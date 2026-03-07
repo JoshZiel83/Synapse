@@ -227,9 +227,13 @@ export default function MessageBubble({
   const isChildResult = role === 'child_result';
   const isSystem = role === 'system';
 
-  // Process citations
+  // Process citations and sanitize raw HTML tags
   const { processedContent, sources } = useMemo(
-    () => processCitations(content, citationSources),
+    () => {
+      // Replace <br>, <br/>, <br /> with newlines so ReactMarkdown renders them
+      const sanitized = content.replace(/<br\s*\/?>/gi, '\n');
+      return processCitations(sanitized, citationSources);
+    },
     [content, citationSources],
   );
 
