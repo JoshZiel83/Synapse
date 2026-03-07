@@ -1,0 +1,132 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 222 47% 11%;
+    --foreground: 213 31% 91%;
+
+    --card: 224 40% 14%;
+    --card-foreground: 213 31% 91%;
+
+    --popover: 224 40% 14%;
+    --popover-foreground: 213 31% 91%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 47% 5%;
+
+    --secondary: 258 90% 66%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 223 35% 20%;
+    --muted-foreground: 215 20% 55%;
+
+    --accent: 258 90% 66%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 224 30% 22%;
+    --input: 224 30% 22%;
+    --ring: 217 91% 60%;
+
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(222 47% 11%);
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(224 30% 30%);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(224 30% 40%);
+}
+
+/* Glass morphism utility */
+.glass {
+  background: rgba(30, 27, 75, 0.4);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(59, 130, 246, 0.1);
+}
+
+.glass-card {
+  background: rgba(30, 41, 75, 0.5);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(59, 130, 246, 0.08);
+}
+
+/* Gradient background */
+.gradient-bg {
+  background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+}
+
+/* Glow effects */
+.glow-blue {
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.15), 0 0 60px rgba(59, 130, 246, 0.05);
+}
+
+.glow-violet {
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.15), 0 0 60px rgba(139, 92, 246, 0.05);
+}
+
+/* Pulse animation for status indicators */
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 4px rgba(59, 130, 246, 0.6);
+  }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.3);
+  }
+}
+
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Typing indicator animation */
+@keyframes bounce-dot {
+  0%, 80%, 100% {
+    transform: scale(0);
+  }
+  40% {
+    transform: scale(1);
+  }
+}
+
+.typing-dot {
+  animation: bounce-dot 1.4s ease-in-out infinite both;
+}
+
+.typing-dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: -0.16s;
+}

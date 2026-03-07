@@ -1,0 +1,20 @@
+{
+  "name": "synapse",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/shared",
+    "packages/api",
+    "packages/web"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w packages/api",
+    "dev:web": "npm run dev -w packages/web",
+    "build": "npm run build -w packages/shared && npm run build -w packages/api && npm run build -w packages/web",
+    "build:shared": "npm run build -w packages/shared",
+    "build:api": "npm run build -w packages/api",
+    "build:web": "npm run build -w packages/web",
+    "db:migrate": "npm run db:migrate -w packages/api",
+    "db:seed": "npm run db:seed -w packages/api"
+  }
+}
