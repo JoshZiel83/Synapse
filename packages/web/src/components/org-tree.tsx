@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { ChevronDown, ChevronRight, Plus, User, Bot, Crown, Users } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, User, Bot, Crown, Users, MessageSquare } from 'lucide-react';
+import Link from 'next/link';
 
 interface Actor {
   id: string;
@@ -114,6 +115,16 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
 
             {/* Actions */}
             <div className="flex items-center gap-1 shrink-0">
+              <Link href={`/dashboard/chat?actor=${actor.id}`}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-emerald-400"
+                  title="Chat with this actor"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                </Button>
+              </Link>
               {onAddChild && (
                 <Button
                   variant="ghost"

@@ -1,25 +1,27 @@
 import { query, transaction } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
-import { memoryArchivalQueue } from '../../workers/queues.js';
+import { memoryArchivalQueue, sessionTimeoutQueue } from '../../workers/queues.js';
 import type { ActorAction, UUID } from '@synapse/shared';
+import { DEFAULT_WAIT_TIMEOUT } from '@synapse/shared';
 import { v4 as uuidv4 } from 'uuid';
 
 export async function executeActorActions(
   workspaceId: UUID,
   actorId: UUID,
   workItemId: UUID,
-  actions: ActorAction[]
+  actions: ActorAction[],
+  sessionId?: UUID,
 ): Promise<void> {
   for (const action of actions) {
     switch (action.type) {
       case 'respond':
-        await handleRespond(workspaceId, actorId, workItemId, action);
+        await handleRespond(workspaceId, actorId, workItemId, action, sessionId);
         break;
       case 'delegate':
         await handleDelegate(workspaceId, actorId, workItemId, action);
         break;
       case 'complete':
-        await handleComplete(workspaceId, actorId, workItemId, action);
+        await handleComplete(workspaceId, actorId, workItemId, action, sessionId);
         break;
       case 'escalate':
         await handleEscalate(workspaceId, actorId, workItemId, action);
@@ -39,6 +41,11 @@ export async function executeActorActions(
       case 'change_avatar':
         await handleChangeAvatar(actorId, action);
         break;
+      case 'wait':
+        if (sessionId) {
+          await handleWait(workspaceId, sessionId, action);
+        }
+        break;
     }
   }
 }
@@ -47,7 +54,8 @@ async function handleRespond(
   workspaceId: UUID,
   actorId: UUID,
   workItemId: UUID,
-  action: ActorAction
+  action: ActorAction,
+  sessionId?: UUID,
 ): Promise<void> {
   const messageId = uuidv4();
 
@@ -129,7 +137,8 @@ async function handleComplete(
   workspaceId: UUID,
   actorId: UUID,
   workItemId: UUID,
-  action: ActorAction
+  action: ActorAction,
+  sessionId?: UUID,
 ): Promise<void> {
   await transaction(async (client) => {
     const messageId = uuidv4();
@@ -286,6 +295,12 @@ async function handleCreateMemory(
     ]
   );
 
+  // Increment memory_version so concurrent sessions can detect the change
+  await query(
+    `UPDATE actors SET memory_version = memory_version + 1, updated_at = NOW() WHERE id = $1`,
+    [actorId]
+  );
+
   await emitEvent({
     type: 'memory.created',
     workspaceId,
@@ -317,4 +332,52 @@ async function handleChangeAvatar(
     `UPDATE actors SET config = config || $1::jsonb, updated_at = NOW() WHERE id = $2`,
     [JSON.stringify({ avatar_emoji: emoji }), actorId]
   );
+}
+
+async function handleWait(
+  workspaceId: UUID,
+  sessionId: UUID,
+  action: ActorAction
+): Promise<void> {
+  const waitingFor = action.waitingFor || [];
+  if (waitingFor.length === 0) return;
+
+  const timeoutMinutes = (action.metadata?.timeoutMinutes as number) || (DEFAULT_WAIT_TIMEOUT / 60_000);
+  const waitTimeoutAt = new Date(Date.now() + timeoutMinutes * 60_000).toISOString();
+
+  // Update session to waiting status
+  await query(
+    `UPDATE sessions SET status = 'waiting', waiting_for = $1, wait_timeout_at = $2, updated_at = NOW() WHERE id = $3`,
+    [waitingFor, waitTimeoutAt, sessionId]
+  );
+
+  // Schedule a timeout job
+  await sessionTimeoutQueue.add(
+    'timeout',
+    { sessionId, workspaceId },
+    { delay: timeoutMinutes * 60_000 }
+  );
+
+  // Immediately check if any of the child sessions have already completed (race condition protection)
+  const alreadyCompleted = await query(
+    `SELECT id FROM sessions WHERE id = ANY($1) AND status IN ('completed', 'failed')`,
+    [waitingFor]
+  );
+
+  if (alreadyCompleted.rows.length > 0) {
+    // Some children already finished — trigger completion check for each
+    for (const row of alreadyCompleted.rows) {
+      const childResult = await query(
+        `SELECT result FROM work_items WHERE id = (SELECT work_item_id FROM sessions WHERE id = $1)`,
+        [row.id]
+      );
+      const { onSessionCompleted } = await import('../session/completion.js');
+      const childSession = await query('SELECT status FROM sessions WHERE id = $1', [row.id]);
+      await onSessionCompleted(
+        row.id,
+        childResult.rows[0]?.result || '',
+        childSession.rows[0]?.status === 'completed'
+      );
+    }
+  }
 }

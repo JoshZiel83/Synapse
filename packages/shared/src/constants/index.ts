@@ -11,6 +11,10 @@ export const MAX_PAGE_SIZE = 100;
 
 export const ACTOR_LOCK_TTL = 60_000; // 60 seconds
 export const ACTOR_THINK_TIMEOUT = 120_000; // 2 minutes
+export const SESSION_LOCK_TTL = 120_000; // 120 seconds
+export const DEFAULT_WAIT_TIMEOUT = 600_000; // 10 minutes
+export const DEFAULT_MAX_CONCURRENT_SESSIONS = 3;
+export const MAX_SESSION_DEPTH = 10;
 
 export const MEMORY_EMBEDDING_DIMENSIONS = 1536;
 
@@ -53,10 +57,17 @@ export const REDIS_CHANNELS = {
   EVENTS: 'synapse:events',
   WORKSPACE_PREFIX: 'synapse:ws:',
   ACTOR_LOCK_PREFIX: 'synapse:actor:lock:',
+  SESSION_LOCK_PREFIX: 'synapse:session:lock:',
+  ACTOR_SESSIONS_PREFIX: 'synapse:actor:sessions:',
 } as const;
 
 export const QUEUE_NAMES = {
   ACTOR_THINKING: 'actor-thinking',
+  SESSION_THINKING: 'session-thinking',
+  SESSION_TIMEOUT: 'session-timeout',
   MEMORY_ARCHIVAL: 'memory-archival',
   STANDING_ORDERS: 'standing-orders',
 } as const;
+
+export const WS_AUTH_TIMEOUT = 5000;
+export const WS_HEARTBEAT_INTERVAL = 30000;

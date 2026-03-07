@@ -30,10 +30,11 @@ import {
   ChevronRight,
   Settings,
 } from 'lucide-react';
+import { useChatStore } from '@/stores/chat-store';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/dashboard/secretary', label: 'Secretary', icon: MessageSquare },
+  { href: '/dashboard/chat', label: 'Chat', icon: MessageSquare },
   { href: '/dashboard/organization', label: 'Organization', icon: Users },
   { href: '/dashboard/work-items', label: 'Work Items', icon: Kanban },
   { href: '/dashboard/memories', label: 'Memories', icon: Brain },
@@ -41,7 +42,7 @@ const navItems = [
   { href: '/dashboard/settings', label: 'Settings', icon: Settings },
 ];
 
-function NavLink({ href, label, icon: Icon, active }: { href: string; label: string; icon: any; active: boolean }) {
+function NavLink({ href, label, icon: Icon, active, badge }: { href: string; label: string; icon: any; active: boolean; badge?: number }) {
   return (
     <Link
       href={href}
@@ -55,12 +56,19 @@ function NavLink({ href, label, icon: Icon, active }: { href: string; label: str
     >
       <Icon className={`w-5 h-5 ${active ? 'text-blue-400' : ''}`} />
       <span>{label}</span>
-      {active && <ChevronRight className="w-4 h-4 ml-auto text-blue-400/50" />}
+      {badge !== undefined && badge > 0 && (
+        <span className="ml-auto flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-[10px] font-bold">
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
+      {active && !badge && <ChevronRight className="w-4 h-4 ml-auto text-blue-400/50" />}
     </Link>
   );
 }
 
 function Sidebar({ pathname }: { pathname: string }) {
+  const totalUnread = useChatStore((s) => s.totalUnread);
+
   return (
     <div className="flex flex-col h-full">
       {/* Logo */}
@@ -86,7 +94,8 @@ function Sidebar({ pathname }: { pathname: string }) {
             href={item.href}
             label={item.label}
             icon={item.icon}
-            active={pathname === item.href}
+            active={item.href === '/dashboard' ? pathname === item.href : pathname.startsWith(item.href)}
+            badge={item.href === '/dashboard/chat' ? totalUnread : undefined}
           />
         ))}
       </nav>

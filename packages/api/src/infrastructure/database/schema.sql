@@ -297,6 +297,67 @@ CREATE INDEX IF NOT EXISTS idx_ai_request_logs_group ON ai_request_logs(group_id
 -- ============ Add default_model_group_id to workspaces ============
 ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS default_model_group_id UUID REFERENCES model_groups(id) ON DELETE SET NULL;
 
+-- ============ Actor extensions for session concurrency ============
+ALTER TABLE actors ADD COLUMN IF NOT EXISTS memory_version BIGINT DEFAULT 0;
+ALTER TABLE actors ADD COLUMN IF NOT EXISTS max_concurrent_sessions INT DEFAULT 3;
+
+-- ============ Sessions (process tree) ============
+CREATE TABLE IF NOT EXISTS sessions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+  parent_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  root_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  depth INT NOT NULL DEFAULT 0,
+  channel_type VARCHAR(30) NOT NULL DEFAULT 'web' CHECK (channel_type IN ('web', 'im', 'internal_delegation', 'standing_order', 'api')),
+  channel_id VARCHAR(255),
+  work_item_id UUID REFERENCES work_items(id) ON DELETE SET NULL,
+  trigger VARCHAR(50) NOT NULL DEFAULT 'user_message',
+  status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'waiting', 'completed', 'failed', 'cancelled', 'timed_out')),
+  waiting_for UUID[] DEFAULT '{}',
+  wait_timeout_at TIMESTAMPTZ,
+  resume_context JSONB,
+  metadata JSONB DEFAULT '{}',
+  error_message TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_actor ON sessions(actor_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_actor_status ON sessions(actor_id, status);
+CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_root ON sessions(root_session_id);
+
+-- ============ Session Messages ============
+CREATE TABLE IF NOT EXISTS session_messages (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system', 'tool_result', 'child_result')),
+  content TEXT NOT NULL,
+  from_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  from_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_messages_session ON session_messages(session_id, created_at ASC);
+
+-- ============ Session Interrupts ============
+CREATE TABLE IF NOT EXISTS session_interrupts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  target_session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  type VARCHAR(50) NOT NULL CHECK (type IN ('progress_check', 'memory_changed', 'priority_override')),
+  content TEXT NOT NULL,
+  from_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  is_consumed BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_interrupts_target ON session_interrupts(target_session_id) WHERE is_consumed = FALSE;
+
 -- ============ Updated at trigger ============
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
@@ -310,10 +371,18 @@ DO $$
 DECLARE
   tbl TEXT;
 BEGIN
-  FOR tbl IN SELECT unnest(ARRAY['users', 'workspaces', 'actors', 'work_items', 'memories', 'standing_orders', 'model_groups', 'model_group_items'])
+  FOR tbl IN SELECT unnest(ARRAY['users', 'workspaces', 'actors', 'work_items', 'memories', 'standing_orders', 'model_groups', 'model_group_items', 'sessions'])
   LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS set_updated_at ON %I', tbl);
     EXECUTE format('CREATE TRIGGER set_updated_at BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION update_updated_at()', tbl);
   END LOOP;
 END;
 $$;
+
+-- ============ User Session Reads (unread tracking) ============
+CREATE TABLE IF NOT EXISTS user_session_reads (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  root_session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, root_session_id)
+);

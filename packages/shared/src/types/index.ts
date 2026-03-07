@@ -243,7 +243,8 @@ export type EventType =
   | 'memory.created'
   | 'user.message' // User sent message to secretary
   | 'secretary.response'
-  | 'actor.thinking' | 'actor.action';
+  | 'actor.thinking' | 'actor.action'
+  | 'session.message.new' | 'session.status.changed' | 'session.thinking' | 'group.updated';
 
 export interface SystemEvent {
   type: EventType;
@@ -253,11 +254,62 @@ export interface SystemEvent {
 }
 
 // ============ AI ============
+export type SessionStatus = 'active' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'timed_out';
+export type ChannelType = 'web' | 'im' | 'internal_delegation' | 'standing_order' | 'api';
+export type SessionTrigger = 'user_message' | 'delegation' | 'standing_order' | 'api_call';
+export type SessionMessageRole = 'user' | 'assistant' | 'system' | 'tool_result' | 'child_result';
+export type SessionInterruptType = 'progress_check' | 'memory_changed' | 'priority_override';
+
+export interface Session {
+  id: UUID;
+  workspaceId: UUID;
+  actorId: UUID;
+  parentSessionId?: UUID;
+  rootSessionId?: UUID;
+  depth: number;
+  channelType: ChannelType;
+  channelId?: string;
+  workItemId?: UUID;
+  trigger: string;
+  status: SessionStatus;
+  waitingFor: UUID[];
+  waitTimeoutAt?: Timestamp;
+  resumeContext?: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  errorMessage?: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  completedAt?: Timestamp;
+}
+
+export interface SessionMessage {
+  id: UUID;
+  sessionId: UUID;
+  workspaceId: UUID;
+  role: SessionMessageRole;
+  content: string;
+  fromActorId?: UUID;
+  fromUserId?: UUID;
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+}
+
+export interface SessionInterrupt {
+  id: UUID;
+  targetSessionId: UUID;
+  type: SessionInterruptType;
+  content: string;
+  fromSessionId?: UUID;
+  isConsumed: boolean;
+  createdAt: Timestamp;
+}
+
 export interface ActorAction {
-  type: 'respond' | 'delegate' | 'complete' | 'escalate' | 'request_info' | 'update_progress' | 'create_memory' | 'rename_self' | 'change_avatar';
+  type: 'respond' | 'delegate' | 'complete' | 'escalate' | 'request_info' | 'update_progress' | 'create_memory' | 'rename_self' | 'change_avatar' | 'wait';
   content: string;
   targetActorId?: UUID;
   workItemId?: UUID;
+  waitingFor?: string[];
   metadata?: Record<string, unknown>;
 }
 
@@ -265,6 +317,24 @@ export interface ThinkingResult {
   actions: ActorAction[];
   reasoning: string;
   tokensUsed: { input: number; output: number };
+  toolsUsed?: string[]; // names of callable tools invoked during thinking
+  serverToolCalls?: ServerToolCall[]; // cloud-side tool calls (web_search, web_fetch)
+  citationSources?: Record<string, { url: string; title: string }>; // <cite index="X-Y"> → source
+}
+
+// ============ Server Tool Calls (Anthropic/OpenAI cloud-side tools) ============
+
+export interface ServerToolCall {
+  type: 'web_search' | 'web_fetch';
+  query?: string;   // web_search query
+  url?: string;     // web_fetch URL
+  results?: ServerToolSearchResult[];
+}
+
+export interface ServerToolSearchResult {
+  url: string;
+  title: string;
+  pageAge?: string;
 }
 
 // ============ Model Groups ============

@@ -82,6 +82,36 @@ class ApiClient {
   setActorModelGroups(wsId: string, actorId: string, groups: { groupId: string; priority: number }[]) {
     return this.fetch(`/workspaces/${wsId}/actors/${actorId}/model-groups`, { method: 'PUT', body: JSON.stringify({ groups }) });
   }
+
+  // Sessions
+  createSession(wsId: string, actorId: string, content: string, channelType?: string) {
+    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/sessions`, { method: 'POST', body: JSON.stringify({ content, channelType: channelType || 'web' }) });
+  }
+  sendSessionMessage(wsId: string, sessionId: string, content: string) {
+    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/messages`, { method: 'POST', body: JSON.stringify({ content }) });
+  }
+  getSession(wsId: string, sessionId: string) { return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}`); }
+  getSessionMessages(wsId: string, sessionId: string) { return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/messages`); }
+  getActorSessions(wsId: string, actorId: string, status?: string) {
+    const params = status ? `?status=${status}` : '';
+    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/sessions${params}`);
+  }
+  getSessionTree(wsId: string, sessionId: string) { return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/tree`); }
+  cancelSession(wsId: string, sessionId: string) { return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}`, { method: 'DELETE' }); }
+
+  // Chat Groups
+  getGroups(wsId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups`); }
+  createGroup(wsId: string, actorId: string, content: string) { return this.fetch(`/workspaces/${wsId}/chat/groups`, { method: 'POST', body: JSON.stringify({ actorId, content }) }); }
+  getGroupMessages(wsId: string, rootSessionId: string, limit?: number, before?: string) {
+    const params = new URLSearchParams();
+    if (limit) params.set('limit', String(limit));
+    if (before) params.set('before', before);
+    const qs = params.toString();
+    return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/messages${qs ? '?' + qs : ''}`);
+  }
+  sendGroupMessage(wsId: string, rootSessionId: string, content: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/messages`, { method: 'POST', body: JSON.stringify({ content }) }); }
+  markGroupRead(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/read`, { method: 'POST' }); }
+  cancelGroup(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}`, { method: 'DELETE' }); }
 }
 
 export const api = new ApiClient();

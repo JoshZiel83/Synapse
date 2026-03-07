@@ -13,15 +13,15 @@ export const ACTOR_TOOLS: ToolDefinition[] = [
     },
   },
   {
-    name: 'delegate',
-    description: 'Delegate a task to a subordinate actor. Use when a specialist should handle the work.',
+    name: 'wait',
+    description: 'Wait for one or more child sessions (delegated tasks) to complete before continuing. This will pause your current session. Use after calling delegate one or more times.',
     parameters: {
       type: 'object',
       properties: {
-        content: { type: 'string', description: 'Description of the task to delegate' },
-        targetActorId: { type: 'string', description: 'The UUID of the subordinate actor to delegate to' },
+        sessionIds: { type: 'string', description: 'Comma-separated list of child session IDs to wait for' },
+        timeoutMinutes: { type: 'string', description: 'Maximum wait time in minutes (default: 10)' },
       },
-      required: ['content', 'targetActorId'],
+      required: ['sessionIds'],
     },
   },
   {
@@ -129,12 +129,16 @@ export function toolCallsToActions(toolCalls: ToolCall[]): ActorAction[] {
       case 'respond':
         return { type: 'respond' as const, content: input.content };
 
-      case 'delegate':
+      case 'wait': {
+        const sessionIds = String(input.sessionIds).split(',').map((s: string) => s.trim()).filter(Boolean);
+        const timeoutMinutes = parseInt(input.timeoutMinutes) || 10;
         return {
-          type: 'delegate' as const,
-          content: input.content,
-          targetActorId: input.targetActorId,
+          type: 'wait' as const,
+          content: `Waiting for sessions: ${sessionIds.join(', ')}`,
+          waitingFor: sessionIds,
+          metadata: { timeoutMinutes },
         };
+      }
 
       case 'complete':
         return { type: 'complete' as const, content: input.content };

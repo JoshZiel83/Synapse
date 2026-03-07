@@ -130,7 +130,6 @@ function RequestInfoPopup({ msg, onClose }: { msg: ChatMessage; onClose: () => v
 
 export default function SecretaryPage() {
   const { workspaceId } = useWorkspace();
-  const { lastEvent } = useWebSocket(workspaceId);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -157,6 +156,20 @@ export default function SecretaryPage() {
     return 0;
   }, [workspaceId]);
 
+  // WS event handler
+  const onEvent = useCallback((event: any) => {
+    if (
+      event?.type === 'secretary.response' ||
+      event?.type === 'message.created' ||
+      event?.type === 'actor.action'
+    ) {
+      loadConversation();
+      stopPolling();
+    }
+  }, [loadConversation]);
+
+  useWebSocket({ workspaceId, onEvent });
+
   // Initial load
   useEffect(() => {
     if (!workspaceId) return;
@@ -165,18 +178,6 @@ export default function SecretaryPage() {
       setLoading(false);
     });
   }, [workspaceId, loadConversation]);
-
-  // React to WebSocket events
-  useEffect(() => {
-    if (
-      lastEvent?.type === 'secretary.response' ||
-      lastEvent?.type === 'message.created' ||
-      lastEvent?.type === 'actor.action'
-    ) {
-      loadConversation();
-      stopPolling();
-    }
-  }, [lastEvent, loadConversation]);
 
   // Auto-scroll on new messages
   useEffect(() => {
