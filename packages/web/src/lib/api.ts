@@ -110,7 +110,7 @@ class ApiClient {
     return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/messages${qs ? '?' + qs : ''}`);
   }
   sendGroupMessage(wsId: string, rootSessionId: string, content: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/messages`, { method: 'POST', body: JSON.stringify({ content }) }); }
-  markGroupRead(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/read`, { method: 'POST' }); }
+  markGroupRead(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/read`, { method: 'POST', body: '{}' }); }
   cancelGroup(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}`, { method: 'DELETE' }); }
 }
 
