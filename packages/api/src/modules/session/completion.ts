@@ -82,6 +82,13 @@ export async function resumeSession(sessionId: UUID): Promise<void> {
     timestamp: nowISO(),
   });
 
+  // Look up the userId from the session's initial user message
+  const userMsgResult = await query(
+    'SELECT from_user_id FROM session_messages WHERE session_id = $1 AND role = \'user\' ORDER BY created_at LIMIT 1',
+    [session.root_session_id || sessionId]
+  );
+  const userId = userMsgResult.rows[0]?.from_user_id || undefined;
+
   // Enqueue a new thinking job for the resumed session
   await sessionThinkingQueue.add('think', {
     sessionId: session.id,
@@ -89,6 +96,7 @@ export async function resumeSession(sessionId: UUID): Promise<void> {
     workspaceId: session.workspace_id,
     workItemId: session.work_item_id,
     trigger: 'resume',
+    userId,
   });
 
   console.log(`[session-completion] Resumed session ${sessionId}`);

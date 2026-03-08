@@ -6,6 +6,7 @@ import { buildActorPrompt } from './prompt-builder.js';
 import { logAIRequest } from '../model-groups/service.js';
 import { isCallableTool, executeCallableTools, getCallableToolDefinitions } from './callable-tools.js';
 import { setToolExecutionContext } from './session-tools.js';
+import { getMcpVersion } from '../mcp-plugins/instance-manager.js';
 
 export { buildActorPrompt } from './prompt-builder.js';
 
@@ -53,9 +54,16 @@ export async function actorThink(
   subordinates?: Subordinate[],
   resolved?: ResolvedModelConfig | null,
   workspaceId?: string,
-  options?: { sessionId?: string; onStatus?: (status: string) => Promise<void> },
+  options?: {
+    sessionId?: string;
+    onStatus?: (status: string) => Promise<void>;
+    extraTools?: import('@synapse/shared').ToolDefinition[];
+    extraToolExecutor?: (toolName: string, input: Record<string, unknown>) => Promise<string>;
+    mcpVersion?: number;
+    mcpRefresh?: () => Promise<{ tools: import('@synapse/shared').ToolDefinition[]; mcpVersion: number }>;
+  },
 ): Promise<ThinkingResult> {
-  const { system, messages } = buildActorPrompt(actor, memories, workContext, subordinates);
+  const { system, messages } = buildActorPrompt(actor, memories, workContext, subordinates, undefined, options?.extraTools);
   const provider = getProvider(resolved);
 
   const aiMessages: AIMessage[] = messages.map((m) => ({
@@ -63,9 +71,12 @@ export async function actorThink(
     content: m.content,
   }));
 
-  // Merge action tools + callable tools
+  // Merge action tools + callable tools + MCP extra tools
   const callableToolDefs = getCallableToolDefinitions();
-  const allTools = [...ACTOR_TOOLS, ...callableToolDefs];
+  let extraToolDefs = options?.extraTools || [];
+  let extraToolNames = new Set(extraToolDefs.map(t => t.name));
+  let allTools = [...ACTOR_TOOLS, ...callableToolDefs, ...extraToolDefs];
+  let currentMcpVersion = options?.mcpVersion ?? 0;
 
   const startTime = Date.now();
   let totalTokens = { input: 0, output: 0 };
@@ -150,20 +161,37 @@ export async function actorThink(
         response.textContent = injectOpenAICitationMarkers(response.textContent, response.rawAssistantMessage, citations);
       }
 
-      // Separate tool calls into action tools vs callable tools
-      const actionCalls = response.toolCalls.filter((tc) => !isCallableTool(tc.name));
+      // Separate tool calls into action tools vs callable/MCP tools
+      const actionCalls = response.toolCalls.filter((tc) => !isCallableTool(tc.name) && !extraToolNames.has(tc.name));
       const callableCalls = response.toolCalls.filter((tc) => isCallableTool(tc.name));
+      const mcpCalls = response.toolCalls.filter((tc) => extraToolNames.has(tc.name));
+      const allContinuableCalls = [...callableCalls, ...mcpCalls];
 
-      if (callableCalls.length > 0) {
+      if (allContinuableCalls.length > 0) {
         // Track tool names and emit status
-        const toolNames = callableCalls.map((tc) => tc.name);
+        const toolNames = allContinuableCalls.map((tc) => tc.name);
         allToolsUsed.push(...toolNames);
         if (onStatus) {
           await onStatus(`Calling ${toolNames.join(', ')}...`);
         }
 
-        // Execute callable tools and collect results
-        const toolResults = await executeCallableTools(callableCalls);
+        // Execute callable tools (builtin registry)
+        const callableResults = callableCalls.length > 0 ? await executeCallableTools(callableCalls) : [];
+
+        // Execute MCP tools via extraToolExecutor
+        const mcpResults: import('@synapse/shared').ToolResult[] = [];
+        if (mcpCalls.length > 0 && options?.extraToolExecutor) {
+          for (const tc of mcpCalls) {
+            try {
+              const result = await options.extraToolExecutor(tc.name, tc.input);
+              mcpResults.push({ toolCallId: tc.id, toolName: tc.name, content: result });
+            } catch (err: any) {
+              mcpResults.push({ toolCallId: tc.id, toolName: tc.name, content: `Error: ${err.message}`, isError: true });
+            }
+          }
+        }
+
+        const toolResults = [...callableResults, ...mcpResults];
         continuationHistory.push({
           rawAssistantMessage: response.rawAssistantMessage,
           toolResults,
@@ -183,6 +211,22 @@ export async function actorThink(
         }
 
         // Otherwise continue to next round
+        // Dynamic MCP tool refresh between rounds
+        if (options?.mcpRefresh && workspaceId) {
+          const latestVersion = await getMcpVersion(workspaceId);
+          if (latestVersion !== currentMcpVersion) {
+            try {
+              const refreshed = await options.mcpRefresh();
+              extraToolDefs = refreshed.tools;
+              extraToolNames = new Set(extraToolDefs.map(t => t.name));
+              allTools = [...ACTOR_TOOLS, ...callableToolDefs, ...extraToolDefs];
+              currentMcpVersion = refreshed.mcpVersion;
+              console.log(`[actorThink] MCP tools refreshed: ${extraToolDefs.length} tools, version=${currentMcpVersion}`);
+            } catch (err: any) {
+              console.error('[actorThink] MCP refresh failed:', err.message);
+            }
+          }
+        }
         continue;
       }
 

@@ -22,7 +22,11 @@ import auditQueryModule from './modules/audit/index.js';
 import standingOrdersModule from './modules/standing-orders/index.js';
 import modelGroupsModule from './modules/model-groups/index.js';
 import chatModule from './modules/chat/index.js';
+import mcpPluginsModule from './modules/mcp-plugins/index.js';
 import { seedPlatformDefaultGroup } from './modules/model-groups/service.js';
+import { seedBuiltinMcpPlugins } from './modules/mcp-plugins/service.js';
+import { initBuiltinRegistry } from './modules/mcp-plugins/builtin/index.js';
+import { initInstanceManagerListeners } from './modules/mcp-plugins/instance-manager.js';
 import { registerSessionTools } from './modules/ai/session-tools.js';
 
 // Workers
@@ -68,6 +72,7 @@ async function main() {
   await app.register(standingOrdersModule);
   await app.register(modelGroupsModule);
   await app.register(chatModule);
+  await app.register(mcpPluginsModule);
 
   // Seed platform default model group
   try {
@@ -75,6 +80,16 @@ async function main() {
     console.log('Platform default model group seeded');
   } catch (err) {
     console.error('Failed to seed platform default model group:', err);
+  }
+
+  // Seed MCP builtin plugins and init registry
+  try {
+    await seedBuiltinMcpPlugins();
+    initBuiltinRegistry();
+    initInstanceManagerListeners();
+    console.log('MCP plugins seeded and registry initialized');
+  } catch (err) {
+    console.error('Failed to seed MCP plugins:', err);
   }
 
   // Health check

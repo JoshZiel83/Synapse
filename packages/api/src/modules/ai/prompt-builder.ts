@@ -1,4 +1,4 @@
-import type { Actor, Memory } from '@synapse/shared';
+import type { Actor, Memory, ToolDefinition } from '@synapse/shared';
 
 interface Subordinate {
   name: string;
@@ -20,7 +20,8 @@ export function buildActorPrompt(
   memories: Memory[],
   workContext: string,
   subordinates?: Subordinate[],
-  sessionContext?: SessionContext
+  sessionContext?: SessionContext,
+  extraTools?: ToolDefinition[],
 ): { system: string; messages: { role: string; content: string }[] } {
   let system =
     actor.systemPrompt +
@@ -58,6 +59,15 @@ export function buildActorPrompt(
     if (sessionContext.isResume) {
       system += '\n\n[恢复通知] 你之前等待的子任务已完成。请查看子任务结果并继续处理。';
     }
+  }
+
+  // Add MCP plugin tools section
+  if (extraTools && extraTools.length > 0) {
+    system += '\n\n[可用插件工具]\n你有以下额外的MCP插件工具可以使用:\n';
+    for (const tool of extraTools) {
+      system += `- ${tool.name}: ${tool.description}\n`;
+    }
+    system += '\n当用户的请求需要使用这些工具时，请主动调用它们。工具名称使用命名空间格式（组织__插件__工具名）。';
   }
 
   const messages = [{ role: 'user', content: workContext }];

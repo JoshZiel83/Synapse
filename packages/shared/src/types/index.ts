@@ -244,7 +244,8 @@ export type EventType =
   | 'user.message' // User sent message to secretary
   | 'secretary.response'
   | 'actor.thinking' | 'actor.action'
-  | 'session.message.new' | 'session.status.changed' | 'session.thinking' | 'group.updated';
+  | 'session.message.new' | 'session.status.changed' | 'session.thinking' | 'group.updated'
+  | 'mcp.config.changed';
 
 export interface SystemEvent {
   type: EventType;
@@ -469,4 +470,148 @@ export interface AIResponse {
   tokensUsed: { input: number; output: number };
   stopReason: string;                // e.g. 'end_turn', 'tool_use' (Anthropic) or 'stop', 'tool_calls' (OpenAI)
   rawAssistantMessage: unknown;      // Provider-specific raw assistant message for continuation
+}
+
+// ============================================================
+// MCP Plugin Marketplace Types
+// ============================================================
+
+export type McpTransport = 'builtin' | 'stdio' | 'http' | 'relay';
+export type McpLifecycleScope = 'workspace' | 'user' | 'actor' | 'session';
+export type McpScopeType = 'workspace' | 'user' | 'actor';
+
+export interface McpOrganization {
+  id: string;
+  slug: string;
+  displayName: string;
+  description: string;
+  logoUrl?: string;
+  isBuiltin: boolean;
+  isVerified: boolean;
+  ownerUserId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpPluginTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface McpPlugin {
+  id: string;
+  orgId: string;
+  slug: string;
+  displayName: string;
+  description: string;
+  longDescription: string;
+  iconUrl?: string;
+  version: string;
+  transport: McpTransport;
+  entryPoint: string;
+  lifecycleScope: McpLifecycleScope;
+  configSchema: Record<string, unknown>;
+  defaultConfig: Record<string, unknown>;
+  toolsManifest: McpPluginTool[];
+  tags: string[];
+  isActive: boolean;
+  isBuiltin: boolean;
+  downloadCount: number;
+  createdAt: string;
+  updatedAt: string;
+  // Joined fields
+  orgSlug?: string;
+  orgDisplayName?: string;
+}
+
+export interface McpInstallation {
+  id: string;
+  workspaceId: string;
+  pluginId: string;
+  scopeType: McpScopeType;
+  scopeId: string;
+  lifecycleScope: McpLifecycleScope;
+  isEnabled: boolean;
+  configData: Record<string, unknown>;
+  installedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+  // Joined
+  plugin?: McpPlugin;
+}
+
+export interface McpRelay {
+  id: string;
+  userId?: string;
+  workspaceId?: string;
+  name: string;
+  authToken: string;
+  isConnected: boolean;
+  lastConnectedAt?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpRelayServer {
+  id: string;
+  relayId: string;
+  name: string;
+  transport: 'stdio' | 'http';
+  command?: string;
+  endpoint?: string;
+  envVars: Record<string, unknown>;
+  toolsManifest: McpPluginTool[];
+  isEnabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpToolCallLog {
+  id: string;
+  workspaceId: string;
+  sessionId?: string;
+  actorId?: string;
+  userId?: string;
+  pluginId: string;
+  relayId?: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  output?: string;
+  isError: boolean;
+  errorMessage?: string;
+  durationMs?: number;
+  transport?: string;
+  instanceKey?: string;
+  createdAt: string;
+}
+
+export interface McpEventLog {
+  id: string;
+  workspaceId?: string;
+  userId?: string;
+  pluginId?: string;
+  relayId?: string;
+  eventType: string;
+  eventData: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface McpValidationRule {
+  field: string;
+  rule: 'required' | 'pattern' | 'url' | 'min_length' | 'max_length' | 'prefix' | 'enum';
+  value?: string | number | string[];
+  message: string;
+}
+
+export interface McpSetupStep {
+  id: string;
+  title: string;
+  description: string;
+  scope: 'workspace' | 'plugin';
+  fields: string[];
+  optional?: boolean;
+  helpUrl?: string;
+  helpText?: string;
 }

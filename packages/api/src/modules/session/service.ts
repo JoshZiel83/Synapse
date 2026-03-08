@@ -283,6 +283,7 @@ export async function createSessionAndEnqueue(params: {
     workspaceId: params.workspaceId,
     workItemId: session.work_item_id,
     trigger: params.trigger || 'user_message',
+    userId: params.userId,
   });
 
   // Emit event

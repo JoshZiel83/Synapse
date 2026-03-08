@@ -1,0 +1,226 @@
+import { z } from 'zod';
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import { authMiddleware } from '../../infrastructure/middleware/auth.js';
+import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
+import {
+  listOrganizations, getOrganization,
+  listPlugins, getPlugin,
+  installPluginUnified, uninstallPluginUnified, getInstallations, updateInstallation,
+  validateConfig,
+  McpPluginError,
+} from './service.js';
+import { getToolCallLogs, getEventLogs } from './audit.js';
+
+// ============ Schemas ============
+
+const installSchema = z.object({
+  pluginId: z.string().uuid(),
+  scopeType: z.enum(['workspace', 'user', 'actor']),
+  scopeId: z.string().uuid().optional(),
+  lifecycleScope: z.enum(['workspace', 'user', 'actor', 'session']).optional(),
+  configData: z.record(z.unknown()).optional(),
+});
+
+const updateInstallSchema = z.object({
+  isEnabled: z.boolean().optional(),
+  configData: z.record(z.unknown()).optional(),
+  lifecycleScope: z.enum(['workspace', 'user', 'actor', 'session']).optional(),
+});
+
+// ============ Error handling ============
+
+function handleError(reply: FastifyReply, error: unknown) {
+  if (error instanceof McpPluginError) {
+    return reply.status(error.statusCode).send({ error: error.message });
+  }
+  if (error instanceof z.ZodError) {
+    return reply.status(400).send({ error: 'Validation error', details: error.errors });
+  }
+  console.error('[MCP Controller]', error);
+  return reply.status(500).send({ error: 'Internal server error' });
+}
+
+// ============ Route registration ============
+
+export function registerMcpPluginRoutes(app: FastifyInstance) {
+  const wsPreHandler = [authMiddleware, workspaceMiddleware];
+  const authPreHandler = [authMiddleware];
+
+  // ========== Marketplace (auth required) ==========
+
+  app.get('/api/v1/mcp/marketplace', { preHandler: authPreHandler }, async (request, reply) => {
+    try {
+      const { search, tags, transport } = request.query as { search?: string; tags?: string; transport?: string };
+      const plugins = await listPlugins({
+        search,
+        transport,
+        tags: tags ? tags.split(',') : undefined,
+      });
+      reply.send(plugins);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/mcp/marketplace/:pluginId', { preHandler: authPreHandler }, async (request, reply) => {
+    try {
+      const { pluginId } = request.params as { pluginId: string };
+      const plugin = await getPlugin(pluginId);
+      reply.send(plugin);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  // ========== Organizations ==========
+
+  app.get('/api/v1/mcp/organizations', { preHandler: authPreHandler }, async (_request, reply) => {
+    try {
+      const orgs = await listOrganizations();
+      reply.send(orgs);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/mcp/organizations/:orgId', { preHandler: authPreHandler }, async (request, reply) => {
+    try {
+      const { orgId } = request.params as { orgId: string };
+      const org = await getOrganization(orgId);
+      const plugins = await listPlugins({ orgId });
+      reply.send({ ...org, plugins });
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  // ========== Unified Installations ==========
+
+  app.get('/api/v1/workspaces/:workspaceId/mcp/installations', { preHandler: wsPreHandler }, async (request, reply) => {
+    try {
+      const { workspaceId } = request.params as { workspaceId: string };
+      const { scopeType, scopeId, pluginId } = request.query as { scopeType?: string; scopeId?: string; pluginId?: string };
+      const installations = await getInstallations(workspaceId, { scopeType, scopeId, pluginId });
+      reply.send(installations);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.post('/api/v1/workspaces/:workspaceId/mcp/installations', { preHandler: wsPreHandler }, async (request, reply) => {
+    try {
+      const { workspaceId } = request.params as { workspaceId: string };
+      const data = installSchema.parse(request.body);
+      const user = (request as any).user;
+
+      // Derive scopeId from context if not provided
+      let scopeId = data.scopeId;
+      if (!scopeId) {
+        switch (data.scopeType) {
+          case 'workspace': scopeId = workspaceId; break;
+          case 'user': scopeId = user.id; break;
+          case 'actor': throw new McpPluginError(400, 'scopeId is required for actor scope');
+        }
+      }
+
+      // Validate config against plugin's validation rules if config provided
+      if (data.configData) {
+        const plugin = await getPlugin(data.pluginId);
+        const rules = plugin.validation_rules || [];
+        if (rules.length > 0) {
+          const validation = validateConfig(data.configData, rules);
+          if (!validation.valid) {
+            return reply.status(400).send({ error: 'Validation failed', details: validation.errors });
+          }
+        }
+      }
+
+      const installation = await installPluginUnified({
+        workspaceId,
+        pluginId: data.pluginId,
+        scopeType: data.scopeType,
+        scopeId: scopeId!,
+        lifecycleScope: data.lifecycleScope,
+        configData: data.configData,
+        installedBy: user.id,
+      });
+      reply.status(201).send(installation);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.put('/api/v1/workspaces/:workspaceId/mcp/installations/:installId', { preHandler: wsPreHandler }, async (request, reply) => {
+    try {
+      const { installId } = request.params as { installId: string };
+      const data = updateInstallSchema.parse(request.body);
+
+      // Validate config against plugin's validation rules if updating config
+      if (data.configData) {
+        const { query: dbQuery } = await import('../../infrastructure/database/index.js');
+        const installRow = await dbQuery('SELECT plugin_id FROM mcp_installations WHERE id = $1', [installId]);
+        if (installRow.rows.length > 0) {
+          const plugin = await getPlugin(installRow.rows[0].plugin_id);
+          const rules = plugin.validation_rules || [];
+          if (rules.length > 0) {
+            const validation = validateConfig(data.configData, rules);
+            if (!validation.valid) {
+              return reply.status(400).send({ error: 'Validation failed', details: validation.errors });
+            }
+          }
+        }
+      }
+
+      const installation = await updateInstallation(installId, data);
+      reply.send(installation);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.delete('/api/v1/workspaces/:workspaceId/mcp/installations/:installId', { preHandler: wsPreHandler }, async (request, reply) => {
+    try {
+      const { installId } = request.params as { installId: string };
+      await uninstallPluginUnified(installId);
+      reply.send({ success: true });
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  // ========== Audit Logs ==========
+
+  app.get('/api/v1/workspaces/:workspaceId/mcp/audit/tool-calls', { preHandler: wsPreHandler }, async (request, reply) => {
+    try {
+      const { workspaceId } = request.params as { workspaceId: string };
+      const { pluginId, sessionId, actorId, limit, before } = request.query as {
+        pluginId?: string; sessionId?: string; actorId?: string; limit?: string; before?: string;
+      };
+      const logs = await getToolCallLogs(workspaceId, {
+        pluginId, sessionId, actorId,
+        limit: limit ? parseInt(limit) : undefined,
+        before,
+      });
+      reply.send(logs);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/workspaces/:workspaceId/mcp/audit/events', { preHandler: wsPreHandler }, async (request, reply) => {
+    try {
+      const { workspaceId } = request.params as { workspaceId: string };
+      const { eventType, pluginId, limit, before } = request.query as {
+        eventType?: string; pluginId?: string; limit?: string; before?: string;
+      };
+      const logs = await getEventLogs(workspaceId, {
+        eventType, pluginId,
+        limit: limit ? parseInt(limit) : undefined,
+        before,
+      });
+      reply.send(logs);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+}

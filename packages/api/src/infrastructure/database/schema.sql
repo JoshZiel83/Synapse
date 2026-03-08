@@ -358,7 +358,179 @@ CREATE TABLE IF NOT EXISTS session_interrupts (
 
 CREATE INDEX IF NOT EXISTS idx_session_interrupts_target ON session_interrupts(target_session_id) WHERE is_consumed = FALSE;
 
--- ============ Updated at trigger ============
+-- ============ User Session Reads (unread tracking) ============
+CREATE TABLE IF NOT EXISTS user_session_reads (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  root_session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, root_session_id)
+);
+
+-- ============ MCP Organizations (publisher groups) ============
+CREATE TABLE IF NOT EXISTS mcp_organizations (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  slug VARCHAR(100) UNIQUE NOT NULL,
+  display_name VARCHAR(255) NOT NULL,
+  description TEXT DEFAULT '',
+  logo_url TEXT,
+  is_builtin BOOLEAN DEFAULT FALSE,
+  is_verified BOOLEAN DEFAULT FALSE,
+  owner_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============ MCP Plugins ============
+CREATE TABLE IF NOT EXISTS mcp_plugins (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  org_id UUID NOT NULL REFERENCES mcp_organizations(id) ON DELETE CASCADE,
+  slug VARCHAR(100) NOT NULL,
+  display_name VARCHAR(255) NOT NULL,
+  description TEXT DEFAULT '',
+  long_description TEXT DEFAULT '',
+  icon_url TEXT,
+  version VARCHAR(50) DEFAULT '1.0.0',
+  transport VARCHAR(20) NOT NULL DEFAULT 'builtin'
+    CHECK (transport IN ('builtin', 'stdio', 'http', 'relay')),
+  entry_point TEXT NOT NULL DEFAULT '',
+  lifecycle_scope VARCHAR(20) NOT NULL DEFAULT 'session'
+    CHECK (lifecycle_scope IN ('workspace', 'user', 'actor', 'session')),
+  config_schema JSONB DEFAULT '{}',
+  default_config JSONB DEFAULT '{}',
+  tools_manifest JSONB DEFAULT '[]',
+  tags TEXT[] DEFAULT '{}',
+  is_active BOOLEAN DEFAULT TRUE,
+  is_builtin BOOLEAN DEFAULT FALSE,
+  download_count INT DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(org_id, slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_plugins_org ON mcp_plugins(org_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_plugins_transport ON mcp_plugins(transport);
+CREATE INDEX IF NOT EXISTS idx_mcp_plugins_tags ON mcp_plugins USING GIN(tags);
+
+-- ============ MCP Installations (unified) ============
+CREATE TABLE IF NOT EXISTS mcp_installations (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  plugin_id UUID NOT NULL REFERENCES mcp_plugins(id) ON DELETE CASCADE,
+  scope_type VARCHAR(20) NOT NULL CHECK (scope_type IN ('workspace', 'user', 'actor')),
+  scope_id UUID NOT NULL,
+  lifecycle_scope VARCHAR(20) NOT NULL DEFAULT 'session'
+    CHECK (lifecycle_scope IN ('workspace', 'user', 'actor', 'session')),
+  is_enabled BOOLEAN DEFAULT TRUE,
+  config_data JSONB DEFAULT '{}',
+  installed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (plugin_id, scope_type, scope_id)
+);
+
+-- Hierarchy constraint: lifecycle ≤ scope
+ALTER TABLE mcp_installations DROP CONSTRAINT IF EXISTS chk_lifecycle_hierarchy;
+ALTER TABLE mcp_installations ADD CONSTRAINT chk_lifecycle_hierarchy CHECK (
+  (scope_type = 'workspace' AND lifecycle_scope IN ('workspace', 'actor', 'session')) OR
+  (scope_type = 'user'      AND lifecycle_scope IN ('user', 'actor', 'session')) OR
+  (scope_type = 'actor'     AND lifecycle_scope IN ('actor', 'session'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_inst_workspace ON mcp_installations(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_inst_plugin ON mcp_installations(plugin_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_inst_scope ON mcp_installations(scope_type, scope_id);
+
+-- ============ MCP Relay Agents ============
+CREATE TABLE IF NOT EXISTS mcp_relays (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  auth_token VARCHAR(255) UNIQUE NOT NULL,
+  is_connected BOOLEAN DEFAULT FALSE,
+  last_connected_at TIMESTAMPTZ,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_relays_user ON mcp_relays(user_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_relays_workspace ON mcp_relays(workspace_id);
+
+-- ============ MCP Relay Servers ============
+CREATE TABLE IF NOT EXISTS mcp_relay_servers (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  relay_id UUID NOT NULL REFERENCES mcp_relays(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  transport VARCHAR(20) NOT NULL CHECK (transport IN ('stdio', 'http')),
+  command TEXT,
+  endpoint TEXT,
+  env_vars JSONB DEFAULT '{}',
+  tools_manifest JSONB DEFAULT '[]',
+  is_enabled BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_relay_servers_relay ON mcp_relay_servers(relay_id);
+
+-- ============ MCP Tool Call Logs ============
+CREATE TABLE IF NOT EXISTS mcp_tool_call_logs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  plugin_id UUID NOT NULL REFERENCES mcp_plugins(id) ON DELETE CASCADE,
+  relay_id UUID REFERENCES mcp_relays(id) ON DELETE SET NULL,
+  tool_name VARCHAR(255) NOT NULL,
+  input JSONB DEFAULT '{}',
+  output TEXT,
+  is_error BOOLEAN DEFAULT FALSE,
+  error_message TEXT,
+  duration_ms INT,
+  transport VARCHAR(20),
+  instance_key VARCHAR(512),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_ws_created ON mcp_tool_call_logs(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_session ON mcp_tool_call_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_plugin ON mcp_tool_call_logs(plugin_id);
+
+-- ============ MCP Event Logs ============
+CREATE TABLE IF NOT EXISTS mcp_event_logs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  plugin_id UUID REFERENCES mcp_plugins(id) ON DELETE SET NULL,
+  relay_id UUID REFERENCES mcp_relays(id) ON DELETE SET NULL,
+  event_type VARCHAR(50) NOT NULL,
+  event_data JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_event_logs_ws_type ON mcp_event_logs(workspace_id, event_type);
+CREATE INDEX IF NOT EXISTS idx_mcp_event_logs_created ON mcp_event_logs(created_at DESC);
+
+-- ============ MCP Validation & Setup Extensions ============
+ALTER TABLE mcp_plugins ADD COLUMN IF NOT EXISTS validation_rules JSONB DEFAULT '[]';
+ALTER TABLE mcp_plugins ADD COLUMN IF NOT EXISTS setup_steps JSONB DEFAULT '[]';
+
+-- Drop columns removed in architecture redesign
+ALTER TABLE mcp_plugins DROP COLUMN IF EXISTS config_dependencies;
+ALTER TABLE mcp_organizations DROP COLUMN IF EXISTS config;
+ALTER TABLE mcp_organizations DROP COLUMN IF EXISTS config_schema;
+ALTER TABLE mcp_organizations DROP COLUMN IF EXISTS validation_rules;
+ALTER TABLE mcp_organizations DROP COLUMN IF EXISTS setup_steps;
+
+-- Drop old tables replaced by mcp_installations
+DROP TABLE IF EXISTS mcp_config_authorizations CASCADE;
+DROP TABLE IF EXISTS mcp_actor_plugins CASCADE;
+DROP TABLE IF EXISTS mcp_user_installations CASCADE;
+DROP TABLE IF EXISTS mcp_workspace_installations CASCADE;
+
+-- ============ Updated at trigger (must be after all tables) ============
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -371,18 +543,10 @@ DO $$
 DECLARE
   tbl TEXT;
 BEGIN
-  FOR tbl IN SELECT unnest(ARRAY['users', 'workspaces', 'actors', 'work_items', 'memories', 'standing_orders', 'model_groups', 'model_group_items', 'sessions'])
+  FOR tbl IN SELECT unnest(ARRAY['users', 'workspaces', 'actors', 'work_items', 'memories', 'standing_orders', 'model_groups', 'model_group_items', 'sessions', 'mcp_organizations', 'mcp_plugins', 'mcp_installations', 'mcp_relays', 'mcp_relay_servers'])
   LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS set_updated_at ON %I', tbl);
     EXECUTE format('CREATE TRIGGER set_updated_at BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION update_updated_at()', tbl);
   END LOOP;
 END;
 $$;
-
--- ============ User Session Reads (unread tracking) ============
-CREATE TABLE IF NOT EXISTS user_session_reads (
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  root_session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (user_id, root_session_id)
-);

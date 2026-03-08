@@ -89,6 +89,7 @@ export async function sessionController(app: FastifyInstance) {
         workspaceId,
         workItemId: session.work_item_id,
         trigger: 'user_message',
+        userId,
       });
     }
 

@@ -112,6 +112,24 @@ class ApiClient {
   sendGroupMessage(wsId: string, rootSessionId: string, content: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/messages`, { method: 'POST', body: JSON.stringify({ content }) }); }
   markGroupRead(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/read`, { method: 'POST', body: '{}' }); }
   cancelGroup(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}`, { method: 'DELETE' }); }
+
+  // MCP Marketplace
+  getMarketplace(params?: string) { return this.fetch(`/mcp/marketplace${params ? '?' + params : ''}`); }
+  getMarketplacePlugin(pluginId: string) { return this.fetch(`/mcp/marketplace/${pluginId}`); }
+  getMcpOrganizations() { return this.fetch('/mcp/organizations'); }
+  getMcpOrganization(orgId: string) { return this.fetch(`/mcp/organizations/${orgId}`); }
+
+  // MCP Unified Installations
+  getInstallations(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/mcp/installations${params ? '?' + params : ''}`); }
+  installPlugin(wsId: string, data: { pluginId: string; scopeType: string; scopeId?: string; lifecycleScope?: string; configData?: Record<string, unknown> }) {
+    return this.fetch(`/workspaces/${wsId}/mcp/installations`, { method: 'POST', body: JSON.stringify(data) });
+  }
+  updateInstallation(wsId: string, installId: string, data: any) { return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}`, { method: 'PUT', body: JSON.stringify(data) }); }
+  uninstallPlugin(wsId: string, installId: string) { return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}`, { method: 'DELETE' }); }
+
+  // MCP Audit
+  getMcpToolCallLogs(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/mcp/audit/tool-calls${params ? '?' + params : ''}`); }
+  getMcpEventLogs(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/mcp/audit/events${params ? '?' + params : ''}`); }
 }
 
 export const api = new ApiClient();

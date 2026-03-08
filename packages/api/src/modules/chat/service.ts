@@ -1,5 +1,6 @@
 import { query } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
+import { redis } from '../../infrastructure/redis/index.js';
 import {
   createSessionAndEnqueue,
   getSession,
@@ -108,7 +109,7 @@ export async function listGroups(workspaceId: UUID, userId: UUID) {
     [workspaceId, userId]
   );
 
-  return result.rows.map((row: any) => ({
+  const groups = result.rows.map((row: any) => ({
     id: row.id,
     status: row.status,
     participants: row.participants || [],
@@ -117,6 +118,23 @@ export async function listGroups(workspaceId: UUID, userId: UUID) {
     createdAt: row.created_at,
     title: row.title,
   }));
+
+  // Recover thinking states from Redis for active groups
+  const activeGroupIds = groups.filter((g: any) => g.status === 'active').map((g: any) => g.id);
+  const thinkingMap: Record<string, any> = {};
+  if (activeGroupIds.length > 0) {
+    const keys = activeGroupIds.map((id: string) => `thinking:${id}`);
+    const values = await redis.mget(...keys);
+    for (let i = 0; i < activeGroupIds.length; i++) {
+      if (values[i]) {
+        try {
+          thinkingMap[activeGroupIds[i]] = JSON.parse(values[i]!);
+        } catch { /* ignore parse errors */ }
+      }
+    }
+  }
+
+  return { groups, thinkingMap };
 }
 
 /**
@@ -215,6 +233,7 @@ export async function sendMessageToGroup(
       workspaceId,
       workItemId: existing.work_item_id,
       trigger: 'user_message',
+      userId,
     });
   } else {
     // All sessions completed — re-activate the root session with new user message
@@ -236,6 +255,7 @@ export async function sendMessageToGroup(
       workspaceId,
       workItemId: rootSession.work_item_id,
       trigger: 'user_message',
+      userId,
     });
   }
 

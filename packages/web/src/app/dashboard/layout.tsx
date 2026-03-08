@@ -29,6 +29,7 @@ import {
   Zap,
   ChevronRight,
   Settings,
+  Puzzle,
 } from 'lucide-react';
 import { useChatStore } from '@/stores/chat-store';
 
@@ -39,6 +40,7 @@ const navItems = [
   { href: '/dashboard/work-items', label: 'Work Items', icon: Kanban },
   { href: '/dashboard/memories', label: 'Memories', icon: Brain },
   { href: '/dashboard/audit', label: 'Audit Log', icon: FileText },
+  { href: '/dashboard/plugins', label: 'Plugins', icon: Puzzle },
   { href: '/dashboard/settings', label: 'Settings', icon: Settings },
 ];
 

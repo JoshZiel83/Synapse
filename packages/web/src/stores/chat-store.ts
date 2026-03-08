@@ -87,7 +87,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const res = await api.getGroups(workspaceId);
       const groups = res?.groups || [];
       const totalUnread = groups.reduce((sum: number, g: any) => sum + (g.unreadCount || 0), 0);
-      set({ groups, totalUnread, loadingGroups: false });
+      // Recover thinking states from server (persisted in Redis)
+      const serverThinking = res?.thinkingMap || {};
+      set((s) => ({
+        groups,
+        totalUnread,
+        loadingGroups: false,
+        thinkingMap: { ...serverThinking, ...s.thinkingMap },
+      }));
     } catch (err) {
       console.error('Failed to load groups:', err);
       set({ loadingGroups: false });

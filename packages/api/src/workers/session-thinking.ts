@@ -7,6 +7,8 @@ import type { ActorAction } from '@synapse/shared';
 import { actorThink } from '../modules/ai/index.js';
 import { executeActorActions } from '../modules/orchestrator/service.js';
 import { resolveModelConfig } from '../modules/model-groups/resolver.js';
+import { resolveMcpToolsForActor } from '../modules/mcp-plugins/tool-resolver.js';
+import type { ResolvedMcpTools } from '../modules/mcp-plugins/tool-resolver.js';
 import {
   getSession,
   getSessionMessages,
@@ -20,7 +22,7 @@ export function startSessionThinkingWorker() {
   const worker = new Worker(
     QUEUE_NAMES.SESSION_THINKING,
     async (job) => {
-      const { sessionId, actorId, workspaceId, workItemId, trigger } = job.data;
+      const { sessionId, actorId, workspaceId, workItemId, trigger, userId } = job.data;
       const sessionLockKey = `${REDIS_CHANNELS.SESSION_LOCK_PREFIX}${sessionId}`;
       const actorSessionsKey = `${REDIS_CHANNELS.ACTOR_SESSIONS_PREFIX}${actorId}`;
 
@@ -64,11 +66,15 @@ export function startSessionThinkingWorker() {
         const thinkingSession = await getSession(sessionId);
         const rootSessionIdForEvents = thinkingSession?.root_session_id || sessionId;
 
+        const thinkingRedisKey = `thinking:${rootSessionIdForEvents}`;
         const emitThinkingStatus = async (status: string) => {
+          const thinkingPayload = { rootSessionId: rootSessionIdForEvents, sessionId, actorId, actorName: thinkingActorName, status };
+          // Persist in Redis so page reloads can recover it (5 min TTL safety net)
+          await redis.set(thinkingRedisKey, JSON.stringify(thinkingPayload), 'EX', 300);
           await emitEvent({
             type: 'session.thinking',
             workspaceId,
-            payload: { rootSessionId: rootSessionIdForEvents, sessionId, actorId, actorName: thinkingActorName, status },
+            payload: thinkingPayload,
             timestamp: nowISO(),
           });
         };
@@ -160,6 +166,17 @@ export function startSessionThinkingWorker() {
         // Resolve model config
         const resolvedConfig = await resolveModelConfig(actorId, workspaceId);
 
+        // Resolve MCP plugin tools for this actor session
+        let mcpTools: ResolvedMcpTools = { tools: [], executor: async () => '', cleanup: async () => {}, mcpVersion: 0, refresh: async () => ({ tools: [], mcpVersion: 0 }) };
+        try {
+          mcpTools = await resolveMcpToolsForActor({ actorId, workspaceId, sessionId, userId });
+          if (mcpTools.tools.length > 0) {
+            console.log(`[session-thinking] Resolved ${mcpTools.tools.length} MCP tools for actor ${actorId}`);
+          }
+        } catch (err: any) {
+          console.error(`[session-thinking] Failed to resolve MCP tools:`, err.message);
+        }
+
         // Refresh session lock periodically
         const lockRefreshInterval = setInterval(async () => {
           try {
@@ -177,10 +194,19 @@ export function startSessionThinkingWorker() {
             subordinatesResult.rows.length > 0 ? subordinatesResult.rows : undefined,
             resolvedConfig,
             workspaceId,
-            { sessionId, onStatus: emitThinkingStatus },
+            {
+              sessionId,
+              onStatus: emitThinkingStatus,
+              extraTools: mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
+              extraToolExecutor: mcpTools.executor,
+              mcpVersion: mcpTools.mcpVersion,
+              mcpRefresh: mcpTools.refresh,
+            },
           );
         } finally {
           clearInterval(lockRefreshInterval);
+          // Cleanup session-scoped MCP instances
+          await mcpTools.cleanup().catch(() => {});
         }
 
         // Filter out empty complete actions
@@ -206,6 +232,9 @@ export function startSessionThinkingWorker() {
           await emitThinkingStatus('Composing response...');
         }
         await executeActorActions(workspaceId, actorId, workItemId, result.actions, sessionId);
+
+        // Clear thinking state — this round is done
+        await redis.del(thinkingRedisKey);
 
         // Save assistant response as session message (include tool call info in metadata)
         const respondActions = result.actions.filter((a: ActorAction) => a.type === 'respond');
@@ -296,6 +325,10 @@ export function startSessionThinkingWorker() {
 
       } catch (err: any) {
         console.error(`[session-thinking] Session ${sessionId} failed:`, err.message);
+        // Clear thinking state from Redis on failure (best-effort: try both session and root keys)
+        const failedSess = await getSession(sessionId).catch(() => null);
+        const failRootId = failedSess?.root_session_id || sessionId;
+        await redis.del(`thinking:${failRootId}`).catch(() => {});
         await updateSessionStatus(sessionId, 'failed', { errorMessage: err.message });
 
         // Emit session.status.changed for failure

@@ -71,3 +71,11 @@ export const QUEUE_NAMES = {
 
 export const WS_AUTH_TIMEOUT = 5000;
 export const WS_HEARTBEAT_INTERVAL = 30000;
+
+// MCP Plugin Marketplace
+export const MCP_BUILTIN_ORG_SLUG = 'z_ai';
+export const MCP_TOOL_NAMESPACE_SEPARATOR = '__';
+export const MCP_INSTANCE_TTL = {
+  actor: 30 * 60 * 1000,    // 30 minutes
+  workspace: 60 * 60 * 1000, // 60 minutes
+} as const;

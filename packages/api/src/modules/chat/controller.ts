@@ -29,8 +29,8 @@ export async function chatController(app: FastifyInstance) {
     const { workspaceId } = request.params;
     const userId = (request as any).user!.userId;
 
-    const groups = await listGroups(workspaceId, userId);
-    return reply.send({ groups });
+    const result = await listGroups(workspaceId, userId);
+    return reply.send({ groups: result.groups, thinkingMap: result.thinkingMap });
   });
 
   // POST /workspaces/:wsId/chat/groups — create a new group
