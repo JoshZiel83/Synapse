@@ -9,19 +9,19 @@ import (
 )
 
 type Config struct {
-	Endpoint string         `yaml:"endpoint"`
-	Token    string         `yaml:"token"`
-	LogLevel string         `yaml:"log_level"`
-	Servers  []ServerConfig `yaml:"servers"`
+	Endpoint string         `yaml:"endpoint" json:"endpoint"`
+	Token    string         `yaml:"token" json:"token"`
+	LogLevel string         `yaml:"log_level" json:"log_level"`
+	Servers  []ServerConfig `yaml:"servers" json:"servers"`
 }
 
 type ServerConfig struct {
-	Name      string            `yaml:"name"`
-	Transport string            `yaml:"transport"` // "stdio" or "http"
-	Command   string            `yaml:"command"`    // for stdio
-	Args      []string          `yaml:"args"`       // for stdio
-	Env       map[string]string `yaml:"env"`        // for stdio
-	Endpoint  string            `yaml:"endpoint"`   // for http
+	Name      string            `yaml:"name" json:"name"`
+	Transport string            `yaml:"transport" json:"transport"`
+	Command   string            `yaml:"command" json:"command,omitempty"`
+	Args      []string          `yaml:"args" json:"args,omitempty"`
+	Env       map[string]string `yaml:"env" json:"env,omitempty"`
+	Endpoint  string            `yaml:"endpoint" json:"endpoint,omitempty"`
 }
 
 // DefaultDir returns the default config directory (~/.synapse-relay/)
