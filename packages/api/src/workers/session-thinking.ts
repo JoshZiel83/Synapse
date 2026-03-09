@@ -18,6 +18,7 @@ import {
   consumeInterrupts,
 } from '../modules/session/service.js';
 import { onSessionCompleted } from '../modules/session/completion.js';
+import { sessionThinkingQueue } from './queues.js';
 
 export function startSessionThinkingWorker() {
   const worker = new Worker(
@@ -30,7 +31,10 @@ export function startSessionThinkingWorker() {
       // 1. Acquire per-session lock
       const acquired = await redis.set(sessionLockKey, job.id!, 'PX', SESSION_LOCK_TTL, 'NX');
       if (!acquired) {
-        throw new Error(`Session ${sessionId} is already being processed, will retry`);
+        // Another worker is already processing this session.
+        // It will detect any new messages after finishing — safe to skip.
+        console.log(`[session-thinking] Session ${sessionId} is already being processed, skipping`);
+        return { success: false, reason: 'session locked, current worker will handle new messages' };
       }
 
       // 2. Check actor concurrent session limit
@@ -298,10 +302,89 @@ export function startSessionThinkingWorker() {
 
           // If session has completed work (no pending), mark session as completed
           if (!hasPendingWork) {
+            // Check for new user messages that arrived while AI was processing
+            const latestMessages = await getSessionMessages(sessionId);
+            const lastAssistantMsg = [...latestMessages].reverse().find(m => m.role === 'assistant');
+            const lastAssistantTime = lastAssistantMsg ? new Date(lastAssistantMsg.created_at) : new Date(0);
+            const hasNewUserMsgs = latestMessages.some(
+              m => m.role === 'user' && new Date(m.created_at) > lastAssistantTime
+            );
+
+            if (hasNewUserMsgs) {
+              // New user messages arrived during processing — re-enqueue
+              await sessionThinkingQueue.add('think', {
+                sessionId, actorId, workspaceId, workItemId, trigger: 'user_message', userId,
+              });
+
+              // Audit log for the completed round
+              await query(
+                `INSERT INTO audit_logs (workspace_id, actor_id, action, resource_type, resource_id, details)
+                 VALUES ($1, $2, 'ai.think', 'session', $3, $4)`,
+                [workspaceId, actorId, sessionId, JSON.stringify({
+                  trigger,
+                  tokensUsed: result.tokensUsed,
+                  actionsCount: result.actions.length,
+                  reasoning: result.reasoning,
+                  requeued: true,
+                })]
+              );
+
+              await emitEvent({
+                type: 'actor.action',
+                workspaceId,
+                payload: { actorId, sessionId, workItemId, actions: result.actions },
+                timestamp: nowISO(),
+              });
+
+              return { success: true, actions: result.actions.length, requeued: true };
+            }
+
             const resultContent = respondActions.map((a: ActorAction) => a.content).join('\n') ||
               result.actions.find((a: ActorAction) => a.type === 'complete')?.content || '';
 
             await updateSessionStatus(sessionId, 'completed');
+
+            // Final safety check: a message could have arrived between our
+            // first check and the status flip to 'completed'. At that moment
+            // sendMessageToGroup would have seen status='active' and enqueued
+            // a job, but that job will skip (lock still held by us). So we do
+            // one last check while we still hold the lock.
+            const finalMessages = await getSessionMessages(sessionId);
+            const finalLastAssistant = [...finalMessages].reverse().find(m => m.role === 'assistant');
+            const finalAssistantTime = finalLastAssistant ? new Date(finalLastAssistant.created_at) : new Date(0);
+            const hasLateUserMsgs = finalMessages.some(
+              m => m.role === 'user' && new Date(m.created_at) > finalAssistantTime
+            );
+
+            if (hasLateUserMsgs) {
+              // Re-activate and enqueue — message arrived in the gap
+              await updateSessionStatus(sessionId, 'active');
+              await sessionThinkingQueue.add('think', {
+                sessionId, actorId, workspaceId, workItemId, trigger: 'user_message', userId,
+              });
+
+              await query(
+                `INSERT INTO audit_logs (workspace_id, actor_id, action, resource_type, resource_id, details)
+                 VALUES ($1, $2, 'ai.think', 'session', $3, $4)`,
+                [workspaceId, actorId, sessionId, JSON.stringify({
+                  trigger,
+                  tokensUsed: result.tokensUsed,
+                  actionsCount: result.actions.length,
+                  reasoning: result.reasoning,
+                  requeued: true,
+                  requeueReason: 'late_message_after_completion',
+                })]
+              );
+
+              await emitEvent({
+                type: 'actor.action',
+                workspaceId,
+                payload: { actorId, sessionId, workItemId, actions: result.actions },
+                timestamp: nowISO(),
+              });
+
+              return { success: true, actions: result.actions.length, requeued: true };
+            }
 
             // Emit session.status.changed
             await emitEvent({

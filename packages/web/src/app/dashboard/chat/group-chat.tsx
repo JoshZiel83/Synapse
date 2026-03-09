@@ -266,6 +266,15 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
 
       {/* Input */}
       <div className="p-4 border-t border-blue-500/5">
+        {/* Responding hint */}
+        {thinking && (
+          <div className="flex items-center gap-2 mb-2 px-1">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-xs text-muted-foreground">
+              {thinking.actorName} is responding — you can still send messages
+            </span>
+          </div>
+        )}
         {/* Pending file previews */}
         {pendingFiles.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-3">

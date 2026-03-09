@@ -235,10 +235,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const exists = s.messages.some((m) => m.id === messageId);
         if (exists) return s;
 
-        // Remove temp messages from same user if this is a user message confirmation
+        // Remove optimistic temp messages when server confirms the user message
         let messages = s.messages;
         if (role === 'user' && fromUserId) {
-          messages = messages.filter((m) => !(m.status === 'sending' && m.role === 'user'));
+          messages = messages.filter((m) => !(m.id.startsWith('temp-') && m.role === 'user'));
         }
 
         return {

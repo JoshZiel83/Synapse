@@ -26,6 +26,12 @@ export async function createOrganization(data: {
   const result = await query(
     `INSERT INTO mcp_organizations (slug, display_name, description, logo_url, is_builtin, is_verified, owner_user_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (slug) DO UPDATE SET
+       display_name = EXCLUDED.display_name,
+       description = EXCLUDED.description,
+       logo_url = EXCLUDED.logo_url,
+       is_builtin = EXCLUDED.is_builtin,
+       is_verified = EXCLUDED.is_verified
      RETURNING *`,
     [
       data.slug,
@@ -356,31 +362,18 @@ export function validateConfig(
 
 // ============ Seed Builtin MCP Plugins ============
 
-async function cleanOldBuiltinPlugins() {
-  // Wipe all builtin installations, plugins, and orgs so seed is always fresh
-  await query(`DELETE FROM mcp_installations WHERE plugin_id IN (SELECT id FROM mcp_plugins WHERE is_builtin = TRUE)`, []);
-  await query(`DELETE FROM mcp_plugins WHERE is_builtin = TRUE`, []);
-  await query(`DELETE FROM mcp_organizations WHERE is_builtin = TRUE`, []);
-  console.log('[MCP] Cleaned old builtin data');
-}
-
 export async function seedBuiltinMcpPlugins() {
-  await cleanOldBuiltinPlugins();
   for (const seed of builtinSeeds) {
-    // Create or find the organization
-    let org = await getOrganizationBySlug(seed.slug);
-    if (!org) {
-      org = await createOrganization({
-        slug: seed.slug,
-        displayName: seed.displayName,
-        description: seed.description,
-        isBuiltin: true,
-        isVerified: true,
-      });
-      console.log(`[MCP] Created ${seed.slug} organization`);
-    }
+    // Upsert the organization (preserves existing id and installations)
+    const org = await createOrganization({
+      slug: seed.slug,
+      displayName: seed.displayName,
+      description: seed.description,
+      isBuiltin: true,
+      isVerified: true,
+    });
 
-    // Seed each plugin under the org
+    // Seed each plugin under the org (upsert preserves existing id)
     for (const pluginSeed of seed.plugins) {
       const plugin = await createPlugin({
         orgId: org.id,

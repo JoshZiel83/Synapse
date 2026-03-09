@@ -229,7 +229,11 @@ export async function sendMessageToGroup(
       metadata: Object.keys(msgMetadata).length > 0 ? msgMetadata : undefined,
     });
 
-    // Re-enqueue thinking if waiting
+    // If session is waiting (idle), re-activate and enqueue.
+    // If session is active (worker running), still enqueue — the new job will
+    // either be picked up after the current worker finishes, or gracefully
+    // skip if the worker detects the new messages itself. This eliminates
+    // the race window where a message could be missed.
     if (existing.status === 'waiting') {
       await updateSessionStatus(targetSessionId, 'active');
     }
