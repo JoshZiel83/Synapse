@@ -35,6 +35,7 @@ type detector struct {
 
 var detectors = []detector{
 	{name: "Claude Code", path: claudeConfigPath, detect: detectClaude},
+	{name: "Claude Desktop", path: claudeDesktopConfigPath, detect: detectClaude},
 	{name: "Codex", path: codexConfigPath, detect: detectCodex},
 	{name: "Gemini", path: geminiConfigPath, detect: detectGemini},
 	{name: "OpenCode", path: openCodeConfigPath, detect: detectOpenCode},

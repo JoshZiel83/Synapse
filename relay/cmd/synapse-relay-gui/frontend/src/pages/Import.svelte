@@ -1,5 +1,5 @@
 <script lang="ts">
-  declare const window: any
+  import { callGo } from '../lib/wails'
 
   interface ImportedServer {
     name: string
@@ -26,9 +26,12 @@
 
   async function detect() {
     loading = true
+    message = ''
     try {
-      sources = await window.go.main.App.DetectSources()
-    } catch {}
+      sources = await callGo<Source[]>('DetectSources')
+    } catch (e: any) {
+      message = `Scan failed: ${e?.message || String(e)}`
+    }
     loading = false
   }
 
@@ -71,7 +74,7 @@
     importing = true
     message = ''
     try {
-      await window.go.main.App.ImportServers(servers)
+      await callGo('ImportServers', servers)
       message = `Imported ${servers.length} server(s) successfully.`
       selected = new Set()
     } catch (e: any) {

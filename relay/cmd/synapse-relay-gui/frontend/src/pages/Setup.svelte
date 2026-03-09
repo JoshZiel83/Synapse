@@ -1,5 +1,5 @@
 <script lang="ts">
-  declare const window: any
+  import { callGo } from '../lib/wails'
 
   let endpoint = $state('')
   let token = $state('')
@@ -10,7 +10,7 @@
 
   async function loadConfig() {
     try {
-      const cfg = await window.go.main.App.GetConfig()
+      const cfg = await callGo<any>('GetConfig')
       endpoint = cfg.endpoint || ''
       token = cfg.token || ''
     } catch {}
@@ -22,7 +22,7 @@
     testResult = ''
     testError = ''
     try {
-      const result = await window.go.main.App.TestConnection(endpoint, token)
+      const result = await callGo<string>('TestConnection', endpoint, token)
       testResult = result
     } catch (e: any) {
       testError = e?.message || String(e)
@@ -34,10 +34,10 @@
   async function save() {
     saving = true
     try {
-      const cfg = await window.go.main.App.GetConfig()
+      const cfg = await callGo<any>('GetConfig')
       cfg.endpoint = endpoint
       cfg.token = token
-      await window.go.main.App.SaveConfig(cfg)
+      await callGo('SaveConfig', cfg)
       testResult = 'Configuration saved.'
       testError = ''
     } catch (e: any) {

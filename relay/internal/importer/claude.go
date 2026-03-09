@@ -24,6 +24,16 @@ func claudeConfigPath() string {
 	return filepath.Join(home, ".claude.json")
 }
 
+func claudeDesktopConfigPath() string {
+	// Claude Desktop: %APPDATA%/Claude/claude_desktop_config.json (Windows)
+	// or ~/Library/Application Support/Claude/claude_desktop_config.json (macOS)
+	if dir := os.Getenv("APPDATA"); dir != "" {
+		return filepath.Join(dir, "Claude", "claude_desktop_config.json")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
+}
+
 func detectClaude(path string) ([]ImportedServer, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import { callGo } from '../lib/wails'
   declare const window: any
 
   interface StatusInfo {
@@ -38,7 +39,7 @@
 
   async function refreshStatus() {
     try {
-      status = await window.go.main.App.GetStatus()
+      status = await callGo<StatusInfo>('GetStatus')
     } catch {}
     starting = false
     stopping = false
@@ -46,14 +47,14 @@
 
   async function loadLogs() {
     try {
-      logs = await window.go.main.App.GetRecentLogs(100)
+      logs = await callGo<LogEntry[]>('GetRecentLogs', 100)
     } catch {}
   }
 
   async function start() {
     starting = true
     try {
-      await window.go.main.App.StartRelay()
+      await callGo('StartRelay')
     } catch (e: any) {
       status = { state: 'error', error: e?.message || String(e) }
       starting = false
@@ -63,14 +64,14 @@
   async function stop() {
     stopping = true
     try {
-      await window.go.main.App.StopRelay()
+      await callGo('StopRelay')
     } catch {}
   }
 
   async function restart() {
     stopping = true
     try {
-      await window.go.main.App.RestartRelay()
+      await callGo('RestartRelay')
     } catch (e: any) {
       status = { state: 'error', error: e?.message || String(e) }
     }

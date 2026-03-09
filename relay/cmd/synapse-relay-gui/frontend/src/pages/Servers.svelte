@@ -1,5 +1,5 @@
 <script lang="ts">
-  declare const window: any
+  import { callGo } from '../lib/wails'
 
   interface ServerConfig {
     name: string
@@ -20,7 +20,7 @@
 
   async function loadServers() {
     try {
-      const cfg = await window.go.main.App.GetConfig()
+      const cfg = await callGo<any>('GetConfig')
       servers = cfg.servers || []
     } catch {}
   }
@@ -35,7 +35,7 @@
       endpoint: newTransport === 'http' ? newEndpoint : '',
     }
     try {
-      await window.go.main.App.AddServer(sc)
+      await callGo('AddServer', sc)
       showAdd = false
       newName = ''; newCommand = ''; newArgs = ''; newEndpoint = ''
       await loadServers()
@@ -46,7 +46,7 @@
 
   async function removeServer(name: string) {
     try {
-      await window.go.main.App.RemoveServer(name)
+      await callGo('RemoveServer', name)
       await loadServers()
     } catch (e: any) {
       alert(e?.message || String(e))
