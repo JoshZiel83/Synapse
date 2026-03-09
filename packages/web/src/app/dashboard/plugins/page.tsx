@@ -3,16 +3,18 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Store, Package } from 'lucide-react';
+import { Store, Package, Radio } from 'lucide-react';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { usePluginStore } from '@/stores/plugin-store';
 import MarketplaceBrowse from './marketplace-browse';
 import InstalledList from './installed-list';
+import RelayList from './relay-list';
 
 export default function PluginsPage() {
   const searchParams = useSearchParams();
   const defaultActorId = searchParams.get('actorId') || undefined;
-  const [tab, setTab] = useState('marketplace');
+  const defaultTab = searchParams.get('tab') || 'marketplace';
+  const [tab, setTab] = useState(defaultTab);
   const { workspaceId } = useWorkspace();
   const { loadMarketplace, loadInstallations, loadOrganizations } = usePluginStore();
 
@@ -43,6 +45,10 @@ export default function PluginsPage() {
             <Package className="w-4 h-4" />
             Installed
           </TabsTrigger>
+          <TabsTrigger value="relays" className="data-[state=active]:bg-indigo-50 data-[state=active]:text-indigo-600 dark:data-[state=active]:bg-indigo-500/20 dark:data-[state=active]:text-indigo-400 gap-2">
+            <Radio className="w-4 h-4" />
+            Relays
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="marketplace" className="mt-6">
@@ -51,6 +57,10 @@ export default function PluginsPage() {
 
         <TabsContent value="installed" className="mt-6">
           <InstalledList />
+        </TabsContent>
+
+        <TabsContent value="relays" className="mt-6">
+          <RelayList />
         </TabsContent>
       </Tabs>
     </div>

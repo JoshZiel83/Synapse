@@ -79,3 +79,8 @@ export const MCP_INSTANCE_TTL = {
   actor: 30 * 60 * 1000,    // 30 minutes
   workspace: 60 * 60 * 1000, // 60 minutes
 } as const;
+
+// MCP Relay
+export const RELAY_AUTH_TIMEOUT = 5000;
+export const RELAY_HEARTBEAT_INTERVAL = 30000;
+export const RELAY_TOOL_CALL_TIMEOUT = 30000;

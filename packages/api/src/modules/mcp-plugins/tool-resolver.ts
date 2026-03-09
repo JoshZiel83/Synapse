@@ -5,6 +5,7 @@ import { query } from '../../infrastructure/database/index.js';
 import { resolveInstallationConfig } from './config-resolver.js';
 import { getOrCreateInstance, getMcpVersion, McpInstance } from './instance-manager.js';
 import { logToolCall } from './audit.js';
+import { getConnectedRelayServers, callRelayTool } from './relay-manager.js';
 
 export interface ResolvedMcpTools {
   tools: ToolDefinition[];
@@ -113,9 +114,79 @@ async function resolveTools(
 }
 
 /**
+ * Resolve relay tools from all connected relay agents for a workspace.
+ * Creates lightweight McpInstance entries in the shared instances map so
+ * the executor can dispatch tool calls to relays using the same namespace pattern.
+ */
+async function resolveRelayTools(
+  params: ResolveParams,
+  instances: Map<string, McpInstance>,
+): Promise<ToolDefinition[]> {
+  const { workspaceId, userId } = params;
+
+  const relayServers = getConnectedRelayServers(workspaceId, userId);
+  if (relayServers.length === 0) return [];
+
+  // Also check which relay servers are enabled in DB
+  const enabledResult = await query(
+    `SELECT rs.relay_id, rs.name, rs.is_enabled
+     FROM mcp_relay_servers rs
+     JOIN mcp_relays r ON r.id = rs.relay_id
+     WHERE r.workspace_id = $1`,
+    [workspaceId]
+  );
+  const enabledMap = new Map<string, boolean>();
+  for (const row of enabledResult.rows) {
+    enabledMap.set(`${row.relay_id}:${row.name}`, row.is_enabled);
+  }
+
+  const allTools: ToolDefinition[] = [];
+
+  for (const server of relayServers) {
+    // Check if server is enabled
+    const key = `${server.relayId}:${server.serverName}`;
+    if (enabledMap.has(key) && !enabledMap.get(key)) continue;
+
+    const relayPrefix = `relay_${server.relayId.slice(0, 8)}`;
+    const namespace = `${relayPrefix}${MCP_TOOL_NAMESPACE_SEPARATOR}${server.serverName}`;
+
+    // Create lightweight McpInstance for the relay server
+    const relayInstance: McpInstance = {
+      pluginId: `relay:${server.relayId}:${server.serverName}`,
+      pluginSlug: server.serverName,
+      orgSlug: relayPrefix,
+      transport: 'relay',
+      scope: 'workspace',
+      scopeId: workspaceId,
+      workspaceId,
+      configHash: 'relay',
+      tools: server.tools,
+      execute: async (toolName: string, input: Record<string, unknown>) => {
+        return callRelayTool(server.relayId, server.serverName, toolName, input);
+      },
+      shutdown: async () => { /* no-op for relay */ },
+      lastUsed: Date.now(),
+      createdAt: Date.now(),
+    };
+
+    const namespacedTools = server.tools.map(tool => ({
+      ...tool,
+      name: `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.name}`,
+      description: `[relay/${server.relayName}/${server.serverName}] ${tool.description}`,
+    }));
+
+    allTools.push(...namespacedTools);
+    instances.set(namespace, relayInstance);
+  }
+
+  return allTools;
+}
+
+/**
  * Resolve all available MCP tools for an actor session.
  * Queries the unified mcp_installations table, de-duplicates by plugin_id
  * (most specific scope wins: actor > user > workspace).
+ * Also resolves tools from connected relay agents.
  *
  * Session-scoped instances are managed by TTL (30 min) in instance-manager
  * and explicitly cleaned up on session cancellation/failure.
@@ -134,7 +205,12 @@ export async function resolveMcpToolsForActor(params: {
   // Mutable state — shared by executor and refresh
   const instances: Map<string, McpInstance> = new Map();
 
-  const allTools = await resolveTools(params, instances);
+  // Resolve plugin tools + relay tools in parallel
+  const [pluginTools, relayTools] = await Promise.all([
+    resolveTools(params, instances),
+    resolveRelayTools(params, instances),
+  ]);
+  const allTools = [...pluginTools, ...relayTools];
 
   // Build unified executor — references the mutable `instances` Map.
   // Created unconditionally so refresh() can add tools mid-session even if none exist initially.
@@ -167,30 +243,37 @@ export async function resolveMcpToolsForActor(params: {
       errorMessage = error.message;
       throw error;
     } finally {
-      logToolCall({
-        workspaceId,
-        sessionId,
-        actorId,
-        userId,
-        pluginId: instance.pluginId,
-        toolName: namespacedToolName,
-        input,
-        output,
-        isError,
-        errorMessage,
-        durationMs: Date.now() - startTime,
-        transport: instance.transport,
-        instanceKey: `${instance.pluginId}:${instance.scope}:${instance.scopeId}`,
-      });
+      // For relay tools, pluginId is a composite string — skip the FK-constrained log
+      const isRelay = instance.transport === 'relay';
+      if (!isRelay) {
+        logToolCall({
+          workspaceId,
+          sessionId,
+          actorId,
+          userId,
+          pluginId: instance.pluginId,
+          toolName: namespacedToolName,
+          input,
+          output,
+          isError,
+          errorMessage,
+          durationMs: Date.now() - startTime,
+          transport: instance.transport,
+          instanceKey: `${instance.pluginId}:${instance.scope}:${instance.scopeId}`,
+        });
+      }
     }
   };
 
-  // Refresh function — re-queries DB, rebuilds instances map
+  // Refresh function — re-queries DB + relay, rebuilds instances map
   const refresh = async (): Promise<{ tools: ToolDefinition[]; mcpVersion: number }> => {
     const newVersion = await getMcpVersion(workspaceId);
     instances.clear();
-    const newTools = await resolveTools(params, instances);
-    return { tools: newTools, mcpVersion: newVersion };
+    const [newPluginTools, newRelayTools] = await Promise.all([
+      resolveTools(params, instances),
+      resolveRelayTools(params, instances),
+    ]);
+    return { tools: [...newPluginTools, ...newRelayTools], mcpVersion: newVersion };
   };
 
   return { tools: allTools, executor, mcpVersion, refresh };

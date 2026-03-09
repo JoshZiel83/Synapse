@@ -19,3 +19,8 @@ storage/
 
 # Playwright MCP
 .playwright-mcp/
+
+# Relay agent
+relay/synapse-relay
+relay/synapse-relay-*
+relay/config.yaml

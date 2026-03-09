@@ -135,6 +135,23 @@ class ApiClient {
   getMcpToolCallLogs(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/mcp/audit/tool-calls${params ? '?' + params : ''}`); }
   getMcpEventLogs(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/mcp/audit/events${params ? '?' + params : ''}`); }
 
+  // MCP Relays
+  getRelays(wsId: string) { return this.fetch(`/workspaces/${wsId}/mcp/relays`); }
+  createRelay(wsId: string, data: { name: string; metadata?: Record<string, unknown> }) {
+    return this.fetch(`/workspaces/${wsId}/mcp/relays`, { method: 'POST', body: JSON.stringify(data) });
+  }
+  updateRelay(wsId: string, relayId: string, data: { name?: string; metadata?: Record<string, unknown> }) {
+    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+  deleteRelay(wsId: string, relayId: string) { return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`, { method: 'DELETE' }); }
+  regenerateRelayToken(wsId: string, relayId: string) {
+    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}/regenerate-token`, { method: 'POST', body: '{}' });
+  }
+  getRelayServers(wsId: string, relayId: string) { return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}/servers`); }
+  updateRelayServer(wsId: string, relayId: string, serverId: string, data: { isEnabled: boolean }) {
+    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}/servers/${serverId}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
   // File Upload
   async uploadFile(wsId: string, file: File) {
     const formData = new FormData();

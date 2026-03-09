@@ -30,6 +30,7 @@ import { seedPlatformDefaultGroup } from './modules/model-groups/service.js';
 import { seedBuiltinMcpPlugins } from './modules/mcp-plugins/service.js';
 import { initBuiltinRegistry } from './modules/mcp-plugins/builtin/index.js';
 import { initInstanceManagerListeners } from './modules/mcp-plugins/instance-manager.js';
+import { initRelayManager, shutdownAllRelays } from './modules/mcp-plugins/relay-manager.js';
 import { registerSessionTools } from './modules/ai/session-tools.js';
 
 // Workers
@@ -95,6 +96,7 @@ async function main() {
     await seedBuiltinMcpPlugins();
     await initBuiltinRegistry();
     initInstanceManagerListeners();
+    await initRelayManager();
     console.log('MCP plugins seeded and registry initialized');
   } catch (err) {
     console.error('Failed to seed MCP plugins:', err);
@@ -129,6 +131,13 @@ async function main() {
     app.log.error(err);
     process.exit(1);
   }
+
+  // Graceful shutdown for relay connections
+  const gracefulShutdown = async () => {
+    await shutdownAllRelays();
+  };
+  process.on('SIGTERM', () => { gracefulShutdown().catch(() => {}); });
+  process.on('SIGINT', () => { gracefulShutdown().catch(() => {}); });
 }
 
 main();

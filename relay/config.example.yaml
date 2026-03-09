@@ -1,0 +1,26 @@
+# Synapse Relay Agent Configuration
+# Copy this file to config.yaml and fill in your values
+
+# WebSocket endpoint to connect to (REQUIRED)
+endpoint: "wss://your-synapse-server.com/ws/relay"
+
+# Authentication token (REQUIRED, obtained from Synapse dashboard)
+token: "your-relay-auth-token-here"
+
+# Log level: debug, info, warn, error
+log_level: "info"
+
+# Local MCP servers to expose
+servers:
+  # Example: filesystem server via stdio
+  - name: "filesystem"
+    transport: "stdio"
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"]
+    env:
+      NODE_ENV: "production"
+
+  # Example: custom HTTP MCP server
+  # - name: "custom-api"
+  #   transport: "http"
+  #   endpoint: "http://localhost:8080/mcp"

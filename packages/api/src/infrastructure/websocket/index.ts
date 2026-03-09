@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { SystemEvent } from '@synapse/shared';
 import { WS_AUTH_TIMEOUT, WS_HEARTBEAT_INTERVAL } from '@synapse/shared';
 import { onEvent } from '../events/index.js';
+import { handleRelayConnection } from '../../modules/mcp-plugins/relay-manager.js';
 
 interface WSClient {
   ws: any;
@@ -19,6 +20,11 @@ let appRef: FastifyInstance | null = null;
 
 export function setupWebSocket(app: FastifyInstance) {
   appRef = app;
+
+  // Relay agent WebSocket endpoint
+  app.get('/ws/relay', { websocket: true }, (socket: any, req: any) => {
+    handleRelayConnection(socket, req, app);
+  });
 
   app.get('/ws', { websocket: true }, (socket: any, req: any) => {
     const clientId = crypto.randomUUID();

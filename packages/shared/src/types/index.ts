@@ -245,7 +245,8 @@ export type EventType =
   | 'secretary.response'
   | 'actor.thinking' | 'actor.action'
   | 'session.message.new' | 'session.status.changed' | 'session.thinking' | 'group.updated'
-  | 'mcp.config.changed';
+  | 'mcp.config.changed'
+  | 'relay.connected' | 'relay.disconnected' | 'relay.servers_updated';
 
 export interface SystemEvent {
   type: EventType;
