@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Globe, FileText } from 'lucide-react';
+import { Globe, FileText, Image, Mic, Video, FileIcon } from 'lucide-react';
 
 interface ModelItemDialogProps {
   open: boolean;
@@ -39,6 +39,13 @@ const ANTHROPIC_BUILTIN_TOOLS = [
   },
 ];
 
+const MULTIMODAL_TYPES = [
+  { key: 'image', label: 'Images', description: 'Send images (JPEG, PNG, GIF, WebP) to the model', icon: Image },
+  { key: 'audio', label: 'Audio', description: 'Send audio files (MP3, WAV, etc.) to the model', icon: Mic },
+  { key: 'video', label: 'Video', description: 'Send video files to the model', icon: Video },
+  { key: 'document', label: 'Documents', description: 'Send PDF and document files to the model', icon: FileIcon },
+];
+
 export default function ModelItemDialog({ open, onOpenChange, groupId, item, onSaved }: ModelItemDialogProps) {
   const { workspaceId } = useWorkspace();
   const [displayName, setDisplayName] = useState('');
@@ -50,6 +57,7 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
   const [priority, setPriority] = useState('0');
   const [weight, setWeight] = useState('100');
   const [builtinTools, setBuiltinTools] = useState<string[]>([]);
+  const [multimodalTypes, setMultimodalTypes] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -62,9 +70,10 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
       setMaxTokens(String(item.max_tokens || 4096));
       setPriority(String(item.priority ?? 0));
       setWeight(String(item.weight ?? 100));
-      // Load builtin_tools from extra_config
+      // Load builtin_tools and multimodal from extra_config
       const ec = item.extra_config || {};
       setBuiltinTools(Array.isArray(ec.builtin_tools) ? ec.builtin_tools : []);
+      setMultimodalTypes(ec.multimodal?.supported && Array.isArray(ec.multimodal.types) ? ec.multimodal.types : []);
     } else {
       setDisplayName('');
       setProviderType('anthropic');
@@ -75,6 +84,7 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
       setPriority('0');
       setWeight('100');
       setBuiltinTools([]);
+      setMultimodalTypes([]);
     }
   }, [item, open]);
 
@@ -84,14 +94,23 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
     );
   };
 
+  const toggleMultimodalType = (type: string) => {
+    setMultimodalTypes((prev) =>
+      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
+    );
+  };
+
   const handleSave = async () => {
     if (!workspaceId || !displayName.trim()) return;
     setSaving(true);
     try {
-      // Build extraConfig with builtin_tools
+      // Build extraConfig with builtin_tools and multimodal
       const extraConfig: Record<string, unknown> = {};
       if (providerType === 'anthropic' && builtinTools.length > 0) {
         extraConfig.builtin_tools = builtinTools;
+      }
+      if (multimodalTypes.length > 0) {
+        extraConfig.multimodal = { supported: true, types: multimodalTypes };
       }
 
       if (item) {
@@ -272,6 +291,66 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
               </p>
             </div>
           )}
+
+          {/* Multimodal Capabilities */}
+          <div className="space-y-3 pt-1">
+            <Label className="text-sm">Multimodal Capabilities</Label>
+            <div className="space-y-2">
+              {MULTIMODAL_TYPES.map((type) => {
+                const Icon = type.icon;
+                const checked = multimodalTypes.includes(type.key);
+                return (
+                  <label
+                    key={type.key}
+                    className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all duration-200 ${
+                      checked
+                        ? 'border-violet-500/40 bg-violet-500/5'
+                        : 'border-blue-500/10 bg-background/30 hover:border-blue-500/20'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleMultimodalType(type.key)}
+                      className="sr-only"
+                    />
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                      checked
+                        ? 'bg-violet-500/20 text-violet-400'
+                        : 'bg-background/50 text-muted-foreground'
+                    }`}>
+                      <Icon className="w-4 h-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-sm font-medium ${checked ? 'text-foreground' : 'text-muted-foreground'}`}>
+                          {type.label}
+                        </span>
+                        {checked && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/10 text-violet-400 border border-violet-500/20">
+                            Enabled
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground/80 mt-0.5">{type.description}</p>
+                    </div>
+                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                      checked ? 'bg-violet-500 border-violet-500' : 'border-muted-foreground/30'
+                    }`}>
+                      {checked && (
+                        <svg className="w-3 h-3 text-white" viewBox="0 0 12 12" fill="none">
+                          <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      )}
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground/60">
+              Enable multimodal input types that this model supports. Attachments of unsupported types will be sent as text descriptions.
+            </p>
+          </div>
         </div>
 
         <DialogFooter>

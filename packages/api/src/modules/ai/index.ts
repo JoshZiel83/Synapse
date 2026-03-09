@@ -7,6 +7,7 @@ import { logAIRequest } from '../model-groups/service.js';
 import { isCallableTool, executeCallableTools, getCallableToolDefinitions } from './callable-tools.js';
 import { setToolExecutionContext } from './session-tools.js';
 import { getMcpVersion } from '../mcp-plugins/instance-manager.js';
+import { adaptAttachments, type Attachment } from './content-adapter.js';
 
 export { buildActorPrompt } from './prompt-builder.js';
 
@@ -61,6 +62,7 @@ export async function actorThink(
     extraToolExecutor?: (toolName: string, input: Record<string, unknown>) => Promise<string>;
     mcpVersion?: number;
     mcpRefresh?: () => Promise<{ tools: import('@synapse/shared').ToolDefinition[]; mcpVersion: number }>;
+    attachments?: Attachment[];
   },
 ): Promise<ThinkingResult> {
   const { system, messages } = buildActorPrompt(actor, memories, workContext, subordinates, undefined, options?.extraTools);
@@ -70,6 +72,29 @@ export async function actorThink(
     role: m.role as 'user' | 'assistant',
     content: m.content,
   }));
+
+  // If attachments are present, adapt the last user message to include multimodal content blocks
+  let multimodalContent: unknown[] | undefined;
+  if (options?.attachments && options.attachments.length > 0 && aiMessages.length > 0) {
+    const lastUserIdx = aiMessages.length - 1;
+    if (aiMessages[lastUserIdx]?.role === 'user') {
+      const { contentBlocks, textFallback } = await adaptAttachments(
+        aiMessages[lastUserIdx].content,
+        options.attachments,
+        resolved?.multimodal,
+        resolved?.providerType || (config.ai.provider as any),
+      );
+      // If we have multimodal blocks (more than just text), use content blocks
+      if (contentBlocks.length > 1) {
+        multimodalContent = contentBlocks;
+        // Update the text content to include fallback descriptions
+        aiMessages[lastUserIdx] = { ...aiMessages[lastUserIdx], content: textFallback };
+      } else {
+        // Only text fallback, update the message content
+        aiMessages[lastUserIdx] = { ...aiMessages[lastUserIdx], content: textFallback };
+      }
+    }
+  }
 
   // Merge action tools + callable tools + MCP extra tools
   const callableToolDefs = getCallableToolDefinitions();
@@ -116,6 +141,7 @@ export async function actorThink(
         tools: allTools,
         builtinTools: resolved?.builtinTools,
         continuationHistory: continuationHistory.length > 0 ? continuationHistory : undefined,
+        multimodalContent: round === 0 ? multimodalContent : undefined,
       });
 
       totalTokens.input += response.tokensUsed.input;

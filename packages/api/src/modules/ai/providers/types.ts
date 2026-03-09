@@ -15,5 +15,6 @@ export interface AIProvider {
     tools?: ToolDefinition[];
     builtinTools?: AnthropicBuiltinTool[];
     continuationHistory?: ContinuationEntry[];
+    multimodalContent?: unknown[];
   }): Promise<AIResponse>;
 }

@@ -15,8 +15,19 @@ const createGroupSchema = z.object({
   content: z.string().min(1).max(10000),
 });
 
+const attachmentSchema = z.object({
+  id: z.string().uuid(),
+  url: z.string(),
+  fullUrl: z.string().optional(),
+  storedName: z.string().optional(),
+  originalName: z.string(),
+  mimeType: z.string(),
+  sizeBytes: z.number(),
+});
+
 const sendMessageSchema = z.object({
   content: z.string().min(1).max(10000),
+  attachments: z.array(attachmentSchema).optional(),
 });
 
 export async function chatController(app: FastifyInstance) {
@@ -63,13 +74,13 @@ export async function chatController(app: FastifyInstance) {
   // POST /workspaces/:wsId/chat/groups/:rootSessionId/messages — send message to group
   app.post<{
     Params: { workspaceId: string; rootSessionId: string };
-    Body: { content: string };
+    Body: { content: string; attachments?: any[] };
   }>('/workspaces/:workspaceId/chat/groups/:rootSessionId/messages', async (request, reply) => {
     const { workspaceId, rootSessionId } = request.params;
-    const { content } = sendMessageSchema.parse(request.body);
+    const { content, attachments } = sendMessageSchema.parse(request.body);
     const userId = (request as any).user!.userId;
 
-    const result = await sendMessageToGroup(workspaceId, rootSessionId, userId, content);
+    const result = await sendMessageToGroup(workspaceId, rootSessionId, userId, content, attachments);
     return reply.status(201).send(result);
   });
 

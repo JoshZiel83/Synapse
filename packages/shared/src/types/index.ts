@@ -412,6 +412,13 @@ export interface AIRequestLog {
 
 export type AnthropicBuiltinTool = 'web_search' | 'web_fetch';
 
+export type MultimodalType = 'image' | 'audio' | 'video' | 'document';
+
+export interface MultimodalConfig {
+  supported: boolean;
+  types: MultimodalType[];
+}
+
 export interface ResolvedModelConfig {
   groupId: UUID;
   itemId: UUID;
@@ -422,6 +429,7 @@ export interface ResolvedModelConfig {
   modelName: string;
   maxTokens: number;
   builtinTools?: AnthropicBuiltinTool[];
+  multimodal?: MultimodalConfig;
 }
 
 // ============ AI Provider ============
@@ -429,6 +437,7 @@ export interface ToolParameterProperty {
   type: string;
   description: string;
   enum?: string[];
+  items?: { type: string };
 }
 
 export interface ToolDefinition {

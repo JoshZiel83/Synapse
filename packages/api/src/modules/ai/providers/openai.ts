@@ -14,12 +14,19 @@ export class OpenAIProvider implements AIProvider {
     messages: AIMessage[];
     tools?: ToolDefinition[];
     continuationHistory?: ContinuationEntry[];
+    multimodalContent?: unknown[];
   }): Promise<AIResponse> {
     const base = this.config.baseUrl.replace(/\/+$/, '');
 
     const openaiMessages: Record<string, unknown>[] = [
       { role: 'system', content: params.system },
-      ...params.messages.map((m) => ({ role: m.role, content: m.content })),
+      ...params.messages.map((m, i) => {
+        // If multimodal content is provided, use it for the last user message
+        if (params.multimodalContent && i === params.messages.length - 1 && m.role === 'user') {
+          return { role: m.role, content: params.multimodalContent };
+        }
+        return { role: m.role, content: m.content };
+      }),
     ];
 
     // Append continuation history (multi-turn tool use)

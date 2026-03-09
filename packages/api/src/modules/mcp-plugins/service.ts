@@ -356,7 +356,16 @@ export function validateConfig(
 
 // ============ Seed Builtin MCP Plugins ============
 
+async function cleanOldBuiltinPlugins() {
+  // Wipe all builtin installations, plugins, and orgs so seed is always fresh
+  await query(`DELETE FROM mcp_installations WHERE plugin_id IN (SELECT id FROM mcp_plugins WHERE is_builtin = TRUE)`, []);
+  await query(`DELETE FROM mcp_plugins WHERE is_builtin = TRUE`, []);
+  await query(`DELETE FROM mcp_organizations WHERE is_builtin = TRUE`, []);
+  console.log('[MCP] Cleaned old builtin data');
+}
+
 export async function seedBuiltinMcpPlugins() {
+  await cleanOldBuiltinPlugins();
   for (const seed of builtinSeeds) {
     // Create or find the organization
     let org = await getOrganizationBySlug(seed.slug);

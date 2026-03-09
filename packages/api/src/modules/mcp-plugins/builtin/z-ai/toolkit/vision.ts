@@ -1,5 +1,5 @@
 import { ToolDefinition } from '@synapse/shared';
-import { BuiltinPluginHandler } from './index.js';
+import type { SubFeature } from './types.js';
 
 const ZHIPU_CHAT_ENDPOINT = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
 const DEFAULT_MODEL = 'glm-4v-flash';
@@ -111,35 +111,35 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 
 const TOOL_PROMPTS: Record<string, (input: Record<string, unknown>) => { prompt: string; images: string[] }> = {
   image_analysis: (input) => ({
-    prompt: `请详细分析这张图片的内容。${input.focus ? `请重点关注: ${input.focus}` : ''}描述图片中的物体、场景、文字和其他显著特征。`,
+    prompt: `Please analyze this image in detail.${input.focus ? ` Focus on: ${input.focus}` : ''} Describe objects, scenes, text, and notable features.`,
     images: [input.image_url as string],
   }),
   extract_text_from_screenshot: (input) => ({
-    prompt: `请提取这张截图中的所有可见文字。${input.language ? `文字语言: ${input.language}` : ''}请按照在图片中出现的顺序和布局排列文字。`,
+    prompt: `Extract all visible text from this screenshot.${input.language ? ` Text language: ${input.language}` : ''} Preserve the layout and ordering.`,
     images: [input.image_url as string],
   }),
   diagnose_error_screenshot: (input) => ({
-    prompt: `请分析这张错误截图。${input.context ? `背景信息: ${input.context}` : ''}请识别错误信息，诊断可能的原因，并提供修复建议。`,
+    prompt: `Analyze this error screenshot.${input.context ? ` Context: ${input.context}` : ''} Identify the error, diagnose likely causes, and suggest fixes.`,
     images: [input.image_url as string],
   }),
   understand_technical_diagram: (input) => ({
-    prompt: `请分析这张技术图表${input.diagram_type ? `(类型: ${input.diagram_type})` : ''}。解释其中的组件、关系和数据流。`,
+    prompt: `Analyze this technical diagram${input.diagram_type ? ` (type: ${input.diagram_type})` : ''}. Explain its components, relationships, and data flow.`,
     images: [input.image_url as string],
   }),
   analyze_data_visualization: (input) => ({
-    prompt: `请分析这张数据可视化图表。${input.questions ? `请回答: ${input.questions}` : '提取关键数据点、趋势和洞见。'}`,
+    prompt: `Analyze this data visualization.${input.questions ? ` Answer: ${input.questions}` : ' Extract key data points, trends, and insights.'}`,
     images: [input.image_url as string],
   }),
   ui_diff_check: (input) => ({
-    prompt: `请比较这两张UI截图，识别视觉差异、布局变化或回归问题。${input.focus_areas ? `重点关注: ${input.focus_areas}` : ''}第一张是参考/之前的版本，第二张是当前版本。`,
+    prompt: `Compare these two UI screenshots and identify visual differences, layout changes, or regressions.${input.focus_areas ? ` Focus on: ${input.focus_areas}` : ''} The first image is the before/reference version, the second is the current version.`,
     images: [input.image_url_before as string, input.image_url_after as string],
   }),
   image_qa: (input) => ({
-    prompt: `关于这张图片，请回答以下问题: ${input.question}`,
+    prompt: `About this image, please answer: ${input.question}`,
     images: [input.image_url as string],
   }),
   video_analysis: (input) => ({
-    prompt: `请分析这个视频内容。${input.question ? `请回答: ${input.question}` : '提供视频内容的详细摘要。'}`,
+    prompt: `Analyze this video content.${input.question ? ` Answer: ${input.question}` : ' Provide a detailed summary.'}`,
     images: [input.video_url as string],
   }),
 };
@@ -152,12 +152,9 @@ async function callGLM4V(
 ): Promise<string> {
   const content: VisionMessage['content'] = [];
 
-  // Add images first
   for (const url of imageUrls) {
     content.push({ type: 'image_url', image_url: { url } });
   }
-
-  // Add text prompt
   content.push({ type: 'text', text: prompt });
 
   const body = {
@@ -195,7 +192,9 @@ async function callGLM4V(
   }
 }
 
-export const visionHandler: BuiltinPluginHandler = {
+export const visionFeature: SubFeature = {
+  featureKey: 'feature_vision',
+
   getTools(): ToolDefinition[] {
     return TOOL_DEFINITIONS;
   },
@@ -203,7 +202,7 @@ export const visionHandler: BuiltinPluginHandler = {
   async execute(toolName: string, input: Record<string, unknown>, config: Record<string, unknown>): Promise<string> {
     const apiKey = config.apiKey as string;
     if (!apiKey) {
-      throw new Error('ZhipuAI API key not configured. Set it in the z_ai organization config.');
+      throw new Error('ZhipuAI API key not configured.');
     }
 
     const promptBuilder = TOOL_PROMPTS[toolName];

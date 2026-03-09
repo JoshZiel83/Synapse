@@ -530,6 +530,22 @@ DROP TABLE IF EXISTS mcp_actor_plugins CASCADE;
 DROP TABLE IF EXISTS mcp_user_installations CASCADE;
 DROP TABLE IF EXISTS mcp_workspace_installations CASCADE;
 
+-- ============ Files ============
+CREATE TABLE IF NOT EXISTS files (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  uploader_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  original_name VARCHAR(500) NOT NULL,
+  stored_name VARCHAR(500) NOT NULL,
+  mime_type VARCHAR(255) NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  category VARCHAR(30) DEFAULT 'general' CHECK (category IN ('general', 'chat_attachment', 'plugin_output')),
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_files_workspace ON files(workspace_id);
+
 -- ============ Updated at trigger (must be after all tables) ============
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$

@@ -2,6 +2,7 @@ import { ToolDefinition } from '@synapse/shared';
 
 export interface BuiltinPluginHandler {
   getTools(): ToolDefinition[];
+  getToolsFiltered?(config: Record<string, unknown>): ToolDefinition[];
   execute(toolName: string, input: Record<string, unknown>, config: Record<string, unknown>): Promise<string>;
 }
 
@@ -19,10 +20,7 @@ export function hasBuiltinHandler(pluginSlug: string): boolean {
   return registry.has(pluginSlug);
 }
 
-export function initBuiltinRegistry(): void {
-  // Import and register all builtin handlers
-  // Vision is imported dynamically to avoid circular deps
-  import('./vision.js').then(mod => {
-    registerBuiltinHandler('vision', mod.visionHandler);
-  });
+export async function initBuiltinRegistry(): Promise<void> {
+  const mod = await import('./z-ai/toolkit/index.js');
+  registerBuiltinHandler('z_ai/toolkit', mod.zAiToolkitHandler);
 }

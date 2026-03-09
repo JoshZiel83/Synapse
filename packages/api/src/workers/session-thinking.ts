@@ -5,6 +5,7 @@ import { emitEvent } from '../infrastructure/events/index.js';
 import { QUEUE_NAMES, SESSION_LOCK_TTL, REDIS_CHANNELS, DEFAULT_MAX_CONCURRENT_SESSIONS, nowISO } from '@synapse/shared';
 import type { ActorAction } from '@synapse/shared';
 import { actorThink } from '../modules/ai/index.js';
+import { adaptAttachments } from '../modules/ai/content-adapter.js';
 import { executeActorActions } from '../modules/orchestrator/service.js';
 import { resolveModelConfig } from '../modules/model-groups/resolver.js';
 import { resolveMcpToolsForActor } from '../modules/mcp-plugins/tool-resolver.js';
@@ -91,11 +92,24 @@ export function startSessionThinkingWorker() {
 
         // Build work context from session messages
         let workContext = '';
+        let lastUserAttachments: { id: string; url: string; fullUrl?: string; storedName?: string; originalName: string; mimeType: string; sizeBytes: number }[] | undefined;
         for (const msg of sessionMessages) {
           switch (msg.role) {
-            case 'user':
+            case 'user': {
               workContext += `[Boss]: ${msg.content}\n`;
+              // Reset attachments for each user message — only the last user message's attachments matter
+              lastUserAttachments = undefined;
+              // Check for attachments in metadata
+              const meta = typeof msg.metadata === 'string' ? JSON.parse(msg.metadata) : (msg.metadata || {});
+              if (Array.isArray(meta.attachments) && meta.attachments.length > 0) {
+                lastUserAttachments = meta.attachments;
+                // Add text descriptions of attachments to work context
+                for (const att of meta.attachments) {
+                  workContext += `[Attached file: ${att.originalName} (${att.mimeType}) - ${att.url}]\n`;
+                }
+              }
               break;
+            }
             case 'system':
               workContext += `[任务指令]: ${msg.content}\n`;
               break;
@@ -201,6 +215,7 @@ export function startSessionThinkingWorker() {
               extraToolExecutor: mcpTools.executor,
               mcpVersion: mcpTools.mcpVersion,
               mcpRefresh: mcpTools.refresh,
+              attachments: lastUserAttachments,
             },
           );
         } finally {
@@ -336,7 +351,12 @@ export function startSessionThinkingWorker() {
         await emitEvent({
           type: 'session.status.changed',
           workspaceId,
-          payload: { rootSessionId: failedSession?.root_session_id || sessionId, sessionId, status: 'failed' },
+          payload: {
+            rootSessionId: failedSession?.root_session_id || sessionId,
+            sessionId,
+            status: 'failed',
+            errorMessage: err.message || 'Unknown error',
+          },
           timestamp: nowISO(),
         });
 

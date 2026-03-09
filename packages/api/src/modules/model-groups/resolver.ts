@@ -1,7 +1,7 @@
 import { query } from '../../infrastructure/database/index.js';
 import { redis } from '../../infrastructure/redis/index.js';
 import { config } from '../../config/index.js';
-import type { ResolvedModelConfig } from '@synapse/shared';
+import type { ResolvedModelConfig, MultimodalConfig } from '@synapse/shared';
 
 /**
  * Resolve model config for an actor using the failover chain:
@@ -101,9 +101,12 @@ async function resolveFromGroup(groupId: string): Promise<ResolvedModelConfig | 
 
   if (!selected) return null;
 
-  // Extract builtin_tools from extra_config
+  // Extract builtin_tools and multimodal from extra_config
   const extraConfig = selected.extra_config || {};
   const builtinTools = Array.isArray(extraConfig.builtin_tools) ? extraConfig.builtin_tools : undefined;
+  const multimodal: MultimodalConfig | undefined = extraConfig.multimodal?.supported
+    ? { supported: true, types: Array.isArray(extraConfig.multimodal.types) ? extraConfig.multimodal.types : [] }
+    : undefined;
 
   return {
     groupId,
@@ -115,6 +118,7 @@ async function resolveFromGroup(groupId: string): Promise<ResolvedModelConfig | 
     modelName: selected.model_name,
     maxTokens: selected.max_tokens,
     builtinTools,
+    multimodal,
   };
 }
 

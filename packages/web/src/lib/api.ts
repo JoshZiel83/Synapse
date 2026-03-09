@@ -109,7 +109,11 @@ class ApiClient {
     const qs = params.toString();
     return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/messages${qs ? '?' + qs : ''}`);
   }
-  sendGroupMessage(wsId: string, rootSessionId: string, content: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/messages`, { method: 'POST', body: JSON.stringify({ content }) }); }
+  sendGroupMessage(wsId: string, rootSessionId: string, content: string, attachments?: { id: string; url: string; fullUrl?: string; storedName?: string; originalName: string; mimeType: string; sizeBytes: number }[]) {
+    const body: any = { content };
+    if (attachments && attachments.length > 0) body.attachments = attachments;
+    return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/messages`, { method: 'POST', body: JSON.stringify(body) });
+  }
   markGroupRead(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/read`, { method: 'POST', body: '{}' }); }
   cancelGroup(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}`, { method: 'DELETE' }); }
 
@@ -130,6 +134,25 @@ class ApiClient {
   // MCP Audit
   getMcpToolCallLogs(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/mcp/audit/tool-calls${params ? '?' + params : ''}`); }
   getMcpEventLogs(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/mcp/audit/events${params ? '?' + params : ''}`); }
+
+  // File Upload
+  async uploadFile(wsId: string, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = this.getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE}/workspaces/${wsId}/files`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Upload failed');
+    }
+    return res.json();
+  }
 }
 
 export const api = new ApiClient();

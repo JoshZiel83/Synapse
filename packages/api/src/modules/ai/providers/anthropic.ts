@@ -21,14 +21,18 @@ export class AnthropicProvider implements AIProvider {
     tools?: ToolDefinition[];
     builtinTools?: AnthropicBuiltinTool[];
     continuationHistory?: ContinuationEntry[];
+    multimodalContent?: unknown[];
   }): Promise<AIResponse> {
     const base = this.config.baseUrl.replace(/\/+$/, '');
 
     // Build messages: initial messages + continuation history
-    const allMessages: Record<string, unknown>[] = params.messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+    const allMessages: Record<string, unknown>[] = params.messages.map((m, i) => {
+      // If multimodal content is provided, use it for the last user message
+      if (params.multimodalContent && i === params.messages.length - 1 && m.role === 'user') {
+        return { role: m.role, content: params.multimodalContent };
+      }
+      return { role: m.role, content: m.content };
+    });
 
     // Append continuation history (multi-turn tool use)
     if (params.continuationHistory && params.continuationHistory.length > 0) {

@@ -2,12 +2,14 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import websocket from '@fastify/websocket';
+import multipart from '@fastify/multipart';
 import { config } from './config/index.js';
 import { testConnection } from './infrastructure/database/index.js';
 import { testRedisConnection } from './infrastructure/redis/index.js';
 import { initEventBus } from './infrastructure/events/index.js';
 import { setupWebSocket } from './infrastructure/websocket/index.js';
 import { auditMiddleware } from './infrastructure/middleware/audit.js';
+import { ensureStorageDir } from './infrastructure/storage/index.js';
 
 // Module imports
 import authModule from './modules/auth/index.js';
@@ -23,6 +25,7 @@ import standingOrdersModule from './modules/standing-orders/index.js';
 import modelGroupsModule from './modules/model-groups/index.js';
 import chatModule from './modules/chat/index.js';
 import mcpPluginsModule from './modules/mcp-plugins/index.js';
+import filesModule from './modules/files/index.js';
 import { seedPlatformDefaultGroup } from './modules/model-groups/service.js';
 import { seedBuiltinMcpPlugins } from './modules/mcp-plugins/service.js';
 import { initBuiltinRegistry } from './modules/mcp-plugins/builtin/index.js';
@@ -49,6 +52,10 @@ async function main() {
   await app.register(cors, { origin: true, credentials: true });
   await app.register(jwt, { secret: config.jwt.secret });
   await app.register(websocket);
+  await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } });
+
+  // Ensure storage directory exists
+  await ensureStorageDir();
 
   // Audit middleware
   auditMiddleware(app);
@@ -73,6 +80,7 @@ async function main() {
   await app.register(modelGroupsModule);
   await app.register(chatModule);
   await app.register(mcpPluginsModule);
+  await app.register(filesModule);
 
   // Seed platform default model group
   try {
@@ -85,7 +93,7 @@ async function main() {
   // Seed MCP builtin plugins and init registry
   try {
     await seedBuiltinMcpPlugins();
-    initBuiltinRegistry();
+    await initBuiltinRegistry();
     initInstanceManagerListeners();
     console.log('MCP plugins seeded and registry initialized');
   } catch (err) {

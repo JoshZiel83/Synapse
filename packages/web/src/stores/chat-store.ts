@@ -26,6 +26,16 @@ export interface ServerToolCall {
   results?: { url: string; title: string; pageAge?: string }[];
 }
 
+export interface Attachment {
+  id: string;
+  url: string;
+  fullUrl?: string;
+  storedName?: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
 export interface GroupMessage {
   id: string;
   sessionId: string;
@@ -41,6 +51,7 @@ export interface GroupMessage {
   toolsUsed?: string[];
   serverToolCalls?: ServerToolCall[];
   citationSources?: Record<string, { url: string; title: string }>;
+  attachments?: Attachment[];
 }
 
 interface ThinkingState {
@@ -61,7 +72,7 @@ interface ChatState {
   loadGroups: (workspaceId: string) => Promise<void>;
   selectGroup: (groupId: string | null) => void;
   loadMessages: (workspaceId: string, groupId: string) => Promise<void>;
-  sendMessage: (workspaceId: string, groupId: string, content: string) => Promise<void>;
+  sendMessage: (workspaceId: string, groupId: string, content: string, attachments?: Attachment[]) => Promise<void>;
   createGroup: (workspaceId: string, actorId: string, content: string) => Promise<string>;
   markRead: (workspaceId: string, groupId: string) => Promise<void>;
 
@@ -116,6 +127,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         toolsUsed: m.metadata?.toolsUsed,
         serverToolCalls: m.metadata?.serverToolCalls,
         citationSources: m.metadata?.citationSources,
+        attachments: m.metadata?.attachments,
       }));
       set({ messages, loadingMessages: false });
     } catch (err) {
@@ -124,7 +136,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (workspaceId, groupId, content) => {
+  sendMessage: async (workspaceId, groupId, content, attachments) => {
     // Optimistic insert
     const tempId = `temp-${Date.now()}`;
     const optimisticMsg: GroupMessage = {
@@ -134,13 +146,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content,
       createdAt: new Date().toISOString(),
       status: 'sending',
+      attachments,
     };
     set((state) => ({
       messages: [...state.messages, optimisticMsg],
     }));
 
     try {
-      await api.sendGroupMessage(workspaceId, groupId, content);
+      await api.sendGroupMessage(workspaceId, groupId, content, attachments);
       // Update optimistic message status
       set((state) => ({
         messages: state.messages.map((m) =>
@@ -210,10 +223,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       });
     }
 
-    // Extract toolsUsed and serverToolCalls from metadata
+    // Extract toolsUsed, serverToolCalls, and attachments from metadata
     const toolsUsed = metadata?.toolsUsed as string[] | undefined;
     const serverToolCalls = metadata?.serverToolCalls as ServerToolCall[] | undefined;
     const citationSources = metadata?.citationSources as Record<string, { url: string; title: string }> | undefined;
+    const attachments = metadata?.attachments as Attachment[] | undefined;
 
     // If this group is selected, append the message (avoid duplicates)
     if (state.selectedGroupId === rootSessionId) {
@@ -242,6 +256,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               toolsUsed,
               serverToolCalls,
               citationSources,
+              attachments,
             },
           ],
         };
@@ -272,12 +287,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   handleStatusChanged: (payload) => {
-    const { rootSessionId, status } = payload;
+    const { rootSessionId, status, errorMessage } = payload;
+
+    // Update group status
     set((s) => ({
       groups: s.groups.map((g) =>
         g.id === rootSessionId ? { ...g, status } : g
       ),
     }));
+
+    // On failure: clear thinking indicator and inject an error message into the chat
+    if (status === 'failed') {
+      set((s) => {
+        const newMap = { ...s.thinkingMap };
+        delete newMap[rootSessionId];
+
+        // Only inject if this group is currently selected
+        if (s.selectedGroupId !== rootSessionId) {
+          return { thinkingMap: newMap };
+        }
+
+        const errMsg: GroupMessage = {
+          id: `error-${Date.now()}`,
+          sessionId: rootSessionId,
+          role: 'error',
+          content: errorMessage || 'An unexpected error occurred while processing your request.',
+          createdAt: new Date().toISOString(),
+        };
+
+        return {
+          thinkingMap: newMap,
+          messages: [...s.messages, errMsg],
+        };
+      });
+    }
   },
 
   handleThinking: (payload) => {

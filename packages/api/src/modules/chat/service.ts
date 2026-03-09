@@ -191,7 +191,8 @@ export async function sendMessageToGroup(
   workspaceId: UUID,
   rootSessionId: UUID,
   userId: UUID,
-  content: string
+  content: string,
+  attachments?: { id: string; url: string; fullUrl?: string; storedName?: string; originalName: string; mimeType: string; sizeBytes: number }[],
 ) {
   const rootSession = await getSession(rootSessionId);
   if (!rootSession) throw new Error('Group not found');
@@ -214,12 +215,18 @@ export async function sendMessageToGroup(
     targetSessionId = existing.id;
 
     // Add user message
+    const msgMetadata: Record<string, unknown> = {};
+    if (attachments && attachments.length > 0) {
+      msgMetadata.attachments = attachments;
+    }
+
     await addSessionMessage({
       sessionId: targetSessionId,
       workspaceId,
       role: 'user',
       content,
       fromUserId: userId,
+      metadata: Object.keys(msgMetadata).length > 0 ? msgMetadata : undefined,
     });
 
     // Re-enqueue thinking if waiting
@@ -239,12 +246,18 @@ export async function sendMessageToGroup(
     // All sessions completed — re-activate the root session with new user message
     targetSessionId = rootSessionId;
 
+    const reactivateMetadata: Record<string, unknown> = {};
+    if (attachments && attachments.length > 0) {
+      reactivateMetadata.attachments = attachments;
+    }
+
     await addSessionMessage({
       sessionId: rootSessionId,
       workspaceId,
       role: 'user',
       content,
       fromUserId: userId,
+      metadata: Object.keys(reactivateMetadata).length > 0 ? reactivateMetadata : undefined,
     });
 
     await updateSessionStatus(rootSessionId, 'active');

@@ -2,10 +2,10 @@
 
 import { useState, useMemo } from 'react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Bot, User, GitBranch, Wrench, Search, Globe, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
+import { Bot, User, GitBranch, Wrench, Search, Globe, ChevronDown, ChevronRight, ExternalLink, FileIcon, Download, AlertTriangle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ServerToolCall } from '@/stores/chat-store';
+import type { ServerToolCall, Attachment } from '@/stores/chat-store';
 
 interface MessageBubbleProps {
   role: string;
@@ -19,6 +19,7 @@ interface MessageBubbleProps {
   toolsUsed?: string[];
   serverToolCalls?: ServerToolCall[];
   citationSources?: Record<string, { url: string; title: string }>;
+  attachments?: Attachment[];
 }
 
 function formatToolsUsed(tools: string[]): string {
@@ -114,6 +115,138 @@ function CitationFooter({ sources }: { sources: { num: number; url: string; titl
         ))}
       </div>
     </div>
+  );
+}
+
+const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
+const VIDEO_EXTENSIONS = ['.mp4', '.webm', '.mov', '.avi', '.mkv'];
+
+function getFileCategory(mimeType: string, url: string): 'image' | 'audio' | 'video' | 'document' {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  if (mimeType.startsWith('video/')) return 'video';
+  const ext = '.' + url.split('.').pop()?.toLowerCase();
+  if (IMAGE_EXTENSIONS.includes(ext)) return 'image';
+  if (AUDIO_EXTENSIONS.includes(ext)) return 'audio';
+  if (VIDEO_EXTENSIONS.includes(ext)) return 'video';
+  return 'document';
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function AttachmentPreview({ attachments }: { attachments: Attachment[] }) {
+  const [expandedImage, setExpandedImage] = useState<string | null>(null);
+
+  if (attachments.length === 0) return null;
+
+  return (
+    <>
+      <div className="space-y-2 mb-2">
+        {attachments.map((att) => {
+          const cat = getFileCategory(att.mimeType, att.url);
+
+          if (cat === 'image') {
+            return (
+              <div key={att.id}>
+                <img
+                  src={att.url}
+                  alt={att.originalName}
+                  className="max-w-full max-h-64 rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+                  onClick={() => setExpandedImage(att.url)}
+                />
+              </div>
+            );
+          }
+
+          if (cat === 'audio') {
+            return (
+              <div key={att.id} className="rounded-lg bg-white/[0.03] border border-white/[0.06] p-2.5">
+                <div className="text-[11px] text-muted-foreground mb-1.5 truncate">{att.originalName}</div>
+                <audio controls className="w-full h-8" preload="metadata">
+                  <source src={att.url} type={att.mimeType} />
+                </audio>
+              </div>
+            );
+          }
+
+          if (cat === 'video') {
+            return (
+              <div key={att.id}>
+                <video
+                  controls
+                  className="max-w-full max-h-64 rounded-lg"
+                  preload="metadata"
+                >
+                  <source src={att.url} type={att.mimeType} />
+                </video>
+              </div>
+            );
+          }
+
+          // Document
+          return (
+            <a
+              key={att.id}
+              href={att.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2.5 rounded-lg bg-white/[0.03] border border-white/[0.06] p-2.5 hover:bg-white/[0.06] transition-colors group/file"
+            >
+              <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">
+                <FileIcon className="w-4 h-4 text-blue-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-foreground/80 truncate">{att.originalName}</div>
+                <div className="text-[10px] text-muted-foreground/50">{formatBytes(att.sizeBytes)}</div>
+              </div>
+              <Download className="w-3.5 h-3.5 text-muted-foreground/40 group-hover/file:text-blue-400 transition-colors shrink-0" />
+            </a>
+          );
+        })}
+      </div>
+
+      {/* Image lightbox */}
+      {expandedImage && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setExpandedImage(null)}
+        >
+          <img
+            src={expandedImage}
+            alt="Expanded"
+            className="max-w-full max-h-full object-contain rounded-lg"
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
+function ExpandableImage({ src, alt, ...props }: React.ImgHTMLAttributes<HTMLImageElement>) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <>
+      <img
+        src={src}
+        alt={alt || ''}
+        className="max-w-full max-h-64 rounded-lg cursor-pointer hover:opacity-90 transition-opacity my-2"
+        onClick={() => setExpanded(true)}
+        {...props}
+      />
+      {expanded && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setExpanded(false)}
+        >
+          <img src={src} alt={alt || ''} className="max-w-full max-h-full object-contain rounded-lg" />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -223,9 +356,11 @@ export default function MessageBubble({
   toolsUsed,
   serverToolCalls,
   citationSources,
+  attachments,
 }: MessageBubbleProps) {
   const isChildResult = role === 'child_result';
   const isSystem = role === 'system';
+  const isError = role === 'error';
 
   // Process citations and sanitize raw HTML tags
   const { processedContent, sources } = useMemo(
@@ -236,6 +371,26 @@ export default function MessageBubble({
     },
     [content, citationSources],
   );
+
+  if (isError) {
+    return (
+      <div className="flex gap-3">
+        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-red-500 to-rose-600 flex items-center justify-center shrink-0 mt-1">
+          <AlertTriangle className="w-4 h-4 text-white" />
+        </div>
+        <div className="max-w-[75%] min-w-0 flex flex-col">
+          <div className="rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed bg-red-500/10 border border-red-500/20 text-red-300">
+            <p className="whitespace-pre-wrap">{content}</p>
+          </div>
+          {timestamp && (
+            <span className="text-[10px] text-muted-foreground/50 mt-1">
+              {new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (isSystem) {
     return (
@@ -250,6 +405,7 @@ export default function MessageBubble({
   const hasServerToolCalls = serverToolCalls && serverToolCalls.length > 0;
   const hasToolsUsed = toolsUsed && toolsUsed.length > 0;
   const hasCitations = sources.length > 0;
+  const hasAttachments = attachments && attachments.length > 0;
 
   return (
     <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
@@ -290,9 +446,37 @@ export default function MessageBubble({
             }
           `}
         >
+          {/* Attachment previews */}
+          {hasAttachments && <AttachmentPreview attachments={attachments} />}
+
           {!isUser ? (
             <div className="prose prose-invert prose-sm max-w-none prose-p:my-1.5 prose-headings:text-foreground prose-code:text-blue-300 prose-code:bg-blue-500/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:font-mono prose-code:before:content-none prose-code:after:content-none prose-pre:bg-black/30 prose-pre:border prose-pre:border-blue-500/10 prose-pre:rounded-lg">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{processedContent}</ReactMarkdown>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  img: ({ src, alt, ...props }) => <ExpandableImage src={src} alt={alt} {...props} />,
+                  a: ({ href, children, ...props }) => {
+                    const isAudio = href && AUDIO_EXTENSIONS.some((ext) => href.toLowerCase().endsWith(ext));
+                    if (isAudio) {
+                      return (
+                        <span className="block my-2">
+                          <audio controls className="w-full h-8" preload="metadata">
+                            <source src={href} />
+                          </audio>
+                          <span className="text-[10px] text-muted-foreground/50 block mt-0.5">{String(children) || href}</span>
+                        </span>
+                      );
+                    }
+                    return (
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline" {...props}>
+                        {children}
+                      </a>
+                    );
+                  },
+                }}
+              >
+                {processedContent}
+              </ReactMarkdown>
             </div>
           ) : (
             <p className="whitespace-pre-wrap">{content}</p>

@@ -5,17 +5,19 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Send, ArrowDown, Bot } from 'lucide-react';
+import { Send, ArrowDown, Bot, Paperclip, X } from 'lucide-react';
 import MessageBubble from './message-bubble';
-import type { Group, GroupMessage } from '@/stores/chat-store';
+import type { Group, GroupMessage, Attachment } from '@/stores/chat-store';
+import { api } from '@/lib/api';
 
 interface GroupChatProps {
   group: Group;
   messages: GroupMessage[];
   loading: boolean;
   thinking?: { actorId: string; actorName: string; status?: string };
-  onSend: (content: string) => Promise<void> | void;
+  onSend: (content: string, attachments?: Attachment[]) => Promise<void> | void;
   onBack?: () => void;
+  workspaceId?: string;
 }
 
 function statusLabel(status: string) {
@@ -27,9 +29,11 @@ function statusLabel(status: string) {
   }
 }
 
-export default function GroupChat({ group, messages, loading, thinking, onSend, onBack }: GroupChatProps) {
+export default function GroupChat({ group, messages, loading, thinking, onSend, onBack, workspaceId }: GroupChatProps) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [showJumpButton, setShowJumpButton] = useState(false);
@@ -74,14 +78,33 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!input.trim() || sending) return;
+    if ((!input.trim() && pendingFiles.length === 0) || sending) return;
 
-    const content = input.trim();
+    const content = input.trim() || '(attached files)';
+    const filesToUpload = [...pendingFiles];
     setInput('');
+    setPendingFiles([]);
     setSending(true);
 
     try {
-      await onSend(content);
+      // Upload files first if any
+      let attachments: Attachment[] | undefined;
+      if (filesToUpload.length > 0 && workspaceId) {
+        attachments = [];
+        for (const file of filesToUpload) {
+          const record = await api.uploadFile(workspaceId, file);
+          attachments.push({
+            id: record.id,
+            url: record.url,
+            fullUrl: record.fullUrl,
+            storedName: record.storedName,
+            originalName: record.originalName || file.name,
+            mimeType: record.mimeType || file.type,
+            sizeBytes: record.sizeBytes || file.size,
+          });
+        }
+      }
+      await onSend(content, attachments);
     } catch {
       // error handled upstream
     } finally {
@@ -91,6 +114,24 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 50);
     }
+  }
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files) return;
+    setPendingFiles((prev) => [...prev, ...Array.from(files)]);
+    // Reset input so selecting the same file again triggers change
+    e.target.value = '';
+  }
+
+  function removeFile(index: number) {
+    setPendingFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function formatFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   const status = statusLabel(group.status);
@@ -178,6 +219,7 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
               toolsUsed={msg.toolsUsed}
               serverToolCalls={msg.serverToolCalls}
               citationSources={msg.citationSources}
+              attachments={msg.attachments}
             />
           ))
         )}
@@ -224,7 +266,45 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
 
       {/* Input */}
       <div className="p-4 border-t border-blue-500/5">
+        {/* Pending file previews */}
+        {pendingFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-3">
+            {pendingFiles.map((file, i) => (
+              <div
+                key={`${file.name}-${i}`}
+                className="flex items-center gap-2 bg-white/5 border border-blue-500/10 rounded-lg px-3 py-1.5 text-xs text-muted-foreground"
+              >
+                <span className="truncate max-w-[150px]">{file.name}</span>
+                <span className="text-muted-foreground/50">{formatFileSize(file.size)}</span>
+                <button
+                  onClick={() => removeFile(i)}
+                  className="text-muted-foreground/50 hover:text-red-400 transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <form onSubmit={handleSend} className="flex gap-3">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.txt,.csv,.xls,.xlsx"
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={sending}
+            className="shrink-0 h-12 w-12 text-muted-foreground hover:text-blue-400"
+          >
+            <Paperclip className="w-5 h-5" />
+          </Button>
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -234,7 +314,7 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
           />
           <Button
             type="submit"
-            disabled={!input.trim() || sending}
+            disabled={(!input.trim() && pendingFiles.length === 0) || sending}
             className="bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white rounded-xl h-12 w-12 p-0 shadow-lg shadow-blue-500/20 transition-all duration-300"
           >
             <Send className="w-5 h-5" />

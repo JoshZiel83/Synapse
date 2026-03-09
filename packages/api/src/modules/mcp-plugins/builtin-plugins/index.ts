@@ -1,5 +1,5 @@
 import type { BuiltinOrgSeed } from './types.js';
-import { zAiSeed } from './z-ai.js';
+import { zAiSeed } from './z-ai/index.js';
 
 export const builtinSeeds: BuiltinOrgSeed[] = [
   zAiSeed,

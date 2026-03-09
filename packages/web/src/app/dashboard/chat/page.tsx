@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { useWorkspace } from '../workspace-provider';
 import { useWebSocket } from '@/hooks/use-websocket';
 import { useNotifications } from '@/hooks/use-notifications';
-import { useChatStore } from '@/stores/chat-store';
+import { useChatStore, type Attachment } from '@/stores/chat-store';
 import GroupList from './group-list';
 import GroupChat from './group-chat';
 import NewGroupDialog from './new-group-dialog';
@@ -101,10 +101,10 @@ export default function ChatPage() {
     setMobileView('chat');
   }
 
-  async function handleSend(content: string) {
+  async function handleSend(content: string, attachments?: Attachment[]) {
     if (!workspaceId || !selectedGroupId) return;
     try {
-      await sendMessage(workspaceId, selectedGroupId, content);
+      await sendMessage(workspaceId, selectedGroupId, content, attachments);
     } catch (err) {
       console.error('Failed to send:', err);
     }
@@ -163,6 +163,7 @@ export default function ChatPage() {
             thinking={thinkingMap[selectedGroupId!]}
             onSend={handleSend}
             onBack={() => setMobileView('list')}
+            workspaceId={workspaceId}
           />
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center space-y-4 p-8">

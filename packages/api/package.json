@@ -12,25 +12,27 @@
     "db:seed": "tsx src/infrastructure/database/seed.ts"
   },
   "dependencies": {
-    "@synapse/shared": "*",
-    "fastify": "^4.28.0",
-    "@fastify/cors": "^9.0.0",
-    "@fastify/websocket": "^10.0.0",
-    "@fastify/jwt": "^8.0.0",
     "@fastify/cookie": "^9.4.0",
-    "pg": "^8.12.0",
-    "ioredis": "^5.4.0",
-    "bullmq": "^5.8.0",
+    "@fastify/cors": "^9.0.0",
+    "@fastify/jwt": "^8.0.0",
+    "@fastify/multipart": "^8.3.1",
+    "@fastify/websocket": "^10.0.0",
+    "@synapse/shared": "*",
     "bcryptjs": "^2.4.3",
-    "zod": "^3.23.0",
+    "bullmq": "^5.8.0",
+    "dotenv": "^16.4.0",
+    "fastify": "^4.28.0",
+    "ioredis": "^5.4.0",
+    "pg": "^8.12.0",
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",
-    "dotenv": "^16.4.0"
+    "sharp": "^0.34.5",
+    "zod": "^3.23.0"
   },
   "devDependencies": {
-    "@types/pg": "^8.11.0",
     "@types/bcryptjs": "^2.4.6",
-    "typescript": "^5.4.0",
-    "tsx": "^4.16.0"
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.4.0"
   }
 }

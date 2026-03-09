@@ -105,7 +105,9 @@ async function createBuiltinInstance(params: {
     throw new Error(`No builtin handler found for: ${params.entryPoint}`);
   }
 
-  const tools = handler.getTools();
+  const tools = handler.getToolsFiltered
+    ? handler.getToolsFiltered(params.config)
+    : handler.getTools();
 
   return {
     pluginId: params.pluginId,
@@ -117,7 +119,10 @@ async function createBuiltinInstance(params: {
     workspaceId: params.workspaceId,
     configHash,
     tools,
-    execute: async (toolName, input) => handler.execute(toolName, input, params.config),
+    execute: async (toolName, input) => {
+      const configWithScope = { ...params.config, workspace_id: params.workspaceId || params.scopeId };
+      return handler.execute(toolName, input, configWithScope);
+    },
     shutdown: async () => {
       instanceCache.delete(key);
       clearTTLTimer(key);
