@@ -149,6 +149,7 @@ func (h *HTTPServer) doRequest(body interface{}, target interface{}) error {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	if h.sessionID != "" {
 		httpReq.Header.Set("Mcp-Session-Id", h.sessionID)
 	}
