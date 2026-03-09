@@ -39,6 +39,7 @@ function runClientValidation(config: Record<string, unknown>, rules: ValidationR
 
 interface Props {
   plugin: any;
+  defaultActorId?: string;
   onClose: () => void;
 }
 
@@ -65,14 +66,14 @@ const lifecycleOptions: Record<string, { value: string; label: string }[]> = {
   ],
 };
 
-export default function InstallDialog({ plugin, onClose }: Props) {
+export default function InstallDialog({ plugin, defaultActorId, onClose }: Props) {
   const { workspaceId } = useWorkspace();
   const { installPlugin } = usePluginStore();
   const user = useAuthStore((s) => s.user);
 
-  const [scopeType, setScopeType] = useState('workspace');
+  const [scopeType, setScopeType] = useState(defaultActorId ? 'actor' : 'workspace');
   const [lifecycleScope, setLifecycleScope] = useState(plugin.lifecycle_scope || 'session');
-  const [selectedActorId, setSelectedActorId] = useState('');
+  const [selectedActorId, setSelectedActorId] = useState(defaultActorId || '');
   const [actors, setActors] = useState<any[]>([]);
   const [configData, setConfigData] = useState<Record<string, any>>({});
   const [saving, setSaving] = useState(false);

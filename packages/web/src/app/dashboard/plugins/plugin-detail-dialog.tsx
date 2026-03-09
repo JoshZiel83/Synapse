@@ -26,7 +26,7 @@ export default function PluginDetailDialog({ plugin, installedCount, onInstall, 
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
-      <DialogContent className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 max-w-lg">
+      <DialogContent className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-lg bg-blue-500/10 flex items-center justify-center">

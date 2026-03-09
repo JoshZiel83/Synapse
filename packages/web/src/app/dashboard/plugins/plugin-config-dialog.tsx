@@ -68,6 +68,7 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
   const [configData, setConfigData] = useState<Record<string, any>>(installation.config_data || {});
   const [jsonText, setJsonText] = useState(JSON.stringify(installation.config_data || {}, null, 2));
   const [lifecycleScope, setLifecycleScope] = useState(installation.lifecycle_scope);
+  const [isEnabled, setIsEnabled] = useState<boolean>(installation.is_enabled !== false);
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
@@ -111,6 +112,7 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
       const updateData: any = {};
       if (hasConfig) updateData.configData = data;
       if (lifecycleScope !== installation.lifecycle_scope) updateData.lifecycleScope = lifecycleScope;
+      if (isEnabled !== (installation.is_enabled !== false)) updateData.isEnabled = isEnabled;
 
       if (Object.keys(updateData).length > 0) {
         await updateInstallation(workspaceId, installation.id, updateData);
@@ -182,6 +184,15 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Enable / Disable */}
+          <div className="flex items-center justify-between py-2 border-t border-gray-200 dark:border-white/10">
+            <div>
+              <Label className="text-sm font-medium">启用插件</Label>
+              <p className="text-xs text-muted-foreground">{isEnabled ? '插件当前已启用' : '插件当前已禁用'}</p>
+            </div>
+            <Switch checked={isEnabled} onCheckedChange={setIsEnabled} />
           </div>
 
           {/* Config editing */}

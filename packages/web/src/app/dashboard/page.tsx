@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { useRouter } from 'next/navigation';
 import {
   Users,
-  Kanban,
+  Network,
   Brain,
   MessageSquare,
   ArrowRight,
@@ -68,10 +68,10 @@ export default function DashboardPage() {
     {
       title: 'Active Work Items',
       value: stats.activeWorkItems,
-      icon: Kanban,
+      icon: Network,
       color: 'from-violet-500 to-purple-500',
       shadow: 'shadow-violet-500/10',
-      href: '/dashboard/work-items',
+      href: '/dashboard/overview',
     },
     {
       title: 'Memories Stored',
@@ -99,11 +99,11 @@ export default function DashboardPage() {
       href: '/dashboard/organization',
     },
     {
-      title: 'Monitor Work',
-      description: 'Track progress on active tasks and work items across your organization',
-      icon: Activity,
+      title: 'Organization Overview',
+      description: 'View your digital employee hierarchy, status, and capabilities',
+      icon: Network,
       color: 'from-emerald-500 to-teal-500',
-      href: '/dashboard/work-items',
+      href: '/dashboard/overview',
     },
   ];
 

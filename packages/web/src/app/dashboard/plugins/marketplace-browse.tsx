@@ -17,7 +17,7 @@ const transportIcons: Record<string, any> = {
   relay: Puzzle,
 };
 
-export default function MarketplaceBrowse() {
+export default function MarketplaceBrowse({ defaultActorId }: { defaultActorId?: string }) {
   const { marketplace, installations, loadMarketplace, loadingMarketplace } = usePluginStore();
   const { workspaceId } = useWorkspace();
   const [search, setSearch] = useState('');
@@ -130,6 +130,7 @@ export default function MarketplaceBrowse() {
       {installPlugin && (
         <InstallDialog
           plugin={installPlugin}
+          defaultActorId={defaultActorId}
           onClose={() => setInstallPlugin(null)}
         />
       )}

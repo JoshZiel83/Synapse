@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Store, Package } from 'lucide-react';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
@@ -9,6 +10,8 @@ import MarketplaceBrowse from './marketplace-browse';
 import InstalledList from './installed-list';
 
 export default function PluginsPage() {
+  const searchParams = useSearchParams();
+  const defaultActorId = searchParams.get('actorId') || undefined;
   const [tab, setTab] = useState('marketplace');
   const { workspaceId } = useWorkspace();
   const { loadMarketplace, loadInstallations, loadOrganizations } = usePluginStore();
@@ -43,7 +46,7 @@ export default function PluginsPage() {
         </TabsList>
 
         <TabsContent value="marketplace" className="mt-6">
-          <MarketplaceBrowse />
+          <MarketplaceBrowse defaultActorId={defaultActorId} />
         </TabsContent>
 
         <TabsContent value="installed" className="mt-6">

@@ -167,3 +167,91 @@
 .typing-dot:nth-child(2) {
   animation-delay: -0.16s;
 }
+
+/* ─── Org Chart Tree Connectors ─── */
+.org-chart ul {
+  display: flex;
+  position: relative;
+  padding-top: 24px;
+}
+
+.org-chart li {
+  float: left;
+  text-align: center;
+  list-style-type: none;
+  position: relative;
+  padding: 24px 4px 0 4px;
+}
+
+/* Horizontal + vertical connector lines */
+.org-chart li::before,
+.org-chart li::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 50%;
+  border-top: 2px solid #d1d5db;
+  width: 50%;
+  height: 24px;
+}
+
+.org-chart li::after {
+  right: auto;
+  left: 50%;
+  border-left: 2px solid #d1d5db;
+}
+
+/* Remove excess lines for single children */
+.org-chart li:only-child::after,
+.org-chart li:only-child::before {
+  display: none;
+}
+
+.org-chart li:only-child {
+  padding-top: 0;
+}
+
+/* Remove outside borders */
+.org-chart li:first-child::before,
+.org-chart li:last-child::after {
+  border: 0 none;
+}
+
+.org-chart li:last-child::before {
+  border-right: 2px solid #d1d5db;
+  border-radius: 0 8px 0 0;
+}
+
+.org-chart li:first-child::after {
+  border-radius: 8px 0 0 0;
+}
+
+/* Vertical line from parent down */
+.org-chart ul::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  border-left: 2px solid #d1d5db;
+  width: 0;
+  height: 24px;
+  transform: translateX(-50%);
+}
+
+/* Dark mode connector colors */
+.dark .org-chart li::before,
+.dark .org-chart li::after {
+  border-color: #424a57;
+}
+
+.dark .org-chart li:last-child::before {
+  border-color: #424a57;
+}
+
+.dark .org-chart li:first-child::after {
+  border-color: #424a57;
+}
+
+.dark .org-chart ul::before {
+  border-color: #424a57;
+}
