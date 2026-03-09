@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Zap } from 'lucide-react';
+import Image from 'next/image';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -55,8 +55,8 @@ export default function RegisterPage() {
 
       <Card className="w-full max-w-md glass-card border-violet-500/10 glow-violet relative">
         <CardHeader className="text-center space-y-4">
-          <div className="mx-auto flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-blue-600 shadow-lg shadow-violet-500/20">
-            <Zap className="w-8 h-8 text-white" />
+          <div className="mx-auto flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-blue-600 shadow-lg shadow-violet-500/20 p-2.5">
+            <Image src="/synapse.svg" alt="Synapse" width={40} height={40} className="invert" />
           </div>
           <div>
             <CardTitle className="text-2xl font-bold bg-gradient-to-r from-violet-400 to-blue-400 bg-clip-text text-transparent">
