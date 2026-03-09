@@ -13,3 +13,9 @@ TARGET.md
 
 .cert/*
 storage/
+
+# Build caches
+*.tsbuildinfo
+
+# Playwright MCP
+.playwright-mcp/
