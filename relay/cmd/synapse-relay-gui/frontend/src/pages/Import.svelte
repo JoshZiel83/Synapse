@@ -19,7 +19,7 @@
   }
 
   let sources = $state<Source[]>([])
-  let loading = $state(true)
+  let loading = $state(false)
   let importing = $state(false)
   let selected = $state<Set<string>>(new Set())
   let message = $state('')
@@ -28,12 +28,17 @@
     loading = true
     message = ''
     try {
-      sources = await callGo<Source[]>('DetectSources')
+      const result = await callGo<Source[]>('DetectSources')
+      // Ensure servers arrays are never null/undefined (Wails may omit empty arrays)
+      sources = (result || []).map(s => ({ ...s, servers: s.servers || [] }))
     } catch (e: any) {
       message = `Scan failed: ${e?.message || String(e)}`
     }
     loading = false
   }
+
+  // Defer auto-scan to avoid blocking WebView2 IPC during mount
+  setTimeout(() => detect(), 100)
 
   function toggleServer(key: string) {
     const next = new Set(selected)
@@ -83,8 +88,6 @@
       importing = false
     }
   }
-
-  detect()
 </script>
 
 <div class="p-6">

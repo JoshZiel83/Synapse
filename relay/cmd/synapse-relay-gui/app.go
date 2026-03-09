@@ -34,6 +34,26 @@ type LogEntry struct {
 	Message string `json:"message"`
 }
 
+// GUISource represents a detected MCP config source (main-package mirror of importer.Source
+// to avoid Wails v2 cross-package binding issues on Windows WebView2)
+type GUISource struct {
+	Name       string            `json:"name"`
+	ConfigPath string            `json:"configPath"`
+	Available  bool              `json:"available"`
+	Servers    []GUIImportServer `json:"servers"`
+	Error      string            `json:"error,omitempty"`
+}
+
+// GUIImportServer is a main-package mirror of importer.ImportedServer
+type GUIImportServer struct {
+	Name      string            `json:"name"`
+	Transport string            `json:"transport"`
+	Command   string            `json:"command,omitempty"`
+	Args      []string          `json:"args,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+	Endpoint  string            `json:"endpoint,omitempty"`
+}
+
 // App is the Wails-bound application struct
 type App struct {
 	ctx      context.Context
@@ -294,24 +314,57 @@ func (a *App) RemoveServer(name string) error {
 
 // --- Import ---
 
-func (a *App) DetectSources() []importer.Source {
-	return importer.DetectAll()
+func (a *App) DetectSources() []GUISource {
+	sources := importer.DetectAll()
+	result := make([]GUISource, len(sources))
+	for i, s := range sources {
+		gs := GUISource{
+			Name:       s.Name,
+			ConfigPath: s.ConfigPath,
+			Available:  s.Available,
+			Error:      s.Error,
+			Servers:    make([]GUIImportServer, len(s.Servers)),
+		}
+		for j, srv := range s.Servers {
+			gs.Servers[j] = GUIImportServer{
+				Name:      srv.Name,
+				Transport: srv.Transport,
+				Command:   srv.Command,
+				Args:      srv.Args,
+				Env:       srv.Env,
+				Endpoint:  srv.Endpoint,
+			}
+		}
+		result[i] = gs
+	}
+	return result
 }
 
-func (a *App) ImportServers(servers []importer.ImportedServer) error {
+func (a *App) ImportServers(servers []GUIImportServer) error {
 	existingNames := make(map[string]bool)
 	for _, s := range a.cfg.Servers {
 		existingNames[s.Name] = true
 	}
 
-	configs := importer.ToServerConfigs(servers)
 	added := 0
-	for _, sc := range configs {
-		if !existingNames[sc.Name] {
-			a.cfg.Servers = append(a.cfg.Servers, sc)
-			existingNames[sc.Name] = true
-			added++
+	for _, srv := range servers {
+		if existingNames[srv.Name] {
+			continue
 		}
+		sc := config.ServerConfig{
+			Name:      srv.Name,
+			Transport: srv.Transport,
+			Command:   srv.Command,
+			Args:      srv.Args,
+			Env:       srv.Env,
+			Endpoint:  srv.Endpoint,
+		}
+		if sc.Transport == "" {
+			sc.Transport = "stdio"
+		}
+		a.cfg.Servers = append(a.cfg.Servers, sc)
+		existingNames[srv.Name] = true
+		added++
 	}
 
 	if added == 0 {
