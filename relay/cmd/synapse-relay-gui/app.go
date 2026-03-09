@@ -3,12 +3,17 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/PekingSpades/Synapse/relay/internal/config"
 	"github.com/PekingSpades/Synapse/relay/internal/importer"
+	"github.com/PekingSpades/Synapse/relay/internal/localapi"
 	"github.com/PekingSpades/Synapse/relay/internal/mcp"
 	"github.com/PekingSpades/Synapse/relay/internal/relay"
 	"github.com/gorilla/websocket"
@@ -31,12 +36,13 @@ type LogEntry struct {
 
 // App is the Wails-bound application struct
 type App struct {
-	ctx     context.Context
-	engine  *relay.Engine
-	cfg     *config.Config
-	cfgPath string
-	logs    []LogEntry
-	logsMu  sync.Mutex
+	ctx      context.Context
+	engine   *relay.Engine
+	cfg      *config.Config
+	cfgPath  string
+	logs     []LogEntry
+	logsMu   sync.Mutex
+	localAPI *localapi.Server
 }
 
 // NewApp creates a new App instance
@@ -59,11 +65,91 @@ func (a *App) startup(ctx context.Context) {
 		cfg = &config.Config{LogLevel: "info"}
 	}
 	a.cfg = cfg
+
+	// Start local API server for web-to-client communication
+	a.localAPI = localapi.New(localapi.DefaultPort, Version, a.handleRemoteSetup, a.getRelayState)
+	if err := a.localAPI.Start(); err != nil {
+		log.Printf("Warning: failed to start local API: %v", err)
+	}
+
+	// Check for deep link URL in args (synapse-relay://setup?endpoint=...&token=...)
+	a.handleDeepLinkArgs()
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.localAPI != nil {
+		a.localAPI.Stop()
+	}
 	if a.engine != nil && (a.engine.State() == relay.StateRunning || a.engine.State() == relay.StateStarting) {
 		a.engine.Stop()
+	}
+}
+
+// handleRemoteSetup is called by the local API when the web UI sends a setup request.
+// Shows a confirmation dialog and returns true if the user accepts.
+func (a *App) handleRemoteSetup(endpoint, token string) bool {
+	// Show confirmation dialog via Wails runtime
+	result, err := wailsRuntime.MessageDialog(a.ctx, wailsRuntime.MessageDialogOptions{
+		Type:    wailsRuntime.QuestionDialog,
+		Title:   "Remote Configuration",
+		Message: fmt.Sprintf("The web dashboard wants to configure this relay:\n\nEndpoint: %s\nToken: %s...%s\n\nAccept this configuration?", endpoint, token[:8], token[len(token)-4:]),
+		Buttons: []string{"Accept", "Reject"},
+	})
+	if err != nil {
+		log.Printf("Dialog error: %v", err)
+		return false
+	}
+
+	if result == "Accept" {
+		a.cfg.Endpoint = endpoint
+		a.cfg.Token = token
+		if err := config.EnsureDir(); err == nil {
+			config.Save(a.cfgPath, a.cfg)
+		}
+		// Emit event to frontend to update UI
+		wailsRuntime.EventsEmit(a.ctx, "config:updated", map[string]interface{}{
+			"endpoint": endpoint,
+		})
+		return true
+	}
+	return false
+}
+
+func (a *App) getRelayState() string {
+	if a.engine != nil {
+		return string(a.engine.State())
+	}
+	return "stopped"
+}
+
+// handleDeepLinkArgs checks os.Args for a synapse-relay:// URL and processes it.
+func (a *App) handleDeepLinkArgs() {
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "synapse-relay://") {
+			a.processDeepLink(arg)
+			return
+		}
+	}
+}
+
+// processDeepLink parses synapse-relay://setup?endpoint=...&token=... and triggers setup.
+func (a *App) processDeepLink(rawURL string) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		log.Printf("Failed to parse deep link: %v", err)
+		return
+	}
+
+	if u.Host == "setup" || u.Path == "setup" || u.Path == "/setup" {
+		endpoint := u.Query().Get("endpoint")
+		token := u.Query().Get("token")
+		if endpoint != "" && token != "" {
+			// Defer to after startup completes (ctx must be ready)
+			go func() {
+				time.Sleep(500 * time.Millisecond) // wait for window to render
+				a.handleRemoteSetup(endpoint, token)
+			}()
+		}
 	}
 }
 

@@ -2,8 +2,15 @@ name: Build Relay GUI
 
 on:
   push:
+    branches:
+      - '**'
+    paths:
+      - 'relay/**'
     tags:
       - 'relay-gui-v*'
+  pull_request:
+    paths:
+      - 'relay/**'
   workflow_dispatch:
     inputs:
       version:

@@ -12,10 +12,12 @@ import {
 } from '@/components/ui/dialog';
 import {
   Plus, Trash2, RefreshCw, Copy, Check, ChevronDown, ChevronRight,
-  Radio, Wifi, WifiOff, Server, KeyRound, Wrench,
+  Radio, Wifi, WifiOff, Server, KeyRound, Wrench, Monitor, ExternalLink, Clipboard,
 } from 'lucide-react';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
+
+const LOCAL_CLIENT_PORT = 21519;
 
 interface Relay {
   id: string;
@@ -36,6 +38,11 @@ interface RelayServer {
   createdAt: string;
 }
 
+function getRelayEndpoint(): string {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}/ws/relay`;
+}
+
 export default function RelayList() {
   const { workspaceId } = useWorkspace();
   const [relays, setRelays] = useState<Relay[]>([]);
@@ -48,6 +55,30 @@ export default function RelayList() {
   const [relayServers, setRelayServers] = useState<Record<string, RelayServer[]>>({});
   const [copiedToken, setCopiedToken] = useState(false);
   const [regeneratedToken, setRegeneratedToken] = useState<{ relayId: string; name: string; token: string } | null>(null);
+
+  // Client detection state
+  const [clientDetected, setClientDetected] = useState(false);
+  const [clientSending, setClientSending] = useState(false);
+  const [clientResult, setClientResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [copiedConfig, setCopiedConfig] = useState(false);
+
+  // Probe local client on mount and periodically
+  useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      try {
+        const res = await fetch(`http://127.0.0.1:${LOCAL_CLIENT_PORT}/ping`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        if (!cancelled && res.ok) setClientDetected(true);
+      } catch {
+        if (!cancelled) setClientDetected(false);
+      }
+    };
+    probe();
+    const interval = setInterval(probe, 10000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
 
   const loadRelays = useCallback(async () => {
     if (!workspaceId) return;
@@ -73,6 +104,8 @@ export default function RelayList() {
       setCreatedToken({ name: result.name, token: result.token });
       setShowCreate(false);
       setNewName('');
+      setClientResult(null);
+      setCopiedConfig(false);
       await loadRelays();
     } catch (err) {
       console.error('Failed to create relay:', err);
@@ -98,6 +131,8 @@ export default function RelayList() {
     try {
       const result = await api.regenerateRelayToken(workspaceId, relay.id);
       setRegeneratedToken({ relayId: relay.id, name: result.name, token: result.token });
+      setClientResult(null);
+      setCopiedConfig(false);
       await loadRelays();
     } catch (err) {
       console.error('Failed to regenerate token:', err);
@@ -140,6 +175,91 @@ export default function RelayList() {
     setCopiedToken(true);
     setTimeout(() => setCopiedToken(false), 2000);
   };
+
+  // --- Config delivery methods ---
+
+  const sendToClient = async (token: string) => {
+    setClientSending(true);
+    setClientResult(null);
+    try {
+      const res = await fetch(`http://127.0.0.1:${LOCAL_CLIENT_PORT}/setup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: getRelayEndpoint(), token }),
+        signal: AbortSignal.timeout(30000), // user needs time to confirm
+      });
+      const data = await res.json();
+      setClientResult({
+        ok: data.accepted,
+        message: data.accepted ? 'Configuration sent and accepted by client!' : (data.message || 'User rejected the configuration'),
+      });
+    } catch (err: any) {
+      setClientResult({ ok: false, message: `Failed to reach client: ${err?.message || err}` });
+    } finally {
+      setClientSending(false);
+    }
+  };
+
+  const openDeepLink = (token: string) => {
+    const endpoint = encodeURIComponent(getRelayEndpoint());
+    const encodedToken = encodeURIComponent(token);
+    window.location.href = `synapse-relay://setup?endpoint=${endpoint}&token=${encodedToken}`;
+  };
+
+  const copyConfig = (token: string) => {
+    const yaml = `endpoint: "${getRelayEndpoint()}"\ntoken: "${token}"\nlog_level: "info"\nservers: []`;
+    navigator.clipboard.writeText(yaml);
+    setCopiedConfig(true);
+    setTimeout(() => setCopiedConfig(false), 2000);
+  };
+
+  // Reusable token actions component
+  const TokenActions = ({ token }: { token: string }) => (
+    <div className="space-y-3">
+      {/* Method 1: Send to local client (if detected) */}
+      {clientDetected && (
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            className="flex-1 gap-2"
+            onClick={() => sendToClient(token)}
+            disabled={clientSending}
+          >
+            <Monitor className="w-4 h-4" />
+            {clientSending ? 'Waiting for confirmation...' : 'Send to Desktop Client'}
+          </Button>
+          <Badge variant="outline" className="text-xs border-emerald-500/30 text-emerald-400 shrink-0">
+            Client Detected
+          </Badge>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        {/* Method 2: Deep link */}
+        <Button size="sm" variant="outline" className="flex-1 gap-2" onClick={() => openDeepLink(token)}>
+          <ExternalLink className="w-4 h-4" />
+          Open in Client
+        </Button>
+
+        {/* Method 3: Copy full config YAML */}
+        <Button size="sm" variant="outline" className="flex-1 gap-2" onClick={() => copyConfig(token)}>
+          {copiedConfig ? <Check className="w-4 h-4 text-emerald-400" /> : <Clipboard className="w-4 h-4" />}
+          {copiedConfig ? 'Config Copied!' : 'Copy Config YAML'}
+        </Button>
+      </div>
+
+      {/* Result feedback */}
+      {clientResult && (
+        <div className={`text-xs px-3 py-2 rounded-lg border ${
+          clientResult.ok
+            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+            : 'bg-red-500/10 border-red-500/20 text-red-400'
+        }`}>
+          {clientResult.message}
+        </div>
+      )}
+    </div>
+  );
 
   if (loading) {
     return <div className="text-center py-12 text-muted-foreground">Loading relays...</div>;
@@ -295,11 +415,14 @@ export default function RelayList() {
           <DialogHeader>
             <DialogTitle>Relay Created: {createdToken?.name}</DialogTitle>
             <DialogDescription>
-              Copy the authentication token below. It will not be shown again.
+              Send the configuration to your desktop client, or copy the token manually.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <div>
+            {/* Config delivery buttons */}
+            {createdToken && <TokenActions token={createdToken.token} />}
+
+            <div className="border-t border-gray-200 dark:border-white/10 pt-4">
               <Label className="text-xs text-muted-foreground">Authentication Token</Label>
               <div className="flex items-center gap-2 mt-1.5">
                 <code className="flex-1 text-xs bg-gray-100 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md p-3 font-mono break-all select-all">
@@ -318,8 +441,7 @@ export default function RelayList() {
             <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
               <p className="text-xs text-amber-400 font-medium">Save this token now</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Paste it into your relay agent&apos;s <code className="text-xs">config.yaml</code> file.
-                You won&apos;t be able to see this token again.
+                You won&apos;t be able to see this token again after closing this dialog.
               </p>
             </div>
           </div>
@@ -335,11 +457,14 @@ export default function RelayList() {
           <DialogHeader>
             <DialogTitle>New Token for: {regeneratedToken?.name}</DialogTitle>
             <DialogDescription>
-              The old token has been invalidated. Copy the new token below.
+              The old token has been invalidated. Send the new configuration to your client.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <div>
+            {/* Config delivery buttons */}
+            {regeneratedToken && <TokenActions token={regeneratedToken.token} />}
+
+            <div className="border-t border-gray-200 dark:border-white/10 pt-4">
               <Label className="text-xs text-muted-foreground">New Authentication Token</Label>
               <div className="flex items-center gap-2 mt-1.5">
                 <code className="flex-1 text-xs bg-gray-100 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md p-3 font-mono break-all select-all">
