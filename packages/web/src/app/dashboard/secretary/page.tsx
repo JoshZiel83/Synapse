@@ -59,7 +59,7 @@ function mapApiMessages(msgs: any[]): ChatMessage[] {
 
 function RequestInfoPopup({ msg, onClose }: { msg: ChatMessage; onClose: () => void }) {
   return (
-    <div className="absolute bottom-full mb-2 right-0 z-50 w-72 glass-card rounded-xl border border-blue-500/20 shadow-xl shadow-black/20 p-4 text-xs">
+    <div className="absolute bottom-full mb-2 right-0 z-50 w-72 bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 rounded-xl border border-gray-200 dark:border-white/10 shadow-xl shadow-black/20 p-4 text-xs">
       <div className="flex items-center justify-between mb-3">
         <span className="text-sm font-medium text-foreground flex items-center gap-1.5">
           <Cpu className="w-3.5 h-3.5 text-blue-400" />
@@ -292,12 +292,12 @@ export default function SecretaryPage() {
             size="sm"
             onClick={handleNewConversation}
             disabled={sending || messages.length === 0}
-            className="border-border/50 hover:bg-white/5 text-muted-foreground text-xs"
+            className="border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-white/5 text-muted-foreground text-xs"
           >
             <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
             New Chat
           </Button>
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full glass-card">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 dark:bg-white/5">
             <div className={`w-2 h-2 rounded-full ${sending ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
             <span className="text-xs text-muted-foreground">{sending ? 'Thinking...' : 'Ready'}</span>
           </div>
@@ -305,7 +305,7 @@ export default function SecretaryPage() {
       </div>
 
       {/* Chat Area */}
-      <Card className="flex-1 glass-card border-blue-500/5 flex flex-col overflow-hidden">
+      <Card className="flex-1 bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 shadow-sm flex flex-col overflow-hidden">
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-4">
           {loading ? (
@@ -334,7 +334,7 @@ export default function SecretaryPage() {
                   <button
                     key={suggestion}
                     onClick={() => setInput(suggestion)}
-                    className="px-3 py-2 text-xs rounded-xl glass-card hover:bg-blue-500/10 text-muted-foreground hover:text-blue-400 transition-all duration-200 border border-transparent hover:border-blue-500/20"
+                    className="px-3 py-2 text-xs rounded-xl bg-gray-50 dark:bg-white/5 hover:bg-gray-100 dark:hover:bg-white/10 text-muted-foreground hover:text-indigo-600 dark:hover:text-indigo-400 transition-all duration-200 border border-transparent hover:border-gray-200 dark:hover:border-white/10"
                   >
                     {suggestion}
                   </button>
@@ -364,17 +364,17 @@ export default function SecretaryPage() {
                     ${
                       msg.role === 'user'
                         ? 'bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-tr-sm'
-                        : 'glass-card text-foreground rounded-tl-sm'
+                        : 'bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 text-foreground rounded-tl-sm'
                     }
                   `}
                 >
                   {msg.role === 'assistant' ? (
-                    <div className="prose prose-invert prose-sm max-w-none
+                    <div className="prose dark:prose-invert prose-sm max-w-none
                       prose-p:my-1.5 prose-p:leading-relaxed
                       prose-headings:text-foreground prose-headings:font-semibold prose-headings:mt-3 prose-headings:mb-1.5
                       prose-h1:text-base prose-h2:text-sm prose-h3:text-sm
                       prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5
-                      prose-code:text-blue-300 prose-code:bg-blue-500/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:font-mono prose-code:before:content-none prose-code:after:content-none
+                      prose-code:text-indigo-600 dark:prose-code:text-indigo-300 prose-code:bg-blue-500/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:font-mono prose-code:before:content-none prose-code:after:content-none
                       prose-pre:bg-black/30 prose-pre:border prose-pre:border-blue-500/10 prose-pre:rounded-lg prose-pre:my-2
                       prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline
                       prose-strong:text-foreground
@@ -403,7 +403,7 @@ export default function SecretaryPage() {
                               e.stopPropagation();
                               setInfoMsgId(infoMsgId === (msg.id || String(i)) ? null : (msg.id || String(i)));
                             }}
-                            className="inline-flex items-center gap-1 text-muted-foreground/60 hover:text-blue-400 transition-colors ml-1"
+                            className="inline-flex items-center gap-1 text-muted-foreground/60 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors ml-1"
                             title="View request details"
                           >
                             <Info className="w-3.5 h-3.5" />
@@ -431,7 +431,7 @@ export default function SecretaryPage() {
                   <Bot className="w-4 h-4" />
                 </AvatarFallback>
               </Avatar>
-              <div className="glass-card rounded-2xl rounded-tl-sm px-4 py-3">
+              <div className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 rounded-2xl rounded-tl-sm px-4 py-3">
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-1.5">
                     <div className="w-2 h-2 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '0ms' }} />
@@ -446,20 +446,20 @@ export default function SecretaryPage() {
         </div>
 
         {/* Input */}
-        <div className="p-4 border-t border-blue-500/5">
+        <div className="p-4 border-t border-gray-200 dark:border-white/10">
           <form onSubmit={handleSend} className="flex gap-3">
             <Input
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Type a message to your AI secretary..."
-              className="flex-1 bg-background/50 border-border/50 focus:border-blue-500/50 rounded-xl h-12 text-sm"
+              className="flex-1 bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-gray-700 focus:border-blue-500/50 rounded-xl h-12 text-sm"
               disabled={sending}
             />
             <Button
               type="submit"
               disabled={!input.trim() || sending}
-              className="bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white rounded-xl h-12 w-12 p-0 shadow-lg shadow-blue-500/20 transition-all duration-300"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl h-12 w-12 p-0 shadow-lg shadow-indigo-500/20 transition-all duration-300"
             >
               <Send className="w-5 h-5" />
             </Button>

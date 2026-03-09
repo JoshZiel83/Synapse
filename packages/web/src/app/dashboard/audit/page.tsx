@@ -158,7 +158,7 @@ export default function AuditPage() {
           variant="outline"
           size="sm"
           onClick={loadLogs}
-          className="border-border/50 hover:bg-white/5 text-muted-foreground"
+          className="border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-white/5 text-muted-foreground"
         >
           <RefreshCw className="w-4 h-4 mr-2" />
           Refresh
@@ -178,7 +178,7 @@ export default function AuditPage() {
             className={
               actionFilter === action
                 ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/20 hover:bg-cyan-500/30'
-                : 'border-border/50 hover:bg-white/5 text-muted-foreground'
+                : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-white/5 text-muted-foreground'
             }
           >
             {action.charAt(0).toUpperCase() + action.slice(1)}
@@ -187,7 +187,7 @@ export default function AuditPage() {
       </div>
 
       {/* Audit Log Table */}
-      <Card className="glass-card border-blue-500/5 overflow-hidden">
+      <Card className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 shadow-sm overflow-hidden">
         {loading ? (
           <div className="flex items-center justify-center py-16">
             <div className="h-8 w-8 rounded-full border-2 border-cyan-500 border-t-transparent animate-spin" />
@@ -203,7 +203,7 @@ export default function AuditPage() {
         ) : (
           <>
             {/* Table Header */}
-            <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-3 border-b border-border/30 bg-background/30">
+            <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-3 border-b border-border/30 bg-gray-50 dark:bg-background/30">
               <div className="col-span-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Timestamp</div>
               <div className="col-span-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Action</div>
               <div className="col-span-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Actor / User</div>
@@ -283,7 +283,7 @@ export default function AuditPage() {
             size="sm"
             onClick={() => setPage(Math.max(1, page - 1))}
             disabled={page === 1}
-            className="border-border/50 hover:bg-white/5 text-muted-foreground"
+            className="border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-white/5 text-muted-foreground"
           >
             <ChevronLeft className="w-4 h-4 mr-1" />
             Previous
@@ -296,7 +296,7 @@ export default function AuditPage() {
             size="sm"
             onClick={() => setPage(Math.min(totalPages, page + 1))}
             disabled={page === totalPages}
-            className="border-border/50 hover:bg-white/5 text-muted-foreground"
+            className="border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-white/5 text-muted-foreground"
           >
             Next
             <ChevronRight className="w-4 h-4 ml-1" />
@@ -306,7 +306,7 @@ export default function AuditPage() {
 
       {/* Detail Dialog */}
       <Dialog open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
-        <DialogContent className="sm:max-w-lg border-border/50 bg-background/95 backdrop-blur-xl">
+        <DialogContent className="sm:max-w-lg border-gray-200 dark:border-white/10 bg-white dark:bg-gray-900">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
               <span>Audit Detail</span>

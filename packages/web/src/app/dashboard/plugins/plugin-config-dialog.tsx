@@ -150,7 +150,7 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
           value={value}
           onChange={(e) => handleGuidedChange(key, e.target.value)}
           placeholder={isSensitive ? '••••••••' : `Enter ${key}`}
-          className={`glass-card ${error ? 'border-red-500/50' : 'border-blue-500/10'}`}
+          className={`bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 ${error ? 'border-red-500/50' : 'border-gray-200 dark:border-white/10'}`}
         />
         {error && <p className="text-xs text-red-400">{error}</p>}
       </div>
@@ -159,7 +159,7 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
-      <DialogContent className="glass-card border-blue-500/10 max-w-md max-h-[85vh] overflow-y-auto">
+      <DialogContent className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 max-w-md max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Configure {installation.plugin_display_name}</DialogTitle>
         </DialogHeader>
@@ -173,7 +173,7 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
             <div className="flex items-center gap-2">
               <Label className="text-xs text-muted-foreground">Lifecycle:</Label>
               <select
-                className="h-7 rounded-md border border-blue-500/10 bg-transparent px-2 text-xs glass-card"
+                className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10"
                 value={lifecycleScope}
                 onChange={(e) => setLifecycleScope(e.target.value)}
               >
@@ -187,9 +187,9 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
           {/* Config editing */}
           {hasConfig ? (
             <Tabs value={mode} onValueChange={(v) => setMode(v as any)}>
-              <TabsList className="glass-card border border-blue-500/10 w-full">
-                <TabsTrigger value="guided" className="flex-1 data-[state=active]:bg-blue-500/20 data-[state=active]:text-blue-400">Guided</TabsTrigger>
-                <TabsTrigger value="json" className="flex-1 data-[state=active]:bg-blue-500/20 data-[state=active]:text-blue-400">JSON</TabsTrigger>
+              <TabsList className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border border-gray-200 dark:border-white/10 w-full">
+                <TabsTrigger value="guided" className="flex-1 data-[state=active]:bg-indigo-50 data-[state=active]:text-indigo-600 dark:data-[state=active]:bg-indigo-500/20 dark:data-[state=active]:text-indigo-400">Guided</TabsTrigger>
+                <TabsTrigger value="json" className="flex-1 data-[state=active]:bg-indigo-50 data-[state=active]:text-indigo-600 dark:data-[state=active]:bg-indigo-500/20 dark:data-[state=active]:text-indigo-400">JSON</TabsTrigger>
               </TabsList>
 
               <TabsContent value="guided" className="mt-3 space-y-3">
@@ -201,7 +201,7 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
                   value={jsonText}
                   onChange={(e) => setJsonText(e.target.value)}
                   rows={6}
-                  className="font-mono text-xs glass-card border-blue-500/10"
+                  className="font-mono text-xs bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10"
                 />
               </TabsContent>
             </Tabs>

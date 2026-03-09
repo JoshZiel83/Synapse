@@ -111,7 +111,7 @@ export default function WorkItemsPage() {
             variant="outline"
             size="sm"
             onClick={loadWorkItems}
-            className="border-border/50 hover:bg-white/5 text-muted-foreground"
+            className="border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-white/5 text-muted-foreground"
           >
             <RefreshCw className="w-4 h-4 mr-2" />
             Refresh
@@ -131,8 +131,8 @@ export default function WorkItemsPage() {
             onClick={() => setFilter(p)}
             className={
               filter === p
-                ? 'bg-blue-500/20 text-blue-400 border-blue-500/20 hover:bg-blue-500/30'
-                : 'border-border/50 hover:bg-white/5 text-muted-foreground'
+                ? 'bg-indigo-50 text-indigo-600 border-indigo-200 dark:bg-indigo-500/20 dark:text-indigo-400 dark:border-indigo-500/20 hover:bg-indigo-100 dark:hover:bg-indigo-500/30'
+                : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-white/5 text-muted-foreground'
             }
           >
             {p.charAt(0).toUpperCase() + p.slice(1)}
@@ -172,7 +172,7 @@ export default function WorkItemsPage() {
                     items.map((item) => {
                       const priority = getPriorityBadge(item.priority);
                       return (
-                        <Card key={item.id} className="glass-card border-blue-500/5 hover:border-blue-500/15 transition-all duration-300 cursor-pointer group">
+                        <Card key={item.id} className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 shadow-sm hover:border-gray-200 dark:hover:border-white/10 transition-all duration-300 cursor-pointer group">
                           <CardContent className="p-4 space-y-3">
                             <div className="flex items-start justify-between gap-2">
                               <h3 className="text-sm font-medium text-foreground leading-tight group-hover:text-blue-400 transition-colors">

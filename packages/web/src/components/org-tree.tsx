@@ -72,7 +72,7 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
         <div className="absolute left-0 top-0 w-6 h-6 border-l-2 border-b-2 border-blue-500/15 rounded-bl-xl -translate-x-4" />
       )}
 
-      <Card className="glass-card border-blue-500/5 hover:border-blue-500/15 transition-all duration-300 group mb-3">
+      <Card className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 hover:border-blue-500/15 transition-all duration-300 group mb-3">
         <CardContent className="p-4">
           <div className="flex items-start gap-3">
             {/* Avatar */}
@@ -105,7 +105,7 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
               {actor.capabilities && actor.capabilities.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-2">
                   {actor.capabilities.map((cap, i) => (
-                    <Badge key={i} variant="outline" className="text-[10px] px-1.5 py-0 bg-background/30 text-muted-foreground border-border/50">
+                    <Badge key={i} variant="outline" className="text-[10px] px-1.5 py-0 bg-background/30 text-muted-foreground border-gray-200 dark:border-gray-700">
                       {cap}
                     </Badge>
                   ))}
@@ -129,7 +129,7 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-blue-400"
+                  className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-indigo-600 dark:hover:text-indigo-400"
                   onClick={() => onAddChild(actor.id)}
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -152,7 +152,7 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
 
       {/* Children */}
       {hasChildren && expanded && (
-        <div className="ml-8 pl-4 border-l-2 border-blue-500/10 space-y-0">
+        <div className="ml-8 pl-4 border-l-2 border-gray-200 dark:border-white/10 space-y-0">
           {actor.children!.map((child) => (
             <OrgTreeNode key={child.id} actor={child} depth={depth + 1} onAddChild={onAddChild} />
           ))}

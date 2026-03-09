@@ -19,12 +19,12 @@ export default function SettingsPage() {
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="glass-card border border-blue-500/10">
-          <TabsTrigger value="model-groups" className="data-[state=active]:bg-blue-500/20 data-[state=active]:text-blue-400 gap-2">
+        <TabsList className="bg-gray-100 dark:bg-white/5 border border-gray-200 dark:border-white/10">
+          <TabsTrigger value="model-groups" className="data-[state=active]:bg-indigo-50 data-[state=active]:text-indigo-600 dark:data-[state=active]:bg-indigo-500/20 dark:data-[state=active]:text-indigo-400 gap-2">
             <Cpu className="w-4 h-4" />
             Model Groups
           </TabsTrigger>
-          <TabsTrigger value="actor-assignment" className="data-[state=active]:bg-blue-500/20 data-[state=active]:text-blue-400 gap-2">
+          <TabsTrigger value="actor-assignment" className="data-[state=active]:bg-indigo-50 data-[state=active]:text-indigo-600 dark:data-[state=active]:bg-indigo-500/20 dark:data-[state=active]:text-indigo-400 gap-2">
             <Users className="w-4 h-4" />
             Actor Assignment
           </TabsTrigger>

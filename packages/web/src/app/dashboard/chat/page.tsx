@@ -135,7 +135,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="h-[calc(100vh-8rem)] flex rounded-2xl overflow-hidden glass-card border border-blue-500/5">
+    <div className="flex-1 -m-4 lg:-m-8 flex overflow-hidden min-h-0">
       {/* Desktop: side-by-side. Mobile: toggle */}
 
       {/* Group List */}
@@ -153,7 +153,7 @@ export default function ChatPage() {
 
       {/* Chat Area */}
       <div className={`
-        flex-1 ${mobileView === 'chat' ? 'flex' : 'hidden'} lg:flex flex-col border-l border-blue-500/5
+        flex-1 ${mobileView === 'chat' ? 'flex' : 'hidden'} lg:flex flex-col
       `}>
         {selectedGroup ? (
           <GroupChat
@@ -167,7 +167,7 @@ export default function ChatPage() {
           />
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center space-y-4 p-8">
-            <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-blue-500/10 to-violet-500/10 flex items-center justify-center">
+            <div className="w-24 h-24 rounded-3xl bg-gray-100 dark:bg-white/5 flex items-center justify-center">
               <MessageSquare className="w-12 h-12 text-muted-foreground/30" />
             </div>
             <div>

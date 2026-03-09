@@ -8,16 +8,7 @@ import { useAuthStore } from '@/stores/auth-store';
 import { WorkspaceProvider } from './workspace-provider';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Separator } from '@/components/ui/separator';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import {
   LayoutDashboard,
   MessageSquare,
@@ -27,11 +18,11 @@ import {
   FileText,
   LogOut,
   Menu,
-  ChevronRight,
   Settings,
   Puzzle,
 } from 'lucide-react';
 import { useChatStore } from '@/stores/chat-store';
+import { ThemeToggle } from '@/components/theme-toggle';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -44,74 +35,91 @@ const navItems = [
   { href: '/dashboard/settings', label: 'Settings', icon: Settings },
 ];
 
-function NavLink({ href, label, icon: Icon, active, badge }: { href: string; label: string; icon: any; active: boolean; badge?: number }) {
-  return (
-    <Link
-      href={href}
-      className={`
-        flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200
-        ${active
-          ? 'bg-gradient-to-r from-blue-500/20 to-violet-500/20 text-blue-400 border border-blue-500/20 shadow-lg shadow-blue-500/5'
-          : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
-        }
-      `}
-    >
-      <Icon className={`w-5 h-5 ${active ? 'text-blue-400' : ''}`} />
-      <span>{label}</span>
-      {badge !== undefined && badge > 0 && (
-        <span className="ml-auto flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-[10px] font-bold">
-          {badge > 99 ? '99+' : badge}
-        </span>
-      )}
-      {active && !badge && <ChevronRight className="w-4 h-4 ml-auto text-blue-400/50" />}
-    </Link>
-  );
-}
-
-function Sidebar({ pathname }: { pathname: string }) {
+function SidebarContent({ pathname, user, onLogout }: { pathname: string; user: any; onLogout: () => void }) {
   const totalUnread = useChatStore((s) => s.totalUnread);
+  const initials = user?.name
+    ? user.name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
+    : 'U';
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="relative flex grow flex-col gap-y-5 overflow-y-auto bg-white px-6 pb-4 dark:bg-gray-900">
       {/* Logo */}
-      <div className="flex items-center gap-3 px-6 py-6">
-        <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-violet-600 shadow-lg shadow-blue-500/20 p-1.5">
-          <Image src="/synapse.svg" alt="Synapse" width={28} height={28} className="invert" />
-        </div>
-        <div>
-          <h1 className="text-lg font-bold bg-gradient-to-r from-blue-400 to-violet-400 bg-clip-text text-transparent">
-            Synapse
-          </h1>
-          <p className="text-xs text-muted-foreground">Command Center</p>
-        </div>
+      <div className="flex h-16 shrink-0 items-center gap-3">
+        <Image src="/synapse.svg" alt="Synapse" width={32} height={32} className="dark:invert" />
+        <span className="text-lg font-bold text-gray-900 dark:text-white">Synapse</span>
       </div>
-
-      <Separator className="bg-border/50 mx-4" />
 
       {/* Navigation */}
-      <nav className="flex-1 p-4 space-y-1">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.href}
-            href={item.href}
-            label={item.label}
-            icon={item.icon}
-            active={item.href === '/dashboard' ? pathname === item.href : pathname.startsWith(item.href)}
-            badge={item.href === '/dashboard/chat' ? totalUnread : undefined}
-          />
-        ))}
-      </nav>
+      <nav className="flex flex-1 flex-col">
+        <ul role="list" className="flex flex-1 flex-col gap-y-7">
+          <li>
+            <ul role="list" className="-mx-2 space-y-1">
+              {navItems.map((item) => {
+                const active = item.href === '/dashboard'
+                  ? pathname === item.href
+                  : pathname.startsWith(item.href);
+                const Icon = item.icon;
+                const badge = item.href === '/dashboard/chat' ? totalUnread : 0;
 
-      {/* Bottom section */}
-      <div className="p-4">
-        <div className="glass-card rounded-xl p-4 text-center">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-r from-blue-500 to-violet-500 mx-auto mb-2 flex items-center justify-center p-1.5">
-            <Image src="/synapse.svg" alt="Synapse" width={20} height={20} className="invert" />
-          </div>
-          <p className="text-xs text-muted-foreground">Digital Employee Runtime</p>
-          <p className="text-xs text-muted-foreground/60 mt-1">v0.1.0</p>
-        </div>
-      </div>
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      className={`
+                        group flex gap-x-3 rounded-md p-2 text-sm/6 font-semibold
+                        ${active
+                          ? 'bg-gray-50 text-indigo-600 dark:bg-white/5 dark:text-white'
+                          : 'text-gray-700 hover:bg-gray-50 hover:text-indigo-600 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white'
+                        }
+                      `}
+                    >
+                      <Icon
+                        className={`size-6 shrink-0 ${
+                          active
+                            ? 'text-indigo-600 dark:text-white'
+                            : 'text-gray-400 group-hover:text-indigo-600 dark:text-gray-500 dark:group-hover:text-white'
+                        }`}
+                      />
+                      {item.label}
+                      {badge > 0 && (
+                        <span className="ml-auto flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-indigo-600 text-white text-[10px] font-bold">
+                          {badge > 99 ? '99+' : badge}
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </li>
+
+          {/* Bottom: theme toggle + user profile */}
+          <li className="-mx-6 mt-auto">
+            <div className="flex items-center justify-between px-6 py-2">
+              <span className="text-xs font-semibold text-gray-400 dark:text-gray-500">Theme</span>
+              <ThemeToggle />
+            </div>
+            <div className="flex items-center gap-x-4 px-6 py-3 text-sm/6 font-semibold text-gray-900 dark:text-white">
+              <Avatar className="size-8 bg-gray-50 dark:bg-gray-800">
+                <AvatarFallback className="bg-indigo-600 text-white text-xs">
+                  {initials}
+                </AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0">
+                <span className="block truncate">{user?.name}</span>
+                <span className="block truncate text-xs font-normal text-gray-500 dark:text-gray-400">{user?.email}</span>
+              </div>
+              <button
+                onClick={onLogout}
+                className="p-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-md hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+                title="Sign out"
+              >
+                <LogOut className="size-4" />
+              </button>
+            </div>
+          </li>
+        </ul>
+      </nav>
     </div>
   );
 }
@@ -138,10 +146,10 @@ export default function DashboardLayout({
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center gradient-bg">
+      <div className="min-h-screen flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="h-12 w-12 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-          <p className="text-muted-foreground text-sm">Loading Synapse...</p>
+          <div className="h-12 w-12 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
+          <p className="text-gray-500 dark:text-gray-400 text-sm">Loading Synapse...</p>
         </div>
       </div>
     );
@@ -149,89 +157,48 @@ export default function DashboardLayout({
 
   if (!user) return null;
 
-  const initials = user.name
-    ? user.name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
-    : 'U';
+  const handleLogout = () => {
+    logout();
+    router.push('/login');
+  };
 
   return (
     <WorkspaceProvider>
-      <div className="min-h-screen flex gradient-bg">
-        {/* Desktop Sidebar */}
-        <aside className="hidden lg:flex lg:w-72 lg:flex-col glass border-r border-blue-500/10 fixed inset-y-0 left-0 z-40">
-          <Sidebar pathname={pathname} />
-        </aside>
-
+      <div>
         {/* Mobile Sidebar */}
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-          <SheetContent side="left" onClose={() => setMobileOpen(false)} className="w-72 p-0 glass border-r border-blue-500/10">
-            <Sidebar pathname={pathname} />
+          <SheetContent side="left" onClose={() => setMobileOpen(false)} className="w-72 p-0 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-white/10">
+            <SidebarContent pathname={pathname} user={user} onLogout={handleLogout} />
           </SheetContent>
         </Sheet>
 
-        {/* Main Content */}
-        <div className="flex-1 lg:ml-72 flex flex-col min-h-screen">
-          {/* Top Bar */}
-          <header className="sticky top-0 z-30 glass border-b border-blue-500/10">
-            <div className="flex items-center justify-between h-16 px-4 lg:px-8">
-              <div className="flex items-center gap-4">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="lg:hidden text-muted-foreground hover:text-foreground"
-                  onClick={() => setMobileOpen(true)}
-                >
-                  <Menu className="w-5 h-5" />
-                </Button>
-                <div className="hidden sm:block">
-                  <h2 className="text-sm font-medium text-foreground">
-                    {navItems.find(i => i.href === pathname)?.label || 'Dashboard'}
-                  </h2>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-4">
-                {/* Connection Status */}
-                <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full glass-card">
-                  <div className="w-2 h-2 rounded-full bg-emerald-400 pulse-glow" />
-                  <span className="text-xs text-muted-foreground">Online</span>
-                </div>
-
-                {/* User Menu */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" className="flex items-center gap-3 hover:bg-white/5 rounded-xl px-3">
-                      <Avatar className="h-8 w-8 border border-blue-500/20">
-                        <AvatarFallback className="bg-gradient-to-br from-blue-500 to-violet-600 text-white text-xs">
-                          {initials}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="hidden sm:block text-left">
-                        <p className="text-sm font-medium text-foreground">{user.name}</p>
-                        <p className="text-xs text-muted-foreground">{user.email}</p>
-                      </div>
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-56 glass-card border-blue-500/10">
-                    <DropdownMenuLabel className="text-muted-foreground">My Account</DropdownMenuLabel>
-                    <DropdownMenuSeparator className="bg-border/50" />
-                    <DropdownMenuItem
-                      onClick={() => { logout(); router.push('/login'); }}
-                      className="text-red-400 focus:text-red-400 focus:bg-red-500/10 cursor-pointer"
-                    >
-                      <LogOut className="w-4 h-4 mr-2" />
-                      Sign Out
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </div>
-          </header>
-
-          {/* Page Content */}
-          <main className="flex-1 p-4 lg:p-8">
-            {children}
-          </main>
+        {/* Desktop Sidebar */}
+        <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-72 lg:flex-col">
+          <div className="relative flex grow flex-col border-r border-gray-200 dark:border-white/10">
+            <SidebarContent pathname={pathname} user={user} onLogout={handleLogout} />
+          </div>
         </div>
+
+        {/* Top bar (mobile only shows hamburger + title) */}
+        <div className="sticky top-0 z-40 flex items-center gap-x-6 bg-white px-4 py-4 shadow-xs sm:px-6 lg:hidden dark:bg-gray-900 dark:shadow-none border-b border-gray-200 dark:border-white/10">
+          <button
+            type="button"
+            onClick={() => setMobileOpen(true)}
+            className="-m-2.5 p-2.5 text-gray-700 dark:text-gray-400"
+          >
+            <Menu className="size-6" />
+          </button>
+          <div className="flex-1 text-sm/6 font-semibold text-gray-900 dark:text-white">
+            {navItems.find(i => i.href === pathname)?.label || 'Dashboard'}
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <main className="lg:pl-72 flex flex-col min-h-screen lg:h-screen lg:max-h-screen">
+          <div className="flex-1 flex flex-col p-4 lg:p-8 min-h-0 overflow-auto">
+            {children}
+          </div>
+        </main>
       </div>
     </WorkspaceProvider>
   );

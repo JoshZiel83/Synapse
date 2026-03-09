@@ -110,7 +110,7 @@ export default function DashboardPage() {
   if (wsLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="h-8 w-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+        <div className="h-8 w-8 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
       </div>
     );
   }
@@ -123,7 +123,7 @@ export default function DashboardPage() {
           <h1 className="text-3xl font-bold text-foreground">
             {workspaceName || 'Workspace'}
           </h1>
-          <Badge variant="secondary" className="bg-blue-500/10 text-blue-400 border-blue-500/20">
+          <Badge variant="secondary" className="bg-indigo-50 text-indigo-600 border-indigo-200 dark:bg-indigo-500/10 dark:text-indigo-400 dark:border-indigo-500/20">
             <Zap className="w-3 h-3 mr-1" />
             Active
           </Badge>
@@ -138,7 +138,7 @@ export default function DashboardPage() {
         {statCards.map((stat) => (
           <Card
             key={stat.title}
-            className="glass-card border-blue-500/5 hover:border-blue-500/15 transition-all duration-300 cursor-pointer group"
+            className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 hover:ring-gray-300 dark:hover:ring-white/20 shadow-sm transition-all duration-300 cursor-pointer group"
             onClick={() => router.push(stat.href)}
           >
             <CardContent className="p-6">
@@ -147,7 +147,7 @@ export default function DashboardPage() {
                   <p className="text-sm text-muted-foreground mb-1">{stat.title}</p>
                   <p className="text-4xl font-bold text-foreground">
                     {loading ? (
-                      <span className="inline-block h-10 w-16 bg-muted/50 rounded animate-pulse" />
+                      <span className="inline-block h-10 w-16 bg-gray-200 dark:bg-muted/50 rounded animate-pulse" />
                     ) : (
                       stat.value
                     )}
@@ -173,7 +173,7 @@ export default function DashboardPage() {
           {quickActions.map((action) => (
             <Card
               key={action.title}
-              className="glass-card border-blue-500/5 hover:border-blue-500/15 transition-all duration-300 cursor-pointer group overflow-hidden relative"
+              className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 shadow-sm transition-all duration-300 cursor-pointer group overflow-hidden relative"
               onClick={() => router.push(action.href)}
             >
               {/* Gradient overlay */}
@@ -183,7 +183,7 @@ export default function DashboardPage() {
                 <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${action.color} shadow-lg flex items-center justify-center mb-3 group-hover:scale-110 transition-transform duration-300`}>
                   <action.icon className="w-6 h-6 text-white" />
                 </div>
-                <CardTitle className="text-lg text-foreground group-hover:text-blue-400 transition-colors">
+                <CardTitle className="text-lg text-foreground group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
                   {action.title}
                 </CardTitle>
               </CardHeader>
@@ -191,7 +191,7 @@ export default function DashboardPage() {
                 <CardDescription className="text-muted-foreground mb-4">
                   {action.description}
                 </CardDescription>
-                <div className="flex items-center gap-2 text-sm text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                <div className="flex items-center gap-2 text-sm text-indigo-600 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                   <span>Go to {action.title.toLowerCase()}</span>
                   <ArrowRight className="w-4 h-4" />
                 </div>
@@ -202,7 +202,7 @@ export default function DashboardPage() {
       </div>
 
       {/* System Status */}
-      <Card className="glass-card border-blue-500/5">
+      <Card className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 shadow-sm">
         <CardHeader>
           <CardTitle className="text-lg text-foreground flex items-center gap-2">
             <Activity className="w-5 h-5 text-blue-400" />
@@ -211,21 +211,21 @@ export default function DashboardPage() {
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-background/30">
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 dark:bg-background/30">
               <div className="w-3 h-3 rounded-full bg-emerald-400 pulse-glow" />
               <div>
                 <p className="text-sm font-medium text-foreground">API Server</p>
                 <p className="text-xs text-muted-foreground">Connected</p>
               </div>
             </div>
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-background/30">
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 dark:bg-background/30">
               <div className="w-3 h-3 rounded-full bg-emerald-400 pulse-glow" />
               <div>
                 <p className="text-sm font-medium text-foreground">WebSocket</p>
                 <p className="text-xs text-muted-foreground">Real-time active</p>
               </div>
             </div>
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-background/30">
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 dark:bg-background/30">
               <div className="w-3 h-3 rounded-full bg-emerald-400 pulse-glow" />
               <div>
                 <p className="text-sm font-medium text-foreground">AI Engine</p>

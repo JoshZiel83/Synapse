@@ -26,7 +26,7 @@ export default function PluginDetailDialog({ plugin, installedCount, onInstall, 
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
-      <DialogContent className="glass-card border-blue-500/10 max-w-lg">
+      <DialogContent className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 max-w-lg">
         <DialogHeader>
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-lg bg-blue-500/10 flex items-center justify-center">
@@ -45,10 +45,10 @@ export default function PluginDetailDialog({ plugin, installedCount, onInstall, 
           <p className="text-sm text-muted-foreground">{plugin.long_description || plugin.description}</p>
 
           <div className="flex gap-2 flex-wrap">
-            <Badge variant="outline" className="border-blue-500/20">{transportLabels[plugin.transport] || plugin.transport}</Badge>
-            <Badge variant="outline" className="border-blue-500/20">Scope: {plugin.lifecycle_scope}</Badge>
+            <Badge variant="outline" className="border-gray-200 dark:border-white/10">{transportLabels[plugin.transport] || plugin.transport}</Badge>
+            <Badge variant="outline" className="border-gray-200 dark:border-white/10">Scope: {plugin.lifecycle_scope}</Badge>
             {(plugin.tags || []).map((tag: string) => (
-              <Badge key={tag} variant="secondary" className="bg-blue-500/5">{tag}</Badge>
+              <Badge key={tag} variant="secondary" className="bg-gray-50 dark:bg-white/5">{tag}</Badge>
             ))}
           </div>
 
@@ -73,7 +73,7 @@ export default function PluginDetailDialog({ plugin, installedCount, onInstall, 
               </h4>
               <div className="space-y-2">
                 {tools.map((tool: any) => (
-                  <div key={tool.name} className="p-2 rounded bg-blue-500/5 border border-blue-500/10">
+                  <div key={tool.name} className="p-2 rounded bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10">
                     <p className="text-sm font-mono font-medium text-blue-400">{tool.name}</p>
                     <p className="text-xs text-muted-foreground mt-1">{tool.description}</p>
                   </div>

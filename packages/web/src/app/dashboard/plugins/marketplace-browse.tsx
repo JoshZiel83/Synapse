@@ -56,10 +56,10 @@ export default function MarketplaceBrowse() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            className="pl-10 glass-card border-blue-500/10"
+            className="pl-10 bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10"
           />
         </div>
-        <Button onClick={handleSearch} variant="outline" className="border-blue-500/20">
+        <Button onClick={handleSearch} variant="outline" className="border-gray-200 dark:border-white/10">
           Search
         </Button>
       </div>
@@ -72,7 +72,7 @@ export default function MarketplaceBrowse() {
             const TransportIcon = transportIcons[plugin.transport] || Puzzle;
             const count = installedCount(plugin.id);
             return (
-              <Card key={plugin.id} className="glass-card border-blue-500/10 hover:border-blue-500/30 transition-colors cursor-pointer" onClick={() => setSelectedPlugin(plugin)}>
+              <Card key={plugin.id} className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 hover:border-blue-500/30 transition-colors cursor-pointer" onClick={() => setSelectedPlugin(plugin)}>
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3">
@@ -94,7 +94,7 @@ export default function MarketplaceBrowse() {
                   <div className="flex items-center justify-between">
                     <div className="flex gap-1 flex-wrap">
                       {(plugin.tags || []).slice(0, 3).map((tag: string) => (
-                        <Badge key={tag} variant="secondary" className="text-xs bg-blue-500/5">{tag}</Badge>
+                        <Badge key={tag} variant="secondary" className="text-xs bg-gray-50 dark:bg-white/5">{tag}</Badge>
                       ))}
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">

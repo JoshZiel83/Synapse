@@ -75,7 +75,7 @@ export default function ModelGroupDialog({ open, onOpenChange, group, onSaved }:
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="glass-card border-blue-500/10 sm:max-w-md">
+      <DialogContent className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{group ? 'Edit Model Group' : 'Create Model Group'}</DialogTitle>
           <DialogDescription>
@@ -90,7 +90,7 @@ export default function ModelGroupDialog({ open, onOpenChange, group, onSaved }:
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Primary Models"
-              className="bg-background/50 border-blue-500/20 focus:border-blue-500/40"
+              className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40"
             />
           </div>
 
@@ -100,7 +100,7 @@ export default function ModelGroupDialog({ open, onOpenChange, group, onSaved }:
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Optional description"
-              className="bg-background/50 border-blue-500/20 focus:border-blue-500/40"
+              className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40"
             />
           </div>
 
@@ -113,7 +113,7 @@ export default function ModelGroupDialog({ open, onOpenChange, group, onSaved }:
                   className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
                     strategy === s.value
                       ? 'border-blue-500/40 bg-blue-500/10'
-                      : 'border-blue-500/10 hover:border-blue-500/20 bg-background/30'
+                      : 'border-gray-200 dark:border-white/10 hover:border-blue-500/20 bg-background/30'
                   }`}
                 >
                   <input
@@ -145,11 +145,11 @@ export default function ModelGroupDialog({ open, onOpenChange, group, onSaved }:
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} className="border-blue-500/20">
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="border-gray-200 dark:border-white/10">
             Cancel
           </Button>
           <Button onClick={handleSave} disabled={saving || !name.trim()}
-            className="bg-gradient-to-r from-blue-500 to-violet-600 hover:from-blue-600 hover:to-violet-700">
+            className="bg-indigo-600 hover:bg-indigo-500">
             {saving ? 'Saving...' : group ? 'Update' : 'Create'}
           </Button>
         </DialogFooter>

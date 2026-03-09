@@ -70,7 +70,7 @@ export default function ModelItemVersions({
       ) : (
         <div className="grid gap-3">
           {versions.map((v, idx) => (
-            <Card key={v.id} className={`glass-card border-blue-500/10 ${idx === 0 ? 'border-emerald-500/20' : ''}`}>
+            <Card key={v.id} className={`bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 ${idx === 0 ? 'border-emerald-500/20' : ''}`}>
               <CardContent className="p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">

@@ -179,7 +179,7 @@ export default function MemoriesPage() {
             variant="outline"
             size="sm"
             onClick={loadMemories}
-            className="border-border/50 hover:bg-white/5 text-muted-foreground"
+            className="border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-white/5 text-muted-foreground"
           >
             <RefreshCw className="w-4 h-4 mr-2" />
             Refresh
@@ -187,7 +187,7 @@ export default function MemoriesPage() {
           <Button
             size="sm"
             onClick={openCreateDialog}
-            className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-lg shadow-emerald-500/20"
+            className="bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20"
           >
             <Plus className="w-4 h-4 mr-2" />
             Add Memory
@@ -203,7 +203,7 @@ export default function MemoriesPage() {
             placeholder="Search memories..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10 bg-background/50 border-border/50"
+            className="pl-10 bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-gray-700"
           />
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -217,7 +217,7 @@ export default function MemoriesPage() {
               className={
                 categoryFilter === cat
                   ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/30'
-                  : 'border-border/50 hover:bg-white/5 text-muted-foreground'
+                  : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-white/5 text-muted-foreground'
               }
             >
               {cat.charAt(0).toUpperCase() + cat.slice(1)}
@@ -246,7 +246,7 @@ export default function MemoriesPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filteredMemories.map((memory) => (
-            <Card key={memory.id} className="glass-card border-blue-500/5 hover:border-blue-500/15 transition-all duration-300 group">
+            <Card key={memory.id} className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 shadow-sm hover:border-gray-200 dark:hover:border-white/10 transition-all duration-300 group">
               <CardContent className="p-5 space-y-3">
                 {/* Top row */}
                 <div className="flex items-start justify-between gap-2">
@@ -257,7 +257,7 @@ export default function MemoriesPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7 text-muted-foreground hover:text-blue-400"
+                      className="h-7 w-7 text-muted-foreground hover:text-indigo-600 dark:hover:text-indigo-400"
                       onClick={() => openEditDialog(memory)}
                     >
                       <Pencil className="w-3.5 h-3.5" />
@@ -280,7 +280,7 @@ export default function MemoriesPage() {
                 {memory.tags && memory.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1">
                     {memory.tags.map((tag, i) => (
-                      <span key={i} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-background/30 text-muted-foreground border border-border/30">
+                      <span key={i} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-gray-50 dark:bg-background/30 text-muted-foreground border border-border/30">
                         <Tag className="w-2.5 h-2.5" />
                         {tag}
                       </span>
@@ -318,7 +318,7 @@ export default function MemoriesPage() {
 
       {/* Create/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="glass-card border-blue-500/10">
+        <DialogContent className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10">
           <DialogHeader>
             <DialogTitle className="text-foreground">
               {editingMemory ? 'Edit Memory' : 'Create Memory'}
@@ -335,7 +335,7 @@ export default function MemoriesPage() {
                 onChange={(e) => setFormData({ ...formData, content: e.target.value })}
                 placeholder="What should be remembered?"
                 rows={3}
-                className="flex w-full rounded-md border border-input bg-background/50 px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className="flex w-full rounded-md border border-input bg-gray-50 dark:bg-white/5 px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -344,7 +344,7 @@ export default function MemoriesPage() {
                 <select
                   value={formData.category}
                   onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                  className="flex h-10 w-full rounded-md border border-input bg-background/50 px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  className="flex h-10 w-full rounded-md border border-input bg-gray-50 dark:bg-white/5 px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 >
                   <option value="knowledge">Knowledge</option>
                   <option value="experiential">Experiential</option>
@@ -362,7 +362,7 @@ export default function MemoriesPage() {
                   step={0.1}
                   value={formData.importance}
                   onChange={(e) => setFormData({ ...formData, importance: parseFloat(e.target.value) || 0.5 })}
-                  className="bg-background/50 border-border/50"
+                  className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-gray-700"
                 />
               </div>
             </div>
@@ -372,7 +372,7 @@ export default function MemoriesPage() {
                 value={formData.tags}
                 onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
                 placeholder="e.g., project-x, architecture, decision"
-                className="bg-background/50 border-border/50"
+                className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-gray-700"
               />
             </div>
             <div className="space-y-2">
@@ -380,7 +380,7 @@ export default function MemoriesPage() {
               <select
                 value={formData.scope}
                 onChange={(e) => setFormData({ ...formData, scope: e.target.value })}
-                className="flex h-10 w-full rounded-md border border-input bg-background/50 px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className="flex h-10 w-full rounded-md border border-input bg-gray-50 dark:bg-white/5 px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >
                 <option value="private">Private</option>
                 <option value="team">Team</option>
@@ -389,13 +389,13 @@ export default function MemoriesPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)} className="border-border/50">
+            <Button variant="outline" onClick={() => setDialogOpen(false)} className="border-gray-200 dark:border-gray-700">
               Cancel
             </Button>
             <Button
               onClick={handleSave}
               disabled={!formData.content || saving}
-              className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white"
             >
               {saving ? (
                 <span className="flex items-center gap-2">

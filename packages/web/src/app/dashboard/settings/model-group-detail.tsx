@@ -149,18 +149,18 @@ export default function ModelGroupDetail({ groupId, onBack }: { groupId: string;
               {group.items.length} model{group.items.length !== 1 ? 's' : ''} configured
             </p>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={loadGroup} className="border-blue-500/20 hover:bg-blue-500/10">
+              <Button variant="outline" size="sm" onClick={loadGroup} className="border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-white/5">
                 <RefreshCw className="w-4 h-4 mr-1" /> Refresh
               </Button>
               <Button size="sm" onClick={() => { setEditItem(null); setItemDialogOpen(true); }}
-                className="bg-gradient-to-r from-blue-500 to-violet-600 hover:from-blue-600 hover:to-violet-700">
+                className="bg-indigo-600 hover:bg-indigo-500">
                 <Plus className="w-4 h-4 mr-1" /> Add Model
               </Button>
             </div>
           </div>
 
           {group.items.length === 0 ? (
-            <Card className="glass-card border-blue-500/10">
+            <Card className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10">
               <CardContent className="flex flex-col items-center py-12">
                 <Cpu className="w-12 h-12 text-muted-foreground/50 mb-4" />
                 <p className="text-muted-foreground">No models in this group</p>
@@ -170,7 +170,7 @@ export default function ModelGroupDetail({ groupId, onBack }: { groupId: string;
           ) : (
             <div className="grid gap-3">
               {group.items.map((item) => (
-                <Card key={item.id} className={`glass-card border-blue-500/10 transition-all ${!item.is_enabled ? 'opacity-50' : ''}`}>
+                <Card key={item.id} className={`bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 transition-all ${!item.is_enabled ? 'opacity-50' : ''}`}>
                   <CardContent className="flex items-center justify-between p-4">
                     <div className="flex items-center gap-4">
                       <div className={`flex items-center justify-center w-10 h-10 rounded-lg border ${
@@ -205,7 +205,7 @@ export default function ModelGroupDetail({ groupId, onBack }: { groupId: string;
                         variant="ghost" size="icon"
                         onClick={() => setVersionsItemId(item.id)}
                         title="Version history"
-                        className="text-muted-foreground hover:text-blue-400"
+                        className="text-muted-foreground hover:text-indigo-600 dark:hover:text-indigo-400"
                       >
                         <History className="w-4 h-4" />
                       </Button>

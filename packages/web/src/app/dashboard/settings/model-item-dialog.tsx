@@ -155,7 +155,7 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="glass-card border-blue-500/10 sm:max-w-lg">
+      <DialogContent className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{item ? 'Edit Model' : 'Add Model'}</DialogTitle>
           <DialogDescription>
@@ -170,7 +170,7 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
             <Label>Display Name</Label>
             <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)}
               placeholder="e.g. Claude Sonnet"
-              className="bg-background/50 border-blue-500/20 focus:border-blue-500/40" />
+              className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40" />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -182,7 +182,7 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
                   setProviderType(e.target.value);
                   if (e.target.value !== 'anthropic') setBuiltinTools([]);
                 }}
-                className="w-full h-10 px-3 rounded-md bg-background/50 border border-blue-500/20 text-sm text-foreground focus:border-blue-500/40 outline-none"
+                className="w-full h-10 px-3 rounded-md bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 text-sm text-foreground focus:border-blue-500/40 outline-none"
               >
                 <option value="anthropic">Anthropic</option>
                 <option value="openai">OpenAI</option>
@@ -192,7 +192,7 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
               <Label>Model Name</Label>
               <Input value={modelName} onChange={(e) => setModelName(e.target.value)}
                 placeholder="claude-sonnet-4-20250514"
-                className="bg-background/50 border-blue-500/20 focus:border-blue-500/40" />
+                className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40" />
             </div>
           </div>
 
@@ -200,33 +200,33 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
             <Label>API Key</Label>
             <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)}
               type="password" placeholder={item ? '(leave blank to keep current)' : 'sk-...'}
-              className="bg-background/50 border-blue-500/20 focus:border-blue-500/40" />
+              className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40" />
           </div>
 
           <div className="space-y-2">
             <Label>Base URL</Label>
             <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
               placeholder="https://api.anthropic.com"
-              className="bg-background/50 border-blue-500/20 focus:border-blue-500/40" />
+              className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40" />
           </div>
 
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Max Tokens</Label>
               <Input value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)}
-                type="number" className="bg-background/50 border-blue-500/20 focus:border-blue-500/40" />
+                type="number" className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40" />
             </div>
             <div className="space-y-2">
               <Label>Priority</Label>
               <Input value={priority} onChange={(e) => setPriority(e.target.value)}
-                type="number" className="bg-background/50 border-blue-500/20 focus:border-blue-500/40" />
+                type="number" className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40" />
               <p className="text-xs text-muted-foreground">Lower = higher priority</p>
             </div>
             <div className="space-y-2">
               <Label>Weight</Label>
               <Input value={weight} onChange={(e) => setWeight(e.target.value)}
                 type="number" min="0" max="1000"
-                className="bg-background/50 border-blue-500/20 focus:border-blue-500/40" />
+                className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40" />
             </div>
           </div>
 
@@ -244,7 +244,7 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
                       className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all duration-200 ${
                         checked
                           ? 'border-blue-500/40 bg-blue-500/5'
-                          : 'border-blue-500/10 bg-background/30 hover:border-blue-500/20'
+                          : 'border-gray-200 dark:border-white/10 bg-background/30 hover:border-blue-500/20'
                       }`}
                     >
                       <input
@@ -256,7 +256,7 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
                       <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
                         checked
                           ? 'bg-blue-500/20 text-blue-400'
-                          : 'bg-background/50 text-muted-foreground'
+                          : 'bg-gray-50 dark:bg-white/5 text-muted-foreground'
                       }`}>
                         <Icon className="w-4 h-4" />
                       </div>
@@ -305,7 +305,7 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
                     className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all duration-200 ${
                       checked
                         ? 'border-violet-500/40 bg-violet-500/5'
-                        : 'border-blue-500/10 bg-background/30 hover:border-blue-500/20'
+                        : 'border-gray-200 dark:border-white/10 bg-background/30 hover:border-blue-500/20'
                     }`}
                   >
                     <input
@@ -354,11 +354,11 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} className="border-blue-500/20">
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="border-gray-200 dark:border-white/10">
             Cancel
           </Button>
           <Button onClick={handleSave} disabled={saving || !isValid}
-            className="bg-gradient-to-r from-blue-500 to-violet-600 hover:from-blue-600 hover:to-violet-700">
+            className="bg-indigo-600 hover:bg-indigo-500">
             {saving ? 'Saving...' : item ? 'Update' : 'Add Model'}
           </Button>
         </DialogFooter>

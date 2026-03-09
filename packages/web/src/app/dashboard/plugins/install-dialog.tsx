@@ -143,7 +143,7 @@ export default function InstallDialog({ plugin, onClose }: Props) {
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
-      <DialogContent className="glass-card border-blue-500/10 max-w-md max-h-[85vh] overflow-y-auto">
+      <DialogContent className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 max-w-md max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Install {plugin.display_name}</DialogTitle>
         </DialogHeader>
@@ -160,7 +160,7 @@ export default function InstallDialog({ plugin, onClose }: Props) {
                   className={`p-2 rounded-lg border text-center text-xs transition-colors ${
                     scopeType === opt.value
                       ? 'border-blue-500/50 bg-blue-500/10 text-blue-400'
-                      : 'border-blue-500/10 hover:border-blue-500/30 text-muted-foreground'
+                      : 'border-gray-200 dark:border-white/10 hover:border-blue-500/30 text-muted-foreground'
                   }`}
                 >
                   <div className="font-medium">{opt.label}</div>
@@ -177,7 +177,7 @@ export default function InstallDialog({ plugin, onClose }: Props) {
             <div className="space-y-1">
               <Label className="text-sm">Select Actor</Label>
               <select
-                className="w-full h-9 rounded-md border border-blue-500/10 bg-transparent px-3 text-sm glass-card"
+                className="w-full h-9 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-3 text-sm bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10"
                 value={selectedActorId}
                 onChange={(e) => setSelectedActorId(e.target.value)}
               >
@@ -193,7 +193,7 @@ export default function InstallDialog({ plugin, onClose }: Props) {
           <div className="space-y-2">
             <Label className="text-sm font-medium">Instance Lifecycle</Label>
             <select
-              className="w-full h-9 rounded-md border border-blue-500/10 bg-transparent px-3 text-sm glass-card"
+              className="w-full h-9 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-3 text-sm bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10"
               value={lifecycleScope}
               onChange={(e) => setLifecycleScope(e.target.value)}
             >
@@ -205,7 +205,7 @@ export default function InstallDialog({ plugin, onClose }: Props) {
 
           {/* Config fields */}
           {hasConfig && (
-            <div className="space-y-3 border-t border-blue-500/10 pt-3">
+            <div className="space-y-3 border-t border-gray-200 dark:border-white/10 pt-3">
               <Label className="text-sm font-medium">Configuration</Label>
               {Object.entries(properties).map(([key, schema]: [string, any]) => {
                 const isSensitive = schema.sensitive === true;
@@ -239,7 +239,7 @@ export default function InstallDialog({ plugin, onClose }: Props) {
                         if (error) setFieldErrors(prev => { const n = { ...prev }; delete n[key]; return n; });
                       }}
                       placeholder={isSensitive ? '••••••••' : `Enter ${key}`}
-                      className={`glass-card ${error ? 'border-red-500/50' : 'border-blue-500/10'}`}
+                      className={`bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 ${error ? 'border-red-500/50' : 'border-gray-200 dark:border-white/10'}`}
                     />
                     {error && <p className="text-xs text-red-400">{error}</p>}
                   </div>
@@ -248,7 +248,7 @@ export default function InstallDialog({ plugin, onClose }: Props) {
 
               {/* Help from setup steps */}
               {setupSteps.length > 0 && setupSteps[0].helpUrl && (
-                <div className="rounded-lg border border-blue-500/10 bg-blue-500/5 p-3 space-y-1.5">
+                <div className="rounded-lg border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 p-3 space-y-1.5">
                   <div className="flex items-center gap-1.5 text-xs font-medium text-blue-400">
                     <HelpCircle className="w-3.5 h-3.5" />
                     Help

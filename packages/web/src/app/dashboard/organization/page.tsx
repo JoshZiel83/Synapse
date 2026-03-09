@@ -112,7 +112,7 @@ export default function OrganizationPage() {
             variant="outline"
             size="sm"
             onClick={loadActors}
-            className="border-border/50 hover:bg-white/5 text-muted-foreground"
+            className="border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-white/5 text-muted-foreground"
           >
             <RefreshCw className="w-4 h-4 mr-2" />
             Refresh
@@ -120,7 +120,7 @@ export default function OrganizationPage() {
           <Button
             size="sm"
             onClick={handleAddRoot}
-            className="bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 text-white shadow-lg shadow-violet-500/20"
+            className="bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20"
           >
             <Plus className="w-4 h-4 mr-2" />
             Add Actor
@@ -129,7 +129,7 @@ export default function OrganizationPage() {
       </div>
 
       {/* Tree */}
-      <Card className="glass-card border-blue-500/5">
+      <Card className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 shadow-sm">
         <CardContent className="p-6">
           {loading ? (
             <div className="flex items-center justify-center py-16">
@@ -143,7 +143,7 @@ export default function OrganizationPage() {
 
       {/* Create Actor Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="glass-card border-blue-500/10">
+        <DialogContent className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10">
           <DialogHeader>
             <DialogTitle className="text-foreground">
               {parentId ? 'Add Subordinate Actor' : 'Add Root Actor'}
@@ -159,7 +159,7 @@ export default function OrganizationPage() {
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 placeholder="e.g., Project Manager Alpha"
-                className="bg-background/50 border-border/50"
+                className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-gray-700"
               />
             </div>
             <div className="space-y-2">
@@ -168,7 +168,7 @@ export default function OrganizationPage() {
                 value={formData.role}
                 onChange={(e) => setFormData({ ...formData, role: e.target.value })}
                 placeholder="e.g., manager, engineer, analyst"
-                className="bg-background/50 border-border/50"
+                className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-gray-700"
               />
             </div>
             <div className="space-y-2">
@@ -177,7 +177,7 @@ export default function OrganizationPage() {
                 value={formData.title}
                 onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                 placeholder="e.g., Senior Project Coordinator"
-                className="bg-background/50 border-border/50"
+                className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-gray-700"
               />
             </div>
             <div className="space-y-2">
@@ -186,18 +186,18 @@ export default function OrganizationPage() {
                 value={formData.capabilities}
                 onChange={(e) => setFormData({ ...formData, capabilities: e.target.value })}
                 placeholder="e.g., code-review, testing, deployment"
-                className="bg-background/50 border-border/50"
+                className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-gray-700"
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)} className="border-border/50">
+            <Button variant="outline" onClick={() => setDialogOpen(false)} className="border-gray-200 dark:border-gray-700">
               Cancel
             </Button>
             <Button
               onClick={handleCreate}
               disabled={!formData.name || !formData.role || creating}
-              className="bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 text-white"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white"
             >
               {creating ? (
                 <span className="flex items-center gap-2">

@@ -64,7 +64,7 @@ export default function InstalledList() {
       {installations.map((install: any) => {
         const configMissing = hasRequiredConfigMissing(install);
         return (
-          <Card key={install.id} className={`glass-card ${configMissing ? 'border-amber-500/20' : 'border-blue-500/10'}`}>
+          <Card key={install.id} className={`bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 ${configMissing ? 'border-amber-500/20' : 'border-gray-200 dark:border-white/10'}`}>
             <CardContent className="flex items-center justify-between p-4">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
@@ -75,10 +75,10 @@ export default function InstalledList() {
                 <div>
                   <div className="flex items-center gap-2">
                     <p className="font-medium text-sm">{install.plugin_display_name}</p>
-                    <Badge variant="outline" className={`text-xs ${scopeColors[install.scope_type] || 'border-blue-500/20'}`}>
+                    <Badge variant="outline" className={`text-xs ${scopeColors[install.scope_type] || 'border-gray-200 dark:border-white/10'}`}>
                       {scopeLabels[install.scope_type] || install.scope_type}
                     </Badge>
-                    <Badge variant="outline" className="text-xs border-blue-500/20 text-muted-foreground">
+                    <Badge variant="outline" className="text-xs border-gray-200 dark:border-white/10 text-muted-foreground">
                       {install.lifecycle_scope}
                     </Badge>
                     {configMissing && (

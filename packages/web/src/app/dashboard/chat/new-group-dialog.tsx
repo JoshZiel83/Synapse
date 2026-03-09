@@ -83,7 +83,7 @@ export default function NewGroupDialog({ open, onOpenChange, workspaceId, onCrea
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="glass-card border-blue-500/10 max-w-lg">
+      <DialogContent className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 max-w-lg">
         <DialogHeader>
           <DialogTitle className="text-foreground">New Conversation</DialogTitle>
         </DialogHeader>
@@ -97,7 +97,7 @@ export default function NewGroupDialog({ open, onOpenChange, workspaceId, onCrea
                   <button
                     key={actor.id}
                     onClick={() => setSelectedActor(actor)}
-                    className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-all text-left group"
+                    className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 dark:hover:bg-white/5 transition-all text-left group"
                   >
                     <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 shadow-lg flex items-center justify-center text-lg shrink-0">
                       {actor.config?.avatar_emoji || <Bot className="w-5 h-5 text-white" />}
@@ -124,7 +124,7 @@ export default function NewGroupDialog({ open, onOpenChange, workspaceId, onCrea
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5">
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/5">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-lg shrink-0">
                 {selectedActor.config?.avatar_emoji || <Bot className="w-5 h-5 text-white" />}
               </div>
@@ -157,7 +157,7 @@ export default function NewGroupDialog({ open, onOpenChange, workspaceId, onCrea
                 <Button
                   type="submit"
                   disabled={!message.trim() || loading}
-                  className="bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white rounded-xl h-11 w-11 p-0 shadow-lg"
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl h-11 w-11 p-0 shadow-lg"
                 >
                   <Send className="w-4 h-4" />
                 </Button>

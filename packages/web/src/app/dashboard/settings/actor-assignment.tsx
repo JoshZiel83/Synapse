@@ -160,7 +160,7 @@ export default function ActorAssignment() {
           <div className="h-8 w-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
         </div>
       ) : actors.length === 0 ? (
-        <Card className="glass-card border-blue-500/10">
+        <Card className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10">
           <CardContent className="flex flex-col items-center py-12">
             <Users className="w-12 h-12 text-muted-foreground/50 mb-4" />
             <p className="text-muted-foreground">No actors found</p>
@@ -171,12 +171,12 @@ export default function ActorAssignment() {
           {actors.map((actor) => (
             <Card
               key={actor.id}
-              className="glass-card border-blue-500/10 hover:border-blue-500/25 transition-all cursor-pointer"
+              className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 hover:border-blue-500/25 transition-all cursor-pointer"
               onClick={() => handleSelectActor(actor)}
             >
               <CardContent className="flex items-center justify-between p-4">
                 <div className="flex items-center gap-4">
-                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/10">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-gray-200 dark:border-white/10">
                     <Users className="w-5 h-5 text-blue-400" />
                   </div>
                   <div>
@@ -187,7 +187,7 @@ export default function ActorAssignment() {
                     <span className="text-xs text-muted-foreground">{actor.title}</span>
                   </div>
                 </div>
-                <Button variant="outline" size="sm" className="border-blue-500/20 hover:bg-blue-500/10">
+                <Button variant="outline" size="sm" className="border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-white/5">
                   <Cpu className="w-4 h-4 mr-1" /> Configure
                 </Button>
               </CardContent>
@@ -197,7 +197,7 @@ export default function ActorAssignment() {
       )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="glass-card border-blue-500/10 sm:max-w-lg">
+        <DialogContent className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
               Model Groups for {selectedActor?.name}
@@ -217,7 +217,7 @@ export default function ActorAssignment() {
                 {assignedGroups.map((g, idx) => (
                   <div
                     key={g.group_id}
-                    className="flex items-center gap-2 p-3 rounded-lg border border-blue-500/10 bg-background/30"
+                    className="flex items-center gap-2 p-3 rounded-lg border border-gray-200 dark:border-white/10 bg-background/30"
                   >
                     <div className="flex flex-col gap-0.5">
                       <button
@@ -270,7 +270,7 @@ export default function ActorAssignment() {
                       variant="outline"
                       size="sm"
                       onClick={() => handleAddGroup(g.id)}
-                      className="border-blue-500/20 hover:bg-blue-500/10 text-xs"
+                      className="border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-white/5 text-xs"
                     >
                       <Plus className="w-3 h-3 mr-1" /> {g.name}
                     </Button>
@@ -281,11 +281,11 @@ export default function ActorAssignment() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)} className="border-blue-500/20">
+            <Button variant="outline" onClick={() => setDialogOpen(false)} className="border-gray-200 dark:border-white/10">
               Cancel
             </Button>
             <Button onClick={handleSave} disabled={saving}
-              className="bg-gradient-to-r from-blue-500 to-violet-600 hover:from-blue-600 hover:to-violet-700">
+              className="bg-indigo-600 hover:bg-indigo-500">
               {saving ? 'Saving...' : 'Save Assignment'}
             </Button>
           </DialogFooter>

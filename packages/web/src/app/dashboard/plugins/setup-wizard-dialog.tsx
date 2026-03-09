@@ -130,7 +130,7 @@ export default function SetupWizardDialog({ plugin, scopeType = 'workspace', sco
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
-      <DialogContent className="glass-card border-blue-500/10 max-w-md">
+      <DialogContent className="bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 border-gray-200 dark:border-white/10 max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             Setup {plugin.display_name}
@@ -166,7 +166,7 @@ export default function SetupWizardDialog({ plugin, scopeType = 'workspace', sco
             </div>
 
             {step.optional && (
-              <Badge variant="outline" className="text-xs border-blue-500/20 text-muted-foreground">Optional</Badge>
+              <Badge variant="outline" className="text-xs border-gray-200 dark:border-white/10 text-muted-foreground">Optional</Badge>
             )}
 
             {step.fields.map(field => {
@@ -186,7 +186,7 @@ export default function SetupWizardDialog({ plugin, scopeType = 'workspace', sco
                     placeholder={`Enter ${field}...`}
                     value={stepValues[field] || ''}
                     onChange={(e) => handleFieldChange(field, e.target.value)}
-                    className={`glass-card ${error ? 'border-red-500/50' : 'border-blue-500/10'}`}
+                    className={`bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 ${error ? 'border-red-500/50' : 'border-gray-200 dark:border-white/10'}`}
                   />
                   {error && <p className="text-xs text-red-400">{error}</p>}
                 </div>
@@ -194,7 +194,7 @@ export default function SetupWizardDialog({ plugin, scopeType = 'workspace', sco
             })}
 
             {(step.helpUrl || step.helpText) && (
-              <div className="rounded-lg border border-blue-500/10 bg-blue-500/5 p-3 space-y-1.5">
+              <div className="rounded-lg border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 p-3 space-y-1.5">
                 <div className="flex items-center gap-1.5 text-xs font-medium text-blue-400">
                   <HelpCircle className="w-3.5 h-3.5" />
                   Help
