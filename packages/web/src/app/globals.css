@@ -4,66 +4,75 @@
 
 @layer base {
   :root {
-    /* Light theme */
+    /* TDesign Light Theme
+     * Brand: Tencent Blue #0052d9
+     * Neutrals: Pure Gray scale
+     * Text: rgba(0,0,0,0.9) / rgba(0,0,0,0.6)
+     */
     --background: 0 0% 100%;
-    --foreground: 224 71% 4%;
+    --foreground: 0 0% 10%;
 
     --card: 0 0% 100%;
-    --card-foreground: 224 71% 4%;
+    --card-foreground: 0 0% 10%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 224 71% 4%;
+    --popover-foreground: 0 0% 10%;
 
-    --primary: 239 84% 67%;
+    --primary: 217 100% 43%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 220 14% 96%;
-    --secondary-foreground: 220 9% 46%;
+    --secondary: 0 0% 95%;
+    --secondary-foreground: 0 0% 37%;
 
-    --muted: 220 14% 96%;
-    --muted-foreground: 220 9% 46%;
+    --muted: 0 0% 95%;
+    --muted-foreground: 0 0% 55%;
 
-    --accent: 220 14% 96%;
-    --accent-foreground: 224 71% 4%;
+    --accent: 0 0% 95%;
+    --accent-foreground: 0 0% 10%;
 
-    --destructive: 0 84% 60%;
+    --destructive: 3 64% 55%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 220 13% 91%;
-    --input: 220 13% 91%;
-    --ring: 239 84% 67%;
+    --border: 0 0% 91%;
+    --input: 0 0% 91%;
+    --ring: 217 100% 43%;
 
     --radius: 0.75rem;
   }
 
   .dark {
-    --background: 222 47% 11%;
-    --foreground: 213 31% 91%;
+    /* TDesign Dark Theme
+     * Brand: Blue6 #366ef4 (lighter for dark bg contrast)
+     * Neutrals: BlueGray tinted (8-12% brand mix)
+     * BlueGray14 #15181d → BlueGray10 #424a57
+     */
+    --background: 218 16% 10%;
+    --foreground: 0 0% 93%;
 
-    --card: 224 71% 4%;
-    --card-foreground: 213 31% 91%;
+    --card: 224 15% 15%;
+    --card-foreground: 0 0% 93%;
 
-    --popover: 224 71% 4%;
-    --popover-foreground: 213 31% 91%;
+    --popover: 224 15% 15%;
+    --popover-foreground: 0 0% 93%;
 
-    --primary: 239 84% 67%;
+    --primary: 222 90% 58%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 215 28% 17%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 219 15% 23%;
+    --secondary-foreground: 0 0% 93%;
 
-    --muted: 223 35% 20%;
-    --muted-foreground: 215 20% 55%;
+    --muted: 219 15% 23%;
+    --muted-foreground: 225 9% 56%;
 
-    --accent: 215 28% 17%;
-    --accent-foreground: 210 40% 98%;
+    --accent: 219 15% 23%;
+    --accent-foreground: 0 0% 93%;
 
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 3 64% 55%;
+    --destructive-foreground: 0 0% 93%;
 
-    --border: 215 28% 17%;
-    --input: 215 28% 17%;
-    --ring: 239 84% 67%;
+    --border: 217 14% 30%;
+    --input: 217 14% 30%;
+    --ring: 222 90% 58%;
   }
 }
 
@@ -87,49 +96,49 @@
 }
 
 .dark ::-webkit-scrollbar-track {
-  background: hsl(222 47% 11%);
+  background: hsl(218 16% 10%);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(220 13% 80%);
+  background: hsl(0 0% 78%);
   border-radius: 3px;
 }
 
 .dark ::-webkit-scrollbar-thumb {
-  background: hsl(224 30% 30%);
+  background: hsl(217 14% 30%);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(220 13% 70%);
+  background: hsl(0 0% 65%);
 }
 
 .dark ::-webkit-scrollbar-thumb:hover {
-  background: hsl(224 30% 40%);
+  background: hsl(216 14% 38%);
 }
 
 /* Gradient background — decorative only, dark mode */
 .gradient-bg {
-  background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+  background: linear-gradient(135deg, #15181d 0%, #001a57 50%, #15181d 100%);
 }
 
 /* Glow effects — dark mode only */
 .dark .glow-blue {
-  box-shadow: 0 0 20px rgba(59, 130, 246, 0.15), 0 0 60px rgba(59, 130, 246, 0.05);
+  box-shadow: 0 0 20px rgba(0, 82, 217, 0.15), 0 0 60px rgba(0, 82, 217, 0.05);
 }
 
 .dark .glow-violet {
-  box-shadow: 0 0 20px rgba(139, 92, 246, 0.15), 0 0 60px rgba(139, 92, 246, 0.05);
+  box-shadow: 0 0 20px rgba(142, 86, 221, 0.15), 0 0 60px rgba(142, 86, 221, 0.05);
 }
 
 /* Pulse animation for status indicators */
 @keyframes pulse-glow {
   0%, 100% {
     opacity: 1;
-    box-shadow: 0 0 4px rgba(59, 130, 246, 0.6);
+    box-shadow: 0 0 4px rgba(0, 82, 217, 0.6);
   }
   50% {
     opacity: 0.7;
-    box-shadow: 0 0 12px rgba(59, 130, 246, 0.3);
+    box-shadow: 0 0 12px rgba(0, 82, 217, 0.3);
   }
 }
 

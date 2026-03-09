@@ -18,6 +18,20 @@ const config = {
     },
     extend: {
       colors: {
+        /* TDesign Blue scale overriding Tailwind indigo */
+        indigo: {
+          50: "#f2f3ff",   // Blue1
+          100: "#d9e1ff",  // Blue2
+          200: "#b5c7ff",  // Blue3
+          300: "#8eabff",  // Blue4
+          400: "#618dff",  // Blue5
+          500: "#366ef4",  // Blue6
+          600: "#0052d9",  // Blue7 (brand)
+          700: "#003cab",  // Blue8
+          800: "#002a7c",  // Blue9
+          900: "#001a57",  // Blue10
+          950: "#001040",
+        },
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
