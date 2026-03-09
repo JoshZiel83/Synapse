@@ -1,0 +1,111 @@
+name: Build Relay GUI
+
+on:
+  push:
+    tags:
+      - 'relay-gui-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+            setup: |
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq libgtk-3-dev libwebkit2gtk-4.1-dev
+          - runner: macos-latest
+            goos: darwin
+            goarch: arm64
+            suffix: darwin-arm64
+            setup: ''
+          - runner: macos-13
+            goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+            setup: ''
+          - runner: windows-latest
+            goos: windows
+            goarch: amd64
+            suffix: windows-amd64
+            ext: .exe
+            setup: ''
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Platform setup
+        if: matrix.setup != ''
+        run: ${{ matrix.setup }}
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF_NAME#relay-gui-}" >> $GITHUB_OUTPUT
+          else
+            echo "version=dev-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build GUI
+        working-directory: relay/cmd/synapse-relay-gui
+        run: wails build -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
+
+      - name: Rename artifact
+        shell: bash
+        run: |
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            mv relay/cmd/synapse-relay-gui/build/bin/synapse-relay-gui.exe synapse-relay-gui-${{ matrix.suffix }}.exe
+          elif [ "${{ matrix.goos }}" = "darwin" ]; then
+            cd relay/cmd/synapse-relay-gui/build/bin && zip -r ../../../../../synapse-relay-gui-${{ matrix.suffix }}.zip "Synapse Relay.app" 2>/dev/null || mv synapse-relay-gui ../../../../../synapse-relay-gui-${{ matrix.suffix }}
+          else
+            mv relay/cmd/synapse-relay-gui/build/bin/synapse-relay-gui synapse-relay-gui-${{ matrix.suffix }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: synapse-relay-gui-${{ matrix.suffix }}
+          path: synapse-relay-gui-${{ matrix.suffix }}*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true

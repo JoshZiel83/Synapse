@@ -1,4 +1,4 @@
-name: Build Relay Agent
+name: Build Relay CLI
 
 on:
   push:
@@ -69,7 +69,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           go build -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}" \
-            -o ../synapse-relay-${{ matrix.suffix }}${{ matrix.ext }} .
+            -o ../synapse-relay-${{ matrix.suffix }}${{ matrix.ext }} ./cmd/synapse-relay
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

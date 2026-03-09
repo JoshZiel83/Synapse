@@ -44,6 +44,10 @@ type Client struct {
 	caller   ToolCaller
 	servers  interface{} // []mcp.ServerInfo passed opaquely
 	mu       sync.Mutex
+
+	// OnEvent is an optional callback for relay events (e.g. for GUI observability).
+	// evtType is one of: "connecting", "connected", "disconnected", "auth_failed", "tool_call", "tool_result", "error", "log"
+	OnEvent func(evtType string, msg string, data map[string]interface{})
 }
 
 func NewClient(endpoint, token string, caller ToolCaller) *Client {
@@ -51,6 +55,12 @@ func NewClient(endpoint, token string, caller ToolCaller) *Client {
 		endpoint: endpoint,
 		token:    token,
 		caller:   caller,
+	}
+}
+
+func (c *Client) emit(evtType, msg string, data map[string]interface{}) {
+	if c.OnEvent != nil {
+		c.OnEvent(evtType, msg, data)
 	}
 }
 
@@ -91,6 +101,7 @@ func (c *Client) Run(ctx context.Context) error {
 		attempt++
 		delay := c.backoffDelay(attempt)
 		log.Printf("Disconnected (attempt %d): %v. Reconnecting in %v...", attempt, err, delay)
+		c.emit("disconnected", fmt.Sprintf("Disconnected (attempt %d), reconnecting in %v", attempt, delay), nil)
 
 		select {
 		case <-ctx.Done():
@@ -105,6 +116,7 @@ func (c *Client) connectAndServe(ctx context.Context) error {
 		HandshakeTimeout: 10 * time.Second,
 	}
 
+	c.emit("connecting", fmt.Sprintf("Connecting to %s...", c.endpoint), nil)
 	log.Printf("Connecting to %s...", c.endpoint)
 	conn, _, err := dialer.DialContext(ctx, c.endpoint, http.Header{})
 	if err != nil {
@@ -135,6 +147,7 @@ func (c *Client) connectAndServe(ctx context.Context) error {
 		var authErr AuthErrorMessage
 		json.Unmarshal(raw, &authErr)
 		msg := authErr.Message
+		c.emit("auth_failed", msg, nil)
 		// Permanent failures: invalid token, already connected
 		if strings.Contains(msg, "Invalid") || strings.Contains(msg, "unknown") {
 			return fmt.Errorf("%w: %s", ErrPermanentAuthFailure, msg)
@@ -149,6 +162,7 @@ func (c *Client) connectAndServe(ctx context.Context) error {
 	var authOK AuthOKMessage
 	json.Unmarshal(raw, &authOK)
 	log.Printf("Authenticated as relay %s", authOK.RelayID)
+	c.emit("connected", fmt.Sprintf("Authenticated as relay %s", authOK.RelayID), map[string]interface{}{"relayId": authOK.RelayID})
 
 	// Register servers
 	c.mu.Lock()
@@ -268,6 +282,7 @@ func (c *Client) handleToolCall(ctx context.Context, conn *websocket.Conn, write
 	args, _ := req.Params["arguments"].(map[string]interface{})
 
 	log.Printf("Tool call: %s/%s (id=%s)", serverName, toolName, req.ID)
+	c.emit("tool_call", fmt.Sprintf("%s/%s", serverName, toolName), map[string]interface{}{"server": serverName, "tool": toolName, "id": req.ID})
 
 	result, err := c.caller.CallTool(ctx, serverName, toolName, args)
 
@@ -278,8 +293,10 @@ func (c *Client) handleToolCall(ctx context.Context, conn *websocket.Conn, write
 	if err != nil {
 		log.Printf("Tool call %s/%s failed: %v", serverName, toolName, err)
 		resp.Error = &RPCError{Code: -1, Message: err.Error()}
+		c.emit("tool_result", fmt.Sprintf("%s/%s failed: %v", serverName, toolName, err), map[string]interface{}{"server": serverName, "tool": toolName, "error": true})
 	} else {
 		resp.Result = result
+		c.emit("tool_result", fmt.Sprintf("%s/%s completed", serverName, toolName), map[string]interface{}{"server": serverName, "tool": toolName, "error": false})
 	}
 
 	writeMu.Lock()

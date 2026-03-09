@@ -24,3 +24,7 @@ storage/
 relay/synapse-relay
 relay/synapse-relay-*
 relay/config.yaml
+relay/cmd/synapse-relay-gui/frontend/node_modules/
+relay/cmd/synapse-relay-gui/frontend/dist/
+relay/cmd/synapse-relay-gui/frontend/src/lib/wailsjs/
+relay/cmd/synapse-relay-gui/build/bin/

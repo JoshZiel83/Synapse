@@ -41,16 +41,27 @@ type serverEntry struct {
 type Manager struct {
 	configs []config.ServerConfig
 	servers []serverEntry
+
+	// OnEvent is an optional callback for relay events (e.g. for GUI observability).
+	OnEvent func(evtType string, msg string, data map[string]interface{})
 }
 
 func NewManager(configs []config.ServerConfig) *Manager {
 	return &Manager{configs: configs}
 }
 
+func (m *Manager) emit(evtType, msg string, data map[string]interface{}) {
+	if m.OnEvent != nil {
+		m.OnEvent(evtType, msg, data)
+	}
+}
+
 // InitAll starts all configured MCP servers, initializes them, and discovers their tools
 func (m *Manager) InitAll(ctx context.Context) error {
 	for _, cfg := range m.configs {
 		var srv Server
+
+		m.emit("server_init", fmt.Sprintf("Initializing server %s (%s)", cfg.Name, cfg.Transport), map[string]interface{}{"server": cfg.Name, "transport": cfg.Transport})
 
 		switch cfg.Transport {
 		case "stdio":
@@ -74,6 +85,7 @@ func (m *Manager) InitAll(ctx context.Context) error {
 		// Initialize
 		if err := srv.Initialize(); err != nil {
 			log.Printf("Warning: server %s initialize failed: %v", cfg.Name, err)
+			m.emit("server_failed", fmt.Sprintf("Server %s initialize failed: %v", cfg.Name, err), map[string]interface{}{"server": cfg.Name})
 			srv.Shutdown()
 			continue
 		}
@@ -82,6 +94,7 @@ func (m *Manager) InitAll(ctx context.Context) error {
 		tools, err := srv.ListTools()
 		if err != nil {
 			log.Printf("Warning: server %s tools/list failed: %v", cfg.Name, err)
+			m.emit("server_failed", fmt.Sprintf("Server %s tools/list failed: %v", cfg.Name, err), map[string]interface{}{"server": cfg.Name})
 			srv.Shutdown()
 			continue
 		}
