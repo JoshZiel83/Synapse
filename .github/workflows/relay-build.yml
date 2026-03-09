@@ -2,8 +2,15 @@ name: Build Relay Agent
 
 on:
   push:
+    branches:
+      - '**'
+    paths:
+      - 'relay/**'
     tags:
       - 'relay-v*'
+  pull_request:
+    paths:
+      - 'relay/**'
   workflow_dispatch:
     inputs:
       version:
@@ -48,8 +55,10 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
-          else
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
             echo "version=${GITHUB_REF_NAME#relay-}" >> $GITHUB_OUTPUT
+          else
+            echo "version=dev-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
           fi
 
       - name: Build
