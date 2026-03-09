@@ -89,6 +89,8 @@ func (a *App) shutdown(ctx context.Context) {
 // Shows a confirmation dialog and returns true if the user accepts.
 func (a *App) handleRemoteSetup(endpoint, token string) bool {
 	// Show confirmation dialog via Wails runtime
+	// Note: QuestionDialog returns platform-specific strings:
+	//   Windows: "Yes"/"No", macOS/Linux: custom button label
 	result, err := wailsRuntime.MessageDialog(a.ctx, wailsRuntime.MessageDialogOptions{
 		Type:    wailsRuntime.QuestionDialog,
 		Title:   "Remote Configuration",
@@ -100,7 +102,8 @@ func (a *App) handleRemoteSetup(endpoint, token string) bool {
 		return false
 	}
 
-	if result == "Accept" {
+	accepted := result == "Accept" || result == "Yes" || result == "Ok"
+	if accepted {
 		a.cfg.Endpoint = endpoint
 		a.cfg.Token = token
 		if err := config.EnsureDir(); err == nil {
