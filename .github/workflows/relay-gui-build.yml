@@ -29,24 +29,28 @@ jobs:
             goos: linux
             goarch: amd64
             suffix: linux-amd64
+            wails_extra: -tags webkit2_41
             setup: |
               sudo apt-get update -qq
               sudo apt-get install -y -qq libgtk-3-dev libwebkit2gtk-4.1-dev
-          - runner: macos-latest
+          - runner: macos-15
             goos: darwin
             goarch: arm64
             suffix: darwin-arm64
+            wails_extra: ''
             setup: ''
-          - runner: macos-13
+          - runner: macos-15-intel
             goos: darwin
             goarch: amd64
             suffix: darwin-amd64
+            wails_extra: ''
             setup: ''
           - runner: windows-latest
             goos: windows
             goarch: amd64
             suffix: windows-amd64
             ext: .exe
+            wails_extra: ''
             setup: ''
 
     runs-on: ${{ matrix.runner }}
@@ -82,7 +86,7 @@ jobs:
 
       - name: Build GUI
         working-directory: relay/cmd/synapse-relay-gui
-        run: wails build -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
+        run: wails build ${{ matrix.wails_extra }} -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
 
       - name: Rename artifact
         shell: bash
