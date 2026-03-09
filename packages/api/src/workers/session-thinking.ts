@@ -9,6 +9,7 @@ import { adaptAttachments } from '../modules/ai/content-adapter.js';
 import { executeActorActions } from '../modules/orchestrator/service.js';
 import { resolveModelConfig } from '../modules/model-groups/resolver.js';
 import { resolveMcpToolsForActor } from '../modules/mcp-plugins/tool-resolver.js';
+import { shutdownSessionInstances } from '../modules/mcp-plugins/instance-manager.js';
 import type { ResolvedMcpTools } from '../modules/mcp-plugins/tool-resolver.js';
 import {
   getSession,
@@ -185,7 +186,7 @@ export function startSessionThinkingWorker() {
         const resolvedConfig = await resolveModelConfig(actorId, workspaceId);
 
         // Resolve MCP plugin tools for this actor session
-        let mcpTools: ResolvedMcpTools = { tools: [], executor: async () => '', cleanup: async () => {}, mcpVersion: 0, refresh: async () => ({ tools: [], mcpVersion: 0 }) };
+        let mcpTools: ResolvedMcpTools = { tools: [], executor: async () => '', mcpVersion: 0, refresh: async () => ({ tools: [], mcpVersion: 0 }) };
         try {
           mcpTools = await resolveMcpToolsForActor({ actorId, workspaceId, sessionId, userId });
           if (mcpTools.tools.length > 0) {
@@ -224,8 +225,8 @@ export function startSessionThinkingWorker() {
           );
         } finally {
           clearInterval(lockRefreshInterval);
-          // Cleanup session-scoped MCP instances
-          await mcpTools.cleanup().catch(() => {});
+          // Session-scoped MCP instances now use TTL-based cleanup (30 min)
+          // instead of immediate shutdown, so they persist across conversation rounds.
         }
 
         // Filter out empty complete actions
@@ -428,6 +429,9 @@ export function startSessionThinkingWorker() {
         const failRootId = failedSess?.root_session_id || sessionId;
         await redis.del(`thinking:${failRootId}`).catch(() => {});
         await updateSessionStatus(sessionId, 'failed', { errorMessage: err.message });
+
+        // Cleanup session-scoped MCP instances on failure
+        await shutdownSessionInstances(sessionId).catch(() => {});
 
         // Emit session.status.changed for failure
         const failedSession = await getSession(sessionId);

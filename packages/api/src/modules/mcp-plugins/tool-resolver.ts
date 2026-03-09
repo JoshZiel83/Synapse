@@ -9,7 +9,6 @@ import { logToolCall } from './audit.js';
 export interface ResolvedMcpTools {
   tools: ToolDefinition[];
   executor: (toolName: string, input: Record<string, unknown>) => Promise<string>;
-  cleanup: () => Promise<void>;
   mcpVersion: number;
   refresh: () => Promise<{ tools: ToolDefinition[]; mcpVersion: number }>;
 }
@@ -28,7 +27,6 @@ interface ResolveParams {
 async function resolveTools(
   params: ResolveParams,
   instances: Map<string, McpInstance>,
-  sessionInstanceKeys: string[],
 ): Promise<ToolDefinition[]> {
   const { actorId, workspaceId, sessionId, userId } = params;
 
@@ -106,10 +104,6 @@ async function resolveTools(
 
       allTools.push(...namespacedTools);
       instances.set(namespace, instance);
-
-      if (install.lifecycle_scope === 'session') {
-        sessionInstanceKeys.push(`${install.plugin_id}:session:${sessionId}:${instance.configHash}`);
-      }
     } catch (error: any) {
       console.error(`[MCP ToolResolver] Failed to initialize plugin ${install.org_slug}/${install.plugin_slug}:`, error.message);
     }
@@ -122,6 +116,9 @@ async function resolveTools(
  * Resolve all available MCP tools for an actor session.
  * Queries the unified mcp_installations table, de-duplicates by plugin_id
  * (most specific scope wins: actor > user > workspace).
+ *
+ * Session-scoped instances are managed by TTL (30 min) in instance-manager
+ * and explicitly cleaned up on session cancellation/failure.
  */
 export async function resolveMcpToolsForActor(params: {
   actorId: string;
@@ -136,9 +133,8 @@ export async function resolveMcpToolsForActor(params: {
 
   // Mutable state — shared by executor and refresh
   const instances: Map<string, McpInstance> = new Map();
-  const sessionInstanceKeys: string[] = [];
 
-  const allTools = await resolveTools(params, instances, sessionInstanceKeys);
+  const allTools = await resolveTools(params, instances);
 
   // Build unified executor — references the mutable `instances` Map.
   // Created unconditionally so refresh() can add tools mid-session even if none exist initially.
@@ -189,25 +185,13 @@ export async function resolveMcpToolsForActor(params: {
     }
   };
 
-  // Cleanup function for session-scoped instances
-  const cleanup = async () => {
-    for (const key of sessionInstanceKeys) {
-      try {
-        const { shutdownSessionInstance } = await import('./instance-manager.js');
-        await shutdownSessionInstance(key);
-      } catch {
-        // Best-effort cleanup
-      }
-    }
-  };
-
   // Refresh function — re-queries DB, rebuilds instances map
   const refresh = async (): Promise<{ tools: ToolDefinition[]; mcpVersion: number }> => {
     const newVersion = await getMcpVersion(workspaceId);
     instances.clear();
-    const newTools = await resolveTools(params, instances, sessionInstanceKeys);
+    const newTools = await resolveTools(params, instances);
     return { tools: newTools, mcpVersion: newVersion };
   };
 
-  return { tools: allTools, executor, cleanup, mcpVersion, refresh };
+  return { tools: allTools, executor, mcpVersion, refresh };
 }

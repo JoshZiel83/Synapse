@@ -3,9 +3,10 @@ import { ToolDefinition } from '@synapse/shared';
 import { redis } from '../../infrastructure/redis/index.js';
 
 const MCP_VERSION_KEY_PREFIX = 'mcp:v:';
-const MCP_INSTANCE_TTL_ACTOR = 30 * 60 * 1000;    // 30 minutes
-const MCP_INSTANCE_TTL_USER = 30 * 60 * 1000;     // 30 minutes
-const MCP_INSTANCE_TTL_WORKSPACE = 60 * 60 * 1000; // 60 minutes
+const MCP_INSTANCE_TTL_SESSION   = 30 * 60 * 1000;       // 30 minutes
+const MCP_INSTANCE_TTL_ACTOR     = 2 * 60 * 60 * 1000;   // 2 hours
+const MCP_INSTANCE_TTL_USER      = 2 * 60 * 60 * 1000;   // 2 hours
+const MCP_INSTANCE_TTL_WORKSPACE = 24 * 60 * 60 * 1000;  // 24 hours
 import { McpHttpClient } from './mcp-client.js';
 import { getBuiltinHandler } from './builtin/index.js';
 import { logEvent } from './audit.js';
@@ -201,31 +202,38 @@ async function createHttpInstance(params: {
   };
 }
 
+function getTTLForScope(scope: string): number {
+  switch (scope) {
+    case 'workspace': return MCP_INSTANCE_TTL_WORKSPACE;
+    case 'user': return MCP_INSTANCE_TTL_USER;
+    case 'actor': return MCP_INSTANCE_TTL_ACTOR;
+    case 'session': return MCP_INSTANCE_TTL_SESSION;
+    default: return MCP_INSTANCE_TTL_SESSION;
+  }
+}
+
 function resetTTL(key: string, scope: string) {
   clearTTLTimer(key);
 
-  // Session scope: no TTL (cleaned up in finally block)
-  if (scope === 'actor' || scope === 'user' || scope === 'workspace') {
-    const ttl = scope === 'workspace' ? MCP_INSTANCE_TTL_WORKSPACE : scope === 'user' ? MCP_INSTANCE_TTL_USER : MCP_INSTANCE_TTL_ACTOR;
-    const timer = setTimeout(() => {
-      const instance = instanceCache.get(key);
-      if (instance) {
-        // Check if it was used recently
-        if (Date.now() - instance.lastUsed > ttl) {
-          instance.shutdown().catch(() => {});
-          logEvent({
-            pluginId: instance.pluginId,
-            eventType: 'instance.shutdown',
-            eventData: { pluginSlug: instance.pluginSlug, reason: 'ttl_expired', durationSec: Math.round((Date.now() - instance.createdAt) / 1000) },
-          });
-        } else {
-          // Still in use, reset timer
-          resetTTL(key, scope);
-        }
+  const ttl = getTTLForScope(scope);
+  const timer = setTimeout(() => {
+    const instance = instanceCache.get(key);
+    if (instance) {
+      // Check if it was used recently
+      if (Date.now() - instance.lastUsed > ttl) {
+        instance.shutdown().catch(() => {});
+        logEvent({
+          pluginId: instance.pluginId,
+          eventType: 'instance.shutdown',
+          eventData: { pluginSlug: instance.pluginSlug, reason: 'ttl_expired', scope, durationSec: Math.round((Date.now() - instance.createdAt) / 1000) },
+        });
+      } else {
+        // Still in use, reset timer
+        resetTTL(key, scope);
       }
-    }, ttl);
-    ttlTimers.set(key, timer);
-  }
+    }
+  }, ttl);
+  ttlTimers.set(key, timer);
 }
 
 function clearTTLTimer(key: string) {
@@ -237,17 +245,26 @@ function clearTTLTimer(key: string) {
 }
 
 /**
- * Shutdown a specific session-scoped instance
+ * Shutdown all session-scoped instances for a given sessionId.
+ * Called when a session reaches a terminal state (cancelled, failed).
  */
-export async function shutdownSessionInstance(key: string) {
-  const instance = instanceCache.get(key);
-  if (instance) {
-    await instance.shutdown();
-    logEvent({
-      pluginId: instance.pluginId,
-      eventType: 'instance.shutdown',
-      eventData: { pluginSlug: instance.pluginSlug, reason: 'session_complete', durationSec: Math.round((Date.now() - instance.createdAt) / 1000) },
-    });
+export async function shutdownSessionInstances(sessionId: string) {
+  const keysToRemove: string[] = [];
+  for (const [key, instance] of instanceCache) {
+    if (instance.scope === 'session' && instance.scopeId === sessionId) {
+      keysToRemove.push(key);
+    }
+  }
+  for (const key of keysToRemove) {
+    const instance = instanceCache.get(key);
+    if (instance) {
+      await instance.shutdown().catch(() => {});
+      logEvent({
+        pluginId: instance.pluginId,
+        eventType: 'instance.shutdown',
+        eventData: { pluginSlug: instance.pluginSlug, reason: 'session_terminated', durationSec: Math.round((Date.now() - instance.createdAt) / 1000) },
+      });
+    }
   }
 }
 

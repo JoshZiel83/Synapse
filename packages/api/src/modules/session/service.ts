@@ -1,6 +1,7 @@
 import { query, transaction } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { sessionThinkingQueue } from '../../workers/queues.js';
+import { shutdownSessionInstances } from '../mcp-plugins/instance-manager.js';
 import type { UUID } from '@synapse/shared';
 import { MAX_SESSION_DEPTH, nowISO } from '@synapse/shared';
 import { v4 as uuidv4 } from 'uuid';
@@ -328,6 +329,9 @@ export async function cancelSession(sessionId: UUID): Promise<void> {
   }
 
   await updateSessionStatus(sessionId, 'cancelled');
+
+  // Cleanup session-scoped MCP instances
+  await shutdownSessionInstances(sessionId).catch(() => {});
 
   // Also cancel any active child sessions
   const children = await query(
