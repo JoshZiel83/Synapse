@@ -2,9 +2,10 @@
 
 import { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Cpu, Users } from 'lucide-react';
+import { Cpu, Users, Link2 } from 'lucide-react';
 import ModelGroupList from './model-group-list';
 import ActorAssignment from './actor-assignment';
+import InviteManagement from './invite-management';
 
 export default function SettingsPage() {
   const [tab, setTab] = useState('model-groups');
@@ -14,7 +15,7 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Settings</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Manage model groups, AI configurations, and actor assignments
+          Manage model groups, AI configurations, actor assignments, and invites
         </p>
       </div>
 
@@ -28,6 +29,10 @@ export default function SettingsPage() {
             <Users className="w-4 h-4" />
             Actor Assignment
           </TabsTrigger>
+          <TabsTrigger value="invites" className="data-[state=active]:bg-indigo-50 data-[state=active]:text-indigo-600 dark:data-[state=active]:bg-indigo-500/20 dark:data-[state=active]:text-indigo-400 gap-2">
+            <Link2 className="w-4 h-4" />
+            Invites
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="model-groups" className="mt-6">
@@ -36,6 +41,10 @@ export default function SettingsPage() {
 
         <TabsContent value="actor-assignment" className="mt-6">
           <ActorAssignment />
+        </TabsContent>
+
+        <TabsContent value="invites" className="mt-6">
+          <InviteManagement />
         </TabsContent>
       </Tabs>
     </div>

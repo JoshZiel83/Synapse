@@ -50,6 +50,25 @@ export interface WorkspaceMember {
   joinedAt: Timestamp;
 }
 
+// ============ Workspace Invites ============
+export type InviteTrustLevel = 'admin' | 'member' | 'guest';
+
+export interface WorkspaceInvite {
+  id: UUID;
+  workspaceId: UUID;
+  token: string;
+  createdBy: UUID;
+  trustLevel: InviteTrustLevel;
+  maxUses?: number;
+  useCount: number;
+  expiresAt?: Timestamp;
+  isRevoked: boolean;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  // Joined fields
+  workspaceName?: string;
+}
+
 // ============ Actor (Digital Employee) ============
 export type ActorRole = 'secretary' | 'manager' | 'specialist' | 'reviewer' | 'archivist' | 'receptionist' | 'assistant';
 

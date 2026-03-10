@@ -5,10 +5,17 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useAuthStore } from '@/stores/auth-store';
-import { WorkspaceProvider } from './workspace-provider';
+import { WorkspaceProvider, useWorkspace } from './workspace-provider';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   LayoutDashboard,
   MessageSquare,
@@ -20,6 +27,9 @@ import {
   Menu,
   Settings,
   Puzzle,
+  ChevronsUpDown,
+  Plus,
+  Check,
 } from 'lucide-react';
 import { useChatStore } from '@/stores/chat-store';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -35,6 +45,47 @@ const navItems = [
   { href: '/dashboard/settings', label: 'Settings', icon: Settings },
 ];
 
+function WorkspaceSwitcher() {
+  const { workspaceId, workspaceName, workspaces, setWorkspaceId } = useWorkspace();
+  const router = useRouter();
+
+  if (workspaces.length === 0) return null;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm font-semibold text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-indigo-600 text-[10px] font-bold text-white">
+            {(workspaceName || 'W')[0].toUpperCase()}
+          </div>
+          <span className="flex-1 truncate text-left">{workspaceName || 'Workspace'}</span>
+          <ChevronsUpDown className="h-4 w-4 shrink-0 text-gray-400" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        {workspaces.map((ws) => (
+          <DropdownMenuItem
+            key={ws.id}
+            onClick={() => setWorkspaceId(ws.id)}
+            className="flex items-center gap-2"
+          >
+            <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-indigo-600/10 dark:bg-indigo-500/20 text-[9px] font-bold text-indigo-600 dark:text-indigo-400">
+              {ws.name[0].toUpperCase()}
+            </div>
+            <span className="flex-1 truncate">{ws.name}</span>
+            {ws.id === workspaceId && <Check className="h-4 w-4 text-indigo-600" />}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => router.push('/welcome')} className="gap-2">
+          <Plus className="h-4 w-4" />
+          Create or Join Workspace
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function SidebarContent({ pathname, user, onLogout }: { pathname: string; user: any; onLogout: () => void }) {
   const totalUnread = useChatStore((s) => s.totalUnread);
   const initials = user?.name
@@ -47,6 +98,11 @@ function SidebarContent({ pathname, user, onLogout }: { pathname: string; user: 
       <div className="flex h-16 shrink-0 items-center gap-3">
         <Image src="/synapse.svg" alt="Synapse" width={32} height={32} className="dark:invert" />
         <span className="text-lg font-bold text-gray-900 dark:text-white">Synapse</span>
+      </div>
+
+      {/* Workspace Switcher */}
+      <div className="-mx-2">
+        <WorkspaceSwitcher />
       </div>
 
       {/* Navigation */}
@@ -124,46 +180,45 @@ function SidebarContent({ pathname, user, onLogout }: { pathname: string; user: 
   );
 }
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+function OnboardingGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const pathname = usePathname();
-  const { user, loading, checkAuth, logout } = useAuthStore();
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const { needsOnboarding, loading } = useWorkspace();
 
   useEffect(() => {
-    checkAuth();
-  }, [checkAuth]);
-
-  useEffect(() => {
-    if (!loading && !user) {
-      router.replace('/login');
+    if (!loading && needsOnboarding) {
+      router.replace('/welcome');
     }
-  }, [user, loading, router]);
+  }, [loading, needsOnboarding, router]);
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <div className="h-12 w-12 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
-          <p className="text-gray-500 dark:text-gray-400 text-sm">Loading Synapse...</p>
+          <p className="text-gray-500 dark:text-gray-400 text-sm">Loading workspace...</p>
         </div>
       </div>
     );
   }
 
-  if (!user) return null;
+  if (needsOnboarding) return null;
+
+  return <>{children}</>;
+}
+
+function DashboardInner({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const { user } = useAuthStore();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   const handleLogout = () => {
-    logout();
+    useAuthStore.getState().logout();
     router.push('/login');
   };
 
   return (
-    <WorkspaceProvider>
+    <OnboardingGuard>
       <div>
         {/* Mobile Sidebar */}
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
@@ -200,6 +255,44 @@ export default function DashboardLayout({
           </div>
         </main>
       </div>
+    </OnboardingGuard>
+  );
+}
+
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const router = useRouter();
+  const { user, loading, checkAuth } = useAuthStore();
+
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.replace('/login');
+    }
+  }, [user, loading, router]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-12 w-12 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
+          <p className="text-gray-500 dark:text-gray-400 text-sm">Loading Synapse...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) return null;
+
+  return (
+    <WorkspaceProvider>
+      <DashboardInner>{children}</DashboardInner>
     </WorkspaceProvider>
   );
 }

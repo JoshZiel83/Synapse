@@ -1,19 +1,32 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
 import { api } from '@/lib/api';
+
+interface WorkspaceInfo {
+  id: string;
+  name: string;
+  slug: string;
+  trustLevel?: string;
+}
 
 interface WorkspaceContextType {
   workspaceId: string | null;
   workspaceName: string | null;
+  workspaces: WorkspaceInfo[];
+  needsOnboarding: boolean;
   setWorkspaceId: (id: string) => void;
+  refreshWorkspaces: () => Promise<void>;
   loading: boolean;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextType>({
   workspaceId: null,
   workspaceName: null,
+  workspaces: [],
+  needsOnboarding: false,
   setWorkspaceId: () => {},
+  refreshWorkspaces: async () => {},
   loading: true,
 });
 
@@ -24,62 +37,67 @@ export function useWorkspace() {
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const savedWsId = localStorage.getItem('workspaceId');
-    if (savedWsId) {
-      api.getWorkspace(savedWsId)
-        .then((ws: any) => {
-          setWorkspaceId(savedWsId);
-          setWorkspaceName(ws.name);
-          setLoading(false);
-        })
-        .catch(() => {
-          localStorage.removeItem('workspaceId');
-          loadOrCreateWorkspace();
-        });
-    } else {
-      loadOrCreateWorkspace();
-    }
-  }, []);
-
-  async function loadOrCreateWorkspace() {
+  const loadWorkspaces = useCallback(async () => {
     try {
       const res = await api.getWorkspaces();
-      // API returns { data: [...] }
-      const workspaces = res?.data ?? res ?? [];
+      const list: WorkspaceInfo[] = res?.data ?? res ?? [];
+      setWorkspaces(list);
 
-      if (workspaces.length > 0) {
-        setWorkspaceId(workspaces[0].id);
-        setWorkspaceName(workspaces[0].name);
-        localStorage.setItem('workspaceId', workspaces[0].id);
+      if (list.length === 0) {
+        setNeedsOnboarding(true);
+        setWorkspaceId(null);
+        setWorkspaceName(null);
+        localStorage.removeItem('workspaceId');
       } else {
-        // Auto-create a default workspace for new users
-        const newWs = await api.createWorkspace('My Workspace', 'Default workspace');
-        if (newWs?.id) {
-          setWorkspaceId(newWs.id);
-          setWorkspaceName(newWs.name);
-          localStorage.setItem('workspaceId', newWs.id);
+        setNeedsOnboarding(false);
+        const savedWsId = localStorage.getItem('workspaceId');
+        const match = list.find((w) => w.id === savedWsId);
+        if (match) {
+          setWorkspaceId(match.id);
+          setWorkspaceName(match.name);
+        } else {
+          setWorkspaceId(list[0].id);
+          setWorkspaceName(list[0].name);
+          localStorage.setItem('workspaceId', list[0].id);
         }
       }
     } catch (err) {
-      console.error('Failed to load/create workspace:', err);
+      console.error('Failed to load workspaces:', err);
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    loadWorkspaces();
+  }, [loadWorkspaces]);
 
   const handleSetWorkspaceId = (id: string) => {
+    const ws = workspaces.find((w) => w.id === id);
     setWorkspaceId(id);
+    setWorkspaceName(ws?.name ?? null);
     localStorage.setItem('workspaceId', id);
-    api.getWorkspace(id)
-      .then((ws: any) => setWorkspaceName(ws.name))
-      .catch(() => {});
+    if (!ws) {
+      api.getWorkspace(id)
+        .then((w: any) => setWorkspaceName(w.name))
+        .catch(() => {});
+    }
   };
 
   return (
-    <WorkspaceContext.Provider value={{ workspaceId, workspaceName, setWorkspaceId: handleSetWorkspaceId, loading }}>
+    <WorkspaceContext.Provider value={{
+      workspaceId,
+      workspaceName,
+      workspaces,
+      needsOnboarding,
+      setWorkspaceId: handleSetWorkspaceId,
+      refreshWorkspaces: loadWorkspaces,
+      loading,
+    }}>
       {children}
     </WorkspaceContext.Provider>
   );

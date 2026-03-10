@@ -42,6 +42,25 @@ CREATE TABLE IF NOT EXISTS workspace_members (
 CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace ON workspace_members(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_members_user ON workspace_members(user_id);
 
+-- ============ Workspace Invites ============
+CREATE TABLE IF NOT EXISTS workspace_invites (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  token VARCHAR(12) UNIQUE NOT NULL,
+  created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  trust_level VARCHAR(20) NOT NULL DEFAULT 'member'
+    CHECK (trust_level IN ('admin', 'member', 'guest')),
+  max_uses INT,
+  use_count INT NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ,
+  is_revoked BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_invites_token ON workspace_invites(token);
+CREATE INDEX IF NOT EXISTS idx_workspace_invites_workspace ON workspace_invites(workspace_id);
+
 -- ============ Actors (Digital Employees) ============
 CREATE TABLE IF NOT EXISTS actors (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -549,7 +568,7 @@ DO $$
 DECLARE
   tbl TEXT;
 BEGIN
-  FOR tbl IN SELECT unnest(ARRAY['users', 'workspaces', 'actors', 'work_items', 'memories', 'standing_orders', 'model_groups', 'model_group_items', 'sessions', 'mcp_organizations', 'mcp_plugins', 'mcp_installations', 'mcp_relays', 'mcp_relay_servers'])
+  FOR tbl IN SELECT unnest(ARRAY['users', 'workspaces', 'workspace_invites', 'actors', 'work_items', 'memories', 'standing_orders', 'model_groups', 'model_group_items', 'sessions', 'mcp_organizations', 'mcp_plugins', 'mcp_installations', 'mcp_relays', 'mcp_relay_servers'])
   LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS set_updated_at ON %I', tbl);
     EXECUTE format('CREATE TRIGGER set_updated_at BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION update_updated_at()', tbl);

@@ -29,6 +29,15 @@ class ApiClient {
   createWorkspace(name: string, description?: string) { return this.fetch('/workspaces', { method: 'POST', body: JSON.stringify({ name, description }) }); }
   getWorkspace(id: string) { return this.fetch(`/workspaces/${id}`); }
 
+  // Workspace Invites
+  getInviteInfo(token: string) { return this.fetch(`/invites/${token}`); }
+  redeemInvite(token: string) { return this.fetch(`/invites/${token}/redeem`, { method: 'POST', body: '{}' }); }
+  createInvite(wsId: string, data: { trustLevel?: string; maxUses?: number; expiresAt?: string }) {
+    return this.fetch(`/workspaces/${wsId}/invites`, { method: 'POST', body: JSON.stringify(data) });
+  }
+  listInvites(wsId: string) { return this.fetch(`/workspaces/${wsId}/invites`); }
+  revokeInvite(wsId: string, inviteId: string) { return this.fetch(`/workspaces/${wsId}/invites/${inviteId}`, { method: 'DELETE' }); }
+
   // Actors
   getActors(wsId: string) { return this.fetch(`/workspaces/${wsId}/actors`); }
   getOrgTree(wsId: string) { return this.fetch(`/workspaces/${wsId}/actors/tree`); }
