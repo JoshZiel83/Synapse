@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
   slug VARCHAR(255) UNIQUE NOT NULL,
   description TEXT,
   owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  default_model_group_id UUID, -- FK added after model_groups table
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -54,6 +55,8 @@ CREATE TABLE IF NOT EXISTS actors (
   capabilities TEXT[] DEFAULT '{}',
   config JSONB DEFAULT '{}',
   is_active BOOLEAN DEFAULT TRUE,
+  memory_version BIGINT DEFAULT 0,
+  max_concurrent_sessions INT DEFAULT 3,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -219,11 +222,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_model_groups_default_platform
 CREATE UNIQUE INDEX IF NOT EXISTS idx_model_groups_default_workspace
   ON model_groups (workspace_id) WHERE workspace_id IS NOT NULL AND is_default = TRUE AND is_active = TRUE;
 
+-- FK: workspaces.default_model_group_id → model_groups (deferred, both tables now exist)
+ALTER TABLE workspaces ADD CONSTRAINT fk_workspaces_default_model_group
+  FOREIGN KEY (default_model_group_id) REFERENCES model_groups(id) ON DELETE SET NULL;
+
 -- ============ Model Group Items ============
 CREATE TABLE IF NOT EXISTS model_group_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   group_id UUID NOT NULL REFERENCES model_groups(id) ON DELETE CASCADE,
-  current_config_id UUID, -- filled after first config insert
+  current_config_id UUID, -- FK added after model_item_configs table
   display_name VARCHAR(255) NOT NULL,
   priority INT NOT NULL DEFAULT 0,
   weight INT NOT NULL DEFAULT 100 CHECK (weight >= 0 AND weight <= 1000),
@@ -254,8 +261,7 @@ CREATE TABLE IF NOT EXISTS model_item_configs (
 
 CREATE INDEX IF NOT EXISTS idx_model_item_configs_item ON model_item_configs(item_id);
 
--- Add FK from model_group_items to model_item_configs now that both tables exist
-ALTER TABLE model_group_items DROP CONSTRAINT IF EXISTS fk_current_config;
+-- FK: model_group_items.current_config_id → model_item_configs (deferred, both tables now exist)
 ALTER TABLE model_group_items ADD CONSTRAINT fk_current_config
   FOREIGN KEY (current_config_id) REFERENCES model_item_configs(id) ON DELETE SET NULL;
 
@@ -269,42 +275,6 @@ CREATE TABLE IF NOT EXISTS actor_model_groups (
 );
 
 CREATE INDEX IF NOT EXISTS idx_actor_model_groups_actor ON actor_model_groups(actor_id);
-
--- ============ AI Request Logs ============
-CREATE TABLE IF NOT EXISTS ai_request_logs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
-  actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
-  session_id UUID,
-  turn_id UUID,
-  round INT DEFAULT 1,
-  group_id UUID REFERENCES model_groups(id) ON DELETE SET NULL,
-  item_id UUID REFERENCES model_group_items(id) ON DELETE SET NULL,
-  config_id UUID REFERENCES model_item_configs(id) ON DELETE SET NULL,
-  request_type VARCHAR(30) NOT NULL CHECK (request_type IN ('actor_think', 'ai_complete')),
-  input_tokens INT DEFAULT 0,
-  output_tokens INT DEFAULT 0,
-  cost_micros BIGINT DEFAULT 0,
-  latency_ms INT DEFAULT 0,
-  status VARCHAR(20) NOT NULL DEFAULT 'success' CHECK (status IN ('success', 'error', 'timeout')),
-  error_message TEXT,
-  request_body JSONB,
-  response_body JSONB,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_ai_request_logs_workspace ON ai_request_logs(workspace_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_ai_request_logs_actor ON ai_request_logs(actor_id);
-CREATE INDEX IF NOT EXISTS idx_ai_request_logs_session ON ai_request_logs(session_id);
-CREATE INDEX IF NOT EXISTS idx_ai_request_logs_turn ON ai_request_logs(turn_id);
-CREATE INDEX IF NOT EXISTS idx_ai_request_logs_group ON ai_request_logs(group_id);
-
--- ============ Add default_model_group_id to workspaces ============
-ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS default_model_group_id UUID REFERENCES model_groups(id) ON DELETE SET NULL;
-
--- ============ Actor extensions for session concurrency ============
-ALTER TABLE actors ADD COLUMN IF NOT EXISTS memory_version BIGINT DEFAULT 0;
-ALTER TABLE actors ADD COLUMN IF NOT EXISTS max_concurrent_sessions INT DEFAULT 3;
 
 -- ============ Sessions (process tree) ============
 CREATE TABLE IF NOT EXISTS sessions (
@@ -335,10 +305,34 @@ CREATE INDEX IF NOT EXISTS idx_sessions_actor_status ON sessions(actor_id, statu
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_root ON sessions(root_session_id);
 
--- Add FK from ai_request_logs to sessions now that sessions table exists
-ALTER TABLE ai_request_logs DROP CONSTRAINT IF EXISTS fk_ai_request_logs_session;
-ALTER TABLE ai_request_logs ADD CONSTRAINT fk_ai_request_logs_session
-  FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL;
+-- ============ AI Request Logs ============
+CREATE TABLE IF NOT EXISTS ai_request_logs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
+  actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  turn_id UUID,
+  round INT DEFAULT 1,
+  group_id UUID REFERENCES model_groups(id) ON DELETE SET NULL,
+  item_id UUID REFERENCES model_group_items(id) ON DELETE SET NULL,
+  config_id UUID REFERENCES model_item_configs(id) ON DELETE SET NULL,
+  request_type VARCHAR(30) NOT NULL CHECK (request_type IN ('actor_think', 'ai_complete')),
+  input_tokens INT DEFAULT 0,
+  output_tokens INT DEFAULT 0,
+  cost_micros BIGINT DEFAULT 0,
+  latency_ms INT DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'success' CHECK (status IN ('success', 'error', 'timeout')),
+  error_message TEXT,
+  request_body JSONB,
+  response_body JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_request_logs_workspace ON ai_request_logs(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_request_logs_actor ON ai_request_logs(actor_id);
+CREATE INDEX IF NOT EXISTS idx_ai_request_logs_session ON ai_request_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_ai_request_logs_turn ON ai_request_logs(turn_id);
+CREATE INDEX IF NOT EXISTS idx_ai_request_logs_group ON ai_request_logs(group_id);
 
 -- ============ Session Messages ============
 CREATE TABLE IF NOT EXISTS session_messages (
@@ -408,6 +402,8 @@ CREATE TABLE IF NOT EXISTS mcp_plugins (
   config_schema JSONB DEFAULT '{}',
   default_config JSONB DEFAULT '{}',
   tools_manifest JSONB DEFAULT '[]',
+  validation_rules JSONB DEFAULT '[]',
+  setup_steps JSONB DEFAULT '[]',
   tags TEXT[] DEFAULT '{}',
   is_active BOOLEAN DEFAULT TRUE,
   is_builtin BOOLEAN DEFAULT FALSE,
@@ -435,15 +431,12 @@ CREATE TABLE IF NOT EXISTS mcp_installations (
   installed_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE (plugin_id, scope_type, scope_id)
-);
-
--- Hierarchy constraint: lifecycle ≤ scope
-ALTER TABLE mcp_installations DROP CONSTRAINT IF EXISTS chk_lifecycle_hierarchy;
-ALTER TABLE mcp_installations ADD CONSTRAINT chk_lifecycle_hierarchy CHECK (
-  (scope_type = 'workspace' AND lifecycle_scope IN ('workspace', 'actor', 'session')) OR
-  (scope_type = 'user'      AND lifecycle_scope IN ('user', 'actor', 'session')) OR
-  (scope_type = 'actor'     AND lifecycle_scope IN ('actor', 'session'))
+  UNIQUE (plugin_id, scope_type, scope_id),
+  CONSTRAINT chk_lifecycle_hierarchy CHECK (
+    (scope_type = 'workspace' AND lifecycle_scope IN ('workspace', 'actor', 'session')) OR
+    (scope_type = 'user'      AND lifecycle_scope IN ('user', 'actor', 'session')) OR
+    (scope_type = 'actor'     AND lifecycle_scope IN ('actor', 'session'))
+  )
 );
 
 CREATE INDEX IF NOT EXISTS idx_mcp_inst_workspace ON mcp_installations(workspace_id);
@@ -526,23 +519,6 @@ CREATE TABLE IF NOT EXISTS mcp_event_logs (
 
 CREATE INDEX IF NOT EXISTS idx_mcp_event_logs_ws_type ON mcp_event_logs(workspace_id, event_type);
 CREATE INDEX IF NOT EXISTS idx_mcp_event_logs_created ON mcp_event_logs(created_at DESC);
-
--- ============ MCP Validation & Setup Extensions ============
-ALTER TABLE mcp_plugins ADD COLUMN IF NOT EXISTS validation_rules JSONB DEFAULT '[]';
-ALTER TABLE mcp_plugins ADD COLUMN IF NOT EXISTS setup_steps JSONB DEFAULT '[]';
-
--- Drop columns removed in architecture redesign
-ALTER TABLE mcp_plugins DROP COLUMN IF EXISTS config_dependencies;
-ALTER TABLE mcp_organizations DROP COLUMN IF EXISTS config;
-ALTER TABLE mcp_organizations DROP COLUMN IF EXISTS config_schema;
-ALTER TABLE mcp_organizations DROP COLUMN IF EXISTS validation_rules;
-ALTER TABLE mcp_organizations DROP COLUMN IF EXISTS setup_steps;
-
--- Drop old tables replaced by mcp_installations
-DROP TABLE IF EXISTS mcp_config_authorizations CASCADE;
-DROP TABLE IF EXISTS mcp_actor_plugins CASCADE;
-DROP TABLE IF EXISTS mcp_user_installations CASCADE;
-DROP TABLE IF EXISTS mcp_workspace_installations CASCADE;
 
 -- ============ Files ============
 CREATE TABLE IF NOT EXISTS files (
