@@ -186,7 +186,7 @@ export function startSessionThinkingWorker() {
         const resolvedConfig = await resolveModelConfig(actorId, workspaceId);
 
         // Resolve MCP plugin tools for this actor session
-        let mcpTools: ResolvedMcpTools = { tools: [], executor: async () => '', mcpVersion: 0, refresh: async () => ({ tools: [], mcpVersion: 0 }) };
+        let mcpTools: ResolvedMcpTools = { tools: [], executor: async () => '', mcpVersion: 0, refresh: async () => ({ tools: [], mcpVersion: 0 }), setTurnId: () => {} };
         try {
           mcpTools = await resolveMcpToolsForActor({ actorId, workspaceId, sessionId, userId });
           if (mcpTools.tools.length > 0) {
@@ -220,6 +220,7 @@ export function startSessionThinkingWorker() {
               extraToolExecutor: mcpTools.executor,
               mcpVersion: mcpTools.mcpVersion,
               mcpRefresh: mcpTools.refresh,
+              mcpSetTurnId: mcpTools.setTurnId,
               attachments: lastUserAttachments,
             },
           );
@@ -269,16 +270,30 @@ export function startSessionThinkingWorker() {
           msgMetadata.citationSources = result.citationSources;
         }
         const hasMeta = Object.keys(msgMetadata).length > 0 ? msgMetadata : undefined;
-        for (const action of respondActions) {
+        if (respondActions.length > 0) {
+          for (const action of respondActions) {
+            await addSessionMessage({
+              sessionId,
+              workspaceId,
+              role: 'assistant',
+              content: action.content,
+              fromActorId: actorId,
+              metadata: hasMeta,
+          });
+          // Note: addSessionMessage already emits session.message.new
+        }
+        } else if (result.actions.length > 0) {
+          // No respond actions but actions were executed (e.g. rename_self only).
+          // Write a minimal assistant marker so the "new user messages" check works correctly.
+          const actionNames = result.actions.map((a: ActorAction) => a.type).join(', ');
           await addSessionMessage({
             sessionId,
             workspaceId,
             role: 'assistant',
-            content: action.content,
+            content: `[executed: ${actionNames}]`,
             fromActorId: actorId,
-            metadata: hasMeta,
+            metadata: { ...hasMeta, silentActions: true },
           });
-          // Note: addSessionMessage already emits session.message.new
         }
 
         // Handle wait action

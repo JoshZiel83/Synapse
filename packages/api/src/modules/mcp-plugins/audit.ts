@@ -6,11 +6,14 @@ import { query } from '../../infrastructure/database/index.js';
 export async function logToolCall(data: {
   workspaceId: string;
   sessionId?: string;
+  turnId?: string;
+  round?: number;
   actorId?: string;
   userId?: string;
-  pluginId: string;
+  pluginId?: string | null;
   relayId?: string;
   toolName: string;
+  toolType?: 'callable' | 'mcp_plugin' | 'relay' | 'action';
   input: Record<string, unknown>;
   output?: string;
   isError?: boolean;
@@ -24,19 +27,22 @@ export async function logToolCall(data: {
 
   await query(
     `INSERT INTO mcp_tool_call_logs
-       (workspace_id, session_id, actor_id, user_id, plugin_id, relay_id,
-        tool_name, input, output, is_error, error_message, duration_ms, transport, instance_key)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+       (workspace_id, session_id, turn_id, round, actor_id, user_id, plugin_id, relay_id,
+        tool_name, tool_type, input, output, is_error, error_message, duration_ms, transport, instance_key)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
     [
       data.workspaceId,
       data.sessionId || null,
+      data.turnId || null,
+      data.round || null,
       data.actorId || null,
       data.userId || null,
-      data.pluginId,
+      data.pluginId || null,
       data.relayId || null,
       data.toolName,
+      data.toolType || 'mcp_plugin',
       JSON.stringify(sanitizedInput),
-      data.output ? truncateOutput(data.output) : null,
+      data.output ?? null,
       data.isError || false,
       data.errorMessage || null,
       data.durationMs || null,
@@ -140,9 +146,4 @@ function sanitizeInput(input: Record<string, unknown>): Record<string, unknown> 
     }
   }
   return result;
-}
-
-function truncateOutput(output: string, maxLen = 10000): string {
-  if (output.length <= maxLen) return output;
-  return output.slice(0, maxLen) + `\n... (truncated, total ${output.length} chars)`;
 }

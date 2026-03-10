@@ -12,6 +12,7 @@ export interface ResolvedMcpTools {
   executor: (toolName: string, input: Record<string, unknown>) => Promise<string | unknown[]>;
   mcpVersion: number;
   refresh: () => Promise<{ tools: ToolDefinition[]; mcpVersion: number }>;
+  setTurnId: (turnId: string, round?: number) => void;
 }
 
 interface ResolveParams {
@@ -214,6 +215,10 @@ export async function resolveMcpToolsForActor(params: {
 
   // Build unified executor — references the mutable `instances` Map.
   // Created unconditionally so refresh() can add tools mid-session even if none exist initially.
+  let currentTurnId: string | undefined;
+  let currentRound: number | undefined;
+  const setTurnId = (turnId: string, round?: number) => { currentTurnId = turnId; currentRound = round; };
+
   const executor = async (namespacedToolName: string, input: Record<string, unknown>): Promise<string | unknown[]> => {
     const parts = namespacedToolName.split(MCP_TOOL_NAMESPACE_SEPARATOR);
     if (parts.length < 3) {
@@ -243,25 +248,33 @@ export async function resolveMcpToolsForActor(params: {
       errorMessage = error.message;
       throw error;
     } finally {
-      // For relay tools, pluginId is a composite string — skip the FK-constrained log
+      // Log all tool calls — relay, MCP plugin, etc.
       const isRelay = instance.transport === 'relay';
-      if (!isRelay) {
-        logToolCall({
-          workspaceId,
-          sessionId,
-          actorId,
-          userId,
-          pluginId: instance.pluginId,
-          toolName: namespacedToolName,
-          input,
-          output: typeof output === 'string' ? output : output ? JSON.stringify(output) : undefined,
-          isError,
-          errorMessage,
-          durationMs: Date.now() - startTime,
-          transport: instance.transport,
-          instanceKey: `${instance.pluginId}:${instance.scope}:${instance.scopeId}`,
-        });
+      let relayId: string | undefined;
+      if (isRelay) {
+        // Extract relay UUID from composite pluginId: "relay:{uuid}:{serverName}"
+        const relayParts = instance.pluginId.split(':');
+        if (relayParts.length >= 2) relayId = relayParts[1];
       }
+      logToolCall({
+        workspaceId,
+        sessionId,
+        turnId: currentTurnId,
+        round: currentRound,
+        actorId,
+        userId,
+        pluginId: isRelay ? null : instance.pluginId,
+        relayId,
+        toolName: namespacedToolName,
+        toolType: isRelay ? 'relay' : 'mcp_plugin',
+        input,
+        output: typeof output === 'string' ? output : output ? JSON.stringify(output) : undefined,
+        isError,
+        errorMessage,
+        durationMs: Date.now() - startTime,
+        transport: instance.transport,
+        instanceKey: `${instance.pluginId}:${instance.scope}:${instance.scopeId}`,
+      });
     }
   };
 
@@ -276,5 +289,5 @@ export async function resolveMcpToolsForActor(params: {
     return { tools: [...newPluginTools, ...newRelayTools], mcpVersion: newVersion };
   };
 
-  return { tools: allTools, executor, mcpVersion, refresh };
+  return { tools: allTools, executor, mcpVersion, refresh, setTurnId };
 }

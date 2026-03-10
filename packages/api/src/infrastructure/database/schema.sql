@@ -275,6 +275,9 @@ CREATE TABLE IF NOT EXISTS ai_request_logs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
   actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  session_id UUID,
+  turn_id UUID,
+  round INT DEFAULT 1,
   group_id UUID REFERENCES model_groups(id) ON DELETE SET NULL,
   item_id UUID REFERENCES model_group_items(id) ON DELETE SET NULL,
   config_id UUID REFERENCES model_item_configs(id) ON DELETE SET NULL,
@@ -292,6 +295,8 @@ CREATE TABLE IF NOT EXISTS ai_request_logs (
 
 CREATE INDEX IF NOT EXISTS idx_ai_request_logs_workspace ON ai_request_logs(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_request_logs_actor ON ai_request_logs(actor_id);
+CREATE INDEX IF NOT EXISTS idx_ai_request_logs_session ON ai_request_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_ai_request_logs_turn ON ai_request_logs(turn_id);
 CREATE INDEX IF NOT EXISTS idx_ai_request_logs_group ON ai_request_logs(group_id);
 
 -- ============ Add default_model_group_id to workspaces ============
@@ -329,6 +334,11 @@ CREATE INDEX IF NOT EXISTS idx_sessions_actor ON sessions(actor_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_actor_status ON sessions(actor_id, status);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_root ON sessions(root_session_id);
+
+-- Add FK from ai_request_logs to sessions now that sessions table exists
+ALTER TABLE ai_request_logs DROP CONSTRAINT IF EXISTS fk_ai_request_logs_session;
+ALTER TABLE ai_request_logs ADD CONSTRAINT fk_ai_request_logs_session
+  FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL;
 
 -- ============ Session Messages ============
 CREATE TABLE IF NOT EXISTS session_messages (
@@ -479,11 +489,14 @@ CREATE TABLE IF NOT EXISTS mcp_tool_call_logs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  turn_id UUID,
+  round INT,
   actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  plugin_id UUID NOT NULL REFERENCES mcp_plugins(id) ON DELETE CASCADE,
+  plugin_id UUID REFERENCES mcp_plugins(id) ON DELETE CASCADE,
   relay_id UUID REFERENCES mcp_relays(id) ON DELETE SET NULL,
   tool_name VARCHAR(255) NOT NULL,
+  tool_type VARCHAR(20) DEFAULT 'mcp_plugin',
   input JSONB DEFAULT '{}',
   output TEXT,
   is_error BOOLEAN DEFAULT FALSE,
@@ -496,6 +509,7 @@ CREATE TABLE IF NOT EXISTS mcp_tool_call_logs (
 
 CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_ws_created ON mcp_tool_call_logs(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_session ON mcp_tool_call_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_turn ON mcp_tool_call_logs(turn_id);
 CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_plugin ON mcp_tool_call_logs(plugin_id);
 
 -- ============ MCP Event Logs ============

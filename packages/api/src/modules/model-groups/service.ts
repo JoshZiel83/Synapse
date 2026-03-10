@@ -328,6 +328,9 @@ export async function setActorModelGroups(actorId: string, groups: { groupId: st
 export async function logAIRequest(data: {
   workspaceId?: string;
   actorId?: string;
+  sessionId?: string;
+  turnId?: string;
+  round?: number;
   groupId?: string;
   itemId?: string;
   configId?: string;
@@ -341,13 +344,16 @@ export async function logAIRequest(data: {
   responseBody?: unknown;
 }) {
   await query(
-    `INSERT INTO ai_request_logs (workspace_id, actor_id, group_id, item_id, config_id,
+    `INSERT INTO ai_request_logs (workspace_id, actor_id, session_id, turn_id, round, group_id, item_id, config_id,
        request_type, input_tokens, output_tokens, latency_ms, status, error_message,
        request_body, response_body)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
     [
       data.workspaceId || null,
       data.actorId || null,
+      data.sessionId || null,
+      data.turnId || null,
+      data.round || 1,
       data.groupId || null,
       data.itemId || null,
       data.configId || null,

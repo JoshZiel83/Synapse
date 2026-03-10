@@ -1,9 +1,11 @@
 import type { Actor, Memory, ThinkingResult, ActorAction, AIMessage, ResolvedModelConfig, ContinuationEntry, ServerToolCall } from '@synapse/shared';
+import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
 import { createAIProvider, type AIProvider, type AIProviderConfig } from './providers/index.js';
 import { ACTOR_TOOLS, toolCallsToActions } from './tools.js';
 import { buildActorPrompt } from './prompt-builder.js';
 import { logAIRequest } from '../model-groups/service.js';
+import { logToolCall } from '../mcp-plugins/audit.js';
 import { isCallableTool, executeCallableTools, getCallableToolDefinitions } from './callable-tools.js';
 import { setToolExecutionContext } from './session-tools.js';
 import { getMcpVersion } from '../mcp-plugins/instance-manager.js';
@@ -62,6 +64,7 @@ export async function actorThink(
     extraToolExecutor?: (toolName: string, input: Record<string, unknown>) => Promise<string | unknown[]>;
     mcpVersion?: number;
     mcpRefresh?: () => Promise<{ tools: import('@synapse/shared').ToolDefinition[]; mcpVersion: number }>;
+    mcpSetTurnId?: (turnId: string, round?: number) => void;
     attachments?: Attachment[];
   },
 ): Promise<ThinkingResult> {
@@ -104,25 +107,37 @@ export async function actorThink(
   let currentMcpVersion = options?.mcpVersion ?? 0;
 
   const startTime = Date.now();
+  const turnId = randomUUID();
   let totalTokens = { input: 0, output: 0 };
   const continuationHistory: ContinuationEntry[] = [];
 
-  // Capture request context for logging (no API key!)
-  const requestLog = {
+  // Capture initial request context for logging (no API key!)
+  const initialRequestLog = {
     provider: resolved?.providerType || config.ai.provider,
     model: resolved?.modelName || config.ai.model,
-    system: system.slice(0, 2000), // truncate system prompt for storage
+    system,
     messages: aiMessages,
-    tools: allTools.map((t) => t.name),
+    tools: allTools,
     builtinTools: resolved?.builtinTools || null,
   };
 
-  // Collect per-round response snapshots
-  const roundLogs: unknown[] = [];
   const allToolsUsed: string[] = []; // track callable tools invoked
   const allServerToolCalls: ServerToolCall[] = []; // track cloud-side tool calls
   let allCitationSources: Record<string, { url: string; title: string }> = {}; // cite index → source
   const onStatus = options?.onStatus;
+  let currentRound = 0; // track for error handler
+
+  // Common fields for logAIRequest
+  const logCommon = {
+    workspaceId,
+    actorId: actor.id,
+    sessionId: options?.sessionId,
+    turnId,
+    groupId: resolved?.groupId,
+    itemId: resolved?.itemId,
+    configId: resolved?.configId,
+    requestType: 'actor_think' as const,
+  };
 
   // Set tool execution context for session-aware callable tools
   if (options?.sessionId) {
@@ -133,8 +148,32 @@ export async function actorThink(
     });
   }
 
+  // Helper to log tool calls with current round context
+  const logToolCallWithRound = (roundNum: number, tc: { name: string; input: Record<string, unknown> }, toolType: 'callable' | 'action', output?: string, isError?: boolean) => {
+    logToolCall({
+      workspaceId: workspaceId || '',
+      sessionId: options?.sessionId,
+      turnId,
+      round: roundNum,
+      actorId: actor.id,
+      pluginId: null,
+      toolName: tc.name,
+      toolType,
+      input: tc.input,
+      output,
+      isError,
+      transport: toolType,
+    });
+  };
+
   try {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      currentRound = round + 1;
+      const roundStartTime = Date.now();
+
+      // Set turn+round context for MCP executor
+      if (options?.mcpSetTurnId) options.mcpSetTurnId(turnId, currentRound);
+
       const response = await provider.chat({
         system,
         messages: aiMessages,
@@ -144,22 +183,34 @@ export async function actorThink(
         multimodalContent: round === 0 ? multimodalContent : undefined,
       });
 
+      const roundLatencyMs = Date.now() - roundStartTime;
       totalTokens.input += response.tokensUsed.input;
       totalTokens.output += response.tokensUsed.output;
 
-      // Capture this round's response for logging
-      roundLogs.push({
-        round: round + 1,
+      // Build per-round request/response bodies
+      const roundRequestBody = round === 0
+        ? initialRequestLog
+        : { round: currentRound, continuationToolResults: continuationHistory[continuationHistory.length - 1]?.toolResults };
+      const roundResponseBody = {
         stopReason: response.stopReason,
-        toolCalls: response.toolCalls.map((tc) => ({ id: tc.id, name: tc.name })),
-        textContent: response.textContent.slice(0, 2000),
-        tokens: response.tokensUsed,
-        rawContentBlockTypes: Array.isArray(response.rawAssistantMessage)
-          ? (response.rawAssistantMessage as any[]).map((b: any) => b.type)
-          : undefined,
-      });
+        toolCalls: response.toolCalls.map((tc) => ({ id: tc.id, name: tc.name, input: tc.input })),
+        textContent: response.textContent,
+        rawAssistantMessage: response.rawAssistantMessage,
+      };
 
-      console.log(`[actorThink] actor=${actor.id} round=${round + 1} stopReason=${response.stopReason} toolCalls=[${response.toolCalls.map(tc => tc.name).join(',')}] builtinTools=${JSON.stringify(resolved?.builtinTools || null)} textLen=${response.textContent.length}`);
+      // Log this round's AI request immediately
+      logAIRequest({
+        ...logCommon,
+        round: currentRound,
+        inputTokens: response.tokensUsed.input,
+        outputTokens: response.tokensUsed.output,
+        latencyMs: roundLatencyMs,
+        status: 'success',
+        requestBody: roundRequestBody,
+        responseBody: roundResponseBody,
+      }).catch(err => console.error('[actorThink] Failed to log AI request:', err.message));
+
+      console.log(`[actorThink] actor=${actor.id} turn=${turnId.slice(0,8)} round=${currentRound} stopReason=${response.stopReason} toolCalls=[${response.toolCalls.map(tc => tc.name).join(',')}] textLen=${response.textContent.length}`);
 
       // Extract server-side tool calls from raw response (Anthropic web_search/web_fetch, OpenAI web_search_call)
       const serverCalls = extractServerToolCalls(response.rawAssistantMessage);
@@ -182,7 +233,6 @@ export async function actorThink(
       }
 
       // For OpenAI: inject <cite> markers into text using url_citation annotations
-      // (Anthropic already includes <cite> tags in the text)
       if (citations && !Array.isArray(response.rawAssistantMessage)) {
         response.textContent = injectOpenAICitationMarkers(response.textContent, response.rawAssistantMessage, citations);
       }
@@ -223,6 +273,15 @@ export async function actorThink(
           toolResults,
         });
 
+        // Log each callable tool call individually
+        for (let ci = 0; ci < callableCalls.length; ci++) {
+          const tc = callableCalls[ci];
+          const res = callableResults[ci];
+          logToolCallWithRound(currentRound, tc, 'callable',
+            typeof res?.content === 'string' ? res.content : res?.content ? JSON.stringify(res.content) : undefined,
+            res?.isError);
+        }
+
         // If model also produced action calls in the same turn, execute them and finish
         if (actionCalls.length > 0) {
           const actions = toolCallsToActions(actionCalls);
@@ -231,7 +290,9 @@ export async function actorThink(
             actions.unshift({ type: 'respond', content: response.textContent });
           }
 
-          await logThinkRequest(workspaceId, actor.id, resolved, totalTokens, startTime, requestLog, roundLogs);
+          for (const tc of actionCalls) {
+            logToolCallWithRound(currentRound, tc, 'action', JSON.stringify(tc.input));
+          }
 
           return { actions, reasoning: response.textContent, tokensUsed: totalTokens, toolsUsed: allToolsUsed, serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined, citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined };
         }
@@ -264,20 +325,21 @@ export async function actorThink(
         if (!hasRespond && response.textContent) {
           actions.unshift({ type: 'respond', content: response.textContent });
         }
+
+        for (const tc of actionCalls) {
+          logToolCallWithRound(currentRound, tc, 'action', JSON.stringify(tc.input));
+        }
       } else if (response.textContent) {
         actions = [{ type: 'respond', content: response.textContent }];
       } else {
         actions = [{ type: 'respond', content: 'I could not process this request.' }];
       }
 
-      await logThinkRequest(workspaceId, actor.id, resolved, totalTokens, startTime, requestLog, roundLogs);
-
       return { actions, reasoning: response.textContent, tokensUsed: totalTokens, toolsUsed: allToolsUsed.length > 0 ? allToolsUsed : undefined, serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined, citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined };
     }
 
     // Exceeded MAX_TOOL_ROUNDS — fallback respond
     console.warn(`[actorThink] actor=${actor.id} exceeded max tool rounds (${MAX_TOOL_ROUNDS})`);
-    await logThinkRequest(workspaceId, actor.id, resolved, totalTokens, startTime, requestLog, roundLogs);
 
     return {
       actions: [{ type: 'respond', content: 'I ran into complexity processing this request. Please try again with a simpler question.' }],
@@ -288,52 +350,22 @@ export async function actorThink(
       citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
     };
   } catch (err: any) {
-    // Log the failed request with request/response context
+    // Log the failed round
     await logAIRequest({
-      workspaceId,
-      actorId: actor.id,
-      groupId: resolved?.groupId,
-      itemId: resolved?.itemId,
-      configId: resolved?.configId,
-      requestType: 'actor_think',
+      ...logCommon,
+      round: currentRound,
       inputTokens: totalTokens.input,
       outputTokens: totalTokens.output,
       latencyMs: Date.now() - startTime,
       status: 'error',
       errorMessage: err.message,
-      requestBody: requestLog,
-      responseBody: roundLogs.length > 0 ? { rounds: roundLogs } : null,
+      requestBody: currentRound <= 1 ? initialRequestLog : { round: currentRound },
     });
     throw err;
   } finally {
     // Always clear tool execution context
     setToolExecutionContext(null);
   }
-}
-
-async function logThinkRequest(
-  workspaceId: string | undefined,
-  actorId: string,
-  resolved: ResolvedModelConfig | null | undefined,
-  totalTokens: { input: number; output: number },
-  startTime: number,
-  requestBody?: unknown,
-  responseBody?: unknown[],
-): Promise<void> {
-  await logAIRequest({
-    workspaceId,
-    actorId,
-    groupId: resolved?.groupId,
-    itemId: resolved?.itemId,
-    configId: resolved?.configId,
-    requestType: 'actor_think',
-    inputTokens: totalTokens.input,
-    outputTokens: totalTokens.output,
-    latencyMs: Date.now() - startTime,
-    status: 'success',
-    requestBody,
-    responseBody: responseBody ? { rounds: responseBody } : null,
-  });
 }
 
 export async function aiComplete(
@@ -357,7 +389,7 @@ export async function aiComplete(
   const requestLog = {
     provider: resolved?.providerType || config.ai.provider,
     model: resolved?.modelName || config.ai.model,
-    system: system.slice(0, 2000),
+    system,
     messages: aiMessages,
   };
 
@@ -399,7 +431,7 @@ export async function aiComplete(
     requestBody: requestLog,
     responseBody: {
       stopReason: response.stopReason,
-      textContent: response.textContent.slice(0, 2000),
+      textContent: response.textContent,
       tokens: response.tokensUsed,
     },
   });
