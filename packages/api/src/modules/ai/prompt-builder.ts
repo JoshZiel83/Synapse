@@ -15,14 +15,17 @@ export interface SessionContext {
   parentActorName?: string;
 }
 
+/**
+ * Build the system prompt for an actor.
+ * Only constructs the system prompt — conversation messages are handled by message-builder.
+ */
 export function buildActorPrompt(
   actor: Actor,
   memories: Memory[],
-  workContext: string,
   subordinates?: Subordinate[],
   sessionContext?: SessionContext,
   extraTools?: ToolDefinition[],
-): { system: string; messages: { role: string; content: string }[] } {
+): { system: string } {
   let system =
     actor.systemPrompt +
     '\n\nYour charter:\n' +
@@ -44,8 +47,7 @@ export function buildActorPrompt(
   } else {
     system +=
       '\n\nYou currently have no subordinates. You MUST handle all tasks yourself directly. ' +
-      'Provide complete, thorough responses. Do NOT say you will do something later — do it now in your response. ' +
-      'Always include the full content in your respond tool call.';
+      'Provide complete, thorough responses. Do NOT say you will do something later — do it now in your response.';
   }
 
   // Add session context
@@ -70,7 +72,5 @@ export function buildActorPrompt(
     system += '\n当用户的请求需要使用这些工具时，请主动调用它们。工具名称使用命名空间格式（组织__插件__工具名）。';
   }
 
-  const messages = [{ role: 'user', content: workContext }];
-
-  return { system, messages };
+  return { system };
 }

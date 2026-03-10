@@ -107,6 +107,7 @@ async function resolveFromGroup(groupId: string): Promise<ResolvedModelConfig | 
   const multimodal: MultimodalConfig | undefined = extraConfig.multimodal?.supported
     ? { supported: true, types: Array.isArray(extraConfig.multimodal.types) ? extraConfig.multimodal.types : [] }
     : undefined;
+  const crossTurnToolHistory = extraConfig.cross_turn_tool_history === true ? true : undefined;
 
   return {
     groupId,
@@ -119,6 +120,7 @@ async function resolveFromGroup(groupId: string): Promise<ResolvedModelConfig | 
     maxTokens: selected.max_tokens,
     builtinTools,
     multimodal,
+    crossTurnToolHistory,
   };
 }
 

@@ -3,8 +3,9 @@ import { redis } from '../infrastructure/redis/index.js';
 import { query } from '../infrastructure/database/index.js';
 import { emitEvent } from '../infrastructure/events/index.js';
 import { QUEUE_NAMES, ACTOR_LOCK_TTL, REDIS_CHANNELS, nowISO } from '@synapse/shared';
-import type { ActorAction } from '@synapse/shared';
+import type { ActorAction, ConversationMessage } from '@synapse/shared';
 import { actorThink } from '../modules/ai/index.js';
+import { buildActorPrompt } from '../modules/ai/prompt-builder.js';
 import { executeActorActions } from '../modules/orchestrator/service.js';
 import { resolveModelConfig } from '../modules/model-groups/resolver.js';
 
@@ -81,6 +82,18 @@ export function startActorThinkingWorker() {
         // Resolve model config for this actor
         const resolvedConfig = await resolveModelConfig(actorId, workspaceId);
 
+        // Build system prompt
+        const { system } = buildActorPrompt(
+          actor,
+          memoriesResult.rows,
+          subordinatesResult.rows.length > 0 ? subordinatesResult.rows : undefined,
+        );
+
+        // Build conversation messages from work context
+        const conversationMessages: ConversationMessage[] = [
+          { role: 'user', content: workContext },
+        ];
+
         // Refresh actor lock TTL periodically during multi-round thinking
         const lockRefreshInterval = setInterval(async () => {
           try {
@@ -94,10 +107,11 @@ export function startActorThinkingWorker() {
           result = await actorThink(
             actor,
             memoriesResult.rows,
-            workContext,
+            conversationMessages,
             subordinatesResult.rows.length > 0 ? subordinatesResult.rows : undefined,
             resolvedConfig,
             workspaceId,
+            { system },
           );
         } finally {
           clearInterval(lockRefreshInterval);

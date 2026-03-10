@@ -1,5 +1,7 @@
-import type { AIMessage, AIResponse, ToolDefinition, ToolCall, AnthropicBuiltinTool, ContinuationEntry } from '@synapse/shared';
+import type { AIResponse, ToolDefinition, ToolCall, AnthropicBuiltinTool, ContinuationEntry, ConversationMessage, MultimodalConfig } from '@synapse/shared';
 import type { AIProvider, AIProviderConfig } from './types.js';
+import { convertToAnthropicMessages } from '../message-converter.js';
+import { resolveContentBlocks } from '../content-resolve.js';
 
 // Map tool names to their latest versioned type identifiers
 const BUILTIN_TOOL_TYPES: Record<string, string> = {
@@ -17,24 +19,27 @@ export class AnthropicProvider implements AIProvider {
 
   async chat(params: {
     system: string;
-    messages: AIMessage[];
+    messages: ConversationMessage[];
     tools?: ToolDefinition[];
     builtinTools?: AnthropicBuiltinTool[];
     continuationHistory?: ContinuationEntry[];
     multimodalContent?: unknown[];
+    multimodal?: MultimodalConfig;
   }): Promise<AIResponse> {
     const base = this.config.baseUrl.replace(/\/+$/, '');
 
-    // Build messages: initial messages + continuation history
-    const allMessages: Record<string, unknown>[] = params.messages.map((m, i) => {
-      // If multimodal content is provided, use it for the last user message
-      if (params.multimodalContent && i === params.messages.length - 1 && m.role === 'user') {
-        return { role: m.role, content: params.multimodalContent };
-      }
-      return { role: m.role, content: m.content };
-    });
+    // Convert ConversationMessage[] to Anthropic format
+    const allMessages = await convertToAnthropicMessages(params.messages, params.multimodal);
 
-    // Append continuation history (multi-turn tool use)
+    // If multimodal content is provided for the current turn, replace the last user message content
+    if (params.multimodalContent && allMessages.length > 0) {
+      const lastIdx = allMessages.length - 1;
+      if ((allMessages[lastIdx] as any).role === 'user') {
+        allMessages[lastIdx] = { role: 'user', content: params.multimodalContent };
+      }
+    }
+
+    // Append continuation history (within-turn multi-round tool use)
     if (params.continuationHistory && params.continuationHistory.length > 0) {
       for (const entry of params.continuationHistory) {
         // Raw assistant message (contains tool_use blocks) — pass back as-is
@@ -43,22 +48,42 @@ export class AnthropicProvider implements AIProvider {
           content: entry.rawAssistantMessage,
         });
         // Tool results as a user message with tool_result content blocks
-        const toolResultBlocks = entry.toolResults.map((tr) => {
-          if (typeof tr.content !== 'string') {
-            const blocks = tr.content as any[];
-            for (const b of blocks) {
-              console.log(`[anthropic] tool_result block for ${tr.toolName}: keys=${Object.keys(b).join(',')}, type=${b.type}, mimeType=${b.mimeType}, hasData=${!!b.data}, dataLen=${typeof b.data === 'string' ? b.data.length : 'N/A'}`);
+        const toolResultBlocks: unknown[] = [];
+        for (const tr of entry.toolResults) {
+          if (typeof tr.content !== 'string' && Array.isArray(tr.content)) {
+            // Check if content is CanonicalContentBlock[] (has file_ref blocks)
+            const hasFileRef = tr.content.some((b: any) => b?.type === 'file_ref');
+            if (hasFileRef) {
+              // Resolve canonical blocks to Anthropic-native format
+              const { providerBlocks } = await resolveContentBlocks(
+                tr.content as any,
+                'anthropic',
+                params.multimodal,
+              );
+              toolResultBlocks.push({
+                type: 'tool_result',
+                tool_use_id: tr.toolCallId,
+                content: providerBlocks,
+                is_error: tr.isError || false,
+              });
+            } else {
+              // Legacy MCP content blocks — convert directly
+              toolResultBlocks.push({
+                type: 'tool_result',
+                tool_use_id: tr.toolCallId,
+                content: convertMcpContentToAnthropic(tr.content),
+                is_error: tr.isError || false,
+              });
             }
+          } else {
+            toolResultBlocks.push({
+              type: 'tool_result',
+              tool_use_id: tr.toolCallId,
+              content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
+              is_error: tr.isError || false,
+            });
           }
-          return {
-            type: 'tool_result',
-            tool_use_id: tr.toolCallId,
-            content: typeof tr.content === 'string'
-              ? tr.content
-              : convertMcpContentToAnthropic(tr.content),
-            is_error: tr.isError || false,
-          };
-        });
+        }
         allMessages.push({
           role: 'user',
           content: toolResultBlocks,
@@ -139,6 +164,7 @@ export class AnthropicProvider implements AIProvider {
 
     const toolCalls: ToolCall[] = [];
     let textContent = '';
+    const mediaBlocks: unknown[] = [];
 
     // Debug: log content block types for diagnosing server tool behavior
     const blockTypes = data.content.map((b) => b.type);
@@ -151,6 +177,9 @@ export class AnthropicProvider implements AIProvider {
         toolCalls.push({ id: block.id || '', name: block.name, input: block.input });
       } else if (block.type === 'text' && block.text) {
         textContent += block.text;
+      } else if (block.type === 'image') {
+        // Collect media blocks from model response for ingestion
+        mediaBlocks.push(block);
       }
       // Skip server_tool_use, web_search_tool_result, web_fetch_tool_result
       // These are intermediate blocks handled by Anthropic's server
@@ -165,25 +194,14 @@ export class AnthropicProvider implements AIProvider {
       },
       stopReason: data.stop_reason || 'end_turn',
       rawAssistantMessage: data.content,
+      mediaBlocks: mediaBlocks.length > 0 ? mediaBlocks : undefined,
     };
   }
 }
 
 /**
  * Convert MCP content blocks to Anthropic tool_result content format.
- *
- * MCP spec (2025-06-18) content types:
- *   TextContent:  { type: "text", text: "..." }
- *   ImageContent: { type: "image", data: "<base64>", mimeType: "image/png" }
- *   AudioContent: { type: "audio", data: "<base64>", mimeType: "audio/wav" }
- *   EmbeddedResource: { type: "resource", resource: { uri, mimeType, text|blob } }
- *
- * Some MCP servers (e.g. CUA) may return blocks already in Anthropic format:
- *   { type: "image", source: { type: "base64", media_type: "image/png", data: "..." } }
- *
- * Anthropic tool_result content blocks:
- *   TextBlockParam:  { type: "text", text: "..." }
- *   ImageBlockParam: { type: "image", source: { type: "base64", media_type: "image/png", data: "..." } }
+ * Kept for backward compatibility with legacy non-ingested MCP content.
  */
 function convertMcpContentToAnthropic(blocks: unknown[]): unknown[] {
   return blocks.map((block: any) => {
@@ -191,7 +209,6 @@ function convertMcpContentToAnthropic(blocks: unknown[]): unknown[] {
       case 'text':
         return { type: 'text', text: block.text || '' };
       case 'image': {
-        // Case 1: Already in Anthropic format { source: { type, media_type, data } }
         if (block.source?.data) {
           return {
             type: 'image',
@@ -202,7 +219,6 @@ function convertMcpContentToAnthropic(blocks: unknown[]): unknown[] {
             },
           };
         }
-        // Case 2: MCP standard format { data, mimeType }
         const mimeType = block.mimeType || block.mime_type || 'image/png';
         if (!block.data) {
           return { type: 'text', text: `[Image: missing data, keys=${Object.keys(block).join(',')}]` };
@@ -224,7 +240,6 @@ function convertMcpContentToAnthropic(blocks: unknown[]): unknown[] {
         }
         return { type: 'text', text: JSON.stringify(block) };
       default:
-        // Pass through blocks that are already in Anthropic format (e.g. image with source)
         if (block.source?.data && block.source?.media_type) {
           return block;
         }

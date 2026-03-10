@@ -1,5 +1,7 @@
-import type { AIMessage, AIResponse, ToolDefinition, ToolCall, ContinuationEntry } from '@synapse/shared';
+import type { AIResponse, ToolDefinition, ToolCall, ContinuationEntry, ConversationMessage, MultimodalConfig } from '@synapse/shared';
 import type { AIProvider, AIProviderConfig } from './types.js';
+import { convertToOpenAIMessages } from '../message-converter.js';
+import { resolveContentBlocks } from '../content-resolve.js';
 
 export class OpenAIProvider implements AIProvider {
   readonly name = 'openai';
@@ -11,35 +13,58 @@ export class OpenAIProvider implements AIProvider {
 
   async chat(params: {
     system: string;
-    messages: AIMessage[];
+    messages: ConversationMessage[];
     tools?: ToolDefinition[];
     continuationHistory?: ContinuationEntry[];
     multimodalContent?: unknown[];
+    multimodal?: MultimodalConfig;
   }): Promise<AIResponse> {
     const base = this.config.baseUrl.replace(/\/+$/, '');
 
-    const openaiMessages: Record<string, unknown>[] = [
-      { role: 'system', content: params.system },
-      ...params.messages.map((m, i) => {
-        // If multimodal content is provided, use it for the last user message
-        if (params.multimodalContent && i === params.messages.length - 1 && m.role === 'user') {
-          return { role: m.role, content: params.multimodalContent };
-        }
-        return { role: m.role, content: m.content };
-      }),
-    ];
+    // Convert ConversationMessage[] to OpenAI format (includes system message)
+    const openaiMessages = await convertToOpenAIMessages(params.messages, params.system, params.multimodal);
 
-    // Append continuation history (multi-turn tool use)
+    // If multimodal content is provided, replace last user message content
+    if (params.multimodalContent && openaiMessages.length > 0) {
+      // Find the last user message
+      for (let i = openaiMessages.length - 1; i >= 0; i--) {
+        if ((openaiMessages[i] as any).role === 'user') {
+          openaiMessages[i] = { role: 'user', content: params.multimodalContent };
+          break;
+        }
+      }
+    }
+
+    // Append continuation history (within-turn multi-round tool use)
     if (params.continuationHistory && params.continuationHistory.length > 0) {
       for (const entry of params.continuationHistory) {
         // Raw assistant message (contains tool_calls array) — pass back as-is
         openaiMessages.push(entry.rawAssistantMessage as Record<string, unknown>);
         // Each tool result as a separate role:"tool" message
         for (const tr of entry.toolResults) {
+          let content: string;
+          if (typeof tr.content === 'string') {
+            content = tr.content;
+          } else if (Array.isArray(tr.content)) {
+            // Check if CanonicalContentBlock[] (has file_ref blocks)
+            const hasFileRef = tr.content.some((b: any) => b?.type === 'file_ref');
+            if (hasFileRef) {
+              const { textFallback } = await resolveContentBlocks(
+                tr.content as any,
+                'openai',
+                params.multimodal,
+              );
+              content = textFallback;
+            } else {
+              content = JSON.stringify(tr.content);
+            }
+          } else {
+            content = JSON.stringify(tr.content);
+          }
           openaiMessages.push({
             role: 'tool',
             tool_call_id: tr.toolCallId,
-            content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
+            content,
           });
         }
       }

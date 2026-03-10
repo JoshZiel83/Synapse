@@ -5,7 +5,8 @@ import { emitEvent } from '../infrastructure/events/index.js';
 import { QUEUE_NAMES, SESSION_LOCK_TTL, REDIS_CHANNELS, DEFAULT_MAX_CONCURRENT_SESSIONS, nowISO } from '@synapse/shared';
 import type { ActorAction } from '@synapse/shared';
 import { actorThink } from '../modules/ai/index.js';
-import { adaptAttachments } from '../modules/ai/content-adapter.js';
+import { buildActorPrompt } from '../modules/ai/prompt-builder.js';
+import { buildConversationMessages } from '../modules/ai/message-builder.js';
 import { executeActorActions } from '../modules/orchestrator/service.js';
 import { resolveModelConfig } from '../modules/model-groups/resolver.js';
 import { resolveMcpToolsForActor } from '../modules/mcp-plugins/tool-resolver.js';
@@ -95,54 +96,25 @@ export function startSessionThinkingWorker() {
         // Load session messages (isolated context - only this session's messages)
         const sessionMessages = await getSessionMessages(sessionId);
 
-        // Build work context from session messages
-        let workContext = '';
+        // Extract last user attachments for multimodal handling
         let lastUserAttachments: { id: string; url: string; fullUrl?: string; storedName?: string; originalName: string; mimeType: string; sizeBytes: number }[] | undefined;
         for (const msg of sessionMessages) {
-          switch (msg.role) {
-            case 'user': {
-              workContext += `[Boss]: ${msg.content}\n`;
-              // Reset attachments for each user message — only the last user message's attachments matter
-              lastUserAttachments = undefined;
-              // Check for attachments in metadata
-              const meta = typeof msg.metadata === 'string' ? JSON.parse(msg.metadata) : (msg.metadata || {});
-              if (Array.isArray(meta.attachments) && meta.attachments.length > 0) {
-                lastUserAttachments = meta.attachments;
-                // Add text descriptions of attachments to work context
-                for (const att of meta.attachments) {
-                  workContext += `[Attached file: ${att.originalName} (${att.mimeType}) - ${att.url}]\n`;
-                }
-              }
-              break;
+          if (msg.role === 'user') {
+            lastUserAttachments = undefined;
+            const meta = typeof msg.metadata === 'string' ? JSON.parse(msg.metadata) : (msg.metadata || {});
+            if (Array.isArray(meta.attachments) && meta.attachments.length > 0) {
+              lastUserAttachments = meta.attachments;
             }
-            case 'system':
-              workContext += `[任务指令]: ${msg.content}\n`;
-              break;
-            case 'assistant':
-              workContext += `[你之前的回复]: ${msg.content}\n`;
-              break;
-            case 'child_result':
-              workContext += `${msg.content}\n`;
-              break;
-            case 'tool_result':
-              workContext += `[工具结果]: ${msg.content}\n`;
-              break;
           }
         }
 
-        // Check for interrupts and inject them
+        // Check for interrupts
         const interrupts = await consumeInterrupts(sessionId);
-        if (interrupts.length > 0) {
-          workContext += '\n[系统通知] 以下中断需要你注意:\n';
-          for (const interrupt of interrupts) {
-            workContext += `- [${interrupt.type}]: ${interrupt.content}\n`;
-          }
-        }
 
         // Check memory version
+        let memoryNotice: string | undefined;
         const lastSeenMemoryVersion = session.metadata?.lastSeenMemoryVersion ?? actor.memory_version;
         if (actor.memory_version > lastSeenMemoryVersion) {
-          // Load new memories created since last seen version
           const newMemories = await query(
             `SELECT content, category FROM memories
              WHERE actor_id = $1 AND workspace_id = $2
@@ -150,22 +122,24 @@ export function startSessionThinkingWorker() {
             [actorId, workspaceId]
           );
           if (newMemories.rows.length > 0) {
-            workContext += '\n[系统通知] 你的记忆已被另一个并发任务更新:\n';
+            memoryNotice = '[System Notice] Your memories have been updated by another concurrent task:\n';
             for (const mem of newMemories.rows) {
-              workContext += `- [${mem.category}]: ${mem.content}\n`;
+              memoryNotice += `- [${mem.category}]: ${mem.content}\n`;
             }
           }
-          // Update lastSeenMemoryVersion in session metadata
           await query(
             `UPDATE sessions SET metadata = metadata || $1::jsonb WHERE id = $2`,
             [JSON.stringify({ lastSeenMemoryVersion: actor.memory_version }), sessionId]
           );
         }
 
-        // If this is a resumed session, add context
-        if (trigger === 'resume') {
-          workContext += '\n[系统通知] 你之前委派的子任务已全部完成，请查看上方的子任务结果并继续处理。\n';
-        }
+        // Build structured conversation messages
+        const conversationMessages = buildConversationMessages(sessionMessages, {
+          crossTurnToolHistory: false, // will be enabled per resolvedConfig
+          interrupts: interrupts.length > 0 ? interrupts : undefined,
+          resumeTrigger: trigger === 'resume',
+          memoryNotice,
+        });
 
         // Recall memories
         const memoriesResult = await query(
@@ -185,6 +159,17 @@ export function startSessionThinkingWorker() {
         // Resolve model config
         const resolvedConfig = await resolveModelConfig(actorId, workspaceId);
 
+        // If cross-turn tool history is enabled, rebuild conversation messages with it
+        let finalConversationMessages = conversationMessages;
+        if (resolvedConfig?.crossTurnToolHistory) {
+          finalConversationMessages = buildConversationMessages(sessionMessages, {
+            crossTurnToolHistory: true,
+            interrupts: interrupts.length > 0 ? interrupts : undefined,
+            resumeTrigger: trigger === 'resume',
+            memoryNotice,
+          });
+        }
+
         // Resolve MCP plugin tools for this actor session
         let mcpTools: ResolvedMcpTools = { tools: [], executor: async () => '', mcpVersion: 0, refresh: async () => ({ tools: [], mcpVersion: 0 }), setTurnId: () => {} };
         try {
@@ -195,6 +180,15 @@ export function startSessionThinkingWorker() {
         } catch (err: any) {
           console.error(`[session-thinking] Failed to resolve MCP tools:`, err.message);
         }
+
+        // Build system prompt (no longer includes messages)
+        const { system } = buildActorPrompt(
+          actor,
+          memoriesResult.rows,
+          subordinatesResult.rows.length > 0 ? subordinatesResult.rows : undefined,
+          undefined,
+          mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
+        );
 
         // Refresh session lock periodically
         const lockRefreshInterval = setInterval(async () => {
@@ -209,7 +203,7 @@ export function startSessionThinkingWorker() {
           result = await actorThink(
             actor,
             memoriesResult.rows,
-            workContext,
+            finalConversationMessages,
             subordinatesResult.rows.length > 0 ? subordinatesResult.rows : undefined,
             resolvedConfig,
             workspaceId,
@@ -222,6 +216,7 @@ export function startSessionThinkingWorker() {
               mcpRefresh: mcpTools.refresh,
               mcpSetTurnId: mcpTools.setTurnId,
               attachments: lastUserAttachments,
+              system,
             },
           );
         } finally {
@@ -257,7 +252,7 @@ export function startSessionThinkingWorker() {
         // Clear thinking state — this round is done
         await redis.del(thinkingRedisKey);
 
-        // Save assistant response as session message (include tool call info in metadata)
+        // Save assistant response as session message (include tool call info + media in metadata)
         const respondActions = result.actions.filter((a: ActorAction) => a.type === 'respond');
         const msgMetadata: Record<string, unknown> = {};
         if (result.toolsUsed && result.toolsUsed.length > 0) {
@@ -268,6 +263,12 @@ export function startSessionThinkingWorker() {
         }
         if (result.citationSources && Object.keys(result.citationSources).length > 0) {
           msgMetadata.citationSources = result.citationSources;
+        }
+        if (result.toolHistory) {
+          msgMetadata.toolHistory = result.toolHistory;
+        }
+        if (result.mediaAttachments && result.mediaAttachments.length > 0) {
+          msgMetadata.attachments = result.mediaAttachments;
         }
         const hasMeta = Object.keys(msgMetadata).length > 0 ? msgMetadata : undefined;
         if (respondActions.length > 0) {

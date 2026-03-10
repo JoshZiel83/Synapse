@@ -2,17 +2,6 @@ import type { ToolDefinition, ToolCall, ActorAction } from '@synapse/shared';
 
 export const ACTOR_TOOLS: ToolDefinition[] = [
   {
-    name: 'respond',
-    description: 'Send a reply to the Boss or the requesting actor. Use this to communicate your answer.',
-    parameters: {
-      type: 'object',
-      properties: {
-        content: { type: 'string', description: 'The message to send back' },
-      },
-      required: ['content'],
-    },
-  },
-  {
     name: 'wait',
     description: 'Wait for one or more child sessions (delegated tasks) to complete before continuing. This will pause your current session. Use after calling delegate one or more times.',
     parameters: {
@@ -126,9 +115,6 @@ export function toolCallsToActions(toolCalls: ToolCall[]): ActorAction[] {
     const input = tc.input as Record<string, any>;
 
     switch (tc.name) {
-      case 'respond':
-        return { type: 'respond' as const, content: input.content };
-
       case 'wait': {
         const sessionIds = String(input.sessionIds).split(',').map((s: string) => s.trim()).filter(Boolean);
         const timeoutMinutes = parseInt(input.timeoutMinutes) || 10;

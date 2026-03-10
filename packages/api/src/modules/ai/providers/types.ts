@@ -1,4 +1,4 @@
-import type { AIMessage, AIResponse, ToolDefinition, AnthropicBuiltinTool, ContinuationEntry } from '@synapse/shared';
+import type { AIResponse, ToolDefinition, AnthropicBuiltinTool, ContinuationEntry, ConversationMessage, MultimodalConfig } from '@synapse/shared';
 
 export interface AIProviderConfig {
   apiKey: string;
@@ -11,10 +11,11 @@ export interface AIProvider {
   readonly name: string;
   chat(params: {
     system: string;
-    messages: AIMessage[];
+    messages: ConversationMessage[];
     tools?: ToolDefinition[];
     builtinTools?: AnthropicBuiltinTool[];
     continuationHistory?: ContinuationEntry[];
     multimodalContent?: unknown[];
+    multimodal?: MultimodalConfig;
   }): Promise<AIResponse>;
 }

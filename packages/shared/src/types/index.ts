@@ -341,6 +341,8 @@ export interface ThinkingResult {
   toolsUsed?: string[]; // names of callable tools invoked during thinking
   serverToolCalls?: ServerToolCall[]; // cloud-side tool calls (web_search, web_fetch)
   citationSources?: Record<string, { url: string; title: string }>; // <cite index="X-Y"> → source
+  toolHistory?: AssistantToolHistory; // cross-turn tool history for replay
+  mediaAttachments?: { id: string; url: string; fullUrl?: string; storedName?: string; originalName: string; mimeType: string; sizeBytes: number }[]; // media from MCP/model responses
 }
 
 // ============ Server Tool Calls (Anthropic/OpenAI cloud-side tools) ============
@@ -450,7 +452,53 @@ export interface ResolvedModelConfig {
   maxTokens: number;
   builtinTools?: AnthropicBuiltinTool[];
   multimodal?: MultimodalConfig;
+  crossTurnToolHistory?: boolean;
 }
+
+// ============ Canonical Content Block ============
+// Unified representation: text stored directly, media via file_ref pointing to platform file storage
+export type CanonicalContentBlock =
+  | { type: 'text'; text: string }
+  | {
+      type: 'file_ref';
+      fileId: string;        // files table UUID
+      storedName: string;    // disk relative path (resolved via readAsBuffer)
+      url: string;           // /files/... (frontend display)
+      mimeType: string;
+      originalName: string;
+      sizeBytes: number;
+      category: 'image' | 'audio' | 'video' | 'document';
+    };
+
+// ============ Canonical Tool History ============
+export interface CanonicalToolCall {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+export interface CanonicalToolResult {
+  toolCallId: string;
+  toolName: string;
+  content: string | CanonicalContentBlock[];  // text or content blocks with file_ref
+  isError?: boolean;
+}
+
+export interface ToolRound {
+  textContent?: string;
+  toolCalls: CanonicalToolCall[];
+  toolResults: CanonicalToolResult[];
+}
+
+export interface AssistantToolHistory {
+  rounds: ToolRound[];
+}
+
+// ============ Conversation Message ============
+export type ConversationMessage =
+  | { role: 'user'; content: string }
+  | { role: 'assistant'; content: string; toolCalls?: CanonicalToolCall[] }
+  | { role: 'tool_result'; results: CanonicalToolResult[] };
 
 // ============ AI Provider ============
 export interface ToolParameterProperty {
@@ -499,6 +547,7 @@ export interface AIResponse {
   tokensUsed: { input: number; output: number };
   stopReason: string;                // e.g. 'end_turn', 'tool_use' (Anthropic) or 'stop', 'tool_calls' (OpenAI)
   rawAssistantMessage: unknown;      // Provider-specific raw assistant message for continuation
+  mediaBlocks?: unknown[];           // Provider raw media content blocks (images, audio from model response)
 }
 
 // ============================================================

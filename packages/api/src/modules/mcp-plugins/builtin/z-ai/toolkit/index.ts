@@ -51,7 +51,7 @@ export const zAiToolkitHandler: BuiltinPluginHandler & {
     return tools;
   },
 
-  async execute(toolName: string, input: Record<string, unknown>, config: Record<string, unknown>): Promise<string> {
+  async execute(toolName: string, input: Record<string, unknown>, config: Record<string, unknown>): Promise<string | unknown[]> {
     const apiKey = config.apiKey as string;
     if (!apiKey) {
       throw new Error('ZhipuAI API key not configured. Set it in the plugin configuration.');

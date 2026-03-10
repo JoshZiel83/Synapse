@@ -40,7 +40,7 @@ export const ttsFeature: SubFeature = {
     return TOOL_DEFINITIONS;
   },
 
-  async execute(toolName: string, input: Record<string, unknown>, config: Record<string, unknown>): Promise<string> {
+  async execute(toolName: string, input: Record<string, unknown>, config: Record<string, unknown>): Promise<string | unknown[]> {
     const apiKey = config.apiKey as string;
     if (!apiKey) throw new Error('ZhipuAI API key not configured.');
 
@@ -92,7 +92,19 @@ export const ttsFeature: SubFeature = {
         'plugin_output',
       );
 
-      return `[Generated Audio](${fileRecord.url})`;
+      return [
+        { type: 'text', text: `Generated audio: ${fileRecord.originalName}` },
+        {
+          type: 'file_ref',
+          fileId: fileRecord.id,
+          storedName: fileRecord.storedName,
+          url: fileRecord.url,
+          mimeType: fileRecord.mimeType,
+          originalName: fileRecord.originalName,
+          sizeBytes: fileRecord.sizeBytes,
+          category: 'audio',
+        },
+      ];
     } finally {
       clearTimeout(timeout);
     }

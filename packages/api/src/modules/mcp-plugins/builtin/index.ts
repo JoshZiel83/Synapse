@@ -3,7 +3,7 @@ import { ToolDefinition } from '@synapse/shared';
 export interface BuiltinPluginHandler {
   getTools(): ToolDefinition[];
   getToolsFiltered?(config: Record<string, unknown>): ToolDefinition[];
-  execute(toolName: string, input: Record<string, unknown>, config: Record<string, unknown>): Promise<string>;
+  execute(toolName: string, input: Record<string, unknown>, config: Record<string, unknown>): Promise<string | unknown[]>;
 }
 
 const registry = new Map<string, BuiltinPluginHandler>();

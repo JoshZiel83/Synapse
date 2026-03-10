@@ -1,4 +1,4 @@
-import type { Actor, Memory, ThinkingResult, ActorAction, AIMessage, ResolvedModelConfig, ContinuationEntry, ServerToolCall } from '@synapse/shared';
+import type { Actor, Memory, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ContinuationEntry, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory } from '@synapse/shared';
 import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
 import { createAIProvider, type AIProvider, type AIProviderConfig } from './providers/index.js';
@@ -10,6 +10,7 @@ import { isCallableTool, executeCallableTools, getCallableToolDefinitions } from
 import { setToolExecutionContext } from './session-tools.js';
 import { getMcpVersion } from '../mcp-plugins/instance-manager.js';
 import { adaptAttachments, type Attachment } from './content-adapter.js';
+import { ingestToolResultContent, ingestResponseMedia, extractAttachmentsFromBlocks } from './content-ingest.js';
 
 export { buildActorPrompt } from './prompt-builder.js';
 
@@ -53,7 +54,7 @@ interface Subordinate {
 export async function actorThink(
   actor: Actor,
   memories: Memory[],
-  workContext: string,
+  conversationMessages: ConversationMessage[],
   subordinates?: Subordinate[],
   resolved?: ResolvedModelConfig | null,
   workspaceId?: string,
@@ -66,23 +67,27 @@ export async function actorThink(
     mcpRefresh?: () => Promise<{ tools: import('@synapse/shared').ToolDefinition[]; mcpVersion: number }>;
     mcpSetTurnId?: (turnId: string, round?: number) => void;
     attachments?: Attachment[];
+    system: string;
   },
 ): Promise<ThinkingResult> {
-  const { system, messages } = buildActorPrompt(actor, memories, workContext, subordinates, undefined, options?.extraTools);
+  const system = options?.system || '';
   const provider = getProvider(resolved);
-
-  const aiMessages: AIMessage[] = messages.map((m) => ({
-    role: m.role as 'user' | 'assistant',
-    content: m.content,
-  }));
 
   // If attachments are present, adapt the last user message to include multimodal content blocks
   let multimodalContent: unknown[] | undefined;
-  if (options?.attachments && options.attachments.length > 0 && aiMessages.length > 0) {
-    const lastUserIdx = aiMessages.length - 1;
-    if (aiMessages[lastUserIdx]?.role === 'user') {
+  if (options?.attachments && options.attachments.length > 0 && conversationMessages.length > 0) {
+    // Find the last user message
+    let lastUserIdx = -1;
+    for (let i = conversationMessages.length - 1; i >= 0; i--) {
+      if (conversationMessages[i].role === 'user') {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx >= 0) {
+      const lastUserMsg = conversationMessages[lastUserIdx] as { role: 'user'; content: string };
       const { contentBlocks, textFallback } = await adaptAttachments(
-        aiMessages[lastUserIdx].content,
+        lastUserMsg.content,
         options.attachments,
         resolved?.multimodal,
         resolved?.providerType || (config.ai.provider as any),
@@ -91,10 +96,9 @@ export async function actorThink(
       if (contentBlocks.length > 1) {
         multimodalContent = contentBlocks;
         // Update the text content to include fallback descriptions
-        aiMessages[lastUserIdx] = { ...aiMessages[lastUserIdx], content: textFallback };
+        (conversationMessages[lastUserIdx] as any).content = textFallback;
       } else {
-        // Only text fallback, update the message content
-        aiMessages[lastUserIdx] = { ...aiMessages[lastUserIdx], content: textFallback };
+        (conversationMessages[lastUserIdx] as any).content = textFallback;
       }
     }
   }
@@ -116,7 +120,7 @@ export async function actorThink(
     provider: resolved?.providerType || config.ai.provider,
     model: resolved?.modelName || config.ai.model,
     system,
-    messages: aiMessages,
+    messages: conversationMessages,
     tools: allTools,
     builtinTools: resolved?.builtinTools || null,
   };
@@ -126,6 +130,11 @@ export async function actorThink(
   let allCitationSources: Record<string, { url: string; title: string }> = {}; // cite index → source
   const onStatus = options?.onStatus;
   let currentRound = 0; // track for error handler
+
+  // Accumulate tool rounds for cross-turn history
+  const toolRounds: ToolRound[] = [];
+  // Accumulate media attachments from MCP/model responses
+  const allMediaAttachments: Attachment[] = [];
 
   // Common fields for logAIRequest
   const logCommon = {
@@ -176,11 +185,12 @@ export async function actorThink(
 
       const response = await provider.chat({
         system,
-        messages: aiMessages,
+        messages: conversationMessages,
         tools: allTools,
         builtinTools: resolved?.builtinTools,
         continuationHistory: continuationHistory.length > 0 ? continuationHistory : undefined,
         multimodalContent: round === 0 ? multimodalContent : undefined,
+        multimodal: resolved?.multimodal,
       });
 
       const roundLatencyMs = Date.now() - roundStartTime;
@@ -211,6 +221,16 @@ export async function actorThink(
       }).catch(err => console.error('[actorThink] Failed to log AI request:', err.message));
 
       console.log(`[actorThink] actor=${actor.id} turn=${turnId.slice(0,8)} round=${currentRound} stopReason=${response.stopReason} toolCalls=[${response.toolCalls.map(tc => tc.name).join(',')}] textLen=${response.textContent.length}`);
+
+      // Ingest response media (Phase 5)
+      if (response.mediaBlocks && response.mediaBlocks.length > 0 && workspaceId) {
+        try {
+          const mediaAtts = await ingestResponseMedia(response.mediaBlocks, resolved?.providerType || 'anthropic', workspaceId);
+          allMediaAttachments.push(...mediaAtts);
+        } catch (err: any) {
+          console.error('[actorThink] Failed to ingest response media:', err.message);
+        }
+      }
 
       // Extract server-side tool calls from raw response (Anthropic web_search/web_fetch, OpenAI web_search_call)
       const serverCalls = extractServerToolCalls(response.rawAssistantMessage);
@@ -254,13 +274,24 @@ export async function actorThink(
         // Execute callable tools (builtin registry)
         const callableResults = callableCalls.length > 0 ? await executeCallableTools(callableCalls) : [];
 
-        // Execute MCP tools via extraToolExecutor
+        // Execute MCP tools via extraToolExecutor, with content ingestion
         const mcpResults: import('@synapse/shared').ToolResult[] = [];
         if (mcpCalls.length > 0 && options?.extraToolExecutor) {
           for (const tc of mcpCalls) {
             try {
-              const result = await options.extraToolExecutor(tc.name, tc.input);
-              mcpResults.push({ toolCallId: tc.id, toolName: tc.name, content: result });
+              const rawResult = await options.extraToolExecutor(tc.name, tc.input);
+              // Ingest MCP result content into platform file storage
+              if (workspaceId && typeof rawResult !== 'string') {
+                const normalizedContent = await ingestToolResultContent(rawResult, workspaceId);
+                mcpResults.push({ toolCallId: tc.id, toolName: tc.name, content: normalizedContent });
+                // Extract file_ref attachments for metadata
+                if (Array.isArray(normalizedContent)) {
+                  const atts = extractAttachmentsFromBlocks(normalizedContent);
+                  allMediaAttachments.push(...atts);
+                }
+              } else {
+                mcpResults.push({ toolCallId: tc.id, toolName: tc.name, content: rawResult });
+              }
             } catch (err: any) {
               mcpResults.push({ toolCallId: tc.id, toolName: tc.name, content: `Error: ${err.message}`, isError: true });
             }
@@ -271,6 +302,24 @@ export async function actorThink(
         continuationHistory.push({
           rawAssistantMessage: response.rawAssistantMessage,
           toolResults,
+        });
+
+        // Accumulate tool round for cross-turn history
+        const roundToolCalls: CanonicalToolCall[] = allContinuableCalls.map((tc) => ({
+          id: tc.id,
+          name: tc.name,
+          input: tc.input,
+        }));
+        const roundToolResults: CanonicalToolResult[] = toolResults.map((tr) => ({
+          toolCallId: tr.toolCallId,
+          toolName: tr.toolName,
+          content: tr.content as string | import('@synapse/shared').CanonicalContentBlock[],
+          isError: tr.isError,
+        }));
+        toolRounds.push({
+          textContent: response.textContent || undefined,
+          toolCalls: roundToolCalls,
+          toolResults: roundToolResults,
         });
 
         // Log each callable tool call individually
@@ -294,7 +343,17 @@ export async function actorThink(
             logToolCallWithRound(currentRound, tc, 'action', JSON.stringify(tc.input));
           }
 
-          return { actions, reasoning: response.textContent, tokensUsed: totalTokens, toolsUsed: allToolsUsed, serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined, citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined };
+          const toolHistory: AssistantToolHistory | undefined = toolRounds.length > 0 ? { rounds: toolRounds } : undefined;
+          return {
+            actions,
+            reasoning: response.textContent,
+            tokensUsed: totalTokens,
+            toolsUsed: allToolsUsed,
+            serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
+            citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
+            toolHistory,
+            mediaAttachments: allMediaAttachments.length > 0 ? allMediaAttachments : undefined,
+          };
         }
 
         // Otherwise continue to next round
@@ -335,7 +394,17 @@ export async function actorThink(
         actions = [{ type: 'respond', content: 'I could not process this request.' }];
       }
 
-      return { actions, reasoning: response.textContent, tokensUsed: totalTokens, toolsUsed: allToolsUsed.length > 0 ? allToolsUsed : undefined, serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined, citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined };
+      const toolHistory: AssistantToolHistory | undefined = toolRounds.length > 0 ? { rounds: toolRounds } : undefined;
+      return {
+        actions,
+        reasoning: response.textContent,
+        tokensUsed: totalTokens,
+        toolsUsed: allToolsUsed.length > 0 ? allToolsUsed : undefined,
+        serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
+        citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
+        toolHistory,
+        mediaAttachments: allMediaAttachments.length > 0 ? allMediaAttachments : undefined,
+      };
     }
 
     // Exceeded MAX_TOOL_ROUNDS — fallback respond
@@ -348,6 +417,8 @@ export async function actorThink(
       toolsUsed: allToolsUsed.length > 0 ? allToolsUsed : undefined,
       serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
       citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
+      toolHistory: toolRounds.length > 0 ? { rounds: toolRounds } : undefined,
+      mediaAttachments: allMediaAttachments.length > 0 ? allMediaAttachments : undefined,
     };
   } catch (err: any) {
     // Log the failed round
@@ -376,7 +447,8 @@ export async function aiComplete(
 ): Promise<{ content: string; tokensUsed: { input: number; output: number } }> {
   const provider = getProvider(resolved);
 
-  const aiMessages: AIMessage[] = messages.map((m) => ({
+  // Convert to ConversationMessage[] for the unified interface
+  const convMessages: ConversationMessage[] = messages.map((m) => ({
     role: m.role as 'user' | 'assistant',
     content: m.content,
   }));
@@ -390,11 +462,11 @@ export async function aiComplete(
     provider: resolved?.providerType || config.ai.provider,
     model: resolved?.modelName || config.ai.model,
     system,
-    messages: aiMessages,
+    messages: convMessages,
   };
 
   try {
-    response = await provider.chat({ system, messages: aiMessages });
+    response = await provider.chat({ system, messages: convMessages });
   } catch (err: any) {
     status = 'error';
     errorMessage = err.message;
