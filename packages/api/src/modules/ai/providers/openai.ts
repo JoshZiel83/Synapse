@@ -39,7 +39,7 @@ export class OpenAIProvider implements AIProvider {
           openaiMessages.push({
             role: 'tool',
             tool_call_id: tr.toolCallId,
-            content: tr.content,
+            content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
           });
         }
       }

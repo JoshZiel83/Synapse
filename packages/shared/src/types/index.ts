@@ -465,7 +465,7 @@ export interface AIMessage {
 export interface ToolResult {
   toolCallId: string;
   toolName: string;
-  content: string;
+  content: string | unknown[];  // string for text-only, array for multimodal (MCP content blocks)
   isError?: boolean;
 }
 

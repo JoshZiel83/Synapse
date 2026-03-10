@@ -9,7 +9,7 @@ import { getConnectedRelayServers, callRelayTool } from './relay-manager.js';
 
 export interface ResolvedMcpTools {
   tools: ToolDefinition[];
-  executor: (toolName: string, input: Record<string, unknown>) => Promise<string>;
+  executor: (toolName: string, input: Record<string, unknown>) => Promise<string | unknown[]>;
   mcpVersion: number;
   refresh: () => Promise<{ tools: ToolDefinition[]; mcpVersion: number }>;
 }
@@ -214,7 +214,7 @@ export async function resolveMcpToolsForActor(params: {
 
   // Build unified executor — references the mutable `instances` Map.
   // Created unconditionally so refresh() can add tools mid-session even if none exist initially.
-  const executor = async (namespacedToolName: string, input: Record<string, unknown>): Promise<string> => {
+  const executor = async (namespacedToolName: string, input: Record<string, unknown>): Promise<string | unknown[]> => {
     const parts = namespacedToolName.split(MCP_TOOL_NAMESPACE_SEPARATOR);
     if (parts.length < 3) {
       throw new Error(`Invalid namespaced tool name: ${namespacedToolName}`);
@@ -231,7 +231,7 @@ export async function resolveMcpToolsForActor(params: {
     }
 
     const startTime = Date.now();
-    let output: string | undefined;
+    let output: string | unknown[] | undefined;
     let isError = false;
     let errorMessage: string | undefined;
 
@@ -254,7 +254,7 @@ export async function resolveMcpToolsForActor(params: {
           pluginId: instance.pluginId,
           toolName: namespacedToolName,
           input,
-          output,
+          output: typeof output === 'string' ? output : output ? JSON.stringify(output) : undefined,
           isError,
           errorMessage,
           durationMs: Date.now() - startTime,

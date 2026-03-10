@@ -46,7 +46,7 @@ type ToolCallResult struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      int    `json:"id"`
 	Result  struct {
-		Content []ContentItem `json:"content"`
+		Content []interface{} `json:"content"`
 		IsError bool          `json:"isError,omitempty"`
 	} `json:"result"`
 	Error *RPCError `json:"error,omitempty"`
@@ -57,11 +57,6 @@ type Tool struct {
 	Description string      `json:"description"`
 	Parameters  interface{} `json:"parameters,omitempty"`
 	InputSchema interface{} `json:"inputSchema,omitempty"`
-}
-
-type ContentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
 }
 
 type RPCError struct {

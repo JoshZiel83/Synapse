@@ -43,12 +43,22 @@ export class AnthropicProvider implements AIProvider {
           content: entry.rawAssistantMessage,
         });
         // Tool results as a user message with tool_result content blocks
-        const toolResultBlocks = entry.toolResults.map((tr) => ({
-          type: 'tool_result',
-          tool_use_id: tr.toolCallId,
-          content: tr.content,
-          is_error: tr.isError || false,
-        }));
+        const toolResultBlocks = entry.toolResults.map((tr) => {
+          if (typeof tr.content !== 'string') {
+            const blocks = tr.content as any[];
+            for (const b of blocks) {
+              console.log(`[anthropic] tool_result block for ${tr.toolName}: keys=${Object.keys(b).join(',')}, type=${b.type}, mimeType=${b.mimeType}, hasData=${!!b.data}, dataLen=${typeof b.data === 'string' ? b.data.length : 'N/A'}`);
+            }
+          }
+          return {
+            type: 'tool_result',
+            tool_use_id: tr.toolCallId,
+            content: typeof tr.content === 'string'
+              ? tr.content
+              : convertMcpContentToAnthropic(tr.content),
+            is_error: tr.isError || false,
+          };
+        });
         allMessages.push({
           role: 'user',
           content: toolResultBlocks,
@@ -157,4 +167,68 @@ export class AnthropicProvider implements AIProvider {
       rawAssistantMessage: data.content,
     };
   }
+}
+
+/**
+ * Convert MCP content blocks to Anthropic tool_result content format.
+ *
+ * MCP spec (2025-06-18) content types:
+ *   TextContent:  { type: "text", text: "..." }
+ *   ImageContent: { type: "image", data: "<base64>", mimeType: "image/png" }
+ *   AudioContent: { type: "audio", data: "<base64>", mimeType: "audio/wav" }
+ *   EmbeddedResource: { type: "resource", resource: { uri, mimeType, text|blob } }
+ *
+ * Some MCP servers (e.g. CUA) may return blocks already in Anthropic format:
+ *   { type: "image", source: { type: "base64", media_type: "image/png", data: "..." } }
+ *
+ * Anthropic tool_result content blocks:
+ *   TextBlockParam:  { type: "text", text: "..." }
+ *   ImageBlockParam: { type: "image", source: { type: "base64", media_type: "image/png", data: "..." } }
+ */
+function convertMcpContentToAnthropic(blocks: unknown[]): unknown[] {
+  return blocks.map((block: any) => {
+    switch (block.type) {
+      case 'text':
+        return { type: 'text', text: block.text || '' };
+      case 'image': {
+        // Case 1: Already in Anthropic format { source: { type, media_type, data } }
+        if (block.source?.data) {
+          return {
+            type: 'image',
+            source: {
+              type: block.source.type || 'base64',
+              media_type: block.source.media_type || 'image/png',
+              data: block.source.data,
+            },
+          };
+        }
+        // Case 2: MCP standard format { data, mimeType }
+        const mimeType = block.mimeType || block.mime_type || 'image/png';
+        if (!block.data) {
+          return { type: 'text', text: `[Image: missing data, keys=${Object.keys(block).join(',')}]` };
+        }
+        return {
+          type: 'image',
+          source: { type: 'base64', media_type: mimeType, data: block.data },
+        };
+      }
+      case 'resource':
+        if (block.resource?.text) {
+          return { type: 'text', text: block.resource.text };
+        }
+        if (block.resource?.blob && block.resource?.mimeType?.startsWith('image/')) {
+          return {
+            type: 'image',
+            source: { type: 'base64', media_type: block.resource.mimeType, data: block.resource.blob },
+          };
+        }
+        return { type: 'text', text: JSON.stringify(block) };
+      default:
+        // Pass through blocks that are already in Anthropic format (e.g. image with source)
+        if (block.source?.data && block.source?.media_type) {
+          return block;
+        }
+        return { type: 'text', text: JSON.stringify(block) };
+    }
+  });
 }

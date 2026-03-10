@@ -21,7 +21,7 @@ export interface McpInstance {
   workspaceId?: string;
   configHash: string;
   tools: ToolDefinition[];
-  execute: (toolName: string, input: Record<string, unknown>) => Promise<string>;
+  execute: (toolName: string, input: Record<string, unknown>) => Promise<string | unknown[]>;
   shutdown: () => Promise<void>;
   lastUsed: number;
   createdAt: number;

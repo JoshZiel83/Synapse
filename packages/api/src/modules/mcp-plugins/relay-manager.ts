@@ -206,7 +206,7 @@ export async function callRelayTool(
   serverName: string,
   toolName: string,
   args: Record<string, unknown>,
-): Promise<string> {
+): Promise<string | unknown[]> {
   const connected = connectedRelays.get(relayId);
   if (!connected || connected.ws.readyState !== 1) {
     throw new Error(`Relay ${relayId} is not connected`);
@@ -214,7 +214,7 @@ export async function callRelayTool(
 
   const requestId = crypto.randomUUID();
 
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<string | unknown[]>((resolve, reject) => {
     const timer = setTimeout(() => {
       connected.pendingRequests.delete(requestId);
       reject(new Error(`Relay tool call timed out after ${RELAY_TOOL_CALL_TIMEOUT}ms`));
@@ -222,19 +222,14 @@ export async function callRelayTool(
 
     connected.pendingRequests.set(requestId, {
       resolve: (result: any) => {
-        // Extract content string from result
+        // Pass through raw MCP content array (text, image, resource, etc.)
         if (typeof result === 'string') {
           resolve(result);
         } else if (result?.content) {
           if (typeof result.content === 'string') {
             resolve(result.content);
           } else if (Array.isArray(result.content)) {
-            // MCP content array format
-            const text = result.content
-              .filter((c: any) => c.type === 'text')
-              .map((c: any) => c.text)
-              .join('\n');
-            resolve(text || JSON.stringify(result.content));
+            resolve(result.content);
           } else {
             resolve(JSON.stringify(result.content));
           }

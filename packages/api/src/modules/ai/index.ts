@@ -59,7 +59,7 @@ export async function actorThink(
     sessionId?: string;
     onStatus?: (status: string) => Promise<void>;
     extraTools?: import('@synapse/shared').ToolDefinition[];
-    extraToolExecutor?: (toolName: string, input: Record<string, unknown>) => Promise<string>;
+    extraToolExecutor?: (toolName: string, input: Record<string, unknown>) => Promise<string | unknown[]>;
     mcpVersion?: number;
     mcpRefresh?: () => Promise<{ tools: import('@synapse/shared').ToolDefinition[]; mcpVersion: number }>;
     attachments?: Attachment[];
