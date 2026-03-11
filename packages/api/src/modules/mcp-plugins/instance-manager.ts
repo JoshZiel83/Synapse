@@ -22,7 +22,7 @@ export interface McpInstance {
   workspaceId?: string;
   configHash: string;
   tools: ToolDefinition[];
-  execute: (toolName: string, input: Record<string, unknown>) => Promise<string | unknown[]>;
+  execute: (toolName: string, input: Record<string, unknown>) => Promise<unknown>;
   shutdown: () => Promise<void>;
   lastUsed: number;
   createdAt: number;

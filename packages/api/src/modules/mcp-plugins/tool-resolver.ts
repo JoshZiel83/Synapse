@@ -1,4 +1,5 @@
 import type { ToolDefinition, GroupMemberEntry } from '@synapse/shared';
+import type { NormalizedMcpToolResult } from '@synapse/shared/types';
 
 const MCP_TOOL_NAMESPACE_SEPARATOR = '__';
 import { query } from '../../infrastructure/database/index.js';
@@ -6,10 +7,11 @@ import { resolveInstallationConfig } from './config-resolver.js';
 import { getOrCreateInstance, getMcpVersion, McpInstance } from './instance-manager.js';
 import { logToolCall } from './audit.js';
 import { callRelayTool } from './relay-manager.js';
+import { normalizeMcpToolResult } from './result-normalizer.js';
 
 export interface ResolvedMcpTools {
   tools: ToolDefinition[];
-  executor: (toolName: string, input: Record<string, unknown>) => Promise<string | unknown[]>;
+  executor: (toolName: string, input: Record<string, unknown>) => Promise<NormalizedMcpToolResult>;
   mcpVersion: number;
   refresh: () => Promise<{ tools: ToolDefinition[]; mcpVersion: number }>;
   setTurnId: (turnId: string, round?: number) => void;
@@ -202,7 +204,7 @@ export async function resolveMcpToolsForActor(params: {
   let currentRound: number | undefined;
   const setTurnId = (turnId: string, round?: number) => { currentTurnId = turnId; currentRound = round; };
 
-  const executor = async (namespacedToolName: string, input: Record<string, unknown>): Promise<string | unknown[]> => {
+  const executor = async (namespacedToolName: string, input: Record<string, unknown>): Promise<NormalizedMcpToolResult> => {
     const parts = namespacedToolName.split(MCP_TOOL_NAMESPACE_SEPARATOR);
     if (parts.length < 3) {
       throw new Error(`Invalid namespaced tool name: ${namespacedToolName}`);
@@ -219,13 +221,13 @@ export async function resolveMcpToolsForActor(params: {
     }
 
     const startTime = Date.now();
-    let output: string | unknown[] | undefined;
+    let rawOutput: unknown;
     let isError = false;
     let errorMessage: string | undefined;
 
     try {
-      output = await instance.execute(toolName, input);
-      return output;
+      rawOutput = await instance.execute(toolName, input);
+      return await normalizeMcpToolResult(rawOutput, workspaceId);
     } catch (error: any) {
       isError = true;
       errorMessage = error.message;
@@ -249,7 +251,7 @@ export async function resolveMcpToolsForActor(params: {
         toolName: namespacedToolName,
         toolType: isRelay ? 'relay' : 'mcp_plugin',
         input,
-        output: typeof output === 'string' ? output : output ? JSON.stringify(output) : undefined,
+        output: typeof rawOutput === 'string' ? rawOutput : rawOutput ? JSON.stringify(rawOutput) : undefined,
         isError,
         errorMessage,
         durationMs: Date.now() - startTime,

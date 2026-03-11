@@ -93,7 +93,28 @@ export async function callMcpTool(
   apiKey: string,
   toolName: string,
   input: Record<string, unknown>,
-): Promise<string> {
+): Promise<unknown> {
   const client = await getOrCreateMcpClient(endpoint, apiKey);
   return client.callTool(toolName, input);
+}
+
+export function extractMcpTextResult(result: unknown): string {
+  if (typeof result === 'string') return result;
+  if (!result || typeof result !== 'object') return String(result ?? '');
+
+  const candidate = result as Record<string, unknown>;
+  if (typeof candidate.content === 'string') return candidate.content;
+  if (Array.isArray(candidate.content)) {
+    return candidate.content
+      .map((item) => {
+        if (item && typeof item === 'object' && typeof (item as Record<string, unknown>).text === 'string') {
+          return String((item as Record<string, unknown>).text);
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  return JSON.stringify(result);
 }

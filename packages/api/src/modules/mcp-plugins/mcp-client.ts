@@ -225,28 +225,13 @@ export class McpHttpClient {
     });
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<string> {
+  async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     const result = await this.sendRequest('tools/call', {
       name,
       arguments: args,
-    }) as { content?: Array<{ type: string; text?: string }>; isError?: boolean };
+    });
 
-    if (!result) return '';
-
-    if (result.isError) {
-      const errorText = result.content?.map(c => c.text || '').join('\n') || 'Unknown MCP tool error';
-      throw new Error(errorText);
-    }
-
-    // Extract text content from the result
-    if (result.content && Array.isArray(result.content)) {
-      return result.content
-        .filter(c => c.type === 'text' && c.text)
-        .map(c => c.text!)
-        .join('\n');
-    }
-
-    return typeof result === 'string' ? result : JSON.stringify(result);
+    return result ?? '';
   }
 
   isInitialized(): boolean {

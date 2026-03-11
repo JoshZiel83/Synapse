@@ -1,6 +1,6 @@
 import { ToolDefinition } from '@synapse/shared';
 import type { SubFeature } from './types.js';
-import { callMcpTool } from './mcp-pool.js';
+import { callMcpTool, extractMcpTextResult } from './mcp-pool.js';
 
 const MCP_ENDPOINT = 'https://open.bigmodel.cn/api/mcp/zread/mcp';
 
@@ -50,6 +50,6 @@ export const zreadFeature: SubFeature = {
 
   async execute(toolName: string, input: Record<string, unknown>, config: Record<string, unknown>): Promise<string> {
     const apiKey = config.apiKey as string;
-    return callMcpTool(MCP_ENDPOINT, apiKey, toolName, input);
+    return extractMcpTextResult(await callMcpTool(MCP_ENDPOINT, apiKey, toolName, input));
   },
 };

@@ -236,7 +236,7 @@ export function startSessionThinkingWorker() {
 
         let mcpTools: ResolvedMcpTools = {
           tools: [],
-          executor: async () => '',
+          executor: async () => ({ content: [] }),
           mcpVersion: 0,
           refresh: async () => ({ tools: [], mcpVersion: 0 }),
           setTurnId: () => {},

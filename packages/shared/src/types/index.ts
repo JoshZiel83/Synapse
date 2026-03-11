@@ -668,6 +668,14 @@ export interface ToolResult {
   metadata?: Record<string, unknown>;
 }
 
+export interface NormalizedMcpToolResult {
+  content: CanonicalContentBlock[];
+  isError?: boolean;
+  structuredContent?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  rawResult?: unknown;
+}
+
 // ============ Tool Plugin System ============
 
 export interface GroupMemberEntry {

@@ -1,5 +1,5 @@
 import type { Actor, ActorSkill, Memory, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow } from '@synapse/shared';
-import type { CanonicalContextItem } from '@synapse/shared/types';
+import type { CanonicalContextItem, NormalizedMcpToolResult } from '@synapse/shared/types';
 import { textBlocks, extractText } from '@synapse/shared';
 import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
@@ -10,7 +10,7 @@ import { logAIRequest } from '../model-groups/service.js';
 import { resolveBuiltinTools, executeCallableTools, isCallableTool, isActionTool } from './tool-plugins.js';
 import { runWithToolContext } from './session-tools.js';
 import { getMcpVersion } from '../mcp-plugins/instance-manager.js';
-import { ingestToolResultContent, ingestResponseMedia } from './content-ingest.js';
+import { ingestResponseMedia } from './content-ingest.js';
 import { resolveFileRefSegments } from './fileref-resolver.js';
 import { buildAdHocContextItems } from './context-builder.js';
 import { buildAdHocProviderContextWindow } from '../context/service.js';
@@ -149,7 +149,7 @@ export async function actorThink(
     userId?: string;
     onStatus?: (status: string) => Promise<void>;
     mcpTools?: import('@synapse/shared').ToolDefinition[];
-    mcpExecutor?: (toolName: string, input: Record<string, unknown>) => Promise<string | unknown[]>;
+    mcpExecutor?: (toolName: string, input: Record<string, unknown>) => Promise<NormalizedMcpToolResult>;
     mcpVersion?: number;
     mcpRefresh?: () => Promise<{ tools: import('@synapse/shared').ToolDefinition[]; mcpVersion: number }>;
     mcpSetTurnId?: (turnId: string, round?: number) => void;
@@ -491,32 +491,38 @@ export async function actorThink(
               : null;
             const attemptStart = Date.now();
             try {
-              const rawResult = await options.mcpExecutor(tc.toolName, tc.input);
-              // Ingest MCP result content into platform file storage (always returns CanonicalContentBlock[])
-              const normalizedContent = workspaceId
-                ? await ingestToolResultContent(rawResult, workspaceId)
-                : (typeof rawResult === 'string' ? textBlocks(rawResult) : textBlocks(JSON.stringify(rawResult)));
+              const normalizedResult = await options.mcpExecutor(tc.toolName, tc.input);
+              const normalizedContent = normalizedResult.content;
               mcpResults.push({
                 toolCallId: tc.callId,
                 providerCallId: tc.providerCallId,
                 toolName: tc.toolName,
                 content: normalizedContent,
+                isError: normalizedResult.isError,
+                metadata: {
+                  ...(normalizedResult.metadata || {}),
+                  ...(normalizedResult.structuredContent ? { structuredContent: normalizedResult.structuredContent } : {}),
+                },
               });
               allSupplementalBlocks.push(...collectFileRefBlocks(normalizedContent));
 
               if (executionEnabled && callRow && attempt) {
                 await finalizeToolExecutionAttempt({
                   attemptId: attempt.id,
-                  status: 'success',
+                  status: normalizedResult.isError ? 'error' : 'success',
+                  isError: normalizedResult.isError,
+                  errorMessage: normalizedResult.isError ? extractText(normalizedContent) : undefined,
                   durationMs: Date.now() - attemptStart,
-                  responsePayload: rawResult,
+                  responsePayload: normalizedResult.rawResult ?? normalizedResult,
                 });
                 await createToolResult({
                   toolCallId: callRow.id,
                   attemptId: attempt.id,
+                  isError: normalizedResult.isError,
+                  errorMessage: normalizedResult.isError ? extractText(normalizedContent) : undefined,
                   parts: blocksToToolResultParts(normalizedContent),
                 });
-                await updateToolCallStatus(callRow.id, 'completed');
+                await updateToolCallStatus(callRow.id, normalizedResult.isError ? 'failed' : 'completed');
               }
             } catch (err: any) {
               mcpResults.push({
