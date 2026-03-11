@@ -1,4 +1,3 @@
-import { query } from '../../infrastructure/database/index.js';
 import { redis } from '../../infrastructure/redis/index.js';
 import {
   createGroup as createGroupService,
@@ -8,7 +7,7 @@ import {
   markGroupRead,
   cancelGroup as cancelGroupService,
 } from '../group/service.js';
-import type { UUID } from '@synapse/shared';
+import type { CanonicalContentBlock, UUID } from '@synapse/shared';
 
 /**
  * Chat service — thin wrapper around group service for backward compatibility.
@@ -59,37 +58,17 @@ export async function sendMessageToGroup(
   groupId: UUID,
   userId: UUID,
   content: string,
-  attachments?: any[],
+  contentBlocks?: CanonicalContentBlock[],
   targetActorIds?: string[],
 ) {
-  let resolvedTargets: string[];
-
-  if (targetActorIds && targetActorIds.length > 0) {
-    // Explicit @mention — use as-is
-    resolvedTargets = targetActorIds;
-  } else {
-    // No @mention — send to ALL actor members in the group
-    const membersResult = await query(
-      `SELECT gm.actor_id FROM group_members gm
-       WHERE gm.group_id = $1 AND gm.actor_id IS NOT NULL`,
-      [groupId]
-    );
-    resolvedTargets = membersResult.rows.map((r: any) => r.actor_id);
-  }
-
-  const metadata: Record<string, unknown> = {};
-  if (attachments && attachments.length > 0) {
-    metadata.attachments = attachments;
-  }
-
   return sendGroupMessage({
     groupId,
     senderType: 'user',
     senderUserId: userId,
-    targetActorIds: resolvedTargets,
+    targetActorIds,
     targetUserIds: [],
     content,
-    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    contentBlocks,
   });
 }
 

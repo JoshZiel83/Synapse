@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import type { CanonicalContentBlock } from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import {
   createSession,
@@ -13,13 +14,21 @@ import {
 import { sessionThinkingQueue } from '../../workers/queues.js';
 
 const createSessionSchema = z.object({
-  content: z.string().min(1).max(10000),
+  content: z.string().max(10000).optional().default(''),
+  contentBlocks: z.array(z.any()).optional(),
   channelType: z.enum(['web', 'im', 'api']).optional().default('web'),
-});
+}).refine(
+  (body) => body.content.trim().length > 0 || (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
+  { message: 'content or contentBlocks is required' },
+);
 
 const sendMessageSchema = z.object({
-  content: z.string().min(1).max(10000),
-});
+  content: z.string().max(10000).optional().default(''),
+  contentBlocks: z.array(z.any()).optional(),
+}).refine(
+  (body) => body.content.trim().length > 0 || (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
+  { message: 'content or contentBlocks is required' },
+);
 
 export async function sessionController(app: FastifyInstance) {
   app.addHook('onRequest', authMiddleware);
@@ -30,7 +39,11 @@ export async function sessionController(app: FastifyInstance) {
     Body: { content: string; channelType?: string };
   }>('/workspaces/:workspaceId/actors/:actorId/sessions', async (request, reply) => {
     const { workspaceId, actorId } = request.params;
-    const { content, channelType } = createSessionSchema.parse(request.body);
+    const { content, contentBlocks, channelType } = createSessionSchema.parse(request.body) as {
+      content: string;
+      contentBlocks?: CanonicalContentBlock[];
+      channelType?: string;
+    };
     const userId = (request as any).user!.userId;
 
     const session = await createSession({
@@ -47,6 +60,7 @@ export async function sessionController(app: FastifyInstance) {
       workspaceId,
       role: 'user',
       content,
+      contentBlocks,
       fromUserId: userId,
     });
 
@@ -70,7 +84,10 @@ export async function sessionController(app: FastifyInstance) {
     Body: { content: string };
   }>('/workspaces/:workspaceId/sessions/:sessionId/messages', async (request, reply) => {
     const { workspaceId, sessionId } = request.params;
-    const { content } = sendMessageSchema.parse(request.body);
+    const { content, contentBlocks } = sendMessageSchema.parse(request.body) as {
+      content: string;
+      contentBlocks?: CanonicalContentBlock[];
+    };
     const userId = (request as any).user!.userId;
 
     const session = await getSession(sessionId);
@@ -91,6 +108,7 @@ export async function sessionController(app: FastifyInstance) {
       workspaceId,
       role: 'user',
       content,
+      contentBlocks,
       fromUserId: userId,
     });
 

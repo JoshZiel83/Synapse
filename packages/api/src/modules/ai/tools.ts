@@ -78,7 +78,7 @@ export function toolCallsToActions(toolCalls: ToolCall[]): ActorAction[] {
   return toolCalls.map((tc) => {
     const input = tc.input as Record<string, any>;
 
-    switch (tc.name) {
+    switch (tc.toolName) {
       case 'create_memory': {
         const tags = input.tags
           ? String(input.tags).split(',').map((t: string) => t.trim()).filter(Boolean)
@@ -108,7 +108,7 @@ export function toolCallsToActions(toolCalls: ToolCall[]): ActorAction[] {
         };
 
       default:
-        return { type: 'respond' as const, content: `Unknown tool: ${tc.name}` };
+        return { type: 'respond' as const, content: `Unknown tool: ${tc.toolName}` };
     }
   });
 }

@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import type { CanonicalContentBlock } from '@synapse/shared';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Send, ArrowDown, Bot, Paperclip, X, AtSign, Users } from 'lucide-react';
 import MessageBubble from './message-bubble';
-import type { Group, GroupMessage, Attachment } from '@/stores/chat-store';
+import type { Group, GroupMessage } from '@/stores/chat-store';
 import { api } from '@/lib/api';
 
 interface GroupChatProps {
@@ -13,7 +14,7 @@ interface GroupChatProps {
   messages: GroupMessage[];
   loading: boolean;
   thinking?: { actorId: string; actorName: string; status?: string };
-  onSend: (content: string, attachments?: Attachment[], targetActorIds?: string[]) => Promise<void> | void;
+  onSend: (contentBlocks: CanonicalContentBlock[], targetActorIds?: string[]) => Promise<void> | void;
   onBack?: () => void;
   workspaceId?: string;
 }
@@ -80,31 +81,40 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
     e.preventDefault();
     if ((!input.trim() && pendingFiles.length === 0) || sending) return;
 
-    const content = input.trim() || '(attached files)';
+    const textContent = input.trim();
     const filesToUpload = [...pendingFiles];
     setInput('');
     setPendingFiles([]);
     setSending(true);
 
     try {
-      let attachments: Attachment[] | undefined;
+      const contentBlocks: CanonicalContentBlock[] = [];
+      if (textContent) {
+        contentBlocks.push({ type: 'text', text: textContent });
+      }
       if (filesToUpload.length > 0 && workspaceId) {
-        attachments = [];
         for (const file of filesToUpload) {
           const record = await api.uploadFile(workspaceId, file);
-          attachments.push({
-            id: record.id,
+          contentBlocks.push({
+            type: 'file_ref',
+            fileId: record.id,
+            storedName: record.storedName || '',
             url: record.url,
-            fullUrl: record.fullUrl,
-            storedName: record.storedName,
-            originalName: record.originalName || file.name,
             mimeType: record.mimeType || file.type,
+            originalName: record.originalName || file.name,
             sizeBytes: record.sizeBytes || file.size,
+            category: (record.mimeType || file.type || '').startsWith('image/')
+              ? 'image'
+              : (record.mimeType || file.type || '').startsWith('audio/')
+                ? 'audio'
+                : (record.mimeType || file.type || '').startsWith('video/')
+                  ? 'video'
+                  : 'document',
           });
         }
       }
       const targetIds = mentionTarget ? [mentionTarget] : undefined;
-      await onSend(content, attachments, targetIds);
+      await onSend(contentBlocks, targetIds);
     } catch {
       // error handled upstream
     } finally {
@@ -218,7 +228,7 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
             <MessageBubble
               key={msg.id}
               role={msg.role}
-              content={msg.content}
+              contentBlocks={msg.contentBlocks}
               actorName={msg.actorName}
               actorEmoji={msg.actorEmoji}
               actorRole={msg.actorRole}
@@ -228,7 +238,6 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
               toolsUsed={msg.toolsUsed}
               serverToolCalls={msg.serverToolCalls}
               citationSources={msg.citationSources}
-              attachments={msg.attachments}
               coordination={msg.coordination}
               targetActorNames={msg.targetActorNames}
             />

@@ -4,7 +4,6 @@
  */
 import type { CanonicalContentBlock, ProviderType } from '@synapse/shared';
 import { saveFromBase64, saveFromUrl, type FileRecord } from '../../infrastructure/storage/file-io.js';
-import type { Attachment } from './content-adapter.js';
 
 function mimeToCategory(mimeType: string): 'image' | 'audio' | 'video' | 'document' {
   if (mimeType.startsWith('image/')) return 'image';
@@ -26,28 +25,16 @@ function fileRecordToFileRef(rec: FileRecord, category: 'image' | 'audio' | 'vid
   };
 }
 
-function fileRecordToAttachment(rec: FileRecord): Attachment {
-  return {
-    id: rec.id,
-    url: rec.url,
-    fullUrl: rec.fullUrl,
-    storedName: rec.storedName,
-    originalName: rec.originalName,
-    mimeType: rec.mimeType,
-    sizeBytes: rec.sizeBytes,
-  };
-}
-
 /**
  * Normalize MCP tool result content into CanonicalContentBlock[].
- * - string → returned as-is
+ * - string → wrapped as [{ type: 'text', text }]
  * - unknown[] (MCP content blocks) → binary stored to files table, returns CanonicalContentBlock[]
  */
 export async function ingestToolResultContent(
   content: string | unknown[],
   workspaceId: string,
-): Promise<string | CanonicalContentBlock[]> {
-  if (typeof content === 'string') return content;
+): Promise<CanonicalContentBlock[]> {
+  if (typeof content === 'string') return [{ type: 'text', text: content }];
 
   const blocks: CanonicalContentBlock[] = [];
 
@@ -180,17 +167,17 @@ export async function ingestToolResultContent(
 
 /**
  * Ingest media content blocks from model API response into platform file storage.
- * Returns Attachment[] for storing in metadata.attachments (frontend auto-renders).
+ * Returns CanonicalContentBlock[] (file_ref blocks) for embedding into ToolRound.content.
  */
 export async function ingestResponseMedia(
-  rawAssistantMessage: unknown,
+  rawBlocks: unknown[],
   providerType: ProviderType,
   workspaceId: string,
-): Promise<Attachment[]> {
-  const attachments: Attachment[] = [];
+): Promise<CanonicalContentBlock[]> {
+  const blocks: CanonicalContentBlock[] = [];
 
-  if (providerType === 'anthropic' && Array.isArray(rawAssistantMessage)) {
-    for (const block of rawAssistantMessage as any[]) {
+  if (providerType === 'anthropic') {
+    for (const block of rawBlocks as any[]) {
       if (block.type !== 'image') continue;
       try {
         if (block.source?.data) {
@@ -203,7 +190,7 @@ export async function ingestResponseMedia(
             null,
             'ai_output',
           );
-          attachments.push(fileRecordToAttachment(rec));
+          blocks.push(fileRecordToFileRef(rec, 'image'));
         } else if (block.source?.type === 'url' && block.source?.url) {
           const rec = await saveFromUrl(
             block.source.url,
@@ -212,7 +199,7 @@ export async function ingestResponseMedia(
             'model-image.png',
             'ai_output',
           );
-          attachments.push(fileRecordToAttachment(rec));
+          blocks.push(fileRecordToFileRef(rec, mimeToCategory(rec.mimeType)));
         }
       } catch (err: any) {
         console.error('[content-ingest] Failed to ingest response media:', err.message);
@@ -222,21 +209,5 @@ export async function ingestResponseMedia(
 
   // OpenAI: future-proof — when their API returns media blocks, handle similarly
 
-  return attachments;
-}
-
-/**
- * Extract Attachment[] from CanonicalContentBlock[] (for metadata.attachments storage).
- */
-export function extractAttachmentsFromBlocks(blocks: CanonicalContentBlock[]): Attachment[] {
-  return blocks
-    .filter((b): b is Extract<CanonicalContentBlock, { type: 'file_ref' }> => b.type === 'file_ref')
-    .map((b) => ({
-      id: b.fileId,
-      url: b.url,
-      storedName: b.storedName,
-      originalName: b.originalName,
-      mimeType: b.mimeType,
-      sizeBytes: b.sizeBytes,
-    }));
+  return blocks;
 }

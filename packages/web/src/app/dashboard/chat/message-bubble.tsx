@@ -5,11 +5,13 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Bot, User, GitBranch, Wrench, Search, Globe, ChevronDown, ChevronRight, ExternalLink, FileIcon, Download, AlertTriangle, AtSign } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ServerToolCall, Attachment } from '@/stores/chat-store';
+import type { CanonicalContentBlock } from '@synapse/shared';
+import { extractText } from '@synapse/shared';
+import type { ServerToolCall } from '@/stores/chat-store';
 
 interface MessageBubbleProps {
   role: string;
-  content: string;
+  contentBlocks: CanonicalContentBlock[];
   actorName?: string;
   actorEmoji?: string;
   actorRole?: string;
@@ -19,7 +21,6 @@ interface MessageBubbleProps {
   toolsUsed?: string[];
   serverToolCalls?: ServerToolCall[];
   citationSources?: Record<string, { url: string; title: string }>;
-  attachments?: Attachment[];
   coordination?: boolean;
   targetActorNames?: string[];
 }
@@ -120,46 +121,34 @@ function CitationFooter({ sources }: { sources: { num: number; url: string; titl
   );
 }
 
-const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
-const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
-const VIDEO_EXTENSIONS = ['.mp4', '.webm', '.mov', '.avi', '.mkv'];
-
-function getFileCategory(mimeType: string, url: string): 'image' | 'audio' | 'video' | 'document' {
-  if (mimeType.startsWith('image/')) return 'image';
-  if (mimeType.startsWith('audio/')) return 'audio';
-  if (mimeType.startsWith('video/')) return 'video';
-  const ext = '.' + url.split('.').pop()?.toLowerCase();
-  if (IMAGE_EXTENSIONS.includes(ext)) return 'image';
-  if (AUDIO_EXTENSIONS.includes(ext)) return 'audio';
-  if (VIDEO_EXTENSIONS.includes(ext)) return 'video';
-  return 'document';
-}
-
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function AttachmentPreview({ attachments }: { attachments: Attachment[] }) {
+type FileRefBlock = Extract<CanonicalContentBlock, { type: 'file_ref' }>;
+const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
+
+function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
 
-  if (attachments.length === 0) return null;
+  if (blocks.length === 0) return null;
 
   return (
     <>
       <div className="space-y-2 mb-2">
-        {attachments.map((att) => {
-          const cat = getFileCategory(att.mimeType, att.url);
+        {blocks.map((block) => {
+          const cat = block.category;
 
           if (cat === 'image') {
             return (
-              <div key={att.id}>
+              <div key={block.fileId}>
                 <img
-                  src={att.url}
-                  alt={att.originalName}
+                  src={block.url}
+                  alt={block.originalName}
                   className="max-w-full max-h-64 rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
-                  onClick={() => setExpandedImage(att.url)}
+                  onClick={() => setExpandedImage(block.url)}
                 />
               </div>
             );
@@ -167,10 +156,10 @@ function AttachmentPreview({ attachments }: { attachments: Attachment[] }) {
 
           if (cat === 'audio') {
             return (
-              <div key={att.id} className="rounded-lg bg-gray-50 dark:bg-white/[0.03] ring-1 ring-gray-200 dark:ring-white/[0.06] p-2.5">
-                <div className="text-[11px] text-muted-foreground mb-1.5 truncate">{att.originalName}</div>
+              <div key={block.fileId} className="rounded-lg bg-gray-50 dark:bg-white/[0.03] ring-1 ring-gray-200 dark:ring-white/[0.06] p-2.5">
+                <div className="text-[11px] text-muted-foreground mb-1.5 truncate">{block.originalName}</div>
                 <audio controls className="w-full h-8" preload="metadata">
-                  <source src={att.url} type={att.mimeType} />
+                  <source src={block.url} type={block.mimeType} />
                 </audio>
               </div>
             );
@@ -178,13 +167,13 @@ function AttachmentPreview({ attachments }: { attachments: Attachment[] }) {
 
           if (cat === 'video') {
             return (
-              <div key={att.id}>
+              <div key={block.fileId}>
                 <video
                   controls
                   className="max-w-full max-h-64 rounded-lg"
                   preload="metadata"
                 >
-                  <source src={att.url} type={att.mimeType} />
+                  <source src={block.url} type={block.mimeType} />
                 </video>
               </div>
             );
@@ -193,8 +182,8 @@ function AttachmentPreview({ attachments }: { attachments: Attachment[] }) {
           // Document
           return (
             <a
-              key={att.id}
-              href={att.url}
+              key={block.fileId}
+              href={block.url}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2.5 rounded-lg bg-gray-50 dark:bg-white/[0.03] ring-1 ring-gray-200 dark:ring-white/[0.06] p-2.5 hover:bg-gray-100 dark:hover:bg-white/[0.06] transition-colors group/file"
@@ -203,8 +192,8 @@ function AttachmentPreview({ attachments }: { attachments: Attachment[] }) {
                 <FileIcon className="w-4 h-4 text-indigo-500" />
               </div>
               <div className="flex-1 min-w-0">
-                <div className="text-xs text-foreground/80 truncate">{att.originalName}</div>
-                <div className="text-[10px] text-muted-foreground/50">{formatBytes(att.sizeBytes)}</div>
+                <div className="text-xs text-foreground/80 truncate">{block.originalName}</div>
+                <div className="text-[10px] text-muted-foreground/50">{formatBytes(block.sizeBytes)}</div>
               </div>
               <Download className="w-3.5 h-3.5 text-muted-foreground/40 group-hover/file:text-indigo-500 transition-colors shrink-0" />
             </a>
@@ -349,7 +338,7 @@ function ServerToolCallDisplay({ calls }: { calls: ServerToolCall[] }) {
 
 export default function MessageBubble({
   role,
-  content,
+  contentBlocks,
   actorName,
   actorEmoji,
   timestamp,
@@ -358,22 +347,26 @@ export default function MessageBubble({
   toolsUsed,
   serverToolCalls,
   citationSources,
-  attachments,
   coordination,
   targetActorNames,
 }: MessageBubbleProps) {
   const isChildResult = role === 'child_result';
   const isSystem = role === 'system';
   const isError = role === 'error';
+  const textContent = useMemo(() => extractText(contentBlocks), [contentBlocks]);
+  const fileBlocks = useMemo(
+    () => contentBlocks.filter((block): block is FileRefBlock => block.type === 'file_ref'),
+    [contentBlocks],
+  );
 
   // Process citations and sanitize raw HTML tags
   const { processedContent, sources } = useMemo(
     () => {
       // Replace <br>, <br/>, <br /> with newlines so ReactMarkdown renders them
-      const sanitized = content.replace(/<br\s*\/?>/gi, '\n');
+      const sanitized = textContent.replace(/<br\s*\/?>/gi, '\n');
       return processCitations(sanitized, citationSources);
     },
-    [content, citationSources],
+    [citationSources, textContent],
   );
 
   if (isError) {
@@ -384,7 +377,7 @@ export default function MessageBubble({
         </div>
         <div className="max-w-[75%] min-w-0 flex flex-col">
           <div className="rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400">
-            <p className="whitespace-pre-wrap">{content}</p>
+            <p className="whitespace-pre-wrap">{textContent}</p>
           </div>
           {timestamp && (
             <span className="text-[10px] text-muted-foreground/50 mt-1">
@@ -400,7 +393,7 @@ export default function MessageBubble({
     return (
       <div className="flex justify-center my-2">
         <div className="text-xs text-muted-foreground/60 bg-gray-100 dark:bg-white/5 rounded-full px-4 py-1.5 max-w-[80%] text-center">
-          {content.length > 200 ? content.substring(0, 200) + '...' : content}
+          {textContent.length > 200 ? textContent.substring(0, 200) + '...' : textContent}
         </div>
       </div>
     );
@@ -409,7 +402,7 @@ export default function MessageBubble({
   const hasServerToolCalls = serverToolCalls && serverToolCalls.length > 0;
   const hasToolsUsed = toolsUsed && toolsUsed.length > 0;
   const hasCitations = sources.length > 0;
-  const hasAttachments = attachments && attachments.length > 0;
+  const hasFileBlocks = fileBlocks.length > 0;
 
   // Coordination messages (send_to between actors) — render in a compact style
   if (coordination && !isUser) {
@@ -424,6 +417,7 @@ export default function MessageBubble({
                 <span className="text-[10px] text-indigo-400/60">→ {targetActorNames.join(', ')}</span>
               )}
             </div>
+            {hasFileBlocks && <FileBlockPreview blocks={fileBlocks} />}
             <div className="text-xs text-muted-foreground/70 leading-relaxed">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {processedContent}
@@ -479,10 +473,10 @@ export default function MessageBubble({
             }
           `}
         >
-          {/* Attachment previews */}
-          {hasAttachments && <AttachmentPreview attachments={attachments} />}
+          {hasFileBlocks && <FileBlockPreview blocks={fileBlocks} />}
 
           {!isUser ? (
+            textContent ? (
             <div className="prose dark:prose-invert prose-sm max-w-none prose-p:my-1.5 prose-headings:text-foreground prose-code:text-indigo-600 dark:prose-code:text-indigo-300 prose-code:bg-indigo-500/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:font-mono prose-code:before:content-none prose-code:after:content-none prose-pre:bg-black/30 prose-pre:border prose-pre:border-gray-200 dark:prose-pre:border-white/10 prose-pre:rounded-lg">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
@@ -511,8 +505,9 @@ export default function MessageBubble({
                 {processedContent}
               </ReactMarkdown>
             </div>
+            ) : null
           ) : (
-            <p className="whitespace-pre-wrap">{content}</p>
+            textContent ? <p className="whitespace-pre-wrap">{textContent}</p> : null
           )}
 
           {/* Citation sources footer */}

@@ -4,6 +4,7 @@ import { query } from '../infrastructure/database/index.js';
 import { QUEUE_NAMES, nowISO } from '@synapse/shared';
 import { aiComplete } from '../modules/ai/index.js';
 import { resolveModelConfig } from '../modules/model-groups/resolver.js';
+import { getSessionMessages } from '../modules/session/service.js';
 
 export function startMemoryArchivalWorker() {
   const worker = new Worker(
@@ -11,21 +12,14 @@ export function startMemoryArchivalWorker() {
     async (job) => {
       const { workspaceId, actorId, sessionId } = job.data;
 
-      // Load messages from session_messages via sessionId
-      const msgResult = await query(
-        `SELECT sm.role, sm.content FROM session_messages sm
-         WHERE sm.session_id = $1
-         ORDER BY sm.created_at`,
-        [sessionId]
-      );
-
-      if (msgResult.rows.length === 0) return;
+      const messages = await getSessionMessages(sessionId);
+      if (messages.length === 0) return;
 
       // Build context for memory extraction
       const context = `Session conversation for memory extraction:
 
 Messages during this session:
-${msgResult.rows.map((m: any) => `[${m.role}] ${m.content}`).join('\n')}
+${messages.map((m: any) => `[${m.role}] ${m.content}`).join('\n')}
 
 Based on this completed session, extract key experiences and knowledge worth remembering long-term.
 Return a JSON array of memories:

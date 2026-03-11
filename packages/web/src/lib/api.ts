@@ -1,3 +1,5 @@
+import type { CanonicalContentBlock } from '@synapse/shared';
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
 class ApiClient {
@@ -116,21 +118,20 @@ class ApiClient {
       : { actorIds, ...(content && { content }), targetActorId: targetActorId || actorIds[0] };
     return this.fetch(`/workspaces/${wsId}/chat/groups`, { method: 'POST', body: JSON.stringify(body) });
   }
-  getGroupMessages(wsId: string, rootSessionId: string, limit?: number, before?: string) {
+  getGroupMessages(wsId: string, groupId: string, limit?: number, before?: string) {
     const params = new URLSearchParams();
     if (limit) params.set('limit', String(limit));
     if (before) params.set('before', before);
     const qs = params.toString();
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/messages${qs ? '?' + qs : ''}`);
+    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/messages${qs ? '?' + qs : ''}`);
   }
-  sendGroupMessage(wsId: string, groupId: string, content: string, attachments?: { id: string; url: string; fullUrl?: string; storedName?: string; originalName: string; mimeType: string; sizeBytes: number }[], targetActorIds?: string[]) {
-    const body: any = { content };
-    if (attachments && attachments.length > 0) body.attachments = attachments;
+  sendGroupMessage(wsId: string, groupId: string, contentBlocks: CanonicalContentBlock[], targetActorIds?: string[]) {
+    const body: any = { contentBlocks };
     if (targetActorIds && targetActorIds.length > 0) body.targetActorIds = targetActorIds;
     return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/messages`, { method: 'POST', body: JSON.stringify(body) });
   }
-  markGroupRead(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/read`, { method: 'POST', body: '{}' }); }
-  cancelGroup(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}`, { method: 'DELETE' }); }
+  markGroupRead(wsId: string, groupId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/read`, { method: 'POST', body: '{}' }); }
+  cancelGroup(wsId: string, groupId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}`, { method: 'DELETE' }); }
 
   // MCP Marketplace
   getMarketplace(params?: string) { return this.fetch(`/mcp/marketplace${params ? '?' + params : ''}`); }

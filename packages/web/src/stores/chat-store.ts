@@ -1,6 +1,8 @@
 'use client';
 import { create } from 'zustand';
 import { api } from '@/lib/api';
+import type { CanonicalContentBlock } from '@synapse/shared';
+import { extractText } from '@synapse/shared';
 
 export interface GroupParticipant {
   id: string;
@@ -26,21 +28,12 @@ export interface ServerToolCall {
   results?: { url: string; title: string; pageAge?: string }[];
 }
 
-export interface Attachment {
-  id: string;
-  url: string;
-  fullUrl?: string;
-  storedName?: string;
-  originalName: string;
-  mimeType: string;
-  sizeBytes: number;
-}
-
 export interface GroupMessage {
   id: string;
   sessionId: string;
   role: string;
   content: string;
+  contentBlocks: CanonicalContentBlock[];
   fromActorId?: string;
   fromUserId?: string;
   actorName?: string;
@@ -51,7 +44,6 @@ export interface GroupMessage {
   toolsUsed?: string[];
   serverToolCalls?: ServerToolCall[];
   citationSources?: Record<string, { url: string; title: string }>;
-  attachments?: Attachment[];
   coordination?: boolean; // true for send_to inter-actor messages
   targetActorNames?: string[]; // names of @mentioned actors
 }
@@ -74,7 +66,7 @@ interface ChatState {
   loadGroups: (workspaceId: string) => Promise<void>;
   selectGroup: (groupId: string | null) => void;
   loadMessages: (workspaceId: string, groupId: string) => Promise<void>;
-  sendMessage: (workspaceId: string, groupId: string, content: string, attachments?: Attachment[], targetActorIds?: string[]) => Promise<void>;
+  sendMessage: (workspaceId: string, groupId: string, contentBlocks: CanonicalContentBlock[], targetActorIds?: string[]) => Promise<void>;
   createGroup: (workspaceId: string, actorIds: string[], content?: string, targetActorId?: string) => Promise<string>;
   markRead: (workspaceId: string, groupId: string) => Promise<void>;
 
@@ -88,9 +80,17 @@ interface ChatState {
   handleActorVersionChanged: (payload: any) => void;
 }
 
-// Helper to extract groupId from payload (supports both groupId and rootSessionId)
+// WS chat events always target a group conversation.
 function getGroupId(payload: any): string | undefined {
-  return payload.groupId || payload.rootSessionId;
+  return payload.groupId;
+}
+
+function normalizeContentBlocks(payload: any): CanonicalContentBlock[] {
+  const blocks = payload.contentBlocks;
+  if (Array.isArray(blocks)) {
+    return blocks as CanonicalContentBlock[];
+  }
+  return [];
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -133,29 +133,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       const res = await api.getGroupMessages(workspaceId, groupId, 100);
       const messages = (res?.messages || []).map((m: any) => {
-        // API returns pre-transformed fields: role, fromActorId, actorName, createdAt
-        // Fall back to raw DB fields for backward compatibility
-        const role = m.role || (
-          (m.sender_type || m.senderType) === 'user' ? 'user'
-          : (m.sender_type || m.senderType) === 'actor' ? 'assistant'
-          : 'system'
-        );
+        const contentBlocks = normalizeContentBlocks(m);
         return {
           id: m.id,
-          sessionId: m.sessionId || m.sender_session_id || '',
-          role,
-          content: m.content,
-          fromActorId: m.fromActorId || m.sender_actor_id,
-          fromUserId: m.fromUserId || m.sender_user_id,
-          actorName: role === 'user' ? undefined : (m.actorName || m.sender_name),
-          createdAt: m.createdAt || m.created_at,
+          sessionId: m.sessionId || '',
+          role: m.role,
+          contentBlocks,
+          content: extractText(contentBlocks),
+          fromActorId: m.fromActorId,
+          fromUserId: m.fromUserId,
+          actorName: m.actorName,
+          createdAt: m.createdAt,
           status: 'sent' as const,
           toolsUsed: m.metadata?.toolsUsed,
           serverToolCalls: m.metadata?.serverToolCalls,
           citationSources: m.metadata?.citationSources,
-          attachments: m.metadata?.attachments,
           coordination: !!m.metadata?.coordination,
-          targetActorNames: m.targetActorNames || m.target_actor_names,
+          targetActorNames: m.targetActorNames,
         };
       });
       set({ messages, loadingMessages: false });
@@ -165,24 +159,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (workspaceId, groupId, content, attachments, targetActorIds) => {
+  sendMessage: async (workspaceId, groupId, contentBlocks, targetActorIds) => {
     // Optimistic insert
     const tempId = `temp-${Date.now()}`;
     const optimisticMsg: GroupMessage = {
       id: tempId,
       sessionId: '',
       role: 'user',
-      content,
+      content: extractText(contentBlocks),
+      contentBlocks,
       createdAt: new Date().toISOString(),
       status: 'sending',
-      attachments,
     };
     set((state) => ({
       messages: [...state.messages, optimisticMsg],
     }));
 
     try {
-      await api.sendGroupMessage(workspaceId, groupId, content, attachments, targetActorIds);
+      await api.sendGroupMessage(workspaceId, groupId, contentBlocks, targetActorIds);
       // Update optimistic message status
       set((state) => ({
         messages: state.messages.map((m) =>
@@ -195,7 +189,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           g.id === groupId
             ? {
                 ...g,
-                lastMessage: { content, role: 'user', createdAt: new Date().toISOString() },
+                lastMessage: { content: extractText(contentBlocks), role: 'user', createdAt: new Date().toISOString() },
                 status: 'active' as const,
               }
             : g
@@ -238,14 +232,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const groupId = getGroupId(payload);
     if (!groupId) return;
 
-    const { sessionId, role, content, fromActorId, fromActorName, messageId, fromUserId, metadata,
-            senderType, senderActorId, senderUserId, senderName, targetUserIds } = payload;
-
-    // Determine role from either old format (role) or new format (senderType)
-    const effectiveRole = role || (senderType === 'user' ? 'user' : senderType === 'actor' ? 'assistant' : 'system');
-    const effectiveFromActorId = fromActorId || senderActorId;
-    const effectiveFromUserId = fromUserId || senderUserId;
-    const effectiveActorName = fromActorName || senderName;
+    const { sessionId, role, fromActorId, messageId, fromUserId, metadata, actorName, targetUserIds } = payload;
+    const messageContentBlocks = normalizeContentBlocks(payload);
+    const effectiveRole = role;
+    const effectiveFromActorId = fromActorId;
+    const effectiveFromUserId = fromUserId;
+    const effectiveActorName = actorName;
 
     const state = get();
 
@@ -270,11 +262,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       });
     }
 
-    // Extract toolsUsed, serverToolCalls, and attachments from metadata
+    // Extract structured metadata for message chrome
     const toolsUsed = metadata?.toolsUsed as string[] | undefined;
     const serverToolCalls = metadata?.serverToolCalls as ServerToolCall[] | undefined;
     const citationSources = metadata?.citationSources as Record<string, { url: string; title: string }> | undefined;
-    const attachments = metadata?.attachments as Attachment[] | undefined;
     const coordination = !!metadata?.coordination;
     const targetActorNames = payload.targetActorNames as string[] | undefined;
 
@@ -297,15 +288,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
               id: messageId || `ws-${Date.now()}`,
               sessionId: sessionId || '',
               role: effectiveRole,
-              content: content || '',
+              contentBlocks: messageContentBlocks,
+              content: extractText(messageContentBlocks),
               fromActorId: effectiveFromActorId,
               actorName: effectiveActorName,
-              createdAt: new Date().toISOString(),
+              createdAt: payload.createdAt || new Date().toISOString(),
               status: 'sent' as const,
               toolsUsed,
               serverToolCalls,
               citationSources,
-              attachments,
               coordination,
               targetActorNames,
             },
@@ -321,7 +312,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const unreadCount = s.selectedGroupId === groupId ? g.unreadCount : g.unreadCount + 1;
         return {
           ...g,
-          lastMessage: { content: content || '', role: effectiveRole, actorName: effectiveActorName, createdAt: new Date().toISOString() },
+          lastMessage: {
+            content: extractText(messageContentBlocks),
+            role: effectiveRole,
+            actorName: effectiveActorName,
+            createdAt: payload.createdAt || new Date().toISOString(),
+          },
           status: 'active' as const,
           unreadCount,
         };
@@ -370,6 +366,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           sessionId: '',
           role: 'error',
           content: errorMessage || 'An unexpected error occurred while processing your request.',
+          contentBlocks: [{ type: 'text', text: errorMessage || 'An unexpected error occurred while processing your request.' }],
           createdAt: new Date().toISOString(),
         };
 
@@ -464,6 +461,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             sessionId: '',
             role: 'system',
             content: `${actorName || 'An actor'} joined the group`,
+            contentBlocks: [{ type: 'text', text: `${actorName || 'An actor'} joined the group` }],
             createdAt: new Date().toISOString(),
           },
         ],
@@ -499,6 +497,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             sessionId: '',
             role: 'system',
             content: `${actorName || 'An actor'} was removed from the group`,
+            contentBlocks: [{ type: 'text', text: `${actorName || 'An actor'} was removed from the group` }],
             createdAt: new Date().toISOString(),
           },
         ],
@@ -524,6 +523,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             sessionId: '',
             role: 'system',
             content: `${actorName || 'An actor'}'s profile has been updated`,
+            contentBlocks: [{ type: 'text', text: `${actorName || 'An actor'}'s profile has been updated` }],
             createdAt: new Date().toISOString(),
           },
         ],

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import type { CanonicalContentBlock } from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import {
   listGroups,
@@ -16,10 +17,13 @@ const createGroupSchema = z.object({
 });
 
 const sendMessageSchema = z.object({
-  content: z.string().min(1).max(10000),
-  attachments: z.array(z.any()).optional(),
+  content: z.string().max(10000).optional().default(''),
+  contentBlocks: z.array(z.any()).optional(),
   targetActorIds: z.array(z.string().uuid()).optional(),
-});
+}).refine(
+  (body) => body.content.trim().length > 0 || (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
+  { message: 'content or contentBlocks is required' },
+);
 
 export async function chatController(app: FastifyInstance) {
   app.addHook('onRequest', authMiddleware);
@@ -66,13 +70,13 @@ export async function chatController(app: FastifyInstance) {
   // POST /workspaces/:wsId/chat/groups/:groupId/messages — send message to group
   app.post<{
     Params: { workspaceId: string; groupId: string };
-    Body: { content: string; attachments?: any[]; targetActorIds?: string[] };
+    Body: { content?: string; contentBlocks?: CanonicalContentBlock[]; targetActorIds?: string[] };
   }>('/workspaces/:workspaceId/chat/groups/:groupId/messages', async (request, reply) => {
     const { workspaceId, groupId } = request.params;
-    const { content, attachments, targetActorIds } = sendMessageSchema.parse(request.body);
+    const { content, contentBlocks, targetActorIds } = sendMessageSchema.parse(request.body);
     const userId = (request as any).user!.userId;
 
-    const result = await sendMessageToGroup(workspaceId, groupId, userId, content, attachments, targetActorIds);
+    const result = await sendMessageToGroup(workspaceId, groupId, userId, content, contentBlocks, targetActorIds);
     return reply.status(201).send(result);
   });
 

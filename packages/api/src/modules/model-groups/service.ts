@@ -1,5 +1,6 @@
 import { query } from '../../infrastructure/database/index.js';
 import { config } from '../../config/index.js';
+import { logProviderStep, logRuntimeEvent } from '../execution/service.js';
 
 export class ModelGroupError extends Error {
   constructor(public statusCode: number, message: string) {
@@ -343,30 +344,62 @@ export async function logAIRequest(data: {
   requestBody?: unknown;
   responseBody?: unknown;
 }) {
-  await query(
-    `INSERT INTO ai_request_logs (workspace_id, actor_id, session_id, turn_id, round, group_id, item_id, config_id,
-       request_type, input_tokens, output_tokens, latency_ms, status, error_message,
-       request_body, response_body)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-    [
-      data.workspaceId || null,
-      data.actorId || null,
-      data.sessionId || null,
-      data.turnId || null,
-      data.round || 1,
-      data.groupId || null,
-      data.itemId || null,
-      data.configId || null,
-      data.requestType,
-      data.inputTokens,
-      data.outputTokens,
-      data.latencyMs,
-      data.status,
-      data.errorMessage || null,
-      data.requestBody ? JSON.stringify(data.requestBody) : null,
-      data.responseBody ? JSON.stringify(data.responseBody) : null,
-    ]
-  );
+  if (!data.turnId) {
+    await logRuntimeEvent({
+      workspaceId: data.workspaceId,
+      sessionId: data.sessionId,
+      actorId: data.actorId,
+      source: 'provider',
+      level: data.status === 'error' ? 'error' : 'info',
+      eventType: 'provider.step.legacy',
+      payload: {
+        round: data.round || 1,
+        requestType: data.requestType,
+        modelGroupId: data.groupId,
+        modelItemId: data.itemId,
+        modelConfigId: data.configId,
+        inputTokens: data.inputTokens,
+        outputTokens: data.outputTokens,
+        latencyMs: data.latencyMs,
+        status: data.status,
+        errorMessage: data.errorMessage,
+        requestBody: data.requestBody,
+        responseBody: data.responseBody,
+      },
+    });
+    return;
+  }
+
+  let providerType: 'anthropic' | 'openai' = config.ai.provider === 'openai' ? 'openai' : 'anthropic';
+  let modelName = config.ai.model;
+  if (data.configId) {
+    const configResult = await query(
+      `SELECT provider_type, model_name FROM model_item_configs WHERE id = $1`,
+      [data.configId],
+    );
+    if (configResult.rows[0]) {
+      providerType = configResult.rows[0].provider_type === 'openai' ? 'openai' : 'anthropic';
+      modelName = configResult.rows[0].model_name || modelName;
+    }
+  }
+
+  await logProviderStep({
+    turnId: data.turnId,
+    stepIndex: data.round || 1,
+    providerType,
+    requestType: data.requestType as 'actor_think' | 'ai_complete',
+    modelGroupId: data.groupId,
+    modelItemId: data.itemId,
+    modelConfigId: data.configId,
+    modelName,
+    requestPayload: data.requestBody,
+    responsePayload: data.responseBody,
+    inputTokens: data.inputTokens,
+    outputTokens: data.outputTokens,
+    latencyMs: data.latencyMs,
+    status: data.status as 'success' | 'error' | 'timeout',
+    errorMessage: data.errorMessage,
+  });
 }
 
 // ============ Seed Platform Default ============

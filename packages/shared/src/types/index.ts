@@ -312,6 +312,7 @@ export interface SessionMessage {
   workspaceId: UUID;
   role: SessionMessageRole;
   content: string;
+  contentBlocks: CanonicalContentBlock[];
   fromActorId?: UUID;
   fromUserId?: UUID;
   metadata: Record<string, unknown>;
@@ -331,6 +332,7 @@ export interface SessionInterrupt {
 export interface ActorAction {
   type: 'respond' | 'create_memory' | 'rename_self' | 'change_avatar';
   content: string;
+  contentBlocks?: CanonicalContentBlock[];
   targetActorId?: UUID;
   metadata?: Record<string, unknown>;
 }
@@ -343,7 +345,7 @@ export interface ThinkingResult {
   serverToolCalls?: ServerToolCall[]; // cloud-side tool calls (web_search, web_fetch)
   citationSources?: Record<string, { url: string; title: string }>; // <cite index="X-Y"> → source
   toolHistory?: AssistantToolHistory; // cross-turn tool history for replay
-  mediaAttachments?: { id: string; url: string; fullUrl?: string; storedName?: string; originalName: string; mimeType: string; sizeBytes: number }[]; // media from MCP/model responses
+  contentBlocks?: CanonicalContentBlock[];
 }
 
 // ============ Server Tool Calls (Anthropic/OpenAI cloud-side tools) ============
@@ -473,20 +475,24 @@ export type CanonicalContentBlock =
 
 // ============ Canonical Tool History ============
 export interface CanonicalToolCall {
-  id: string;
-  name: string;
+  callId: string;
+  providerCallId?: string;
+  toolName: string;
   input: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CanonicalToolResult {
   toolCallId: string;
+  providerCallId?: string;
   toolName: string;
-  content: string | CanonicalContentBlock[];  // text or content blocks with file_ref
+  content: CanonicalContentBlock[];
   isError?: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ToolRound {
-  textContent?: string;
+  content?: CanonicalContentBlock[];
   toolCalls: CanonicalToolCall[];
   toolResults: CanonicalToolResult[];
 }
@@ -495,10 +501,131 @@ export interface AssistantToolHistory {
   rounds: ToolRound[];
 }
 
+export type CanonicalContextScope = 'shared' | 'private';
+export type CanonicalContextSurface = 'visible' | 'internal';
+export type CanonicalContextRole = 'user' | 'assistant' | 'system' | 'tool';
+export type CanonicalContextMemberType = 'actor' | 'user' | 'remote_agent' | 'system' | 'unknown';
+
+export interface CanonicalContextAuthor {
+  memberId?: string;
+  memberType: CanonicalContextMemberType;
+  actorId?: string;
+  userId?: string;
+  sessionId?: string;
+  name?: string;
+  isSelf?: boolean;
+}
+
+export interface CanonicalContextTarget {
+  memberId?: string;
+  memberType: Exclude<CanonicalContextMemberType, 'unknown'>;
+  actorId?: string;
+  userId?: string;
+  name?: string;
+}
+
+interface CanonicalContextItemBase {
+  itemId?: string;
+  conversationId?: string;
+  sessionId?: string;
+  turnId?: string;
+  sequence?: number;
+  scope: CanonicalContextScope;
+  surface: CanonicalContextSurface;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CanonicalSystemNoticeItem extends CanonicalContextItemBase {
+  kind: 'system_notice';
+  noticeType: 'memory_notice' | 'interrupt' | 'task_instruction' | 'legacy_tool_result' | 'generic';
+  parts: CanonicalContentBlock[];
+}
+
+export interface CanonicalEventContextItem extends CanonicalContextItemBase {
+  kind: 'event';
+  eventType: string;
+  author?: CanonicalContextAuthor;
+  targets?: CanonicalContextTarget[];
+  parts: CanonicalContentBlock[];
+}
+
+export interface CanonicalMessageContextItem extends CanonicalContextItemBase {
+  kind: 'message';
+  messageType: string;
+  role: CanonicalContextRole;
+  author?: CanonicalContextAuthor;
+  targets?: CanonicalContextTarget[];
+  parts: CanonicalContentBlock[];
+}
+
+export interface CanonicalToolCallBatchContextItem extends CanonicalContextItemBase {
+  kind: 'tool_call_batch';
+  role: 'assistant';
+  bundleId?: string;
+  author?: CanonicalContextAuthor;
+  content?: CanonicalContentBlock[];
+  toolCalls: CanonicalToolCall[];
+}
+
+export interface CanonicalToolResultBatchContextItem extends CanonicalContextItemBase {
+  kind: 'tool_result_batch';
+  bundleId?: string;
+  toolResults: CanonicalToolResult[];
+}
+
+export interface CanonicalSummaryContextItem extends CanonicalContextItemBase {
+  kind: 'summary';
+  summaryType: string;
+  sourceItemIds?: string[];
+  parts: CanonicalContentBlock[];
+}
+
+export type CanonicalContextItem =
+  | CanonicalSystemNoticeItem
+  | CanonicalEventContextItem
+  | CanonicalMessageContextItem
+  | CanonicalToolCallBatchContextItem
+  | CanonicalToolResultBatchContextItem
+  | CanonicalSummaryContextItem;
+
+export type CanonicalArchiveFrameRole = 'system' | 'user' | 'assistant' | 'tool';
+export type CanonicalArchiveChainScope = 'shared' | 'private';
+
+export interface CanonicalArchiveFrame {
+  frameId?: string;
+  role: CanonicalArchiveFrameRole;
+  frameType: string;
+  parts?: CanonicalContentBlock[];
+  toolCalls?: CanonicalToolCall[];
+  toolResults?: CanonicalToolResult[];
+  sourceItemIds?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface CanonicalArchivePoint {
+  archivePointId: string;
+  chainScope: CanonicalArchiveChainScope;
+  conversationId: string;
+  sessionId?: string;
+  parentArchivePointId?: string;
+  coversUntilSequence: number;
+  frames: CanonicalArchiveFrame[];
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
+}
+
+export interface ProviderContextWindow {
+  sharedArchivePoint: CanonicalArchivePoint | null;
+  sharedTailItems: CanonicalContextItem[];
+  privateArchivePoint: CanonicalArchivePoint | null;
+  privateTailItems: CanonicalContextItem[];
+  orderedTailItems: CanonicalContextItem[];
+}
+
 // ============ Conversation Message ============
 export type ConversationMessage =
-  | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: CanonicalToolCall[] }
+  | { role: 'user'; content: CanonicalContentBlock[] }
+  | { role: 'assistant'; content: CanonicalContentBlock[]; toolCalls?: CanonicalToolCall[] }
   | { role: 'tool_result'; results: CanonicalToolResult[] };
 
 // ============ AI Provider ============
@@ -520,9 +647,11 @@ export interface ToolDefinition {
 }
 
 export interface ToolCall {
-  id: string;
-  name: string;
+  callId: string;
+  providerCallId?: string;
+  toolName: string;
   input: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface AIMessage {
@@ -532,14 +661,11 @@ export interface AIMessage {
 
 export interface ToolResult {
   toolCallId: string;
+  providerCallId?: string;
   toolName: string;
   content: string | unknown[];  // string for text-only, array for multimodal (MCP content blocks)
   isError?: boolean;
-}
-
-export interface ContinuationEntry {
-  rawAssistantMessage: unknown;  // Provider-specific raw response, passed back as-is
-  toolResults: ToolResult[];
+  metadata?: Record<string, unknown>;
 }
 
 // ============ Tool Plugin System ============
@@ -570,11 +696,10 @@ export interface ToolPlugin {
 }
 
 export interface AIResponse {
-  toolCalls: ToolCall[];
-  textContent: string;
+  context: ConversationMessage[];    // [{ role: 'assistant', content, toolCalls? }]
   tokensUsed: { input: number; output: number };
   stopReason: string;                // e.g. 'end_turn', 'tool_use' (Anthropic) or 'stop', 'tool_calls' (OpenAI)
-  rawAssistantMessage: unknown;      // Provider-specific raw assistant message for continuation
+  rawAssistantMessage?: unknown;     // Provider-specific raw assistant message for server tool extraction
   mediaBlocks?: unknown[];           // Provider raw media content blocks (images, audio from model response)
 }
 
@@ -750,16 +875,19 @@ export interface GroupMember {
 export interface GroupMessage {
   id: UUID;
   groupId: UUID;
-  senderType: 'user' | 'actor' | 'system';
-  senderUserId?: UUID;
-  senderActorId?: UUID;
-  senderSessionId?: UUID;
+  sessionId: UUID | '';
+  role: 'user' | 'assistant' | 'system';
+  fromUserId?: UUID;
+  fromActorId?: UUID;
+  actorName?: string;
   targetActorIds: UUID[];
+  targetUserIds: UUID[];
   content: string;
+  contentBlocks: CanonicalContentBlock[];
   metadata: Record<string, unknown>;
   createdAt: Timestamp;
-  // Joined fields
-  senderName?: string;
+  targetActorNames?: string[];
+  targetUserNames?: string[];
 }
 
 // ============ A2A (Agent-to-Agent) Protocol ============
@@ -836,4 +964,19 @@ export interface A2ATaskResponse {
   };
   artifacts?: { parts: A2APart[]; index: number }[];
   history?: A2AMessage[];
+}
+
+// ============ Content Helpers ============
+
+/** Wrap a plain string into CanonicalContentBlock[] */
+export function textBlocks(s: string): CanonicalContentBlock[] {
+  return [{ type: 'text', text: s }];
+}
+
+/** Extract concatenated text from CanonicalContentBlock[] */
+export function extractText(blocks: CanonicalContentBlock[]): string {
+  return blocks
+    .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+    .map((b) => b.text)
+    .join('');
 }

@@ -3,6 +3,185 @@ import { emitEvent } from '../../infrastructure/events/index.js';
 import { sessionThinkingQueue } from '../../workers/queues.js';
 import { nowISO } from '@synapse/shared';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  createConversationItem,
+  ensureConversationMember,
+  getConversation,
+  getConversationMember,
+  getLastVisibleConversationItem,
+  getVisibleConversationItemsForMember,
+  listConversationMembers,
+  listUserGroupConversations,
+  markConversationRead,
+} from '../conversation/service.js';
+import {
+  buildNormalizedMessageContent,
+  itemPartsToCanonicalContentBlocks,
+} from '../conversation/message-content.js';
+import { createSession, getSession, updateSessionStatus } from '../session/service.js';
+
+function normalizeGroupRow(row: any) {
+  if (!row) return null;
+  return {
+    ...row,
+    group_id: row.id,
+  };
+}
+
+function parseJson(value: unknown) {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  return value || {};
+}
+
+function buildTextContentFromParts(parts: any[]) {
+  const text = parts
+    .filter((part) => part.part_type === 'text')
+    .map((part) => part.text_value || '')
+    .join('\n');
+
+  if (text) return text;
+
+  const jsonParts = parts
+    .filter((part) => part.part_type === 'json')
+    .map((part) => JSON.stringify(part.json_value));
+  return jsonParts.join('\n');
+}
+
+async function getActorNames(actorIds: string[]) {
+  if (actorIds.length === 0) return new Map<string, string>();
+  const result = await query(
+    `SELECT id, name FROM actors WHERE id = ANY($1)`,
+    [actorIds],
+  );
+  return new Map<string, string>(result.rows.map((row: any) => [row.id, row.name]));
+}
+
+async function getUserNames(userIds: string[]) {
+  if (userIds.length === 0) return new Map<string, string>();
+  const result = await query(
+    `SELECT id, name FROM users WHERE id = ANY($1)`,
+    [userIds],
+  );
+  return new Map<string, string>(result.rows.map((row: any) => [row.id, row.name]));
+}
+
+async function getLatestActorSession(conversationId: string, actorId: string) {
+  const result = await query(
+    `SELECT *
+     FROM sessions
+     WHERE conversation_id = $1 AND actor_id = $2
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [conversationId, actorId],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function ensureActorSession(params: {
+  conversationId: string;
+  workspaceId: string;
+  actorId: string;
+  trigger: string;
+}) {
+  const existing = await getLatestActorSession(params.conversationId, params.actorId);
+  if (existing) return existing;
+
+  return createSession({
+    workspaceId: params.workspaceId,
+    actorId: params.actorId,
+    conversationId: params.conversationId,
+    channelType: 'web',
+    trigger: params.trigger,
+    metadata: { lane: 'group' },
+  });
+}
+
+async function recordMembershipEvent(params: {
+  conversationId: string;
+  subtype: 'member_joined' | 'member_kicked' | 'member_left';
+  batchId: string;
+  members: Array<{ memberId: string; memberType: 'actor' | 'user'; actorId?: string; userId?: string; name: string; title?: string }>;
+}) {
+  const names = params.members.map((member) => member.name || 'Unknown').join(', ');
+  let content = names;
+  if (params.subtype === 'member_joined') {
+    content += ' joined the group';
+    if (params.members.length === 1 && params.members[0].title) {
+      content += ` (${params.members[0].title})`;
+    }
+  } else if (params.subtype === 'member_kicked') {
+    content += ' was removed from the group';
+  } else {
+    content += ' left the group';
+  }
+
+  await createConversationItem({
+    conversationId: params.conversationId,
+    scope: 'shared',
+    surface: 'visible',
+    itemType: 'event',
+    subtype: params.subtype,
+    role: 'system',
+    metadata: {
+      batchId: params.batchId,
+      members: params.members.map((member) => ({
+        memberId: member.memberId,
+        memberType: member.memberType,
+        actorId: member.actorId,
+        userId: member.userId,
+        name: member.name,
+        title: member.title,
+      })),
+    },
+    parts: [{ type: 'text', text: content }],
+  });
+}
+
+async function resolveMemberTargets(params: {
+  groupId: string;
+  targetActorIds?: string[];
+  targetUserIds?: string[];
+}) {
+  const members = await listConversationMembers(params.groupId);
+  const actorIds = new Set(params.targetActorIds || []);
+  const userIds = new Set(params.targetUserIds || []);
+  const targetMemberIds: string[] = [];
+
+  for (const member of members) {
+    if (member.state !== 'active') continue;
+    if (member.actor_id && actorIds.has(member.actor_id)) {
+      targetMemberIds.push(member.id);
+    }
+    if (member.user_id && userIds.has(member.user_id)) {
+      targetMemberIds.push(member.id);
+    }
+  }
+
+  return targetMemberIds;
+}
+
+async function getDefaultTargetActorIds(groupId: string, senderActorId?: string) {
+  const members = await listConversationMembers(groupId);
+  return members
+    .filter((member) => member.state === 'active' && member.actor_id && member.actor_id !== senderActorId)
+    .map((member) => member.actor_id);
+}
+
+function senderTypeFromItem(item: any): 'user' | 'actor' | 'system' {
+  if (item.role === 'system' || item.author_member_type === 'system' || item.item_type === 'event') {
+    return 'system';
+  }
+  if (item.author_member_type === 'actor' || item.role === 'assistant') {
+    return 'actor';
+  }
+  return 'user';
+}
 
 // ============ Group CRUD ============
 
@@ -16,130 +195,218 @@ export async function createGroup(params: {
 }): Promise<{ group: any; members: any[]; message: any }> {
   const { workspaceId, createdBy, title, actorIds, initialMessage, targetActorId } = params;
   const groupId = uuidv4();
-  const batchId = uuidv4(); // Shared batch_id for all initial members
+  const batchId = uuidv4();
 
-  return transaction(async (client) => {
-    // 1. Create group
-    const groupResult = await client.query(
-      `INSERT INTO groups (id, workspace_id, title, created_by, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING *`,
-      [groupId, workspaceId, title || null, createdBy]
+  const result = await transaction(async (client) => {
+    const conversationResult = await client.query(
+      `INSERT INTO conversations (id, workspace_id, kind, title, created_by, metadata, created_at, updated_at)
+       VALUES ($1, $2, 'group', $3, $4, '{}'::jsonb, NOW(), NOW())
+       RETURNING *`,
+      [groupId, workspaceId, title || null, createdBy],
     );
-    const group = groupResult.rows[0];
+    const group = normalizeGroupRow(conversationResult.rows[0]);
 
-    // 2. Add user as member + event
+    const userMemberId = uuidv4();
     await client.query(
-      `INSERT INTO group_members (id, group_id, user_id, joined_at)
-       VALUES ($1, $2, $3, NOW())`,
-      [uuidv4(), groupId, createdBy]
-    );
-    await client.query(
-      `INSERT INTO group_member_events (id, group_id, user_id, event_type, batch_id, created_at)
-       VALUES ($1, $2, $3, 'joined', $4, NOW())`,
-      [uuidv4(), groupId, createdBy, batchId]
+      `INSERT INTO conversation_members
+         (id, conversation_id, member_type, user_id, state, metadata, joined_at)
+       VALUES ($1, $2, 'user', $3, 'active', '{}'::jsonb, NOW())`,
+      [userMemberId, groupId, createdBy],
     );
 
-    // 3. Create sessions and add actors as members + events
+    const actorRows = actorIds.length > 0
+      ? (await client.query(
+          `SELECT id, name, title FROM actors WHERE id = ANY($1)`,
+          [actorIds],
+        )).rows
+      : [];
+    const actorMap = new Map<string, any>(actorRows.map((row: any) => [row.id, row]));
+
     const members: any[] = [];
+    const joinedMembers: Array<{
+      memberId: string;
+      memberType: 'actor' | 'user';
+      actorId?: string;
+      userId?: string;
+      name: string;
+      title?: string;
+    }> = [{
+      memberId: userMemberId,
+      memberType: 'user' as const,
+      userId: createdBy,
+      name: 'User',
+    }];
+
     for (const actorId of actorIds) {
       const sessionId = uuidv4();
       await client.query(
-        `INSERT INTO sessions (id, workspace_id, actor_id, group_id, channel_type, trigger, status, metadata, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, 'web', 'user_message', 'sleeping', '{}', NOW(), NOW())`,
-        [sessionId, workspaceId, actorId, groupId]
+        `INSERT INTO sessions
+           (id, workspace_id, actor_id, conversation_id, channel_type, trigger, status, metadata, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'web', 'user_message', 'sleeping', '{}'::jsonb, NOW(), NOW())`,
+        [sessionId, workspaceId, actorId, groupId],
       );
+
       const memberId = uuidv4();
       await client.query(
-        `INSERT INTO group_members (id, group_id, actor_id, session_id, joined_at)
-         VALUES ($1, $2, $3, $4, NOW())`,
-        [memberId, groupId, actorId, sessionId]
-      );
-      await client.query(
-        `INSERT INTO group_member_events (id, group_id, actor_id, event_type, batch_id, created_at)
-         VALUES ($1, $2, $3, 'joined', $4, NOW())`,
-        [uuidv4(), groupId, actorId, batchId]
+        `INSERT INTO conversation_members
+           (id, conversation_id, member_type, actor_id, state, metadata, joined_at)
+         VALUES ($1, $2, 'actor', $3, 'active', '{}'::jsonb, NOW())`,
+        [memberId, groupId, actorId],
       );
       members.push({ id: memberId, actorId, sessionId });
+
+      const actorInfo = actorMap.get(actorId);
+      joinedMembers.push({
+        memberId,
+        memberType: 'actor',
+        actorId,
+        name: actorInfo?.name || 'Unknown',
+        title: actorInfo?.title,
+      });
     }
 
-    // 4. Write initial group message if provided
+    const eventItemId = uuidv4();
+    await client.query(
+      `INSERT INTO conversation_items
+         (id, conversation_id, scope, surface, item_type, subtype, role, metadata, created_at)
+       VALUES ($1, $2, 'shared', 'visible', 'event', 'member_joined', 'system', $3, NOW())`,
+      [eventItemId, groupId, JSON.stringify({ batchId, members: joinedMembers })],
+    );
+    await client.query(
+      `INSERT INTO conversation_item_parts
+         (id, item_id, ordinal, part_type, text_value, metadata)
+       VALUES ($1, $2, 0, 'text', $3, '{}'::jsonb)`,
+      [uuidv4(), eventItemId, `${joinedMembers.map((member) => member.name).join(', ')} joined the group`],
+    );
+
     let msgId: string | null = null;
     if (initialMessage && targetActorId) {
-      msgId = uuidv4();
-      await client.query(
-        `INSERT INTO group_messages (id, group_id, sender_type, sender_user_id, target_actor_ids, target_user_ids, content, metadata, created_at)
-         VALUES ($1, $2, 'user', $3, $4, '{}', $5, '{}', NOW())`,
-        [msgId, groupId, createdBy, [targetActorId], initialMessage]
-      );
+      const targetMember = members.find((member) => member.actorId === targetActorId);
+      const itemId = uuidv4();
+      const authorMemberId = userMemberId;
 
-      // 5. Also write to session_messages for the target actor's session (so AI sees it)
-      const targetMember = members.find(m => m.actorId === targetActorId);
+      await client.query(
+        `INSERT INTO conversation_items
+           (id, conversation_id, scope, surface, item_type, subtype, role, author_member_id, metadata, created_at)
+         VALUES ($1, $2, 'shared', 'visible', 'message', 'chat', 'user', $3, '{}'::jsonb, NOW())`,
+        [itemId, groupId, authorMemberId],
+      );
+      await client.query(
+        `INSERT INTO conversation_item_parts
+           (id, item_id, ordinal, part_type, text_value, metadata)
+         VALUES ($1, $2, 0, 'text', $3, '{}'::jsonb)`,
+        [uuidv4(), itemId, initialMessage],
+      );
       if (targetMember) {
         await client.query(
-          `INSERT INTO session_messages (id, session_id, workspace_id, role, content, from_user_id, metadata, created_at)
-           VALUES ($1, $2, $3, 'user', $4, $5, '{}', NOW())`,
-          [uuidv4(), targetMember.sessionId, workspaceId, initialMessage, createdBy]
+          `INSERT INTO conversation_item_targets (item_id, target_member_id, target_kind)
+           VALUES ($1, $2, 'to')`,
+          [itemId, targetMember.id],
         );
       }
+      await client.query('UPDATE conversations SET updated_at = NOW() WHERE id = $1', [groupId]);
+      msgId = itemId;
     }
 
     return { group, members, message: msgId ? { id: msgId } : null };
-  }).then(async (result) => {
-    // Wake the target actor (outside transaction) — only if an initial message was sent
-    if (targetActorId && initialMessage) {
-      const targetMember = result.members.find((m: any) => m.actorId === targetActorId);
-      if (targetMember) {
-        await wakeActor(groupId, targetActorId);
-      }
-    }
-
-    // Emit event
-    await emitEvent({
-      type: 'group.updated',
-      workspaceId: params.workspaceId,
-      payload: { groupId, action: 'created' },
-      timestamp: nowISO(),
-    });
-
-    return result;
   });
+
+  if (targetActorId && initialMessage) {
+    await wakeActor(groupId, targetActorId);
+  }
+
+  await emitEvent({
+    type: 'group.updated',
+    workspaceId,
+    payload: { groupId, action: 'created' },
+    timestamp: nowISO(),
+  });
+
+  return result;
 }
 
 export async function getGroup(groupId: string): Promise<any | null> {
-  const result = await query('SELECT * FROM groups WHERE id = $1', [groupId]);
-  return result.rows[0] ?? null;
+  const result = await query(
+    `SELECT * FROM conversations WHERE id = $1 AND kind = 'group'`,
+    [groupId],
+  );
+  return normalizeGroupRow(result.rows[0] ?? null);
 }
 
 export async function getGroupsByWorkspace(workspaceId: string, userId: string): Promise<any[]> {
-  const result = await query(
-    `SELECT g.*,
-       (SELECT content FROM group_messages WHERE group_id = g.id ORDER BY created_at DESC LIMIT 1) as last_message,
-       (SELECT sender_type FROM group_messages WHERE group_id = g.id ORDER BY created_at DESC LIMIT 1) as last_message_sender_type,
-       (SELECT COALESCE(a2.name, u2.name, 'System')
-        FROM group_messages gm2
-        LEFT JOIN actors a2 ON a2.id = gm2.sender_actor_id
-        LEFT JOIN users u2 ON u2.id = gm2.sender_user_id
-        WHERE gm2.group_id = g.id ORDER BY gm2.created_at DESC LIMIT 1) as last_message_sender_name,
-       (SELECT created_at FROM group_messages WHERE group_id = g.id ORDER BY created_at DESC LIMIT 1) as last_message_at,
-       (SELECT COUNT(*) FROM group_messages WHERE group_id = g.id
-        AND (sender_user_id = $2 OR $2 = ANY(target_user_ids))
-        AND created_at > COALESCE(
-          (SELECT last_read_at FROM user_group_reads WHERE user_id = $2 AND group_id = g.id),
-          '1970-01-01'
-        ))::int as unread_count,
-       (SELECT COUNT(*) FROM group_members gm
-        JOIN sessions s ON s.id = gm.session_id
-        WHERE gm.group_id = g.id AND s.status = 'active')::int as active_count
-     FROM groups g
-     JOIN group_members gm ON gm.group_id = g.id
-     WHERE g.workspace_id = $1 AND gm.user_id = $2
-     ORDER BY COALESCE(
-       (SELECT created_at FROM group_messages WHERE group_id = g.id ORDER BY created_at DESC LIMIT 1),
-       g.created_at
-     ) DESC`,
-    [workspaceId, userId]
+  const groups = await listUserGroupConversations(workspaceId, userId);
+  if (groups.length === 0) return [];
+
+  const groupIds = groups.map((group: any) => group.id);
+  const activeCountsResult = await query(
+    `SELECT conversation_id, COUNT(*)::int AS active_count
+     FROM sessions
+     WHERE conversation_id = ANY($1)
+       AND status = 'active'
+     GROUP BY conversation_id`,
+    [groupIds],
   );
-  return result.rows;
+  const activeCountMap = new Map<string, number>(
+    activeCountsResult.rows.map((row: any) => [row.conversation_id, row.active_count]),
+  );
+
+  const lastItemsResult = await query(
+    `SELECT DISTINCT ON (ci.conversation_id)
+            ci.conversation_id,
+            ci.id,
+            ci.role,
+            ci.item_type,
+            ci.created_at,
+            cm.member_type AS author_member_type,
+            COALESCE(a.name, u.name, cm.display_name) AS author_name
+     FROM conversation_items ci
+     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
+     LEFT JOIN actors a ON a.id = cm.actor_id
+     LEFT JOIN users u ON u.id = cm.user_id
+     WHERE ci.conversation_id = ANY($1)
+       AND ci.scope = 'shared'
+       AND ci.surface = 'visible'
+     ORDER BY ci.conversation_id, ci.sequence DESC`,
+    [groupIds],
+  );
+
+  const lastItemMap = new Map<string, any>(lastItemsResult.rows.map((row: any) => [row.conversation_id, row]));
+  const itemIds = lastItemsResult.rows.map((row: any) => row.id);
+  const lastPartsResult = itemIds.length > 0
+    ? await query(
+        `SELECT cip.*
+         FROM conversation_item_parts cip
+         WHERE cip.item_id = ANY($1)
+         ORDER BY cip.item_id, cip.ordinal ASC`,
+        [itemIds],
+      )
+    : { rows: [] };
+  const partsByItem = new Map<string, any[]>();
+  for (const row of lastPartsResult.rows) {
+    if (!partsByItem.has(row.item_id)) partsByItem.set(row.item_id, []);
+    partsByItem.get(row.item_id)!.push(row);
+  }
+
+  return groups.map((group: any) => {
+    const lastItem = lastItemMap.get(group.id);
+    const lastParts = lastItem ? partsByItem.get(lastItem.id) || [] : [];
+    const senderType = lastItem
+      ? senderTypeFromItem({
+          ...lastItem,
+          author_member_type: lastItem.author_member_type,
+        })
+      : null;
+
+    return {
+      ...normalizeGroupRow(group),
+      last_message: lastItem ? buildTextContentFromParts(lastParts) : null,
+      last_message_sender_type: senderType,
+      last_message_sender_name: lastItem?.author_name || 'System',
+      last_message_at: lastItem?.created_at || null,
+      unread_count: group.unread_count || 0,
+      active_count: activeCountMap.get(group.id) || 0,
+    };
+  });
 }
 
 // ============ Member Management ============
@@ -153,52 +420,55 @@ export async function addActorToGroup(
   const group = await getGroup(groupId);
   if (!group) throw new Error('Group not found');
 
-  // Check if already a member
-  const existing = await query(
-    'SELECT id FROM group_members WHERE group_id = $1 AND actor_id = $2',
-    [groupId, actorId]
-  );
-  if (existing.rows.length > 0) throw new Error('Actor already in group');
+  const existing = await getConversationMember({ conversationId: groupId, actorId });
+  if (existing?.state === 'active') {
+    throw new Error('Actor already in group');
+  }
 
-  const sessionId = uuidv4();
-  const memberId = uuidv4();
+  const actorResult = await query(
+    `SELECT name, title FROM actors WHERE id = $1`,
+    [actorId],
+  );
+  const actorInfo = actorResult.rows[0];
+  const member = await ensureConversationMember({
+    conversationId: groupId,
+    memberType: 'actor',
+    actorId,
+  });
+  const session = await createSession({
+    workspaceId: group.workspace_id,
+    actorId,
+    conversationId: groupId,
+    channelType: 'web',
+    trigger: 'actor_invite',
+    metadata: { lane: 'group' },
+  });
+  await updateSessionStatus(session.id, 'sleeping');
+
   const eventBatchId = batchId || uuidv4();
-
-  // Create session for the actor
-  await query(
-    `INSERT INTO sessions (id, workspace_id, actor_id, group_id, channel_type, trigger, status, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, 'web', 'actor_invite', 'sleeping', '{}', NOW(), NOW())`,
-    [sessionId, group.workspace_id, actorId, groupId]
-  );
-
-  // Add as member
-  await query(
-    `INSERT INTO group_members (id, group_id, actor_id, session_id, joined_at)
-     VALUES ($1, $2, $3, $4, NOW())`,
-    [memberId, groupId, actorId, sessionId]
-  );
-
-  // Record member event
-  await query(
-    `INSERT INTO group_member_events (id, group_id, actor_id, event_type, batch_id, created_at)
-     VALUES ($1, $2, $3, 'joined', $4, NOW())`,
-    [uuidv4(), groupId, actorId, eventBatchId]
-  );
-
-  // Emit event for real-time frontend
-  const actorResult = await query('SELECT name FROM actors WHERE id = $1', [actorId]);
-  const actorName = actorResult.rows[0]?.name || 'Unknown';
+  await recordMembershipEvent({
+    conversationId: groupId,
+    subtype: 'member_joined',
+    batchId: eventBatchId,
+    members: [{
+      memberId: member.id,
+      memberType: 'actor',
+      actorId,
+      name: actorInfo?.name || 'Unknown',
+      title: actorInfo?.title,
+    }],
+  });
 
   await emitEvent({
     type: 'group.member_joined',
     workspaceId: group.workspace_id,
-    payload: { groupId, actorId, actorName, batchId: eventBatchId },
+    payload: { groupId, actorId, actorName: actorInfo?.name || 'Unknown', batchId: eventBatchId },
     timestamp: nowISO(),
   });
 
   return {
-    member: { id: memberId, groupId, actorId, sessionId },
-    session: { id: sessionId },
+    member: { id: member.id, groupId, actorId, sessionId: session.id },
+    session: { id: session.id },
   };
 }
 
@@ -206,54 +476,74 @@ export async function removeActorFromGroup(groupId: string, actorId: string): Pr
   const group = await getGroup(groupId);
   if (!group) throw new Error('Group not found');
 
-  // Cancel the actor's session
+  const member = await getConversationMember({ conversationId: groupId, actorId });
+  if (!member) return;
+
   await query(
-    `UPDATE sessions SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
-     WHERE group_id = $1 AND actor_id = $2 AND status IN ('active', 'sleeping')`,
-    [groupId, actorId]
+    `UPDATE conversation_members
+     SET state = 'kicked', left_at = NOW()
+     WHERE id = $1`,
+    [member.id],
+  );
+  await query(
+    `UPDATE sessions
+     SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
+     WHERE conversation_id = $1 AND actor_id = $2 AND status IN ('active', 'sleeping')`,
+    [groupId, actorId],
   );
 
-  // Remove from group_members
-  await query(
-    'DELETE FROM group_members WHERE group_id = $1 AND actor_id = $2',
-    [groupId, actorId]
-  );
-
-  // Record kicked event
+  const actorResult = await query('SELECT name, title FROM actors WHERE id = $1', [actorId]);
+  const actorInfo = actorResult.rows[0];
   const eventBatchId = uuidv4();
-  await query(
-    `INSERT INTO group_member_events (id, group_id, actor_id, event_type, batch_id, created_at)
-     VALUES ($1, $2, $3, 'kicked', $4, NOW())`,
-    [uuidv4(), groupId, actorId, eventBatchId]
-  );
-
-  // Emit event
-  const actorResult = await query('SELECT name FROM actors WHERE id = $1', [actorId]);
-  const actorName = actorResult.rows[0]?.name || 'Unknown';
+  await recordMembershipEvent({
+    conversationId: groupId,
+    subtype: 'member_kicked',
+    batchId: eventBatchId,
+    members: [{
+      memberId: member.id,
+      memberType: 'actor',
+      actorId,
+      name: actorInfo?.name || 'Unknown',
+      title: actorInfo?.title,
+    }],
+  });
 
   await emitEvent({
     type: 'group.member_kicked',
     workspaceId: group.workspace_id,
-    payload: { groupId, actorId, actorName, batchId: eventBatchId },
+    payload: { groupId, actorId, actorName: actorInfo?.name || 'Unknown', batchId: eventBatchId },
     timestamp: nowISO(),
   });
 }
 
 export async function getGroupMembers(groupId: string): Promise<any[]> {
   const result = await query(
-    `SELECT gm.*,
-       a.name as actor_name, a.title as actor_title, a.role as actor_role,
-       u.name as user_name,
-       s.status as session_status
-     FROM group_members gm
-     LEFT JOIN actors a ON a.id = gm.actor_id
-     LEFT JOIN users u ON u.id = gm.user_id
-     LEFT JOIN sessions s ON s.id = gm.session_id
-     WHERE gm.group_id = $1
-     ORDER BY gm.joined_at ASC`,
-    [groupId]
+    `SELECT cm.*,
+            a.name AS actor_name,
+            a.title AS actor_title,
+            a.role AS actor_role,
+            u.name AS user_name,
+            ls.id AS session_id,
+            ls.status AS session_status
+     FROM conversation_members cm
+     LEFT JOIN actors a ON a.id = cm.actor_id
+     LEFT JOIN users u ON u.id = cm.user_id
+     LEFT JOIN LATERAL (
+       SELECT s.id, s.status
+       FROM sessions s
+       WHERE s.conversation_id = cm.conversation_id
+         AND s.actor_id = cm.actor_id
+       ORDER BY s.created_at DESC
+       LIMIT 1
+     ) ls ON TRUE
+     WHERE cm.conversation_id = $1
+     ORDER BY cm.joined_at ASC`,
+    [groupId],
   );
-  return result.rows;
+  return result.rows.map((row: any) => ({
+    ...row,
+    group_id: groupId,
+  }));
 }
 
 // ============ Group Messages ============
@@ -264,308 +554,234 @@ export async function sendGroupMessage(params: {
   senderUserId?: string;
   senderActorId?: string;
   senderSessionId?: string;
-  targetActorIds: string[];
+  targetActorIds?: string[];
   targetUserIds?: string[];
   content: string;
+  contentBlocks?: import('@synapse/shared').CanonicalContentBlock[];
   metadata?: Record<string, unknown>;
 }): Promise<any> {
-  const { groupId, senderType, senderUserId, senderActorId, senderSessionId, targetActorIds, targetUserIds = [], content, metadata = {} } = params;
-  const msgId = uuidv4();
+  const {
+    groupId,
+    senderType,
+    senderUserId,
+    senderActorId,
+    senderSessionId,
+    content,
+    contentBlocks,
+    metadata = {},
+  } = params;
+  const group = await getGroup(groupId);
+  if (!group) throw new Error('Group not found');
 
-  await query(
-    `INSERT INTO group_messages (id, group_id, sender_type, sender_user_id, sender_actor_id, sender_session_id, target_actor_ids, target_user_ids, content, metadata, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
-    [msgId, groupId, senderType, senderUserId || null, senderActorId || null, senderSessionId || null, targetActorIds, targetUserIds, content, JSON.stringify(metadata)]
-  );
+  let targetActorIds = params.targetActorIds || [];
+  let targetUserIds = params.targetUserIds || [];
+  if (targetActorIds.length === 0 && targetUserIds.length === 0) {
+    targetActorIds = await getDefaultTargetActorIds(groupId, senderActorId);
+  }
 
-  // Get sender name for event
+  const authorMember = senderType === 'actor'
+    ? await ensureConversationMember({ conversationId: groupId, memberType: 'actor', actorId: senderActorId })
+    : await ensureConversationMember({ conversationId: groupId, memberType: 'user', userId: senderUserId });
+
+  const targetMemberIds = await resolveMemberTargets({ groupId, targetActorIds, targetUserIds });
+  const normalizedMessage = await buildNormalizedMessageContent({ content, contentBlocks, metadata });
+
+  const item = await createConversationItem({
+    conversationId: groupId,
+    sessionId: senderSessionId,
+    scope: 'shared',
+    surface: 'visible',
+    itemType: 'message',
+    subtype: 'chat',
+    role: senderType === 'actor' ? 'assistant' : 'user',
+    authorMemberId: authorMember?.id,
+    metadata: normalizedMessage.normalizedMetadata,
+    parts: normalizedMessage.parts,
+    targetMemberIds,
+  });
+
   let senderName: string | undefined;
   if (senderActorId) {
-    const r = await query('SELECT name FROM actors WHERE id = $1', [senderActorId]);
-    senderName = r.rows[0]?.name;
+    const actorResult = await query('SELECT name FROM actors WHERE id = $1', [senderActorId]);
+    senderName = actorResult.rows[0]?.name;
   } else if (senderUserId) {
-    const r = await query('SELECT name FROM users WHERE id = $1', [senderUserId]);
-    senderName = r.rows[0]?.name;
+    const userResult = await query('SELECT name FROM users WHERE id = $1', [senderUserId]);
+    senderName = userResult.rows[0]?.name;
   }
 
-  // Get group workspace
-  const group = await getGroup(groupId);
+  const actorNames = await getActorNames(targetActorIds);
+  const userNames = await getUserNames(targetUserIds);
+  const targetActorNames = targetActorIds.map((id) => actorNames.get(id) || 'Unknown');
+  const targetUserNames = targetUserIds.map((id) => userNames.get(id) || 'Unknown');
 
-  // Resolve target names for the event
-  let targetActorNames: string[] = [];
-  if (targetActorIds.length > 0) {
-    const namesResult = await query('SELECT name FROM actors WHERE id = ANY($1)', [targetActorIds]);
-    targetActorNames = namesResult.rows.map((r: any) => r.name);
-  }
-  let targetUserNames: string[] = [];
-  if (targetUserIds.length > 0) {
-    const namesResult = await query('SELECT name FROM users WHERE id = ANY($1)', [targetUserIds]);
-    targetUserNames = namesResult.rows.map((r: any) => r.name);
-  }
+  await emitEvent({
+    type: 'session.message.new',
+    workspaceId: group.workspace_id,
+    payload: {
+      groupId,
+      messageId: item.id,
+      sessionId: senderSessionId || '',
+      role: senderType === 'actor' ? 'assistant' : 'user',
+      fromActorId: senderActorId,
+      fromUserId: senderUserId,
+      actorName: senderType === 'actor' ? senderName : undefined,
+      targetActorIds,
+      targetUserIds,
+      targetActorNames,
+      targetUserNames,
+      content: normalizedMessage.normalizedContent,
+      contentBlocks: normalizedMessage.contentBlocks,
+      metadata: normalizedMessage.normalizedMetadata,
+      createdAt: item.created_at,
+    },
+    timestamp: nowISO(),
+  });
 
-  // Emit event for WebSocket
-  if (group) {
-    await emitEvent({
-      type: 'session.message.new',
-      workspaceId: group.workspace_id,
-      payload: {
-        groupId,
-        messageId: msgId,
-        senderType,
-        senderActorId,
-        senderUserId,
-        senderName,
-        targetActorIds,
-        targetUserIds,
-        targetActorNames,
-        targetUserNames,
-        content,
-        metadata,
-      },
-      timestamp: nowISO(),
-    });
-  }
-
-  // Wake target actors
   for (const targetActorId of targetActorIds) {
     await wakeActor(groupId, targetActorId).catch((err) => {
       console.error(`Failed to wake actor ${targetActorId}:`, err.message);
     });
   }
 
-  return { id: msgId, groupId, senderType, content, targetActorIds, targetUserIds };
+  return {
+    id: item.id,
+    groupId,
+    sessionId: senderSessionId || '',
+    role: senderType === 'actor' ? 'assistant' : 'user',
+    fromUserId: senderUserId,
+    fromActorId: senderActorId,
+    actorName: senderType === 'actor' ? senderName : undefined,
+    targetActorIds,
+    targetUserIds,
+    content: normalizedMessage.normalizedContent,
+    contentBlocks: normalizedMessage.contentBlocks,
+    metadata: normalizedMessage.normalizedMetadata,
+    createdAt: item.created_at,
+  };
 }
 
-/**
- * Get group messages with visibility filtering and derived system events.
- * For users: sees messages sent by them or targeting them + system events.
- * For actors: sees messages sent by them or targeting them + system events.
- */
 export async function getGroupMessages(
   groupId: string,
   viewer: { userId?: string; actorId?: string },
   limit = 100,
-  before?: string
+  before?: string,
 ): Promise<any[]> {
-  // 1. Get the viewer's join time for filtering system events
-  let viewerJoinTime: Date;
-  if (viewer.userId) {
-    const joinResult = await query(
-      'SELECT joined_at FROM group_members WHERE group_id = $1 AND user_id = $2',
-      [groupId, viewer.userId]
-    );
-    viewerJoinTime = joinResult.rows[0]?.joined_at || new Date(0);
-  } else if (viewer.actorId) {
-    const joinResult = await query(
-      'SELECT joined_at FROM group_members WHERE group_id = $1 AND actor_id = $2',
-      [groupId, viewer.actorId]
-    );
-    viewerJoinTime = joinResult.rows[0]?.joined_at || new Date(0);
-  } else {
-    viewerJoinTime = new Date(0);
-  }
+  const group = await getGroup(groupId);
+  if (!group) return [];
 
-  // 2. Get chat messages (visibility filtered)
-  let chatWhereClause: string;
-  const chatParams: any[] = [groupId];
+  const viewerMember = viewer.userId
+    ? await getConversationMember({ conversationId: groupId, userId: viewer.userId })
+    : viewer.actorId
+      ? await getConversationMember({ conversationId: groupId, actorId: viewer.actorId })
+      : null;
+  if (!viewerMember) return [];
 
-  if (viewer.userId) {
-    chatWhereClause = `gm.group_id = $1 AND (gm.sender_user_id = $2 OR $2 = ANY(gm.target_user_ids))`;
-    chatParams.push(viewer.userId);
-  } else if (viewer.actorId) {
-    chatWhereClause = `gm.group_id = $1 AND (gm.sender_actor_id = $2 OR $2 = ANY(gm.target_actor_ids))`;
-    chatParams.push(viewer.actorId);
-  } else {
-    chatWhereClause = `gm.group_id = $1`;
-  }
-
+  let beforeSequence: number | undefined;
   if (before) {
-    chatParams.push(before);
-    chatWhereClause += ` AND gm.created_at < $${chatParams.length}`;
-  }
-
-  chatParams.push(limit);
-  const chatMsgs = await query(
-    `SELECT gm.*,
-       COALESCE(a.name, u.name) as sender_name,
-       (SELECT ARRAY_AGG(ta.name) FROM unnest(gm.target_actor_ids) tid JOIN actors ta ON ta.id = tid) as target_actor_names,
-       (SELECT ARRAY_AGG(tu.name) FROM unnest(gm.target_user_ids) tuid JOIN users tu ON tu.id = tuid) as target_user_names
-     FROM group_messages gm
-     LEFT JOIN actors a ON a.id = gm.sender_actor_id
-     LEFT JOIN users u ON u.id = gm.sender_user_id
-     WHERE ${chatWhereClause}
-     ORDER BY gm.created_at ASC
-     LIMIT $${chatParams.length}`,
-    chatParams
-  );
-
-  // 3. Get member events (after viewer joined)
-  const memberEvents = await query(
-    `SELECT gme.*,
-       COALESCE(av.name, a_direct.name, u.name) as member_name,
-       COALESCE(av.title, a_direct.title) as member_title,
-       COALESCE(av.charter, a_direct.charter) as member_charter
-     FROM group_member_events gme
-     LEFT JOIN LATERAL (
-       SELECT * FROM actor_versions av2
-       WHERE av2.actor_id = gme.actor_id AND av2.created_at <= gme.created_at
-       ORDER BY av2.version DESC LIMIT 1
-     ) av ON true
-     LEFT JOIN actors a_direct ON a_direct.id = gme.actor_id
-     LEFT JOIN users u ON u.id = gme.user_id
-     WHERE gme.group_id = $1 AND gme.created_at > $2
-     ORDER BY gme.created_at`,
-    [groupId, viewerJoinTime.toISOString()]
-  );
-
-  // 4. Get actor version changes (after viewer joined)
-  const versionChanges = await query(
-    `SELECT av.*, a.name as current_name
-     FROM actor_versions av
-     JOIN actors a ON a.id = av.actor_id
-     WHERE av.actor_id IN (
-       SELECT DISTINCT actor_id FROM group_member_events WHERE group_id = $1 AND actor_id IS NOT NULL
-     )
-     AND av.created_at > $2
-     AND av.version > 1
-     ORDER BY av.created_at`,
-    [groupId, viewerJoinTime.toISOString()]
-  );
-
-  // 5. Merge and sort all events by timestamp
-  const allEvents: any[] = [];
-
-  // Chat messages
-  for (const msg of chatMsgs.rows) {
-    allEvents.push({
-      ...msg,
-      _eventType: 'chat',
-      _sortTime: new Date(msg.created_at),
-    });
-  }
-
-  // Member events — group by batch_id
-  const batchGroups = new Map<string, any[]>();
-  for (const evt of memberEvents.rows) {
-    const bid = evt.batch_id || evt.id;
-    if (!batchGroups.has(bid)) batchGroups.set(bid, []);
-    batchGroups.get(bid)!.push(evt);
-  }
-
-  for (const [batchId, events] of batchGroups) {
-    const eventType = events[0].event_type;
-    const names = events.map((e: any) => e.member_name || 'Unknown').join(', ');
-    let content: string;
-    if (eventType === 'joined') {
-      content = `${names} joined the group`;
-      const firstWithCharter = events.find((e: any) => e.member_title);
-      if (firstWithCharter && events.length === 1) {
-        content += ` (${firstWithCharter.member_title})`;
-      }
-    } else if (eventType === 'kicked') {
-      content = `${names} was removed from the group`;
-    } else {
-      content = `${names} left the group`;
+    const itemResult = await query(
+      `SELECT sequence FROM conversation_items WHERE id = $1 AND conversation_id = $2`,
+      [before, groupId],
+    );
+    if (itemResult.rows[0]) {
+      beforeSequence = itemResult.rows[0].sequence;
+    } else if (!Number.isNaN(Number(before))) {
+      beforeSequence = Number(before);
     }
-
-    allEvents.push({
-      id: `system-member-${batchId}`,
-      group_id: groupId,
-      sender_type: 'system',
-      content,
-      created_at: events[0].created_at,
-      _eventType: 'system',
-      _sortTime: new Date(events[0].created_at),
-    });
   }
 
-  // Actor version changes
-  for (const vc of versionChanges.rows) {
-    const changes: string[] = [];
-    if (vc.title) changes.push(`title: ${vc.title}`);
-    if (vc.charter) {
-      const brief = vc.charter.split('\n')[0].substring(0, 120);
-      changes.push(`charter: ${brief}`);
-    }
-    allEvents.push({
-      id: `system-version-${vc.id}`,
-      group_id: groupId,
-      sender_type: 'system',
-      content: `${vc.current_name || vc.name}'s profile was updated${changes.length > 0 ? ': ' + changes.join(', ') : ''}`,
-      created_at: vc.created_at,
-      _eventType: 'system',
-      _sortTime: new Date(vc.created_at),
-    });
-  }
+  const items = await getVisibleConversationItemsForMember({
+    conversationId: groupId,
+    memberId: viewerMember.id,
+    beforeSequence,
+    limit,
+  });
 
-  // Sort by time
-  allEvents.sort((a, b) => a._sortTime.getTime() - b._sortTime.getTime());
+  return items.map((item: any) => {
+    const metadata = parseJson(item.metadata);
+    const senderType = senderTypeFromItem(item);
+    const role = senderType === 'user' ? 'user' : senderType === 'actor' ? 'assistant' : 'system';
 
-  // Clean up internal fields
-  return allEvents.map(({ _eventType, _sortTime, ...rest }) => rest);
+    return {
+      id: item.id,
+      groupId,
+      sessionId: item.session_id || '',
+      role,
+      fromUserId: item.author_user_id || null,
+      fromActorId: item.author_actor_id || null,
+      actorName: role === 'assistant' ? item.author_name || 'System' : undefined,
+      targetActorIds: (item.targets || [])
+        .filter((target: any) => target.member_type === 'actor' && target.actor_id)
+        .map((target: any) => target.actor_id),
+      targetUserIds: (item.targets || [])
+        .filter((target: any) => target.member_type === 'user' && target.user_id)
+        .map((target: any) => target.user_id),
+      content: buildTextContentFromParts(item.parts || []),
+      contentBlocks: itemPartsToCanonicalContentBlocks(item.parts || []),
+      metadata,
+      createdAt: item.created_at,
+      targetActorNames: (item.targets || [])
+        .filter((target: any) => target.member_type === 'actor')
+        .map((target: any) => target.member_name || 'Unknown'),
+      targetUserNames: (item.targets || [])
+        .filter((target: any) => target.member_type === 'user')
+        .map((target: any) => target.member_name || 'Unknown'),
+    };
+  });
 }
 
 // ============ Actor Wake / Sleep ============
 
 export async function wakeActor(groupId: string, actorId: string): Promise<void> {
-  // Find the actor's session in this group
-  const memberResult = await query(
-    `SELECT gm.session_id, s.status, s.workspace_id, s.actor_id
-     FROM group_members gm
-     JOIN sessions s ON s.id = gm.session_id
-     WHERE gm.group_id = $1 AND gm.actor_id = $2`,
-    [groupId, actorId]
-  );
+  const group = await getGroup(groupId);
+  if (!group) return;
 
-  if (memberResult.rows.length === 0) return;
+  let session = await ensureActorSession({
+    conversationId: groupId,
+    workspaceId: group.workspace_id,
+    actorId,
+    trigger: 'group_message',
+  });
+  session = await getSession(session.id);
+  if (!session) return;
 
-  const { session_id, status, workspace_id } = memberResult.rows[0];
-
-  if (status === 'sleeping') {
-    // Wake: sleeping → active
+  if (session.status === 'sleeping' || session.status === 'completed' || session.status === 'failed' || session.status === 'cancelled' || session.status === 'timed_out') {
     await query(
-      `UPDATE sessions SET status = 'active', updated_at = NOW() WHERE id = $1`,
-      [session_id]
+      `UPDATE sessions SET status = 'active', error_message = NULL, completed_at = NULL, updated_at = NOW() WHERE id = $1`,
+      [session.id],
     );
 
-    // Enqueue thinking job
     await sessionThinkingQueue.add('think', {
-      sessionId: session_id,
+      sessionId: session.id,
       actorId,
-      workspaceId: workspace_id,
+      workspaceId: group.workspace_id,
       trigger: 'group_message',
     });
 
-    // Emit status change
     await emitEvent({
       type: 'session.status.changed',
-      workspaceId: workspace_id,
-      payload: { groupId, sessionId: session_id, actorId, status: 'active', previousStatus: 'sleeping' },
+      workspaceId: group.workspace_id,
+      payload: { groupId, sessionId: session.id, actorId, status: 'active', previousStatus: session.status },
       timestamp: nowISO(),
     });
   }
-  // If already active, the inter-round message check will pick up new messages
 }
 
 export async function sleepActor(sessionId: string): Promise<void> {
-  const session = await query('SELECT * FROM sessions WHERE id = $1', [sessionId]);
-  if (session.rows.length === 0) return;
-
-  const s = session.rows[0];
-  if (s.status !== 'active') return;
+  const session = await getSession(sessionId);
+  if (!session || session.status !== 'active') return;
 
   await query(
     `UPDATE sessions SET status = 'sleeping', updated_at = NOW() WHERE id = $1`,
-    [sessionId]
+    [sessionId],
   );
 
   await emitEvent({
     type: 'session.status.changed',
-    workspaceId: s.workspace_id,
+    workspaceId: session.workspace_id,
     payload: {
-      groupId: s.group_id,
+      groupId: session.group_id,
       sessionId,
-      actorId: s.actor_id,
+      actorId: session.actor_id,
       status: 'sleeping',
       previousStatus: 'active',
     },
@@ -576,29 +792,19 @@ export async function sleepActor(sessionId: string): Promise<void> {
 // ============ Mark Read ============
 
 export async function markGroupRead(userId: string, groupId: string): Promise<void> {
-  await query(
-    `INSERT INTO user_group_reads (user_id, group_id, last_read_at)
-     VALUES ($1, $2, NOW())
-     ON CONFLICT (user_id, group_id) DO UPDATE SET last_read_at = NOW()`,
-    [userId, groupId]
-  );
+  const lastItem = await getLastVisibleConversationItem(groupId);
+  await markConversationRead(userId, groupId, lastItem?.id);
 }
 
 // ============ Cancel Group ============
 
 export async function cancelGroup(groupId: string): Promise<void> {
-  // Cancel all active/sleeping sessions in this group
-  const sessions = await query(
-    `SELECT id FROM sessions WHERE group_id = $1 AND status IN ('active', 'sleeping')`,
-    [groupId]
+  await query(
+    `UPDATE sessions
+     SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
+     WHERE conversation_id = $1 AND status IN ('active', 'sleeping')`,
+    [groupId],
   );
-
-  for (const s of sessions.rows) {
-    await query(
-      `UPDATE sessions SET status = 'cancelled', completed_at = NOW(), updated_at = NOW() WHERE id = $1`,
-      [s.id]
-    );
-  }
 
   const group = await getGroup(groupId);
   if (group) {

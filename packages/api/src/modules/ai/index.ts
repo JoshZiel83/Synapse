@@ -1,16 +1,27 @@
-import type { Actor, ActorSkill, Memory, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext } from '@synapse/shared';
+import type { Actor, ActorSkill, Memory, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow } from '@synapse/shared';
+import type { CanonicalContextItem } from '@synapse/shared/types';
+import { textBlocks, extractText } from '@synapse/shared';
 import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
 import { createAIProvider, type AIProvider, type AIProviderConfig } from './providers/index.js';
 import { toolCallsToActions } from './tools.js';
 import { buildActorPrompt } from './prompt-builder.js';
 import { logAIRequest } from '../model-groups/service.js';
-import { logToolCall } from '../mcp-plugins/audit.js';
 import { resolveBuiltinTools, executeCallableTools, isCallableTool, isActionTool } from './tool-plugins.js';
 import { runWithToolContext } from './session-tools.js';
 import { getMcpVersion } from '../mcp-plugins/instance-manager.js';
-import { adaptAttachments, type Attachment } from './content-adapter.js';
-import { ingestToolResultContent, ingestResponseMedia, extractAttachmentsFromBlocks } from './content-ingest.js';
+import { ingestToolResultContent, ingestResponseMedia } from './content-ingest.js';
+import { resolveFileRefSegments } from './fileref-resolver.js';
+import { buildAdHocContextItems } from './context-builder.js';
+import { buildAdHocProviderContextWindow } from '../context/service.js';
+import {
+  createToolCall,
+  createToolExecutionAttempt,
+  createToolResult,
+  finalizeToolExecutionAttempt,
+  logProviderStep,
+  updateToolCallStatus,
+} from '../execution/service.js';
 
 export { buildActorPrompt } from './prompt-builder.js';
 
@@ -45,6 +56,49 @@ function getProvider(resolved?: ResolvedModelConfig | null): AIProvider {
   return provider;
 }
 
+function collectFileRefBlocks(blocks: CanonicalContentBlock[]): Extract<CanonicalContentBlock, { type: 'file_ref' }>[] {
+  return blocks.filter((block): block is Extract<CanonicalContentBlock, { type: 'file_ref' }> => block.type === 'file_ref');
+}
+
+function mergeContentBlocks(
+  baseBlocks: CanonicalContentBlock[],
+  extraBlocks: CanonicalContentBlock[],
+): CanonicalContentBlock[] {
+  const merged: CanonicalContentBlock[] = [...baseBlocks];
+  const seenFileIds = new Set(
+    merged
+      .filter((block): block is Extract<CanonicalContentBlock, { type: 'file_ref' }> => block.type === 'file_ref')
+      .map((block) => block.fileId),
+  );
+
+  for (const block of extraBlocks) {
+    if (block.type === 'text') {
+      if (block.text) merged.push(block);
+      continue;
+    }
+    if (seenFileIds.has(block.fileId)) continue;
+    seenFileIds.add(block.fileId);
+    merged.push(block);
+  }
+
+  return merged;
+}
+
+async function buildResponseContentBlocks(
+  provider: AIProvider,
+  textContent: string,
+  supplementalBlocks: CanonicalContentBlock[],
+): Promise<CanonicalContentBlock[]> {
+  const segments = provider.parseFileRefs(textContent);
+  const baseBlocks = segments.some((segment) => segment.type === 'ref')
+    ? await resolveFileRefSegments(segments)
+    : textContent
+      ? [{ type: 'text', text: textContent } satisfies CanonicalContentBlock]
+      : [];
+
+  return mergeContentBlocks(baseBlocks, supplementalBlocks);
+}
+
 interface Subordinate {
   name: string;
   title: string;
@@ -52,15 +106,44 @@ interface Subordinate {
   skills?: ActorSkill[];
 }
 
+function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
+  return blocks.map((block) => {
+    if (block.type === 'text') {
+      return { type: 'text' as const, text: block.text };
+    }
+    return {
+      type: 'file_ref' as const,
+      fileId: block.fileId,
+      mimeType: block.mimeType,
+      name: block.originalName,
+      metadata: {
+        storedName: block.storedName,
+        url: block.url,
+        sizeBytes: block.sizeBytes,
+        category: block.category,
+      },
+    };
+  });
+}
+
+function inferToolKind(toolName: string, mcpToolNames: Set<string>) {
+  if (mcpToolNames.has(toolName)) return 'mcp_plugin' as const;
+  if (isActionTool(toolName)) return 'action' as const;
+  if (isCallableTool(toolName)) return 'callable' as const;
+  return 'builtin' as const;
+}
+
 export async function actorThink(
   actor: Actor,
   memories: Memory[],
-  conversationMessages: ConversationMessage[],
+  contextWindow: ProviderContextWindow,
   subordinates?: Subordinate[],
   resolved?: ResolvedModelConfig | null,
   workspaceId?: string,
   options?: {
     sessionId?: string;
+    turnId?: string;
+    conversationId?: string;
     groupId?: string;
     groupMembers?: GroupMemberEntry[];
     userId?: string;
@@ -70,43 +153,44 @@ export async function actorThink(
     mcpVersion?: number;
     mcpRefresh?: () => Promise<{ tools: import('@synapse/shared').ToolDefinition[]; mcpVersion: number }>;
     mcpSetTurnId?: (turnId: string, round?: number) => void;
-    attachments?: Attachment[];
     system: string;
-    checkNewMessages?: () => Promise<{ role: string; content: string; metadata?: any }[] | null>;
+    checkNewMessages?: () => Promise<CanonicalContextItem[] | null>;
   },
 ): Promise<ThinkingResult> {
   const system = options?.system || '';
   const provider = getProvider(resolved);
+  let allTools: import('@synapse/shared').ToolDefinition[] = [];
 
-  // If attachments are present, adapt the last user message to include multimodal content blocks
-  let multimodalContent: unknown[] | undefined;
-  if (options?.attachments && options.attachments.length > 0 && conversationMessages.length > 0) {
-    // Find the last user message
-    let lastUserIdx = -1;
-    for (let i = conversationMessages.length - 1; i >= 0; i--) {
-      if (conversationMessages[i].role === 'user') {
-        lastUserIdx = i;
-        break;
-      }
-    }
-    if (lastUserIdx >= 0) {
-      const lastUserMsg = conversationMessages[lastUserIdx] as { role: 'user'; content: string };
-      const { contentBlocks, textFallback } = await adaptAttachments(
-        lastUserMsg.content,
-        options.attachments,
-        resolved?.multimodal,
-        resolved?.providerType || (config.ai.provider as any),
-      );
-      // If we have multimodal blocks (more than just text), use content blocks
-      if (contentBlocks.length > 1) {
-        multimodalContent = contentBlocks;
-        // Update the text content to include fallback descriptions
-        (conversationMessages[lastUserIdx] as any).content = textFallback;
-      } else {
-        (conversationMessages[lastUserIdx] as any).content = textFallback;
-      }
-    }
-  }
+  const allContextWindow: ProviderContextWindow = {
+    sharedArchivePoint: contextWindow.sharedArchivePoint,
+    sharedTailItems: [...contextWindow.sharedTailItems],
+    privateArchivePoint: contextWindow.privateArchivePoint,
+    privateTailItems: [...contextWindow.privateTailItems],
+    orderedTailItems: [...contextWindow.orderedTailItems],
+  };
+
+  const appendSharedTailItems = (items: CanonicalContextItem[]) => {
+    if (items.length === 0) return;
+    allContextWindow.sharedTailItems.push(...items);
+    allContextWindow.orderedTailItems.push(...items);
+  };
+
+  const appendPrivateTailItems = (items: CanonicalContextItem[]) => {
+    if (items.length === 0) return;
+    allContextWindow.privateTailItems.push(...items);
+    allContextWindow.orderedTailItems.push(...items);
+  };
+
+  const buildRequestLog = (round: number) => ({
+    provider: resolved?.providerType || config.ai.provider,
+    model: resolved?.modelName || config.ai.model,
+    round,
+    system,
+    contextWindow: allContextWindow,
+    tools: allTools,
+    builtinTools: resolved?.builtinTools || null,
+    multimodal: resolved?.multimodal || null,
+  });
 
   // Build ToolResolveContext for builtin tool resolution
   const resolveCtx: ToolResolveContext = {
@@ -128,22 +212,13 @@ export async function actorThink(
 
   // Merge: MCP names override builtin (defensive)
   const filteredBuiltin = builtinTools.filter(t => !mcpToolNames.has(t.name));
-  let allTools = [...filteredBuiltin, ...mcpToolDefs];
+  allTools = [...filteredBuiltin, ...mcpToolDefs];
   let currentMcpVersion = options?.mcpVersion ?? 0;
 
   const startTime = Date.now();
-  const turnId = randomUUID();
+  const turnId = options?.turnId || randomUUID();
+  const executionEnabled = !!options?.turnId && !!options?.conversationId;
   let totalTokens = { input: 0, output: 0 };
-
-  // Capture initial request context for logging (no API key!)
-  const initialRequestLog = {
-    provider: resolved?.providerType || config.ai.provider,
-    model: resolved?.modelName || config.ai.model,
-    system,
-    messages: conversationMessages,
-    tools: allTools,
-    builtinTools: resolved?.builtinTools || null,
-  };
 
   const allToolsUsed: string[] = []; // track callable tools invoked
   const allServerToolCalls: ServerToolCall[] = []; // track cloud-side tool calls
@@ -151,10 +226,10 @@ export async function actorThink(
   const onStatus = options?.onStatus;
   let currentRound = 0; // track for error handler
 
-  // Accumulate canonical ToolRound[] for intra-turn continuation
-  const canonicalRounds: ToolRound[] = [];
+  // Accumulate ToolRound[] for DB storage only (not passed to provider)
+  const toolRounds: ToolRound[] = [];
   // Accumulate media attachments from MCP/model responses
-  const allMediaAttachments: Attachment[] = [];
+  const allSupplementalBlocks: CanonicalContentBlock[] = [];
 
   // Common fields for logAIRequest
   const logCommon = {
@@ -179,23 +254,55 @@ export async function actorThink(
   return _actorThinkInner();
 
   async function _actorThinkInner(): Promise<ThinkingResult> {
+  const recordProviderRound = async (params: {
+    round: number;
+    latencyMs: number;
+    status: 'success' | 'error' | 'timeout';
+    requestBody: unknown;
+    responseBody?: unknown;
+    stopReason?: string;
+    inputTokens: number;
+    outputTokens: number;
+    errorMessage?: string;
+  }) => {
+    if (executionEnabled) {
+      return logProviderStep({
+        turnId: options!.turnId!,
+        stepIndex: params.round,
+        providerType: (resolved?.providerType || config.ai.provider) === 'openai' ? 'openai' : 'anthropic',
+        requestType: 'actor_think',
+        modelGroupId: resolved?.groupId,
+        modelItemId: resolved?.itemId,
+        modelConfigId: resolved?.configId,
+        modelName: resolved?.modelName || config.ai.model,
+        capabilitiesSnapshot: {
+          builtinTools: resolved?.builtinTools || [],
+          multimodal: resolved?.multimodal || null,
+          toolNames: allTools.map((tool) => tool.name),
+        },
+        requestPayload: params.requestBody,
+        responsePayload: params.responseBody,
+        stopReason: params.stopReason,
+        inputTokens: params.inputTokens,
+        outputTokens: params.outputTokens,
+        latencyMs: params.latencyMs,
+        status: params.status,
+        errorMessage: params.errorMessage,
+      });
+    }
 
-  // Helper to log tool calls with current round context
-  const logToolCallWithRound = (roundNum: number, tc: { name: string; input: Record<string, unknown> }, toolType: 'callable' | 'action', output?: string, isError?: boolean) => {
-    logToolCall({
-      workspaceId: workspaceId || '',
-      sessionId: options?.sessionId,
-      turnId,
-      round: roundNum,
-      actorId: actor.id,
-      pluginId: null,
-      toolName: tc.name,
-      toolType,
-      input: tc.input,
-      output,
-      isError,
-      transport: toolType,
+    await logAIRequest({
+      ...logCommon,
+      round: params.round,
+      inputTokens: params.inputTokens,
+      outputTokens: params.outputTokens,
+      latencyMs: params.latencyMs,
+      status: params.status,
+      errorMessage: params.errorMessage,
+      requestBody: params.requestBody,
+      responseBody: params.responseBody,
     });
+    return null;
   };
 
   try {
@@ -208,11 +315,9 @@ export async function actorThink(
 
       const response = await provider.chat({
         system,
-        messages: conversationMessages,
+        contextWindow: allContextWindow,
         tools: allTools,
         builtinTools: resolved?.builtinTools,
-        canonicalRounds: canonicalRounds.length > 0 ? canonicalRounds : undefined,
-        multimodalContent: round === 0 ? multimodalContent : undefined,
         multimodal: resolved?.multimodal,
       });
 
@@ -220,36 +325,47 @@ export async function actorThink(
       totalTokens.input += response.tokensUsed.input;
       totalTokens.output += response.tokensUsed.output;
 
-      // Build per-round request/response bodies
-      const roundRequestBody = round === 0
-        ? initialRequestLog
-        : { round: currentRound, continuationToolResults: canonicalRounds[canonicalRounds.length - 1]?.toolResults };
+      // Extract from canonical context
+      const assistantMsg = response.context[0];
+      const textContent = assistantMsg?.role === 'assistant' ? extractText(assistantMsg.content) : '';
+      const toolCalls = (assistantMsg?.role === 'assistant' && assistantMsg.toolCalls) ? assistantMsg.toolCalls : [];
+
+      // Build per-round request/response bodies for logging
+      const roundRequestBody = buildRequestLog(currentRound);
       const roundResponseBody = {
         stopReason: response.stopReason,
-        toolCalls: response.toolCalls.map((tc) => ({ id: tc.id, name: tc.name, input: tc.input })),
-        textContent: response.textContent,
+        toolCalls: toolCalls.map((tc: any) => ({
+          callId: tc.callId,
+          providerCallId: tc.providerCallId,
+          toolName: tc.toolName,
+          input: tc.input,
+        })),
+        textContent,
         rawAssistantMessage: response.rawAssistantMessage,
       };
 
-      // Log this round's AI request immediately
-      logAIRequest({
-        ...logCommon,
+      const providerStep = await recordProviderRound({
         round: currentRound,
-        inputTokens: response.tokensUsed.input,
-        outputTokens: response.tokensUsed.output,
         latencyMs: roundLatencyMs,
         status: 'success',
         requestBody: roundRequestBody,
         responseBody: roundResponseBody,
-      }).catch(err => console.error('[actorThink] Failed to log AI request:', err.message));
+        stopReason: response.stopReason,
+        inputTokens: response.tokensUsed.input,
+        outputTokens: response.tokensUsed.output,
+      }).catch((err) => {
+        console.error('[actorThink] Failed to log AI request:', err.message);
+        return null;
+      });
 
-      console.log(`[actorThink] actor=${actor.id} turn=${turnId.slice(0,8)} round=${currentRound} stopReason=${response.stopReason} toolCalls=[${response.toolCalls.map(tc => tc.name).join(',')}] textLen=${response.textContent.length}`);
+      console.log(`[actorThink] actor=${actor.id} turn=${turnId.slice(0,8)} round=${currentRound} stopReason=${response.stopReason} toolCalls=[${toolCalls.map((tc: any) => tc.toolName).join(',')}] textLen=${textContent.length}`);
 
-      // Ingest response media (Phase 5)
+      // Ingest response media → CanonicalContentBlock[] for ToolRound.content
+      let roundMediaBlocks: CanonicalContentBlock[] = [];
       if (response.mediaBlocks && response.mediaBlocks.length > 0 && workspaceId) {
         try {
-          const mediaAtts = await ingestResponseMedia(response.mediaBlocks, resolved?.providerType || 'anthropic', workspaceId);
-          allMediaAttachments.push(...mediaAtts);
+          roundMediaBlocks = await ingestResponseMedia(response.mediaBlocks, resolved?.providerType || 'anthropic', workspaceId);
+          allSupplementalBlocks.push(...collectFileRefBlocks(roundMediaBlocks));
         } catch (err: any) {
           console.error('[actorThink] Failed to ingest response media:', err.message);
         }
@@ -276,115 +392,275 @@ export async function actorThink(
       }
 
       // For OpenAI: inject <cite> markers into text using url_citation annotations
+      // We need a mutable textContent for citation injection
+      let finalTextContent = textContent;
       if (citations && !Array.isArray(response.rawAssistantMessage)) {
-        response.textContent = injectOpenAICitationMarkers(response.textContent, response.rawAssistantMessage, citations);
+        finalTextContent = injectOpenAICitationMarkers(textContent, response.rawAssistantMessage, citations);
       }
 
       // Dispatch: three-bucket separation
-      const actionCalls   = response.toolCalls.filter(tc => isActionTool(tc.name));
-      const callableCalls = response.toolCalls.filter(tc => isCallableTool(tc.name));
-      const mcpCalls      = response.toolCalls.filter(tc => mcpToolNames.has(tc.name));
+      const actionCalls   = toolCalls.filter((tc: any) => isActionTool(tc.toolName));
+      const callableCalls = toolCalls.filter((tc: any) => isCallableTool(tc.toolName));
+      const mcpCalls      = toolCalls.filter((tc: any) => mcpToolNames.has(tc.toolName));
       const allContinuableCalls = [...callableCalls, ...mcpCalls];
 
       if (allContinuableCalls.length > 0) {
         // Track tool names and emit status
-        const toolNames = allContinuableCalls.map((tc) => tc.name);
+        const toolNames = allContinuableCalls.map((tc: any) => tc.toolName);
         allToolsUsed.push(...toolNames);
         if (onStatus) {
           await onStatus(`Calling ${toolNames.join(', ')}...`);
         }
 
+        const roundBundleId = randomUUID();
+        const toolCallRows = new Map<string, any>();
+        if (executionEnabled) {
+          for (let callIndex = 0; callIndex < allContinuableCalls.length; callIndex++) {
+            const tc = allContinuableCalls[callIndex];
+            const row = await createToolCall({
+              id: tc.callId,
+              turnId: options!.turnId!,
+              providerStepId: providerStep?.id,
+              conversationId: options!.conversationId!,
+              sessionId: options?.sessionId,
+              callIndex,
+              providerCallId: tc.providerCallId,
+              bundleId: roundBundleId,
+              toolKind: inferToolKind(tc.toolName, mcpToolNames),
+              toolName: tc.toolName,
+              normalizedInput: tc.input,
+            });
+            toolCallRows.set(tc.callId, row);
+            await updateToolCallStatus(row.id, 'running');
+          }
+        }
+
         // Execute callable tools (builtin registry)
-        const callableResults = callableCalls.length > 0 ? await executeCallableTools(callableCalls) : [];
+        const callableResults = [];
+        for (const tc of callableCalls) {
+          const callRow = toolCallRows.get(tc.callId);
+          const attempt = executionEnabled && callRow
+            ? await createToolExecutionAttempt({
+                toolCallId: callRow.id,
+                attemptNo: 1,
+                executorKind: 'callable',
+                transport: 'callable',
+                requestPayload: tc.input,
+              })
+            : null;
+          const attemptStart = Date.now();
+          const [res] = await executeCallableTools([tc]);
+          callableResults.push(res);
+
+          if (executionEnabled && callRow && attempt) {
+            const blocks = typeof res.content === 'string'
+              ? textBlocks(res.content)
+              : textBlocks(JSON.stringify(res.content));
+            await finalizeToolExecutionAttempt({
+              attemptId: attempt.id,
+              status: res.isError ? 'error' : 'success',
+              isError: res.isError,
+              errorMessage: res.isError && typeof res.content === 'string' ? res.content : undefined,
+              durationMs: Date.now() - attemptStart,
+              responsePayload: res,
+            });
+            await createToolResult({
+              toolCallId: callRow.id,
+              attemptId: attempt.id,
+              isError: res.isError,
+              errorMessage: res.isError && typeof res.content === 'string' ? res.content : undefined,
+              parts: blocksToToolResultParts(blocks),
+            });
+            await updateToolCallStatus(callRow.id, res.isError ? 'failed' : 'completed');
+          }
+        }
 
         // Execute MCP tools via mcpExecutor, with content ingestion
-        const mcpResults: import('@synapse/shared').ToolResult[] = [];
+        const mcpResults: { toolCallId: string; providerCallId?: string; toolName: string; content: CanonicalContentBlock[]; isError?: boolean; metadata?: Record<string, unknown> }[] = [];
         if (mcpCalls.length > 0 && options?.mcpExecutor) {
           for (const tc of mcpCalls) {
+            const callRow = toolCallRows.get(tc.callId);
+            const attempt = executionEnabled && callRow
+              ? await createToolExecutionAttempt({
+                  toolCallId: callRow.id,
+                  attemptNo: 1,
+                  executorKind: 'mcp_plugin',
+                  transport: 'mcp',
+                  requestPayload: tc.input,
+                })
+              : null;
+            const attemptStart = Date.now();
             try {
-              const rawResult = await options.mcpExecutor(tc.name, tc.input);
-              // Ingest MCP result content into platform file storage
-              if (workspaceId && typeof rawResult !== 'string') {
-                const normalizedContent = await ingestToolResultContent(rawResult, workspaceId);
-                mcpResults.push({ toolCallId: tc.id, toolName: tc.name, content: normalizedContent });
-                // Extract file_ref attachments for metadata
-                if (Array.isArray(normalizedContent)) {
-                  const atts = extractAttachmentsFromBlocks(normalizedContent);
-                  allMediaAttachments.push(...atts);
-                }
-              } else {
-                mcpResults.push({ toolCallId: tc.id, toolName: tc.name, content: rawResult });
+              const rawResult = await options.mcpExecutor(tc.toolName, tc.input);
+              // Ingest MCP result content into platform file storage (always returns CanonicalContentBlock[])
+              const normalizedContent = workspaceId
+                ? await ingestToolResultContent(rawResult, workspaceId)
+                : (typeof rawResult === 'string' ? textBlocks(rawResult) : textBlocks(JSON.stringify(rawResult)));
+              mcpResults.push({
+                toolCallId: tc.callId,
+                providerCallId: tc.providerCallId,
+                toolName: tc.toolName,
+                content: normalizedContent,
+              });
+              allSupplementalBlocks.push(...collectFileRefBlocks(normalizedContent));
+
+              if (executionEnabled && callRow && attempt) {
+                await finalizeToolExecutionAttempt({
+                  attemptId: attempt.id,
+                  status: 'success',
+                  durationMs: Date.now() - attemptStart,
+                  responsePayload: rawResult,
+                });
+                await createToolResult({
+                  toolCallId: callRow.id,
+                  attemptId: attempt.id,
+                  parts: blocksToToolResultParts(normalizedContent),
+                });
+                await updateToolCallStatus(callRow.id, 'completed');
               }
             } catch (err: any) {
-              mcpResults.push({ toolCallId: tc.id, toolName: tc.name, content: `Error: ${err.message}`, isError: true });
+              mcpResults.push({
+                toolCallId: tc.callId,
+                providerCallId: tc.providerCallId,
+                toolName: tc.toolName,
+                content: textBlocks(`Error: ${err.message}`),
+                isError: true,
+              });
+              if (executionEnabled && callRow && attempt) {
+                const errorBlocks = textBlocks(`Error: ${err.message}`);
+                await finalizeToolExecutionAttempt({
+                  attemptId: attempt.id,
+                  status: 'error',
+                  isError: true,
+                  errorMessage: err.message,
+                  durationMs: Date.now() - attemptStart,
+                  responsePayload: { error: err.message },
+                });
+                await createToolResult({
+                  toolCallId: callRow.id,
+                  attemptId: attempt.id,
+                  isError: true,
+                  errorMessage: err.message,
+                  parts: blocksToToolResultParts(errorBlocks),
+                });
+                await updateToolCallStatus(callRow.id, 'failed');
+              }
             }
           }
         }
 
         const toolResults = [...callableResults, ...mcpResults];
 
-        // Accumulate canonical ToolRound
-        const roundToolCalls: CanonicalToolCall[] = allContinuableCalls.map((tc) => ({
-          id: tc.id,
-          name: tc.name,
+        // Build ToolRound for DB storage
+        const roundToolCalls: CanonicalToolCall[] = allContinuableCalls.map((tc: any) => ({
+          callId: tc.callId,
+          providerCallId: tc.providerCallId,
+          toolName: tc.toolName,
           input: tc.input,
         }));
         const roundToolResults: CanonicalToolResult[] = toolResults.map((tr) => ({
           toolCallId: tr.toolCallId,
+          providerCallId: tr.providerCallId,
           toolName: tr.toolName,
-          content: tr.content as string | import('@synapse/shared').CanonicalContentBlock[],
+          content: typeof tr.content === 'string' ? textBlocks(tr.content) : (Array.isArray(tr.content) ? tr.content as CanonicalContentBlock[] : textBlocks(JSON.stringify(tr.content))),
           isError: tr.isError,
+          metadata: tr.metadata,
         }));
-        canonicalRounds.push({
-          textContent: response.textContent || undefined,
+        const roundContentBlocks: CanonicalContentBlock[] = [];
+        if (finalTextContent) roundContentBlocks.push({ type: 'text', text: finalTextContent });
+        if (roundMediaBlocks.length > 0) roundContentBlocks.push(...roundMediaBlocks);
+        toolRounds.push({
+          content: roundContentBlocks.length > 0 ? roundContentBlocks : undefined,
           toolCalls: roundToolCalls,
           toolResults: roundToolResults,
         });
 
-        // Log each callable tool call individually
-        for (let ci = 0; ci < callableCalls.length; ci++) {
-          const tc = callableCalls[ci];
-          const res = callableResults[ci];
-          logToolCallWithRound(currentRound, tc, 'callable',
-            typeof res?.content === 'string' ? res.content : res?.content ? JSON.stringify(res.content) : undefined,
-            res?.isError);
-        }
+        appendPrivateTailItems([{
+          kind: 'tool_call_batch',
+          conversationId: options?.conversationId,
+          sessionId: options?.sessionId,
+          turnId,
+          scope: 'private',
+          surface: 'internal',
+          role: 'assistant',
+          bundleId: roundBundleId,
+          author: {
+            memberType: 'actor',
+            actorId: actor.id,
+            sessionId: options?.sessionId,
+            name: actor.name,
+            isSelf: true,
+          },
+          content: roundContentBlocks.length > 0 ? roundContentBlocks : undefined,
+          toolCalls: roundToolCalls,
+        }, {
+          kind: 'tool_result_batch',
+          conversationId: options?.conversationId,
+          sessionId: options?.sessionId,
+          turnId,
+          scope: 'private',
+          surface: 'internal',
+          bundleId: roundBundleId,
+          toolResults: roundToolResults,
+        }]);
 
         // If model also produced action calls in the same turn, execute them and finish
         if (actionCalls.length > 0) {
           const actions = toolCallsToActions(actionCalls);
-
-          for (const tc of actionCalls) {
-            logToolCallWithRound(currentRound, tc, 'action', JSON.stringify(tc.input));
+          if (executionEnabled) {
+            const actionBundleId = randomUUID();
+            for (let actionIndex = 0; actionIndex < actionCalls.length; actionIndex++) {
+              const tc = actionCalls[actionIndex];
+              const actionRow = await createToolCall({
+                id: tc.callId,
+                turnId: options!.turnId!,
+                providerStepId: providerStep?.id,
+                conversationId: options!.conversationId!,
+                sessionId: options?.sessionId,
+                callIndex: actionIndex,
+                providerCallId: tc.providerCallId,
+                bundleId: actionBundleId,
+                toolKind: 'action',
+                toolName: tc.toolName,
+                normalizedInput: tc.input,
+              });
+              await createToolResult({
+                toolCallId: actionRow.id,
+                parts: [{ type: 'json', json: tc.input }],
+              });
+              await updateToolCallStatus(actionRow.id, 'completed');
+            }
           }
 
-          const toolHistory: AssistantToolHistory | undefined = canonicalRounds.length > 0 ? { rounds: canonicalRounds } : undefined;
+          const toolHistory: AssistantToolHistory | undefined = toolRounds.length > 0 ? { rounds: toolRounds } : undefined;
+          const contentBlocks = await buildResponseContentBlocks(provider, finalTextContent, allSupplementalBlocks);
           return {
             actions,
-            reasoning: response.textContent,
+            reasoning: finalTextContent,
             tokensUsed: totalTokens,
             toolsUsed: allToolsUsed,
             serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
             citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
             toolHistory,
-            mediaAttachments: allMediaAttachments.length > 0 ? allMediaAttachments : undefined,
+            contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
           };
         }
 
         // If 'sleep' callable tool was called, the session is now sleeping — stop the loop
-        const sleepCalled = callableCalls.some((tc: any) => tc.name === 'sleep');
+        const sleepCalled = callableCalls.some((tc: any) => tc.toolName === 'sleep');
         if (sleepCalled) {
           const actions: ActorAction[] = [];
-          const toolHistory: AssistantToolHistory | undefined = canonicalRounds.length > 0 ? { rounds: canonicalRounds } : undefined;
+          const toolHistory: AssistantToolHistory | undefined = toolRounds.length > 0 ? { rounds: toolRounds } : undefined;
+          const contentBlocks = await buildResponseContentBlocks(provider, finalTextContent, allSupplementalBlocks);
           return {
             actions,
-            reasoning: response.textContent,
+            reasoning: finalTextContent,
             tokensUsed: totalTokens,
             toolsUsed: allToolsUsed.length > 0 ? allToolsUsed : undefined,
             serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
             citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
             toolHistory,
-            mediaAttachments: allMediaAttachments.length > 0 ? allMediaAttachments : undefined,
+            contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
           };
         }
 
@@ -412,12 +688,7 @@ export async function actorThink(
           try {
             const newMsgs = await options.checkNewMessages();
             if (newMsgs && newMsgs.length > 0) {
-              for (const msg of newMsgs) {
-                conversationMessages.push({
-                  role: 'user',
-                  content: `[新消息] ${msg.content}`,
-                });
-              }
+              appendSharedTailItems(newMsgs);
               console.log(`[actorThink] Injected ${newMsgs.length} new message(s) between rounds`);
             }
           } catch (err: any) {
@@ -431,12 +702,36 @@ export async function actorThink(
       // No callable calls — process action calls (terminal) and finish
       let actions: ActorAction[];
       if (actionCalls.length > 0) {
-        actions = toolCallsToActions(actionCalls);
-
-        for (const tc of actionCalls) {
-          logToolCallWithRound(currentRound, tc, 'action', JSON.stringify(tc.input));
+        actions = toolCallsToActions(actionCalls).map((action) => (
+          action.type === 'respond' && !action.contentBlocks
+            ? { ...action, contentBlocks: textBlocks(action.content) }
+            : action
+        ));
+        if (executionEnabled) {
+          const actionBundleId = randomUUID();
+          for (let actionIndex = 0; actionIndex < actionCalls.length; actionIndex++) {
+            const tc = actionCalls[actionIndex];
+            const actionRow = await createToolCall({
+              id: tc.callId,
+              turnId: options!.turnId!,
+              providerStepId: providerStep?.id,
+              conversationId: options!.conversationId!,
+              sessionId: options?.sessionId,
+              callIndex: actionIndex,
+              providerCallId: tc.providerCallId,
+              bundleId: actionBundleId,
+              toolKind: 'action',
+              toolName: tc.toolName,
+              normalizedInput: tc.input,
+            });
+            await createToolResult({
+              toolCallId: actionRow.id,
+              parts: [{ type: 'json', json: tc.input }],
+            });
+            await updateToolCallStatus(actionRow.id, 'completed');
+          }
         }
-      } else if (response.textContent) {
+      } else if (finalTextContent) {
         // Pure text with no tool calls = reasoning only. No visible group message.
         // send_to handles all visible messaging; text here is saved as session_message for audit.
         actions = [];
@@ -445,19 +740,24 @@ export async function actorThink(
         // Don't generate a fallback — the actor communicated via tools. Worker will auto-sleep.
         actions = [];
       } else {
-        actions = [{ type: 'respond', content: 'I could not process this request.' }];
+        actions = [{
+          type: 'respond',
+          content: 'I could not process this request.',
+          contentBlocks: textBlocks('I could not process this request.'),
+        }];
       }
 
-      const toolHistory: AssistantToolHistory | undefined = canonicalRounds.length > 0 ? { rounds: canonicalRounds } : undefined;
+      const toolHistory: AssistantToolHistory | undefined = toolRounds.length > 0 ? { rounds: toolRounds } : undefined;
+      const contentBlocks = await buildResponseContentBlocks(provider, finalTextContent, allSupplementalBlocks);
       return {
         actions,
-        reasoning: response.textContent,
+        reasoning: finalTextContent,
         tokensUsed: totalTokens,
         toolsUsed: allToolsUsed.length > 0 ? allToolsUsed : undefined,
         serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
         citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
         toolHistory,
-        mediaAttachments: allMediaAttachments.length > 0 ? allMediaAttachments : undefined,
+        contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
       };
     }
 
@@ -465,27 +765,29 @@ export async function actorThink(
     console.warn(`[actorThink] actor=${actor.id} exceeded max tool rounds (${MAX_TOOL_ROUNDS})`);
 
     return {
-      actions: [{ type: 'respond', content: 'I ran into complexity processing this request. Please try again with a simpler question.' }],
+      actions: [{
+        type: 'respond',
+        content: 'I ran into complexity processing this request. Please try again with a simpler question.',
+        contentBlocks: textBlocks('I ran into complexity processing this request. Please try again with a simpler question.'),
+      }],
       reasoning: 'Exceeded maximum tool rounds',
       tokensUsed: totalTokens,
       toolsUsed: allToolsUsed.length > 0 ? allToolsUsed : undefined,
       serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
       citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
-      toolHistory: canonicalRounds.length > 0 ? { rounds: canonicalRounds } : undefined,
-      mediaAttachments: allMediaAttachments.length > 0 ? allMediaAttachments : undefined,
+      toolHistory: toolRounds.length > 0 ? { rounds: toolRounds } : undefined,
+      contentBlocks: allSupplementalBlocks.length > 0 ? allSupplementalBlocks : undefined,
     };
   } catch (err: any) {
-    // Log the failed round
-    await logAIRequest({
-      ...logCommon,
-      round: currentRound,
-      inputTokens: totalTokens.input,
-      outputTokens: totalTokens.output,
+    await recordProviderRound({
+      round: currentRound || 1,
       latencyMs: Date.now() - startTime,
       status: 'error',
+      requestBody: buildRequestLog(currentRound || 1),
+      inputTokens: totalTokens.input,
+      outputTokens: totalTokens.output,
       errorMessage: err.message,
-      requestBody: currentRound <= 1 ? initialRequestLog : { round: currentRound },
-    });
+    }).catch(() => {});
     throw err;
   }
   } // end _actorThinkInner
@@ -498,12 +800,11 @@ export async function aiComplete(
   logContext?: { workspaceId?: string; actorId?: string },
 ): Promise<{ content: string; tokensUsed: { input: number; output: number } }> {
   const provider = getProvider(resolved);
-
-  // Convert to ConversationMessage[] for the unified interface
-  const convMessages: ConversationMessage[] = messages.map((m) => ({
-    role: m.role as 'user' | 'assistant',
-    content: m.content,
-  }));
+  const contextItems = buildAdHocContextItems(messages.map((message) => ({
+    role: message.role as 'user' | 'assistant',
+    content: textBlocks(message.content),
+  })));
+  const contextWindow = buildAdHocProviderContextWindow(contextItems);
 
   const startTime = Date.now();
   let status = 'success';
@@ -514,11 +815,11 @@ export async function aiComplete(
     provider: resolved?.providerType || config.ai.provider,
     model: resolved?.modelName || config.ai.model,
     system,
-    messages: convMessages,
+    contextWindow,
   };
 
   try {
-    response = await provider.chat({ system, messages: convMessages });
+    response = await provider.chat({ system, contextWindow });
   } catch (err: any) {
     status = 'error';
     errorMessage = err.message;
@@ -540,6 +841,8 @@ export async function aiComplete(
   }
 
   const latencyMs = Date.now() - startTime;
+  const ctxMsg = response.context[0];
+  const responseText = ctxMsg?.role === 'assistant' ? extractText(ctxMsg.content) : '';
 
   await logAIRequest({
     workspaceId: logContext?.workspaceId,
@@ -555,13 +858,13 @@ export async function aiComplete(
     requestBody: requestLog,
     responseBody: {
       stopReason: response.stopReason,
-      textContent: response.textContent,
+      textContent: responseText,
       tokens: response.tokensUsed,
     },
   });
 
   return {
-    content: response.textContent,
+    content: responseText,
     tokensUsed: response.tokensUsed,
   };
 }

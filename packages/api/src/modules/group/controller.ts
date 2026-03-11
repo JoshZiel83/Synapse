@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import type { CanonicalContentBlock } from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { query } from '../../infrastructure/database/index.js';
 import { redis } from '../../infrastructure/redis/index.js';
@@ -8,6 +9,15 @@ import {
   sendGroupMessage, markGroupRead, cancelGroup, getGroupMembers,
   removeActorFromGroup,
 } from './service.js';
+
+const sendGroupMessageSchema = z.object({
+  content: z.string().max(10000).optional().default(''),
+  contentBlocks: z.array(z.any()).optional(),
+  targetActorIds: z.array(z.string().uuid()).optional(),
+}).refine(
+  (body) => body.content.trim().length > 0 || (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
+  { message: 'content or contentBlocks is required' },
+);
 
 export default async function groupController(app: FastifyInstance) {
   app.addHook('onRequest', authMiddleware);
@@ -135,31 +145,7 @@ export default async function groupController(app: FastifyInstance) {
       const userId = (request as any).user!.userId;
       const limit = parseInt(request.query.limit || '100', 10);
       const before = request.query.before;
-      const rawMessages = await getGroupMessages(request.params.groupId, { userId }, limit, before);
-
-      // Transform to frontend GroupMessage format
-      const messages = rawMessages.map((m: any) => {
-        let role: string;
-        if (m.sender_type === 'user') role = 'user';
-        else if (m.sender_type === 'actor') role = 'assistant';
-        else role = 'system';
-
-        return {
-          id: m.id,
-          sessionId: m.sender_session_id || '',
-          role,
-          content: m.content,
-          fromActorId: m.sender_actor_id,
-          fromUserId: m.sender_user_id,
-          actorName: role === 'assistant' ? m.sender_name : undefined,
-          createdAt: m.created_at,
-          metadata: m.metadata,
-          targetActorIds: m.target_actor_ids,
-          targetUserIds: m.target_user_ids,
-          targetActorNames: m.target_actor_names,
-        };
-      });
-
+      const messages = await getGroupMessages(request.params.groupId, { userId }, limit, before);
       return reply.send({ messages });
     }
   );
@@ -168,33 +154,22 @@ export default async function groupController(app: FastifyInstance) {
   app.post<{ Params: { workspaceId: string; groupId: string }; Body: any }>(
     '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/messages',
     async (request, reply) => {
-      const body = request.body as any;
+      const body = sendGroupMessageSchema.parse(request.body) as {
+        content: string;
+        contentBlocks?: CanonicalContentBlock[];
+        targetActorIds?: string[];
+      };
       const userId = (request as any).user!.userId;
       const { groupId } = request.params;
-
-      const content = body.content;
-      if (!content || typeof content !== 'string') {
-        return reply.status(400).send({ error: 'content is required' });
-      }
-
-      // If targetActorIds not specified, target all actors in the group
-      let targetActorIds: string[] = body.targetActorIds;
-      if (!targetActorIds || targetActorIds.length === 0) {
-        const membersResult = await query(
-          `SELECT actor_id FROM group_members WHERE group_id = $1 AND actor_id IS NOT NULL`,
-          [groupId]
-        );
-        targetActorIds = membersResult.rows.map((r: any) => r.actor_id);
-      }
 
       const msg = await sendGroupMessage({
         groupId,
         senderType: 'user',
         senderUserId: userId,
-        targetActorIds,
+        targetActorIds: body.targetActorIds,
         targetUserIds: [],
-        content,
-        metadata: body.attachments ? { attachments: body.attachments } : undefined,
+        content: body.content,
+        contentBlocks: body.contentBlocks,
       });
 
       return reply.status(201).send(msg);

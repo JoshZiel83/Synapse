@@ -3,11 +3,13 @@ import { redis } from '../infrastructure/redis/index.js';
 import { query } from '../infrastructure/database/index.js';
 import { emitEvent } from '../infrastructure/events/index.js';
 import { QUEUE_NAMES, ACTOR_LOCK_TTL, REDIS_CHANNELS, nowISO } from '@synapse/shared';
-import type { ConversationMessage } from '@synapse/shared';
+import { textBlocks } from '@synapse/shared';
 import { actorThink } from '../modules/ai/index.js';
 import { buildActorPrompt } from '../modules/ai/prompt-builder.js';
 import { executeActorActions } from '../modules/orchestrator/service.js';
 import { resolveModelConfig } from '../modules/model-groups/resolver.js';
+import { buildAdHocContextItems } from '../modules/ai/context-builder.js';
+import { buildAdHocProviderContextWindow } from '../modules/context/service.js';
 
 export function startActorThinkingWorker() {
   const worker = new Worker(
@@ -55,9 +57,10 @@ export function startActorThinkingWorker() {
         );
 
         // Build conversation messages
-        const conversationMessages: ConversationMessage[] = [
-          { role: 'user', content: `[Trigger: ${trigger}] Process any pending work.` },
-        ];
+        const contextItems = buildAdHocContextItems([
+          { role: 'user', content: textBlocks(`[Trigger: ${trigger}] Process any pending work.`) },
+        ]);
+        const contextWindow = buildAdHocProviderContextWindow(contextItems);
 
         // Refresh actor lock TTL periodically during multi-round thinking
         const lockRefreshInterval = setInterval(async () => {
@@ -71,7 +74,7 @@ export function startActorThinkingWorker() {
           result = await actorThink(
             actor,
             memoriesResult.rows,
-            conversationMessages,
+            contextWindow,
             undefined,
             resolvedConfig,
             workspaceId,

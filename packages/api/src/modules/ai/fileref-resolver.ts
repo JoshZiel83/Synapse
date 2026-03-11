@@ -1,0 +1,74 @@
+/**
+ * FileRef Resolver: validate and resolve <FileRef id="..."/> segments
+ * from model output text into CanonicalContentBlock[].
+ */
+import type { CanonicalContentBlock } from '@synapse/shared';
+import { getFileRecord } from '../files/service.js';
+
+export type FileRefSegment =
+  | { type: 'text'; text: string }
+  | { type: 'ref'; fileId: string };
+
+export function parseFileRefSegments(text: string): FileRefSegment[] {
+  const regex = /<FileRef\s+id="([^"]+)"\s*\/>/g;
+  const segments: FileRefSegment[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ type: 'text', text: text.slice(lastIndex, match.index) });
+    }
+    segments.push({ type: 'ref', fileId: match[1] });
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    segments.push({ type: 'text', text: text.slice(lastIndex) });
+  }
+
+  return segments;
+}
+
+function mimeToCategory(mimeType: string): 'image' | 'audio' | 'video' | 'document' {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  if (mimeType.startsWith('video/')) return 'video';
+  return 'document';
+}
+
+/**
+ * Resolve FileRef segments (from provider.parseFileRefs) into CanonicalContentBlock[].
+ * Text segments pass through; ref segments are looked up in the DB.
+ */
+export async function resolveFileRefSegments(
+  segments: FileRefSegment[],
+): Promise<CanonicalContentBlock[]> {
+  const blocks: CanonicalContentBlock[] = [];
+
+  for (const seg of segments) {
+    if (seg.type === 'text') {
+      if (seg.text) blocks.push({ type: 'text', text: seg.text });
+      continue;
+    }
+
+    // Look up file record in DB
+    const file = await getFileRecord(seg.fileId);
+    if (file) {
+      blocks.push({
+        type: 'file_ref',
+        fileId: file.id,
+        storedName: file.storedName,
+        url: file.url,
+        mimeType: file.mimeType,
+        originalName: file.originalName,
+        sizeBytes: file.sizeBytes,
+        category: mimeToCategory(file.mimeType),
+      });
+    } else {
+      blocks.push({ type: 'text', text: `[File not found: ${seg.fileId}]` });
+    }
+  }
+
+  return blocks;
+}

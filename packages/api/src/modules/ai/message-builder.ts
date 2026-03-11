@@ -2,12 +2,14 @@
  * Message Builder: Convert session_messages DB rows → ConversationMessage[]
  * for structured multi-turn conversation passing to AI providers.
  */
-import type { ConversationMessage, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory } from '@synapse/shared';
+import type { ConversationMessage, CanonicalContentBlock, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory } from '@synapse/shared';
+import { textBlocks } from '@synapse/shared';
 
 interface SessionMessageRow {
   id: string;
   role: string;
   content: string;
+  contentBlocks?: CanonicalContentBlock[];
   metadata: Record<string, unknown> | string;
   created_at: string;
 }
@@ -33,14 +35,8 @@ export function buildConversationMessages(
 
     switch (msg.role) {
       case 'user': {
-        let content = msg.content;
-        // Append attachment descriptions
-        if (Array.isArray(meta.attachments) && meta.attachments.length > 0) {
-          for (const att of meta.attachments) {
-            content += `\n[Attached file: ${att.originalName} (${att.mimeType}) - ${att.url}]`;
-          }
-        }
-        messages.push({ role: 'user', content });
+        const blocks: CanonicalContentBlock[] = Array.isArray(msg.contentBlocks) ? msg.contentBlocks : textBlocks(msg.content);
+        messages.push({ role: 'user', content: blocks });
         break;
       }
 
@@ -50,21 +46,24 @@ export function buildConversationMessages(
           const toolHistory = meta.toolHistory as AssistantToolHistory;
           expandToolHistory(messages, msg.content, toolHistory);
         } else {
-          messages.push({ role: 'assistant', content: msg.content });
+          messages.push({
+            role: 'assistant',
+            content: Array.isArray(msg.contentBlocks) ? msg.contentBlocks : textBlocks(msg.content),
+          });
         }
         break;
       }
 
       case 'system':
-        messages.push({ role: 'user', content: `[Task Instruction]: ${msg.content}` });
+        messages.push({ role: 'user', content: textBlocks(`[Task Instruction]: ${msg.content}`) });
         break;
 
       case 'child_result':
-        messages.push({ role: 'user', content: msg.content });
+        messages.push({ role: 'user', content: textBlocks(msg.content) });
         break;
 
       case 'tool_result':
-        messages.push({ role: 'user', content: `[Tool Result]: ${msg.content}` });
+        messages.push({ role: 'user', content: textBlocks(`[Tool Result]: ${msg.content}`) });
         break;
     }
   }
@@ -75,12 +74,12 @@ export function buildConversationMessages(
     for (const interrupt of options.interrupts) {
       interruptContent += `- [${interrupt.type}]: ${interrupt.content}\n`;
     }
-    messages.push({ role: 'user', content: interruptContent });
+    messages.push({ role: 'user', content: textBlocks(interruptContent) });
   }
 
   // Append memory notice
   if (options.memoryNotice) {
-    messages.push({ role: 'user', content: options.memoryNotice });
+    messages.push({ role: 'user', content: textBlocks(options.memoryNotice) });
   }
 
   // Ensure messages end with user role (required by most APIs)
@@ -92,7 +91,7 @@ export function buildConversationMessages(
 /**
  * Expand tool history into proper conversation turn structure:
  * For each round in the tool history:
- *   - assistant message with text + toolCalls
+ *   - assistant message with content + toolCalls
  *   - tool_result message with results
  * Final assistant message with the main response text.
  */
@@ -102,21 +101,23 @@ function expandToolHistory(
   toolHistory: AssistantToolHistory,
 ): void {
   if (!toolHistory.rounds || toolHistory.rounds.length === 0) {
-    messages.push({ role: 'assistant', content: finalText });
+    messages.push({ role: 'assistant', content: textBlocks(finalText) });
     return;
   }
 
   for (const round of toolHistory.rounds) {
     // Assistant message with tool calls
     const toolCalls: CanonicalToolCall[] = round.toolCalls.map((tc) => ({
-      id: tc.id,
-      name: tc.name,
+      callId: tc.callId,
+      providerCallId: tc.providerCallId,
+      toolName: tc.toolName,
       input: tc.input,
+      metadata: tc.metadata,
     }));
 
     messages.push({
       role: 'assistant',
-      content: round.textContent || '',
+      content: round.content || [],
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     });
 
@@ -124,9 +125,11 @@ function expandToolHistory(
     if (round.toolResults.length > 0) {
       const results: CanonicalToolResult[] = round.toolResults.map((tr) => ({
         toolCallId: tr.toolCallId,
+        providerCallId: tr.providerCallId,
         toolName: tr.toolName,
         content: tr.content,
         isError: tr.isError,
+        metadata: tr.metadata,
       }));
       messages.push({ role: 'tool_result', results });
     }
@@ -134,7 +137,7 @@ function expandToolHistory(
 
   // Final assistant message with the response text
   if (finalText) {
-    messages.push({ role: 'assistant', content: finalText });
+    messages.push({ role: 'assistant', content: textBlocks(finalText) });
   }
 }
 
@@ -146,6 +149,6 @@ function ensureEndsWithUser(messages: ConversationMessage[]): void {
   if (messages.length === 0) return;
   const last = messages[messages.length - 1];
   if (last.role !== 'user') {
-    messages.push({ role: 'user', content: 'Please continue.' });
+    messages.push({ role: 'user', content: textBlocks('Please continue.') });
   }
 }

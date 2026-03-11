@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { registerToolPlugin } from './tool-plugins.js';
 import { query } from '../../infrastructure/database/index.js';
 import { getSession } from '../session/service.js';
-import { sendGroupMessage, addActorToGroup, sleepActor } from '../group/service.js';
+import { sendGroupMessage, addActorToGroup, getGroupMembers, sleepActor } from '../group/service.js';
 
 /**
  * Register callable tool plugins.
@@ -94,17 +94,10 @@ export function registerCallableToolPlugins(): void {
       }
 
       // Load all current group members (excluding self)
-      const allMembers = await query(
-        `SELECT gm.actor_id, gm.user_id, a.name as actor_name, a.title as actor_title, u.name as user_name
-         FROM group_members gm
-         LEFT JOIN actors a ON a.id = gm.actor_id
-         LEFT JOIN users u ON u.id = gm.user_id
-         WHERE gm.group_id = $1`,
-        [session.group_id]
-      );
+      const allMembers = await getGroupMembers(session.group_id);
 
       const memberMap = new Map<string, { type: 'actor' | 'user'; id: string; name: string }>();
-      for (const m of allMembers.rows) {
+      for (const m of allMembers) {
         if (m.actor_id && m.actor_id !== context.actorId) {
           memberMap.set(m.actor_name.toLowerCase(), { type: 'actor', id: m.actor_id, name: m.actor_name });
         }

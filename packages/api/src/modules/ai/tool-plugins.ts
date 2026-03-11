@@ -41,24 +41,31 @@ export function resolveBuiltinTools(ctx: ToolResolveContext): ToolDefinition[] {
 export async function executeCallableTools(toolCalls: ToolCall[]): Promise<ToolResult[]> {
   const results: ToolResult[] = [];
   for (const tc of toolCalls) {
-    const plugin = registry.get(tc.name);
+    const plugin = registry.get(tc.toolName);
     if (!plugin || plugin.kind !== 'callable' || !plugin.execute) {
       results.push({
-        toolCallId: tc.id,
-        toolName: tc.name,
-        content: `Error: unknown callable tool "${tc.name}"`,
+        toolCallId: tc.callId,
+        providerCallId: tc.providerCallId,
+        toolName: tc.toolName,
+        content: `Error: unknown callable tool "${tc.toolName}"`,
         isError: true,
       });
       continue;
     }
     try {
       const content = await plugin.execute(tc.input);
-      results.push({ toolCallId: tc.id, toolName: tc.name, content });
+      results.push({
+        toolCallId: tc.callId,
+        providerCallId: tc.providerCallId,
+        toolName: tc.toolName,
+        content,
+      });
     } catch (err: any) {
       results.push({
-        toolCallId: tc.id,
-        toolName: tc.name,
-        content: `Error executing tool "${tc.name}": ${err.message}`,
+        toolCallId: tc.callId,
+        providerCallId: tc.providerCallId,
+        toolName: tc.toolName,
+        content: `Error executing tool "${tc.toolName}": ${err.message}`,
         isError: true,
       });
     }

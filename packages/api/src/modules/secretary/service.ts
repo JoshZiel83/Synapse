@@ -6,6 +6,7 @@ import {
   getSessionMessages,
   addSessionMessage,
 } from '../session/service.js';
+import { getToolHistoryForSession } from '../execution/service.js';
 import { sessionThinkingQueue } from '../../workers/queues.js';
 import type { Actor, UUID } from '@synapse/shared';
 
@@ -108,55 +109,52 @@ export async function getConversation(
 
   if (sessionsResult.rows.length === 0) return [];
 
-  const sessionIds = sessionsResult.rows.map((r: any) => r.id);
-  const sessionMsgsResult = await query(
-    `SELECT sm.*,
-       arl.group_id as log_group_id,
-       arl.config_id as log_config_id,
-       arl.input_tokens as log_input_tokens,
-       arl.output_tokens as log_output_tokens,
-       arl.latency_ms as log_latency_ms,
-       arl.status as log_status,
-       mic.provider_type as log_provider_type,
-       mic.model_name as log_model_name,
-       mg.name as log_group_name
-     FROM session_messages sm
-     LEFT JOIN LATERAL (
-       SELECT * FROM ai_request_logs
-       WHERE workspace_id = sm.workspace_id
-         AND actor_id = sm.from_actor_id
-         AND request_type = 'actor_think'
-         AND created_at >= sm.created_at - interval '30 seconds'
-         AND created_at <= sm.created_at + interval '5 seconds'
-       ORDER BY created_at DESC
-       LIMIT 1
-     ) arl ON sm.role = 'assistant'
-     LEFT JOIN model_item_configs mic ON mic.id = arl.config_id
-     LEFT JOIN model_groups mg ON mg.id = arl.group_id
-     WHERE sm.session_id = ANY($1)
-       AND sm.role IN ('user', 'assistant')
-     ORDER BY sm.created_at ASC`,
-    [sessionIds]
-  );
+  const rows: any[] = [];
+  for (const sessionRow of sessionsResult.rows) {
+    const [messages, providerSteps, toolHistory] = await Promise.all([
+      getSessionMessages(sessionRow.id),
+      query(
+        `SELECT ps.*, mg.name AS model_group_name, mic.provider_type, mic.model_name
+         FROM provider_steps ps
+         LEFT JOIN model_groups mg ON mg.id = ps.model_group_id
+         LEFT JOIN model_item_configs mic ON mic.id = ps.model_config_id
+         JOIN turns t ON t.id = ps.turn_id
+         WHERE t.session_id = $1
+         ORDER BY ps.created_at DESC`,
+        [sessionRow.id],
+      ),
+      getToolHistoryForSession(sessionRow.id),
+    ]);
 
-  return sessionMsgsResult.rows.map((row: any) => ({
-    id: row.id,
-    workspace_id: row.workspace_id,
-    type: row.role === 'user' ? 'user_message' : 'secretary_response',
-    from_user_id: row.from_user_id,
-    from_actor_id: row.from_actor_id,
-    content: row.content,
-    metadata: row.metadata,
-    created_at: row.created_at,
-    session_id: row.session_id,
-    log_group_id: row.log_group_id,
-    log_config_id: row.log_config_id,
-    log_input_tokens: row.log_input_tokens,
-    log_output_tokens: row.log_output_tokens,
-    log_latency_ms: row.log_latency_ms,
-    log_status: row.log_status,
-    log_provider_type: row.log_provider_type,
-    log_model_name: row.log_model_name,
-    log_group_name: row.log_group_name,
-  }));
+    const latestStep = providerSteps.rows[0];
+    const hasToolHistory = toolHistory.length > 0;
+
+    for (const message of messages) {
+      if (message.role !== 'user' && message.role !== 'assistant') continue;
+      rows.push({
+        id: message.id,
+        workspace_id: workspaceId,
+        type: message.role === 'user' ? 'user_message' : 'secretary_response',
+        from_user_id: message.from_user_id,
+        from_actor_id: message.from_actor_id,
+        content: message.content,
+        metadata: message.metadata,
+        created_at: message.created_at,
+        session_id: message.session_id,
+        log_group_id: latestStep?.model_group_id,
+        log_config_id: latestStep?.model_config_id,
+        log_input_tokens: latestStep?.input_tokens,
+        log_output_tokens: latestStep?.output_tokens,
+        log_latency_ms: latestStep?.latency_ms,
+        log_status: latestStep?.status,
+        log_provider_type: latestStep?.provider_type,
+        log_model_name: latestStep?.model_name,
+        log_group_name: latestStep?.model_group_name,
+        has_tool_history: hasToolHistory,
+      });
+    }
+  }
+
+  rows.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  return rows;
 }

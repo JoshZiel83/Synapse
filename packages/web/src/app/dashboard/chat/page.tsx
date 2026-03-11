@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { extractText, type CanonicalContentBlock } from '@synapse/shared';
 import { useSearchParams } from 'next/navigation';
 import { useWorkspace } from '../workspace-provider';
 import { useWebSocket } from '@/hooks/use-websocket';
 import { useNotifications } from '@/hooks/use-notifications';
-import { useChatStore, type Attachment } from '@/stores/chat-store';
+import { useChatStore } from '@/stores/chat-store';
 import GroupList from './group-list';
 import GroupChat from './group-chat';
 import NewGroupDialog from './new-group-dialog';
@@ -49,10 +50,10 @@ export default function ChatPage() {
       case 'session.message.new':
         handleNewMessage(event.payload);
         // Notify on assistant messages when page is hidden
-        if (event.payload.role === 'assistant' || event.payload.senderType === 'actor') {
-          const name = event.payload.fromActorName || event.payload.senderName || 'Synapse';
-          const content = event.payload.content || '';
-          notify(name, content, event.payload.groupId || event.payload.rootSessionId);
+        if (event.payload.role === 'assistant') {
+          const name = event.payload.actorName || 'Synapse';
+          const content = extractText(event.payload.contentBlocks || []);
+          notify(name, content, event.payload.groupId);
         }
         break;
       case 'session.status.changed':
@@ -115,10 +116,10 @@ export default function ChatPage() {
     setMobileView('chat');
   }
 
-  async function handleSend(content: string, attachments?: Attachment[], targetActorIds?: string[]) {
+  async function handleSend(contentBlocks: CanonicalContentBlock[], targetActorIds?: string[]) {
     if (!workspaceId || !selectedGroupId) return;
     try {
-      await sendMessage(workspaceId, selectedGroupId, content, attachments, targetActorIds);
+      await sendMessage(workspaceId, selectedGroupId, contentBlocks, targetActorIds);
     } catch (err) {
       console.error('Failed to send:', err);
     }

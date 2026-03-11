@@ -1,4 +1,4 @@
-import type { AIResponse, ToolDefinition, AnthropicBuiltinTool, ContinuationEntry, ToolRound, ConversationMessage, MultimodalConfig } from '@synapse/shared';
+import type { AIResponse, ToolDefinition, AnthropicBuiltinTool, MultimodalConfig, ProviderContextWindow } from '@synapse/shared';
 
 export interface AIProviderConfig {
   apiKey: string;
@@ -7,16 +7,20 @@ export interface AIProviderConfig {
   maxTokens: number;
 }
 
+export type FileRefSegment =
+  | { type: 'text'; text: string }
+  | { type: 'ref'; fileId: string };
+
 export interface AIProvider {
   readonly name: string;
   chat(params: {
     system: string;
-    messages: ConversationMessage[];
+    contextWindow: ProviderContextWindow;
     tools?: ToolDefinition[];
     builtinTools?: AnthropicBuiltinTool[];
-    continuationHistory?: ContinuationEntry[];
-    canonicalRounds?: ToolRound[];
-    multimodalContent?: unknown[];
     multimodal?: MultimodalConfig;
   }): Promise<AIResponse>;
+
+  /** Parse FileRef references from model output text */
+  parseFileRefs(text: string): FileRefSegment[];
 }

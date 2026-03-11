@@ -1,14 +1,46 @@
-import type { AIResponse, ToolDefinition, ToolCall, AnthropicBuiltinTool, ContinuationEntry, ToolRound, ConversationMessage, MultimodalConfig } from '@synapse/shared';
-import type { AIProvider, AIProviderConfig } from './types.js';
-import { convertToAnthropicMessages } from '../message-converter.js';
-import { resolveContentBlocks } from '../content-resolve.js';
-import { serializeToolForProvider } from './tool-serializer.js';
+import type { AIResponse, ToolDefinition, ToolCall, AnthropicBuiltinTool, ConversationMessage, MultimodalConfig, CanonicalContentBlock, ProviderContextWindow } from '@synapse/shared';
+import { extractText } from '@synapse/shared';
+import { randomUUID } from 'crypto';
+import type { AIProvider, AIProviderConfig, FileRefSegment } from './types.js';
+import { readAsBuffer, getFullUrl } from '../../../infrastructure/storage/index.js';
+import { compileContextWindowToConversationMessages, compressContextWindow } from '../context-compiler.js';
+import { parseFileRefSegments } from '../fileref-resolver.js';
 
 // Map tool names to their latest versioned type identifiers
 const BUILTIN_TOOL_TYPES: Record<string, string> = {
   web_search: 'web_search_20250305',
   web_fetch: 'web_fetch_20250910',
 };
+
+const SUPPORTED_IMAGE_FORMATS = new Set([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+]);
+
+// Anthropic API enforces 5 MB per base64 image/document
+const BASE64_THRESHOLD = 5 * 1024 * 1024;
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function ensureSupportedFormat(
+  buffer: Buffer,
+  mimeType: string,
+): Promise<{ buffer: Buffer; mimeType: string }> {
+  if (SUPPORTED_IMAGE_FORMATS.has(mimeType)) {
+    return { buffer, mimeType };
+  }
+  try {
+    const sharp = (await import('sharp')).default;
+    const converted = await sharp(buffer).png().toBuffer();
+    return { buffer: converted, mimeType: 'image/png' };
+  } catch (err) {
+    console.error(`[anthropic] Failed to convert ${mimeType} to PNG:`, err);
+    return { buffer, mimeType };
+  }
+}
 
 export class AnthropicProvider implements AIProvider {
   readonly name = 'anthropic';
@@ -20,121 +52,16 @@ export class AnthropicProvider implements AIProvider {
 
   async chat(params: {
     system: string;
-    messages: ConversationMessage[];
+    contextWindow: ProviderContextWindow;
     tools?: ToolDefinition[];
     builtinTools?: AnthropicBuiltinTool[];
-    continuationHistory?: ContinuationEntry[];
-    canonicalRounds?: ToolRound[];
-    multimodalContent?: unknown[];
     multimodal?: MultimodalConfig;
   }): Promise<AIResponse> {
     const base = this.config.baseUrl.replace(/\/+$/, '');
 
-    // Convert ConversationMessage[] to Anthropic format
-    const allMessages = await convertToAnthropicMessages(params.messages, params.multimodal);
-
-    // If multimodal content is provided for the current turn, replace the last user message content
-    if (params.multimodalContent && allMessages.length > 0) {
-      const lastIdx = allMessages.length - 1;
-      if ((allMessages[lastIdx] as any).role === 'user') {
-        allMessages[lastIdx] = { role: 'user', content: params.multimodalContent };
-      }
-    }
-
-    // Append canonical rounds (preferred path — platform-canonical ToolRound[])
-    if (params.canonicalRounds && params.canonicalRounds.length > 0) {
-      for (const round of params.canonicalRounds) {
-        // Build assistant content blocks
-        const blocks: any[] = [];
-        if (round.textContent) blocks.push({ type: 'text', text: round.textContent });
-        for (const tc of round.toolCalls) {
-          blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input });
-        }
-        allMessages.push({ role: 'assistant', content: blocks });
-
-        // Build tool results as user message
-        const resultBlocks: unknown[] = [];
-        for (const tr of round.toolResults) {
-          if (typeof tr.content !== 'string' && Array.isArray(tr.content)) {
-            const hasFileRef = tr.content.some((b: any) => b?.type === 'file_ref');
-            if (hasFileRef) {
-              const { providerBlocks } = await resolveContentBlocks(
-                tr.content as any,
-                'anthropic',
-                params.multimodal,
-              );
-              resultBlocks.push({
-                type: 'tool_result',
-                tool_use_id: tr.toolCallId,
-                content: providerBlocks,
-                is_error: tr.isError || false,
-              });
-            } else {
-              resultBlocks.push({
-                type: 'tool_result',
-                tool_use_id: tr.toolCallId,
-                content: convertMcpContentToAnthropic(tr.content),
-                is_error: tr.isError || false,
-              });
-            }
-          } else {
-            resultBlocks.push({
-              type: 'tool_result',
-              tool_use_id: tr.toolCallId,
-              content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
-              is_error: tr.isError || false,
-            });
-          }
-        }
-        allMessages.push({ role: 'user', content: resultBlocks });
-      }
-    }
-    // Legacy path: ContinuationEntry[] (backward compat — will be removed)
-    else if (params.continuationHistory && params.continuationHistory.length > 0) {
-      for (const entry of params.continuationHistory) {
-        allMessages.push({
-          role: 'assistant',
-          content: entry.rawAssistantMessage,
-        });
-        const toolResultBlocks: unknown[] = [];
-        for (const tr of entry.toolResults) {
-          if (typeof tr.content !== 'string' && Array.isArray(tr.content)) {
-            const hasFileRef = tr.content.some((b: any) => b?.type === 'file_ref');
-            if (hasFileRef) {
-              const { providerBlocks } = await resolveContentBlocks(
-                tr.content as any,
-                'anthropic',
-                params.multimodal,
-              );
-              toolResultBlocks.push({
-                type: 'tool_result',
-                tool_use_id: tr.toolCallId,
-                content: providerBlocks,
-                is_error: tr.isError || false,
-              });
-            } else {
-              toolResultBlocks.push({
-                type: 'tool_result',
-                tool_use_id: tr.toolCallId,
-                content: convertMcpContentToAnthropic(tr.content),
-                is_error: tr.isError || false,
-              });
-            }
-          } else {
-            toolResultBlocks.push({
-              type: 'tool_result',
-              tool_use_id: tr.toolCallId,
-              content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
-              is_error: tr.isError || false,
-            });
-          }
-        }
-        allMessages.push({
-          role: 'user',
-          content: toolResultBlocks,
-        });
-      }
-    }
+    const preparedWindow = await this.compressContextWindow(params.contextWindow);
+    const conversationMessages = await this.compileContextWindow(preparedWindow);
+    const allMessages = await this.convertMessages(conversationMessages, params.multimodal);
 
     const body: Record<string, unknown> = {
       model: this.config.model,
@@ -148,7 +75,11 @@ export class AnthropicProvider implements AIProvider {
 
     if (params.tools && params.tools.length > 0) {
       for (const t of params.tools) {
-        allTools.push(serializeToolForProvider(t, 'anthropic'));
+        allTools.push({
+          name: t.name,
+          description: t.description,
+          input_schema: t.parameters,
+        });
       }
     }
 
@@ -215,7 +146,12 @@ export class AnthropicProvider implements AIProvider {
 
     for (const block of data.content) {
       if (block.type === 'tool_use' && block.name && block.input) {
-        toolCalls.push({ id: block.id || '', name: block.name, input: block.input });
+        toolCalls.push({
+          callId: randomUUID(),
+          providerCallId: block.id || undefined,
+          toolName: block.name,
+          input: block.input,
+        });
       } else if (block.type === 'text' && block.text) {
         textContent += block.text;
       } else if (block.type === 'image') {
@@ -226,9 +162,18 @@ export class AnthropicProvider implements AIProvider {
       // These are intermediate blocks handled by Anthropic's server
     }
 
+    // Build canonical context
+    const contentBlocks: CanonicalContentBlock[] = [];
+    if (textContent) contentBlocks.push({ type: 'text', text: textContent });
+
+    const assistantMsg: ConversationMessage = {
+      role: 'assistant' as const,
+      content: contentBlocks,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    };
+
     return {
-      toolCalls,
-      textContent,
+      context: [assistantMsg],
       tokensUsed: {
         input: data.usage.input_tokens,
         output: data.usage.output_tokens,
@@ -238,53 +183,207 @@ export class AnthropicProvider implements AIProvider {
       mediaBlocks: mediaBlocks.length > 0 ? mediaBlocks : undefined,
     };
   }
-}
 
-/**
- * Convert MCP content blocks to Anthropic tool_result content format.
- * Kept for backward compatibility with legacy non-ingested MCP content.
- */
-function convertMcpContentToAnthropic(blocks: unknown[]): unknown[] {
-  return blocks.map((block: any) => {
-    switch (block.type) {
-      case 'text':
-        return { type: 'text', text: block.text || '' };
-      case 'image': {
-        if (block.source?.data) {
-          return {
-            type: 'image',
-            source: {
-              type: block.source.type || 'base64',
-              media_type: block.source.media_type || 'image/png',
-              data: block.source.data,
-            },
-          };
+  protected async compressContextWindow(window: ProviderContextWindow) {
+    return compressContextWindow(window);
+  }
+
+  protected async compileContextWindow(window: ProviderContextWindow) {
+    return compileContextWindowToConversationMessages(window);
+  }
+
+  parseFileRefs(text: string): FileRefSegment[] {
+    return parseFileRefSegments(text);
+  }
+
+  // ─── Internal: message conversion ───
+
+  private async convertMessages(
+    messages: ConversationMessage[],
+    multimodal?: MultimodalConfig,
+  ): Promise<Record<string, unknown>[]> {
+    const result: Record<string, unknown>[] = [];
+
+    for (const msg of messages) {
+      switch (msg.role) {
+        case 'user': {
+          const { nativeBlocks } = await this.resolveBlocks(msg.content, multimodal);
+          this.appendOrMerge(result, 'user', nativeBlocks);
+          break;
         }
-        const mimeType = block.mimeType || block.mime_type || 'image/png';
-        if (!block.data) {
-          return { type: 'text', text: `[Image: missing data, keys=${Object.keys(block).join(',')}]` };
+
+        case 'assistant': {
+          if (msg.toolCalls && msg.toolCalls.length > 0) {
+            const contentBlocks: unknown[] = [];
+            const text = extractText(msg.content);
+            if (text) {
+              contentBlocks.push({ type: 'text', text });
+            }
+            for (const tc of msg.toolCalls) {
+              contentBlocks.push({
+                type: 'tool_use',
+                id: tc.providerCallId || tc.callId,
+                name: tc.toolName,
+                input: tc.input,
+              });
+            }
+            this.appendOrMerge(result, 'assistant', contentBlocks);
+          } else {
+            const text = extractText(msg.content);
+            this.appendOrMerge(result, 'assistant', text);
+          }
+          break;
         }
-        return {
-          type: 'image',
-          source: { type: 'base64', media_type: mimeType, data: block.data },
-        };
+
+        case 'tool_result': {
+          const toolResultBlocks: unknown[] = [];
+          for (const tr of msg.results) {
+            const { nativeBlocks } = await this.resolveBlocks(tr.content, multimodal);
+            toolResultBlocks.push({
+              type: 'tool_result',
+              tool_use_id: tr.providerCallId || tr.toolCallId,
+              content: nativeBlocks.length > 0 ? nativeBlocks : '',
+              is_error: tr.isError || false,
+            });
+          }
+          this.appendOrMerge(result, 'user', toolResultBlocks);
+          break;
+        }
       }
-      case 'resource':
-        if (block.resource?.text) {
-          return { type: 'text', text: block.resource.text };
-        }
-        if (block.resource?.blob && block.resource?.mimeType?.startsWith('image/')) {
-          return {
-            type: 'image',
-            source: { type: 'base64', media_type: block.resource.mimeType, data: block.resource.blob },
-          };
-        }
-        return { type: 'text', text: JSON.stringify(block) };
-      default:
-        if (block.source?.data && block.source?.media_type) {
-          return block;
-        }
-        return { type: 'text', text: JSON.stringify(block) };
     }
-  });
+
+    // Anthropic rejects requests that end with an assistant-prefill message.
+    // Group/session retries can legitimately rebuild a transcript whose latest
+    // visible item is authored by the actor, so we add a synthetic user turn.
+    const last = result[result.length - 1];
+    if (last?.role === 'assistant') {
+      result.push({
+        role: 'user',
+        content: [{ type: 'text', text: 'Please continue.' }],
+      });
+    }
+
+    return result;
+  }
+
+  // ─── Internal: resolve CanonicalContentBlock[] → Anthropic native blocks ───
+
+  private async resolveBlocks(
+    blocks: CanonicalContentBlock[],
+    multimodal?: MultimodalConfig,
+  ): Promise<{ nativeBlocks: unknown[]; textFallback: string }> {
+    const supportedTypes = multimodal?.supported ? new Set(multimodal.types) : new Set<string>();
+    const nativeBlocks: unknown[] = [];
+    const textParts: string[] = [];
+
+    for (const block of blocks) {
+      if (block.type === 'text') {
+        nativeBlocks.push({ type: 'text', text: block.text });
+        textParts.push(block.text);
+        continue;
+      }
+
+      // file_ref block — check multimodal capability
+      if (!supportedTypes.has(block.category)) {
+        // Unsupported — text fallback
+        const desc = `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`;
+        nativeBlocks.push({ type: 'text', text: desc });
+        textParts.push(desc);
+        // Always inject FileRef hint even for unsupported types
+        nativeBlocks.push({ type: 'text', text: this.buildFileRefHint(block.fileId, block.originalName, block.category) });
+        continue;
+      }
+
+      // Supported — read from disk and build Anthropic native block
+      try {
+        let buffer = await readAsBuffer(block.storedName);
+        let mimeType = block.mimeType;
+
+        if (block.category === 'image') {
+          const converted = await ensureSupportedFormat(buffer, mimeType);
+          buffer = converted.buffer;
+          mimeType = converted.mimeType;
+        }
+
+        let nativeBlock: unknown | null = null;
+        switch (block.category) {
+          case 'image': {
+            if (buffer.length <= BASE64_THRESHOLD) {
+              nativeBlock = { type: 'image', source: { type: 'base64', media_type: mimeType, data: buffer.toString('base64') } };
+            } else {
+              nativeBlock = { type: 'image', source: { type: 'url', url: getFullUrl(block.storedName) } };
+            }
+            break;
+          }
+          case 'document': {
+            if (buffer.length <= BASE64_THRESHOLD) {
+              nativeBlock = { type: 'document', source: { type: 'base64', media_type: mimeType, data: buffer.toString('base64') } };
+            } else {
+              nativeBlock = { type: 'document', source: { type: 'url', url: getFullUrl(block.storedName) } };
+            }
+            break;
+          }
+          case 'audio':
+            // Anthropic Messages API does not accept audio input
+            nativeBlock = null;
+            break;
+          case 'video':
+            nativeBlock = null;
+            break;
+        }
+
+        if (nativeBlock) {
+          nativeBlocks.push(nativeBlock);
+          textParts.push(`[${block.category}: ${block.originalName}]`);
+        } else {
+          const desc = `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)}) - provider does not support this type]`;
+          nativeBlocks.push({ type: 'text', text: desc });
+          textParts.push(desc);
+        }
+      } catch (err: any) {
+        console.error(`[anthropic] Failed to resolve file_ref ${block.storedName}:`, err.message);
+        const desc = `[${block.category}: ${block.originalName} (read failed)]`;
+        nativeBlocks.push({ type: 'text', text: desc });
+        textParts.push(desc);
+      }
+
+      // Inject FileRef hint after every file_ref block
+      nativeBlocks.push({ type: 'text', text: this.buildFileRefHint(block.fileId, block.originalName, block.category) });
+    }
+
+    return { nativeBlocks, textFallback: textParts.join('\n') };
+  }
+
+  private buildFileRefHint(fileId: string, originalName: string, category: string): string {
+    return `To display this ${category} "${originalName}" in your response, use: <FileRef id="${fileId}"/>`;
+  }
+
+  // ─── Internal: role alternation helpers ───
+
+  private appendOrMerge(
+    result: Record<string, unknown>[],
+    role: string,
+    content: string | unknown[],
+  ): void {
+    if (result.length > 0) {
+      const last = result[result.length - 1];
+      if (last.role === role) {
+        const prevContent = this.normalizeContent(last.content);
+        const newContent = this.normalizeContent(content);
+        last.content = [...prevContent, ...newContent];
+        return;
+      }
+    }
+    result.push({ role, content });
+  }
+
+  private normalizeContent(content: unknown): unknown[] {
+    if (typeof content === 'string') {
+      return [{ type: 'text', text: content }];
+    }
+    if (Array.isArray(content)) {
+      return content;
+    }
+    return [{ type: 'text', text: String(content) }];
+  }
 }
