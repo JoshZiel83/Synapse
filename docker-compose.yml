@@ -4,7 +4,7 @@ services:
     container_name: synapse-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-synapse}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required. Run ./setup.sh first.}
       POSTGRES_DB: ${POSTGRES_DB:-synapse}
     ports:
       - "127.0.0.1:5432:5432"
@@ -19,7 +19,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: synapse-redis
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+    command: redis-server --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required. Run ./setup.sh first.}
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -38,10 +38,11 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-synapse}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-synapse}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required. Run ./setup.sh first.}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required. Run ./setup.sh first.}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required.}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:?ANTHROPIC_BASE_URL is required.}
+      AI_MODEL: ${AI_MODEL:?AI_MODEL is required.}
       NODE_ENV: production
       PORT: "3001"
       HOST: "0.0.0.0"
