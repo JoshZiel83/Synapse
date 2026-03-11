@@ -5,6 +5,7 @@ import type { AIProvider, AIProviderConfig, FileRefSegment } from './types.js';
 import { readAsBuffer, getFullUrl } from '../../../infrastructure/storage/index.js';
 import { compileContextWindowToConversationMessages, compressContextWindow } from '../context-compiler.js';
 import { parseFileRefSegments } from '../fileref-resolver.js';
+import { buildAudioFallbackContext } from '../audio-fallback.js';
 
 const SUPPORTED_IMAGE_FORMATS = new Set([
   'image/jpeg', 'image/png', 'image/gif', 'image/webp',
@@ -238,7 +239,12 @@ export class OpenAIProvider implements AIProvider {
 
       // file_ref block — check multimodal capability
       if (!supportedTypes.has(block.category)) {
-        const desc = `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`;
+        const desc = block.category === 'audio'
+          ? await buildAudioFallbackContext(
+              { ...block, category: 'audio' },
+              'Audio input is not enabled for this model configuration.',
+            )
+          : `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`;
         nativeBlocks.push({ type: 'text', text: desc });
         textParts.push(desc);
         // Always inject FileRef hint even for unsupported types

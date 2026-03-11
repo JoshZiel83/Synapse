@@ -5,6 +5,7 @@ import type { AIProvider, AIProviderConfig, FileRefSegment } from './types.js';
 import { readAsBuffer, getFullUrl } from '../../../infrastructure/storage/index.js';
 import { compileContextWindowToConversationMessages, compressContextWindow } from '../context-compiler.js';
 import { parseFileRefSegments } from '../fileref-resolver.js';
+import { buildAudioFallbackContext } from '../audio-fallback.js';
 
 // Map tool names to their latest versioned type identifiers
 const BUILTIN_TOOL_TYPES: Record<string, string> = {
@@ -286,7 +287,12 @@ export class AnthropicProvider implements AIProvider {
       // file_ref block — check multimodal capability
       if (!supportedTypes.has(block.category)) {
         // Unsupported — text fallback
-        const desc = `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`;
+        const desc = block.category === 'audio'
+          ? await buildAudioFallbackContext(
+              { ...block, category: 'audio' },
+              'Audio input is not enabled for this provider request.',
+            )
+          : `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`;
         nativeBlocks.push({ type: 'text', text: desc });
         textParts.push(desc);
         // Always inject FileRef hint even for unsupported types
@@ -336,7 +342,12 @@ export class AnthropicProvider implements AIProvider {
           nativeBlocks.push(nativeBlock);
           textParts.push(`[${block.category}: ${block.originalName}]`);
         } else {
-          const desc = `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)}) - provider does not support this type]`;
+          const desc = block.category === 'audio'
+            ? await buildAudioFallbackContext(
+                { ...block, category: 'audio' },
+                'Direct audio input is not available for Anthropic in this request.',
+              )
+            : `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)}) - provider does not support this type]`;
           nativeBlocks.push({ type: 'text', text: desc });
           textParts.push(desc);
         }

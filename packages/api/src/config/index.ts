@@ -23,4 +23,9 @@ export const config = {
     model: process.env.AI_MODEL || '',
     maxTokens: parseInt(process.env.AI_MAX_TOKENS || '4096'),
   },
+  audioFallback: {
+    provider: process.env.AUDIO_FALLBACK_PROVIDER || 'sherpa-onnx',
+    sherpaOnnxConfigJson: process.env.SHERPA_ONNX_CONFIG_JSON || '',
+    timeoutMs: parseInt(process.env.SHERPA_ONNX_TIMEOUT_MS || '15000'),
+  },
 } as const;
