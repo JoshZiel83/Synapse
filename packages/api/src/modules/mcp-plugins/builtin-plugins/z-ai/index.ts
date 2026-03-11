@@ -63,16 +63,16 @@ export const zAiSeed: BuiltinOrgSeed = {
         { name: 'get_repo_structure', description: 'Get repository file structure', inputSchema: { type: 'object', properties: { repo_url: { type: 'string' } }, required: ['repo_url'] } },
         { name: 'read_file', description: 'Read file content from a repository', inputSchema: { type: 'object', properties: { repo_url: { type: 'string' }, file_path: { type: 'string' } }, required: ['repo_url', 'file_path'] } },
         // Vision
-        { name: 'image_analysis', description: 'Analyze an image and describe its content', inputSchema: { type: 'object', properties: { image_url: { type: 'string' }, focus: { type: 'string' } }, required: ['image_url'] } },
-        { name: 'extract_text_from_screenshot', description: 'Extract text from a screenshot (OCR)', inputSchema: { type: 'object', properties: { image_url: { type: 'string' }, language: { type: 'string' } }, required: ['image_url'] } },
-        { name: 'diagnose_error_screenshot', description: 'Diagnose an error from a screenshot', inputSchema: { type: 'object', properties: { image_url: { type: 'string' }, context: { type: 'string' } }, required: ['image_url'] } },
-        { name: 'understand_technical_diagram', description: 'Understand a technical diagram', inputSchema: { type: 'object', properties: { image_url: { type: 'string' }, diagram_type: { type: 'string' } }, required: ['image_url'] } },
-        { name: 'analyze_data_visualization', description: 'Analyze a chart or data visualization', inputSchema: { type: 'object', properties: { image_url: { type: 'string' }, questions: { type: 'string' } }, required: ['image_url'] } },
-        { name: 'ui_diff_check', description: 'Compare two UI screenshots', inputSchema: { type: 'object', properties: { image_url_before: { type: 'string' }, image_url_after: { type: 'string' }, focus_areas: { type: 'string' } }, required: ['image_url_before', 'image_url_after'] } },
-        { name: 'image_qa', description: 'Answer questions about an image', inputSchema: { type: 'object', properties: { image_url: { type: 'string' }, question: { type: 'string' } }, required: ['image_url', 'question'] } },
-        { name: 'video_analysis', description: 'Analyze video content', inputSchema: { type: 'object', properties: { video_url: { type: 'string' }, question: { type: 'string' } }, required: ['video_url'] } },
+        { name: 'image_analysis', description: 'Analyze an image and describe its content', inputSchema: { type: 'object', properties: { fileRef: { type: 'string' }, focus: { type: 'string' } }, required: ['fileRef'] } },
+        { name: 'extract_text_from_screenshot', description: 'Extract text from a screenshot (OCR)', inputSchema: { type: 'object', properties: { fileRef: { type: 'string' }, language: { type: 'string' } }, required: ['fileRef'] } },
+        { name: 'diagnose_error_screenshot', description: 'Diagnose an error from a screenshot', inputSchema: { type: 'object', properties: { fileRef: { type: 'string' }, context: { type: 'string' } }, required: ['fileRef'] } },
+        { name: 'understand_technical_diagram', description: 'Understand a technical diagram', inputSchema: { type: 'object', properties: { fileRef: { type: 'string' }, diagram_type: { type: 'string' } }, required: ['fileRef'] } },
+        { name: 'analyze_data_visualization', description: 'Analyze a chart or data visualization', inputSchema: { type: 'object', properties: { fileRef: { type: 'string' }, questions: { type: 'string' } }, required: ['fileRef'] } },
+        { name: 'ui_diff_check', description: 'Compare two UI screenshots', inputSchema: { type: 'object', properties: { beforeFileRef: { type: 'string' }, afterFileRef: { type: 'string' }, focus_areas: { type: 'string' } }, required: ['beforeFileRef', 'afterFileRef'] } },
+        { name: 'image_qa', description: 'Answer questions about an image', inputSchema: { type: 'object', properties: { fileRef: { type: 'string' }, question: { type: 'string' } }, required: ['fileRef', 'question'] } },
+        { name: 'video_analysis', description: 'Analyze video content', inputSchema: { type: 'object', properties: { fileRef: { type: 'string' }, question: { type: 'string' } }, required: ['fileRef'] } },
         // STT
-        { name: 'audio_transcription', description: 'Transcribe audio to text', inputSchema: { type: 'object', properties: { file_id: { type: 'string' }, audio_url: { type: 'string' } }, required: [] } },
+        { name: 'audio_transcription', description: 'Transcribe audio to text', inputSchema: { type: 'object', properties: { fileRef: { type: 'string' } }, required: ['fileRef'] } },
         // Image Generation
         { name: 'generate_image', description: 'Generate an image from a text prompt', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, size: { type: 'string' }, model: { type: 'string' }, quality: { type: 'string' } }, required: ['prompt'] } },
         // TTS

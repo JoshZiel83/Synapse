@@ -1,5 +1,10 @@
 import { ToolDefinition } from '@synapse/shared';
 import type { SubFeature } from './types.js';
+import {
+  fileRefProperty,
+  resolveImageFileRefToDataUrl,
+  resolveVideoFileRefToPublicUrl,
+} from '../../../file-ref.js';
 
 const ZHIPU_CHAT_ENDPOINT = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
 const DEFAULT_MODEL = 'glm-4v-flash';
@@ -16,10 +21,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        image_url: { type: 'string', description: 'URL of the image to analyze, or base64 data URI' },
+        fileRef: fileRefProperty('Image file to analyze.'),
         focus: { type: 'string', description: 'Optional focus area or aspect to emphasize in the analysis' },
       },
-      required: ['image_url'],
+      required: ['fileRef'],
     },
   },
   {
@@ -28,10 +33,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        image_url: { type: 'string', description: 'URL of the screenshot to extract text from' },
+        fileRef: fileRefProperty('Screenshot image to extract text from.'),
         language: { type: 'string', description: 'Expected language of the text (e.g., "en", "zh")' },
       },
-      required: ['image_url'],
+      required: ['fileRef'],
     },
   },
   {
@@ -40,10 +45,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        image_url: { type: 'string', description: 'URL of the error screenshot' },
+        fileRef: fileRefProperty('Screenshot image containing the error state.'),
         context: { type: 'string', description: 'Additional context about what was happening when the error occurred' },
       },
-      required: ['image_url'],
+      required: ['fileRef'],
     },
   },
   {
@@ -52,10 +57,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        image_url: { type: 'string', description: 'URL of the technical diagram' },
+        fileRef: fileRefProperty('Technical diagram image to analyze.'),
         diagram_type: { type: 'string', description: 'Type of diagram (architecture, flowchart, UML, ER, etc.)' },
       },
-      required: ['image_url'],
+      required: ['fileRef'],
     },
   },
   {
@@ -64,10 +69,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        image_url: { type: 'string', description: 'URL of the data visualization' },
+        fileRef: fileRefProperty('Chart or data visualization image to analyze.'),
         questions: { type: 'string', description: 'Specific questions to answer about the data' },
       },
-      required: ['image_url'],
+      required: ['fileRef'],
     },
   },
   {
@@ -76,11 +81,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        image_url_before: { type: 'string', description: 'URL of the before/reference screenshot' },
-        image_url_after: { type: 'string', description: 'URL of the after/current screenshot' },
+        beforeFileRef: fileRefProperty('Before/reference screenshot.'),
+        afterFileRef: fileRefProperty('After/current screenshot.'),
         focus_areas: { type: 'string', description: 'Specific areas to focus the comparison on' },
       },
-      required: ['image_url_before', 'image_url_after'],
+      required: ['beforeFileRef', 'afterFileRef'],
     },
   },
   {
@@ -89,10 +94,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        image_url: { type: 'string', description: 'URL of the image to ask about' },
+        fileRef: fileRefProperty('Image file to ask about.'),
         question: { type: 'string', description: 'The question to answer about the image' },
       },
-      required: ['image_url', 'question'],
+      required: ['fileRef', 'question'],
     },
   },
   {
@@ -101,46 +106,54 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        video_url: { type: 'string', description: 'URL of the video to analyze' },
+        fileRef: fileRefProperty('Video file to analyze.'),
         question: { type: 'string', description: 'Optional specific question about the video content' },
       },
-      required: ['video_url'],
+      required: ['fileRef'],
     },
   },
 ];
 
-const TOOL_PROMPTS: Record<string, (input: Record<string, unknown>) => { prompt: string; images: string[] }> = {
+const TOOL_PROMPTS: Record<string, (input: Record<string, unknown>) => { prompt: string; fileRefs: unknown[]; kind: 'image' | 'video' }> = {
   image_analysis: (input) => ({
     prompt: `Please analyze this image in detail.${input.focus ? ` Focus on: ${input.focus}` : ''} Describe objects, scenes, text, and notable features.`,
-    images: [input.image_url as string],
+    fileRefs: [input.fileRef],
+    kind: 'image',
   }),
   extract_text_from_screenshot: (input) => ({
     prompt: `Extract all visible text from this screenshot.${input.language ? ` Text language: ${input.language}` : ''} Preserve the layout and ordering.`,
-    images: [input.image_url as string],
+    fileRefs: [input.fileRef],
+    kind: 'image',
   }),
   diagnose_error_screenshot: (input) => ({
     prompt: `Analyze this error screenshot.${input.context ? ` Context: ${input.context}` : ''} Identify the error, diagnose likely causes, and suggest fixes.`,
-    images: [input.image_url as string],
+    fileRefs: [input.fileRef],
+    kind: 'image',
   }),
   understand_technical_diagram: (input) => ({
     prompt: `Analyze this technical diagram${input.diagram_type ? ` (type: ${input.diagram_type})` : ''}. Explain its components, relationships, and data flow.`,
-    images: [input.image_url as string],
+    fileRefs: [input.fileRef],
+    kind: 'image',
   }),
   analyze_data_visualization: (input) => ({
     prompt: `Analyze this data visualization.${input.questions ? ` Answer: ${input.questions}` : ' Extract key data points, trends, and insights.'}`,
-    images: [input.image_url as string],
+    fileRefs: [input.fileRef],
+    kind: 'image',
   }),
   ui_diff_check: (input) => ({
     prompt: `Compare these two UI screenshots and identify visual differences, layout changes, or regressions.${input.focus_areas ? ` Focus on: ${input.focus_areas}` : ''} The first image is the before/reference version, the second is the current version.`,
-    images: [input.image_url_before as string, input.image_url_after as string],
+    fileRefs: [input.beforeFileRef, input.afterFileRef],
+    kind: 'image',
   }),
   image_qa: (input) => ({
     prompt: `About this image, please answer: ${input.question}`,
-    images: [input.image_url as string],
+    fileRefs: [input.fileRef],
+    kind: 'image',
   }),
   video_analysis: (input) => ({
     prompt: `Analyze this video content.${input.question ? ` Answer: ${input.question}` : ' Provide a detailed summary.'}`,
-    images: [input.video_url as string],
+    fileRefs: [input.fileRef],
+    kind: 'video',
   }),
 };
 
@@ -210,7 +223,14 @@ export const visionFeature: SubFeature = {
       throw new Error(`Unknown vision tool: ${toolName}`);
     }
 
-    const { prompt, images } = promptBuilder(input);
+    const { prompt, fileRefs, kind } = promptBuilder(input);
+    const images = await Promise.all(
+      fileRefs.map((fileRef, index) => (
+        kind === 'video'
+          ? resolveVideoFileRefToPublicUrl(fileRef, `fileRef[${index}]`)
+          : resolveImageFileRefToDataUrl(fileRef, `fileRef[${index}]`)
+      )),
+    );
     const model = (config.visionModel as string) || DEFAULT_MODEL;
 
     return await callGLM4V(apiKey, prompt, images, model);

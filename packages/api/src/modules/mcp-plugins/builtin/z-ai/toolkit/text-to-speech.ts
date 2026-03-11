@@ -1,6 +1,7 @@
 import { ToolDefinition } from '@synapse/shared';
 import type { SubFeature } from './types.js';
 import { saveFromBuffer } from '../../../../../infrastructure/storage/file-io.js';
+import { pluginOutputFileRef } from '../../../file-ref.js';
 
 const ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4';
 const DEFAULT_MODEL = 'glm-tts';
@@ -94,16 +95,7 @@ export const ttsFeature: SubFeature = {
 
       return [
         { type: 'text', text: `Generated audio: ${fileRecord.originalName}` },
-        {
-          type: 'file_ref',
-          fileId: fileRecord.id,
-          storedName: fileRecord.storedName,
-          url: fileRecord.url,
-          mimeType: fileRecord.mimeType,
-          originalName: fileRecord.originalName,
-          sizeBytes: fileRecord.sizeBytes,
-          category: 'audio',
-        },
+        pluginOutputFileRef(fileRecord),
       ];
     } finally {
       clearTimeout(timeout);

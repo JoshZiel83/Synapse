@@ -15,6 +15,7 @@
 import { ToolDefinition } from '@synapse/shared';
 import type { SubFeature } from './types.js';
 import { saveFromUrl } from '../../../../../infrastructure/storage/file-io.js';
+import { pluginOutputFileRef } from '../../../file-ref.js';
 
 const ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4';
 const DEFAULT_MODEL = 'cogview-4-250304';
@@ -135,16 +136,7 @@ export const imageGenFeature: SubFeature = {
       // Return canonical file_ref block — already saved, ingest pipeline will pass through
       return [
         { type: 'text', text: `Generated image: ${fileRecord.originalName}` },
-        {
-          type: 'file_ref',
-          fileId: fileRecord.id,
-          storedName: fileRecord.storedName,
-          url: fileRecord.url,
-          mimeType: fileRecord.mimeType,
-          originalName: fileRecord.originalName,
-          sizeBytes: fileRecord.sizeBytes,
-          category: 'image',
-        },
+        pluginOutputFileRef(fileRecord),
       ];
     } finally {
       clearTimeout(timeout);

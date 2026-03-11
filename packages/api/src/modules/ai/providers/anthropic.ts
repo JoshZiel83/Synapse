@@ -355,7 +355,11 @@ export class AnthropicProvider implements AIProvider {
   }
 
   private buildFileRefHint(fileId: string, originalName: string, category: string): string {
-    return `To display this ${category} "${originalName}" in your response, use: <FileRef id="${fileId}"/>`;
+    return [
+      `This ${category} "${originalName}" is available as <FileRef id="${fileId}"/>.`,
+      `To display it in your response, use exactly: <FileRef id="${fileId}"/>.`,
+      `If a tool parameter expects a fileRef, pass the same exact string <FileRef id="${fileId}"/> instead of inventing a URL or data URI.`,
+    ].join(' ');
   }
 
   // ─── Internal: role alternation helpers ───
