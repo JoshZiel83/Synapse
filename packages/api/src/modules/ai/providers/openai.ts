@@ -6,6 +6,7 @@ import { readAsBuffer, getFullUrl } from '../../../infrastructure/storage/index.
 import { compileContextWindowToConversationMessages, compressContextWindow } from '../context-compiler.js';
 import { parseFileRefSegments } from '../fileref-resolver.js';
 import { buildAudioFallbackContext } from '../audio-fallback.js';
+import { buildImageFallbackContext } from '../image-fallback.js';
 
 const SUPPORTED_IMAGE_FORMATS = new Set([
   'image/jpeg', 'image/png', 'image/gif', 'image/webp',
@@ -244,7 +245,12 @@ export class OpenAIProvider implements AIProvider {
               { ...block, category: 'audio' },
               'Audio input is not enabled for this model configuration.',
             )
-          : `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`;
+          : block.category === 'image'
+            ? await buildImageFallbackContext(
+                { ...block, category: 'image' },
+                'Image input is not enabled for this model configuration.',
+              )
+            : `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`;
         nativeBlocks.push({ type: 'text', text: desc });
         textParts.push(desc);
         // Always inject FileRef hint even for unsupported types

@@ -28,4 +28,11 @@ export const config = {
     sherpaOnnxConfigJson: process.env.SHERPA_ONNX_CONFIG_JSON || '',
     timeoutMs: parseInt(process.env.SHERPA_ONNX_TIMEOUT_MS || '15000'),
   },
+  imageFallback: {
+    provider: process.env.IMAGE_FALLBACK_PROVIDER || 'tesseract',
+    tesseractLangs: process.env.TESSERACT_LANGS || 'eng',
+    tesseractLangPath: process.env.TESSERACT_LANG_PATH || '',
+    tesseractCachePath: process.env.TESSERACT_CACHE_PATH || '/tmp/synapse-tesseract-cache',
+    timeoutMs: parseInt(process.env.TESSERACT_TIMEOUT_MS || '20000'),
+  },
 } as const;
