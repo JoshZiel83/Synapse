@@ -68,6 +68,21 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     );
     const secretary = secretaryResult.rows[0];
 
+    // 4. Create initial actor_versions record for secretary
+    await client.query(
+      `INSERT INTO actor_versions (actor_id, version, name, role, title, charter, system_prompt, skills, config, capabilities)
+       VALUES ($1, 1, $2, $3, $4, $5, $6, '[]', '{}', $7)`,
+      [
+        secretary.id,
+        secretary.name,
+        secretary.role,
+        secretary.title,
+        secretary.charter,
+        secretary.system_prompt,
+        secretary.capabilities,
+      ]
+    );
+
     return {
       ...mapWorkspaceRow(workspace),
       secretary: mapActorRow(secretary),

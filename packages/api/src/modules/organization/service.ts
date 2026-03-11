@@ -1,6 +1,7 @@
 import { query, transaction } from '../../infrastructure/database/index.js';
+import { emitEvent } from '../../infrastructure/events/index.js';
 import { generateId, nowISO } from '@synapse/shared';
-import type { Actor, ActorRole, ActorCollaboration, UUID } from '@synapse/shared';
+import type { Actor, ActorRole, ActorSkill, ActorCollaboration, UUID } from '@synapse/shared';
 
 // ─── Actor CRUD ───
 
@@ -13,18 +14,27 @@ export async function createActor(params: {
   systemPrompt: string;
   parentId?: UUID;
   capabilities?: string[];
+  skills?: ActorSkill[];
   config?: Record<string, unknown>;
 }): Promise<Actor> {
   const id = generateId();
   const now = nowISO();
   const capabilities = params.capabilities ?? [];
+  const skills = params.skills ?? [];
   const config = params.config ?? {};
 
   const result = await query(
-    `INSERT INTO actors (id, workspace_id, name, role, title, charter, system_prompt, parent_id, capabilities, config, is_active, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true, $11, $11)
+    `INSERT INTO actors (id, workspace_id, name, role, title, charter, system_prompt, parent_id, capabilities, skills, config, is_active, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true, $12, $12)
      RETURNING *`,
-    [id, params.workspaceId, params.name, params.role, params.title, params.charter, params.systemPrompt, params.parentId ?? null, capabilities, JSON.stringify(config), now]
+    [id, params.workspaceId, params.name, params.role, params.title, params.charter, params.systemPrompt, params.parentId ?? null, capabilities, JSON.stringify(skills), JSON.stringify(config), now]
+  );
+
+  // Create initial version (version=1)
+  await query(
+    `INSERT INTO actor_versions (actor_id, version, name, role, title, charter, system_prompt, skills, config, capabilities, created_at)
+     VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [id, params.name, params.role, params.title, params.charter, params.systemPrompt, JSON.stringify(skills), JSON.stringify(config), capabilities, now]
   );
 
   return mapRow(result.rows[0]);
@@ -54,6 +64,7 @@ export async function updateActor(actorId: UUID, workspaceId: UUID, updates: Par
   systemPrompt: string;
   parentId: UUID | null;
   capabilities: string[];
+  skills: ActorSkill[];
   config: Record<string, unknown>;
 }>): Promise<Actor | null> {
   const fields: string[] = [];
@@ -68,6 +79,7 @@ export async function updateActor(actorId: UUID, workspaceId: UUID, updates: Par
     systemPrompt: 'system_prompt',
     parentId: 'parent_id',
     capabilities: 'capabilities',
+    skills: 'skills',
     config: 'config',
   };
 
@@ -75,7 +87,7 @@ export async function updateActor(actorId: UUID, workspaceId: UUID, updates: Par
     if (key in updates) {
       const val = (updates as any)[key];
       fields.push(`${col} = $${idx++}`);
-      values.push(key === 'config' ? JSON.stringify(val) : val);
+      values.push(key === 'config' || key === 'skills' ? JSON.stringify(val) : val);
     }
   }
 
@@ -90,7 +102,29 @@ export async function updateActor(actorId: UUID, workspaceId: UUID, updates: Par
     values
   );
 
-  return result.rows.length ? mapRow(result.rows[0]) : null;
+  if (result.rows.length === 0) return null;
+
+  // Insert new version into actor_versions
+  const actorRow = result.rows[0];
+  await query(
+    `INSERT INTO actor_versions (actor_id, version, name, role, title, charter, system_prompt, skills, config, capabilities, created_at)
+     SELECT $1, COALESCE(MAX(version), 0) + 1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()
+     FROM actor_versions WHERE actor_id = $1`,
+    [actorId, actorRow.name, actorRow.role, actorRow.title, actorRow.charter, actorRow.system_prompt,
+     typeof actorRow.skills === 'string' ? actorRow.skills : JSON.stringify(actorRow.skills || []),
+     typeof actorRow.config === 'string' ? actorRow.config : JSON.stringify(actorRow.config || {}),
+     actorRow.capabilities || []]
+  );
+
+  // Emit WebSocket event for real-time frontend updates
+  await emitEvent({
+    type: 'actor.version_changed',
+    workspaceId: actorRow.workspace_id,
+    payload: { actorId, name: actorRow.name },
+    timestamp: nowISO(),
+  });
+
+  return mapRow(result.rows[0]);
 }
 
 export async function deleteActor(actorId: UUID, workspaceId: UUID): Promise<boolean> {
@@ -177,6 +211,7 @@ function mapRow(row: any): Actor {
     systemPrompt: row.system_prompt,
     parentId: row.parent_id ?? undefined,
     capabilities: typeof row.capabilities === 'string' ? JSON.parse(row.capabilities) : row.capabilities,
+    skills: row.skills ? (typeof row.skills === 'string' ? JSON.parse(row.skills) : row.skills) : [],
     config: typeof row.config === 'string' ? JSON.parse(row.config) : row.config,
     isActive: row.is_active,
     createdAt: row.created_at,

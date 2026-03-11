@@ -19,15 +19,13 @@ export async function secretaryController(app: FastifyInstance) {
     const { content } = sendMessageSchema.parse(request.body);
     const userId = (request as any).user!.userId;
 
-    const { messageId, workItemId, sessionId } = await processUserMessage(
+    const { sessionId } = await processUserMessage(
       workspaceId,
       userId,
       content
     );
 
     return reply.status(201).send({
-      messageId,
-      workItemId,
       sessionId,
       status: 'processing',
     });

@@ -110,7 +110,12 @@ class ApiClient {
 
   // Chat Groups
   getGroups(wsId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups`); }
-  createGroup(wsId: string, actorId: string, content: string) { return this.fetch(`/workspaces/${wsId}/chat/groups`, { method: 'POST', body: JSON.stringify({ actorId, content }) }); }
+  createGroup(wsId: string, actorIds: string[], content?: string, targetActorId?: string) {
+    const body: any = actorIds.length === 1
+      ? { actorId: actorIds[0], ...(content && { content }) }
+      : { actorIds, ...(content && { content }), targetActorId: targetActorId || actorIds[0] };
+    return this.fetch(`/workspaces/${wsId}/chat/groups`, { method: 'POST', body: JSON.stringify(body) });
+  }
   getGroupMessages(wsId: string, rootSessionId: string, limit?: number, before?: string) {
     const params = new URLSearchParams();
     if (limit) params.set('limit', String(limit));
@@ -118,10 +123,11 @@ class ApiClient {
     const qs = params.toString();
     return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/messages${qs ? '?' + qs : ''}`);
   }
-  sendGroupMessage(wsId: string, rootSessionId: string, content: string, attachments?: { id: string; url: string; fullUrl?: string; storedName?: string; originalName: string; mimeType: string; sizeBytes: number }[]) {
+  sendGroupMessage(wsId: string, groupId: string, content: string, attachments?: { id: string; url: string; fullUrl?: string; storedName?: string; originalName: string; mimeType: string; sizeBytes: number }[], targetActorIds?: string[]) {
     const body: any = { content };
     if (attachments && attachments.length > 0) body.attachments = attachments;
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/messages`, { method: 'POST', body: JSON.stringify(body) });
+    if (targetActorIds && targetActorIds.length > 0) body.targetActorIds = targetActorIds;
+    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/messages`, { method: 'POST', body: JSON.stringify(body) });
   }
   markGroupRead(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}/read`, { method: 'POST', body: '{}' }); }
   cancelGroup(wsId: string, rootSessionId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${rootSessionId}`, { method: 'DELETE' }); }
@@ -178,6 +184,20 @@ class ApiClient {
       throw new Error(data.error || 'Upload failed');
     }
     return res.json();
+  }
+
+  // A2A Apps
+  getA2AApps(wsId: string) { return this.fetch(`/workspaces/${wsId}/a2a/apps`); }
+  createA2AApp(wsId: string, data: { name: string; description?: string; actorIds: string[]; rateLimitRpm?: number }) {
+    return this.fetch(`/workspaces/${wsId}/a2a/apps`, { method: 'POST', body: JSON.stringify(data) });
+  }
+  getA2AApp(wsId: string, appId: string) { return this.fetch(`/workspaces/${wsId}/a2a/apps/${appId}`); }
+  updateA2AApp(wsId: string, appId: string, data: any) {
+    return this.fetch(`/workspaces/${wsId}/a2a/apps/${appId}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+  deleteA2AApp(wsId: string, appId: string) { return this.fetch(`/workspaces/${wsId}/a2a/apps/${appId}`, { method: 'DELETE' }); }
+  regenerateA2AAppKey(wsId: string, appId: string) {
+    return this.fetch(`/workspaces/${wsId}/a2a/apps/${appId}/regenerate-key`, { method: 'POST', body: '{}' });
   }
 }
 

@@ -2,11 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import {
-  createSessionAndEnqueue,
+  createSession,
   getSession,
   getSessionsByActor,
   getSessionMessages,
-  getSessionTree,
   cancelSession,
   addSessionMessage,
   updateSessionStatus,
@@ -34,18 +33,33 @@ export async function sessionController(app: FastifyInstance) {
     const { content, channelType } = createSessionSchema.parse(request.body);
     const userId = (request as any).user!.userId;
 
-    const session = await createSessionAndEnqueue({
+    const session = await createSession({
       workspaceId,
       actorId,
       channelType,
       trigger: 'user_message',
-      initialMessage: content,
-      userId,
+      metadata: { userId },
+    });
+
+    // Add initial message
+    await addSessionMessage({
+      sessionId: session.id,
+      workspaceId,
+      role: 'user',
+      content,
+      fromUserId: userId,
+    });
+
+    // Enqueue thinking
+    await sessionThinkingQueue.add('think', {
+      sessionId: session.id,
+      actorId,
+      workspaceId,
+      trigger: 'user_message',
     });
 
     return reply.status(201).send({
       sessionId: session.id,
-      workItemId: session.work_item_id,
       status: 'processing',
     });
   });
@@ -87,7 +101,6 @@ export async function sessionController(app: FastifyInstance) {
         sessionId,
         actorId: session.actor_id,
         workspaceId,
-        workItemId: session.work_item_id,
         trigger: 'user_message',
         userId,
       });
@@ -135,21 +148,6 @@ export async function sessionController(app: FastifyInstance) {
 
     const sessions = await getSessionsByActor(workspaceId, actorId, status);
     return reply.send({ sessions });
-  });
-
-  // GET /workspaces/:wsId/sessions/:sessionId/tree — process tree
-  app.get<{
-    Params: { workspaceId: string; sessionId: string };
-  }>('/workspaces/:workspaceId/sessions/:sessionId/tree', async (request, reply) => {
-    const { workspaceId, sessionId } = request.params;
-
-    const session = await getSession(sessionId);
-    if (!session || session.workspace_id !== workspaceId) {
-      return reply.status(404).send({ error: 'Session not found' });
-    }
-
-    const tree = await getSessionTree(sessionId);
-    return reply.send({ tree });
   });
 
   // DELETE /workspaces/:wsId/sessions/:sessionId — cancel session

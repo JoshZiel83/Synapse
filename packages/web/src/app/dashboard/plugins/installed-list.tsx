@@ -14,12 +14,14 @@ const scopeColors: Record<string, string> = {
   workspace: 'border-blue-500/30 text-blue-400',
   user: 'border-purple-500/30 text-purple-400',
   actor: 'border-green-500/30 text-green-400',
+  group: 'border-orange-500/30 text-orange-400',
 };
 
 const scopeLabels: Record<string, string> = {
   workspace: 'Workspace',
   user: 'User',
   actor: 'Actor',
+  group: 'Group',
 };
 
 export default function InstalledList() {

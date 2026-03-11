@@ -27,4 +27,6 @@ relay/config.yaml
 relay/cmd/synapse-relay-gui/frontend/node_modules/
 relay/cmd/synapse-relay-gui/frontend/dist/
 relay/cmd/synapse-relay-gui/frontend/src/lib/wailsjs/
-relay/cmd/synapse-relay-gui/build/bin/
+relay/cmd/synapse-relay-gui/frontend/wailsjs/
+relay/cmd/synapse-relay-gui/frontend/package.json.md5
+relay/cmd/synapse-relay-gui/build/

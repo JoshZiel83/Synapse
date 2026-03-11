@@ -1,149 +1,330 @@
-import { registerCallableTool } from './callable-tools.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { registerToolPlugin } from './tool-plugins.js';
 import { query } from '../../infrastructure/database/index.js';
-import {
-  createSessionAndEnqueue,
-  getSession,
-  getSessionMessages,
-  createInterrupt,
-} from '../session/service.js';
+import { getSession } from '../session/service.js';
+import { sendGroupMessage, addActorToGroup, sleepActor } from '../group/service.js';
 
 /**
- * Register session-aware callable tools: delegate and check_progress.
- * These tools return results to the model for further reasoning.
+ * Register callable tool plugins.
+ * Callable tools return results to the model for further reasoning.
+ * Their `resolve(ctx)` determines availability per-session.
  */
-export function registerSessionTools() {
-  // ============ delegate (callable) ============
-  registerCallableTool(
-    {
-      name: 'delegate',
-      description: 'Delegate a task to a subordinate actor. Creates a child session for the subordinate. You can call this multiple times to delegate to multiple actors, then use the "wait" action tool to wait for them all.',
+export function registerCallableToolPlugins(): void {
+  // ============ send_to (callable) ============
+  registerToolPlugin({
+    name: 'send_to',
+    kind: 'callable',
+    definition: {
+      name: 'send_to',
+      description: 'Send a message to one or more members in the current group by name.',
       parameters: {
         type: 'object',
         properties: {
-          targetActorId: { type: 'string', description: 'The UUID of the subordinate actor to delegate to' },
-          instruction: { type: 'string', description: 'Detailed instruction for the subordinate about what to do' },
-          priority: { type: 'string', description: 'Priority: low, medium, high, urgent', enum: ['low', 'medium', 'high', 'urgent'] },
+          recipients: {
+            type: 'array',
+            description: 'Member names to send to.',
+            items: { type: 'string' },
+          },
+          message: { type: 'string', description: 'The message content' },
         },
-        required: ['targetActorId', 'instruction'],
+        required: ['recipients', 'message'],
       },
     },
-    async (input) => {
-      const { targetActorId, instruction, priority } = input as {
-        targetActorId: string;
-        instruction: string;
-        priority?: string;
+    resolve: (ctx) => {
+      if (!ctx.groupId || !ctx.groupMembers?.length) {
+        return { active: false, definition: null as any };
+      }
+      const otherMembers = ctx.groupMembers.filter(m =>
+        m.type === 'user' || m.id !== ctx.actorId
+      );
+      if (otherMembers.length === 0) {
+        return { active: false, definition: null as any };
+      }
+      const recipientNames = otherMembers.map(m => m.name);
+      const rosterDesc = otherMembers.map(m =>
+        m.type === 'user'
+          ? `"${m.name}" (user)`
+          : `"${m.name}" (actor${m.title ? ', ' + m.title : ''})`
+      ).join(', ');
+      return {
+        active: true,
+        definition: {
+          name: 'send_to',
+          description: `Send a message to one or more members in the current group. Available recipients: ${rosterDesc}.`,
+          parameters: {
+            type: 'object',
+            properties: {
+              recipients: {
+                type: 'array',
+                description: 'One or more member names to send the message to.',
+                items: { type: 'string', enum: recipientNames },
+              },
+              message: { type: 'string', description: 'The message content' },
+            },
+            required: ['recipients', 'message'],
+          },
+        },
       };
+    },
+    execute: async (input) => {
+      const rawRecipients = (input as any).recipients;
+      const message = (input as any).message as string;
 
-      // Get context from the callable tool execution context
+      let recipientNames: string[];
+      if (Array.isArray(rawRecipients)) {
+        recipientNames = rawRecipients;
+      } else if (typeof rawRecipients === 'string') {
+        recipientNames = [rawRecipients];
+      } else {
+        return JSON.stringify({ error: 'recipients must be an array of member names' });
+      }
+
+      if (recipientNames.length === 0) {
+        return JSON.stringify({ error: 'recipients must contain at least one member name' });
+      }
+
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: 'No session context available for delegation' });
+        return JSON.stringify({ error: 'No session context available' });
       }
 
-      // Validate target actor exists and is a subordinate
-      const actorResult = await query(
-        'SELECT id, name, title, parent_id FROM actors WHERE id = $1 AND is_active = true',
-        [targetActorId]
-      );
-      if (actorResult.rows.length === 0) {
-        return JSON.stringify({ error: `Actor ${targetActorId} not found or inactive` });
+      const session = await getSession(context.sessionId);
+      if (!session || !session.group_id) {
+        return JSON.stringify({ error: 'Current session is not in a group' });
       }
+
+      // Load all current group members (excluding self)
+      const allMembers = await query(
+        `SELECT gm.actor_id, gm.user_id, a.name as actor_name, a.title as actor_title, u.name as user_name
+         FROM group_members gm
+         LEFT JOIN actors a ON a.id = gm.actor_id
+         LEFT JOIN users u ON u.id = gm.user_id
+         WHERE gm.group_id = $1`,
+        [session.group_id]
+      );
+
+      const memberMap = new Map<string, { type: 'actor' | 'user'; id: string; name: string }>();
+      for (const m of allMembers.rows) {
+        if (m.actor_id && m.actor_id !== context.actorId) {
+          memberMap.set(m.actor_name.toLowerCase(), { type: 'actor', id: m.actor_id, name: m.actor_name });
+        }
+        if (m.user_id) {
+          memberMap.set(m.user_name.toLowerCase(), { type: 'user', id: m.user_id, name: m.user_name });
+        }
+      }
+
+      const targetActorIds: string[] = [];
+      const targetUserIds: string[] = [];
+      const resolved: string[] = [];
+      const errors: string[] = [];
+
+      for (const name of recipientNames) {
+        const member = memberMap.get(name.toLowerCase());
+        if (!member) {
+          let bestMatch: { name: string; dist: number } | null = null;
+          for (const [key, val] of memberMap) {
+            const dist = levenshtein(name.toLowerCase(), key);
+            if (dist <= 2 && (!bestMatch || dist < bestMatch.dist)) {
+              bestMatch = { name: val.name, dist };
+            }
+          }
+          if (bestMatch) {
+            errors.push(`"${name}" not found. Did you mean "${bestMatch.name}"?`);
+          } else {
+            errors.push(`"${name}" is not a member of this group.`);
+          }
+          continue;
+        }
+        if (member.type === 'actor') targetActorIds.push(member.id);
+        else targetUserIds.push(member.id);
+        resolved.push(member.name);
+      }
+
+      if (resolved.length === 0) {
+        const available = Array.from(memberMap.values()).map((m) => `${m.name} (${m.type})`);
+        return JSON.stringify({
+          error: 'No valid recipients found.',
+          details: errors,
+          availableMembers: available,
+        });
+      }
+
+      const isCoordination = targetUserIds.length === 0;
+
+      await sendGroupMessage({
+        groupId: session.group_id,
+        senderType: 'actor',
+        senderActorId: context.actorId,
+        senderSessionId: context.sessionId,
+        targetActorIds,
+        targetUserIds,
+        content: message,
+        metadata: isCoordination ? { coordination: true } : undefined,
+      });
+
+      const result: Record<string, unknown> = {
+        success: true,
+        sentTo: resolved,
+        message: `Message sent to ${resolved.join(', ')}.`,
+      };
+      if (errors.length > 0) {
+        result.warnings = errors;
+      }
+      return JSON.stringify(result);
+    },
+  });
+
+  // ============ invite_actor (callable) ============
+  registerToolPlugin({
+    name: 'invite_actor',
+    kind: 'callable',
+    definition: {
+      name: 'invite_actor',
+      description: 'Invite a new actor to join the current group. The actor will be added as a member and can be messaged via send_to.',
+      parameters: {
+        type: 'object',
+        properties: {
+          actorName: { type: 'string', description: 'Name of the actor to invite' },
+          reason: { type: 'string', description: 'Reason for inviting / initial instruction for the actor' },
+        },
+        required: ['actorName', 'reason'],
+      },
+    },
+    resolve: (ctx) => ({
+      active: !!ctx.groupId,
+      definition: {
+        name: 'invite_actor',
+        description: 'Invite a new actor to join the current group. The actor will be added as a member and can be messaged via send_to.',
+        parameters: {
+          type: 'object',
+          properties: {
+            actorName: { type: 'string', description: 'Name of the actor to invite' },
+            reason: { type: 'string', description: 'Reason for inviting / initial instruction for the actor' },
+          },
+          required: ['actorName', 'reason'],
+        },
+      },
+    }),
+    execute: async (input) => {
+      const { actorName, reason } = input as { actorName: string; reason: string };
+      const context = getToolExecutionContext();
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const session = await getSession(context.sessionId);
+      if (!session || !session.group_id) {
+        return JSON.stringify({ error: 'Current session is not in a group' });
+      }
+
+      const actorResult = await query(
+        'SELECT id, name, title FROM actors WHERE workspace_id = $1 AND name ILIKE $2 AND is_active = true',
+        [session.workspace_id, actorName]
+      );
+
+      if (actorResult.rows.length === 0) {
+        return JSON.stringify({ error: `Actor "${actorName}" not found in workspace` });
+      }
+
       const targetActor = actorResult.rows[0];
 
-      // Get parent session details
-      const parentSession = await getSession(context.sessionId);
-      if (!parentSession) {
-        return JSON.stringify({ error: 'Parent session not found' });
-      }
-
       try {
-        // Create child session
-        const childSession = await createSessionAndEnqueue({
-          workspaceId: context.workspaceId,
-          actorId: targetActorId,
-          channelType: 'internal_delegation',
-          parentSessionId: context.sessionId,
-          rootSessionId: parentSession.root_session_id || context.sessionId,
-          depth: (parentSession.depth || 0) + 1,
-          trigger: 'delegation',
-          initialMessage: instruction,
-          fromActorId: context.actorId,
-          metadata: { priority: priority || 'medium' },
+        const inviterResult = await query('SELECT name FROM actors WHERE id = $1', [context.actorId]);
+        const inviterName = inviterResult.rows[0]?.name || 'Unknown';
+
+        await addActorToGroup(session.group_id, targetActor.id, inviterName);
+
+        await sendGroupMessage({
+          groupId: session.group_id,
+          senderType: 'actor',
+          senderActorId: context.actorId,
+          senderSessionId: context.sessionId,
+          targetActorIds: [targetActor.id],
+          content: reason,
         });
 
         return JSON.stringify({
-          sessionId: childSession.id,
+          success: true,
           actorName: targetActor.name,
           actorTitle: targetActor.title,
-          status: 'created',
-          message: `已成功委派给 ${targetActor.name}。记住返回的sessionId，稍后可以使用 wait 工具等待结果。`,
+          message: `${targetActor.name} has been invited to the group and notified.`,
         });
       } catch (err: any) {
-        return JSON.stringify({ error: `Delegation failed: ${err.message}` });
+        return JSON.stringify({ error: `Failed to invite: ${err.message}` });
       }
-    }
-  );
+    },
+  });
 
-  // ============ check_progress (callable) ============
-  registerCallableTool(
-    {
-      name: 'check_progress',
-      description: 'Check the progress of a child session (delegated task). Also notifies the subordinate that you are checking on them.',
+  // ============ sleep (callable) ============
+  registerToolPlugin({
+    name: 'sleep',
+    kind: 'callable',
+    definition: {
+      name: 'sleep',
+      description: 'Enter idle/sleeping state after completing your current work. You will be woken up when someone sends you a message in the group.',
       parameters: {
         type: 'object',
         properties: {
-          sessionId: { type: 'string', description: 'The session ID of the child session to check' },
+          summary: { type: 'string', description: 'Brief summary of what you accomplished before sleeping' },
         },
-        required: ['sessionId'],
+        required: ['summary'],
       },
     },
-    async (input) => {
-      const { sessionId: childSessionId } = input as { sessionId: string };
+    resolve: (ctx) => ({
+      active: !!ctx.groupId,
+      definition: {
+        name: 'sleep',
+        description: 'Enter idle/sleeping state after completing your current work. You will be woken up when someone sends you a message in the group.',
+        parameters: {
+          type: 'object',
+          properties: {
+            summary: { type: 'string', description: 'Brief summary of what you accomplished before sleeping' },
+          },
+          required: ['summary'],
+        },
+      },
+    }),
+    execute: async (_input) => {
       const context = getToolExecutionContext();
-
-      const childSession = await getSession(childSessionId);
-      if (!childSession) {
-        return JSON.stringify({ error: `Session ${childSessionId} not found` });
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
       }
 
-      // Get actor name
-      const actorResult = await query('SELECT name FROM actors WHERE id = $1', [childSession.actor_id]);
-      const actorName = actorResult.rows[0]?.name || 'Unknown';
-
-      // Get recent messages from the child session
-      const messages = await getSessionMessages(childSessionId);
-      const recentMessages = messages.slice(-5).map((m: any) => ({
-        role: m.role,
-        content: m.content.substring(0, 500),
-        createdAt: m.created_at,
-      }));
-
-      // If child session is still active, inject an interrupt
-      if (childSession.status === 'active' && context) {
-        await createInterrupt({
-          targetSessionId: childSessionId,
-          type: 'progress_check',
-          content: `上级正在检查你的进度。请在下一轮回复中汇报当前进展。`,
-          fromSessionId: context.sessionId,
-        });
+      const session = await getSession(context.sessionId);
+      if (!session) {
+        return JSON.stringify({ error: 'Session not found' });
       }
+
+      await sleepActor(context.sessionId);
 
       return JSON.stringify({
-        sessionId: childSessionId,
-        actorName,
-        status: childSession.status,
-        depth: childSession.depth,
-        createdAt: childSession.created_at,
-        completedAt: childSession.completed_at,
-        recentMessages,
-        waitingFor: childSession.waiting_for,
+        success: true,
+        message: 'Entering sleep mode. You will be woken up when someone messages you.',
       });
+    },
+  });
+}
+
+/**
+ * Levenshtein distance between two strings.
+ */
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
     }
-  );
+  }
+  return dp[m][n];
 }
 
 // ============ Tool Execution Context ============
-// Used to pass session context to callable tools during execution
+// Uses AsyncLocalStorage so each concurrent BullMQ job has its own context.
 
 interface ToolExecutionContext {
   sessionId: string;
@@ -151,12 +332,20 @@ interface ToolExecutionContext {
   workspaceId: string;
 }
 
-let currentContext: ToolExecutionContext | null = null;
+const contextStorage = new AsyncLocalStorage<ToolExecutionContext>();
 
-export function setToolExecutionContext(ctx: ToolExecutionContext | null) {
-  currentContext = ctx;
+/**
+ * Run `fn` with the given tool execution context bound via AsyncLocalStorage.
+ */
+export function runWithToolContext<T>(ctx: ToolExecutionContext, fn: () => T): T {
+  return contextStorage.run(ctx, fn);
+}
+
+/** @deprecated Use runWithToolContext instead. Kept only as no-op for call sites that still call it. */
+export function setToolExecutionContext(_ctx: ToolExecutionContext | null) {
+  // no-op — context is now set via runWithToolContext / AsyncLocalStorage
 }
 
 export function getToolExecutionContext(): ToolExecutionContext | null {
-  return currentContext;
+  return contextStorage.getStore() ?? null;
 }

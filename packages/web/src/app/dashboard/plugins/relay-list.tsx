@@ -12,12 +12,34 @@ import {
 } from '@/components/ui/dialog';
 import {
   Plus, Trash2, RefreshCw, Copy, Check, ChevronDown, ChevronRight,
-  Radio, Wifi, WifiOff, Server, KeyRound, Wrench, Monitor, ExternalLink, Clipboard,
+  Radio, Wifi, WifiOff, Server, KeyRound, Wrench, Monitor, ExternalLink, Clipboard, Shield,
 } from 'lucide-react';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
+import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
 
 const LOCAL_CLIENT_PORT = 21519;
+
+const scopeColors: Record<string, string> = {
+  workspace: 'border-blue-500/30 text-blue-400',
+  user: 'border-purple-500/30 text-purple-400',
+  actor: 'border-green-500/30 text-green-400',
+  group: 'border-orange-500/30 text-orange-400',
+};
+
+const scopeLabels: Record<string, string> = {
+  workspace: 'Workspace',
+  user: 'User',
+  actor: 'Actor',
+  group: 'Group',
+};
+
+const lifecycleOptionsForScope: Record<string, string[]> = {
+  workspace: ['workspace', 'group', 'actor', 'session'],
+  user: ['user', 'actor', 'session'],
+  actor: ['actor', 'session'],
+  group: ['group', 'actor', 'session'],
+};
 
 interface Relay {
   id: string;
@@ -36,6 +58,11 @@ interface RelayServer {
   toolsManifest: any[];
   isEnabled: boolean;
   createdAt: string;
+  installId: string | null;
+  scopeType: string | null;
+  scopeId: string | null;
+  lifecycleScope: string | null;
+  installEnabled: boolean | null;
 }
 
 function getRelayEndpoint(): string {
@@ -45,6 +72,7 @@ function getRelayEndpoint(): string {
 
 export default function RelayList() {
   const { workspaceId } = useWorkspace();
+  const user = useAuthStore((s) => s.user);
   const [relays, setRelays] = useState<Relay[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -55,6 +83,11 @@ export default function RelayList() {
   const [relayServers, setRelayServers] = useState<Record<string, RelayServer[]>>({});
   const [copiedToken, setCopiedToken] = useState(false);
   const [regeneratedToken, setRegeneratedToken] = useState<{ relayId: string; name: string; token: string } | null>(null);
+
+  // Scope selection resources
+  const [actors, setActors] = useState<any[]>([]);
+  const [groups, setGroups] = useState<any[]>([]);
+  const [scopeResourcesLoaded, setScopeResourcesLoaded] = useState(false);
 
   // Client detection state
   const [clientDetected, setClientDetected] = useState(false);
@@ -152,6 +185,50 @@ export default function RelayList() {
       } catch (err) {
         console.error('Failed to load relay servers:', err);
       }
+    }
+    // Load actors/groups for scope selection
+    if (!scopeResourcesLoaded && workspaceId) {
+      setScopeResourcesLoaded(true);
+      Promise.all([
+        api.getActors(workspaceId).catch(() => []),
+        api.getGroups(workspaceId).then((r: any) => r.groups || []).catch(() => []),
+      ]).then(([a, g]) => { setActors(a); setGroups(g); });
+    }
+  };
+
+  const handleUpdateServerScope = async (relayId: string, server: RelayServer, scopeType: string, scopeId: string, lifecycleScope?: string) => {
+    if (!workspaceId || !server.installId) return;
+    try {
+      const data: any = { scopeType, scopeId };
+      // Auto-adjust lifecycle if current one is invalid for new scope
+      const validLifecycles = lifecycleOptionsForScope[scopeType] || ['session'];
+      const currentLifecycle = lifecycleScope || server.lifecycleScope || 'session';
+      if (!validLifecycles.includes(currentLifecycle)) {
+        data.lifecycleScope = validLifecycles[0];
+      } else if (lifecycleScope) {
+        data.lifecycleScope = lifecycleScope;
+      }
+      await api.updateInstallation(workspaceId, server.installId, data);
+      // Refresh servers
+      const servers = await api.getRelayServers(workspaceId, relayId);
+      setRelayServers(prev => ({ ...prev, [relayId]: servers }));
+    } catch (err: any) {
+      alert('Failed to update scope: ' + (err.message || err));
+    }
+  };
+
+  const handleUpdateServerLifecycle = async (relayId: string, server: RelayServer, lifecycleScope: string) => {
+    if (!workspaceId || !server.installId) return;
+    try {
+      await api.updateInstallation(workspaceId, server.installId, { lifecycleScope });
+      setRelayServers(prev => ({
+        ...prev,
+        [relayId]: (prev[relayId] || []).map(s =>
+          s.id === server.id ? { ...s, lifecycleScope } : s
+        ),
+      }));
+    } catch (err: any) {
+      alert('Failed to update lifecycle: ' + (err.message || err));
     }
   };
 
@@ -350,23 +427,87 @@ export default function RelayList() {
                       <div className="space-y-2">
                         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">MCP Servers</p>
                         {relayServers[relay.id].map(server => (
-                          <div key={server.id} className="flex items-center justify-between py-1.5">
-                            <div className="flex items-center gap-2.5">
-                              <Server className="w-3.5 h-3.5 text-muted-foreground" />
-                              <div>
-                                <p className="text-sm font-medium">{server.name}</p>
-                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                  <span>{server.transport}</span>
-                                  <span>·</span>
-                                  <Wrench className="w-3 h-3" />
-                                  <span>{server.toolsManifest?.length || 0} tools</span>
+                          <div key={server.id} className="rounded-lg border border-gray-200 dark:border-white/10 p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2.5">
+                                <Server className="w-3.5 h-3.5 text-muted-foreground" />
+                                <div>
+                                  <p className="text-sm font-medium">{server.name}</p>
+                                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                    <span>{server.transport}</span>
+                                    <span>·</span>
+                                    <Wrench className="w-3 h-3" />
+                                    <span>{server.toolsManifest?.length || 0} tools</span>
+                                  </div>
                                 </div>
                               </div>
+                              <Switch
+                                checked={server.isEnabled}
+                                onCheckedChange={(checked) => handleToggleServer(relay.id, server.id, checked)}
+                              />
                             </div>
-                            <Switch
-                              checked={server.isEnabled}
-                              onCheckedChange={(checked) => handleToggleServer(relay.id, server.id, checked)}
-                            />
+                            {/* Scope & Lifecycle controls */}
+                            {server.installId && (
+                              <div className="flex items-center gap-2 pt-1 border-t border-gray-100 dark:border-white/5">
+                                <Shield className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                                <select
+                                  className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900"
+                                  value={server.scopeType || 'workspace'}
+                                  onChange={(e) => {
+                                    const newScope = e.target.value;
+                                    let newScopeId = workspaceId || '';
+                                    if (newScope === 'user') newScopeId = user?.id || '';
+                                    if (newScope === 'workspace') newScopeId = workspaceId || '';
+                                    // For actor/group, show first available as default
+                                    if (newScope === 'actor') newScopeId = actors[0]?.id || '';
+                                    if (newScope === 'group') newScopeId = groups[0]?.id || '';
+                                    handleUpdateServerScope(relay.id, server, newScope, newScopeId);
+                                  }}
+                                >
+                                  {Object.entries(scopeLabels).map(([value, label]) => (
+                                    <option key={value} value={value}>{label}</option>
+                                  ))}
+                                </select>
+                                {/* Target selector for actor/group scope */}
+                                {server.scopeType === 'actor' && (
+                                  <select
+                                    className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 max-w-[140px]"
+                                    value={server.scopeId || ''}
+                                    onChange={(e) => handleUpdateServerScope(relay.id, server, 'actor', e.target.value)}
+                                  >
+                                    {actors.map((a: any) => (
+                                      <option key={a.id} value={a.id}>{a.name}</option>
+                                    ))}
+                                  </select>
+                                )}
+                                {server.scopeType === 'group' && (
+                                  <select
+                                    className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 max-w-[140px]"
+                                    value={server.scopeId || ''}
+                                    onChange={(e) => handleUpdateServerScope(relay.id, server, 'group', e.target.value)}
+                                  >
+                                    {groups.map((g: any) => (
+                                      <option key={g.id} value={g.id}>{g.name}</option>
+                                    ))}
+                                  </select>
+                                )}
+                                <span className="text-xs text-muted-foreground">·</span>
+                                <select
+                                  className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900"
+                                  value={server.lifecycleScope || 'session'}
+                                  onChange={(e) => handleUpdateServerLifecycle(relay.id, server, e.target.value)}
+                                >
+                                  {(lifecycleOptionsForScope[server.scopeType || 'workspace'] || ['session']).map(opt => (
+                                    <option key={opt} value={opt}>{opt}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                            {!server.installId && (
+                              <p className="text-xs text-muted-foreground italic pt-1 border-t border-gray-100 dark:border-white/5">
+                                No installation record — reconnect relay to create one
+                              </p>
+                            )}
                           </div>
                         ))}
                       </div>

@@ -12,9 +12,7 @@ export const MAX_PAGE_SIZE = 100;
 export const ACTOR_LOCK_TTL = 60_000; // 60 seconds
 export const ACTOR_THINK_TIMEOUT = 120_000; // 2 minutes
 export const SESSION_LOCK_TTL = 120_000; // 120 seconds
-export const DEFAULT_WAIT_TIMEOUT = 600_000; // 10 minutes
 export const DEFAULT_MAX_CONCURRENT_SESSIONS = 3;
-export const MAX_SESSION_DEPTH = 10;
 
 export const MEMORY_EMBEDDING_DIMENSIONS = 1536;
 
@@ -24,23 +22,23 @@ export const SECRETARY_DEFAULT_CHARTER = `You are the Secretary - the primary po
 
 Your responsibilities:
 1. Receive and understand the Boss's goals and instructions
-2. Make first-level judgments about how to handle requests
-3. Delegate work to appropriate subordinate employees
-4. Collect progress updates and synthesize reports
+2. Coordinate work with other actors in the group
+3. Send messages to appropriate team members via send_to
+4. Collect progress and synthesize reports
 5. Report key progress, risks, and results to the Boss
 6. Maintain the long-term relationship with the Boss
 
-You are NOT the sole executor. You manage the team, not do everything yourself.
-When delegating, be specific about what needs to be done and what the expected outcome is.
+You are NOT the sole executor. You coordinate the team by messaging other actors.
+When assigning work, use send_to to message the right actor with clear instructions.
 When reporting, be concise and focus on what matters to the Boss.`;
 
 export const SECRETARY_DEFAULT_SYSTEM_PROMPT = `You are a digital secretary named "Secretary" in the Synapse platform. You serve as the primary interface between the human user (Boss) and the digital employee organization.
 
 When you receive a message from the Boss, analyze it and decide:
 1. Can you answer directly? (simple questions, greetings, status updates)
-2. Should you delegate to a subordinate? (specialized tasks, coding, research)
+2. Should you message another actor for help? (use send_to for specialized tasks)
 3. Do you need more information from the Boss?
-4. Should you escalate a concern?
+4. Should you invite a new actor to the group? (use invite_actor)
 
 IMPORTANT - Memory Management:
 When the Boss tells you to remember something, shares a preference, makes a decision, or reveals important information about themselves or the organization, you MUST use the create_memory tool. This includes:
@@ -51,7 +49,7 @@ When the Boss tells you to remember something, shares a preference, makes a deci
 
 When creating a memory, always use BOTH the respond tool (to acknowledge) AND the create_memory tool together.
 
-You have tools available to perform actions. Use the appropriate tools to respond, delegate, create memories, etc. You can call multiple tools at once.`;
+You have tools available to perform actions. Use the appropriate tools to respond, send messages, create memories, etc. You can call multiple tools at once.`;
 
 export const REDIS_CHANNELS = {
   EVENTS: 'synapse:events',
@@ -84,3 +82,8 @@ export const MCP_INSTANCE_TTL = {
 export const RELAY_AUTH_TIMEOUT = 5000;
 export const RELAY_HEARTBEAT_INTERVAL = 30000;
 export const RELAY_TOOL_CALL_TIMEOUT = 30000;
+
+// A2A Protocol
+export const A2A_PROTOCOL_VERSION = '0.3';
+export const A2A_API_KEY_HEADER = 'x-api-key';
+export const A2A_DEFAULT_RATE_LIMIT = 60;

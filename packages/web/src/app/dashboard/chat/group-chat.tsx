@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Send, ArrowDown, Bot, Paperclip, X } from 'lucide-react';
+import { Send, ArrowDown, Bot, Paperclip, X, AtSign, Users } from 'lucide-react';
 import MessageBubble from './message-bubble';
 import type { Group, GroupMessage, Attachment } from '@/stores/chat-store';
 import { api } from '@/lib/api';
@@ -13,7 +13,7 @@ interface GroupChatProps {
   messages: GroupMessage[];
   loading: boolean;
   thinking?: { actorId: string; actorName: string; status?: string };
-  onSend: (content: string, attachments?: Attachment[]) => Promise<void> | void;
+  onSend: (content: string, attachments?: Attachment[], targetActorIds?: string[]) => Promise<void> | void;
   onBack?: () => void;
   workspaceId?: string;
 }
@@ -31,6 +31,8 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [mentionTarget, setMentionTarget] = useState<string | null>(null); // actorId or null (all)
+  const [showMentionPicker, setShowMentionPicker] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -101,7 +103,8 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
           });
         }
       }
-      await onSend(content, attachments);
+      const targetIds = mentionTarget ? [mentionTarget] : undefined;
+      await onSend(content, attachments, targetIds);
     } catch {
       // error handled upstream
     } finally {
@@ -142,25 +145,38 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
     <div className="flex flex-col h-full bg-white dark:bg-gray-900">
       {/* Header */}
       <div className="flex items-center justify-between px-6 h-[65px] border-b border-gray-200 dark:border-white/10">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           {onBack && (
             <Button variant="ghost" size="icon" className="lg:hidden h-8 w-8" onClick={onBack}>
               <ArrowDown className="w-4 h-4 rotate-90" />
             </Button>
           )}
-          {/* Participant avatar */}
-          <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-500/20 rounded-full flex items-center justify-center ring-1 ring-indigo-200 dark:ring-indigo-500/30">
-            {group.participants[0]?.emoji ? (
-              <span className="text-lg">{group.participants[0].emoji}</span>
-            ) : (
-              <Bot className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+          {/* Participant avatars */}
+          <div className="flex -space-x-2">
+            {group.participants.slice(0, 3).map((p) => (
+              <div key={p.id} className="w-9 h-9 bg-indigo-100 dark:bg-indigo-500/20 rounded-full flex items-center justify-center ring-2 ring-white dark:ring-gray-900">
+                {p.emoji ? (
+                  <span className="text-sm">{p.emoji}</span>
+                ) : (
+                  <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400">{p.name.charAt(0)}</span>
+                )}
+              </div>
+            ))}
+            {group.participants.length > 3 && (
+              <div className="w-9 h-9 bg-gray-100 dark:bg-white/10 rounded-full flex items-center justify-center ring-2 ring-white dark:ring-gray-900">
+                <span className="text-xs font-medium text-gray-500">+{group.participants.length - 3}</span>
+              </div>
             )}
           </div>
-          <div>
-            <h2 className="text-base font-semibold text-gray-900 dark:text-white tracking-tight truncate">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-white tracking-tight truncate">
               {group.participants.map((p) => p.name).join(', ')}
             </h2>
             <div className="flex items-center gap-1.5 mt-0.5">
+              <Users className="w-3 h-3 text-muted-foreground/50" />
+              <span className="text-[11px] text-muted-foreground">
+                {group.participants.length} member{group.participants.length > 1 ? 's' : ''}
+              </span>
               <Badge variant="outline" className={`text-[10px] px-1.5 py-0 shrink-0 ${status.cls}`}>
                 {status.text}
               </Badge>
@@ -213,6 +229,8 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
               serverToolCalls={msg.serverToolCalls}
               citationSources={msg.citationSources}
               attachments={msg.attachments}
+              coordination={msg.coordination}
+              targetActorNames={msg.targetActorNames}
             />
           ))
         )}
@@ -266,6 +284,53 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
             <span className="text-xs text-muted-foreground">
               {thinking.actorName} is responding — you can still send messages
             </span>
+          </div>
+        )}
+        {/* @mention target indicator */}
+        {mentionTarget && (
+          <div className="flex items-center gap-2 mb-2 px-1">
+            <AtSign className="w-3 h-3 text-indigo-500" />
+            <span className="text-xs text-indigo-600 dark:text-indigo-400 font-medium">
+              {group.participants.find(p => p.id === mentionTarget)?.name || 'Unknown'}
+            </span>
+            <button onClick={() => setMentionTarget(null)} className="text-muted-foreground/50 hover:text-muted-foreground">
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        )}
+        {/* @mention picker dropdown */}
+        {showMentionPicker && (
+          <div className="mb-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-lg shadow-lg overflow-hidden">
+            <div className="px-3 py-1.5 text-[11px] text-muted-foreground border-b border-gray-200 dark:border-white/10 font-medium">
+              Send to... {mentionTarget && <span className="text-indigo-500 ml-1">(click again to deselect)</span>}
+            </div>
+            {group.participants.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => {
+                  if (mentionTarget === p.id) {
+                    setMentionTarget(null);
+                  } else {
+                    setMentionTarget(p.id);
+                  }
+                  setShowMentionPicker(false);
+                }}
+                className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-white/5 flex items-center gap-2 transition-colors ${mentionTarget === p.id ? 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400' : 'text-foreground'}`}
+              >
+                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0">
+                  {p.emoji ? (
+                    <span className="text-[10px]">{p.emoji}</span>
+                  ) : (
+                    <span className="text-[10px] text-white font-medium">{p.name.charAt(0)}</span>
+                  )}
+                </div>
+                <span>{p.name}</span>
+                <span className="text-[10px] text-muted-foreground ml-auto">{p.role}</span>
+              </button>
+            ))}
+            <div className="px-3 py-1.5 text-[10px] text-muted-foreground/60 border-t border-gray-200 dark:border-white/10">
+              No @mention → sends to all members
+            </div>
           </div>
         )}
         {/* Pending file previews */}
@@ -322,6 +387,20 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
               >
                 <Paperclip className="w-5 h-5" />
               </button>
+              {group.participants.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setShowMentionPicker(!showMentionPicker)}
+                  disabled={sending}
+                  className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
+                    mentionTarget || showMentionPicker
+                      ? 'text-indigo-500 bg-indigo-50 dark:bg-indigo-500/10'
+                      : 'text-gray-400 hover:text-gray-500 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/10'
+                  }`}
+                >
+                  <AtSign className="w-5 h-5" />
+                </button>
+              )}
             </div>
             <div className="flex-shrink-0">
               <button

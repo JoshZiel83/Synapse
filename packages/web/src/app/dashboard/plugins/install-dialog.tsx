@@ -45,13 +45,15 @@ interface Props {
 
 const scopeOptions = [
   { value: 'workspace', label: 'Workspace', description: 'Available to all actors in this workspace' },
-  { value: 'user', label: 'User', description: 'Available only in your sessions' },
+  { value: 'user', label: 'User', description: 'Available only when you are the sole user in a group' },
   { value: 'actor', label: 'Actor', description: 'Available to a specific actor only' },
+  { value: 'group', label: 'Group', description: 'Available to all actors in a specific group chat' },
 ];
 
 const lifecycleOptions: Record<string, { value: string; label: string }[]> = {
   workspace: [
     { value: 'workspace', label: 'Workspace (shared instance)' },
+    { value: 'group', label: 'Group (per-group instance)' },
     { value: 'actor', label: 'Actor (per-actor instance)' },
     { value: 'session', label: 'Session (per-session instance)' },
   ],
@@ -61,6 +63,11 @@ const lifecycleOptions: Record<string, { value: string; label: string }[]> = {
     { value: 'session', label: 'Session (per-session instance)' },
   ],
   actor: [
+    { value: 'actor', label: 'Actor (per-actor instance)' },
+    { value: 'session', label: 'Session (per-session instance)' },
+  ],
+  group: [
+    { value: 'group', label: 'Group (per-group instance)' },
     { value: 'actor', label: 'Actor (per-actor instance)' },
     { value: 'session', label: 'Session (per-session instance)' },
   ],
@@ -74,7 +81,9 @@ export default function InstallDialog({ plugin, defaultActorId, onClose }: Props
   const [scopeType, setScopeType] = useState(defaultActorId ? 'actor' : 'workspace');
   const [lifecycleScope, setLifecycleScope] = useState(plugin.lifecycle_scope || 'session');
   const [selectedActorId, setSelectedActorId] = useState(defaultActorId || '');
+  const [selectedGroupId, setSelectedGroupId] = useState('');
   const [actors, setActors] = useState<any[]>([]);
+  const [groups, setGroups] = useState<any[]>([]);
   const [configData, setConfigData] = useState<Record<string, any>>({});
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -88,6 +97,9 @@ export default function InstallDialog({ plugin, defaultActorId, onClose }: Props
   useEffect(() => {
     if (scopeType === 'actor' && workspaceId) {
       api.getActors(workspaceId).then(setActors).catch(() => {});
+    }
+    if (scopeType === 'group' && workspaceId) {
+      api.getGroups(workspaceId).then((res: any) => setGroups(res.groups || [])).catch(() => {});
     }
   }, [scopeType, workspaceId]);
 
@@ -117,6 +129,10 @@ export default function InstallDialog({ plugin, defaultActorId, onClose }: Props
       alert('Please select an actor');
       return;
     }
+    if (scopeType === 'group' && !selectedGroupId) {
+      alert('Please select a group');
+      return;
+    }
 
     setSaving(true);
     try {
@@ -125,6 +141,7 @@ export default function InstallDialog({ plugin, defaultActorId, onClose }: Props
         case 'workspace': scopeId = workspaceId; break;
         case 'user': scopeId = user?.id; break;
         case 'actor': scopeId = selectedActorId; break;
+        case 'group': scopeId = selectedGroupId; break;
       }
 
       await installPlugin(workspaceId, {
@@ -153,7 +170,7 @@ export default function InstallDialog({ plugin, defaultActorId, onClose }: Props
           {/* Scope selector */}
           <div className="space-y-2">
             <Label className="text-sm font-medium">Install Scope</Label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               {scopeOptions.map(opt => (
                 <button
                   key={opt.value}
@@ -185,6 +202,23 @@ export default function InstallDialog({ plugin, defaultActorId, onClose }: Props
                 <option value="">Choose an actor...</option>
                 {actors.map((actor: any) => (
                   <option key={actor.id} value={actor.id}>{actor.name} ({actor.role})</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Group selection for group scope */}
+          {scopeType === 'group' && (
+            <div className="space-y-1">
+              <Label className="text-sm">Select Group</Label>
+              <select
+                className="w-full h-9 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-3 text-sm bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10"
+                value={selectedGroupId}
+                onChange={(e) => setSelectedGroupId(e.target.value)}
+              >
+                <option value="">Choose a group...</option>
+                {groups.map((group: any) => (
+                  <option key={group.id} value={group.id}>{group.name}</option>
                 ))}
               </select>
             </div>

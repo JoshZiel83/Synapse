@@ -33,6 +33,9 @@ export default function ChatPage() {
     handleStatusChanged,
     handleThinking,
     handleGroupUpdated,
+    handleMemberJoined,
+    handleMemberKicked,
+    handleActorVersionChanged,
   } = useChatStore();
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -46,10 +49,10 @@ export default function ChatPage() {
       case 'session.message.new':
         handleNewMessage(event.payload);
         // Notify on assistant messages when page is hidden
-        if (event.payload.role === 'assistant') {
-          const name = event.payload.fromActorName || 'Synapse';
+        if (event.payload.role === 'assistant' || event.payload.senderType === 'actor') {
+          const name = event.payload.fromActorName || event.payload.senderName || 'Synapse';
           const content = event.payload.content || '';
-          notify(name, content, event.payload.rootSessionId);
+          notify(name, content, event.payload.groupId || event.payload.rootSessionId);
         }
         break;
       case 'session.status.changed':
@@ -61,13 +64,24 @@ export default function ChatPage() {
       case 'group.updated':
         handleGroupUpdated(event.payload);
         break;
+      case 'group.member_joined':
+        handleMemberJoined(event.payload);
+        break;
+      case 'group.member_kicked':
+        handleMemberKicked(event.payload);
+        break;
+      case 'actor.version_changed':
+        handleActorVersionChanged(event.payload);
+        break;
       // Also handle legacy events to refresh groups
       case 'actor.action':
       case 'secretary.response':
         if (workspaceId) loadGroups(workspaceId);
         break;
     }
-  }, [handleNewMessage, handleStatusChanged, handleThinking, handleGroupUpdated, loadGroups, workspaceId, notify]);
+  }, [handleNewMessage, handleStatusChanged, handleThinking, handleGroupUpdated,
+      handleMemberJoined, handleMemberKicked, handleActorVersionChanged,
+      loadGroups, workspaceId, notify]);
 
   const { connected } = useWebSocket({ workspaceId, onEvent });
 
@@ -101,19 +115,19 @@ export default function ChatPage() {
     setMobileView('chat');
   }
 
-  async function handleSend(content: string, attachments?: Attachment[]) {
+  async function handleSend(content: string, attachments?: Attachment[], targetActorIds?: string[]) {
     if (!workspaceId || !selectedGroupId) return;
     try {
-      await sendMessage(workspaceId, selectedGroupId, content, attachments);
+      await sendMessage(workspaceId, selectedGroupId, content, attachments, targetActorIds);
     } catch (err) {
       console.error('Failed to send:', err);
     }
   }
 
-  async function handleCreateGroup(actorId: string, content: string) {
+  async function handleCreateGroup(actorIds: string[]) {
     if (!workspaceId) return;
     try {
-      const groupId = await createGroup(workspaceId, actorId, content);
+      const groupId = await createGroup(workspaceId, actorIds);
       selectGroup(groupId);
       setMobileView('chat');
     } catch (err) {

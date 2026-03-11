@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS actors (
   system_prompt TEXT NOT NULL DEFAULT '',
   parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   capabilities TEXT[] DEFAULT '{}',
+  skills JSONB DEFAULT '[]',
   config JSONB DEFAULT '{}',
   is_active BOOLEAN DEFAULT TRUE,
   memory_version BIGINT DEFAULT 0,
@@ -83,6 +84,25 @@ CREATE TABLE IF NOT EXISTS actors (
 CREATE INDEX IF NOT EXISTS idx_actors_workspace ON actors(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_actors_parent ON actors(parent_id);
 CREATE INDEX IF NOT EXISTS idx_actors_role ON actors(workspace_id, role);
+
+-- ============ Actor Versions (append-only history) ============
+CREATE TABLE IF NOT EXISTS actor_versions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+  version INT NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  role VARCHAR(50) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  charter TEXT NOT NULL DEFAULT '',
+  system_prompt TEXT NOT NULL DEFAULT '',
+  skills JSONB DEFAULT '[]',
+  config JSONB DEFAULT '{}',
+  capabilities TEXT[] DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(actor_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_actor_versions_actor_time ON actor_versions(actor_id, created_at);
 
 -- ============ Actor Collaborations ============
 CREATE TABLE IF NOT EXISTS actor_collaborations (
@@ -295,22 +315,27 @@ CREATE TABLE IF NOT EXISTS actor_model_groups (
 
 CREATE INDEX IF NOT EXISTS idx_actor_model_groups_actor ON actor_model_groups(actor_id);
 
--- ============ Sessions (process tree) ============
+-- ============ Groups (chat groups) ============
+CREATE TABLE IF NOT EXISTS groups (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  title VARCHAR(500),
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_groups_workspace ON groups(workspace_id);
+
+-- ============ Sessions ============
 CREATE TABLE IF NOT EXISTS sessions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
-  parent_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
-  root_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
-  depth INT NOT NULL DEFAULT 0,
-  channel_type VARCHAR(30) NOT NULL DEFAULT 'web' CHECK (channel_type IN ('web', 'im', 'internal_delegation', 'standing_order', 'api')),
-  channel_id VARCHAR(255),
-  work_item_id UUID REFERENCES work_items(id) ON DELETE SET NULL,
+  group_id UUID REFERENCES groups(id) ON DELETE SET NULL,
+  channel_type VARCHAR(30) NOT NULL DEFAULT 'web' CHECK (channel_type IN ('web', 'api')),
   trigger VARCHAR(50) NOT NULL DEFAULT 'user_message',
-  status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'waiting', 'completed', 'failed', 'cancelled', 'timed_out')),
-  waiting_for UUID[] DEFAULT '{}',
-  wait_timeout_at TIMESTAMPTZ,
-  resume_context JSONB,
+  status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'sleeping', 'completed', 'failed', 'cancelled', 'timed_out')),
   metadata JSONB DEFAULT '{}',
   error_message TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -321,8 +346,69 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_actor ON sessions(actor_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_actor_status ON sessions(actor_id, status);
-CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_root ON sessions(root_session_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_group ON sessions(group_id);
+
+-- ============ Group Members ============
+CREATE TABLE IF NOT EXISTS group_members (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  joined_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(group_id, actor_id),
+  UNIQUE(group_id, user_id),
+  CHECK (
+    (actor_id IS NOT NULL AND user_id IS NULL) OR
+    (actor_id IS NULL AND user_id IS NOT NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id);
+CREATE INDEX IF NOT EXISTS idx_group_members_actor ON group_members(actor_id);
+CREATE INDEX IF NOT EXISTS idx_group_members_session ON group_members(session_id);
+
+-- ============ Group Member Events (membership history log) ============
+CREATE TABLE IF NOT EXISTS group_member_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  event_type VARCHAR(20) NOT NULL CHECK (event_type IN ('joined', 'kicked', 'left')),
+  batch_id UUID,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (
+    (actor_id IS NOT NULL AND user_id IS NULL) OR
+    (actor_id IS NULL AND user_id IS NOT NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_gme_group_time ON group_member_events(group_id, created_at);
+
+-- ============ Group Messages ============
+CREATE TABLE IF NOT EXISTS group_messages (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  sender_type VARCHAR(10) NOT NULL CHECK (sender_type IN ('user', 'actor', 'system')),
+  sender_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  sender_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  sender_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  target_actor_ids UUID[] DEFAULT '{}',
+  target_user_ids UUID[] DEFAULT '{}',
+  content TEXT NOT NULL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at);
+
+-- ============ User Group Reads (unread tracking) ============
+CREATE TABLE IF NOT EXISTS user_group_reads (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, group_id)
+);
 
 -- ============ AI Request Logs ============
 CREATE TABLE IF NOT EXISTS ai_request_logs (
@@ -381,13 +467,7 @@ CREATE TABLE IF NOT EXISTS session_interrupts (
 
 CREATE INDEX IF NOT EXISTS idx_session_interrupts_target ON session_interrupts(target_session_id) WHERE is_consumed = FALSE;
 
--- ============ User Session Reads (unread tracking) ============
-CREATE TABLE IF NOT EXISTS user_session_reads (
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  root_session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (user_id, root_session_id)
-);
+-- (user_session_reads removed — replaced by user_group_reads above)
 
 -- ============ MCP Organizations (publisher groups) ============
 CREATE TABLE IF NOT EXISTS mcp_organizations (
@@ -417,7 +497,7 @@ CREATE TABLE IF NOT EXISTS mcp_plugins (
     CHECK (transport IN ('builtin', 'stdio', 'http', 'relay')),
   entry_point TEXT NOT NULL DEFAULT '',
   lifecycle_scope VARCHAR(20) NOT NULL DEFAULT 'session'
-    CHECK (lifecycle_scope IN ('workspace', 'user', 'actor', 'session')),
+    CHECK (lifecycle_scope IN ('workspace', 'user', 'actor', 'group', 'session')),
   config_schema JSONB DEFAULT '{}',
   default_config JSONB DEFAULT '{}',
   tools_manifest JSONB DEFAULT '[]',
@@ -441,10 +521,10 @@ CREATE TABLE IF NOT EXISTS mcp_installations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   plugin_id UUID NOT NULL REFERENCES mcp_plugins(id) ON DELETE CASCADE,
-  scope_type VARCHAR(20) NOT NULL CHECK (scope_type IN ('workspace', 'user', 'actor')),
+  scope_type VARCHAR(20) NOT NULL CHECK (scope_type IN ('workspace', 'user', 'actor', 'group')),
   scope_id UUID NOT NULL,
   lifecycle_scope VARCHAR(20) NOT NULL DEFAULT 'session'
-    CHECK (lifecycle_scope IN ('workspace', 'user', 'actor', 'session')),
+    CHECK (lifecycle_scope IN ('workspace', 'user', 'actor', 'group', 'session')),
   is_enabled BOOLEAN DEFAULT TRUE,
   config_data JSONB DEFAULT '{}',
   installed_by UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -452,9 +532,10 @@ CREATE TABLE IF NOT EXISTS mcp_installations (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (plugin_id, scope_type, scope_id),
   CONSTRAINT chk_lifecycle_hierarchy CHECK (
-    (scope_type = 'workspace' AND lifecycle_scope IN ('workspace', 'actor', 'session')) OR
+    (scope_type = 'workspace' AND lifecycle_scope IN ('workspace', 'group', 'user', 'actor', 'session')) OR
     (scope_type = 'user'      AND lifecycle_scope IN ('user', 'actor', 'session')) OR
-    (scope_type = 'actor'     AND lifecycle_scope IN ('actor', 'session'))
+    (scope_type = 'actor'     AND lifecycle_scope IN ('actor', 'session')) OR
+    (scope_type = 'group'     AND lifecycle_scope IN ('group', 'actor', 'session'))
   )
 );
 
@@ -555,6 +636,46 @@ CREATE TABLE IF NOT EXISTS files (
 
 CREATE INDEX IF NOT EXISTS idx_files_workspace ON files(workspace_id);
 
+-- ============ A2A Apps ============
+CREATE TABLE IF NOT EXISTS a2a_apps (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  description TEXT DEFAULT '',
+  api_key_hash VARCHAR(255) NOT NULL,
+  api_key_prefix VARCHAR(8) NOT NULL,
+  rate_limit_rpm INT DEFAULT 60,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_a2a_apps_workspace ON a2a_apps(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_a2a_apps_prefix ON a2a_apps(api_key_prefix);
+
+CREATE TABLE IF NOT EXISTS a2a_app_actors (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  app_id UUID NOT NULL REFERENCES a2a_apps(id) ON DELETE CASCADE,
+  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(app_id, actor_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_a2a_app_actors_app ON a2a_app_actors(app_id);
+
+CREATE TABLE IF NOT EXISTS a2a_tasks (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  app_id UUID NOT NULL REFERENCES a2a_apps(id) ON DELETE CASCADE,
+  context_id VARCHAR(255),
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(app_id, session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_a2a_tasks_app ON a2a_tasks(app_id);
+CREATE INDEX IF NOT EXISTS idx_a2a_tasks_session ON a2a_tasks(session_id);
+
 -- ============ Updated at trigger (must be after all tables) ============
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
@@ -568,7 +689,7 @@ DO $$
 DECLARE
   tbl TEXT;
 BEGIN
-  FOR tbl IN SELECT unnest(ARRAY['users', 'workspaces', 'workspace_invites', 'actors', 'work_items', 'memories', 'standing_orders', 'model_groups', 'model_group_items', 'sessions', 'mcp_organizations', 'mcp_plugins', 'mcp_installations', 'mcp_relays', 'mcp_relay_servers'])
+  FOR tbl IN SELECT unnest(ARRAY['users', 'workspaces', 'workspace_invites', 'actors', 'work_items', 'memories', 'standing_orders', 'model_groups', 'model_group_items', 'sessions', 'mcp_organizations', 'mcp_plugins', 'mcp_installations', 'mcp_relays', 'mcp_relay_servers', 'a2a_apps', 'groups'])
   LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS set_updated_at ON %I', tbl);
     EXECUTE format('CREATE TRIGGER set_updated_at BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION update_updated_at()', tbl);

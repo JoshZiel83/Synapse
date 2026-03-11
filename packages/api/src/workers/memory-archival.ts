@@ -9,29 +9,25 @@ export function startMemoryArchivalWorker() {
   const worker = new Worker(
     QUEUE_NAMES.MEMORY_ARCHIVAL,
     async (job) => {
-      const { workspaceId, actorId, workItemId } = job.data;
+      const { workspaceId, actorId, sessionId } = job.data;
 
-      // Load work item
-      const wiResult = await query('SELECT * FROM work_items WHERE id = $1', [workItemId]);
-      if (wiResult.rows.length === 0) return;
-      const workItem = wiResult.rows[0];
-
-      // Load messages for this work item
+      // Load messages from session_messages via sessionId
       const msgResult = await query(
-        'SELECT type, content, from_actor_id, from_user_id FROM messages WHERE work_item_id = $1 ORDER BY created_at',
-        [workItemId]
+        `SELECT sm.role, sm.content FROM session_messages sm
+         WHERE sm.session_id = $1
+         ORDER BY sm.created_at`,
+        [sessionId]
       );
 
+      if (msgResult.rows.length === 0) return;
+
       // Build context for memory extraction
-      const context = `Work completed: "${workItem.title}"
-Description: ${workItem.description}
-Result: ${workItem.result || 'No result recorded'}
-Status: ${workItem.status}
+      const context = `Session conversation for memory extraction:
 
-Messages during this work:
-${msgResult.rows.map((m: any) => `[${m.type}] ${m.content}`).join('\n')}
+Messages during this session:
+${msgResult.rows.map((m: any) => `[${m.role}] ${m.content}`).join('\n')}
 
-Based on this completed work, extract key experiences and knowledge worth remembering long-term.
+Based on this completed session, extract key experiences and knowledge worth remembering long-term.
 Return a JSON array of memories:
 [{"category": "experiential|knowledge|procedural", "content": "...", "tags": ["..."], "importance": 0.0-1.0}]`;
 
@@ -51,8 +47,8 @@ Return a JSON array of memories:
 
         for (const mem of memories.slice(0, 5)) {
           await query(
-            `INSERT INTO memories (workspace_id, actor_id, category, scope, content, tags, importance, source_work_item_id)
-             VALUES ($1, $2, $3, 'private', $4, $5, $6, $7)`,
+            `INSERT INTO memories (workspace_id, actor_id, category, scope, content, tags, importance)
+             VALUES ($1, $2, $3, 'private', $4, $5, $6)`,
             [
               workspaceId,
               actorId,
@@ -60,7 +56,6 @@ Return a JSON array of memories:
               mem.content,
               mem.tags || [],
               mem.importance || 0.5,
-              workItemId,
             ]
           );
         }

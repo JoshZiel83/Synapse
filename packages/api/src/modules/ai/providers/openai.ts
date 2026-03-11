@@ -1,7 +1,8 @@
-import type { AIResponse, ToolDefinition, ToolCall, ContinuationEntry, ConversationMessage, MultimodalConfig } from '@synapse/shared';
+import type { AIResponse, ToolDefinition, ToolCall, ContinuationEntry, ToolRound, ConversationMessage, MultimodalConfig } from '@synapse/shared';
 import type { AIProvider, AIProviderConfig } from './types.js';
 import { convertToOpenAIMessages } from '../message-converter.js';
 import { resolveContentBlocks } from '../content-resolve.js';
+import { serializeToolForProvider } from './tool-serializer.js';
 
 export class OpenAIProvider implements AIProvider {
   readonly name = 'openai';
@@ -16,6 +17,7 @@ export class OpenAIProvider implements AIProvider {
     messages: ConversationMessage[];
     tools?: ToolDefinition[];
     continuationHistory?: ContinuationEntry[];
+    canonicalRounds?: ToolRound[];
     multimodalContent?: unknown[];
     multimodal?: MultimodalConfig;
   }): Promise<AIResponse> {
@@ -35,18 +37,54 @@ export class OpenAIProvider implements AIProvider {
       }
     }
 
-    // Append continuation history (within-turn multi-round tool use)
-    if (params.continuationHistory && params.continuationHistory.length > 0) {
+    // Append canonical rounds (preferred path — platform-canonical ToolRound[])
+    if (params.canonicalRounds && params.canonicalRounds.length > 0) {
+      for (const round of params.canonicalRounds) {
+        openaiMessages.push({
+          role: 'assistant',
+          content: round.textContent || null,
+          tool_calls: round.toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: JSON.stringify(tc.input) },
+          })),
+        });
+        for (const tr of round.toolResults) {
+          let content: string;
+          if (typeof tr.content === 'string') {
+            content = tr.content;
+          } else if (Array.isArray(tr.content)) {
+            const hasFileRef = tr.content.some((b: any) => b?.type === 'file_ref');
+            if (hasFileRef) {
+              const { textFallback } = await resolveContentBlocks(
+                tr.content as any,
+                'openai',
+                params.multimodal,
+              );
+              content = textFallback;
+            } else {
+              content = JSON.stringify(tr.content);
+            }
+          } else {
+            content = JSON.stringify(tr.content);
+          }
+          openaiMessages.push({
+            role: 'tool',
+            tool_call_id: tr.toolCallId,
+            content,
+          });
+        }
+      }
+    }
+    // Legacy path: ContinuationEntry[] (backward compat — will be removed)
+    else if (params.continuationHistory && params.continuationHistory.length > 0) {
       for (const entry of params.continuationHistory) {
-        // Raw assistant message (contains tool_calls array) — pass back as-is
         openaiMessages.push(entry.rawAssistantMessage as Record<string, unknown>);
-        // Each tool result as a separate role:"tool" message
         for (const tr of entry.toolResults) {
           let content: string;
           if (typeof tr.content === 'string') {
             content = tr.content;
           } else if (Array.isArray(tr.content)) {
-            // Check if CanonicalContentBlock[] (has file_ref blocks)
             const hasFileRef = tr.content.some((b: any) => b?.type === 'file_ref');
             if (hasFileRef) {
               const { textFallback } = await resolveContentBlocks(
@@ -77,14 +115,7 @@ export class OpenAIProvider implements AIProvider {
     };
 
     if (params.tools && params.tools.length > 0) {
-      body.tools = params.tools.map((t) => ({
-        type: 'function',
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-        },
-      }));
+      body.tools = params.tools.map((t) => serializeToolForProvider(t, 'openai'));
       body.tool_choice = 'auto';
     }
 

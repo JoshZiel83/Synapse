@@ -72,6 +72,14 @@ export interface WorkspaceInvite {
 // ============ Actor (Digital Employee) ============
 export type ActorRole = 'secretary' | 'manager' | 'specialist' | 'reviewer' | 'archivist' | 'receptionist' | 'assistant';
 
+export interface ActorSkill {
+  id: string;
+  name: string;
+  description: string;
+  tags?: string[];
+  examples?: string[];
+}
+
 export interface Actor {
   id: UUID;
   workspaceId: UUID;
@@ -82,6 +90,7 @@ export interface Actor {
   systemPrompt: string;
   parentId?: UUID; // Superior in org tree
   capabilities: string[]; // e.g. ['code.review', 'repo.write']
+  skills: ActorSkill[];
   config: Record<string, unknown>;
   isActive: boolean;
   createdAt: Timestamp;
@@ -264,6 +273,7 @@ export type EventType =
   | 'secretary.response'
   | 'actor.thinking' | 'actor.action'
   | 'session.message.new' | 'session.status.changed' | 'session.thinking' | 'group.updated'
+  | 'group.member_joined' | 'group.member_kicked' | 'actor.version_changed'
   | 'mcp.config.changed'
   | 'relay.connected' | 'relay.disconnected' | 'relay.servers_updated';
 
@@ -275,27 +285,20 @@ export interface SystemEvent {
 }
 
 // ============ AI ============
-export type SessionStatus = 'active' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'timed_out';
-export type ChannelType = 'web' | 'im' | 'internal_delegation' | 'standing_order' | 'api';
-export type SessionTrigger = 'user_message' | 'delegation' | 'standing_order' | 'api_call';
-export type SessionMessageRole = 'user' | 'assistant' | 'system' | 'tool_result' | 'child_result';
+export type SessionStatus = 'active' | 'sleeping' | 'completed' | 'failed' | 'cancelled' | 'timed_out';
+export type ChannelType = 'web' | 'api';
+export type SessionTrigger = 'user_message' | 'group_message' | 'api_call' | 'actor_invite';
+export type SessionMessageRole = 'user' | 'assistant' | 'system' | 'tool_result';
 export type SessionInterruptType = 'progress_check' | 'memory_changed' | 'priority_override';
 
 export interface Session {
   id: UUID;
   workspaceId: UUID;
   actorId: UUID;
-  parentSessionId?: UUID;
-  rootSessionId?: UUID;
-  depth: number;
+  groupId?: UUID;
   channelType: ChannelType;
-  channelId?: string;
-  workItemId?: UUID;
   trigger: string;
   status: SessionStatus;
-  waitingFor: UUID[];
-  waitTimeoutAt?: Timestamp;
-  resumeContext?: Record<string, unknown>;
   metadata: Record<string, unknown>;
   errorMessage?: string;
   createdAt: Timestamp;
@@ -326,11 +329,9 @@ export interface SessionInterrupt {
 }
 
 export interface ActorAction {
-  type: 'respond' | 'delegate' | 'complete' | 'escalate' | 'request_info' | 'update_progress' | 'create_memory' | 'rename_self' | 'change_avatar' | 'wait';
+  type: 'respond' | 'create_memory' | 'rename_self' | 'change_avatar';
   content: string;
   targetActorId?: UUID;
-  workItemId?: UUID;
-  waitingFor?: string[];
   metadata?: Record<string, unknown>;
 }
 
@@ -505,7 +506,7 @@ export interface ToolParameterProperty {
   type: string;
   description: string;
   enum?: string[];
-  items?: { type: string };
+  items?: { type: string; enum?: string[] };
 }
 
 export interface ToolDefinition {
@@ -541,6 +542,33 @@ export interface ContinuationEntry {
   toolResults: ToolResult[];
 }
 
+// ============ Tool Plugin System ============
+
+export interface GroupMemberEntry {
+  type: 'actor' | 'user';
+  id: string;
+  name: string;
+  title?: string;
+}
+
+export interface ToolResolveContext {
+  sessionId: string;
+  actorId: string;
+  workspaceId: string;
+  groupId?: string;
+  groupMembers?: GroupMemberEntry[];
+  userId?: string;
+  userCount?: number;
+}
+
+export interface ToolPlugin {
+  name: string;
+  kind: 'action' | 'callable';
+  definition: ToolDefinition;
+  resolve?: (ctx: ToolResolveContext) => { active: boolean; definition: ToolDefinition };
+  execute?: (input: Record<string, unknown>) => Promise<string>;
+}
+
 export interface AIResponse {
   toolCalls: ToolCall[];
   textContent: string;
@@ -555,8 +583,8 @@ export interface AIResponse {
 // ============================================================
 
 export type McpTransport = 'builtin' | 'stdio' | 'http' | 'relay';
-export type McpLifecycleScope = 'workspace' | 'user' | 'actor' | 'session';
-export type McpScopeType = 'workspace' | 'user' | 'actor';
+export type McpLifecycleScope = 'workspace' | 'user' | 'actor' | 'group' | 'session';
+export type McpScopeType = 'workspace' | 'user' | 'actor' | 'group';
 
 export interface McpOrganization {
   id: string;
@@ -692,4 +720,120 @@ export interface McpSetupStep {
   optional?: boolean;
   helpUrl?: string;
   helpText?: string;
+}
+
+// ============ Groups (Chat Groups) ============
+export interface Group {
+  id: UUID;
+  workspaceId: UUID;
+  title?: string;
+  createdBy?: UUID;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface GroupMember {
+  id: UUID;
+  groupId: UUID;
+  actorId?: UUID;
+  userId?: UUID;
+  sessionId?: UUID;
+  joinedAt: Timestamp;
+  // Joined fields
+  actorName?: string;
+  actorTitle?: string;
+  actorRole?: string;
+  userName?: string;
+  status?: SessionStatus;
+}
+
+export interface GroupMessage {
+  id: UUID;
+  groupId: UUID;
+  senderType: 'user' | 'actor' | 'system';
+  senderUserId?: UUID;
+  senderActorId?: UUID;
+  senderSessionId?: UUID;
+  targetActorIds: UUID[];
+  content: string;
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+  // Joined fields
+  senderName?: string;
+}
+
+// ============ A2A (Agent-to-Agent) Protocol ============
+export type A2ATaskState = 'submitted' | 'working' | 'input-required' | 'completed' | 'failed' | 'canceled' | 'rejected';
+
+export interface A2AApp {
+  id: UUID;
+  workspaceId: UUID;
+  name: string;
+  description: string;
+  apiKeyPrefix: string;
+  rateLimitRpm: number;
+  isActive: boolean;
+  createdBy?: UUID;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface A2AAppActor {
+  id: UUID;
+  appId: UUID;
+  actorId: UUID;
+  createdAt: Timestamp;
+}
+
+export interface A2ATask {
+  id: UUID;
+  appId: UUID;
+  contextId?: string;
+  sessionId: UUID;
+  createdAt: Timestamp;
+}
+
+export interface A2AAgentSkill {
+  id: string;
+  name: string;
+  description: string;
+  tags?: string[];
+  examples?: string[];
+}
+
+export interface A2AAgentCard {
+  name: string;
+  description: string;
+  url: string;
+  version: string;
+  capabilities: {
+    streaming: boolean;
+    pushNotifications: boolean;
+    stateTransitionHistory: boolean;
+  };
+  skills: A2AAgentSkill[];
+  defaultInputModes: string[];
+  defaultOutputModes: string[];
+}
+
+export interface A2APart {
+  type: 'text';
+  text: string;
+}
+
+export interface A2AMessage {
+  role: 'user' | 'agent';
+  parts: A2APart[];
+}
+
+export interface A2ATaskResponse {
+  id: string;
+  contextId?: string;
+  status: {
+    state: A2ATaskState;
+    message?: A2AMessage;
+    timestamp: string;
+  };
+  artifacts?: { parts: A2APart[]; index: number }[];
+  history?: A2AMessage[];
 }

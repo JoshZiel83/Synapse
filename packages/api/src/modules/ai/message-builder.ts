@@ -15,7 +15,6 @@ interface SessionMessageRow {
 interface BuildOptions {
   crossTurnToolHistory?: boolean;
   interrupts?: { type: string; content: string }[];
-  resumeTrigger?: boolean;
   memoryNotice?: string;
 }
 
@@ -82,11 +81,6 @@ export function buildConversationMessages(
   // Append memory notice
   if (options.memoryNotice) {
     messages.push({ role: 'user', content: options.memoryNotice });
-  }
-
-  // Append resume trigger
-  if (options.resumeTrigger) {
-    messages.push({ role: 'user', content: '[System Notice] Your previously delegated child tasks have all completed. Review the child task results above and continue processing.' });
   }
 
   // Ensure messages end with user role (required by most APIs)

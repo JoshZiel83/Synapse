@@ -15,19 +15,10 @@ const createGroupSchema = z.object({
   content: z.string().min(1).max(10000),
 });
 
-const attachmentSchema = z.object({
-  id: z.string().uuid(),
-  url: z.string(),
-  fullUrl: z.string().optional(),
-  storedName: z.string().optional(),
-  originalName: z.string(),
-  mimeType: z.string(),
-  sizeBytes: z.number(),
-});
-
 const sendMessageSchema = z.object({
   content: z.string().min(1).max(10000),
-  attachments: z.array(attachmentSchema).optional(),
+  attachments: z.array(z.any()).optional(),
+  targetActorIds: z.array(z.string().uuid()).optional(),
 });
 
 export async function chatController(app: FastifyInstance) {
@@ -57,51 +48,52 @@ export async function chatController(app: FastifyInstance) {
     return reply.status(201).send(group);
   });
 
-  // GET /workspaces/:wsId/chat/groups/:rootSessionId/messages — get group messages
+  // GET /workspaces/:wsId/chat/groups/:groupId/messages — get group messages
   app.get<{
-    Params: { workspaceId: string; rootSessionId: string };
+    Params: { workspaceId: string; groupId: string };
     Querystring: { limit?: string; before?: string };
-  }>('/workspaces/:workspaceId/chat/groups/:rootSessionId/messages', async (request, reply) => {
-    const { rootSessionId } = request.params;
+  }>('/workspaces/:workspaceId/chat/groups/:groupId/messages', async (request, reply) => {
+    const { groupId } = request.params;
     const qs = request.query as any;
     const limit = qs.limit ? parseInt(qs.limit, 10) : 50;
     const before = qs.before || undefined;
 
-    const messages = await getGroupMessages(rootSessionId, limit, before);
+    const userId = (request as any).user!.userId;
+    const messages = await getGroupMessages(groupId, userId, limit, before);
     return reply.send({ messages });
   });
 
-  // POST /workspaces/:wsId/chat/groups/:rootSessionId/messages — send message to group
+  // POST /workspaces/:wsId/chat/groups/:groupId/messages — send message to group
   app.post<{
-    Params: { workspaceId: string; rootSessionId: string };
-    Body: { content: string; attachments?: any[] };
-  }>('/workspaces/:workspaceId/chat/groups/:rootSessionId/messages', async (request, reply) => {
-    const { workspaceId, rootSessionId } = request.params;
-    const { content, attachments } = sendMessageSchema.parse(request.body);
+    Params: { workspaceId: string; groupId: string };
+    Body: { content: string; attachments?: any[]; targetActorIds?: string[] };
+  }>('/workspaces/:workspaceId/chat/groups/:groupId/messages', async (request, reply) => {
+    const { workspaceId, groupId } = request.params;
+    const { content, attachments, targetActorIds } = sendMessageSchema.parse(request.body);
     const userId = (request as any).user!.userId;
 
-    const result = await sendMessageToGroup(workspaceId, rootSessionId, userId, content, attachments);
+    const result = await sendMessageToGroup(workspaceId, groupId, userId, content, attachments, targetActorIds);
     return reply.status(201).send(result);
   });
 
-  // POST /workspaces/:wsId/chat/groups/:rootSessionId/read — mark group as read
+  // POST /workspaces/:wsId/chat/groups/:groupId/read — mark group as read
   app.post<{
-    Params: { workspaceId: string; rootSessionId: string };
-  }>('/workspaces/:workspaceId/chat/groups/:rootSessionId/read', async (request, reply) => {
-    const { rootSessionId } = request.params;
+    Params: { workspaceId: string; groupId: string };
+  }>('/workspaces/:workspaceId/chat/groups/:groupId/read', async (request, reply) => {
+    const { groupId } = request.params;
     const userId = (request as any).user!.userId;
 
-    await markGroupAsRead(userId, rootSessionId);
+    await markGroupAsRead(userId, groupId);
     return reply.status(204).send();
   });
 
-  // DELETE /workspaces/:wsId/chat/groups/:rootSessionId — cancel group
+  // DELETE /workspaces/:wsId/chat/groups/:groupId — cancel group
   app.delete<{
-    Params: { workspaceId: string; rootSessionId: string };
-  }>('/workspaces/:workspaceId/chat/groups/:rootSessionId', async (request, reply) => {
-    const { workspaceId, rootSessionId } = request.params;
+    Params: { workspaceId: string; groupId: string };
+  }>('/workspaces/:workspaceId/chat/groups/:groupId', async (request, reply) => {
+    const { workspaceId, groupId } = request.params;
 
-    await cancelGroup(rootSessionId, workspaceId);
+    await cancelGroup(groupId, workspaceId);
     return reply.status(204).send();
   });
 }

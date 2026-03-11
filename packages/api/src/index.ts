@@ -23,15 +23,17 @@ import sessionModule from './modules/session/index.js';
 import auditQueryModule from './modules/audit/index.js';
 import standingOrdersModule from './modules/standing-orders/index.js';
 import modelGroupsModule from './modules/model-groups/index.js';
-import chatModule from './modules/chat/index.js';
+import groupModule from './modules/group/index.js';
 import mcpPluginsModule from './modules/mcp-plugins/index.js';
 import filesModule from './modules/files/index.js';
+import a2aModule from './modules/a2a/index.js';
 import { seedPlatformDefaultGroup } from './modules/model-groups/service.js';
 import { seedBuiltinMcpPlugins } from './modules/mcp-plugins/service.js';
 import { initBuiltinRegistry } from './modules/mcp-plugins/builtin/index.js';
 import { initInstanceManagerListeners } from './modules/mcp-plugins/instance-manager.js';
 import { initRelayManager, shutdownAllRelays } from './modules/mcp-plugins/relay-manager.js';
-import { registerSessionTools } from './modules/ai/session-tools.js';
+import { registerActionToolPlugins } from './modules/ai/tools.js';
+import { registerCallableToolPlugins } from './modules/ai/session-tools.js';
 
 // Workers
 import { startActorThinkingWorker } from './workers/actor-thinking.js';
@@ -79,9 +81,10 @@ async function main() {
   await app.register(auditQueryModule);
   await app.register(standingOrdersModule);
   await app.register(modelGroupsModule);
-  await app.register(chatModule);
+  await app.register(groupModule);
   await app.register(mcpPluginsModule);
   await app.register(filesModule);
+  await app.register(a2aModule);
 
   // Seed platform default model group
   try {
@@ -112,8 +115,9 @@ async function main() {
     };
   });
 
-  // Register session-aware callable tools (delegate, check_progress)
-  registerSessionTools();
+  // Register builtin tool plugins (action + callable)
+  registerActionToolPlugins();
+  registerCallableToolPlugins();
 
   // Start workers
   startActorThinkingWorker();

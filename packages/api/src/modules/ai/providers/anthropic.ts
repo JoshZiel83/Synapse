@@ -1,7 +1,8 @@
-import type { AIResponse, ToolDefinition, ToolCall, AnthropicBuiltinTool, ContinuationEntry, ConversationMessage, MultimodalConfig } from '@synapse/shared';
+import type { AIResponse, ToolDefinition, ToolCall, AnthropicBuiltinTool, ContinuationEntry, ToolRound, ConversationMessage, MultimodalConfig } from '@synapse/shared';
 import type { AIProvider, AIProviderConfig } from './types.js';
 import { convertToAnthropicMessages } from '../message-converter.js';
 import { resolveContentBlocks } from '../content-resolve.js';
+import { serializeToolForProvider } from './tool-serializer.js';
 
 // Map tool names to their latest versioned type identifiers
 const BUILTIN_TOOL_TYPES: Record<string, string> = {
@@ -23,6 +24,7 @@ export class AnthropicProvider implements AIProvider {
     tools?: ToolDefinition[];
     builtinTools?: AnthropicBuiltinTool[];
     continuationHistory?: ContinuationEntry[];
+    canonicalRounds?: ToolRound[];
     multimodalContent?: unknown[];
     multimodal?: MultimodalConfig;
   }): Promise<AIResponse> {
@@ -39,22 +41,66 @@ export class AnthropicProvider implements AIProvider {
       }
     }
 
-    // Append continuation history (within-turn multi-round tool use)
-    if (params.continuationHistory && params.continuationHistory.length > 0) {
+    // Append canonical rounds (preferred path — platform-canonical ToolRound[])
+    if (params.canonicalRounds && params.canonicalRounds.length > 0) {
+      for (const round of params.canonicalRounds) {
+        // Build assistant content blocks
+        const blocks: any[] = [];
+        if (round.textContent) blocks.push({ type: 'text', text: round.textContent });
+        for (const tc of round.toolCalls) {
+          blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input });
+        }
+        allMessages.push({ role: 'assistant', content: blocks });
+
+        // Build tool results as user message
+        const resultBlocks: unknown[] = [];
+        for (const tr of round.toolResults) {
+          if (typeof tr.content !== 'string' && Array.isArray(tr.content)) {
+            const hasFileRef = tr.content.some((b: any) => b?.type === 'file_ref');
+            if (hasFileRef) {
+              const { providerBlocks } = await resolveContentBlocks(
+                tr.content as any,
+                'anthropic',
+                params.multimodal,
+              );
+              resultBlocks.push({
+                type: 'tool_result',
+                tool_use_id: tr.toolCallId,
+                content: providerBlocks,
+                is_error: tr.isError || false,
+              });
+            } else {
+              resultBlocks.push({
+                type: 'tool_result',
+                tool_use_id: tr.toolCallId,
+                content: convertMcpContentToAnthropic(tr.content),
+                is_error: tr.isError || false,
+              });
+            }
+          } else {
+            resultBlocks.push({
+              type: 'tool_result',
+              tool_use_id: tr.toolCallId,
+              content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
+              is_error: tr.isError || false,
+            });
+          }
+        }
+        allMessages.push({ role: 'user', content: resultBlocks });
+      }
+    }
+    // Legacy path: ContinuationEntry[] (backward compat — will be removed)
+    else if (params.continuationHistory && params.continuationHistory.length > 0) {
       for (const entry of params.continuationHistory) {
-        // Raw assistant message (contains tool_use blocks) — pass back as-is
         allMessages.push({
           role: 'assistant',
           content: entry.rawAssistantMessage,
         });
-        // Tool results as a user message with tool_result content blocks
         const toolResultBlocks: unknown[] = [];
         for (const tr of entry.toolResults) {
           if (typeof tr.content !== 'string' && Array.isArray(tr.content)) {
-            // Check if content is CanonicalContentBlock[] (has file_ref blocks)
             const hasFileRef = tr.content.some((b: any) => b?.type === 'file_ref');
             if (hasFileRef) {
-              // Resolve canonical blocks to Anthropic-native format
               const { providerBlocks } = await resolveContentBlocks(
                 tr.content as any,
                 'anthropic',
@@ -67,7 +113,6 @@ export class AnthropicProvider implements AIProvider {
                 is_error: tr.isError || false,
               });
             } else {
-              // Legacy MCP content blocks — convert directly
               toolResultBlocks.push({
                 type: 'tool_result',
                 tool_use_id: tr.toolCallId,
@@ -103,11 +148,7 @@ export class AnthropicProvider implements AIProvider {
 
     if (params.tools && params.tools.length > 0) {
       for (const t of params.tools) {
-        allTools.push({
-          name: t.name,
-          description: t.description,
-          input_schema: t.parameters,
-        });
+        allTools.push(serializeToolForProvider(t, 'anthropic'));
       }
     }
 

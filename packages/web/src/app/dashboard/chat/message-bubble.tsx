@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Bot, User, GitBranch, Wrench, Search, Globe, ChevronDown, ChevronRight, ExternalLink, FileIcon, Download, AlertTriangle } from 'lucide-react';
+import { Bot, User, GitBranch, Wrench, Search, Globe, ChevronDown, ChevronRight, ExternalLink, FileIcon, Download, AlertTriangle, AtSign } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ServerToolCall, Attachment } from '@/stores/chat-store';
@@ -20,6 +20,8 @@ interface MessageBubbleProps {
   serverToolCalls?: ServerToolCall[];
   citationSources?: Record<string, { url: string; title: string }>;
   attachments?: Attachment[];
+  coordination?: boolean;
+  targetActorNames?: string[];
 }
 
 function formatToolsUsed(tools: string[]): string {
@@ -357,6 +359,8 @@ export default function MessageBubble({
   serverToolCalls,
   citationSources,
   attachments,
+  coordination,
+  targetActorNames,
 }: MessageBubbleProps) {
   const isChildResult = role === 'child_result';
   const isSystem = role === 'system';
@@ -406,6 +410,35 @@ export default function MessageBubble({
   const hasToolsUsed = toolsUsed && toolsUsed.length > 0;
   const hasCitations = sources.length > 0;
   const hasAttachments = attachments && attachments.length > 0;
+
+  // Coordination messages (send_to between actors) — render in a compact style
+  if (coordination && !isUser) {
+    return (
+      <div className="flex gap-2 ml-10 opacity-70">
+        <div className="flex items-start gap-2 max-w-[70%]">
+          <AtSign className="w-3 h-3 text-indigo-400/60 mt-1 shrink-0" />
+          <div>
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <span className="text-[11px] font-medium text-muted-foreground/80">{actorName}</span>
+              {targetActorNames && targetActorNames.length > 0 && (
+                <span className="text-[10px] text-indigo-400/60">→ {targetActorNames.join(', ')}</span>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground/70 leading-relaxed">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {processedContent}
+              </ReactMarkdown>
+            </div>
+            {timestamp && (
+              <span className="text-[9px] text-muted-foreground/30 mt-0.5 block">
+                {new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>

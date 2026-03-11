@@ -52,12 +52,14 @@ export interface GroupMessage {
   serverToolCalls?: ServerToolCall[];
   citationSources?: Record<string, { url: string; title: string }>;
   attachments?: Attachment[];
+  coordination?: boolean; // true for send_to inter-actor messages
+  targetActorNames?: string[]; // names of @mentioned actors
 }
 
 interface ThinkingState {
   actorId: string;
   actorName: string;
-  status?: string; // e.g. "Calling AI model...", "Delegating to Developer..."
+  status?: string;
 }
 
 interface ChatState {
@@ -66,14 +68,14 @@ interface ChatState {
   messages: GroupMessage[];
   loadingGroups: boolean;
   loadingMessages: boolean;
-  thinkingMap: Record<string, ThinkingState>; // keyed by rootSessionId
+  thinkingMap: Record<string, ThinkingState>; // keyed by groupId
   totalUnread: number;
 
   loadGroups: (workspaceId: string) => Promise<void>;
   selectGroup: (groupId: string | null) => void;
   loadMessages: (workspaceId: string, groupId: string) => Promise<void>;
-  sendMessage: (workspaceId: string, groupId: string, content: string, attachments?: Attachment[]) => Promise<void>;
-  createGroup: (workspaceId: string, actorId: string, content: string) => Promise<string>;
+  sendMessage: (workspaceId: string, groupId: string, content: string, attachments?: Attachment[], targetActorIds?: string[]) => Promise<void>;
+  createGroup: (workspaceId: string, actorIds: string[], content?: string, targetActorId?: string) => Promise<string>;
   markRead: (workspaceId: string, groupId: string) => Promise<void>;
 
   // WS handlers
@@ -81,6 +83,14 @@ interface ChatState {
   handleStatusChanged: (payload: any) => void;
   handleThinking: (payload: any) => void;
   handleGroupUpdated: (payload: any) => void;
+  handleMemberJoined: (payload: any) => void;
+  handleMemberKicked: (payload: any) => void;
+  handleActorVersionChanged: (payload: any) => void;
+}
+
+// Helper to extract groupId from payload (supports both groupId and rootSessionId)
+function getGroupId(payload: any): string | undefined {
+  return payload.groupId || payload.rootSessionId;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -114,7 +124,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   selectGroup: (groupId) => {
     const state = get();
-    if (state.selectedGroupId === groupId) return; // don't reset if same group
+    if (state.selectedGroupId === groupId) return;
     set({ selectedGroupId: groupId, messages: [] });
   },
 
@@ -122,13 +132,32 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ loadingMessages: true });
     try {
       const res = await api.getGroupMessages(workspaceId, groupId, 100);
-      const messages = (res?.messages || []).map((m: any) => ({
-        ...m,
-        toolsUsed: m.metadata?.toolsUsed,
-        serverToolCalls: m.metadata?.serverToolCalls,
-        citationSources: m.metadata?.citationSources,
-        attachments: m.metadata?.attachments,
-      }));
+      const messages = (res?.messages || []).map((m: any) => {
+        // API returns pre-transformed fields: role, fromActorId, actorName, createdAt
+        // Fall back to raw DB fields for backward compatibility
+        const role = m.role || (
+          (m.sender_type || m.senderType) === 'user' ? 'user'
+          : (m.sender_type || m.senderType) === 'actor' ? 'assistant'
+          : 'system'
+        );
+        return {
+          id: m.id,
+          sessionId: m.sessionId || m.sender_session_id || '',
+          role,
+          content: m.content,
+          fromActorId: m.fromActorId || m.sender_actor_id,
+          fromUserId: m.fromUserId || m.sender_user_id,
+          actorName: role === 'user' ? undefined : (m.actorName || m.sender_name),
+          createdAt: m.createdAt || m.created_at,
+          status: 'sent' as const,
+          toolsUsed: m.metadata?.toolsUsed,
+          serverToolCalls: m.metadata?.serverToolCalls,
+          citationSources: m.metadata?.citationSources,
+          attachments: m.metadata?.attachments,
+          coordination: !!m.metadata?.coordination,
+          targetActorNames: m.targetActorNames || m.target_actor_names,
+        };
+      });
       set({ messages, loadingMessages: false });
     } catch (err) {
       console.error('Failed to load messages:', err);
@@ -136,7 +165,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (workspaceId, groupId, content, attachments) => {
+  sendMessage: async (workspaceId, groupId, content, attachments, targetActorIds) => {
     // Optimistic insert
     const tempId = `temp-${Date.now()}`;
     const optimisticMsg: GroupMessage = {
@@ -153,7 +182,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
 
     try {
-      await api.sendGroupMessage(workspaceId, groupId, content, attachments);
+      await api.sendGroupMessage(workspaceId, groupId, content, attachments, targetActorIds);
       // Update optimistic message status
       set((state) => ({
         messages: state.messages.map((m) =>
@@ -182,8 +211,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  createGroup: async (workspaceId, actorId, content) => {
-    const res = await api.createGroup(workspaceId, actorId, content);
+  createGroup: async (workspaceId, actorIds, content, targetActorId) => {
+    const res = await api.createGroup(workspaceId, actorIds, content, targetActorId);
     const groupId = res.id || res.sessionId;
     // Reload groups to get the new group
     await get().loadGroups(workspaceId);
@@ -206,19 +235,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   handleNewMessage: (payload) => {
-    const { rootSessionId, sessionId, role, content, fromActorId, fromActorName, messageId, fromUserId, metadata } = payload;
+    const groupId = getGroupId(payload);
+    if (!groupId) return;
+
+    const { sessionId, role, content, fromActorId, fromActorName, messageId, fromUserId, metadata,
+            senderType, senderActorId, senderUserId, senderName, targetUserIds } = payload;
+
+    // Determine role from either old format (role) or new format (senderType)
+    const effectiveRole = role || (senderType === 'user' ? 'user' : senderType === 'actor' ? 'assistant' : 'system');
+    const effectiveFromActorId = fromActorId || senderActorId;
+    const effectiveFromUserId = fromUserId || senderUserId;
+    const effectiveActorName = fromActorName || senderName;
+
     const state = get();
 
-    // Skip child_result and system messages — they're internal cascade noise
-    if (role === 'child_result' || role === 'system' || role === 'tool_result') {
+    // Skip system messages
+    if (effectiveRole === 'system' || effectiveRole === 'tool_result' || effectiveRole === 'child_result') {
+      return;
+    }
+
+    // Visibility filter: actor messages without current user in targetUserIds are not for us
+    // (coordination messages between actors — user can't see them)
+    if (effectiveRole === 'assistant' && targetUserIds && Array.isArray(targetUserIds) && targetUserIds.length === 0) {
+      // Actor sent to other actors only, not to any user — skip for frontend
       return;
     }
 
     // Clear thinking for this group when assistant responds
-    if (role === 'assistant') {
+    if (effectiveRole === 'assistant') {
       set((s) => {
         const newMap = { ...s.thinkingMap };
-        delete newMap[rootSessionId];
+        delete newMap[groupId];
         return { thinkingMap: newMap };
       });
     }
@@ -228,16 +275,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const serverToolCalls = metadata?.serverToolCalls as ServerToolCall[] | undefined;
     const citationSources = metadata?.citationSources as Record<string, { url: string; title: string }> | undefined;
     const attachments = metadata?.attachments as Attachment[] | undefined;
+    const coordination = !!metadata?.coordination;
+    const targetActorNames = payload.targetActorNames as string[] | undefined;
 
     // If this group is selected, append the message (avoid duplicates)
-    if (state.selectedGroupId === rootSessionId) {
+    if (state.selectedGroupId === groupId) {
       set((s) => {
         const exists = s.messages.some((m) => m.id === messageId);
         if (exists) return s;
 
         // Remove optimistic temp messages when server confirms the user message
         let messages = s.messages;
-        if (role === 'user' && fromUserId) {
+        if (effectiveRole === 'user' && effectiveFromUserId) {
           messages = messages.filter((m) => !(m.id.startsWith('temp-') && m.role === 'user'));
         }
 
@@ -246,17 +295,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ...messages,
             {
               id: messageId || `ws-${Date.now()}`,
-              sessionId,
-              role,
-              content,
-              fromActorId,
-              actorName: fromActorName,
+              sessionId: sessionId || '',
+              role: effectiveRole,
+              content: content || '',
+              fromActorId: effectiveFromActorId,
+              actorName: effectiveActorName,
               createdAt: new Date().toISOString(),
               status: 'sent' as const,
               toolsUsed,
               serverToolCalls,
               citationSources,
               attachments,
+              coordination,
+              targetActorNames,
             },
           ],
         };
@@ -266,11 +317,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Update group list
     set((s) => {
       let groups = s.groups.map((g) => {
-        if (g.id !== rootSessionId) return g;
-        const unreadCount = s.selectedGroupId === rootSessionId ? g.unreadCount : g.unreadCount + 1;
+        if (g.id !== groupId) return g;
+        const unreadCount = s.selectedGroupId === groupId ? g.unreadCount : g.unreadCount + 1;
         return {
           ...g,
-          lastMessage: { content, role, actorName: fromActorName, createdAt: new Date().toISOString() },
+          lastMessage: { content: content || '', role: effectiveRole, actorName: effectiveActorName, createdAt: new Date().toISOString() },
           status: 'active' as const,
           unreadCount,
         };
@@ -287,12 +338,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   handleStatusChanged: (payload) => {
-    const { rootSessionId, status, errorMessage } = payload;
+    const groupId = getGroupId(payload);
+    if (!groupId) return;
+    const { status, errorMessage } = payload;
+
+    // Map session status to group-level status
+    let groupStatus = status;
+    if (status === 'sleeping') groupStatus = 'active'; // sleeping actors = group still usable
+    if (status === 'active') groupStatus = 'active';
 
     // Update group status
     set((s) => ({
       groups: s.groups.map((g) =>
-        g.id === rootSessionId ? { ...g, status } : g
+        g.id === groupId ? { ...g, status: groupStatus } : g
       ),
     }));
 
@@ -300,16 +358,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (status === 'failed') {
       set((s) => {
         const newMap = { ...s.thinkingMap };
-        delete newMap[rootSessionId];
+        delete newMap[groupId];
 
         // Only inject if this group is currently selected
-        if (s.selectedGroupId !== rootSessionId) {
+        if (s.selectedGroupId !== groupId) {
           return { thinkingMap: newMap };
         }
 
         const errMsg: GroupMessage = {
           id: `error-${Date.now()}`,
-          sessionId: rootSessionId,
+          sessionId: '',
           role: 'error',
           content: errorMessage || 'An unexpected error occurred while processing your request.',
           createdAt: new Date().toISOString(),
@@ -324,22 +382,47 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   handleThinking: (payload) => {
-    const { rootSessionId, actorId, actorName, status } = payload;
+    const groupId = getGroupId(payload);
+    if (!groupId) return;
+    const { actorId, actorName, status } = payload;
     set((s) => ({
       thinkingMap: {
         ...s.thinkingMap,
-        [rootSessionId]: { actorId, actorName, status },
+        [groupId]: { actorId, actorName, status },
       },
     }));
   },
 
   handleGroupUpdated: (payload) => {
-    const { rootSessionId, newParticipant } = payload;
+    const groupId = getGroupId(payload);
+    if (!groupId) return;
+    const { newParticipant, action } = payload;
+
+    if (action === 'member_added' && payload.actorId && payload.actorName) {
+      // New member added to group
+      set((s) => ({
+        groups: s.groups.map((g) => {
+          if (g.id !== groupId) return g;
+          const exists = g.participants.some((p) => p.id === payload.actorId);
+          if (exists) return g;
+          return {
+            ...g,
+            participants: [...g.participants, {
+              id: payload.actorId,
+              name: payload.actorName,
+              role: 'specialist',
+            }],
+          };
+        }),
+      }));
+      return;
+    }
+
     if (!newParticipant) return;
 
     set((s) => ({
       groups: s.groups.map((g) => {
-        if (g.id !== rootSessionId) return g;
+        if (g.id !== groupId) return g;
         const exists = g.participants.some((p) => p.id === newParticipant.id);
         if (exists) return g;
         return {
@@ -348,5 +431,103 @@ export const useChatStore = create<ChatState>((set, get) => ({
         };
       }),
     }));
+  },
+
+  handleMemberJoined: (payload) => {
+    const groupId = payload.groupId;
+    if (!groupId) return;
+    const { actorId, actorName } = payload;
+
+    const state = get();
+
+    // Add to participants list if not already present
+    set((s) => ({
+      groups: s.groups.map((g) => {
+        if (g.id !== groupId) return g;
+        if (actorId && !g.participants.some((p) => p.id === actorId)) {
+          return {
+            ...g,
+            participants: [...g.participants, { id: actorId, name: actorName || 'Unknown', role: 'specialist' }],
+          };
+        }
+        return g;
+      }),
+    }));
+
+    // Insert system message if this group is selected
+    if (state.selectedGroupId === groupId) {
+      set((s) => ({
+        messages: [
+          ...s.messages,
+          {
+            id: `sys-join-${Date.now()}`,
+            sessionId: '',
+            role: 'system',
+            content: `${actorName || 'An actor'} joined the group`,
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      }));
+    }
+  },
+
+  handleMemberKicked: (payload) => {
+    const groupId = payload.groupId;
+    if (!groupId) return;
+    const { actorId, actorName } = payload;
+
+    const state = get();
+
+    // Remove from participants list
+    set((s) => ({
+      groups: s.groups.map((g) => {
+        if (g.id !== groupId) return g;
+        return {
+          ...g,
+          participants: g.participants.filter((p) => p.id !== actorId),
+        };
+      }),
+    }));
+
+    // Insert system message if this group is selected
+    if (state.selectedGroupId === groupId) {
+      set((s) => ({
+        messages: [
+          ...s.messages,
+          {
+            id: `sys-kick-${Date.now()}`,
+            sessionId: '',
+            role: 'system',
+            content: `${actorName || 'An actor'} was removed from the group`,
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      }));
+    }
+  },
+
+  handleActorVersionChanged: (payload) => {
+    const { actorId, name: actorName } = payload;
+    const state = get();
+
+    // Find which groups this actor is in and insert a system message if selected
+    const relevantGroup = state.groups.find(
+      (g) => g.id === state.selectedGroupId && g.participants.some((p) => p.id === actorId)
+    );
+
+    if (relevantGroup) {
+      set((s) => ({
+        messages: [
+          ...s.messages,
+          {
+            id: `sys-version-${Date.now()}`,
+            sessionId: '',
+            role: 'system',
+            content: `${actorName || 'An actor'}'s profile has been updated`,
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      }));
+    }
   },
 }));

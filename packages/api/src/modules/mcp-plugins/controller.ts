@@ -15,16 +15,18 @@ import { getToolCallLogs, getEventLogs } from './audit.js';
 
 const installSchema = z.object({
   pluginId: z.string().uuid(),
-  scopeType: z.enum(['workspace', 'user', 'actor']),
+  scopeType: z.enum(['workspace', 'user', 'actor', 'group']),
   scopeId: z.string().uuid().optional(),
-  lifecycleScope: z.enum(['workspace', 'user', 'actor', 'session']).optional(),
+  lifecycleScope: z.enum(['workspace', 'user', 'actor', 'group', 'session']).optional(),
   configData: z.record(z.unknown()).optional(),
 });
 
 const updateInstallSchema = z.object({
   isEnabled: z.boolean().optional(),
   configData: z.record(z.unknown()).optional(),
-  lifecycleScope: z.enum(['workspace', 'user', 'actor', 'session']).optional(),
+  lifecycleScope: z.enum(['workspace', 'user', 'actor', 'group', 'session']).optional(),
+  scopeType: z.enum(['workspace', 'user', 'actor', 'group']).optional(),
+  scopeId: z.string().uuid().optional(),
 });
 
 // ============ Error handling ============
@@ -120,6 +122,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           case 'workspace': scopeId = workspaceId; break;
           case 'user': scopeId = user.id; break;
           case 'actor': throw new McpPluginError(400, 'scopeId is required for actor scope');
+          case 'group': throw new McpPluginError(400, 'scopeId is required for group scope');
         }
       }
 

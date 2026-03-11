@@ -1,4 +1,4 @@
-import type { AIResponse, ToolDefinition, AnthropicBuiltinTool, ContinuationEntry, ConversationMessage, MultimodalConfig } from '@synapse/shared';
+import type { AIResponse, ToolDefinition, AnthropicBuiltinTool, ContinuationEntry, ToolRound, ConversationMessage, MultimodalConfig } from '@synapse/shared';
 
 export interface AIProviderConfig {
   apiKey: string;
@@ -15,6 +15,7 @@ export interface AIProvider {
     tools?: ToolDefinition[];
     builtinTools?: AnthropicBuiltinTool[];
     continuationHistory?: ContinuationEntry[];
+    canonicalRounds?: ToolRound[];
     multimodalContent?: unknown[];
     multimodal?: MultimodalConfig;
   }): Promise<AIResponse>;

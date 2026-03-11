@@ -1,13 +1,13 @@
-import type { Actor, Memory, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ContinuationEntry, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory } from '@synapse/shared';
+import type { Actor, ActorSkill, Memory, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext } from '@synapse/shared';
 import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
 import { createAIProvider, type AIProvider, type AIProviderConfig } from './providers/index.js';
-import { ACTOR_TOOLS, toolCallsToActions } from './tools.js';
+import { toolCallsToActions } from './tools.js';
 import { buildActorPrompt } from './prompt-builder.js';
 import { logAIRequest } from '../model-groups/service.js';
 import { logToolCall } from '../mcp-plugins/audit.js';
-import { isCallableTool, executeCallableTools, getCallableToolDefinitions } from './callable-tools.js';
-import { setToolExecutionContext } from './session-tools.js';
+import { resolveBuiltinTools, executeCallableTools, isCallableTool, isActionTool } from './tool-plugins.js';
+import { runWithToolContext } from './session-tools.js';
 import { getMcpVersion } from '../mcp-plugins/instance-manager.js';
 import { adaptAttachments, type Attachment } from './content-adapter.js';
 import { ingestToolResultContent, ingestResponseMedia, extractAttachmentsFromBlocks } from './content-ingest.js';
@@ -49,6 +49,7 @@ interface Subordinate {
   name: string;
   title: string;
   charter: string;
+  skills?: ActorSkill[];
 }
 
 export async function actorThink(
@@ -60,14 +61,18 @@ export async function actorThink(
   workspaceId?: string,
   options?: {
     sessionId?: string;
+    groupId?: string;
+    groupMembers?: GroupMemberEntry[];
+    userId?: string;
     onStatus?: (status: string) => Promise<void>;
-    extraTools?: import('@synapse/shared').ToolDefinition[];
-    extraToolExecutor?: (toolName: string, input: Record<string, unknown>) => Promise<string | unknown[]>;
+    mcpTools?: import('@synapse/shared').ToolDefinition[];
+    mcpExecutor?: (toolName: string, input: Record<string, unknown>) => Promise<string | unknown[]>;
     mcpVersion?: number;
     mcpRefresh?: () => Promise<{ tools: import('@synapse/shared').ToolDefinition[]; mcpVersion: number }>;
     mcpSetTurnId?: (turnId: string, round?: number) => void;
     attachments?: Attachment[];
     system: string;
+    checkNewMessages?: () => Promise<{ role: string; content: string; metadata?: any }[] | null>;
   },
 ): Promise<ThinkingResult> {
   const system = options?.system || '';
@@ -103,17 +108,32 @@ export async function actorThink(
     }
   }
 
-  // Merge action tools + callable tools + MCP extra tools
-  const callableToolDefs = getCallableToolDefinitions();
-  let extraToolDefs = options?.extraTools || [];
-  let extraToolNames = new Set(extraToolDefs.map(t => t.name));
-  let allTools = [...ACTOR_TOOLS, ...callableToolDefs, ...extraToolDefs];
+  // Build ToolResolveContext for builtin tool resolution
+  const resolveCtx: ToolResolveContext = {
+    sessionId: options?.sessionId || '',
+    actorId: actor.id,
+    workspaceId: workspaceId || '',
+    groupId: options?.groupId,
+    groupMembers: options?.groupMembers,
+    userId: options?.userId,
+    userCount: options?.groupMembers?.filter(m => m.type === 'user').length,
+  };
+
+  // Resolve builtin tools (action + callable)
+  const builtinTools = resolveBuiltinTools(resolveCtx);
+
+  // MCP tools (already resolved and authorized by tool-resolver.ts)
+  let mcpToolDefs = options?.mcpTools || [];
+  let mcpToolNames = new Set(mcpToolDefs.map(t => t.name));
+
+  // Merge: MCP names override builtin (defensive)
+  const filteredBuiltin = builtinTools.filter(t => !mcpToolNames.has(t.name));
+  let allTools = [...filteredBuiltin, ...mcpToolDefs];
   let currentMcpVersion = options?.mcpVersion ?? 0;
 
   const startTime = Date.now();
   const turnId = randomUUID();
   let totalTokens = { input: 0, output: 0 };
-  const continuationHistory: ContinuationEntry[] = [];
 
   // Capture initial request context for logging (no API key!)
   const initialRequestLog = {
@@ -131,8 +151,8 @@ export async function actorThink(
   const onStatus = options?.onStatus;
   let currentRound = 0; // track for error handler
 
-  // Accumulate tool rounds for cross-turn history
-  const toolRounds: ToolRound[] = [];
+  // Accumulate canonical ToolRound[] for intra-turn continuation
+  const canonicalRounds: ToolRound[] = [];
   // Accumulate media attachments from MCP/model responses
   const allMediaAttachments: Attachment[] = [];
 
@@ -149,13 +169,16 @@ export async function actorThink(
   };
 
   // Set tool execution context for session-aware callable tools
+  // Uses AsyncLocalStorage — each concurrent call gets its own context
   if (options?.sessionId) {
-    setToolExecutionContext({
-      sessionId: options.sessionId,
-      actorId: actor.id,
-      workspaceId: workspaceId || '',
-    });
+    return runWithToolContext(
+      { sessionId: options.sessionId, actorId: actor.id, workspaceId: workspaceId || '' },
+      () => _actorThinkInner(),
+    );
   }
+  return _actorThinkInner();
+
+  async function _actorThinkInner(): Promise<ThinkingResult> {
 
   // Helper to log tool calls with current round context
   const logToolCallWithRound = (roundNum: number, tc: { name: string; input: Record<string, unknown> }, toolType: 'callable' | 'action', output?: string, isError?: boolean) => {
@@ -188,7 +211,7 @@ export async function actorThink(
         messages: conversationMessages,
         tools: allTools,
         builtinTools: resolved?.builtinTools,
-        continuationHistory: continuationHistory.length > 0 ? continuationHistory : undefined,
+        canonicalRounds: canonicalRounds.length > 0 ? canonicalRounds : undefined,
         multimodalContent: round === 0 ? multimodalContent : undefined,
         multimodal: resolved?.multimodal,
       });
@@ -200,7 +223,7 @@ export async function actorThink(
       // Build per-round request/response bodies
       const roundRequestBody = round === 0
         ? initialRequestLog
-        : { round: currentRound, continuationToolResults: continuationHistory[continuationHistory.length - 1]?.toolResults };
+        : { round: currentRound, continuationToolResults: canonicalRounds[canonicalRounds.length - 1]?.toolResults };
       const roundResponseBody = {
         stopReason: response.stopReason,
         toolCalls: response.toolCalls.map((tc) => ({ id: tc.id, name: tc.name, input: tc.input })),
@@ -257,10 +280,10 @@ export async function actorThink(
         response.textContent = injectOpenAICitationMarkers(response.textContent, response.rawAssistantMessage, citations);
       }
 
-      // Separate tool calls into action tools vs callable/MCP tools
-      const actionCalls = response.toolCalls.filter((tc) => !isCallableTool(tc.name) && !extraToolNames.has(tc.name));
-      const callableCalls = response.toolCalls.filter((tc) => isCallableTool(tc.name));
-      const mcpCalls = response.toolCalls.filter((tc) => extraToolNames.has(tc.name));
+      // Dispatch: three-bucket separation
+      const actionCalls   = response.toolCalls.filter(tc => isActionTool(tc.name));
+      const callableCalls = response.toolCalls.filter(tc => isCallableTool(tc.name));
+      const mcpCalls      = response.toolCalls.filter(tc => mcpToolNames.has(tc.name));
       const allContinuableCalls = [...callableCalls, ...mcpCalls];
 
       if (allContinuableCalls.length > 0) {
@@ -274,12 +297,12 @@ export async function actorThink(
         // Execute callable tools (builtin registry)
         const callableResults = callableCalls.length > 0 ? await executeCallableTools(callableCalls) : [];
 
-        // Execute MCP tools via extraToolExecutor, with content ingestion
+        // Execute MCP tools via mcpExecutor, with content ingestion
         const mcpResults: import('@synapse/shared').ToolResult[] = [];
-        if (mcpCalls.length > 0 && options?.extraToolExecutor) {
+        if (mcpCalls.length > 0 && options?.mcpExecutor) {
           for (const tc of mcpCalls) {
             try {
-              const rawResult = await options.extraToolExecutor(tc.name, tc.input);
+              const rawResult = await options.mcpExecutor(tc.name, tc.input);
               // Ingest MCP result content into platform file storage
               if (workspaceId && typeof rawResult !== 'string') {
                 const normalizedContent = await ingestToolResultContent(rawResult, workspaceId);
@@ -299,12 +322,8 @@ export async function actorThink(
         }
 
         const toolResults = [...callableResults, ...mcpResults];
-        continuationHistory.push({
-          rawAssistantMessage: response.rawAssistantMessage,
-          toolResults,
-        });
 
-        // Accumulate tool round for cross-turn history
+        // Accumulate canonical ToolRound
         const roundToolCalls: CanonicalToolCall[] = allContinuableCalls.map((tc) => ({
           id: tc.id,
           name: tc.name,
@@ -316,7 +335,7 @@ export async function actorThink(
           content: tr.content as string | import('@synapse/shared').CanonicalContentBlock[],
           isError: tr.isError,
         }));
-        toolRounds.push({
+        canonicalRounds.push({
           textContent: response.textContent || undefined,
           toolCalls: roundToolCalls,
           toolResults: roundToolResults,
@@ -334,21 +353,34 @@ export async function actorThink(
         // If model also produced action calls in the same turn, execute them and finish
         if (actionCalls.length > 0) {
           const actions = toolCallsToActions(actionCalls);
-          const hasRespond = actions.some((a) => a.type === 'respond');
-          if (!hasRespond && response.textContent) {
-            actions.unshift({ type: 'respond', content: response.textContent });
-          }
 
           for (const tc of actionCalls) {
             logToolCallWithRound(currentRound, tc, 'action', JSON.stringify(tc.input));
           }
 
-          const toolHistory: AssistantToolHistory | undefined = toolRounds.length > 0 ? { rounds: toolRounds } : undefined;
+          const toolHistory: AssistantToolHistory | undefined = canonicalRounds.length > 0 ? { rounds: canonicalRounds } : undefined;
           return {
             actions,
             reasoning: response.textContent,
             tokensUsed: totalTokens,
             toolsUsed: allToolsUsed,
+            serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
+            citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
+            toolHistory,
+            mediaAttachments: allMediaAttachments.length > 0 ? allMediaAttachments : undefined,
+          };
+        }
+
+        // If 'sleep' callable tool was called, the session is now sleeping — stop the loop
+        const sleepCalled = callableCalls.some((tc: any) => tc.name === 'sleep');
+        if (sleepCalled) {
+          const actions: ActorAction[] = [];
+          const toolHistory: AssistantToolHistory | undefined = canonicalRounds.length > 0 ? { rounds: canonicalRounds } : undefined;
+          return {
+            actions,
+            reasoning: response.textContent,
+            tokensUsed: totalTokens,
+            toolsUsed: allToolsUsed.length > 0 ? allToolsUsed : undefined,
             serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
             citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
             toolHistory,
@@ -363,16 +395,36 @@ export async function actorThink(
           if (latestVersion !== currentMcpVersion) {
             try {
               const refreshed = await options.mcpRefresh();
-              extraToolDefs = refreshed.tools;
-              extraToolNames = new Set(extraToolDefs.map(t => t.name));
-              allTools = [...ACTOR_TOOLS, ...callableToolDefs, ...extraToolDefs];
+              mcpToolDefs = refreshed.tools;
+              mcpToolNames = new Set(mcpToolDefs.map(t => t.name));
+              const refreshedBuiltin = builtinTools.filter(t => !mcpToolNames.has(t.name));
+              allTools = [...refreshedBuiltin, ...mcpToolDefs];
               currentMcpVersion = refreshed.mcpVersion;
-              console.log(`[actorThink] MCP tools refreshed: ${extraToolDefs.length} tools, version=${currentMcpVersion}`);
+              console.log(`[actorThink] MCP tools refreshed: ${mcpToolDefs.length} tools, version=${currentMcpVersion}`);
             } catch (err: any) {
               console.error('[actorThink] MCP refresh failed:', err.message);
             }
           }
         }
+
+        // Inter-round message injection: check for new messages between rounds
+        if (options?.checkNewMessages) {
+          try {
+            const newMsgs = await options.checkNewMessages();
+            if (newMsgs && newMsgs.length > 0) {
+              for (const msg of newMsgs) {
+                conversationMessages.push({
+                  role: 'user',
+                  content: `[新消息] ${msg.content}`,
+                });
+              }
+              console.log(`[actorThink] Injected ${newMsgs.length} new message(s) between rounds`);
+            }
+          } catch (err: any) {
+            console.error('[actorThink] checkNewMessages failed:', err.message);
+          }
+        }
+
         continue;
       }
 
@@ -380,21 +432,23 @@ export async function actorThink(
       let actions: ActorAction[];
       if (actionCalls.length > 0) {
         actions = toolCallsToActions(actionCalls);
-        const hasRespond = actions.some((a) => a.type === 'respond');
-        if (!hasRespond && response.textContent) {
-          actions.unshift({ type: 'respond', content: response.textContent });
-        }
 
         for (const tc of actionCalls) {
           logToolCallWithRound(currentRound, tc, 'action', JSON.stringify(tc.input));
         }
       } else if (response.textContent) {
-        actions = [{ type: 'respond', content: response.textContent }];
+        // Pure text with no tool calls = reasoning only. No visible group message.
+        // send_to handles all visible messaging; text here is saved as session_message for audit.
+        actions = [];
+      } else if (allToolsUsed.length > 0) {
+        // Actor used callable tools (e.g. send_to) in earlier rounds but has nothing to say now.
+        // Don't generate a fallback — the actor communicated via tools. Worker will auto-sleep.
+        actions = [];
       } else {
         actions = [{ type: 'respond', content: 'I could not process this request.' }];
       }
 
-      const toolHistory: AssistantToolHistory | undefined = toolRounds.length > 0 ? { rounds: toolRounds } : undefined;
+      const toolHistory: AssistantToolHistory | undefined = canonicalRounds.length > 0 ? { rounds: canonicalRounds } : undefined;
       return {
         actions,
         reasoning: response.textContent,
@@ -417,7 +471,7 @@ export async function actorThink(
       toolsUsed: allToolsUsed.length > 0 ? allToolsUsed : undefined,
       serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
       citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
-      toolHistory: toolRounds.length > 0 ? { rounds: toolRounds } : undefined,
+      toolHistory: canonicalRounds.length > 0 ? { rounds: canonicalRounds } : undefined,
       mediaAttachments: allMediaAttachments.length > 0 ? allMediaAttachments : undefined,
     };
   } catch (err: any) {
@@ -433,10 +487,8 @@ export async function actorThink(
       requestBody: currentRound <= 1 ? initialRequestLog : { round: currentRound },
     });
     throw err;
-  } finally {
-    // Always clear tool execution context
-    setToolExecutionContext(null);
   }
+  } // end _actorThinkInner
 }
 
 export async function aiComplete(

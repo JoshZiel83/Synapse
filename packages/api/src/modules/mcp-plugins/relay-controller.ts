@@ -109,6 +109,10 @@ export function registerRelayRoutes(app: FastifyInstance) {
         return reply.status(404).send({ error: 'Relay not found' });
       }
 
+      // Delete associated relay org (cascades to plugins → installations)
+      const orgSlug = `relay_${id.slice(0, 8)}`;
+      await query('DELETE FROM mcp_organizations WHERE slug = $1', [orgSlug]);
+
       await incrementMcpVersion(workspaceId);
 
       return reply.send({ success: true });
@@ -208,9 +212,14 @@ export function registerRelayRoutes(app: FastifyInstance) {
       }
 
       const result = await query(
-        `SELECT id, name, transport, tools_manifest, is_enabled, created_at, updated_at
-         FROM mcp_relay_servers WHERE relay_id = $1 ORDER BY name`,
-        [id]
+        `SELECT rs.id, rs.name, rs.transport, rs.tools_manifest, rs.is_enabled, rs.created_at, rs.updated_at,
+           i.id as install_id, i.scope_type, i.scope_id, i.lifecycle_scope, i.is_enabled as install_enabled
+         FROM mcp_relay_servers rs
+         LEFT JOIN mcp_organizations o ON o.slug = $2
+         LEFT JOIN mcp_plugins p ON p.org_id = o.id AND p.slug = LOWER(REGEXP_REPLACE(rs.name, '[^a-zA-Z0-9_-]', '_', 'g')) AND p.transport = 'relay'
+         LEFT JOIN mcp_installations i ON i.plugin_id = p.id AND i.workspace_id = $3
+         WHERE rs.relay_id = $1 ORDER BY rs.name`,
+        [id, `relay_${id.slice(0, 8)}`, workspaceId]
       );
 
       const servers = result.rows.map(r => ({
@@ -221,6 +230,11 @@ export function registerRelayRoutes(app: FastifyInstance) {
         isEnabled: r.is_enabled,
         createdAt: r.created_at,
         updatedAt: r.updated_at,
+        installId: r.install_id || null,
+        scopeType: r.scope_type || null,
+        scopeId: r.scope_id || null,
+        lifecycleScope: r.lifecycle_scope || null,
+        installEnabled: r.install_enabled ?? null,
       }));
 
       return reply.send(servers);

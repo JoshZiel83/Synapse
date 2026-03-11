@@ -3,7 +3,7 @@ import { emitEvent } from '../../infrastructure/events/index.js';
 import { sessionThinkingQueue } from '../../workers/queues.js';
 import { shutdownSessionInstances } from '../mcp-plugins/instance-manager.js';
 import type { UUID } from '@synapse/shared';
-import { MAX_SESSION_DEPTH, nowISO } from '@synapse/shared';
+import { nowISO } from '@synapse/shared';
 import { v4 as uuidv4 } from 'uuid';
 
 // DB rows come back as snake_case — use `any` like the rest of the codebase.
@@ -13,60 +13,27 @@ import { v4 as uuidv4 } from 'uuid';
 export async function createSession(params: {
   workspaceId: UUID;
   actorId: UUID;
+  groupId?: UUID;
   channelType?: string;
-  channelId?: string;
-  parentSessionId?: UUID;
-  rootSessionId?: UUID;
-  depth?: number;
   trigger?: string;
   metadata?: Record<string, unknown>;
 }): Promise<any> {
   const {
-    workspaceId, actorId, channelType = 'web', channelId,
-    parentSessionId, rootSessionId, depth = 0,
+    workspaceId, actorId, groupId,
+    channelType = 'web',
     trigger = 'user_message', metadata = {},
   } = params;
 
-  if (depth >= MAX_SESSION_DEPTH) {
-    throw new Error(`Max session depth (${MAX_SESSION_DEPTH}) exceeded`);
-  }
-
   const id = uuidv4();
-  const workItemId = uuidv4();
 
-  const session = await transaction(async (client) => {
-    // Create a work item for this session
-    await client.query(
-      `INSERT INTO work_items (id, workspace_id, title, description, status, priority, source_type, created_by, assigned_to, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, 'created', 'medium', $5, $6, $6, $7, NOW(), NOW())`,
-      [
-        workItemId, workspaceId, `Session ${id.substring(0, 8)}`, '',
-        trigger === 'delegation' ? 'delegation' : 'user_message',
-        actorId, JSON.stringify({}),
-      ]
-    );
+  const result = await query(
+    `INSERT INTO sessions (id, workspace_id, actor_id, group_id, channel_type, trigger, status, metadata, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, NOW(), NOW())
+     RETURNING *`,
+    [id, workspaceId, actorId, groupId || null, channelType, trigger, JSON.stringify(metadata)]
+  );
 
-    // Create the session
-    const result = await client.query(
-      `INSERT INTO sessions (id, workspace_id, actor_id, parent_session_id, root_session_id, depth, channel_type, channel_id, work_item_id, trigger, status, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11, NOW(), NOW())
-       RETURNING *`,
-      [
-        id, workspaceId, actorId,
-        parentSessionId || null,
-        rootSessionId || id, // root is self if no parent
-        depth,
-        channelType, channelId || null,
-        workItemId,
-        trigger,
-        JSON.stringify(metadata),
-      ]
-    );
-
-    return result.rows[0];
-  });
-
-  return session;
+  return result.rows[0];
 }
 
 export async function getSession(sessionId: UUID): Promise<any | null> {
@@ -99,7 +66,7 @@ export async function getSessionsByActor(
 export async function updateSessionStatus(
   sessionId: UUID,
   status: string,
-  extra?: { waitingFor?: UUID[]; waitTimeoutAt?: string; errorMessage?: string; resumeContext?: Record<string, unknown> }
+  extra?: { errorMessage?: string }
 ): Promise<void> {
   const sets = ['status = $2', 'updated_at = NOW()'];
   const params: any[] = [sessionId, status];
@@ -108,24 +75,9 @@ export async function updateSessionStatus(
   if (status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'timed_out') {
     sets.push(`completed_at = NOW()`);
   }
-  if (extra?.waitingFor !== undefined) {
-    sets.push(`waiting_for = $${idx}`);
-    params.push(extra.waitingFor);
-    idx++;
-  }
-  if (extra?.waitTimeoutAt !== undefined) {
-    sets.push(`wait_timeout_at = $${idx}`);
-    params.push(extra.waitTimeoutAt);
-    idx++;
-  }
   if (extra?.errorMessage !== undefined) {
     sets.push(`error_message = $${idx}`);
     params.push(extra.errorMessage);
-    idx++;
-  }
-  if (extra?.resumeContext !== undefined) {
-    sets.push(`resume_context = $${idx}`);
-    params.push(JSON.stringify(extra.resumeContext));
     idx++;
   }
 
@@ -156,9 +108,10 @@ export async function addSessionMessage(params: {
     [id, sessionId, workspaceId, role, content, fromActorId || null, fromUserId || null, JSON.stringify(metadata)]
   );
 
-  // Emit session.message.new for chat UI
+  // Emit session.message.new for chat UI — but only for non-group sessions.
+  // Group sessions emit events via sendGroupMessage() to avoid duplicates.
   const session = await getSession(sessionId);
-  if (session) {
+  if (session && !session.group_id) {
     let actorName: string | undefined;
     if (fromActorId) {
       const actorResult = await query('SELECT name FROM actors WHERE id = $1', [fromActorId]);
@@ -168,7 +121,6 @@ export async function addSessionMessage(params: {
       type: 'session.message.new',
       workspaceId,
       payload: {
-        rootSessionId: session.root_session_id || sessionId,
         sessionId,
         messageId: id,
         role,
@@ -218,107 +170,6 @@ export async function createInterrupt(params: {
   );
 }
 
-// ============ Session Tree ============
-
-export async function getSessionTree(sessionId: UUID): Promise<any[]> {
-  const session = await getSession(sessionId);
-  if (!session) return [];
-
-  const rootId = session.root_session_id || sessionId;
-
-  const result = await query(
-    `SELECT s.*, a.name as actor_name, a.role as actor_role
-     FROM sessions s
-     JOIN actors a ON a.id = s.actor_id
-     WHERE s.root_session_id = $1 OR s.id = $1
-     ORDER BY s.depth ASC, s.created_at ASC`,
-    [rootId]
-  );
-
-  return result.rows;
-}
-
-// ============ Create Session + Enqueue Thinking ============
-
-export async function createSessionAndEnqueue(params: {
-  workspaceId: UUID;
-  actorId: UUID;
-  channelType?: string;
-  channelId?: string;
-  parentSessionId?: UUID;
-  rootSessionId?: UUID;
-  depth?: number;
-  trigger?: string;
-  initialMessage: string;
-  userId?: UUID;
-  fromActorId?: UUID;
-  metadata?: Record<string, unknown>;
-}): Promise<any> {
-  const session = await createSession({
-    workspaceId: params.workspaceId,
-    actorId: params.actorId,
-    channelType: params.channelType,
-    channelId: params.channelId,
-    parentSessionId: params.parentSessionId,
-    rootSessionId: params.rootSessionId,
-    depth: params.depth,
-    trigger: params.trigger,
-    metadata: params.metadata,
-  });
-
-  // Add the initial message
-  const role = params.trigger === 'delegation' ? 'system' : 'user';
-  await addSessionMessage({
-    sessionId: session.id,
-    workspaceId: params.workspaceId,
-    role,
-    content: params.initialMessage,
-    fromUserId: params.userId,
-    fromActorId: params.fromActorId,
-  });
-
-  // Enqueue session-thinking job
-  await sessionThinkingQueue.add('think', {
-    sessionId: session.id,
-    actorId: params.actorId,
-    workspaceId: params.workspaceId,
-    workItemId: session.work_item_id,
-    trigger: params.trigger || 'user_message',
-    userId: params.userId,
-  });
-
-  // Emit event
-  await emitEvent({
-    type: 'work_item.created',
-    workspaceId: params.workspaceId,
-    payload: { sessionId: session.id, actorId: params.actorId },
-    timestamp: new Date().toISOString(),
-  });
-
-  // If child session (has parent), emit group.updated for the chat UI
-  if (params.parentSessionId) {
-    const actorResult = await query('SELECT name, role, config FROM actors WHERE id = $1', [params.actorId]);
-    const actor = actorResult.rows[0];
-    await emitEvent({
-      type: 'group.updated',
-      workspaceId: params.workspaceId,
-      payload: {
-        rootSessionId: params.rootSessionId || session.id,
-        sessionId: session.id,
-        newParticipant: {
-          id: params.actorId,
-          name: actor?.name,
-          role: actor?.role,
-          emoji: actor?.config?.avatar_emoji,
-        },
-      },
-      timestamp: nowISO(),
-    });
-  }
-
-  return session;
-}
-
 // ============ Cancel Session ============
 
 export async function cancelSession(sessionId: UUID): Promise<void> {
@@ -332,22 +183,13 @@ export async function cancelSession(sessionId: UUID): Promise<void> {
 
   // Cleanup session-scoped MCP instances
   await shutdownSessionInstances(sessionId).catch(() => {});
-
-  // Also cancel any active child sessions
-  const children = await query(
-    `SELECT id FROM sessions WHERE parent_session_id = $1 AND status IN ('active', 'waiting')`,
-    [sessionId]
-  );
-  for (const child of children.rows) {
-    await cancelSession(child.id);
-  }
 }
 
 // ============ Actor concurrent session count ============
 
 export async function getActiveSessionCount(actorId: UUID): Promise<number> {
   const result = await query(
-    `SELECT COUNT(*) as count FROM sessions WHERE actor_id = $1 AND status IN ('active', 'waiting')`,
+    `SELECT COUNT(*) as count FROM sessions WHERE actor_id = $1 AND status IN ('active', 'sleeping')`,
     [actorId]
   );
   return parseInt(result.rows[0].count, 10);

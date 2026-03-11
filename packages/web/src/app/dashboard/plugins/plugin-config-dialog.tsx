@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,6 +11,8 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePluginStore } from '@/stores/plugin-store';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
+import { useAuthStore } from '@/stores/auth-store';
+import { api } from '@/lib/api';
 
 interface ValidationRule {
   field: string;
@@ -48,12 +50,14 @@ const scopeLabels: Record<string, string> = {
   workspace: 'Workspace',
   user: 'User',
   actor: 'Actor',
+  group: 'Group',
 };
 
 const scopeColors: Record<string, string> = {
   workspace: 'border-blue-500/30 text-blue-400',
   user: 'border-purple-500/30 text-purple-400',
   actor: 'border-green-500/30 text-green-400',
+  group: 'border-orange-500/30 text-orange-400',
 };
 
 interface Props {
@@ -64,13 +68,18 @@ interface Props {
 export default function PluginConfigDialog({ installation, onClose }: Props) {
   const { workspaceId } = useWorkspace();
   const { updateInstallation } = usePluginStore();
+  const user = useAuthStore((s) => s.user);
   const [mode, setMode] = useState<'guided' | 'json'>('guided');
   const [configData, setConfigData] = useState<Record<string, any>>(installation.config_data || {});
   const [jsonText, setJsonText] = useState(JSON.stringify(installation.config_data || {}, null, 2));
+  const [scopeType, setScopeType] = useState(installation.scope_type);
+  const [scopeId, setScopeId] = useState(installation.scope_id);
   const [lifecycleScope, setLifecycleScope] = useState(installation.lifecycle_scope);
   const [isEnabled, setIsEnabled] = useState<boolean>(installation.is_enabled !== false);
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [actors, setActors] = useState<any[]>([]);
+  const [groups, setGroups] = useState<any[]>([]);
 
   const configSchema = installation.config_schema || {};
   const properties = configSchema.properties || {};
@@ -79,11 +88,27 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
 
   // Valid lifecycle options based on scope_type
   const lifecycleOptionsMap: Record<string, string[]> = {
-    workspace: ['workspace', 'actor', 'session'],
+    workspace: ['workspace', 'group', 'actor', 'session'],
     user: ['user', 'actor', 'session'],
     actor: ['actor', 'session'],
+    group: ['group', 'actor', 'session'],
   };
-  const lifecycleOptions = lifecycleOptionsMap[installation.scope_type] || ['session'];
+  const lifecycleOptions = lifecycleOptionsMap[scopeType] || ['session'];
+
+  // Load actors/groups when needed
+  useEffect(() => {
+    if (workspaceId && (scopeType === 'actor' || scopeType === 'group')) {
+      if (scopeType === 'actor') api.getActors(workspaceId).then(setActors).catch(() => {});
+      if (scopeType === 'group') api.getGroups(workspaceId).then((r: any) => setGroups(r.groups || [])).catch(() => {});
+    }
+  }, [scopeType, workspaceId]);
+
+  // Reset lifecycle when scope changes if current lifecycle is invalid
+  useEffect(() => {
+    if (!lifecycleOptionsMap[scopeType]?.includes(lifecycleScope)) {
+      setLifecycleScope(lifecycleOptionsMap[scopeType]?.[0] || 'session');
+    }
+  }, [scopeType]);
 
   const handleGuidedChange = (key: string, value: any) => {
     setConfigData(prev => ({ ...prev, [key]: value }));
@@ -113,6 +138,10 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
       if (hasConfig) updateData.configData = data;
       if (lifecycleScope !== installation.lifecycle_scope) updateData.lifecycleScope = lifecycleScope;
       if (isEnabled !== (installation.is_enabled !== false)) updateData.isEnabled = isEnabled;
+      if (scopeType !== installation.scope_type || scopeId !== installation.scope_id) {
+        updateData.scopeType = scopeType;
+        updateData.scopeId = scopeId;
+      }
 
       if (Object.keys(updateData).length > 0) {
         await updateInstallation(workspaceId, installation.id, updateData);
@@ -167,11 +196,49 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* Scope & lifecycle badges */}
+          {/* Scope & lifecycle */}
           <div className="flex items-center gap-2 flex-wrap">
-            <Badge variant="outline" className={`text-xs ${scopeColors[installation.scope_type] || ''}`}>
-              Scope: {scopeLabels[installation.scope_type] || installation.scope_type}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground">Scope:</Label>
+              <select
+                className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10"
+                value={scopeType}
+                onChange={(e) => {
+                  const newScope = e.target.value;
+                  setScopeType(newScope);
+                  if (newScope === 'workspace') setScopeId(workspaceId);
+                  else if (newScope === 'user') setScopeId(user?.id || '');
+                  else if (newScope === 'actor') setScopeId(actors[0]?.id || '');
+                  else if (newScope === 'group') setScopeId(groups[0]?.id || '');
+                }}
+              >
+                {Object.entries(scopeLabels).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+              {scopeType === 'actor' && (
+                <select
+                  className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 max-w-[150px]"
+                  value={scopeId}
+                  onChange={(e) => setScopeId(e.target.value)}
+                >
+                  {actors.map((a: any) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              )}
+              {scopeType === 'group' && (
+                <select
+                  className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 max-w-[150px]"
+                  value={scopeId}
+                  onChange={(e) => setScopeId(e.target.value)}
+                >
+                  {groups.map((g: any) => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <Label className="text-xs text-muted-foreground">Lifecycle:</Label>
               <select

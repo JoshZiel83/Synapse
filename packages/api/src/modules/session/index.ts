@@ -14,11 +14,7 @@ export {
   updateSessionStatus,
   consumeInterrupts,
   createInterrupt,
-  getSessionTree,
-  createSessionAndEnqueue,
   cancelSession,
   getActiveSessionCount,
   getMaxConcurrentSessions,
 } from './service.js';
-
-export { onSessionCompleted, resumeSession } from './completion.js';

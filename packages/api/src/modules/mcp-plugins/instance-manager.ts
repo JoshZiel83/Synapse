@@ -5,6 +5,7 @@ import { redis } from '../../infrastructure/redis/index.js';
 const MCP_VERSION_KEY_PREFIX = 'mcp:v:';
 const MCP_INSTANCE_TTL_SESSION   = 30 * 60 * 1000;       // 30 minutes
 const MCP_INSTANCE_TTL_ACTOR     = 2 * 60 * 60 * 1000;   // 2 hours
+const MCP_INSTANCE_TTL_GROUP     = 1 * 60 * 60 * 1000;   // 1 hour
 const MCP_INSTANCE_TTL_USER      = 2 * 60 * 60 * 1000;   // 2 hours
 const MCP_INSTANCE_TTL_WORKSPACE = 24 * 60 * 60 * 1000;  // 24 hours
 import { McpHttpClient } from './mcp-client.js';
@@ -207,6 +208,7 @@ function getTTLForScope(scope: string): number {
     case 'workspace': return MCP_INSTANCE_TTL_WORKSPACE;
     case 'user': return MCP_INSTANCE_TTL_USER;
     case 'actor': return MCP_INSTANCE_TTL_ACTOR;
+    case 'group': return MCP_INSTANCE_TTL_GROUP;
     case 'session': return MCP_INSTANCE_TTL_SESSION;
     default: return MCP_INSTANCE_TTL_SESSION;
   }

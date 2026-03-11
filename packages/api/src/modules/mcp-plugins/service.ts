@@ -163,9 +163,10 @@ export async function getPlugin(id: string) {
 
 export function validateLifecycleHierarchy(scopeType: string, lifecycleScope: string): boolean {
   switch (scopeType) {
-    case 'workspace': return ['workspace', 'actor', 'session'].includes(lifecycleScope);
+    case 'workspace': return ['workspace', 'group', 'user', 'actor', 'session'].includes(lifecycleScope);
     case 'user':      return ['user', 'actor', 'session'].includes(lifecycleScope);
     case 'actor':     return ['actor', 'session'].includes(lifecycleScope);
+    case 'group':     return ['group', 'actor', 'session'].includes(lifecycleScope);
     default:          return false;
   }
 }
@@ -254,18 +255,26 @@ export async function getInstallations(workspaceId: string, filters?: { scopeTyp
   return result.rows;
 }
 
-export async function updateInstallation(installId: string, data: { isEnabled?: boolean; configData?: Record<string, unknown>; lifecycleScope?: string }) {
+export async function updateInstallation(installId: string, data: { isEnabled?: boolean; configData?: Record<string, unknown>; lifecycleScope?: string; scopeType?: string; scopeId?: string }) {
   const sets: string[] = [];
   const values: unknown[] = [];
   let idx = 1;
 
   if (data.isEnabled !== undefined) { sets.push(`is_enabled = $${idx++}`); values.push(data.isEnabled); }
 
+  // Handle scope change (scopeType + scopeId must come together)
+  if (data.scopeType !== undefined && data.scopeId !== undefined) {
+    sets.push(`scope_type = $${idx++}`);
+    values.push(data.scopeType);
+    sets.push(`scope_id = $${idx++}`);
+    values.push(data.scopeId);
+  }
+
   if (data.lifecycleScope !== undefined) {
-    // Validate hierarchy before updating
-    const install = await query('SELECT scope_type FROM mcp_installations WHERE id = $1', [installId]);
-    if (install.rows.length > 0 && !validateLifecycleHierarchy(install.rows[0].scope_type, data.lifecycleScope)) {
-      throw new McpPluginError(400, `Lifecycle scope '${data.lifecycleScope}' is not valid for install scope '${install.rows[0].scope_type}'`);
+    // Validate hierarchy — use new scopeType if being changed simultaneously
+    const scopeType = data.scopeType || (await query('SELECT scope_type FROM mcp_installations WHERE id = $1', [installId])).rows[0]?.scope_type;
+    if (scopeType && !validateLifecycleHierarchy(scopeType, data.lifecycleScope)) {
+      throw new McpPluginError(400, `Lifecycle scope '${data.lifecycleScope}' is not valid for install scope '${scopeType}'`);
     }
     sets.push(`lifecycle_scope = $${idx++}`);
     values.push(data.lifecycleScope);
