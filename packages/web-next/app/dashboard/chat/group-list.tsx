@@ -1,0 +1,149 @@
+'use client';
+
+import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Plus, Search } from 'lucide-react';
+import type { Group } from '@/stores/chat-store';
+
+function formatRelativeTime(dateStr: string) {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'now';
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  return new Date(dateStr).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+interface GroupListProps {
+  groups: Group[];
+  selectedId: string | null;
+  thinkingMap: Record<string, { actorName: string; status?: string }>;
+  onSelect: (id: string) => void;
+  onNewConversation: () => void;
+}
+
+export default function GroupList({ groups, selectedId, thinkingMap, onSelect, onNewConversation }: GroupListProps) {
+  const [search, setSearch] = useState('');
+
+  const filtered = search
+    ? groups.filter((g) => {
+        const s = search.toLowerCase();
+        return (
+          g.title?.toLowerCase().includes(s) ||
+          g.participants.some((p) => p.name.toLowerCase().includes(s)) ||
+          g.lastMessage?.content.toLowerCase().includes(s)
+        );
+      })
+    : groups;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col border-r border-border bg-muted/20">
+      {/* Header */}
+      <div className="border-b border-border px-4 py-4">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold tracking-tight text-foreground">Messages</h2>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            onClick={onNewConversation}
+            title="New Conversation"
+          >
+            <Plus className="w-5 h-5" />
+          </Button>
+        </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
+          <Input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search conversations..."
+            className="pl-9"
+          />
+        </div>
+      </div>
+
+      {/* Group List */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {filtered.map((group) => {
+          const isSelected = group.id === selectedId;
+          const isThinking = !!thinkingMap[group.id];
+          const avatar = group.participants[0]?.emoji || group.participants[0]?.name?.charAt(0).toUpperCase() || '?';
+          const name = group.title || group.participants.map((p) => p.name).join(', ');
+
+          const preview = group.lastMessage
+            ? `${group.lastMessage.role === 'user' ? 'You' : group.lastMessage.actorName || 'Actor'}: ${group.lastMessage.content}`
+            : '';
+          const previewTrunc = preview.length > 50 ? preview.substring(0, 50) + '...' : preview;
+
+          const timeStr = group.lastMessage?.createdAt || group.createdAt;
+
+          return (
+            <button
+              key={group.id}
+              onClick={() => onSelect(group.id)}
+              className={`
+                relative w-full px-4 py-3 text-left transition-colors
+                ${isSelected
+                  ? 'bg-accent'
+                  : 'hover:bg-accent/70'
+                }
+              `}
+            >
+              {isSelected && (
+                <div className="absolute left-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
+              )}
+
+              <div className="flex items-center gap-3">
+                {/* Avatar */}
+                <div className="relative shrink-0">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white text-sm font-medium">
+                    {avatar.length <= 2 ? avatar : avatar.charAt(0)}
+                  </div>
+                  {group.unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold">
+                      {group.unreadCount > 99 ? '99+' : group.unreadCount}
+                    </span>
+                  )}
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`text-sm font-semibold truncate ${
+                      isSelected ? 'text-primary' : 'text-foreground'
+                    }`}>{name}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {formatRelativeTime(timeStr)}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                    {isThinking
+                      ? (thinkingMap[group.id].status
+                          ? `${thinkingMap[group.id].actorName} · ${thinkingMap[group.id].status}`
+                          : `${thinkingMap[group.id].actorName} is thinking...`)
+                      : previewTrunc || 'No messages yet'
+                    }
+                  </p>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+
+        {filtered.length === 0 && (
+          <div className="py-8 text-center">
+            <p className="text-xs text-muted-foreground">
+              {search ? 'No conversations match your search' : 'No conversations yet'}
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
