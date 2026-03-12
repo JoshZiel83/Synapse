@@ -141,7 +141,18 @@ class ApiClient {
 
   // MCP Unified Installations
   getInstallations(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/mcp/installations${params ? '?' + params : ''}`); }
-  installPlugin(wsId: string, data: { pluginId: string; scopeType: string; scopeId?: string; lifecycleScope?: string; configData?: Record<string, unknown> }) {
+  installPlugin(
+    wsId: string,
+    data: {
+      pluginId: string;
+      scopeType: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+      actorId?: string;
+      conversationId?: string;
+      userId?: string;
+      lifecycleScope?: 'turn' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+      configData?: Record<string, unknown>;
+    },
+  ) {
     return this.fetch(`/workspaces/${wsId}/mcp/installations`, { method: 'POST', body: JSON.stringify(data) });
   }
   updateInstallation(wsId: string, installId: string, data: any) { return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}`, { method: 'PUT', body: JSON.stringify(data) }); }

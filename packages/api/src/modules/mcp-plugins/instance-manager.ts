@@ -3,11 +3,11 @@ import { ToolDefinition } from '@synapse/shared';
 import { redis } from '../../infrastructure/redis/index.js';
 
 const MCP_VERSION_KEY_PREFIX = 'mcp:v:';
-const MCP_INSTANCE_TTL_SESSION   = 30 * 60 * 1000;       // 30 minutes
-const MCP_INSTANCE_TTL_ACTOR     = 2 * 60 * 60 * 1000;   // 2 hours
-const MCP_INSTANCE_TTL_GROUP     = 1 * 60 * 60 * 1000;   // 1 hour
-const MCP_INSTANCE_TTL_USER      = 2 * 60 * 60 * 1000;   // 2 hours
-const MCP_INSTANCE_TTL_WORKSPACE = 24 * 60 * 60 * 1000;  // 24 hours
+const MCP_INSTANCE_TTL_TURN = 5 * 60 * 1000; // 5 minutes
+const MCP_INSTANCE_TTL_ACTOR = 2 * 60 * 60 * 1000; // 2 hours
+const MCP_INSTANCE_TTL_ACTOR_CONV = 1 * 60 * 60 * 1000; // 1 hour
+const MCP_INSTANCE_TTL_CONV = 1 * 60 * 60 * 1000; // 1 hour
+const MCP_INSTANCE_TTL_WORKSPACE = 24 * 60 * 60 * 1000; // 24 hours
 import { McpHttpClient } from './mcp-client.js';
 import { getBuiltinHandler } from './builtin/index.js';
 import { logEvent } from './audit.js';
@@ -26,9 +26,11 @@ export interface McpInstance {
   shutdown: () => Promise<void>;
   lastUsed: number;
   createdAt: number;
+  idleTtlMs: number;
+  maxAgeMs?: number;
 }
 
-// In-memory cache: key = pluginId:scope:scopeId:configHash
+// In-memory cache: key = pluginId:reuseScope:ownerKey:configHash
 const instanceCache = new Map<string, McpInstance>();
 const ttlTimers = new Map<string, NodeJS.Timeout>();
 
@@ -54,6 +56,8 @@ export async function getOrCreateInstance(params: {
   scopeId: string;
   config: Record<string, unknown>;
   workspaceId?: string;
+  idleTtlMs?: number;
+  maxAgeMs?: number;
 }): Promise<McpInstance> {
   const configHash = computeConfigHash(params.config);
   const key = buildInstanceKey(params.pluginId, params.scope, params.scopeId, configHash);
@@ -61,9 +65,15 @@ export async function getOrCreateInstance(params: {
   // Return cached instance if exists
   const cached = instanceCache.get(key);
   if (cached) {
-    cached.lastUsed = Date.now();
-    resetTTL(key, params.scope);
-    return cached;
+    if (cached.maxAgeMs && Date.now() - cached.createdAt > cached.maxAgeMs) {
+      await cached.shutdown().catch(() => {});
+      instanceCache.delete(key);
+      clearTTLTimer(key);
+    } else {
+      cached.lastUsed = Date.now();
+      resetTTL(key, cached.idleTtlMs);
+      return cached;
+    }
   }
 
   // Create new instance based on transport
@@ -78,7 +88,7 @@ export async function getOrCreateInstance(params: {
   }
 
   instanceCache.set(key, instance);
-  resetTTL(key, params.scope);
+  resetTTL(key, instance.idleTtlMs);
 
   // Log instance creation
   logEvent({
@@ -101,6 +111,8 @@ async function createBuiltinInstance(params: {
   scopeId: string;
   config: Record<string, unknown>;
   workspaceId?: string;
+  idleTtlMs?: number;
+  maxAgeMs?: number;
 }, key: string, configHash: string): Promise<McpInstance> {
   const handler = getBuiltinHandler(params.entryPoint);
   if (!handler) {
@@ -131,6 +143,8 @@ async function createBuiltinInstance(params: {
     },
     lastUsed: Date.now(),
     createdAt: Date.now(),
+    idleTtlMs: params.idleTtlMs ?? getTTLForScope(params.scope),
+    maxAgeMs: params.maxAgeMs,
   };
 }
 
@@ -144,6 +158,8 @@ async function createHttpInstance(params: {
   scopeId: string;
   config: Record<string, unknown>;
   workspaceId?: string;
+  idleTtlMs?: number;
+  maxAgeMs?: number;
 }, key: string, configHash: string): Promise<McpInstance> {
   const apiKey = params.config.apiKey as string;
   const headers: Record<string, string> = {};
@@ -200,24 +216,25 @@ async function createHttpInstance(params: {
     },
     lastUsed: Date.now(),
     createdAt: Date.now(),
+    idleTtlMs: params.idleTtlMs ?? getTTLForScope(params.scope),
+    maxAgeMs: params.maxAgeMs,
   };
 }
 
 function getTTLForScope(scope: string): number {
   switch (scope) {
     case 'workspace': return MCP_INSTANCE_TTL_WORKSPACE;
-    case 'user': return MCP_INSTANCE_TTL_USER;
-    case 'actor': return MCP_INSTANCE_TTL_ACTOR;
-    case 'group': return MCP_INSTANCE_TTL_GROUP;
-    case 'session': return MCP_INSTANCE_TTL_SESSION;
-    default: return MCP_INSTANCE_TTL_SESSION;
+    case 'conversation': return MCP_INSTANCE_TTL_CONV;
+    case 'actor_global': return MCP_INSTANCE_TTL_ACTOR;
+    case 'actor_conversation': return MCP_INSTANCE_TTL_ACTOR_CONV;
+    case 'turn': return MCP_INSTANCE_TTL_TURN;
+    default: return MCP_INSTANCE_TTL_CONV;
   }
 }
 
-function resetTTL(key: string, scope: string) {
+function resetTTL(key: string, ttl: number) {
   clearTTLTimer(key);
 
-  const ttl = getTTLForScope(scope);
   const timer = setTimeout(() => {
     const instance = instanceCache.get(key);
     if (instance) {
@@ -227,11 +244,11 @@ function resetTTL(key: string, scope: string) {
         logEvent({
           pluginId: instance.pluginId,
           eventType: 'instance.shutdown',
-          eventData: { pluginSlug: instance.pluginSlug, reason: 'ttl_expired', scope, durationSec: Math.round((Date.now() - instance.createdAt) / 1000) },
+          eventData: { pluginSlug: instance.pluginSlug, reason: 'ttl_expired', scope: instance.scope, durationSec: Math.round((Date.now() - instance.createdAt) / 1000) },
         });
       } else {
         // Still in use, reset timer
-        resetTTL(key, scope);
+        resetTTL(key, ttl);
       }
     }
   }, ttl);
@@ -247,13 +264,13 @@ function clearTTLTimer(key: string) {
 }
 
 /**
- * Shutdown all session-scoped instances for a given sessionId.
- * Called when a session reaches a terminal state (cancelled, failed).
+ * Shutdown all turn-scoped instances that were created while processing a session.
+ * Turn-scoped instances use owner keys prefixed with `session:${sessionId}:`.
  */
 export async function shutdownSessionInstances(sessionId: string) {
   const keysToRemove: string[] = [];
   for (const [key, instance] of instanceCache) {
-    if (instance.scope === 'session' && instance.scopeId === sessionId) {
+    if (instance.scope === 'turn' && instance.scopeId.startsWith(`session:${sessionId}:`)) {
       keysToRemove.push(key);
     }
   }

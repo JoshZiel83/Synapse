@@ -7,7 +7,7 @@ import { textBlocks } from '@synapse/shared';
 import { actorThink } from '../modules/ai/index.js';
 import { buildActorPrompt } from '../modules/ai/prompt-builder.js';
 import { executeActorActions } from '../modules/orchestrator/service.js';
-import { resolveModelConfig } from '../modules/model-groups/resolver.js';
+import { resolveModelPlan } from '../modules/model-groups/resolver.js';
 import { buildAdHocContextItems } from '../modules/ai/context-builder.js';
 import { buildAdHocProviderContextWindow } from '../modules/context/service.js';
 import { recallMemories } from '../modules/memory/service.js';
@@ -41,7 +41,7 @@ export function startActorThinkingWorker() {
         const actor = actorResult.rows[0];
 
         // Resolve model config for this actor
-        const resolvedConfig = await resolveModelConfig(actorId, workspaceId);
+        const resolvedModelPlan = await resolveModelPlan(actorId, workspaceId);
 
         // Build system prompt
         const { system } = buildActorPrompt(
@@ -58,6 +58,7 @@ export function startActorThinkingWorker() {
           queryText: `[Trigger: ${trigger}] Process any pending work.`,
           queryBlocks: textBlocks(`[Trigger: ${trigger}] Process any pending work.`),
           limit: 6,
+          userCount: 0,
           metadata: { trigger, mode: 'adhoc' },
         });
         if (recallResult.memories.length > 0) {
@@ -88,9 +89,11 @@ export function startActorThinkingWorker() {
             actor,
             contextWindow,
             undefined,
-            resolvedConfig,
+            resolvedModelPlan,
             workspaceId,
-            { system },
+            {
+              system,
+            },
           );
         } finally {
           clearInterval(lockRefreshInterval);

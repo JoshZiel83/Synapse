@@ -8,8 +8,11 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Check, ChevronRight, ExternalLink, HelpCircle } from 'lucide-react';
 import { usePluginStore } from '@/stores/plugin-store';
-import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { useAuthStore } from '@/stores/auth-store';
+import { useWorkspace } from '@/app/dashboard/workspace-provider';
+
+type BindingScope = 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+type ReuseScope = 'turn' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
 
 interface SetupStep {
   id: string;
@@ -24,17 +27,29 @@ interface SetupStep {
 
 interface Props {
   plugin: any;
-  scopeType?: string;
-  scopeId?: string;
-  lifecycleScope?: string;
+  scopeType?: BindingScope;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+  lifecycleScope?: ReuseScope;
   onClose: () => void;
   onComplete: () => void;
 }
 
-export default function SetupWizardDialog({ plugin, scopeType = 'workspace', scopeId, lifecycleScope, onClose, onComplete }: Props) {
+export default function SetupWizardDialog({
+  plugin,
+  scopeType = 'workspace',
+  actorId,
+  conversationId,
+  userId,
+  lifecycleScope,
+  onClose,
+  onComplete,
+}: Props) {
   const { workspaceId } = useWorkspace();
   const { installPlugin } = usePluginStore();
-  const user = useAuthStore((s) => s.user);
+  const { user } = useAuthStore();
+  const currentUserId = user?.id || user?.userId || '';
 
   const allSteps: SetupStep[] = plugin.setup_steps || [];
 
@@ -93,13 +108,12 @@ export default function SetupWizardDialog({ plugin, scopeType = 'workspace', sco
           }
         }
 
-        // Derive scopeId if not provided
-        const finalScopeId = scopeId || (scopeType === 'workspace' ? workspaceId : scopeType === 'user' ? user?.id : undefined);
-
         await installPlugin(workspaceId!, {
           pluginId: plugin.id,
           scopeType,
-          scopeId: finalScopeId,
+          actorId,
+          conversationId,
+          userId: scopeType === 'user' ? userId || currentUserId : undefined,
           lifecycleScope,
           configData: Object.keys(allConfig).length > 0 ? allConfig : undefined,
         });
@@ -118,8 +132,14 @@ export default function SetupWizardDialog({ plugin, scopeType = 'workspace', sco
   const handleSkip = () => {
     if (isLastStep) {
       setSaving(true);
-      const finalScopeId = scopeId || (scopeType === 'workspace' ? workspaceId : scopeType === 'user' ? user?.id : undefined);
-      installPlugin(workspaceId!, { pluginId: plugin.id, scopeType, scopeId: finalScopeId, lifecycleScope })
+      installPlugin(workspaceId!, {
+        pluginId: plugin.id,
+        scopeType,
+        actorId,
+        conversationId,
+        userId: scopeType === 'user' ? userId || currentUserId : undefined,
+        lifecycleScope,
+      })
         .then(() => onComplete())
         .finally(() => setSaving(false));
     } else {

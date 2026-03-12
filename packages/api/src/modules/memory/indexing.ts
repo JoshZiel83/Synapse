@@ -173,14 +173,15 @@ export async function reindexMemoryEntry(memoryEntryId: string) {
     const chunk = chunks[index];
     await query(
       `INSERT INTO memory_index_chunks
-         (id, memory_entry_id, workspace_id, scope, actor_id, conversation_id, chunk_index, search_text, embedding, token_count, metadata, created_at, updated_at)
-       VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5, $6, $7, $8::vector, $9, $10, NOW(), NOW())`,
+         (id, memory_entry_id, workspace_id, owner_scope, owner_actor_id, owner_conversation_id, owner_user_id, chunk_index, search_text, embedding, token_count, metadata, created_at, updated_at)
+       VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5, $6, $7, $8, $9::vector, $10, $11, NOW(), NOW())`,
       [
         memoryEntryId,
         source.entry.workspace_id,
-        source.entry.scope,
-        source.entry.actor_id,
-        source.entry.conversation_id,
+        source.entry.owner_scope,
+        source.entry.owner_actor_id,
+        source.entry.owner_conversation_id,
+        source.entry.owner_user_id,
         index,
         chunk,
         embeddings?.[index] ? formatEmbeddingVector(embeddings[index]) : null,

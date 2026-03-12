@@ -2,8 +2,17 @@
 
 import { useEffect, useState } from 'react';
 import { useWorkspace } from '../workspace-provider';
+import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
-import type { CanonicalContentBlock } from '@synapse/shared';
+import type {
+  CanonicalContentBlock,
+  Memory as SharedMemory,
+  MemoryCategory,
+  MemoryGrant,
+  MemoryScope,
+  MemoryStability,
+  MemoryStatus,
+} from '@synapse/shared';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -31,32 +40,14 @@ import {
   Layers,
   Link2,
   FileText,
+  Share2,
 } from 'lucide-react';
 
-type MemoryScope = 'conversation_shared' | 'actor_global' | 'actor_conversation';
-type MemoryCategory = 'fact' | 'preference' | 'decision' | 'relationship' | 'procedure' | 'artifact' | 'summary';
-type MemoryStatus = 'candidate' | 'established' | 'superseded' | 'retracted';
-type MemoryStability = 'ephemeral' | 'durable';
-
-interface Memory {
-  id: string;
-  scope: MemoryScope;
-  actorId?: string;
-  conversationId?: string;
-  category: MemoryCategory;
-  status: MemoryStatus;
-  stability: MemoryStability;
-  importance: number;
-  confidence: number;
-  tags: string[];
-  textDigest: string;
-  searchText: string;
-  contentBlocks: CanonicalContentBlock[];
+type Memory = SharedMemory & {
   actorName?: string;
   conversationTitle?: string;
-  createdAt: string;
-  updatedAt: string;
-}
+  userName?: string;
+};
 
 interface ActorOption {
   id: string;
@@ -69,7 +60,25 @@ interface GroupOption {
   title?: string;
 }
 
-function getCategoryBadge(category: string) {
+type FormState = {
+  content: string;
+  ownerScope: MemoryScope;
+  ownerActorId: string;
+  ownerConversationId: string;
+  ownerUserId: string;
+  category: MemoryCategory;
+  status: MemoryStatus;
+  stability: MemoryStability;
+  tags: string;
+  importance: number;
+  confidence: number;
+  textDigest: string;
+  grantsJson: string;
+};
+
+const defaultGrantJson = '[]';
+
+function getCategoryBadge(category: MemoryCategory) {
   switch (category) {
     case 'fact':
       return 'bg-blue-500/10 text-blue-500 border-blue-500/20';
@@ -85,19 +94,21 @@ function getCategoryBadge(category: string) {
       return 'bg-cyan-500/10 text-cyan-500 border-cyan-500/20';
     case 'summary':
       return 'bg-violet-500/10 text-violet-500 border-violet-500/20';
-    default:
-      return 'bg-muted text-muted-foreground';
   }
 }
 
 function getScopeLabel(scope: MemoryScope) {
   switch (scope) {
-    case 'conversation_shared':
-      return 'Conversation Shared';
+    case 'workspace':
+      return 'Workspace';
+    case 'conversation':
+      return 'Conversation';
     case 'actor_global':
-      return 'Actor Global';
+      return 'Actor';
     case 'actor_conversation':
       return 'Actor + Conversation';
+    case 'user':
+      return 'User';
   }
 }
 
@@ -123,8 +134,88 @@ function getTextPreview(memory: Memory) {
     .trim();
 }
 
+function formatOwner(memory: Memory) {
+  switch (memory.ownerScope) {
+    case 'workspace':
+      return 'Workspace';
+    case 'conversation':
+      return memory.conversationTitle || 'Conversation';
+    case 'actor_global':
+      return memory.actorName || 'Actor';
+    case 'actor_conversation':
+      return [memory.actorName || 'Actor', memory.conversationTitle || 'Conversation'].join(' · ');
+    case 'user':
+      return memory.userName || 'User';
+  }
+}
+
+function serializeGrants(grants: MemoryGrant[]) {
+  return JSON.stringify(
+    grants.map((grant) => ({
+      grantScope: grant.grantScope,
+      actorId: grant.actorId,
+      conversationId: grant.conversationId,
+      userId: grant.userId,
+      reason: grant.reason,
+      metadata: grant.metadata,
+    })),
+    null,
+    2,
+  );
+}
+
+function parseGrantJson(raw: string): Array<{
+  grantScope: MemoryScope;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+  reason?: string;
+  metadata?: Record<string, unknown>;
+}> {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  const parsed = JSON.parse(trimmed);
+  if (!Array.isArray(parsed)) {
+    throw new Error('Grants must be a JSON array.');
+  }
+  return parsed.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error('Each grant must be a JSON object.');
+    }
+    return item as {
+      grantScope: MemoryScope;
+      actorId?: string;
+      conversationId?: string;
+      userId?: string;
+      reason?: string;
+      metadata?: Record<string, unknown>;
+    };
+  });
+}
+
+function initialForm(actors: ActorOption[], groups: GroupOption[], currentUserId: string): FormState {
+  return {
+    content: '',
+    ownerScope: 'actor_global',
+    ownerActorId: actors[0]?.id || '',
+    ownerConversationId: groups[0]?.id || '',
+    ownerUserId: currentUserId,
+    category: 'fact',
+    status: 'established',
+    stability: 'durable',
+    tags: '',
+    importance: 0.7,
+    confidence: 0.8,
+    textDigest: '',
+    grantsJson: defaultGrantJson,
+  };
+}
+
 export default function MemoriesPage() {
   const { workspaceId } = useWorkspace();
+  const { user } = useAuthStore();
+  const currentUserId = user?.id || user?.userId || '';
+
   const [memories, setMemories] = useState<Memory[]>([]);
   const [actors, setActors] = useState<ActorOption[]>([]);
   const [groups, setGroups] = useState<GroupOption[]>([]);
@@ -134,25 +225,21 @@ export default function MemoriesPage() {
   const [saving, setSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
-  const [scopeFilter, setScopeFilter] = useState('all');
-  const [formData, setFormData] = useState({
-    content: '',
-    scope: 'actor_global' as MemoryScope,
-    actorId: '',
-    conversationId: '',
-    category: 'fact' as MemoryCategory,
-    status: 'established' as MemoryStatus,
-    stability: 'durable' as MemoryStability,
-    tags: '',
-    importance: 0.7,
-    confidence: 0.8,
-    textDigest: '',
-  });
+  const [scopeFilter, setScopeFilter] = useState<'all' | MemoryScope>('all');
+  const [formData, setFormData] = useState<FormState>(() => initialForm([], [], ''));
 
   useEffect(() => {
     if (!workspaceId) return;
     loadPageData();
   }, [workspaceId]);
+
+  useEffect(() => {
+    if (!dialogOpen || editingMemory) return;
+    setFormData((current) => ({
+      ...current,
+      ownerUserId: current.ownerUserId || currentUserId,
+    }));
+  }, [currentUserId, dialogOpen, editingMemory]);
 
   async function loadPageData() {
     if (!workspaceId) return;
@@ -179,19 +266,7 @@ export default function MemoriesPage() {
   }
 
   function resetForm() {
-    setFormData({
-      content: '',
-      scope: 'actor_global',
-      actorId: actors[0]?.id || '',
-      conversationId: groups[0]?.id || '',
-      category: 'fact',
-      status: 'established',
-      stability: 'durable',
-      tags: '',
-      importance: 0.7,
-      confidence: 0.8,
-      textDigest: '',
-    });
+    setFormData(initialForm(actors, groups, currentUserId));
   }
 
   function openCreateDialog() {
@@ -204,9 +279,10 @@ export default function MemoriesPage() {
     setEditingMemory(memory);
     setFormData({
       content: getTextPreview(memory),
-      scope: memory.scope,
-      actorId: memory.actorId || '',
-      conversationId: memory.conversationId || '',
+      ownerScope: memory.ownerScope,
+      ownerActorId: memory.ownerActorId || '',
+      ownerConversationId: memory.ownerConversationId || '',
+      ownerUserId: memory.ownerUserId || currentUserId,
       category: memory.category,
       status: memory.status,
       stability: memory.stability,
@@ -214,15 +290,25 @@ export default function MemoriesPage() {
       importance: memory.importance,
       confidence: memory.confidence,
       textDigest: memory.textDigest,
+      grantsJson: serializeGrants(memory.grants || []),
     });
     setDialogOpen(true);
   }
 
   function buildPayload() {
+    const grants = parseGrantJson(formData.grantsJson);
     return {
-      scope: formData.scope,
-      actorId: formData.scope === 'conversation_shared' ? undefined : formData.actorId || undefined,
-      conversationId: formData.scope === 'actor_global' ? undefined : formData.conversationId || undefined,
+      ownerScope: formData.ownerScope,
+      ownerActorId: formData.ownerScope === 'actor_global' || formData.ownerScope === 'actor_conversation'
+        ? formData.ownerActorId || undefined
+        : undefined,
+      ownerConversationId: formData.ownerScope === 'conversation' || formData.ownerScope === 'actor_conversation'
+        ? formData.ownerConversationId || undefined
+        : undefined,
+      ownerUserId: formData.ownerScope === 'user'
+        ? formData.ownerUserId || currentUserId || undefined
+        : undefined,
+      grants,
       category: formData.category,
       status: formData.status,
       stability: formData.stability,
@@ -246,8 +332,9 @@ export default function MemoriesPage() {
       }
       setDialogOpen(false);
       await loadPageData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to save memory:', error);
+      alert(error?.message || 'Failed to save memory');
     } finally {
       setSaving(false);
     }
@@ -266,13 +353,17 @@ export default function MemoriesPage() {
 
   const filteredMemories = memories.filter((memory) => {
     const preview = getTextPreview(memory).toLowerCase();
-    const matchesSearch = !searchQuery || preview.includes(searchQuery.toLowerCase()) || memory.tags.some((tag) => tag.toLowerCase().includes(searchQuery.toLowerCase()));
+    const matchesSearch =
+      !searchQuery ||
+      preview.includes(searchQuery.toLowerCase()) ||
+      memory.tags.some((tag) => tag.toLowerCase().includes(searchQuery.toLowerCase()));
     const matchesCategory = categoryFilter === 'all' || memory.category === categoryFilter;
-    const matchesScope = scopeFilter === 'all' || memory.scope === scopeFilter;
+    const matchesScope = scopeFilter === 'all' || memory.ownerScope === scopeFilter;
     return matchesSearch && matchesCategory && matchesScope;
   });
 
   const categories = ['all', ...Array.from(new Set(memories.map((memory) => memory.category)))];
+  const scopeOptions: Array<'all' | MemoryScope> = ['all', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user'];
 
   return (
     <div className="space-y-6">
@@ -283,7 +374,7 @@ export default function MemoriesPage() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-foreground">Memories</h1>
-            <p className="text-sm text-muted-foreground">Shared conversation memory, actor-global memory, and actor-conversation memory.</p>
+            <p className="text-sm text-muted-foreground">Memory owners and sharing grants now control who can recall a fact.</p>
           </div>
           <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
             {memories.length} memories
@@ -323,7 +414,7 @@ export default function MemoriesPage() {
               {category}
             </Button>
           ))}
-          {(['all', 'conversation_shared', 'actor_global', 'actor_conversation'] as const).map((scope) => (
+          {scopeOptions.map((scope) => (
             <Button
               key={scope}
               variant={scopeFilter === scope ? 'default' : 'outline'}
@@ -364,7 +455,7 @@ export default function MemoriesPage() {
                         {memory.category}
                       </Badge>
                       <Badge variant="outline" className="text-xs">
-                        {getScopeLabel(memory.scope)}
+                        {getScopeLabel(memory.ownerScope)}
                       </Badge>
                       <Badge variant="outline" className={`text-xs ${getStatusBadge(memory.status)}`}>
                         {memory.status}
@@ -404,18 +495,18 @@ export default function MemoriesPage() {
                     </div>
                     <div className="flex items-center gap-1">
                       <User className="w-3 h-3" />
-                      {memory.actorName || 'n/a'}
+                      {formatOwner(memory)}
                     </div>
                     <div className="flex items-center gap-1">
-                      <Link2 className="w-3 h-3" />
-                      {memory.conversationTitle || 'n/a'}
+                      <Share2 className="w-3 h-3" />
+                      {memory.grants.length} grants
                     </div>
                     <div className="flex items-center gap-1">
                       <FileText className="w-3 h-3" />
                       {memory.stability}
                     </div>
                     <div className="flex items-center gap-1">
-                      <Layers className="w-3 h-3" />
+                      <Link2 className="w-3 h-3" />
                       {fileRefs} file refs
                     </div>
                   </div>
@@ -435,7 +526,7 @@ export default function MemoriesPage() {
           <DialogHeader>
             <DialogTitle>{editingMemory ? 'Edit Memory' : 'Create Memory'}</DialogTitle>
             <DialogDescription>
-              Durable memory is now scoped explicitly. Choose whether this fact belongs to the conversation, the actor globally, or one actor inside one conversation.
+              Set the owner for this fact, then optionally share it with additional conversations, actors, users, or the whole workspace.
             </DialogDescription>
           </DialogHeader>
 
@@ -452,15 +543,17 @@ export default function MemoriesPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Scope</Label>
+                <Label>Owner Scope</Label>
                 <select
-                  value={formData.scope}
-                  onChange={(event) => setFormData((current) => ({ ...current, scope: event.target.value as MemoryScope }))}
+                  value={formData.ownerScope}
+                  onChange={(event) => setFormData((current) => ({ ...current, ownerScope: event.target.value as MemoryScope }))}
                   className="flex h-10 w-full rounded-md border border-input bg-gray-50 dark:bg-white/5 px-3 py-2 text-sm"
                 >
-                  <option value="actor_global">Actor Global</option>
-                  <option value="conversation_shared">Conversation Shared</option>
+                  <option value="workspace">Workspace</option>
+                  <option value="conversation">Conversation</option>
+                  <option value="actor_global">Actor</option>
                   <option value="actor_conversation">Actor + Conversation</option>
+                  <option value="user">User</option>
                 </select>
               </div>
               <div className="space-y-2">
@@ -481,12 +574,12 @@ export default function MemoriesPage() {
               </div>
             </div>
 
-            {(formData.scope === 'actor_global' || formData.scope === 'actor_conversation') && (
+            {(formData.ownerScope === 'actor_global' || formData.ownerScope === 'actor_conversation') && (
               <div className="space-y-2">
-                <Label>Actor</Label>
+                <Label>Owner Actor</Label>
                 <select
-                  value={formData.actorId}
-                  onChange={(event) => setFormData((current) => ({ ...current, actorId: event.target.value }))}
+                  value={formData.ownerActorId}
+                  onChange={(event) => setFormData((current) => ({ ...current, ownerActorId: event.target.value }))}
                   className="flex h-10 w-full rounded-md border border-input bg-gray-50 dark:bg-white/5 px-3 py-2 text-sm"
                 >
                   <option value="">Select actor</option>
@@ -499,12 +592,12 @@ export default function MemoriesPage() {
               </div>
             )}
 
-            {(formData.scope === 'conversation_shared' || formData.scope === 'actor_conversation') && (
+            {(formData.ownerScope === 'conversation' || formData.ownerScope === 'actor_conversation') && (
               <div className="space-y-2">
-                <Label>Conversation</Label>
+                <Label>Owner Conversation</Label>
                 <select
-                  value={formData.conversationId}
-                  onChange={(event) => setFormData((current) => ({ ...current, conversationId: event.target.value }))}
+                  value={formData.ownerConversationId}
+                  onChange={(event) => setFormData((current) => ({ ...current, ownerConversationId: event.target.value }))}
                   className="flex h-10 w-full rounded-md border border-input bg-gray-50 dark:bg-white/5 px-3 py-2 text-sm"
                 >
                   <option value="">Select conversation</option>
@@ -514,6 +607,15 @@ export default function MemoriesPage() {
                     </option>
                   ))}
                 </select>
+              </div>
+            )}
+
+            {formData.ownerScope === 'user' && (
+              <div className="space-y-2">
+                <Label>Owner User</Label>
+                <div className="flex h-10 w-full rounded-md border border-input bg-gray-50 dark:bg-white/5 px-3 py-2 text-sm items-center text-muted-foreground">
+                  {user?.name || user?.email || 'Current user'}
+                </div>
               </div>
             )}
 
@@ -585,6 +687,20 @@ export default function MemoriesPage() {
                 onChange={(event) => setFormData((current) => ({ ...current, tags: event.target.value }))}
                 placeholder="comma,separated,tags"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Sharing Grants (JSON)</Label>
+              <textarea
+                value={formData.grantsJson}
+                onChange={(event) => setFormData((current) => ({ ...current, grantsJson: event.target.value }))}
+                rows={6}
+                className="flex w-full rounded-md border border-input bg-gray-50 dark:bg-white/5 px-3 py-2 text-sm font-mono"
+                placeholder='[{"grantScope":"conversation","conversationId":"..."}]'
+              />
+              <p className="text-xs text-muted-foreground">
+                Example: share this memory into another conversation or actor without changing its owner.
+              </p>
             </div>
           </div>
 

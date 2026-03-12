@@ -202,18 +202,35 @@ export interface Message {
 }
 
 // ============ Memory ============
-export type MemoryScope = 'conversation_shared' | 'actor_global' | 'actor_conversation';
+export type MemoryScope = 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
 export type MemoryCategory = 'fact' | 'preference' | 'decision' | 'relationship' | 'procedure' | 'artifact' | 'summary';
 export type MemoryStatus = 'candidate' | 'established' | 'superseded' | 'retracted';
 export type MemoryStability = 'ephemeral' | 'durable';
 export type MemoryRecallType = 'bootstrap' | 'turn_recall' | 'manual_search';
 
+export interface MemoryGrant {
+  id: UUID;
+  memoryId: UUID;
+  workspaceId: UUID;
+  grantScope: MemoryScope;
+  actorId?: UUID;
+  conversationId?: UUID;
+  userId?: UUID;
+  status: 'active' | 'revoked';
+  grantedBy?: UUID;
+  reason?: string;
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+  revokedAt?: Timestamp;
+}
+
 export interface MemoryEntry {
   id: UUID;
   workspaceId: UUID;
-  scope: MemoryScope;
-  actorId?: UUID;
-  conversationId?: UUID;
+  ownerScope: MemoryScope;
+  ownerActorId?: UUID;
+  ownerConversationId?: UUID;
+  ownerUserId?: UUID;
   category: MemoryCategory;
   status: MemoryStatus;
   stability: MemoryStability;
@@ -227,11 +244,13 @@ export interface MemoryEntry {
   sourceToolCallId?: UUID;
   sourceTurnId?: UUID;
   supersedesMemoryId?: UUID;
+  grants: MemoryGrant[];
   metadata: Record<string, unknown>;
   createdAt: Timestamp;
   updatedAt: Timestamp;
   actorName?: string;
   conversationTitle?: string;
+  userName?: string;
 }
 
 export type Memory = MemoryEntry;
@@ -244,6 +263,7 @@ export interface MemorySearchHit extends MemoryEntry {
   textScore?: number;
   similarityScore?: number;
   matchedTerms?: string[];
+  matchedGrantIds?: UUID[];
 }
 
 export interface MemoryRecallResult extends MemorySearchHit {
@@ -255,6 +275,7 @@ export interface MemoryRecallRun {
   workspaceId: UUID;
   actorId?: UUID;
   conversationId?: UUID;
+  userId?: UUID;
   recallType: MemoryRecallType;
   queryText: string;
   queryBlocks: CanonicalContentBlock[];
@@ -487,9 +508,9 @@ export interface MultimodalConfig {
 }
 
 export interface ResolvedModelConfig {
-  groupId: UUID;
-  itemId: UUID;
-  configId: UUID;
+  routeId: UUID;
+  bindingId: UUID;
+  revisionId: UUID;
   providerType: ProviderType;
   apiKey: string;
   baseUrl: string;
@@ -498,6 +519,28 @@ export interface ResolvedModelConfig {
   builtinTools?: AnthropicBuiltinTool[];
   multimodal?: MultimodalConfig;
   crossTurnToolHistory?: boolean;
+  bindingScope?: 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+  priority?: number;
+  weight?: number;
+  requestTimeoutMs?: number;
+  maxRetries?: number;
+}
+
+export interface ModelAttemptPolicy {
+  maxAttemptsTotal: number;
+  maxAttemptsPerBinding: number;
+  timeoutMsPerAttempt: number;
+  continueOn: string[];
+  stopOn: string[];
+  retryBackoffMs: number[];
+}
+
+export interface ResolvedModelPlan {
+  routeId: UUID;
+  routeName: string;
+  routingStrategy: 'weighted_random' | 'round_robin' | 'priority_failover';
+  attemptPolicy: ModelAttemptPolicy;
+  candidates: ResolvedModelConfig[];
 }
 
 // ============ Canonical Content Block ============
@@ -757,6 +800,7 @@ export interface ToolResolveContext {
   groupMembers?: GroupMemberEntry[];
   userId?: string;
   userCount?: number;
+  availableSkills?: CapabilityAvailableSkill[];
 }
 
 export interface ToolPlugin {
@@ -779,11 +823,32 @@ export interface AIResponse {
 // MCP Plugin Marketplace Types
 // ============================================================
 
-export type McpTransport = 'builtin' | 'stdio' | 'http' | 'relay';
-export type McpLifecycleScope = 'workspace' | 'user' | 'actor' | 'group' | 'session';
-export type McpScopeType = 'workspace' | 'user' | 'actor' | 'group';
+export type CapabilityPackageKind = 'plugin' | 'skill' | 'actor_template' | 'model';
+export type CapabilityTransport = 'builtin' | 'stdio' | 'http' | 'relay' | 'filesystem';
+export type CapabilityBindingScope = 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+export type CapabilityReuseScope = 'turn' | 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+export type CapabilityGrantScope = CapabilityBindingScope;
+export type CapabilitySourceType = 'builtin' | 'official' | 'workspace_upload' | 'user_upload' | 'relay_derived';
+export type CapabilityRequirementKind = 'required' | 'recommended' | 'optional' | 'conflicts_with';
+export type CapabilityRequirementTargetKind = 'package' | 'tag';
+export type CapabilityBindingInstallMode =
+  | 'manual'
+  | 'seeded'
+  | 'relay_derived'
+  | 'template_required'
+  | 'template_recommended';
+export type CapabilityRevisionStatus = 'draft' | 'active' | 'deprecated' | 'archived';
+export type CapabilityGrantStatus = 'active' | 'revoked';
+export type CapabilityRequirementStatus = 'satisfied' | 'missing_required' | 'missing_recommended' | 'scope_mismatch' | 'config_incomplete';
+export type CapabilityAssetKind = 'skill_markdown' | 'reference_markdown' | 'script' | 'json' | 'text' | 'binary';
 
-export interface McpOrganization {
+export interface CapabilityAuthorizationManifest {
+  requiredPermissions: string[];
+  defaultGrantScope?: CapabilityGrantScope;
+  reason?: string;
+}
+
+export interface CapabilityPublisher {
   id: string;
   slug: string;
   displayName: string;
@@ -796,51 +861,190 @@ export interface McpOrganization {
   updatedAt: string;
 }
 
-export interface McpPluginTool {
+export interface CapabilityPackageTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
 }
 
-export interface McpPlugin {
+export interface CapabilityAsset {
   id: string;
-  orgId: string;
+  revisionId: string;
+  path: string;
+  assetKind: CapabilityAssetKind;
+  mediaType?: string;
+  sizeBytes: number;
+  sha256: string;
+  textContent?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface CapabilityPackageRevision {
+  id: string;
+  packageId: string;
+  version: string;
+  status: CapabilityRevisionStatus;
+  manifest: Record<string, unknown>;
+  authorization?: CapabilityAuthorizationManifest;
+  configSchema: Record<string, unknown>;
+  defaultConfig: Record<string, unknown>;
+  transport?: CapabilityTransport;
+  entryPoint?: string;
+  toolsManifest: CapabilityPackageTool[];
+  validationRules: McpValidationRule[];
+  setupSteps: McpSetupStep[];
+  metadata: Record<string, unknown>;
+  createdBy?: string;
+  createdAt: string;
+  assets?: CapabilityAsset[];
+}
+
+export interface CapabilityPackage {
+  id: string;
+  publisherId: string;
+  workspaceId?: string;
+  kind: CapabilityPackageKind;
   slug: string;
   displayName: string;
   description: string;
   longDescription: string;
   iconUrl?: string;
-  version: string;
-  transport: McpTransport;
-  entryPoint: string;
-  lifecycleScope: McpLifecycleScope;
-  configSchema: Record<string, unknown>;
-  defaultConfig: Record<string, unknown>;
-  toolsManifest: McpPluginTool[];
+  sourceType: CapabilitySourceType;
   tags: string[];
   isActive: boolean;
   isBuiltin: boolean;
   downloadCount: number;
+  latestRevisionId?: string;
+  defaultBindingScope?: CapabilityBindingScope;
+  defaultReuseScope?: CapabilityReuseScope;
+  defaultIdleTtlMs?: number;
+  defaultMaxAgeMs?: number;
+  requiresHandshake: boolean;
+  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
-  // Joined fields
-  orgSlug?: string;
-  orgDisplayName?: string;
+  publisher?: CapabilityPublisher;
+  latestRevision?: CapabilityPackageRevision;
 }
 
-export interface McpInstallation {
+export interface CapabilityBinding {
   id: string;
   workspaceId: string;
+  packageId: string;
+  revisionId: string;
+  bindingScope: CapabilityBindingScope;
+  conversationId?: string;
+  actorId?: string;
+  userId?: string;
+  installMode: CapabilityBindingInstallMode;
+  reuseScope: CapabilityReuseScope;
+  idleTtlMs?: number;
+  maxAgeMs?: number;
+  requiresHandshake: boolean;
+  isEnabled: boolean;
+  configData: Record<string, unknown>;
+  installedBy?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  package?: CapabilityPackage;
+  revision?: CapabilityPackageRevision;
+}
+
+export interface CapabilityGrant {
+  id: string;
+  bindingId: string;
+  workspaceId: string;
+  grantScope: CapabilityGrantScope;
+  conversationId?: string;
+  actorId?: string;
+  userId?: string;
+  permissions: string[];
+  status: CapabilityGrantStatus;
+  grantedBy?: string;
+  reason?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  revokedAt?: string;
+}
+
+export interface CapabilityRequirement {
+  id: string;
+  revisionId: string;
+  requirementKind: CapabilityRequirementKind;
+  targetKind: CapabilityRequirementTargetKind;
+  targetPackageKind?: CapabilityPackageKind;
+  targetPublisherSlug?: string;
+  targetPackageSlug?: string;
+  targetTag?: string;
+  acceptableBindingScopes: CapabilityBindingScope[];
+  acceptableReuseScopes: CapabilityReuseScope[];
+  description: string;
+  configPredicate: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface CapabilityRequirementCheck {
+  requirementId: string;
+  requirementKind: CapabilityRequirementKind;
+  status: CapabilityRequirementStatus;
+  message: string;
+  matchedBindingIds: string[];
+  missingPublisherSlug?: string;
+  missingPackageSlug?: string;
+  missingTag?: string;
+}
+
+export interface CapabilityInstallPlan {
+  packageId: string;
+  revisionId: string;
+  workspaceId: string;
+  bindingScope: CapabilityBindingScope;
+  conversationId?: string;
+  actorId?: string;
+  userId?: string;
+  checks: CapabilityRequirementCheck[];
+  grantPlan?: {
+    requiresGrant: boolean;
+    requiredPermissions: string[];
+    suggestedGrantScope?: CapabilityGrantScope;
+    reason?: string;
+  };
+}
+
+export interface CapabilityAvailableSkill {
+  bindingId: string;
+  packageId: string;
+  revisionId: string;
+  slug: string;
+  name: string;
+  description: string;
+  version: string;
+  bindingScope: CapabilityBindingScope;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+  entryPoint?: string;
+}
+
+export type McpTransport = Exclude<CapabilityTransport, 'filesystem'>;
+export type McpLifecycleScope = CapabilityReuseScope;
+export type McpScopeType = CapabilityBindingScope;
+
+export type McpOrganization = CapabilityPublisher;
+export type McpPluginTool = CapabilityPackageTool;
+
+export interface McpPlugin extends CapabilityPackage {
+  kind: 'plugin';
+}
+
+export interface McpInstallation extends CapabilityBinding {
   pluginId: string;
   scopeType: McpScopeType;
   scopeId: string;
   lifecycleScope: McpLifecycleScope;
-  isEnabled: boolean;
-  configData: Record<string, unknown>;
-  installedBy?: string;
-  createdAt: string;
-  updatedAt: string;
-  // Joined
   plugin?: McpPlugin;
 }
 

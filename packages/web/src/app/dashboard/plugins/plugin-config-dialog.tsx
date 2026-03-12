@@ -7,11 +7,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
-import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePluginStore } from '@/stores/plugin-store';
-import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { useAuthStore } from '@/stores/auth-store';
+import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
 
 interface ValidationRule {
@@ -46,18 +45,23 @@ function runClientValidation(config: Record<string, unknown>, rules: ValidationR
   return errors;
 }
 
-const scopeLabels: Record<string, string> = {
+type BindingScope = 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+type ReuseScope = 'turn' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+
+const scopeLabels: Record<BindingScope, string> = {
   workspace: 'Workspace',
+  conversation: 'Conversation',
+  actor_global: 'Actor',
+  actor_conversation: 'Actor + Conversation',
   user: 'User',
-  actor: 'Actor',
-  group: 'Group',
 };
 
-const scopeColors: Record<string, string> = {
-  workspace: 'border-blue-500/30 text-blue-400',
-  user: 'border-purple-500/30 text-purple-400',
-  actor: 'border-green-500/30 text-green-400',
-  group: 'border-orange-500/30 text-orange-400',
+const lifecycleOptionsMap: Record<BindingScope, ReuseScope[]> = {
+  workspace: ['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user', 'turn'],
+  conversation: ['conversation', 'actor_conversation', 'turn'],
+  actor_global: ['actor_global', 'actor_conversation', 'turn'],
+  actor_conversation: ['actor_conversation', 'turn'],
+  user: ['user', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'turn'],
 };
 
 interface Props {
@@ -68,47 +72,44 @@ interface Props {
 export default function PluginConfigDialog({ installation, onClose }: Props) {
   const { workspaceId } = useWorkspace();
   const { updateInstallation } = usePluginStore();
-  const user = useAuthStore((s) => s.user);
+  const { user } = useAuthStore();
+  const currentUserId = user?.id || user?.userId || '';
   const [mode, setMode] = useState<'guided' | 'json'>('guided');
   const [configData, setConfigData] = useState<Record<string, any>>(installation.config_data || {});
   const [jsonText, setJsonText] = useState(JSON.stringify(installation.config_data || {}, null, 2));
-  const [scopeType, setScopeType] = useState(installation.scope_type);
-  const [scopeId, setScopeId] = useState(installation.scope_id);
-  const [lifecycleScope, setLifecycleScope] = useState(installation.lifecycle_scope);
+  const [scopeType, setScopeType] = useState<BindingScope>(installation.scope_type);
+  const [selectedActorId, setSelectedActorId] = useState<string>(installation.actor_id || '');
+  const [selectedConversationId, setSelectedConversationId] = useState<string>(installation.conversation_id || '');
+  const [selectedUserId, setSelectedUserId] = useState<string>(installation.user_id || currentUserId);
+  const [lifecycleScope, setLifecycleScope] = useState<ReuseScope>(installation.lifecycle_scope);
   const [isEnabled, setIsEnabled] = useState<boolean>(installation.is_enabled !== false);
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [actors, setActors] = useState<any[]>([]);
-  const [groups, setGroups] = useState<any[]>([]);
+  const [conversations, setConversations] = useState<any[]>([]);
 
   const configSchema = installation.config_schema || {};
   const properties = configSchema.properties || {};
   const hasConfig = Object.keys(properties).length > 0;
   const validationRules: ValidationRule[] = installation.plugin_validation_rules || [];
 
-  // Valid lifecycle options based on scope_type
-  const lifecycleOptionsMap: Record<string, string[]> = {
-    workspace: ['workspace', 'group', 'actor', 'session'],
-    user: ['user', 'actor', 'session'],
-    actor: ['actor', 'session'],
-    group: ['group', 'actor', 'session'],
-  };
-  const lifecycleOptions = lifecycleOptionsMap[scopeType] || ['session'];
+  const lifecycleOptions = lifecycleOptionsMap[scopeType] || ['turn'];
 
-  // Load actors/groups when needed
   useEffect(() => {
-    if (workspaceId && (scopeType === 'actor' || scopeType === 'group')) {
-      if (scopeType === 'actor') api.getActors(workspaceId).then(setActors).catch(() => {});
-      if (scopeType === 'group') api.getGroups(workspaceId).then((r: any) => setGroups(r.groups || [])).catch(() => {});
+    if (!workspaceId) return;
+    if (scopeType === 'actor_global' || scopeType === 'actor_conversation') {
+      api.getActors(workspaceId).then(setActors).catch(() => {});
+    }
+    if (scopeType === 'conversation' || scopeType === 'actor_conversation') {
+      api.getGroups(workspaceId).then((r: any) => setConversations(r.groups || [])).catch(() => {});
     }
   }, [scopeType, workspaceId]);
 
-  // Reset lifecycle when scope changes if current lifecycle is invalid
   useEffect(() => {
     if (!lifecycleOptionsMap[scopeType]?.includes(lifecycleScope)) {
-      setLifecycleScope(lifecycleOptionsMap[scopeType]?.[0] || 'session');
+      setLifecycleScope(lifecycleOptionsMap[scopeType]?.[0] || 'conversation');
     }
-  }, [scopeType]);
+  }, [lifecycleScope, scopeType]);
 
   const handleGuidedChange = (key: string, value: any) => {
     setConfigData(prev => ({ ...prev, [key]: value }));
@@ -138,9 +139,20 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
       if (hasConfig) updateData.configData = data;
       if (lifecycleScope !== installation.lifecycle_scope) updateData.lifecycleScope = lifecycleScope;
       if (isEnabled !== (installation.is_enabled !== false)) updateData.isEnabled = isEnabled;
-      if (scopeType !== installation.scope_type || scopeId !== installation.scope_id) {
+      if (
+        scopeType !== installation.scope_type ||
+        selectedActorId !== (installation.actor_id || '') ||
+        selectedConversationId !== (installation.conversation_id || '') ||
+        selectedUserId !== (installation.user_id || '')
+      ) {
         updateData.scopeType = scopeType;
-        updateData.scopeId = scopeId;
+        updateData.actorId = scopeType === 'actor_global' || scopeType === 'actor_conversation'
+          ? selectedActorId
+          : null;
+        updateData.conversationId = scopeType === 'conversation' || scopeType === 'actor_conversation'
+          ? selectedConversationId
+          : null;
+        updateData.userId = scopeType === 'user' ? selectedUserId || currentUserId : null;
       }
 
       if (Object.keys(updateData).length > 0) {
@@ -204,39 +216,77 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
                 className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10"
                 value={scopeType}
                 onChange={(e) => {
-                  const newScope = e.target.value;
+                  const newScope = e.target.value as BindingScope;
                   setScopeType(newScope);
-                  if (newScope === 'workspace') setScopeId(workspaceId);
-                  else if (newScope === 'user') setScopeId(user?.id || '');
-                  else if (newScope === 'actor') setScopeId(actors[0]?.id || '');
-                  else if (newScope === 'group') setScopeId(groups[0]?.id || '');
+                  if (newScope === 'actor_global' || newScope === 'actor_conversation') {
+                    setSelectedActorId((prev) => prev || actors[0]?.id || '');
+                  } else {
+                    setSelectedActorId('');
+                  }
+                  if (newScope === 'conversation' || newScope === 'actor_conversation') {
+                    setSelectedConversationId((prev) => prev || conversations[0]?.id || '');
+                  } else {
+                    setSelectedConversationId('');
+                  }
+                  if (newScope === 'user') {
+                    setSelectedUserId(currentUserId);
+                  } else {
+                    setSelectedUserId('');
+                  }
                 }}
               >
                 {Object.entries(scopeLabels).map(([value, label]) => (
                   <option key={value} value={value}>{label}</option>
                 ))}
               </select>
-              {scopeType === 'actor' && (
+              {scopeType === 'actor_global' && (
                 <select
                   className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 max-w-[150px]"
-                  value={scopeId}
-                  onChange={(e) => setScopeId(e.target.value)}
+                  value={selectedActorId}
+                  onChange={(e) => setSelectedActorId(e.target.value)}
                 >
                   {actors.map((a: any) => (
                     <option key={a.id} value={a.id}>{a.name}</option>
                   ))}
                 </select>
               )}
-              {scopeType === 'group' && (
+              {scopeType === 'conversation' && (
                 <select
                   className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 max-w-[150px]"
-                  value={scopeId}
-                  onChange={(e) => setScopeId(e.target.value)}
+                  value={selectedConversationId}
+                  onChange={(e) => setSelectedConversationId(e.target.value)}
                 >
-                  {groups.map((g: any) => (
-                    <option key={g.id} value={g.id}>{g.name}</option>
+                  {conversations.map((conversation: any) => (
+                    <option key={conversation.id} value={conversation.id}>{conversation.name}</option>
                   ))}
                 </select>
+              )}
+              {scopeType === 'actor_conversation' && (
+                <>
+                  <select
+                    className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 max-w-[150px]"
+                    value={selectedActorId}
+                    onChange={(e) => setSelectedActorId(e.target.value)}
+                  >
+                    {actors.map((a: any) => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                  <select
+                    className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 max-w-[150px]"
+                    value={selectedConversationId}
+                    onChange={(e) => setSelectedConversationId(e.target.value)}
+                  >
+                    {conversations.map((conversation: any) => (
+                      <option key={conversation.id} value={conversation.id}>{conversation.name}</option>
+                    ))}
+                  </select>
+                </>
+              )}
+              {scopeType === 'user' && (
+                <div className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 flex items-center text-muted-foreground">
+                  {user?.name || user?.email || 'Current user'}
+                </div>
               )}
             </div>
             <div className="flex items-center gap-2">
@@ -244,9 +294,9 @@ export default function PluginConfigDialog({ installation, onClose }: Props) {
               <select
                 className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10"
                 value={lifecycleScope}
-                onChange={(e) => setLifecycleScope(e.target.value)}
+                onChange={(e) => setLifecycleScope(e.target.value as ReuseScope)}
               >
-                {lifecycleOptions.map(opt => (
+                {lifecycleOptions.map((opt) => (
                   <option key={opt} value={opt}>{opt}</option>
                 ))}
               </select>

@@ -1,13 +1,16 @@
-import type { ToolDefinition, GroupMemberEntry } from '@synapse/shared';
+import { randomUUID } from 'crypto';
+import type { ToolDefinition } from '@synapse/shared';
 import type { NormalizedMcpToolResult } from '@synapse/shared/types';
+import type { CapabilityBinding, CapabilityPackageTool } from '@synapse/shared';
 
-const MCP_TOOL_NAMESPACE_SEPARATOR = '__';
-import { query } from '../../infrastructure/database/index.js';
+import { listAuthorizedCapabilityBindings } from '../capabilities/service.js';
 import { resolveInstallationConfig } from './config-resolver.js';
-import { getOrCreateInstance, getMcpVersion, McpInstance } from './instance-manager.js';
+import { getOrCreateInstance, getMcpVersion, type McpInstance } from './instance-manager.js';
 import { logToolCall } from './audit.js';
 import { callRelayTool } from './relay-manager.js';
 import { normalizeMcpToolResult } from './result-normalizer.js';
+
+const MCP_TOOL_NAMESPACE_SEPARATOR = '__';
 
 export interface ResolvedMcpTools {
   tools: ToolDefinition[];
@@ -21,190 +24,190 @@ interface ResolveParams {
   actorId: string;
   workspaceId: string;
   sessionId: string;
+  conversationId: string;
   userId?: string;
-  groupId?: string;
-  groupMembers?: GroupMemberEntry[];
+  userCount?: number;
 }
 
-/**
- * Core tool resolution logic — shared by initial resolve and refresh.
- * Queries DB, de-duplicates, creates instances, returns namespaced tools.
- * Handles both regular MCP plugins AND relay plugins (transport='relay') in one unified query.
- */
+function dedupeBindings(bindings: CapabilityBinding[]) {
+  const seenPackages = new Set<string>();
+  const deduped: CapabilityBinding[] = [];
+  for (const binding of bindings) {
+    if (seenPackages.has(binding.packageId)) continue;
+    seenPackages.add(binding.packageId);
+    deduped.push(binding);
+  }
+  return deduped;
+}
+
+function resolveReuseOwnerKey(binding: CapabilityBinding, params: ResolveParams, turnOwnerKey: string) {
+  switch (binding.reuseScope) {
+    case 'workspace':
+      return params.workspaceId;
+    case 'conversation':
+      return params.conversationId;
+    case 'actor_global':
+      return params.actorId;
+    case 'actor_conversation':
+      return `${params.actorId}:${params.conversationId}`;
+    case 'user':
+      return params.userId && params.userCount === 1
+        ? `user:${params.userId}`
+        : params.conversationId;
+    case 'turn':
+      return turnOwnerKey;
+    default:
+      return params.conversationId;
+  }
+}
+
+function manifestToolToDefinition(tool: CapabilityPackageTool): ToolDefinition {
+  const inputSchema = tool.inputSchema as Record<string, unknown> | undefined;
+  const properties =
+    inputSchema && typeof inputSchema === 'object' && !Array.isArray(inputSchema)
+      ? ((inputSchema.properties as Record<string, unknown> | undefined) || {})
+      : {};
+  const required =
+    inputSchema && typeof inputSchema === 'object' && !Array.isArray(inputSchema)
+      ? ((inputSchema.required as string[] | undefined) || [])
+      : [];
+
+  return {
+    name: tool.name,
+    description: tool.description,
+    parameters: {
+      type: 'object',
+      properties: properties as ToolDefinition['parameters']['properties'],
+      required,
+    },
+  };
+}
+
 async function resolveTools(
   params: ResolveParams,
   instances: Map<string, McpInstance>,
+  turnOwnerKey: string,
 ): Promise<ToolDefinition[]> {
-  const { actorId, workspaceId, sessionId, userId, groupId, groupMembers } = params;
-
-  const scopeIds = [workspaceId];
-  if (userId) scopeIds.push(userId);
-  scopeIds.push(actorId);
-  if (groupId) scopeIds.push(groupId);
-
-  const result = await query(
-    `SELECT i.id as install_id, i.plugin_id, i.scope_type, i.scope_id, i.lifecycle_scope, i.config_data,
-            p.slug as plugin_slug, p.transport, p.entry_point, p.config_schema,
-            p.tools_manifest,
-            o.slug as org_slug
-     FROM mcp_installations i
-     JOIN mcp_plugins p ON p.id = i.plugin_id AND p.is_active = TRUE
-     JOIN mcp_organizations o ON o.id = p.org_id
-     WHERE i.workspace_id = $1
-       AND i.is_enabled = TRUE
-       AND i.scope_id = ANY($2)
-     ORDER BY
-       CASE i.scope_type
-         WHEN 'group' THEN 1
-         WHEN 'actor' THEN 2
-         WHEN 'user' THEN 3
-         WHEN 'workspace' THEN 4
-       END`,
-    [workspaceId, scopeIds]
+  const bindings = dedupeBindings(
+    await listAuthorizedCapabilityBindings({
+      workspaceId: params.workspaceId,
+      kind: 'plugin',
+      actorId: params.actorId,
+      conversationId: params.conversationId,
+      userId: params.userId,
+      userCount: params.userCount,
+    }),
   );
-
-  if (result.rows.length === 0) {
-    return [];
-  }
-
-  // De-duplicate by plugin_id — most specific scope wins (group > actor > user > workspace)
-  const seenPlugins = new Set<string>();
-  let installations: typeof result.rows = [];
-  for (const row of result.rows) {
-    if (!seenPlugins.has(row.plugin_id)) {
-      seenPlugins.add(row.plugin_id);
-      installations.push(row);
-    }
-  }
-
-  // User scope post-filter: only allow when exactly 1 user in the group AND that user matches scope_id
-  const groupUsers = groupMembers?.filter(m => m.type === 'user') ?? [];
-  installations = installations.filter(inst => {
-    if (inst.scope_type === 'user') {
-      // Outside group context: allow if userId matches scope_id (already filtered by SQL)
-      if (!groupId) return true;
-      // In group: must have exactly 1 user, and that user must be the scope target
-      if (groupUsers.length !== 1) return false;
-      if (groupUsers[0].id !== inst.scope_id) return false;
-    }
-    return true;
-  });
 
   const allTools: ToolDefinition[] = [];
 
-  for (const install of installations) {
+  for (const binding of bindings) {
+    const pkg = binding.package;
+    const revision = binding.revision;
+    if (!pkg || !revision || !revision.transport) {
+      continue;
+    }
+
     try {
-      if (install.transport === 'relay') {
-        // Relay plugin — create lightweight instance from entry_point metadata
-        const { relayId, serverName } = JSON.parse(install.entry_point);
+      const namespace = `${pkg.publisher?.slug || 'plugin'}${MCP_TOOL_NAMESPACE_SEPARATOR}${pkg.slug}`;
 
-        const namespace = `${install.org_slug}${MCP_TOOL_NAMESPACE_SEPARATOR}${install.plugin_slug}`;
+      if (revision.transport === 'relay') {
+        const { relayId, serverName } = JSON.parse(revision.entryPoint || '{}') as {
+          relayId?: string;
+          serverName?: string;
+        };
+        if (!relayId || !serverName) {
+          throw new Error(`Relay plugin ${namespace} is missing relay entry point metadata`);
+        }
 
-        // Parse tools from manifest
-        const tools: ToolDefinition[] = Array.isArray(install.tools_manifest)
-          ? install.tools_manifest
-          : JSON.parse(install.tools_manifest || '[]');
-
+        const tools = Array.isArray(revision.toolsManifest)
+          ? revision.toolsManifest.map(manifestToolToDefinition)
+          : [];
         const relayInstance: McpInstance = {
-          pluginId: install.plugin_id,
-          pluginSlug: install.plugin_slug,
-          orgSlug: install.org_slug,
+          pluginId: binding.packageId,
+          pluginSlug: pkg.slug,
+          orgSlug: pkg.publisher?.slug || 'plugin',
           transport: 'relay',
-          scope: install.lifecycle_scope,
-          scopeId: install.scope_id,
-          workspaceId,
+          scope: binding.reuseScope,
+          scopeId: resolveReuseOwnerKey(binding, params, turnOwnerKey),
+          workspaceId: params.workspaceId,
           configHash: `relay:${relayId}:${serverName}`,
           tools,
           execute: async (toolName: string, input: Record<string, unknown>) => {
             return callRelayTool(relayId, serverName, toolName, input);
           },
-          shutdown: async () => { /* relay connection managed independently */ },
+          shutdown: async () => {
+            // Relay connection lifecycle is managed independently from per-turn tool resolution.
+          },
           lastUsed: Date.now(),
           createdAt: Date.now(),
+          idleTtlMs: binding.idleTtlMs ?? 0,
+          maxAgeMs: binding.maxAgeMs ?? undefined,
         };
 
-        const namespacedTools = tools.map(tool => ({
+        const namespacedTools = tools.map((tool: ToolDefinition) => ({
           ...tool,
           name: `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.name}`,
-          description: `[${install.org_slug}/${install.plugin_slug}] ${tool.description}`,
+          description: `[${pkg.publisher?.slug || 'plugin'}/${pkg.slug}] ${tool.description}`,
         }));
 
         allTools.push(...namespacedTools);
         instances.set(namespace, relayInstance);
-      } else {
-        // Regular plugin (builtin, http, stdio)
-        const resolved = await resolveInstallationConfig(install.install_id);
-
-        let scopeId: string;
-        switch (install.lifecycle_scope) {
-          case 'workspace': scopeId = workspaceId; break;
-          case 'user': scopeId = userId || sessionId; break;
-          case 'actor': scopeId = actorId; break;
-          case 'group': scopeId = groupId || sessionId; break;
-          case 'session': scopeId = sessionId; break;
-          default: scopeId = sessionId;
-        }
-
-        const instance = await getOrCreateInstance({
-          pluginId: install.plugin_id,
-          pluginSlug: install.plugin_slug,
-          orgSlug: install.org_slug,
-          transport: install.transport,
-          entryPoint: install.entry_point,
-          scope: install.lifecycle_scope,
-          scopeId,
-          config: resolved.config,
-          workspaceId,
-        });
-
-        const namespace = `${install.org_slug}${MCP_TOOL_NAMESPACE_SEPARATOR}${install.plugin_slug}`;
-        const namespacedTools = instance.tools.map(tool => ({
-          ...tool,
-          name: `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.name}`,
-          description: `[${install.org_slug}/${install.plugin_slug}] ${tool.description}`,
-        }));
-
-        allTools.push(...namespacedTools);
-        instances.set(namespace, instance);
+        continue;
       }
+
+      const resolved = await resolveInstallationConfig(binding.id);
+      const instance = await getOrCreateInstance({
+        pluginId: binding.packageId,
+        pluginSlug: pkg.slug,
+        orgSlug: pkg.publisher?.slug || 'plugin',
+        transport: revision.transport,
+        entryPoint: revision.entryPoint || '',
+        scope: binding.reuseScope,
+        scopeId: resolveReuseOwnerKey(binding, params, turnOwnerKey),
+        config: resolved.config,
+        workspaceId: params.workspaceId,
+        idleTtlMs: binding.idleTtlMs ?? undefined,
+        maxAgeMs: binding.maxAgeMs ?? undefined,
+      });
+
+      const namespacedTools = instance.tools.map((tool: ToolDefinition) => ({
+        ...tool,
+        name: `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.name}`,
+        description: `[${pkg.publisher?.slug || 'plugin'}/${pkg.slug}] ${tool.description}`,
+      }));
+
+      allTools.push(...namespacedTools);
+      instances.set(namespace, instance);
     } catch (error: any) {
-      console.error(`[MCP ToolResolver] Failed to initialize plugin ${install.org_slug}/${install.plugin_slug}:`, error.message);
+      console.error(
+        `[MCP ToolResolver] Failed to initialize plugin ${binding.package?.publisher?.slug || 'plugin'}/${binding.package?.slug}:`,
+        error.message,
+      );
     }
   }
 
   return allTools;
 }
 
-/**
- * Resolve all available MCP tools for an actor session.
- * Unified entry point — handles regular plugins AND relay plugins
- * through a single mcp_installations query.
- */
-export async function resolveMcpToolsForActor(params: {
-  actorId: string;
-  workspaceId: string;
-  sessionId: string;
-  userId?: string;
-  groupId?: string;
-  groupMembers?: GroupMemberEntry[];
-}): Promise<ResolvedMcpTools> {
+export async function resolveMcpToolsForActor(params: ResolveParams): Promise<ResolvedMcpTools> {
   const { actorId, workspaceId, sessionId, userId } = params;
-
-  // Read current MCP version
   const mcpVersion = await getMcpVersion(workspaceId);
+  const turnOwnerKey = `session:${sessionId}:turn:${randomUUID()}`;
+  const instances = new Map<string, McpInstance>();
+  const allTools = await resolveTools(params, instances, turnOwnerKey);
 
-  // Mutable state — shared by executor and refresh
-  const instances: Map<string, McpInstance> = new Map();
-
-  // Single unified resolveTools — no separate resolveRelayTools
-  const allTools = await resolveTools(params, instances);
-
-  // Build unified executor — references the mutable `instances` Map.
   let currentTurnId: string | undefined;
   let currentRound: number | undefined;
-  const setTurnId = (turnId: string, round?: number) => { currentTurnId = turnId; currentRound = round; };
+  const setTurnId = (turnId: string, round?: number) => {
+    currentTurnId = turnId;
+    currentRound = round;
+  };
 
-  const executor = async (namespacedToolName: string, input: Record<string, unknown>): Promise<NormalizedMcpToolResult> => {
+  const executor = async (
+    namespacedToolName: string,
+    input: Record<string, unknown>,
+  ): Promise<NormalizedMcpToolResult> => {
     const parts = namespacedToolName.split(MCP_TOOL_NAMESPACE_SEPARATOR);
     if (parts.length < 3) {
       throw new Error(`Invalid namespaced tool name: ${namespacedToolName}`);
@@ -239,6 +242,7 @@ export async function resolveMcpToolsForActor(params: {
         const relayParts = instance.configHash.split(':');
         if (relayParts.length >= 2) relayId = relayParts[1];
       }
+
       logToolCall({
         workspaceId,
         sessionId,
@@ -251,7 +255,12 @@ export async function resolveMcpToolsForActor(params: {
         toolName: namespacedToolName,
         toolType: isRelay ? 'relay' : 'mcp_plugin',
         input,
-        output: typeof rawOutput === 'string' ? rawOutput : rawOutput ? JSON.stringify(rawOutput) : undefined,
+        output:
+          typeof rawOutput === 'string'
+            ? rawOutput
+            : rawOutput
+              ? JSON.stringify(rawOutput)
+              : undefined,
         isError,
         errorMessage,
         durationMs: Date.now() - startTime,
@@ -261,11 +270,10 @@ export async function resolveMcpToolsForActor(params: {
     }
   };
 
-  // Refresh function — re-queries DB, rebuilds instances map
   const refresh = async (): Promise<{ tools: ToolDefinition[]; mcpVersion: number }> => {
     const newVersion = await getMcpVersion(workspaceId);
     instances.clear();
-    const newTools = await resolveTools(params, instances);
+    const newTools = await resolveTools(params, instances, turnOwnerKey);
     return { tools: newTools, mcpVersion: newVersion };
   };
 

@@ -175,7 +175,7 @@ export async function compileContextItemsToConversationMessages(
           const digest = memory.textDigest || fallbackText;
           content.push({
             type: 'text',
-            text: `[${memory.scope}/${memory.category}]${digest ? ` ${digest}` : ''}\n`,
+            text: `[${memory.ownerScope}/${memory.category}]${digest ? ` ${digest}` : ''}\n`,
           });
 
           if (memory.contentBlocks.length > 0) {

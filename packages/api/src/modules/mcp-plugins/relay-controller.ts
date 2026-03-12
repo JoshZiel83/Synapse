@@ -109,9 +109,9 @@ export function registerRelayRoutes(app: FastifyInstance) {
         return reply.status(404).send({ error: 'Relay not found' });
       }
 
-      // Delete associated relay org (cascades to plugins → installations)
+      // Delete associated relay publisher (cascades to packages → bindings)
       const orgSlug = `relay_${id.slice(0, 8)}`;
-      await query('DELETE FROM mcp_organizations WHERE slug = $1', [orgSlug]);
+      await query('DELETE FROM capability_publishers WHERE slug = $1', [orgSlug]);
 
       await incrementMcpVersion(workspaceId);
 
@@ -213,11 +213,16 @@ export function registerRelayRoutes(app: FastifyInstance) {
 
       const result = await query(
         `SELECT rs.id, rs.name, rs.transport, rs.tools_manifest, rs.is_enabled, rs.created_at, rs.updated_at,
-           i.id as install_id, i.scope_type, i.scope_id, i.lifecycle_scope, i.is_enabled as install_enabled
+           b.id as install_id, b.binding_scope, b.actor_id, b.conversation_id, b.reuse_scope, b.is_enabled as install_enabled
          FROM mcp_relay_servers rs
-         LEFT JOIN mcp_organizations o ON o.slug = $2
-         LEFT JOIN mcp_plugins p ON p.org_id = o.id AND p.slug = LOWER(REGEXP_REPLACE(rs.name, '[^a-zA-Z0-9_-]', '_', 'g')) AND p.transport = 'relay'
-         LEFT JOIN mcp_installations i ON i.plugin_id = p.id AND i.workspace_id = $3
+         LEFT JOIN capability_publishers pub ON pub.slug = $2
+         LEFT JOIN capability_packages p
+           ON p.publisher_id = pub.id
+          AND p.kind = 'plugin'
+          AND p.slug = LOWER(REGEXP_REPLACE(rs.name, '[^a-zA-Z0-9_-]', '_', 'g'))
+          AND p.is_active = TRUE
+         LEFT JOIN capability_package_revisions r ON r.id = p.latest_revision_id AND r.transport = 'relay'
+         LEFT JOIN capability_bindings b ON b.package_id = p.id AND b.workspace_id = $3
          WHERE rs.relay_id = $1 ORDER BY rs.name`,
         [id, `relay_${id.slice(0, 8)}`, workspaceId]
       );
@@ -231,9 +236,10 @@ export function registerRelayRoutes(app: FastifyInstance) {
         createdAt: r.created_at,
         updatedAt: r.updated_at,
         installId: r.install_id || null,
-        scopeType: r.scope_type || null,
-        scopeId: r.scope_id || null,
-        lifecycleScope: r.lifecycle_scope || null,
+        scopeType: r.binding_scope || null,
+        actorId: r.actor_id || null,
+        conversationId: r.conversation_id || null,
+        lifecycleScope: r.reuse_scope || null,
         installEnabled: r.install_enabled ?? null,
       }));
 

@@ -373,8 +373,8 @@ async function onRelayAuthenticated(relayId: string) {
 
 /**
  * Process servers_register. Returns error string if validation fails, null on success.
- * Creates/updates mcp_plugins records for each server so relay tools go through
- * the unified mcp_installations authorization system.
+ * Creates/updates capability package records for each server so relay tools go
+ * through the unified capability binding authorization system.
  */
 async function onServersRegister(
   relayId: string,
@@ -412,7 +412,7 @@ async function onServersRegister(
     );
   }
 
-  // Create/update mcp_plugins records for unified authorization
+  // Create/update capability package records for unified authorization
   if (connected.workspaceId) {
     try {
       const org = await findOrCreateRelayOrg(relayId, connected);
@@ -428,17 +428,25 @@ async function onServersRegister(
 
         const plugin = await createPlugin({
           orgId: org.id,
+          workspaceId: connected.workspaceId,
           slug,
           displayName: `${relayName} / ${server.name}`,
           description: `Relay server: ${server.name}`,
           transport: 'relay',
           entryPoint: JSON.stringify({ relayId, serverName: server.name }),
-          lifecycleScope: 'session',
+          lifecycleScope: 'conversation',
+          defaultBindingScope: 'workspace',
+          requiresHandshake: true,
           toolsManifest: server.tools || [],
+          authorization: {
+            requiredPermissions: ['relay:use'],
+            defaultGrantScope: 'workspace',
+            reason: 'Relay-derived plugins require explicit permission to use relay-backed remote tool execution.',
+          },
         });
 
         // Ensure is_active = true (may have been set to false on disconnect)
-        await query('UPDATE mcp_plugins SET is_active = TRUE WHERE id = $1', [plugin.id]);
+        await query('UPDATE capability_packages SET is_active = TRUE WHERE id = $1', [plugin.id]);
 
         // Ensure default workspace-scope installation exists
         await ensureDefaultInstallation(connected.workspaceId, plugin.id);
@@ -492,7 +500,19 @@ function cleanupRelay(relayId: string) {
   // Mark relay's plugins as inactive — resolveTools query filters on p.is_active = TRUE
   findRelayOrg(relayId).then(org => {
     if (org) {
-      query('UPDATE mcp_plugins SET is_active = FALSE WHERE org_id = $1 AND transport = $2', [org.id, 'relay']).catch(() => {});
+      query(
+        `UPDATE capability_packages
+         SET is_active = FALSE
+         WHERE publisher_id = $1
+           AND kind = 'plugin'
+           AND id IN (
+             SELECT p.id
+             FROM capability_packages p
+             JOIN capability_package_revisions r ON r.id = p.latest_revision_id
+             WHERE p.publisher_id = $1 AND r.transport = 'relay'
+           )`,
+        [org.id],
+      ).catch(() => {});
     }
   }).catch(() => {});
 
@@ -538,33 +558,55 @@ async function findOrCreateRelayOrg(relayId: string, connected: ConnectedRelay) 
 
 async function findRelayOrg(relayId: string) {
   const slug = `relay_${relayId.slice(0, 8)}`;
-  const result = await query('SELECT * FROM mcp_organizations WHERE slug = $1', [slug]);
+  const result = await query('SELECT * FROM capability_publishers WHERE slug = $1', [slug]);
   return result.rows[0] || null;
 }
 
 async function ensureDefaultInstallation(workspaceId: string, pluginId: string) {
   const existing = await query(
-    'SELECT id FROM mcp_installations WHERE plugin_id = $1 AND workspace_id = $2',
+    `SELECT id FROM capability_bindings
+     WHERE package_id = $1 AND workspace_id = $2 AND binding_scope = 'workspace'`,
     [pluginId, workspaceId]
   );
   if (existing.rows.length > 0) return; // already has installation(s)
 
   await query(
-    `INSERT INTO mcp_installations (workspace_id, plugin_id, scope_type, scope_id, lifecycle_scope, is_enabled)
-     VALUES ($1, $2, 'workspace', $1, 'session', TRUE)
-     ON CONFLICT (plugin_id, scope_type, scope_id) DO NOTHING`,
-    [workspaceId, pluginId]
+    `INSERT INTO capability_bindings (
+       workspace_id, package_id, revision_id, binding_scope, install_mode, is_enabled, config_data,
+       reuse_scope, requires_handshake, metadata
+     )
+     SELECT $1, p.id, p.latest_revision_id, 'workspace', 'relay_derived', TRUE, '{}'::jsonb,
+            COALESCE(p.default_reuse_scope, 'conversation'), p.requires_handshake, '{}'::jsonb
+     FROM capability_packages p
+     WHERE p.id = $2
+     ON CONFLICT DO NOTHING`,
+    [workspaceId, pluginId],
   );
 }
 
 async function deactivateStaleRelayPlugins(orgId: string, activeSlugs: string[]) {
   if (activeSlugs.length === 0) {
-    await query('UPDATE mcp_plugins SET is_active = FALSE WHERE org_id = $1 AND transport = $2', [orgId, 'relay']);
+    await query(
+      `UPDATE capability_packages p
+       SET is_active = FALSE
+       FROM capability_package_revisions r
+       WHERE p.latest_revision_id = r.id
+         AND p.publisher_id = $1
+         AND p.kind = 'plugin'
+         AND r.transport = 'relay'`,
+      [orgId],
+    );
     return;
   }
   await query(
-    `UPDATE mcp_plugins SET is_active = FALSE
-     WHERE org_id = $1 AND transport = 'relay' AND slug != ALL($2)`,
+    `UPDATE capability_packages p
+     SET is_active = FALSE
+     FROM capability_package_revisions r
+     WHERE p.latest_revision_id = r.id
+       AND p.publisher_id = $1
+       AND p.kind = 'plugin'
+       AND r.transport = 'relay'
+       AND p.slug != ALL($2)`,
     [orgId, activeSlugs]
   );
 }

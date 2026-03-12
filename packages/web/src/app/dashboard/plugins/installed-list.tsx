@@ -12,16 +12,18 @@ import PluginConfigDialog from './plugin-config-dialog';
 
 const scopeColors: Record<string, string> = {
   workspace: 'border-blue-500/30 text-blue-400',
-  user: 'border-purple-500/30 text-purple-400',
-  actor: 'border-green-500/30 text-green-400',
-  group: 'border-orange-500/30 text-orange-400',
+  conversation: 'border-orange-500/30 text-orange-400',
+  actor_global: 'border-green-500/30 text-green-400',
+  actor_conversation: 'border-amber-500/30 text-amber-400',
+  user: 'border-fuchsia-500/30 text-fuchsia-400',
 };
 
 const scopeLabels: Record<string, string> = {
   workspace: 'Workspace',
+  conversation: 'Conversation',
+  actor_global: 'Actor',
+  actor_conversation: 'Actor + Conversation',
   user: 'User',
-  actor: 'Actor',
-  group: 'Group',
 };
 
 export default function InstalledList() {

@@ -59,7 +59,14 @@ export const zAiSeed: BuiltinOrgSeed = {
       longDescription: 'A comprehensive AI toolkit powered by ZhipuAI. Includes official Web Search API, official Reader API, ZRead repository analysis, official OCR service, official GLM-OCR layout parsing, official content moderation, image/video analysis (GLM-4V), speech-to-text (GLM-ASR), image generation (GLM-Image / CogView), and text-to-speech (GLM-TTS). Enable or disable individual features via configuration toggles.',
       transport: 'builtin',
       entryPoint: 'z_ai/toolkit',
-      lifecycleScope: 'workspace',
+      defaultBindingScope: 'workspace',
+      defaultReuseScope: 'workspace',
+      requiresHandshake: false,
+      authorization: {
+        requiredPermissions: ['network:outbound', 'files:read', 'files:write'],
+        defaultGrantScope: 'workspace',
+        reason: 'ZhipuAI toolkit needs outbound network access and file read/write access to process FileRefs and store generated artifacts.',
+      },
       tags: ['search', 'web', 'reader', 'documents', 'code', 'vision', 'image', 'ocr', 'layout', 'moderation', 'file-parser', 'stt', 'tts', 'image-gen', 'builtin'],
       toolsManifest: [
         // Search

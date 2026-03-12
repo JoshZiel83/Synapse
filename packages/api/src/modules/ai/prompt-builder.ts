@@ -1,4 +1,4 @@
-import type { ToolDefinition } from '@synapse/shared';
+import type { CapabilityAvailableSkill, ToolDefinition } from '@synapse/shared';
 
 export interface GroupMemberInfo {
   actor_id?: string;
@@ -29,6 +29,7 @@ export function buildActorPrompt(
   _sessionContext?: any,
   extraTools?: ToolDefinition[],
   groupMembers?: GroupMemberInfo[],
+  availableSkills?: CapabilityAvailableSkill[],
 ): { system: string } {
   const parts: string[] = [];
 
@@ -62,6 +63,15 @@ export function buildActorPrompt(
     `- If you store a file-backed memory, include the exact FileRef string such as <FileRef id="..."/> in the memory content, and include a concise textual summary or \`textDigest\` so it can be retrieved later.\n` +
     `- If memory appears uncertain or conflicts with current evidence, say so explicitly instead of guessing.`,
   );
+
+  if (availableSkills && availableSkills.length > 0) {
+    parts.push(
+      `# Installed Skills\n` +
+      `These skills are installed and available on demand. Do not assume their detailed contents are already loaded.\n` +
+      `If one skill clearly matches the task, call \`read_skill\` to read its \`SKILL.md\` or a referenced text asset before using it.\n` +
+      availableSkills.map((skill) => `- \`${skill.slug}\`: ${skill.description}`).join('\n'),
+    );
+  }
 
   // ── 3. Group context ──
   if (groupMembers && groupMembers.length > 0) {
@@ -103,7 +113,8 @@ export function buildActorPrompt(
       `- \`invite_actor\`: Invite a new actor to join this group when you need a skill no current member has\n` +
       `- \`sleep\`: When you have finished your work, call sleep. You will be automatically woken when someone sends you a message\n` +
       `- \`memory_search\`: Search durable memories when recalled context is insufficient\n` +
-      `- \`create_memory\`: Save a durable established fact for future reference\n\n` +
+      `- \`create_memory\`: Save a durable established fact for future reference\n` +
+      `${availableSkills && availableSkills.length > 0 ? '- `read_skill`: Load an installed skill package on demand when a listed skill clearly applies\n' : ''}\n` +
 
       `## Workflow\n` +
       `1. Read the message directed at you\n` +
@@ -125,7 +136,8 @@ export function buildActorPrompt(
       `# Working Mode\n\n` +
       `You are working independently (no group context). Handle all tasks yourself directly.\n` +
       `Provide complete, thorough responses. Do NOT say you will do something later — do it now.\n` +
-      `Use recalled memory when the task depends on durable facts or prior decisions, and use \`memory_search\` if you need deeper retrieval.`,
+      `Use recalled memory when the task depends on durable facts or prior decisions, and use \`memory_search\` if you need deeper retrieval.\n` +
+      `${availableSkills && availableSkills.length > 0 ? 'When a listed installed skill clearly matches the task, load it with `read_skill` before using it.' : ''}`,
     );
   }
 

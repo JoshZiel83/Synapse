@@ -12,7 +12,18 @@ interface PluginState {
   loadMarketplace: (search?: string) => Promise<void>;
   loadOrganizations: () => Promise<void>;
   loadInstallations: (wsId: string) => Promise<void>;
-  installPlugin: (wsId: string, data: { pluginId: string; scopeType: string; scopeId?: string; lifecycleScope?: string; configData?: Record<string, unknown> }) => Promise<void>;
+  installPlugin: (
+    wsId: string,
+    data: {
+      pluginId: string;
+      scopeType: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+      actorId?: string;
+      conversationId?: string;
+      userId?: string;
+      lifecycleScope?: 'turn' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+      configData?: Record<string, unknown>;
+    },
+  ) => Promise<void>;
   uninstallPlugin: (wsId: string, installId: string) => Promise<void>;
   updateInstallation: (wsId: string, installId: string, data: any) => Promise<void>;
 }

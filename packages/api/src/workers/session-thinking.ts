@@ -20,7 +20,7 @@ import {
 } from '../modules/ai/context-builder.js';
 import { buildProviderContextWindow } from '../modules/context/service.js';
 import { executeActorActions } from '../modules/orchestrator/service.js';
-import { resolveModelConfig } from '../modules/model-groups/resolver.js';
+import { resolveModelPlan } from '../modules/model-groups/resolver.js';
 import { resolveMcpToolsForActor } from '../modules/mcp-plugins/tool-resolver.js';
 import { shutdownSessionInstances } from '../modules/mcp-plugins/instance-manager.js';
 import type { ResolvedMcpTools } from '../modules/mcp-plugins/tool-resolver.js';
@@ -39,6 +39,7 @@ import {
 } from '../modules/conversation/service.js';
 import { createTurn, updateTurnStatus } from '../modules/execution/service.js';
 import { buildMemoryRecallQuery, recallMemories } from '../modules/memory/service.js';
+import { listVisibleSkills } from '../modules/skills/service.js';
 import { sessionThinkingQueue } from './queues.js';
 import { registerWorker } from './registry.js';
 
@@ -139,6 +140,7 @@ export function startSessionThinkingWorker() {
         let groupMembers: any[] | undefined;
         let memberEntries: GroupMemberEntry[] = [];
         let groupUserId: string | undefined;
+        let groupUserCount = 0;
         let actorMemberId: string | undefined;
         let lastKnownGroupSequence = 0;
         let contextItems: CanonicalContextItem[];
@@ -160,12 +162,15 @@ export function startSessionThinkingWorker() {
                 title: member.actor_title,
               });
             } else if (member.user_id && member.state === 'active') {
+              groupUserCount += 1;
               memberEntries.push({
                 type: 'user',
                 id: member.user_id,
                 name: member.user_name || 'User',
               });
-              groupUserId = member.user_id;
+              if (!groupUserId) {
+                groupUserId = member.user_id;
+              }
             }
           }
 
@@ -198,6 +203,8 @@ export function startSessionThinkingWorker() {
         const recallResult = await recallMemories(workspaceId, {
           actorId,
           conversationId: session.conversation_id,
+          userId: groupUserId || userId,
+          userCount: groupId ? groupUserCount : (userId ? 1 : 0),
           recallType,
           queryText: recallQuery,
           queryBlocks: recallQuery ? [{ type: 'text', text: recallQuery }] : [],
@@ -232,9 +239,14 @@ export function startSessionThinkingWorker() {
           );
         }
 
-        const resolvedConfig = await resolveModelConfig(actorId, workspaceId);
+        const resolvedModelPlan = await resolveModelPlan(actorId, workspaceId, {
+          conversationId: session.conversation_id,
+          userId: groupUserId || userId,
+          userCount: groupId ? groupUserCount : (userId ? 1 : 0),
+        });
+        const primaryModel = resolvedModelPlan?.candidates[0] || null;
         let finalContextItems = contextItems;
-        if (resolvedConfig?.crossTurnToolHistory && !groupId) {
+        if (primaryModel?.crossTurnToolHistory && !groupId) {
           finalContextItems = buildSessionContextItems(sessionMessages, {
             crossTurnToolHistory: true,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
@@ -274,9 +286,9 @@ export function startSessionThinkingWorker() {
             actorId,
             workspaceId,
             sessionId,
+            conversationId: session.conversation_id,
             userId: groupUserId || userId,
-            groupId,
-            groupMembers: memberEntries,
+            userCount: groupId ? groupUserCount : (userId ? 1 : 0),
           });
           if (mcpTools.tools.length > 0) {
             console.log(`[session-thinking] Resolved ${mcpTools.tools.length} MCP tools for actor ${actorId}`);
@@ -285,12 +297,21 @@ export function startSessionThinkingWorker() {
           console.error('[session-thinking] Failed to resolve MCP tools:', err.message);
         }
 
+        const availableSkills = await listVisibleSkills({
+          workspaceId,
+          actorId,
+          conversationId: session.conversation_id,
+          userId: groupUserId || userId,
+          userCount: groupId ? groupUserCount : (userId ? 1 : 0),
+        });
+
         const { system } = buildActorPrompt(
           actor,
           undefined,
           undefined,
           mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
           groupMembers,
+          availableSkills,
         );
 
         const triggerItem = groupId
@@ -323,7 +344,7 @@ export function startSessionThinkingWorker() {
             actor,
             contextWindow,
             undefined,
-            resolvedConfig,
+            resolvedModelPlan,
             workspaceId,
             {
               sessionId,
@@ -332,6 +353,7 @@ export function startSessionThinkingWorker() {
               groupId,
               groupMembers: memberEntries,
               userId: groupUserId || userId,
+              availableSkills,
               onStatus: emitThinkingStatus,
               mcpTools: mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
               mcpExecutor: mcpTools.executor,

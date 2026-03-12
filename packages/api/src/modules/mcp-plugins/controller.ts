@@ -5,6 +5,7 @@ import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.j
 import {
   listOrganizations, getOrganization,
   listPlugins, getPlugin,
+  createPluginInstallPlan,
   installPluginUnified, uninstallPluginUnified, getInstallations, updateInstallation,
   validateConfig,
   McpPluginError,
@@ -15,18 +16,29 @@ import { getToolCallLogs, getEventLogs } from './audit.js';
 
 const installSchema = z.object({
   pluginId: z.string().uuid(),
-  scopeType: z.enum(['workspace', 'user', 'actor', 'group']),
-  scopeId: z.string().uuid().optional(),
-  lifecycleScope: z.enum(['workspace', 'user', 'actor', 'group', 'session']).optional(),
+  scopeType: z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']),
+  actorId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
+  lifecycleScope: z.enum(['turn', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']).optional(),
   configData: z.record(z.unknown()).optional(),
 });
 
 const updateInstallSchema = z.object({
   isEnabled: z.boolean().optional(),
   configData: z.record(z.unknown()).optional(),
-  lifecycleScope: z.enum(['workspace', 'user', 'actor', 'group', 'session']).optional(),
-  scopeType: z.enum(['workspace', 'user', 'actor', 'group']).optional(),
-  scopeId: z.string().uuid().optional(),
+  lifecycleScope: z.enum(['turn', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']).optional(),
+  scopeType: z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']).optional(),
+  actorId: z.string().uuid().nullable().optional(),
+  conversationId: z.string().uuid().nullable().optional(),
+  userId: z.string().uuid().nullable().optional(),
+});
+
+const installPlanSchema = z.object({
+  scopeType: z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']),
+  actorId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
 });
 
 // ============ Error handling ============
@@ -74,6 +86,24 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post('/api/v1/workspaces/:workspaceId/mcp/plugins/:pluginId/install-plan', { preHandler: wsPreHandler }, async (request, reply) => {
+    try {
+      const { workspaceId, pluginId } = request.params as { workspaceId: string; pluginId: string };
+      const data = installPlanSchema.parse(request.body);
+      const plan = await createPluginInstallPlan({
+        workspaceId,
+        pluginId,
+        bindingScope: data.scopeType,
+        actorId: data.actorId,
+        conversationId: data.conversationId,
+        userId: data.userId,
+      });
+      reply.send({ plan });
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
   // ========== Organizations ==========
 
   app.get('/api/v1/mcp/organizations', { preHandler: authPreHandler }, async (_request, reply) => {
@@ -101,8 +131,10 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
   app.get('/api/v1/workspaces/:workspaceId/mcp/installations', { preHandler: wsPreHandler }, async (request, reply) => {
     try {
       const { workspaceId } = request.params as { workspaceId: string };
-      const { scopeType, scopeId, pluginId } = request.query as { scopeType?: string; scopeId?: string; pluginId?: string };
-      const installations = await getInstallations(workspaceId, { scopeType, scopeId, pluginId });
+      const { scopeType, conversationId, actorId, userId, pluginId } = request.query as {
+        scopeType?: any; conversationId?: string; actorId?: string; userId?: string; pluginId?: string;
+      };
+      const installations = await getInstallations(workspaceId, { scopeType, conversationId, actorId, userId, pluginId });
       reply.send(installations);
     } catch (error) {
       handleError(reply, error);
@@ -114,17 +146,6 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const { workspaceId } = request.params as { workspaceId: string };
       const data = installSchema.parse(request.body);
       const user = (request as any).user;
-
-      // Derive scopeId from context if not provided
-      let scopeId = data.scopeId;
-      if (!scopeId) {
-        switch (data.scopeType) {
-          case 'workspace': scopeId = workspaceId; break;
-          case 'user': scopeId = user.id; break;
-          case 'actor': throw new McpPluginError(400, 'scopeId is required for actor scope');
-          case 'group': throw new McpPluginError(400, 'scopeId is required for group scope');
-        }
-      }
 
       // Validate config against plugin's validation rules if config provided
       if (data.configData) {
@@ -142,10 +163,12 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         workspaceId,
         pluginId: data.pluginId,
         scopeType: data.scopeType,
-        scopeId: scopeId!,
+        actorId: data.actorId,
+        conversationId: data.conversationId,
+        userId: data.userId,
         lifecycleScope: data.lifecycleScope,
         configData: data.configData,
-        installedBy: user.id,
+        installedBy: user.id || user.userId,
       });
       reply.status(201).send(installation);
     } catch (error) {
@@ -161,9 +184,9 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       // Validate config against plugin's validation rules if updating config
       if (data.configData) {
         const { query: dbQuery } = await import('../../infrastructure/database/index.js');
-        const installRow = await dbQuery('SELECT plugin_id FROM mcp_installations WHERE id = $1', [installId]);
+        const installRow = await dbQuery('SELECT package_id FROM capability_bindings WHERE id = $1', [installId]);
         if (installRow.rows.length > 0) {
-          const plugin = await getPlugin(installRow.rows[0].plugin_id);
+          const plugin = await getPlugin(installRow.rows[0].package_id);
           const rules = plugin.validation_rules || [];
           if (rules.length > 0) {
             const validation = validateConfig(data.configData, rules);

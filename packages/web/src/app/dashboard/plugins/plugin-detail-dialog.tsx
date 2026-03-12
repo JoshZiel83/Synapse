@@ -19,6 +19,14 @@ const transportLabels: Record<string, string> = {
   relay: 'Relay Tunnel',
 };
 
+const bindingScopeLabels: Record<string, string> = {
+  workspace: 'Workspace',
+  conversation: 'Conversation',
+  actor_global: 'Actor',
+  actor_conversation: 'Actor + Conversation',
+  user: 'User',
+};
+
 export default function PluginDetailDialog({ plugin, installedCount, onInstall, onClose }: Props) {
   const tools = plugin.tools_manifest || [];
   const configSchema = plugin.config_schema || {};
@@ -46,7 +54,12 @@ export default function PluginDetailDialog({ plugin, installedCount, onInstall, 
 
           <div className="flex gap-2 flex-wrap">
             <Badge variant="outline" className="border-gray-200 dark:border-white/10">{transportLabels[plugin.transport] || plugin.transport}</Badge>
-            <Badge variant="outline" className="border-gray-200 dark:border-white/10">Scope: {plugin.lifecycle_scope}</Badge>
+            <Badge variant="outline" className="border-gray-200 dark:border-white/10">
+              Install: {bindingScopeLabels[plugin.default_binding_scope] || plugin.default_binding_scope || 'workspace'}
+            </Badge>
+            <Badge variant="outline" className="border-gray-200 dark:border-white/10">
+              Runtime: {plugin.lifecycle_scope}
+            </Badge>
             {(plugin.tags || []).map((tag: string) => (
               <Badge key={tag} variant="secondary" className="bg-gray-50 dark:bg-white/5">{tag}</Badge>
             ))}

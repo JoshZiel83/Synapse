@@ -1,4 +1,4 @@
-import type { Actor, ActorSkill, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow } from '@synapse/shared';
+import type { Actor, ActorSkill, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ResolvedModelPlan, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow, CapabilityAvailableSkill, ModelAttemptPolicy } from '@synapse/shared';
 import type { CanonicalContextItem, NormalizedMcpToolResult } from '@synapse/shared/types';
 import { textBlocks, extractText } from '@synapse/shared';
 import { randomUUID } from 'crypto';
@@ -26,6 +26,14 @@ import {
 export { buildActorPrompt } from './prompt-builder.js';
 
 const MAX_TOOL_ROUNDS = 10;
+const DEFAULT_ATTEMPT_POLICY: ModelAttemptPolicy = {
+  maxAttemptsTotal: 4,
+  maxAttemptsPerBinding: 2,
+  timeoutMsPerAttempt: 30000,
+  continueOn: ['timeout', '5xx', 'network', 'rate_limit'],
+  stopOn: ['auth_error', 'bad_request', 'policy_block'],
+  retryBackoffMs: [0, 1000, 3000],
+};
 
 // Cache providers by config fingerprint to avoid recreating
 const providerCache = new Map<string, AIProvider>();
@@ -54,6 +62,70 @@ function getProvider(resolved?: ResolvedModelConfig | null): AIProvider {
     providerCache.set(cacheKey, provider);
   }
   return provider;
+}
+
+function getFallbackResolvedConfig(): ResolvedModelConfig {
+  return {
+    routeId: 'env-fallback',
+    bindingId: 'env-fallback',
+    revisionId: 'env-fallback',
+    providerType: config.ai.provider === 'openai' ? 'openai' : 'anthropic',
+    apiKey: config.ai.apiKey,
+    baseUrl: config.ai.baseUrl,
+    modelName: config.ai.model,
+    maxTokens: config.ai.maxTokens,
+    requestTimeoutMs: DEFAULT_ATTEMPT_POLICY.timeoutMsPerAttempt,
+    maxRetries: DEFAULT_ATTEMPT_POLICY.maxAttemptsPerBinding - 1,
+  };
+}
+
+function classifyModelError(error: unknown): string {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  if (message.includes('timed out') || message.includes('abort')) return 'timeout';
+  if (message.includes('401') || message.includes('403') || message.includes('auth')) return 'auth_error';
+  if (message.includes('400') || message.includes('bad request') || message.includes('validation')) return 'bad_request';
+  if (message.includes('429') || message.includes('rate limit')) return 'rate_limit';
+  if (message.includes('policy') || message.includes('safety') || message.includes('blocked')) return 'policy_block';
+  if (message.includes('500') || message.includes('502') || message.includes('503') || message.includes('504')) return '5xx';
+  if (message.includes('network') || message.includes('fetch failed') || message.includes('econn') || message.includes('enotfound')) {
+    return 'network';
+  }
+  return 'unknown';
+}
+
+async function delay(ms: number) {
+  if (ms <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Model attempt timed out after ${timeoutMs}ms`)), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function effectiveAttemptPolicy(
+  routePolicy: ModelAttemptPolicy,
+  resolved: ResolvedModelConfig,
+): ModelAttemptPolicy {
+  return {
+    ...routePolicy,
+    timeoutMsPerAttempt: resolved.requestTimeoutMs ?? routePolicy.timeoutMsPerAttempt,
+    maxAttemptsPerBinding: Math.max(
+      1,
+      resolved.maxRetries !== undefined ? resolved.maxRetries + 1 : routePolicy.maxAttemptsPerBinding,
+    ),
+  };
 }
 
 function collectFileRefBlocks(blocks: CanonicalContentBlock[]): Extract<CanonicalContentBlock, { type: 'file_ref' }>[] {
@@ -137,7 +209,7 @@ export async function actorThink(
   actor: Actor,
   contextWindow: ProviderContextWindow,
   subordinates?: Subordinate[],
-  resolved?: ResolvedModelConfig | null,
+  modelPlan?: ResolvedModelPlan | null,
   workspaceId?: string,
   options?: {
     sessionId?: string;
@@ -146,6 +218,7 @@ export async function actorThink(
     groupId?: string;
     groupMembers?: GroupMemberEntry[];
     userId?: string;
+    availableSkills?: CapabilityAvailableSkill[];
     onStatus?: (status: string) => Promise<void>;
     mcpTools?: import('@synapse/shared').ToolDefinition[];
     mcpExecutor?: (toolName: string, input: Record<string, unknown>) => Promise<NormalizedMcpToolResult>;
@@ -157,8 +230,16 @@ export async function actorThink(
   },
 ): Promise<ThinkingResult> {
   const system = options?.system || '';
-  const provider = getProvider(resolved);
   let allTools: import('@synapse/shared').ToolDefinition[] = [];
+  const effectiveModelPlan = modelPlan && modelPlan.candidates.length > 0
+    ? modelPlan
+    : {
+        routeId: 'env-fallback',
+        routeName: 'Environment Fallback',
+        routingStrategy: 'priority_failover' as const,
+        attemptPolicy: DEFAULT_ATTEMPT_POLICY,
+        candidates: [getFallbackResolvedConfig()],
+      };
 
   const allContextWindow: ProviderContextWindow = {
     sharedArchivePoint: contextWindow.sharedArchivePoint,
@@ -180,10 +261,14 @@ export async function actorThink(
     allContextWindow.orderedTailItems.push(...items);
   };
 
-  const buildRequestLog = (round: number) => ({
+  const buildRequestLog = (round: number, resolved?: ResolvedModelConfig | null, attempt?: number) => ({
     provider: resolved?.providerType || config.ai.provider,
     model: resolved?.modelName || config.ai.model,
     round,
+    attempt: attempt || 1,
+    routeId: effectiveModelPlan.routeId,
+    routeName: effectiveModelPlan.routeName,
+    candidateBindingIds: effectiveModelPlan.candidates.map((candidate: ResolvedModelConfig) => candidate.bindingId),
     system,
     contextWindow: allContextWindow,
     tools: allTools,
@@ -200,6 +285,7 @@ export async function actorThink(
     groupMembers: options?.groupMembers,
     userId: options?.userId,
     userCount: options?.groupMembers?.filter(m => m.type === 'user').length,
+    availableSkills: options?.availableSkills,
   };
 
   // Resolve builtin tools (action + callable)
@@ -214,16 +300,15 @@ export async function actorThink(
   allTools = [...filteredBuiltin, ...mcpToolDefs];
   let currentMcpVersion = options?.mcpVersion ?? 0;
 
-  const startTime = Date.now();
   const turnId = options?.turnId || randomUUID();
   const executionEnabled = !!options?.turnId && !!options?.conversationId;
   let totalTokens = { input: 0, output: 0 };
+  let providerStepIndex = 0;
 
   const allToolsUsed: string[] = []; // track callable tools invoked
   const allServerToolCalls: ServerToolCall[] = []; // track cloud-side tool calls
   let allCitationSources: Record<string, { url: string; title: string }> = {}; // cite index → source
   const onStatus = options?.onStatus;
-  let currentRound = 0; // track for error handler
 
   // Accumulate ToolRound[] for DB storage only (not passed to provider)
   const toolRounds: ToolRound[] = [];
@@ -236,9 +321,7 @@ export async function actorThink(
     actorId: actor.id,
     sessionId: options?.sessionId,
     turnId,
-    groupId: resolved?.groupId,
-    itemId: resolved?.itemId,
-    configId: resolved?.configId,
+    routeId: effectiveModelPlan.routeId,
     requestType: 'actor_think' as const,
   };
 
@@ -246,81 +329,194 @@ export async function actorThink(
   // Uses AsyncLocalStorage — each concurrent call gets its own context
   if (options?.sessionId) {
     return runWithToolContext(
-      { sessionId: options.sessionId, actorId: actor.id, workspaceId: workspaceId || '' },
+      {
+        sessionId: options.sessionId,
+        actorId: actor.id,
+        workspaceId: workspaceId || '',
+        userId: options.userId,
+        userCount: options.groupMembers?.filter((member) => member.type === 'user').length ?? (options.userId ? 1 : 0),
+      },
       () => _actorThinkInner(),
     );
   }
   return _actorThinkInner();
 
   async function _actorThinkInner(): Promise<ThinkingResult> {
-  const recordProviderRound = async (params: {
-    round: number;
-    latencyMs: number;
-    status: 'success' | 'error' | 'timeout';
-    requestBody: unknown;
-    responseBody?: unknown;
-    stopReason?: string;
-    inputTokens: number;
-    outputTokens: number;
-    errorMessage?: string;
-  }) => {
-    if (executionEnabled) {
-      return logProviderStep({
-        turnId: options!.turnId!,
-        stepIndex: params.round,
-        providerType: (resolved?.providerType || config.ai.provider) === 'openai' ? 'openai' : 'anthropic',
-        requestType: 'actor_think',
-        modelGroupId: resolved?.groupId,
-        modelItemId: resolved?.itemId,
-        modelConfigId: resolved?.configId,
-        modelName: resolved?.modelName || config.ai.model,
-        capabilitiesSnapshot: {
-          builtinTools: resolved?.builtinTools || [],
-          multimodal: resolved?.multimodal || null,
-          toolNames: allTools.map((tool) => tool.name),
-        },
-        requestPayload: params.requestBody,
-        responsePayload: params.responseBody,
-        stopReason: params.stopReason,
+    const recordProviderRound = async (params: {
+      round: number;
+      attempt: number;
+      resolved: ResolvedModelConfig;
+      latencyMs: number;
+      status: 'success' | 'error' | 'timeout';
+      requestBody: unknown;
+      responseBody?: unknown;
+      stopReason?: string;
+      inputTokens: number;
+      outputTokens: number;
+      errorMessage?: string;
+    }) => {
+      const stepIndex = ++providerStepIndex;
+      if (executionEnabled) {
+        return logProviderStep({
+          turnId: options!.turnId!,
+          stepIndex,
+          providerType: params.resolved.providerType === 'openai' ? 'openai' : 'anthropic',
+          requestType: 'actor_think',
+          modelRouteId: effectiveModelPlan.routeId,
+          modelBindingId: params.resolved.bindingId,
+          modelRevisionId: params.resolved.revisionId,
+          modelName: params.resolved.modelName || config.ai.model,
+          capabilitiesSnapshot: {
+            builtinTools: params.resolved.builtinTools || [],
+            multimodal: params.resolved.multimodal || null,
+            toolNames: allTools.map((tool) => tool.name),
+            attempt: params.attempt,
+            round: params.round,
+          },
+          requestPayload: params.requestBody,
+          responsePayload: params.responseBody,
+          stopReason: params.stopReason,
+          inputTokens: params.inputTokens,
+          outputTokens: params.outputTokens,
+          latencyMs: params.latencyMs,
+          status: params.status,
+          errorMessage: params.errorMessage,
+        });
+      }
+
+      await logAIRequest({
+        ...logCommon,
+        round: stepIndex,
+        bindingId: params.resolved.bindingId,
+        revisionId: params.resolved.revisionId,
         inputTokens: params.inputTokens,
         outputTokens: params.outputTokens,
         latencyMs: params.latencyMs,
         status: params.status,
         errorMessage: params.errorMessage,
+        requestBody: params.requestBody,
+        responseBody: params.responseBody,
       });
-    }
+      return null;
+    };
 
-    await logAIRequest({
-      ...logCommon,
-      round: params.round,
-      inputTokens: params.inputTokens,
-      outputTokens: params.outputTokens,
-      latencyMs: params.latencyMs,
-      status: params.status,
-      errorMessage: params.errorMessage,
-      requestBody: params.requestBody,
-      responseBody: params.responseBody,
-    });
-    return null;
-  };
+    const executeProviderRound = async (round: number) => {
+      const routePolicy = effectiveModelPlan.attemptPolicy || DEFAULT_ATTEMPT_POLICY;
+      const perBindingAttempts = new Map<string, number>();
+      let totalAttempts = 0;
+      let lastError: Error | null = null;
 
-  try {
+      candidateLoop:
+      for (const candidate of effectiveModelPlan.candidates) {
+        const candidatePolicy = effectiveAttemptPolicy(routePolicy, candidate);
+        while (true) {
+          const priorAttempts = perBindingAttempts.get(candidate.bindingId) || 0;
+          if (priorAttempts >= candidatePolicy.maxAttemptsPerBinding) break;
+          if (totalAttempts >= routePolicy.maxAttemptsTotal) break candidateLoop;
+
+          const attempt = priorAttempts + 1;
+          perBindingAttempts.set(candidate.bindingId, attempt);
+          totalAttempts += 1;
+
+          const provider = getProvider(candidate);
+          const requestBody = buildRequestLog(round, candidate, attempt);
+          const attemptStart = Date.now();
+
+          try {
+            const response = await withTimeout(provider.chat({
+              system,
+              contextWindow: allContextWindow,
+              tools: allTools,
+              builtinTools: candidate.builtinTools,
+              multimodal: candidate.multimodal,
+            }), candidatePolicy.timeoutMsPerAttempt);
+
+            const assistantMsg = response.context[0];
+            const textContent = assistantMsg?.role === 'assistant' ? extractText(assistantMsg.content) : '';
+            const toolCalls = (assistantMsg?.role === 'assistant' && assistantMsg.toolCalls) ? assistantMsg.toolCalls : [];
+
+            const providerStep = await recordProviderRound({
+              round,
+              attempt,
+              resolved: candidate,
+              latencyMs: Date.now() - attemptStart,
+              status: 'success',
+              requestBody,
+              responseBody: {
+                stopReason: response.stopReason,
+                toolCalls: toolCalls.map((tc: any) => ({
+                  callId: tc.callId,
+                  providerCallId: tc.providerCallId,
+                  toolName: tc.toolName,
+                  input: tc.input,
+                })),
+                textContent,
+                rawAssistantMessage: response.rawAssistantMessage,
+              },
+              stopReason: response.stopReason,
+              inputTokens: response.tokensUsed.input,
+              outputTokens: response.tokensUsed.output,
+            }).catch((err) => {
+              console.error('[actorThink] Failed to log provider step:', err.message);
+              return null;
+            });
+
+            return { response, provider, resolved: candidate, providerStep };
+          } catch (err: any) {
+            const error = err instanceof Error ? err : new Error(String(err));
+            lastError = error;
+            const errorType = classifyModelError(error);
+            const status = errorType === 'timeout' ? 'timeout' : 'error';
+
+            await recordProviderRound({
+              round,
+              attempt,
+              resolved: candidate,
+              latencyMs: Date.now() - attemptStart,
+              status,
+              requestBody,
+              inputTokens: 0,
+              outputTokens: 0,
+              errorMessage: error.message,
+            }).catch(() => {});
+
+            if (routePolicy.stopOn.includes(errorType)) {
+              throw error;
+            }
+
+            const canRetrySameBinding =
+              routePolicy.continueOn.includes(errorType) &&
+              attempt < candidatePolicy.maxAttemptsPerBinding &&
+              totalAttempts < routePolicy.maxAttemptsTotal;
+
+            if (canRetrySameBinding) {
+              const backoff = candidatePolicy.retryBackoffMs[Math.min(attempt - 1, candidatePolicy.retryBackoffMs.length - 1)] || 0;
+              await delay(backoff);
+              continue;
+            }
+
+            break;
+          }
+        }
+      }
+
+      if (lastError) throw lastError;
+      throw new Error('No eligible model candidates available for this request');
+    };
+
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      currentRound = round + 1;
-      const roundStartTime = Date.now();
+      const currentRound = round + 1;
 
       // Set turn+round context for MCP executor
       if (options?.mcpSetTurnId) options.mcpSetTurnId(turnId, currentRound);
 
-      const response = await provider.chat({
-        system,
-        contextWindow: allContextWindow,
-        tools: allTools,
-        builtinTools: resolved?.builtinTools,
-        multimodal: resolved?.multimodal,
-      });
+      const {
+        response,
+        provider,
+        resolved: selectedResolved,
+        providerStep,
+      } = await executeProviderRound(currentRound);
 
-      const roundLatencyMs = Date.now() - roundStartTime;
       totalTokens.input += response.tokensUsed.input;
       totalTokens.output += response.tokensUsed.output;
 
@@ -329,41 +525,13 @@ export async function actorThink(
       const textContent = assistantMsg?.role === 'assistant' ? extractText(assistantMsg.content) : '';
       const toolCalls = (assistantMsg?.role === 'assistant' && assistantMsg.toolCalls) ? assistantMsg.toolCalls : [];
 
-      // Build per-round request/response bodies for logging
-      const roundRequestBody = buildRequestLog(currentRound);
-      const roundResponseBody = {
-        stopReason: response.stopReason,
-        toolCalls: toolCalls.map((tc: any) => ({
-          callId: tc.callId,
-          providerCallId: tc.providerCallId,
-          toolName: tc.toolName,
-          input: tc.input,
-        })),
-        textContent,
-        rawAssistantMessage: response.rawAssistantMessage,
-      };
-
-      const providerStep = await recordProviderRound({
-        round: currentRound,
-        latencyMs: roundLatencyMs,
-        status: 'success',
-        requestBody: roundRequestBody,
-        responseBody: roundResponseBody,
-        stopReason: response.stopReason,
-        inputTokens: response.tokensUsed.input,
-        outputTokens: response.tokensUsed.output,
-      }).catch((err) => {
-        console.error('[actorThink] Failed to log AI request:', err.message);
-        return null;
-      });
-
       console.log(`[actorThink] actor=${actor.id} turn=${turnId.slice(0,8)} round=${currentRound} stopReason=${response.stopReason} toolCalls=[${toolCalls.map((tc: any) => tc.toolName).join(',')}] textLen=${textContent.length}`);
 
       // Ingest response media → CanonicalContentBlock[] for ToolRound.content
       let roundMediaBlocks: CanonicalContentBlock[] = [];
       if (response.mediaBlocks && response.mediaBlocks.length > 0 && workspaceId) {
         try {
-          roundMediaBlocks = await ingestResponseMedia(response.mediaBlocks, resolved?.providerType || 'anthropic', workspaceId);
+          roundMediaBlocks = await ingestResponseMedia(response.mediaBlocks, selectedResolved.providerType || 'anthropic', workspaceId);
           allSupplementalBlocks.push(...collectFileRefBlocks(roundMediaBlocks));
         } catch (err: any) {
           console.error('[actorThink] Failed to ingest response media:', err.message);
@@ -783,18 +951,6 @@ export async function actorThink(
       toolHistory: toolRounds.length > 0 ? { rounds: toolRounds } : undefined,
       contentBlocks: allSupplementalBlocks.length > 0 ? allSupplementalBlocks : undefined,
     };
-  } catch (err: any) {
-    await recordProviderRound({
-      round: currentRound || 1,
-      latencyMs: Date.now() - startTime,
-      status: 'error',
-      requestBody: buildRequestLog(currentRound || 1),
-      inputTokens: totalTokens.input,
-      outputTokens: totalTokens.output,
-      errorMessage: err.message,
-    }).catch(() => {});
-    throw err;
-  }
   } // end _actorThinkInner
 }
 
@@ -831,9 +987,9 @@ export async function aiComplete(
     await logAIRequest({
       workspaceId: logContext?.workspaceId,
       actorId: logContext?.actorId,
-      groupId: resolved?.groupId,
-      itemId: resolved?.itemId,
-      configId: resolved?.configId,
+      routeId: resolved?.routeId,
+      bindingId: resolved?.bindingId,
+      revisionId: resolved?.revisionId,
       requestType: 'ai_complete',
       inputTokens: 0,
       outputTokens: 0,
@@ -852,9 +1008,9 @@ export async function aiComplete(
   await logAIRequest({
     workspaceId: logContext?.workspaceId,
     actorId: logContext?.actorId,
-    groupId: resolved?.groupId,
-    itemId: resolved?.itemId,
-    configId: resolved?.configId,
+    routeId: resolved?.routeId,
+    bindingId: resolved?.bindingId,
+    revisionId: resolved?.revisionId,
     requestType: 'ai_complete',
     inputTokens: response.tokensUsed.input,
     outputTokens: response.tokensUsed.output,

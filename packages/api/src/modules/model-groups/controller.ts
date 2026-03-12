@@ -19,11 +19,20 @@ import {
 
 const routingStrategyEnum = z.enum(['weighted_random', 'round_robin', 'priority_failover']);
 const providerTypeEnum = z.enum(['anthropic', 'openai']);
+const attemptPolicySchema = z.object({
+  maxAttemptsTotal: z.number().int().positive().optional(),
+  maxAttemptsPerBinding: z.number().int().positive().optional(),
+  timeoutMsPerAttempt: z.number().int().positive().optional(),
+  continueOn: z.array(z.string()).optional(),
+  stopOn: z.array(z.string()).optional(),
+  retryBackoffMs: z.array(z.number().int().min(0)).optional(),
+}).passthrough();
 
 const createGroupSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().optional(),
   routingStrategy: routingStrategyEnum.optional(),
+  attemptPolicy: attemptPolicySchema.optional(),
   isDefault: z.boolean().optional(),
 });
 
@@ -31,6 +40,7 @@ const updateGroupSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   description: z.string().optional(),
   routingStrategy: routingStrategyEnum.optional(),
+  attemptPolicy: attemptPolicySchema.optional(),
   isDefault: z.boolean().optional(),
   isActive: z.boolean().optional(),
 });
@@ -44,10 +54,10 @@ const addItemSchema = z.object({
   baseUrl: z.string().min(1),
   modelName: z.string().min(1),
   maxTokens: z.number().int().positive().optional(),
-  inputTokenCostMicros: z.number().int().min(0).optional(),
-  outputTokenCostMicros: z.number().int().min(0).optional(),
   capabilityTags: z.array(z.string()).optional(),
   extraConfig: z.record(z.unknown()).optional(),
+  requestTimeoutMs: z.number().int().positive().optional(),
+  maxRetries: z.number().int().min(0).optional(),
 });
 
 const updateItemSchema = z.object({
@@ -60,10 +70,10 @@ const updateItemSchema = z.object({
   baseUrl: z.string().min(1).optional(),
   modelName: z.string().min(1).optional(),
   maxTokens: z.number().int().positive().optional(),
-  inputTokenCostMicros: z.number().int().min(0).optional(),
-  outputTokenCostMicros: z.number().int().min(0).optional(),
   capabilityTags: z.array(z.string()).optional(),
   extraConfig: z.record(z.unknown()).optional(),
+  requestTimeoutMs: z.number().int().positive().optional(),
+  maxRetries: z.number().int().min(0).optional(),
 });
 
 const setActorGroupsSchema = z.object({

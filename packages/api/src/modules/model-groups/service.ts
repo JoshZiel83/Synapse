@@ -1,6 +1,8 @@
-import { query } from '../../infrastructure/database/index.js';
 import { config } from '../../config/index.js';
+import { query } from '../../infrastructure/database/index.js';
 import { logProviderStep, logRuntimeEvent } from '../execution/service.js';
+
+type JsonMap = Record<string, unknown>;
 
 export class ModelGroupError extends Error {
   constructor(public statusCode: number, message: string) {
@@ -8,46 +10,235 @@ export class ModelGroupError extends Error {
   }
 }
 
-// ============ Model Groups CRUD ============
+function asObject(value: unknown): JsonMap {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as JsonMap;
+}
+
+function mapRouteToGroup(row: any) {
+  return {
+    id: row.id,
+    workspace_id: row.workspace_id,
+    route_scope: row.route_scope,
+    name: row.name,
+    description: row.description || '',
+    routing_strategy: row.routing_strategy,
+    attempt_policy: asObject(row.attempt_policy),
+    is_default: Boolean(row.is_default),
+    is_active: Boolean(row.is_enabled),
+    created_by: row.created_by || null,
+    metadata: asObject(row.metadata),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function mapRouteItem(row: any) {
+  return {
+    id: row.id,
+    group_id: row.route_id,
+    binding_id: row.binding_id,
+    current_config_id: row.current_revision_id || null,
+    display_name: row.display_name,
+    priority: row.priority,
+    weight: row.weight,
+    is_enabled: Boolean(row.is_enabled),
+    config_id: row.current_revision_id || null,
+    version: row.version || null,
+    provider_type: row.provider_type || null,
+    base_url: row.base_url || null,
+    model_name: row.model_name || null,
+    max_tokens: row.max_tokens || null,
+    capability_tags: row.capability_tags || [],
+    extra_config: asObject(row.extra_config),
+    request_timeout_ms: row.request_timeout_ms ?? null,
+    max_retries: row.max_retries ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+async function ensurePlatformSettingsRow() {
+  await query(
+    `INSERT INTO platform_settings (id, metadata)
+     VALUES (TRUE, '{}'::jsonb)
+     ON CONFLICT (id) DO NOTHING`,
+    [],
+  );
+}
+
+async function clearExistingDefault(scope: 'platform' | 'workspace', workspaceId?: string) {
+  if (scope === 'platform') {
+    await query(
+      `UPDATE model_routes
+       SET is_default = FALSE
+       WHERE route_scope = 'platform' AND is_default = TRUE`,
+      [],
+    );
+    await ensurePlatformSettingsRow();
+    return;
+  }
+
+  if (!workspaceId) {
+    throw new ModelGroupError(400, 'workspaceId is required for workspace defaults');
+  }
+
+  await query(
+    `UPDATE model_routes
+     SET is_default = FALSE
+     WHERE workspace_id = $1 AND route_scope = 'workspace' AND is_default = TRUE`,
+    [workspaceId],
+  );
+}
+
+async function setDefaultRoute(routeId: string, scope: 'platform' | 'workspace', workspaceId?: string) {
+  if (scope === 'platform') {
+    await ensurePlatformSettingsRow();
+    await query(
+      `UPDATE platform_settings
+       SET default_model_route_id = $1, updated_at = NOW()
+       WHERE id = TRUE`,
+      [routeId],
+    );
+    return;
+  }
+
+  if (!workspaceId) {
+    throw new ModelGroupError(400, 'workspaceId is required for workspace defaults');
+  }
+
+  await query(
+    `UPDATE workspaces
+     SET default_model_route_id = $1, updated_at = NOW()
+     WHERE id = $2`,
+    [routeId, workspaceId],
+  );
+}
+
+async function resolveDefaultRouteScope(routeId: string) {
+  const result = await query(
+    `SELECT id, workspace_id, route_scope
+     FROM model_routes
+     WHERE id = $1
+     LIMIT 1`,
+    [routeId],
+  );
+  if (result.rows.length === 0) {
+    throw new ModelGroupError(404, 'Model route not found');
+  }
+  return result.rows[0] as {
+    id: string;
+    workspace_id: string | null;
+    route_scope: 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+  };
+}
+
+async function createBindingRevision(input: {
+  bindingId: string;
+  version: number;
+  providerType: string;
+  apiKey: string;
+  baseUrl: string;
+  modelName: string;
+  maxTokens?: number;
+  capabilityTags?: string[];
+  extraConfig?: JsonMap;
+  requestTimeoutMs?: number;
+  maxRetries?: number;
+}) {
+  const result = await query(
+    `INSERT INTO model_binding_revisions (
+       binding_id, version, provider_type, api_key, base_url, model_name,
+       max_tokens, capability_tags, extra_config, request_timeout_ms, max_retries, metadata
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, '{}'::jsonb)
+     RETURNING *`,
+    [
+      input.bindingId,
+      input.version,
+      input.providerType,
+      input.apiKey,
+      input.baseUrl,
+      input.modelName,
+      input.maxTokens ?? 4096,
+      input.capabilityTags || [],
+      JSON.stringify(input.extraConfig || {}),
+      input.requestTimeoutMs ?? null,
+      input.maxRetries ?? null,
+    ],
+  );
+  return result.rows[0];
+}
 
 export async function listModelGroups(workspaceId: string | null) {
-  if (workspaceId) {
-    // Return workspace groups + platform groups
+  if (!workspaceId) {
     const result = await query(
-      `SELECT * FROM model_groups
-       WHERE (workspace_id = $1 OR workspace_id IS NULL) AND is_active = TRUE
-       ORDER BY workspace_id NULLS LAST, is_default DESC, name`,
-      [workspaceId]
+      `SELECT * FROM model_routes
+       WHERE route_scope = 'platform' AND is_enabled = TRUE
+       ORDER BY is_default DESC, name`,
+      [],
     );
-    return result.rows;
+    return result.rows.map(mapRouteToGroup);
   }
-  // Platform groups only
+
   const result = await query(
-    `SELECT * FROM model_groups WHERE workspace_id IS NULL AND is_active = TRUE
-     ORDER BY is_default DESC, name`,
-    []
+    `SELECT *
+     FROM model_routes
+     WHERE is_enabled = TRUE
+       AND (
+         route_scope = 'platform'
+         OR workspace_id = $1
+       )
+     ORDER BY
+       CASE route_scope
+         WHEN 'platform' THEN 0
+         WHEN 'workspace' THEN 1
+         WHEN 'conversation' THEN 2
+         WHEN 'actor_global' THEN 3
+         WHEN 'actor_conversation' THEN 4
+         WHEN 'user' THEN 5
+         ELSE 99
+       END,
+       is_default DESC,
+       name`,
+    [workspaceId],
   );
-  return result.rows;
+  return result.rows.map(mapRouteToGroup);
 }
 
 export async function getModelGroup(groupId: string) {
-  const result = await query('SELECT * FROM model_groups WHERE id = $1', [groupId]);
-  if (result.rows.length === 0) throw new ModelGroupError(404, 'Model group not found');
-  const group = result.rows[0];
+  const routeResult = await query(
+    `SELECT * FROM model_routes WHERE id = $1 LIMIT 1`,
+    [groupId],
+  );
+  if (routeResult.rows.length === 0) throw new ModelGroupError(404, 'Model route not found');
 
-  // Load items with current config
-  const items = await query(
-    `SELECT gi.*, mc.id as config_id, mc.version, mc.provider_type, mc.base_url,
-            mc.model_name, mc.max_tokens, mc.input_token_cost_micros, mc.output_token_cost_micros,
-            mc.capability_tags, mc.extra_config, mc.created_at as config_created_at
-     FROM model_group_items gi
-     LEFT JOIN model_item_configs mc ON mc.id = gi.current_config_id
-     WHERE gi.group_id = $1
-     ORDER BY gi.priority, gi.display_name`,
-    [groupId]
+  const itemsResult = await query(
+    `SELECT
+        ri.*,
+        b.display_name,
+        b.current_revision_id,
+        r.version,
+        r.provider_type,
+        r.base_url,
+        r.model_name,
+        r.max_tokens,
+        r.capability_tags,
+        r.extra_config,
+        r.request_timeout_ms,
+        r.max_retries
+     FROM model_route_items ri
+     JOIN model_bindings b ON b.id = ri.binding_id
+     LEFT JOIN model_binding_revisions r ON r.id = b.current_revision_id
+     WHERE ri.route_id = $1
+     ORDER BY ri.priority ASC, b.display_name`,
+    [groupId],
   );
 
-  return { ...group, items: items.rows };
+  return {
+    ...mapRouteToGroup(routeResult.rows[0]),
+    items: itemsResult.rows.map(mapRouteItem),
+  };
 }
 
 export async function createModelGroup(data: {
@@ -55,91 +246,118 @@ export async function createModelGroup(data: {
   name: string;
   description?: string;
   routingStrategy?: string;
+  attemptPolicy?: JsonMap;
   isDefault?: boolean;
   createdBy?: string;
 }) {
-  // If setting as default, unset existing default in same scope
+  const routeScope = data.workspaceId ? 'workspace' : 'platform';
+
   if (data.isDefault) {
-    if (data.workspaceId) {
-      await query(
-        'UPDATE model_groups SET is_default = FALSE WHERE workspace_id = $1 AND is_default = TRUE',
-        [data.workspaceId]
-      );
-    } else {
-      await query(
-        'UPDATE model_groups SET is_default = FALSE WHERE workspace_id IS NULL AND is_default = TRUE',
-        []
-      );
-    }
+    await clearExistingDefault(routeScope, data.workspaceId);
   }
 
   const result = await query(
-    `INSERT INTO model_groups (workspace_id, name, description, routing_strategy, is_default, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    `INSERT INTO model_routes (
+       workspace_id, route_scope, name, description, routing_strategy, attempt_policy,
+       is_default, is_enabled, created_by, metadata
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, '{}'::jsonb)
+     RETURNING *`,
     [
       data.workspaceId || null,
+      routeScope,
       data.name,
       data.description || '',
       data.routingStrategy || 'priority_failover',
+      JSON.stringify(data.attemptPolicy || {}),
       data.isDefault || false,
       data.createdBy || null,
-    ]
+    ],
   );
-  return result.rows[0];
+
+  const route = mapRouteToGroup(result.rows[0]);
+  if (data.isDefault) {
+    await setDefaultRoute(route.id, routeScope, data.workspaceId);
+  }
+  return route;
 }
 
 export async function updateModelGroup(groupId: string, data: {
   name?: string;
   description?: string;
   routingStrategy?: string;
+  attemptPolicy?: JsonMap;
   isDefault?: boolean;
   isActive?: boolean;
 }) {
-  const group = await query('SELECT * FROM model_groups WHERE id = $1', [groupId]);
-  if (group.rows.length === 0) throw new ModelGroupError(404, 'Model group not found');
+  const route = await resolveDefaultRouteScope(groupId);
 
-  // If setting as default, unset existing default in same scope
   if (data.isDefault === true) {
-    const wsId = group.rows[0].workspace_id;
-    if (wsId) {
-      await query(
-        'UPDATE model_groups SET is_default = FALSE WHERE workspace_id = $1 AND is_default = TRUE AND id != $2',
-        [wsId, groupId]
-      );
-    } else {
-      await query(
-        'UPDATE model_groups SET is_default = FALSE WHERE workspace_id IS NULL AND is_default = TRUE AND id != $1',
-        [groupId]
-      );
+    if (route.route_scope !== 'platform' && route.route_scope !== 'workspace') {
+      throw new ModelGroupError(400, 'Only platform or workspace routes can be default routes');
     }
+    await clearExistingDefault(route.route_scope, route.workspace_id || undefined);
   }
 
   const sets: string[] = [];
-  const values: any[] = [];
+  const values: unknown[] = [];
   let idx = 1;
 
-  if (data.name !== undefined) { sets.push(`name = $${idx++}`); values.push(data.name); }
-  if (data.description !== undefined) { sets.push(`description = $${idx++}`); values.push(data.description); }
-  if (data.routingStrategy !== undefined) { sets.push(`routing_strategy = $${idx++}`); values.push(data.routingStrategy); }
-  if (data.isDefault !== undefined) { sets.push(`is_default = $${idx++}`); values.push(data.isDefault); }
-  if (data.isActive !== undefined) { sets.push(`is_active = $${idx++}`); values.push(data.isActive); }
+  if (data.name !== undefined) {
+    sets.push(`name = $${idx++}`);
+    values.push(data.name);
+  }
+  if (data.description !== undefined) {
+    sets.push(`description = $${idx++}`);
+    values.push(data.description);
+  }
+  if (data.routingStrategy !== undefined) {
+    sets.push(`routing_strategy = $${idx++}`);
+    values.push(data.routingStrategy);
+  }
+  if (data.attemptPolicy !== undefined) {
+    sets.push(`attempt_policy = $${idx++}`);
+    values.push(JSON.stringify(data.attemptPolicy));
+  }
+  if (data.isDefault !== undefined) {
+    sets.push(`is_default = $${idx++}`);
+    values.push(data.isDefault);
+  }
+  if (data.isActive !== undefined) {
+    sets.push(`is_enabled = $${idx++}`);
+    values.push(data.isActive);
+  }
 
-  if (sets.length === 0) return group.rows[0];
+  if (sets.length === 0) {
+    return getModelGroup(groupId);
+  }
 
+  sets.push(`updated_at = NOW()`);
   values.push(groupId);
   const result = await query(
-    `UPDATE model_groups SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`,
-    values
+    `UPDATE model_routes
+     SET ${sets.join(', ')}
+     WHERE id = $${idx}
+     RETURNING *`,
+    values,
   );
-  return result.rows[0];
+
+  if (result.rows.length === 0) throw new ModelGroupError(404, 'Model route not found');
+  const updated = mapRouteToGroup(result.rows[0]);
+  if (data.isDefault === true && (route.route_scope === 'platform' || route.route_scope === 'workspace')) {
+    await setDefaultRoute(updated.id, route.route_scope, route.workspace_id || undefined);
+  }
+  return updated;
 }
 
 export async function deleteModelGroup(groupId: string) {
-  // Soft delete
-  await query('UPDATE model_groups SET is_active = FALSE WHERE id = $1', [groupId]);
+  await query(
+    `UPDATE model_routes
+     SET is_enabled = FALSE, updated_at = NOW()
+     WHERE id = $1`,
+    [groupId],
+  );
 }
-
-// ============ Model Group Items CRUD ============
 
 export async function addModelItem(groupId: string, data: {
   displayName: string;
@@ -150,47 +368,80 @@ export async function addModelItem(groupId: string, data: {
   baseUrl: string;
   modelName: string;
   maxTokens?: number;
-  inputTokenCostMicros?: number;
-  outputTokenCostMicros?: number;
   capabilityTags?: string[];
-  extraConfig?: Record<string, unknown>;
+  extraConfig?: JsonMap;
+  requestTimeoutMs?: number;
+  maxRetries?: number;
 }) {
-  // Verify group exists
-  const group = await query('SELECT id FROM model_groups WHERE id = $1', [groupId]);
-  if (group.rows.length === 0) throw new ModelGroupError(404, 'Model group not found');
-
-  // Create item
-  const itemResult = await query(
-    `INSERT INTO model_group_items (group_id, display_name, priority, weight)
-     VALUES ($1, $2, $3, $4) RETURNING *`,
-    [groupId, data.displayName, data.priority ?? 0, data.weight ?? 100]
+  const routeResult = await query(
+    `SELECT * FROM model_routes WHERE id = $1 LIMIT 1`,
+    [groupId],
   );
-  const item = itemResult.rows[0];
+  if (routeResult.rows.length === 0) throw new ModelGroupError(404, 'Model route not found');
+  const route = routeResult.rows[0];
 
-  // Create first config version
-  const configResult = await query(
-    `INSERT INTO model_item_configs (item_id, version, provider_type, api_key, base_url, model_name, max_tokens,
-       input_token_cost_micros, output_token_cost_micros, capability_tags, extra_config)
-     VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+  const bindingResult = await query(
+    `INSERT INTO model_bindings (
+       workspace_id, binding_scope, conversation_id, actor_id, user_id,
+       display_name, is_enabled, metadata
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, TRUE, '{}'::jsonb)
+     RETURNING *`,
     [
-      item.id,
-      data.providerType,
-      data.apiKey,
-      data.baseUrl,
-      data.modelName,
-      data.maxTokens ?? 4096,
-      data.inputTokenCostMicros ?? 0,
-      data.outputTokenCostMicros ?? 0,
-      data.capabilityTags || [],
-      JSON.stringify(data.extraConfig || {}),
-    ]
+      route.workspace_id || null,
+      route.route_scope,
+      route.conversation_id || null,
+      route.actor_id || null,
+      route.user_id || null,
+      data.displayName,
+    ],
   );
-  const cfg = configResult.rows[0];
+  const binding = bindingResult.rows[0];
 
-  // Set current_config_id
-  await query('UPDATE model_group_items SET current_config_id = $1 WHERE id = $2', [cfg.id, item.id]);
+  const revision = await createBindingRevision({
+    bindingId: binding.id,
+    version: 1,
+    providerType: data.providerType,
+    apiKey: data.apiKey,
+    baseUrl: data.baseUrl,
+    modelName: data.modelName,
+    maxTokens: data.maxTokens,
+    capabilityTags: data.capabilityTags,
+    extraConfig: data.extraConfig,
+    requestTimeoutMs: data.requestTimeoutMs,
+    maxRetries: data.maxRetries,
+  });
 
-  return { ...item, current_config_id: cfg.id, currentConfig: cfg };
+  await query(
+    `UPDATE model_bindings
+     SET current_revision_id = $1, updated_at = NOW()
+     WHERE id = $2`,
+    [revision.id, binding.id],
+  );
+
+  const routeItemResult = await query(
+    `INSERT INTO model_route_items (
+       route_id, binding_id, priority, weight, is_enabled, metadata
+     )
+     VALUES ($1, $2, $3, $4, TRUE, '{}'::jsonb)
+     RETURNING *`,
+    [groupId, binding.id, data.priority ?? 0, data.weight ?? 100],
+  );
+
+  return mapRouteItem({
+    ...routeItemResult.rows[0],
+    display_name: binding.display_name,
+    current_revision_id: revision.id,
+    version: revision.version,
+    provider_type: revision.provider_type,
+    base_url: revision.base_url,
+    model_name: revision.model_name,
+    max_tokens: revision.max_tokens,
+    capability_tags: revision.capability_tags,
+    extra_config: revision.extra_config,
+    request_timeout_ms: revision.request_timeout_ms,
+    max_retries: revision.max_retries,
+  });
 }
 
 export async function updateModelItem(groupId: string, itemId: string, data: {
@@ -198,133 +449,210 @@ export async function updateModelItem(groupId: string, itemId: string, data: {
   priority?: number;
   weight?: number;
   isEnabled?: boolean;
-  // Config fields trigger new version
   providerType?: string;
   apiKey?: string;
   baseUrl?: string;
   modelName?: string;
   maxTokens?: number;
-  inputTokenCostMicros?: number;
-  outputTokenCostMicros?: number;
   capabilityTags?: string[];
-  extraConfig?: Record<string, unknown>;
+  extraConfig?: JsonMap;
+  requestTimeoutMs?: number;
+  maxRetries?: number;
 }) {
   const itemResult = await query(
-    'SELECT * FROM model_group_items WHERE id = $1 AND group_id = $2',
-    [itemId, groupId]
+    `SELECT
+        ri.*,
+        b.display_name,
+        b.current_revision_id,
+        b.id AS binding_id,
+        r.version,
+        r.provider_type,
+        r.api_key,
+        r.base_url,
+        r.model_name,
+        r.max_tokens,
+        r.capability_tags,
+        r.extra_config,
+        r.request_timeout_ms,
+        r.max_retries
+     FROM model_route_items ri
+     JOIN model_bindings b ON b.id = ri.binding_id
+     LEFT JOIN model_binding_revisions r ON r.id = b.current_revision_id
+     WHERE ri.id = $1 AND ri.route_id = $2
+     LIMIT 1`,
+    [itemId, groupId],
   );
-  if (itemResult.rows.length === 0) throw new ModelGroupError(404, 'Model item not found');
+  if (itemResult.rows.length === 0) throw new ModelGroupError(404, 'Model route item not found');
   const item = itemResult.rows[0];
 
-  // Update item metadata
-  const metaSets: string[] = [];
-  const metaVals: any[] = [];
-  let mi = 1;
-  if (data.displayName !== undefined) { metaSets.push(`display_name = $${mi++}`); metaVals.push(data.displayName); }
-  if (data.priority !== undefined) { metaSets.push(`priority = $${mi++}`); metaVals.push(data.priority); }
-  if (data.weight !== undefined) { metaSets.push(`weight = $${mi++}`); metaVals.push(data.weight); }
-  if (data.isEnabled !== undefined) { metaSets.push(`is_enabled = $${mi++}`); metaVals.push(data.isEnabled); }
+  const routeSets: string[] = [];
+  const routeValues: unknown[] = [];
+  let routeIdx = 1;
 
-  if (metaSets.length > 0) {
-    metaVals.push(itemId);
-    await query(`UPDATE model_group_items SET ${metaSets.join(', ')} WHERE id = $${mi}`, metaVals);
+  if (data.priority !== undefined) {
+    routeSets.push(`priority = $${routeIdx++}`);
+    routeValues.push(data.priority);
+  }
+  if (data.weight !== undefined) {
+    routeSets.push(`weight = $${routeIdx++}`);
+    routeValues.push(data.weight);
+  }
+  if (data.isEnabled !== undefined) {
+    routeSets.push(`is_enabled = $${routeIdx++}`);
+    routeValues.push(data.isEnabled);
   }
 
-  // If config fields provided, create new version
-  const hasConfigChange = data.providerType || data.apiKey || data.baseUrl || data.modelName || data.maxTokens !== undefined || data.extraConfig !== undefined;
-  if (hasConfigChange) {
-    // Get current config to use as base
-    let base: any = {};
-    if (item.current_config_id) {
-      const baseResult = await query('SELECT * FROM model_item_configs WHERE id = $1', [item.current_config_id]);
-      if (baseResult.rows.length > 0) base = baseResult.rows[0];
-    }
-
-    // Get next version
-    const maxVer = await query('SELECT COALESCE(MAX(version), 0) as max_ver FROM model_item_configs WHERE item_id = $1', [itemId]);
-    const newVersion = (maxVer.rows[0].max_ver || 0) + 1;
-
-    const configResult = await query(
-      `INSERT INTO model_item_configs (item_id, version, provider_type, api_key, base_url, model_name, max_tokens,
-         input_token_cost_micros, output_token_cost_micros, capability_tags, extra_config)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-      [
-        itemId,
-        newVersion,
-        data.providerType || base.provider_type || 'anthropic',
-        data.apiKey || base.api_key || '',
-        data.baseUrl || base.base_url || '',
-        data.modelName || base.model_name || '',
-        data.maxTokens ?? base.max_tokens ?? 4096,
-        data.inputTokenCostMicros ?? base.input_token_cost_micros ?? 0,
-        data.outputTokenCostMicros ?? base.output_token_cost_micros ?? 0,
-        data.capabilityTags || base.capability_tags || [],
-        JSON.stringify(data.extraConfig || base.extra_config || {}),
-      ]
+  if (routeSets.length > 0) {
+    routeSets.push(`updated_at = NOW()`);
+    routeValues.push(itemId);
+    await query(
+      `UPDATE model_route_items
+       SET ${routeSets.join(', ')}
+       WHERE id = $${routeIdx}`,
+      routeValues,
     );
-
-    await query('UPDATE model_group_items SET current_config_id = $1 WHERE id = $2', [configResult.rows[0].id, itemId]);
   }
 
-  // Return updated item
-  const updated = await query(
-    `SELECT gi.*, mc.id as config_id, mc.version, mc.provider_type, mc.base_url,
-            mc.model_name, mc.max_tokens, mc.capability_tags, mc.extra_config
-     FROM model_group_items gi
-     LEFT JOIN model_item_configs mc ON mc.id = gi.current_config_id
-     WHERE gi.id = $1`,
-    [itemId]
+  if (data.displayName !== undefined) {
+    await query(
+      `UPDATE model_bindings
+       SET display_name = $1, updated_at = NOW()
+       WHERE id = $2`,
+      [data.displayName, item.binding_id],
+    );
+  }
+
+  const hasConfigChange =
+    data.providerType !== undefined ||
+    data.apiKey !== undefined ||
+    data.baseUrl !== undefined ||
+    data.modelName !== undefined ||
+    data.maxTokens !== undefined ||
+    data.capabilityTags !== undefined ||
+    data.extraConfig !== undefined ||
+    data.requestTimeoutMs !== undefined ||
+    data.maxRetries !== undefined;
+
+  if (hasConfigChange) {
+    const nextVersion = Number(item.version || 0) + 1;
+    const revision = await createBindingRevision({
+      bindingId: item.binding_id,
+      version: nextVersion,
+      providerType: data.providerType || item.provider_type,
+      apiKey: data.apiKey || item.api_key,
+      baseUrl: data.baseUrl || item.base_url,
+      modelName: data.modelName || item.model_name,
+      maxTokens: data.maxTokens ?? item.max_tokens,
+      capabilityTags: data.capabilityTags || item.capability_tags || [],
+      extraConfig: data.extraConfig ?? asObject(item.extra_config),
+      requestTimeoutMs: data.requestTimeoutMs ?? item.request_timeout_ms ?? undefined,
+      maxRetries: data.maxRetries ?? item.max_retries ?? undefined,
+    });
+    await query(
+      `UPDATE model_bindings
+       SET current_revision_id = $1, updated_at = NOW()
+       WHERE id = $2`,
+      [revision.id, item.binding_id],
+    );
+  }
+
+  const updatedResult = await query(
+    `SELECT
+        ri.*,
+        b.display_name,
+        b.current_revision_id,
+        r.version,
+        r.provider_type,
+        r.base_url,
+        r.model_name,
+        r.max_tokens,
+        r.capability_tags,
+        r.extra_config,
+        r.request_timeout_ms,
+        r.max_retries
+     FROM model_route_items ri
+     JOIN model_bindings b ON b.id = ri.binding_id
+     LEFT JOIN model_binding_revisions r ON r.id = b.current_revision_id
+     WHERE ri.id = $1
+     LIMIT 1`,
+    [itemId],
   );
-  return updated.rows[0];
+  return mapRouteItem(updatedResult.rows[0]);
 }
 
 export async function deleteModelItem(groupId: string, itemId: string) {
-  // Disable instead of hard delete
   await query(
-    'UPDATE model_group_items SET is_enabled = FALSE WHERE id = $1 AND group_id = $2',
-    [itemId, groupId]
+    `UPDATE model_route_items
+     SET is_enabled = FALSE, updated_at = NOW()
+     WHERE id = $1 AND route_id = $2`,
+    [itemId, groupId],
   );
 }
 
 export async function getItemVersions(itemId: string) {
-  const result = await query(
-    `SELECT id, item_id, version, provider_type, base_url, model_name, max_tokens,
-            input_token_cost_micros, output_token_cost_micros, capability_tags, created_at
-     FROM model_item_configs WHERE item_id = $1 ORDER BY version DESC`,
-    [itemId]
+  const itemResult = await query(
+    `SELECT binding_id
+     FROM model_route_items
+     WHERE id = $1
+     LIMIT 1`,
+    [itemId],
   );
-  return result.rows;
-}
+  if (itemResult.rows.length === 0) throw new ModelGroupError(404, 'Model route item not found');
+  const bindingId = itemResult.rows[0].binding_id as string;
 
-// ============ Actor Model Groups ============
+  const versions = await query(
+    `SELECT
+        r.id,
+        r.binding_id AS item_id,
+        r.version,
+        r.provider_type,
+        r.base_url,
+        r.model_name,
+        r.max_tokens,
+        r.capability_tags,
+        r.extra_config,
+        r.request_timeout_ms,
+        r.max_retries,
+        r.created_at
+     FROM model_binding_revisions r
+     WHERE r.binding_id = $1
+     ORDER BY r.version DESC`,
+    [bindingId],
+  );
+  return versions.rows;
+}
 
 export async function getActorModelGroups(actorId: string) {
   const result = await query(
-    `SELECT amg.*, mg.name as group_name, mg.routing_strategy, mg.is_default, mg.workspace_id
-     FROM actor_model_groups amg
-     JOIN model_groups mg ON mg.id = amg.group_id
-     WHERE amg.actor_id = $1
-     ORDER BY amg.priority`,
-    [actorId]
+    `SELECT
+        amr.actor_id,
+        amr.route_id AS group_id,
+        amr.priority,
+        amr.created_at,
+        mr.name AS group_name,
+        mr.routing_strategy,
+        mr.is_default,
+        mr.workspace_id
+     FROM actor_model_routes amr
+     JOIN model_routes mr ON mr.id = amr.route_id
+     WHERE amr.actor_id = $1
+     ORDER BY amr.priority ASC`,
+    [actorId],
   );
   return result.rows;
 }
 
 export async function setActorModelGroups(actorId: string, groups: { groupId: string; priority: number }[]) {
-  // Replace all assignments
-  await query('DELETE FROM actor_model_groups WHERE actor_id = $1', [actorId]);
-
-  for (const g of groups) {
+  await query(`DELETE FROM actor_model_routes WHERE actor_id = $1`, [actorId]);
+  for (const group of groups) {
     await query(
-      'INSERT INTO actor_model_groups (actor_id, group_id, priority) VALUES ($1, $2, $3)',
-      [actorId, g.groupId, g.priority]
+      `INSERT INTO actor_model_routes (actor_id, route_id, priority)
+       VALUES ($1, $2, $3)`,
+      [actorId, group.groupId, group.priority],
     );
   }
-
   return getActorModelGroups(actorId);
 }
-
-// ============ AI Request Logging ============
 
 export async function logAIRequest(data: {
   workspaceId?: string;
@@ -332,9 +660,9 @@ export async function logAIRequest(data: {
   sessionId?: string;
   turnId?: string;
   round?: number;
-  groupId?: string;
-  itemId?: string;
-  configId?: string;
+  routeId?: string;
+  bindingId?: string;
+  revisionId?: string;
   requestType: string;
   inputTokens: number;
   outputTokens: number;
@@ -355,9 +683,9 @@ export async function logAIRequest(data: {
       payload: {
         round: data.round || 1,
         requestType: data.requestType,
-        modelGroupId: data.groupId,
-        modelItemId: data.itemId,
-        modelConfigId: data.configId,
+        modelRouteId: data.routeId,
+        modelBindingId: data.bindingId,
+        modelRevisionId: data.revisionId,
         inputTokens: data.inputTokens,
         outputTokens: data.outputTokens,
         latencyMs: data.latencyMs,
@@ -372,14 +700,17 @@ export async function logAIRequest(data: {
 
   let providerType: 'anthropic' | 'openai' = config.ai.provider === 'openai' ? 'openai' : 'anthropic';
   let modelName = config.ai.model;
-  if (data.configId) {
-    const configResult = await query(
-      `SELECT provider_type, model_name FROM model_item_configs WHERE id = $1`,
-      [data.configId],
+  if (data.revisionId) {
+    const revisionResult = await query(
+      `SELECT provider_type, model_name
+       FROM model_binding_revisions
+       WHERE id = $1
+       LIMIT 1`,
+      [data.revisionId],
     );
-    if (configResult.rows[0]) {
-      providerType = configResult.rows[0].provider_type === 'openai' ? 'openai' : 'anthropic';
-      modelName = configResult.rows[0].model_name || modelName;
+    if (revisionResult.rows[0]) {
+      providerType = revisionResult.rows[0].provider_type === 'openai' ? 'openai' : 'anthropic';
+      modelName = revisionResult.rows[0].model_name || modelName;
     }
   }
 
@@ -388,9 +719,9 @@ export async function logAIRequest(data: {
     stepIndex: data.round || 1,
     providerType,
     requestType: data.requestType as 'actor_think' | 'ai_complete',
-    modelGroupId: data.groupId,
-    modelItemId: data.itemId,
-    modelConfigId: data.configId,
+    modelRouteId: data.routeId,
+    modelBindingId: data.bindingId,
+    modelRevisionId: data.revisionId,
     modelName,
     requestPayload: data.requestBody,
     responsePayload: data.responseBody,
@@ -402,25 +733,35 @@ export async function logAIRequest(data: {
   });
 }
 
-// ============ Seed Platform Default ============
-
 export async function seedPlatformDefaultGroup() {
-  // Check if platform default already exists
-  const existing = await query(
-    'SELECT id FROM model_groups WHERE workspace_id IS NULL AND is_default = TRUE AND is_active = TRUE',
-    []
-  );
-  if (existing.rows.length > 0) return existing.rows[0].id;
+  await ensurePlatformSettingsRow();
 
-  // Create platform default group from env config
+  const existing = await query(
+    `SELECT ps.default_model_route_id
+     FROM platform_settings ps
+     WHERE ps.id = TRUE AND ps.default_model_route_id IS NOT NULL
+     LIMIT 1`,
+    [],
+  );
+  if (existing.rows[0]?.default_model_route_id) {
+    return existing.rows[0].default_model_route_id as string;
+  }
+
   const group = await createModelGroup({
     name: 'Platform Default',
     description: 'Auto-created from environment variables',
     routingStrategy: 'priority_failover',
+    attemptPolicy: {
+      maxAttemptsTotal: 4,
+      maxAttemptsPerBinding: 2,
+      timeoutMsPerAttempt: 30000,
+      continueOn: ['timeout', '5xx', 'network', 'rate_limit'],
+      stopOn: ['auth_error', 'bad_request', 'policy_block'],
+      retryBackoffMs: [0, 1000, 3000],
+    },
     isDefault: true,
   });
 
-  // Add the env-configured model as an item
   if (config.ai.apiKey) {
     await addModelItem(group.id, {
       displayName: `${config.ai.model} (env)`,
@@ -431,6 +772,8 @@ export async function seedPlatformDefaultGroup() {
       baseUrl: config.ai.baseUrl,
       modelName: config.ai.model,
       maxTokens: config.ai.maxTokens,
+      requestTimeoutMs: 30000,
+      maxRetries: 1,
     });
   }
 

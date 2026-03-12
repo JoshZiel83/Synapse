@@ -27,8 +27,8 @@ export function registerActionToolPlugins(): void {
           },
           scope: {
             type: 'string',
-            description: 'Memory scope. actor_conversation = private to you inside the current conversation; conversation_shared = visible to all actors in the current conversation; actor_global = follows you across conversations.',
-            enum: ['actor_conversation', 'conversation_shared', 'actor_global'],
+            description: 'Memory owner scope. actor_conversation = private to you inside the current conversation; conversation = shared within the current conversation; actor_global = follows you across conversations; user = shared for the sole active real user; workspace = shared workspace memory.',
+            enum: ['actor_conversation', 'conversation', 'actor_global', 'user', 'workspace'],
           },
           importance: {
             type: 'string',

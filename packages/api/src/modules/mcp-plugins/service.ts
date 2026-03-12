@@ -1,9 +1,31 @@
-import { query } from '../../infrastructure/database/index.js';
-import { encryptSensitiveFields } from '../../infrastructure/crypto/index.js';
-import { emitEvent } from '../../infrastructure/events/index.js';
-import { incrementMcpVersion } from './instance-manager.js';
 import { nowISO } from '@synapse/shared';
-import type { McpValidationRule } from '@synapse/shared';
+import type {
+  CapabilityBindingScope,
+  CapabilityReuseScope,
+  McpSetupStep,
+  McpValidationRule,
+} from '@synapse/shared';
+import { encryptSensitiveFields } from '../../infrastructure/crypto/index.js';
+import { query } from '../../infrastructure/database/index.js';
+import { emitEvent } from '../../infrastructure/events/index.js';
+import {
+  buildCapabilityGrantPlan,
+  CapabilityError,
+  createCapabilityBinding,
+  ensureDefaultCapabilityGrant,
+  createCapabilityPackage,
+  createCapabilityPublisher,
+  createCapabilityRevision,
+  deleteCapabilityBinding,
+  evaluateCapabilityRequirements,
+  getCapabilityPackage,
+  getCapabilityPublisher,
+  listCapabilityBindings,
+  listCapabilityPackages,
+  listCapabilityPublishers,
+  updateCapabilityBinding,
+} from '../capabilities/service.js';
+import { incrementMcpVersion } from './instance-manager.js';
 import { builtinSeeds } from './builtin-plugins/index.js';
 
 export class McpPluginError extends Error {
@@ -12,7 +34,114 @@ export class McpPluginError extends Error {
   }
 }
 
-// ============ Organizations ============
+function wrapCapabilityError(error: unknown): never {
+  if (error instanceof CapabilityError) {
+    throw new McpPluginError(error.statusCode, error.message);
+  }
+  throw error;
+}
+
+function mapPackageToPluginView(pkg: any) {
+  const revision = pkg.latestRevision || {};
+  return {
+    id: pkg.id,
+    org_id: pkg.publisherId,
+    slug: pkg.slug,
+    display_name: pkg.displayName,
+    description: pkg.description,
+    long_description: pkg.longDescription,
+    icon_url: pkg.iconUrl || null,
+    version: revision.version || '1.0.0',
+    transport: revision.transport || 'builtin',
+    entry_point: revision.entryPoint || '',
+    lifecycle_scope: pkg.defaultReuseScope,
+    default_binding_scope: pkg.defaultBindingScope,
+    config_schema: revision.configSchema || {},
+    default_config: revision.defaultConfig || {},
+    tools_manifest: revision.toolsManifest || [],
+    validation_rules: revision.validationRules || [],
+    setup_steps: revision.setupSteps || [],
+    authorization: revision.authorization || { requiredPermissions: [] },
+    tags: pkg.tags || [],
+    is_active: pkg.isActive,
+    is_builtin: pkg.isBuiltin,
+    download_count: pkg.downloadCount || 0,
+    created_at: pkg.createdAt,
+    updated_at: pkg.updatedAt,
+    org_slug: pkg.publisher?.slug,
+    org_display_name: pkg.publisher?.displayName,
+  };
+}
+
+function mapBindingToInstallationView(binding: any) {
+  const plugin: any = binding.package ? mapPackageToPluginView(binding.package) : {};
+  const scopeId =
+    binding.bindingScope === 'workspace'
+      ? binding.workspaceId
+      : binding.bindingScope === 'conversation'
+        ? binding.conversationId
+        : binding.bindingScope === 'actor_global'
+          ? binding.actorId
+          : binding.bindingScope === 'user'
+            ? binding.userId
+            : `${binding.actorId}:${binding.conversationId}`;
+
+  return {
+    id: binding.id,
+    workspace_id: binding.workspaceId,
+    plugin_id: binding.packageId,
+    scope_type: binding.bindingScope,
+    scope_id: scopeId,
+    actor_id: binding.actorId || null,
+    conversation_id: binding.conversationId || null,
+    user_id: binding.userId || null,
+    lifecycle_scope: binding.reuseScope,
+    is_enabled: binding.isEnabled,
+    config_data: binding.configData || {},
+    installed_by: binding.installedBy || null,
+    metadata: binding.metadata || {},
+    created_at: binding.createdAt,
+    updated_at: binding.updatedAt,
+    plugin_slug: plugin.slug,
+    plugin_display_name: plugin.display_name,
+    plugin_description: plugin.description,
+    transport: plugin.transport,
+    plugin_lifecycle_scope: plugin.lifecycle_scope,
+    tools_manifest: plugin.tools_manifest,
+    plugin_icon_url: plugin.icon_url,
+    plugin_version: plugin.version,
+    config_schema: plugin.config_schema,
+    is_builtin: plugin.is_builtin,
+    plugin_validation_rules: plugin.validation_rules,
+    plugin_setup_steps: plugin.setup_steps,
+    org_id: plugin.org_id,
+    org_slug: plugin.org_slug,
+    org_display_name: plugin.org_display_name,
+  };
+}
+
+function scopeColumns(scopeType: CapabilityBindingScope, actorId?: string | null, conversationId?: string | null, userId?: string | null) {
+  switch (scopeType) {
+    case 'workspace':
+      return { actorId: null, conversationId: null, userId: null };
+    case 'conversation':
+      if (!conversationId) throw new McpPluginError(400, 'conversationId is required for conversation scope');
+      return { actorId: null, conversationId, userId: null };
+    case 'actor_global':
+      if (!actorId) throw new McpPluginError(400, 'actorId is required for actor_global scope');
+      return { actorId, conversationId: null, userId: null };
+    case 'actor_conversation':
+      if (!actorId || !conversationId) {
+        throw new McpPluginError(400, 'actorId and conversationId are required for actor_conversation scope');
+      }
+      return { actorId, conversationId, userId: null };
+    case 'user':
+      if (!userId) throw new McpPluginError(400, 'userId is required for user scope');
+      return { actorId: null, conversationId: null, userId };
+    default:
+      throw new McpPluginError(400, `Unsupported binding scope: ${scopeType}`);
+  }
+}
 
 export async function createOrganization(data: {
   slug: string;
@@ -23,53 +152,37 @@ export async function createOrganization(data: {
   isVerified?: boolean;
   ownerUserId?: string;
 }) {
-  const result = await query(
-    `INSERT INTO mcp_organizations (slug, display_name, description, logo_url, is_builtin, is_verified, owner_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     ON CONFLICT (slug) DO UPDATE SET
-       display_name = EXCLUDED.display_name,
-       description = EXCLUDED.description,
-       logo_url = EXCLUDED.logo_url,
-       is_builtin = EXCLUDED.is_builtin,
-       is_verified = EXCLUDED.is_verified
-     RETURNING *`,
-    [
-      data.slug,
-      data.displayName,
-      data.description || '',
-      data.logoUrl || null,
-      data.isBuiltin || false,
-      data.isVerified || false,
-      data.ownerUserId || null,
-    ]
-  );
-  return result.rows[0];
+  try {
+    return await createCapabilityPublisher(data);
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
 }
 
 export async function listOrganizations() {
-  const result = await query(
-    'SELECT * FROM mcp_organizations ORDER BY is_builtin DESC, display_name',
-    []
-  );
-  return result.rows;
+  try {
+    return await listCapabilityPublishers();
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
 }
 
 export async function getOrganization(id: string) {
-  const result = await query('SELECT * FROM mcp_organizations WHERE id = $1', [id]);
-  if (result.rows.length === 0) throw new McpPluginError(404, 'Organization not found');
-  return result.rows[0];
+  try {
+    return await getCapabilityPublisher(id);
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
 }
 
 export async function getOrganizationBySlug(slug: string) {
-  const result = await query('SELECT * FROM mcp_organizations WHERE slug = $1', [slug]);
-  if (result.rows.length === 0) return null;
-  return result.rows[0];
+  const result = await query(`SELECT * FROM capability_publishers WHERE slug = $1`, [slug]);
+  return result.rows[0] || null;
 }
-
-// ============ Plugins ============
 
 export async function createPlugin(data: {
   orgId: string;
+  workspaceId?: string;
   slug: string;
   displayName: string;
   description?: string;
@@ -78,260 +191,309 @@ export async function createPlugin(data: {
   version?: string;
   transport: string;
   entryPoint?: string;
-  lifecycleScope?: string;
+  lifecycleScope?: CapabilityReuseScope;
   configSchema?: Record<string, unknown>;
   defaultConfig?: Record<string, unknown>;
   toolsManifest?: unknown[];
   tags?: string[];
   isBuiltin?: boolean;
+  validationRules?: McpValidationRule[];
+  setupSteps?: McpSetupStep[];
+  defaultBindingScope?: CapabilityBindingScope;
+  requiresHandshake?: boolean;
+  authorization?: {
+    requiredPermissions?: string[];
+    defaultGrantScope?: CapabilityBindingScope;
+    reason?: string;
+  };
 }) {
-  const result = await query(
-    `INSERT INTO mcp_plugins (org_id, slug, display_name, description, long_description, icon_url,
-       version, transport, entry_point, lifecycle_scope, config_schema, default_config,
-       tools_manifest, tags, is_builtin)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-     ON CONFLICT (org_id, slug) DO UPDATE SET
-       display_name = EXCLUDED.display_name,
-       description = EXCLUDED.description,
-       long_description = EXCLUDED.long_description,
-       icon_url = EXCLUDED.icon_url,
-       version = EXCLUDED.version,
-       transport = EXCLUDED.transport,
-       entry_point = EXCLUDED.entry_point,
-       lifecycle_scope = EXCLUDED.lifecycle_scope,
-       config_schema = EXCLUDED.config_schema,
-       default_config = EXCLUDED.default_config,
-       tools_manifest = EXCLUDED.tools_manifest,
-       tags = EXCLUDED.tags,
-       is_builtin = EXCLUDED.is_builtin
-     RETURNING *`,
-    [
-      data.orgId,
-      data.slug,
-      data.displayName,
-      data.description || '',
-      data.longDescription || '',
-      data.iconUrl || null,
-      data.version || '1.0.0',
-      data.transport,
-      data.entryPoint || '',
-      data.lifecycleScope || 'session',
-      JSON.stringify(data.configSchema || {}),
-      JSON.stringify(data.defaultConfig || {}),
-      JSON.stringify(data.toolsManifest || []),
-      data.tags || [],
-      data.isBuiltin || false,
-    ]
-  );
-  return result.rows[0];
+  try {
+    const pkg = await createCapabilityPackage({
+      publisherId: data.orgId,
+      workspaceId: data.workspaceId,
+      kind: 'plugin',
+      slug: data.slug,
+      displayName: data.displayName,
+      description: data.description,
+      longDescription: data.longDescription,
+      iconUrl: data.iconUrl,
+      sourceType: data.transport === 'relay'
+        ? 'relay_derived'
+        : data.isBuiltin
+          ? 'builtin'
+          : 'official',
+      tags: data.tags,
+      isBuiltin: data.isBuiltin,
+      defaultBindingScope: data.defaultBindingScope || 'workspace',
+      defaultReuseScope: data.lifecycleScope || 'conversation',
+      requiresHandshake: data.requiresHandshake ?? data.transport !== 'builtin',
+    });
+
+    await createCapabilityRevision({
+      packageId: pkg.id,
+      version: data.version || '1.0.0',
+      transport: data.transport as any,
+      entryPoint: data.entryPoint,
+      toolsManifest: data.toolsManifest,
+      configSchema: data.configSchema,
+      defaultConfig: data.defaultConfig,
+      validationRules: data.validationRules,
+      setupSteps: data.setupSteps,
+      manifest: {
+        kind: 'plugin',
+        authorization: {
+          requiredPermissions: data.authorization?.requiredPermissions || [],
+          defaultGrantScope: data.authorization?.defaultGrantScope,
+          reason: data.authorization?.reason,
+        },
+      },
+      setLatest: true,
+    });
+
+    const created = await getCapabilityPackage(pkg.id);
+    return mapPackageToPluginView(created);
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
 }
 
 export async function listPlugins(filters?: { orgId?: string; transport?: string; search?: string; tags?: string[] }) {
-  let where = 'p.is_active = TRUE';
-  const values: unknown[] = [];
-  let idx = 1;
-
-  if (filters?.orgId) { where += ` AND p.org_id = $${idx++}`; values.push(filters.orgId); }
-  if (filters?.transport) { where += ` AND p.transport = $${idx++}`; values.push(filters.transport); }
-  if (filters?.search) { where += ` AND (p.display_name ILIKE $${idx} OR p.description ILIKE $${idx})`; values.push(`%${filters.search}%`); idx++; }
-  if (filters?.tags && filters.tags.length > 0) { where += ` AND p.tags && $${idx++}`; values.push(filters.tags); }
-
-  const result = await query(
-    `SELECT p.*, o.slug as org_slug, o.display_name as org_display_name
-     FROM mcp_plugins p
-     JOIN mcp_organizations o ON o.id = p.org_id
-     WHERE ${where}
-     ORDER BY p.is_builtin DESC, p.download_count DESC, p.display_name`,
-    values
-  );
-  return result.rows;
+  try {
+    const packages = await listCapabilityPackages({
+      kind: 'plugin',
+      publisherId: filters?.orgId,
+      transport: filters?.transport as any,
+      search: filters?.search,
+      tags: filters?.tags,
+    });
+    return packages.map(mapPackageToPluginView);
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
 }
 
 export async function getPlugin(id: string) {
-  const result = await query(
-    `SELECT p.*, o.slug as org_slug, o.display_name as org_display_name
-     FROM mcp_plugins p
-     JOIN mcp_organizations o ON o.id = p.org_id
-     WHERE p.id = $1`,
-    [id]
-  );
-  if (result.rows.length === 0) throw new McpPluginError(404, 'Plugin not found');
-  return result.rows[0];
+  try {
+    const pkg = await getCapabilityPackage(id);
+    if (pkg.kind !== 'plugin') throw new McpPluginError(404, 'Plugin not found');
+    return mapPackageToPluginView(pkg);
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
 }
 
-// ============ Unified Installations ============
-
-export function validateLifecycleHierarchy(scopeType: string, lifecycleScope: string): boolean {
+export function validateLifecycleHierarchy(scopeType: CapabilityBindingScope, lifecycleScope: CapabilityReuseScope): boolean {
   switch (scopeType) {
-    case 'workspace': return ['workspace', 'group', 'user', 'actor', 'session'].includes(lifecycleScope);
-    case 'user':      return ['user', 'actor', 'session'].includes(lifecycleScope);
-    case 'actor':     return ['actor', 'session'].includes(lifecycleScope);
-    case 'group':     return ['group', 'actor', 'session'].includes(lifecycleScope);
-    default:          return false;
+    case 'workspace':
+      return ['workspace', 'conversation', 'actor_global', 'actor_conversation', 'turn'].includes(lifecycleScope);
+    case 'conversation':
+      return ['conversation', 'actor_conversation', 'turn'].includes(lifecycleScope);
+    case 'actor_global':
+      return ['actor_global', 'actor_conversation', 'turn'].includes(lifecycleScope);
+    case 'actor_conversation':
+      return ['actor_conversation', 'turn'].includes(lifecycleScope);
+    case 'user':
+      return ['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user', 'turn'].includes(lifecycleScope);
+    default:
+      return false;
   }
 }
 
 export async function installPluginUnified(data: {
   workspaceId: string;
   pluginId: string;
-  scopeType: string;
-  scopeId: string;
-  lifecycleScope?: string;
+  scopeType: CapabilityBindingScope;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+  lifecycleScope?: CapabilityReuseScope;
   configData?: Record<string, unknown>;
   installedBy?: string;
 }) {
-  const lifecycleScope = data.lifecycleScope || 'session';
-
+  const lifecycleScope = data.lifecycleScope || 'conversation';
   if (!validateLifecycleHierarchy(data.scopeType, lifecycleScope)) {
-    throw new McpPluginError(400, `Lifecycle scope '${lifecycleScope}' is not valid for install scope '${data.scopeType}'`);
+    throw new McpPluginError(400, `Reuse scope '${lifecycleScope}' is not valid for binding scope '${data.scopeType}'`);
   }
 
-  // Encrypt sensitive config
-  const plugin = await getPlugin(data.pluginId);
-  const encrypted = data.configData ? encryptSensitiveFields(data.configData, plugin.config_schema || {}) : {};
+  try {
+    const plugin = await getCapabilityPackage(data.pluginId);
+    if (plugin.kind !== 'plugin') throw new McpPluginError(404, 'Plugin not found');
+    const encrypted = data.configData
+      ? encryptSensitiveFields(data.configData, plugin.latestRevision?.configSchema || {})
+      : {};
+    const scoped = scopeColumns(data.scopeType, data.actorId, data.conversationId, data.userId);
+    const binding = await createCapabilityBinding({
+      workspaceId: data.workspaceId,
+      packageId: data.pluginId,
+      revisionId: plugin.latestRevisionId,
+      bindingScope: data.scopeType,
+      actorId: scoped.actorId || undefined,
+      conversationId: scoped.conversationId || undefined,
+      userId: scoped.userId || undefined,
+      installMode: 'manual',
+      reuseScope: lifecycleScope,
+      requiresHandshake: plugin.requiresHandshake,
+      configData: encrypted,
+      installedBy: data.installedBy,
+    });
 
-  const result = await query(
-    `INSERT INTO mcp_installations (workspace_id, plugin_id, scope_type, scope_id, lifecycle_scope, config_data, installed_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     ON CONFLICT (plugin_id, scope_type, scope_id) DO UPDATE SET
-       is_enabled = TRUE,
-       config_data = EXCLUDED.config_data,
-       lifecycle_scope = EXCLUDED.lifecycle_scope,
-       installed_by = EXCLUDED.installed_by
-     RETURNING *`,
-    [data.workspaceId, data.pluginId, data.scopeType, data.scopeId, lifecycleScope, JSON.stringify(encrypted), data.installedBy || null]
-  );
-
-  // Increment download count
-  await query('UPDATE mcp_plugins SET download_count = download_count + 1 WHERE id = $1', [data.pluginId]);
-
-  // Notify active sessions that MCP tools have changed
-  await incrementMcpVersion(data.workspaceId);
-
-  return result.rows[0];
+    try {
+      await ensureDefaultCapabilityGrant({
+        bindingId: binding.id,
+        workspaceId: data.workspaceId,
+        grantedBy: data.installedBy,
+      });
+      await query('UPDATE capability_packages SET download_count = download_count + 1 WHERE id = $1', [data.pluginId]);
+      await incrementMcpVersion(data.workspaceId);
+      return mapBindingToInstallationView(binding);
+    } catch (error) {
+      await deleteCapabilityBinding(binding.id).catch(() => {});
+      throw error;
+    }
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
 }
 
 export async function uninstallPluginUnified(installId: string) {
-  // Capture workspace_id before deletion for version bump
-  const existing = await query('SELECT workspace_id FROM mcp_installations WHERE id = $1', [installId]);
-
-  const result = await query(
-    'DELETE FROM mcp_installations WHERE id = $1 RETURNING *',
-    [installId]
-  );
-  if (result.rows.length === 0) throw new McpPluginError(404, 'Installation not found');
-
-  // Notify active sessions that MCP tools have changed
-  if (existing.rows[0]?.workspace_id) {
-    await incrementMcpVersion(existing.rows[0].workspace_id);
+  try {
+    const deleted = await deleteCapabilityBinding(installId);
+    await incrementMcpVersion(deleted.workspace_id);
+    return deleted;
+  } catch (error) {
+    wrapCapabilityError(error);
   }
-
-  return result.rows[0];
 }
 
-export async function getInstallations(workspaceId: string, filters?: { scopeType?: string; scopeId?: string; pluginId?: string }) {
-  let where = 'i.workspace_id = $1';
-  const values: unknown[] = [workspaceId];
-  let idx = 2;
-
-  if (filters?.scopeType) { where += ` AND i.scope_type = $${idx++}`; values.push(filters.scopeType); }
-  if (filters?.scopeId) { where += ` AND i.scope_id = $${idx++}`; values.push(filters.scopeId); }
-  if (filters?.pluginId) { where += ` AND i.plugin_id = $${idx++}`; values.push(filters.pluginId); }
-
-  const result = await query(
-    `SELECT i.*, p.slug as plugin_slug, p.display_name as plugin_display_name,
-            p.description as plugin_description, p.transport, p.lifecycle_scope as plugin_lifecycle_scope,
-            p.tools_manifest, p.icon_url as plugin_icon_url, p.version as plugin_version,
-            p.config_schema, p.is_builtin,
-            p.validation_rules as plugin_validation_rules, p.setup_steps as plugin_setup_steps,
-            o.id as org_id, o.slug as org_slug, o.display_name as org_display_name
-     FROM mcp_installations i
-     JOIN mcp_plugins p ON p.id = i.plugin_id
-     JOIN mcp_organizations o ON o.id = p.org_id
-     WHERE ${where}
-     ORDER BY i.created_at DESC`,
-    values
-  );
-  return result.rows;
-}
-
-export async function updateInstallation(installId: string, data: { isEnabled?: boolean; configData?: Record<string, unknown>; lifecycleScope?: string; scopeType?: string; scopeId?: string }) {
-  const sets: string[] = [];
-  const values: unknown[] = [];
-  let idx = 1;
-
-  if (data.isEnabled !== undefined) { sets.push(`is_enabled = $${idx++}`); values.push(data.isEnabled); }
-
-  // Handle scope change (scopeType + scopeId must come together)
-  if (data.scopeType !== undefined && data.scopeId !== undefined) {
-    sets.push(`scope_type = $${idx++}`);
-    values.push(data.scopeType);
-    sets.push(`scope_id = $${idx++}`);
-    values.push(data.scopeId);
-  }
-
-  if (data.lifecycleScope !== undefined) {
-    // Validate hierarchy — use new scopeType if being changed simultaneously
-    const scopeType = data.scopeType || (await query('SELECT scope_type FROM mcp_installations WHERE id = $1', [installId])).rows[0]?.scope_type;
-    if (scopeType && !validateLifecycleHierarchy(scopeType, data.lifecycleScope)) {
-      throw new McpPluginError(400, `Lifecycle scope '${data.lifecycleScope}' is not valid for install scope '${scopeType}'`);
-    }
-    sets.push(`lifecycle_scope = $${idx++}`);
-    values.push(data.lifecycleScope);
-  }
-
-  if (data.configData !== undefined) {
-    const install = await query('SELECT plugin_id, workspace_id FROM mcp_installations WHERE id = $1', [installId]);
-    if (install.rows.length > 0) {
-      const plugin = await getPlugin(install.rows[0].plugin_id);
-      const encrypted = encryptSensitiveFields(data.configData, plugin.config_schema || {});
-      sets.push(`config_data = $${idx++}`);
-      values.push(JSON.stringify(encrypted));
-    }
-  }
-
-  if (sets.length === 0) throw new McpPluginError(400, 'No fields to update');
-
-  values.push(installId);
-  const result = await query(
-    `UPDATE mcp_installations SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`,
-    values
-  );
-  if (result.rows.length === 0) throw new McpPluginError(404, 'Installation not found');
-
-  // Bump version for any change (enable/disable, config, lifecycle scope)
-  const row = result.rows[0];
-  await incrementMcpVersion(row.workspace_id);
-
-  // Emit config change event for WebSocket frontend notification (backward compat)
-  if (data.configData !== undefined) {
-    await emitEvent({
-      type: 'mcp.config.changed',
-      workspaceId: row.workspace_id,
-      payload: { pluginId: row.plugin_id, workspaceId: row.workspace_id },
-      timestamp: nowISO(),
+export async function getInstallations(workspaceId: string, filters?: {
+  scopeType?: CapabilityBindingScope;
+  conversationId?: string;
+  actorId?: string;
+  userId?: string;
+  pluginId?: string;
+}) {
+  try {
+    const bindings = await listCapabilityBindings(workspaceId, {
+      kind: 'plugin',
+      packageId: filters?.pluginId,
+      bindingScope: filters?.scopeType,
+      conversationId: filters?.conversationId,
+      actorId: filters?.actorId,
+      userId: filters?.userId,
     });
+    return bindings.map(mapBindingToInstallationView);
+  } catch (error) {
+    wrapCapabilityError(error);
   }
-
-  return result.rows[0];
 }
 
-// ============ Config Validation ============
+export async function updateInstallation(installId: string, data: {
+  isEnabled?: boolean;
+  configData?: Record<string, unknown>;
+  lifecycleScope?: CapabilityReuseScope;
+  scopeType?: CapabilityBindingScope;
+  actorId?: string | null;
+  conversationId?: string | null;
+  userId?: string | null;
+}) {
+  try {
+    const existingResult = await query(
+      `SELECT b.workspace_id, b.package_id, r.config_schema
+       FROM capability_bindings b
+       JOIN capability_package_revisions r ON r.id = b.revision_id
+       WHERE b.id = $1`,
+      [installId],
+    );
+    if (existingResult.rows.length === 0) throw new McpPluginError(404, 'Installation not found');
+    const existing = existingResult.rows[0];
+
+    const scopeType = data.scopeType;
+    if (scopeType && data.lifecycleScope && !validateLifecycleHierarchy(scopeType, data.lifecycleScope)) {
+      throw new McpPluginError(400, `Reuse scope '${data.lifecycleScope}' is not valid for binding scope '${scopeType}'`);
+    }
+
+    const scoped = scopeType ? scopeColumns(scopeType, data.actorId ?? undefined, data.conversationId ?? undefined, data.userId ?? undefined) : null;
+    const encrypted = data.configData
+      ? encryptSensitiveFields(data.configData, existing.config_schema || {})
+      : undefined;
+
+    const updated = await updateCapabilityBinding(installId, {
+      isEnabled: data.isEnabled,
+      configData: encrypted,
+      bindingScope: scopeType,
+      actorId: scoped ? scoped.actorId : undefined,
+      conversationId: scoped ? scoped.conversationId : undefined,
+      userId: scoped ? scoped.userId : undefined,
+      reuseScope: data.lifecycleScope,
+    });
+
+    await incrementMcpVersion(existing.workspace_id);
+
+    if (data.configData !== undefined) {
+      await emitEvent({
+        type: 'mcp.config.changed',
+        workspaceId: existing.workspace_id,
+        payload: { pluginId: existing.package_id, workspaceId: existing.workspace_id },
+        timestamp: nowISO(),
+      });
+    }
+
+    return mapBindingToInstallationView(updated);
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
+}
+
+export async function createPluginInstallPlan(input: {
+  workspaceId: string;
+  pluginId: string;
+  bindingScope: CapabilityBindingScope;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+}) {
+  try {
+    const plugin = await getCapabilityPackage(input.pluginId);
+    if (plugin.kind !== 'plugin') throw new McpPluginError(404, 'Plugin not found');
+    if (!plugin.latestRevisionId) throw new McpPluginError(400, 'Plugin has no active revision');
+    const checks = await evaluateCapabilityRequirements({
+      workspaceId: input.workspaceId,
+      revisionId: plugin.latestRevisionId,
+    });
+
+    return {
+      packageId: plugin.id,
+      revisionId: plugin.latestRevisionId,
+      workspaceId: input.workspaceId,
+      bindingScope: input.bindingScope,
+      actorId: input.actorId,
+      conversationId: input.conversationId,
+      userId: input.userId,
+      checks,
+      grantPlan: buildCapabilityGrantPlan({
+        revision: plugin.latestRevision,
+        bindingScope: input.bindingScope,
+        actorId: input.actorId,
+        conversationId: input.conversationId,
+        userId: input.userId,
+      }),
+    };
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
+}
 
 export function validateConfig(
   config: Record<string, unknown>,
-  rules: McpValidationRule[]
+  rules: McpValidationRule[],
 ): { valid: boolean; errors: { field: string; message: string }[] } {
   const errors: { field: string; message: string }[] = [];
 
   for (const rule of rules) {
     const value = config[rule.field];
-
     switch (rule.rule) {
       case 'required':
-        if (value === undefined || value === null || value === '') {
-          errors.push({ field: rule.field, message: rule.message });
-        }
+        if (value === undefined || value === null || value === '') errors.push({ field: rule.field, message: rule.message });
         break;
       case 'pattern':
         if (typeof value === 'string' && rule.value && !new RegExp(rule.value as string).test(value)) {
@@ -344,24 +506,16 @@ export function validateConfig(
         }
         break;
       case 'min_length':
-        if (typeof value === 'string' && value.length < (rule.value as number)) {
-          errors.push({ field: rule.field, message: rule.message });
-        }
+        if (typeof value === 'string' && value.length < (rule.value as number)) errors.push({ field: rule.field, message: rule.message });
         break;
       case 'max_length':
-        if (typeof value === 'string' && value.length > (rule.value as number)) {
-          errors.push({ field: rule.field, message: rule.message });
-        }
+        if (typeof value === 'string' && value.length > (rule.value as number)) errors.push({ field: rule.field, message: rule.message });
         break;
       case 'prefix':
-        if (typeof value === 'string' && !value.startsWith(rule.value as string)) {
-          errors.push({ field: rule.field, message: rule.message });
-        }
+        if (typeof value === 'string' && !value.startsWith(rule.value as string)) errors.push({ field: rule.field, message: rule.message });
         break;
       case 'enum':
-        if (Array.isArray(rule.value) && !rule.value.includes(value as string)) {
-          errors.push({ field: rule.field, message: rule.message });
-        }
+        if (Array.isArray(rule.value) && !rule.value.includes(value as string)) errors.push({ field: rule.field, message: rule.message });
         break;
     }
   }
@@ -369,12 +523,9 @@ export function validateConfig(
   return { valid: errors.length === 0, errors };
 }
 
-// ============ Seed Builtin MCP Plugins ============
-
 export async function seedBuiltinMcpPlugins() {
   for (const seed of builtinSeeds) {
-    // Upsert the organization (preserves existing id and installations)
-    const org = await createOrganization({
+    const publisher = await createOrganization({
       slug: seed.slug,
       displayName: seed.displayName,
       description: seed.description,
@@ -382,37 +533,29 @@ export async function seedBuiltinMcpPlugins() {
       isVerified: true,
     });
 
-    // Seed each plugin under the org (upsert preserves existing id)
     for (const pluginSeed of seed.plugins) {
-      const plugin = await createPlugin({
-        orgId: org.id,
+      await createPlugin({
+        orgId: publisher.id,
         slug: pluginSeed.slug,
         displayName: pluginSeed.displayName,
         description: pluginSeed.description,
         longDescription: pluginSeed.longDescription,
         transport: pluginSeed.transport,
         entryPoint: pluginSeed.entryPoint,
-        lifecycleScope: pluginSeed.lifecycleScope,
+        lifecycleScope: pluginSeed.defaultReuseScope,
+        defaultBindingScope: pluginSeed.defaultBindingScope,
+        requiresHandshake: pluginSeed.requiresHandshake,
         tags: pluginSeed.tags,
         isBuiltin: true,
         toolsManifest: pluginSeed.toolsManifest,
         configSchema: pluginSeed.configSchema,
         defaultConfig: pluginSeed.defaultConfig,
+        validationRules: pluginSeed.validationRules,
+        setupSteps: pluginSeed.setupSteps,
+        authorization: pluginSeed.authorization,
       });
-
-      // Update plugin-level validation rules and setup steps
-      if (pluginSeed.validationRules?.length || pluginSeed.setupSteps?.length) {
-        await query(
-          `UPDATE mcp_plugins SET validation_rules = $1, setup_steps = $2 WHERE id = $3`,
-          [
-            JSON.stringify(pluginSeed.validationRules || []),
-            JSON.stringify(pluginSeed.setupSteps || []),
-            plugin.id,
-          ]
-        );
-      }
     }
 
-    console.log(`[MCP] Seeded ${seed.slug} builtin plugins (${seed.plugins.map(p => p.slug).join(', ')})`);
+    console.log(`[MCP] Seeded ${seed.slug} builtin plugins (${seed.plugins.map((plugin) => plugin.slug).join(', ')})`);
   }
 }

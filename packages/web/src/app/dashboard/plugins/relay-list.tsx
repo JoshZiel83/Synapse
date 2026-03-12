@@ -22,23 +22,26 @@ const LOCAL_CLIENT_PORT = 21519;
 
 const scopeColors: Record<string, string> = {
   workspace: 'border-blue-500/30 text-blue-400',
-  user: 'border-purple-500/30 text-purple-400',
-  actor: 'border-green-500/30 text-green-400',
-  group: 'border-orange-500/30 text-orange-400',
+  conversation: 'border-orange-500/30 text-orange-400',
+  actor_global: 'border-green-500/30 text-green-400',
+  actor_conversation: 'border-amber-500/30 text-amber-400',
+  user: 'border-fuchsia-500/30 text-fuchsia-400',
 };
 
 const scopeLabels: Record<string, string> = {
   workspace: 'Workspace',
+  conversation: 'Conversation',
+  actor_global: 'Actor',
+  actor_conversation: 'Actor + Conversation',
   user: 'User',
-  actor: 'Actor',
-  group: 'Group',
 };
 
 const lifecycleOptionsForScope: Record<string, string[]> = {
-  workspace: ['workspace', 'group', 'actor', 'session'],
-  user: ['user', 'actor', 'session'],
-  actor: ['actor', 'session'],
-  group: ['group', 'actor', 'session'],
+  workspace: ['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user', 'turn'],
+  conversation: ['conversation', 'actor_conversation', 'turn'],
+  actor_global: ['actor_global', 'actor_conversation', 'turn'],
+  actor_conversation: ['actor_conversation', 'turn'],
+  user: ['user', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'turn'],
 };
 
 interface Relay {
@@ -60,7 +63,9 @@ interface RelayServer {
   createdAt: string;
   installId: string | null;
   scopeType: string | null;
-  scopeId: string | null;
+  actorId: string | null;
+  conversationId: string | null;
+  userId: string | null;
   lifecycleScope: string | null;
   installEnabled: boolean | null;
 }
@@ -72,7 +77,8 @@ function getRelayEndpoint(): string {
 
 export default function RelayList() {
   const { workspaceId } = useWorkspace();
-  const user = useAuthStore((s) => s.user);
+  const { user } = useAuthStore();
+  const currentUserId = user?.id || user?.userId || '';
   const [relays, setRelays] = useState<Relay[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -86,7 +92,7 @@ export default function RelayList() {
 
   // Scope selection resources
   const [actors, setActors] = useState<any[]>([]);
-  const [groups, setGroups] = useState<any[]>([]);
+  const [conversations, setConversations] = useState<any[]>([]);
   const [scopeResourcesLoaded, setScopeResourcesLoaded] = useState(false);
 
   // Client detection state
@@ -192,17 +198,29 @@ export default function RelayList() {
       Promise.all([
         api.getActors(workspaceId).catch(() => []),
         api.getGroups(workspaceId).then((r: any) => r.groups || []).catch(() => []),
-      ]).then(([a, g]) => { setActors(a); setGroups(g); });
+      ]).then(([a, g]) => { setActors(a); setConversations(g); });
     }
   };
 
-  const handleUpdateServerScope = async (relayId: string, server: RelayServer, scopeType: string, scopeId: string, lifecycleScope?: string) => {
+  const handleUpdateServerScope = async (
+    relayId: string,
+    server: RelayServer,
+    scopeType: string,
+    actorId?: string,
+    conversationId?: string,
+    lifecycleScope?: string,
+  ) => {
     if (!workspaceId || !server.installId) return;
     try {
-      const data: any = { scopeType, scopeId };
+      const data: any = {
+        scopeType,
+        actorId: scopeType === 'actor_global' || scopeType === 'actor_conversation' ? actorId || null : null,
+        conversationId: scopeType === 'conversation' || scopeType === 'actor_conversation' ? conversationId || null : null,
+        userId: scopeType === 'user' ? currentUserId || null : null,
+      };
       // Auto-adjust lifecycle if current one is invalid for new scope
-      const validLifecycles = lifecycleOptionsForScope[scopeType] || ['session'];
-      const currentLifecycle = lifecycleScope || server.lifecycleScope || 'session';
+      const validLifecycles = lifecycleOptionsForScope[scopeType] || ['turn'];
+      const currentLifecycle = lifecycleScope || server.lifecycleScope || 'turn';
       if (!validLifecycles.includes(currentLifecycle)) {
         data.lifecycleScope = validLifecycles[0];
       } else if (lifecycleScope) {
@@ -455,49 +473,77 @@ export default function RelayList() {
                                   value={server.scopeType || 'workspace'}
                                   onChange={(e) => {
                                     const newScope = e.target.value;
-                                    let newScopeId = workspaceId || '';
-                                    if (newScope === 'user') newScopeId = user?.id || '';
-                                    if (newScope === 'workspace') newScopeId = workspaceId || '';
-                                    // For actor/group, show first available as default
-                                    if (newScope === 'actor') newScopeId = actors[0]?.id || '';
-                                    if (newScope === 'group') newScopeId = groups[0]?.id || '';
-                                    handleUpdateServerScope(relay.id, server, newScope, newScopeId);
+                                    const nextActorId =
+                                      newScope === 'actor_global' || newScope === 'actor_conversation'
+                                        ? server.actorId || actors[0]?.id || ''
+                                        : undefined;
+                                    const nextConversationId =
+                                      newScope === 'conversation' || newScope === 'actor_conversation'
+                                        ? server.conversationId || conversations[0]?.id || ''
+                                        : undefined;
+                                    handleUpdateServerScope(relay.id, server, newScope, nextActorId, nextConversationId);
                                   }}
                                 >
                                   {Object.entries(scopeLabels).map(([value, label]) => (
                                     <option key={value} value={value}>{label}</option>
                                   ))}
                                 </select>
-                                {/* Target selector for actor/group scope */}
-                                {server.scopeType === 'actor' && (
+                                {server.scopeType === 'actor_global' && (
                                   <select
                                     className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 max-w-[140px]"
-                                    value={server.scopeId || ''}
-                                    onChange={(e) => handleUpdateServerScope(relay.id, server, 'actor', e.target.value)}
+                                    value={server.actorId || ''}
+                                    onChange={(e) => handleUpdateServerScope(relay.id, server, 'actor_global', e.target.value)}
                                   >
                                     {actors.map((a: any) => (
                                       <option key={a.id} value={a.id}>{a.name}</option>
                                     ))}
                                   </select>
                                 )}
-                                {server.scopeType === 'group' && (
+                                {server.scopeType === 'conversation' && (
                                   <select
                                     className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 max-w-[140px]"
-                                    value={server.scopeId || ''}
-                                    onChange={(e) => handleUpdateServerScope(relay.id, server, 'group', e.target.value)}
+                                    value={server.conversationId || ''}
+                                    onChange={(e) => handleUpdateServerScope(relay.id, server, 'conversation', undefined, e.target.value)}
                                   >
-                                    {groups.map((g: any) => (
-                                      <option key={g.id} value={g.id}>{g.name}</option>
+                                    {conversations.map((conversation: any) => (
+                                      <option key={conversation.id} value={conversation.id}>{conversation.name}</option>
                                     ))}
                                   </select>
+                                )}
+                                {server.scopeType === 'actor_conversation' && (
+                                  <>
+                                    <select
+                                      className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 max-w-[140px]"
+                                      value={server.actorId || ''}
+                                      onChange={(e) => handleUpdateServerScope(relay.id, server, 'actor_conversation', e.target.value, server.conversationId || conversations[0]?.id || '')}
+                                    >
+                                      {actors.map((a: any) => (
+                                        <option key={a.id} value={a.id}>{a.name}</option>
+                                      ))}
+                                    </select>
+                                    <select
+                                      className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 max-w-[140px]"
+                                      value={server.conversationId || ''}
+                                      onChange={(e) => handleUpdateServerScope(relay.id, server, 'actor_conversation', server.actorId || actors[0]?.id || '', e.target.value)}
+                                    >
+                                      {conversations.map((conversation: any) => (
+                                        <option key={conversation.id} value={conversation.id}>{conversation.name}</option>
+                                      ))}
+                                    </select>
+                                  </>
+                                )}
+                                {server.scopeType === 'user' && (
+                                  <div className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 flex items-center max-w-[180px] text-muted-foreground">
+                                    {user?.name || user?.email || 'Current user'}
+                                  </div>
                                 )}
                                 <span className="text-xs text-muted-foreground">·</span>
                                 <select
                                   className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900"
-                                  value={server.lifecycleScope || 'session'}
+                                  value={server.lifecycleScope || 'turn'}
                                   onChange={(e) => handleUpdateServerLifecycle(relay.id, server, e.target.value)}
                                 >
-                                  {(lifecycleOptionsForScope[server.scopeType || 'workspace'] || ['session']).map(opt => (
+                                  {(lifecycleOptionsForScope[server.scopeType || 'workspace'] || ['turn']).map(opt => (
                                     <option key={opt} value={opt}>{opt}</option>
                                   ))}
                                 </select>

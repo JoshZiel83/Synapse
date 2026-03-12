@@ -19,6 +19,8 @@ import organizationModule from './modules/organization/index.js';
 import workEngineModule from './modules/work-engine/index.js';
 import communicationModule from './modules/communication/index.js';
 import memoryModule from './modules/memory/index.js';
+import capabilitiesModule from './modules/capabilities/index.js';
+import skillsModule from './modules/skills/index.js';
 import secretaryModule from './modules/secretary/index.js';
 import sessionModule from './modules/session/index.js';
 import auditQueryModule from './modules/audit/index.js';
@@ -79,6 +81,8 @@ async function main() {
   await app.register(workEngineModule);
   await app.register(communicationModule);
   await app.register(memoryModule);
+  await app.register(capabilitiesModule);
+  await app.register(skillsModule);
   await app.register(secretaryModule);
   await app.register(sessionModule);
   await app.register(auditQueryModule);

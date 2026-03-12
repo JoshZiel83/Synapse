@@ -4,6 +4,7 @@ import { query } from '../../infrastructure/database/index.js';
 import { getSession } from '../session/service.js';
 import { sendGroupMessage, addActorToGroup, getGroupMembers, sleepActor } from '../group/service.js';
 import { runMemorySearch } from '../memory/service.js';
+import { readVisibleSkill } from '../skills/service.js';
 
 /**
  * Register callable tool plugins.
@@ -12,6 +13,95 @@ import { runMemorySearch } from '../memory/service.js';
  */
 export function registerCallableToolPlugins(): void {
   // ============ send_to (callable) ============
+  registerToolPlugin({
+    name: 'read_skill',
+    kind: 'callable',
+    definition: {
+      name: 'read_skill',
+      description: 'Read the contents of an installed skill package on demand. Use when a listed skill clearly matches the task and you need its detailed instructions or referenced text resources.',
+      parameters: {
+        type: 'object',
+        properties: {
+          skillName: { type: 'string', description: 'The installed skill name/slug to read.' },
+          path: { type: 'string', description: 'Optional relative asset path inside the skill package. Defaults to SKILL.md.' },
+        },
+        required: ['skillName'],
+      },
+    },
+    resolve: (ctx) => {
+      const availableSkills = ctx.availableSkills || [];
+      if (availableSkills.length === 0) {
+        return { active: false, definition: null as any };
+      }
+      const skillNames: string[] = Array.from(new Set(availableSkills.map((skill) => skill.slug)));
+      const skillList = availableSkills
+        .map((skill) => `\`${skill.slug}\`: ${skill.description}`)
+        .join('; ');
+      return {
+        active: true,
+        definition: {
+          name: 'read_skill',
+          description: `Read the contents of an installed skill package. Available skills: ${skillList}`,
+          parameters: {
+            type: 'object',
+            properties: {
+              skillName: {
+                type: 'string',
+                description: 'The installed skill name/slug to read.',
+                enum: skillNames,
+              },
+              path: {
+                type: 'string',
+                description: 'Optional relative text asset path inside the skill package, e.g. SKILL.md or references/REFERENCE.md.',
+              },
+            },
+            required: ['skillName'],
+          },
+        },
+      };
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const session = await getSession(context.sessionId);
+      if (!session) {
+        return JSON.stringify({ error: 'Session not found' });
+      }
+
+      const skillName = String((input as any).skillName || '').trim();
+      const path = typeof (input as any).path === 'string' ? String((input as any).path).trim() : undefined;
+      if (!skillName) {
+        return JSON.stringify({ error: 'skillName is required' });
+      }
+
+      try {
+        const result = await readVisibleSkill({
+          workspaceId: context.workspaceId,
+          actorId: context.actorId,
+          conversationId: session.conversation_id,
+          userId: context.userId,
+          userCount: context.userCount,
+          skillName,
+          assetPath: path || undefined,
+        });
+
+        return [
+          `Skill: ${result.skill.name}`,
+          `Slug: ${result.skill.slug}`,
+          `Version: ${result.skill.version}`,
+          `Path: ${result.asset.path}`,
+          '',
+          result.asset.textContent || '',
+        ].join('\n');
+      } catch (err: any) {
+        return JSON.stringify({ error: err.message || 'Failed to read skill' });
+      }
+    },
+  });
+
   registerToolPlugin({
     name: 'send_to',
     kind: 'callable',
@@ -286,6 +376,8 @@ export function registerCallableToolPlugins(): void {
         queryText,
         actorId: context.actorId,
         conversationId: session.conversation_id,
+        userId: context.userId,
+        userCount: context.userCount,
         limit,
         metadata: {
           sessionId: context.sessionId,
@@ -298,7 +390,7 @@ export function registerCallableToolPlugins(): void {
         runId: result.run.id,
         results: result.memories.map((memory) => ({
           id: memory.id,
-          scope: memory.scope,
+          ownerScope: memory.ownerScope,
           category: memory.category,
           textDigest: memory.textDigest,
           tags: memory.tags,
@@ -384,6 +476,8 @@ interface ToolExecutionContext {
   sessionId: string;
   actorId: string;
   workspaceId: string;
+  userId?: string;
+  userCount?: number;
 }
 
 const contextStorage = new AsyncLocalStorage<ToolExecutionContext>();

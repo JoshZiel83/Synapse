@@ -13,7 +13,7 @@ import {
   updateMemory,
 } from './service.js';
 
-const memoryScopeEnum = z.enum(['conversation_shared', 'actor_global', 'actor_conversation']);
+const memoryScopeEnum = z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']);
 const memoryCategoryEnum = z.enum(['fact', 'preference', 'decision', 'relationship', 'procedure', 'artifact', 'summary']);
 const memoryStatusEnum = z.enum(['candidate', 'established', 'superseded', 'retracted']);
 const memoryStabilityEnum = z.enum(['ephemeral', 'durable']);
@@ -34,10 +34,21 @@ const contentBlockSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-const memoryPayloadSchema = z.object({
-  scope: memoryScopeEnum,
+const memoryGrantSchema = z.object({
+  grantScope: memoryScopeEnum,
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
+  reason: z.string().optional(),
+  metadata: z.record(z.any()).optional(),
+});
+
+const memoryPayloadSchema = z.object({
+  ownerScope: memoryScopeEnum,
+  ownerActorId: z.string().uuid().optional(),
+  ownerConversationId: z.string().uuid().optional(),
+  ownerUserId: z.string().uuid().optional(),
+  grants: z.array(memoryGrantSchema).optional(),
   category: memoryCategoryEnum,
   status: memoryStatusEnum.optional(),
   stability: memoryStabilityEnum.optional(),
@@ -64,7 +75,9 @@ const updateMemorySchema = memoryPayloadSchema.partial();
 const listMemoriesSchema = z.object({
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
-  scope: memoryScopeEnum.optional(),
+  userId: z.string().uuid().optional(),
+  userCount: z.coerce.number().int().min(0).optional(),
+  ownerScope: memoryScopeEnum.optional(),
   category: memoryCategoryEnum.optional(),
   status: memoryStatusEnum.optional(),
   stability: memoryStabilityEnum.optional(),
@@ -76,6 +89,8 @@ const searchMemoriesSchema = z.object({
   queryText: z.string().min(1),
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
+  userCount: z.coerce.number().int().min(0).optional(),
   scopes: z.array(memoryScopeEnum).optional(),
   categories: z.array(memoryCategoryEnum).optional(),
   statuses: z.array(memoryStatusEnum).optional(),
@@ -112,8 +127,12 @@ export function registerMemoryRoutes(app: FastifyInstance) {
   app.post(prefix, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId } = request.params as { workspaceId: string };
+      const user = (request as any).user;
       const body = createMemorySchema.parse(request.body);
-      const memory = await createMemory(workspaceId, body);
+      const memory = await createMemory(workspaceId, {
+        ...body,
+        grantedBy: user?.id || user?.userId,
+      });
       return reply.status(201).send({ memory });
     } catch (error) {
       return handleError(error, reply);
@@ -144,8 +163,12 @@ export function registerMemoryRoutes(app: FastifyInstance) {
   app.put(`${prefix}/:memoryId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId, memoryId } = request.params as { workspaceId: string; memoryId: string };
+      const user = (request as any).user;
       const body = updateMemorySchema.parse(request.body);
-      const memory = await updateMemory(workspaceId, memoryId, body);
+      const memory = await updateMemory(workspaceId, memoryId, {
+        ...body,
+        grantedBy: user?.id || user?.userId,
+      });
       return reply.status(200).send({ memory });
     } catch (error) {
       return handleError(error, reply);

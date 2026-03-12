@@ -111,12 +111,16 @@ async function handleCreateMemory(
   const metadata = action.metadata ?? {};
   const session = sessionId ? await getSession(sessionId) : null;
   const requestedScope = (metadata.scope as string | undefined) ?? 'actor_conversation';
-  const conversationId = requestedScope === 'actor_global' ? undefined : session?.conversation_id;
+  const conversationId = (requestedScope === 'actor_global' || requestedScope === 'workspace' || requestedScope === 'user')
+    ? undefined
+    : session?.conversation_id;
+  const ownerUserId = requestedScope === 'user' ? session?.user_id || undefined : undefined;
 
   const memory = await createMemory(workspaceId, {
-    scope: requestedScope as any,
-    actorId: requestedScope === 'conversation_shared' ? undefined : actorId,
-    conversationId,
+    ownerScope: requestedScope as any,
+    ownerActorId: requestedScope === 'conversation' || requestedScope === 'workspace' || requestedScope === 'user' ? undefined : actorId,
+    ownerConversationId: conversationId,
+    ownerUserId,
     category: ((metadata.category as string | undefined) ?? 'fact') as any,
     stability: ((metadata.stability as string | undefined) ?? 'durable') as any,
     importance: (metadata.importance as number | undefined) ?? 0.5,
@@ -129,11 +133,15 @@ async function handleCreateMemory(
   });
 
   const scopeLabel =
-    memory.scope === 'conversation_shared'
+    memory.ownerScope === 'conversation'
       ? 'shared conversation memory'
-      : memory.scope === 'actor_global'
+      : memory.ownerScope === 'actor_global'
         ? 'global actor memory'
-        : 'private actor-conversation memory';
+        : memory.ownerScope === 'user'
+          ? 'single-user memory'
+          : memory.ownerScope === 'workspace'
+            ? 'workspace memory'
+            : 'private actor-conversation memory';
   const summary = memory.textDigest?.trim() || 'durable memory saved';
 
   await emitUserVisibleSystemNotice({
@@ -144,7 +152,7 @@ async function handleCreateMemory(
     eventPayload: {
       actorId,
       memoryId: memory.id,
-      memoryScope: memory.scope,
+      memoryScope: memory.ownerScope,
       memoryCategory: memory.category,
       textDigest: memory.textDigest,
       summary,
@@ -154,7 +162,7 @@ async function handleCreateMemory(
       noticeType: action.metadata?.supersedesMemoryId ? 'memory_updated' : 'memory_saved',
       actorId,
       memoryId: memory.id,
-      memoryScope: memory.scope,
+      memoryScope: memory.ownerScope,
       memoryCategory: memory.category,
       textDigest: memory.textDigest,
     },

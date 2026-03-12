@@ -9,8 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { ExternalLink, HelpCircle } from 'lucide-react';
 import { usePluginStore } from '@/stores/plugin-store';
-import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { useAuthStore } from '@/stores/auth-store';
+import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
 
 interface ValidationRule {
@@ -45,45 +45,59 @@ interface Props {
 
 const scopeOptions = [
   { value: 'workspace', label: 'Workspace', description: 'Available to all actors in this workspace' },
-  { value: 'user', label: 'User', description: 'Available only when you are the sole user in a group' },
-  { value: 'actor', label: 'Actor', description: 'Available to a specific actor only' },
-  { value: 'group', label: 'Group', description: 'Available to all actors in a specific group chat' },
+  { value: 'conversation', label: 'Conversation', description: 'Available to all actors in a specific conversation' },
+  { value: 'actor_global', label: 'Actor', description: 'Available to a specific actor across all conversations' },
+  { value: 'actor_conversation', label: 'Actor + Conversation', description: 'Available only to a specific actor within one conversation' },
+  { value: 'user', label: 'User', description: 'Installed privately by the current user and shareable later through grants' },
 ];
 
 const lifecycleOptions: Record<string, { value: string; label: string }[]> = {
   workspace: [
     { value: 'workspace', label: 'Workspace (shared instance)' },
-    { value: 'group', label: 'Group (per-group instance)' },
-    { value: 'actor', label: 'Actor (per-actor instance)' },
-    { value: 'session', label: 'Session (per-session instance)' },
+    { value: 'conversation', label: 'Conversation (per-conversation instance)' },
+    { value: 'actor_global', label: 'Actor (shared across conversations)' },
+    { value: 'actor_conversation', label: 'Actor + Conversation (scoped instance)' },
+    { value: 'user', label: 'User (per-user shared instance)' },
+    { value: 'turn', label: 'Turn (per-request instance)' },
+  ],
+  conversation: [
+    { value: 'conversation', label: 'Conversation (shared instance)' },
+    { value: 'actor_conversation', label: 'Actor + Conversation (scoped instance)' },
+    { value: 'turn', label: 'Turn (per-request instance)' },
+  ],
+  actor_global: [
+    { value: 'actor_global', label: 'Actor (shared across conversations)' },
+    { value: 'actor_conversation', label: 'Actor + Conversation (scoped instance)' },
+    { value: 'turn', label: 'Turn (per-request instance)' },
+  ],
+  actor_conversation: [
+    { value: 'actor_conversation', label: 'Actor + Conversation (scoped instance)' },
+    { value: 'turn', label: 'Turn (per-request instance)' },
   ],
   user: [
-    { value: 'user', label: 'User (shared instance)' },
-    { value: 'actor', label: 'Actor (per-actor instance)' },
-    { value: 'session', label: 'Session (per-session instance)' },
-  ],
-  actor: [
-    { value: 'actor', label: 'Actor (per-actor instance)' },
-    { value: 'session', label: 'Session (per-session instance)' },
-  ],
-  group: [
-    { value: 'group', label: 'Group (per-group instance)' },
-    { value: 'actor', label: 'Actor (per-actor instance)' },
-    { value: 'session', label: 'Session (per-session instance)' },
+    { value: 'user', label: 'User (shared across your conversations)' },
+    { value: 'workspace', label: 'Workspace (shared instance)' },
+    { value: 'conversation', label: 'Conversation (per-conversation instance)' },
+    { value: 'actor_global', label: 'Actor (shared across conversations)' },
+    { value: 'actor_conversation', label: 'Actor + Conversation (scoped instance)' },
+    { value: 'turn', label: 'Turn (per-request instance)' },
   ],
 };
 
 export default function InstallDialog({ plugin, defaultActorId, onClose }: Props) {
   const { workspaceId } = useWorkspace();
   const { installPlugin } = usePluginStore();
-  const user = useAuthStore((s) => s.user);
+  const { user } = useAuthStore();
+  const currentUserId = user?.id || user?.userId || '';
 
-  const [scopeType, setScopeType] = useState(defaultActorId ? 'actor' : 'workspace');
-  const [lifecycleScope, setLifecycleScope] = useState(plugin.lifecycle_scope || 'session');
+  const [scopeType, setScopeType] = useState(
+    defaultActorId ? 'actor_global' : (plugin.default_binding_scope || 'workspace'),
+  );
+  const [lifecycleScope, setLifecycleScope] = useState(plugin.lifecycle_scope || 'conversation');
   const [selectedActorId, setSelectedActorId] = useState(defaultActorId || '');
-  const [selectedGroupId, setSelectedGroupId] = useState('');
+  const [selectedConversationId, setSelectedConversationId] = useState('');
   const [actors, setActors] = useState<any[]>([]);
-  const [groups, setGroups] = useState<any[]>([]);
+  const [conversations, setConversations] = useState<any[]>([]);
   const [configData, setConfigData] = useState<Record<string, any>>({});
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -95,11 +109,11 @@ export default function InstallDialog({ plugin, defaultActorId, onClose }: Props
   const setupSteps = plugin.setup_steps || [];
 
   useEffect(() => {
-    if (scopeType === 'actor' && workspaceId) {
+    if ((scopeType === 'actor_global' || scopeType === 'actor_conversation') && workspaceId) {
       api.getActors(workspaceId).then(setActors).catch(() => {});
     }
-    if (scopeType === 'group' && workspaceId) {
-      api.getGroups(workspaceId).then((res: any) => setGroups(res.groups || [])).catch(() => {});
+    if ((scopeType === 'conversation' || scopeType === 'actor_conversation') && workspaceId) {
+      api.getGroups(workspaceId).then((res: any) => setConversations(res.groups || [])).catch(() => {});
     }
   }, [scopeType, workspaceId]);
 
@@ -107,9 +121,9 @@ export default function InstallDialog({ plugin, defaultActorId, onClose }: Props
   useEffect(() => {
     const validOptions = lifecycleOptions[scopeType] || [];
     if (!validOptions.find(o => o.value === lifecycleScope)) {
-      setLifecycleScope(validOptions[0]?.value || 'session');
+      setLifecycleScope(validOptions[0]?.value || 'conversation');
     }
-  }, [scopeType]);
+  }, [scopeType, lifecycleScope]);
 
   const handleInstall = async () => {
     if (!workspaceId) return;
@@ -125,30 +139,28 @@ export default function InstallDialog({ plugin, defaultActorId, onClose }: Props
       }
     }
 
-    if (scopeType === 'actor' && !selectedActorId) {
+    if ((scopeType === 'actor_global' || scopeType === 'actor_conversation') && !selectedActorId) {
       alert('Please select an actor');
       return;
     }
-    if (scopeType === 'group' && !selectedGroupId) {
-      alert('Please select a group');
+    if ((scopeType === 'conversation' || scopeType === 'actor_conversation') && !selectedConversationId) {
+      alert('Please select a conversation');
+      return;
+    }
+    if (scopeType === 'user' && !currentUserId) {
+      alert('Current user is unavailable. Please refresh and try again.');
       return;
     }
 
     setSaving(true);
     try {
-      let scopeId: string | undefined;
-      switch (scopeType) {
-        case 'workspace': scopeId = workspaceId; break;
-        case 'user': scopeId = user?.id; break;
-        case 'actor': scopeId = selectedActorId; break;
-        case 'group': scopeId = selectedGroupId; break;
-      }
-
       await installPlugin(workspaceId, {
         pluginId: plugin.id,
-        scopeType,
-        scopeId,
-        lifecycleScope,
+        scopeType: scopeType as 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user',
+        actorId: scopeType === 'actor_global' || scopeType === 'actor_conversation' ? selectedActorId : undefined,
+        conversationId: scopeType === 'conversation' || scopeType === 'actor_conversation' ? selectedConversationId : undefined,
+        userId: scopeType === 'user' ? currentUserId : undefined,
+        lifecycleScope: lifecycleScope as 'turn' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user',
         configData: hasConfig ? configData : undefined,
       });
       onClose();
@@ -170,7 +182,7 @@ export default function InstallDialog({ plugin, defaultActorId, onClose }: Props
           {/* Scope selector */}
           <div className="space-y-2">
             <Label className="text-sm font-medium">Install Scope</Label>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               {scopeOptions.map(opt => (
                 <button
                   key={opt.value}
@@ -190,8 +202,7 @@ export default function InstallDialog({ plugin, defaultActorId, onClose }: Props
             </p>
           </div>
 
-          {/* Actor selection for actor scope */}
-          {scopeType === 'actor' && (
+          {scopeType === 'actor_global' && (
             <div className="space-y-1">
               <Label className="text-sm">Select Actor</Label>
               <select
@@ -207,20 +218,59 @@ export default function InstallDialog({ plugin, defaultActorId, onClose }: Props
             </div>
           )}
 
-          {/* Group selection for group scope */}
-          {scopeType === 'group' && (
+          {scopeType === 'conversation' && (
             <div className="space-y-1">
-              <Label className="text-sm">Select Group</Label>
+              <Label className="text-sm">Select Conversation</Label>
               <select
                 className="w-full h-9 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-3 text-sm bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10"
-                value={selectedGroupId}
-                onChange={(e) => setSelectedGroupId(e.target.value)}
+                value={selectedConversationId}
+                onChange={(e) => setSelectedConversationId(e.target.value)}
               >
-                <option value="">Choose a group...</option>
-                {groups.map((group: any) => (
-                  <option key={group.id} value={group.id}>{group.name}</option>
+                <option value="">Choose a conversation...</option>
+                {conversations.map((conversation: any) => (
+                  <option key={conversation.id} value={conversation.id}>{conversation.name}</option>
                 ))}
               </select>
+            </div>
+          )}
+
+          {scopeType === 'actor_conversation' && (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <Label className="text-sm">Select Actor</Label>
+                <select
+                  className="w-full h-9 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-3 text-sm bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10"
+                  value={selectedActorId}
+                  onChange={(e) => setSelectedActorId(e.target.value)}
+                >
+                  <option value="">Choose an actor...</option>
+                  {actors.map((actor: any) => (
+                    <option key={actor.id} value={actor.id}>{actor.name} ({actor.role})</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-sm">Select Conversation</Label>
+                <select
+                  className="w-full h-9 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-3 text-sm bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10"
+                  value={selectedConversationId}
+                  onChange={(e) => setSelectedConversationId(e.target.value)}
+                >
+                  <option value="">Choose a conversation...</option>
+                  {conversations.map((conversation: any) => (
+                    <option key={conversation.id} value={conversation.id}>{conversation.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {scopeType === 'user' && (
+            <div className="space-y-1">
+              <Label className="text-sm">Installed For</Label>
+              <div className="h-9 rounded-md border border-gray-200 dark:border-white/10 bg-white dark:bg-gray-900 px-3 text-sm flex items-center text-muted-foreground">
+                {user?.name || user?.email || 'Current user'}
+              </div>
             </div>
           )}
 
