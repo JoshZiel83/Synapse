@@ -1,15 +1,21 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY packages/web/package.json packages/web/package-lock.json ./
+
+COPY packages/shared /app/packages/shared
+WORKDIR /app/packages/shared
+RUN npm install
+RUN npm run build
+
+COPY packages/web-next /app/packages/web-next
+WORKDIR /app/packages/web-next
 RUN npm ci
-COPY packages/web/ ./
 RUN npm run build
 
 FROM node:20-alpine
 WORKDIR /app
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./
+COPY --from=builder /app/packages/web-next/.next ./.next
+COPY --from=builder /app/packages/web-next/public ./public
+COPY --from=builder /app/packages/web-next/node_modules ./node_modules
+COPY --from=builder /app/packages/web-next/package.json ./
 EXPOSE 3000
 CMD ["npx", "next", "start", "-p", "3000"]
