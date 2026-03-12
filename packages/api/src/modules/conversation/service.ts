@@ -1,5 +1,14 @@
 import { query, transaction } from '../../infrastructure/database/index.js';
 import { v4 as uuidv4 } from 'uuid';
+import type {
+  ConversationEventContextPolicy,
+  ConversationEventTimelinePolicy,
+} from '@synapse/shared/types';
+import { buildNormalizedMessageContent } from './message-content.js';
+import {
+  getConversationEventSpec,
+  renderConversationEventTimelineBlocks,
+} from './event-registry.js';
 
 export type ConversationKind = 'group' | 'direct' | 'a2a_virtual';
 export type ItemScope = 'shared' | 'private';
@@ -30,9 +39,27 @@ export interface CreateConversationItemParams {
   bundleId?: string;
   replyToItemId?: string;
   causedByItemId?: string;
+  eventPayload?: Record<string, unknown>;
+  eventTimelinePolicy?: ConversationEventTimelinePolicy;
+  eventContextPolicy?: ConversationEventContextPolicy;
   metadata?: Record<string, unknown>;
   parts?: ItemPartInput[];
   targetMemberIds?: string[];
+  contextTargetMemberIds?: string[];
+}
+
+export interface CreateConversationEventParams {
+  conversationId: string;
+  sessionId?: string;
+  turnId?: string;
+  eventType: string;
+  authorMemberId?: string;
+  metadata?: Record<string, unknown>;
+  eventPayload?: Record<string, unknown>;
+  timelinePolicy?: ConversationEventTimelinePolicy;
+  contextPolicy?: ConversationEventContextPolicy;
+  targetMemberIds?: string[];
+  contextTargetMemberIds?: string[];
 }
 
 export async function createConversation(params: {
@@ -180,14 +207,84 @@ export async function listConversationMembers(conversationId: string) {
   return result.rows;
 }
 
+function uniqueIds(ids: string[]) {
+  return [...new Set(ids.filter(Boolean))];
+}
+
+async function resolveEventTimelineTargets(params: {
+  conversationId: string;
+  timelinePolicy: ConversationEventTimelinePolicy;
+  explicitTargetMemberIds?: string[];
+}) {
+  if (params.timelinePolicy === 'none' || params.timelinePolicy === 'all_members') {
+    return [];
+  }
+
+  const members = await listConversationMembers(params.conversationId);
+  if (params.timelinePolicy === 'targeted_members') {
+    return uniqueIds(params.explicitTargetMemberIds || []);
+  }
+
+  if (params.timelinePolicy === 'users_only') {
+    return uniqueIds(
+      members
+        .filter((member: any) => member.state === 'active' && member.user_id)
+        .map((member: any) => member.id),
+    );
+  }
+
+  if (params.timelinePolicy === 'actors_only') {
+    return uniqueIds(
+      members
+        .filter((member: any) => member.state === 'active' && member.actor_id)
+        .map((member: any) => member.id),
+    );
+  }
+
+  return [];
+}
+
+async function resolveEventContextTargets(params: {
+  conversationId: string;
+  contextPolicy: ConversationEventContextPolicy;
+  explicitContextTargetMemberIds?: string[];
+}) {
+  if (params.contextPolicy === 'none') {
+    return [];
+  }
+
+  const members = await listConversationMembers(params.conversationId);
+  if (params.contextPolicy === 'shared') {
+    return uniqueIds(
+      members
+        .filter((member: any) => member.state === 'active' && member.actor_id)
+        .map((member: any) => member.id),
+    );
+  }
+
+  const explicitTargets = uniqueIds(params.explicitContextTargetMemberIds || []);
+  if (explicitTargets.length === 0) {
+    return [];
+  }
+
+  const activeActorTargets = new Set(
+    members
+      .filter((member: any) => member.state === 'active' && member.actor_id)
+      .map((member: any) => member.id),
+  );
+
+  return explicitTargets.filter((targetMemberId) => activeActorTargets.has(targetMemberId));
+}
+
 export async function createConversationItem(params: CreateConversationItemParams) {
   return transaction(async (client) => {
     const itemId = uuidv4();
     const itemResult = await client.query(
       `INSERT INTO conversation_items
          (id, conversation_id, session_id, turn_id, scope, surface, item_type, subtype, role,
-          author_member_id, bundle_id, reply_to_item_id, caused_by_item_id, metadata, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+          author_member_id, bundle_id, reply_to_item_id, caused_by_item_id, event_payload,
+          event_timeline_policy, event_context_policy, metadata, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
        RETURNING *`,
       [
         itemId,
@@ -203,6 +300,9 @@ export async function createConversationItem(params: CreateConversationItemParam
         params.bundleId || null,
         params.replyToItemId || null,
         params.causedByItemId || null,
+        JSON.stringify(params.eventPayload || {}),
+        params.eventTimelinePolicy || null,
+        params.eventContextPolicy || null,
         JSON.stringify(params.metadata || {}),
       ],
     );
@@ -240,6 +340,16 @@ export async function createConversationItem(params: CreateConversationItemParam
       }
     }
 
+    if (params.contextTargetMemberIds && params.contextTargetMemberIds.length > 0) {
+      for (const targetMemberId of params.contextTargetMemberIds) {
+        await client.query(
+          `INSERT INTO conversation_item_context_targets (item_id, target_member_id)
+           VALUES ($1, $2)`,
+          [itemId, targetMemberId],
+        );
+      }
+    }
+
     await client.query(
       `UPDATE conversations SET updated_at = NOW() WHERE id = $1`,
       [params.conversationId],
@@ -247,6 +357,61 @@ export async function createConversationItem(params: CreateConversationItemParam
 
     return itemResult.rows[0];
   });
+}
+
+export async function createConversationEvent(params: CreateConversationEventParams) {
+  const spec = getConversationEventSpec(params.eventType);
+  const timelinePolicy = params.timelinePolicy || spec.timelinePolicy;
+  const contextPolicy = params.contextPolicy || spec.contextPolicy;
+  const eventPayload = params.eventPayload || {};
+
+  const timelineTargetMemberIds = await resolveEventTimelineTargets({
+    conversationId: params.conversationId,
+    timelinePolicy,
+    explicitTargetMemberIds: params.targetMemberIds,
+  });
+  const contextTargetMemberIds = await resolveEventContextTargets({
+    conversationId: params.conversationId,
+    contextPolicy,
+    explicitContextTargetMemberIds: params.contextTargetMemberIds,
+  });
+
+  const normalizedTimeline = await buildNormalizedMessageContent({
+    content: '',
+    contentBlocks: renderConversationEventTimelineBlocks(params.eventType, eventPayload),
+    metadata: params.metadata || {},
+  });
+
+  const item = await createConversationItem({
+    conversationId: params.conversationId,
+    sessionId: params.sessionId,
+    turnId: params.turnId,
+    scope: 'shared',
+    surface: timelinePolicy === 'none' ? 'internal' : 'visible',
+    itemType: 'event',
+    subtype: params.eventType,
+    role: 'system',
+    authorMemberId: params.authorMemberId,
+    eventPayload,
+    eventTimelinePolicy: timelinePolicy,
+    eventContextPolicy: contextPolicy,
+    metadata: params.metadata || {},
+    parts: normalizedTimeline.parts,
+    targetMemberIds: timelineTargetMemberIds,
+    contextTargetMemberIds,
+  });
+
+  return {
+    item,
+    timelinePolicy,
+    contextPolicy,
+    timelineTargetMemberIds,
+    contextTargetMemberIds,
+    timelineContent: normalizedTimeline.normalizedContent,
+    timelineContentBlocks: normalizedTimeline.contentBlocks,
+    metadata: normalizedTimeline.normalizedMetadata,
+    eventPayload,
+  };
 }
 
 export async function markConversationRead(userId: string, conversationId: string, lastReadItemId?: string) {
@@ -293,6 +458,22 @@ async function loadItemsWithRelations(itemRows: any[]) {
     [itemIds],
   );
 
+  const contextTargetsResult = await query(
+    `SELECT cict.item_id,
+            cm.id AS member_id,
+            cm.member_type,
+            cm.actor_id,
+            cm.user_id,
+            COALESCE(a.name, u.name, cm.display_name) AS member_name
+     FROM conversation_item_context_targets cict
+     JOIN conversation_members cm ON cm.id = cict.target_member_id
+     LEFT JOIN actors a ON a.id = cm.actor_id
+     LEFT JOIN users u ON u.id = cm.user_id
+     WHERE cict.item_id = ANY($1)
+     ORDER BY cict.item_id`,
+    [itemIds],
+  );
+
   const partsByItem = new Map<string, any[]>();
   for (const row of partsResult.rows) {
     if (!partsByItem.has(row.item_id)) partsByItem.set(row.item_id, []);
@@ -305,10 +486,17 @@ async function loadItemsWithRelations(itemRows: any[]) {
     targetsByItem.get(row.item_id)!.push(row);
   }
 
+  const contextTargetsByItem = new Map<string, any[]>();
+  for (const row of contextTargetsResult.rows) {
+    if (!contextTargetsByItem.has(row.item_id)) contextTargetsByItem.set(row.item_id, []);
+    contextTargetsByItem.get(row.item_id)!.push(row);
+  }
+
   return itemRows.map((row) => ({
     ...row,
     parts: partsByItem.get(row.id) || [],
     targets: targetsByItem.get(row.id) || [],
+    context_targets: contextTargetsByItem.get(row.id) || [],
   }));
 }
 
@@ -346,6 +534,59 @@ export async function getVisibleConversationItemsForMember(params: {
          OR EXISTS (
            SELECT 1 FROM conversation_item_targets cit
            WHERE cit.item_id = ci.id AND cit.target_member_id = $2
+         )
+       )
+       ${extra}
+     ORDER BY ci.sequence ASC
+     LIMIT $${values.length}`,
+    values,
+  );
+
+  return loadItemsWithRelations(items.rows);
+}
+
+export async function getContextConversationItemsForMember(params: {
+  conversationId: string;
+  memberId: string;
+  beforeSequence?: number;
+  limit?: number;
+}) {
+  const { conversationId, memberId, beforeSequence, limit = 200 } = params;
+  const values: any[] = [conversationId, memberId];
+  let extra = '';
+  if (beforeSequence !== undefined) {
+    values.push(beforeSequence);
+    extra += ` AND ci.sequence < $${values.length}`;
+  }
+  values.push(limit);
+
+  const items = await query(
+    `SELECT ci.*,
+            cm.member_type AS author_member_type,
+            cm.actor_id AS author_actor_id,
+            cm.user_id AS author_user_id,
+            COALESCE(a.name, u.name, cm.display_name) AS author_name
+     FROM conversation_items ci
+     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
+     LEFT JOIN actors a ON a.id = cm.actor_id
+     LEFT JOIN users u ON u.id = cm.user_id
+     WHERE ci.conversation_id = $1
+       AND ci.scope = 'shared'
+       AND (
+         (
+           ci.surface = 'visible'
+           AND (
+             ci.author_member_id = $2
+             OR NOT EXISTS (SELECT 1 FROM conversation_item_targets cit0 WHERE cit0.item_id = ci.id)
+             OR EXISTS (
+               SELECT 1 FROM conversation_item_targets cit
+               WHERE cit.item_id = ci.id AND cit.target_member_id = $2
+             )
+           )
+         )
+         OR EXISTS (
+           SELECT 1 FROM conversation_item_context_targets cict
+           WHERE cict.item_id = ci.id AND cict.target_member_id = $2
          )
        )
        ${extra}

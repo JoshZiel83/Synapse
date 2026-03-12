@@ -17,7 +17,6 @@ interface SessionMessageRow {
 interface BuildOptions {
   crossTurnToolHistory?: boolean;
   interrupts?: { type: string; content: string }[];
-  memoryNotice?: string;
 }
 
 /**
@@ -75,11 +74,6 @@ export function buildConversationMessages(
       interruptContent += `- [${interrupt.type}]: ${interrupt.content}\n`;
     }
     messages.push({ role: 'user', content: textBlocks(interruptContent) });
-  }
-
-  // Append memory notice
-  if (options.memoryNotice) {
-    messages.push({ role: 'user', content: textBlocks(options.memoryNotice) });
   }
 
   // Ensure messages end with user role (required by most APIs)

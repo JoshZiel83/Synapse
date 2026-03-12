@@ -1,4 +1,4 @@
-import type { Memory, ToolDefinition } from '@synapse/shared';
+import type { ToolDefinition } from '@synapse/shared';
 
 export interface GroupMemberInfo {
   actor_id?: string;
@@ -18,14 +18,13 @@ export interface GroupMemberInfo {
  * Build the system prompt for an actor in a group chat.
  * Structure:
  *   1. Actor identity & responsibilities (from versioned data at join time)
- *   2. Memories
+ *   2. Memory usage rules
  *   3. Group member roster with type + database UUID
  *   4. send_to tool description & collaboration rules
  *   5. MCP plugin tools (if any)
  */
 export function buildActorPrompt(
   actor: any, // DB row or versioned actor data with snake_case fields
-  memories: Memory[],
   _subordinates?: any,
   _sessionContext?: any,
   extraTools?: ToolDefinition[],
@@ -51,13 +50,18 @@ export function buildActorPrompt(
     );
   }
 
-  // ── 2. Memories ──
-  if (memories.length > 0) {
-    parts.push(
-      `# Your Memories\n` +
-      memories.map((m) => `- [${m.category}] ${m.content}`).join('\n'),
-    );
-  }
+  // ── 2. Memory usage rules ──
+  parts.push(
+    `# Memory Usage\n` +
+    `The system may automatically recall established memories for you as structured context.\n` +
+    `Use these rules:\n` +
+    `- Treat recalled memories as durable facts, preferences, decisions, procedures, relationships, or artifacts.\n` +
+    `- If the current task depends on history, decisions, user preferences, or durable facts, consult recalled memories first.\n` +
+    `- If recalled memories are insufficient, use \`memory_search\` to search deeper.\n` +
+    `- Use \`create_memory\` only for stable and established information that should persist beyond the current turn.\n` +
+    `- If you store a file-backed memory, include the exact FileRef string such as <FileRef id="..."/> in the memory content, and include a concise textual summary or \`textDigest\` so it can be retrieved later.\n` +
+    `- If memory appears uncertain or conflicts with current evidence, say so explicitly instead of guessing.`,
+  );
 
   // ── 3. Group context ──
   if (groupMembers && groupMembers.length > 0) {
@@ -98,7 +102,8 @@ export function buildActorPrompt(
       `## Other tools\n` +
       `- \`invite_actor\`: Invite a new actor to join this group when you need a skill no current member has\n` +
       `- \`sleep\`: When you have finished your work, call sleep. You will be automatically woken when someone sends you a message\n` +
-      `- \`create_memory\`: Save important information for future reference\n\n` +
+      `- \`memory_search\`: Search durable memories when recalled context is insufficient\n` +
+      `- \`create_memory\`: Save a durable established fact for future reference\n\n` +
 
       `## Workflow\n` +
       `1. Read the message directed at you\n` +
@@ -109,7 +114,7 @@ export function buildActorPrompt(
 
       `## Important\n` +
       `- **You MUST use \`send_to\` to reply.** Plain text output is internal reasoning only — nobody can see it.\n` +
-      `- Your internal tool calls (MCP tools, create_memory, etc.) are NOT visible to the group\n` +
+      `- Your internal tool calls (MCP tools, memory_search, create_memory, etc.) are NOT visible to the group\n` +
       `- Only \`send_to\` produces visible messages — ALWAYS use it to communicate your response\n` +
       `- You can only see messages sent directly to you. Other actors' conversations are private.\n` +
       `- NEVER reply with plain text alone. You MUST call \`send_to\` for every response.`,
@@ -119,7 +124,8 @@ export function buildActorPrompt(
     parts.push(
       `# Working Mode\n\n` +
       `You are working independently (no group context). Handle all tasks yourself directly.\n` +
-      `Provide complete, thorough responses. Do NOT say you will do something later — do it now.`,
+      `Provide complete, thorough responses. Do NOT say you will do something later — do it now.\n` +
+      `Use recalled memory when the task depends on durable facts or prior decisions, and use \`memory_search\` if you need deeper retrieval.`,
     );
   }
 

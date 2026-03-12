@@ -47,7 +47,9 @@ export default function DashboardPage() {
       setStats({
         actors: actors.status === 'fulfilled' ? (Array.isArray(actors.value) ? actors.value.length : 0) : 0,
         activeWorkItems: workItems.status === 'fulfilled' ? (Array.isArray(workItems.value) ? workItems.value.length : (workItems.value?.items?.length || 0)) : 0,
-        memories: memories.status === 'fulfilled' ? (Array.isArray(memories.value) ? memories.value.length : (memories.value?.items?.length || 0)) : 0,
+        memories: memories.status === 'fulfilled'
+          ? (Array.isArray(memories.value) ? memories.value.length : (memories.value?.memories?.length || memories.value?.items?.length || 0))
+          : 0,
       });
     } catch (err) {
       console.error('Failed to load stats:', err);

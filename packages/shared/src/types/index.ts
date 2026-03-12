@@ -202,23 +202,65 @@ export interface Message {
 }
 
 // ============ Memory ============
-export type MemoryCategory = 'working' | 'experiential' | 'knowledge' | 'procedural' | 'relational';
-export type MemoryScope = 'private' | 'team' | 'workspace';
+export type MemoryScope = 'conversation_shared' | 'actor_global' | 'actor_conversation';
+export type MemoryCategory = 'fact' | 'preference' | 'decision' | 'relationship' | 'procedure' | 'artifact' | 'summary';
+export type MemoryStatus = 'candidate' | 'established' | 'superseded' | 'retracted';
+export type MemoryStability = 'ephemeral' | 'durable';
+export type MemoryRecallType = 'bootstrap' | 'turn_recall' | 'manual_search';
 
-export interface Memory {
+export interface MemoryEntry {
   id: UUID;
   workspaceId: UUID;
-  actorId?: UUID; // null = shared memory
-  category: MemoryCategory;
   scope: MemoryScope;
-  content: string; // Human-readable text
-  summary?: string;
+  actorId?: UUID;
+  conversationId?: UUID;
+  category: MemoryCategory;
+  status: MemoryStatus;
+  stability: MemoryStability;
+  importance: number;
+  confidence: number;
   tags: string[];
-  sourceWorkItemId?: UUID;
-  importance: number; // 0-1
-  expiresAt?: Timestamp;
+  textDigest: string;
+  searchText: string;
+  contentBlocks: CanonicalContentBlock[];
+  sourceItemId?: UUID;
+  sourceToolCallId?: UUID;
+  sourceTurnId?: UUID;
+  supersedesMemoryId?: UUID;
+  metadata: Record<string, unknown>;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+  actorName?: string;
+  conversationTitle?: string;
+}
+
+export type Memory = MemoryEntry;
+
+export interface MemorySearchHit extends MemoryEntry {
+  matchedChunkId?: UUID;
+  rank: number;
+  finalScore: number;
+  vectorScore?: number;
+  textScore?: number;
+  similarityScore?: number;
+  matchedTerms?: string[];
+}
+
+export interface MemoryRecallResult extends MemorySearchHit {
+  recallReason?: string;
+}
+
+export interface MemoryRecallRun {
+  id: UUID;
+  workspaceId: UUID;
+  actorId?: UUID;
+  conversationId?: UUID;
+  recallType: MemoryRecallType;
+  queryText: string;
+  queryBlocks: CanonicalContentBlock[];
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+  results: MemoryRecallResult[];
 }
 
 // ============ Standing Orders ============
@@ -289,7 +331,7 @@ export type SessionStatus = 'active' | 'sleeping' | 'completed' | 'failed' | 'ca
 export type ChannelType = 'web' | 'api';
 export type SessionTrigger = 'user_message' | 'group_message' | 'api_call' | 'actor_invite';
 export type SessionMessageRole = 'user' | 'assistant' | 'system' | 'tool_result';
-export type SessionInterruptType = 'progress_check' | 'memory_changed' | 'priority_override';
+export type SessionInterruptType = 'progress_check' | 'priority_override';
 
 export interface Session {
   id: UUID;
@@ -505,6 +547,17 @@ export type CanonicalContextScope = 'shared' | 'private';
 export type CanonicalContextSurface = 'visible' | 'internal';
 export type CanonicalContextRole = 'user' | 'assistant' | 'system' | 'tool';
 export type CanonicalContextMemberType = 'actor' | 'user' | 'remote_agent' | 'system' | 'unknown';
+export type ConversationEventTimelinePolicy =
+  | 'none'
+  | 'all_members'
+  | 'users_only'
+  | 'actors_only'
+  | 'targeted_members';
+export type ConversationEventContextPolicy =
+  | 'none'
+  | 'shared'
+  | 'actor_private'
+  | 'targeted_members';
 
 export interface CanonicalContextAuthor {
   memberId?: string;
@@ -537,13 +590,16 @@ interface CanonicalContextItemBase {
 
 export interface CanonicalSystemNoticeItem extends CanonicalContextItemBase {
   kind: 'system_notice';
-  noticeType: 'memory_notice' | 'interrupt' | 'task_instruction' | 'legacy_tool_result' | 'generic';
+  noticeType: 'interrupt' | 'task_instruction' | 'legacy_tool_result' | 'generic';
   parts: CanonicalContentBlock[];
 }
 
 export interface CanonicalEventContextItem extends CanonicalContextItemBase {
   kind: 'event';
   eventType: string;
+  eventPayload?: Record<string, unknown>;
+  timelinePolicy?: ConversationEventTimelinePolicy;
+  contextPolicy?: ConversationEventContextPolicy;
   author?: CanonicalContextAuthor;
   targets?: CanonicalContextTarget[];
   parts: CanonicalContentBlock[];
@@ -580,13 +636,21 @@ export interface CanonicalSummaryContextItem extends CanonicalContextItemBase {
   parts: CanonicalContentBlock[];
 }
 
+export interface CanonicalMemoryRecallContextItem extends CanonicalContextItemBase {
+  kind: 'memory_recall';
+  recallType: Exclude<MemoryRecallType, 'manual_search'>;
+  memories: MemoryRecallResult[];
+  metadata?: Record<string, unknown>;
+}
+
 export type CanonicalContextItem =
   | CanonicalSystemNoticeItem
   | CanonicalEventContextItem
   | CanonicalMessageContextItem
   | CanonicalToolCallBatchContextItem
   | CanonicalToolResultBatchContextItem
-  | CanonicalSummaryContextItem;
+  | CanonicalSummaryContextItem
+  | CanonicalMemoryRecallContextItem;
 
 export type CanonicalArchiveFrameRole = 'system' | 'user' | 'assistant' | 'tool';
 export type CanonicalArchiveChainScope = 'shared' | 'private';

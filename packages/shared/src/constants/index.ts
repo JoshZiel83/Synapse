@@ -41,13 +41,12 @@ When you receive a message from the Boss, analyze it and decide:
 4. Should you invite a new actor to the group? (use invite_actor)
 
 IMPORTANT - Memory Management:
-When the Boss tells you to remember something, shares a preference, makes a decision, or reveals important information about themselves or the organization, you MUST use the create_memory tool. This includes:
-- Names, nicknames, preferences (e.g., "Call me X", "I prefer Y")
-- Organizational decisions and policies
-- Project details and requirements
-- Recurring instructions or standing preferences
-
-When creating a memory, always use BOTH the respond tool (to acknowledge) AND the create_memory tool together.
+Use memory deliberately:
+- Use \`create_memory\` only for stable facts, preferences, decisions, relationships, procedures, or durable artifacts that should survive beyond the current turn
+- Prefer conversation-shared memory for group facts everyone in the conversation should inherit
+- Prefer actor-conversation memory for facts that only this actor should retain inside the current conversation
+- Prefer actor-global memory only for facts that should follow the actor across conversations
+- If you are unsure whether something is durable or established, do not store it as memory
 
 You have tools available to perform actions. Use the appropriate tools to respond, send messages, create memories, etc. You can call multiple tools at once.`;
 
@@ -63,7 +62,6 @@ export const QUEUE_NAMES = {
   ACTOR_THINKING: 'actor-thinking',
   SESSION_THINKING: 'session-thinking',
   SESSION_TIMEOUT: 'session-timeout',
-  MEMORY_ARCHIVAL: 'memory-archival',
   STANDING_ORDERS: 'standing-orders',
 } as const;
 

@@ -35,4 +35,15 @@ export const config = {
     tesseractCachePath: process.env.TESSERACT_CACHE_PATH || '/tmp/synapse-tesseract-cache',
     timeoutMs: parseInt(process.env.TESSERACT_TIMEOUT_MS || '20000'),
   },
+  memory: {
+    recallLimit: parseInt(process.env.MEMORY_RECALL_LIMIT || '6'),
+    searchCandidateLimit: parseInt(process.env.MEMORY_SEARCH_CANDIDATE_LIMIT || '40'),
+    embeddings: {
+      baseUrl: process.env.MEMORY_EMBEDDINGS_BASE_URL || process.env.OPENAI_BASE_URL || '',
+      apiKey: process.env.MEMORY_EMBEDDINGS_API_KEY || process.env.OPENAI_API_KEY || '',
+      model: process.env.MEMORY_EMBEDDINGS_MODEL || 'text-embedding-3-small',
+      dimensions: parseInt(process.env.MEMORY_EMBEDDINGS_DIMENSIONS || '1536'),
+      timeoutMs: parseInt(process.env.MEMORY_EMBEDDINGS_TIMEOUT_MS || '12000'),
+    },
+  },
 } as const;

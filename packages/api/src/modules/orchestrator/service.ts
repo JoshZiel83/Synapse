@@ -1,7 +1,68 @@
 import { query } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import type { ActorAction, UUID } from '@synapse/shared';
-import { v4 as uuidv4 } from 'uuid';
+import { createMemory } from '../memory/service.js';
+import { getSession } from '../session/service.js';
+import { createConversationEvent, listConversationMembers } from '../conversation/service.js';
+import { renderConversationEventTimelineBlocks } from '../conversation/event-registry.js';
+import { extractText } from '@synapse/shared';
+
+async function emitUserVisibleSystemNotice(params: {
+  workspaceId: UUID;
+  actorId: UUID;
+  sessionId?: UUID;
+  eventType: 'memory_saved' | 'memory_updated' | 'actor_renamed' | 'actor_avatar_changed';
+  eventPayload: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  if (!params.sessionId) return;
+
+  const session = await getSession(params.sessionId);
+  if (!session) return;
+
+  const members = await listConversationMembers(session.conversation_id);
+  const targetUserMembers = members.filter((member: any) => member.state === 'active' && member.user_id);
+  if (targetUserMembers.length === 0) return;
+
+  const created = await createConversationEvent({
+    conversationId: session.conversation_id,
+    sessionId: params.sessionId,
+    eventType: params.eventType,
+    timelinePolicy: 'users_only',
+    contextPolicy: 'none',
+    metadata: {
+      ...(params.metadata || {}),
+    },
+    eventPayload: params.eventPayload,
+    targetMemberIds: targetUserMembers.map((member: any) => member.id),
+  });
+
+  const timelineBlocks = created.timelineContentBlocks.length > 0
+    ? created.timelineContentBlocks
+    : renderConversationEventTimelineBlocks(params.eventType, params.eventPayload);
+  const content = extractText(timelineBlocks);
+
+  await emitEvent({
+    type: 'session.message.new',
+    workspaceId: params.workspaceId,
+    payload: {
+      groupId: session.group_id || undefined,
+      sessionId: params.sessionId,
+      messageId: created.item.id,
+      role: 'system',
+      fromActorId: params.actorId,
+      fromUserId: null,
+      targetUserIds: targetUserMembers.map((member: any) => member.user_id),
+      content,
+      contentBlocks: timelineBlocks,
+      metadata: created.metadata,
+      eventType: params.eventType,
+      eventPayload: params.eventPayload,
+      createdAt: created.item.created_at,
+    },
+    timestamp: new Date().toISOString(),
+  });
+}
 
 export async function executeActorActions(
   workspaceId: UUID,
@@ -15,13 +76,13 @@ export async function executeActorActions(
         await handleRespond(workspaceId, actorId, action, sessionId);
         break;
       case 'create_memory':
-        await handleCreateMemory(workspaceId, actorId, action);
+        await handleCreateMemory(workspaceId, actorId, action, sessionId);
         break;
       case 'rename_self':
-        await handleRenameSelf(actorId, action);
+        await handleRenameSelf(workspaceId, actorId, action, sessionId);
         break;
       case 'change_avatar':
-        await handleChangeAvatar(actorId, action);
+        await handleChangeAvatar(workspaceId, actorId, action, sessionId);
         break;
     }
   }
@@ -44,43 +105,67 @@ async function handleRespond(
 async function handleCreateMemory(
   workspaceId: UUID,
   actorId: UUID,
-  action: ActorAction
+  action: ActorAction,
+  sessionId?: UUID,
 ): Promise<void> {
-  const memoryId = uuidv4();
   const metadata = action.metadata ?? {};
+  const session = sessionId ? await getSession(sessionId) : null;
+  const requestedScope = (metadata.scope as string | undefined) ?? 'actor_conversation';
+  const conversationId = requestedScope === 'actor_global' ? undefined : session?.conversation_id;
 
-  await query(
-    `INSERT INTO memories (id, workspace_id, actor_id, category, scope, content, tags, importance, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
-    [
-      memoryId,
-      workspaceId,
-      actorId,
-      (metadata.category as string) ?? 'experiential',
-      (metadata.scope as string) ?? 'private',
-      action.content,
-      (metadata.tags as string[]) ?? [],
-      (metadata.importance as number) ?? 0.5,
-    ]
-  );
+  const memory = await createMemory(workspaceId, {
+    scope: requestedScope as any,
+    actorId: requestedScope === 'conversation_shared' ? undefined : actorId,
+    conversationId,
+    category: ((metadata.category as string | undefined) ?? 'fact') as any,
+    stability: ((metadata.stability as string | undefined) ?? 'durable') as any,
+    importance: (metadata.importance as number | undefined) ?? 0.5,
+    confidence: (metadata.confidence as number | undefined) ?? 0.8,
+    tags: (metadata.tags as string[] | undefined) ?? [],
+    content: action.content,
+    contentBlocks: action.contentBlocks,
+    textDigest: typeof metadata.textDigest === 'string' ? metadata.textDigest : undefined,
+    metadata: typeof metadata === 'object' ? metadata : {},
+  });
 
-  // Increment memory_version so concurrent sessions can detect the change
-  await query(
-    `UPDATE actors SET memory_version = memory_version + 1, updated_at = NOW() WHERE id = $1`,
-    [actorId]
-  );
+  const scopeLabel =
+    memory.scope === 'conversation_shared'
+      ? 'shared conversation memory'
+      : memory.scope === 'actor_global'
+        ? 'global actor memory'
+        : 'private actor-conversation memory';
+  const summary = memory.textDigest?.trim() || 'durable memory saved';
 
-  await emitEvent({
-    type: 'memory.created',
+  await emitUserVisibleSystemNotice({
     workspaceId,
-    payload: { memoryId, actorId, category: metadata.category ?? 'experiential' },
-    timestamp: new Date().toISOString(),
+    actorId,
+    sessionId,
+    eventType: action.metadata?.supersedesMemoryId ? 'memory_updated' : 'memory_saved',
+    eventPayload: {
+      actorId,
+      memoryId: memory.id,
+      memoryScope: memory.scope,
+      memoryCategory: memory.category,
+      textDigest: memory.textDigest,
+      summary,
+      scopeLabel,
+    },
+    metadata: {
+      noticeType: action.metadata?.supersedesMemoryId ? 'memory_updated' : 'memory_saved',
+      actorId,
+      memoryId: memory.id,
+      memoryScope: memory.scope,
+      memoryCategory: memory.category,
+      textDigest: memory.textDigest,
+    },
   });
 }
 
 async function handleRenameSelf(
+  workspaceId: UUID,
   actorId: UUID,
-  action: ActorAction
+  action: ActorAction,
+  sessionId?: UUID,
 ): Promise<void> {
   const newName = action.content?.trim();
   if (!newName) return;
@@ -88,11 +173,28 @@ async function handleRenameSelf(
     `UPDATE actors SET name = $1, updated_at = NOW() WHERE id = $2`,
     [newName, actorId]
   );
+  await emitUserVisibleSystemNotice({
+    workspaceId,
+    actorId,
+    sessionId,
+    eventType: 'actor_renamed',
+    eventPayload: {
+      actorId,
+      newName,
+    },
+    metadata: {
+      noticeType: 'actor_renamed',
+      actorId,
+      newName,
+    },
+  });
 }
 
 async function handleChangeAvatar(
+  workspaceId: UUID,
   actorId: UUID,
-  action: ActorAction
+  action: ActorAction,
+  sessionId?: UUID,
 ): Promise<void> {
   const emoji = action.content?.trim();
   if (!emoji) return;
@@ -100,4 +202,19 @@ async function handleChangeAvatar(
     `UPDATE actors SET config = config || $1::jsonb, updated_at = NOW() WHERE id = $2`,
     [JSON.stringify({ avatar_emoji: emoji }), actorId]
   );
+  await emitUserVisibleSystemNotice({
+    workspaceId,
+    actorId,
+    sessionId,
+    eventType: 'actor_avatar_changed',
+    eventPayload: {
+      actorId,
+      avatarEmoji: emoji,
+    },
+    metadata: {
+      noticeType: 'actor_avatar_changed',
+      actorId,
+      avatarEmoji: emoji,
+    },
+  });
 }

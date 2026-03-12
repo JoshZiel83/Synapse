@@ -35,19 +35,20 @@ import { getGroupMembers, sleepActor, wakeActor } from '../modules/group/service
 import {
   getConversationMember,
   getLastVisibleConversationItem,
-  getVisibleConversationItemsForMember,
+  getContextConversationItemsForMember,
 } from '../modules/conversation/service.js';
 import { createTurn, updateTurnStatus } from '../modules/execution/service.js';
+import { buildMemoryRecallQuery, recallMemories } from '../modules/memory/service.js';
 import { sessionThinkingQueue } from './queues.js';
 import { registerWorker } from './registry.js';
 
-async function loadNewVisibleMessages(params: {
+async function loadNewContextItems(params: {
   groupId: string;
   memberId: string;
   actorId: string;
   sinceSequence: number;
 }) {
-  const visibleItems = await getVisibleConversationItemsForMember({
+  const visibleItems = await getContextConversationItemsForMember({
     conversationId: params.groupId,
     memberId: params.memberId,
     limit: 200,
@@ -135,27 +136,6 @@ export function startSessionThinkingWorker() {
         const sessionMessages = await getSessionMessages(sessionId);
         const interrupts = await consumeInterrupts(sessionId);
 
-        let memoryNotice: string | undefined;
-        const lastSeenMemoryVersion = session.metadata?.lastSeenMemoryVersion ?? actor.memory_version;
-        if (actor.memory_version > lastSeenMemoryVersion) {
-          const newMemories = await query(
-            `SELECT content, category FROM memories
-             WHERE actor_id = $1 AND workspace_id = $2
-             ORDER BY created_at DESC LIMIT 5`,
-            [actorId, workspaceId],
-          );
-          if (newMemories.rows.length > 0) {
-            memoryNotice = '[System Notice] Your memories have been updated by another concurrent task:\n';
-            for (const mem of newMemories.rows) {
-              memoryNotice += `- [${mem.category}]: ${mem.content}\n`;
-            }
-          }
-          await query(
-            `UPDATE sessions SET metadata = metadata || $1::jsonb WHERE id = $2`,
-            [JSON.stringify({ lastSeenMemoryVersion: actor.memory_version }), sessionId],
-          );
-        }
-
         let groupMembers: any[] | undefined;
         let memberEntries: GroupMemberEntry[] = [];
         let groupUserId: string | undefined;
@@ -189,7 +169,7 @@ export function startSessionThinkingWorker() {
             }
           }
 
-          const visibleItems = await getVisibleConversationItemsForMember({
+          const visibleItems = await getContextConversationItemsForMember({
             conversationId: groupId,
             memberId: actorMemberId,
             limit: 200,
@@ -199,7 +179,6 @@ export function startSessionThinkingWorker() {
             actorId,
             sessionMessages,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
-            memoryNotice,
           });
           contextItems = built.items;
           lastKnownGroupSequence = built.lastSequence;
@@ -207,17 +186,51 @@ export function startSessionThinkingWorker() {
           contextItems = buildSessionContextItems(sessionMessages, {
             crossTurnToolHistory: false,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
-            memoryNotice,
           });
         }
 
-        const memoriesResult = await query(
-          `SELECT content, category, importance FROM memories
-           WHERE (actor_id = $1 OR scope IN ('team', 'workspace'))
-             AND workspace_id = $2
-           ORDER BY importance DESC, created_at DESC LIMIT 10`,
-          [actorId, workspaceId],
-        );
+        const recallType = session.metadata?.memoryBootstrapCompleted ? 'turn_recall' : 'bootstrap';
+        const recallQuery = buildMemoryRecallQuery({
+          actorName: actor.name,
+          conversationTitle: session.conversation_title,
+          contextItems,
+        });
+        const recallResult = await recallMemories(workspaceId, {
+          actorId,
+          conversationId: session.conversation_id,
+          recallType,
+          queryText: recallQuery,
+          queryBlocks: recallQuery ? [{ type: 'text', text: recallQuery }] : [],
+          limit: 6,
+          metadata: {
+            sessionId,
+            trigger,
+          },
+        });
+        const recalledMemories = recallResult.memories;
+        if (recalledMemories.length > 0) {
+          contextItems = [
+            {
+              kind: 'memory_recall',
+              scope: 'private',
+              surface: 'internal',
+              recallType,
+              memories: recalledMemories,
+              metadata: {
+                recallRunId: recallResult.run.id,
+              },
+            },
+            ...contextItems,
+          ];
+        }
+        if (recallType === 'bootstrap' && !session.metadata?.memoryBootstrapCompleted) {
+          await query(
+            `UPDATE sessions
+             SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb
+             WHERE id = $2`,
+            [JSON.stringify({ memoryBootstrapCompleted: true }), sessionId],
+          );
+        }
 
         const resolvedConfig = await resolveModelConfig(actorId, workspaceId);
         let finalContextItems = contextItems;
@@ -225,8 +238,22 @@ export function startSessionThinkingWorker() {
           finalContextItems = buildSessionContextItems(sessionMessages, {
             crossTurnToolHistory: true,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
-            memoryNotice,
           });
+          if (recalledMemories.length > 0) {
+            finalContextItems = [
+              {
+                kind: 'memory_recall',
+                scope: 'private',
+                surface: 'internal',
+                recallType,
+                memories: recalledMemories,
+                metadata: {
+                  recallRunId: recallResult.run.id,
+                },
+              },
+              ...finalContextItems,
+            ];
+          }
         }
 
         contextWindow = await buildProviderContextWindow({
@@ -260,7 +287,6 @@ export function startSessionThinkingWorker() {
 
         const { system } = buildActorPrompt(
           actor,
-          memoriesResult.rows,
           undefined,
           undefined,
           mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
@@ -295,7 +321,6 @@ export function startSessionThinkingWorker() {
 
           result = await actorThink(
             actor,
-            memoriesResult.rows,
             contextWindow,
             undefined,
             resolvedConfig,
@@ -315,7 +340,7 @@ export function startSessionThinkingWorker() {
               mcpSetTurnId: mcpTools.setTurnId,
               system,
               checkNewMessages: groupId && actorMemberId ? async () => {
-                const update = await loadNewVisibleMessages({
+                const update = await loadNewContextItems({
                   groupId,
                   memberId: actorMemberId!,
                   actorId,
@@ -378,7 +403,7 @@ export function startSessionThinkingWorker() {
         const postThinkSession = await getSession(sessionId);
         if (postThinkSession?.status === 'sleeping') {
           if (groupId && actorMemberId) {
-            const update = await loadNewVisibleMessages({
+            const update = await loadNewContextItems({
               groupId,
               memberId: actorMemberId,
               actorId,
@@ -394,7 +419,7 @@ export function startSessionThinkingWorker() {
         } else if (postThinkSession?.status === 'active') {
           await sleepActor(sessionId);
           if (groupId && actorMemberId) {
-            const update = await loadNewVisibleMessages({
+            const update = await loadNewContextItems({
               groupId,
               memberId: actorMemberId,
               actorId,

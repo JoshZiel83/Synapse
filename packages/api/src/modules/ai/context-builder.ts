@@ -10,6 +10,7 @@ import type {
   CanonicalContextTarget,
 } from '@synapse/shared/types';
 import { textBlocks } from '@synapse/shared';
+import { renderConversationEventContextBlocks } from '../conversation/event-registry.js';
 
 function mimeToCategory(mimeType: string): 'image' | 'audio' | 'video' | 'document' {
   if (mimeType.startsWith('image/')) return 'image';
@@ -107,10 +108,22 @@ function buildTargets(targets: any[]): CanonicalContextTarget[] | undefined {
 export function conversationItemToContextItem(item: any, actorId: string): CanonicalContextItem | null {
   const parts = itemPartsToCanonicalBlocks(item.parts || []);
   const metadata = parseMetadata(item.metadata);
+  const eventPayload = parseMetadata(item.event_payload);
   const author = buildAuthor(item, actorId);
-  const targets = buildTargets(item.targets || []);
+  const targets = buildTargets(item.context_targets?.length > 0 ? item.context_targets : item.targets || []);
 
   if (item.item_type === 'event' || item.role === 'system') {
+    const contextPolicy = (item.event_context_policy || 'shared') as
+      | 'none'
+      | 'shared'
+      | 'actor_private'
+      | 'targeted_members';
+    if (contextPolicy === 'none') {
+      return null;
+    }
+
+    const renderedContextParts = renderConversationEventContextBlocks(item.subtype || 'event', eventPayload);
+    const eventParts = renderedContextParts && renderedContextParts.length > 0 ? renderedContextParts : parts;
     return {
       kind: 'event',
       itemId: item.id,
@@ -121,9 +134,12 @@ export function conversationItemToContextItem(item: any, actorId: string): Canon
       scope: item.scope || 'shared',
       surface: item.surface || 'visible',
       eventType: item.subtype || 'event',
+      eventPayload,
+      timelinePolicy: item.event_timeline_policy || undefined,
+      contextPolicy,
       author,
       targets,
-      parts: parts.length > 0 ? parts : textBlocks(''),
+      parts: eventParts.length > 0 ? eventParts : textBlocks(''),
       metadata,
     };
   }
@@ -156,16 +172,6 @@ function buildInterruptNotice(interrupt: { type: string; content: string }): Can
     metadata: {
       interruptType: interrupt.type,
     },
-  };
-}
-
-function buildMemoryNotice(content: string): CanonicalContextItem {
-  return {
-    kind: 'system_notice',
-    noticeType: 'memory_notice',
-    scope: 'private',
-    surface: 'internal',
-    parts: textBlocks(content),
   };
 }
 
@@ -288,7 +294,6 @@ export function buildSessionContextItems(
   options: {
     crossTurnToolHistory?: boolean;
     interrupts?: { type: string; content: string }[];
-    memoryNotice?: string;
   } = {},
 ): CanonicalContextItem[] {
   const items: CanonicalContextItem[] = [];
@@ -406,10 +411,6 @@ export function buildSessionContextItems(
     items.push(...options.interrupts.map(buildInterruptNotice));
   }
 
-  if (options.memoryNotice) {
-    items.push(buildMemoryNotice(options.memoryNotice));
-  }
-
   return items;
 }
 
@@ -418,13 +419,8 @@ export function buildGroupContextItems(params: {
   actorId: string;
   sessionMessages: SessionMessageRow[];
   interrupts?: { type: string; content: string }[];
-  memoryNotice?: string;
 }) {
   const items: CanonicalContextItem[] = [];
-
-  if (params.memoryNotice) {
-    items.push(buildMemoryNotice(params.memoryNotice));
-  }
 
   if (params.interrupts) {
     items.push(...params.interrupts.map(buildInterruptNotice));

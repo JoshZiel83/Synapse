@@ -1,4 +1,4 @@
-import type { Actor, ActorSkill, Memory, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow } from '@synapse/shared';
+import type { Actor, ActorSkill, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow } from '@synapse/shared';
 import type { CanonicalContextItem, NormalizedMcpToolResult } from '@synapse/shared/types';
 import { textBlocks, extractText } from '@synapse/shared';
 import { randomUUID } from 'crypto';
@@ -135,7 +135,6 @@ function inferToolKind(toolName: string, mcpToolNames: Set<string>) {
 
 export async function actorThink(
   actor: Actor,
-  memories: Memory[],
   contextWindow: ProviderContextWindow,
   subordinates?: Subordinate[],
   resolved?: ResolvedModelConfig | null,

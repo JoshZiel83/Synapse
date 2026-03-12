@@ -4,6 +4,7 @@ import { sessionThinkingQueue } from '../../workers/queues.js';
 import { nowISO } from '@synapse/shared';
 import { v4 as uuidv4 } from 'uuid';
 import {
+  createConversationEvent,
   createConversationItem,
   ensureConversationMember,
   getConversation,
@@ -108,27 +109,15 @@ async function recordMembershipEvent(params: {
   batchId: string;
   members: Array<{ memberId: string; memberType: 'actor' | 'user'; actorId?: string; userId?: string; name: string; title?: string }>;
 }) {
-  const names = params.members.map((member) => member.name || 'Unknown').join(', ');
-  let content = names;
-  if (params.subtype === 'member_joined') {
-    content += ' joined the group';
-    if (params.members.length === 1 && params.members[0].title) {
-      content += ` (${params.members[0].title})`;
-    }
-  } else if (params.subtype === 'member_kicked') {
-    content += ' was removed from the group';
-  } else {
-    content += ' left the group';
-  }
-
-  await createConversationItem({
+  await createConversationEvent({
     conversationId: params.conversationId,
-    scope: 'shared',
-    surface: 'visible',
-    itemType: 'event',
-    subtype: params.subtype,
-    role: 'system',
+    eventType: params.subtype,
+    timelinePolicy: 'all_members',
+    contextPolicy: 'shared',
     metadata: {
+      batchId: params.batchId,
+    },
+    eventPayload: {
       batchId: params.batchId,
       members: params.members.map((member) => ({
         memberId: member.memberId,
@@ -139,7 +128,6 @@ async function recordMembershipEvent(params: {
         title: member.title,
       })),
     },
-    parts: [{ type: 'text', text: content }],
   });
 }
 
@@ -265,20 +253,6 @@ export async function createGroup(params: {
       });
     }
 
-    const eventItemId = uuidv4();
-    await client.query(
-      `INSERT INTO conversation_items
-         (id, conversation_id, scope, surface, item_type, subtype, role, metadata, created_at)
-       VALUES ($1, $2, 'shared', 'visible', 'event', 'member_joined', 'system', $3, NOW())`,
-      [eventItemId, groupId, JSON.stringify({ batchId, members: joinedMembers })],
-    );
-    await client.query(
-      `INSERT INTO conversation_item_parts
-         (id, item_id, ordinal, part_type, text_value, metadata)
-       VALUES ($1, $2, 0, 'text', $3, '{}'::jsonb)`,
-      [uuidv4(), eventItemId, `${joinedMembers.map((member) => member.name).join(', ')} joined the group`],
-    );
-
     let msgId: string | null = null;
     if (initialMessage && targetActorId) {
       const targetMember = members.find((member) => member.actorId === targetActorId);
@@ -308,7 +282,14 @@ export async function createGroup(params: {
       msgId = itemId;
     }
 
-    return { group, members, message: msgId ? { id: msgId } : null };
+    return { group, members, joinedMembers, message: msgId ? { id: msgId } : null };
+  });
+
+  await recordMembershipEvent({
+    conversationId: groupId,
+    subtype: 'member_joined',
+    batchId,
+    members: result.joinedMembers,
   });
 
   if (targetActorId && initialMessage) {
@@ -322,7 +303,11 @@ export async function createGroup(params: {
     timestamp: nowISO(),
   });
 
-  return result;
+  return {
+    group: result.group,
+    members: result.members,
+    message: result.message,
+  };
 }
 
 export async function getGroup(groupId: string): Promise<any | null> {
@@ -706,6 +691,8 @@ export async function getGroupMessages(
       groupId,
       sessionId: item.session_id || '',
       role,
+      eventType: item.item_type === 'event' ? item.subtype : undefined,
+      eventPayload: item.item_type === 'event' ? parseJson(item.event_payload) : undefined,
       fromUserId: item.author_user_id || null,
       fromActorId: item.author_actor_id || null,
       actorName: role === 'assistant' ? item.author_name || 'System' : undefined,

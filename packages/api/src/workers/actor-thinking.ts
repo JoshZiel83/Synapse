@@ -10,6 +10,7 @@ import { executeActorActions } from '../modules/orchestrator/service.js';
 import { resolveModelConfig } from '../modules/model-groups/resolver.js';
 import { buildAdHocContextItems } from '../modules/ai/context-builder.js';
 import { buildAdHocProviderContextWindow } from '../modules/context/service.js';
+import { recallMemories } from '../modules/memory/service.js';
 import { registerWorker } from './registry.js';
 
 export function startActorThinkingWorker() {
@@ -39,28 +40,39 @@ export function startActorThinkingWorker() {
         if (actorResult.rows.length === 0) throw new Error(`Actor ${actorId} not found`);
         const actor = actorResult.rows[0];
 
-        // Recall memories
-        const memoriesResult = await query(
-          `SELECT content, category, importance FROM memories
-           WHERE (actor_id = $1 OR scope IN ('team', 'workspace'))
-           AND workspace_id = $2
-           ORDER BY importance DESC, created_at DESC LIMIT 10`,
-          [actorId, workspaceId]
-        );
-
         // Resolve model config for this actor
         const resolvedConfig = await resolveModelConfig(actorId, workspaceId);
 
         // Build system prompt
         const { system } = buildActorPrompt(
           actor,
-          memoriesResult.rows,
         );
 
         // Build conversation messages
-        const contextItems = buildAdHocContextItems([
+        let contextItems = buildAdHocContextItems([
           { role: 'user', content: textBlocks(`[Trigger: ${trigger}] Process any pending work.`) },
         ]);
+        const recallResult = await recallMemories(workspaceId, {
+          actorId,
+          recallType: 'turn_recall',
+          queryText: `[Trigger: ${trigger}] Process any pending work.`,
+          queryBlocks: textBlocks(`[Trigger: ${trigger}] Process any pending work.`),
+          limit: 6,
+          metadata: { trigger, mode: 'adhoc' },
+        });
+        if (recallResult.memories.length > 0) {
+          contextItems = [
+            {
+              kind: 'memory_recall',
+              scope: 'private',
+              surface: 'internal',
+              recallType: 'turn_recall',
+              memories: recallResult.memories,
+              metadata: { recallRunId: recallResult.run.id },
+            },
+            ...contextItems,
+          ];
+        }
         const contextWindow = buildAdHocProviderContextWindow(contextItems);
 
         // Refresh actor lock TTL periodically during multi-round thinking
@@ -74,7 +86,6 @@ export function startActorThinkingWorker() {
         try {
           result = await actorThink(
             actor,
-            memoriesResult.rows,
             contextWindow,
             undefined,
             resolvedConfig,

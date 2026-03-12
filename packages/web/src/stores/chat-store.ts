@@ -241,8 +241,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     const state = get();
 
-    // Skip system messages
-    if (effectiveRole === 'system' || effectiveRole === 'tool_result' || effectiveRole === 'child_result') {
+    if (effectiveRole === 'tool_result' || effectiveRole === 'child_result') {
       return;
     }
 
@@ -261,6 +260,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return { thinkingMap: newMap };
       });
     }
+
+    const eventType = (payload as any).eventType as string | undefined;
+    const eventPayload = ((payload as any).eventPayload || {}) as Record<string, unknown>;
+    const noticeType = eventType || (metadata?.noticeType as string | undefined);
+    const noticeActorId = (eventPayload.actorId as string | undefined) || (metadata?.actorId as string | undefined);
+    const newActorName = (eventPayload.newName as string | undefined) || (metadata?.newName as string | undefined);
+    const avatarEmoji = (eventPayload.avatarEmoji as string | undefined) || (metadata?.avatarEmoji as string | undefined);
 
     // Extract structured metadata for message chrome
     const toolsUsed = metadata?.toolsUsed as string[] | undefined;
@@ -310,8 +316,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
       let groups = s.groups.map((g) => {
         if (g.id !== groupId) return g;
         const unreadCount = s.selectedGroupId === groupId ? g.unreadCount : g.unreadCount + 1;
+        let participants = g.participants;
+        if (noticeType === 'actor_renamed' && noticeActorId && newActorName) {
+          participants = participants.map((participant) => (
+            participant.id === noticeActorId
+              ? { ...participant, name: newActorName }
+              : participant
+          ));
+        }
+        if (noticeType === 'actor_avatar_changed' && noticeActorId && avatarEmoji) {
+          participants = participants.map((participant) => (
+            participant.id === noticeActorId
+              ? { ...participant, emoji: avatarEmoji }
+              : participant
+          ));
+        }
         return {
           ...g,
+          participants,
           lastMessage: {
             content: extractText(messageContentBlocks),
             role: effectiveRole,

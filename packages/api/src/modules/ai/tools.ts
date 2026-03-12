@@ -12,24 +12,40 @@ export function registerActionToolPlugins(): void {
     kind: 'action',
     definition: {
       name: 'create_memory',
-      description: 'Store an important piece of information for long-term recall. Use when the Boss shares preferences, names, decisions, or any fact worth remembering across conversations.',
+      description: 'Store a stable, established fact for future recall. Use only for durable facts, preferences, decisions, relationships, procedures, or artifacts that should persist beyond the current turn.',
       parameters: {
         type: 'object',
         properties: {
-          content: { type: 'string', description: 'The information to remember' },
+          content: {
+            type: 'string',
+            description: 'The information to remember. May include exact FileRef strings like <FileRef id="..."/>. If you include a FileRef, also include concise natural-language context so the memory can be recalled later.',
+          },
           category: {
             type: 'string',
             description: 'Memory category',
-            enum: ['working', 'experiential', 'knowledge', 'procedural', 'relational'],
+            enum: ['fact', 'preference', 'decision', 'relationship', 'procedure', 'artifact', 'summary'],
           },
           scope: {
             type: 'string',
-            description: 'Visibility scope of the memory',
-            enum: ['private', 'team', 'workspace'],
+            description: 'Memory scope. actor_conversation = private to you inside the current conversation; conversation_shared = visible to all actors in the current conversation; actor_global = follows you across conversations.',
+            enum: ['actor_conversation', 'conversation_shared', 'actor_global'],
           },
           importance: {
             type: 'string',
             description: 'Importance score from 0.0 to 1.0',
+          },
+          confidence: {
+            type: 'string',
+            description: 'Confidence score from 0.0 to 1.0. Use high confidence only for established facts.',
+          },
+          stability: {
+            type: 'string',
+            description: 'Whether this memory is ephemeral or durable.',
+            enum: ['ephemeral', 'durable'],
+          },
+          textDigest: {
+            type: 'string',
+            description: 'Optional one-line digest of the memory for faster future retrieval. Strongly recommended when content includes a FileRef.',
           },
           tags: {
             type: 'string',
@@ -87,9 +103,12 @@ export function toolCallsToActions(toolCalls: ToolCall[]): ActorAction[] {
           type: 'create_memory' as const,
           content: input.content,
           metadata: {
-            category: input.category || 'knowledge',
-            scope: input.scope || 'private',
+            category: input.category || 'fact',
+            scope: input.scope || 'actor_conversation',
             importance: parseFloat(input.importance) || 0.5,
+            confidence: parseFloat(input.confidence) || 0.8,
+            stability: input.stability || 'durable',
+            textDigest: input.textDigest || undefined,
             tags,
           },
         };

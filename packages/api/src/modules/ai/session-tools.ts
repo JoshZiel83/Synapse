@@ -3,6 +3,7 @@ import { registerToolPlugin } from './tool-plugins.js';
 import { query } from '../../infrastructure/database/index.js';
 import { getSession } from '../session/service.js';
 import { sendGroupMessage, addActorToGroup, getGroupMembers, sleepActor } from '../group/service.js';
+import { runMemorySearch } from '../memory/service.js';
 
 /**
  * Register callable tool plugins.
@@ -245,6 +246,66 @@ export function registerCallableToolPlugins(): void {
       } catch (err: any) {
         return JSON.stringify({ error: `Failed to invite: ${err.message}` });
       }
+    },
+  });
+
+  // ============ memory_search (callable) ============
+  registerToolPlugin({
+    name: 'memory_search',
+    kind: 'callable',
+    definition: {
+      name: 'memory_search',
+      description: 'Search durable memories scoped to the current actor and conversation. Use when recalled memory is insufficient and you need deeper historical context.',
+      parameters: {
+        type: 'object',
+        properties: {
+          queryText: { type: 'string', description: 'What you want to search for in memory.' },
+          limit: { type: 'string', description: 'Optional result limit from 1 to 10.' },
+        },
+        required: ['queryText'],
+      },
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const session = await getSession(context.sessionId);
+      if (!session) {
+        return JSON.stringify({ error: 'Session not found' });
+      }
+
+      const queryText = String((input as any).queryText || '').trim();
+      const limit = Math.max(1, Math.min(10, parseInt(String((input as any).limit || '5'), 10) || 5));
+      if (!queryText) {
+        return JSON.stringify({ error: 'queryText is required' });
+      }
+
+      const result = await runMemorySearch(context.workspaceId, {
+        queryText,
+        actorId: context.actorId,
+        conversationId: session.conversation_id,
+        limit,
+        metadata: {
+          sessionId: context.sessionId,
+          source: 'memory_search_tool',
+        },
+      });
+
+      return JSON.stringify({
+        success: true,
+        runId: result.run.id,
+        results: result.memories.map((memory) => ({
+          id: memory.id,
+          scope: memory.scope,
+          category: memory.category,
+          textDigest: memory.textDigest,
+          tags: memory.tags,
+          finalScore: Number(memory.finalScore.toFixed(4)),
+          matchedTerms: memory.matchedTerms || [],
+        })),
+      });
     },
   });
 

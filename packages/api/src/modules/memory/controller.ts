@@ -1,64 +1,92 @@
 import { z } from 'zod';
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import {
   createMemory,
-  getMemory,
-  updateMemory,
   deleteMemory,
+  getMemory,
   listMemories,
-  searchMemories,
-  recallMemories,
   MemoryError,
+  recallMemories,
+  runMemorySearch,
+  updateMemory,
 } from './service.js';
 
-const memoryCategoryEnum = z.enum(['working', 'experiential', 'knowledge', 'procedural', 'relational']);
-const memoryScopeEnum = z.enum(['private', 'team', 'workspace']);
+const memoryScopeEnum = z.enum(['conversation_shared', 'actor_global', 'actor_conversation']);
+const memoryCategoryEnum = z.enum(['fact', 'preference', 'decision', 'relationship', 'procedure', 'artifact', 'summary']);
+const memoryStatusEnum = z.enum(['candidate', 'established', 'superseded', 'retracted']);
+const memoryStabilityEnum = z.enum(['ephemeral', 'durable']);
+const contentBlockSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('text'),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal('file_ref'),
+    fileId: z.string().uuid(),
+    storedName: z.string(),
+    url: z.string(),
+    mimeType: z.string(),
+    originalName: z.string(),
+    sizeBytes: z.number(),
+    category: z.enum(['image', 'audio', 'video', 'document']),
+  }),
+]);
 
-const createMemorySchema = z.object({
-  actorId: z.string().uuid().optional(),
-  category: memoryCategoryEnum,
+const memoryPayloadSchema = z.object({
   scope: memoryScopeEnum,
-  content: z.string().min(1, 'Content is required'),
-  summary: z.string().optional(),
-  tags: z.array(z.string()).optional(),
+  actorId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  category: memoryCategoryEnum,
+  status: memoryStatusEnum.optional(),
+  stability: memoryStabilityEnum.optional(),
   importance: z.number().min(0).max(1).optional(),
-  sourceWorkItemId: z.string().uuid().optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  tags: z.array(z.string()).optional(),
+  content: z.string().optional(),
+  contentBlocks: z.array(contentBlockSchema).optional(),
+  textDigest: z.string().optional(),
+  searchText: z.string().optional(),
+  sourceItemId: z.string().uuid().optional(),
+  sourceToolCallId: z.string().uuid().optional(),
+  sourceTurnId: z.string().uuid().optional(),
+  supersedesMemoryId: z.string().uuid().optional(),
+  metadata: z.record(z.any()).optional(),
 });
 
-const updateMemorySchema = z.object({
-  category: memoryCategoryEnum.optional(),
-  scope: memoryScopeEnum.optional(),
-  content: z.string().min(1).optional(),
-  summary: z.string().optional(),
-  tags: z.array(z.string()).optional(),
-  importance: z.number().min(0).max(1).optional(),
+const createMemorySchema = memoryPayloadSchema.refine((value) => !!value.content || !!value.contentBlocks || !!value.textDigest, {
+  message: 'content, contentBlocks, or textDigest is required',
 });
+
+const updateMemorySchema = memoryPayloadSchema.partial();
 
 const listMemoriesSchema = z.object({
   actorId: z.string().uuid().optional(),
-  category: memoryCategoryEnum.optional(),
+  conversationId: z.string().uuid().optional(),
   scope: memoryScopeEnum.optional(),
-  tags: z
-    .union([z.string().transform((s) => s.split(',')), z.array(z.string())])
-    .optional(),
+  category: memoryCategoryEnum.optional(),
+  status: memoryStatusEnum.optional(),
+  stability: memoryStabilityEnum.optional(),
+  tags: z.union([z.string().transform((value) => value.split(',').map((item) => item.trim()).filter(Boolean)), z.array(z.string())]).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 
 const searchMemoriesSchema = z.object({
-  query: z.string().min(1, 'Search query is required'),
+  queryText: z.string().min(1),
   actorId: z.string().uuid().optional(),
-  category: memoryCategoryEnum.optional(),
-  scope: memoryScopeEnum.optional(),
-  tags: z.array(z.string()).optional(),
-  limit: z.number().int().min(1).max(100).optional(),
+  conversationId: z.string().uuid().optional(),
+  scopes: z.array(memoryScopeEnum).optional(),
+  categories: z.array(memoryCategoryEnum).optional(),
+  statuses: z.array(memoryStatusEnum).optional(),
+  stabilities: z.array(memoryStabilityEnum).optional(),
+  limit: z.number().int().min(1).max(50).optional(),
+  metadata: z.record(z.any()).optional(),
 });
 
-const recallMemoriesSchema = z.object({
-  actorId: z.string().uuid(),
-  context: z.string().min(1, 'Context is required'),
-  categories: z.array(memoryCategoryEnum).optional(),
-  limit: z.number().int().min(1).max(100).optional(),
+const recallMemoriesSchema = searchMemoriesSchema.extend({
+  recallType: z.enum(['bootstrap', 'turn_recall']),
+  queryBlocks: z.array(contentBlockSchema).optional(),
 });
 
 function handleError(error: unknown, reply: FastifyReply) {
@@ -68,9 +96,9 @@ function handleError(error: unknown, reply: FastifyReply) {
   if (error instanceof z.ZodError) {
     return reply.status(400).send({
       error: 'Validation failed',
-      details: error.errors.map((e) => ({
-        field: e.path.join('.'),
-        message: e.message,
+      details: error.errors.map((item) => ({
+        field: item.path.join('.'),
+        message: item.message,
       })),
     });
   }
@@ -81,7 +109,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
   const prefix = '/api/v1/workspaces/:workspaceId/memories';
   const preHandler = [authMiddleware, workspaceMiddleware];
 
-  // POST / - create memory
   app.post(prefix, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId } = request.params as { workspaceId: string };
@@ -93,7 +120,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
     }
   });
 
-  // GET / - list memories
   app.get(prefix, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId } = request.params as { workspaceId: string };
@@ -105,90 +131,56 @@ export function registerMemoryRoutes(app: FastifyInstance) {
     }
   });
 
-  // GET /:memoryId - get memory
-  app.get(
-    `${prefix}/:memoryId`,
-    { preHandler },
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const { workspaceId, memoryId } = request.params as {
-          workspaceId: string;
-          memoryId: string;
-        };
-        const memory = await getMemory(workspaceId, memoryId);
-        return reply.status(200).send({ memory });
-      } catch (error) {
-        return handleError(error, reply);
-      }
-    },
-  );
+  app.get(`${prefix}/:memoryId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { workspaceId, memoryId } = request.params as { workspaceId: string; memoryId: string };
+      const memory = await getMemory(workspaceId, memoryId);
+      return reply.status(200).send({ memory });
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
 
-  // PUT /:memoryId - update memory
-  app.put(
-    `${prefix}/:memoryId`,
-    { preHandler },
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const { workspaceId, memoryId } = request.params as {
-          workspaceId: string;
-          memoryId: string;
-        };
-        const body = updateMemorySchema.parse(request.body);
-        const memory = await updateMemory(workspaceId, memoryId, body);
-        return reply.status(200).send({ memory });
-      } catch (error) {
-        return handleError(error, reply);
-      }
-    },
-  );
+  app.put(`${prefix}/:memoryId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { workspaceId, memoryId } = request.params as { workspaceId: string; memoryId: string };
+      const body = updateMemorySchema.parse(request.body);
+      const memory = await updateMemory(workspaceId, memoryId, body);
+      return reply.status(200).send({ memory });
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
 
-  // DELETE /:memoryId - delete memory
-  app.delete(
-    `${prefix}/:memoryId`,
-    { preHandler },
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const { workspaceId, memoryId } = request.params as {
-          workspaceId: string;
-          memoryId: string;
-        };
-        await deleteMemory(workspaceId, memoryId);
-        return reply.status(204).send();
-      } catch (error) {
-        return handleError(error, reply);
-      }
-    },
-  );
+  app.delete(`${prefix}/:memoryId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { workspaceId, memoryId } = request.params as { workspaceId: string; memoryId: string };
+      await deleteMemory(workspaceId, memoryId);
+      return reply.status(204).send();
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
 
-  // POST /search - search memories
-  app.post(
-    `${prefix}/search`,
-    { preHandler },
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const { workspaceId } = request.params as { workspaceId: string };
-        const body = searchMemoriesSchema.parse(request.body);
-        const memories = await searchMemories(workspaceId, body);
-        return reply.status(200).send({ memories });
-      } catch (error) {
-        return handleError(error, reply);
-      }
-    },
-  );
+  app.post(`${prefix}/search`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { workspaceId } = request.params as { workspaceId: string };
+      const body = searchMemoriesSchema.parse(request.body);
+      const result = await runMemorySearch(workspaceId, body);
+      return reply.status(200).send(result);
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
 
-  // POST /recall - recall relevant memories for an actor
-  app.post(
-    `${prefix}/recall`,
-    { preHandler },
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const { workspaceId } = request.params as { workspaceId: string };
-        const body = recallMemoriesSchema.parse(request.body);
-        const memories = await recallMemories(workspaceId, body);
-        return reply.status(200).send({ memories });
-      } catch (error) {
-        return handleError(error, reply);
-      }
-    },
-  );
+  app.post(`${prefix}/recall`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { workspaceId } = request.params as { workspaceId: string };
+      const body = recallMemoriesSchema.parse(request.body);
+      const result = await recallMemories(workspaceId, body);
+      return reply.status(200).send(result);
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
 }

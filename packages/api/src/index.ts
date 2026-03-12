@@ -41,7 +41,6 @@ import { registerCallableToolPlugins } from './modules/ai/session-tools.js';
 import { startActorThinkingWorker } from './workers/actor-thinking.js';
 import { startSessionThinkingWorker } from './workers/session-thinking.js';
 import { startSessionTimeoutWorker } from './workers/session-timeout.js';
-import { startMemoryArchivalWorker } from './workers/memory-archival.js';
 import { startStandingOrdersWorker } from './workers/standing-orders.js';
 import { shutdownAllWorkers } from './workers/registry.js';
 import { shutdownQueues } from './workers/queues.js';
@@ -131,7 +130,6 @@ async function main() {
   startActorThinkingWorker();
   startSessionThinkingWorker();
   startSessionTimeoutWorker();
-  startMemoryArchivalWorker();
   startStandingOrdersWorker();
   console.log('Workers started (including session-thinking and session-timeout)');
 

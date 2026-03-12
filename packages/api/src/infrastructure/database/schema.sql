@@ -79,7 +79,6 @@ CREATE TABLE actors (
   skills JSONB DEFAULT '[]',
   config JSONB DEFAULT '{}',
   is_active BOOLEAN DEFAULT TRUE,
-  memory_version BIGINT DEFAULT 0,
   max_concurrent_sessions INT DEFAULT 3,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -185,32 +184,6 @@ CREATE TABLE messages (
 CREATE INDEX idx_messages_workspace ON messages(workspace_id);
 CREATE INDEX idx_messages_work_item ON messages(work_item_id);
 CREATE INDEX idx_messages_created ON messages(workspace_id, created_at DESC);
-
--- ============ Memories ============
-CREATE TABLE memories (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  category VARCHAR(20) NOT NULL DEFAULT 'knowledge'
-    CHECK (category IN ('working', 'experiential', 'knowledge', 'procedural', 'relational')),
-  scope VARCHAR(20) NOT NULL DEFAULT 'private'
-    CHECK (scope IN ('private', 'team', 'workspace')),
-  content TEXT NOT NULL,
-  summary TEXT,
-  tags TEXT[] DEFAULT '{}',
-  source_work_item_id UUID REFERENCES work_items(id) ON DELETE SET NULL,
-  importance REAL DEFAULT 0.5 CHECK (importance >= 0 AND importance <= 1),
-  embedding VECTOR(1536),
-  expires_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_memories_workspace ON memories(workspace_id);
-CREATE INDEX idx_memories_actor ON memories(actor_id);
-CREATE INDEX idx_memories_category ON memories(actor_id, category);
-CREATE INDEX idx_memories_tags ON memories USING GIN(tags);
-CREATE INDEX idx_memories_content_trgm ON memories USING GIN(content gin_trgm_ops);
 
 -- ============ Standing Orders ============
 CREATE TABLE standing_orders (
@@ -420,6 +393,11 @@ CREATE TABLE conversation_items (
   bundle_id UUID,
   reply_to_item_id UUID REFERENCES conversation_items(id) ON DELETE SET NULL,
   caused_by_item_id UUID REFERENCES conversation_items(id) ON DELETE SET NULL,
+  event_payload JSONB DEFAULT '{}',
+  event_timeline_policy VARCHAR(20)
+    CHECK (event_timeline_policy IN ('none', 'all_members', 'users_only', 'actors_only', 'targeted_members')),
+  event_context_policy VARCHAR(20)
+    CHECK (event_context_policy IN ('none', 'shared', 'actor_private', 'targeted_members')),
   sequence BIGINT GENERATED ALWAYS AS IDENTITY,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -468,6 +446,15 @@ CREATE TABLE conversation_item_targets (
 );
 
 CREATE INDEX idx_conversation_item_targets_member ON conversation_item_targets(target_member_id, item_id);
+
+CREATE TABLE conversation_item_context_targets (
+  item_id UUID NOT NULL REFERENCES conversation_items(id) ON DELETE CASCADE,
+  target_member_id UUID NOT NULL REFERENCES conversation_members(id) ON DELETE CASCADE,
+  PRIMARY KEY (item_id, target_member_id)
+);
+
+CREATE INDEX idx_conversation_item_context_targets_member
+  ON conversation_item_context_targets(target_member_id, item_id);
 
 -- ============ Conversation Reads ============
 CREATE TABLE conversation_reads (
@@ -633,6 +620,136 @@ CREATE TABLE tool_result_parts (
 
 CREATE INDEX idx_tool_result_parts_result ON tool_result_parts(tool_result_id, ordinal);
 
+-- ============ Memory Entries ============
+CREATE TABLE memory_entries (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  scope VARCHAR(30) NOT NULL
+    CHECK (scope IN ('conversation_shared', 'actor_global', 'actor_conversation')),
+  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  category VARCHAR(30) NOT NULL
+    CHECK (category IN ('fact', 'preference', 'decision', 'relationship', 'procedure', 'artifact', 'summary')),
+  status VARCHAR(20) NOT NULL DEFAULT 'established'
+    CHECK (status IN ('candidate', 'established', 'superseded', 'retracted')),
+  stability VARCHAR(20) NOT NULL DEFAULT 'durable'
+    CHECK (stability IN ('ephemeral', 'durable')),
+  importance REAL NOT NULL DEFAULT 0.5 CHECK (importance >= 0 AND importance <= 1),
+  confidence REAL NOT NULL DEFAULT 0.8 CHECK (confidence >= 0 AND confidence <= 1),
+  tags TEXT[] DEFAULT '{}',
+  text_digest TEXT NOT NULL DEFAULT '',
+  search_text TEXT NOT NULL DEFAULT '',
+  source_item_id UUID REFERENCES conversation_items(id) ON DELETE SET NULL,
+  source_tool_call_id UUID REFERENCES tool_calls(id) ON DELETE SET NULL,
+  source_turn_id UUID REFERENCES turns(id) ON DELETE SET NULL,
+  supersedes_memory_id UUID REFERENCES memory_entries(id) ON DELETE SET NULL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (
+    (scope = 'conversation_shared' AND conversation_id IS NOT NULL AND actor_id IS NULL) OR
+    (scope = 'actor_global' AND actor_id IS NOT NULL AND conversation_id IS NULL) OR
+    (scope = 'actor_conversation' AND actor_id IS NOT NULL AND conversation_id IS NOT NULL)
+  )
+);
+
+CREATE INDEX idx_memory_entries_workspace ON memory_entries(workspace_id, created_at DESC);
+CREATE INDEX idx_memory_entries_actor ON memory_entries(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
+CREATE INDEX idx_memory_entries_conversation ON memory_entries(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
+CREATE INDEX idx_memory_entries_scope_status ON memory_entries(workspace_id, scope, status, stability, created_at DESC);
+CREATE INDEX idx_memory_entries_tags ON memory_entries USING GIN(tags);
+
+-- ============ Memory Entry Parts ============
+CREATE TABLE memory_entry_parts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  memory_entry_id UUID NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
+  ordinal INT NOT NULL,
+  part_type VARCHAR(20) NOT NULL CHECK (part_type IN ('text', 'file_ref', 'json')),
+  text_value TEXT,
+  file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  json_value JSONB,
+  mime_type VARCHAR(255),
+  name VARCHAR(255),
+  metadata JSONB DEFAULT '{}',
+  UNIQUE(memory_entry_id, ordinal),
+  CHECK (
+    (part_type = 'text' AND text_value IS NOT NULL) OR
+    (part_type = 'file_ref' AND file_id IS NOT NULL) OR
+    (part_type = 'json' AND json_value IS NOT NULL)
+  )
+);
+
+CREATE INDEX idx_memory_entry_parts_entry ON memory_entry_parts(memory_entry_id, ordinal);
+
+-- ============ Memory Index Chunks ============
+CREATE TABLE memory_index_chunks (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  memory_entry_id UUID NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  scope VARCHAR(30) NOT NULL
+    CHECK (scope IN ('conversation_shared', 'actor_global', 'actor_conversation')),
+  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  chunk_index INT NOT NULL,
+  search_text TEXT NOT NULL,
+  embedding VECTOR(1536),
+  token_count INT DEFAULT 0,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(memory_entry_id, chunk_index),
+  CHECK (
+    (scope = 'conversation_shared' AND conversation_id IS NOT NULL AND actor_id IS NULL) OR
+    (scope = 'actor_global' AND actor_id IS NOT NULL AND conversation_id IS NULL) OR
+    (scope = 'actor_conversation' AND actor_id IS NOT NULL AND conversation_id IS NOT NULL)
+  )
+);
+
+CREATE INDEX idx_memory_index_chunks_entry ON memory_index_chunks(memory_entry_id, chunk_index);
+CREATE INDEX idx_memory_index_chunks_scope ON memory_index_chunks(workspace_id, scope, created_at DESC);
+CREATE INDEX idx_memory_index_chunks_actor ON memory_index_chunks(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
+CREATE INDEX idx_memory_index_chunks_conversation ON memory_index_chunks(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
+CREATE INDEX idx_memory_index_chunks_fts ON memory_index_chunks USING GIN(to_tsvector('simple', search_text));
+CREATE INDEX idx_memory_index_chunks_trgm ON memory_index_chunks USING GIN(search_text gin_trgm_ops);
+
+-- ============ Memory Recall Runs ============
+CREATE TABLE memory_recall_runs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  recall_type VARCHAR(20) NOT NULL
+    CHECK (recall_type IN ('bootstrap', 'turn_recall', 'manual_search')),
+  query_text TEXT NOT NULL DEFAULT '',
+  query_blocks JSONB DEFAULT '[]',
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_memory_recall_runs_workspace ON memory_recall_runs(workspace_id, created_at DESC);
+CREATE INDEX idx_memory_recall_runs_actor ON memory_recall_runs(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
+CREATE INDEX idx_memory_recall_runs_conversation ON memory_recall_runs(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
+
+-- ============ Memory Recall Run Results ============
+CREATE TABLE memory_recall_run_results (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  run_id UUID NOT NULL REFERENCES memory_recall_runs(id) ON DELETE CASCADE,
+  memory_entry_id UUID NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
+  matched_chunk_id UUID REFERENCES memory_index_chunks(id) ON DELETE SET NULL,
+  rank INT NOT NULL,
+  final_score REAL NOT NULL DEFAULT 0,
+  vector_score REAL,
+  text_score REAL,
+  similarity_score REAL,
+  matched_terms TEXT[] DEFAULT '{}',
+  recall_reason TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_memory_recall_run_results_run ON memory_recall_run_results(run_id, rank);
+CREATE INDEX idx_memory_recall_run_results_memory ON memory_recall_run_results(memory_entry_id, created_at DESC);
+
 -- ============ Context Archive Points ============
 CREATE TABLE context_archive_points (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -761,7 +878,7 @@ CREATE TABLE session_context_states (
 CREATE TABLE session_interrupts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   target_session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  type VARCHAR(50) NOT NULL CHECK (type IN ('progress_check', 'memory_changed', 'priority_override')),
+  type VARCHAR(50) NOT NULL CHECK (type IN ('progress_check', 'priority_override')),
   content TEXT NOT NULL,
   from_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   is_consumed BOOLEAN DEFAULT FALSE,
@@ -1012,8 +1129,9 @@ DECLARE
   tbl TEXT;
 BEGIN
   FOR tbl IN SELECT unnest(ARRAY[
-    'users', 'workspaces', 'workspace_invites', 'actors', 'work_items', 'memories',
+    'users', 'workspaces', 'workspace_invites', 'actors', 'work_items',
     'standing_orders', 'model_groups', 'model_group_items', 'conversations', 'sessions',
+    'memory_entries', 'memory_index_chunks',
     'mcp_organizations', 'mcp_plugins', 'mcp_installations', 'mcp_relays', 'mcp_relay_servers',
     'a2a_apps', 'agent_endpoints', 'endpoint_agents', 'conversation_bridges'
   ])
