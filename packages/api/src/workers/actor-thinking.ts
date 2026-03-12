@@ -10,6 +10,7 @@ import { executeActorActions } from '../modules/orchestrator/service.js';
 import { resolveModelConfig } from '../modules/model-groups/resolver.js';
 import { buildAdHocContextItems } from '../modules/ai/context-builder.js';
 import { buildAdHocProviderContextWindow } from '../modules/context/service.js';
+import { registerWorker } from './registry.js';
 
 export function startActorThinkingWorker() {
   const worker = new Worker(
@@ -124,5 +125,6 @@ export function startActorThinkingWorker() {
     console.error(`Actor thinking job ${job?.id} failed:`, err.message);
   });
 
+  registerWorker(worker);
   return worker;
 }

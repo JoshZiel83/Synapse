@@ -3,6 +3,7 @@ import type { SystemEvent } from '@synapse/shared';
 import { WS_AUTH_TIMEOUT, WS_HEARTBEAT_INTERVAL } from '@synapse/shared';
 import { onEvent } from '../events/index.js';
 import { handleRelayConnection } from '../../modules/mcp-plugins/relay-manager.js';
+import { isShuttingDown } from '../shutdown/state.js';
 
 interface WSClient {
   ws: any;
@@ -21,12 +22,45 @@ let appRef: FastifyInstance | null = null;
 export function setupWebSocket(app: FastifyInstance) {
   appRef = app;
 
+  app.addHook('onRequest', async (request, reply) => {
+    const isUpgrade = request.headers.upgrade?.toLowerCase() === 'websocket';
+    if (isUpgrade && isShuttingDown()) {
+      return reply.code(503).send({
+        error: 'Server shutting down',
+        message: 'WebSocket connections are temporarily unavailable while the server is shutting down.',
+      });
+    }
+  });
+
   // Relay agent WebSocket endpoint
   app.get('/ws/relay', { websocket: true }, (socket: any, req: any) => {
+    if (isShuttingDown()) {
+      try {
+        socket.send(JSON.stringify({
+          type: 'server_shutdown',
+          message: 'Synapse API server is shutting down',
+          retryable: true,
+        }));
+      } catch {}
+      try { socket.close(1012, 'service restart'); } catch {}
+      return;
+    }
     handleRelayConnection(socket, req, app);
   });
 
   app.get('/ws', { websocket: true }, (socket: any, req: any) => {
+    if (isShuttingDown()) {
+      try {
+        socket.send(JSON.stringify({
+          type: 'server_shutdown',
+          message: 'Synapse API server is shutting down',
+          retryable: true,
+        }));
+      } catch {}
+      try { socket.close(1012, 'service restart'); } catch {}
+      return;
+    }
+
     const clientId = crypto.randomUUID();
 
     const client: WSClient = {
@@ -111,6 +145,10 @@ export function setupWebSocket(app: FastifyInstance) {
     socket.on('close', () => {
       cleanup(clientId);
     });
+
+    socket.on('error', () => {
+      cleanup(clientId);
+    });
   });
 
   // Forward events to relevant WebSocket clients
@@ -139,5 +177,26 @@ export function broadcastToWorkspace(workspaceId: string, data: unknown) {
     if (client.authenticated && client.workspaceId === workspaceId && client.ws.readyState === 1) {
       client.ws.send(msg);
     }
+  }
+}
+
+export async function shutdownWebSockets(reason = 'Synapse API server is shutting down') {
+  for (const [clientId, client] of clients) {
+    if (client.authTimer) clearTimeout(client.authTimer);
+    if (client.heartbeatTimer) clearInterval(client.heartbeatTimer);
+    if (client.pongTimer) clearTimeout(client.pongTimer);
+
+    if (client.ws.readyState === 1) {
+      try {
+        client.ws.send(JSON.stringify({
+          type: 'server_shutdown',
+          message: reason,
+          retryable: true,
+        }));
+      } catch {}
+      try { client.ws.close(1012, 'service restart'); } catch {}
+    }
+
+    cleanup(clientId);
   }
 }

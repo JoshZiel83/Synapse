@@ -317,7 +317,18 @@ export async function shutdownAllRelays() {
       clearTimeout(pending.timer);
       pending.reject(new Error('Server shutting down'));
     }
-    try { connected.ws.close(); } catch {}
+    if (connected.ws.readyState === 1) {
+      try {
+        connected.ws.send(JSON.stringify({
+          type: 'server_shutdown',
+          message: 'Synapse API server is shutting down',
+          retryable: true,
+        }));
+      } catch {}
+      try { connected.ws.close(1012, 'service restart'); } catch {}
+    } else {
+      try { connected.ws.close(); } catch {}
+    }
   }
   connectedRelays.clear();
   await query(`UPDATE mcp_relays SET is_connected = FALSE WHERE is_connected = TRUE`).catch(() => {});

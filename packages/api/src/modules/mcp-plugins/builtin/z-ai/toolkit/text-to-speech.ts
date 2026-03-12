@@ -2,6 +2,7 @@ import { ToolDefinition } from '@synapse/shared';
 import type { SubFeature } from './types.js';
 import { saveFromBuffer } from '../../../../../infrastructure/storage/file-io.js';
 import { pluginOutputFileRef } from '../../../file-ref.js';
+import { normalizeZhipuTransportError, throwZhipuApiError } from './zhipu-errors.js';
 
 const ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4';
 const DEFAULT_MODEL = 'glm-tts';
@@ -27,7 +28,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
           enum: VALID_VOICES,
         },
         speed: { type: 'number', description: 'Speech speed (0.5 to 2.0, default 1.0)' },
-        format: { type: 'string', description: 'Audio format: wav (default) or pcm', enum: ['wav', 'pcm'] },
+        volume: { type: 'number', description: 'Output volume. Official range is (0, 10], default 1.0.' },
+        watermarkEnabled: {
+          type: 'boolean',
+          description: 'Whether to keep the official AI watermark. true by default; false only works for accounts that have enabled de-watermark permissions in ZhipuAI console.',
+        } as any,
+        format: { type: 'string', description: 'Audio format. The official API default is pcm; this tool supports wav and pcm and defaults to wav for easier playback.', enum: ['wav', 'pcm'] },
       },
       required: ['text'],
     },
@@ -49,6 +55,7 @@ export const ttsFeature: SubFeature = {
     const text = input.text as string;
     const voice = VALID_VOICES.includes(input.voice as string) ? (input.voice as string) : 'tongtong';
     const speed = input.speed !== undefined ? Math.max(0.5, Math.min(2.0, Number(input.speed))) : 1.0;
+    const volume = input.volume !== undefined ? Math.max(Number.EPSILON, Math.min(10, Number(input.volume))) : 1.0;
     const format = input.format === 'pcm' ? 'pcm' : 'wav';
 
     const body: Record<string, unknown> = {
@@ -56,8 +63,10 @@ export const ttsFeature: SubFeature = {
       input: text,
       voice,
       speed,
+      volume,
       response_format: format,
     };
+    if (typeof input.watermarkEnabled === 'boolean') body.watermark_enabled = input.watermarkEnabled;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
@@ -74,8 +83,7 @@ export const ttsFeature: SubFeature = {
       });
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        throw new Error(`GLM-TTS API error ${response.status}: ${errorText}`);
+        await throwZhipuApiError('文本转语音 API', response);
       }
 
       const arrayBuf = await response.arrayBuffer();
@@ -97,6 +105,8 @@ export const ttsFeature: SubFeature = {
         { type: 'text', text: `Generated audio: ${fileRecord.originalName}` },
         pluginOutputFileRef(fileRecord),
       ];
+    } catch (error) {
+      throw normalizeZhipuTransportError('文本转语音 API', error);
     } finally {
       clearTimeout(timeout);
     }

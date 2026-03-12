@@ -5,6 +5,7 @@ import { QUEUE_NAMES, nowISO } from '@synapse/shared';
 import { aiComplete } from '../modules/ai/index.js';
 import { resolveModelConfig } from '../modules/model-groups/resolver.js';
 import { getSessionMessages } from '../modules/session/service.js';
+import { registerWorker } from './registry.js';
 
 export function startMemoryArchivalWorker() {
   const worker = new Worker(
@@ -64,5 +65,6 @@ Return a JSON array of memories:
     console.error(`Memory archival job ${job?.id} failed:`, err.message);
   });
 
+  registerWorker(worker);
   return worker;
 }

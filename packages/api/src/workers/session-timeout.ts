@@ -2,6 +2,7 @@ import { Worker } from 'bullmq';
 import { redis } from '../infrastructure/redis/index.js';
 import { QUEUE_NAMES } from '@synapse/shared';
 import { getSession } from '../modules/session/service.js';
+import { registerWorker } from './registry.js';
 
 /**
  * Session timeout worker — handles timed-out sessions.
@@ -33,5 +34,6 @@ export function startSessionTimeoutWorker() {
     console.error(`Session timeout job ${job?.id} failed:`, err.message);
   });
 
+  registerWorker(worker);
   return worker;
 }

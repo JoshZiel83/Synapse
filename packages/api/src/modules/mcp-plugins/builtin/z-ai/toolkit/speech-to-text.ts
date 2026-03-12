@@ -9,6 +9,7 @@
 import { ToolDefinition } from '@synapse/shared';
 import type { SubFeature } from './types.js';
 import { fileRefProperty, resolveAudioFileRefToBase64 } from '../../../file-ref.js';
+import { normalizeZhipuTransportError, throwZhipuApiError } from './zhipu-errors.js';
 
 const ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4';
 const DEFAULT_MODEL = 'glm-asr-2512';
@@ -32,6 +33,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'array',
           items: { type: 'string' },
           description: 'Hotword list to improve domain-specific recognition, e.g. names or terms (max 100 items)',
+        },
+        requestId: {
+          type: 'string',
+          description: 'Optional unique request identifier forwarded to the official API.',
+        },
+        userId: {
+          type: 'string',
+          description: 'Optional end-user identifier forwarded to the official API for abuse tracing. Must be 6-128 characters if provided.',
         },
       },
       required: ['fileRef'],
@@ -57,6 +66,8 @@ export const sttFeature: SubFeature = {
     const { base64 } = await getAudioBase64(input);
     const prompt = input.prompt as string | undefined;
     const hotwords = input.hotwords as string[] | undefined;
+    const requestId = input.requestId as string | undefined;
+    const userId = input.userId as string | undefined;
 
     // Use the dedicated /audio/transcriptions endpoint with file_base64
     // @see https://docs.bigmodel.cn/api-reference/模型-api/语音转文本
@@ -66,6 +77,9 @@ export const sttFeature: SubFeature = {
     };
     if (prompt) body.prompt = prompt;
     if (hotwords && hotwords.length > 0) body.hotwords = hotwords.slice(0, 100);
+    if (requestId) body.request_id = requestId;
+    if (userId && userId.length >= 6 && userId.length <= 128) body.user_id = userId;
+    body.stream = false;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
@@ -82,13 +96,14 @@ export const sttFeature: SubFeature = {
       });
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        throw new Error(`GLM-ASR API error ${response.status}: ${errorText}`);
+        await throwZhipuApiError('语音转文本 API', response);
       }
 
       const result = await response.json() as { text?: string };
 
       return result.text || 'No transcription result';
+    } catch (error) {
+      throw normalizeZhipuTransportError('语音转文本 API', error);
     } finally {
       clearTimeout(timeout);
     }

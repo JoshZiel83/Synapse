@@ -104,3 +104,7 @@ export async function testConnection(): Promise<boolean> {
     return false;
   }
 }
+
+export async function closeDatabasePool(): Promise<void> {
+  await pool.end();
+}

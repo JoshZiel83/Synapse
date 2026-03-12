@@ -4,11 +4,12 @@ import jwt from '@fastify/jwt';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
 import { config } from './config/index.js';
-import { testConnection } from './infrastructure/database/index.js';
-import { testRedisConnection } from './infrastructure/redis/index.js';
-import { initEventBus } from './infrastructure/events/index.js';
-import { setupWebSocket } from './infrastructure/websocket/index.js';
+import { closeDatabasePool, testConnection } from './infrastructure/database/index.js';
+import { shutdownRedisConnections, testRedisConnection } from './infrastructure/redis/index.js';
+import { initEventBus, shutdownEventBus } from './infrastructure/events/index.js';
+import { setupWebSocket, shutdownWebSockets } from './infrastructure/websocket/index.js';
 import { auditMiddleware } from './infrastructure/middleware/audit.js';
+import { beginShutdown } from './infrastructure/shutdown/state.js';
 import { ensureStorageDir } from './infrastructure/storage/index.js';
 
 // Module imports
@@ -30,8 +31,9 @@ import a2aModule from './modules/a2a/index.js';
 import { seedPlatformDefaultGroup } from './modules/model-groups/service.js';
 import { seedBuiltinMcpPlugins } from './modules/mcp-plugins/service.js';
 import { initBuiltinRegistry } from './modules/mcp-plugins/builtin/index.js';
-import { initInstanceManagerListeners } from './modules/mcp-plugins/instance-manager.js';
+import { initInstanceManagerListeners, shutdownAllInstances } from './modules/mcp-plugins/instance-manager.js';
 import { initRelayManager, shutdownAllRelays } from './modules/mcp-plugins/relay-manager.js';
+import { recoverInterruptedExecutions } from './modules/execution/service.js';
 import { registerActionToolPlugins } from './modules/ai/tools.js';
 import { registerCallableToolPlugins } from './modules/ai/session-tools.js';
 
@@ -41,6 +43,8 @@ import { startSessionThinkingWorker } from './workers/session-thinking.js';
 import { startSessionTimeoutWorker } from './workers/session-timeout.js';
 import { startMemoryArchivalWorker } from './workers/memory-archival.js';
 import { startStandingOrdersWorker } from './workers/standing-orders.js';
+import { shutdownAllWorkers } from './workers/registry.js';
+import { shutdownQueues } from './workers/queues.js';
 
 async function main() {
   const app = Fastify({
@@ -100,6 +104,10 @@ async function main() {
     await initBuiltinRegistry();
     initInstanceManagerListeners();
     await initRelayManager();
+    const recovered = await recoverInterruptedExecutions();
+    if (recovered.recoveredToolCalls > 0 || recovered.recoveredTurns > 0) {
+      console.warn('[startup-recovery] Recovered interrupted execution state', recovered);
+    }
     console.log('MCP plugins seeded and registry initialized');
   } catch (err) {
     console.error('Failed to seed MCP plugins:', err);
@@ -136,12 +144,73 @@ async function main() {
     process.exit(1);
   }
 
-  // Graceful shutdown for relay connections
-  const gracefulShutdown = async () => {
-    await shutdownAllRelays();
+  const waitWithTimeout = async (label: string, promise: Promise<unknown>, ms: number) => {
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   };
-  process.on('SIGTERM', () => { gracefulShutdown().catch(() => {}); });
-  process.on('SIGINT', () => { gracefulShutdown().catch(() => {}); });
+
+  let shutdownStarted = false;
+  const gracefulShutdown = async (signal: string) => {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
+    beginShutdown();
+
+    app.log.info({ signal }, 'Starting graceful shutdown');
+
+    const forceExitTimer = setTimeout(() => {
+      app.log.error({ signal }, 'Graceful shutdown timed out, forcing exit');
+      process.exit(1);
+    }, 15000);
+    forceExitTimer.unref();
+
+    try {
+      await shutdownAllRelays().catch((err) => app.log.error({ err }, 'Failed to shutdown relay connections'));
+      await shutdownWebSockets().catch((err) => app.log.error({ err }, 'Failed to shutdown websocket clients'));
+      await waitWithTimeout('instance shutdown', shutdownAllInstances(), 5000).catch((err) => {
+        app.log.error({ err }, 'MCP instance shutdown timed out');
+      });
+      app.server.closeIdleConnections?.();
+      await waitWithTimeout('fastify close', app.close(), 5000).catch((err) => {
+        app.log.error({ err }, 'Fastify close timed out');
+        app.server.closeAllConnections?.();
+      });
+      await waitWithTimeout('worker shutdown', shutdownAllWorkers(), 5000).catch((err) => {
+        app.log.error({ err }, 'Worker shutdown timed out');
+      });
+      await waitWithTimeout('queue shutdown', shutdownQueues(), 5000).catch((err) => {
+        app.log.error({ err }, 'Queue shutdown timed out');
+      });
+      await waitWithTimeout('event bus shutdown', shutdownEventBus(), 3000).catch((err) => {
+        app.log.error({ err }, 'Event bus shutdown timed out');
+      });
+      await waitWithTimeout('database pool shutdown', closeDatabasePool(), 3000).catch((err) => {
+        app.log.error({ err }, 'Database pool shutdown timed out');
+      });
+      await waitWithTimeout('redis shutdown', shutdownRedisConnections(), 3000).catch((err) => {
+        app.log.error({ err }, 'Redis shutdown timed out');
+      });
+      app.log.info({ signal }, 'Graceful shutdown completed');
+      process.exit(0);
+    } catch (err) {
+      app.log.error({ err, signal }, 'Graceful shutdown failed');
+      process.exit(1);
+    } finally {
+      clearTimeout(forceExitTimer);
+    }
+  };
+
+  process.on('SIGTERM', () => { gracefulShutdown('SIGTERM').catch(() => {}); });
+  process.on('SIGINT', () => { gracefulShutdown('SIGINT').catch(() => {}); });
 }
 
 main();

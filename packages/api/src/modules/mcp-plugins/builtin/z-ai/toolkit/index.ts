@@ -4,6 +4,10 @@ import type { SubFeature } from './types.js';
 import { searchFeature } from './search.js';
 import { readerFeature } from './reader.js';
 import { zreadFeature } from './zread.js';
+import { ocrFeature } from './ocr.js';
+import { fileParserSyncFeature } from './file-parser-sync.js';
+import { layoutParsingFeature } from './layout-parsing.js';
+import { moderationFeature } from './moderation.js';
 import { visionFeature } from './vision.js';
 import { sttFeature } from './speech-to-text.js';
 import { imageGenFeature } from './image-generation.js';
@@ -13,6 +17,10 @@ const ALL_FEATURES: SubFeature[] = [
   searchFeature,
   readerFeature,
   zreadFeature,
+  ocrFeature,
+  fileParserSyncFeature,
+  layoutParsingFeature,
+  moderationFeature,
   visionFeature,
   sttFeature,
   imageGenFeature,
@@ -51,7 +59,7 @@ export const zAiToolkitHandler: BuiltinPluginHandler & {
     return tools;
   },
 
-  async execute(toolName: string, input: Record<string, unknown>, config: Record<string, unknown>): Promise<string | unknown[]> {
+  async execute(toolName: string, input: Record<string, unknown>, config: Record<string, unknown>): Promise<unknown> {
     const apiKey = config.apiKey as string;
     if (!apiKey) {
       throw new Error('ZhipuAI API key not configured. Set it in the plugin configuration.');

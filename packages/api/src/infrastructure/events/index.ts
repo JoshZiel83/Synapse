@@ -53,3 +53,11 @@ export function onEvent(type: string, handler: EventHandler) {
 export async function emitEvent(event: SystemEvent) {
   await redisPub.publish(REDIS_CHANNELS.EVENTS, JSON.stringify(event));
 }
+
+export async function shutdownEventBus() {
+  try {
+    await redisSub.unsubscribe(REDIS_CHANNELS.EVENTS);
+  } catch {
+    // Ignore unsubscribe errors during shutdown.
+  }
+}

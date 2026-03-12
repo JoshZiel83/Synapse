@@ -412,3 +412,95 @@ export async function logRuntimeEvent(params: {
     console.error('[runtime_events] failed:', err.message);
   });
 }
+
+export async function recoverInterruptedExecutions(params?: {
+  errorMessage?: string;
+}) {
+  const errorMessage = params?.errorMessage || 'Interrupted by server shutdown before the tool call completed.';
+
+  const interruptedToolCalls = await query<{
+    tool_call_id: string;
+    latest_attempt_id: string | null;
+    session_id: string | null;
+  }>(
+    `SELECT
+       tc.id AS tool_call_id,
+       tc.session_id,
+       (
+         SELECT tea.id
+         FROM tool_execution_attempts tea
+         WHERE tea.tool_call_id = tc.id
+         ORDER BY tea.attempt_no DESC
+         LIMIT 1
+       ) AS latest_attempt_id
+     FROM tool_calls tc
+     JOIN turns t ON t.id = tc.turn_id
+     WHERE t.status = 'running'
+       AND tc.status IN ('pending', 'running')`,
+  );
+
+  let recoveredToolCalls = 0;
+  for (const row of interruptedToolCalls.rows) {
+    if (row.latest_attempt_id) {
+      await query(
+        `UPDATE tool_execution_attempts
+         SET status = 'error',
+             is_error = TRUE,
+             error_message = COALESCE(error_message, $2)
+         WHERE id = $1`,
+        [row.latest_attempt_id, errorMessage],
+      );
+    }
+
+    const existingResult = await query(
+      `SELECT id FROM tool_results WHERE tool_call_id = $1 LIMIT 1`,
+      [row.tool_call_id],
+    );
+
+    if (!existingResult.rows[0]) {
+      await createToolResult({
+        toolCallId: row.tool_call_id,
+        attemptId: row.latest_attempt_id || undefined,
+        isError: true,
+        errorMessage,
+        parts: [{ type: 'text', text: `Error: ${errorMessage}` }],
+      });
+    }
+
+    await updateToolCallStatus(row.tool_call_id, 'failed');
+    recoveredToolCalls += 1;
+  }
+
+  const interruptedTurns = await query<{ id: string; session_id: string | null }>(
+    `SELECT id, session_id FROM turns WHERE status = 'running'`,
+  );
+
+  const sessionIds = new Set<string>();
+  for (const row of interruptedTurns.rows) {
+    await updateTurnStatus(row.id, 'failed', {
+      metadata: { errorMessage, interruptedByShutdown: true },
+    });
+    if (row.session_id) sessionIds.add(row.session_id);
+  }
+
+  let recoveredSessions = 0;
+  for (const sessionId of sessionIds) {
+    await query(
+      `UPDATE sessions
+       SET status = 'failed',
+           error_message = COALESCE(error_message, $2),
+           completed_at = COALESCE(completed_at, NOW()),
+           updated_at = NOW()
+       WHERE id = $1
+         AND status = 'active'`,
+      [sessionId, errorMessage],
+    );
+    recoveredSessions += 1;
+  }
+
+  return {
+    recoveredToolCalls,
+    recoveredTurns: interruptedTurns.rows.length,
+    recoveredSessions,
+  };
+}

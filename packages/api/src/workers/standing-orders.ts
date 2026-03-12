@@ -3,6 +3,7 @@ import { redis } from '../infrastructure/redis/index.js';
 import { query } from '../infrastructure/database/index.js';
 import { QUEUE_NAMES, nowISO } from '@synapse/shared';
 import { actorThinkingQueue } from './queues.js';
+import { registerWorker } from './registry.js';
 
 export function startStandingOrdersWorker() {
   const worker = new Worker(
@@ -42,5 +43,6 @@ export function startStandingOrdersWorker() {
     console.error(`Standing order job ${job?.id} failed:`, err.message);
   });
 
+  registerWorker(worker);
   return worker;
 }

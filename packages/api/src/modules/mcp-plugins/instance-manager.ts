@@ -326,12 +326,3 @@ export function initInstanceManagerListeners() {
   // No-op — version bumps are handled directly by service layer.
   // Event is still emitted for WebSocket frontend notifications (backward compat).
 }
-
-// Cleanup on process exit
-process.on('SIGTERM', () => {
-  shutdownAllInstances().catch(() => {});
-});
-
-process.on('SIGINT', () => {
-  shutdownAllInstances().catch(() => {});
-});

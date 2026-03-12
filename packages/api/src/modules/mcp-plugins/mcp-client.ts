@@ -20,6 +20,8 @@ export class McpHttpClient {
   private sessionId: string | null = null;
   private requestId = 0;
   private initialized = false;
+  private shutdownRequested = false;
+  private activeRequests = new Set<AbortController>();
 
   constructor(endpoint: string, headers?: Record<string, string>) {
     this.endpoint = endpoint;
@@ -58,6 +60,10 @@ export class McpHttpClient {
   }
 
   private async sendRequest(method: string, params?: Record<string, unknown>): Promise<unknown> {
+    if (this.shutdownRequested) {
+      throw new Error('MCP HTTP client is shutting down');
+    }
+
     const request: JsonRpcRequest = {
       jsonrpc: '2.0',
       id: this.nextId(),
@@ -77,6 +83,7 @@ export class McpHttpClient {
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
+    this.activeRequests.add(controller);
 
     try {
       const response = await fetch(this.endpoint, {
@@ -112,8 +119,14 @@ export class McpHttpClient {
       }
 
       return json.result;
+    } catch (error: any) {
+      if (controller.signal.aborted && this.shutdownRequested) {
+        throw new Error('MCP HTTP request aborted because the server is shutting down');
+      }
+      throw error;
     } finally {
       clearTimeout(timeout);
+      this.activeRequests.delete(controller);
     }
   }
 
@@ -169,20 +182,33 @@ export class McpHttpClient {
   async shutdown(): Promise<void> {
     if (!this.initialized) return;
     try {
+      this.shutdownRequested = true;
+      for (const controller of this.activeRequests) {
+        controller.abort();
+      }
+
       // For HTTP transport, we can send a DELETE to terminate the session
       if (this.sessionId) {
         const headers: Record<string, string> = {
           ...this.headers,
           'Mcp-Session-Id': this.sessionId,
         };
-        await fetch(this.endpoint, {
-          method: 'DELETE',
-          headers,
-        }).catch(() => {}); // Best-effort
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3000);
+        try {
+          await fetch(this.endpoint, {
+            method: 'DELETE',
+            headers,
+            signal: controller.signal,
+          }).catch(() => {}); // Best-effort
+        } finally {
+          clearTimeout(timeout);
+        }
       }
     } finally {
       this.initialized = false;
       this.sessionId = null;
+      this.activeRequests.clear();
     }
   }
 

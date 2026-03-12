@@ -61,7 +61,7 @@ export function extractFileRefId(value: unknown): string | null {
   return null;
 }
 
-async function resolveFileRecord(value: unknown, label: string, expectedCategory?: FileCategory): Promise<FileRecord> {
+export async function resolveFileRefRecord(value: unknown, label: string, expectedCategory?: FileCategory): Promise<FileRecord> {
   const fileId = extractFileRefId(value);
   if (!fileId) {
     throw new Error(`${label} must be a FileRef string like <FileRef id="..."/>`);
@@ -93,19 +93,19 @@ async function ensureSupportedVisionImage(buffer: Buffer, mimeType: string): Pro
 }
 
 export async function resolveImageFileRefToDataUrl(value: unknown, label = 'fileRef'): Promise<string> {
-  const record = await resolveFileRecord(value, label, 'image');
+  const record = await resolveFileRefRecord(value, label, 'image');
   const originalBuffer = await fileToBuffer(record.storedName);
   const { buffer, mimeType } = await ensureSupportedVisionImage(originalBuffer, record.mimeType);
   return `data:${mimeType};base64,${buffer.toString('base64')}`;
 }
 
 export async function resolveAudioFileRefToBase64(value: unknown, label = 'fileRef'): Promise<{ base64: string; mimeType: string }> {
-  const record = await resolveFileRecord(value, label, 'audio');
+  const record = await resolveFileRefRecord(value, label, 'audio');
   const base64 = await fileToBase64(record.storedName);
   return { base64, mimeType: record.mimeType };
 }
 
 export async function resolveVideoFileRefToPublicUrl(value: unknown, label = 'fileRef'): Promise<string> {
-  const record = await resolveFileRecord(value, label, 'video');
+  const record = await resolveFileRefRecord(value, label, 'video');
   return record.fullUrl;
 }

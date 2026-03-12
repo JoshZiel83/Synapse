@@ -24,3 +24,16 @@ export async function testRedisConnection(): Promise<boolean> {
     return false;
   }
 }
+
+export async function shutdownRedisConnections() {
+  const clients = [redisSub, redisPub, redis];
+  await Promise.allSettled(
+    clients.map(async (client) => {
+      try {
+        await client.quit();
+      } catch {
+        client.disconnect();
+      }
+    })
+  );
+}

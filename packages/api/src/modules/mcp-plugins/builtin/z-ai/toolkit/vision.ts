@@ -5,6 +5,7 @@ import {
   resolveImageFileRefToDataUrl,
   resolveVideoFileRefToPublicUrl,
 } from '../../../file-ref.js';
+import { normalizeZhipuTransportError, throwZhipuApiError } from './zhipu-errors.js';
 
 const ZHIPU_CHAT_ENDPOINT = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
 const DEFAULT_MODEL = 'glm-4v-flash';
@@ -16,8 +17,33 @@ interface VisionMessage {
 
 const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
+    name: 'ui_to_artifact',
+    description:
+      'Convert a UI screenshot into code guidance, a generation prompt, a design specification, or a natural-language description.',
+    parameters: {
+      type: 'object',
+      properties: {
+        fileRef: fileRefProperty('UI screenshot image to analyze.'),
+        artifactType: {
+          type: 'string',
+          description: 'Target artifact to generate from the screenshot.',
+          enum: ['frontend_code', 'design_prompt', 'design_spec', 'natural_language'],
+        },
+        framework: {
+          type: 'string',
+          description: 'Optional frontend framework or target stack, such as React, Vue, HTML/CSS, Tailwind, or SwiftUI.',
+        },
+        instructions: {
+          type: 'string',
+          description: 'Optional extra instructions about style, fidelity, components, or output constraints.',
+        },
+      },
+      required: ['fileRef'],
+    },
+  },
+  {
     name: 'image_analysis',
-    description: 'Analyze an image and provide a detailed description of its content, objects, scenes, and notable features.',
+    description: 'General-purpose image understanding for visual content not covered by the more specialized screenshot or diagram tools.',
     parameters: {
       type: 'object',
       properties: {
@@ -29,7 +55,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'extract_text_from_screenshot',
-    description: 'Extract and return all text visible in a screenshot or image using OCR capabilities.',
+    description: 'Extract visible text from screenshots, code panes, terminal output, documents, and other on-screen text.',
     parameters: {
       type: 'object',
       properties: {
@@ -41,7 +67,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'diagnose_error_screenshot',
-    description: 'Analyze a screenshot of an error message or error state and provide diagnosis and suggested fixes.',
+    description: 'Analyze an error screenshot, popup, stack trace, or failing UI state and provide diagnosis plus suggested fixes.',
     parameters: {
       type: 'object',
       properties: {
@@ -53,7 +79,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'understand_technical_diagram',
-    description: 'Analyze a technical diagram (architecture, UML, flowchart, etc.) and explain its components and relationships.',
+    description: 'Interpret architecture diagrams, flowcharts, UML, ER diagrams, and other technical drawings.',
     parameters: {
       type: 'object',
       properties: {
@@ -65,7 +91,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'analyze_data_visualization',
-    description: 'Analyze a chart, graph, or data visualization and extract key insights, trends, and data points.',
+    description: 'Analyze dashboards, charts, and graphs to extract trends, anomalies, and key business insights.',
     parameters: {
       type: 'object',
       properties: {
@@ -77,7 +103,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'ui_diff_check',
-    description: 'Compare two UI screenshots and identify visual differences, layout changes, or regressions.',
+    description: 'Compare two UI screenshots to find visual differences, regressions, and design-to-implementation mismatches.',
     parameters: {
       type: 'object',
       properties: {
@@ -102,7 +128,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'video_analysis',
-    description: 'Analyze a video by examining key frames and provide a summary of the content.',
+    description: 'Analyze video content and summarize key scenes, events, and details. Intended for common MP4/MOV/M4V-style video understanding workflows.',
     parameters: {
       type: 'object',
       properties: {
@@ -115,6 +141,24 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 ];
 
 const TOOL_PROMPTS: Record<string, (input: Record<string, unknown>) => { prompt: string; fileRefs: unknown[]; kind: 'image' | 'video' }> = {
+  ui_to_artifact: (input) => {
+    const artifactType = typeof input.artifactType === 'string' ? input.artifactType : 'natural_language';
+    const targetMap: Record<string, string> = {
+      frontend_code: 'frontend implementation guidance or code scaffolding',
+      design_prompt: 'a prompt for image/UI generation systems',
+      design_spec: 'a structured UI design specification',
+      natural_language: 'a natural-language UI description',
+    };
+    return {
+      prompt:
+        `Analyze this UI screenshot and convert it into ${targetMap[artifactType] || targetMap.natural_language}.` +
+        `${input.framework ? ` Target framework or stack: ${input.framework}.` : ''}` +
+        `${input.instructions ? ` Additional instructions: ${input.instructions}` : ''}` +
+        ' Focus on layout, hierarchy, spacing, components, states, copy, colors, and interactions that are visible in the screenshot.',
+      fileRefs: [input.fileRef],
+      kind: 'image',
+    };
+  },
   image_analysis: (input) => ({
     prompt: `Please analyze this image in detail.${input.focus ? ` Focus on: ${input.focus}` : ''} Describe objects, scenes, text, and notable features.`,
     fileRefs: [input.fileRef],
@@ -191,8 +235,7 @@ async function callGLM4V(
     });
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(`GLM-4V API error ${response.status}: ${errorText}`);
+      await throwZhipuApiError('视觉理解 API', response);
     }
 
     const result = await response.json() as {
@@ -200,6 +243,8 @@ async function callGLM4V(
     };
 
     return result.choices?.[0]?.message?.content || 'No response from vision model';
+  } catch (error) {
+    throw normalizeZhipuTransportError('视觉理解 API', error);
   } finally {
     clearTimeout(timeout);
   }

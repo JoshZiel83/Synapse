@@ -16,6 +16,7 @@ import { ToolDefinition } from '@synapse/shared';
 import type { SubFeature } from './types.js';
 import { saveFromUrl } from '../../../../../infrastructure/storage/file-io.js';
 import { pluginOutputFileRef } from '../../../file-ref.js';
+import { normalizeZhipuTransportError, throwZhipuApiError } from './zhipu-errors.js';
 
 const ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4';
 const DEFAULT_MODEL = 'cogview-4-250304';
@@ -58,6 +59,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
             'For cogview models: 1024x1024 (default), 768x1344, 864x1152, 1344x768, 1152x864, 1440x720, 720x1440. ' +
             'Custom: 512-2048px, multiples of 16.',
         },
+        watermarkEnabled: {
+          type: 'boolean',
+          description: 'Whether to keep the official AI watermark. true by default; false only works for accounts that have enabled de-watermark permissions in ZhipuAI console.',
+        } as any,
+        userId: {
+          type: 'string',
+          description: 'Optional end-user identifier passed through to ZhipuAI for abuse tracing. Must be 6-128 characters if provided.',
+        },
       },
       required: ['prompt'],
     },
@@ -95,6 +104,8 @@ export const imageGenFeature: SubFeature = {
     } else if (quality === 'hd' || quality === 'standard') {
       body.quality = quality;
     }
+    if (typeof input.watermarkEnabled === 'boolean') body.watermark_enabled = input.watermarkEnabled;
+    if (typeof input.userId === 'string' && input.userId.length >= 6 && input.userId.length <= 128) body.user_id = input.userId;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
@@ -111,8 +122,7 @@ export const imageGenFeature: SubFeature = {
       });
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        throw new Error(`CogView API error ${response.status}: ${errorText}`);
+        await throwZhipuApiError('图像生成 API', response);
       }
 
       const result = await response.json() as {
@@ -138,6 +148,8 @@ export const imageGenFeature: SubFeature = {
         { type: 'text', text: `Generated image: ${fileRecord.originalName}` },
         pluginOutputFileRef(fileRecord),
       ];
+    } catch (error) {
+      throw normalizeZhipuTransportError('图像生成 API', error);
     } finally {
       clearTimeout(timeout);
     }

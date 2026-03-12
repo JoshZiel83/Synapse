@@ -39,6 +39,7 @@ import {
 } from '../modules/conversation/service.js';
 import { createTurn, updateTurnStatus } from '../modules/execution/service.js';
 import { sessionThinkingQueue } from './queues.js';
+import { registerWorker } from './registry.js';
 
 async function loadNewVisibleMessages(params: {
   groupId: string;
@@ -472,6 +473,7 @@ export function startSessionThinkingWorker() {
     console.error(`Session thinking job ${job?.id} failed:`, err.message);
   });
 
+  registerWorker(worker);
   return worker;
 }
 
