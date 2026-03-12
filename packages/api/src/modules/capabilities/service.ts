@@ -1,12 +1,17 @@
 import type {
   CapabilityAvailableSkill,
+  CapabilityAuthProviderDefinition,
   CapabilityAuthorizationManifest,
   CapabilityAsset,
   CapabilityBinding,
   CapabilityBindingInstallMode,
   CapabilityBindingScope,
+  CapabilityCategory,
+  CapabilityConfigFieldDefinition,
   CapabilityGrant,
   CapabilityGrantScope,
+  CapabilityInstallFlow,
+  CapabilityInstallStep,
   CapabilityPackage,
   CapabilityPackageKind,
   CapabilityPackageRevision,
@@ -17,6 +22,7 @@ import type {
   CapabilityReuseScope,
   CapabilitySourceType,
   CapabilityPublisher,
+  LocalizedText,
   McpSetupStep,
   McpValidationRule,
 } from '@synapse/shared';
@@ -41,6 +47,25 @@ function asArray<T>(value: unknown): T[] {
 
 function asStringArray(value: unknown): string[] {
   return asArray<unknown>(value).filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+}
+
+function asLocalizedText(value: unknown, fallback?: string): LocalizedText | undefined {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return { en: value.trim() };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return fallback ? { en: fallback } : undefined;
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].trim().length > 0)
+    .map(([locale, text]) => [locale, text.trim()] as const);
+
+  if (entries.length === 0) {
+    return fallback ? { en: fallback } : undefined;
+  }
+
+  return Object.fromEntries(entries);
 }
 
 function asGrantScope(value: unknown): CapabilityGrantScope | undefined {
@@ -70,6 +95,127 @@ function extractAuthorizationManifest(manifestValue: unknown): CapabilityAuthori
       ? authorization.reason.trim()
       : undefined,
   };
+}
+
+function extractConfigFields(manifestValue: unknown, configSchemaValue: unknown, defaultConfigValue: unknown): CapabilityConfigFieldDefinition[] {
+  const manifest = asObject(manifestValue);
+  const configFields = asArray<CapabilityConfigFieldDefinition>(manifest.configFields);
+  if (configFields.length > 0) {
+    return configFields.map((field) => ({
+      key: field.key,
+      type: field.type,
+      titleI18n: asLocalizedText(field.titleI18n, field.key) || { en: field.key },
+      descriptionI18n: asLocalizedText(field.descriptionI18n),
+      placeholderI18n: asLocalizedText(field.placeholderI18n),
+      required: Boolean(field.required),
+      defaultValue: field.defaultValue,
+      options: asArray(field.options),
+      secret: Boolean(field.secret),
+      serverManaged: Boolean(field.serverManaged),
+      authProviderKey: typeof field.authProviderKey === 'string' ? field.authProviderKey : undefined,
+      validation: asObject(field.validation),
+      metadata: asObject(field.metadata),
+    }));
+  }
+
+  const schema = asObject(configSchemaValue);
+  const properties = asObject(schema.properties);
+  const required = new Set(asStringArray(schema.required));
+  const defaultConfig = asObject(defaultConfigValue);
+
+  return Object.entries(properties).map(([key, raw]) => {
+    const property = asObject(raw);
+    const schemaType = typeof property.type === 'string' ? property.type : 'text';
+    let type: CapabilityConfigFieldDefinition['type'] = 'text';
+    if (property.sensitive === true) type = 'secret';
+    else if (schemaType === 'boolean') type = 'boolean';
+    else if (schemaType === 'number' || schemaType === 'integer') type = 'number';
+    else if (Array.isArray(property.enum)) type = 'select';
+    else if (schemaType === 'string' && property.format === 'multiline') type = 'textarea';
+
+    return {
+      key,
+      type,
+      titleI18n: asLocalizedText(property.title, key) || { en: key },
+      descriptionI18n: asLocalizedText(property.description),
+      placeholderI18n: asLocalizedText(property.placeholder),
+      required: required.has(key),
+      defaultValue: defaultConfig[key],
+      options: Array.isArray(property.enum)
+        ? property.enum
+            .filter((item): item is string => typeof item === 'string')
+            .map((value) => ({ value, labelI18n: { en: value } }))
+        : undefined,
+      secret: property.sensitive === true,
+      serverManaged: property.serverManaged === true,
+      authProviderKey: typeof property.authProviderKey === 'string' ? property.authProviderKey : undefined,
+      validation: {},
+      metadata: {},
+    } satisfies CapabilityConfigFieldDefinition;
+  });
+}
+
+function normalizeInstallStep(raw: McpSetupStep | CapabilityInstallStep): CapabilityInstallStep {
+  const legacy = raw as McpSetupStep;
+  const step = raw as CapabilityInstallStep;
+  return {
+    id: raw.id,
+    kind: raw.kind || (raw.action?.kind === 'oauth_authorize' ? 'oauth' : 'form'),
+    titleI18n: asLocalizedText(step.titleI18n || legacy.title, raw.id) || { en: raw.id },
+    descriptionI18n: asLocalizedText(step.descriptionI18n || legacy.description),
+    scope: raw.scope,
+    fields: asStringArray(raw.fields),
+    optional: Boolean(raw.optional),
+    helpUrl: raw.helpUrl,
+    helpTextI18n: asLocalizedText(step.helpTextI18n || legacy.helpText),
+    action: raw.action,
+    metadata: asObject(raw.metadata),
+  };
+}
+
+function extractInstallFlow(manifestValue: unknown, setupStepsValue: unknown): CapabilityInstallFlow | undefined {
+  const manifest = asObject(manifestValue);
+  const flow = asObject(manifest.installFlow);
+  const steps = asArray<CapabilityInstallStep>(flow.steps);
+  if (steps.length > 0) {
+    return { steps: steps.map(normalizeInstallStep) };
+  }
+  const legacy = asArray<McpSetupStep>(setupStepsValue);
+  if (legacy.length > 0) {
+    return { steps: legacy.map(normalizeInstallStep) };
+  }
+  return undefined;
+}
+
+function extractAuthProviders(manifestValue: unknown): CapabilityAuthProviderDefinition[] {
+  const manifest = asObject(manifestValue);
+  return asArray<CapabilityAuthProviderDefinition>(manifest.authProviders).map((provider) => ({
+    key: provider.key,
+    kind: provider.kind,
+    displayNameI18n: asLocalizedText(provider.displayNameI18n, provider.key) || { en: provider.key },
+    descriptionI18n: asLocalizedText(provider.descriptionI18n),
+    authorizeUrl: provider.authorizeUrl,
+    tokenUrl: provider.tokenUrl,
+    userInfoUrl: typeof provider.userInfoUrl === 'string' ? provider.userInfoUrl : undefined,
+    scopes: asStringArray(provider.scopes),
+    clientId: typeof provider.clientId === 'string' ? provider.clientId : undefined,
+    clientSecret: typeof provider.clientSecret === 'string' ? provider.clientSecret : undefined,
+    clientIdEnv: typeof provider.clientIdEnv === 'string' ? provider.clientIdEnv : undefined,
+    clientSecretEnv: typeof provider.clientSecretEnv === 'string' ? provider.clientSecretEnv : undefined,
+    audience: typeof provider.audience === 'string' ? provider.audience : undefined,
+    extraAuthorizeParams: Object.fromEntries(
+      Object.entries(asObject(provider.extraAuthorizeParams)).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    ),
+    extraTokenParams: Object.fromEntries(
+      Object.entries(asObject(provider.extraTokenParams)).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    ),
+    profileIdPath: typeof provider.profileIdPath === 'string' ? provider.profileIdPath : undefined,
+    profileDisplayNamePath: typeof provider.profileDisplayNamePath === 'string' ? provider.profileDisplayNamePath : undefined,
+    profileAvatarUrlPath: typeof provider.profileAvatarUrlPath === 'string' ? provider.profileAvatarUrlPath : undefined,
+    reusable: provider.reusable !== false,
+    configFieldKey: typeof provider.configFieldKey === 'string' ? provider.configFieldKey : undefined,
+    metadata: asObject(provider.metadata),
+  }));
 }
 
 function isPermissionSubset(requiredPermissions: string[], grantedPermissions: string[]) {
@@ -186,8 +332,30 @@ function mapPublisher(row: any): CapabilityPublisher {
   };
 }
 
+function mapCategory(row: any): CapabilityCategory {
+  const metadata = asObject(row.metadata);
+  return {
+    id: row.id,
+    slug: row.slug,
+    targetKind: row.target_kind,
+    displayName: row.display_name,
+    displayNameI18n: asLocalizedText(metadata.displayNameI18n, row.display_name),
+    description: row.description || '',
+    descriptionI18n: asLocalizedText(metadata.descriptionI18n, row.description || ''),
+    iconUrl: row.icon_url || undefined,
+    defaultLocale: typeof metadata.defaultLocale === 'string' ? metadata.defaultLocale : undefined,
+    sortOrder: Number(row.sort_order || 0),
+    isBuiltin: Boolean(row.is_builtin),
+    metadata,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function mapRevision(row: any): CapabilityPackageRevision {
   const manifest = asObject(row.manifest);
+  const installFlow = extractInstallFlow(manifest, row.setup_steps);
+  const configFields = extractConfigFields(manifest, row.config_schema, row.default_config);
   return {
     id: row.revision_id ?? row.id,
     packageId: row.package_id,
@@ -196,12 +364,15 @@ function mapRevision(row: any): CapabilityPackageRevision {
     manifest,
     authorization: extractAuthorizationManifest(manifest),
     configSchema: asObject(row.config_schema),
+    configFields,
     defaultConfig: asObject(row.default_config),
     transport: row.transport || undefined,
     entryPoint: row.entry_point || undefined,
     toolsManifest: asArray(row.tools_manifest),
     validationRules: asArray<McpValidationRule>(row.validation_rules),
-    setupSteps: asArray<McpSetupStep>(row.setup_steps),
+    setupSteps: installFlow?.steps || [],
+    installFlow,
+    authProviders: extractAuthProviders(manifest),
     metadata: asObject(row.metadata),
     createdBy: row.created_by || undefined,
     createdAt: row.created_at,
@@ -251,8 +422,13 @@ function mapPackage(row: any): CapabilityPackage {
     kind: row.kind,
     slug: row.slug,
     displayName: row.display_name,
+    displayNameI18n: asLocalizedText(asObject(row.metadata).displayNameI18n, row.display_name),
     description: row.description || '',
+    descriptionI18n: asLocalizedText(asObject(row.metadata).descriptionI18n, row.description || ''),
     longDescription: row.long_description || '',
+    longDescriptionI18n: asLocalizedText(asObject(row.metadata).longDescriptionI18n, row.long_description || ''),
+    summaryI18n: asLocalizedText(asObject(row.metadata).summaryI18n),
+    defaultLocale: typeof asObject(row.metadata).defaultLocale === 'string' ? String(asObject(row.metadata).defaultLocale) : undefined,
     iconUrl: row.icon_url || undefined,
     sourceType: row.source_type,
     tags: asArray<string>(row.tags),
@@ -268,9 +444,60 @@ function mapPackage(row: any): CapabilityPackage {
     metadata: asObject(row.metadata),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    categories: [],
     publisher,
     latestRevision,
   };
+}
+
+async function loadCapabilityCategoriesForPackages(packageIds: string[]) {
+  if (packageIds.length === 0) {
+    return new Map<string, CapabilityCategory[]>();
+  }
+
+  const result = await query(
+    `SELECT
+        pc.package_id,
+        c.*
+     FROM capability_package_categories pc
+     JOIN capability_categories c ON c.id = pc.category_id
+     WHERE pc.package_id = ANY($1::uuid[])
+     ORDER BY c.sort_order ASC, c.display_name ASC`,
+    [packageIds],
+  );
+
+  const byPackageId = new Map<string, CapabilityCategory[]>();
+  for (const row of result.rows) {
+    const categories = byPackageId.get(row.package_id) || [];
+    categories.push(mapCategory(row));
+    byPackageId.set(row.package_id, categories);
+  }
+  return byPackageId;
+}
+
+async function hydratePackageCategories<T extends CapabilityPackage>(packages: T[]): Promise<T[]> {
+  if (packages.length === 0) return packages;
+  const packageIds = [...new Set(packages.map((pkg) => pkg.id))];
+  const categoriesByPackageId = await loadCapabilityCategoriesForPackages(packageIds);
+  return packages.map((pkg) => ({
+    ...pkg,
+    categories: categoriesByPackageId.get(pkg.id) || [],
+  }));
+}
+
+async function hydrateBindingPackageCategories<T extends CapabilityBinding>(bindings: T[]): Promise<T[]> {
+  const packages = bindings
+    .map((binding) => binding.package)
+    .filter((pkg): pkg is CapabilityPackage => Boolean(pkg));
+  if (packages.length === 0) return bindings;
+
+  const hydratedPackages = await hydratePackageCategories(packages);
+  const packageMap = new Map(hydratedPackages.map((pkg) => [pkg.id, pkg]));
+  return bindings.map((binding) => (
+    binding.package
+      ? { ...binding, package: packageMap.get(binding.package.id) || binding.package }
+      : binding
+  ));
 }
 
 function mapAsset(row: any): CapabilityAsset {
@@ -326,6 +553,7 @@ function mapBinding(row: any): CapabilityBinding {
     requiresHandshake: Boolean(row.requires_handshake),
     isEnabled: Boolean(row.is_enabled),
     configData: asObject(row.config_data),
+    configState: [],
     installedBy: row.installed_by || undefined,
     metadata: asObject(row.metadata),
     createdAt: row.created_at,
@@ -405,6 +633,127 @@ export async function createCapabilityPublisher(data: {
     ],
   );
   return mapPublisher(result.rows[0]);
+}
+
+export async function createCapabilityCategory(input: {
+  slug: string;
+  targetKind: CapabilityPackageKind;
+  displayName: string;
+  description?: string;
+  iconUrl?: string;
+  sortOrder?: number;
+  isBuiltin?: boolean;
+  metadata?: JsonMap;
+}) {
+  const existing = await query(
+    `SELECT * FROM capability_categories WHERE slug = $1 AND target_kind = $2 LIMIT 1`,
+    [input.slug, input.targetKind],
+  );
+
+  if (existing.rows.length > 0) {
+    const updated = await query(
+      `UPDATE capability_categories
+       SET display_name = $1,
+           description = $2,
+           icon_url = $3,
+           sort_order = $4,
+           is_builtin = $5,
+           metadata = $6,
+           updated_at = NOW()
+       WHERE id = $7
+       RETURNING *`,
+      [
+        input.displayName,
+        input.description || '',
+        input.iconUrl || null,
+        input.sortOrder ?? 0,
+        input.isBuiltin ?? false,
+        JSON.stringify(input.metadata || {}),
+        existing.rows[0].id,
+      ],
+    );
+    return mapCategory(updated.rows[0]);
+  }
+
+  const result = await query(
+    `INSERT INTO capability_categories (
+       slug, target_kind, display_name, description, icon_url, sort_order, is_builtin, metadata
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING *`,
+    [
+      input.slug,
+      input.targetKind,
+      input.displayName,
+      input.description || '',
+      input.iconUrl || null,
+      input.sortOrder ?? 0,
+      input.isBuiltin ?? false,
+      JSON.stringify(input.metadata || {}),
+    ],
+  );
+  return mapCategory(result.rows[0]);
+}
+
+export async function listCapabilityCategories(filters?: {
+  targetKind?: CapabilityPackageKind;
+  builtinOnly?: boolean;
+}) {
+  const where: string[] = [];
+  const values: unknown[] = [];
+  let idx = 1;
+
+  if (filters?.targetKind) {
+    where.push(`target_kind = $${idx++}`);
+    values.push(filters.targetKind);
+  }
+  if (filters?.builtinOnly) {
+    where.push(`is_builtin = TRUE`);
+  }
+
+  const result = await query(
+    `SELECT *
+     FROM capability_categories
+     ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY sort_order ASC, display_name ASC`,
+    values,
+  );
+  return result.rows.map(mapCategory);
+}
+
+export async function assignCapabilityPackageCategories(packageId: string, categorySlugs: string[], targetKind?: CapabilityPackageKind) {
+  const pkg = await getCapabilityPackage(packageId);
+  const effectiveKind = targetKind || pkg.kind;
+  const normalizedSlugs = [...new Set(categorySlugs.map((slug) => slug.trim()).filter(Boolean))];
+
+  await query(`DELETE FROM capability_package_categories WHERE package_id = $1`, [packageId]);
+  if (normalizedSlugs.length === 0) return [];
+
+  const categories = await query(
+    `SELECT id, slug
+     FROM capability_categories
+     WHERE target_kind = $1
+       AND slug = ANY($2::text[])`,
+    [effectiveKind, normalizedSlugs],
+  );
+
+  const foundSlugs = new Set(categories.rows.map((row) => row.slug));
+  const missing = normalizedSlugs.filter((slug) => !foundSlugs.has(slug));
+  if (missing.length > 0) {
+    throw new CapabilityError(400, `Capability categories not found: ${missing.join(', ')}`);
+  }
+
+  for (const row of categories.rows) {
+    await query(
+      `INSERT INTO capability_package_categories (package_id, category_id)
+       VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [packageId, row.id],
+    );
+  }
+
+  const refreshed = await getCapabilityPackage(packageId);
+  return refreshed.categories || [];
 }
 
 export async function listCapabilityPublishers() {
@@ -704,7 +1053,7 @@ export async function listCapabilityPackages(filters?: {
      ORDER BY p.is_builtin DESC, p.download_count DESC, p.display_name`,
     values,
   );
-  return result.rows.map(mapPackage);
+  return hydratePackageCategories(result.rows.map(mapPackage));
 }
 
 export async function getCapabilityPackage(id: string) {
@@ -742,7 +1091,8 @@ export async function getCapabilityPackage(id: string) {
     [id],
   );
   if (result.rows.length === 0) throw new CapabilityError(404, 'Capability package not found');
-  return mapPackage(result.rows[0]);
+  const [pkg] = await hydratePackageCategories([mapPackage(result.rows[0])]);
+  return pkg;
 }
 
 export async function getCapabilityPackageBySlug(input: {
@@ -803,7 +1153,8 @@ export async function getCapabilityPackageBySlug(input: {
   );
 
   if (result.rows.length === 0) throw new CapabilityError(404, 'Capability package not found');
-  return mapPackage(result.rows[0]);
+  const [pkg] = await hydratePackageCategories([mapPackage(result.rows[0])]);
+  return pkg;
 }
 
 export async function getCapabilityRevision(revisionId: string) {
@@ -926,7 +1277,7 @@ export async function listCapabilityBindings(workspaceId: string, filters?: {
      ORDER BY b.created_at DESC`,
     values,
   );
-  return result.rows.map(mapBinding);
+  return hydrateBindingPackageCategories(result.rows.map(mapBinding));
 }
 
 export async function getCapabilityBinding(bindingId: string) {
@@ -992,7 +1343,8 @@ export async function getCapabilityBinding(bindingId: string) {
     throw new CapabilityError(404, 'Capability binding not found');
   }
 
-  return mapBinding(result.rows[0]);
+  const [binding] = await hydrateBindingPackageCategories([mapBinding(result.rows[0])]);
+  return binding;
 }
 
 export function validateGrantHierarchy(bindingScope: CapabilityBindingScope, grantScope: CapabilityGrantScope): boolean {

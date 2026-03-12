@@ -49,6 +49,12 @@ async function ensureSupportedOcrImage(buffer: Buffer, mimeType: string): Promis
   return { buffer: converted, mimeType: 'image/png', originalName: 'ocr-input.png' };
 }
 
+function toBlobBytes(buffer: Buffer) {
+  const bytes = new Uint8Array(buffer.byteLength);
+  bytes.set(buffer);
+  return bytes;
+}
+
 export const ocrFeature: SubFeature = {
   featureKey: 'feature_ocr',
 
@@ -65,7 +71,7 @@ export const ocrFeature: SubFeature = {
     const prepared = await ensureSupportedOcrImage(originalBuffer, record.mimeType);
 
     const form = new FormData();
-    form.append('file', new Blob([prepared.buffer], { type: prepared.mimeType }), record.originalName || prepared.originalName);
+    form.append('file', new Blob([toBlobBytes(prepared.buffer)], { type: prepared.mimeType }), record.originalName || prepared.originalName);
     form.append('tool_type', 'hand_write');
 
     if (typeof input.languageType === 'string' && input.languageType) {

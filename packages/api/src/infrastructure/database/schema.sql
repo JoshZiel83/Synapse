@@ -242,7 +242,7 @@ CREATE TABLE files (
   mime_type VARCHAR(255) NOT NULL,
   size_bytes BIGINT NOT NULL,
   category VARCHAR(30) DEFAULT 'general'
-    CHECK (category IN ('general', 'chat_attachment', 'plugin_output')),
+    CHECK (category IN ('general', 'chat_attachment', 'plugin_output', 'plugin_asset')),
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -1081,6 +1081,25 @@ CREATE TABLE capability_publishers (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- ============ Capability Categories ============
+CREATE TABLE capability_categories (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  slug VARCHAR(100) NOT NULL,
+  target_kind VARCHAR(30) NOT NULL
+    CHECK (target_kind IN ('plugin', 'skill', 'actor_template')),
+  display_name VARCHAR(255) NOT NULL,
+  description TEXT DEFAULT '',
+  icon_url TEXT,
+  sort_order INT NOT NULL DEFAULT 0,
+  is_builtin BOOLEAN DEFAULT FALSE,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(target_kind, slug)
+);
+
+CREATE INDEX idx_capability_categories_kind_order ON capability_categories(target_kind, sort_order, display_name);
+
 -- ============ Capability Packages ============
 CREATE TABLE capability_packages (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1122,6 +1141,15 @@ CREATE UNIQUE INDEX uq_capability_packages_global_slug
 CREATE UNIQUE INDEX uq_capability_packages_workspace_slug
   ON capability_packages(publisher_id, workspace_id, kind, slug)
   WHERE workspace_id IS NOT NULL;
+
+CREATE TABLE capability_package_categories (
+  package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE CASCADE,
+  category_id UUID NOT NULL REFERENCES capability_categories(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (package_id, category_id)
+);
+
+CREATE INDEX idx_capability_package_categories_category ON capability_package_categories(category_id, package_id);
 
 -- ============ Capability Revisions ============
 CREATE TABLE capability_package_revisions (
@@ -1298,6 +1326,61 @@ CREATE TABLE capability_runtime_leases (
 
 CREATE INDEX idx_capability_runtime_leases_binding ON capability_runtime_leases(binding_id, created_at DESC);
 CREATE INDEX idx_capability_runtime_leases_owner ON capability_runtime_leases(owner_key, created_at DESC);
+
+-- ============ Capability Auth Connections ============
+CREATE TABLE capability_auth_connections (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE CASCADE,
+  provider_key VARCHAR(100) NOT NULL,
+  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  external_account_id VARCHAR(255),
+  display_name VARCHAR(255),
+  avatar_url TEXT,
+  scopes TEXT[] DEFAULT '{}',
+  access_token TEXT,
+  refresh_token TEXT,
+  token_type VARCHAR(100),
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'expired', 'revoked')),
+  expires_at TIMESTAMPTZ,
+  profile JSONB DEFAULT '{}',
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_capability_auth_connections_workspace ON capability_auth_connections(workspace_id, created_at DESC);
+CREATE INDEX idx_capability_auth_connections_package_provider ON capability_auth_connections(package_id, provider_key, created_at DESC);
+CREATE INDEX idx_capability_auth_connections_owner ON capability_auth_connections(owner_user_id, created_at DESC);
+
+-- ============ Capability Auth Sessions ============
+CREATE TABLE capability_auth_sessions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE CASCADE,
+  revision_id UUID REFERENCES capability_package_revisions(id) ON DELETE SET NULL,
+  provider_key VARCHAR(100) NOT NULL,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'completed', 'failed', 'expired', 'consumed')),
+  state VARCHAR(255) NOT NULL UNIQUE,
+  code_verifier TEXT,
+  redirect_uri TEXT NOT NULL,
+  authorize_url TEXT,
+  error_code VARCHAR(100),
+  error_message TEXT,
+  result_preview JSONB DEFAULT '{}',
+  auth_connection_id UUID REFERENCES capability_auth_connections(id) ON DELETE SET NULL,
+  metadata JSONB DEFAULT '{}',
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_capability_auth_sessions_workspace ON capability_auth_sessions(workspace_id, created_at DESC);
+CREATE INDEX idx_capability_auth_sessions_user ON capability_auth_sessions(user_id, created_at DESC);
+CREATE INDEX idx_capability_auth_sessions_package_provider ON capability_auth_sessions(package_id, provider_key, created_at DESC);
 
 -- ============ MCP Relay Agents ============
 CREATE TABLE mcp_relays (

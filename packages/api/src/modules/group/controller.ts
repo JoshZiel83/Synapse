@@ -58,6 +58,10 @@ export default async function groupController(app: FastifyInstance) {
 
         const hasActive = members.some((m: any) => m.session_status === 'active');
         const hasSleeping = members.some((m: any) => m.session_status === 'sleeping');
+        const derivedName = row.title
+          || participants.map((participant: any) => participant.name).filter(Boolean).join(', ')
+          || row.last_message?.substring(0, 100)
+          || 'Untitled conversation';
 
         return {
           id: row.id,
@@ -71,7 +75,8 @@ export default async function groupController(app: FastifyInstance) {
           } : undefined,
           unreadCount: row.unread_count || 0,
           createdAt: row.created_at,
-          title: row.title || row.last_message?.substring(0, 100),
+          title: derivedName,
+          name: derivedName,
         };
       }));
 

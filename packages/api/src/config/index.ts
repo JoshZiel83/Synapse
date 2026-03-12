@@ -4,6 +4,9 @@ export const config = {
   port: parseInt(process.env.PORT || '3001'),
   host: process.env.HOST || '0.0.0.0',
   nodeEnv: process.env.NODE_ENV || 'development',
+  app: {
+    baseUrl: process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3001',
+  },
   database: {
     url: process.env.DATABASE_URL || 'postgresql://synapse:password@localhost:5432/synapse',
   },

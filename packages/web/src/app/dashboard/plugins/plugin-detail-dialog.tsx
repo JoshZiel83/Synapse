@@ -5,6 +5,18 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Globe, Code, Puzzle, Wrench, Key } from 'lucide-react';
 
+function getLocale(defaultLocale?: string) {
+  if (typeof navigator !== 'undefined') {
+    return navigator.languages?.[0] || navigator.language || defaultLocale || 'en';
+  }
+  return defaultLocale || 'en';
+}
+
+function translate(text: Record<string, string> | undefined, locale: string, fallback?: string) {
+  if (!text || Object.keys(text).length === 0) return fallback || '';
+  return text[locale] || text[locale.split('-')[0]] || text[fallback || ''] || text.en || Object.values(text)[0] || fallback || '';
+}
+
 interface Props {
   plugin: any;
   installedCount: number;
@@ -29,8 +41,9 @@ const bindingScopeLabels: Record<string, string> = {
 
 export default function PluginDetailDialog({ plugin, installedCount, onInstall, onClose }: Props) {
   const tools = plugin.tools_manifest || [];
-  const configSchema = plugin.config_schema || {};
-  const hasRequiredConfig = (configSchema.required || []).length > 0;
+  const configFields = plugin.config_fields || [];
+  const hasRequiredConfig = configFields.some((field: any) => field.required);
+  const locale = getLocale(plugin.default_locale);
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
@@ -38,19 +51,23 @@ export default function PluginDetailDialog({ plugin, installedCount, onInstall, 
         <DialogHeader>
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-lg bg-blue-500/10 flex items-center justify-center">
-              {plugin.transport === 'http' ? <Globe className="w-6 h-6 text-blue-400" /> :
-               plugin.transport === 'builtin' ? <Code className="w-6 h-6 text-blue-400" /> :
-               <Puzzle className="w-6 h-6 text-blue-400" />}
+              {plugin.icon_url ? (
+                <img src={plugin.icon_url} alt={plugin.display_name} className="w-8 h-8 rounded-md object-contain" />
+              ) : plugin.transport === 'http' ? <Globe className="w-6 h-6 text-blue-400" /> :
+                plugin.transport === 'builtin' ? <Code className="w-6 h-6 text-blue-400" /> :
+                  <Puzzle className="w-6 h-6 text-blue-400" />}
             </div>
             <div>
-              <DialogTitle>{plugin.display_name}</DialogTitle>
+              <DialogTitle>{translate(plugin.display_name_i18n, locale, plugin.default_locale || 'en') || plugin.display_name}</DialogTitle>
               <p className="text-sm text-muted-foreground">{plugin.org_display_name} · v{plugin.version}</p>
             </div>
           </div>
         </DialogHeader>
 
         <div className="space-y-4 mt-2">
-          <p className="text-sm text-muted-foreground">{plugin.long_description || plugin.description}</p>
+          <p className="text-sm text-muted-foreground">
+            {translate(plugin.long_description_i18n || plugin.description_i18n, locale, plugin.default_locale || 'en') || plugin.long_description || plugin.description}
+          </p>
 
           <div className="flex gap-2 flex-wrap">
             <Badge variant="outline" className="border-gray-200 dark:border-white/10">{transportLabels[plugin.transport] || plugin.transport}</Badge>
@@ -60,6 +77,11 @@ export default function PluginDetailDialog({ plugin, installedCount, onInstall, 
             <Badge variant="outline" className="border-gray-200 dark:border-white/10">
               Runtime: {plugin.lifecycle_scope}
             </Badge>
+            {(plugin.categories || []).map((category: any) => (
+              <Badge key={category.slug} variant="outline" className="border-blue-500/20 text-blue-500 dark:text-blue-300">
+                {translate(category.displayNameI18n, locale, category.defaultLocale || 'en') || category.displayName}
+              </Badge>
+            ))}
             {(plugin.tags || []).map((tag: string) => (
               <Badge key={tag} variant="secondary" className="bg-gray-50 dark:bg-white/5">{tag}</Badge>
             ))}

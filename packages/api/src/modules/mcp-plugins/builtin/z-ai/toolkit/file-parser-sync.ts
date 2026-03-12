@@ -66,6 +66,12 @@ function inferFileType(originalName: string, mimeType: string): string {
   return mimeToType[mimeType] || 'PDF';
 }
 
+function toBlobBytes(buffer: Buffer) {
+  const bytes = new Uint8Array(buffer.byteLength);
+  bytes.set(buffer);
+  return bytes;
+}
+
 export const fileParserSyncFeature: SubFeature = {
   featureKey: 'feature_file_parser',
 
@@ -85,7 +91,7 @@ export const fileParserSyncFeature: SubFeature = {
       : inferFileType(record.originalName, record.mimeType);
 
     const form = new FormData();
-    form.append('file', new Blob([buffer], { type: record.mimeType }), record.originalName);
+    form.append('file', new Blob([toBlobBytes(buffer)], { type: record.mimeType }), record.originalName);
     form.append('tool_type', 'prime-sync');
     form.append('file_type', fileType);
 

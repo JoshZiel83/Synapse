@@ -1,21 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import Link from 'next/link';
-import Image from 'next/image';
 import { useAuthStore } from '@/stores/auth-store';
 import { WorkspaceProvider, useWorkspace } from './workspace-provider';
-import { Button } from '@/components/ui/button';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Sheet, SheetContent } from '@/components/ui/sheet';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { AppSidebar } from '@/components/app-sidebar';
+import { SiteHeader } from '@/components/site-header';
 import {
   LayoutDashboard,
   MessageSquare,
@@ -23,16 +13,14 @@ import {
   Network,
   Brain,
   FileText,
-  LogOut,
-  Menu,
+  ShieldCheck,
   Settings,
   Puzzle,
-  ChevronsUpDown,
-  Plus,
-  Check,
 } from 'lucide-react';
-import { useChatStore } from '@/stores/chat-store';
-import { ThemeToggle } from '@/components/theme-toggle';
+import {
+  SidebarInset,
+  SidebarProvider,
+} from '@/components/ui/sidebar';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -42,145 +30,11 @@ const navItems = [
   { href: '/dashboard/memories', label: 'Memories', icon: Brain },
   { href: '/dashboard/audit', label: 'Audit Log', icon: FileText },
   { href: '/dashboard/plugins', label: 'Plugins', icon: Puzzle },
+  { href: '/dashboard/authorizations', label: 'Authorizations', icon: ShieldCheck },
   { href: '/dashboard/settings', label: 'Settings', icon: Settings },
 ];
 
-function WorkspaceSwitcher() {
-  const { workspaceId, workspaceName, workspaces, setWorkspaceId } = useWorkspace();
-  const router = useRouter();
-
-  if (workspaces.length === 0) return null;
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm font-semibold text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
-          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-indigo-600 text-[10px] font-bold text-white">
-            {(workspaceName || 'W')[0].toUpperCase()}
-          </div>
-          <span className="flex-1 truncate text-left">{workspaceName || 'Workspace'}</span>
-          <ChevronsUpDown className="h-4 w-4 shrink-0 text-gray-400" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56">
-        {workspaces.map((ws) => (
-          <DropdownMenuItem
-            key={ws.id}
-            onClick={() => setWorkspaceId(ws.id)}
-            className="flex items-center gap-2"
-          >
-            <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-indigo-600/10 dark:bg-indigo-500/20 text-[9px] font-bold text-indigo-600 dark:text-indigo-400">
-              {ws.name[0].toUpperCase()}
-            </div>
-            <span className="flex-1 truncate">{ws.name}</span>
-            {ws.id === workspaceId && <Check className="h-4 w-4 text-indigo-600" />}
-          </DropdownMenuItem>
-        ))}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => router.push('/welcome')} className="gap-2">
-          <Plus className="h-4 w-4" />
-          Create or Join Workspace
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function SidebarContent({ pathname, user, onLogout }: { pathname: string; user: any; onLogout: () => void }) {
-  const totalUnread = useChatStore((s) => s.totalUnread);
-  const initials = user?.name
-    ? user.name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
-    : 'U';
-
-  return (
-    <div className="relative flex grow flex-col gap-y-5 overflow-y-auto bg-white px-6 pb-4 dark:bg-gray-900">
-      {/* Logo */}
-      <div className="flex h-16 shrink-0 items-center gap-3">
-        <Image src="/synapse.svg" alt="Synapse" width={32} height={32} className="dark:invert" />
-        <span className="text-lg font-bold text-gray-900 dark:text-white">Synapse</span>
-      </div>
-
-      {/* Workspace Switcher */}
-      <div className="-mx-2">
-        <WorkspaceSwitcher />
-      </div>
-
-      {/* Navigation */}
-      <nav className="flex flex-1 flex-col">
-        <ul role="list" className="flex flex-1 flex-col gap-y-7">
-          <li>
-            <ul role="list" className="-mx-2 space-y-1">
-              {navItems.map((item) => {
-                const active = item.href === '/dashboard'
-                  ? pathname === item.href
-                  : pathname.startsWith(item.href);
-                const Icon = item.icon;
-                const badge = item.href === '/dashboard/chat' ? totalUnread : 0;
-
-                return (
-                  <li key={item.href}>
-                    <Link
-                      href={item.href}
-                      className={`
-                        group flex gap-x-3 rounded-md p-2 text-sm/6 font-semibold
-                        ${active
-                          ? 'bg-gray-50 text-indigo-600 dark:bg-white/5 dark:text-white'
-                          : 'text-gray-700 hover:bg-gray-50 hover:text-indigo-600 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white'
-                        }
-                      `}
-                    >
-                      <Icon
-                        className={`size-6 shrink-0 ${
-                          active
-                            ? 'text-indigo-600 dark:text-white'
-                            : 'text-gray-400 group-hover:text-indigo-600 dark:text-gray-500 dark:group-hover:text-white'
-                        }`}
-                      />
-                      {item.label}
-                      {badge > 0 && (
-                        <span className="ml-auto flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-indigo-600 text-white text-[10px] font-bold">
-                          {badge > 99 ? '99+' : badge}
-                        </span>
-                      )}
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </li>
-
-          {/* Bottom: theme toggle + user profile */}
-          <li className="-mx-6 mt-auto">
-            <div className="flex items-center justify-between px-6 py-2">
-              <span className="text-xs font-semibold text-gray-400 dark:text-gray-500">Theme</span>
-              <ThemeToggle />
-            </div>
-            <div className="flex items-center gap-x-4 px-6 py-3 text-sm/6 font-semibold text-gray-900 dark:text-white">
-              <Avatar className="size-8 bg-gray-50 dark:bg-gray-800">
-                <AvatarFallback className="bg-indigo-600 text-white text-xs">
-                  {initials}
-                </AvatarFallback>
-              </Avatar>
-              <div className="flex-1 min-w-0">
-                <span className="block truncate">{user?.name}</span>
-                <span className="block truncate text-xs font-normal text-gray-500 dark:text-gray-400">{user?.email}</span>
-              </div>
-              <button
-                onClick={onLogout}
-                className="p-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-md hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
-                title="Sign out"
-              >
-                <LogOut className="size-4" />
-              </button>
-            </div>
-          </li>
-        </ul>
-      </nav>
-    </div>
-  );
-}
-
-function OnboardingGuard({ children }: { children: React.ReactNode }) {
+function OnboardingGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { needsOnboarding, loading } = useWorkspace();
 
@@ -206,11 +60,10 @@ function OnboardingGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-function DashboardInner({ children }: { children: React.ReactNode }) {
+function DashboardInner({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const { user } = useAuthStore();
-  const [mobileOpen, setMobileOpen] = useState(false);
 
   const handleLogout = () => {
     useAuthStore.getState().logout();
@@ -219,42 +72,21 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
 
   return (
     <OnboardingGuard>
-      <div>
-        {/* Mobile Sidebar */}
-        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-          <SheetContent side="left" onClose={() => setMobileOpen(false)} className="w-72 p-0 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-white/10">
-            <SidebarContent pathname={pathname} user={user} onLogout={handleLogout} />
-          </SheetContent>
-        </Sheet>
-
-        {/* Desktop Sidebar */}
-        <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-72 lg:flex-col">
-          <div className="relative flex grow flex-col border-r border-gray-200 dark:border-white/10">
-            <SidebarContent pathname={pathname} user={user} onLogout={handleLogout} />
+      <SidebarProvider className="min-h-svh bg-gray-50 dark:bg-gray-900">
+        <AppSidebar user={user} onLogout={handleLogout} />
+        <SidebarInset className="min-h-svh bg-background">
+          <SiteHeader title={navItems.find((item) => item.href === pathname)?.label || 'Dashboard'} />
+          <div className="flex flex-1 flex-col">
+            <div className="@container/main flex flex-1 flex-col gap-2">
+              <div className="flex flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
+                <div className="px-4 lg:px-6">
+                  {children}
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-
-        {/* Top bar (mobile only shows hamburger + title) */}
-        <div className="sticky top-0 z-40 flex items-center gap-x-6 bg-white px-4 py-4 shadow-xs sm:px-6 lg:hidden dark:bg-gray-900 dark:shadow-none border-b border-gray-200 dark:border-white/10">
-          <button
-            type="button"
-            onClick={() => setMobileOpen(true)}
-            className="-m-2.5 p-2.5 text-gray-700 dark:text-gray-400"
-          >
-            <Menu className="size-6" />
-          </button>
-          <div className="flex-1 text-sm/6 font-semibold text-gray-900 dark:text-white">
-            {navItems.find(i => i.href === pathname)?.label || 'Dashboard'}
-          </div>
-        </div>
-
-        {/* Main Content */}
-        <main className="lg:pl-72 flex flex-col min-h-screen lg:h-screen lg:max-h-screen">
-          <div className="flex-1 flex flex-col p-4 lg:p-8 min-h-0 overflow-auto">
-            {children}
-          </div>
-        </main>
-      </div>
+        </SidebarInset>
+      </SidebarProvider>
     </OnboardingGuard>
   );
 }
@@ -262,7 +94,7 @@ function DashboardInner({ children }: { children: React.ReactNode }) {
 export default function DashboardLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const router = useRouter();
   const { user, loading, checkAuth } = useAuthStore();

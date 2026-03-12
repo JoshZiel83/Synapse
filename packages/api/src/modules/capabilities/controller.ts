@@ -10,7 +10,7 @@ import {
   revokeCapabilityGrant,
 } from './service.js';
 
-const grantScopeSchema = z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']);
+const grantScopeSchema = z.enum(['platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']);
 
 const issueGrantSchema = z.object({
   grantScope: grantScopeSchema.optional(),

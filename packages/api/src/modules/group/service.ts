@@ -186,11 +186,22 @@ export async function createGroup(params: {
   const batchId = uuidv4();
 
   const result = await transaction(async (client) => {
+    const actorRows = actorIds.length > 0
+      ? (await client.query(
+          `SELECT id, name, title FROM actors WHERE id = ANY($1)`,
+          [actorIds],
+        )).rows
+      : [];
+    const actorMap = new Map<string, any>(actorRows.map((row: any) => [row.id, row]));
+    const fallbackTitle = title?.trim()
+      || actorRows.map((row: any) => row.name).filter(Boolean).join(', ')
+      || 'Untitled conversation';
+
     const conversationResult = await client.query(
       `INSERT INTO conversations (id, workspace_id, kind, title, created_by, metadata, created_at, updated_at)
        VALUES ($1, $2, 'group', $3, $4, '{}'::jsonb, NOW(), NOW())
        RETURNING *`,
-      [groupId, workspaceId, title || null, createdBy],
+      [groupId, workspaceId, fallbackTitle, createdBy],
     );
     const group = normalizeGroupRow(conversationResult.rows[0]);
 
@@ -201,14 +212,6 @@ export async function createGroup(params: {
        VALUES ($1, $2, 'user', $3, 'active', '{}'::jsonb, NOW())`,
       [userMemberId, groupId, createdBy],
     );
-
-    const actorRows = actorIds.length > 0
-      ? (await client.query(
-          `SELECT id, name, title FROM actors WHERE id = ANY($1)`,
-          [actorIds],
-        )).rows
-      : [];
-    const actorMap = new Map<string, any>(actorRows.map((row: any) => [row.id, row]));
 
     const members: any[] = [];
     const joinedMembers: Array<{

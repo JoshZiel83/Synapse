@@ -4,12 +4,14 @@ import { api } from '@/lib/api';
 
 interface PluginState {
   marketplace: any[];
+  categories: any[];
   installations: any[];
   organizations: any[];
   loadingMarketplace: boolean;
   loadingInstalled: boolean;
 
-  loadMarketplace: (search?: string) => Promise<void>;
+  loadMarketplace: (search?: string, categorySlugs?: string[]) => Promise<void>;
+  loadCategories: () => Promise<void>;
   loadOrganizations: () => Promise<void>;
   loadInstallations: (wsId: string) => Promise<void>;
   installPlugin: (
@@ -22,6 +24,7 @@ interface PluginState {
       userId?: string;
       lifecycleScope?: 'turn' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
       configData?: Record<string, unknown>;
+      authSessionIds?: Record<string, string>;
     },
   ) => Promise<void>;
   uninstallPlugin: (wsId: string, installId: string) => Promise<void>;
@@ -30,21 +33,33 @@ interface PluginState {
 
 export const usePluginStore = create<PluginState>((set, get) => ({
   marketplace: [],
+  categories: [],
   installations: [],
   organizations: [],
   loadingMarketplace: false,
   loadingInstalled: false,
 
-  loadMarketplace: async (search?: string) => {
+  loadMarketplace: async (search?: string, categorySlugs?: string[]) => {
     set({ loadingMarketplace: true });
     try {
-      const params = search ? `search=${encodeURIComponent(search)}` : '';
-      const data = await api.getMarketplace(params);
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      if (categorySlugs && categorySlugs.length > 0) params.set('categories', categorySlugs.join(','));
+      const data = await api.getMarketplace(params.toString() || undefined);
       set({ marketplace: data });
     } catch (err) {
       console.error('Failed to load marketplace:', err);
     } finally {
       set({ loadingMarketplace: false });
+    }
+  },
+
+  loadCategories: async () => {
+    try {
+      const data = await api.getPluginCategories();
+      set({ categories: data });
+    } catch (err) {
+      console.error('Failed to load plugin categories:', err);
     }
   },
 

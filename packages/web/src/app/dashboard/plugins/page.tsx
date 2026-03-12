@@ -16,10 +16,11 @@ export default function PluginsPage() {
   const defaultTab = searchParams.get('tab') || 'marketplace';
   const [tab, setTab] = useState(defaultTab);
   const { workspaceId } = useWorkspace();
-  const { loadMarketplace, loadInstallations, loadOrganizations } = usePluginStore();
+  const { loadMarketplace, loadCategories, loadInstallations, loadOrganizations } = usePluginStore();
 
   useEffect(() => {
     loadMarketplace();
+    loadCategories();
     loadOrganizations();
     if (workspaceId) {
       loadInstallations(workspaceId);

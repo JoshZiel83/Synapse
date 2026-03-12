@@ -5,11 +5,18 @@ import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.j
 import {
   listOrganizations, getOrganization,
   listPlugins, getPlugin,
+  listPluginCategories,
   createPluginInstallPlan,
-  installPluginUnified, uninstallPluginUnified, getInstallations, updateInstallation,
+  installPluginUnified, uninstallPluginUnified, getInstallation, getInstallations, updateInstallation,
   validateConfig,
   McpPluginError,
 } from './service.js';
+import {
+  getPluginAuthSession,
+  handlePluginAuthCallback,
+  PluginAuthError,
+  startPluginAuthSession,
+} from './auth-service.js';
 import { getToolCallLogs, getEventLogs } from './audit.js';
 
 // ============ Schemas ============
@@ -22,6 +29,7 @@ const installSchema = z.object({
   userId: z.string().uuid().optional(),
   lifecycleScope: z.enum(['turn', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']).optional(),
   configData: z.record(z.unknown()).optional(),
+  authSessionIds: z.record(z.string().uuid()).optional(),
 });
 
 const updateInstallSchema = z.object({
@@ -32,6 +40,7 @@ const updateInstallSchema = z.object({
   actorId: z.string().uuid().nullable().optional(),
   conversationId: z.string().uuid().nullable().optional(),
   userId: z.string().uuid().nullable().optional(),
+  authSessionIds: z.record(z.string().uuid()).optional(),
 });
 
 const installPlanSchema = z.object({
@@ -45,6 +54,9 @@ const installPlanSchema = z.object({
 
 function handleError(reply: FastifyReply, error: unknown) {
   if (error instanceof McpPluginError) {
+    return reply.status(error.statusCode).send({ error: error.message });
+  }
+  if (error instanceof PluginAuthError) {
     return reply.status(error.statusCode).send({ error: error.message });
   }
   if (error instanceof z.ZodError) {
@@ -64,13 +76,23 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/mcp/marketplace', { preHandler: authPreHandler }, async (request, reply) => {
     try {
-      const { search, tags, transport } = request.query as { search?: string; tags?: string; transport?: string };
+      const { search, tags, categories, transport } = request.query as { search?: string; tags?: string; categories?: string; transport?: string };
       const plugins = await listPlugins({
         search,
         transport,
         tags: tags ? tags.split(',') : undefined,
+        categorySlugs: categories ? categories.split(',') : undefined,
       });
       reply.send(plugins);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/mcp/categories', { preHandler: authPreHandler }, async (_request, reply) => {
+    try {
+      const categories = await listPluginCategories();
+      reply.send(categories);
     } catch (error) {
       handleError(reply, error);
     }
@@ -101,6 +123,54 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       reply.send({ plan });
     } catch (error) {
       handleError(reply, error);
+    }
+  });
+
+  app.post('/api/v1/workspaces/:workspaceId/mcp/plugins/:pluginId/auth/:providerKey/start', { preHandler: wsPreHandler }, async (request, reply) => {
+    try {
+      const { workspaceId, pluginId, providerKey } = request.params as { workspaceId: string; pluginId: string; providerKey: string };
+      const user = (request as any).user;
+      const result = await startPluginAuthSession({
+        workspaceId,
+        pluginId,
+        providerKey,
+        userId: user.id || user.userId,
+      });
+      reply.send(result);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/workspaces/:workspaceId/mcp/auth/sessions/:sessionId', { preHandler: wsPreHandler }, async (request, reply) => {
+    try {
+      const { workspaceId, sessionId } = request.params as { workspaceId: string; sessionId: string };
+      const user = (request as any).user;
+      const session = await getPluginAuthSession(sessionId, workspaceId, user.id || user.userId);
+      reply.send({ session });
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/mcp/auth/callback', async (request, reply) => {
+    try {
+      const { state, code, error, error_description: errorDescription } = request.query as {
+        state?: string;
+        code?: string;
+        error?: string;
+        error_description?: string;
+      };
+      const session = await handlePluginAuthCallback({ state, code, error, errorDescription });
+      reply
+        .type('text/html; charset=utf-8')
+        .send(`<!doctype html><html><body><script>window.opener&&window.opener.postMessage({type:'synapse:mcp-auth',sessionId:'${session.id}',status:'${session.status}'},'*');window.close&&window.close();</script><p>Authorization ${session.status}. You can close this window.</p></body></html>`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Authorization failed';
+      reply
+        .status(400)
+        .type('text/html; charset=utf-8')
+        .send(`<!doctype html><html><body><p>${message}</p></body></html>`);
     }
   });
 
@@ -141,6 +211,16 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get('/api/v1/workspaces/:workspaceId/mcp/installations/:installId', { preHandler: wsPreHandler }, async (request, reply) => {
+    try {
+      const { workspaceId, installId } = request.params as { workspaceId: string; installId: string };
+      const installation = await getInstallation(workspaceId, installId);
+      reply.send({ installation });
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
   app.post('/api/v1/workspaces/:workspaceId/mcp/installations', { preHandler: wsPreHandler }, async (request, reply) => {
     try {
       const { workspaceId } = request.params as { workspaceId: string };
@@ -168,6 +248,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         userId: data.userId,
         lifecycleScope: data.lifecycleScope,
         configData: data.configData,
+        authSessionIds: data.authSessionIds,
         installedBy: user.id || user.userId,
       });
       reply.status(201).send(installation);
@@ -197,7 +278,11 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         }
       }
 
-      const installation = await updateInstallation(installId, data);
+      const user = (request as any).user;
+      const installation = await updateInstallation(installId, {
+        ...data,
+        updatedBy: user.id || user.userId,
+      });
       reply.send(installation);
     } catch (error) {
       handleError(reply, error);

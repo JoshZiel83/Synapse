@@ -27,12 +27,13 @@ async function insertFileRow(
   mimeType: string,
   sizeBytes: number,
   category: string = 'general',
+  metadata: Record<string, unknown> = {},
 ): Promise<FileRecord> {
   const result = await query(
-    `INSERT INTO files (workspace_id, uploader_user_id, original_name, stored_name, mime_type, size_bytes, category)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO files (workspace_id, uploader_user_id, original_name, stored_name, mime_type, size_bytes, category, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id`,
-    [workspaceId, uploaderUserId, originalName, storedName, mimeType, sizeBytes, category],
+    [workspaceId, uploaderUserId, originalName, storedName, mimeType, sizeBytes, category, JSON.stringify(metadata)],
   );
   return {
     id: result.rows[0].id,
@@ -71,9 +72,10 @@ export async function saveFromUrl(
   uploaderUserId: string | null,
   originalName?: string,
   category: string = 'general',
+  metadata: Record<string, unknown> = {},
 ): Promise<FileRecord> {
   const { storedName, mimeType, sizeBytes } = await downloadAndSave(url, originalName);
-  return insertFileRow(workspaceId, uploaderUserId, originalName || 'download', storedName, mimeType, sizeBytes, category);
+  return insertFileRow(workspaceId, uploaderUserId, originalName || 'download', storedName, mimeType, sizeBytes, category, metadata);
 }
 
 /** Decode base64, save to disk, insert DB row, return FileRecord */
@@ -84,10 +86,11 @@ export async function saveFromBase64(
   workspaceId: string | null,
   uploaderUserId: string | null,
   category: string = 'general',
+  metadata: Record<string, unknown> = {},
 ): Promise<FileRecord> {
   const buffer = Buffer.from(base64, 'base64');
   const { storedName, sizeBytes } = await saveBuffer(buffer, originalName, mimeType);
-  return insertFileRow(workspaceId, uploaderUserId, originalName, storedName, mimeType, sizeBytes, category);
+  return insertFileRow(workspaceId, uploaderUserId, originalName, storedName, mimeType, sizeBytes, category, metadata);
 }
 
 /** Save a buffer to disk, insert DB row, return FileRecord */
@@ -98,7 +101,8 @@ export async function saveFromBuffer(
   workspaceId: string | null,
   uploaderUserId: string | null,
   category: string = 'general',
+  metadata: Record<string, unknown> = {},
 ): Promise<FileRecord> {
   const { storedName, sizeBytes } = await saveBuffer(buffer, originalName, mimeType);
-  return insertFileRow(workspaceId, uploaderUserId, originalName, storedName, mimeType, sizeBytes, category);
+  return insertFileRow(workspaceId, uploaderUserId, originalName, storedName, mimeType, sizeBytes, category, metadata);
 }

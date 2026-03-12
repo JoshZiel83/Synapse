@@ -52,7 +52,7 @@ function resolveReuseOwnerKey(binding: CapabilityBinding, params: ResolveParams,
       return `${params.actorId}:${params.conversationId}`;
     case 'user':
       return params.userId && params.userCount === 1
-        ? `user:${params.userId}`
+        ? `workspace:${params.workspaceId}:user:${params.userId}`
         : params.conversationId;
     case 'turn':
       return turnOwnerKey;

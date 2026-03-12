@@ -1,5 +1,6 @@
 import { query } from '../../infrastructure/database/index.js';
 import { decryptSensitiveFields } from '../../infrastructure/crypto/index.js';
+import { resolveAuthConnectionRefs } from './auth-service.js';
 
 export interface ResolvedPluginConfig {
   pluginId: string;
@@ -48,10 +49,11 @@ export async function resolveInstallationConfig(installationId: string): Promise
   const bindingConfig = row.config_data || {};
   const merged = mergeConfigs(revisionDefault, bindingConfig);
   const decrypted = decryptSensitiveFields(merged);
+  const withConnections = await resolveAuthConnectionRefs(decrypted);
 
   return {
     pluginId: row.package_id,
     installationId,
-    config: decrypted,
+    config: withConnections,
   };
 }

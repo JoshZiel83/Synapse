@@ -1,5 +1,7 @@
 import type { BuiltinOrgSeed } from '../types.js';
 
+const i18n = (en: string, zhCN: string) => ({ en, 'zh-CN': zhCN });
+
 const zhipuConfig = {
   configSchema: {
     type: 'object',
@@ -36,6 +38,94 @@ const zhipuConfig = {
     { field: 'apiKey', rule: 'required' as const, message: 'API key is required' },
     { field: 'apiKey', rule: 'min_length' as const, value: 10, message: 'API key seems too short' },
   ],
+  configFields: [
+    {
+      key: 'apiKey',
+      type: 'secret' as const,
+      titleI18n: i18n('API Key', 'API 密钥'),
+      descriptionI18n: i18n('Your ZhipuAI API key.', '你的智谱 API 密钥。'),
+      placeholderI18n: i18n('Paste your API key', '粘贴你的 API 密钥'),
+      required: true,
+      secret: true,
+    },
+    {
+      key: 'feature_search',
+      type: 'boolean' as const,
+      titleI18n: i18n('Enable Web Search', '启用联网搜索'),
+      descriptionI18n: i18n('Expose the official web search tools.', '暴露官方联网搜索工具。'),
+      defaultValue: true,
+    },
+    {
+      key: 'feature_reader',
+      type: 'boolean' as const,
+      titleI18n: i18n('Enable Web Reader', '启用网页阅读'),
+      descriptionI18n: i18n('Expose the official web reader tools.', '暴露官方网页阅读工具。'),
+      defaultValue: true,
+    },
+    {
+      key: 'feature_zread',
+      type: 'boolean' as const,
+      titleI18n: i18n('Enable ZRead', '启用 ZRead'),
+      descriptionI18n: i18n('Expose repository search and file reading tools.', '暴露仓库搜索和文件读取工具。'),
+      defaultValue: true,
+    },
+    {
+      key: 'feature_ocr',
+      type: 'boolean' as const,
+      titleI18n: i18n('Enable OCR', '启用 OCR'),
+      descriptionI18n: i18n('Expose the official OCR service.', '暴露官方 OCR 服务。'),
+      defaultValue: true,
+    },
+    {
+      key: 'feature_file_parser',
+      type: 'boolean' as const,
+      titleI18n: i18n('Enable File Parser', '启用文件解析'),
+      descriptionI18n: i18n('Expose the official synchronous file parser.', '暴露官方同步文件解析能力。'),
+      defaultValue: true,
+    },
+    {
+      key: 'feature_layout_parsing',
+      type: 'boolean' as const,
+      titleI18n: i18n('Enable Layout Parsing', '启用版面解析'),
+      descriptionI18n: i18n('Expose GLM-OCR layout parsing.', '暴露 GLM-OCR 版面解析能力。'),
+      defaultValue: true,
+    },
+    {
+      key: 'feature_moderation',
+      type: 'boolean' as const,
+      titleI18n: i18n('Enable Content Moderation', '启用内容安全'),
+      descriptionI18n: i18n('Expose the official content moderation API.', '暴露官方内容安全审核能力。'),
+      defaultValue: true,
+    },
+    {
+      key: 'feature_vision',
+      type: 'boolean' as const,
+      titleI18n: i18n('Enable Vision Tools', '启用视觉工具'),
+      descriptionI18n: i18n('Expose screenshot, image, and video understanding tools.', '暴露截图、图片和视频理解工具。'),
+      defaultValue: true,
+    },
+    {
+      key: 'feature_stt',
+      type: 'boolean' as const,
+      titleI18n: i18n('Enable Speech to Text', '启用语音转文本'),
+      descriptionI18n: i18n('Expose GLM-ASR transcription.', '暴露 GLM-ASR 转写能力。'),
+      defaultValue: true,
+    },
+    {
+      key: 'feature_image_gen',
+      type: 'boolean' as const,
+      titleI18n: i18n('Enable Image Generation', '启用图像生成'),
+      descriptionI18n: i18n('Expose the official image generation API.', '暴露官方图像生成能力。'),
+      defaultValue: true,
+    },
+    {
+      key: 'feature_tts',
+      type: 'boolean' as const,
+      titleI18n: i18n('Enable Text to Speech', '启用文本转语音'),
+      descriptionI18n: i18n('Expose GLM-TTS speech synthesis.', '暴露 GLM-TTS 语音合成能力。'),
+      defaultValue: true,
+    },
+  ],
   setupSteps: [{
     id: 'api_key',
     title: 'Configure API Key',
@@ -45,6 +135,48 @@ const zhipuConfig = {
     helpUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     helpText: 'Navigate to your ZhipuAI dashboard to create an API key.',
   }],
+  installFlow: {
+    steps: [
+      {
+        id: 'credentials',
+        kind: 'form' as const,
+        titleI18n: i18n('Connect your ZhipuAI account', '连接你的智谱账号'),
+        descriptionI18n: i18n('Paste an API key to enable this toolkit.', '粘贴 API 密钥以启用该工具包。'),
+        scope: 'plugin' as const,
+        fields: ['apiKey'],
+        helpUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
+        helpTextI18n: i18n('Create an API key in the ZhipuAI dashboard and paste it here.', '在智谱开放平台创建 API 密钥后粘贴到这里。'),
+      },
+      {
+        id: 'features',
+        kind: 'form' as const,
+        titleI18n: i18n('Choose enabled capabilities', '选择启用的能力'),
+        descriptionI18n: i18n('Decide which official ZhipuAI tools should be exposed to your actors.', '决定向你的 Actor 暴露哪些官方智谱能力。'),
+        scope: 'plugin' as const,
+        fields: [
+          'feature_search',
+          'feature_reader',
+          'feature_zread',
+          'feature_ocr',
+          'feature_file_parser',
+          'feature_layout_parsing',
+          'feature_moderation',
+          'feature_vision',
+          'feature_stt',
+          'feature_image_gen',
+          'feature_tts',
+        ],
+      },
+      {
+        id: 'review',
+        kind: 'confirm' as const,
+        titleI18n: i18n('Review and install', '确认并安装'),
+        descriptionI18n: i18n('Review the selected scope and enabled capabilities before installing.', '确认安装范围和已启用能力后再执行安装。'),
+        scope: 'plugin' as const,
+        fields: [],
+      },
+    ],
+  },
 };
 
 export const zAiSeed: BuiltinOrgSeed = {
@@ -57,16 +189,39 @@ export const zAiSeed: BuiltinOrgSeed = {
       displayName: 'ZhipuAI Toolkit',
       description: 'Unified ZhipuAI toolkit with search, web reading, code/document analysis, OCR, layout parsing, content moderation, vision, STT, image generation, and TTS.',
       longDescription: 'A comprehensive AI toolkit powered by ZhipuAI. Includes official Web Search API, official Reader API, ZRead repository analysis, official OCR service, official GLM-OCR layout parsing, official content moderation, image/video analysis (GLM-4V), speech-to-text (GLM-ASR), image generation (GLM-Image / CogView), and text-to-speech (GLM-TTS). Enable or disable individual features via configuration toggles.',
+      displayNameI18n: i18n('ZhipuAI Toolkit', '智谱工具包'),
+      descriptionI18n: i18n(
+        'Unified ZhipuAI toolkit with search, web reading, code/document analysis, OCR, layout parsing, content moderation, vision, STT, image generation, and TTS.',
+        '统一的智谱工具包，涵盖联网搜索、网页阅读、仓库分析、OCR、版面解析、内容安全、视觉理解、语音转文本、图像生成与文本转语音。',
+      ),
+      longDescriptionI18n: i18n(
+        'A comprehensive AI toolkit powered by ZhipuAI. Includes official Web Search API, official Reader API, ZRead repository analysis, official OCR service, official GLM-OCR layout parsing, official content moderation, image/video analysis (GLM-4V), speech-to-text (GLM-ASR), image generation (GLM-Image / CogView), and text-to-speech (GLM-TTS). Enable or disable individual features via configuration toggles.',
+        '由智谱能力驱动的综合工具包，包含官方联网搜索、网页阅读、ZRead 仓库分析、OCR、GLM-OCR 版面解析、内容安全、图片/视频理解、语音转写、图像生成和语音合成，并支持按功能开关控制。',
+      ),
+      summaryI18n: i18n(
+        'Official ZhipuAI toolkit for multimodal, search, and document workflows.',
+        '用于多模态、联网搜索和文档处理的官方智谱工具包。',
+      ),
+      defaultLocale: 'zh-CN',
       transport: 'builtin',
       entryPoint: 'z_ai/toolkit',
       defaultBindingScope: 'workspace',
       defaultReuseScope: 'workspace',
       requiresHandshake: false,
+      iconAssetPath: 'assets/icons/z_ai.svg',
       authorization: {
         requiredPermissions: ['network:outbound', 'files:read', 'files:write'],
         defaultGrantScope: 'workspace',
         reason: 'ZhipuAI toolkit needs outbound network access and file read/write access to process FileRefs and store generated artifacts.',
       },
+      categorySlugs: [
+        'search-and-retrieval',
+        'documents-and-reading',
+        'vision-and-ocr',
+        'audio-and-speech',
+        'media-generation',
+        'safety-and-moderation',
+      ],
       tags: ['search', 'web', 'reader', 'documents', 'code', 'vision', 'image', 'ocr', 'layout', 'moderation', 'file-parser', 'stt', 'tts', 'image-gen', 'builtin'],
       toolsManifest: [
         // Search

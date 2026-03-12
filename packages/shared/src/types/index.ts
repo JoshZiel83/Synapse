@@ -841,6 +841,108 @@ export type CapabilityRevisionStatus = 'draft' | 'active' | 'deprecated' | 'arch
 export type CapabilityGrantStatus = 'active' | 'revoked';
 export type CapabilityRequirementStatus = 'satisfied' | 'missing_required' | 'missing_recommended' | 'scope_mismatch' | 'config_incomplete';
 export type CapabilityAssetKind = 'skill_markdown' | 'reference_markdown' | 'script' | 'json' | 'text' | 'binary';
+export type LocalizedText = Record<string, string>;
+export type CapabilityConfigFieldType =
+  | 'text'
+  | 'textarea'
+  | 'number'
+  | 'boolean'
+  | 'select'
+  | 'secret'
+  | 'oauth_connection'
+  | 'file';
+export type CapabilityInstallStepKind =
+  | 'form'
+  | 'oauth'
+  | 'check'
+  | 'confirm'
+  | 'binding_scope'
+  | 'reuse_scope';
+export type CapabilityInstallActionKind = 'oauth_authorize' | 'external_link' | 'noop';
+export type CapabilityAuthProviderKind = 'oauth2_authorization_code_pkce';
+export type CapabilityAuthSessionStatus = 'pending' | 'completed' | 'failed' | 'expired' | 'consumed';
+export type CapabilityAuthConnectionStatus = 'active' | 'expired' | 'revoked';
+
+export interface CapabilityConfigFieldOption {
+  value: string;
+  labelI18n: LocalizedText;
+  descriptionI18n?: LocalizedText;
+}
+
+export interface CapabilityConfigFieldDefinition {
+  key: string;
+  type: CapabilityConfigFieldType;
+  titleI18n: LocalizedText;
+  descriptionI18n?: LocalizedText;
+  placeholderI18n?: LocalizedText;
+  required?: boolean;
+  defaultValue?: unknown;
+  options?: CapabilityConfigFieldOption[];
+  secret?: boolean;
+  serverManaged?: boolean;
+  authProviderKey?: string;
+  validation?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CapabilityInstallAction {
+  kind: CapabilityInstallActionKind;
+  providerKey?: string;
+  url?: string;
+  buttonLabelI18n?: LocalizedText;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CapabilityInstallStep {
+  id: string;
+  kind: CapabilityInstallStepKind;
+  titleI18n: LocalizedText;
+  descriptionI18n?: LocalizedText;
+  scope: 'workspace' | 'plugin';
+  fields: string[];
+  optional?: boolean;
+  helpUrl?: string;
+  helpTextI18n?: LocalizedText;
+  action?: CapabilityInstallAction;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CapabilityInstallFlow {
+  steps: CapabilityInstallStep[];
+}
+
+export interface CapabilityAuthProviderDefinition {
+  key: string;
+  kind: CapabilityAuthProviderKind;
+  displayNameI18n: LocalizedText;
+  descriptionI18n?: LocalizedText;
+  authorizeUrl: string;
+  tokenUrl: string;
+  userInfoUrl?: string;
+  scopes?: string[];
+  clientId?: string;
+  clientSecret?: string;
+  clientIdEnv?: string;
+  clientSecretEnv?: string;
+  audience?: string;
+  extraAuthorizeParams?: Record<string, string>;
+  extraTokenParams?: Record<string, string>;
+  profileIdPath?: string;
+  profileDisplayNamePath?: string;
+  profileAvatarUrlPath?: string;
+  reusable?: boolean;
+  configFieldKey?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CapabilityConfigFieldState {
+  key: string;
+  isConfigured: boolean;
+  maskedValue?: string;
+  authConnectionId?: string;
+  accountDisplayName?: string;
+  updatedAt?: string;
+}
 
 export interface CapabilityAuthorizationManifest {
   requiredPermissions: string[];
@@ -857,6 +959,23 @@ export interface CapabilityPublisher {
   isBuiltin: boolean;
   isVerified: boolean;
   ownerUserId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CapabilityCategory {
+  id: string;
+  slug: string;
+  targetKind: CapabilityPackageKind;
+  displayName: string;
+  displayNameI18n?: LocalizedText;
+  description?: string;
+  descriptionI18n?: LocalizedText;
+  iconUrl?: string;
+  defaultLocale?: string;
+  sortOrder: number;
+  isBuiltin: boolean;
+  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -888,12 +1007,15 @@ export interface CapabilityPackageRevision {
   manifest: Record<string, unknown>;
   authorization?: CapabilityAuthorizationManifest;
   configSchema: Record<string, unknown>;
+  configFields: CapabilityConfigFieldDefinition[];
   defaultConfig: Record<string, unknown>;
   transport?: CapabilityTransport;
   entryPoint?: string;
   toolsManifest: CapabilityPackageTool[];
   validationRules: McpValidationRule[];
-  setupSteps: McpSetupStep[];
+  setupSteps: CapabilityInstallStep[];
+  installFlow?: CapabilityInstallFlow;
+  authProviders: CapabilityAuthProviderDefinition[];
   metadata: Record<string, unknown>;
   createdBy?: string;
   createdAt: string;
@@ -907,8 +1029,13 @@ export interface CapabilityPackage {
   kind: CapabilityPackageKind;
   slug: string;
   displayName: string;
+  displayNameI18n?: LocalizedText;
   description: string;
+  descriptionI18n?: LocalizedText;
   longDescription: string;
+  longDescriptionI18n?: LocalizedText;
+  summaryI18n?: LocalizedText;
+  defaultLocale?: string;
   iconUrl?: string;
   sourceType: CapabilitySourceType;
   tags: string[];
@@ -924,6 +1051,7 @@ export interface CapabilityPackage {
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+  categories?: CapabilityCategory[];
   publisher?: CapabilityPublisher;
   latestRevision?: CapabilityPackageRevision;
 }
@@ -944,6 +1072,7 @@ export interface CapabilityBinding {
   requiresHandshake: boolean;
   isEnabled: boolean;
   configData: Record<string, unknown>;
+  configState: CapabilityConfigFieldState[];
   installedBy?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
@@ -967,6 +1096,45 @@ export interface CapabilityGrant {
   metadata: Record<string, unknown>;
   createdAt: string;
   revokedAt?: string;
+}
+
+export interface CapabilityAuthSession {
+  id: string;
+  workspaceId: string;
+  packageId: string;
+  revisionId?: string;
+  providerKey: string;
+  userId: string;
+  status: CapabilityAuthSessionStatus;
+  state: string;
+  codeVerifier?: string;
+  redirectUri: string;
+  authorizeUrl?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  resultPreview: Record<string, unknown>;
+  authConnectionId?: string;
+  metadata: Record<string, unknown>;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CapabilityAuthConnection {
+  id: string;
+  workspaceId: string;
+  packageId: string;
+  providerKey: string;
+  ownerUserId: string;
+  externalAccountId?: string;
+  displayName?: string;
+  avatarUrl?: string;
+  scopes: string[];
+  status: CapabilityAuthConnectionStatus;
+  expiresAt?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CapabilityRequirement {
@@ -1114,13 +1282,19 @@ export interface McpValidationRule {
 
 export interface McpSetupStep {
   id: string;
-  title: string;
-  description: string;
+  kind?: CapabilityInstallStepKind;
+  title?: string;
+  titleI18n?: LocalizedText;
+  description?: string;
+  descriptionI18n?: LocalizedText;
   scope: 'workspace' | 'plugin';
   fields: string[];
   optional?: boolean;
   helpUrl?: string;
   helpText?: string;
+  helpTextI18n?: LocalizedText;
+  action?: CapabilityInstallAction;
+  metadata?: Record<string, unknown>;
 }
 
 // ============ Groups (Chat Groups) ============

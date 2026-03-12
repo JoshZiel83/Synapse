@@ -30,6 +30,7 @@ class ApiClient {
   getWorkspaces() { return this.fetch('/workspaces'); }
   createWorkspace(name: string, description?: string) { return this.fetch('/workspaces', { method: 'POST', body: JSON.stringify({ name, description }) }); }
   getWorkspace(id: string) { return this.fetch(`/workspaces/${id}`); }
+  getWorkspaceMembers(wsId: string) { return this.fetch(`/workspaces/${wsId}/members`); }
 
   // Workspace Invites
   getInviteInfo(token: string) { return this.fetch(`/invites/${token}`); }
@@ -136,11 +137,13 @@ class ApiClient {
   // MCP Marketplace
   getMarketplace(params?: string) { return this.fetch(`/mcp/marketplace${params ? '?' + params : ''}`); }
   getMarketplacePlugin(pluginId: string) { return this.fetch(`/mcp/marketplace/${pluginId}`); }
+  getPluginCategories() { return this.fetch('/mcp/categories'); }
   getMcpOrganizations() { return this.fetch('/mcp/organizations'); }
   getMcpOrganization(orgId: string) { return this.fetch(`/mcp/organizations/${orgId}`); }
 
   // MCP Unified Installations
   getInstallations(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/mcp/installations${params ? '?' + params : ''}`); }
+  getInstallation(wsId: string, installId: string) { return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}`); }
   installPlugin(
     wsId: string,
     data: {
@@ -151,12 +154,43 @@ class ApiClient {
       userId?: string;
       lifecycleScope?: 'turn' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
       configData?: Record<string, unknown>;
+      authSessionIds?: Record<string, string>;
     },
   ) {
     return this.fetch(`/workspaces/${wsId}/mcp/installations`, { method: 'POST', body: JSON.stringify(data) });
   }
   updateInstallation(wsId: string, installId: string, data: any) { return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}`, { method: 'PUT', body: JSON.stringify(data) }); }
   uninstallPlugin(wsId: string, installId: string) { return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}`, { method: 'DELETE' }); }
+  startPluginAuth(wsId: string, pluginId: string, providerKey: string) {
+    return this.fetch(`/workspaces/${wsId}/mcp/plugins/${pluginId}/auth/${providerKey}/start`, { method: 'POST', body: '{}' });
+  }
+  getPluginAuthSession(wsId: string, sessionId: string) {
+    return this.fetch(`/workspaces/${wsId}/mcp/auth/sessions/${sessionId}`);
+  }
+  getCapabilityGrants(wsId: string, bindingId: string) {
+    return this.fetch(`/workspaces/${wsId}/capabilities/bindings/${bindingId}/grants`);
+  }
+  getCapabilityAuthorization(wsId: string, bindingId: string, params?: string) {
+    return this.fetch(`/workspaces/${wsId}/capabilities/bindings/${bindingId}/authorization${params ? `?${params}` : ''}`);
+  }
+  issueCapabilityGrant(
+    wsId: string,
+    bindingId: string,
+    data: {
+      grantScope?: 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+      conversationId?: string;
+      actorId?: string;
+      userId?: string;
+      permissions?: string[];
+      reason?: string;
+      metadata?: Record<string, unknown>;
+    },
+  ) {
+    return this.fetch(`/workspaces/${wsId}/capabilities/bindings/${bindingId}/grants`, { method: 'POST', body: JSON.stringify(data) });
+  }
+  revokeCapabilityGrant(wsId: string, grantId: string) {
+    return this.fetch(`/workspaces/${wsId}/capabilities/grants/${grantId}`, { method: 'DELETE' });
+  }
 
   // MCP Audit
   getMcpToolCallLogs(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/mcp/audit/tool-calls${params ? '?' + params : ''}`); }
