@@ -9,7 +9,7 @@ import type {
   CanonicalContextItem,
   CanonicalContextTarget,
 } from '@synapse/shared/types';
-import { textBlocks } from '@synapse/shared';
+import { fileRefBlock, textBlock, textBlocks } from '@synapse/shared';
 import { renderConversationEventContextBlocks } from '../conversation/event-registry.js';
 
 function mimeToCategory(mimeType: string): 'image' | 'audio' | 'video' | 'document' {
@@ -35,14 +35,13 @@ export function itemPartsToCanonicalBlocks(parts: any[]): CanonicalContentBlock[
 
   for (const part of parts || []) {
     if (part.part_type === 'text') {
-      blocks.push({ type: 'text', text: part.text_value || '' });
+      blocks.push(textBlock(part.text_value || ''));
       continue;
     }
 
     if (part.part_type === 'file_ref' && part.file_id) {
       const metadata = parseMetadata(part.metadata);
-      blocks.push({
-        type: 'file_ref',
+      blocks.push(fileRefBlock({
         fileId: part.file_id,
         storedName: part.stored_name || String(metadata.storedName || ''),
         url: part.file_id ? `/api/v1/files/${part.file_id}` : '',
@@ -50,7 +49,7 @@ export function itemPartsToCanonicalBlocks(parts: any[]): CanonicalContentBlock[
         originalName: part.original_name || part.name || 'file',
         sizeBytes: part.size_bytes || Number(metadata.sizeBytes || 0),
         category: (metadata.category as 'image' | 'audio' | 'video' | 'document') || 'document',
-      });
+      }));
     }
   }
 

@@ -1,5 +1,6 @@
 import type {
   CanonicalContentBlock,
+  CanonicalContentBlockInput,
   CanonicalContextItem,
   Memory,
   MemoryCategory,
@@ -12,7 +13,7 @@ import type {
   MemoryStatus,
   UUID,
 } from '@synapse/shared';
-import { extractText } from '@synapse/shared';
+import { extractText, normalizeCanonicalContentBlocks, textBlocks } from '@synapse/shared';
 import { query, transaction } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { config } from '../../config/index.js';
@@ -426,7 +427,7 @@ function normalizeGrantInputs(grants?: MemoryGrantInput[]) {
 
 async function normalizeMemoryContent(input: {
   content?: string;
-  contentBlocks?: CanonicalContentBlock[];
+  contentBlocks?: CanonicalContentBlockInput[];
   textDigest?: string;
   searchText?: string;
   tags?: string[];
@@ -546,7 +547,7 @@ export interface CreateMemoryInput {
   confidence?: number;
   tags?: string[];
   content?: string;
-  contentBlocks?: CanonicalContentBlock[];
+  contentBlocks?: CanonicalContentBlockInput[];
   textDigest?: string;
   searchText?: string;
   sourceItemId?: string;
@@ -570,7 +571,7 @@ export interface UpdateMemoryInput {
   confidence?: number;
   tags?: string[];
   content?: string;
-  contentBlocks?: CanonicalContentBlock[];
+  contentBlocks?: CanonicalContentBlockInput[];
   textDigest?: string;
   searchText?: string;
   sourceItemId?: string;
@@ -602,7 +603,7 @@ export interface SearchMemoriesInput extends MemoryAccessTarget {
 
 export interface RecallMemoriesInput extends SearchMemoriesInput {
   recallType: Exclude<MemoryRecallType, 'manual_search'>;
-  queryBlocks?: CanonicalContentBlock[];
+  queryBlocks?: CanonicalContentBlockInput[];
 }
 
 function buildVisibilityClause(target: MemoryAccessTarget, startIndex: number, alias = 'me') {
@@ -920,10 +921,11 @@ async function recordMemoryRecallRun(params: {
   userId?: string;
   recallType: MemoryRecallType;
   queryText: string;
-  queryBlocks?: CanonicalContentBlock[];
+  queryBlocks?: CanonicalContentBlockInput[];
   metadata?: Record<string, unknown>;
   results: MemoryRecallResult[];
 }): Promise<MemoryRecallRun> {
+  const normalizedQueryBlocks = normalizeCanonicalContentBlocks(params.queryBlocks || []);
   const runId = uuidv4();
   await transaction(async (client) => {
     await client.query(
@@ -938,7 +940,7 @@ async function recordMemoryRecallRun(params: {
         params.userId || null,
         params.recallType,
         params.queryText,
-        JSON.stringify(params.queryBlocks || []),
+        JSON.stringify(normalizedQueryBlocks),
         JSON.stringify(params.metadata || {}),
       ],
     );
@@ -978,7 +980,7 @@ async function recordMemoryRecallRun(params: {
     userId: params.userId,
     recallType: params.recallType,
     queryText: params.queryText,
-    queryBlocks: params.queryBlocks || [],
+    queryBlocks: normalizedQueryBlocks,
     metadata: params.metadata || {},
     createdAt: new Date().toISOString(),
     results: params.results,
@@ -1225,7 +1227,7 @@ export async function runMemorySearch(workspaceId: UUID, input: SearchMemoriesIn
     userId: input.userId,
     recallType: 'manual_search',
     queryText: input.queryText,
-    queryBlocks: input.queryText ? [{ type: 'text', text: input.queryText }] : [],
+    queryBlocks: input.queryText ? textBlocks(input.queryText) : [],
     metadata: input.metadata,
     results,
   });

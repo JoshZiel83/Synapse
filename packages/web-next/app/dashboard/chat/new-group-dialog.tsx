@@ -16,6 +16,17 @@ interface Actor {
   config?: { avatar_emoji?: string };
 }
 
+function normalizeActor(actor: any): Actor {
+  const definition = actor?.definition || actor;
+  return {
+    id: actor.id,
+    name: definition.name,
+    role: definition.role,
+    title: definition.title,
+    config: definition.config || {},
+  };
+}
+
 interface NewGroupDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -62,7 +73,7 @@ export default function NewGroupDialog({ open, onOpenChange, workspaceId, onCrea
     (async () => {
       try {
         const data = await api.getActors(workspaceId);
-        const list: Actor[] = data?.actors || data || [];
+        const list: Actor[] = (data?.actors || data || []).map(normalizeActor);
         list.sort((a, b) => a.name.localeCompare(b.name));
         setActors(list);
 

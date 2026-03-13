@@ -1,6 +1,6 @@
-import type { Actor, ActorSkill, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ResolvedModelPlan, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow, CapabilityAvailableSkill, ModelAttemptPolicy } from '@synapse/shared';
+import type { Actor, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ResolvedModelPlan, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow, CapabilityAvailableSkill, ModelAttemptPolicy } from '@synapse/shared';
 import type { CanonicalContextItem, NormalizedMcpToolResult } from '@synapse/shared/types';
-import { textBlocks, extractText } from '@synapse/shared';
+import { normalizeCanonicalContentBlocks, textBlock, textBlocks, extractText } from '@synapse/shared';
 import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
 import { createAIProvider, type AIProvider, type AIProviderConfig } from './providers/index.js';
@@ -165,7 +165,7 @@ async function buildResponseContentBlocks(
   const baseBlocks = segments.some((segment) => segment.type === 'ref')
     ? await resolveFileRefSegments(segments)
     : textContent
-      ? [{ type: 'text', text: textContent } satisfies CanonicalContentBlock]
+      ? [textBlock(textContent)]
       : [];
 
   return mergeContentBlocks(baseBlocks, supplementalBlocks);
@@ -174,8 +174,7 @@ async function buildResponseContentBlocks(
 interface Subordinate {
   name: string;
   title: string;
-  charter: string;
-  skills?: ActorSkill[];
+  summary: string;
 }
 
 function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
@@ -229,6 +228,7 @@ export async function actorThink(
     checkNewMessages?: () => Promise<CanonicalContextItem[] | null>;
   },
 ): Promise<ThinkingResult> {
+  const actorDefinition = actor.definition ?? actor;
   const system = options?.system || '';
   let allTools: import('@synapse/shared').ToolDefinition[] = [];
   const effectiveModelPlan = modelPlan && modelPlan.candidates.length > 0
@@ -735,12 +735,16 @@ export async function actorThink(
           toolCallId: tr.toolCallId,
           providerCallId: tr.providerCallId,
           toolName: tr.toolName,
-          content: typeof tr.content === 'string' ? textBlocks(tr.content) : (Array.isArray(tr.content) ? tr.content as CanonicalContentBlock[] : textBlocks(JSON.stringify(tr.content))),
+          content: typeof tr.content === 'string'
+            ? textBlocks(tr.content)
+            : (Array.isArray(tr.content)
+              ? normalizeCanonicalContentBlocks(tr.content as any[])
+              : textBlocks(JSON.stringify(tr.content))),
           isError: tr.isError,
           metadata: tr.metadata,
         }));
         const roundContentBlocks: CanonicalContentBlock[] = [];
-        if (finalTextContent) roundContentBlocks.push({ type: 'text', text: finalTextContent });
+        if (finalTextContent) roundContentBlocks.push(textBlock(finalTextContent));
         if (roundMediaBlocks.length > 0) roundContentBlocks.push(...roundMediaBlocks);
         toolRounds.push({
           content: roundContentBlocks.length > 0 ? roundContentBlocks : undefined,
@@ -761,7 +765,7 @@ export async function actorThink(
             memberType: 'actor',
             actorId: actor.id,
             sessionId: options?.sessionId,
-            name: actor.name,
+            name: actorDefinition.name,
             isSelf: true,
           },
           content: roundContentBlocks.length > 0 ? roundContentBlocks : undefined,

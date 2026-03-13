@@ -2,8 +2,8 @@ import crypto from 'node:crypto';
 import type pg from 'pg';
 import { query, transaction } from '../../infrastructure/database/index.js';
 import {
-  SECRETARY_DEFAULT_CHARTER,
-  SECRETARY_DEFAULT_SYSTEM_PROMPT,
+  normalizeActorDocs,
+  SECRETARY_DEFAULT_DOCS,
 } from '@synapse/shared';
 
 export interface CreateWorkspaceInput {
@@ -51,17 +51,19 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     );
 
     // 3. Auto-create secretary actor
+    const secretaryDocs = SECRETARY_DEFAULT_DOCS;
     const secretaryResult = await client.query(
-      `INSERT INTO actors (workspace_id, name, role, title, charter, system_prompt, parent_id, capabilities)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO actors (
+         workspace_id, name, role, title, can_represent_user, docs, parent_id, capabilities, current_version
+       )
+       VALUES ($1, $2, $3, $4, false, $5, $6, $7, 1)
        RETURNING *`,
       [
         workspace.id,
         'Secretary',
         'secretary',
         'Personal Secretary',
-        SECRETARY_DEFAULT_CHARTER,
-        SECRETARY_DEFAULT_SYSTEM_PROMPT,
+        JSON.stringify(secretaryDocs),
         null,
         ['delegation', 'reporting', 'organization'],
       ]
@@ -70,15 +72,17 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
 
     // 4. Create initial actor_versions record for secretary
     await client.query(
-      `INSERT INTO actor_versions (actor_id, version, name, role, title, charter, system_prompt, skills, config, capabilities)
-       VALUES ($1, 1, $2, $3, $4, $5, $6, '[]', '{}', $7)`,
+      `INSERT INTO actor_versions (
+         actor_id, version, name, role, title, avatar_file_id, parent_id, can_represent_user, docs,
+         config, capabilities
+       )
+       VALUES ($1, 1, $2, $3, $4, NULL, NULL, false, $5, '{}', $6)`,
       [
         secretary.id,
         secretary.name,
         secretary.role,
         secretary.title,
-        secretary.charter,
-        secretary.system_prompt,
+        JSON.stringify(secretaryDocs),
         secretary.capabilities,
       ]
     );
@@ -195,17 +199,24 @@ function mapWorkspaceRow(row: any) {
 }
 
 function mapActorRow(row: any) {
+  const docs = normalizeActorDocs(
+    typeof row.docs === 'string' ? JSON.parse(row.docs) : (row.docs || []),
+  );
   return {
     id: row.id,
     workspaceId: row.workspace_id,
-    name: row.name,
-    role: row.role,
-    title: row.title,
-    charter: row.charter,
-    systemPrompt: row.system_prompt,
-    parentId: row.parent_id ?? null,
-    capabilities: row.capabilities ?? [],
-    config: row.config ?? {},
+    definition: {
+      name: row.name,
+      role: row.role,
+      title: row.title,
+      avatarFileId: row.avatar_file_id ?? undefined,
+      parentId: row.parent_id ?? undefined,
+      canRepresentUser: Boolean(row.can_represent_user),
+      docs,
+      capabilities: Array.isArray(row.capabilities) ? row.capabilities : [],
+      config: row.config ? (typeof row.config === 'string' ? JSON.parse(row.config) : row.config) : {},
+    },
+    currentVersion: Number(row.current_version || 1),
     isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

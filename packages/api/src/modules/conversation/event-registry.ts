@@ -66,6 +66,35 @@ function actorAvatarSummary(payload: Record<string, unknown>) {
   return `Actor avatar updated to ${avatarEmoji}.`;
 }
 
+function actorVersionSummary(payload: Record<string, unknown>) {
+  const actorName = typeof payload.actorName === 'string' ? payload.actorName.trim() : 'An actor';
+  const fromVersion = typeof payload.fromVersion === 'number' ? payload.fromVersion : null;
+  const toVersion = typeof payload.toVersion === 'number' ? payload.toVersion : null;
+  const changedFields = Array.isArray(payload.changedFields)
+    ? payload.changedFields.filter((field): field is string => typeof field === 'string')
+    : [];
+  const changedDocs = Array.isArray(payload.changedDocs)
+    ? payload.changedDocs
+        .filter((doc): doc is { title?: string; summaryText?: string } => !!doc && typeof doc === 'object')
+        .map((doc) => doc.title?.trim())
+        .filter((title): title is string => !!title)
+    : [];
+
+  const fragments: string[] = [];
+  if (fromVersion !== null && toVersion !== null) {
+    fragments.push(`${actorName} updated from v${fromVersion} to v${toVersion}.`);
+  } else {
+    fragments.push(`${actorName} updated their profile.`);
+  }
+  if (changedFields.length > 0) {
+    fragments.push(`Fields: ${changedFields.join(', ')}.`);
+  }
+  if (changedDocs.length > 0) {
+    fragments.push(`Docs: ${changedDocs.join(', ')}.`);
+  }
+  return fragments.join(' ');
+}
+
 function genericSummary(eventType: string) {
   return `[Event: ${eventType}]`;
 }
@@ -116,6 +145,12 @@ const EVENT_SPECS: Record<string, ConversationEventSpec> = {
     contextPolicy: 'none',
     renderTimeline: ({ payload }) => textBlocks(actorAvatarSummary(payload)),
     renderContext: noContext,
+  },
+  actor_version_changed: {
+    timelinePolicy: 'all_members',
+    contextPolicy: 'shared',
+    renderTimeline: ({ payload }) => textBlocks(actorVersionSummary(payload)),
+    renderContext: ({ payload }) => textBlocks(actorVersionSummary(payload)),
   },
 };
 

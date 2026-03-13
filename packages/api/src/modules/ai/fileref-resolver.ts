@@ -2,7 +2,7 @@
  * FileRef Resolver: validate and resolve <FileRef id="..."/> segments
  * from model output text into CanonicalContentBlock[].
  */
-import type { CanonicalContentBlock } from '@synapse/shared';
+import { fileRefBlock, textBlock, type CanonicalContentBlock } from '@synapse/shared';
 import { getFileRecord } from '../files/service.js';
 
 export type FileRefSegment =
@@ -48,15 +48,14 @@ export async function resolveFileRefSegments(
 
   for (const seg of segments) {
     if (seg.type === 'text') {
-      if (seg.text) blocks.push({ type: 'text', text: seg.text });
+      if (seg.text) blocks.push(textBlock(seg.text));
       continue;
     }
 
     // Look up file record in DB
     const file = await getFileRecord(seg.fileId);
     if (file) {
-      blocks.push({
-        type: 'file_ref',
+      blocks.push(fileRefBlock({
         fileId: file.id,
         storedName: file.storedName,
         url: file.url,
@@ -64,9 +63,9 @@ export async function resolveFileRefSegments(
         originalName: file.originalName,
         sizeBytes: file.sizeBytes,
         category: mimeToCategory(file.mimeType),
-      });
+      }));
     } else {
-      blocks.push({ type: 'text', text: `[File not found: ${seg.fileId}]` });
+      blocks.push(textBlock(`[File not found: ${seg.fileId}]`));
     }
   }
 

@@ -2,6 +2,7 @@ import { query } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import type { ActorAction, UUID } from '@synapse/shared';
 import { createMemory } from '../memory/service.js';
+import { getActor, updateActor } from '../organization/service.js';
 import { getSession } from '../session/service.js';
 import { createConversationEvent, listConversationMembers } from '../conversation/service.js';
 import { renderConversationEventTimelineBlocks } from '../conversation/event-registry.js';
@@ -177,10 +178,7 @@ async function handleRenameSelf(
 ): Promise<void> {
   const newName = action.content?.trim();
   if (!newName) return;
-  await query(
-    `UPDATE actors SET name = $1, updated_at = NOW() WHERE id = $2`,
-    [newName, actorId]
-  );
+  await updateActor(actorId, workspaceId, { name: newName });
   await emitUserVisibleSystemNotice({
     workspaceId,
     actorId,
@@ -206,10 +204,13 @@ async function handleChangeAvatar(
 ): Promise<void> {
   const emoji = action.content?.trim();
   if (!emoji) return;
-  await query(
-    `UPDATE actors SET config = config || $1::jsonb, updated_at = NOW() WHERE id = $2`,
-    [JSON.stringify({ avatar_emoji: emoji }), actorId]
-  );
+  const actor = await getActor(actorId, workspaceId);
+  await updateActor(actorId, workspaceId, {
+    config: {
+      ...(actor?.definition.config || {}),
+      avatar_emoji: emoji,
+    },
+  });
   await emitUserVisibleSystemNotice({
     workspaceId,
     actorId,

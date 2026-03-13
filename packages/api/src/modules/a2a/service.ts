@@ -1,5 +1,5 @@
 import { query } from '../../infrastructure/database/index.js';
-import { generateId, nowISO } from '@synapse/shared';
+import { generateId, normalizeActorDocs, nowISO, summarizeActorForRole } from '@synapse/shared';
 import type { A2AApp, UUID } from '@synapse/shared';
 import bcryptjs from 'bcryptjs';
 import { randomBytes } from 'crypto';
@@ -154,7 +154,7 @@ export async function setAppActors(appId: UUID, actorIds: UUID[]): Promise<void>
 
 export async function getAppActors(appId: UUID): Promise<any[]> {
   const result = await query(
-    `SELECT a.id, a.name, a.title, a.charter, a.role, a.skills, a.capabilities
+    `SELECT a.id, a.name, a.title, a.docs, a.role, a.capabilities
      FROM actors a
      JOIN a2a_app_actors aaa ON aaa.actor_id = a.id
      WHERE aaa.app_id = $1 AND a.is_active = true
@@ -165,9 +165,11 @@ export async function getAppActors(appId: UUID): Promise<any[]> {
     id: r.id,
     name: r.name,
     title: r.title,
-    charter: r.charter,
+    summary: summarizeActorForRole(
+      normalizeActorDocs(typeof r.docs === 'string' ? JSON.parse(r.docs) : (r.docs || [])),
+      r.title,
+    ),
     role: r.role,
-    skills: r.skills ? (typeof r.skills === 'string' ? JSON.parse(r.skills) : r.skills) : [],
     capabilities: r.capabilities,
   }));
 }

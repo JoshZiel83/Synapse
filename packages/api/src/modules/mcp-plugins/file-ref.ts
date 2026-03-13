@@ -1,4 +1,4 @@
-import type { CanonicalContentBlock, ToolParameterProperty } from '@synapse/shared';
+import { fileRefBlock, type CanonicalContentBlock, type ToolParameterProperty } from '@synapse/shared';
 import { getFileRecord } from '../files/service.js';
 import { fileToBase64, fileToBuffer, type FileRecord } from '../../infrastructure/storage/file-io.js';
 
@@ -31,8 +31,7 @@ export function fileRefsProperty(description: string): ToolParameterProperty {
 }
 
 export function pluginOutputFileRef(record: FileRecord): Extract<CanonicalContentBlock, { type: 'file_ref' }> {
-  return {
-    type: 'file_ref',
+  return fileRefBlock({
     fileId: record.id,
     storedName: record.storedName,
     url: record.url,
@@ -40,7 +39,7 @@ export function pluginOutputFileRef(record: FileRecord): Extract<CanonicalConten
     originalName: record.originalName,
     sizeBytes: record.sizeBytes,
     category: mimeToCategory(record.mimeType),
-  };
+  });
 }
 
 export function extractFileRefId(value: unknown): string | null {

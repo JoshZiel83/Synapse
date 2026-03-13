@@ -23,6 +23,16 @@ interface Actor {
   title: string;
 }
 
+function normalizeActor(actor: any): Actor {
+  const definition = actor?.definition || actor;
+  return {
+    id: actor.id,
+    name: definition.name,
+    role: definition.role,
+    title: definition.title,
+  };
+}
+
 interface AssignedGroup {
   actor_id: string;
   group_id: string;
@@ -60,7 +70,7 @@ export default function ActorAssignment() {
     ])
       .then(([actorsRes, groupsRes]) => {
         const actorList = actorsRes?.data ?? actorsRes?.actors ?? actorsRes ?? [];
-        setActors(Array.isArray(actorList) ? actorList : []);
+        setActors(Array.isArray(actorList) ? actorList.map(normalizeActor) : []);
         setGroups(groupsRes.groups || []);
       })
       .catch((err) => console.error('Failed to load data:', err))

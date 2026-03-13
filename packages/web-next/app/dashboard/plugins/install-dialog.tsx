@@ -59,6 +59,18 @@ type AuthFieldState = {
   authConnectionId?: string;
 };
 
+function normalizeActorOption(actor: any) {
+  const definition = actor?.definition || actor;
+  return {
+    ...actor,
+    id: actor.id,
+    name: definition.name,
+    title: definition.title,
+    role: definition.role,
+    config: definition.config || {},
+  };
+}
+
 const installLifecycleOptionMap: Record<PluginBindingScope, PluginReuseScope[]> = {
   workspace: ['workspace', 'conversation', 'actor_global', 'user', 'turn'],
   conversation: ['conversation', 'actor_conversation', 'turn'],
@@ -256,7 +268,10 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
 
   useEffect(() => {
     if ((scopeType === 'actor_global' || scopeType === 'actor_conversation') && workspaceId) {
-      api.getActors(workspaceId).then(setActors).catch(() => {});
+      api.getActors(workspaceId).then((result: any) => {
+        const actorList = result?.actors ?? result ?? [];
+        setActors(Array.isArray(actorList) ? actorList.map(normalizeActorOption) : []);
+      }).catch(() => {});
     }
     if ((scopeType === 'conversation' || scopeType === 'actor_conversation') && workspaceId) {
       api.getGroups(workspaceId).then((res: any) => setConversations(

@@ -92,7 +92,12 @@ function NavSection({
       <SidebarGroupContent>
         <SidebarMenu>
           {items.map((item) => {
-            const active = item.href === "/dashboard" ? pathname === item.href : pathname.startsWith(item.href)
+            const active =
+              item.href === "/dashboard"
+                ? pathname === item.href
+                : item.href === "/dashboard/contacts"
+                  ? pathname.startsWith("/dashboard/contacts") || pathname.startsWith("/dashboard/actors")
+                  : pathname.startsWith(item.href)
             const Icon = item.icon
             const badge = item.href === "/dashboard/chat" ? unreadCount : 0
 

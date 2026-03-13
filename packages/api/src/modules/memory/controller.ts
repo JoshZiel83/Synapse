@@ -19,10 +19,12 @@ const memoryStatusEnum = z.enum(['candidate', 'established', 'superseded', 'retr
 const memoryStabilityEnum = z.enum(['ephemeral', 'durable']);
 const contentBlockSchema = z.discriminatedUnion('type', [
   z.object({
+    id: z.string().uuid().optional(),
     type: z.literal('text'),
     text: z.string(),
   }),
   z.object({
+    id: z.string().uuid().optional(),
     type: z.literal('file_ref'),
     fileId: z.string().uuid(),
     storedName: z.string(),

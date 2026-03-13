@@ -62,7 +62,13 @@ function DashboardInner({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const { user } = useAuthStore();
-  const isFullPaneRoute = pathname.startsWith('/dashboard/chat') || pathname.startsWith('/dashboard/contacts');
+  const isFullPaneRoute =
+    pathname.startsWith('/dashboard/chat') ||
+    pathname.startsWith('/dashboard/contacts') ||
+    pathname.startsWith('/dashboard/actors');
+  const pageTitle = pathname.startsWith('/dashboard/actors')
+    ? 'Actors'
+    : navItems.find((item) => item.href === pathname)?.label || 'Dashboard';
 
   const handleLogout = () => {
     useAuthStore.getState().logout();
@@ -74,7 +80,7 @@ function DashboardInner({ children }: { children: ReactNode }) {
       <SidebarProvider className="h-svh overflow-hidden">
         <AppSidebar user={user} onLogout={handleLogout} />
         <SidebarInset className="min-h-0 bg-background">
-          <SiteHeader title={navItems.find((item) => item.href === pathname)?.label || 'Dashboard'} />
+          <SiteHeader title={pageTitle} />
           <div className="flex flex-1 min-h-0 flex-col">
             <div className="@container/main flex flex-1 min-h-0 flex-col">
               <div className="flex flex-1 min-h-0 flex-col gap-4 md:gap-6">

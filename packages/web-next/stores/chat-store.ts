@@ -2,7 +2,7 @@
 import { create } from 'zustand';
 import { api } from '@/lib/api';
 import type { CanonicalContentBlock } from '@synapse/shared';
-import { extractText } from '@synapse/shared';
+import { extractText, normalizeCanonicalContentBlocks, textBlocks } from '@synapse/shared';
 
 export interface GroupParticipant {
   id: string;
@@ -88,7 +88,7 @@ function getGroupId(payload: any): string | undefined {
 function normalizeContentBlocks(payload: any): CanonicalContentBlock[] {
   const blocks = payload.contentBlocks;
   if (Array.isArray(blocks)) {
-    return blocks as CanonicalContentBlock[];
+    return normalizeCanonicalContentBlocks(blocks);
   }
   return [];
 }
@@ -388,7 +388,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           sessionId: '',
           role: 'error',
           content: errorMessage || 'An unexpected error occurred while processing your request.',
-          contentBlocks: [{ type: 'text', text: errorMessage || 'An unexpected error occurred while processing your request.' }],
+          contentBlocks: textBlocks(errorMessage || 'An unexpected error occurred while processing your request.'),
           createdAt: new Date().toISOString(),
         };
 
@@ -483,7 +483,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             sessionId: '',
             role: 'system',
             content: `${actorName || 'An actor'} joined the group`,
-            contentBlocks: [{ type: 'text', text: `${actorName || 'An actor'} joined the group` }],
+            contentBlocks: textBlocks(`${actorName || 'An actor'} joined the group`),
             createdAt: new Date().toISOString(),
           },
         ],
@@ -519,7 +519,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             sessionId: '',
             role: 'system',
             content: `${actorName || 'An actor'} was removed from the group`,
-            contentBlocks: [{ type: 'text', text: `${actorName || 'An actor'} was removed from the group` }],
+            contentBlocks: textBlocks(`${actorName || 'An actor'} was removed from the group`),
             createdAt: new Date().toISOString(),
           },
         ],
@@ -545,7 +545,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             sessionId: '',
             role: 'system',
             content: `${actorName || 'An actor'}'s profile has been updated`,
-            contentBlocks: [{ type: 'text', text: `${actorName || 'An actor'}'s profile has been updated` }],
+            contentBlocks: textBlocks(`${actorName || 'An actor'}'s profile has been updated`),
             createdAt: new Date().toISOString(),
           },
         ],

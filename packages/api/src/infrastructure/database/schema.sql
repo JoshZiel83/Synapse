@@ -81,13 +81,14 @@ CREATE TABLE actors (
   role VARCHAR(50) NOT NULL DEFAULT 'specialist'
     CHECK (role IN ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant')),
   title VARCHAR(255) NOT NULL,
-  charter TEXT NOT NULL DEFAULT '',
-  system_prompt TEXT NOT NULL DEFAULT '',
+  avatar_file_id UUID,
+  can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
+  docs JSONB NOT NULL DEFAULT '[]',
   parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   capabilities TEXT[] DEFAULT '{}',
-  skills JSONB DEFAULT '[]',
   config JSONB DEFAULT '{}',
   is_active BOOLEAN DEFAULT TRUE,
+  current_version INT NOT NULL DEFAULT 1,
   max_concurrent_sessions INT DEFAULT 3,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -105,16 +106,19 @@ CREATE TABLE actor_versions (
   name VARCHAR(255) NOT NULL,
   role VARCHAR(50) NOT NULL,
   title VARCHAR(255) NOT NULL,
-  charter TEXT NOT NULL DEFAULT '',
-  system_prompt TEXT NOT NULL DEFAULT '',
-  skills JSONB DEFAULT '[]',
+  avatar_file_id UUID,
+  parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
+  docs JSONB NOT NULL DEFAULT '[]',
   config JSONB DEFAULT '{}',
   capabilities TEXT[] DEFAULT '{}',
+  version_delta JSONB,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(actor_id, version)
 );
 
 CREATE INDEX idx_actor_versions_actor_time ON actor_versions(actor_id, created_at);
+
 
 -- ============ Actor Collaborations ============
 CREATE TABLE actor_collaborations (
@@ -248,6 +252,11 @@ CREATE TABLE files (
 );
 
 CREATE INDEX idx_files_workspace ON files(workspace_id);
+
+ALTER TABLE actors ADD CONSTRAINT fk_actors_avatar_file
+  FOREIGN KEY (avatar_file_id) REFERENCES files(id) ON DELETE SET NULL;
+ALTER TABLE actor_versions ADD CONSTRAINT fk_actor_versions_avatar_file
+  FOREIGN KEY (avatar_file_id) REFERENCES files(id) ON DELETE SET NULL;
 
 -- ============ Model Routes ============
 CREATE TABLE model_routes (
@@ -1179,6 +1188,19 @@ CREATE INDEX idx_capability_package_revisions_package
 ALTER TABLE capability_packages
   ADD CONSTRAINT fk_capability_packages_latest_revision
   FOREIGN KEY (latest_revision_id) REFERENCES capability_package_revisions(id) ON DELETE SET NULL;
+
+CREATE TABLE actor_template_links (
+  actor_id UUID PRIMARY KEY REFERENCES actors(id) ON DELETE CASCADE,
+  template_package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE RESTRICT,
+  imported_revision_id UUID NOT NULL REFERENCES capability_package_revisions(id) ON DELETE RESTRICT,
+  baseline_actor_version INT NOT NULL DEFAULT 1,
+  sync_mode VARCHAR(30) NOT NULL DEFAULT 'notify'
+    CHECK (sync_mode IN ('notify', 'manual_merge')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_actor_template_links_template ON actor_template_links(template_package_id, created_at DESC);
 
 -- ============ Capability Assets ============
 CREATE TABLE capability_assets (

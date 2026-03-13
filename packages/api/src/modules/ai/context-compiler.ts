@@ -4,7 +4,7 @@ import type {
   ConversationMessage,
   ProviderContextWindow,
 } from '@synapse/shared';
-import { extractText } from '@synapse/shared';
+import { extractText, textBlock } from '@synapse/shared';
 import type {
   CanonicalContextItem,
   CanonicalContextTarget,
@@ -12,7 +12,7 @@ import type {
 
 function withTextPrefix(prefix: string, blocks: CanonicalContentBlock[]) {
   if (!prefix) return blocks;
-  return [{ type: 'text', text: prefix } as const, ...blocks];
+  return [textBlock(prefix), ...blocks];
 }
 
 function targetLabel(targets?: CanonicalContextTarget[]) {
@@ -26,7 +26,7 @@ function authorLabel(item: Extract<CanonicalContextItem, { kind: 'message' | 'ev
 }
 
 function normalizeParts(parts?: CanonicalContentBlock[]) {
-  return parts && parts.length > 0 ? parts : [{ type: 'text', text: '' } as const];
+  return parts && parts.length > 0 ? parts : [textBlock('')];
 }
 
 export async function compressContextItems(
@@ -165,25 +165,21 @@ export async function compileContextItemsToConversationMessages(
       }
 
       case 'memory_recall': {
-        const content: CanonicalContentBlock[] = [{
-          type: 'text',
-          text: item.recallType === 'bootstrap' ? '[Recalled Memory / Bootstrap]\n' : '[Recalled Memory / Turn]\n',
-        }];
+        const content: CanonicalContentBlock[] = [
+          textBlock(item.recallType === 'bootstrap' ? '[Recalled Memory / Bootstrap]\n' : '[Recalled Memory / Turn]\n'),
+        ];
 
         item.memories.forEach((memory, index) => {
           const fallbackText = extractText(memory.contentBlocks).trim();
           const digest = memory.textDigest || fallbackText;
-          content.push({
-            type: 'text',
-            text: `[${memory.ownerScope}/${memory.category}]${digest ? ` ${digest}` : ''}\n`,
-          });
+          content.push(textBlock(`[${memory.ownerScope}/${memory.category}]${digest ? ` ${digest}` : ''}\n`));
 
           if (memory.contentBlocks.length > 0) {
             content.push(...memory.contentBlocks);
           }
 
           if (index < item.memories.length - 1) {
-            content.push({ type: 'text', text: '\n' });
+            content.push(textBlock('\n'));
           }
         });
 

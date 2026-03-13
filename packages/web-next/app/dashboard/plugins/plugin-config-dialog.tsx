@@ -54,6 +54,18 @@ const scopeLabels: Record<CapabilityBindingScope, string> = {
   user: 'User',
 };
 
+function normalizeActorOption(actor: any) {
+  const definition = actor?.definition || actor;
+  return {
+    ...actor,
+    id: actor.id,
+    name: definition.name,
+    title: definition.title,
+    role: definition.role,
+    config: definition.config || {},
+  };
+}
+
 function getLocale(defaultLocale?: string) {
   if (typeof navigator !== 'undefined') {
     return navigator.languages?.[0] || navigator.language || defaultLocale || 'en';
@@ -125,7 +137,10 @@ export default function PluginConfigDialog({ installation, onClose, presentation
   useEffect(() => {
     if (!workspaceId) return;
     if (scopeType === 'actor_global' || scopeType === 'actor_conversation') {
-      api.getActors(workspaceId).then(setActors).catch(() => {});
+      api.getActors(workspaceId).then((result: any) => {
+        const actorList = result?.actors ?? result ?? [];
+        setActors(Array.isArray(actorList) ? actorList.map(normalizeActorOption) : []);
+      }).catch(() => {});
     }
     if (scopeType === 'conversation' || scopeType === 'actor_conversation') {
       api.getGroups(workspaceId).then((res: any) => setConversations(

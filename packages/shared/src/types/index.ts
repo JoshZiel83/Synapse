@@ -72,26 +72,100 @@ export interface WorkspaceInvite {
 // ============ Actor (Digital Employee) ============
 export type ActorRole = 'secretary' | 'manager' | 'specialist' | 'reviewer' | 'archivist' | 'receptionist' | 'assistant';
 
-export interface ActorSkill {
-  id: string;
+export type ActorDocVisibility = 'always' | 'solo_only' | 'group_only' | 'internal_only';
+
+export type CoreActorDocKey =
+  | 'identity_card'
+  | 'public_persona'
+  | 'soul'
+  | 'self_narrative'
+  | 'origin_story'
+  | 'relationship_with_user'
+  | 'relationship_with_team'
+  | 'representation_guidelines'
+  | 'social_protocol'
+  | 'role_charter'
+  | 'mission'
+  | 'work_doctrine'
+  | 'limitations_and_escalation'
+  | 'quirks_and_signatures'
+  | 'routines'
+  | 'conversation_examples';
+
+export type ActorDocKey = CoreActorDocKey | 'custom';
+
+export interface ActorDoc {
+  id: UUID;
+  key: ActorDocKey;
+  title: string;
+  content: CanonicalContentBlock[];
+  visibility: ActorDocVisibility;
+  priority: number;
+}
+
+export type ActorDocInput = Omit<ActorDoc, 'id' | 'content'> & {
+  id?: UUID;
+  content: CanonicalContentBlockInput[];
+};
+
+export interface ActorDefinition {
   name: string;
-  description: string;
-  tags?: string[];
-  examples?: string[];
+  role: ActorRole;
+  title: string;
+  avatarFileId?: UUID;
+  parentId?: UUID;
+  canRepresentUser: boolean;
+  docs: ActorDoc[];
+  capabilities: string[];
+  config: Record<string, unknown>;
+}
+
+export type ActorVersionChangedField =
+  | 'name'
+  | 'role'
+  | 'title'
+  | 'avatarFileId'
+  | 'parentId'
+  | 'canRepresentUser'
+  | 'capabilities'
+  | 'config';
+
+export interface ActorVersionDocChange {
+  docId: UUID;
+  key: ActorDocKey;
+  title: string;
+  changeType: 'added' | 'updated' | 'removed';
+  visibility: ActorDocVisibility;
+  priority: number;
+  before?: ActorDoc;
+  after?: ActorDoc;
+  summary: CanonicalContentBlock[];
+}
+
+export interface ActorVersionDelta {
+  fromVersion: number;
+  toVersion: number;
+  changedFields: ActorVersionChangedField[];
+  changedDocs: ActorVersionDocChange[];
+  summary: CanonicalContentBlock[];
+}
+
+export interface ActorVersion {
+  id: UUID;
+  actorId: UUID;
+  version: number;
+  snapshot: ActorDefinition;
+  delta?: ActorVersionDelta;
+  createdAt: Timestamp;
 }
 
 export interface Actor {
   id: UUID;
   workspaceId: UUID;
-  name: string;
-  role: ActorRole;
-  title: string;
-  charter: string; // Job description - what they're responsible for
-  systemPrompt: string;
-  parentId?: UUID; // Superior in org tree
-  capabilities: string[]; // e.g. ['code.review', 'repo.write']
-  skills: ActorSkill[];
-  config: Record<string, unknown>;
+  definition: ActorDefinition;
+  avatarUrl?: string;
+  currentVersion: number;
+  templateLink?: ActorTemplateLink;
   isActive: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
@@ -545,18 +619,158 @@ export interface ResolvedModelPlan {
 
 // ============ Canonical Content Block ============
 // Unified representation: text stored directly, media via file_ref pointing to platform file storage
-export type CanonicalContentBlock =
-  | { type: 'text'; text: string }
-  | {
-      type: 'file_ref';
-      fileId: string;        // files table UUID
-      storedName: string;    // disk relative path (resolved via readAsBuffer)
-      url: string;           // /files/... (frontend display)
-      mimeType: string;
-      originalName: string;
-      sizeBytes: number;
-      category: 'image' | 'audio' | 'video' | 'document';
-    };
+export type CanonicalFileCategory = 'image' | 'audio' | 'video' | 'document';
+
+export interface CanonicalTextBlock {
+  id: UUID;
+  type: 'text';
+  text: string;
+}
+
+export interface CanonicalFileRefBlock {
+  id: UUID;
+  type: 'file_ref';
+  fileId: string;        // files table UUID
+  storedName: string;    // disk relative path (resolved via readAsBuffer)
+  url: string;           // /files/... (frontend display)
+  mimeType: string;
+  originalName: string;
+  sizeBytes: number;
+  category: CanonicalFileCategory;
+}
+
+export type CanonicalContentBlock = CanonicalTextBlock | CanonicalFileRefBlock;
+
+export type CanonicalTextBlockInput = Omit<CanonicalTextBlock, 'id'> & { id?: UUID };
+export type CanonicalFileRefBlockInput = Omit<CanonicalFileRefBlock, 'id'> & { id?: UUID };
+export type CanonicalContentBlockInput = CanonicalTextBlockInput | CanonicalFileRefBlockInput;
+
+export interface ActorDocTemplate {
+  key: CoreActorDocKey;
+  title: string;
+  description: string;
+  defaultVisibility: ActorDocVisibility;
+  defaultPriority: number;
+}
+
+export const ACTOR_DOC_TEMPLATES: ActorDocTemplate[] = [
+  {
+    key: 'identity_card',
+    title: 'Identity Card',
+    description: 'How this actor introduces themselves in public.',
+    defaultVisibility: 'always',
+    defaultPriority: 120,
+  },
+  {
+    key: 'public_persona',
+    title: 'Public Persona',
+    description: 'Voice, tone, and how this actor appears to others.',
+    defaultVisibility: 'always',
+    defaultPriority: 115,
+  },
+  {
+    key: 'soul',
+    title: 'Soul',
+    description: 'Values, principles, taboos, and emotional core.',
+    defaultVisibility: 'always',
+    defaultPriority: 110,
+  },
+  {
+    key: 'self_narrative',
+    title: 'Self Narrative',
+    description: 'How this actor understands themselves.',
+    defaultVisibility: 'always',
+    defaultPriority: 105,
+  },
+  {
+    key: 'origin_story',
+    title: 'Origin Story',
+    description: 'Where this actor comes from and what shaped them.',
+    defaultVisibility: 'internal_only',
+    defaultPriority: 100,
+  },
+  {
+    key: 'relationship_with_user',
+    title: 'Relationship With User',
+    description: 'How this actor relates to the human user.',
+    defaultVisibility: 'always',
+    defaultPriority: 98,
+  },
+  {
+    key: 'relationship_with_team',
+    title: 'Relationship With Team',
+    description: 'How this actor views and works with other actors.',
+    defaultVisibility: 'group_only',
+    defaultPriority: 96,
+  },
+  {
+    key: 'representation_guidelines',
+    title: 'Representation Guidelines',
+    description: 'How to speak or act when representing the user.',
+    defaultVisibility: 'internal_only',
+    defaultPriority: 94,
+  },
+  {
+    key: 'social_protocol',
+    title: 'Social Protocol',
+    description: 'When to speak, when to stay quiet, and what not to share.',
+    defaultVisibility: 'group_only',
+    defaultPriority: 92,
+  },
+  {
+    key: 'role_charter',
+    title: 'Role Charter',
+    description: 'Organizational responsibilities and scope.',
+    defaultVisibility: 'always',
+    defaultPriority: 90,
+  },
+  {
+    key: 'mission',
+    title: 'Mission',
+    description: 'Long-term aim, current mission, and success criteria.',
+    defaultVisibility: 'always',
+    defaultPriority: 88,
+  },
+  {
+    key: 'work_doctrine',
+    title: 'Work Doctrine',
+    description: 'How this actor approaches work, evidence, and communication.',
+    defaultVisibility: 'always',
+    defaultPriority: 86,
+  },
+  {
+    key: 'limitations_and_escalation',
+    title: 'Limitations And Escalation',
+    description: 'Blind spots, refusal zones, and when to ask for help.',
+    defaultVisibility: 'always',
+    defaultPriority: 84,
+  },
+  {
+    key: 'quirks_and_signatures',
+    title: 'Quirks And Signatures',
+    description: 'Habits, running jokes, signatures, and expressive details.',
+    defaultVisibility: 'always',
+    defaultPriority: 82,
+  },
+  {
+    key: 'routines',
+    title: 'Routines',
+    description: 'Recurring habits, checks, and proactive rhythms.',
+    defaultVisibility: 'internal_only',
+    defaultPriority: 80,
+  },
+  {
+    key: 'conversation_examples',
+    title: 'Conversation Examples',
+    description: 'Examples of how this actor speaks, declines, or collaborates.',
+    defaultVisibility: 'internal_only',
+    defaultPriority: 78,
+  },
+];
+
+export const ACTOR_DOC_TEMPLATE_MAP: Record<CoreActorDocKey, ActorDocTemplate> = Object.fromEntries(
+  ACTOR_DOC_TEMPLATES.map((template) => [template.key, template]),
+) as Record<CoreActorDocKey, ActorDocTemplate>;
 
 // ============ Canonical Tool History ============
 export interface CanonicalToolCall {
@@ -1182,6 +1396,69 @@ export interface CapabilityInstallPlan {
   };
 }
 
+export type ActorTemplateDependencyKind = Extract<CapabilityRequirementKind, 'required' | 'recommended'>;
+export type ActorTemplateTargetKind = Extract<CapabilityPackageKind, 'plugin' | 'skill'>;
+export type ActorTemplateSyncMode = 'notify' | 'manual_merge';
+export type ActorTemplateLinkStatus =
+  | 'up_to_date'
+  | 'update_available'
+  | 'diverged'
+  | 'update_available_with_local_changes'
+  | 'detached';
+
+export interface ActorTemplateDependency {
+  requirementId?: string;
+  requirementKind: ActorTemplateDependencyKind;
+  targetPackageKind: ActorTemplateTargetKind;
+  targetPublisherSlug?: string;
+  targetPackageSlug: string;
+  acceptableBindingScopes: CapabilityBindingScope[];
+  acceptableReuseScopes: CapabilityReuseScope[];
+  description: string;
+  notes: CanonicalContentBlock[];
+  metadata: Record<string, unknown>;
+}
+
+export interface ActorTemplateManifest {
+  actor: ActorDefinition;
+  setupGuide: CanonicalContentBlock[];
+  releaseNotes: CanonicalContentBlock[];
+}
+
+export interface ActorTemplateLink {
+  actorId: UUID;
+  templatePackageId: UUID;
+  importedRevisionId: UUID;
+  templateSlug: string;
+  templateDisplayName: string;
+  templatePublisherSlug?: string;
+  templatePublisherDisplayName?: string;
+  importedTemplateVersion?: string;
+  latestRevisionId?: UUID;
+  latestTemplateVersion?: string;
+  baselineActorVersion: number;
+  syncMode: ActorTemplateSyncMode;
+  hasLocalChanges: boolean;
+  hasUpstreamUpdate: boolean;
+  status: ActorTemplateLinkStatus;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface ActorTemplateRecord {
+  package: CapabilityPackage;
+  manifest: ActorTemplateManifest;
+  dependencies: ActorTemplateDependency[];
+  requirementChecks?: CapabilityRequirementCheck[];
+}
+
+export interface ActorTemplateCloneResult {
+  actor: Actor;
+  template: ActorTemplateRecord;
+  templateLink: ActorTemplateLink;
+  requirementChecks: CapabilityRequirementCheck[];
+}
+
 export interface CapabilityAvailableSkill {
   bindingId: string;
   packageId: string;
@@ -1418,15 +1695,250 @@ export interface A2ATaskResponse {
 
 // ============ Content Helpers ============
 
+export function createCanonicalContentBlockId(prefix = 'block'): UUID {
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  if (randomUUID) {
+    return randomUUID();
+  }
+  return `${prefix}_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+}
+
+export function textBlock(text: string, id?: UUID): CanonicalTextBlock {
+  return {
+    id: typeof id === 'string' && id.trim().length > 0 ? id : createCanonicalContentBlockId('text'),
+    type: 'text',
+    text,
+  };
+}
+
+export function fileRefBlock(input: Omit<CanonicalFileRefBlock, 'id' | 'type'> & { id?: UUID }): CanonicalFileRefBlock {
+  return {
+    id: typeof input.id === 'string' && input.id.trim().length > 0 ? input.id : createCanonicalContentBlockId('file'),
+    type: 'file_ref',
+    fileId: input.fileId,
+    storedName: input.storedName,
+    url: input.url,
+    mimeType: input.mimeType,
+    originalName: input.originalName,
+    sizeBytes: input.sizeBytes,
+    category: input.category,
+  };
+}
+
+export function isCanonicalContentBlock(value: unknown): value is CanonicalContentBlock {
+  if (!value || typeof value !== 'object') return false;
+
+  const block = value as Record<string, unknown>;
+  if (typeof block.id !== 'string' || block.id.trim().length === 0) return false;
+
+  if (block.type === 'text') {
+    return typeof block.text === 'string';
+  }
+
+  if (block.type === 'file_ref') {
+    return typeof block.fileId === 'string'
+      && typeof block.storedName === 'string'
+      && typeof block.url === 'string'
+      && typeof block.mimeType === 'string'
+      && typeof block.originalName === 'string'
+      && typeof block.sizeBytes === 'number'
+      && (block.category === 'image' || block.category === 'audio' || block.category === 'video' || block.category === 'document');
+  }
+
+  return false;
+}
+
+export function normalizeCanonicalContentBlocks(blocks: CanonicalContentBlockInput[]): CanonicalContentBlock[] {
+  const normalized: CanonicalContentBlock[] = [];
+
+  for (const block of blocks || []) {
+    if (!block || typeof block !== 'object') continue;
+
+    if (block.type === 'text') {
+      if (typeof block.text !== 'string') continue;
+      normalized.push(textBlock(block.text, block.id));
+      continue;
+    }
+
+    if (block.type === 'file_ref') {
+      if (
+        typeof block.fileId !== 'string'
+        || typeof block.storedName !== 'string'
+        || typeof block.url !== 'string'
+        || typeof block.mimeType !== 'string'
+        || typeof block.originalName !== 'string'
+        || typeof block.sizeBytes !== 'number'
+        || (block.category !== 'image' && block.category !== 'audio' && block.category !== 'video' && block.category !== 'document')
+      ) {
+        continue;
+      }
+
+      normalized.push(fileRefBlock(block));
+    }
+  }
+
+  return normalized;
+}
+
 /** Wrap a plain string into CanonicalContentBlock[] */
 export function textBlocks(s: string): CanonicalContentBlock[] {
-  return [{ type: 'text', text: s }];
+  return [textBlock(s)];
 }
+
+function createActorDocId(): UUID {
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  if (randomUUID) {
+    return randomUUID();
+  }
+  return `doc_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+}
+
+export const SECRETARY_DEFAULT_DOCS: ActorDoc[] = normalizeActorDocs([
+  {
+    id: createActorDocId(),
+    key: 'identity_card',
+    title: 'Identity Card',
+    content: textBlocks('I am Secretary, the primary point of contact between the Boss (user) and the digital organization.'),
+    visibility: 'always',
+    priority: 120,
+  },
+  {
+    id: createActorDocId(),
+    key: 'relationship_with_user',
+    title: 'Relationship With User',
+    content: textBlocks('Maintain the long-term relationship with the Boss. Keep them informed, clarify intent, and report what matters without burying them in noise.'),
+    visibility: 'always',
+    priority: 98,
+  },
+  {
+    id: createActorDocId(),
+    key: 'role_charter',
+    title: 'Role Charter',
+    content: textBlocks(
+      [
+        'Responsibilities:',
+        '1. Receive and understand the Boss\'s goals and instructions.',
+        '2. Coordinate work with other actors in the group.',
+        '3. Send messages to appropriate team members with clear instructions.',
+        '4. Collect progress and synthesize reports.',
+        '5. Report key progress, risks, and results to the Boss.',
+      ].join('\n'),
+    ),
+    visibility: 'always',
+    priority: 90,
+  },
+  {
+    id: createActorDocId(),
+    key: 'work_doctrine',
+    title: 'Work Doctrine',
+    content: textBlocks(
+      [
+        'You are not the sole executor. Coordinate the team by messaging the right actor with clear instructions.',
+        'When you receive a message from the Boss, decide whether to answer directly, delegate, ask for more information, or invite a new actor.',
+        'When reporting, be concise and focus on what matters to the Boss.',
+      ].join('\n\n'),
+    ),
+    visibility: 'always',
+    priority: 86,
+  },
+  {
+    id: createActorDocId(),
+    key: 'routines',
+    title: 'Routines',
+    content: textBlocks(
+      [
+        'Use memory deliberately for stable facts, preferences, decisions, relationships, procedures, or durable artifacts.',
+        'If you are unsure whether something is durable or established, do not store it as memory.',
+      ].join('\n'),
+    ),
+    visibility: 'internal_only',
+    priority: 80,
+  },
+]);
 
 /** Extract concatenated text from CanonicalContentBlock[] */
 export function extractText(blocks: CanonicalContentBlock[]): string {
   return blocks
-    .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+    .filter((b): b is CanonicalTextBlock => b.type === 'text')
     .map((b) => b.text)
-    .join('');
+    .join('\n\n');
+}
+
+export function getActorDocTemplate(key: ActorDocKey): ActorDocTemplate | undefined {
+  if (key === 'custom') return undefined;
+  return ACTOR_DOC_TEMPLATE_MAP[key as CoreActorDocKey];
+}
+
+function isNonEmptyActorDoc(doc: ActorDoc): boolean {
+  return doc.content.some((block) => {
+    if (block.type === 'text') return block.text.trim().length > 0;
+    return true;
+  });
+}
+
+export function normalizeActorDocs(docs: ActorDocInput[]): ActorDoc[] {
+  const standardDocs = new Map<CoreActorDocKey, ActorDoc>();
+  const customDocs = new Map<UUID, ActorDoc>();
+
+  for (const doc of docs || []) {
+    if (!doc || typeof doc !== 'object' || !doc.key || !Array.isArray(doc.content)) continue;
+    if (doc.key !== 'custom' && !(doc.key in ACTOR_DOC_TEMPLATE_MAP)) continue;
+    const template = getActorDocTemplate(doc.key);
+    const normalizedDoc: ActorDoc = {
+      id: typeof doc.id === 'string' && doc.id.trim().length > 0 ? doc.id : createActorDocId(),
+      key: doc.key,
+      title: doc.title?.trim() || template?.title || (doc.key === 'custom' ? 'Custom section' : doc.key),
+      content: normalizeCanonicalContentBlocks(doc.content),
+      visibility: doc.visibility || template?.defaultVisibility || 'always',
+      priority: Number.isFinite(doc.priority) ? doc.priority : (template?.defaultPriority || 0),
+    };
+
+    if (!isNonEmptyActorDoc(normalizedDoc)) continue;
+    if (normalizedDoc.key === 'custom') {
+      customDocs.set(normalizedDoc.id, normalizedDoc);
+    } else {
+      standardDocs.set(normalizedDoc.key as CoreActorDocKey, normalizedDoc);
+    }
+  }
+
+  return [...standardDocs.values(), ...customDocs.values()].sort((left, right) => {
+    if (right.priority !== left.priority) return right.priority - left.priority;
+    return left.title.localeCompare(right.title);
+  });
+}
+
+export function summarizeActorDoc(doc: ActorDoc, maxLength = 200): string {
+  const text = extractText(doc.content).replace(/\s+/g, ' ').trim();
+  if (text.length > 0) {
+    return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
+  }
+
+  const fileBlock = doc.content.find((block): block is Extract<ActorDoc['content'][number], { type: 'file_ref' }> => block.type === 'file_ref');
+  return fileBlock ? `Attached file: ${fileBlock.originalName}` : '';
+}
+
+export function pickActorDocSummary(docs: ActorDoc[], keys: ActorDocKey[], maxLength = 500, fallback = ''): string {
+  const fragments = keys
+    .map((key) => docs.find((doc) => doc.key === key))
+    .filter((doc): doc is ActorDoc => Boolean(doc))
+    .map((doc) => summarizeActorDoc(doc, maxLength))
+    .filter(Boolean);
+
+  if (fragments.length > 0) {
+    return fragments.join('\n\n');
+  }
+
+  return fallback;
+}
+
+export function summarizeActorForRole(docs: ActorDoc[], fallbackTitle = ''): string {
+  return pickActorDocSummary(docs, ['role_charter', 'mission', 'limitations_and_escalation'], 500, fallbackTitle || 'No role summary provided.');
+}
+
+export function summarizeActorForPrompt(docs: ActorDoc[]): string {
+  return pickActorDocSummary(
+    docs,
+    ['soul', 'self_narrative', 'work_doctrine', 'social_protocol', 'representation_guidelines', 'quirks_and_signatures'],
+    700,
+  );
 }

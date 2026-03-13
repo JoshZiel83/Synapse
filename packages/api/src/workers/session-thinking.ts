@@ -8,6 +8,7 @@ import {
   REDIS_CHANNELS,
   DEFAULT_MAX_CONCURRENT_SESSIONS,
   nowISO,
+  textBlocks,
 } from '@synapse/shared';
 import type { ActorAction, GroupMemberEntry, ProviderContextWindow } from '@synapse/shared';
 import type { CanonicalContextItem } from '@synapse/shared/types';
@@ -207,7 +208,7 @@ export function startSessionThinkingWorker() {
           userCount: groupId ? groupUserCount : (userId ? 1 : 0),
           recallType,
           queryText: recallQuery,
-          queryBlocks: recallQuery ? [{ type: 'text', text: recallQuery }] : [],
+          queryBlocks: recallQuery ? textBlocks(recallQuery) : [],
           limit: 6,
           metadata: {
             sessionId,

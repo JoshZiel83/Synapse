@@ -1,6 +1,10 @@
-import type { CanonicalContentBlock } from '@synapse/shared';
+import type {
+  ActorTemplateCloneResult,
+  ActorTemplateRecord,
+  CanonicalContentBlock,
+} from '@synapse/shared';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
 class ApiClient {
   private token: string | null = null;
@@ -43,8 +47,33 @@ class ApiClient {
 
   // Actors
   getActors(wsId: string) { return this.fetch(`/workspaces/${wsId}/actors`); }
+  getActor(wsId: string, actorId: string) { return this.fetch(`/workspaces/${wsId}/actors/${actorId}`); }
+  getActorVersions(wsId: string, actorId: string) { return this.fetch(`/workspaces/${wsId}/actors/${actorId}/versions`); }
+  getActorTemplates(wsId: string, search?: string): Promise<ActorTemplateRecord[]> {
+    const params = search ? `?search=${encodeURIComponent(search)}` : ''
+    return this.fetch(`/workspaces/${wsId}/actors/templates${params}`)
+  }
+  getActorTemplate(wsId: string, templateId: string): Promise<ActorTemplateRecord> {
+    return this.fetch(`/workspaces/${wsId}/actors/templates/${templateId}`)
+  }
+  cloneActorTemplate(
+    wsId: string,
+    templateId: string,
+    data?: {
+      name?: string
+      title?: string
+      parentId?: string | null
+      syncMode?: 'notify' | 'manual_merge'
+    },
+  ): Promise<ActorTemplateCloneResult> {
+    return this.fetch(`/workspaces/${wsId}/actors/templates/${templateId}/clone`, {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    })
+  }
   getOrgTree(wsId: string) { return this.fetch(`/workspaces/${wsId}/actors/tree`); }
   createActor(wsId: string, data: any) { return this.fetch(`/workspaces/${wsId}/actors`, { method: 'POST', body: JSON.stringify(data) }); }
+  updateActor(wsId: string, actorId: string, data: any) { return this.fetch(`/workspaces/${wsId}/actors/${actorId}`, { method: 'PUT', body: JSON.stringify(data) }); }
 
   // Work Items
   getWorkItems(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/work-items${params ? '?' + params : ''}`); }

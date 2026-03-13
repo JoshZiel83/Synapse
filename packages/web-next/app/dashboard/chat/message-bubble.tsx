@@ -8,6 +8,7 @@ import remarkGfm from 'remark-gfm';
 import type { CanonicalContentBlock } from '@synapse/shared';
 import { extractText } from '@synapse/shared';
 import type { ServerToolCall } from '@/stores/chat-store';
+import { resolveFileUrl } from '@/lib/utils';
 
 interface MessageBubbleProps {
   role: string;
@@ -140,15 +141,16 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
       <div className="space-y-2 mb-2">
         {blocks.map((block) => {
           const cat = block.category;
+          const resolvedUrl = resolveFileUrl(block.url) || block.url;
 
           if (cat === 'image') {
             return (
               <div key={block.fileId}>
                 <img
-                  src={block.url}
+                  src={resolvedUrl}
                   alt={block.originalName}
                   className="max-w-full max-h-64 rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
-                  onClick={() => setExpandedImage(block.url)}
+                  onClick={() => setExpandedImage(resolvedUrl)}
                 />
               </div>
             );
@@ -159,7 +161,7 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
               <div key={block.fileId} className="rounded-lg bg-gray-50 dark:bg-white/[0.03] ring-1 ring-gray-200 dark:ring-white/[0.06] p-2.5">
                 <div className="text-[11px] text-muted-foreground mb-1.5 truncate">{block.originalName}</div>
                 <audio controls className="w-full h-8" preload="metadata">
-                  <source src={block.url} type={block.mimeType} />
+                  <source src={resolvedUrl} type={block.mimeType} />
                 </audio>
               </div>
             );
@@ -173,7 +175,7 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
                   className="max-w-full max-h-64 rounded-lg"
                   preload="metadata"
                 >
-                  <source src={block.url} type={block.mimeType} />
+                  <source src={resolvedUrl} type={block.mimeType} />
                 </video>
               </div>
             );
@@ -183,7 +185,7 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
           return (
             <a
               key={block.fileId}
-              href={block.url}
+              href={resolvedUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2.5 rounded-lg bg-gray-50 dark:bg-white/[0.03] ring-1 ring-gray-200 dark:ring-white/[0.06] p-2.5 hover:bg-gray-100 dark:hover:bg-white/[0.06] transition-colors group/file"

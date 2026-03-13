@@ -510,6 +510,9 @@ export async function getGroupMembers(groupId: string): Promise<any[]> {
             a.name AS actor_name,
             a.title AS actor_title,
             a.role AS actor_role,
+            a.docs AS actor_docs,
+            a.can_represent_user AS actor_can_represent_user,
+            a.current_version AS actor_current_version,
             u.name AS user_name,
             ls.id AS session_id,
             ls.status AS session_status

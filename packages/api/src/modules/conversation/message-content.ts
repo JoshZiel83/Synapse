@@ -1,4 +1,11 @@
-import type { CanonicalContentBlock } from '@synapse/shared';
+import {
+  fileRefBlock,
+  isCanonicalContentBlock,
+  normalizeCanonicalContentBlocks,
+  textBlock,
+  type CanonicalContentBlockInput,
+  type CanonicalContentBlock,
+} from '@synapse/shared';
 import { parseFileRefSegments, resolveFileRefSegments } from '../ai/fileref-resolver.js';
 
 export type DraftConversationPart = {
@@ -10,21 +17,6 @@ export type DraftConversationPart = {
   name?: string;
   metadata?: Record<string, unknown>;
 };
-
-function isCanonicalContentBlock(value: unknown): value is CanonicalContentBlock {
-  if (!value || typeof value !== 'object') return false;
-
-  const block = value as Record<string, unknown>;
-  if (block.type === 'text') {
-    return typeof block.text === 'string';
-  }
-
-  if (block.type === 'file_ref') {
-    return typeof block.fileId === 'string' && typeof block.mimeType === 'string';
-  }
-
-  return false;
-}
 
 function getCategoryFromMimeType(mimeType: string): 'image' | 'audio' | 'video' | 'document' {
   if (mimeType.startsWith('image/')) return 'image';
@@ -81,7 +73,7 @@ export function draftPartsToCanonicalContentBlocks(parts: DraftConversationPart[
   for (const part of parts) {
     if (part.type === 'text') {
       if (part.text) {
-        blocks.push({ type: 'text', text: part.text });
+        blocks.push(textBlock(part.text));
       }
       continue;
     }
@@ -91,8 +83,7 @@ export function draftPartsToCanonicalContentBlocks(parts: DraftConversationPart[
       const mimeType = typeof metadata.mimeType === 'string'
         ? metadata.mimeType
         : part.mimeType || 'application/octet-stream';
-      blocks.push({
-        type: 'file_ref',
+      blocks.push(fileRefBlock({
         fileId: part.fileId,
         storedName: typeof metadata.storedName === 'string' ? metadata.storedName : '',
         url: typeof metadata.url === 'string' ? metadata.url : `/api/v1/files/${part.fileId}`,
@@ -102,7 +93,7 @@ export function draftPartsToCanonicalContentBlocks(parts: DraftConversationPart[
           : part.name || 'file',
         sizeBytes: typeof metadata.sizeBytes === 'number' ? metadata.sizeBytes : 0,
         category: (metadata.category as 'image' | 'audio' | 'video' | 'document' | undefined) || getCategoryFromMimeType(mimeType),
-      });
+      }));
     }
   }
 
@@ -115,7 +106,7 @@ export function itemPartsToCanonicalContentBlocks(parts: any[]): CanonicalConten
   for (const part of parts || []) {
     if (part.part_type === 'text') {
       if (part.text_value) {
-        blocks.push({ type: 'text', text: part.text_value });
+        blocks.push(textBlock(part.text_value));
       }
       continue;
     }
@@ -123,8 +114,7 @@ export function itemPartsToCanonicalContentBlocks(parts: any[]): CanonicalConten
     if (part.part_type === 'file_ref' && part.file_id) {
       const metadata = parseJson(part.metadata);
       const mimeType = part.file_mime_type || part.mime_type || 'application/octet-stream';
-      blocks.push({
-        type: 'file_ref',
+      blocks.push(fileRefBlock({
         fileId: part.file_id,
         storedName: part.stored_name || String(metadata.storedName || ''),
         url: typeof metadata.url === 'string' ? metadata.url : `/api/v1/files/${part.file_id}`,
@@ -132,7 +122,7 @@ export function itemPartsToCanonicalContentBlocks(parts: any[]): CanonicalConten
         originalName: part.original_name || part.name || 'file',
         sizeBytes: part.size_bytes || Number(metadata.sizeBytes || 0),
         category: (metadata.category as 'image' | 'audio' | 'video' | 'document' | undefined) || getCategoryFromMimeType(mimeType),
-      });
+      }));
     }
   }
 
@@ -154,12 +144,12 @@ async function buildBlocksFromContent(content: string): Promise<CanonicalContent
     return resolveFileRefSegments(segments);
   }
 
-  return [{ type: 'text', text: content }];
+  return [textBlock(content)];
 }
 
 export async function buildNormalizedMessageContent(params: {
   content: string;
-  contentBlocks?: CanonicalContentBlock[];
+  contentBlocks?: CanonicalContentBlockInput[];
   metadata?: Record<string, unknown>;
 }): Promise<{
   parts: DraftConversationPart[];
@@ -174,7 +164,7 @@ export async function buildNormalizedMessageContent(params: {
   };
 
   const explicitBlocks = Array.isArray(contentBlocks)
-    ? contentBlocks.filter(isCanonicalContentBlock)
+    ? normalizeCanonicalContentBlocks(contentBlocks.filter(isCanonicalContentBlock))
     : [];
   const baseBlocks = explicitBlocks.length > 0
     ? explicitBlocks

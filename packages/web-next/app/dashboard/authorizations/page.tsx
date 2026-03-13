@@ -24,6 +24,16 @@ const grantOptions: Array<{ value: GrantScope; label: string }> = [
   { value: 'user', label: 'User' },
 ];
 
+function normalizeActorOption(actor: any) {
+  const definition = actor?.definition || actor;
+  return {
+    id: actor.id,
+    name: definition.name,
+    title: definition.title,
+    role: definition.role,
+  };
+}
+
 export default function AuthorizationsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -65,7 +75,7 @@ export default function AuthorizationsPage() {
         ]);
         if (cancelled) return;
         setInstallations(installedData);
-        setActors(actorData);
+        setActors(Array.isArray(actorData) ? actorData.map(normalizeActorOption) : []);
         setConversations(groupData.groups || []);
         setMembers(memberData.data || []);
         if (!selectedBindingId && installedData[0]?.id) {

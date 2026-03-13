@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { CanonicalContentBlock } from '@synapse/shared';
+import { fileRefBlock, textBlock, type CanonicalContentBlock } from '@synapse/shared';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Send, ArrowDown, Bot, Paperclip, X, AtSign, Users } from 'lucide-react';
@@ -90,13 +90,12 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
     try {
       const contentBlocks: CanonicalContentBlock[] = [];
       if (textContent) {
-        contentBlocks.push({ type: 'text', text: textContent });
+        contentBlocks.push(textBlock(textContent));
       }
       if (filesToUpload.length > 0 && workspaceId) {
         for (const file of filesToUpload) {
           const record = await api.uploadFile(workspaceId, file);
-          contentBlocks.push({
-            type: 'file_ref',
+          contentBlocks.push(fileRefBlock({
             fileId: record.id,
             storedName: record.storedName || '',
             url: record.url,
@@ -110,7 +109,7 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
                 : (record.mimeType || file.type || '').startsWith('video/')
                   ? 'video'
                   : 'document',
-          });
+          }));
         }
       }
       const targetIds = mentionTarget ? [mentionTarget] : undefined;

@@ -1,4 +1,4 @@
-import type { CanonicalContentBlock } from '@synapse/shared';
+import { fileRefBlock, normalizeCanonicalContentBlocks, textBlock, textBlocks, type CanonicalContentBlock } from '@synapse/shared';
 import type { NormalizedMcpToolResult } from '@synapse/shared/types';
 import { saveFromBase64, saveFromUrl, type FileRecord } from '../../infrastructure/storage/file-io.js';
 
@@ -10,8 +10,7 @@ function mimeToCategory(mimeType: string): 'image' | 'audio' | 'video' | 'docume
 }
 
 function fileRecordToFileRef(rec: FileRecord, category: 'image' | 'audio' | 'video' | 'document'): CanonicalContentBlock {
-  return {
-    type: 'file_ref',
+  return fileRefBlock({
     fileId: rec.id,
     storedName: rec.storedName,
     url: rec.url,
@@ -19,11 +18,7 @@ function fileRecordToFileRef(rec: FileRecord, category: 'image' | 'audio' | 'vid
     originalName: rec.originalName,
     sizeBytes: rec.sizeBytes,
     category,
-  };
-}
-
-function textBlock(text: string): CanonicalContentBlock[] {
-  return [{ type: 'text', text }];
+  });
 }
 
 async function normalizeMcpContentArray(
@@ -35,17 +30,17 @@ async function normalizeMcpContentArray(
   for (const raw of content) {
     const block = raw as any;
     if (!block || typeof block !== 'object') {
-      blocks.push({ type: 'text', text: String(raw) });
+      blocks.push(textBlock(String(raw)));
       continue;
     }
 
     switch (block.type) {
       case 'text':
-        blocks.push({ type: 'text', text: block.text || '' });
+        blocks.push(textBlock(block.text || ''));
         break;
 
       case 'file_ref':
-        blocks.push(block as CanonicalContentBlock);
+        blocks.push(...normalizeCanonicalContentBlocks([block]));
         break;
 
       case 'image': {
@@ -87,10 +82,10 @@ async function normalizeMcpContentArray(
             blocks.push(fileRecordToFileRef(rec, 'image'));
             break;
           }
-          blocks.push({ type: 'text', text: `[Image: missing data, keys=${Object.keys(block).join(',')}]` });
+          blocks.push(textBlock(`[Image: missing data, keys=${Object.keys(block).join(',')}]`));
         } catch (err: any) {
           console.error('[mcp-result-normalizer] Failed to ingest image:', err.message);
-          blocks.push({ type: 'text', text: `[Image: ingest failed - ${err.message}]` });
+          blocks.push(textBlock(`[Image: ingest failed - ${err.message}]`));
         }
         break;
       }
@@ -110,10 +105,10 @@ async function normalizeMcpContentArray(
             blocks.push(fileRecordToFileRef(rec, 'audio'));
             break;
           }
-          blocks.push({ type: 'text', text: '[Audio: missing data]' });
+          blocks.push(textBlock('[Audio: missing data]'));
         } catch (err: any) {
           console.error('[mcp-result-normalizer] Failed to ingest audio:', err.message);
-          blocks.push({ type: 'text', text: `[Audio: ingest failed - ${err.message}]` });
+          blocks.push(textBlock(`[Audio: ingest failed - ${err.message}]`));
         }
         break;
       }
@@ -121,7 +116,7 @@ async function normalizeMcpContentArray(
       case 'resource': {
         try {
           if (block.resource?.text) {
-            blocks.push({ type: 'text', text: block.resource.text });
+            blocks.push(textBlock(block.resource.text));
           } else if (block.resource?.blob && block.resource?.mimeType) {
             const mimeType = block.resource.mimeType;
             const category = mimeToCategory(mimeType);
@@ -136,22 +131,22 @@ async function normalizeMcpContentArray(
             );
             blocks.push(fileRecordToFileRef(rec, category));
           } else if (block.resource?.uri) {
-            blocks.push({ type: 'text', text: String(block.resource.uri) });
+            blocks.push(textBlock(String(block.resource.uri)));
           } else {
-            blocks.push({ type: 'text', text: JSON.stringify(block) });
+            blocks.push(textBlock(JSON.stringify(block)));
           }
         } catch (err: any) {
           console.error('[mcp-result-normalizer] Failed to ingest resource:', err.message);
-          blocks.push({ type: 'text', text: JSON.stringify(block) });
+          blocks.push(textBlock(JSON.stringify(block)));
         }
         break;
       }
 
       default:
         if (typeof block.text === 'string' && block.text) {
-          blocks.push({ type: 'text', text: block.text });
+          blocks.push(textBlock(block.text));
         } else {
-          blocks.push({ type: 'text', text: JSON.stringify(block) });
+          blocks.push(textBlock(JSON.stringify(block)));
         }
         break;
     }
@@ -166,7 +161,7 @@ export async function normalizeMcpToolResult(
 ): Promise<NormalizedMcpToolResult> {
   if (typeof rawResult === 'string') {
     return {
-      content: textBlock(rawResult),
+      content: textBlocks(rawResult),
       rawResult,
     };
   }
@@ -180,7 +175,7 @@ export async function normalizeMcpToolResult(
 
   if (!rawResult || typeof rawResult !== 'object') {
     return {
-      content: textBlock(String(rawResult)),
+      content: textBlocks(String(rawResult)),
       rawResult,
     };
   }
@@ -192,7 +187,7 @@ export async function normalizeMcpToolResult(
 
   if (typeof candidate.content === 'string') {
     return {
-      content: textBlock(candidate.content),
+      content: textBlocks(candidate.content),
       isError: candidate.isError === true,
       structuredContent,
       rawResult,
@@ -210,7 +205,7 @@ export async function normalizeMcpToolResult(
 
   if (structuredContent) {
     return {
-      content: textBlock(JSON.stringify(structuredContent)),
+      content: textBlocks(JSON.stringify(structuredContent)),
       isError: candidate.isError === true,
       structuredContent,
       rawResult,
@@ -218,7 +213,7 @@ export async function normalizeMcpToolResult(
   }
 
   return {
-    content: textBlock(JSON.stringify(rawResult)),
+    content: textBlocks(JSON.stringify(rawResult)),
     isError: candidate.isError === true,
     rawResult,
   };

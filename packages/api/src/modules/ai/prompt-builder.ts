@@ -1,4 +1,12 @@
-import type { CapabilityAvailableSkill, ToolDefinition } from '@synapse/shared';
+import {
+  extractText,
+  normalizeActorDocs,
+} from '@synapse/shared';
+import type {
+  ActorDoc,
+  CapabilityAvailableSkill,
+  ToolDefinition,
+} from '@synapse/shared';
 
 export interface GroupMemberInfo {
   actor_id?: string;
@@ -9,22 +17,102 @@ export interface GroupMemberInfo {
   user_name?: string;
   user_id_ref?: string;
   session_status?: string;
-  // Extended fields for richer member descriptions
-  actor_charter?: string;
-  actor_skills?: { name: string; description: string }[];
+  actor_docs?: ActorDoc[];
+  actor_can_represent_user?: boolean;
+  actor_current_version?: number;
+}
+
+function parseJsonArray<T>(value: unknown): T[] {
+  if (!value) return [];
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as T[];
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
+function actorSource(actor: any) {
+  return actor.definition ?? actor.snapshot ?? actor;
+}
+
+function parseActorDocs(actor: any): ActorDoc[] {
+  const source = actorSource(actor);
+  return normalizeActorDocs(parseJsonArray<ActorDoc>(source.docs ?? actor.actor_docs));
+}
+
+function isDocVisible(doc: ActorDoc, mode: 'solo' | 'group', includeInternal: boolean): boolean {
+  if (doc.visibility === 'always') return true;
+  if (doc.visibility === 'internal_only') return includeInternal;
+  if (mode === 'group') return doc.visibility === 'group_only';
+  return doc.visibility === 'solo_only';
+}
+
+function blocksToPromptText(blocks: ActorDoc['content']): string {
+  return blocks
+    .map((block: ActorDoc['content'][number]) => {
+      if (block.type === 'text') return block.text;
+      return `[File reference: ${block.originalName} (${block.category}) <FileRef id="${block.fileId}"/>]`;
+    })
+    .join('\n')
+    .trim();
+}
+
+function summarizeDoc(doc: ActorDoc, maxLength = 160): string {
+  const text = extractText(doc.content).replace(/\s+/g, ' ').trim();
+  if (text) {
+    return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
+  }
+
+  const file = doc.content.find((block: ActorDoc['content'][number]): block is Extract<ActorDoc['content'][number], { type: 'file_ref' }> => block.type === 'file_ref');
+  return file ? `Attached file: ${file.originalName}` : '';
+}
+
+function renderDocSections(actor: any, mode: 'solo' | 'group'): string {
+  const visibleDocs = parseActorDocs(actor)
+    .filter((doc) => isDocVisible(doc, mode, true))
+    .sort((left, right) => right.priority - left.priority);
+
+  if (visibleDocs.length === 0) return '';
+
+  return visibleDocs
+    .map((doc) => {
+      const content = blocksToPromptText(doc.content);
+      if (!content) return '';
+      return `## ${doc.title}\n${content}`;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function buildRosterEntry(member: GroupMemberInfo): string {
+  const title = member.actor_title || member.actor_role || 'Actor';
+  const docs = parseActorDocs(member)
+    .filter((doc) => isDocVisible(doc, 'group', false))
+    .sort((left, right) => right.priority - left.priority);
+
+  const summary = docs
+    .map((doc) => summarizeDoc(doc, 120))
+    .find(Boolean)
+    || '';
+
+  const version = member.actor_current_version ? ` v${member.actor_current_version}` : '';
+  return `- [actor] **${member.actor_name}**${version} — ${title}${summary ? ` — ${summary}` : ''}`;
 }
 
 /**
  * Build the system prompt for an actor in a group chat.
  * Structure:
- *   1. Actor identity & responsibilities (from versioned data at join time)
+ *   1. Actor identity & profile documents
  *   2. Memory usage rules
  *   3. Group member roster with type + database UUID
  *   4. send_to tool description & collaboration rules
  *   5. MCP plugin tools (if any)
  */
 export function buildActorPrompt(
-  actor: any, // DB row or versioned actor data with snake_case fields
+  actor: any,
   _subordinates?: any,
   _sessionContext?: any,
   extraTools?: ToolDefinition[],
@@ -32,26 +120,31 @@ export function buildActorPrompt(
   availableSkills?: CapabilityAvailableSkill[],
 ): { system: string } {
   const parts: string[] = [];
+  const mode: 'solo' | 'group' = groupMembers && groupMembers.length > 0 ? 'group' : 'solo';
+  const source = actorSource(actor);
+  const actorName = source.name || actor.name || 'Actor';
+  const actorTitle = source.title || source.role || actor.title || actor.role || 'Actor';
+  const actorVersion = actor.current_version ?? actor.currentVersion ?? 1;
+  const canRepresentUser = Boolean(source.canRepresentUser ?? actor.can_represent_user ?? actor.canRepresentUser);
 
-  // ── 1. Identity ──
   parts.push(
     `# Your Identity\n` +
-    `You are **${actor.name}** (${actor.title || actor.role}).\n\n` +
-    actor.system_prompt + '\n\n' +
-    `## Your Charter (Responsibilities)\n` +
-    actor.charter,
+    `You are **${actorName}** (${actorTitle}).\n` +
+    `Current actor version: v${actorVersion}.\n` +
+    `${canRepresentUser
+      ? 'You may represent the user only when the permission system allows it, and you must still follow your representation guidelines.'
+      : 'You are not automatically allowed to speak on behalf of the user. If representation would matter, ask or defer.'}\n\n` +
+    renderDocSections(actor, mode),
   );
 
-  // Skills
-  const skills: any[] = typeof actor.skills === 'string' ? JSON.parse(actor.skills) : (actor.skills || []);
-  if (skills.length > 0) {
+  const capabilities = Array.isArray(source.capabilities) ? source.capabilities : parseJsonArray<string>(source.capabilities ?? actor.capabilities);
+  if (capabilities.length > 0) {
     parts.push(
-      `## Your Skills\n` +
-      skills.map((s: any) => `- **${s.name}**: ${s.description}`).join('\n'),
+      `## Your Structured Capabilities\n` +
+      capabilities.map((capability: string) => `- \`${capability}\``).join('\n'),
     );
   }
 
-  // ── 2. Memory usage rules ──
   parts.push(
     `# Memory Usage\n` +
     `The system may automatically recall established memories for you as structured context.\n` +
@@ -73,81 +166,72 @@ export function buildActorPrompt(
     );
   }
 
-  // ── 3. Group context ──
   if (groupMembers && groupMembers.length > 0) {
-    let roster = '# Group Members\n\nYou are in a group chat with the following members:\n\n';
-
-    for (const member of groupMembers) {
-      if (member.user_id) {
-        roster += `- [user] **${member.user_name || 'User'}** — the human user\n`;
-      } else if (member.actor_id && member.actor_id !== actor.id) {
-        const title = member.actor_title || member.actor_role || 'Actor';
-        roster += `- [actor] **${member.actor_name}** — ${title}`;
-        if (member.actor_charter) {
-          const brief = member.actor_charter.split('\n')[0].substring(0, 120);
-          roster += ` — ${brief}`;
+    const roster = [
+      '# Group Members',
+      '',
+      'You are in a group chat with the following members:',
+      '',
+      ...groupMembers.flatMap((member) => {
+        if (member.user_id) {
+          return [`- [user] **${member.user_name || 'User'}** — the human user`];
         }
-        roster += '\n';
-      }
-    }
+        if (member.actor_id && member.actor_id !== actor.id) {
+          return [buildRosterEntry(member)];
+        }
+        return [];
+      }),
+    ].join('\n');
 
     parts.push(roster);
 
-    // ── 4. Communication rules ──
     parts.push(
       `# Message Format\n\n` +
       `Messages in the group chat use this format:\n` +
       `- \`[SenderName → RecipientName]: message\` — a directed message\n` +
       `- \`[System]: event description\` — a system event (member joined/left, profile updated)\n\n` +
-
       `# Communication\n\n` +
-      `All communication uses the \`send_to\` tool. There is no broadcast — every message must have a specific recipient.\n\n` +
-
+      `All communication uses the \`send_to\` tool. There is no broadcast. Every visible reply must target a specific recipient.\n\n` +
       `## send_to\n` +
       `Send a message to one or more members by name.\n` +
       `Parameters:\n` +
-      `- \`recipients\`: array of member names (e.g. ["${groupMembers.find(m => m.user_id)?.user_name || 'User'}"] or ["Actor1", "Actor2"])\n` +
+      `- \`recipients\`: array of member names (for example ["${groupMembers.find((member) => member.user_id)?.user_name || 'User'}"] or ["Actor1", "Actor2"])\n` +
       `- \`message\`: your message content\n\n` +
-
       `## Other tools\n` +
       `- \`invite_actor\`: Invite a new actor to join this group when you need a skill no current member has\n` +
       `- \`sleep\`: When you have finished your work, call sleep. You will be automatically woken when someone sends you a message\n` +
       `- \`memory_search\`: Search durable memories when recalled context is insufficient\n` +
       `- \`create_memory\`: Save a durable established fact for future reference\n` +
       `${availableSkills && availableSkills.length > 0 ? '- `read_skill`: Load an installed skill package on demand when a listed skill clearly applies\n' : ''}\n` +
-
       `## Workflow\n` +
       `1. Read the message directed at you\n` +
-      `2. Do the work using your tools and capabilities\n` +
+      `2. Do the work using your tools and profile\n` +
       `3. Use \`send_to\` to reply to whoever sent you the message (user or actor)\n` +
       `4. If you need help from another actor, use \`send_to\` to ask them\n` +
-      `5. When done, call \`sleep\` — you'll be woken when needed again\n\n` +
-
+      `5. When done, call \`sleep\` so you can be woken only when needed\n\n` +
       `## Important\n` +
-      `- **You MUST use \`send_to\` to reply.** Plain text output is internal reasoning only — nobody can see it.\n` +
-      `- Your internal tool calls (MCP tools, memory_search, create_memory, etc.) are NOT visible to the group\n` +
-      `- Only \`send_to\` produces visible messages — ALWAYS use it to communicate your response\n` +
+      `- **You MUST use \`send_to\` to reply.** Plain text output is internal reasoning only.\n` +
+      `- Your internal tool calls (MCP tools, memory_search, create_memory, and so on) are not visible to the group.\n` +
+      `- Only \`send_to\` produces visible messages.\n` +
       `- You can only see messages sent directly to you. Other actors' conversations are private.\n` +
-      `- NEVER reply with plain text alone. You MUST call \`send_to\` for every response.`,
+      `- Never rely on outdated roster assumptions. The system may insert profile-version events when another actor changes.`,
     );
   } else {
-    // Non-group (solo) mode
     parts.push(
       `# Working Mode\n\n` +
-      `You are working independently (no group context). Handle all tasks yourself directly.\n` +
-      `Provide complete, thorough responses. Do NOT say you will do something later — do it now.\n` +
+      `You are working independently with no group roster.\n` +
+      `Handle the task directly. Do not defer obvious work.\n` +
       `Use recalled memory when the task depends on durable facts or prior decisions, and use \`memory_search\` if you need deeper retrieval.\n` +
       `${availableSkills && availableSkills.length > 0 ? 'When a listed installed skill clearly matches the task, load it with `read_skill` before using it.' : ''}`,
     );
   }
 
-  // ── 5. MCP plugin tools ──
   if (extraTools && extraTools.length > 0) {
     parts.push(
       `# Available Plugin Tools\n\n` +
       `You have the following MCP plugin tools:\n` +
-      extraTools.map((t) => `- \`${t.name}\`: ${t.description}`).join('\n') +
-      '\n\nUse these tools when the user\'s request requires them. Tool names use namespace format (org__plugin__tool).',
+      extraTools.map((tool) => `- \`${tool.name}\`: ${tool.description}`).join('\n') +
+      `\n\nUse these tools when the user's request requires them. Tool names use namespace format (org__plugin__tool).`,
     );
   }
 

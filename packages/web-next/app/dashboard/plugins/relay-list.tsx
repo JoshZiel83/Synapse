@@ -44,6 +44,18 @@ const lifecycleOptionsForScope: Record<string, string[]> = {
   user: ['user', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'turn'],
 };
 
+function normalizeActorOption(actor: any) {
+  const definition = actor?.definition || actor;
+  return {
+    ...actor,
+    id: actor.id,
+    name: definition.name,
+    title: definition.title,
+    role: definition.role,
+    config: definition.config || {},
+  };
+}
+
 interface Relay {
   id: string;
   name: string;
@@ -198,7 +210,11 @@ export default function RelayList() {
       Promise.all([
         api.getActors(workspaceId).catch(() => []),
         api.getGroups(workspaceId).then((r: any) => r.groups || []).catch(() => []),
-      ]).then(([a, g]) => { setActors(a); setConversations(g); });
+      ]).then(([a, g]) => {
+        const actorList = (a as any)?.actors ?? a ?? [];
+        setActors(Array.isArray(actorList) ? actorList.map(normalizeActorOption) : []);
+        setConversations(g);
+      });
     }
   };
 

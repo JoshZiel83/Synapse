@@ -32,6 +32,7 @@ import filesModule from './modules/files/index.js';
 import a2aModule from './modules/a2a/index.js';
 import { seedPlatformDefaultGroup } from './modules/model-groups/service.js';
 import { seedBuiltinMcpPlugins } from './modules/mcp-plugins/service.js';
+import { seedBuiltinActorTemplates } from './modules/organization/service.js';
 import { initBuiltinRegistry } from './modules/mcp-plugins/builtin/index.js';
 import { initInstanceManagerListeners, shutdownAllInstances } from './modules/mcp-plugins/instance-manager.js';
 import { initRelayManager, shutdownAllRelays } from './modules/mcp-plugins/relay-manager.js';
@@ -104,6 +105,7 @@ async function main() {
   // Seed MCP builtin plugins and init registry
   try {
     await seedBuiltinMcpPlugins();
+    await seedBuiltinActorTemplates();
     await initBuiltinRegistry();
     initInstanceManagerListeners();
     await initRelayManager();
@@ -111,9 +113,9 @@ async function main() {
     if (recovered.recoveredToolCalls > 0 || recovered.recoveredTurns > 0) {
       console.warn('[startup-recovery] Recovered interrupted execution state', recovered);
     }
-    console.log('MCP plugins seeded and registry initialized');
+    console.log('MCP plugins and actor templates seeded; registry initialized');
   } catch (err) {
-    console.error('Failed to seed MCP plugins:', err);
+    console.error('Failed to seed builtin marketplace packages:', err);
   }
 
   // Health check

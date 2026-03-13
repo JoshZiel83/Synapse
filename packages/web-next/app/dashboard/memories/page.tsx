@@ -55,6 +55,15 @@ interface ActorOption {
   title?: string;
 }
 
+function normalizeActorOption(actor: any): ActorOption {
+  const definition = actor?.definition || actor;
+  return {
+    id: actor.id,
+    name: definition.name,
+    title: definition.title,
+  };
+}
+
 interface GroupOption {
   id: string;
   title?: string;
@@ -256,7 +265,7 @@ export default function MemoriesPage() {
       const groupItems = Array.isArray(groupData) ? groupData : (groupData?.groups || []);
 
       setMemories(memoryItems);
-      setActors(actorItems.map((actor: ActorOption) => ({ id: actor.id, name: actor.name, title: actor.title })));
+      setActors(actorItems.map(normalizeActorOption));
       setGroups(groupItems.map((group: GroupOption) => ({ id: group.id, title: group.title })));
     } catch (error) {
       console.error('Failed to load memories page data:', error);

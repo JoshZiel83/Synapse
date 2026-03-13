@@ -1,5 +1,5 @@
 import type { AIResponse, ToolDefinition, ToolCall, AnthropicBuiltinTool, ConversationMessage, MultimodalConfig, CanonicalContentBlock, ProviderContextWindow } from '@synapse/shared';
-import { extractText } from '@synapse/shared';
+import { extractText, textBlock } from '@synapse/shared';
 import { randomUUID } from 'crypto';
 import type { AIProvider, AIProviderConfig, FileRefSegment } from './types.js';
 import { readAsBuffer, getFullUrl } from '../../../infrastructure/storage/index.js';
@@ -166,7 +166,7 @@ export class AnthropicProvider implements AIProvider {
 
     // Build canonical context
     const contentBlocks: CanonicalContentBlock[] = [];
-    if (textContent) contentBlocks.push({ type: 'text', text: textContent });
+    if (textContent) contentBlocks.push(textBlock(textContent));
 
     const assistantMsg: ConversationMessage = {
       role: 'assistant' as const,

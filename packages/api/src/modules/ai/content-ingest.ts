@@ -2,7 +2,7 @@
  * Content Ingest: normalize arbitrary binary content (MCP results, model responses)
  * into platform file storage and return CanonicalContentBlock[].
  */
-import type { CanonicalContentBlock, ProviderType } from '@synapse/shared';
+import { fileRefBlock, normalizeCanonicalContentBlocks, textBlock, type CanonicalContentBlock, type ProviderType } from '@synapse/shared';
 import { saveFromBase64, saveFromUrl, type FileRecord } from '../../infrastructure/storage/file-io.js';
 
 function mimeToCategory(mimeType: string): 'image' | 'audio' | 'video' | 'document' {
@@ -13,8 +13,7 @@ function mimeToCategory(mimeType: string): 'image' | 'audio' | 'video' | 'docume
 }
 
 function fileRecordToFileRef(rec: FileRecord, category: 'image' | 'audio' | 'video' | 'document'): CanonicalContentBlock {
-  return {
-    type: 'file_ref',
+  return fileRefBlock({
     fileId: rec.id,
     storedName: rec.storedName,
     url: rec.url,
@@ -22,7 +21,7 @@ function fileRecordToFileRef(rec: FileRecord, category: 'image' | 'audio' | 'vid
     originalName: rec.originalName,
     sizeBytes: rec.sizeBytes,
     category,
-  };
+  });
 }
 
 /**
@@ -34,25 +33,25 @@ export async function ingestToolResultContent(
   content: string | unknown[],
   workspaceId: string,
 ): Promise<CanonicalContentBlock[]> {
-  if (typeof content === 'string') return [{ type: 'text', text: content }];
+  if (typeof content === 'string') return [textBlock(content)];
 
   const blocks: CanonicalContentBlock[] = [];
 
   for (const raw of content) {
     const block = raw as any;
     if (!block || typeof block !== 'object') {
-      blocks.push({ type: 'text', text: String(raw) });
+      blocks.push(textBlock(String(raw)));
       continue;
     }
 
     switch (block.type) {
       case 'text':
-        blocks.push({ type: 'text', text: block.text || '' });
+        blocks.push(textBlock(block.text || ''));
         break;
 
       case 'file_ref':
         // Already-ingested canonical block — pass through directly
-        blocks.push(block as CanonicalContentBlock);
+        blocks.push(...normalizeCanonicalContentBlocks([block]));
         break;
 
       case 'image': {
@@ -97,10 +96,10 @@ export async function ingestToolResultContent(
             blocks.push(fileRecordToFileRef(rec, 'image'));
             break;
           }
-          blocks.push({ type: 'text', text: `[Image: missing data, keys=${Object.keys(block).join(',')}]` });
+          blocks.push(textBlock(`[Image: missing data, keys=${Object.keys(block).join(',')}]`));
         } catch (err: any) {
           console.error('[content-ingest] Failed to ingest image:', err.message);
-          blocks.push({ type: 'text', text: `[Image: ingest failed - ${err.message}]` });
+          blocks.push(textBlock(`[Image: ingest failed - ${err.message}]`));
         }
         break;
       }
@@ -120,10 +119,10 @@ export async function ingestToolResultContent(
             blocks.push(fileRecordToFileRef(rec, 'audio'));
             break;
           }
-          blocks.push({ type: 'text', text: `[Audio: missing data]` });
+          blocks.push(textBlock('[Audio: missing data]'));
         } catch (err: any) {
           console.error('[content-ingest] Failed to ingest audio:', err.message);
-          blocks.push({ type: 'text', text: `[Audio: ingest failed - ${err.message}]` });
+          blocks.push(textBlock(`[Audio: ingest failed - ${err.message}]`));
         }
         break;
       }
@@ -131,7 +130,7 @@ export async function ingestToolResultContent(
       case 'resource': {
         try {
           if (block.resource?.text) {
-            blocks.push({ type: 'text', text: block.resource.text });
+            blocks.push(textBlock(block.resource.text));
           } else if (block.resource?.blob && block.resource?.mimeType) {
             const mimeType = block.resource.mimeType;
             const category = mimeToCategory(mimeType);
@@ -146,18 +145,18 @@ export async function ingestToolResultContent(
             );
             blocks.push(fileRecordToFileRef(rec, category));
           } else {
-            blocks.push({ type: 'text', text: JSON.stringify(block) });
+            blocks.push(textBlock(JSON.stringify(block)));
           }
         } catch (err: any) {
           console.error('[content-ingest] Failed to ingest resource:', err.message);
-          blocks.push({ type: 'text', text: JSON.stringify(block) });
+          blocks.push(textBlock(JSON.stringify(block)));
         }
         break;
       }
 
       default:
         // Pass through as text
-        blocks.push({ type: 'text', text: JSON.stringify(block) });
+        blocks.push(textBlock(JSON.stringify(block)));
         break;
     }
   }

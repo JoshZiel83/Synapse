@@ -42,6 +42,16 @@ interface WorkspaceActor {
   role: string;
 }
 
+function normalizeWorkspaceActor(actor: any): WorkspaceActor {
+  const definition = actor?.definition || actor;
+  return {
+    id: actor.id,
+    name: definition.name,
+    title: definition.title,
+    role: definition.role,
+  };
+}
+
 export default function A2AManagement() {
   const { workspaceId } = useWorkspace();
   const [apps, setApps] = useState<A2AApp[]>([]);
@@ -75,7 +85,8 @@ export default function A2AManagement() {
     if (!workspaceId) return;
     try {
       const res = await api.getActors(workspaceId);
-      setActors(res?.actors ?? []);
+      const actorList = res?.actors ?? res ?? [];
+      setActors(Array.isArray(actorList) ? actorList.map(normalizeWorkspaceActor) : []);
     } catch (err) {
       console.error('Failed to load actors:', err);
     }
