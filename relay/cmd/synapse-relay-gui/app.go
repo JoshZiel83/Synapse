@@ -4,27 +4,29 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/PekingSpades/Synapse/relay/internal/cloud"
 	"github.com/PekingSpades/Synapse/relay/internal/config"
 	"github.com/PekingSpades/Synapse/relay/internal/importer"
 	"github.com/PekingSpades/Synapse/relay/internal/localapi"
 	"github.com/PekingSpades/Synapse/relay/internal/mcp"
 	"github.com/PekingSpades/Synapse/relay/internal/relay"
-	"github.com/gorilla/websocket"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // StatusInfo is returned by GetStatus for the dashboard
 type StatusInfo struct {
-	State   string           `json:"state"`
-	Error   string           `json:"error,omitempty"`
-	Servers []mcp.ServerInfo `json:"servers,omitempty"`
+	State                string           `json:"state"`
+	Error                string           `json:"error,omitempty"`
+	AuthFailureCode      string           `json:"authFailureCode,omitempty"`
+	AuthFailureMessage   string           `json:"authFailureMessage,omitempty"`
+	AuthFailurePermanent bool             `json:"authFailurePermanent,omitempty"`
+	Servers              []mcp.ServerInfo `json:"servers,omitempty"`
 }
 
 // LogEntry represents a log line for the GUI
@@ -37,32 +39,47 @@ type LogEntry struct {
 // GUISource represents a detected MCP config source (main-package mirror of importer.Source
 // to avoid Wails v2 cross-package binding issues on Windows WebView2)
 type GUISource struct {
+	Kind       string            `json:"kind"`
+	SourceKey  string            `json:"sourceKey"`
 	Name       string            `json:"name"`
 	ConfigPath string            `json:"configPath"`
 	Available  bool              `json:"available"`
+	SyncMode   string            `json:"syncMode,omitempty"`
+	Status     string            `json:"status,omitempty"`
+	LinkedMCPs int               `json:"linkedMcps,omitempty"`
 	Servers    []GUIImportServer `json:"servers"`
 	Error      string            `json:"error,omitempty"`
 }
 
 // GUIImportServer is a main-package mirror of importer.ImportedServer
 type GUIImportServer struct {
-	Name      string            `json:"name"`
-	Transport string            `json:"transport"`
-	Command   string            `json:"command,omitempty"`
-	Args      []string          `json:"args,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
-	Endpoint  string            `json:"endpoint,omitempty"`
+	SourceKind       string            `json:"sourceKind,omitempty"`
+	SourceKey        string            `json:"sourceKey,omitempty"`
+	SourceConfigPath string            `json:"sourceConfigPath,omitempty"`
+	Name             string            `json:"name"`
+	Transport        string            `json:"transport"`
+	Command          string            `json:"command,omitempty"`
+	Args             []string          `json:"args,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`
+	Endpoint         string            `json:"endpoint,omitempty"`
 }
 
 // App is the Wails-bound application struct
 type App struct {
-	ctx      context.Context
-	engine   *relay.Engine
-	cfg      *config.Config
-	cfgPath  string
-	logs     []LogEntry
-	logsMu   sync.Mutex
-	localAPI *localapi.Server
+	ctx                  context.Context
+	engine               *relay.Engine
+	cfg                  *config.Config
+	cfgPath              string
+	cfgHash              string
+	cfgMu                sync.RWMutex
+	logs                 []LogEntry
+	logsMu               sync.Mutex
+	authFailureMu        sync.RWMutex
+	authFailureCode      string
+	authFailureMessage   string
+	authFailurePermanent bool
+	localAPI             *localapi.Server
+	watchCfgCancel       context.CancelFunc
 }
 
 // NewApp creates a new App instance
@@ -84,19 +101,27 @@ func (a *App) startup(ctx context.Context) {
 	if err != nil {
 		cfg = &config.Config{LogLevel: "info"}
 	}
-	a.cfg = cfg
+	a.cfg = config.Clone(cfg)
+	a.cfgHash = config.Fingerprint(a.cfg)
+
+	watchCtx, cancel := context.WithCancel(context.Background())
+	a.watchCfgCancel = cancel
+	go config.NewWatcher(a.cfgPath, 1500*time.Millisecond, a.handleConfigWatchEvent).Start(watchCtx)
 
 	// Start local API server for web-to-client communication
-	a.localAPI = localapi.New(localapi.DefaultPort, Version, a.handleRemoteSetup, a.getRelayState)
+	a.localAPI = localapi.New(localapi.DefaultPort, Version, a.handleRemotePairing, a.getLocalStatus)
 	if err := a.localAPI.Start(); err != nil {
 		log.Printf("Warning: failed to start local API: %v", err)
 	}
 
-	// Check for deep link URL in args (synapse-relay://setup?endpoint=...&token=...)
+	// Check for deep link URL in args (synapse-relay://pair?serverBaseUrl=...&code=...)
 	a.handleDeepLinkArgs()
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.watchCfgCancel != nil {
+		a.watchCfgCancel()
+	}
 	if a.localAPI != nil {
 		a.localAPI.Stop()
 	}
@@ -105,16 +130,13 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 }
 
-// handleRemoteSetup is called by the local API when the web UI sends a setup request.
-// Shows a confirmation dialog and returns true if the user accepts.
-func (a *App) handleRemoteSetup(endpoint, token string) bool {
-	// Show confirmation dialog via Wails runtime
-	// Note: QuestionDialog returns platform-specific strings:
-	//   Windows: "Yes"/"No", macOS/Linux: custom button label
+// handleRemotePairing is called by the local API when the web UI sends a pairing request.
+// Shows a confirmation dialog and, if accepted, claims the pairing and persists the relay identity.
+func (a *App) handleRemotePairing(serverBaseURL, pairingCode, displayName string) bool {
 	result, err := wailsRuntime.MessageDialog(a.ctx, wailsRuntime.MessageDialogOptions{
 		Type:    wailsRuntime.QuestionDialog,
-		Title:   "Remote Configuration",
-		Message: fmt.Sprintf("The web dashboard wants to configure this relay:\n\nEndpoint: %s\nToken: %s...%s\n\nAccept this configuration?", endpoint, token[:8], token[len(token)-4:]),
+		Title:   "Relay Pairing Request",
+		Message: fmt.Sprintf("The web dashboard wants to pair this relay client:\n\nServer: %s\nCode: %s\n\nAccept this pairing?", serverBaseURL, summarizeSecret(pairingCode)),
 		Buttons: []string{"Accept", "Reject"},
 	})
 	if err != nil {
@@ -124,25 +146,40 @@ func (a *App) handleRemoteSetup(endpoint, token string) bool {
 
 	accepted := result == "Accept" || result == "Yes" || result == "Ok"
 	if accepted {
-		a.cfg.Endpoint = endpoint
-		a.cfg.Token = token
-		if err := config.EnsureDir(); err == nil {
-			config.Save(a.cfgPath, a.cfg)
+		if _, err := a.claimPairing(serverBaseURL, pairingCode, displayName); err != nil {
+			_, _ = wailsRuntime.MessageDialog(a.ctx, wailsRuntime.MessageDialogOptions{
+				Type:    wailsRuntime.ErrorDialog,
+				Title:   "Pairing Failed",
+				Message: err.Error(),
+			})
+			return false
 		}
-		// Emit event to frontend to update UI
-		wailsRuntime.EventsEmit(a.ctx, "config:updated", map[string]interface{}{
-			"endpoint": endpoint,
-		})
 		return true
 	}
 	return false
 }
 
-func (a *App) getRelayState() string {
+func (a *App) getLocalStatus() localapi.StatusSnapshot {
+	cfg := a.getConfigSnapshot()
+	state := "stopped"
 	if a.engine != nil {
-		return string(a.engine.State())
+		state = string(a.engine.State())
 	}
-	return "stopped"
+
+	return localapi.StatusSnapshot{
+		Relay:                 state,
+		Paired:                strings.TrimSpace(cfg.Relay.DeviceID) != "",
+		ServerIdentityPinned:  strings.TrimSpace(cfg.Relay.ServerTLSPublicKeyPin) != "",
+		AuthFailureCode:       a.getAuthFailureCode(),
+		AuthFailureMessage:    a.getAuthFailureMessage(),
+		AuthFailurePermanent:  a.getAuthFailurePermanent(),
+		DeviceID:              cfg.Relay.DeviceID,
+		DisplayName:           cfg.Relay.DisplayName,
+		ServerBaseURL:         cfg.Relay.ServerBaseURL,
+		WebSocketURL:          cfg.Relay.WebSocketURL,
+		PublicKeyFingerprint:  cfg.Relay.PublicKeyFingerprint,
+		ServerTLSPublicKeyPin: cfg.Relay.ServerTLSPublicKeyPin,
+	}
 }
 
 // handleDeepLinkArgs checks os.Args for a synapse-relay:// URL and processes it.
@@ -155,7 +192,7 @@ func (a *App) handleDeepLinkArgs() {
 	}
 }
 
-// processDeepLink parses synapse-relay://setup?endpoint=...&token=... and triggers setup.
+// processDeepLink parses synapse-relay://pair?serverBaseUrl=...&code=... and triggers pairing.
 func (a *App) processDeepLink(rawURL string) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -163,14 +200,15 @@ func (a *App) processDeepLink(rawURL string) {
 		return
 	}
 
-	if u.Host == "setup" || u.Path == "setup" || u.Path == "/setup" {
-		endpoint := u.Query().Get("endpoint")
-		token := u.Query().Get("token")
-		if endpoint != "" && token != "" {
+	if u.Host == "pair" || u.Path == "pair" || u.Path == "/pair" {
+		serverBaseURL := u.Query().Get("serverBaseUrl")
+		pairingCode := u.Query().Get("code")
+		displayName := u.Query().Get("displayName")
+		if serverBaseURL != "" && pairingCode != "" {
 			// Defer to after startup completes (ctx must be ready)
 			go func() {
 				time.Sleep(500 * time.Millisecond) // wait for window to render
-				a.handleRemoteSetup(endpoint, token)
+				a.handleRemotePairing(serverBaseURL, pairingCode, displayName)
 			}()
 		}
 	}
@@ -179,49 +217,54 @@ func (a *App) processDeepLink(rawURL string) {
 // --- Config methods ---
 
 func (a *App) GetConfig() *config.Config {
-	return a.cfg
+	return a.getConfigSnapshot()
 }
 
 func (a *App) SaveConfig(cfg config.Config) error {
-	a.cfg = &cfg
-	if err := config.EnsureDir(); err != nil {
+	normalizeLinkedServerManagementModes(&cfg)
+	a.setConfig(&cfg)
+	message, autoApplied, err := a.persistConfig(&cfg)
+	if err != nil {
 		return err
 	}
-	return config.Save(a.cfgPath, &cfg)
+	a.emitConfigUpdated(&cfg, message, autoApplied)
+	return nil
 }
 
-func (a *App) TestConnection(endpoint, token string) (string, error) {
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	conn, _, err := dialer.Dial(endpoint, http.Header{})
+func (a *App) ClaimPairing(serverBaseURL, pairingCode, displayName string) (string, error) {
+	result, err := a.claimPairing(serverBaseURL, pairingCode, displayName)
 	if err != nil {
-		return "", fmt.Errorf("connection failed: %w", err)
+		return "", err
 	}
-	defer conn.Close()
+	return fmt.Sprintf("Paired device %s to %s", result.DeviceID, result.ServerBaseURL), nil
+}
 
-	// Send auth
-	authMsg := map[string]string{"type": "auth", "token": token}
-	if err := conn.WriteJSON(authMsg); err != nil {
-		return "", fmt.Errorf("auth send failed: %w", err)
-	}
-
-	// Read response
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp map[string]interface{}
-	if err := conn.ReadJSON(&resp); err != nil {
-		return "", fmt.Errorf("auth response failed: %w", err)
+func (a *App) claimPairing(serverBaseURL, pairingCode, displayName string) (*cloud.PairingClaimResult, error) {
+	cfg := a.getConfigSnapshot()
+	cfg.Relay.ServerBaseURL = strings.TrimSpace(serverBaseURL)
+	if strings.TrimSpace(displayName) != "" {
+		cfg.Relay.DisplayName = strings.TrimSpace(displayName)
 	}
 
-	if resp["type"] == "auth_error" {
-		msg, _ := resp["message"].(string)
-		return "", fmt.Errorf("auth rejected: %s", msg)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	nextRelay, result, err := cloud.ClaimPairing(ctx, cfg.Relay, pairingCode, displayName)
+	if err != nil {
+		return nil, err
 	}
 
-	if resp["type"] == "auth_ok" {
-		relayID, _ := resp["relayId"].(string)
-		return fmt.Sprintf("Connected! Relay ID: %s", relayID), nil
+	cfg.Relay = *nextRelay
+	normalizeLinkedServerManagementModes(cfg)
+	a.setConfig(cfg)
+
+	message, autoApplied, err := a.persistConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
 
-	return fmt.Sprintf("Unexpected response: %v", resp["type"]), nil
+	a.emitConfigUpdated(cfg, message, autoApplied)
+	return result, nil
 }
 
 // --- Relay control methods ---
@@ -231,13 +274,26 @@ func (a *App) StartRelay() error {
 		return fmt.Errorf("relay already running")
 	}
 
-	errs := config.Validate(a.cfg)
+	cfg := a.getConfigSnapshot()
+	errs := config.Validate(cfg)
 	if len(errs) > 0 {
 		return fmt.Errorf("config invalid: %s", errs[0])
 	}
 
-	a.engine = relay.New(a.cfg)
+	a.engine = relay.New(cfg)
+	a.clearAuthFailure()
 	a.engine.OnEvent(func(evt relay.Event) {
+		switch evt.Type {
+		case relay.EventAuthFailed:
+			a.setAuthFailure(
+				metadataString(evt.Data, "code"),
+				evt.Message,
+				metadataBool(evt.Data, "permanent"),
+			)
+		case relay.EventConnected:
+			a.clearAuthFailure()
+		}
+
 		// Store log
 		a.logsMu.Lock()
 		a.logs = append(a.logs, LogEntry{
@@ -285,6 +341,9 @@ func (a *App) GetStatus() StatusInfo {
 		if err := a.engine.LastError(); err != nil {
 			info.Error = err.Error()
 		}
+		info.AuthFailureCode = a.getAuthFailureCode()
+		info.AuthFailureMessage = a.getAuthFailureMessage()
+		info.AuthFailurePermanent = a.getAuthFailurePermanent()
 		info.Servers = a.engine.ServerInfo()
 	}
 	return info
@@ -293,20 +352,39 @@ func (a *App) GetStatus() StatusInfo {
 // --- Server management ---
 
 func (a *App) AddServer(sc config.ServerConfig) error {
-	for _, s := range a.cfg.Servers {
+	cfg := a.getConfigSnapshot()
+	for _, s := range cfg.Servers {
 		if s.Name == sc.Name {
 			return fmt.Errorf("server %q already exists", sc.Name)
 		}
 	}
-	a.cfg.Servers = append(a.cfg.Servers, sc)
-	return config.Save(a.cfgPath, a.cfg)
+	if sc.ManagementMode == "" {
+		sc.ManagementMode = "manual"
+	}
+	cfg.Servers = append(cfg.Servers, sc)
+	normalizeLinkedServerManagementModes(cfg)
+	a.setConfig(cfg)
+	message, autoApplied, err := a.persistConfig(cfg)
+	if err != nil {
+		return err
+	}
+	a.emitConfigUpdated(cfg, message, autoApplied)
+	return nil
 }
 
 func (a *App) RemoveServer(name string) error {
-	for i, s := range a.cfg.Servers {
+	cfg := a.getConfigSnapshot()
+	for i, s := range cfg.Servers {
 		if s.Name == name {
-			a.cfg.Servers = append(a.cfg.Servers[:i], a.cfg.Servers[i+1:]...)
-			return config.Save(a.cfgPath, a.cfg)
+			cfg.Servers = append(cfg.Servers[:i], cfg.Servers[i+1:]...)
+			normalizeLinkedServerManagementModes(cfg)
+			a.setConfig(cfg)
+			message, autoApplied, err := a.persistConfig(cfg)
+			if err != nil {
+				return err
+			}
+			a.emitConfigUpdated(cfg, message, autoApplied)
+			return nil
 		}
 	}
 	return fmt.Errorf("server %q not found", name)
@@ -316,33 +394,87 @@ func (a *App) RemoveServer(name string) error {
 
 func (a *App) DetectSources() []GUISource {
 	sources := importer.DetectAll()
+	cfg := a.getConfigSnapshot()
+	bySourceKey := make(map[string]config.SyncSourceConfig, len(cfg.SyncSources))
+	linkedServers := make(map[string]int)
+	for _, source := range cfg.SyncSources {
+		bySourceKey[source.SourceKey] = source
+	}
+	for _, server := range cfg.Servers {
+		if server.SyncSourceKey != "" {
+			linkedServers[server.SyncSourceKey]++
+		}
+	}
+
+	dirty := false
 	result := make([]GUISource, len(sources))
 	for i, s := range sources {
+		existing := bySourceKey[s.SourceKey]
 		gs := GUISource{
+			Kind:       s.Kind,
+			SourceKey:  s.SourceKey,
 			Name:       s.Name,
 			ConfigPath: s.ConfigPath,
 			Available:  s.Available,
+			SyncMode:   existing.SyncMode,
+			Status:     existing.Status,
+			LinkedMCPs: linkedServers[s.SourceKey],
 			Error:      s.Error,
 			Servers:    make([]GUIImportServer, len(s.Servers)),
 		}
+		if gs.SyncMode == "" {
+			gs.SyncMode = "observe"
+		}
+		gs.Status = syncSourceStatusForDetection(s.Available, s.Error)
 		for j, srv := range s.Servers {
 			gs.Servers[j] = GUIImportServer{
-				Name:      srv.Name,
-				Transport: srv.Transport,
-				Command:   srv.Command,
-				Args:      srv.Args,
-				Env:       srv.Env,
-				Endpoint:  srv.Endpoint,
+				SourceKind:       srv.SourceKind,
+				SourceKey:        srv.SourceKey,
+				SourceConfigPath: srv.SourceConfigPath,
+				Name:             srv.Name,
+				Transport:        srv.Transport,
+				Command:          srv.Command,
+				Args:             srv.Args,
+				Env:              srv.Env,
+				Endpoint:         srv.Endpoint,
+			}
+		}
+
+		if existing.SourceKey != "" {
+			next := existing
+			next.SourceKind = s.Kind
+			next.ConfigPath = s.ConfigPath
+			next.Status = gs.Status
+			if s.Error != "" {
+				next.LastError = s.Error
+			} else {
+				next.LastError = ""
+			}
+			next.Metadata = ensureMetadata(next.Metadata)
+			next.Metadata["detectedServerCount"] = len(s.Servers)
+			if !syncSourceEqual(existing, next) {
+				upsertSyncSourceConfig(cfg, next)
+				dirty = true
 			}
 		}
 		result[i] = gs
+	}
+
+	if dirty {
+		a.setConfig(cfg)
+		if err := config.Save(a.cfgPath, cfg); err != nil {
+			log.Printf("Warning: failed to persist sync source detection metadata: %v", err)
+		} else {
+			wailsRuntime.EventsEmit(a.ctx, "config:updated", config.Clone(cfg))
+		}
 	}
 	return result
 }
 
 func (a *App) ImportServers(servers []GUIImportServer) error {
+	cfg := a.getConfigSnapshot()
 	existingNames := make(map[string]bool)
-	for _, s := range a.cfg.Servers {
+	for _, s := range cfg.Servers {
 		existingNames[s.Name] = true
 	}
 
@@ -351,18 +483,40 @@ func (a *App) ImportServers(servers []GUIImportServer) error {
 		if existingNames[srv.Name] {
 			continue
 		}
+		if srv.SourceKey != "" {
+			syncSource := findSyncSourceConfig(cfg, srv.SourceKey)
+			syncMode := "import_only"
+			if syncSource != nil && strings.TrimSpace(syncSource.SyncMode) != "" {
+				syncMode = syncSource.SyncMode
+			}
+			upsertSyncSourceConfig(cfg, config.SyncSourceConfig{
+				SourceKind: srv.SourceKind,
+				SourceKey:  srv.SourceKey,
+				ConfigPath: srv.SourceConfigPath,
+				SyncMode:   syncMode,
+				Status:     "idle",
+				Metadata: map[string]interface{}{
+					"displayName": srv.SourceKind,
+				},
+			})
+		}
 		sc := config.ServerConfig{
-			Name:      srv.Name,
-			Transport: srv.Transport,
-			Command:   srv.Command,
-			Args:      srv.Args,
-			Env:       srv.Env,
-			Endpoint:  srv.Endpoint,
+			SyncSourceKey:  srv.SourceKey,
+			ManagementMode: managementModeForImport(srv.SourceKey),
+			Name:           srv.Name,
+			Transport:      srv.Transport,
+			Command:        srv.Command,
+			Args:           srv.Args,
+			Env:            srv.Env,
+			Endpoint:       srv.Endpoint,
+			Metadata: map[string]interface{}{
+				"sourceKind": srv.SourceKind,
+			},
 		}
 		if sc.Transport == "" {
 			sc.Transport = "stdio"
 		}
-		a.cfg.Servers = append(a.cfg.Servers, sc)
+		cfg.Servers = append(cfg.Servers, sc)
 		existingNames[srv.Name] = true
 		added++
 	}
@@ -371,7 +525,155 @@ func (a *App) ImportServers(servers []GUIImportServer) error {
 		return fmt.Errorf("all selected servers already exist in config")
 	}
 
-	return config.Save(a.cfgPath, a.cfg)
+	normalizeLinkedServerManagementModes(cfg)
+	a.setConfig(cfg)
+	message, autoApplied, err := a.persistConfig(cfg)
+	if err != nil {
+		return err
+	}
+	a.emitConfigUpdated(cfg, message, autoApplied)
+	return nil
+}
+
+func syncSourceStatusForDetection(available bool, detectErr string) string {
+	if available {
+		return "idle"
+	}
+	if detectErr != "" {
+		return "error"
+	}
+	return "disabled"
+}
+
+func managementModeForImport(sourceKey string) string {
+	if strings.TrimSpace(sourceKey) == "" {
+		return "manual"
+	}
+	return "imported"
+}
+
+func upsertSyncSourceConfig(cfg *config.Config, next config.SyncSourceConfig) {
+	if cfg == nil || strings.TrimSpace(next.SourceKey) == "" {
+		return
+	}
+
+	next.Metadata = ensureMetadata(next.Metadata)
+	for i := range cfg.SyncSources {
+		if cfg.SyncSources[i].SourceKey == next.SourceKey {
+			cfg.SyncSources[i] = next
+			return
+		}
+	}
+	cfg.SyncSources = append(cfg.SyncSources, next)
+}
+
+func findSyncSourceConfig(cfg *config.Config, sourceKey string) *config.SyncSourceConfig {
+	if cfg == nil {
+		return nil
+	}
+	for i := range cfg.SyncSources {
+		if cfg.SyncSources[i].SourceKey == sourceKey {
+			return &cfg.SyncSources[i]
+		}
+	}
+	return nil
+}
+
+func syncSourceEqual(left, right config.SyncSourceConfig) bool {
+	return left.SourceKind == right.SourceKind &&
+		left.SourceKey == right.SourceKey &&
+		left.ConfigPath == right.ConfigPath &&
+		left.SyncMode == right.SyncMode &&
+		left.Status == right.Status &&
+		left.LastSyncedAt == right.LastSyncedAt &&
+		left.LastError == right.LastError &&
+		metadataString(left.Metadata, "detectedServerCount") == metadataString(right.Metadata, "detectedServerCount")
+}
+
+func ensureMetadata(metadata map[string]interface{}) map[string]interface{} {
+	if metadata == nil {
+		return map[string]interface{}{}
+	}
+	return metadata
+}
+
+func metadataString(metadata map[string]interface{}, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", metadata[key])
+}
+
+func metadataBool(metadata map[string]interface{}, key string) bool {
+	if metadata == nil {
+		return false
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return false
+	}
+	result, ok := value.(bool)
+	return ok && result
+}
+
+func (a *App) setAuthFailure(code, message string, permanent bool) {
+	a.authFailureMu.Lock()
+	defer a.authFailureMu.Unlock()
+	a.authFailureCode = code
+	a.authFailureMessage = message
+	a.authFailurePermanent = permanent
+}
+
+func (a *App) clearAuthFailure() {
+	a.setAuthFailure("", "", false)
+}
+
+func (a *App) getAuthFailureCode() string {
+	a.authFailureMu.RLock()
+	defer a.authFailureMu.RUnlock()
+	return a.authFailureCode
+}
+
+func (a *App) getAuthFailureMessage() string {
+	a.authFailureMu.RLock()
+	defer a.authFailureMu.RUnlock()
+	return a.authFailureMessage
+}
+
+func (a *App) getAuthFailurePermanent() bool {
+	a.authFailureMu.RLock()
+	defer a.authFailureMu.RUnlock()
+	return a.authFailurePermanent
+}
+
+func normalizeLinkedServerManagementModes(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+
+	bySourceKey := make(map[string]string, len(cfg.SyncSources))
+	for _, source := range cfg.SyncSources {
+		bySourceKey[source.SourceKey] = source.SyncMode
+	}
+
+	for i := range cfg.Servers {
+		if strings.TrimSpace(cfg.Servers[i].SyncSourceKey) == "" {
+			cfg.Servers[i].ManagementMode = "manual"
+			continue
+		}
+		cfg.Servers[i].ManagementMode = managementModeForSyncMode(bySourceKey[cfg.Servers[i].SyncSourceKey])
+	}
+}
+
+func managementModeForSyncMode(syncMode string) string {
+	switch syncMode {
+	case "mirror":
+		return "mirrored"
+	case "managed":
+		return "managed"
+	default:
+		return "imported"
+	}
 }
 
 // --- Logs ---
@@ -390,4 +692,134 @@ func (a *App) GetRecentLogs(count int) []LogEntry {
 	result := make([]LogEntry, count)
 	copy(result, a.logs[start:])
 	return result
+}
+
+func (a *App) getConfigSnapshot() *config.Config {
+	a.cfgMu.RLock()
+	defer a.cfgMu.RUnlock()
+	return config.Clone(a.cfg)
+}
+
+func (a *App) setConfig(next *config.Config) {
+	if next == nil {
+		return
+	}
+
+	a.cfgMu.Lock()
+	a.cfg = config.Clone(next)
+	engine := a.engine
+	cfgCopy := config.Clone(next)
+	a.cfgMu.Unlock()
+
+	if engine != nil {
+		engine.UpdateConfig(cfgCopy)
+	}
+}
+
+func (a *App) handleConfigWatchEvent(evt config.WatchEvent) {
+	switch evt.Kind {
+	case config.WatchEventChanged:
+		nextHash := config.Fingerprint(evt.Config)
+		if nextHash != "" && nextHash == a.getConfigHash() {
+			return
+		}
+		a.setConfig(evt.Config)
+		a.setConfigHash(nextHash)
+		message, autoApplied, requiresRestart := a.applyConfigToRunningRelay(evt.Config)
+		if message == "" {
+			message = "Configuration reloaded from disk."
+		}
+		wailsRuntime.EventsEmit(a.ctx, "config:external-change", map[string]interface{}{
+			"kind":            string(evt.Kind),
+			"path":            evt.Path,
+			"config":          evt.Config,
+			"requiresRestart": requiresRestart,
+			"autoApplied":     autoApplied,
+			"message":         message,
+		})
+	case config.WatchEventDeleted:
+		a.setConfigHash("")
+		wailsRuntime.EventsEmit(a.ctx, "config:external-change", map[string]interface{}{
+			"kind": string(evt.Kind),
+			"path": evt.Path,
+		})
+	case config.WatchEventError:
+		wailsRuntime.EventsEmit(a.ctx, "config:external-change", map[string]interface{}{
+			"kind":    string(evt.Kind),
+			"path":    evt.Path,
+			"message": errorString(evt.Err),
+		})
+	}
+}
+
+func summarizeSecret(secret string) string {
+	if len(secret) <= 12 {
+		return secret
+	}
+	return fmt.Sprintf("%s...%s", secret[:8], secret[len(secret)-4:])
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func (a *App) persistConfig(cfg *config.Config) (string, bool, error) {
+	if err := config.EnsureDir(); err != nil {
+		return "", false, err
+	}
+	if err := config.Save(a.cfgPath, cfg); err != nil {
+		return "", false, err
+	}
+
+	a.setConfigHash(config.Fingerprint(cfg))
+	message, autoApplied, _ := a.applyConfigToRunningRelay(cfg)
+	return message, autoApplied, nil
+}
+
+func (a *App) applyConfigToRunningRelay(cfg *config.Config) (string, bool, bool) {
+	if cfg == nil || a.engine == nil {
+		return "", false, false
+	}
+
+	state := a.engine.State()
+	if state != relay.StateRunning && state != relay.StateStarting {
+		return "", false, false
+	}
+
+	cfgCopy := config.Clone(cfg)
+	if errs := config.Validate(cfgCopy); len(errs) > 0 {
+		return fmt.Sprintf("Configuration updated, but relay kept the previous runtime settings: %s", errs[0]), false, true
+	}
+
+	if err := a.RestartRelay(); err != nil {
+		return fmt.Sprintf("Configuration updated, but relay restart failed: %v", err), false, true
+	}
+
+	return "Configuration applied and relay restarted.", true, false
+}
+
+func (a *App) emitConfigUpdated(cfg *config.Config, message string, autoApplied bool) {
+	payload := map[string]interface{}{
+		"config":      config.Clone(cfg),
+		"autoApplied": autoApplied,
+	}
+	if strings.TrimSpace(message) != "" {
+		payload["message"] = message
+	}
+	wailsRuntime.EventsEmit(a.ctx, "config:updated", payload)
+}
+
+func (a *App) getConfigHash() string {
+	a.cfgMu.RLock()
+	defer a.cfgMu.RUnlock()
+	return a.cfgHash
+}
+
+func (a *App) setConfigHash(hash string) {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	a.cfgHash = hash
 }

@@ -1,3 +1,5 @@
+export * from './relay.js';
+
 // ============ Common ============
 export type UUID = string;
 export type Timestamp = string; // ISO 8601

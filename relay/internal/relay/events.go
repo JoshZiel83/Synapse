@@ -6,18 +6,20 @@ import "time"
 type EventType string
 
 const (
-	EventConnecting    EventType = "connecting"
-	EventConnected     EventType = "connected"
-	EventDisconnected  EventType = "disconnected"
-	EventAuthFailed    EventType = "auth_failed"
-	EventServersReady  EventType = "servers_ready"
-	EventToolCall      EventType = "tool_call"
-	EventToolResult    EventType = "tool_result"
-	EventError         EventType = "error"
-	EventLog           EventType = "log"
-	EventStateChanged  EventType = "state_changed"
-	EventServerInit    EventType = "server_init"
-	EventServerFailed  EventType = "server_failed"
+	EventConnecting     EventType = "connecting"
+	EventConnected      EventType = "connected"
+	EventDisconnected   EventType = "disconnected"
+	EventAuthFailed     EventType = "auth_failed"
+	EventServersReady   EventType = "servers_ready"
+	EventToolCall       EventType = "tool_call"
+	EventToolResult     EventType = "tool_result"
+	EventError          EventType = "error"
+	EventLog            EventType = "log"
+	EventStateChanged   EventType = "state_changed"
+	EventServerInit     EventType = "server_init"
+	EventServerFailed   EventType = "server_failed"
+	EventCatalogHint    EventType = "catalog_hint"
+	EventCatalogChanged EventType = "catalog_changed"
 )
 
 // Event is emitted by the relay engine and its components

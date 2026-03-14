@@ -204,6 +204,41 @@ function inferToolKind(toolName: string, mcpToolNames: Set<string>) {
   return 'builtin' as const;
 }
 
+function classifyMcpExecutionError(error: unknown) {
+  const raw = typeof error === 'object' && error !== null
+    ? error as Record<string, unknown>
+    : null;
+  const code = typeof raw?.code === 'string' ? raw.code : undefined;
+  const requiresReplan =
+    raw?.requiresReplan === true ||
+    code === 'tool_definition_changed' ||
+    code === 'tool_removed';
+  const message = typeof raw?.message === 'string' && raw.message.trim().length > 0
+    ? raw.message
+    : error instanceof Error
+      ? error.message
+      : String(error || 'MCP tool execution failed');
+
+  return {
+    code,
+    message,
+    requiresReplan,
+  };
+}
+
+function formatMcpExecutionErrorMessage(message: string, requiresReplan: boolean, skipped = false) {
+  if (!requiresReplan) {
+    return `Error: ${message}`;
+  }
+  if (skipped) {
+    return 'Error: Skipped because another MCP tool changed during execution. Re-read the latest tool definitions before retrying.';
+  }
+  if (/re-read the latest tool definition/i.test(message)) {
+    return `Error: ${message}`;
+  }
+  return `Error: ${message} Re-read the latest tool definitions before retrying.`;
+}
+
 export async function actorThink(
   actor: Actor,
   contextWindow: ProviderContextWindow,
@@ -642,8 +677,58 @@ export async function actorThink(
 
         // Execute MCP tools via mcpExecutor, with content ingestion
         const mcpResults: { toolCallId: string; providerCallId?: string; toolName: string; content: CanonicalContentBlock[]; isError?: boolean; metadata?: Record<string, unknown> }[] = [];
+        let mcpReplanRequired = false;
         if (mcpCalls.length > 0 && options?.mcpExecutor) {
-          for (const tc of mcpCalls) {
+          const appendMcpFailureResult = async (params: {
+            tc: typeof mcpCalls[number];
+            callRow: any;
+            attempt?: { id: string } | null;
+            attemptStart: number;
+            message: string;
+            metadata?: Record<string, unknown>;
+            responsePayload?: unknown;
+          }) => {
+            const content = textBlocks(params.message);
+            mcpResults.push({
+              toolCallId: params.tc.callId,
+              providerCallId: params.tc.providerCallId,
+              toolName: params.tc.toolName,
+              content,
+              isError: true,
+              metadata: params.metadata,
+            });
+
+            if (executionEnabled && params.callRow) {
+              const attemptRow = params.attempt ?? await createToolExecutionAttempt({
+                toolCallId: params.callRow.id,
+                attemptNo: 1,
+                executorKind: 'mcp_plugin',
+                transport: 'mcp',
+                requestPayload: params.tc.input,
+              });
+              if (attemptRow) {
+                await finalizeToolExecutionAttempt({
+                  attemptId: attemptRow.id,
+                  status: 'error',
+                  isError: true,
+                  errorMessage: params.message,
+                  durationMs: Date.now() - params.attemptStart,
+                  responsePayload: params.responsePayload ?? { error: params.message },
+                });
+                await createToolResult({
+                  toolCallId: params.callRow.id,
+                  attemptId: attemptRow.id,
+                  isError: true,
+                  errorMessage: params.message,
+                  parts: blocksToToolResultParts(content),
+                });
+                await updateToolCallStatus(params.callRow.id, 'failed');
+              }
+            }
+          };
+
+          for (let mcpIndex = 0; mcpIndex < mcpCalls.length; mcpIndex++) {
+            const tc = mcpCalls[mcpIndex];
             const callRow = toolCallRows.get(tc.callId);
             const attempt = executionEnabled && callRow
               ? await createToolExecutionAttempt({
@@ -690,31 +775,58 @@ export async function actorThink(
                 await updateToolCallStatus(callRow.id, normalizedResult.isError ? 'failed' : 'completed');
               }
             } catch (err: any) {
-              mcpResults.push({
-                toolCallId: tc.callId,
-                providerCallId: tc.providerCallId,
-                toolName: tc.toolName,
-                content: textBlocks(`Error: ${err.message}`),
-                isError: true,
+              const classifiedError = classifyMcpExecutionError(err);
+              const formattedMessage = formatMcpExecutionErrorMessage(
+                classifiedError.message,
+                classifiedError.requiresReplan,
+              );
+              await appendMcpFailureResult({
+                tc,
+                callRow,
+                attempt,
+                attemptStart,
+                message: formattedMessage,
+                metadata: {
+                  ...(classifiedError.code ? { errorCode: classifiedError.code } : {}),
+                  ...(classifiedError.requiresReplan ? { requiresReplan: true } : {}),
+                },
+                responsePayload: {
+                  error: classifiedError.message,
+                  ...(classifiedError.code ? { code: classifiedError.code } : {}),
+                  ...(classifiedError.requiresReplan ? { requiresReplan: true } : {}),
+                },
               });
-              if (executionEnabled && callRow && attempt) {
-                const errorBlocks = textBlocks(`Error: ${err.message}`);
-                await finalizeToolExecutionAttempt({
-                  attemptId: attempt.id,
-                  status: 'error',
-                  isError: true,
-                  errorMessage: err.message,
-                  durationMs: Date.now() - attemptStart,
-                  responsePayload: { error: err.message },
-                });
-                await createToolResult({
-                  toolCallId: callRow.id,
-                  attemptId: attempt.id,
-                  isError: true,
-                  errorMessage: err.message,
-                  parts: blocksToToolResultParts(errorBlocks),
-                });
-                await updateToolCallStatus(callRow.id, 'failed');
+
+              if (classifiedError.requiresReplan) {
+                mcpReplanRequired = true;
+                for (let skippedIndex = mcpIndex + 1; skippedIndex < mcpCalls.length; skippedIndex++) {
+                  const skippedTc = mcpCalls[skippedIndex];
+                  const skippedCallRow = toolCallRows.get(skippedTc.callId);
+                  const skippedAttemptStart = Date.now();
+                  const skippedMessage = formatMcpExecutionErrorMessage(
+                    classifiedError.message,
+                    true,
+                    true,
+                  );
+                  await appendMcpFailureResult({
+                    tc: skippedTc,
+                    callRow: skippedCallRow,
+                    attemptStart: skippedAttemptStart,
+                    message: skippedMessage,
+                    metadata: {
+                      errorCode: 'tool_replan_required',
+                      requiresReplan: true,
+                      skippedDueToReplan: true,
+                    },
+                    responsePayload: {
+                      error: skippedMessage,
+                      code: 'tool_replan_required',
+                      requiresReplan: true,
+                      skippedDueToReplan: true,
+                    },
+                  });
+                }
+                break;
               }
             }
           }
@@ -779,8 +891,12 @@ export async function actorThink(
           toolResults: roundToolResults,
         }]);
 
+        if (mcpReplanRequired && !options?.mcpRefresh) {
+          throw new Error('MCP tool definitions changed during execution, but no refresh handler is available');
+        }
+
         // If model also produced action calls in the same turn, execute them and finish
-        if (actionCalls.length > 0) {
+        if (!mcpReplanRequired && actionCalls.length > 0) {
           const actions = toolCallsToActions(actionCalls);
           if (executionEnabled) {
             const actionBundleId = randomUUID();
@@ -823,7 +939,7 @@ export async function actorThink(
 
         // If 'sleep' callable tool was called, the session is now sleeping — stop the loop
         const sleepCalled = callableCalls.some((tc: any) => tc.toolName === 'sleep');
-        if (sleepCalled) {
+        if (!mcpReplanRequired && sleepCalled) {
           const actions: ActorAction[] = [];
           const toolHistory: AssistantToolHistory | undefined = toolRounds.length > 0 ? { rounds: toolRounds } : undefined;
           const contentBlocks = await buildResponseContentBlocks(provider, finalTextContent, allSupplementalBlocks);
@@ -841,9 +957,18 @@ export async function actorThink(
 
         // Otherwise continue to next round
         // Dynamic MCP tool refresh between rounds
-        if (options?.mcpRefresh && workspaceId) {
-          const latestVersion = await getMcpVersion(workspaceId);
-          if (latestVersion !== currentMcpVersion) {
+        if (options?.mcpRefresh) {
+          if (mcpReplanRequired && onStatus) {
+            await onStatus('MCP tools changed. Refreshing tool definitions...');
+          }
+          let needsRefresh = mcpReplanRequired;
+          if (workspaceId) {
+            const latestVersion = await getMcpVersion(workspaceId);
+            if (latestVersion !== currentMcpVersion) {
+              needsRefresh = true;
+            }
+          }
+          if (needsRefresh) {
             try {
               const refreshed = await options.mcpRefresh();
               mcpToolDefs = refreshed.tools;
@@ -854,6 +979,9 @@ export async function actorThink(
               console.log(`[actorThink] MCP tools refreshed: ${mcpToolDefs.length} tools, version=${currentMcpVersion}`);
             } catch (err: any) {
               console.error('[actorThink] MCP refresh failed:', err.message);
+              if (mcpReplanRequired) {
+                throw new Error(`MCP tool definitions changed during execution, but refresh failed: ${err.message}`);
+              }
             }
           }
         }

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/PekingSpades/Synapse/relay/internal/config"
+	"github.com/PekingSpades/Synapse/relay/internal/deviceauth"
 	"github.com/gorilla/websocket"
 )
 
@@ -23,39 +25,69 @@ const (
 	jitterFraction      = 0.25
 )
 
-// ErrPermanentAuthFailure is returned when the token is rejected and retrying won't help
-var ErrPermanentAuthFailure = errors.New("permanent auth failure — token invalid or revoked")
+var ErrPermanentAuthFailure = errors.New("permanent auth failure")
 
-// disconnectError wraps an error that occurred after a successful connection was established.
-// Used to distinguish "failed to connect" from "connected then disconnected" for backoff reset.
 type disconnectError struct{ err error }
 
 func (d *disconnectError) Error() string { return d.err.Error() }
 func (d *disconnectError) Unwrap() error { return d.err }
 
-// ToolCaller is an interface for dispatching tool calls to local MCP servers
+type authFailureError struct {
+	code      string
+	message   string
+	permanent bool
+}
+
+func (e *authFailureError) Error() string {
+	return e.message
+}
+
+func (e *authFailureError) Is(target error) bool {
+	return target == ErrPermanentAuthFailure && e.permanent
+}
+
 type ToolCaller interface {
-	CallTool(ctx context.Context, serverName, toolName string, args map[string]interface{}) (interface{}, error)
+	CallTool(ctx context.Context, exposureStableKey, toolName string, args map[string]interface{}) (interface{}, error)
+}
+
+type operationOutcome struct {
+	success bool
+	result  interface{}
+	err     *RelayOperationError
+}
+
+type runningOperation struct {
+	done    chan struct{}
+	outcome operationOutcome
 }
 
 type Client struct {
-	endpoint string
-	token    string
-	caller   ToolCaller
-	servers  interface{} // []mcp.ServerInfo passed opaquely
-	mu       sync.Mutex
-
-	// OnEvent is an optional callback for relay events (e.g. for GUI observability).
-	// evtType is one of: "connecting", "connected", "disconnected", "auth_failed", "tool_call", "tool_result", "error", "log"
-	OnEvent func(evtType string, msg string, data map[string]interface{})
+	relay         config.RelayConfig
+	caller        ToolCaller
+	syncSources   interface{}
+	exposures     interface{}
+	mu            sync.Mutex
+	inflight      map[string]*runningOperation
+	journal       *OperationJournal
+	clientVersion string
+	conn          *websocket.Conn
+	writeMu       sync.Mutex
+	catalogSyncMu sync.Mutex
+	catalogSyncCh chan error
+	OnEvent       func(evtType string, msg string, data map[string]interface{})
 }
 
-func NewClient(endpoint, token string, caller ToolCaller) *Client {
+func NewClient(relayCfg config.RelayConfig, caller ToolCaller) *Client {
 	return &Client{
-		endpoint: endpoint,
-		token:    token,
+		relay:    relayCfg,
 		caller:   caller,
+		inflight: make(map[string]*runningOperation),
+		journal:  NewOperationJournal(""),
 	}
+}
+
+func (c *Client) SetClientVersion(version string) {
+	c.clientVersion = version
 }
 
 func (c *Client) emit(evtType, msg string, data map[string]interface{}) {
@@ -64,15 +96,18 @@ func (c *Client) emit(evtType, msg string, data map[string]interface{}) {
 	}
 }
 
-func (c *Client) SetServers(servers interface{}) {
+func (c *Client) SetExposures(exposures interface{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.servers = servers
+	c.exposures = exposures
 }
 
-// Run connects to the cloud and enters the main read loop.
-// Reconnects with exponential backoff on disconnection.
-// Stops permanently on auth rejection (invalid/revoked token).
+func (c *Client) SetSyncSources(syncSources interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.syncSources = syncSources
+}
+
 func (c *Client) Run(ctx context.Context) error {
 	attempt := 0
 
@@ -83,16 +118,22 @@ func (c *Client) Run(ctx context.Context) error {
 
 		err := c.connectAndServe(ctx)
 		if ctx.Err() != nil {
-			return nil // graceful shutdown
+			return nil
 		}
 
-		// Permanent auth failure — don't retry
+		var authFailure *authFailureError
+		if errors.As(err, &authFailure) {
+			c.emit("auth_failed", authFailure.message, map[string]interface{}{
+				"code":      authFailure.code,
+				"permanent": authFailure.permanent,
+			})
+		}
+
 		if errors.Is(err, ErrPermanentAuthFailure) {
-			log.Printf("Fatal: %v. Not retrying.", err)
+			log.Printf("Fatal relay authentication failure: %v", err)
 			return err
 		}
 
-		// If we were successfully connected before disconnect, reset backoff
 		var de *disconnectError
 		if errors.As(err, &de) {
 			attempt = 0
@@ -100,8 +141,8 @@ func (c *Client) Run(ctx context.Context) error {
 
 		attempt++
 		delay := c.backoffDelay(attempt)
-		log.Printf("Disconnected (attempt %d): %v. Reconnecting in %v...", attempt, err, delay)
-		c.emit("disconnected", fmt.Sprintf("Disconnected (attempt %d), reconnecting in %v", attempt, delay), nil)
+		log.Printf("Relay disconnected (attempt %d): %v. Reconnecting in %v...", attempt, err, delay)
+		c.emit("disconnected", fmt.Sprintf("Relay disconnected, reconnecting in %v", delay), nil)
 
 		select {
 		case <-ctx.Done():
@@ -115,111 +156,172 @@ func (c *Client) connectAndServe(ctx context.Context) error {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 	}
-
-	c.emit("connecting", fmt.Sprintf("Connecting to %s...", c.endpoint), nil)
-	log.Printf("Connecting to %s...", c.endpoint)
-	conn, _, err := dialer.DialContext(ctx, c.endpoint, http.Header{})
+	tlsConfig, err := buildPinnedTLSConfig(c.relay.WebSocketURL, c.relay.ServerTLSPublicKeyPin, nil)
 	if err != nil {
+		return &authFailureError{
+			code:      "server_identity_invalid",
+			message:   err.Error(),
+			permanent: true,
+		}
+	}
+	if tlsConfig != nil {
+		dialer.TLSClientConfig = tlsConfig
+	}
+
+	c.emit("connecting", fmt.Sprintf("Connecting to %s...", c.relay.WebSocketURL), nil)
+	conn, _, err := dialer.DialContext(ctx, c.relay.WebSocketURL, http.Header{})
+	if err != nil {
+		var pinErr *serverIdentityError
+		if errors.As(err, &pinErr) {
+			return &authFailureError{
+				code:      "server_identity_mismatch",
+				message:   pinErr.Error(),
+				permanent: true,
+			}
+		}
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
 
-	// Authenticate
-	authMsg := AuthMessage{Type: "auth", Token: c.token}
-	if err := conn.WriteJSON(authMsg); err != nil {
-		return fmt.Errorf("send auth: %w", err)
+	authOK, err := c.authenticate(conn)
+	if err != nil {
+		return err
 	}
 
-	// Wait for auth response with timeout
+	c.emit("connected", fmt.Sprintf("Authenticated relay device %s", authOK.DeviceID), map[string]interface{}{
+		"deviceId":  authOK.DeviceID,
+		"sessionId": authOK.SessionID,
+	})
+
+	if err := c.writeCatalogSync(conn); err != nil {
+		return fmt.Errorf("send catalog sync: %w", err)
+	}
+
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
-		return fmt.Errorf("read auth response: %w", err)
-	}
-	conn.SetReadDeadline(time.Time{}) // clear deadline
-
-	var generic GenericMessage
-	if err := json.Unmarshal(raw, &generic); err != nil {
-		return fmt.Errorf("parse auth response: %w", err)
-	}
-
-	if generic.Type == "auth_error" {
-		var authErr AuthErrorMessage
-		json.Unmarshal(raw, &authErr)
-		msg := authErr.Message
-		c.emit("auth_failed", msg, nil)
-		// Permanent failures: invalid token, already connected
-		if strings.Contains(msg, "Invalid") || strings.Contains(msg, "unknown") {
-			return fmt.Errorf("%w: %s", ErrPermanentAuthFailure, msg)
-		}
-		return fmt.Errorf("auth rejected: %s", msg)
-	}
-
-	if generic.Type != "auth_ok" {
-		return fmt.Errorf("unexpected auth response type: %s", generic.Type)
-	}
-
-	var authOK AuthOKMessage
-	json.Unmarshal(raw, &authOK)
-	log.Printf("Authenticated as relay %s", authOK.RelayID)
-	c.emit("connected", fmt.Sprintf("Authenticated as relay %s", authOK.RelayID), map[string]interface{}{"relayId": authOK.RelayID})
-
-	// Register servers
-	c.mu.Lock()
-	servers := c.servers
-	c.mu.Unlock()
-
-	regMsg := ServersRegisterMessage{Type: "servers_register", Servers: servers}
-	if err := conn.WriteJSON(regMsg); err != nil {
-		return fmt.Errorf("send servers_register: %w", err)
-	}
-
-	// Wait for registration ack/error
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	_, raw, err = conn.ReadMessage()
-	if err != nil {
-		return fmt.Errorf("read registration response: %w", err)
+		return fmt.Errorf("read catalog sync response: %w", err)
 	}
 	conn.SetReadDeadline(time.Time{})
 
-	var regResp GenericMessage
-	if err := json.Unmarshal(raw, &regResp); err != nil {
-		return fmt.Errorf("parse registration response: %w", err)
+	var syncAck GenericMessage
+	if err := json.Unmarshal(raw, &syncAck); err != nil {
+		return fmt.Errorf("parse catalog sync response: %w", err)
+	}
+	if syncAck.Type == "catalog.sync_error" {
+		var syncErr AuthErrorMessage
+		_ = json.Unmarshal(raw, &syncErr)
+		return fmt.Errorf("catalog sync rejected: %s", syncErr.Message)
+	}
+	if syncAck.Type != "catalog.synced" {
+		return fmt.Errorf("unexpected catalog sync response type: %s", syncAck.Type)
 	}
 
-	if regResp.Type == "servers_register_error" {
-		// Parse the error message
-		var errMsg struct {
-			Message string `json:"message"`
-		}
-		json.Unmarshal(raw, &errMsg)
-		return fmt.Errorf("server registration rejected: %s", errMsg.Message)
-	}
+	c.setConnection(conn)
+	defer c.clearConnection(conn)
 
-	if regResp.Type == "servers_registered" {
-		log.Printf("Server registration acknowledged")
-	} else {
-		log.Printf("Unexpected registration response type: %s (continuing)", regResp.Type)
-	}
-
-	log.Printf("Connected and ready")
-
-	// Main read loop — connection is established.
-	// Wrap readLoop errors as disconnectError to signal successful connection (reset backoff).
 	if err := c.readLoop(ctx, conn); err != nil {
 		return &disconnectError{err: err}
 	}
-	return &disconnectError{err: fmt.Errorf("read loop ended")}
+	return &disconnectError{err: fmt.Errorf("relay connection closed")}
+}
+
+func (c *Client) authenticate(conn *websocket.Conn) (*AuthOKMessage, error) {
+	begin := AuthBeginMessage{
+		Type:                 "auth.begin",
+		DeviceID:             c.relay.DeviceID,
+		PublicKeyFingerprint: c.relay.PublicKeyFingerprint,
+		ProtocolVersion:      2,
+		ClientVersion:        c.clientVersion,
+	}
+	if err := conn.WriteJSON(begin); err != nil {
+		return nil, fmt.Errorf("send auth.begin: %w", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		return nil, fmt.Errorf("read auth challenge: %w", err)
+	}
+
+	var generic GenericMessage
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		return nil, fmt.Errorf("parse auth challenge: %w", err)
+	}
+	if generic.Type == "auth_error" {
+		var authErr AuthErrorMessage
+		_ = json.Unmarshal(raw, &authErr)
+		return nil, classifyAuthFailure(authErr, false)
+	}
+	if generic.Type != "auth.challenge" {
+		return nil, fmt.Errorf("unexpected auth response type: %s", generic.Type)
+	}
+
+	var challenge AuthChallengeMessage
+	if err := json.Unmarshal(raw, &challenge); err != nil {
+		return nil, fmt.Errorf("parse auth.challenge: %w", err)
+	}
+
+	signature, err := deviceauth.SignChallenge(c.relay.PrivateKeyPath, c.relay.DeviceID, challenge.Challenge, challenge.Nonce)
+	if err != nil {
+		return nil, fmt.Errorf("sign auth challenge: %w", err)
+	}
+
+	if err := conn.WriteJSON(AuthFinishMessage{
+		Type:      "auth.finish",
+		DeviceID:  c.relay.DeviceID,
+		Challenge: challenge.Challenge,
+		Signature: signature,
+	}); err != nil {
+		return nil, fmt.Errorf("send auth.finish: %w", err)
+	}
+
+	_, raw, err = conn.ReadMessage()
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return nil, fmt.Errorf("read auth result: %w", err)
+	}
+
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		return nil, fmt.Errorf("parse auth result: %w", err)
+	}
+	if generic.Type == "auth_error" {
+		var authErr AuthErrorMessage
+		_ = json.Unmarshal(raw, &authErr)
+		return nil, classifyAuthFailure(authErr, false)
+	}
+	if generic.Type != "auth_ok" {
+		return nil, fmt.Errorf("unexpected auth result type: %s", generic.Type)
+	}
+
+	var authOK AuthOKMessage
+	if err := json.Unmarshal(raw, &authOK); err != nil {
+		return nil, fmt.Errorf("parse auth_ok: %w", err)
+	}
+	return &authOK, nil
+}
+
+func classifyAuthFailure(msg AuthErrorMessage, defaultPermanent bool) error {
+	code := strings.TrimSpace(msg.Code)
+	if code == "" {
+		code = "auth_error"
+	}
+	message := strings.TrimSpace(msg.Message)
+	if message == "" {
+		message = "relay authentication failed"
+	}
+	permanent := defaultPermanent || !msg.Retryable
+	return &authFailureError{
+		code:      code,
+		message:   message,
+		permanent: permanent,
+	}
 }
 
 func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
-	// Write mutex for concurrent writes
-	var writeMu sync.Mutex
-
-	// Close connection when context is cancelled
 	go func() {
 		<-ctx.Done()
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	for {
@@ -230,80 +332,220 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 
 		var generic GenericMessage
 		if err := json.Unmarshal(raw, &generic); err != nil {
-			log.Printf("Failed to parse message: %v", err)
+			log.Printf("Failed to parse relay message: %v", err)
 			continue
 		}
 
-		// Handle ping
-		if generic.Type == "ping" {
-			writeMu.Lock()
-			if err := conn.WriteJSON(PongMessage{Type: "pong"}); err != nil {
-				writeMu.Unlock()
-				log.Printf("Failed to send pong: %v", err)
-				return fmt.Errorf("pong write: %w", err)
+		switch generic.Type {
+		case "ping":
+			err = c.writeJSON(conn, PongMessage{Type: "pong"})
+			if err != nil {
+				return fmt.Errorf("write pong: %w", err)
 			}
-			writeMu.Unlock()
+		case "catalog.synced":
+			c.resolveCatalogSync(nil)
 			continue
-		}
-
-		// Handle JSON-RPC tool call request
-		if generic.JSONRPC == "2.0" && generic.Method != "" && generic.ID != "" {
-			var req JSONRPCRequest
-			if err := json.Unmarshal(raw, &req); err != nil {
-				log.Printf("Failed to parse JSON-RPC request: %v", err)
+		case "catalog.sync_error":
+			var syncErr AuthErrorMessage
+			_ = json.Unmarshal(raw, &syncErr)
+			c.resolveCatalogSync(fmt.Errorf("catalog sync rejected: %s", syncErr.Message))
+			log.Printf("Relay catalog sync error: %s", syncErr.Message)
+		case "server_shutdown":
+			c.resolveCatalogSync(fmt.Errorf("server shutdown"))
+			return fmt.Errorf("server shutdown")
+		case "relay.operation.dispatch":
+			var dispatch RelayDispatchMessage
+			if err := json.Unmarshal(raw, &dispatch); err != nil {
+				log.Printf("Failed to parse relay dispatch: %v", err)
 				continue
 			}
-
-			go c.handleToolCall(ctx, conn, &writeMu, req)
-			continue
-		}
-
-		// Handle servers_registered ack (from re-registration after reconnect)
-		if generic.Type == "servers_registered" {
-			log.Printf("Server registration acknowledged")
-			continue
-		}
-
-		// Handle servers_register_error
-		if generic.Type == "servers_register_error" {
-			var errMsg struct {
-				Message string `json:"message"`
-			}
-			json.Unmarshal(raw, &errMsg)
-			log.Printf("Server registration error: %s", errMsg.Message)
-			continue
+			go c.handleOperationDispatch(ctx, conn, dispatch)
 		}
 	}
 }
 
-func (c *Client) handleToolCall(ctx context.Context, conn *websocket.Conn, writeMu *sync.Mutex, req JSONRPCRequest) {
-	serverName, _ := req.Params["server"].(string)
-	toolName, _ := req.Params["tool"].(string)
-	args, _ := req.Params["arguments"].(map[string]interface{})
+func (c *Client) handleOperationDispatch(ctx context.Context, conn *websocket.Conn, dispatch RelayDispatchMessage) {
+	c.emit("tool_call", dispatch.Payload.ToolName, map[string]interface{}{
+		"operationId":       dispatch.OperationID,
+		"exposureStableKey": dispatch.Payload.ExposureStableKey,
+		"toolName":          dispatch.Payload.ToolName,
+	})
 
-	log.Printf("Tool call: %s/%s (id=%s)", serverName, toolName, req.ID)
-	c.emit("tool_call", fmt.Sprintf("%s/%s", serverName, toolName), map[string]interface{}{"server": serverName, "tool": toolName, "id": req.ID})
+	_ = c.writeJSON(conn, OperationReceivedMessage{
+		Type:        "operation.received",
+		OperationID: dispatch.OperationID,
+		DeliveryID:  dispatch.DeliveryID,
+	})
 
-	result, err := c.caller.CallTool(ctx, serverName, toolName, args)
+	entry, exists := c.journal.Get(dispatch.OperationID)
+	if exists && entry.InputHash != "" && dispatch.Payload.InputHash != "" && entry.InputHash != dispatch.Payload.InputHash {
+		c.sendOperationOutcome(conn, dispatch.OperationID, dispatch.DeliveryID, operationOutcome{
+			success: false,
+			err: &RelayOperationError{
+				Code:      "delivery_rejected",
+				Message:   "Relay operation payload changed for an existing operation_id",
+				Retryable: false,
+			},
+		})
+		return
+	}
 
-	var resp JSONRPCResponse
-	resp.JSONRPC = "2.0"
-	resp.ID = req.ID
+	if exists && (entry.Status == "completed" || entry.Status == "failed") {
+		c.sendJournalOutcome(conn, dispatch.OperationID, dispatch.DeliveryID, entry)
+		return
+	}
 
+	c.mu.Lock()
+	inflight := c.inflight[dispatch.OperationID]
+	isNewExecution := false
+	if inflight == nil {
+		inflight = &runningOperation{done: make(chan struct{})}
+		c.inflight[dispatch.OperationID] = inflight
+		isNewExecution = true
+	}
+	c.mu.Unlock()
+
+	if !isNewExecution {
+		c.waitAndSendRunningOutcome(ctx, conn, dispatch.OperationID, dispatch.DeliveryID, inflight)
+		return
+	}
+
+	c.journal.UpsertPending(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, "received")
+
+	_ = c.writeJSON(conn, OperationStartedMessage{
+		Type:        "operation.started",
+		OperationID: dispatch.OperationID,
+		DeliveryID:  dispatch.DeliveryID,
+	})
+
+	c.journal.UpsertPending(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, "started")
+
+	result, err := c.caller.CallTool(ctx, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, dispatch.Payload.Arguments)
 	if err != nil {
-		log.Printf("Tool call %s/%s failed: %v", serverName, toolName, err)
-		resp.Error = &RPCError{Code: -1, Message: err.Error()}
-		c.emit("tool_result", fmt.Sprintf("%s/%s failed: %v", serverName, toolName, err), map[string]interface{}{"server": serverName, "tool": toolName, "error": true})
-	} else {
-		resp.Result = result
-		c.emit("tool_result", fmt.Sprintf("%s/%s completed", serverName, toolName), map[string]interface{}{"server": serverName, "tool": toolName, "error": false})
+		opErr := normalizeOperationError(err)
+		outcome := operationOutcome{success: false, err: opErr}
+		c.journal.MarkFailed(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, opErr)
+		c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
+		c.sendOperationOutcome(conn, dispatch.OperationID, dispatch.DeliveryID, outcome)
+		c.emit("tool_result", fmt.Sprintf("%s failed: %s", dispatch.Payload.ToolName, err.Error()), map[string]interface{}{
+			"operationId": dispatch.OperationID,
+			"error":       true,
+		})
+		return
 	}
 
-	writeMu.Lock()
-	if writeErr := conn.WriteJSON(resp); writeErr != nil {
-		log.Printf("Failed to send tool response for %s: %v", req.ID, writeErr)
+	outcome := operationOutcome{success: true, result: result}
+	c.journal.MarkCompleted(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, result)
+	c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
+	c.sendOperationOutcome(conn, dispatch.OperationID, dispatch.DeliveryID, outcome)
+	c.emit("tool_result", fmt.Sprintf("%s completed", dispatch.Payload.ToolName), map[string]interface{}{
+		"operationId": dispatch.OperationID,
+		"error":       false,
+	})
+}
+
+func (c *Client) sendOperationOutcome(conn *websocket.Conn, operationID, deliveryID string, outcome operationOutcome) {
+	msg := OperationResultMessage{
+		Type:        "operation.result",
+		OperationID: operationID,
+		DeliveryID:  deliveryID,
+		Success:     outcome.success,
+		Result:      outcome.result,
+		Error:       outcome.err,
 	}
-	writeMu.Unlock()
+
+	err := c.writeJSON(conn, msg)
+	if err != nil {
+		log.Printf("Failed to send relay operation result %s: %v", operationID, err)
+	}
+}
+
+func (c *Client) sendJournalOutcome(conn *websocket.Conn, operationID, deliveryID string, entry JournalEntry) {
+	outcome := operationOutcome{
+		success: entry.Status == "completed",
+		result:  entry.Result,
+		err:     cloneRelayOperationError(entry.Error),
+	}
+	c.sendOperationOutcome(conn, operationID, deliveryID, outcome)
+}
+
+func (c *Client) waitAndSendRunningOutcome(
+	ctx context.Context,
+	conn *websocket.Conn,
+	operationID string,
+	deliveryID string,
+	inflight *runningOperation,
+) {
+	_ = c.writeJSON(conn, OperationStartedMessage{
+		Type:        "operation.started",
+		OperationID: operationID,
+		DeliveryID:  deliveryID,
+	})
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-inflight.done:
+			c.sendOperationOutcome(conn, operationID, deliveryID, inflight.outcome)
+		}
+	}()
+}
+
+func (c *Client) completeRunningOperation(operationID string, inflight *runningOperation, outcome operationOutcome) {
+	inflight.outcome = outcome
+	close(inflight.done)
+
+	c.mu.Lock()
+	delete(c.inflight, operationID)
+	c.mu.Unlock()
+}
+
+func (c *Client) SyncCatalog(ctx context.Context) error {
+	c.catalogSyncMu.Lock()
+	defer c.catalogSyncMu.Unlock()
+
+	conn := c.getConnection()
+	if conn == nil {
+		return fmt.Errorf("relay is not connected")
+	}
+
+	waitCh := make(chan error, 1)
+	c.mu.Lock()
+	c.catalogSyncCh = waitCh
+	c.mu.Unlock()
+	defer c.clearCatalogSyncWait(waitCh)
+
+	if err := c.writeCatalogSync(conn); err != nil {
+		return err
+	}
+
+	select {
+	case err := <-waitCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(10 * time.Second):
+		return fmt.Errorf("timeout waiting for catalog sync acknowledgement")
+	}
+}
+
+func normalizeOperationError(err error) *RelayOperationError {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "relay exposure"):
+		return &RelayOperationError{
+			Code:      "mcp_unavailable",
+			Message:   message,
+			Retryable: true,
+		}
+	default:
+		return &RelayOperationError{
+			Code:      "tool_execution_failed",
+			Message:   message,
+			Retryable: true,
+		}
+	}
 }
 
 func (c *Client) backoffDelay(attempt int) time.Duration {
@@ -311,11 +553,82 @@ func (c *Client) backoffDelay(attempt int) time.Duration {
 	if delay > float64(maxReconnectDelay) {
 		delay = float64(maxReconnectDelay)
 	}
-	// Add jitter
 	jitter := delay * jitterFraction * (rand.Float64()*2 - 1)
 	d := time.Duration(delay + jitter)
 	if d < baseReconnectDelay {
 		d = baseReconnectDelay
 	}
 	return d
+}
+
+func (c *Client) writeCatalogSync(conn *websocket.Conn) error {
+	c.mu.Lock()
+	syncSources := c.syncSources
+	exposures := c.exposures
+	c.mu.Unlock()
+
+	return c.writeJSON(conn, CatalogSyncMessage{
+		Type:        "catalog.sync",
+		SyncSources: syncSources,
+		Exposures:   exposures,
+	})
+}
+
+func (c *Client) writeJSON(conn *websocket.Conn, payload interface{}) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return conn.WriteJSON(payload)
+}
+
+func (c *Client) setConnection(conn *websocket.Conn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.conn = conn
+}
+
+func (c *Client) clearConnection(conn *websocket.Conn) {
+	c.mu.Lock()
+	if c.conn == conn {
+		c.conn = nil
+	}
+	waitCh := c.catalogSyncCh
+	c.catalogSyncCh = nil
+	c.mu.Unlock()
+
+	if waitCh != nil {
+		select {
+		case waitCh <- fmt.Errorf("relay connection closed"):
+		default:
+		}
+	}
+}
+
+func (c *Client) getConnection() *websocket.Conn {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conn
+}
+
+func (c *Client) resolveCatalogSync(err error) {
+	c.mu.Lock()
+	waitCh := c.catalogSyncCh
+	c.catalogSyncCh = nil
+	c.mu.Unlock()
+
+	if waitCh == nil {
+		return
+	}
+
+	select {
+	case waitCh <- err:
+	default:
+	}
+}
+
+func (c *Client) clearCatalogSyncWait(waitCh chan error) {
+	c.mu.Lock()
+	if c.catalogSyncCh == waitCh {
+		c.catalogSyncCh = nil
+	}
+	c.mu.Unlock()
 }

@@ -10,7 +10,9 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/PekingSpades/Synapse/relay/internal/cloud"
 	"github.com/PekingSpades/Synapse/relay/internal/config"
 	"github.com/PekingSpades/Synapse/relay/internal/importer"
 	"github.com/PekingSpades/Synapse/relay/internal/relay"
@@ -22,6 +24,10 @@ func main() {
 	configPath := flag.String("c", "", "path to config file")
 	showVersion := flag.Bool("version", false, "show version")
 	importMode := flag.Bool("import", false, "import MCP configs from other tools")
+	pairMode := flag.Bool("pair", false, "pair this relay client with a Synapse server")
+	serverBaseURL := flag.String("server-base-url", "", "relay server base URL for --pair")
+	pairingCode := flag.String("pairing-code", "", "relay pairing code for --pair")
+	displayName := flag.String("display-name", "", "relay display name for --pair")
 	flag.Parse()
 
 	if *showVersion {
@@ -37,20 +43,27 @@ func main() {
 		runImport(cfgPath)
 		return
 	}
+	if *pairMode {
+		runPair(cfgPath, *serverBaseURL, *pairingCode, *displayName)
+		return
+	}
 
 	// Normal run mode — config is required
 	if cfgPath == "" {
-		log.Fatalf("No config file found. Use -c <path>, create ./config.yaml, or run with --import to set up.")
+		log.Fatalf("No config file found. Use -c <path>, run with --pair to bind a relay device, or run with --import to add MCP servers.")
 	}
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	if errs := config.Validate(cfg); len(errs) > 0 {
+		log.Fatalf("Invalid relay config: %s", errs[0])
+	}
 
 	setupLogging(cfg.LogLevel)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	// Handle signals
@@ -196,21 +209,29 @@ func runImport(cfgPath string) {
 		added++
 	}
 
+	for _, srv := range selected {
+		if strings.TrimSpace(srv.SourceKey) == "" {
+			continue
+		}
+		syncMode := "import_only"
+		for i := range cfg.SyncSources {
+			if cfg.SyncSources[i].SourceKey == srv.SourceKey && strings.TrimSpace(cfg.SyncSources[i].SyncMode) != "" {
+				syncMode = cfg.SyncSources[i].SyncMode
+				break
+			}
+		}
+		upsertSyncSource(cfg, config.SyncSourceConfig{
+			SourceKind: srv.SourceKind,
+			SourceKey:  srv.SourceKey,
+			ConfigPath: srv.SourceConfigPath,
+			SyncMode:   syncMode,
+			Status:     "idle",
+		})
+	}
+
 	if added == 0 {
 		fmt.Println("All selected servers already exist in config.")
 		return
-	}
-
-	// Prompt for endpoint/token if not set
-	if cfg.Endpoint == "" {
-		fmt.Print("Enter relay endpoint URL: ")
-		endpoint, _ := reader.ReadString('\n')
-		cfg.Endpoint = strings.TrimSpace(endpoint)
-	}
-	if cfg.Token == "" {
-		fmt.Print("Enter auth token: ")
-		token, _ := reader.ReadString('\n')
-		cfg.Token = strings.TrimSpace(token)
 	}
 
 	// Save config
@@ -222,6 +243,70 @@ func runImport(cfgPath string) {
 	}
 
 	fmt.Printf("Config saved to %s (%d servers added)\n", cfgPath, added)
+	if cfg.Relay.DeviceID == "" {
+		fmt.Println("Relay pairing is not configured yet. Run `synapse-relay --pair` before starting the relay.")
+	}
+}
+
+func runPair(cfgPath, serverBaseURL, pairingCode, displayName string) {
+	reader := bufio.NewReader(os.Stdin)
+	defaultDisplayName := cloud.DefaultRelayDisplayName()
+
+	if strings.TrimSpace(serverBaseURL) == "" {
+		fmt.Print("Enter relay server base URL: ")
+		value, _ := reader.ReadString('\n')
+		serverBaseURL = strings.TrimSpace(value)
+	}
+	if strings.TrimSpace(pairingCode) == "" {
+		fmt.Print("Enter relay pairing code: ")
+		value, _ := reader.ReadString('\n')
+		pairingCode = strings.TrimSpace(value)
+	}
+	if strings.TrimSpace(displayName) == "" {
+		fmt.Printf("Enter display name (optional, default %s): ", defaultDisplayName)
+		value, _ := reader.ReadString('\n')
+		displayName = strings.TrimSpace(value)
+	}
+
+	if cfgPath == "" {
+		cfgPath = config.DefaultPath()
+	}
+
+	cfg, err := config.LoadOrDefault(cfgPath)
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	cfg.Relay.ServerBaseURL = strings.TrimSpace(serverBaseURL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	nextRelay, result, err := cloud.ClaimPairing(ctx, cfg.Relay, pairingCode, displayName)
+	if err != nil {
+		log.Fatalf("Failed to claim pairing: %v", err)
+	}
+	cfg.Relay = *nextRelay
+
+	if err := config.EnsureDir(); err != nil {
+		log.Fatalf("Failed to create config dir: %v", err)
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		log.Fatalf("Failed to save config: %v", err)
+	}
+
+	fmt.Printf("Relay paired: %s (%s)\n", result.DeviceID, result.DisplayName)
+	fmt.Printf("Config saved to %s\n", cfgPath)
+}
+
+func upsertSyncSource(cfg *config.Config, next config.SyncSourceConfig) {
+	for i := range cfg.SyncSources {
+		if cfg.SyncSources[i].SourceKey == next.SourceKey {
+			cfg.SyncSources[i] = next
+			return
+		}
+	}
+	cfg.SyncSources = append(cfg.SyncSources, next)
 }
 
 type importedEntry struct {

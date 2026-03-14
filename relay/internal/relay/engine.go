@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/PekingSpades/Synapse/relay/internal/cloud"
 	"github.com/PekingSpades/Synapse/relay/internal/config"
@@ -21,6 +22,8 @@ const (
 	StateStopping State = "stopping"
 	StateError    State = "error"
 )
+
+const catalogRefreshInterval = 10 * time.Second
 
 // Engine orchestrates the relay lifecycle: MCP servers + cloud connection
 type Engine struct {
@@ -68,6 +71,10 @@ func (e *Engine) Start(ctx context.Context) error {
 	if e.state == StateRunning || e.state == StateStarting {
 		e.mu.Unlock()
 		return fmt.Errorf("engine already running")
+	}
+	if errs := config.Validate(e.cfg); len(errs) > 0 {
+		e.mu.Unlock()
+		return fmt.Errorf("invalid config: %s", errs[0])
 	}
 	e.state = StateStarting
 	e.lastErr = nil
@@ -121,8 +128,9 @@ func (e *Engine) run(ctx context.Context) {
 	}
 
 	// Connect to cloud
-	client := cloud.NewClient(e.cfg.Endpoint, e.cfg.Token, mgr)
-	client.SetServers(servers)
+	client := cloud.NewClient(e.cfg.Relay, mgr)
+	client.SetSyncSources(e.cfg.SyncSources)
+	client.SetExposures(servers)
 
 	// Wire event callback to client
 	client.OnEvent = func(evtType string, msg string, data map[string]interface{}) {
@@ -137,6 +145,8 @@ func (e *Engine) run(ctx context.Context) {
 	e.mu.Unlock()
 
 	e.emit(NewEvent(EventStateChanged, "running"))
+
+	go e.watchCatalog(ctx, mgr, client)
 
 	err := client.Run(ctx)
 
@@ -231,4 +241,44 @@ func (e *Engine) Wait() {
 	if e.done != nil {
 		<-e.done
 	}
+}
+
+func (e *Engine) watchCatalog(ctx context.Context, mgr *mcp.Manager, client *cloud.Client) {
+	ticker := time.NewTicker(catalogRefreshInterval)
+	defer ticker.Stop()
+	hintCh := mgr.CatalogHints()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-hintCh:
+			e.emit(NewEvent(EventCatalogHint, "Received MCP tools/list_changed notification"))
+			e.refreshCatalog(ctx, mgr, client)
+		case <-ticker.C:
+			e.refreshCatalog(ctx, mgr, client)
+		}
+	}
+}
+
+func (e *Engine) refreshCatalog(ctx context.Context, mgr *mcp.Manager, client *cloud.Client) {
+	changed, servers, err := mgr.RefreshToolCatalogs()
+	if err != nil {
+		e.emit(NewEvent(EventError, fmt.Sprintf("Failed to refresh MCP catalog: %v", err)))
+		return
+	}
+	if !changed {
+		return
+	}
+
+	client.SetExposures(servers)
+	syncCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	err = client.SyncCatalog(syncCtx)
+	cancel()
+	if err != nil {
+		e.emit(NewEvent(EventLog, fmt.Sprintf("Tool catalog changed locally; server sync will retry on reconnect: %v", err)))
+		return
+	}
+
+	e.emit(NewEvent(EventCatalogChanged, fmt.Sprintf("Updated relay catalog with %d MCP servers", len(servers))))
 }

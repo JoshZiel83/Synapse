@@ -33,6 +33,8 @@ type StdioServer struct {
 	// Channel-based reader for timeout support
 	lines chan lineResult
 	done  chan struct{}
+
+	onToolsListChanged func()
 }
 
 type lineResult struct {
@@ -52,6 +54,7 @@ func NewStdioServer(command string, args []string, env map[string]string) *Stdio
 
 func (s *StdioServer) Start(ctx context.Context) error {
 	s.cmd = exec.CommandContext(ctx, s.command, s.args...)
+	applyPlatformProcessAttrs(s.cmd)
 
 	// Set environment
 	s.cmd.Env = os.Environ()
@@ -94,6 +97,9 @@ func (s *StdioServer) readLinesLoop() {
 				s.lines <- lineResult{err: err}
 			}
 			return
+		}
+		if s.handleNotification(line) {
+			continue
 		}
 		s.lines <- lineResult{data: line}
 	}
@@ -228,6 +234,10 @@ func (s *StdioServer) Shutdown() {
 	}
 }
 
+func (s *StdioServer) SetToolsChangedHandler(handler func()) {
+	s.onToolsListChanged = handler
+}
+
 func (s *StdioServer) writeMessage(msg interface{}) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -277,6 +287,25 @@ func (s *StdioServer) readMessage(target interface{}, timeout time.Duration) err
 			return json.Unmarshal(line, target)
 		}
 	}
+}
+
+func (s *StdioServer) handleNotification(line []byte) bool {
+	var msg struct {
+		Method string          `json:"method"`
+		ID     json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(line, &msg); err != nil {
+		return false
+	}
+
+	if msg.Method == "" || len(msg.ID) > 0 {
+		return false
+	}
+
+	if msg.Method == "notifications/tools/list_changed" && s.onToolsListChanged != nil {
+		s.onToolsListChanged()
+	}
+	return true
 }
 
 func min(a, b int) int {

@@ -7,64 +7,72 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
 
 const DefaultPort = 21519
 
-// SetupRequest is sent by the web UI to push config to the client
-type SetupRequest struct {
-	Endpoint string `json:"endpoint"`
-	Token    string `json:"token"`
+type PairingRequest struct {
+	ServerBaseURL string `json:"serverBaseUrl"`
+	PairingCode   string `json:"pairingCode"`
+	DisplayName   string `json:"displayName,omitempty"`
 }
 
-// SetupResponse is returned after the user confirms/rejects
-type SetupResponse struct {
+type PairingResponse struct {
 	Accepted bool   `json:"accepted"`
 	Message  string `json:"message,omitempty"`
 }
 
-// StatusResponse is returned by GET /status
-type StatusResponse struct {
-	Status  string `json:"status"` // "ok"
-	Version string `json:"version"`
-	Relay   string `json:"relay,omitempty"` // relay state: "stopped","running",etc
+type StatusSnapshot struct {
+	Relay                 string `json:"relay,omitempty"`
+	Paired                bool   `json:"paired"`
+	ServerIdentityPinned  bool   `json:"serverIdentityPinned,omitempty"`
+	AuthFailureCode       string `json:"authFailureCode,omitempty"`
+	AuthFailureMessage    string `json:"authFailureMessage,omitempty"`
+	AuthFailurePermanent  bool   `json:"authFailurePermanent,omitempty"`
+	DeviceID              string `json:"deviceId,omitempty"`
+	DisplayName           string `json:"displayName,omitempty"`
+	ServerBaseURL         string `json:"serverBaseUrl,omitempty"`
+	WebSocketURL          string `json:"websocketUrl,omitempty"`
+	PublicKeyFingerprint  string `json:"publicKeyFingerprint,omitempty"`
+	ServerTLSPublicKeyPin string `json:"serverTlsPublicKeyPin,omitempty"`
 }
 
-// SetupHandler is called when a setup request arrives. It should present a
-// confirmation dialog to the user and return true if accepted.
-type SetupHandler func(endpoint, token string) bool
+type StatusResponse struct {
+	Status  string `json:"status"`
+	Version string `json:"version"`
+	StatusSnapshot
+}
 
-// StatusProvider returns the current relay state string.
-type StatusProvider func() string
+type PairingHandler func(serverBaseURL, pairingCode, displayName string) bool
+type StatusProvider func() StatusSnapshot
 
-// Server runs a local HTTP API on localhost for web-to-client communication.
 type Server struct {
 	port           int
 	version        string
-	onSetup        SetupHandler
+	onPairing      PairingHandler
 	statusProvider StatusProvider
 	httpServer     *http.Server
 	mu             sync.Mutex
 }
 
-// New creates a local API server.
-func New(port int, version string, onSetup SetupHandler, statusProvider StatusProvider) *Server {
+func New(port int, version string, onPairing PairingHandler, statusProvider StatusProvider) *Server {
 	return &Server{
 		port:           port,
 		version:        version,
-		onSetup:        onSetup,
+		onPairing:      onPairing,
 		statusProvider: statusProvider,
 	}
 }
 
-// Start begins listening on localhost:port.
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ping", s.handlePing)
-	mux.HandleFunc("/setup", s.handleSetup)
 	mux.HandleFunc("/status", s.handleStatus)
+	mux.HandleFunc("/pairing", s.handlePairing)
 
 	s.httpServer = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", s.port),
@@ -86,12 +94,11 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Stop gracefully shuts down the server.
 func (s *Server) Stop() {
 	if s.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		s.httpServer.Shutdown(ctx)
+		_ = s.httpServer.Shutdown(ctx)
 	}
 }
 
@@ -100,6 +107,7 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
 	writeJSON(w, StatusResponse{
 		Status:  "ok",
 		Version: s.version,
@@ -111,18 +119,23 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	relayState := "unknown"
+
+	snapshot := StatusSnapshot{Relay: "unknown"}
 	if s.statusProvider != nil {
-		relayState = s.statusProvider()
+		snapshot = s.statusProvider()
 	}
+	if !allowTrustedStatusOrigin(strings.TrimSpace(r.Header.Get("Origin")), snapshot.ServerBaseURL) {
+		snapshot = publicStatusSnapshot(snapshot)
+	}
+
 	writeJSON(w, StatusResponse{
-		Status:  "ok",
-		Version: s.version,
-		Relay:   relayState,
+		Status:         "ok",
+		Version:        s.version,
+		StatusSnapshot: snapshot,
 	})
 }
 
-func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePairing(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -132,46 +145,158 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req SetupRequest
+	var req PairingRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
-	if req.Endpoint == "" || req.Token == "" {
-		writeJSON(w, SetupResponse{Accepted: false, Message: "endpoint and token are required"})
+	if strings.TrimSpace(req.ServerBaseURL) == "" || strings.TrimSpace(req.PairingCode) == "" {
+		writeJSON(w, PairingResponse{Accepted: false, Message: "serverBaseUrl and pairingCode are required"})
+		return
+	}
+	if !allowPairingOrigin(strings.TrimSpace(r.Header.Get("Origin")), req.ServerBaseURL) {
+		writeJSONStatus(w, http.StatusForbidden, PairingResponse{
+			Accepted: false,
+			Message:  "pairing origin must match serverBaseUrl",
+		})
 		return
 	}
 
-	// Serialize setup requests — only one confirmation dialog at a time
 	s.mu.Lock()
 	accepted := false
-	if s.onSetup != nil {
-		accepted = s.onSetup(req.Endpoint, req.Token)
+	if s.onPairing != nil {
+		accepted = s.onPairing(req.ServerBaseURL, req.PairingCode, req.DisplayName)
 	}
 	s.mu.Unlock()
 
 	if accepted {
-		writeJSON(w, SetupResponse{Accepted: true, Message: "Configuration saved"})
-	} else {
-		writeJSON(w, SetupResponse{Accepted: false, Message: "User rejected the configuration"})
+		writeJSON(w, PairingResponse{Accepted: true, Message: "Pairing accepted"})
+		return
 	}
+
+	writeJSON(w, PairingResponse{Accepted: false, Message: "User rejected the pairing"})
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
+	writeJSONStatus(w, http.StatusOK, v)
+}
+
+func writeJSONStatus(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if origin := strings.TrimSpace(r.Header.Get("Origin")); allowOrigin(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func allowOrigin(origin string) bool {
+	_, ok := parseAllowedOrigin(origin)
+	return ok
+}
+
+func allowPairingOrigin(origin, serverBaseURL string) bool {
+	if origin == "" {
+		return true
+	}
+
+	parsedOrigin, ok := parseAllowedOrigin(origin)
+	if !ok {
+		return false
+	}
+	if isLoopbackHost(parsedOrigin.Hostname()) {
+		return true
+	}
+	return sameOrigin(parsedOrigin, serverBaseURL)
+}
+
+func allowTrustedStatusOrigin(origin, serverBaseURL string) bool {
+	if origin == "" {
+		return false
+	}
+
+	parsedOrigin, ok := parseAllowedOrigin(origin)
+	if !ok {
+		return false
+	}
+	if isLoopbackHost(parsedOrigin.Hostname()) {
+		return true
+	}
+	return sameOrigin(parsedOrigin, serverBaseURL)
+}
+
+func publicStatusSnapshot(snapshot StatusSnapshot) StatusSnapshot {
+	return StatusSnapshot{
+		Relay:                snapshot.Relay,
+		Paired:               snapshot.Paired,
+		ServerIdentityPinned: snapshot.ServerIdentityPinned,
+		AuthFailureCode:      snapshot.AuthFailureCode,
+		AuthFailureMessage:   snapshot.AuthFailureMessage,
+		AuthFailurePermanent: snapshot.AuthFailurePermanent,
+		DisplayName:          snapshot.DisplayName,
+		ServerBaseURL:        snapshot.ServerBaseURL,
+	}
+}
+
+func parseAllowedOrigin(origin string) (*url.URL, bool) {
+	if origin == "" {
+		return nil, false
+	}
+
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return nil, false
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, false
+	}
+	if parsed.Host == "" {
+		return nil, false
+	}
+	return parsed, true
+}
+
+func sameOrigin(origin *url.URL, serverBaseURL string) bool {
+	serverURL, err := url.Parse(strings.TrimSpace(serverBaseURL))
+	if err != nil || serverURL.Scheme == "" || serverURL.Host == "" {
+		return false
+	}
+	return strings.EqualFold(origin.Scheme, serverURL.Scheme) &&
+		strings.EqualFold(origin.Hostname(), serverURL.Hostname()) &&
+		effectivePort(origin) == effectivePort(serverURL)
+}
+
+func effectivePort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	if strings.EqualFold(u.Scheme, "http") {
+		return "80"
+	}
+	return ""
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

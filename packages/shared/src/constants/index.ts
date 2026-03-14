@@ -45,9 +45,13 @@ export const MCP_INSTANCE_TTL = {
 } as const;
 
 // MCP Relay
+export const RELAY_PROTOCOL_VERSION = 2 as const;
 export const RELAY_AUTH_TIMEOUT = 5000;
 export const RELAY_HEARTBEAT_INTERVAL = 30000;
 export const RELAY_TOOL_CALL_TIMEOUT = 30000;
+export const RELAY_PAIRING_TTL_MS = 10 * 60 * 1000;
+export const RELAY_DELIVERY_ACK_TIMEOUT_MS = 15 * 1000;
+export const RELAY_OPERATION_TTL_MS = 5 * 60 * 1000;
 
 // A2A Protocol
 export const A2A_PROTOCOL_VERSION = '0.3';

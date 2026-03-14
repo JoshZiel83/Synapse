@@ -1519,79 +1519,250 @@ CREATE INDEX idx_capability_auth_sessions_workspace ON capability_auth_sessions(
 CREATE INDEX idx_capability_auth_sessions_user ON capability_auth_sessions(user_id, created_at DESC);
 CREATE INDEX idx_capability_auth_sessions_package_provider ON capability_auth_sessions(package_id, provider_key, created_at DESC);
 
--- ============ MCP Relay Agents ============
-CREATE TABLE mcp_relays (
+-- ============ MCP Relay V2 ============
+CREATE TABLE relay_devices (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  name VARCHAR(255) NOT NULL,
-  auth_token VARCHAR(255) UNIQUE NOT NULL,
-  is_connected BOOLEAN DEFAULT FALSE,
-  last_connected_at TIMESTAMPTZ,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_mcp_relays_user ON mcp_relays(user_id);
-CREATE INDEX idx_mcp_relays_workspace ON mcp_relays(workspace_id);
-
-CREATE TABLE mcp_relay_grants (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  relay_id UUID NOT NULL REFERENCES mcp_relays(id) ON DELETE CASCADE,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  grant_scope VARCHAR(30) NOT NULL
-    CHECK (grant_scope IN ('workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
-  conversation_id UUID,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'revoked')),
-  granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  reason TEXT,
+  owner_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  display_name VARCHAR(255) NOT NULL,
+  client_kind VARCHAR(40) NOT NULL DEFAULT 'desktop',
+  platform VARCHAR(40),
+  public_key TEXT NOT NULL,
+  public_key_fingerprint VARCHAR(128) NOT NULL UNIQUE,
+  trust_status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (trust_status IN ('pending', 'active', 'revoked', 'blocked')),
+  last_seen_at TIMESTAMPTZ,
+  last_connected_at TIMESTAMPTZ,
+  last_catalog_changed_at TIMESTAMPTZ,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ,
-  CONSTRAINT chk_mcp_relay_grants_target CHECK (
-    (grant_scope = 'workspace' AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'conversation' AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'actor_global' AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'actor_conversation' AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
-    (grant_scope = 'user' AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
-  )
-);
-
-CREATE INDEX idx_mcp_relay_grants_relay ON mcp_relay_grants(relay_id, created_at DESC);
-CREATE INDEX idx_mcp_relay_grants_workspace ON mcp_relay_grants(workspace_id, created_at DESC);
-CREATE INDEX idx_mcp_relay_grants_conversation ON mcp_relay_grants(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
-CREATE INDEX idx_mcp_relay_grants_actor ON mcp_relay_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_mcp_relay_grants_user ON mcp_relay_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
-
--- ============ MCP Relay Servers ============
-CREATE TABLE mcp_relay_servers (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  relay_id UUID NOT NULL REFERENCES mcp_relays(id) ON DELETE CASCADE,
-  name VARCHAR(255) NOT NULL,
-  transport VARCHAR(20) NOT NULL CHECK (transport IN ('stdio', 'http')),
-  command TEXT,
-  endpoint TEXT,
-  env_vars JSONB DEFAULT '{}',
-  tools_manifest JSONB DEFAULT '[]',
-  is_enabled BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_mcp_relay_servers_relay ON mcp_relay_servers(relay_id);
+CREATE INDEX idx_relay_devices_workspace ON relay_devices(workspace_id, created_at DESC);
+CREATE INDEX idx_relay_devices_owner ON relay_devices(owner_user_id, created_at DESC);
+CREATE INDEX idx_relay_devices_trust ON relay_devices(trust_status, updated_at DESC);
+
+CREATE TABLE relay_pairing_sessions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  requested_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  device_id UUID REFERENCES relay_devices(id) ON DELETE SET NULL,
+  server_base_url TEXT NOT NULL,
+  requested_display_name VARCHAR(255),
+  pairing_code VARCHAR(32) NOT NULL UNIQUE,
+  verification_uri TEXT NOT NULL,
+  verification_uri_complete TEXT,
+  expires_at TIMESTAMPTZ NOT NULL,
+  confirmed_at TIMESTAMPTZ,
+  consumed_at TIMESTAMPTZ,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'confirmed', 'consumed', 'expired', 'cancelled', 'rejected')),
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_relay_pairing_sessions_workspace ON relay_pairing_sessions(workspace_id, created_at DESC);
+CREATE INDEX idx_relay_pairing_sessions_device ON relay_pairing_sessions(device_id, created_at DESC);
+CREATE INDEX idx_relay_pairing_sessions_status ON relay_pairing_sessions(status, expires_at DESC);
+
+CREATE TABLE relay_device_sessions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
+  protocol_version INT NOT NULL DEFAULT 2,
+  client_version VARCHAR(64),
+  status VARCHAR(20) NOT NULL DEFAULT 'connecting'
+    CHECK (status IN ('connecting', 'active', 'closing', 'closed', 'rejected')),
+  transport VARCHAR(20) NOT NULL DEFAULT 'websocket'
+    CHECK (transport IN ('websocket')),
+  remote_addr TEXT,
+  last_sequence BIGINT NOT NULL DEFAULT 0,
+  last_heartbeat_at TIMESTAMPTZ,
+  close_reason TEXT,
+  started_at TIMESTAMPTZ DEFAULT NOW(),
+  ended_at TIMESTAMPTZ,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_relay_device_sessions_device ON relay_device_sessions(device_id, created_at DESC);
+CREATE INDEX idx_relay_device_sessions_status ON relay_device_sessions(status, updated_at DESC);
+
+CREATE TABLE relay_sync_sources (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
+  source_kind VARCHAR(30) NOT NULL
+    CHECK (source_kind IN ('manual', 'claude_code', 'claude_desktop', 'codex', 'gemini', 'opencode', 'custom')),
+  source_key VARCHAR(255) NOT NULL,
+  config_path TEXT,
+  sync_mode VARCHAR(20) NOT NULL DEFAULT 'observe'
+    CHECK (sync_mode IN ('import_only', 'observe', 'mirror', 'managed', 'detached')),
+  status VARCHAR(20) NOT NULL DEFAULT 'unknown'
+    CHECK (status IN ('unknown', 'idle', 'syncing', 'error', 'disabled')),
+  last_synced_at TIMESTAMPTZ,
+  last_error TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(device_id, source_key)
+);
+
+CREATE INDEX idx_relay_sync_sources_device ON relay_sync_sources(device_id, created_at DESC);
+CREATE INDEX idx_relay_sync_sources_status ON relay_sync_sources(status, updated_at DESC);
+
+CREATE TABLE relay_exposures (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
+  sync_source_id UUID REFERENCES relay_sync_sources(id) ON DELETE SET NULL,
+  stable_key VARCHAR(255) NOT NULL,
+  display_name VARCHAR(255) NOT NULL,
+  transport VARCHAR(20) NOT NULL
+    CHECK (transport IN ('stdio', 'http', 'sse', 'custom')),
+  runtime_status VARCHAR(20) NOT NULL DEFAULT 'discovered'
+    CHECK (runtime_status IN ('discovered', 'starting', 'healthy', 'degraded', 'failed', 'quarantined', 'offline')),
+  management_mode VARCHAR(20) NOT NULL DEFAULT 'manual'
+    CHECK (management_mode IN ('manual', 'imported', 'mirrored', 'managed')),
+  last_seen_at TIMESTAMPTZ,
+  last_healthy_at TIMESTAMPTZ,
+  last_error TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(device_id, stable_key)
+);
+
+CREATE INDEX idx_relay_exposures_device ON relay_exposures(device_id, created_at DESC);
+CREATE INDEX idx_relay_exposures_status ON relay_exposures(runtime_status, updated_at DESC);
+CREATE INDEX idx_relay_exposures_source ON relay_exposures(sync_source_id, created_at DESC);
+
+CREATE TABLE relay_catalog_revisions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
+  revision_seq BIGINT NOT NULL,
+  schema_hash VARCHAR(128) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'superseded')),
+  activated_at TIMESTAMPTZ DEFAULT NOW(),
+  invalidated_at TIMESTAMPTZ,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(exposure_id, revision_seq)
+);
+
+CREATE INDEX idx_relay_catalog_revisions_exposure ON relay_catalog_revisions(exposure_id, revision_seq DESC);
+CREATE INDEX idx_relay_catalog_revisions_status ON relay_catalog_revisions(status, updated_at DESC);
+
+CREATE TABLE relay_tools (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
+  stable_key VARCHAR(255) NOT NULL,
+  latest_revision_id UUID,
+  current_name VARCHAR(255) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'removed')),
+  first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ DEFAULT NOW(),
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(exposure_id, stable_key)
+);
+
+CREATE INDEX idx_relay_tools_exposure ON relay_tools(exposure_id, current_name);
+CREATE INDEX idx_relay_tools_status ON relay_tools(status, updated_at DESC);
+
+CREATE TABLE relay_tool_revisions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tool_id UUID NOT NULL REFERENCES relay_tools(id) ON DELETE CASCADE,
+  catalog_revision_id UUID NOT NULL REFERENCES relay_catalog_revisions(id) ON DELETE CASCADE,
+  tool_name VARCHAR(255) NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  input_schema JSONB NOT NULL DEFAULT '{}',
+  annotations JSONB NOT NULL DEFAULT '{}',
+  definition_hash VARCHAR(128) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(tool_id, catalog_revision_id)
+);
+
+CREATE INDEX idx_relay_tool_revisions_tool ON relay_tool_revisions(tool_id, created_at DESC);
+CREATE INDEX idx_relay_tool_revisions_catalog ON relay_tool_revisions(catalog_revision_id, created_at DESC);
+
+ALTER TABLE relay_tools
+  ADD CONSTRAINT fk_relay_tools_latest_revision
+  FOREIGN KEY (latest_revision_id) REFERENCES relay_tool_revisions(id) ON DELETE SET NULL;
+
+CREATE TABLE relay_operations (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  requested_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  requested_by_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
+  exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
+  catalog_revision_id UUID NOT NULL REFERENCES relay_catalog_revisions(id) ON DELETE CASCADE,
+  tool_id UUID NOT NULL REFERENCES relay_tools(id) ON DELETE CASCADE,
+  tool_revision_id UUID NOT NULL REFERENCES relay_tool_revisions(id) ON DELETE CASCADE,
+  visible_tool_name VARCHAR(255) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'created'
+    CHECK (status IN ('created', 'dispatched', 'received', 'started', 'completed', 'failed', 'aborted', 'expired')),
+  input_payload JSONB NOT NULL DEFAULT '{}',
+  input_hash VARCHAR(128) NOT NULL,
+  result_hash VARCHAR(128),
+  error_code VARCHAR(100),
+  error_message TEXT,
+  requires_replan BOOLEAN NOT NULL DEFAULT FALSE,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_relay_operations_workspace ON relay_operations(workspace_id, created_at DESC);
+CREATE INDEX idx_relay_operations_session ON relay_operations(session_id, created_at DESC);
+CREATE INDEX idx_relay_operations_device ON relay_operations(device_id, created_at DESC);
+CREATE INDEX idx_relay_operations_tool ON relay_operations(tool_id, created_at DESC);
+CREATE INDEX idx_relay_operations_status ON relay_operations(status, updated_at DESC);
+
+CREATE TABLE relay_operation_deliveries (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  operation_id UUID NOT NULL REFERENCES relay_operations(id) ON DELETE CASCADE,
+  relay_session_id UUID REFERENCES relay_device_sessions(id) ON DELETE SET NULL,
+  delivery_seq BIGINT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'sent', 'acked', 'nacked', 'timed_out', 'cancelled')),
+  sent_at TIMESTAMPTZ,
+  acknowledged_at TIMESTAMPTZ,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(operation_id, delivery_seq)
+);
+
+CREATE INDEX idx_relay_operation_deliveries_operation ON relay_operation_deliveries(operation_id, delivery_seq DESC);
+CREATE INDEX idx_relay_operation_deliveries_session ON relay_operation_deliveries(relay_session_id, created_at DESC);
+CREATE INDEX idx_relay_operation_deliveries_status ON relay_operation_deliveries(status, updated_at DESC);
+
+CREATE TABLE relay_operation_results (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  operation_id UUID NOT NULL UNIQUE REFERENCES relay_operations(id) ON DELETE CASCADE,
+  output_payload JSONB NOT NULL DEFAULT '{}',
+  output_preview TEXT,
+  result_hash VARCHAR(128),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
 
 ALTER TABLE tool_calls ADD CONSTRAINT fk_tool_calls_plugin
   FOREIGN KEY (plugin_id) REFERENCES capability_packages(id) ON DELETE SET NULL;
 ALTER TABLE tool_calls ADD CONSTRAINT fk_tool_calls_relay
-  FOREIGN KEY (relay_id) REFERENCES mcp_relays(id) ON DELETE SET NULL;
+  FOREIGN KEY (relay_id) REFERENCES relay_devices(id) ON DELETE SET NULL;
 ALTER TABLE tool_execution_attempts ADD CONSTRAINT fk_tool_execution_attempts_plugin
   FOREIGN KEY (plugin_id) REFERENCES capability_packages(id) ON DELETE SET NULL;
 ALTER TABLE tool_execution_attempts ADD CONSTRAINT fk_tool_execution_attempts_relay
-  FOREIGN KEY (relay_id) REFERENCES mcp_relays(id) ON DELETE SET NULL;
+  FOREIGN KEY (relay_id) REFERENCES relay_devices(id) ON DELETE SET NULL;
 
 -- ============ Runtime Events ============
 CREATE TABLE runtime_events (
@@ -1720,7 +1891,10 @@ BEGIN
     'users', 'workspaces', 'workspace_invites', 'actors', 'work_items',
     'standing_orders', 'platform_settings', 'model_groups', 'model_profiles', 'model_group_profiles', 'conversations', 'sessions',
     'memory_entries', 'memory_index_chunks',
-    'capability_publishers', 'capability_packages', 'capability_instances', 'mcp_relays', 'mcp_relay_servers',
+    'capability_publishers', 'capability_packages', 'capability_instances',
+    'relay_devices', 'relay_pairing_sessions', 'relay_device_sessions', 'relay_sync_sources',
+    'relay_exposures', 'relay_catalog_revisions', 'relay_tools', 'relay_operations',
+    'relay_operation_deliveries', 'relay_operation_results',
     'a2a_apps', 'agent_endpoints', 'endpoint_agents', 'conversation_bridges'
   ])
   LOOP

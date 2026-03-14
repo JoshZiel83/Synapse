@@ -2,6 +2,10 @@ import type {
   ActorTemplateCloneResult,
   ActorTemplateRecord,
   CanonicalContentBlock,
+  RelayDashboardView,
+  RelayDeviceDetailView,
+  RelayDeviceSummaryView,
+  RelayPairingSessionView,
 } from '@synapse/shared';
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
@@ -301,21 +305,56 @@ class ApiClient {
   getMcpEventLogs(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/mcp/audit/events${params ? '?' + params : ''}`); }
 
   // MCP Relays
-  getRelays(wsId: string) { return this.fetch(`/workspaces/${wsId}/mcp/relays`); }
-  createRelay(wsId: string, data: { name: string; metadata?: Record<string, unknown> }) {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays`, { method: 'POST', body: JSON.stringify(data) });
+  getRelayDashboard(wsId: string): Promise<RelayDashboardView> {
+    return this.fetch(`/workspaces/${wsId}/mcp/relays`);
   }
-  updateRelay(wsId: string, relayId: string, data: { name?: string; metadata?: Record<string, unknown> }) {
+  createRelayPairingSession(
+    wsId: string,
+    data: { displayName?: string; metadata?: Record<string, unknown> },
+  ): Promise<{ pairing: RelayPairingSessionView }> {
+    return this.fetch(`/workspaces/${wsId}/mcp/relays/pairing-sessions`, { method: 'POST', body: JSON.stringify(data) });
+  }
+  getRelayPairingSession(wsId: string, pairingId: string): Promise<{ pairing: RelayPairingSessionView }> {
+    return this.fetch(`/workspaces/${wsId}/mcp/relays/pairing-sessions/${pairingId}`);
+  }
+  cancelRelayPairingSession(wsId: string, pairingId: string): Promise<{ pairing: RelayPairingSessionView }> {
+    return this.fetch(`/workspaces/${wsId}/mcp/relays/pairing-sessions/${pairingId}/cancel`, { method: 'POST', body: '{}' });
+  }
+  claimRelayPairing(data: {
+    pairingCode: string;
+    displayName?: string;
+    clientKind?: string;
+    platform?: string;
+    publicKey: string;
+    publicKeyFingerprint: string;
+    metadata?: Record<string, unknown>;
+  }) {
+    return this.fetch('/mcp/relay/pairing/claim', { method: 'POST', body: JSON.stringify(data) });
+  }
+  getRelayDevice(wsId: string, relayId: string): Promise<RelayDeviceDetailView> {
+    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`);
+  }
+  updateRelayDevice(
+    wsId: string,
+    relayId: string,
+    data: { displayName: string; metadata?: Record<string, unknown> },
+  ): Promise<RelayDeviceSummaryView> {
     return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`, { method: 'PUT', body: JSON.stringify(data) });
   }
-  deleteRelay(wsId: string, relayId: string) { return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`, { method: 'DELETE' }); }
-  regenerateRelayToken(wsId: string, relayId: string) {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}/regenerate-token`, { method: 'POST', body: '{}' });
+  disconnectRelayDevice(wsId: string, relayId: string) {
+    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}/disconnect`, { method: 'POST', body: '{}' });
   }
-  getRelayServers(wsId: string, relayId: string) { return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}/servers`); }
-  updateRelayServer(wsId: string, relayId: string, serverId: string, data: { isEnabled: boolean }) {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}/servers/${serverId}`, { method: 'PUT', body: JSON.stringify(data) });
+  updateRelayTrustStatus(
+    wsId: string,
+    relayId: string,
+    trustStatus: 'active' | 'revoked' | 'blocked',
+  ): Promise<{ device: RelayDeviceSummaryView }> {
+    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}/trust-status`, {
+      method: 'POST',
+      body: JSON.stringify({ trustStatus }),
+    });
   }
+  deleteRelayDevice(wsId: string, relayId: string) { return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`, { method: 'DELETE' }); }
 
   // File Upload
   async uploadFile(wsId: string, file: File) {

@@ -4,11 +4,12 @@
     "useDefineForClassFields": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "jsx": "react-jsx",
     "resolveJsonModule": true,
     "allowJs": true,
     "checkJs": false,
     "isolatedModules": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

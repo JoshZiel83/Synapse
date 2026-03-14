@@ -1,94 +1,176 @@
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 import { z } from 'zod';
-import type { FastifyInstance, FastifyReply } from 'fastify';
-import {
-  authzEnabled,
-  buildActorConversationContextId,
-  checkPermission,
-  diffAuthzRelationships,
-  enqueueAuthzRelationships,
-  flushAuthzOutboxEntries,
-  lookupResources,
-  touchActorConversationContext,
-  touchRelation,
-  type AuthzRelationMutation,
-} from '../../infrastructure/authz/index.js';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type {
+  RelayDashboardView,
+  RelayDeviceDetailView,
+  RelayDeviceSummaryView,
+  RelayExposureView,
+  RelayPairingSessionView,
+  RelaySyncSourceView,
+  RelayToolView,
+} from '@synapse/shared';
+import { RELAY_PAIRING_TTL_MS, RELAY_PROTOCOL_VERSION } from '@synapse/shared';
+import { authzEnabled, checkPermission } from '../../infrastructure/authz/index.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
-import { query } from '../../infrastructure/database/index.js';
-import { disconnectRelay, isRelayConnected } from './relay-manager.js';
+import { query, transaction } from '../../infrastructure/database/index.js';
+import { emitEvent } from '../../infrastructure/events/index.js';
+import { disconnectRelay } from './relay-manager.js';
 import { incrementMcpVersion } from './instance-manager.js';
+import { logEvent } from './audit.js';
 
-// ============ Schemas ============
-
-const createRelaySchema = z.object({
-  name: z.string().min(1).max(255),
+const createPairingSchema = z.object({
+  displayName: z.string().trim().min(1).max(255).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 
-const updateRelaySchema = z.object({
-  name: z.string().min(1).max(255).optional(),
+const updateRelayDeviceSchema = z.object({
+  displayName: z.string().trim().min(1).max(255),
   metadata: z.record(z.unknown()).optional(),
 });
 
-const relayGrantScopeEnum = z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']);
-const createRelayGrantSchema = z.object({
-  grantScope: relayGrantScopeEnum,
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  userId: z.string().uuid().optional(),
-  reason: z.string().max(2000).optional(),
-  metadata: z.record(z.unknown()).optional(),
-}).superRefine((value, ctx) => {
-  const invalid = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message });
-  switch (value.grantScope) {
-    case 'workspace':
-      if (value.actorId || value.conversationId || value.userId) invalid('workspace grant cannot target actor, conversation, or user');
-      break;
-    case 'conversation':
-      if (!value.conversationId || value.actorId || value.userId) invalid('conversation grant requires conversationId only');
-      break;
-    case 'actor_global':
-      if (!value.actorId || value.conversationId || value.userId) invalid('actor_global grant requires actorId only');
-      break;
-    case 'actor_conversation':
-      if (!value.actorId || !value.conversationId || value.userId) invalid('actor_conversation grant requires actorId and conversationId');
-      break;
-    case 'user':
-      if (!value.userId || value.actorId || value.conversationId) invalid('user grant requires userId only');
-      break;
-  }
+const updateRelayTrustSchema = z.object({
+  trustStatus: z.enum(['active', 'revoked', 'blocked']),
 });
 
-type RelayGrantScope = z.infer<typeof relayGrantScopeEnum>;
-type RelayGrantRow = {
+const claimPairingSchema = z.object({
+  pairingCode: z.string().trim().min(4).max(32),
+  displayName: z.string().trim().min(1).max(255).optional(),
+  clientKind: z.string().trim().min(1).max(40).optional(),
+  platform: z.string().trim().min(1).max(40).optional(),
+  publicKey: z.string().trim().min(1),
+  publicKeyFingerprint: z.string().trim().min(8).max(128),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+type WorkspaceParams = { workspaceId: string };
+type RelayParams = WorkspaceParams & { id: string };
+type PairingParams = WorkspaceParams & { pairingId: string };
+
+type RelayDeviceSummaryRow = {
   id: string;
-  relay_id: string;
   workspace_id: string;
-  grant_scope: RelayGrantScope;
-  actor_id: string | null;
-  conversation_id: string | null;
-  user_id: string | null;
-  status: 'active' | 'revoked';
-  granted_by: string | null;
-  reason: string | null;
+  owner_user_id: string | null;
+  display_name: string;
+  client_kind: string;
+  platform: string | null;
+  public_key_fingerprint: string;
+  trust_status: RelayDeviceSummaryView['trustStatus'];
+  is_connected: boolean;
+  exposure_count: string | number;
+  healthy_exposure_count: string | number;
+  degraded_exposure_count: string | number;
+  failed_exposure_count: string | number;
+  offline_exposure_count: string | number;
+  tool_count: string | number;
+  sync_source_count: string | number;
+  last_seen_at: string | null;
+  last_connected_at: string | null;
+  last_catalog_changed_at: string | null;
   metadata: Record<string, unknown> | string | null;
   created_at: string;
-  revoked_at: string | null;
+  updated_at: string;
 };
 
-type RelayRow = {
+type RelayPairingRow = {
   id: string;
-  user_id: string | null;
   workspace_id: string;
+  requested_by: string | null;
+  device_id: string | null;
+  server_base_url: string;
+  requested_display_name: string | null;
+  pairing_code: string;
+  verification_uri: string;
+  verification_uri_complete: string | null;
+  expires_at: string;
+  confirmed_at: string | null;
+  consumed_at: string | null;
+  status: RelayPairingSessionView['status'];
+  metadata: Record<string, unknown> | string | null;
+  created_at: string;
+  updated_at: string;
 };
 
-// ============ Error helper ============
+type RelaySyncSourceRow = {
+  id: string;
+  source_kind: RelaySyncSourceView['sourceKind'];
+  source_key: string;
+  config_path: string | null;
+  sync_mode: RelaySyncSourceView['syncMode'];
+  status: RelaySyncSourceView['status'];
+  last_synced_at: string | null;
+  last_error: string | null;
+  metadata: Record<string, unknown> | string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type RelayExposureToolRow = {
+  exposure_id: string;
+  exposure_stable_key: string;
+  exposure_display_name: string;
+  exposure_transport: RelayExposureView['transport'];
+  exposure_runtime_status: RelayExposureView['runtimeStatus'];
+  exposure_management_mode: RelayExposureView['managementMode'];
+  exposure_last_seen_at: string | null;
+  exposure_last_healthy_at: string | null;
+  exposure_last_error: string | null;
+  exposure_metadata: Record<string, unknown> | string | null;
+  exposure_created_at: string;
+  exposure_updated_at: string;
+  sync_source_id: string | null;
+  sync_source_kind: RelaySyncSourceView['sourceKind'] | null;
+  sync_source_key: string | null;
+  sync_source_config_path: string | null;
+  sync_source_sync_mode: RelaySyncSourceView['syncMode'] | null;
+  sync_source_status: RelaySyncSourceView['status'] | null;
+  sync_source_last_synced_at: string | null;
+  sync_source_last_error: string | null;
+  sync_source_metadata: Record<string, unknown> | string | null;
+  sync_source_created_at: string | null;
+  sync_source_updated_at: string | null;
+  tool_id: string | null;
+  tool_stable_key: string | null;
+  tool_current_name: string | null;
+  tool_status: RelayToolView['status'] | null;
+  tool_last_seen_at: string | null;
+  tool_created_at: string | null;
+  tool_updated_at: string | null;
+  tool_revision_id: string | null;
+  catalog_revision_id: string | null;
+  catalog_revision_seq: string | number | null;
+  tool_description: string | null;
+  tool_input_schema: Record<string, unknown> | string | null;
+  tool_annotations: Record<string, unknown> | string | null;
+  tool_definition_hash: string | null;
+};
 
 function handleError(reply: FastifyReply, error: unknown) {
   if (error instanceof z.ZodError) {
     return reply.status(400).send({ error: 'Validation error', details: error.errors });
   }
+
+  if ((error as any)?.code === 'RELAY_PAIRING_NOT_FOUND') {
+    return reply.status(404).send({ error: 'Relay pairing session not found' });
+  }
+
+  if ((error as any)?.code === 'RELAY_DEVICE_NOT_FOUND') {
+    return reply.status(404).send({ error: 'Relay device not found' });
+  }
+
+  if ((error as any)?.code === 'RELAY_PAIRING_EXPIRED') {
+    return reply.status(410).send({ error: 'Relay pairing session expired' });
+  }
+
+  if ((error as any)?.code === 'RELAY_PAIRING_INVALID') {
+    return reply.status(409).send({ error: (error as Error).message });
+  }
+
+  if ((error as any)?.code === 'RELAY_DEVICE_FINGERPRINT_CONFLICT') {
+    return reply.status(409).send({ error: 'A relay device with this public key fingerprint already exists' });
+  }
+
   console.error('[Relay Controller]', error);
   return reply.status(500).send({ error: 'Internal server error' });
 }
@@ -105,26 +187,17 @@ function parseJsonObject(value: unknown) {
   return value as Record<string, unknown>;
 }
 
-function hasLegacyWorkspacePermission(trustLevel: string | null | undefined, permission: string) {
+function parseCount(value: string | number | null | undefined) {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') return Number(value) || 0;
+  return 0;
+}
+
+function hasLegacyWorkspacePermission(trustLevel: string | null, permission: string) {
   switch (permission) {
     case 'view':
       return Boolean(trustLevel);
     case 'manage_relays':
-      return trustLevel === 'owner' || trustLevel === 'admin';
-    default:
-      return false;
-  }
-}
-
-function hasLegacyRelayPermission(trustLevel: string | null | undefined, permission: string) {
-  switch (permission) {
-    case 'view':
-    case 'invoke':
-      return Boolean(trustLevel);
-    case 'edit':
-    case 'grant':
-    case 'delete':
-    case 'rotate_token':
       return trustLevel === 'owner' || trustLevel === 'admin';
     default:
       return false;
@@ -142,167 +215,19 @@ async function getWorkspaceTrustLevel(workspaceId: string, userId: string) {
   return (result.rows[0]?.trust_level as string | undefined) || null;
 }
 
-function buildRelayScopeRelations(params: {
-  relayId: string;
-  scope: RelayGrantScope;
-  workspaceId: string;
-  actorId?: string | null;
-  conversationId?: string | null;
-  userId?: string | null;
-  enabled?: boolean;
-}): AuthzRelationMutation[] {
-  if (params.enabled === false) {
-    return [];
-  }
-
-  switch (params.scope) {
-    case 'workspace':
-      return [touchRelation('mcp_relay', params.relayId, 'use_workspace', 'workspace', params.workspaceId)];
-    case 'conversation':
-      return params.conversationId
-        ? [touchRelation('mcp_relay', params.relayId, 'use_conversation', 'conversation', params.conversationId)]
-        : [];
-    case 'actor_global':
-      return params.actorId
-        ? [touchRelation('mcp_relay', params.relayId, 'use_principal', 'actor', params.actorId)]
-        : [];
-    case 'actor_conversation':
-      return params.actorId && params.conversationId
-        ? [
-            ...touchActorConversationContext(params.actorId, params.conversationId),
-            touchRelation(
-              'mcp_relay',
-              params.relayId,
-              'use_actor_conversation',
-              'actor_conversation',
-              buildActorConversationContextId(params.actorId, params.conversationId),
-            ),
-          ]
-        : [];
-    case 'user':
-      return params.userId
-        ? [touchRelation('mcp_relay', params.relayId, 'use_principal', 'user', params.userId)]
-        : [];
-    default:
-      return [];
-  }
-}
-
-function buildRelayGrantAuthzRelations(relayId: string, workspaceId: string, grants: RelayGrantRow[]) {
-  return grants
-    .filter((grant) => grant.status === 'active')
-    .flatMap((grant) =>
-      buildRelayScopeRelations({
-        relayId,
-        scope: grant.grant_scope,
-        workspaceId,
-        actorId: grant.actor_id,
-        conversationId: grant.conversation_id,
-        userId: grant.user_id,
-        enabled: true,
-      }),
-    );
-}
-
-function buildRelayAuthzRelations(relay: RelayRow, grants: RelayGrantRow[]) {
-  return [
-    touchRelation('mcp_relay', relay.id, 'workspace', 'workspace', relay.workspace_id),
-    ...(relay.user_id ? [touchRelation('mcp_relay', relay.id, 'owner', 'user', relay.user_id)] : []),
-    ...buildRelayGrantAuthzRelations(relay.id, relay.workspace_id, grants),
-  ];
-}
-
-function mapRelayGrant(row: RelayGrantRow) {
-  return {
-    id: row.id,
-    relayId: row.relay_id,
-    workspaceId: row.workspace_id,
-    grantScope: row.grant_scope,
-    actorId: row.actor_id || undefined,
-    conversationId: row.conversation_id || undefined,
-    userId: row.user_id || undefined,
-    status: row.status,
-    grantedBy: row.granted_by || undefined,
-    reason: row.reason || undefined,
-    metadata: parseJsonObject(row.metadata),
-    createdAt: row.created_at,
-    revokedAt: row.revoked_at || undefined,
-  };
-}
-
-async function listRelayGrants(relayId: string, workspaceId: string) {
-  const result = await query<RelayGrantRow>(
-    `SELECT *
-     FROM mcp_relay_grants
-     WHERE relay_id = $1 AND workspace_id = $2
-     ORDER BY created_at DESC`,
-    [relayId, workspaceId],
-  );
-  return result.rows;
-}
-
-async function validateRelayGrantTargets(
-  workspaceId: string,
-  input: {
-    actorId?: string;
-    conversationId?: string;
-    userId?: string;
-  },
-) {
-  if (input.actorId) {
-    const actorResult = await query(
-      `SELECT 1
-       FROM actors
-       WHERE id = $1 AND workspace_id = $2
-       LIMIT 1`,
-      [input.actorId, workspaceId],
-    );
-    if (actorResult.rows.length === 0) {
-      return 'actorId does not belong to this workspace';
-    }
-  }
-
-  if (input.conversationId) {
-    const conversationResult = await query(
-      `SELECT 1
-       FROM conversations
-       WHERE id = $1 AND workspace_id = $2
-       LIMIT 1`,
-      [input.conversationId, workspaceId],
-    );
-    if (conversationResult.rows.length === 0) {
-      return 'conversationId does not belong to this workspace';
-    }
-  }
-
-  if (input.userId) {
-    const userResult = await query(
-      `SELECT 1
-       FROM workspace_members
-       WHERE workspace_id = $1 AND user_id = $2
-       LIMIT 1`,
-      [workspaceId, input.userId],
-    );
-    if (userResult.rows.length === 0) {
-      return 'userId is not a member of this workspace';
-    }
-  }
-
-  return null;
-}
-
 async function requireWorkspacePermission(
-  request: any,
+  request: FastifyRequest<{ Params: WorkspaceParams }>,
   reply: FastifyReply,
-  permission: string,
+  permission: 'view' | 'manage_relays',
   errorMessage: string,
 ) {
-  const { workspaceId } = request.params as { workspaceId: string };
-  const userId = (request as any).user.userId;
+  const { workspaceId } = request.params;
+  const userId = (request as any).user.userId as string;
 
   if (!authzEnabled()) {
     const trustLevel = await getWorkspaceTrustLevel(workspaceId, userId);
-    if (!hasLegacyWorkspacePermission(trustLevel, permission)) {
+    const allowed = hasLegacyWorkspacePermission(trustLevel, permission);
+    if (!allowed) {
       reply.status(403).send({ error: errorMessage });
       return false;
     }
@@ -324,572 +249,1068 @@ async function requireWorkspacePermission(
   return true;
 }
 
-async function getRelay(relayId: string, workspaceId: string) {
-  const result = await query<RelayRow>(
-    `SELECT *
-     FROM mcp_relays
-     WHERE id = $1 AND workspace_id = $2
-     LIMIT 1`,
-    [relayId, workspaceId],
-  );
-  return result.rows[0] ?? null;
+function mapRelayDeviceSummary(row: RelayDeviceSummaryRow): RelayDeviceSummaryView {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    ownerUserId: row.owner_user_id || undefined,
+    displayName: row.display_name,
+    clientKind: row.client_kind,
+    platform: row.platform || undefined,
+    publicKeyFingerprint: row.public_key_fingerprint,
+    trustStatus: row.trust_status,
+    isConnected: Boolean(row.is_connected),
+    exposureCount: parseCount(row.exposure_count),
+    healthyExposureCount: parseCount(row.healthy_exposure_count),
+    degradedExposureCount: parseCount(row.degraded_exposure_count),
+    failedExposureCount: parseCount(row.failed_exposure_count),
+    offlineExposureCount: parseCount(row.offline_exposure_count),
+    toolCount: parseCount(row.tool_count),
+    syncSourceCount: parseCount(row.sync_source_count),
+    lastSeenAt: row.last_seen_at || undefined,
+    lastConnectedAt: row.last_connected_at || undefined,
+    lastCatalogChangedAt: row.last_catalog_changed_at || undefined,
+    metadata: parseJsonObject(row.metadata),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
-async function requireRelayPermission(
-  request: any,
-  reply: FastifyReply,
-  permission: string,
-  errorMessage: string,
-) {
-  const { workspaceId, id } = request.params as { workspaceId: string; id: string };
-  const relay = await getRelay(id, workspaceId);
-  if (!relay) {
-    reply.status(404).send({ error: 'Relay not found' });
+function mapRelayPairingSession(row: RelayPairingRow): RelayPairingSessionView {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    requestedBy: row.requested_by || undefined,
+    deviceId: row.device_id || undefined,
+    serverBaseUrl: row.server_base_url,
+    requestedDisplayName: row.requested_display_name || undefined,
+    pairingCode: row.pairing_code,
+    verificationUri: row.verification_uri,
+    verificationUriComplete: row.verification_uri_complete || undefined,
+    status: row.status,
+    expiresAt: row.expires_at,
+    confirmedAt: row.confirmed_at || undefined,
+    consumedAt: row.consumed_at || undefined,
+    metadata: parseJsonObject(row.metadata),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapRelaySyncSource(row: RelaySyncSourceRow): RelaySyncSourceView {
+  return {
+    id: row.id,
+    sourceKind: row.source_kind,
+    sourceKey: row.source_key,
+    configPath: row.config_path || undefined,
+    syncMode: row.sync_mode,
+    status: row.status,
+    lastSyncedAt: row.last_synced_at || undefined,
+    lastError: row.last_error || undefined,
+    metadata: parseJsonObject(row.metadata),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapRelayTool(row: RelayExposureToolRow): RelayToolView | null {
+  if (!row.tool_id || !row.tool_stable_key || !row.tool_current_name || !row.tool_status || !row.tool_created_at || !row.tool_updated_at) {
     return null;
   }
 
-  const userId = (request as any).user.userId;
-  if (!authzEnabled()) {
-    const trustLevel = await getWorkspaceTrustLevel(workspaceId, userId);
-    if (!hasLegacyRelayPermission(trustLevel, permission)) {
-      reply.status(403).send({ error: errorMessage });
-      return null;
+  return {
+    id: row.tool_id,
+    stableKey: row.tool_stable_key,
+    currentName: row.tool_current_name,
+    status: row.tool_status,
+    latestRevisionId: row.tool_revision_id || undefined,
+    catalogRevisionId: row.catalog_revision_id || undefined,
+    catalogRevisionSeq: row.catalog_revision_seq === null ? undefined : parseCount(row.catalog_revision_seq),
+    description: row.tool_description || '',
+    inputSchema: parseJsonObject(row.tool_input_schema),
+    annotations: parseJsonObject(row.tool_annotations),
+    definitionHash: row.tool_definition_hash || undefined,
+    lastSeenAt: row.tool_last_seen_at || undefined,
+    createdAt: row.tool_created_at,
+    updatedAt: row.tool_updated_at,
+  };
+}
+
+function mapInlineSyncSource(row: RelayExposureToolRow): RelaySyncSourceView | undefined {
+  if (
+    !row.sync_source_id ||
+    !row.sync_source_kind ||
+    !row.sync_source_key ||
+    !row.sync_source_sync_mode ||
+    !row.sync_source_status ||
+    !row.sync_source_created_at ||
+    !row.sync_source_updated_at
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: row.sync_source_id,
+    sourceKind: row.sync_source_kind,
+    sourceKey: row.sync_source_key,
+    configPath: row.sync_source_config_path || undefined,
+    syncMode: row.sync_source_sync_mode,
+    status: row.sync_source_status,
+    lastSyncedAt: row.sync_source_last_synced_at || undefined,
+    lastError: row.sync_source_last_error || undefined,
+    metadata: parseJsonObject(row.sync_source_metadata),
+    createdAt: row.sync_source_created_at,
+    updatedAt: row.sync_source_updated_at,
+  };
+}
+
+function groupRelayExposures(rows: RelayExposureToolRow[]): RelayExposureView[] {
+  const exposures = new Map<string, RelayExposureView>();
+
+  for (const row of rows) {
+    let exposure = exposures.get(row.exposure_id);
+    if (!exposure) {
+      exposure = {
+        id: row.exposure_id,
+        stableKey: row.exposure_stable_key,
+        displayName: row.exposure_display_name,
+        transport: row.exposure_transport,
+        runtimeStatus: row.exposure_runtime_status,
+        managementMode: row.exposure_management_mode,
+        lastSeenAt: row.exposure_last_seen_at || undefined,
+        lastHealthyAt: row.exposure_last_healthy_at || undefined,
+        lastError: row.exposure_last_error || undefined,
+        metadata: parseJsonObject(row.exposure_metadata),
+        syncSource: mapInlineSyncSource(row),
+        tools: [],
+        createdAt: row.exposure_created_at,
+        updatedAt: row.exposure_updated_at,
+      };
+      exposures.set(row.exposure_id, exposure);
     }
-    return relay;
+
+    const tool = mapRelayTool(row);
+    if (tool) {
+      exposure.tools.push(tool);
+    }
   }
 
-  const allowed = await checkPermission({
-    resourceType: 'mcp_relay',
-    resourceId: relay.id,
-    permission,
-    subject: { type: 'user', id: userId },
+  return [...exposures.values()];
+}
+
+function createNotFoundError(code: string, message: string) {
+  const error = new Error(message) as Error & { code: string };
+  error.code = code;
+  return error;
+}
+
+function generatePairingCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  const bytes = crypto.randomBytes(12);
+  for (let index = 0; index < 12; index += 1) {
+    code += alphabet[bytes[index] % alphabet.length];
+  }
+  return `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8)}`;
+}
+
+function normalizePairingCode(code: string) {
+  return code.trim().toUpperCase();
+}
+
+function resolveServerBaseUrl(request: FastifyRequest) {
+  const protoHeader = request.headers['x-forwarded-proto'];
+  const hostHeader = request.headers['x-forwarded-host'] || request.headers.host;
+  const proto = typeof protoHeader === 'string' ? protoHeader.split(',')[0] : (request.protocol || 'http');
+  const host = typeof hostHeader === 'string' ? hostHeader.split(',')[0] : 'localhost:3000';
+  return `${proto}://${host}`;
+}
+
+function buildVerificationUri(serverBaseUrl: string, pairingId: string) {
+  const url = new URL('/dashboard/plugins', `${serverBaseUrl}/`);
+  url.searchParams.set('relayPairing', pairingId);
+  return url.toString();
+}
+
+function buildVerificationUriComplete(serverBaseUrl: string, pairingId: string, pairingCode: string) {
+  const url = new URL('/dashboard/plugins', `${serverBaseUrl}/`);
+  url.searchParams.set('relayPairing', pairingId);
+  url.searchParams.set('code', pairingCode);
+  return url.toString();
+}
+
+function buildRelayWebSocketUrl(serverBaseUrl: string) {
+  const url = new URL(serverBaseUrl);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = '/ws/relay';
+  url.search = '';
+  url.hash = '';
+  return url.toString();
+}
+
+async function expireRelayPairings(workspaceId?: string) {
+  if (workspaceId) {
+    await query(
+      `UPDATE relay_pairing_sessions
+       SET status = 'expired',
+           updated_at = NOW()
+       WHERE workspace_id = $1
+         AND status IN ('pending', 'confirmed')
+         AND expires_at <= NOW()`,
+      [workspaceId],
+    );
+    return;
+  }
+
+  await query(
+    `UPDATE relay_pairing_sessions
+     SET status = 'expired',
+         updated_at = NOW()
+     WHERE status IN ('pending', 'confirmed')
+       AND expires_at <= NOW()`,
+  );
+}
+
+async function listRelayDeviceSummaries(workspaceId: string) {
+  const result = await query<RelayDeviceSummaryRow>(
+    `SELECT
+        d.id,
+        d.workspace_id,
+        d.owner_user_id,
+        d.display_name,
+        d.client_kind,
+        d.platform,
+        d.public_key_fingerprint,
+        d.trust_status,
+        d.last_seen_at,
+        d.last_connected_at,
+        d.last_catalog_changed_at,
+        d.metadata,
+        d.created_at,
+        d.updated_at,
+        COALESCE(session_stats.is_connected, FALSE) AS is_connected,
+        COALESCE(exposure_stats.exposure_count, 0) AS exposure_count,
+        COALESCE(exposure_stats.healthy_exposure_count, 0) AS healthy_exposure_count,
+        COALESCE(exposure_stats.degraded_exposure_count, 0) AS degraded_exposure_count,
+        COALESCE(exposure_stats.failed_exposure_count, 0) AS failed_exposure_count,
+        COALESCE(exposure_stats.offline_exposure_count, 0) AS offline_exposure_count,
+        COALESCE(exposure_stats.tool_count, 0) AS tool_count,
+        COALESCE(sync_stats.sync_source_count, 0) AS sync_source_count
+     FROM relay_devices d
+     LEFT JOIN LATERAL (
+       SELECT
+         COUNT(*) AS exposure_count,
+         COUNT(*) FILTER (WHERE runtime_status = 'healthy') AS healthy_exposure_count,
+         COUNT(*) FILTER (WHERE runtime_status = 'degraded') AS degraded_exposure_count,
+         COUNT(*) FILTER (WHERE runtime_status IN ('failed', 'quarantined')) AS failed_exposure_count,
+         COUNT(*) FILTER (WHERE runtime_status IN ('offline', 'discovered', 'starting')) AS offline_exposure_count,
+         COALESCE(SUM(tool_count), 0) AS tool_count
+       FROM (
+         SELECT
+           e.id,
+           e.runtime_status,
+           (
+             SELECT COUNT(*)
+             FROM relay_tools t
+             WHERE t.exposure_id = e.id
+               AND t.status = 'active'
+           ) AS tool_count
+         FROM relay_exposures e
+         WHERE e.device_id = d.id
+       ) exposure_rows
+     ) exposure_stats ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT COUNT(*) AS sync_source_count
+       FROM relay_sync_sources source
+       WHERE source.device_id = d.id
+     ) sync_stats ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT EXISTS (
+         SELECT 1
+         FROM relay_device_sessions session_row
+         WHERE session_row.device_id = d.id
+           AND session_row.status = 'active'
+       ) AS is_connected
+     ) session_stats ON TRUE
+     WHERE d.workspace_id = $1
+     ORDER BY d.created_at DESC`,
+    [workspaceId],
+  );
+
+  return result.rows.map(mapRelayDeviceSummary);
+}
+
+async function listPendingRelayPairings(workspaceId: string) {
+  const result = await query<RelayPairingRow>(
+    `SELECT *
+     FROM relay_pairing_sessions
+     WHERE workspace_id = $1
+       AND status IN ('pending', 'confirmed')
+     ORDER BY created_at DESC`,
+    [workspaceId],
+  );
+  return result.rows.map(mapRelayPairingSession);
+}
+
+async function getRelayDeviceSummary(workspaceId: string, deviceId: string) {
+  const result = await query<RelayDeviceSummaryRow>(
+    `SELECT
+        d.id,
+        d.workspace_id,
+        d.owner_user_id,
+        d.display_name,
+        d.client_kind,
+        d.platform,
+        d.public_key_fingerprint,
+        d.trust_status,
+        d.last_seen_at,
+        d.last_connected_at,
+        d.last_catalog_changed_at,
+        d.metadata,
+        d.created_at,
+        d.updated_at,
+        COALESCE(session_stats.is_connected, FALSE) AS is_connected,
+        COALESCE(exposure_stats.exposure_count, 0) AS exposure_count,
+        COALESCE(exposure_stats.healthy_exposure_count, 0) AS healthy_exposure_count,
+        COALESCE(exposure_stats.degraded_exposure_count, 0) AS degraded_exposure_count,
+        COALESCE(exposure_stats.failed_exposure_count, 0) AS failed_exposure_count,
+        COALESCE(exposure_stats.offline_exposure_count, 0) AS offline_exposure_count,
+        COALESCE(exposure_stats.tool_count, 0) AS tool_count,
+        COALESCE(sync_stats.sync_source_count, 0) AS sync_source_count
+     FROM relay_devices d
+     LEFT JOIN LATERAL (
+       SELECT
+         COUNT(*) AS exposure_count,
+         COUNT(*) FILTER (WHERE runtime_status = 'healthy') AS healthy_exposure_count,
+         COUNT(*) FILTER (WHERE runtime_status = 'degraded') AS degraded_exposure_count,
+         COUNT(*) FILTER (WHERE runtime_status IN ('failed', 'quarantined')) AS failed_exposure_count,
+         COUNT(*) FILTER (WHERE runtime_status IN ('offline', 'discovered', 'starting')) AS offline_exposure_count,
+         COALESCE(SUM(tool_count), 0) AS tool_count
+       FROM (
+         SELECT
+           e.id,
+           e.runtime_status,
+           (
+             SELECT COUNT(*)
+             FROM relay_tools t
+             WHERE t.exposure_id = e.id
+               AND t.status = 'active'
+           ) AS tool_count
+         FROM relay_exposures e
+         WHERE e.device_id = d.id
+       ) exposure_rows
+     ) exposure_stats ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT COUNT(*) AS sync_source_count
+       FROM relay_sync_sources source
+       WHERE source.device_id = d.id
+     ) sync_stats ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT EXISTS (
+         SELECT 1
+         FROM relay_device_sessions session_row
+         WHERE session_row.device_id = d.id
+           AND session_row.status = 'active'
+       ) AS is_connected
+     ) session_stats ON TRUE
+     WHERE d.workspace_id = $1
+       AND d.id = $2
+     LIMIT 1`,
+    [workspaceId, deviceId],
+  );
+
+  if (result.rows.length === 0) {
+    throw createNotFoundError('RELAY_DEVICE_NOT_FOUND', 'Relay device not found');
+  }
+
+  return mapRelayDeviceSummary(result.rows[0]);
+}
+
+async function getRelayPairingSession(workspaceId: string, pairingId: string) {
+  const result = await query<RelayPairingRow>(
+    `SELECT *
+     FROM relay_pairing_sessions
+     WHERE id = $1
+       AND workspace_id = $2
+     LIMIT 1`,
+    [pairingId, workspaceId],
+  );
+
+  if (result.rows.length === 0) {
+    throw createNotFoundError('RELAY_PAIRING_NOT_FOUND', 'Relay pairing session not found');
+  }
+
+  return mapRelayPairingSession(result.rows[0]);
+}
+
+async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Promise<RelayDeviceDetailView> {
+  const [device, pairingsResult, syncSourcesResult, exposuresResult] = await Promise.all([
+    getRelayDeviceSummary(workspaceId, deviceId),
+    query<RelayPairingRow>(
+      `SELECT *
+       FROM relay_pairing_sessions
+       WHERE workspace_id = $1
+         AND device_id = $2
+       ORDER BY created_at DESC
+       LIMIT 20`,
+      [workspaceId, deviceId],
+    ),
+    query<RelaySyncSourceRow>(
+      `SELECT *
+       FROM relay_sync_sources
+       WHERE device_id = $1
+       ORDER BY created_at DESC`,
+      [deviceId],
+    ),
+    query<RelayExposureToolRow>(
+      `SELECT
+          e.id AS exposure_id,
+          e.stable_key AS exposure_stable_key,
+          e.display_name AS exposure_display_name,
+          e.transport AS exposure_transport,
+          e.runtime_status AS exposure_runtime_status,
+          e.management_mode AS exposure_management_mode,
+          e.last_seen_at AS exposure_last_seen_at,
+          e.last_healthy_at AS exposure_last_healthy_at,
+          e.last_error AS exposure_last_error,
+          e.metadata AS exposure_metadata,
+          e.created_at AS exposure_created_at,
+          e.updated_at AS exposure_updated_at,
+          source.id AS sync_source_id,
+          source.source_kind AS sync_source_kind,
+          source.source_key AS sync_source_key,
+          source.config_path AS sync_source_config_path,
+          source.sync_mode AS sync_source_sync_mode,
+          source.status AS sync_source_status,
+          source.last_synced_at AS sync_source_last_synced_at,
+          source.last_error AS sync_source_last_error,
+          source.metadata AS sync_source_metadata,
+          source.created_at AS sync_source_created_at,
+          source.updated_at AS sync_source_updated_at,
+          t.id AS tool_id,
+          t.stable_key AS tool_stable_key,
+          t.current_name AS tool_current_name,
+          t.status AS tool_status,
+          t.last_seen_at AS tool_last_seen_at,
+          t.created_at AS tool_created_at,
+          t.updated_at AS tool_updated_at,
+          tr.id AS tool_revision_id,
+          tr.catalog_revision_id AS catalog_revision_id,
+          cr.revision_seq AS catalog_revision_seq,
+          tr.description AS tool_description,
+          tr.input_schema AS tool_input_schema,
+          tr.annotations AS tool_annotations,
+          tr.definition_hash AS tool_definition_hash
+       FROM relay_exposures e
+       LEFT JOIN relay_sync_sources source
+         ON source.id = e.sync_source_id
+       LEFT JOIN relay_tools t
+         ON t.exposure_id = e.id
+       LEFT JOIN relay_tool_revisions tr
+         ON tr.id = t.latest_revision_id
+       LEFT JOIN relay_catalog_revisions cr
+         ON cr.id = tr.catalog_revision_id
+       WHERE e.device_id = $1
+       ORDER BY e.display_name ASC, t.current_name ASC NULLS LAST`,
+      [deviceId],
+    ),
+  ]);
+
+  return {
+    device,
+    pairings: pairingsResult.rows.map(mapRelayPairingSession),
+    syncSources: syncSourcesResult.rows.map(mapRelaySyncSource),
+    exposures: groupRelayExposures(exposuresResult.rows),
+  };
+}
+
+async function createRelayPairingSession(params: {
+  workspaceId: string;
+  requestedBy: string;
+  serverBaseUrl: string;
+  displayName?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  const expiresAt = new Date(Date.now() + RELAY_PAIRING_TTL_MS).toISOString();
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const pairingCode = generatePairingCode();
+
+    try {
+      const result = await query<RelayPairingRow>(
+        `INSERT INTO relay_pairing_sessions (
+           workspace_id,
+           requested_by,
+           server_base_url,
+           requested_display_name,
+           pairing_code,
+           verification_uri,
+           verification_uri_complete,
+           expires_at,
+           metadata
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING *`,
+        [
+          params.workspaceId,
+          params.requestedBy,
+          params.serverBaseUrl,
+          params.displayName || null,
+          pairingCode,
+          buildVerificationUri(params.serverBaseUrl, 'pending'),
+          buildVerificationUriComplete(params.serverBaseUrl, 'pending', pairingCode),
+          expiresAt,
+          JSON.stringify(params.metadata || {}),
+        ],
+      );
+
+      const inserted = result.rows[0];
+      const verificationUri = buildVerificationUri(params.serverBaseUrl, inserted.id);
+      const verificationUriComplete = buildVerificationUriComplete(params.serverBaseUrl, inserted.id, pairingCode);
+
+      const updated = await query<RelayPairingRow>(
+        `UPDATE relay_pairing_sessions
+         SET verification_uri = $2,
+             verification_uri_complete = $3,
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [inserted.id, verificationUri, verificationUriComplete],
+      );
+
+      return mapRelayPairingSession(updated.rows[0]);
+    } catch (error: any) {
+      if (error?.code === '23505') {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw new Error('Unable to allocate a unique relay pairing code');
+}
+
+async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema>) {
+  return transaction(async (client) => {
+    await client.query(
+      `UPDATE relay_pairing_sessions
+       SET status = 'expired',
+           updated_at = NOW()
+       WHERE status IN ('pending', 'confirmed')
+         AND expires_at <= NOW()`,
+    );
+
+    const pairingResult = await client.query<RelayPairingRow>(
+      `SELECT *
+       FROM relay_pairing_sessions
+       WHERE pairing_code = $1
+       FOR UPDATE`,
+      [normalizePairingCode(input.pairingCode)],
+    );
+
+    if (pairingResult.rows.length === 0) {
+      throw createNotFoundError('RELAY_PAIRING_NOT_FOUND', 'Relay pairing session not found');
+    }
+
+    const pairing = pairingResult.rows[0];
+    if (pairing.status === 'expired') {
+      throw createNotFoundError('RELAY_PAIRING_EXPIRED', 'Relay pairing session expired');
+    }
+    if (pairing.status !== 'pending' && pairing.status !== 'confirmed') {
+      const error = new Error(`Relay pairing session is already ${pairing.status}`) as Error & { code: string };
+      error.code = 'RELAY_PAIRING_INVALID';
+      throw error;
+    }
+    if (new Date(pairing.expires_at).getTime() <= Date.now()) {
+      await client.query(
+        `UPDATE relay_pairing_sessions
+         SET status = 'expired',
+             updated_at = NOW()
+         WHERE id = $1`,
+        [pairing.id],
+      );
+      throw createNotFoundError('RELAY_PAIRING_EXPIRED', 'Relay pairing session expired');
+    }
+
+    let computedFingerprint: string;
+    try {
+      computedFingerprint = computeRelayPublicKeyFingerprint(input.publicKey);
+    } catch {
+      const error = new Error('Relay device public key is invalid') as Error & { code: string };
+      error.code = 'RELAY_DEVICE_PUBLIC_KEY_INVALID';
+      throw error;
+    }
+    if (computedFingerprint !== input.publicKeyFingerprint) {
+      const error = new Error('Relay device fingerprint does not match the supplied public key') as Error & { code: string };
+      error.code = 'RELAY_DEVICE_FINGERPRINT_MISMATCH';
+      throw error;
+    }
+
+    const existingFingerprint = await client.query(
+      `SELECT id
+       FROM relay_devices
+       WHERE public_key_fingerprint = $1
+       LIMIT 1`,
+      [computedFingerprint],
+    );
+    if (existingFingerprint.rows.length > 0) {
+      const error = new Error('Relay device fingerprint conflict') as Error & { code: string };
+      error.code = 'RELAY_DEVICE_FINGERPRINT_CONFLICT';
+      throw error;
+    }
+
+    const deviceResult = await client.query(
+      `INSERT INTO relay_devices (
+         workspace_id,
+         owner_user_id,
+         display_name,
+         client_kind,
+         platform,
+         public_key,
+         public_key_fingerprint,
+         trust_status,
+         metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8)
+       RETURNING id, workspace_id, display_name`,
+      [
+        pairing.workspace_id,
+        pairing.requested_by,
+        input.displayName || pairing.requested_display_name || 'Relay Device',
+        input.clientKind || 'desktop',
+        input.platform || null,
+        input.publicKey,
+        computedFingerprint,
+        JSON.stringify(input.metadata || {}),
+      ],
+    );
+
+    const device = deviceResult.rows[0];
+    await client.query(
+      `UPDATE relay_pairing_sessions
+       SET device_id = $2,
+           confirmed_at = NOW(),
+           consumed_at = NOW(),
+           status = 'consumed',
+           updated_at = NOW()
+       WHERE id = $1`,
+      [pairing.id, device.id],
+    );
+
+    return {
+      deviceId: device.id as string,
+      workspaceId: device.workspace_id as string,
+      displayName: device.display_name as string,
+      serverBaseUrl: pairing.server_base_url,
+      websocketUrl: buildRelayWebSocketUrl(pairing.server_base_url),
+    };
   });
-
-  if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
-    return null;
-  }
-
-  return relay;
 }
 
-async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (!authzEnabled() || entryIds.length === 0) return;
-
-  try {
-    await flushAuthzOutboxEntries(entryIds);
-  } catch (error) {
-    console.error(`[authz] Failed to flush ${source} relationship updates:`, error);
-  }
+function computeRelayPublicKeyFingerprint(publicKeyPem: string) {
+  const publicKey = crypto.createPublicKey(publicKeyPem);
+  const spkiDer = publicKey.export({ type: 'spki', format: 'der' });
+  return crypto.createHash('sha256').update(spkiDer).digest('hex');
 }
-
-// ============ Route registration ============
 
 export function registerRelayRoutes(app: FastifyInstance) {
-  const preHandler = [authMiddleware, workspaceMiddleware];
+  const workspacePreHandler = [authMiddleware, workspaceMiddleware];
 
-  // POST /api/v1/workspaces/:workspaceId/mcp/relays — Create relay
-  app.post('/api/v1/workspaces/:workspaceId/mcp/relays', { preHandler }, async (request, reply) => {
+  app.get('/api/v1/workspaces/:workspaceId/mcp/relays', { preHandler: workspacePreHandler }, async (request, reply) => {
     try {
       const allowed = await requireWorkspacePermission(
-        request,
-        reply,
-        'manage_relays',
-        'Not allowed to manage relays in this workspace',
-      );
-      if (!allowed) return;
-
-      const { workspaceId } = request.params as any;
-      const userId = (request as any).user.userId;
-      const body = createRelaySchema.parse(request.body);
-
-      const authToken = crypto.randomBytes(32).toString('hex');
-
-      const result = await query(
-        `INSERT INTO mcp_relays (user_id, workspace_id, name, auth_token, metadata)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, name, is_connected, created_at`,
-        [userId, workspaceId, body.name, authToken, JSON.stringify(body.metadata || {})]
-      );
-
-      const relay = result.rows[0];
-
-      const authzEntryIds = await enqueueAuthzRelationships(
-        buildRelayAuthzRelations(
-          {
-            id: relay.id,
-            workspace_id: workspaceId,
-            user_id: userId,
-          },
-          [],
-        ),
-        {
-          source: 'mcp_relay.create',
-          workspaceId,
-          relayId: relay.id,
-          userId,
-        },
-      );
-      await flushQueuedAuthzEntries(authzEntryIds, 'mcp_relay.create');
-
-      return reply.status(201).send({
-        id: relay.id,
-        name: relay.name,
-        token: authToken, // Only returned once at creation
-        isConnected: relay.is_connected,
-        createdAt: relay.created_at,
-      });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
-  // GET /api/v1/workspaces/:workspaceId/mcp/relays — List relays
-  app.get('/api/v1/workspaces/:workspaceId/mcp/relays', { preHandler }, async (request, reply) => {
-    try {
-      const { workspaceId } = request.params as any;
-      const userId = (request as any).user.userId;
-
-      const allowed = await requireWorkspacePermission(
-        request,
+        request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
         'view',
         'Not allowed to access relays in this workspace',
       );
       if (!allowed) return;
 
-      const relayIds = authzEnabled()
-        ? await lookupResources({
-            resourceType: 'mcp_relay',
-            permission: 'view',
-            subject: { type: 'user', id: userId },
-          })
-        : [];
+      const { workspaceId } = request.params as WorkspaceParams;
+      await expireRelayPairings(workspaceId);
 
-      if (authzEnabled() && relayIds.length === 0) {
-        return reply.send([]);
-      }
-
-      const result = await query(
-        `SELECT id, name, is_connected, last_connected_at, metadata, created_at, updated_at
-         FROM mcp_relays
-         WHERE workspace_id = $1
-           ${authzEnabled() ? 'AND id = ANY($2)' : ''}
-         ORDER BY created_at DESC`,
-        authzEnabled() ? [workspaceId, relayIds] : [workspaceId]
-      );
-
-      // Enrich with live connection status
-      const relays = result.rows.map(r => ({
-        id: r.id,
-        name: r.name,
-        isConnected: isRelayConnected(r.id),
-        lastConnectedAt: r.last_connected_at,
-        metadata: r.metadata,
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-      }));
-
-      return reply.send(relays);
+      const response: RelayDashboardView = {
+        devices: await listRelayDeviceSummaries(workspaceId),
+        pendingPairings: await listPendingRelayPairings(workspaceId),
+      };
+      reply.send(response);
     } catch (error) {
-      return handleError(reply, error);
+      handleError(reply, error);
     }
   });
 
-  // GET /api/v1/workspaces/:workspaceId/mcp/relays/:id/grants — List relay grants
-  app.get('/api/v1/workspaces/:workspaceId/mcp/relays/:id/grants', { preHandler }, async (request, reply) => {
+  app.post('/api/v1/workspaces/:workspaceId/mcp/relays/pairing-sessions', { preHandler: workspacePreHandler }, async (request, reply) => {
     try {
-      const relay = await requireRelayPermission(
-        request,
+      const allowed = await requireWorkspacePermission(
+        request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
-        'grant',
-        'Not allowed to manage grants for this relay',
+        'manage_relays',
+        'Not allowed to manage relays in this workspace',
       );
-      if (!relay) return;
+      if (!allowed) return;
 
-      const { workspaceId } = request.params as any;
-      const grants = await listRelayGrants(relay.id, workspaceId);
-      return reply.send({ grants: grants.map(mapRelayGrant) });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
-  // POST /api/v1/workspaces/:workspaceId/mcp/relays/:id/grants — Create relay grant
-  app.post('/api/v1/workspaces/:workspaceId/mcp/relays/:id/grants', { preHandler }, async (request, reply) => {
-    try {
-      const relay = await requireRelayPermission(
-        request,
-        reply,
-        'grant',
-        'Not allowed to manage grants for this relay',
-      );
-      if (!relay) return;
-
-      const { workspaceId } = request.params as any;
-      const userId = (request as any).user.userId;
-      const body = createRelayGrantSchema.parse(request.body);
-      const targetError = await validateRelayGrantTargets(workspaceId, body);
-      if (targetError) {
-        return reply.status(400).send({ error: targetError });
-      }
-      const previousGrants = await listRelayGrants(relay.id, workspaceId);
-
-      const existing = await query<RelayGrantRow>(
-        `SELECT *
-         FROM mcp_relay_grants
-         WHERE relay_id = $1
-           AND workspace_id = $2
-           AND grant_scope = $3
-           AND conversation_id IS NOT DISTINCT FROM $4
-           AND actor_id IS NOT DISTINCT FROM $5
-           AND user_id IS NOT DISTINCT FROM $6
-           AND status = 'active'
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        [
-          relay.id,
-          workspaceId,
-          body.grantScope,
-          body.conversationId || null,
-          body.actorId || null,
-          body.userId || null,
-        ],
-      );
-
-      if (existing.rows[0]) {
-        return reply.send({ grant: mapRelayGrant(existing.rows[0]) });
-      }
-
-      const result = await query<RelayGrantRow>(
-        `INSERT INTO mcp_relay_grants (
-           relay_id, workspace_id, grant_scope, conversation_id, actor_id, user_id,
-           status, granted_by, reason, metadata
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9)
-         RETURNING *`,
-        [
-          relay.id,
-          workspaceId,
-          body.grantScope,
-          body.conversationId || null,
-          body.actorId || null,
-          body.userId || null,
-          userId,
-          body.reason || null,
-          JSON.stringify(body.metadata || {}),
-        ],
-      );
-
-      const nextGrants = await listRelayGrants(relay.id, workspaceId);
-      const authzEntryIds = await enqueueAuthzRelationships(
-        diffAuthzRelationships(
-          buildRelayAuthzRelations(relay, previousGrants),
-          buildRelayAuthzRelations(relay, nextGrants),
-        ),
-        {
-          source: 'mcp_relay_grant.create',
-          workspaceId,
-          relayId: relay.id,
-          grantId: result.rows[0].id,
-        },
-      );
-      await flushQueuedAuthzEntries(authzEntryIds, 'mcp_relay_grant.create');
-      await incrementMcpVersion(workspaceId);
-
-      return reply.status(201).send({ grant: mapRelayGrant(result.rows[0]) });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
-  // POST /api/v1/workspaces/:workspaceId/mcp/relays/:id/grants/:grantId/revoke — Revoke relay grant
-  app.post('/api/v1/workspaces/:workspaceId/mcp/relays/:id/grants/:grantId/revoke', { preHandler }, async (request, reply) => {
-    try {
-      const relay = await requireRelayPermission(
-        request,
-        reply,
-        'grant',
-        'Not allowed to manage grants for this relay',
-      );
-      if (!relay) return;
-
-      const { workspaceId, grantId } = request.params as { workspaceId: string; grantId: string };
-      const previousGrants = await listRelayGrants(relay.id, workspaceId);
-      const result = await query<RelayGrantRow>(
-        `UPDATE mcp_relay_grants
-         SET status = 'revoked', revoked_at = NOW()
-         WHERE id = $1
-           AND relay_id = $2
-           AND workspace_id = $3
-           AND status = 'active'
-         RETURNING *`,
-        [grantId, relay.id, workspaceId],
-      );
-
-      if (result.rows.length === 0) {
-        return reply.status(404).send({ error: 'Relay grant not found' });
-      }
-
-      const nextGrants = await listRelayGrants(relay.id, workspaceId);
-      const authzEntryIds = await enqueueAuthzRelationships(
-        diffAuthzRelationships(
-          buildRelayAuthzRelations(relay, previousGrants),
-          buildRelayAuthzRelations(relay, nextGrants),
-        ),
-        {
-          source: 'mcp_relay_grant.revoke',
-          workspaceId,
-          relayId: relay.id,
-          grantId,
-        },
-      );
-      await flushQueuedAuthzEntries(authzEntryIds, 'mcp_relay_grant.revoke');
-      await incrementMcpVersion(workspaceId);
-
-      return reply.send({ grant: mapRelayGrant(result.rows[0]) });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
-  // DELETE /api/v1/workspaces/:workspaceId/mcp/relays/:id — Delete relay
-  app.delete('/api/v1/workspaces/:workspaceId/mcp/relays/:id', { preHandler }, async (request, reply) => {
-    try {
-      const relay = await requireRelayPermission(
-        request,
-        reply,
-        'delete',
-        'Not allowed to delete this relay',
-      );
-      if (!relay) return;
-
-      const { workspaceId, id } = request.params as any;
-      const grants = await listRelayGrants(relay.id, workspaceId);
-
-      // Force disconnect if connected
-      disconnectRelay(id);
-
-      const result = await query(
-        `DELETE FROM mcp_relays WHERE id = $1 AND workspace_id = $2 RETURNING id`,
-        [id, workspaceId]
-      );
-
-      if (result.rows.length === 0) {
-        return reply.status(404).send({ error: 'Relay not found' });
-      }
-
-      // Delete associated relay publisher (cascades to packages → bindings)
-      const orgSlug = `relay_${id.slice(0, 8)}`;
-      await query('DELETE FROM capability_publishers WHERE slug = $1', [orgSlug]);
-
-      const authzEntryIds = await enqueueAuthzRelationships(
-        diffAuthzRelationships(
-          buildRelayAuthzRelations(relay, grants),
-          [],
-        ),
-        {
-          source: 'mcp_relay.delete',
-          workspaceId,
-          relayId: relay.id,
-        },
-      );
-      await flushQueuedAuthzEntries(authzEntryIds, 'mcp_relay.delete');
-
-      await incrementMcpVersion(workspaceId);
-
-      return reply.send({ success: true });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
-  // PUT /api/v1/workspaces/:workspaceId/mcp/relays/:id — Update relay
-  app.put('/api/v1/workspaces/:workspaceId/mcp/relays/:id', { preHandler }, async (request, reply) => {
-    try {
-      const authorizedRelay = await requireRelayPermission(
-        request,
-        reply,
-        'edit',
-        'Not allowed to edit this relay',
-      );
-      if (!authorizedRelay) return;
-
-      const { workspaceId, id } = request.params as any;
-      const body = updateRelaySchema.parse(request.body);
-
-      const sets: string[] = [];
-      const values: unknown[] = [];
-      let idx = 1;
-
-      if (body.name !== undefined) {
-        sets.push(`name = $${idx++}`);
-        values.push(body.name);
-      }
-      if (body.metadata !== undefined) {
-        sets.push(`metadata = $${idx++}`);
-        values.push(JSON.stringify(body.metadata));
-      }
-
-      if (sets.length === 0) {
-        return reply.status(400).send({ error: 'No fields to update' });
-      }
-
-      values.push(id, workspaceId);
-      const result = await query(
-        `UPDATE mcp_relays SET ${sets.join(', ')} WHERE id = $${idx++} AND workspace_id = $${idx}
-         RETURNING id, name, is_connected, metadata, updated_at`,
-        values
-      );
-
-      if (result.rows.length === 0) {
-        return reply.status(404).send({ error: 'Relay not found' });
-      }
-
-      const relayRow = result.rows[0];
-      return reply.send({
-        id: relayRow.id,
-        name: relayRow.name,
-        isConnected: isRelayConnected(relayRow.id),
-        metadata: relayRow.metadata,
-        updatedAt: relayRow.updated_at,
+      const { workspaceId } = request.params as WorkspaceParams;
+      const body = createPairingSchema.parse(request.body);
+      const userId = (request as any).user.userId as string;
+      const pairing = await createRelayPairingSession({
+        workspaceId,
+        requestedBy: userId,
+        serverBaseUrl: resolveServerBaseUrl(request),
+        displayName: body.displayName,
+        metadata: body.metadata,
       });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
 
-  // POST /api/v1/workspaces/:workspaceId/mcp/relays/:id/regenerate-token — Regenerate token
-  app.post('/api/v1/workspaces/:workspaceId/mcp/relays/:id/regenerate-token', { preHandler }, async (request, reply) => {
-    try {
-      const authorizedRelay = await requireRelayPermission(
-        request,
-        reply,
-        'rotate_token',
-        'Not allowed to rotate this relay token',
-      );
-      if (!authorizedRelay) return;
-
-      const { workspaceId, id } = request.params as any;
-
-      // Force disconnect
-      disconnectRelay(id);
-
-      const newToken = crypto.randomBytes(32).toString('hex');
-
-      const result = await query(
-        `UPDATE mcp_relays SET auth_token = $1 WHERE id = $2 AND workspace_id = $3 RETURNING id, name`,
-        [newToken, id, workspaceId]
-      );
-
-      if (result.rows.length === 0) {
-        return reply.status(404).send({ error: 'Relay not found' });
-      }
-
-      return reply.send({
-        id: result.rows[0].id,
-        name: result.rows[0].name,
-        token: newToken, // Returned once
+      logEvent({
+        workspaceId,
+        userId,
+        eventType: 'relay.pairing.created',
+        eventData: {
+          pairingId: pairing.id,
+          requestedDisplayName: pairing.requestedDisplayName,
+        },
       });
+
+      reply.status(201).send({ pairing });
     } catch (error) {
-      return handleError(reply, error);
+      handleError(reply, error);
     }
   });
 
-  // GET /api/v1/workspaces/:workspaceId/mcp/relays/:id/servers — List servers for relay
-  app.get('/api/v1/workspaces/:workspaceId/mcp/relays/:id/servers', { preHandler }, async (request, reply) => {
+  app.get('/api/v1/workspaces/:workspaceId/mcp/relays/pairing-sessions/:pairingId', { preHandler: workspacePreHandler }, async (request, reply) => {
     try {
-      const relay = await requireRelayPermission(
-        request,
+      const allowed = await requireWorkspacePermission(
+        request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
         'view',
-        'Not allowed to view this relay',
+        'Not allowed to access relays in this workspace',
       );
-      if (!relay) return;
+      if (!allowed) return;
 
-      const { workspaceId, id } = request.params as any;
-
-      const result = await query(
-        `SELECT rs.id, rs.name, rs.transport, rs.tools_manifest, rs.is_enabled, rs.created_at, rs.updated_at,
-           b.id as install_id,
-           b.attachment_type,
-           b.attachment_actor_id,
-           b.attachment_conversation_id,
-           b.attachment_user_id,
-           b.reuse_scope,
-           b.is_enabled as install_enabled
-         FROM mcp_relay_servers rs
-         LEFT JOIN capability_publishers pub ON pub.slug = $2
-         LEFT JOIN capability_packages p
-           ON p.publisher_id = pub.id
-          AND p.kind = 'plugin'
-          AND p.slug = LOWER(REGEXP_REPLACE(rs.name, '[^a-zA-Z0-9_-]', '_', 'g'))
-          AND p.is_active = TRUE
-         LEFT JOIN capability_package_revisions r ON r.id = p.latest_revision_id AND r.transport = 'relay'
-         LEFT JOIN capability_instances b ON b.package_id = p.id AND b.workspace_id = $3
-         WHERE rs.relay_id = $1 ORDER BY rs.name`,
-        [id, `relay_${id.slice(0, 8)}`, workspaceId]
-      );
-
-      const servers = result.rows.map(r => ({
-        id: r.id,
-        name: r.name,
-        transport: r.transport,
-        toolsManifest: r.tools_manifest,
-        isEnabled: r.is_enabled,
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-        installId: r.install_id || null,
-        attachmentType: r.attachment_type || null,
-        attachmentActorId: r.attachment_actor_id || null,
-        attachmentConversationId: r.attachment_conversation_id || null,
-        attachmentUserId: r.attachment_user_id || null,
-        lifecycleScope: r.reuse_scope || null,
-        installEnabled: r.install_enabled ?? null,
-      }));
-
-      return reply.send(servers);
+      const { workspaceId, pairingId } = request.params as PairingParams;
+      await expireRelayPairings(workspaceId);
+      const pairing = await getRelayPairingSession(workspaceId, pairingId);
+      reply.send({ pairing });
     } catch (error) {
-      return handleError(reply, error);
+      handleError(reply, error);
     }
   });
 
-  // PUT /api/v1/workspaces/:workspaceId/mcp/relays/:id/servers/:serverId — Toggle server enabled
-  app.put('/api/v1/workspaces/:workspaceId/mcp/relays/:id/servers/:serverId', { preHandler }, async (request, reply) => {
+  app.post('/api/v1/workspaces/:workspaceId/mcp/relays/pairing-sessions/:pairingId/cancel', { preHandler: workspacePreHandler }, async (request, reply) => {
     try {
-      const relay = await requireRelayPermission(
-        request,
+      const allowed = await requireWorkspacePermission(
+        request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
-        'edit',
-        'Not allowed to edit this relay',
+        'manage_relays',
+        'Not allowed to manage relays in this workspace',
       );
-      if (!relay) return;
+      if (!allowed) return;
 
-      const { workspaceId, id, serverId } = request.params as any;
-      const { isEnabled } = request.body as any;
-
-      if (typeof isEnabled !== 'boolean') {
-        return reply.status(400).send({ error: 'isEnabled (boolean) is required' });
-      }
-      const result = await query(
-        `UPDATE mcp_relay_servers SET is_enabled = $1 WHERE id = $2 AND relay_id = $3
-         RETURNING id, name, is_enabled`,
-        [isEnabled, serverId, id]
+      const { workspaceId, pairingId } = request.params as PairingParams;
+      const result = await query<RelayPairingRow>(
+        `UPDATE relay_pairing_sessions
+         SET status = 'cancelled',
+             updated_at = NOW()
+         WHERE id = $1
+           AND workspace_id = $2
+           AND status IN ('pending', 'confirmed')
+         RETURNING *`,
+        [pairingId, workspaceId],
       );
 
       if (result.rows.length === 0) {
-        return reply.status(404).send({ error: 'Server not found' });
+        throw createNotFoundError('RELAY_PAIRING_NOT_FOUND', 'Relay pairing session not found');
       }
 
-      await incrementMcpVersion(workspaceId);
+      reply.send({ pairing: mapRelayPairingSession(result.rows[0]) });
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
 
-      return reply.send({
-        id: result.rows[0].id,
-        name: result.rows[0].name,
-        isEnabled: result.rows[0].is_enabled,
+  app.post('/api/v1/mcp/relay/pairing/claim', async (request, reply) => {
+    try {
+      const body = claimPairingSchema.parse(request.body);
+      const claimed = await claimRelayPairingSession(body);
+
+      logEvent({
+        workspaceId: claimed.workspaceId,
+        relayId: claimed.deviceId,
+        eventType: 'relay.pairing.claimed',
+        eventData: {
+          deviceId: claimed.deviceId,
+          displayName: claimed.displayName,
+        },
+      });
+
+      reply.status(201).send({
+        deviceId: claimed.deviceId,
+        displayName: claimed.displayName,
+        workspaceId: claimed.workspaceId,
+        protocolVersion: RELAY_PROTOCOL_VERSION,
+        websocketUrl: claimed.websocketUrl,
+        serverBaseUrl: claimed.serverBaseUrl,
       });
     } catch (error) {
-      return handleError(reply, error);
+      handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/workspaces/:workspaceId/mcp/relays/:id', { preHandler: workspacePreHandler }, async (request, reply) => {
+    try {
+      const allowed = await requireWorkspacePermission(
+        request as FastifyRequest<{ Params: WorkspaceParams }>,
+        reply,
+        'view',
+        'Not allowed to access relays in this workspace',
+      );
+      if (!allowed) return;
+
+      const { workspaceId, id } = request.params as RelayParams;
+      const detail = await buildRelayDeviceDetail(workspaceId, id);
+      reply.send(detail);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.put('/api/v1/workspaces/:workspaceId/mcp/relays/:id', { preHandler: workspacePreHandler }, async (request, reply) => {
+    try {
+      const allowed = await requireWorkspacePermission(
+        request as FastifyRequest<{ Params: WorkspaceParams }>,
+        reply,
+        'manage_relays',
+        'Not allowed to manage relays in this workspace',
+      );
+      if (!allowed) return;
+
+      const { workspaceId, id } = request.params as RelayParams;
+      const body = updateRelayDeviceSchema.parse(request.body);
+      const result = await query(
+        `UPDATE relay_devices
+         SET display_name = $3,
+             metadata = CASE
+               WHEN $4::jsonb IS NULL THEN metadata
+               ELSE $4::jsonb
+             END,
+             updated_at = NOW()
+         WHERE id = $1
+           AND workspace_id = $2
+         RETURNING id`,
+        [id, workspaceId, body.displayName, body.metadata ? JSON.stringify(body.metadata) : null],
+      );
+
+      if (result.rows.length === 0) {
+        throw createNotFoundError('RELAY_DEVICE_NOT_FOUND', 'Relay device not found');
+      }
+
+      logEvent({
+        workspaceId,
+        relayId: id,
+        eventType: 'relay.device.updated',
+        eventData: { displayName: body.displayName },
+      });
+
+      const detail = await buildRelayDeviceDetail(workspaceId, id);
+      reply.send(detail.device);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.post('/api/v1/workspaces/:workspaceId/mcp/relays/:id/disconnect', { preHandler: workspacePreHandler }, async (request, reply) => {
+    try {
+      const allowed = await requireWorkspacePermission(
+        request as FastifyRequest<{ Params: WorkspaceParams }>,
+        reply,
+        'manage_relays',
+        'Not allowed to manage relays in this workspace',
+      );
+      if (!allowed) return;
+
+      const { workspaceId, id } = request.params as RelayParams;
+      await getRelayDeviceSummary(workspaceId, id);
+      disconnectRelay(id);
+
+      logEvent({
+        workspaceId,
+        relayId: id,
+        eventType: 'relay.device.disconnect_requested',
+        eventData: { deviceId: id },
+      });
+
+      reply.status(204).send();
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.post('/api/v1/workspaces/:workspaceId/mcp/relays/:id/trust-status', { preHandler: workspacePreHandler }, async (request, reply) => {
+    try {
+      const allowed = await requireWorkspacePermission(
+        request as FastifyRequest<{ Params: WorkspaceParams }>,
+        reply,
+        'manage_relays',
+        'Not allowed to manage relays in this workspace',
+      );
+      if (!allowed) return;
+
+      const { workspaceId, id } = request.params as RelayParams;
+      const body = updateRelayTrustSchema.parse(request.body);
+      await getRelayDeviceSummary(workspaceId, id);
+
+      const result = await query<RelayDeviceSummaryRow>(
+        `UPDATE relay_devices
+         SET trust_status = $3,
+             updated_at = NOW()
+         WHERE id = $1
+           AND workspace_id = $2
+         RETURNING
+           id,
+           workspace_id,
+           owner_user_id,
+           display_name,
+           client_kind,
+           platform,
+           public_key_fingerprint,
+           trust_status,
+           EXISTS(
+             SELECT 1
+             FROM relay_device_sessions session_row
+             WHERE session_row.device_id = relay_devices.id
+               AND session_row.status = 'active'
+           ) AS is_connected,
+           COALESCE((
+             SELECT COUNT(*)
+             FROM relay_exposures e
+             WHERE e.device_id = relay_devices.id
+           ), 0) AS exposure_count,
+           COALESCE((
+             SELECT COUNT(*)
+             FROM relay_exposures e
+             WHERE e.device_id = relay_devices.id
+               AND e.runtime_status = 'healthy'
+           ), 0) AS healthy_exposure_count,
+           COALESCE((
+             SELECT COUNT(*)
+             FROM relay_exposures e
+             WHERE e.device_id = relay_devices.id
+               AND e.runtime_status = 'degraded'
+           ), 0) AS degraded_exposure_count,
+           COALESCE((
+             SELECT COUNT(*)
+             FROM relay_exposures e
+             WHERE e.device_id = relay_devices.id
+               AND e.runtime_status = 'failed'
+           ), 0) AS failed_exposure_count,
+           COALESCE((
+             SELECT COUNT(*)
+             FROM relay_exposures e
+             WHERE e.device_id = relay_devices.id
+               AND e.runtime_status = 'offline'
+           ), 0) AS offline_exposure_count,
+           COALESCE((
+             SELECT COUNT(*)
+             FROM relay_tool_lineages t
+             JOIN relay_exposures e ON e.id = t.exposure_id
+             WHERE e.device_id = relay_devices.id
+               AND t.status = 'active'
+           ), 0) AS tool_count,
+           COALESCE((
+             SELECT COUNT(*)
+             FROM relay_sync_sources s
+             WHERE s.device_id = relay_devices.id
+           ), 0) AS sync_source_count,
+           (
+             SELECT MAX(e.last_seen_at)
+             FROM relay_exposures e
+             WHERE e.device_id = relay_devices.id
+           ) AS last_seen_at,
+           (
+             SELECT MAX(session_row.started_at)
+             FROM relay_device_sessions session_row
+             WHERE session_row.device_id = relay_devices.id
+           ) AS last_connected_at,
+           (
+             SELECT MAX(rev.created_at)
+             FROM relay_catalog_revisions rev
+             WHERE rev.device_id = relay_devices.id
+           ) AS last_catalog_changed_at,
+           metadata,
+           created_at,
+           updated_at`,
+        [id, workspaceId, body.trustStatus],
+      );
+
+      if (result.rows.length === 0) {
+        throw createNotFoundError('RELAY_DEVICE_NOT_FOUND', 'Relay device not found');
+      }
+
+      if (body.trustStatus !== 'active') {
+        disconnectRelay(id);
+      }
+
+      logEvent({
+        workspaceId,
+        relayId: id,
+        eventType: 'relay.device.trust_status_changed',
+        eventData: {
+          deviceId: id,
+          trustStatus: body.trustStatus,
+        },
+      });
+
+      reply.send({ device: mapRelayDeviceSummary(result.rows[0]) });
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.delete('/api/v1/workspaces/:workspaceId/mcp/relays/:id', { preHandler: workspacePreHandler }, async (request, reply) => {
+    try {
+      const allowed = await requireWorkspacePermission(
+        request as FastifyRequest<{ Params: WorkspaceParams }>,
+        reply,
+        'manage_relays',
+        'Not allowed to manage relays in this workspace',
+      );
+      if (!allowed) return;
+
+      const { workspaceId, id } = request.params as RelayParams;
+      await getRelayDeviceSummary(workspaceId, id);
+
+      disconnectRelay(id);
+
+      await query(
+        `DELETE FROM relay_devices
+         WHERE id = $1
+           AND workspace_id = $2`,
+        [id, workspaceId],
+      );
+
+      await query(
+        `DELETE FROM capability_publishers
+         WHERE slug = $1`,
+        [`relay_device_${id.slice(0, 8)}`],
+      );
+
+      await incrementMcpVersion(workspaceId);
+      emitEvent({
+        type: 'relay.servers_updated',
+        workspaceId,
+        payload: { deviceId: id, exposureCount: 0 },
+        timestamp: new Date().toISOString(),
+      });
+
+      logEvent({
+        workspaceId,
+        relayId: id,
+        eventType: 'relay.device.deleted',
+        eventData: { deviceId: id },
+      });
+
+      reply.status(204).send();
+    } catch (error) {
+      handleError(reply, error);
     }
   });
 }

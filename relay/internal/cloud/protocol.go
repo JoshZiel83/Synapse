@@ -1,30 +1,54 @@
 package cloud
 
-// Message types for the cloud<->agent WebSocket protocol
+// Relay WebSocket protocol v2
 
-// Auth messages
-type AuthMessage struct {
-	Type  string `json:"type"`
-	Token string `json:"token"`
+type AuthBeginMessage struct {
+	Type                 string `json:"type"`
+	DeviceID             string `json:"deviceId"`
+	PublicKeyFingerprint string `json:"publicKeyFingerprint,omitempty"`
+	ProtocolVersion      int    `json:"protocolVersion"`
+	ClientVersion        string `json:"clientVersion,omitempty"`
+}
+
+type AuthChallengeMessage struct {
+	Type      string `json:"type"`
+	DeviceID  string `json:"deviceId"`
+	Challenge string `json:"challenge"`
+	Nonce     string `json:"nonce"`
+}
+
+type AuthFinishMessage struct {
+	Type      string `json:"type"`
+	DeviceID  string `json:"deviceId"`
+	Challenge string `json:"challenge"`
+	Signature string `json:"signature"`
 }
 
 type AuthOKMessage struct {
-	Type    string `json:"type"`
-	RelayID string `json:"relayId"`
+	Type            string `json:"type"`
+	ProtocolVersion int    `json:"protocolVersion"`
+	DeviceID        string `json:"deviceId"`
+	SessionID       string `json:"sessionId"`
 }
 
 type AuthErrorMessage struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
+	Type      string `json:"type"`
+	Code      string `json:"code,omitempty"`
+	Message   string `json:"message"`
+	Retryable bool   `json:"retryable"`
 }
 
-// Server registration
-type ServersRegisterMessage struct {
-	Type    string      `json:"type"`
-	Servers interface{} `json:"servers"` // accepts []mcp.ServerInfo
+type CatalogSyncMessage struct {
+	Type        string      `json:"type"`
+	SyncSources interface{} `json:"syncSources,omitempty"`
+	Exposures   interface{} `json:"exposures"`
 }
 
-// Heartbeat
+type CatalogSyncedMessage struct {
+	Type          string `json:"type"`
+	ExposureCount int    `json:"exposureCount"`
+}
+
 type PingMessage struct {
 	Type string `json:"type"`
 }
@@ -33,30 +57,57 @@ type PongMessage struct {
 	Type string `json:"type"`
 }
 
-// JSON-RPC 2.0 messages
-type JSONRPCRequest struct {
-	JSONRPC string                 `json:"jsonrpc"`
-	ID      string                 `json:"id"`
-	Method  string                 `json:"method"`
-	Params  map[string]interface{} `json:"params"`
+type RelayDispatchMessage struct {
+	Type            string               `json:"type"`
+	ProtocolVersion int                  `json:"protocolVersion"`
+	SessionID       string               `json:"sessionId"`
+	OperationID     string               `json:"operationId"`
+	DeliveryID      string               `json:"deliveryId"`
+	Payload         RelayDispatchPayload `json:"payload"`
 }
 
-type JSONRPCResponse struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      string      `json:"id"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   *RPCError   `json:"error,omitempty"`
+type RelayDispatchPayload struct {
+	ExposureID        string                 `json:"exposureId"`
+	ExposureStableKey string                 `json:"exposureStableKey"`
+	ToolID            string                 `json:"toolId"`
+	ToolRevisionID    string                 `json:"toolRevisionId"`
+	ToolName          string                 `json:"toolName"`
+	InputHash         string                 `json:"inputHash"`
+	Arguments         map[string]interface{} `json:"arguments"`
+	ExpiresInMs       int                    `json:"expiresInMs"`
 }
 
-type RPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+type OperationReceivedMessage struct {
+	Type        string `json:"type"`
+	OperationID string `json:"operationId"`
+	DeliveryID  string `json:"deliveryId,omitempty"`
 }
 
-// Generic message for type detection
+type OperationStartedMessage struct {
+	Type        string `json:"type"`
+	OperationID string `json:"operationId"`
+	DeliveryID  string `json:"deliveryId,omitempty"`
+}
+
+type OperationResultMessage struct {
+	Type        string               `json:"type"`
+	OperationID string               `json:"operationId"`
+	DeliveryID  string               `json:"deliveryId,omitempty"`
+	Success     bool                 `json:"success"`
+	Result      interface{}          `json:"result,omitempty"`
+	Error       *RelayOperationError `json:"error,omitempty"`
+}
+
+type RelayOperationError struct {
+	Code                string `json:"code"`
+	Message             string `json:"message"`
+	Retryable           bool   `json:"retryable"`
+	RequiresReplan      bool   `json:"requiresReplan,omitempty"`
+	CurrentToolRevision string `json:"currentToolRevisionId,omitempty"`
+}
+
 type GenericMessage struct {
-	Type    string `json:"type,omitempty"`
-	JSONRPC string `json:"jsonrpc,omitempty"`
-	ID      string `json:"id,omitempty"`
-	Method  string `json:"method,omitempty"`
+	Type      string `json:"type,omitempty"`
+	DeviceID  string `json:"deviceId,omitempty"`
+	Challenge string `json:"challenge,omitempty"`
 }

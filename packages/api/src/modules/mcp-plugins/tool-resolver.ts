@@ -7,7 +7,7 @@ import { listAuthorizedCapabilityInstances } from '../capabilities/service.js';
 import { resolveInstallationConfig } from './config-resolver.js';
 import { getOrCreateInstance, getMcpVersion, type McpInstance } from './instance-manager.js';
 import { logToolCall } from './audit.js';
-import { callRelayTool } from './relay-manager.js';
+import { callRelayTool, getRelayExposureCatalog } from './relay-manager.js';
 import { normalizeMcpToolResult } from './result-normalizer.js';
 
 const MCP_TOOL_NAMESPACE_SEPARATOR = '__';
@@ -85,6 +85,7 @@ function manifestToolToDefinition(tool: CapabilityPackageTool): ToolDefinition {
 async function resolveTools(
   params: ResolveParams,
   instances: Map<string, McpInstance>,
+  relayBindings: Map<string, Map<string, { binding: any; visibleToolName: string }>>,
   turnOwnerKey: string,
 ): Promise<ToolDefinition[]> {
   const instancesToUse = dedupeInstances(
@@ -109,17 +110,31 @@ async function resolveTools(
       const namespace = `${pkg.publisher?.slug || 'plugin'}${MCP_TOOL_NAMESPACE_SEPARATOR}${pkg.slug}`;
 
       if (revision.transport === 'relay') {
-        const { relayId, serverName } = JSON.parse(revision.entryPoint || '{}') as {
-          relayId?: string;
-          serverName?: string;
+        const { deviceId, exposureId } = JSON.parse(revision.entryPoint || '{}') as {
+          deviceId?: string;
+          exposureId?: string;
         };
-        if (!relayId || !serverName) {
+        if (!deviceId || !exposureId) {
           throw new Error(`Relay plugin ${namespace} is missing relay entry point metadata`);
         }
 
-        const tools = Array.isArray(revision.toolsManifest)
-          ? revision.toolsManifest.map(manifestToolToDefinition)
-          : [];
+        const relayCatalog = getRelayExposureCatalog(deviceId, exposureId);
+        if (!relayCatalog) {
+          throw new Error(`Relay exposure ${exposureId} is not currently connected`);
+        }
+
+        const bindingMap = new Map<string, { binding: any; visibleToolName: string }>();
+        const tools = relayCatalog.tools.map((tool) => {
+          bindingMap.set(tool.visible.name, {
+            binding: tool.binding,
+            visibleToolName: tool.visible.name,
+          });
+          return manifestToolToDefinition({
+            name: tool.visible.name,
+            description: tool.visible.description,
+            inputSchema: tool.visible.inputSchema,
+          });
+        });
         const relayInstance: McpInstance = {
           pluginId: instance.packageId,
           pluginSlug: pkg.slug,
@@ -128,10 +143,21 @@ async function resolveTools(
           scope: instance.reuseScope,
           scopeId: resolveReuseOwnerKey(instance, params, turnOwnerKey),
           workspaceId: params.workspaceId,
-          configHash: `relay:${relayId}:${serverName}`,
+          configHash: `relay:${deviceId}:${exposureId}`,
           tools,
           execute: async (toolName: string, input: Record<string, unknown>) => {
-            return callRelayTool(relayId, serverName, toolName, input);
+            const toolBinding = bindingMap.get(toolName);
+            if (!toolBinding) {
+              throw new Error(`Relay binding missing for tool ${toolName}`);
+            }
+
+            return callRelayTool({
+              deviceId,
+              exposureId,
+              visibleToolName: toolBinding.visibleToolName,
+              binding: toolBinding.binding,
+              args: input,
+            });
           },
           shutdown: async () => {
             // Relay connection lifecycle is managed independently from per-turn tool resolution.
@@ -150,6 +176,7 @@ async function resolveTools(
 
         allTools.push(...namespacedTools);
         instances.set(namespace, relayInstance);
+        relayBindings.set(namespace, bindingMap);
         continue;
       }
 
@@ -192,7 +219,8 @@ export async function resolveMcpToolsForActor(params: ResolveParams): Promise<Re
   const mcpVersion = await getMcpVersion(workspaceId);
   const turnOwnerKey = `session:${sessionId}:turn:${randomUUID()}`;
   const instances = new Map<string, McpInstance>();
-  const allTools = await resolveTools(params, instances, turnOwnerKey);
+  const relayBindings = new Map<string, Map<string, { binding: any; visibleToolName: string }>>();
+  const allTools = await resolveTools(params, instances, relayBindings, turnOwnerKey);
 
   let currentTurnId: string | undefined;
   let currentRound: number | undefined;
@@ -270,7 +298,8 @@ export async function resolveMcpToolsForActor(params: ResolveParams): Promise<Re
   const refresh = async (): Promise<{ tools: ToolDefinition[]; mcpVersion: number }> => {
     const newVersion = await getMcpVersion(workspaceId);
     instances.clear();
-    const newTools = await resolveTools(params, instances, turnOwnerKey);
+    relayBindings.clear();
+    const newTools = await resolveTools(params, instances, relayBindings, turnOwnerKey);
     return { tools: newTools, mcpVersion: newVersion };
   };
 
