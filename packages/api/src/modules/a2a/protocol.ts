@@ -3,15 +3,12 @@ import { getSession, getSessionMessages } from '../session/service.js';
 
 export function sessionStatusToTaskState(status: SessionStatus): A2ATaskState {
   switch (status) {
-    case 'active':
-    case 'sleeping':
+    case 'queued':
+    case 'running':
       return 'working';
-    case 'completed':
-      return 'completed';
-    case 'failed':
-    case 'timed_out':
+    case 'blocked':
       return 'failed';
-    case 'cancelled':
+    case 'closed':
       return 'canceled';
     default:
       return 'submitted';
@@ -36,9 +33,9 @@ export async function buildTaskResponse(
     throw new Error(`Session ${sessionId} not found`);
   }
 
-  // For A2A (non-group) sessions, sleeping means the actor finished its turn
+  // For A2A/direct sessions, idle means the actor finished its latest turn.
   let state = sessionStatusToTaskState(session.status);
-  if (session.status === 'sleeping' && !session.group_id) {
+  if (session.status === 'idle' && !session.group_id) {
     state = 'completed';
   }
   const messages = await getSessionMessages(sessionId);
@@ -59,7 +56,7 @@ export async function buildTaskResponse(
     },
   };
 
-  // If completed (or sleeping=completed for A2A), add the final result as an artifact
+  // If completed (or idle=completed for A2A), add the final result as an artifact
   if (state === 'completed' && lastAssistantMsg) {
     response.artifacts = [{
       parts: [{ type: 'text', text: lastAssistantMsg.content }],

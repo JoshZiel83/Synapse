@@ -1,12 +1,12 @@
 "use client"
 
 import { useState } from "react"
-import Image from "next/image"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
+import { AuthConversationPreview } from "@/components/auth-conversation-preview"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -179,18 +179,7 @@ export function SignupForm({
             </FieldGroup>
           </form>
           <div className="relative hidden bg-muted md:block">
-            <div className="absolute inset-0 bg-gradient-to-br from-indigo-600 via-indigo-700 to-purple-800">
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.18),transparent_30%),radial-gradient(circle_at_bottom_left,rgba(255,255,255,0.12),transparent_35%)]" />
-              <div className="relative flex h-full flex-col items-center justify-center px-8 text-center text-white">
-                <div className="mb-6 rounded-2xl bg-white/10 p-3 ring-1 ring-white/20 backdrop-blur">
-                  <Image src="/synapse.svg" alt="Synapse" width={52} height={52} className="invert" />
-                </div>
-                <h2 className="text-3xl font-semibold tracking-tight">Build your team of digital employees.</h2>
-                <p className="mt-4 max-w-sm text-sm/6 text-indigo-100">
-                  Create a workspace, add actors, install plugins, and coordinate work across shared conversations.
-                </p>
-              </div>
-            </div>
+            <AuthConversationPreview />
           </div>
         </CardContent>
       </Card>

@@ -1,21 +1,28 @@
 'use client';
 
+import type { ActorRuntimeState } from '@synapse/shared';
 import { useState, useMemo } from 'react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Bot, User, GitBranch, Wrench, Search, Globe, ChevronDown, ChevronRight, ExternalLink, FileIcon, Download, AlertTriangle, AtSign } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { User, GitBranch, Wrench, Search, Globe, ChevronDown, ChevronRight, ExternalLink, FileIcon, Download, AlertTriangle, AtSign } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { CanonicalContentBlock } from '@synapse/shared';
 import { extractText } from '@synapse/shared';
+import { runtimeToAvatarStatus } from '@/stores/chat-store';
 import type { ServerToolCall } from '@/stores/chat-store';
+import type { GroupMember } from '@/stores/chat-store';
 import { resolveFileUrl } from '@/lib/utils';
+import ChatAvatar from './chat-avatar';
 
 interface MessageBubbleProps {
   role: string;
   contentBlocks: CanonicalContentBlock[];
   actorName?: string;
+  actorAvatarUrl?: string;
   actorEmoji?: string;
   actorRole?: string;
+  actorRuntime?: ActorRuntimeState;
   timestamp?: string;
   isUser: boolean;
   status?: 'sending' | 'sent';
@@ -23,7 +30,9 @@ interface MessageBubbleProps {
   serverToolCalls?: ServerToolCall[];
   citationSources?: Record<string, { url: string; title: string }>;
   coordination?: boolean;
-  targetActorNames?: string[];
+  groupMembers?: GroupMember[];
+  targetActorIds?: string[];
+  targetUserIds?: string[];
 }
 
 function formatToolsUsed(tools: string[]): string {
@@ -38,6 +47,31 @@ function formatToolsUsed(tools: string[]): string {
     return `Used ${names.join(', ')} (${total} tool call${total > 1 ? 's' : ''})`;
   }
   return `Used ${names.slice(0, 2).join(', ')} + ${names.length - 2} more (${total} tool call${total > 1 ? 's' : ''})`;
+}
+
+function getRuntimeLabel(runtime?: ActorRuntimeState) {
+  if (!runtime) return undefined;
+  if (runtime.health === 'error' || runtime.laneState === 'blocked') return 'Error';
+  if (runtime.laneState === 'running') return 'Working';
+  if (runtime.laneState === 'queued') return 'Queued';
+  return 'Idle';
+}
+
+function getRuntimeDetail(runtime?: ActorRuntimeState) {
+  if (!runtime) return undefined;
+  if (runtime.lastError?.message) return runtime.lastError.message;
+  if (runtime.laneState === 'running' && runtime.activeWakeups.some((wakeup) => wakeup.status === 'attached')) {
+    return runtime.activeWakeups
+      .filter((wakeup) => wakeup.status === 'attached')
+      .slice(0, 2)
+      .map((wakeup) => wakeup.sourceName || wakeup.sourceType.replace(/_/g, ' '))
+      .join(', ');
+  }
+  if (runtime.statusText) return runtime.statusText;
+  if (runtime.pendingWakeupCount > 0) {
+    return `${runtime.pendingWakeupCount} queued wakeup${runtime.pendingWakeupCount === 1 ? '' : 's'}`;
+  }
+  return undefined;
 }
 
 /**
@@ -128,8 +162,105 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+type MessageRecipient = Pick<GroupMember, 'id' | 'type' | 'name' | 'title' | 'role' | 'emoji' | 'avatarUrl'>;
+
 type FileRefBlock = Extract<CanonicalContentBlock, { type: 'file_ref' }>;
 const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
+
+function resolveRecipients(
+  groupMembers: GroupMember[] | undefined,
+  targetActorIds: string[] | undefined,
+  targetUserIds: string[] | undefined,
+) {
+  const actorIds = Array.from(new Set(targetActorIds || []));
+  const userIds = Array.from(new Set(targetUserIds || []));
+  const actorMap = new Map<string, GroupMember>();
+  const userMap = new Map<string, GroupMember>();
+
+  for (const member of groupMembers || []) {
+    if (member.type === 'actor') {
+      actorMap.set(member.id, member);
+      continue;
+    }
+    userMap.set(member.id, member);
+  }
+
+  const recipients: MessageRecipient[] = [];
+  for (const actorId of actorIds) {
+    const member = actorMap.get(actorId);
+    recipients.push({
+      id: actorId,
+      type: 'actor',
+      name: member?.name || 'Unknown actor',
+      title: member?.title,
+      role: member?.role,
+      emoji: member?.emoji,
+      avatarUrl: member?.avatarUrl,
+    });
+  }
+  for (const userId of userIds) {
+    const member = userMap.get(userId);
+    recipients.push({
+      id: userId,
+      type: 'user',
+      name: member?.name || 'Unknown user',
+      avatarUrl: member?.avatarUrl,
+    });
+  }
+
+  return recipients;
+}
+
+function RecipientChip({ recipient }: { recipient: MessageRecipient }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="cursor-help text-foreground/70 transition-colors hover:text-foreground">
+          @{recipient.name}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="flex max-w-64 items-start gap-2 px-3 py-2">
+        <ChatAvatar
+          name={recipient.name}
+          avatarUrl={recipient.avatarUrl}
+          emoji={recipient.emoji}
+          entityType={recipient.type === 'actor' ? 'actor' : 'user'}
+          size="sm"
+          className="shrink-0"
+        />
+        <div className="min-w-0">
+          <div className="font-medium">{recipient.name}</div>
+          <div className="text-background/80">
+            {recipient.type === 'actor'
+              ? recipient.title || recipient.role || 'Actor'
+              : 'User'}
+          </div>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function RecipientSummary({
+  recipients,
+  hasExplicitTargets,
+}: {
+  recipients: MessageRecipient[];
+  hasExplicitTargets: boolean;
+}) {
+  if (!hasExplicitTargets) {
+    return <span className="text-[10px] text-muted-foreground/45">To all members</span>;
+  }
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground/45">
+      <span>To</span>
+      {recipients.map((recipient) => (
+        <RecipientChip key={`${recipient.type}:${recipient.id}`} recipient={recipient} />
+      ))}
+    </span>
+  );
+}
 
 function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
@@ -342,7 +473,9 @@ export default function MessageBubble({
   role,
   contentBlocks,
   actorName,
+  actorAvatarUrl,
   actorEmoji,
+  actorRuntime,
   timestamp,
   isUser,
   status,
@@ -350,7 +483,9 @@ export default function MessageBubble({
   serverToolCalls,
   citationSources,
   coordination,
-  targetActorNames,
+  groupMembers,
+  targetActorIds,
+  targetUserIds,
 }: MessageBubbleProps) {
   const isChildResult = role === 'child_result';
   const isSystem = role === 'system';
@@ -360,6 +495,11 @@ export default function MessageBubble({
     () => contentBlocks.filter((block): block is FileRefBlock => block.type === 'file_ref'),
     [contentBlocks],
   );
+  const recipients = useMemo(
+    () => resolveRecipients(groupMembers, targetActorIds, targetUserIds),
+    [groupMembers, targetActorIds, targetUserIds],
+  );
+  const hasExplicitTargets = (targetActorIds?.length || 0) + (targetUserIds?.length || 0) > 0;
 
   // Process citations and sanitize raw HTML tags
   const { processedContent, sources } = useMemo(
@@ -394,7 +534,7 @@ export default function MessageBubble({
   if (isSystem) {
     return (
       <div className="flex justify-center my-2">
-        <div className="max-w-[80%] rounded-full border border-border bg-background px-4 py-1.5 text-center text-xs text-muted-foreground shadow-sm">
+        <div className="max-w-[80%] text-center text-xs text-muted-foreground/75">
           {textContent.length > 200 ? textContent.substring(0, 200) + '...' : textContent}
         </div>
       </div>
@@ -415,9 +555,6 @@ export default function MessageBubble({
           <div>
             <div className="flex items-center gap-1.5 mb-0.5">
               <span className="text-[11px] font-medium text-muted-foreground/80">{actorName}</span>
-              {targetActorNames && targetActorNames.length > 0 && (
-                <span className="text-[10px] text-primary/60">→ {targetActorNames.join(', ')}</span>
-              )}
             </div>
             {hasFileBlocks && <FileBlockPreview blocks={fileBlocks} />}
             <div className="text-xs text-muted-foreground/70 leading-relaxed">
@@ -425,11 +562,14 @@ export default function MessageBubble({
                 {processedContent}
               </ReactMarkdown>
             </div>
-            {timestamp && (
-              <span className="text-[9px] text-muted-foreground/30 mt-0.5 block">
-                {new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            )}
+            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[9px] text-muted-foreground/30">
+              {timestamp ? (
+                <span>
+                  {new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              ) : null}
+              <RecipientSummary recipients={recipients} hasExplicitTargets={hasExplicitTargets} />
+            </div>
           </div>
         </div>
       </div>
@@ -438,27 +578,30 @@ export default function MessageBubble({
 
   return (
     <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-      <Avatar className="h-8 w-8 shrink-0 mt-1">
-        <AvatarFallback
-          className={
-            isUser
-              ? 'bg-primary text-primary-foreground text-xs'
-              : isChildResult
-              ? 'bg-amber-500 text-white text-xs'
-              : 'bg-card text-foreground text-xs border border-border'
-          }
-        >
-          {isUser ? (
+      {isUser ? (
+        <Avatar className="h-8 w-8 shrink-0 mt-1">
+          <AvatarFallback className="bg-primary text-primary-foreground text-xs">
             <User className="w-4 h-4" />
-          ) : isChildResult ? (
+          </AvatarFallback>
+        </Avatar>
+      ) : isChildResult ? (
+        <Avatar className="h-8 w-8 shrink-0 mt-1">
+          <AvatarFallback className="bg-amber-500 text-white text-xs">
             <GitBranch className="w-4 h-4" />
-          ) : actorEmoji ? (
-            <span className="text-sm">{actorEmoji}</span>
-          ) : (
-            <Bot className="w-4 h-4" />
-          )}
-        </AvatarFallback>
-      </Avatar>
+          </AvatarFallback>
+        </Avatar>
+      ) : (
+        <ChatAvatar
+          name={actorName}
+          avatarUrl={actorAvatarUrl}
+          emoji={actorEmoji}
+          entityType="actor"
+          className="mt-1 shrink-0"
+          statusState={runtimeToAvatarStatus(actorRuntime)}
+          statusLabel={getRuntimeLabel(actorRuntime)}
+          statusDetail={getRuntimeDetail(actorRuntime)}
+        />
+      )}
 
       <div className={`max-w-[75%] min-w-0 ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
         {!isUser && actorName && (
@@ -526,6 +669,7 @@ export default function MessageBubble({
               {new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
           )}
+          <RecipientSummary recipients={recipients} hasExplicitTargets={hasExplicitTargets} />
           {status === 'sending' && (
             <span className="text-[10px] text-muted-foreground/40">Sending...</span>
           )}

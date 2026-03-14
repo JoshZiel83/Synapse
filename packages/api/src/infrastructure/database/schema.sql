@@ -472,8 +472,8 @@ CREATE TABLE sessions (
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   channel_type VARCHAR(30) NOT NULL DEFAULT 'web' CHECK (channel_type IN ('web', 'api', 'bridge')),
   trigger VARCHAR(50) NOT NULL DEFAULT 'user_message',
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'sleeping', 'completed', 'failed', 'cancelled', 'timed_out')),
+  status VARCHAR(20) NOT NULL DEFAULT 'idle'
+    CHECK (status IN ('idle', 'queued', 'running', 'blocked', 'closed')),
   metadata JSONB DEFAULT '{}',
   error_message TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -714,6 +714,35 @@ CREATE INDEX idx_turns_conversation_started ON turns(conversation_id, started_at
 
 ALTER TABLE conversation_items ADD CONSTRAINT fk_conversation_items_turn
   FOREIGN KEY (turn_id) REFERENCES turns(id) ON DELETE SET NULL;
+
+-- ============ Session Wakeups ============
+CREATE TABLE session_wakeups (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  turn_id UUID REFERENCES turns(id) ON DELETE SET NULL,
+  source_type VARCHAR(50) NOT NULL
+    CHECK (source_type IN ('user_message', 'actor_message', 'broadcast', 'invite', 'api_call', 'system_interrupt', 'retry')),
+  source_item_id UUID REFERENCES conversation_items(id) ON DELETE SET NULL,
+  source_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  source_member_type VARCHAR(20)
+    CHECK (source_member_type IN ('user', 'actor', 'system')),
+  source_member_id UUID,
+  source_name VARCHAR(255),
+  summary TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'attached', 'processed', 'dropped')),
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  attached_at TIMESTAMPTZ,
+  processed_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_session_wakeups_session_created
+  ON session_wakeups(session_id, created_at DESC);
+CREATE INDEX idx_session_wakeups_session_status
+  ON session_wakeups(session_id, status, created_at DESC);
+CREATE INDEX idx_session_wakeups_turn
+  ON session_wakeups(turn_id, created_at DESC) WHERE turn_id IS NOT NULL;
 
 -- ============ Payload Blobs ============
 CREATE TABLE payload_blobs (

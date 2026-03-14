@@ -32,7 +32,15 @@ import {
   addSessionMessage,
   consumeInterrupts,
 } from '../modules/session/service.js';
-import { getGroupMembers, sleepActor, wakeActor } from '../modules/group/service.js';
+import { getGroupMembers, sleepActor } from '../modules/group/service.js';
+import {
+  attachPendingWakeupsToTurn,
+  getPendingWakeupCount,
+  getPendingWakeups,
+  markTurnWakeupsDropped,
+  markTurnWakeupsProcessed,
+  publishSessionRuntime,
+} from '../modules/session/runtime.js';
 import {
   getConversationMember,
   getLastVisibleConversationItem,
@@ -114,12 +122,49 @@ export function startSessionThinkingWorker() {
 
       let turn: any = null;
       let thinkingActorName = 'Unknown';
+      let requeueAfterUnlock = false;
+      let currentStatusText: string | undefined;
+      let currentPhase: ThinkingPhase | 'error' = 'thinking';
 
       try {
-        const session = await getSession(sessionId);
-        if (!session || session.status !== 'active') {
+        let session = await getSession(sessionId);
+        if (!session || session.status === 'closed') {
           console.log(`[session-thinking] Session ${sessionId} is ${session?.status ?? 'not found'}, skipping`);
-          return { success: false, reason: 'session not active' };
+          return { success: false, reason: 'session closed or missing' };
+        }
+
+        const pendingWakeupsAtStart = await getPendingWakeupCount(sessionId);
+        if (pendingWakeupsAtStart === 0 && session.status !== 'running') {
+          if (session.status !== 'idle') {
+            await updateSessionStatus(sessionId, 'idle', { errorMessage: null });
+          }
+          await publishSessionRuntime(workspaceId, sessionId, {
+            laneState: 'idle',
+            health: 'ok',
+            phase: 'idle',
+          });
+          return { success: true, reason: 'no pending wakeups' };
+        }
+
+        const previousStatus = session.status;
+        if (session.status !== 'running') {
+          await updateSessionStatus(sessionId, 'running', { errorMessage: null });
+          await emitEvent({
+            type: 'session.status.changed',
+            workspaceId,
+            payload: {
+              groupId: session.group_id,
+              sessionId,
+              actorId,
+              status: 'running',
+              previousStatus,
+            },
+            timestamp: nowISO(),
+          });
+          session = await getSession(sessionId);
+          if (!session) {
+            return { success: false, reason: 'session disappeared after status update' };
+          }
         }
 
         const groupId = session.group_id;
@@ -131,20 +176,24 @@ export function startSessionThinkingWorker() {
           timestamp: nowISO(),
         });
 
-        const thinkingActorResult = await query('SELECT name FROM actors WHERE id = $1', [actorId]);
-        thinkingActorName = thinkingActorResult.rows[0]?.name || 'Unknown';
-
-        const thinkingRedisKey = `thinking:${groupId || sessionId}`;
         const emitThinkingStatus = async (status: string) => {
+          currentStatusText = status;
+          currentPhase = deriveThinkingPhase(status);
           const thinkingPayload = {
             groupId,
             sessionId,
             actorId,
-            actorName: thinkingActorName,
+            actorName: thinkingActorName || session.actor_name || 'Unknown',
             status,
-            phase: deriveThinkingPhase(status),
+            phase: currentPhase,
           };
-          await redis.set(thinkingRedisKey, JSON.stringify(thinkingPayload), 'EX', 300);
+          await publishSessionRuntime(workspaceId, sessionId, {
+            laneState: 'running',
+            health: 'ok',
+            phase: currentPhase,
+            statusText: status,
+            currentTurnId: turn?.id,
+          });
           await emitEvent({
             type: 'session.thinking',
             workspaceId,
@@ -153,6 +202,7 @@ export function startSessionThinkingWorker() {
           });
         };
 
+        thinkingActorName = session.actor_name || 'Unknown';
         await emitThinkingStatus('Analyzing message...');
 
         const actorResult = await query('SELECT * FROM actors WHERE id = $1', [actorId]);
@@ -331,16 +381,31 @@ export function startSessionThinkingWorker() {
           availableSkills,
         );
 
-        const triggerItem = groupId
-          ? await getLastVisibleConversationItem(groupId)
-          : null;
+        const pendingWakeups = await getPendingWakeups(sessionId);
+        if (pendingWakeups.length === 0) {
+          await sleepActor(sessionId);
+          return { success: true, reason: 'wakeup already handled' };
+        }
+
         turn = await createTurn({
           sessionId,
           conversationId: session.conversation_id,
           actorId,
-          triggerType: trigger,
-          triggerItemId: triggerItem?.id,
-          metadata: { triggerUserId: userId || groupUserId || null },
+          triggerType: pendingWakeups[0]!.sourceType,
+          triggerItemId: pendingWakeups[0]!.sourceItemId,
+          metadata: {
+            triggerUserId: userId || groupUserId || null,
+            wakeupIds: pendingWakeups.map((wakeup) => wakeup.wakeupId),
+            wakeupCount: pendingWakeups.length,
+          },
+        });
+        await attachPendingWakeupsToTurn(sessionId, turn.id);
+        await publishSessionRuntime(workspaceId, sessionId, {
+          laneState: 'running',
+          health: 'ok',
+          phase: currentPhase,
+          statusText: currentStatusText,
+          currentTurnId: turn.id,
         });
 
         const lockRefreshInterval = setInterval(async () => {
@@ -386,6 +451,16 @@ export function startSessionThinkingWorker() {
                   sinceSequence: lastKnownGroupSequence,
                 });
                 lastKnownGroupSequence = update.maxSequence;
+                if (update.items.length > 0) {
+                  await attachPendingWakeupsToTurn(sessionId, turn.id);
+                  await publishSessionRuntime(workspaceId, sessionId, {
+                    laneState: 'running',
+                    health: 'ok',
+                    phase: currentPhase === 'error' ? 'thinking' : currentPhase,
+                    statusText: currentStatusText,
+                    currentTurnId: turn.id,
+                  });
+                }
                 return update.items.length > 0 ? update.items : null;
               } : undefined,
             },
@@ -395,7 +470,6 @@ export function startSessionThinkingWorker() {
         }
 
         await executeActorActions(workspaceId, actorId, result.actions, sessionId);
-        await redis.del(thinkingRedisKey);
 
         const respondActions = result.actions.filter((action: ActorAction) => action.type === 'respond');
         const msgMetadata: Record<string, unknown> = {};
@@ -406,6 +480,13 @@ export function startSessionThinkingWorker() {
         const hasMeta = Object.keys(msgMetadata).length > 0 ? msgMetadata : undefined;
 
         if (respondActions.length > 0) {
+          await publishSessionRuntime(workspaceId, sessionId, {
+            laneState: 'running',
+            health: 'ok',
+            phase: 'responding',
+            statusText: 'Responding...',
+            currentTurnId: turn.id,
+          });
           for (const action of respondActions) {
             await addSessionMessage({
               sessionId,
@@ -438,43 +519,7 @@ export function startSessionThinkingWorker() {
             metadata: { ...hasMeta, silentActions: true },
           });
         }
-
-        const postThinkSession = await getSession(sessionId);
-        if (postThinkSession?.status === 'sleeping') {
-          if (groupId && actorMemberId) {
-            const update = await loadNewContextItems({
-              groupId,
-              memberId: actorMemberId,
-              actorId,
-              sinceSequence: thinkStartSequence,
-            });
-            if (update.items.length > 0) {
-              console.log(`[session-thinking] Session ${sessionId} has unprocessed messages after sleep — re-waking`);
-              await wakeActor(groupId, actorId);
-            } else {
-              console.log(`[session-thinking] Session ${sessionId} entered sleeping state`);
-            }
-          }
-        } else if (postThinkSession?.status === 'active') {
-          await sleepActor(sessionId);
-          if (groupId && actorMemberId) {
-            const update = await loadNewContextItems({
-              groupId,
-              memberId: actorMemberId,
-              actorId,
-              sinceSequence: thinkStartSequence,
-            });
-            if (update.items.length > 0) {
-              console.log(`[session-thinking] Session ${sessionId} has unprocessed messages after auto-sleep — re-waking`);
-              await wakeActor(groupId, actorId);
-            } else {
-              console.log(`[session-thinking] Session ${sessionId} auto-slept`);
-            }
-          } else {
-            console.log(`[session-thinking] Session ${sessionId} auto-slept`);
-          }
-        }
-
+        await markTurnWakeupsProcessed(turn.id);
         await updateTurnStatus(turn.id, 'completed');
 
         await query(
@@ -496,17 +541,55 @@ export function startSessionThinkingWorker() {
           timestamp: nowISO(),
         });
 
-        return { success: true, actions: result.actions.length };
+        turn = null;
+        const remainingPendingWakeups = await getPendingWakeupCount(sessionId);
+        if (remainingPendingWakeups > 0) {
+          requeueAfterUnlock = true;
+          await updateSessionStatus(sessionId, 'queued', { errorMessage: null });
+          await publishSessionRuntime(workspaceId, sessionId, {
+            laneState: 'queued',
+            health: 'ok',
+            phase: 'idle',
+            statusText: 'Queued follow-up messages',
+          });
+          await emitEvent({
+            type: 'session.status.changed',
+            workspaceId,
+            payload: {
+              groupId,
+              sessionId,
+              actorId,
+              status: 'queued',
+              previousStatus: 'running',
+            },
+            timestamp: nowISO(),
+          });
+        } else {
+          await sleepActor(sessionId);
+        }
+
+        return { success: true, actions: result.actions.length, requeued: requeueAfterUnlock };
       } catch (err: any) {
         console.error(`[session-thinking] Session ${sessionId} failed:`, err.message);
         const failedSession = await getSession(sessionId).catch(() => null);
-        await redis.del(`thinking:${failedSession?.group_id || sessionId}`).catch(() => {});
-        await updateSessionStatus(sessionId, 'failed', { errorMessage: err.message });
         if (turn?.id) {
+          await markTurnWakeupsDropped(turn.id).catch(() => {});
           await updateTurnStatus(turn.id, 'failed', { metadata: { errorMessage: err.message } }).catch(() => {});
         }
 
         await shutdownSessionInstances(sessionId).catch(() => {});
+        await updateSessionStatus(sessionId, 'blocked', { errorMessage: err.message });
+        await publishSessionRuntime(workspaceId, sessionId, {
+          laneState: 'blocked',
+          health: 'error',
+          phase: 'error',
+          statusText: err.message || 'Unknown error',
+          currentTurnId: turn?.id,
+          lastError: {
+            message: err.message || 'Unknown error',
+            at: nowISO(),
+          },
+        }).catch(() => {});
 
         await emitEvent({
           type: 'session.status.changed',
@@ -516,7 +599,7 @@ export function startSessionThinkingWorker() {
             sessionId,
             actorId,
             actorName: thinkingActorName,
-            status: 'failed',
+            status: 'blocked',
             phase: 'error',
             errorMessage: err.message || 'Unknown error',
           },
@@ -527,6 +610,15 @@ export function startSessionThinkingWorker() {
       } finally {
         await redis.del(sessionLockKey);
         await redis.decr(actorSessionsKey);
+        if (requeueAfterUnlock) {
+          await sessionThinkingQueue.add('think', {
+            sessionId,
+            actorId,
+            workspaceId,
+            trigger,
+            userId,
+          });
+        }
       }
     },
     {

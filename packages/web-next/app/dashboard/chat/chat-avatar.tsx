@@ -1,15 +1,18 @@
 'use client';
 
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Avatar, AvatarBadge, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { resolveFileUrl } from '@/lib/utils';
 import { getTwemojiUrl } from '@/lib/twemoji';
 import { cn } from '@/lib/utils';
-import type { ThinkingPhase } from '@/stores/chat-store';
+import type { ActorAvatarStatus, ThinkingPhase } from '@/stores/chat-store';
 
-const STATUS_EMOJI: Record<ThinkingPhase, string> = {
-  thinking: '🤔',
-  tool: '🛠️',
-  error: '⚠️',
+const STATUS_DOT_CLASS: Record<ActorAvatarStatus, string> = {
+  idle: 'bg-muted-foreground/50',
+  thinking: 'bg-sky-500',
+  tool: 'bg-amber-500',
+  responding: 'bg-emerald-500',
+  error: 'bg-destructive',
 };
 
 function getInitial(name: string | undefined) {
@@ -23,7 +26,10 @@ interface ChatAvatarProps {
   emoji?: string;
   entityType?: 'group' | 'user' | 'actor';
   size?: 'sm' | 'default' | 'lg';
+  statusState?: ActorAvatarStatus;
   statusPhase?: ThinkingPhase;
+  statusLabel?: string;
+  statusDetail?: string;
   className?: string;
 }
 
@@ -33,14 +39,16 @@ export default function ChatAvatar({
   emoji,
   entityType = 'actor',
   size = 'default',
+  statusState,
   statusPhase,
+  statusLabel,
+  statusDetail,
   className,
 }: ChatAvatarProps) {
   const resolvedAvatarUrl = resolveFileUrl(avatarUrl);
   const emojiUrl = !resolvedAvatarUrl && entityType === 'actor' ? getTwemojiUrl(emoji) : null;
-  const badgeEmojiUrl = statusPhase ? getTwemojiUrl(STATUS_EMOJI[statusPhase]) : null;
-
-  return (
+  const badgeState = statusState || statusPhase;
+  const avatar = (
     <Avatar size={size} className={cn(className)}>
       {resolvedAvatarUrl ? (
         <AvatarImage src={resolvedAvatarUrl} alt={name || entityType} />
@@ -48,20 +56,24 @@ export default function ChatAvatar({
         <AvatarImage src={emojiUrl} alt={name || entityType} className="bg-muted p-1" />
       ) : null}
       <AvatarFallback>{getInitial(name)}</AvatarFallback>
-      {entityType === 'actor' && statusPhase ? (
-        <AvatarBadge
-          className={cn(
-            'bg-background p-0.5 shadow-sm ring-1 ring-border',
-            size === 'sm' && 'size-4',
-            size === 'default' && 'size-5',
-            size === 'lg' && 'size-6',
-          )}
-        >
-          {badgeEmojiUrl ? (
-            <img src={badgeEmojiUrl} alt={statusPhase} className="size-full" />
-          ) : null}
-        </AvatarBadge>
+      {entityType === 'actor' && badgeState ? (
+        <AvatarBadge className={cn('shadow-sm ring-2 ring-background', STATUS_DOT_CLASS[badgeState])} />
       ) : null}
     </Avatar>
+  );
+
+  if (entityType !== 'actor' || !badgeState || (!statusLabel && !statusDetail && !name)) {
+    return avatar;
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{avatar}</TooltipTrigger>
+      <TooltipContent side="top" className="flex max-w-60 flex-col items-start gap-0.5">
+        <span className="font-medium">{name || 'Actor'}</span>
+        {statusLabel ? <span>{statusLabel}</span> : null}
+        {statusDetail ? <span className="text-background/80">{statusDetail}</span> : null}
+      </TooltipContent>
+    </Tooltip>
   );
 }

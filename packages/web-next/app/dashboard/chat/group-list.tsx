@@ -1,11 +1,12 @@
 'use client';
 
 import { useState } from 'react';
+import type { ActorRuntimeState } from '@synapse/shared';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Plus, Search } from 'lucide-react';
 import ChatAvatar from './chat-avatar';
-import type { Group, ThinkingState } from '@/stores/chat-store';
+import type { Group, GroupRuntimeMap } from '@/stores/chat-store';
 
 function formatRelativeTime(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -22,12 +23,48 @@ function formatRelativeTime(dateStr: string) {
 interface GroupListProps {
   groups: Group[];
   selectedId: string | null;
-  thinkingMap: Record<string, ThinkingState>;
+  runtimeMap: GroupRuntimeMap;
   onSelect: (id: string) => void;
   onNewConversation: () => void;
 }
 
-export default function GroupList({ groups, selectedId, thinkingMap, onSelect, onNewConversation }: GroupListProps) {
+function getRuntimePriority(runtime: ActorRuntimeState) {
+  if (runtime.health === 'error' || runtime.laneState === 'blocked') return 0;
+  if (runtime.laneState === 'running') return 1;
+  if (runtime.laneState === 'queued') return 2;
+  return 3;
+}
+
+function summarizeRuntimePreview(runtimeByActor?: Record<string, ActorRuntimeState>) {
+  const activeRuntimes = Object.values(runtimeByActor || {})
+    .filter((runtime) => runtime.laneState !== 'idle' && runtime.laneState !== 'closed')
+    .sort((left, right) => getRuntimePriority(left) - getRuntimePriority(right));
+
+  if (activeRuntimes.length === 0) return null;
+
+  const names = activeRuntimes.map((runtime) => runtime.actorName);
+  const lead = names.slice(0, 2).join(', ');
+  const suffix = names.length > 2 ? ` +${names.length - 2}` : '';
+  const blocked = activeRuntimes.find((runtime) => runtime.health === 'error' || runtime.laneState === 'blocked');
+  if (blocked) {
+    return `${lead}${suffix} · ${blocked.lastError?.message || 'Needs attention'}`;
+  }
+
+  const wakeupCount = activeRuntimes.reduce(
+    (sum, runtime) => sum + Math.max(runtime.activeWakeups.length, runtime.pendingWakeupCount),
+    0,
+  );
+  const statusText = activeRuntimes[0]?.statusText;
+  if (statusText) {
+    return `${lead}${suffix} · ${statusText}`;
+  }
+  if (wakeupCount > 0) {
+    return `${lead}${suffix} · handling ${wakeupCount} wakeup${wakeupCount === 1 ? '' : 's'}`;
+  }
+  return `${lead}${suffix} · working`;
+}
+
+export default function GroupList({ groups, selectedId, runtimeMap, onSelect, onNewConversation }: GroupListProps) {
   const [search, setSearch] = useState('');
 
   const filtered = search
@@ -73,8 +110,7 @@ export default function GroupList({ groups, selectedId, thinkingMap, onSelect, o
       <div className="min-h-0 flex-1 overflow-y-auto">
         {filtered.map((group) => {
           const isSelected = group.id === selectedId;
-          const thinking = thinkingMap[group.id];
-          const isThinking = !!thinking;
+          const runtimePreview = summarizeRuntimePreview(runtimeMap[group.id]);
           const name = group.title || group.participants.map((p) => p.name).join(', ');
 
           const preview = group.lastMessage
@@ -127,12 +163,7 @@ export default function GroupList({ groups, selectedId, thinkingMap, onSelect, o
                     </span>
                   </div>
                   <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                    {isThinking
-                      ? (thinking?.status
-                          ? `${thinking.actorName} · ${thinking.status}`
-                          : `${thinking?.actorName} is thinking...`)
-                      : previewTrunc || 'No messages yet'
-                    }
+                    {runtimePreview || previewTrunc || 'No messages yet'}
                   </p>
                 </div>
               </div>

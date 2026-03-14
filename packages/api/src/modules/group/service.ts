@@ -12,7 +12,6 @@ import {
 } from '../../infrastructure/authz/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { getFileUrl } from '../../infrastructure/storage/index.js';
-import { sessionThinkingQueue } from '../../workers/queues.js';
 import { nowISO } from '@synapse/shared';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -32,6 +31,11 @@ import {
   itemPartsToCanonicalContentBlocks,
 } from '../conversation/message-content.js';
 import { createSession, getSession, updateSessionStatus } from '../session/service.js';
+import {
+  enqueueSessionWakeup,
+  publishSessionRuntime,
+  removeSessionRuntime,
+} from '../session/runtime.js';
 
 type ConversationGrantPermission =
   | 'send'
@@ -104,6 +108,14 @@ function parseConversationMetadata(value: unknown): Record<string, unknown> {
 
 function stripUndefined<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
+}
+
+function buildWakeupSummary(sourceName: string | undefined, content: string) {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  const preview = normalized.length > 96 ? `${normalized.slice(0, 93)}...` : normalized;
+  if (sourceName && preview) return `${sourceName}: ${preview}`;
+  if (sourceName) return `${sourceName} sent a message`;
+  return preview || 'New message';
 }
 
 async function resolveWorkspaceImageFile(workspaceId: string, fileId: string) {
@@ -280,24 +292,6 @@ function buildTextContentFromParts(parts: any[]) {
   return jsonParts.join('\n');
 }
 
-async function getActorNames(actorIds: string[]) {
-  if (actorIds.length === 0) return new Map<string, string>();
-  const result = await query(
-    `SELECT id, name FROM actors WHERE id = ANY($1)`,
-    [actorIds],
-  );
-  return new Map<string, string>(result.rows.map((row: any) => [row.id, row.name]));
-}
-
-async function getUserNames(userIds: string[]) {
-  if (userIds.length === 0) return new Map<string, string>();
-  const result = await query(
-    `SELECT id, name FROM users WHERE id = ANY($1)`,
-    [userIds],
-  );
-  return new Map<string, string>(result.rows.map((row: any) => [row.id, row.name]));
-}
-
 async function getLatestActorSession(conversationId: string, actorId: string) {
   const result = await query(
     `SELECT *
@@ -359,10 +353,11 @@ async function recordMembershipEvent(params: {
 
 async function resolveMemberTargets(params: {
   groupId: string;
+  members?: any[];
   targetActorIds?: string[];
   targetUserIds?: string[];
 }) {
-  const members = await listConversationMembers(params.groupId);
+  const members = params.members || await listConversationMembers(params.groupId);
   const actorIds = new Set(params.targetActorIds || []);
   const userIds = new Set(params.targetUserIds || []);
   const targetMemberIds: string[] = [];
@@ -380,11 +375,34 @@ async function resolveMemberTargets(params: {
   return targetMemberIds;
 }
 
-async function getDefaultTargetActorIds(groupId: string, senderActorId?: string) {
-  const members = await listConversationMembers(groupId);
-  return members
-    .filter((member) => member.state === 'active' && member.actor_id && member.actor_id !== senderActorId)
-    .map((member) => member.actor_id);
+function getAutomaticWakeActorIds(params: {
+  members: any[];
+  senderType: 'user' | 'actor';
+  senderUserId?: string;
+  targetActorIds: string[];
+  targetUserIds: string[];
+}) {
+  if (
+    params.senderType !== 'user'
+    || !params.senderUserId
+    || params.targetActorIds.length > 0
+    || params.targetUserIds.length > 0
+  ) {
+    return [];
+  }
+
+  const activeActors = params.members.filter((member) => member.state === 'active' && member.actor_id);
+  const activeUsers = params.members.filter((member) => member.state === 'active' && member.user_id);
+
+  if (activeActors.length !== 1 || activeUsers.length !== 1) {
+    return [];
+  }
+
+  if (activeUsers[0]?.user_id !== params.senderUserId) {
+    return [];
+  }
+
+  return [activeActors[0]!.actor_id as string];
 }
 
 function buildSenderSubject(params: {
@@ -553,7 +571,7 @@ export async function createGroup(params: {
       await client.query(
         `INSERT INTO sessions
            (id, workspace_id, actor_id, conversation_id, channel_type, trigger, status, metadata, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, 'web', 'user_message', 'sleeping', '{}'::jsonb, NOW(), NOW())`,
+         VALUES ($1, $2, $3, $4, 'web', 'user_message', 'idle', '{}'::jsonb, NOW(), NOW())`,
         [sessionId, workspaceId, actorId, groupId],
       );
 
@@ -628,6 +646,7 @@ export async function createGroup(params: {
       group,
       members,
       joinedMembers,
+      creatorName: userRow?.name || 'User',
       message: msgId ? { id: msgId } : null,
       authzEntryIds,
     };
@@ -642,8 +661,19 @@ export async function createGroup(params: {
     members: result.joinedMembers,
   });
 
+  await Promise.all(result.members.map((member: any) => publishSessionRuntime(workspaceId, member.sessionId)));
+
   if (targetActorId && initialMessage) {
-    await wakeActor(groupId, targetActorId);
+    await wakeActor({
+      groupId,
+      actorId: targetActorId,
+      sourceType: 'user_message',
+      sourceItemId: result.message?.id,
+      sourceMemberType: 'user',
+      sourceMemberId: createdBy,
+      sourceName: result.creatorName,
+      summary: buildWakeupSummary(result.creatorName, initialMessage),
+    });
   }
 
   await emitEvent({
@@ -744,11 +774,6 @@ export async function getGroupsByWorkspace(
                     WHERE ci.conversation_id = c.id
                       AND ci.scope = 'shared'
                       AND ci.surface = 'visible'
-                      AND (
-                        ci.author_member_id = cm_u.id
-                        OR NOT EXISTS (SELECT 1 FROM conversation_item_targets t0 WHERE t0.item_id = ci.id)
-                        OR EXISTS (SELECT 1 FROM conversation_item_targets t1 WHERE t1.item_id = ci.id AND t1.target_member_id = cm_u.id)
-                      )
                       AND ci.created_at > COALESCE(cr.last_read_at, '1970-01-01'::timestamptz)
                   ) AS unread_count
            FROM conversations c
@@ -768,7 +793,7 @@ export async function getGroupsByWorkspace(
     `SELECT conversation_id, COUNT(*)::int AS active_count
      FROM sessions
      WHERE conversation_id = ANY($1)
-       AND status = 'active'
+       AND status <> 'closed'
      GROUP BY conversation_id`,
     [resolvedGroupIds],
   );
@@ -870,7 +895,6 @@ export async function addActorToGroup(
       trigger: 'actor_invite',
       metadata: { lane: 'group' },
     });
-    await updateSessionStatus(session.id, 'sleeping');
 
     const authzEntryIds = await queueAuthzRelationships(
       client,
@@ -889,6 +913,7 @@ export async function addActorToGroup(
   });
 
   await flushQueuedAuthzEntries(result.authzEntryIds, 'group.add_actor');
+  await publishSessionRuntime(group.workspace_id, result.session.id);
 
   const eventBatchId = batchId || uuidv4();
   await recordMembershipEvent({
@@ -1000,7 +1025,6 @@ export async function addMembersToGroup(params: {
         trigger: 'actor_invite',
         metadata: { lane: 'group' },
       });
-      await updateSessionStatus(session.id, 'sleeping');
 
       const actorInfo = actorMap.get(actorId)!;
       relationships.push(
@@ -1071,6 +1095,16 @@ export async function addMembersToGroup(params: {
   });
 
   await flushQueuedAuthzEntries(result.authzEntryIds, 'group.add_members');
+  await Promise.all(
+    result.addedMembers
+      .filter((member: any) => member.type === 'actor' && member.actorId)
+      .map(async (member: any) => {
+        const session = await getLatestActorSession(params.groupId, member.actorId);
+        if (session) {
+          await publishSessionRuntime(params.workspaceId, session.id);
+        }
+      }),
+  );
 
   if (result.joinedMembers.length > 0) {
     await recordMembershipEvent({
@@ -1102,36 +1136,41 @@ export async function removeActorFromGroup(groupId: string, actorId: string): Pr
   const member = await getConversationMember({ conversationId: groupId, actorId });
   if (!member) return;
 
-  const authzEntryIds = await transaction(async (client) => {
+  const { authzEntryIds, closedSessionIds } = await transaction(async (client) => {
     await client.query(
       `UPDATE conversation_members
        SET state = 'kicked', left_at = NOW()
        WHERE id = $1`,
       [member.id],
     );
-    await client.query(
+    const closedSessions = await client.query(
       `UPDATE sessions
-       SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
-       WHERE conversation_id = $1 AND actor_id = $2 AND status IN ('active', 'sleeping')`,
+       SET status = 'closed', completed_at = NOW(), updated_at = NOW()
+       WHERE conversation_id = $1 AND actor_id = $2 AND status <> 'closed'
+       RETURNING id`,
       [groupId, actorId],
     );
 
-    return queueAuthzRelationships(
-      client,
-      [
-        deleteRelation('conversation', groupId, 'participant', 'actor', actorId),
-        deleteRelation('actor_conversation', buildActorConversationContextId(actorId, groupId), 'actor', 'actor', actorId),
-        deleteRelation('actor_conversation', buildActorConversationContextId(actorId, groupId), 'conversation', 'conversation', groupId),
-      ],
-      {
-        source: 'group.remove_actor',
-        groupId,
-        actorId,
-      },
-    );
+    return {
+      closedSessionIds: closedSessions.rows.map((row: any) => row.id as string),
+      authzEntryIds: await queueAuthzRelationships(
+        client,
+        [
+          deleteRelation('conversation', groupId, 'participant', 'actor', actorId),
+          deleteRelation('actor_conversation', buildActorConversationContextId(actorId, groupId), 'actor', 'actor', actorId),
+          deleteRelation('actor_conversation', buildActorConversationContextId(actorId, groupId), 'conversation', 'conversation', groupId),
+        ],
+        {
+          source: 'group.remove_actor',
+          groupId,
+          actorId,
+        },
+      ),
+    };
   });
 
   await flushQueuedAuthzEntries(authzEntryIds, 'group.remove_actor');
+  await Promise.all(closedSessionIds.map((sessionId: string) => removeSessionRuntime(sessionId)));
 
   const actorResult = await query('SELECT name, title FROM actors WHERE id = $1', [actorId]);
   const actorInfo = actorResult.rows[0];
@@ -1243,9 +1282,6 @@ export async function sendGroupMessage(params: {
   const explicitActorTargets = Array.isArray(params.targetActorIds) && params.targetActorIds.length > 0;
   let targetActorIds = params.targetActorIds || [];
   let targetUserIds = params.targetUserIds || [];
-  if (targetActorIds.length === 0 && targetUserIds.length === 0) {
-    targetActorIds = await getDefaultTargetActorIds(groupId, senderActorId);
-  }
 
   targetActorIds = await filterAllowedTargetActorIds({
     conversationId: groupId,
@@ -1256,15 +1292,28 @@ export async function sendGroupMessage(params: {
     explicit: explicitActorTargets,
   });
 
-  if (targetActorIds.length === 0 && targetUserIds.length === 0) {
-    throw new Error('No eligible recipients are available for this message');
-  }
-
   const authorMember = senderType === 'actor'
     ? await ensureConversationMember({ conversationId: groupId, memberType: 'actor', actorId: senderActorId })
     : await ensureConversationMember({ conversationId: groupId, memberType: 'user', userId: senderUserId });
 
-  const targetMemberIds = await resolveMemberTargets({ groupId, targetActorIds, targetUserIds });
+  const members = await listConversationMembers(groupId);
+  const targetMemberIds = await resolveMemberTargets({ groupId, members, targetActorIds, targetUserIds });
+  const automaticWakeCandidateIds = getAutomaticWakeActorIds({
+    members,
+    senderType,
+    senderUserId,
+    targetActorIds,
+    targetUserIds,
+  });
+  const automaticWakeActorIds = await filterAllowedTargetActorIds({
+    conversationId: groupId,
+    senderType,
+    senderUserId,
+    senderActorId,
+    targetActorIds: automaticWakeCandidateIds,
+    explicit: false,
+  });
+  const wakeActorIds = Array.from(new Set([...targetActorIds, ...automaticWakeActorIds]));
   const normalizedMessage = await buildNormalizedMessageContent({ content, contentBlocks, metadata });
 
   const item = await createConversationItem({
@@ -1290,11 +1339,6 @@ export async function sendGroupMessage(params: {
     senderName = userResult.rows[0]?.name;
   }
 
-  const actorNames = await getActorNames(targetActorIds);
-  const userNames = await getUserNames(targetUserIds);
-  const targetActorNames = targetActorIds.map((id) => actorNames.get(id) || 'Unknown');
-  const targetUserNames = targetUserIds.map((id) => userNames.get(id) || 'Unknown');
-
   await emitEvent({
     type: 'session.message.new',
     workspaceId: group.workspace_id,
@@ -1308,8 +1352,6 @@ export async function sendGroupMessage(params: {
       actorName: senderType === 'actor' ? senderName : undefined,
       targetActorIds,
       targetUserIds,
-      targetActorNames,
-      targetUserNames,
       content: normalizedMessage.normalizedContent,
       contentBlocks: normalizedMessage.contentBlocks,
       metadata: normalizedMessage.normalizedMetadata,
@@ -1318,8 +1360,26 @@ export async function sendGroupMessage(params: {
     timestamp: nowISO(),
   });
 
-  for (const targetActorId of targetActorIds) {
-    await wakeActor(groupId, targetActorId).catch((err) => {
+  const wakeupSourceType = senderType === 'actor' ? 'actor_message' as const : 'user_message' as const;
+  const wakeupSummary = buildWakeupSummary(senderName, normalizedMessage.normalizedContent);
+  for (const targetActorId of wakeActorIds) {
+    const isAutomaticWake = automaticWakeActorIds.includes(targetActorId);
+    await wakeActor({
+      groupId,
+      actorId: targetActorId,
+      sourceType: wakeupSourceType,
+      sourceItemId: item.id,
+      sourceSessionId: senderSessionId,
+      sourceMemberType: senderType,
+      sourceMemberId: senderType === 'actor' ? senderActorId : senderUserId,
+      sourceName: senderName,
+      summary: wakeupSummary,
+      metadata: isAutomaticWake
+        ? { delivery: 'broadcast', activationKind: 'auto_single_actor' }
+        : explicitActorTargets
+          ? { delivery: 'direct' }
+          : { delivery: 'broadcast' },
+    }).catch((err) => {
       console.error(`Failed to wake actor ${targetActorId}:`, err.message);
     });
   }
@@ -1402,64 +1462,61 @@ export async function getGroupMessages(
       contentBlocks: itemPartsToCanonicalContentBlocks(item.parts || []),
       metadata,
       createdAt: item.created_at,
-      targetActorNames: (item.targets || [])
-        .filter((target: any) => target.member_type === 'actor')
-        .map((target: any) => target.member_name || 'Unknown'),
-      targetUserNames: (item.targets || [])
-        .filter((target: any) => target.member_type === 'user')
-        .map((target: any) => target.member_name || 'Unknown'),
     };
   });
 }
 
 // ============ Actor Wake / Sleep ============
 
-export async function wakeActor(groupId: string, actorId: string): Promise<void> {
-  const group = await getGroup(groupId);
+export async function wakeActor(params: {
+  groupId: string;
+  actorId: string;
+  sourceType: 'user_message' | 'actor_message' | 'broadcast' | 'invite' | 'api_call' | 'system_interrupt' | 'retry';
+  sourceItemId?: string;
+  sourceSessionId?: string;
+  sourceMemberType?: 'user' | 'actor' | 'system';
+  sourceMemberId?: string;
+  sourceName?: string;
+  summary: string;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  const group = await getGroup(params.groupId);
   if (!group) return;
 
   let session = await ensureActorSession({
-    conversationId: groupId,
+    conversationId: params.groupId,
     workspaceId: group.workspace_id,
-    actorId,
-    trigger: 'group_message',
+    actorId: params.actorId,
+    trigger: params.sourceType,
   });
   session = await getSession(session.id);
   if (!session) return;
 
-  const previousStatus = session.status;
-
-  if (session.status === 'sleeping' || session.status === 'completed' || session.status === 'failed' || session.status === 'cancelled' || session.status === 'timed_out') {
-    await query(
-      `UPDATE sessions SET status = 'active', error_message = NULL, completed_at = NULL, updated_at = NOW() WHERE id = $1`,
-      [session.id],
-    );
-    session = { ...session, status: 'active' };
-
-    await emitEvent({
-      type: 'session.status.changed',
-      workspaceId: group.workspace_id,
-      payload: { groupId, sessionId: session.id, actorId, status: 'active', previousStatus },
-      timestamp: nowISO(),
-    });
-  }
-
-  await sessionThinkingQueue.add('think', {
+  await enqueueSessionWakeup({
     sessionId: session.id,
-    actorId,
+    actorId: params.actorId,
     workspaceId: group.workspace_id,
-    trigger: 'group_message',
+    sourceType: params.sourceType,
+    sourceItemId: params.sourceItemId,
+    sourceSessionId: params.sourceSessionId,
+    sourceMemberType: params.sourceMemberType,
+    sourceMemberId: params.sourceMemberId,
+    sourceName: params.sourceName,
+    summary: params.summary,
+    metadata: params.metadata,
+    trigger: params.sourceType,
   });
 }
 
 export async function sleepActor(sessionId: string): Promise<void> {
   const session = await getSession(sessionId);
-  if (!session || session.status !== 'active') return;
+  if (!session || session.status !== 'running') return;
 
-  await query(
-    `UPDATE sessions SET status = 'sleeping', updated_at = NOW() WHERE id = $1`,
-    [sessionId],
-  );
+  await updateSessionStatus(sessionId, 'idle', { errorMessage: null });
+  await publishSessionRuntime(session.workspace_id, sessionId, {
+    laneState: 'idle',
+    phase: 'idle',
+  });
 
   await emitEvent({
     type: 'session.status.changed',
@@ -1468,8 +1525,8 @@ export async function sleepActor(sessionId: string): Promise<void> {
       groupId: session.group_id,
       sessionId,
       actorId: session.actor_id,
-      status: 'sleeping',
-      previousStatus: 'active',
+      status: 'idle',
+      previousStatus: 'running',
     },
     timestamp: nowISO(),
   });
@@ -1871,12 +1928,14 @@ export async function markGroupRead(userId: string, groupId: string): Promise<vo
 // ============ Cancel Group ============
 
 export async function cancelGroup(groupId: string): Promise<void> {
-  await query(
+  const closed = await query(
     `UPDATE sessions
-     SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
-     WHERE conversation_id = $1 AND status IN ('active', 'sleeping')`,
+     SET status = 'closed', completed_at = NOW(), updated_at = NOW()
+     WHERE conversation_id = $1 AND status <> 'closed'
+     RETURNING id`,
     [groupId],
   );
+  await Promise.all(closed.rows.map((row: any) => removeSessionRuntime(row.id)));
 
   const group = await getGroup(groupId);
   if (group) {

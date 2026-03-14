@@ -23,7 +23,7 @@ export default function ChatPage() {
     messages,
     loadingGroups,
     loadingMessages,
-    thinkingMap,
+    runtimeMap,
     loadGroups,
     selectGroup,
     loadMessages,
@@ -33,6 +33,7 @@ export default function ChatPage() {
     handleNewMessage,
     handleStatusChanged,
     handleThinking,
+    handleActorRuntimeUpdated,
     handleGroupUpdated,
     handleMemberJoined,
     handleMemberKicked,
@@ -62,6 +63,9 @@ export default function ChatPage() {
       case 'session.thinking':
         handleThinking(event.payload);
         break;
+      case 'group.actor.runtime.updated':
+        handleActorRuntimeUpdated(event.payload);
+        break;
       case 'group.updated':
         handleGroupUpdated(event.payload);
         break;
@@ -80,7 +84,7 @@ export default function ChatPage() {
         if (workspaceId) loadGroups(workspaceId);
         break;
     }
-  }, [handleNewMessage, handleStatusChanged, handleThinking, handleGroupUpdated,
+  }, [handleNewMessage, handleStatusChanged, handleThinking, handleActorRuntimeUpdated, handleGroupUpdated,
       handleMemberJoined, handleMemberKicked, handleActorVersionChanged,
       loadGroups, workspaceId, notify]);
 
@@ -160,7 +164,7 @@ export default function ChatPage() {
         <GroupList
           groups={groups}
           selectedId={selectedGroupId}
-          thinkingMap={thinkingMap}
+          runtimeMap={runtimeMap}
           onSelect={handleSelectGroup}
           onNewConversation={handleNewConversation}
         />
@@ -175,7 +179,7 @@ export default function ChatPage() {
             group={selectedGroup}
             messages={messages}
             loading={loadingMessages}
-            thinking={thinkingMap[selectedGroupId!]}
+            actorRuntimes={selectedGroupId ? runtimeMap[selectedGroupId] : undefined}
             onSend={handleSend}
             onBack={() => setMobileView('list')}
             workspaceId={workspaceId}

@@ -223,9 +223,16 @@ class ApiClient {
   addGroupMembers(wsId: string, groupId: string, data: { actorIds?: string[]; userIds?: string[] }) {
     return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/members`, { method: 'POST', body: JSON.stringify(data) });
   }
-  sendGroupMessage(wsId: string, groupId: string, contentBlocks: CanonicalContentBlock[], targetActorIds?: string[]) {
+  sendGroupMessage(
+    wsId: string,
+    groupId: string,
+    contentBlocks: CanonicalContentBlock[],
+    targetActorIds?: string[],
+    targetUserIds?: string[],
+  ) {
     const body: any = { contentBlocks };
     if (targetActorIds && targetActorIds.length > 0) body.targetActorIds = targetActorIds;
+    if (targetUserIds && targetUserIds.length > 0) body.targetUserIds = targetUserIds;
     return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/messages`, { method: 'POST', body: JSON.stringify(body) });
   }
   markGroupRead(wsId: string, groupId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/read`, { method: 'POST', body: '{}' }); }

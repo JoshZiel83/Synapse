@@ -33,9 +33,11 @@ function normalizeSessionRow(row: any) {
 async function loadSession(sessionId: UUID): Promise<any | null> {
   const result = await query(
     `SELECT s.*,
+            a.name AS actor_name,
             c.kind AS conversation_kind,
             c.title AS conversation_title
      FROM sessions s
+     JOIN actors a ON a.id = s.actor_id
      JOIN conversations c ON c.id = s.conversation_id
      WHERE s.id = $1`,
     [sessionId],
@@ -161,7 +163,7 @@ export async function createSession(params: {
   const id = uuidv4();
   const result = await query(
     `INSERT INTO sessions (id, workspace_id, actor_id, conversation_id, channel_type, trigger, status, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, NOW(), NOW())
+     VALUES ($1, $2, $3, $4, $5, $6, 'idle', $7, NOW(), NOW())
      RETURNING *`,
     [id, workspaceId, actorId, finalConversationId, channelType, trigger, JSON.stringify(metadata)],
   );
@@ -226,14 +228,16 @@ export async function getSessionsByActor(
 export async function updateSessionStatus(
   sessionId: UUID,
   status: string,
-  extra?: { errorMessage?: string },
+  extra?: { errorMessage?: string | null },
 ): Promise<void> {
   const sets = ['status = $2', 'updated_at = NOW()'];
   const params: any[] = [sessionId, status];
   let idx = 3;
 
-  if (status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'timed_out') {
+  if (status === 'closed') {
     sets.push('completed_at = NOW()');
+  } else {
+    sets.push('completed_at = NULL');
   }
   if (extra?.errorMessage !== undefined) {
     sets.push(`error_message = $${idx}`);
@@ -413,11 +417,11 @@ export async function createInterrupt(params: {
 export async function cancelSession(sessionId: UUID): Promise<void> {
   const session = await getSession(sessionId);
   if (!session) throw new Error('Session not found');
-  if (session.status === 'completed' || session.status === 'cancelled') {
+  if (session.status === 'closed') {
     throw new Error(`Session already ${session.status}`);
   }
 
-  await updateSessionStatus(sessionId, 'cancelled');
+  await updateSessionStatus(sessionId, 'closed');
   await shutdownSessionInstances(sessionId).catch(() => {});
 }
 
@@ -425,7 +429,7 @@ export async function cancelSession(sessionId: UUID): Promise<void> {
 
 export async function getActiveSessionCount(actorId: UUID): Promise<number> {
   const result = await query(
-    `SELECT COUNT(*) as count FROM sessions WHERE actor_id = $1 AND status IN ('active', 'sleeping')`,
+    `SELECT COUNT(*) as count FROM sessions WHERE actor_id = $1 AND status = 'running'`,
     [actorId],
   );
   return parseInt(result.rows[0].count, 10);

@@ -222,10 +222,14 @@ export default function GroupMemberPickerDialog({
           </ScrollArea>
 
           <div className="flex items-center justify-end gap-3">
-            <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button onClick={() => void handleAdd()} disabled={selectedKeys.size === 0 || submitting}>
+            <Button
+              type="button"
+              onClick={() => void handleAdd()}
+              disabled={selectedKeys.size === 0 || submitting}
+            >
               <UserPlus className="size-4" />
               Add members
             </Button>

@@ -8,6 +8,7 @@ import type { GroupParticipant, ThinkingPhase } from '@/stores/chat-store';
 const STATUS_EMOJI: Record<ThinkingPhase | 'idle', string> = {
   thinking: '🤔',
   tool: '🛠️',
+  responding: '💬',
   error: '⚠️',
   idle: '😴',
 };

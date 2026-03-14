@@ -1,4 +1,3 @@
-import { redis } from '../../infrastructure/redis/index.js';
 import {
   createGroup as createGroupService,
   getGroupsByWorkspace,
@@ -8,6 +7,7 @@ import {
   cancelGroup as cancelGroupService,
 } from '../group/service.js';
 import type { CanonicalContentBlock, UUID } from '@synapse/shared';
+import { getGroupRuntimeMap } from '../session/runtime.js';
 
 /**
  * Chat service — thin wrapper around group service for backward compatibility.
@@ -31,22 +31,9 @@ export async function listGroups(workspaceId: UUID, userId: UUID) {
     title: row.title || row.last_message?.substring(0, 100),
   }));
 
-  // Recover thinking states from Redis for active groups
-  const activeGroupIds = transformedGroups.filter((g: any) => g.status === 'active').map((g: any) => g.id);
-  const thinkingMap: Record<string, any> = {};
-  if (activeGroupIds.length > 0) {
-    const keys = activeGroupIds.map((id: string) => `thinking:${id}`);
-    const values = await redis.mget(...keys);
-    for (let i = 0; i < activeGroupIds.length; i++) {
-      if (values[i]) {
-        try {
-          thinkingMap[activeGroupIds[i]] = JSON.parse(values[i]!);
-        } catch { /* ignore parse errors */ }
-      }
-    }
-  }
+  const runtimeMap = await getGroupRuntimeMap(transformedGroups.map((group: any) => group.id));
 
-  return { groups: transformedGroups, thinkingMap };
+  return { groups: transformedGroups, runtimeMap };
 }
 
 export async function getGroupMessages(groupId: UUID, userId: UUID, limit = 50, before?: string) {
@@ -60,13 +47,14 @@ export async function sendMessageToGroup(
   content: string,
   contentBlocks?: CanonicalContentBlock[],
   targetActorIds?: string[],
+  targetUserIds?: string[],
 ) {
   return sendGroupMessage({
     groupId,
     senderType: 'user',
     senderUserId: userId,
     targetActorIds,
-    targetUserIds: [],
+    targetUserIds,
     content,
     contentBlocks,
   });

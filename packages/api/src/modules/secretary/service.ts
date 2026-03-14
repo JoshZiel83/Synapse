@@ -7,7 +7,7 @@ import {
   addSessionMessage,
 } from '../session/service.js';
 import { getToolHistoryForSession } from '../execution/service.js';
-import { sessionThinkingQueue } from '../../workers/queues.js';
+import { enqueueSessionWakeup } from '../session/runtime.js';
 import type { Actor, UUID } from '@synapse/shared';
 
 export async function findSecretary(workspaceId: UUID): Promise<Actor | null> {
@@ -47,12 +47,16 @@ export async function processUserMessage(
   });
 
   // Enqueue thinking
-  await sessionThinkingQueue.add('think', {
+  await enqueueSessionWakeup({
     sessionId: session.id,
     actorId: secretary.id,
     workspaceId,
+    sourceType: 'user_message',
+    sourceMemberType: 'user',
+    sourceMemberId: userId,
+    sourceName: 'User',
+    summary: content.trim().slice(0, 96) || 'New message',
     trigger: 'user_message',
-    userId,
   });
 
   // Emit events
@@ -84,9 +88,9 @@ export async function clearConversation(
 
   // Cancel active sessions and mark session messages as cleared
   await query(
-    `UPDATE sessions SET status = 'cancelled', updated_at = NOW()
+    `UPDATE sessions SET status = 'closed', completed_at = NOW(), updated_at = NOW()
      WHERE workspace_id = $1 AND actor_id = $2 AND channel_type = 'web'
-       AND status NOT IN ('completed', 'failed', 'cancelled', 'timed_out')`,
+       AND status <> 'closed'`,
     [workspaceId, secretary.id]
   );
 }

@@ -1,7 +1,7 @@
 'use client';
 import { create } from 'zustand';
 import { api } from '@/lib/api';
-import type { CanonicalContentBlock } from '@synapse/shared';
+import type { ActorRuntimeState, CanonicalContentBlock } from '@synapse/shared';
 import { extractText, normalizeCanonicalContentBlocks, textBlocks } from '@synapse/shared';
 
 export interface GroupParticipant {
@@ -66,17 +66,13 @@ export interface GroupMessage {
   serverToolCalls?: ServerToolCall[];
   citationSources?: Record<string, { url: string; title: string }>;
   coordination?: boolean; // true for send_to inter-actor messages
-  targetActorNames?: string[]; // names of @mentioned actors
+  targetActorIds?: string[];
+  targetUserIds?: string[];
 }
 
-export type ThinkingPhase = 'thinking' | 'tool' | 'error';
-
-export interface ThinkingState {
-  actorId: string;
-  actorName: string;
-  status?: string;
-  phase?: ThinkingPhase;
-}
+export type ThinkingPhase = 'thinking' | 'tool' | 'responding' | 'error';
+export type ActorAvatarStatus = 'idle' | ThinkingPhase;
+export type GroupRuntimeMap = Record<string, Record<string, ActorRuntimeState>>;
 
 interface ChatState {
   groups: Group[];
@@ -84,7 +80,7 @@ interface ChatState {
   messages: GroupMessage[];
   loadingGroups: boolean;
   loadingMessages: boolean;
-  thinkingMap: Record<string, ThinkingState>; // keyed by groupId
+  runtimeMap: GroupRuntimeMap; // keyed by groupId -> actorId
   totalUnread: number;
 
   loadGroups: (workspaceId: string) => Promise<void>;
@@ -98,6 +94,7 @@ interface ChatState {
   handleNewMessage: (payload: any) => void;
   handleStatusChanged: (payload: any) => void;
   handleThinking: (payload: any) => void;
+  handleActorRuntimeUpdated: (payload: any) => void;
   handleGroupUpdated: (payload: any) => void;
   handleMemberJoined: (payload: any) => void;
   handleMemberKicked: (payload: any) => void;
@@ -117,13 +114,70 @@ function normalizeContentBlocks(payload: any): CanonicalContentBlock[] {
   return [];
 }
 
+export function runtimePhaseToBadgePhase(runtime?: ActorRuntimeState): ThinkingPhase | undefined {
+  if (!runtime) return undefined;
+  if (runtime.health === 'error' || runtime.phase === 'error') return 'error';
+  if (runtime.phase === 'tool') return 'tool';
+  if (runtime.phase === 'responding') return 'responding';
+  if (runtime.phase === 'thinking' || runtime.laneState === 'running' || runtime.laneState === 'queued') {
+    return 'thinking';
+  }
+  return undefined;
+}
+
+export function runtimeToAvatarStatus(runtime?: ActorRuntimeState): ActorAvatarStatus | undefined {
+  if (!runtime) return undefined;
+  return runtimePhaseToBadgePhase(runtime) || 'idle';
+}
+
+function applyRuntimeToGroupMembers(group: Group, runtime: ActorRuntimeState): Group {
+  return {
+    ...group,
+    members: group.members.map((member) => (
+      member.type === 'actor' && member.id === runtime.actorId
+        ? { ...member, sessionStatus: runtime.laneState }
+        : member
+    )),
+  };
+}
+
+function deriveGroupStatus(group: Group, runtimesForGroup?: Record<string, ActorRuntimeState>) {
+  const actorMembers = group.members.filter((member) => member.type === 'actor');
+  if (actorMembers.length === 0) return 'completed' as const;
+  const hasOpenLane = actorMembers.some((member) => {
+    const runtime = runtimesForGroup?.[member.id];
+    const laneState = runtime?.laneState || member.sessionStatus;
+    return laneState !== 'closed';
+  });
+  return hasOpenLane ? 'active' as const : 'completed' as const;
+}
+
+function applyRuntimeMapToGroup(group: Group, runtimesForGroup?: Record<string, ActorRuntimeState>): Group {
+  if (!runtimesForGroup) {
+    return {
+      ...group,
+      status: deriveGroupStatus(group, undefined),
+    };
+  }
+
+  let nextGroup = group;
+  for (const runtime of Object.values(runtimesForGroup)) {
+    nextGroup = applyRuntimeToGroupMembers(nextGroup, runtime);
+  }
+
+  return {
+    ...nextGroup,
+    status: deriveGroupStatus(nextGroup, runtimesForGroup),
+  };
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   groups: [],
   selectedGroupId: null,
   messages: [],
   loadingGroups: false,
   loadingMessages: false,
-  thinkingMap: {},
+  runtimeMap: {},
   totalUnread: 0,
 
   loadGroups: async (workspaceId) => {
@@ -132,13 +186,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const res = await api.getGroups(workspaceId);
       const groups = res?.groups || [];
       const totalUnread = groups.reduce((sum: number, g: any) => sum + (g.unreadCount || 0), 0);
-      // Recover thinking states from server (persisted in Redis)
-      const serverThinking = res?.thinkingMap || {};
+      const serverRuntime = res?.runtimeMap || {};
       set((s) => ({
-        groups,
+        groups: groups.map((group: Group) => applyRuntimeMapToGroup(group, serverRuntime[group.id] || s.runtimeMap[group.id])),
         totalUnread,
         loadingGroups: false,
-        thinkingMap: { ...serverThinking, ...s.thinkingMap },
+        runtimeMap: { ...serverRuntime, ...s.runtimeMap },
       }));
     } catch (err) {
       console.error('Failed to load groups:', err);
@@ -173,7 +226,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           serverToolCalls: m.metadata?.serverToolCalls,
           citationSources: m.metadata?.citationSources,
           coordination: !!m.metadata?.coordination,
-          targetActorNames: m.targetActorNames,
+          targetActorIds: m.targetActorIds,
+          targetUserIds: m.targetUserIds,
         };
       });
       set({ messages, loadingMessages: false });
@@ -194,6 +248,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       contentBlocks,
       createdAt: new Date().toISOString(),
       status: 'sending',
+      targetActorIds,
     };
     set((state) => ({
       messages: [...state.messages, optimisticMsg],
@@ -214,7 +269,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ? {
                 ...g,
                 lastMessage: { content: extractText(contentBlocks), role: 'user', createdAt: new Date().toISOString() },
-                status: 'active' as const,
+                status: deriveGroupStatus(g, state.runtimeMap[groupId]),
               }
             : g
         ),
@@ -256,7 +311,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const groupId = getGroupId(payload);
     if (!groupId) return;
 
-    const { sessionId, role, fromActorId, messageId, fromUserId, metadata, actorName, targetUserIds } = payload;
+    const { sessionId, role, fromActorId, messageId, fromUserId, metadata, actorName } = payload;
     const messageContentBlocks = normalizeContentBlocks(payload);
     const effectiveRole = role;
     const effectiveFromActorId = fromActorId;
@@ -267,22 +322,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     if (effectiveRole === 'tool_result' || effectiveRole === 'child_result') {
       return;
-    }
-
-    // Visibility filter: actor messages without current user in targetUserIds are not for us
-    // (coordination messages between actors — user can't see them)
-    if (effectiveRole === 'assistant' && targetUserIds && Array.isArray(targetUserIds) && targetUserIds.length === 0) {
-      // Actor sent to other actors only, not to any user — skip for frontend
-      return;
-    }
-
-    // Clear thinking for this group when assistant responds
-    if (effectiveRole === 'assistant') {
-      set((s) => {
-        const newMap = { ...s.thinkingMap };
-        delete newMap[groupId];
-        return { thinkingMap: newMap };
-      });
     }
 
     const eventType = (payload as any).eventType as string | undefined;
@@ -297,7 +336,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const serverToolCalls = metadata?.serverToolCalls as ServerToolCall[] | undefined;
     const citationSources = metadata?.citationSources as Record<string, { url: string; title: string }> | undefined;
     const coordination = !!metadata?.coordination;
-    const targetActorNames = payload.targetActorNames as string[] | undefined;
+    const targetActorIds = payload.targetActorIds as string[] | undefined;
+    const targetUserIds = payload.targetUserIds as string[] | undefined;
 
     // If this group is selected, append the message (avoid duplicates)
     if (state.selectedGroupId === groupId) {
@@ -321,6 +361,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               contentBlocks: messageContentBlocks,
               content: extractText(messageContentBlocks),
               fromActorId: effectiveFromActorId,
+              fromUserId: effectiveFromUserId,
               actorName: effectiveActorName,
               createdAt: payload.createdAt || new Date().toISOString(),
               status: 'sent' as const,
@@ -328,7 +369,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
               serverToolCalls,
               citationSources,
               coordination,
-              targetActorNames,
+              targetActorIds,
+              targetUserIds,
             },
           ],
         };
@@ -376,7 +418,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             actorName: effectiveActorName,
             createdAt: payload.createdAt || new Date().toISOString(),
           },
-          status: 'active' as const,
+          status: deriveGroupStatus(g, s.runtimeMap[groupId]),
           unreadCount,
         };
       });
@@ -395,66 +437,120 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const groupId = getGroupId(payload);
     if (!groupId) return;
     const { status, errorMessage, actorId, actorName, phase } = payload;
-
-    // Map session status to group-level status
-    let groupStatus = status;
-    if (status === 'sleeping') groupStatus = 'active'; // sleeping actors = group still usable
-    if (status === 'active') groupStatus = 'active';
-
-    // Update group status
-    set((s) => ({
-      groups: s.groups.map((g) =>
-        g.id === groupId ? { ...g, status: groupStatus } : g
-      ),
-    }));
-
-    // On failure: clear thinking indicator and inject an error message into the chat
-    if (status === 'failed') {
-      set((s) => {
-        const newMap = { ...s.thinkingMap };
-        if (actorId) {
-          newMap[groupId] = {
-            actorId,
-            actorName: actorName || 'Unknown',
-            status: errorMessage || 'Something went wrong',
-            phase: phase || 'error',
-          };
-        } else {
-          delete newMap[groupId];
-        }
-
-        // Only inject if this group is currently selected
-        if (s.selectedGroupId !== groupId) {
-          return { thinkingMap: newMap };
-        }
-
-        const errMsg: GroupMessage = {
-          id: `error-${Date.now()}`,
-          sessionId: '',
-          role: 'error',
-          content: errorMessage || 'An unexpected error occurred while processing your request.',
-          contentBlocks: textBlocks(errorMessage || 'An unexpected error occurred while processing your request.'),
-          createdAt: new Date().toISOString(),
-        };
-
-        return {
-          thinkingMap: newMap,
-          messages: [...s.messages, errMsg],
-        };
+    set((s) => {
+      const nextRuntimeForGroup = actorId
+        ? {
+            ...(s.runtimeMap[groupId] || {}),
+            [actorId]: {
+              groupId,
+              sessionId: payload.sessionId || '',
+              actorId,
+              actorName: actorName || 'Unknown',
+              laneState: status,
+              health: status === 'blocked' ? 'error' : 'ok',
+              phase: phase || (status === 'blocked' ? 'error' : 'idle'),
+              pendingWakeupCount: 0,
+              activeWakeups: [],
+              updatedAt: payload.createdAt || new Date().toISOString(),
+              ...(status === 'blocked' && errorMessage
+                ? {
+                    lastError: {
+                      message: errorMessage,
+                      at: payload.createdAt || new Date().toISOString(),
+                    },
+                  }
+                : {}),
+            } satisfies ActorRuntimeState,
+          }
+        : (s.runtimeMap[groupId] || {});
+      const runtimeMap = actorId
+        ? {
+            ...s.runtimeMap,
+            [groupId]: nextRuntimeForGroup,
+          }
+        : s.runtimeMap;
+      const groups = s.groups.map((group) => {
+        if (group.id !== groupId) return group;
+        return applyRuntimeMapToGroup(group, nextRuntimeForGroup);
       });
-    }
+
+      if (status !== 'blocked' || s.selectedGroupId !== groupId) {
+        return { groups, runtimeMap };
+      }
+
+      const errMsg: GroupMessage = {
+        id: `error-${Date.now()}`,
+        sessionId: '',
+        role: 'error',
+        content: errorMessage || 'An unexpected error occurred while processing your request.',
+        contentBlocks: textBlocks(errorMessage || 'An unexpected error occurred while processing your request.'),
+        createdAt: new Date().toISOString(),
+      };
+
+      return {
+        groups,
+        runtimeMap,
+        messages: [...s.messages, errMsg],
+      };
+    });
   },
 
   handleThinking: (payload) => {
     const groupId = getGroupId(payload);
     if (!groupId) return;
     const { actorId, actorName, status, phase } = payload;
-    set((s) => ({
-      thinkingMap: {
-        ...s.thinkingMap,
-        [groupId]: { actorId, actorName, status, phase },
-      },
-    }));
+    set((s) => {
+      const currentGroupRuntime = { ...(s.runtimeMap[groupId] || {}) };
+      const currentRuntime = currentGroupRuntime[actorId] || null;
+      currentGroupRuntime[actorId] = {
+        groupId,
+        sessionId: payload.sessionId || currentRuntime?.sessionId || '',
+        actorId,
+        actorName: actorName || currentRuntime?.actorName || 'Unknown',
+        laneState: currentRuntime?.laneState || 'running',
+        health: currentRuntime?.health || 'ok',
+        phase: phase || currentRuntime?.phase || 'thinking',
+        statusText: status || currentRuntime?.statusText,
+        currentTurnId: currentRuntime?.currentTurnId,
+        pendingWakeupCount: currentRuntime?.pendingWakeupCount || 0,
+        activeWakeups: currentRuntime?.activeWakeups || [],
+        latestWakeupAt: currentRuntime?.latestWakeupAt,
+        lastError: currentRuntime?.lastError,
+        updatedAt: new Date().toISOString(),
+      };
+      return {
+        runtimeMap: {
+          ...s.runtimeMap,
+          [groupId]: currentGroupRuntime,
+        },
+        groups: s.groups.map((group) => (
+          group.id === groupId
+            ? applyRuntimeMapToGroup(group, currentGroupRuntime)
+            : group
+        )),
+      };
+    });
+  },
+
+  handleActorRuntimeUpdated: (payload) => {
+    const groupId = payload.groupId;
+    if (!groupId || !payload.actorId) return;
+
+    set((s) => {
+      const nextRuntimeForGroup = {
+        ...(s.runtimeMap[groupId] || {}),
+        [payload.actorId]: payload as ActorRuntimeState,
+      };
+      const runtimeMap = {
+        ...s.runtimeMap,
+        [groupId]: nextRuntimeForGroup,
+      };
+      const groups = s.groups.map((group) => {
+        if (group.id !== groupId) return group;
+        return applyRuntimeMapToGroup(group, nextRuntimeForGroup);
+      });
+      return { runtimeMap, groups };
+    });
   },
 
   handleGroupUpdated: (payload) => {
@@ -570,6 +666,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ...g,
           members: nextMembers,
           participants: nextParticipants,
+          status: deriveGroupStatus({ ...g, members: nextMembers }, s.runtimeMap[groupId]),
         };
       }),
     }));
@@ -608,22 +705,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const state = get();
 
     // Remove from participants list
-    set((s) => ({
-      groups: s.groups.map((g) => {
+    set((s) => {
+      const nextRuntimeForGroup = { ...(s.runtimeMap[groupId] || {}) };
+      const groups = s.groups.map((g) => {
         if (g.id !== groupId) return g;
-        const removedActorIds = new Set(
+        const removedActorIds = new Set<string>(
           removedMembers
             .filter((member: any) => member.type !== 'user')
             .map((member: any) => member.actorId || member.id)
-            .filter(Boolean),
+            .filter((value: string | undefined): value is string => Boolean(value)),
         );
-        const removedUserIds = new Set(
+        const removedUserIds = new Set<string>(
           removedMembers
             .filter((member: any) => member.type === 'user')
             .map((member: any) => member.userId || member.id)
-            .filter(Boolean),
+            .filter((value: string | undefined): value is string => Boolean(value)),
         );
-        return {
+        for (const actorId of removedActorIds) {
+          delete nextRuntimeForGroup[actorId];
+        }
+        const nextGroup = {
           ...g,
           participants: g.participants.filter((p) => !removedActorIds.has(p.id)),
           members: g.members.filter((member) => (
@@ -632,8 +733,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
               : !removedUserIds.has(member.id)
           )),
         };
-      }),
-    }));
+        return {
+          ...nextGroup,
+          status: deriveGroupStatus(nextGroup, nextRuntimeForGroup),
+        };
+      });
+      return {
+        groups,
+        runtimeMap: {
+          ...s.runtimeMap,
+          [groupId]: nextRuntimeForGroup,
+        },
+      };
+    });
 
     // Insert system message if this group is selected
     if (state.selectedGroupId === groupId) {
@@ -659,6 +771,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const state = get();
 
     set((s) => ({
+      runtimeMap: Object.fromEntries(
+        Object.entries(s.runtimeMap).map(([groupId, runtimeByActor]) => [
+          groupId,
+          Object.fromEntries(
+            Object.entries(runtimeByActor).map(([runtimeActorId, runtime]) => [
+              runtimeActorId,
+              runtimeActorId === actorId
+                ? {
+                    ...runtime,
+                    actorName: actorName || runtime.actorName,
+                  }
+                : runtime,
+            ]),
+          ),
+        ]),
+      ),
       groups: s.groups.map((group) => ({
         ...group,
         participants: group.participants.map((participant) => (

@@ -11,10 +11,10 @@ import { generateAgentCard, generateMultiAgentCard } from './actor-card.js';
 import { buildTaskResponse } from './protocol.js';
 import {
   getSession, getSessionMessages, addSessionMessage,
-  updateSessionStatus, cancelSession, createSession,
+  cancelSession, createSession,
 } from '../session/service.js';
+import { enqueueSessionWakeup } from '../session/runtime.js';
 import { query } from '../../infrastructure/database/index.js';
-import { sessionThinkingQueue } from '../../workers/queues.js';
 
 // ============ Management Routes (JWT auth) ============
 
@@ -256,24 +256,21 @@ async function handleMessageSend(a2aApp: any, workspaceId: string, params: any, 
       // Add message to existing session
       const existingTask = existingTasks.rows[0];
       const session = await getSession(existingTask.session_id);
-      if (session && !['completed', 'failed', 'cancelled', 'timed_out'].includes(session.status)) {
+      if (session && session.status !== 'closed') {
         await addSessionMessage({
           sessionId: existingTask.session_id,
           workspaceId,
           role: 'user',
           content,
         });
-
-        // Resume if sleeping
-        if (session.status === 'sleeping') {
-          await updateSessionStatus(existingTask.session_id, 'active');
-          await sessionThinkingQueue.add('think', {
-            sessionId: existingTask.session_id,
-            actorId: session.actor_id,
-            workspaceId,
-            trigger: 'a2a_message',
-          });
-        }
+        await enqueueSessionWakeup({
+          sessionId: existingTask.session_id,
+          actorId: session.actor_id,
+          workspaceId,
+          sourceType: 'api_call',
+          summary: content.trim().slice(0, 96) || 'API message',
+          trigger: 'api_call',
+        });
 
         return buildTaskResponse(existingTask.id, existingTask.session_id, contextId);
       }
@@ -298,10 +295,12 @@ async function handleMessageSend(a2aApp: any, workspaceId: string, params: any, 
   });
 
   // Enqueue thinking
-  await sessionThinkingQueue.add('think', {
+  await enqueueSessionWakeup({
     sessionId: session.id,
     actorId: targetActor.id,
     workspaceId,
+    sourceType: 'api_call',
+    summary: content.trim().slice(0, 96) || 'API message',
     trigger: 'api_call',
   });
 
@@ -365,8 +364,7 @@ async function waitForSession(sessionId: string, timeoutSec: number): Promise<vo
   while (Date.now() < deadline) {
     const session = await getSession(sessionId);
     if (!session) break;
-    // sleeping = actor finished its turn (auto-slept after responding)
-    if (['completed', 'failed', 'cancelled', 'timed_out', 'sleeping'].includes(session.status)) {
+    if (session.status === 'idle' || session.status === 'blocked' || session.status === 'closed') {
       return;
     }
     await new Promise(resolve => setTimeout(resolve, poll));

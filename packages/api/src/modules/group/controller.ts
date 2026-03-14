@@ -4,7 +4,6 @@ import type { CanonicalContentBlock } from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { checkPermission, lookupResources } from '../../infrastructure/authz/index.js';
 import { query } from '../../infrastructure/database/index.js';
-import { redis } from '../../infrastructure/redis/index.js';
 import {
   createGroup, getGroup, getGroupsByWorkspace, getGroupMessages,
   sendGroupMessage, markGroupRead, cancelGroup, getGroupMembers,
@@ -18,11 +17,13 @@ import {
   revokeConversationGrant,
   revokeConversationMemoryGrant,
 } from './service.js';
+import { getGroupRuntimeMap } from '../session/runtime.js';
 
 const sendGroupMessageSchema = z.object({
   content: z.string().max(10000).optional().default(''),
   contentBlocks: z.array(z.any()).optional(),
   targetActorIds: z.array(z.string().uuid()).optional(),
+  targetUserIds: z.array(z.string().uuid()).optional(),
 }).refine(
   (body) => body.content.trim().length > 0 || (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
   { message: 'content or contentBlocks is required' },
@@ -203,8 +204,7 @@ export default async function groupController(app: FastifyInstance) {
         const mappedMembers = members.map(mapMember);
         const participants = mappedMembers.filter((member: any) => member.type === 'actor');
 
-        const hasActive = members.some((m: any) => m.session_status === 'active');
-        const hasSleeping = members.some((m: any) => m.session_status === 'sleeping');
+        const hasOpenLane = members.some((m: any) => m.actor_id && m.session_status !== 'closed');
         const metadata = parseMetadata(row.metadata);
         const derivedName = row.title
           || mappedMembers.map((member: any) => member.name).filter(Boolean).join(', ')
@@ -227,7 +227,7 @@ export default async function groupController(app: FastifyInstance) {
 
         return {
           id: row.id,
-          status: hasActive ? 'active' : hasSleeping ? 'active' : 'completed',
+          status: hasOpenLane ? 'active' : 'completed',
           participants,
           members: mappedMembers,
           lastMessage: row.last_message ? {
@@ -248,22 +248,8 @@ export default async function groupController(app: FastifyInstance) {
         };
       }));
 
-      // Recover thinking states from Redis
-      const activeGroupIds = groups.filter((g: any) => g.status === 'active').map((g: any) => g.id);
-      const thinkingMap: Record<string, any> = {};
-      if (activeGroupIds.length > 0) {
-        const keys = activeGroupIds.map((id: string) => `thinking:${id}`);
-        const values = await redis.mget(...keys);
-        for (let i = 0; i < activeGroupIds.length; i++) {
-          if (values[i]) {
-            try {
-              thinkingMap[activeGroupIds[i]] = JSON.parse(values[i]!);
-            } catch { /* ignore */ }
-          }
-        }
-      }
-
-      return reply.send({ groups, thinkingMap });
+      const runtimeMap = await getGroupRuntimeMap(groups.map((group: any) => group.id));
+      return reply.send({ groups, runtimeMap });
     }
   );
 
@@ -339,7 +325,7 @@ export default async function groupController(app: FastifyInstance) {
     }
   );
 
-  // Send message to group — targetActorIds optional (defaults to all actors)
+  // Send message to group — explicit targets are optional.
   app.post<{ Params: { workspaceId: string; groupId: string }; Body: any }>(
     '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/messages',
     async (request, reply) => {
@@ -355,6 +341,7 @@ export default async function groupController(app: FastifyInstance) {
         content: string;
         contentBlocks?: CanonicalContentBlock[];
         targetActorIds?: string[];
+        targetUserIds?: string[];
       };
       const userId = (request as any).user!.userId;
 
@@ -363,7 +350,7 @@ export default async function groupController(app: FastifyInstance) {
         senderType: 'user',
         senderUserId: userId,
         targetActorIds: body.targetActorIds,
-        targetUserIds: [],
+        targetUserIds: body.targetUserIds,
         content: body.content,
         contentBlocks: body.contentBlocks,
       });

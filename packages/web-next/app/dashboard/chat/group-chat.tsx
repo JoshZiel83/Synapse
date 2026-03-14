@@ -1,12 +1,14 @@
 'use client';
 
+import type { ActorRuntimeState } from '@synapse/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fileRefBlock, textBlock, type CanonicalContentBlock } from '@synapse/shared';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, ArrowDown, Bot, Paperclip, X, Pencil, Check } from 'lucide-react';
+import { Send, ArrowDown, Paperclip, X, Pencil, Check } from 'lucide-react';
 import MessageBubble from './message-bubble';
-import type { Group, GroupMessage, ThinkingState } from '@/stores/chat-store';
+import type { Group, GroupMessage } from '@/stores/chat-store';
+import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
 import ChatAvatar from './chat-avatar';
 import ChatMemberStrip from './chat-member-strip';
@@ -17,7 +19,7 @@ interface GroupChatProps {
   group: Group;
   messages: GroupMessage[];
   loading: boolean;
-  thinking?: ThinkingState;
+  actorRuntimes?: Record<string, ActorRuntimeState>;
   onSend: (contentBlocks: CanonicalContentBlock[], targetActorIds?: string[]) => Promise<void> | void;
   onBack?: () => void;
   workspaceId?: string;
@@ -32,16 +34,33 @@ function summarizeMemberCounts(group: Group) {
   return `${userLabel} · ${actorLabel}`;
 }
 
+function getRuntimePriority(runtime: ActorRuntimeState) {
+  if (runtime.health === 'error' || runtime.laneState === 'blocked') return 0;
+  if (runtime.laneState === 'running') return 1;
+  if (runtime.laneState === 'queued') return 2;
+  return 3;
+}
+
+function summarizeCurrentUserProcessingActors(runtimes: ActorRuntimeState[]) {
+  const names = runtimes.map((runtime) => runtime.actorName);
+  if (names.length === 0) return null;
+  if (names.length === 1) return `${names[0]} is processing your message`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are processing your messages`;
+  return `${names[0]}, ${names[1]} +${names.length - 2} are processing your messages`;
+}
+
 export default function GroupChat({
   group,
   messages,
   loading,
-  thinking,
+  actorRuntimes,
   onSend,
   onBack,
   workspaceId,
   onRefreshGroup,
 }: GroupChatProps) {
+  const { user } = useAuthStore();
+  const currentUserId = user?.id || user?.userId || '';
   const [inputValue, setInputValue] = useState('');
   const [inputPlainTextValue, setInputPlainTextValue] = useState('');
   const [mentionedActorIds, setMentionedActorIds] = useState<string[]>([]);
@@ -74,6 +93,35 @@ export default function GroupChat({
       .map((actorId) => mentionableActors.find((actor) => actor.id === actorId))
       .filter((actor): actor is MentionableActor => Boolean(actor)),
     [mentionedActorIds, mentionableActors],
+  );
+  const actorMemberMap = useMemo(
+    () => Object.fromEntries(
+      group.members
+        .filter((member) => member.type === 'actor')
+        .map((member) => [member.id, member]),
+    ),
+    [group.members],
+  );
+  const activeRuntimes = useMemo(
+    () => Object.values(actorRuntimes || {})
+      .filter((runtime) => runtime.laneState !== 'idle' && runtime.laneState !== 'closed')
+      .sort((left, right) => getRuntimePriority(left) - getRuntimePriority(right)),
+    [actorRuntimes],
+  );
+  const myProcessingRuntimes = useMemo(
+    () => activeRuntimes.filter((runtime) => (
+      runtime.laneState === 'running'
+      && runtime.activeWakeups.some((wakeup) => (
+        wakeup.status === 'attached'
+        && wakeup.sourceMemberType === 'user'
+        && wakeup.sourceMemberId === currentUserId
+      ))
+    )),
+    [activeRuntimes, currentUserId],
+  );
+  const workingHint = useMemo(
+    () => summarizeCurrentUserProcessingActors(myProcessingRuntimes),
+    [myProcessingRuntimes],
   );
 
   // Auto-scroll to bottom on new messages
@@ -319,8 +367,7 @@ export default function GroupChat({
         <div className="flex shrink-0 items-center gap-3">
           <ChatMemberStrip
             members={group.members}
-            activeActorId={thinking?.actorId}
-            activePhase={thinking?.phase}
+            runtimeByActor={actorRuntimes}
             max={5}
             size="lg"
             onAdd={group.permissions?.canManageMembers ? () => setMemberDialogOpen(true) : undefined}
@@ -363,8 +410,10 @@ export default function GroupChat({
               role={msg.role}
               contentBlocks={msg.contentBlocks}
               actorName={msg.actorName}
+              actorAvatarUrl={msg.fromActorId ? actorMemberMap[msg.fromActorId]?.avatarUrl : undefined}
               actorEmoji={msg.actorEmoji}
               actorRole={msg.actorRole}
+              actorRuntime={msg.fromActorId ? actorRuntimes?.[msg.fromActorId] : undefined}
               timestamp={msg.createdAt}
               isUser={msg.role === 'user'}
               status={msg.status}
@@ -372,33 +421,11 @@ export default function GroupChat({
               serverToolCalls={msg.serverToolCalls}
               citationSources={msg.citationSources}
               coordination={msg.coordination}
-              targetActorNames={msg.targetActorNames}
+              groupMembers={group.members}
+              targetActorIds={msg.targetActorIds}
+              targetUserIds={msg.targetUserIds}
             />
           ))
-        )}
-
-        {/* Thinking indicator */}
-        {thinking && (
-          <div className="flex gap-3">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0">
-              <Bot className="w-4 h-4 text-white" />
-            </div>
-            <div className="bg-gray-50 dark:bg-white/5 ring-1 ring-gray-200 dark:ring-white/10 rounded-2xl rounded-tl-sm px-4 py-3">
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <div className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <div className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '300ms' }} />
-                </div>
-                <span className="text-xs text-muted-foreground ml-2">
-                  {thinking.status
-                    ? `${thinking.actorName} · ${thinking.status}`
-                    : `${thinking.actorName} is thinking...`
-                  }
-                </span>
-              </div>
-            </div>
-          </div>
         )}
 
         <div ref={bottomRef} />
@@ -420,11 +447,11 @@ export default function GroupChat({
       {/* Input area — textarea with toolbar */}
       <div className="shrink-0 border-t border-border bg-muted/20 p-4">
         {/* Responding hint */}
-        {thinking && (
+        {workingHint && (
           <div className="flex items-center gap-2 mb-2 px-1">
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-xs text-muted-foreground">
-              {thinking.actorName} is responding — you can still send messages
+              {workingHint}
             </span>
           </div>
         )}
@@ -506,24 +533,27 @@ export default function GroupChat({
           {/* Toolbar */}
           <div className="absolute inset-x-0 bottom-0 flex justify-between py-2 pl-3 pr-2">
             <div className="flex items-center space-x-1">
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon-sm"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={sending}
-                className="flex h-8 w-8 items-center justify-center rounded-full text-gray-400 hover:text-gray-500 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+                className="rounded-full text-muted-foreground"
               >
                 <Paperclip className="w-5 h-5" />
-              </button>
+              </Button>
             </div>
             <div className="flex-shrink-0">
-              <button
+              <Button
                 type="submit"
+                size="sm"
                 disabled={(!inputPlainTextValue.trim() && pendingFiles.length === 0) || sending}
-                className="inline-flex items-center rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:bg-gray-200 dark:disabled:bg-gray-800 disabled:text-gray-400 dark:disabled:text-gray-500 disabled:cursor-not-allowed transition-all"
+                className="min-w-[104px] rounded-full shadow-sm"
               >
-                <span className="mr-1.5">Send</span>
+                <span>Send</span>
                 <Send className="w-4 h-4" />
-              </button>
+              </Button>
             </div>
           </div>
         </form>

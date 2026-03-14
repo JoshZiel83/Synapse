@@ -517,11 +517,13 @@ export async function getVisibleConversationItemsForMember(params: {
 
   const items = await query(
     `SELECT ci.*,
+            c.kind AS conversation_kind,
             cm.member_type AS author_member_type,
             cm.actor_id AS author_actor_id,
             cm.user_id AS author_user_id,
             COALESCE(a.name, u.name, cm.display_name) AS author_name
      FROM conversation_items ci
+     JOIN conversations c ON c.id = ci.conversation_id
      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
      LEFT JOIN actors a ON a.id = cm.actor_id
      LEFT JOIN users u ON u.id = cm.user_id
@@ -529,7 +531,8 @@ export async function getVisibleConversationItemsForMember(params: {
        AND ci.scope = 'shared'
        AND ci.surface = 'visible'
        AND (
-         ci.author_member_id = $2
+         (c.kind = 'group' AND ci.item_type = 'message')
+         OR ci.author_member_id = $2
          OR NOT EXISTS (SELECT 1 FROM conversation_item_targets cit0 WHERE cit0.item_id = ci.id)
          OR EXISTS (
            SELECT 1 FROM conversation_item_targets cit
@@ -562,21 +565,24 @@ export async function getContextConversationItemsForMember(params: {
 
   const items = await query(
     `SELECT ci.*,
+            c.kind AS conversation_kind,
             cm.member_type AS author_member_type,
             cm.actor_id AS author_actor_id,
             cm.user_id AS author_user_id,
             COALESCE(a.name, u.name, cm.display_name) AS author_name
      FROM conversation_items ci
+     JOIN conversations c ON c.id = ci.conversation_id
      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
      LEFT JOIN actors a ON a.id = cm.actor_id
      LEFT JOIN users u ON u.id = cm.user_id
      WHERE ci.conversation_id = $1
-       AND ci.scope = 'shared'
+      AND ci.scope = 'shared'
        AND (
          (
            ci.surface = 'visible'
            AND (
-             ci.author_member_id = $2
+             (c.kind = 'group' AND ci.item_type = 'message')
+             OR ci.author_member_id = $2
              OR NOT EXISTS (SELECT 1 FROM conversation_item_targets cit0 WHERE cit0.item_id = ci.id)
              OR EXISTS (
                SELECT 1 FROM conversation_item_targets cit
@@ -652,11 +658,6 @@ export async function listUserGroupConversations(workspaceId: string, userId: st
               WHERE ci.conversation_id = c.id
                 AND ci.scope = 'shared'
                 AND ci.surface = 'visible'
-                AND (
-                  ci.author_member_id = cm_u.id
-                  OR NOT EXISTS (SELECT 1 FROM conversation_item_targets t0 WHERE t0.item_id = ci.id)
-                  OR EXISTS (SELECT 1 FROM conversation_item_targets t1 WHERE t1.item_id = ci.id AND t1.target_member_id = cm_u.id)
-                )
                 AND ci.created_at > COALESCE(cr.last_read_at, '1970-01-01'::timestamptz)
             ) AS unread_count
      FROM conversations c

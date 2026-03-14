@@ -11,9 +11,8 @@ import {
   getSessionMessages,
   cancelSession,
   addSessionMessage,
-  updateSessionStatus,
 } from './service.js';
-import { sessionThinkingQueue } from '../../workers/queues.js';
+import { enqueueSessionWakeup } from './runtime.js';
 
 const createSessionSchema = z.object({
   content: z.string().max(10000).optional().default(''),
@@ -160,12 +159,15 @@ export async function sessionController(app: FastifyInstance) {
     });
 
     // Enqueue thinking
-    await sessionThinkingQueue.add('think', {
+    await enqueueSessionWakeup({
       sessionId: session.id,
       actorId,
       workspaceId,
+      sourceType: 'user_message',
+      sourceMemberType: 'user',
+      sourceMemberId: userId,
+      summary: content.trim().slice(0, 96) || 'New message',
       trigger: 'user_message',
-      userId,
     });
 
     return reply.status(201).send({
@@ -194,7 +196,7 @@ export async function sessionController(app: FastifyInstance) {
     );
     if (!session) return;
 
-    if (session.status === 'completed' || session.status === 'failed' || session.status === 'cancelled') {
+    if (session.status === 'closed') {
       return reply.status(400).send({ error: `Cannot send message to ${session.status} session` });
     }
 
@@ -208,17 +210,16 @@ export async function sessionController(app: FastifyInstance) {
       fromUserId: userId,
     });
 
-    // Re-enqueue thinking for this session if it's not already active
-    if (session.status !== 'active') {
-      await updateSessionStatus(sessionId, 'active');
-      await sessionThinkingQueue.add('think', {
-        sessionId,
-        actorId: session.actor_id,
-        workspaceId,
-        trigger: 'user_message',
-        userId,
-      });
-    }
+    await enqueueSessionWakeup({
+      sessionId,
+      actorId: session.actor_id,
+      workspaceId,
+      sourceType: 'user_message',
+      sourceMemberType: 'user',
+      sourceMemberId: userId,
+      summary: content.trim().slice(0, 96) || 'New message',
+      trigger: 'user_message',
+    });
 
     return reply.status(201).send({ messageId: message.id, status: 'processing' });
   });

@@ -412,7 +412,7 @@ export type EventType =
   | 'user.message' // User sent message to secretary
   | 'secretary.response'
   | 'actor.thinking' | 'actor.action'
-  | 'session.message.new' | 'session.status.changed' | 'session.thinking' | 'group.updated'
+  | 'session.message.new' | 'session.status.changed' | 'session.thinking' | 'group.actor.runtime.updated' | 'group.updated'
   | 'group.member_joined' | 'group.member_kicked' | 'actor.version_changed'
   | 'mcp.config.changed'
   | 'relay.connected' | 'relay.disconnected' | 'relay.servers_updated';
@@ -425,11 +425,30 @@ export interface SystemEvent {
 }
 
 // ============ AI ============
-export type SessionStatus = 'active' | 'sleeping' | 'completed' | 'failed' | 'cancelled' | 'timed_out';
+export type SessionStatus = 'idle' | 'queued' | 'running' | 'blocked' | 'closed';
 export type ChannelType = 'web' | 'api';
-export type SessionTrigger = 'user_message' | 'group_message' | 'api_call' | 'actor_invite';
+export type SessionTrigger =
+  | 'user_message'
+  | 'group_message'
+  | 'actor_message'
+  | 'broadcast'
+  | 'api_call'
+  | 'actor_invite'
+  | 'system_interrupt'
+  | 'retry';
 export type SessionMessageRole = 'user' | 'assistant' | 'system' | 'tool_result';
 export type SessionInterruptType = 'progress_check' | 'priority_override';
+export type SessionWakeupSourceType =
+  | 'user_message'
+  | 'actor_message'
+  | 'broadcast'
+  | 'invite'
+  | 'api_call'
+  | 'system_interrupt'
+  | 'retry';
+export type SessionWakeupStatus = 'pending' | 'attached' | 'processed' | 'dropped';
+export type ActorRuntimeHealth = 'ok' | 'error';
+export type ActorRuntimePhase = 'idle' | 'thinking' | 'tool' | 'responding' | 'blocked' | 'error';
 
 export interface Session {
   id: UUID;
@@ -444,6 +463,62 @@ export interface Session {
   createdAt: Timestamp;
   updatedAt: Timestamp;
   completedAt?: Timestamp;
+}
+
+export interface SessionWakeup {
+  id: UUID;
+  sessionId: UUID;
+  turnId?: UUID;
+  sourceType: SessionWakeupSourceType;
+  sourceItemId?: UUID;
+  sourceSessionId?: UUID;
+  sourceMemberType?: 'user' | 'actor' | 'system';
+  sourceMemberId?: UUID;
+  sourceName?: string;
+  summary: string;
+  status: SessionWakeupStatus;
+  activationKind?: string;
+  delivery?: string;
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+  attachedAt?: Timestamp;
+  processedAt?: Timestamp;
+}
+
+export interface ActorRuntimeWakeup {
+  wakeupId: UUID;
+  sourceType: SessionWakeupSourceType;
+  sourceItemId?: UUID;
+  sourceSessionId?: UUID;
+  sourceMemberType?: 'user' | 'actor' | 'system';
+  sourceMemberId?: UUID;
+  sourceName?: string;
+  summary: string;
+  status: SessionWakeupStatus;
+  activationKind?: string;
+  delivery?: string;
+  createdAt: Timestamp;
+  attachedAt?: Timestamp;
+}
+
+export interface ActorRuntimeState {
+  groupId: UUID;
+  sessionId: UUID;
+  actorId: UUID;
+  actorName: string;
+  laneState: SessionStatus;
+  health: ActorRuntimeHealth;
+  phase: ActorRuntimePhase;
+  statusText?: string;
+  currentTurnId?: UUID;
+  pendingWakeupCount: number;
+  activeWakeups: ActorRuntimeWakeup[];
+  latestWakeupAt?: Timestamp;
+  lastError?: {
+    message: string;
+    at: Timestamp;
+  };
+  updatedAt: Timestamp;
 }
 
 export interface SessionMessage {
@@ -1636,8 +1711,6 @@ export interface GroupMessage {
   contentBlocks: CanonicalContentBlock[];
   metadata: Record<string, unknown>;
   createdAt: Timestamp;
-  targetActorNames?: string[];
-  targetUserNames?: string[];
 }
 
 // ============ A2A (Agent-to-Agent) Protocol ============
