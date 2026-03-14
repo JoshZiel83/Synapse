@@ -2,14 +2,13 @@ import type { ModelAttemptPolicy, MultimodalConfig, ResolvedModelConfig, Resolve
 import { redis } from '../../infrastructure/redis/index.js';
 import { query } from '../../infrastructure/database/index.js';
 import { config } from '../../config/index.js';
+import { authzEnabled, lookupResources } from '../../infrastructure/authz/index.js';
 
-type RouteRow = {
+type GroupRow = {
   id: string;
-  workspace_id: string | null;
-  route_scope: 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-  conversation_id: string | null;
-  actor_id: string | null;
-  user_id: string | null;
+  owner_type: 'platform' | 'workspace' | 'user';
+  owner_workspace_id: string | null;
+  owner_user_id: string | null;
   name: string;
   routing_strategy: 'weighted_random' | 'round_robin' | 'priority_failover';
   attempt_policy: Record<string, unknown> | null;
@@ -19,37 +18,16 @@ type RouteRow = {
   updated_at: string;
 };
 
-type GrantRow = {
-  route_id?: string;
-  binding_id?: string;
-  grant_scope: 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-  workspace_id: string | null;
-  conversation_id: string | null;
-  actor_id: string | null;
-  user_id: string | null;
-  status: 'active' | 'revoked';
-};
-
-type RouteItemRow = {
-  route_id: string;
-  route_name: string;
+type GroupItemRow = {
+  group_id: string;
+  group_name: string;
   routing_strategy: 'weighted_random' | 'round_robin' | 'priority_failover';
   attempt_policy: Record<string, unknown> | null;
-  route_scope: RouteRow['route_scope'];
-  route_workspace_id: string | null;
-  route_conversation_id: string | null;
-  route_actor_id: string | null;
-  route_user_id: string | null;
   item_id: string;
   priority: number;
   weight: number;
   item_enabled: boolean;
-  binding_id: string;
-  binding_scope: 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-  binding_workspace_id: string | null;
-  binding_conversation_id: string | null;
-  binding_actor_id: string | null;
-  binding_user_id: string | null;
+  profile_id: string;
   display_name: string;
   current_revision_id: string | null;
   provider_type: 'anthropic' | 'openai' | null;
@@ -68,7 +46,6 @@ type ResolveContext = {
   workspaceId: string;
   conversationId?: string;
   userId?: string;
-  userCount?: number;
 };
 
 const DEFAULT_ATTEMPT_POLICY: ModelAttemptPolicy = {
@@ -120,104 +97,6 @@ function finalizeAttemptPolicy(value: unknown): ModelAttemptPolicy {
   };
 }
 
-function scopeMatches(
-  scope: 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user',
-  target: {
-    workspaceId?: string | null;
-    conversationId?: string | null;
-    actorId?: string | null;
-    userId?: string | null;
-    userCount?: number;
-  },
-  current: ResolveContext,
-) {
-  switch (scope) {
-    case 'platform':
-      return true;
-    case 'workspace':
-      return target.workspaceId === current.workspaceId;
-    case 'conversation':
-      return Boolean(current.conversationId && target.conversationId === current.conversationId);
-    case 'actor_global':
-      return target.actorId === current.actorId;
-    case 'actor_conversation':
-      return Boolean(
-        current.conversationId &&
-        target.actorId === current.actorId &&
-        target.conversationId === current.conversationId,
-      );
-    case 'user':
-      return Boolean(
-        current.userId &&
-        current.userCount === 1 &&
-        target.userId === current.userId,
-      );
-    default:
-      return false;
-  }
-}
-
-function routeVisible(route: RouteRow, grants: GrantRow[], current: ResolveContext) {
-  if (scopeMatches(route.route_scope, {
-    workspaceId: route.workspace_id,
-    conversationId: route.conversation_id,
-    actorId: route.actor_id,
-    userId: route.user_id,
-  }, current)) {
-    return true;
-  }
-
-  return grants.some((grant) =>
-    grant.status === 'active' &&
-    scopeMatches(grant.grant_scope, {
-      workspaceId: grant.workspace_id,
-      conversationId: grant.conversation_id,
-      actorId: grant.actor_id,
-      userId: grant.user_id,
-    }, current),
-  );
-}
-
-function bindingVisible(binding: RouteItemRow, grants: GrantRow[], current: ResolveContext) {
-  if (scopeMatches(binding.binding_scope, {
-    workspaceId: binding.binding_workspace_id,
-    conversationId: binding.binding_conversation_id,
-    actorId: binding.binding_actor_id,
-    userId: binding.binding_user_id,
-  }, current)) {
-    return true;
-  }
-
-  return grants.some((grant) =>
-    grant.status === 'active' &&
-    scopeMatches(grant.grant_scope, {
-      workspaceId: grant.workspace_id,
-      conversationId: grant.conversation_id,
-      actorId: grant.actor_id,
-      userId: grant.user_id,
-    }, current),
-  );
-}
-
-function scopeRank(scope: RouteRow['route_scope']) {
-  switch (scope) {
-    case 'actor_conversation':
-      return 0;
-    case 'conversation':
-      return 1;
-    case 'user':
-      return 2;
-    case 'actor_global':
-      return 3;
-    case 'workspace':
-      return 4;
-    case 'platform':
-      return 5;
-    default:
-      return 99;
-  }
-}
-
 function weightedPick<T extends { weight: number }>(items: T[]) {
   const totalWeight = items.reduce((sum, item) => sum + Math.max(1, item.weight || 1), 0);
   let cursor = Math.random() * totalWeight;
@@ -228,7 +107,7 @@ function weightedPick<T extends { weight: number }>(items: T[]) {
   return items[0];
 }
 
-function orderRouteItems(routeId: string, strategy: RouteRow['routing_strategy'], items: RouteItemRow[], roundRobinOffset = 0) {
+function orderGroupItems(groupId: string, strategy: GroupRow['routing_strategy'], items: GroupItemRow[], roundRobinOffset = 0) {
   const sorted = [...items].sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority;
     if (a.weight !== b.weight) return b.weight - a.weight;
@@ -245,126 +124,168 @@ function orderRouteItems(routeId: string, strategy: RouteRow['routing_strategy']
     return [first, ...sorted.filter((item) => item.item_id !== first.item_id)];
   }
 
-  void routeId;
+  void groupId;
   return sorted;
 }
 
-async function getRoundRobinOffset(routeId: string, length: number) {
+async function getRoundRobinOffset(groupId: string, length: number) {
   if (length <= 1) return 0;
-  const key = `model_route:rr:${routeId}`;
+  const key = `model_group:rr:${groupId}`;
   const count = await redis.incr(key);
   await redis.expire(key, 86400);
   return (count - 1) % length;
 }
 
-async function listVisibleRoutes(current: ResolveContext) {
-  const [routesResult, grantsResult, assignmentsResult, workspaceDefaultResult, platformDefaultResult] = await Promise.all([
+function ownerRank(group: GroupRow, current: ResolveContext) {
+  if (group.owner_type === 'user' && group.owner_user_id === current.userId) return 0;
+  if (group.owner_type === 'workspace' && group.owner_workspace_id === current.workspaceId) return 1;
+  if (group.owner_type === 'platform') return 2;
+  return 3;
+}
+
+async function listAuthorizedModelGroupIds(current: ResolveContext) {
+  const authorized = new Set<string>();
+
+  const actorResults = await lookupResources({
+    resourceType: 'model_group',
+    permission: 'use',
+    subject: { type: 'actor', id: current.actorId },
+  });
+  for (const id of actorResults) {
+    authorized.add(id);
+  }
+
+  if (current.userId) {
+    const userResults = await lookupResources({
+      resourceType: 'model_group',
+      permission: 'use',
+      subject: { type: 'user', id: current.userId },
+    });
+    for (const id of userResults) {
+      authorized.add(id);
+    }
+  }
+
+  return authorized;
+}
+
+async function listCandidateGroups(current: ResolveContext, authorizedGroupIds: Set<string> | null) {
+  const [groupsResult, assignmentsResult, workspaceDefaultResult, platformDefaultResult, userDefaultResult] = await Promise.all([
+    authorizedGroupIds
+      ? authorizedGroupIds.size > 0
+        ? query<GroupRow>(
+            `SELECT *
+             FROM model_groups
+             WHERE is_enabled = TRUE
+               AND id = ANY($1)`,
+            [Array.from(authorizedGroupIds)],
+          )
+        : Promise.resolve({ rows: [] as GroupRow[] })
+      : query<GroupRow>(
+          `SELECT DISTINCT mg.*
+           FROM model_groups mg
+           LEFT JOIN model_group_grants mgg
+             ON mgg.group_id = mg.id
+            AND mgg.status = 'active'
+           WHERE mg.is_enabled = TRUE
+             AND (
+               (mg.owner_type = 'workspace' AND mg.owner_workspace_id = $1)
+               OR (mg.owner_type = 'user' AND mg.owner_user_id = $2)
+               OR (mgg.grant_scope = 'platform')
+               OR (mgg.grant_scope = 'workspace' AND mgg.workspace_id = $1)
+               OR (mgg.grant_scope = 'user' AND mgg.user_id = $2)
+               OR (mgg.grant_scope = 'workspace_user' AND mgg.workspace_id = $1 AND mgg.user_id = $2)
+               OR (mgg.grant_scope = 'actor' AND mgg.workspace_id = $1 AND mgg.actor_id = $3)
+             )`,
+          [current.workspaceId, current.userId || null, current.actorId],
+        ),
     query(
-      `SELECT *
-       FROM model_routes
-       WHERE is_enabled = TRUE
-         AND (
-           route_scope = 'platform'
-           OR workspace_id = $1
-         )`,
-      [current.workspaceId],
-    ),
-    query(
-      `SELECT *
-       FROM model_route_grants
-       WHERE status = 'active'
-         AND (
-           grant_scope = 'platform'
-           OR workspace_id = $1
-         )`,
-      [current.workspaceId],
-    ),
-    query(
-      `SELECT route_id, priority
-       FROM actor_model_routes
+      `SELECT group_id, priority
+       FROM actor_model_group_assignments
        WHERE actor_id = $1
        ORDER BY priority ASC`,
       [current.actorId],
     ),
     query(
-      `SELECT default_model_route_id
+      `SELECT default_model_group_id
        FROM workspaces
        WHERE id = $1
        LIMIT 1`,
       [current.workspaceId],
     ),
     query(
-      `SELECT default_model_route_id
+      `SELECT default_model_group_id
        FROM platform_settings
        WHERE id = TRUE
        LIMIT 1`,
       [],
     ),
+    current.userId
+      ? query(
+          `SELECT id
+           FROM model_groups
+           WHERE owner_type = 'user'
+             AND owner_user_id = $1
+             AND is_default = TRUE
+             AND is_enabled = TRUE
+           LIMIT 1`,
+          [current.userId],
+        )
+      : Promise.resolve({ rows: [] as Array<{ id: string }> }),
   ]);
 
-  const grantsByRoute = new Map<string, GrantRow[]>();
-  for (const row of grantsResult.rows as GrantRow[]) {
-    if (!row.route_id) continue;
-    const bucket = grantsByRoute.get(row.route_id) || [];
-    bucket.push(row);
-    grantsByRoute.set(row.route_id, bucket);
-  }
-
   const assignedPriority = new Map<string, number>();
-  for (const row of assignmentsResult.rows as Array<{ route_id: string; priority: number }>) {
-    assignedPriority.set(row.route_id, row.priority);
+  for (const row of assignmentsResult.rows as Array<{ group_id: string; priority: number }>) {
+    assignedPriority.set(row.group_id, row.priority);
   }
 
-  const workspaceDefaultRouteId = workspaceDefaultResult.rows[0]?.default_model_route_id as string | undefined;
-  const platformDefaultRouteId = platformDefaultResult.rows[0]?.default_model_route_id as string | undefined;
+  const workspaceDefaultGroupId = workspaceDefaultResult.rows[0]?.default_model_group_id as string | undefined;
+  const platformDefaultGroupId = platformDefaultResult.rows[0]?.default_model_group_id as string | undefined;
+  const userDefaultGroupId = userDefaultResult.rows[0]?.id as string | undefined;
 
-  const visible = (routesResult.rows as RouteRow[])
-    .filter((route) => routeVisible(route, grantsByRoute.get(route.id) || [], current))
-    .sort((a, b) => {
-      const aAssigned = assignedPriority.has(a.id);
-      const bAssigned = assignedPriority.has(b.id);
-      if (aAssigned && bAssigned) {
-        return (assignedPriority.get(a.id) || 0) - (assignedPriority.get(b.id) || 0);
-      }
-      if (aAssigned) return -1;
-      if (bAssigned) return 1;
+  return groupsResult.rows.sort((a, b) => {
+    const aAssigned = assignedPriority.has(a.id);
+    const bAssigned = assignedPriority.has(b.id);
+    if (aAssigned && bAssigned) {
+      return (assignedPriority.get(a.id) || 0) - (assignedPriority.get(b.id) || 0);
+    }
+    if (aAssigned) return -1;
+    if (bAssigned) return 1;
 
-      const aIsDefault = a.id === workspaceDefaultRouteId || a.id === platformDefaultRouteId || a.is_default;
-      const bIsDefault = b.id === workspaceDefaultRouteId || b.id === platformDefaultRouteId || b.is_default;
-      if (aIsDefault !== bIsDefault) return aIsDefault ? -1 : 1;
+    const aIsUserDefault = a.id === userDefaultGroupId;
+    const bIsUserDefault = b.id === userDefaultGroupId;
+    if (aIsUserDefault !== bIsUserDefault) return aIsUserDefault ? -1 : 1;
 
-      const rankDiff = scopeRank(a.route_scope) - scopeRank(b.route_scope);
-      if (rankDiff !== 0) return rankDiff;
-      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-    });
+    const aIsWorkspaceDefault = a.id === workspaceDefaultGroupId;
+    const bIsWorkspaceDefault = b.id === workspaceDefaultGroupId;
+    if (aIsWorkspaceDefault !== bIsWorkspaceDefault) return aIsWorkspaceDefault ? -1 : 1;
 
-  return visible;
+    const aIsPlatformDefault = a.id === platformDefaultGroupId;
+    const bIsPlatformDefault = b.id === platformDefaultGroupId;
+    if (aIsPlatformDefault !== bIsPlatformDefault) return aIsPlatformDefault ? -1 : 1;
+
+    const aOwnerRank = ownerRank(a, current);
+    const bOwnerRank = ownerRank(b, current);
+    if (aOwnerRank !== bOwnerRank) return aOwnerRank - bOwnerRank;
+
+    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+  });
 }
 
-async function listRouteItems(routeId: string) {
+async function listGroupItems(groupId: string) {
   const result = await query(
     `SELECT
-        mr.id AS route_id,
-        mr.name AS route_name,
-        mr.routing_strategy,
-        mr.attempt_policy,
-        mr.route_scope,
-        mr.workspace_id AS route_workspace_id,
-        mr.conversation_id AS route_conversation_id,
-        mr.actor_id AS route_actor_id,
-        mr.user_id AS route_user_id,
-        ri.id AS item_id,
-        ri.priority,
-        ri.weight,
-        ri.is_enabled AS item_enabled,
-        b.id AS binding_id,
-        b.binding_scope,
-        b.workspace_id AS binding_workspace_id,
-        b.conversation_id AS binding_conversation_id,
-        b.actor_id AS binding_actor_id,
-        b.user_id AS binding_user_id,
-        b.display_name,
-        b.current_revision_id,
+        mg.id AS group_id,
+        mg.name AS group_name,
+        mg.routing_strategy,
+        mg.attempt_policy,
+        mgp.id AS item_id,
+        mgp.priority,
+        mgp.weight,
+        mgp.is_enabled AS item_enabled,
+        mp.id AS profile_id,
+        mp.display_name,
+        mp.current_revision_id,
         r.provider_type,
         r.api_key,
         r.base_url,
@@ -374,46 +295,24 @@ async function listRouteItems(routeId: string) {
         r.extra_config,
         r.request_timeout_ms,
         r.max_retries
-     FROM model_route_items ri
-     JOIN model_routes mr ON mr.id = ri.route_id
-     JOIN model_bindings b ON b.id = ri.binding_id
-     LEFT JOIN model_binding_revisions r ON r.id = b.current_revision_id
-     WHERE ri.route_id = $1
-       AND ri.is_enabled = TRUE
-       AND b.is_enabled = TRUE
-       AND b.current_revision_id IS NOT NULL`,
-    [routeId],
+     FROM model_group_profiles mgp
+     JOIN model_groups mg ON mg.id = mgp.group_id
+     JOIN model_profiles mp ON mp.id = mgp.profile_id
+     LEFT JOIN model_profile_revisions r ON r.id = mp.current_revision_id
+     WHERE mgp.group_id = $1
+       AND mgp.is_enabled = TRUE
+       AND mp.is_enabled = TRUE
+       AND mp.current_revision_id IS NOT NULL`,
+    [groupId],
   );
-  return result.rows as RouteItemRow[];
+  return result.rows as GroupItemRow[];
 }
 
-async function listBindingGrants(workspaceId: string, bindingIds: string[]) {
-  if (bindingIds.length === 0) return new Map<string, GrantRow[]>();
-  const result = await query(
-    `SELECT *
-     FROM model_binding_grants
-     WHERE status = 'active'
-       AND binding_id = ANY($1)
-       AND (
-         grant_scope = 'platform'
-         OR workspace_id = $2
-       )`,
-    [bindingIds, workspaceId],
-  );
-  const byBinding = new Map<string, GrantRow[]>();
-  for (const row of result.rows as GrantRow[]) {
-    if (!row.binding_id) continue;
-    const bucket = byBinding.get(row.binding_id) || [];
-    bucket.push(row);
-    byBinding.set(row.binding_id, bucket);
-  }
-  return byBinding;
-}
-
-function toResolvedModelConfig(row: RouteItemRow): ResolvedModelConfig | null {
+function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {
   if (!row.current_revision_id || !row.provider_type || !row.api_key || !row.base_url || !row.model_name) {
     return null;
   }
+
   const extraConfig = asObject(row.extra_config);
   const multimodalConfig = asObject(extraConfig.multimodal);
   const multimodal: MultimodalConfig | undefined = multimodalConfig.supported === true
@@ -424,9 +323,9 @@ function toResolvedModelConfig(row: RouteItemRow): ResolvedModelConfig | null {
     : undefined;
 
   return {
-    routeId: row.route_id,
-    bindingId: row.binding_id,
-    revisionId: row.current_revision_id,
+    groupId: row.group_id,
+    profileId: row.profile_id,
+    profileRevisionId: row.current_revision_id,
     providerType: row.provider_type,
     apiKey: row.api_key,
     baseUrl: row.base_url,
@@ -435,7 +334,6 @@ function toResolvedModelConfig(row: RouteItemRow): ResolvedModelConfig | null {
     builtinTools: Array.isArray(extraConfig.builtin_tools) ? extraConfig.builtin_tools as ResolvedModelConfig['builtinTools'] : undefined,
     multimodal,
     crossTurnToolHistory: extraConfig.cross_turn_tool_history === true ? true : undefined,
-    bindingScope: row.binding_scope,
     priority: row.priority,
     weight: row.weight,
     requestTimeoutMs: row.request_timeout_ms ?? undefined,
@@ -449,39 +347,38 @@ export async function resolveModelPlan(
   options?: {
     conversationId?: string;
     userId?: string;
-    userCount?: number;
   },
 ): Promise<ResolvedModelPlan | null> {
+  const authzActive = authzEnabled();
   const current: ResolveContext = {
     actorId,
     workspaceId,
     conversationId: options?.conversationId,
     userId: options?.userId,
-    userCount: options?.userCount ?? 0,
   };
 
-  const routes = await listVisibleRoutes(current);
-  for (const route of routes) {
-    const items = await listRouteItems(route.id);
-    if (items.length === 0) continue;
-    const grantsByBinding = await listBindingGrants(workspaceId, items.map((item) => item.binding_id));
-    const visibleItems = items.filter((item) => bindingVisible(item, grantsByBinding.get(item.binding_id) || [], current));
-    if (visibleItems.length === 0) continue;
+  const authorizedGroupIds = authzActive ? await listAuthorizedModelGroupIds(current) : null;
+  const groups = await listCandidateGroups(current, authorizedGroupIds);
 
-    const offset = route.routing_strategy === 'round_robin'
-      ? await getRoundRobinOffset(route.id, visibleItems.length)
+  for (const group of groups) {
+    const items = await listGroupItems(group.id);
+    if (items.length === 0) continue;
+
+    const offset = group.routing_strategy === 'round_robin'
+      ? await getRoundRobinOffset(group.id, items.length)
       : 0;
-    const orderedItems = orderRouteItems(route.id, route.routing_strategy, visibleItems, offset);
+    const orderedItems = orderGroupItems(group.id, group.routing_strategy, items, offset);
     const candidates = orderedItems
       .map(toResolvedModelConfig)
       .filter((candidate): candidate is ResolvedModelConfig => candidate !== null);
+
     if (candidates.length === 0) continue;
 
     return {
-      routeId: route.id,
-      routeName: route.name,
-      routingStrategy: route.routing_strategy,
-      attemptPolicy: finalizeAttemptPolicy(route.attempt_policy),
+      groupId: group.id,
+      groupName: group.name,
+      routingStrategy: group.routing_strategy,
+      attemptPolicy: finalizeAttemptPolicy(group.attempt_policy),
       candidates,
     };
   }
@@ -495,7 +392,6 @@ export async function resolveModelConfig(
   options?: {
     conversationId?: string;
     userId?: string;
-    userCount?: number;
   },
 ): Promise<ResolvedModelConfig | null> {
   const plan = await resolveModelPlan(actorId, workspaceId, options);
@@ -504,9 +400,9 @@ export async function resolveModelConfig(
 
 export function getEnvFallbackConfig(): ResolvedModelConfig {
   return {
-    routeId: 'env-fallback',
-    bindingId: 'env-fallback',
-    revisionId: 'env-fallback',
+    groupId: 'env-fallback',
+    profileId: 'env-fallback',
+    profileRevisionId: 'env-fallback',
     providerType: config.ai.provider === 'openai' ? 'openai' : 'anthropic',
     apiKey: config.ai.apiKey,
     baseUrl: config.ai.baseUrl,

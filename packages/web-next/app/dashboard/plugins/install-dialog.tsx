@@ -1,35 +1,45 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { ExclamationCircleIcon } from '@heroicons/react/16/solid';
-import { CheckCircleIcon } from '@heroicons/react/20/solid';
 import type {
+  CapabilityAttachmentType,
   CapabilityAuthProviderDefinition,
   CapabilityAuthSession,
-  CapabilityBindingScope,
   CapabilityConfigFieldDefinition,
   CapabilityInstallStep,
   CapabilityReuseScope,
   LocalizedText,
 } from '@synapse/shared';
+import { AppCard } from '@/components/app-card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import { ExternalLink, HelpCircle, Loader2 } from 'lucide-react';
 import { usePluginStore } from '@/stores/plugin-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
+import PluginAccessStep from './plugin-access-step';
 import { PluginIcon } from './plugin-ui';
 import {
-  CapabilityBindingScopeStep,
+  CapabilityAttachmentTypeStep,
   CapabilityReuseScopeStep,
   getConversationDisplayName,
-} from '@/app/dashboard/capabilities/binding-visuals';
+} from '@/app/dashboard/capabilities/attachment-visuals';
 
 interface ValidationRule {
   field: string;
@@ -44,11 +54,28 @@ interface Props {
   initialInstallation?: any;
   onClose: () => void;
   presentation?: 'dialog' | 'page';
-  onSuccess?: () => void;
+  onSuccess?: (installation: any) => void | Promise<void>;
+  onInstallationSaved?: (installation: any) => void | Promise<void>;
+  showPluginHeader?: boolean;
+  pageChrome?: 'card' | 'plain';
 }
 
-type PluginBindingScope = Exclude<CapabilityBindingScope, 'platform'>;
+type PluginAttachmentType = Exclude<CapabilityAttachmentType, 'platform'>;
 type PluginReuseScope = Exclude<CapabilityReuseScope, 'platform'>;
+type AccessStep = {
+  id: 'access';
+  kind: 'access';
+  titleI18n: LocalizedText;
+  descriptionI18n?: LocalizedText;
+  scope: 'plugin';
+  fields: [];
+  optional?: boolean;
+  helpUrl?: string;
+  helpTextI18n?: LocalizedText;
+  action?: undefined;
+  metadata?: Record<string, unknown>;
+};
+type InstallFlowStep = CapabilityInstallStep | AccessStep;
 
 type AuthFieldState = {
   sessionId: string;
@@ -71,7 +98,7 @@ function normalizeActorOption(actor: any) {
   };
 }
 
-const installLifecycleOptionMap: Record<PluginBindingScope, PluginReuseScope[]> = {
+const installLifecycleOptionMap: Record<PluginAttachmentType, PluginReuseScope[]> = {
   workspace: ['workspace', 'conversation', 'actor_global', 'user', 'turn'],
   conversation: ['conversation', 'actor_conversation', 'turn'],
   actor_global: ['actor_global', 'turn'],
@@ -79,8 +106,8 @@ const installLifecycleOptionMap: Record<PluginBindingScope, PluginReuseScope[]> 
   user: ['user', 'conversation', 'actor_conversation', 'turn'],
 };
 
-function getInstallAllowedReuseScopes(scopeType: PluginBindingScope) {
-  return installLifecycleOptionMap[scopeType] || ['turn'];
+function getInstallAllowedReuseScopes(attachmentType: PluginAttachmentType) {
+  return installLifecycleOptionMap[attachmentType] || ['turn'];
 }
 
 function getLocale(defaultLocale?: string) {
@@ -135,18 +162,18 @@ function deriveInstallFlow(plugin: any, configFields: CapabilityConfigFieldDefin
   return [
     ...baseSteps,
     {
-      id: 'binding-scope',
-      kind: 'binding_scope',
-      titleI18n: { [locale]: 'Choose install scope' },
-      descriptionI18n: { [locale]: 'Pick where this installation belongs and who manages it.' },
+      id: 'attachment-scope',
+      kind: 'attachment_scope',
+      titleI18n: { [locale]: 'Choose owner' },
+      descriptionI18n: { [locale]: 'Choose where this installation belongs. Access is set later.' },
       scope: 'plugin',
       fields: [],
     },
     {
       id: 'reuse-scope',
       kind: 'reuse_scope',
-      titleI18n: { [locale]: 'Choose MCP lifecycle' },
-      descriptionI18n: { [locale]: 'Pick how runtime instances are reused across turns, actors, and conversations.' },
+      titleI18n: { [locale]: 'Choose lifecycle' },
+      descriptionI18n: { [locale]: 'Decide how runtimes are reused.' },
       scope: 'plugin',
       fields: [],
     },
@@ -219,7 +246,17 @@ function runClientValidation(
   return errors;
 }
 
-export default function InstallDialog({ plugin, defaultActorId, initialInstallation, onClose, presentation = 'dialog', onSuccess }: Props) {
+export default function InstallDialog({
+  plugin,
+  defaultActorId,
+  initialInstallation,
+  onClose,
+  presentation = 'dialog',
+  onSuccess,
+  onInstallationSaved,
+  showPluginHeader = true,
+  pageChrome = 'card',
+}: Props) {
   const { workspaceId } = useWorkspace();
   const { installPlugin, updateInstallation } = usePluginStore();
   const { user } = useAuthStore();
@@ -227,17 +264,20 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
 
   const locale = useMemo(() => getLocale(plugin.default_locale), [plugin.default_locale]);
   const configFields = useMemo(() => deriveConfigFields(plugin), [plugin]);
-  const installSteps = useMemo(() => deriveInstallFlow(plugin, configFields, locale), [plugin, configFields, locale]);
+  const setupSteps = useMemo(() => deriveInstallFlow(plugin, configFields, locale), [plugin, configFields, locale]);
   const authProviders = useMemo<CapabilityAuthProviderDefinition[]>(() => plugin.auth_providers || [], [plugin.auth_providers]);
   const authProviderMap = useMemo(() => new Map(authProviders.map((provider) => [provider.key, provider])), [authProviders]);
-  const allowedBindingScopes = useMemo<PluginBindingScope[]>(
+  const allowedAttachmentTypes = useMemo<PluginAttachmentType[]>(
     () => ['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user'],
     [],
   );
+  const initialAttachmentType = initialInstallation?.attachment_type as PluginAttachmentType | undefined;
+  const initialAttachmentActorId = initialInstallation?.attachment_actor_id || '';
+  const initialAttachmentConversationId = initialInstallation?.attachment_conversation_id || '';
 
-  const [scopeType, setScopeType] = useState<PluginBindingScope>(
-    (initialInstallation?.scope_type as PluginBindingScope | undefined) ||
-    ((defaultActorId ? 'actor_global' : (plugin.default_binding_scope || 'workspace')) as PluginBindingScope),
+  const [selectedAttachmentType, setSelectedAttachmentType] = useState<PluginAttachmentType>(
+    initialAttachmentType ||
+    ((defaultActorId ? 'actor_global' : (plugin.default_instance_scope || 'workspace')) as PluginAttachmentType),
   );
   const [lifecycleScope, setLifecycleScope] = useState<PluginReuseScope>(
     ((initialInstallation?.lifecycle_scope as PluginReuseScope | undefined) ||
@@ -245,8 +285,8 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
       plugin.default_reuse_scope ||
       'conversation') as PluginReuseScope,
   );
-  const [selectedActorId, setSelectedActorId] = useState(initialInstallation?.actor_id || defaultActorId || '');
-  const [selectedConversationId, setSelectedConversationId] = useState(initialInstallation?.conversation_id || '');
+  const [selectedActorId, setSelectedActorId] = useState(initialAttachmentActorId || defaultActorId || '');
+  const [selectedConversationId, setSelectedConversationId] = useState(initialAttachmentConversationId || '');
   const [actors, setActors] = useState<any[]>([]);
   const [conversations, setConversations] = useState<any[]>([]);
   const [configData, setConfigData] = useState<Record<string, unknown>>(() => ({
@@ -257,23 +297,46 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [authFields, setAuthFields] = useState<Record<string, AuthFieldState>>({});
+  const [currentInstallation, setCurrentInstallation] = useState<any>(initialInstallation || null);
   const authPollers = useRef<Record<string, number>>({});
 
   const validationRules: ValidationRule[] = plugin.validation_rules || [];
+  const installSteps = useMemo<InstallFlowStep[]>(() => {
+    if (presentation !== 'page') {
+      return setupSteps;
+    }
+
+    return [
+      ...setupSteps,
+      {
+        id: 'access',
+        kind: 'access',
+        titleI18n: { [locale]: 'Access' },
+        descriptionI18n: { [locale]: 'Grant this installation to the users, actors, and conversations that should be able to use it.' },
+        scope: 'plugin',
+        fields: [],
+      },
+    ];
+  }, [locale, presentation, setupSteps]);
   const currentStep = installSteps[currentStepIndex];
+  const accessStepIndex = useMemo(
+    () => installSteps.findIndex((step) => step.kind === 'access'),
+    [installSteps],
+  );
+  const lastSetupStepIndex = setupSteps.length - 1;
   const installLifecycleOptions = useMemo(
-    () => getInstallAllowedReuseScopes(scopeType),
-    [scopeType],
+    () => getInstallAllowedReuseScopes(selectedAttachmentType),
+    [selectedAttachmentType],
   );
 
   useEffect(() => {
-    if ((scopeType === 'actor_global' || scopeType === 'actor_conversation') && workspaceId) {
+    if ((selectedAttachmentType === 'actor_global' || selectedAttachmentType === 'actor_conversation') && workspaceId) {
       api.getActors(workspaceId).then((result: any) => {
         const actorList = result?.actors ?? result ?? [];
         setActors(Array.isArray(actorList) ? actorList.map(normalizeActorOption) : []);
       }).catch(() => {});
     }
-    if ((scopeType === 'conversation' || scopeType === 'actor_conversation') && workspaceId) {
+    if ((selectedAttachmentType === 'conversation' || selectedAttachmentType === 'actor_conversation') && workspaceId) {
       api.getGroups(workspaceId).then((res: any) => setConversations(
         (res.groups || []).map((conversation: any) => ({
           ...conversation,
@@ -281,7 +344,7 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
         })),
       )).catch(() => {});
     }
-  }, [scopeType, workspaceId]);
+  }, [selectedAttachmentType, workspaceId]);
 
   useEffect(() => {
     const valid = installLifecycleOptions;
@@ -289,6 +352,10 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
       setLifecycleScope((valid[0] || 'conversation') as PluginReuseScope);
     }
   }, [installLifecycleOptions, lifecycleScope]);
+
+  useEffect(() => {
+    setCurrentInstallation(initialInstallation || null);
+  }, [initialInstallation]);
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
@@ -394,13 +461,13 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
   const validateCurrentState = (fieldKeys?: string[]) => {
     const errors = runClientValidation(configData, authFields, validationRules, configFields, fieldKeys);
 
-    if ((scopeType === 'actor_global' || scopeType === 'actor_conversation') && !selectedActorId) {
+    if ((selectedAttachmentType === 'actor_global' || selectedAttachmentType === 'actor_conversation') && !selectedActorId) {
       errors.__scope = 'Please select an actor.';
     }
-    if ((scopeType === 'conversation' || scopeType === 'actor_conversation') && !selectedConversationId) {
+    if ((selectedAttachmentType === 'conversation' || selectedAttachmentType === 'actor_conversation') && !selectedConversationId) {
       errors.__scope = 'Please select a conversation.';
     }
-    if (scopeType === 'user' && !currentUserId) {
+    if (selectedAttachmentType === 'user' && !currentUserId) {
       errors.__scope = 'Current user is unavailable. Please refresh and try again.';
     }
     return errors;
@@ -417,7 +484,7 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
     setCurrentStepIndex((index) => Math.max(index - 1, 0));
   };
 
-  const handleInstall = async () => {
+  const persistInstallation = async ({ continueToAccess = false }: { continueToAccess?: boolean } = {}) => {
     if (!workspaceId) return;
 
     const errors = validateCurrentState();
@@ -432,36 +499,95 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
           .map(([fieldKey, state]) => [fieldKey, state.sessionId]),
       );
 
-      if (initialInstallation?.id) {
-        await updateInstallation(workspaceId, initialInstallation.id, {
-          scopeType,
-          actorId: scopeType === 'actor_global' || scopeType === 'actor_conversation' ? selectedActorId : null,
-          conversationId: scopeType === 'conversation' || scopeType === 'actor_conversation' ? selectedConversationId : null,
-          userId: scopeType === 'user' ? currentUserId : null,
+      let installation: any;
+      const installationId = currentInstallation?.id || initialInstallation?.id;
+
+      if (installationId) {
+        installation = await updateInstallation(workspaceId, installationId, {
+          attachmentType: selectedAttachmentType,
+          actorId: selectedAttachmentType === 'actor_global' || selectedAttachmentType === 'actor_conversation' ? selectedActorId : null,
+          conversationId: selectedAttachmentType === 'conversation' || selectedAttachmentType === 'actor_conversation' ? selectedConversationId : null,
+          userId: selectedAttachmentType === 'user' ? currentUserId : null,
           lifecycleScope,
           configData,
           authSessionIds: Object.keys(authSessionIds).length > 0 ? authSessionIds : undefined,
         });
       } else {
-        await installPlugin(workspaceId, {
+        installation = await installPlugin(workspaceId, {
           pluginId: plugin.id,
-          scopeType,
-          actorId: scopeType === 'actor_global' || scopeType === 'actor_conversation' ? selectedActorId : undefined,
-          conversationId: scopeType === 'conversation' || scopeType === 'actor_conversation' ? selectedConversationId : undefined,
-          userId: scopeType === 'user' ? currentUserId : undefined,
+          attachmentType: selectedAttachmentType,
+          actorId: selectedAttachmentType === 'actor_global' || selectedAttachmentType === 'actor_conversation' ? selectedActorId : undefined,
+          conversationId: selectedAttachmentType === 'conversation' || selectedAttachmentType === 'actor_conversation' ? selectedConversationId : undefined,
+          userId: selectedAttachmentType === 'user' ? currentUserId : undefined,
           lifecycleScope,
           configData,
           authSessionIds: Object.keys(authSessionIds).length > 0 ? authSessionIds : undefined,
         });
       }
-      onSuccess?.();
-      onClose();
+      setCurrentInstallation(installation);
+      await onInstallationSaved?.(installation);
+
+      if (continueToAccess && accessStepIndex >= 0) {
+        setCurrentStepIndex(accessStepIndex);
+      } else if (onSuccess) {
+        await onSuccess(installation);
+      } else {
+        onClose();
+      }
     } catch (error: any) {
       alert(`Install failed: ${error.message}`);
     } finally {
       setSaving(false);
     }
   };
+
+  const finalizeFlow = async () => {
+    if (onSuccess && currentInstallation) {
+      await onSuccess(currentInstallation);
+      return;
+    }
+
+    onClose();
+  };
+
+  const renderStepBreadcrumbs = () => (
+    <Breadcrumb>
+      <BreadcrumbList className="gap-2">
+        {installSteps.map((step, index) => {
+          const label = translate(step.titleI18n, locale, plugin.default_locale || 'en') || step.id;
+          const isCurrent = index === currentStepIndex;
+          const isComplete = index < currentStepIndex;
+
+          return (
+            <Fragment key={step.id}>
+              <BreadcrumbItem>
+                {isCurrent ? (
+                  <BreadcrumbPage className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium">
+                    {label}
+                  </BreadcrumbPage>
+                ) : (
+                  <BreadcrumbLink asChild>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (step.kind === 'access' && !currentInstallation) return;
+                        setCurrentStepIndex(index);
+                      }}
+                      disabled={step.kind === 'access' && !currentInstallation}
+                      className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium"
+                    >
+                      <span>{label}</span>
+                    </button>
+                  </BreadcrumbLink>
+                )}
+              </BreadcrumbItem>
+              {index < installSteps.length - 1 ? <BreadcrumbSeparator /> : null}
+            </Fragment>
+          );
+        })}
+      </BreadcrumbList>
+    </Breadcrumb>
+  );
 
   const renderStepAction = () => {
     if (!currentStep?.action) return null;
@@ -668,9 +794,8 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
     );
   };
 
-  const renderStepDetails = () => (
-    <div className="flex flex-col">
-      <div className="space-y-5">
+  const renderStepBody = () => (
+    <div className="space-y-5">
         {currentStep && (
           <div className="space-y-3">
             <div className="space-y-1">
@@ -698,25 +823,26 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
           </div>
         )}
 
-        {currentStep?.kind === 'binding_scope' && (
-          <CapabilityBindingScopeStep
-            value={scopeType}
-            onChange={(value) => setScopeType(value as PluginBindingScope)}
-            allowedScopes={allowedBindingScopes}
-            actors={actors}
-            conversations={conversations}
-            selectedActorId={selectedActorId}
-            onActorChange={setSelectedActorId}
-            selectedConversationId={selectedConversationId}
-            onConversationChange={setSelectedConversationId}
-            currentUserLabel={user?.name || user?.email || 'You'}
-            error={fieldErrors.__scope}
-          />
+        {currentStep?.kind === 'attachment_scope' && (
+          <div className="space-y-4">
+            <CapabilityAttachmentTypeStep
+              value={selectedAttachmentType}
+              onChange={(value) => setSelectedAttachmentType(value as PluginAttachmentType)}
+              allowedScopes={allowedAttachmentTypes}
+              actors={actors}
+              conversations={conversations}
+              selectedActorId={selectedActorId}
+              onActorChange={setSelectedActorId}
+              selectedConversationId={selectedConversationId}
+              onConversationChange={setSelectedConversationId}
+              error={fieldErrors.__scope}
+            />
+          </div>
         )}
 
         {currentStep?.kind === 'reuse_scope' && (
           <CapabilityReuseScopeStep
-            bindingScope={scopeType}
+            attachmentType={selectedAttachmentType}
             value={lifecycleScope}
             onChange={(value) => setLifecycleScope(value as PluginReuseScope)}
             actors={actors}
@@ -725,6 +851,10 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
             selectedConversationId={selectedConversationId}
             allowedReuseScopes={installLifecycleOptions}
           />
+        )}
+
+        {currentStep?.kind === 'access' && (
+          <PluginAccessStep installation={currentInstallation} />
         )}
 
         {(currentStep?.kind === 'form' || currentStep?.kind === 'oauth' || currentStep?.kind === 'check') && currentStep?.fields.length > 0 && (
@@ -736,114 +866,94 @@ export default function InstallDialog({ plugin, defaultActorId, initialInstallat
           </div>
         )}
 
-        {(currentStep?.kind === 'form' || currentStep?.kind === 'oauth' || currentStep?.kind === 'check') && renderStepAction()}
-      </div>
+    </div>
+  );
 
-      <div className="mt-auto flex items-center justify-between gap-2 pt-6">
-        <Button variant="outline" onClick={onClose}>
-          Cancel
+  const renderStepFooter = () => (
+    <div className="flex items-center justify-between gap-2">
+      <Button variant="outline" onClick={onClose}>
+        {currentStep?.kind === 'access' ? 'Close' : 'Cancel'}
+      </Button>
+      <div className="flex items-center gap-2">
+        <Button variant="outline" onClick={previousStep} disabled={currentStepIndex === 0 || saving}>
+          Back
         </Button>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={previousStep} disabled={currentStepIndex === 0 || saving}>
-            Back
+        {currentStep?.kind === 'access' ? (
+          <Button onClick={finalizeFlow} disabled={saving}>
+            Done
           </Button>
-          {currentStepIndex < installSteps.length - 1 ? (
-            <Button onClick={nextStep} disabled={saving}>
-              Next
-            </Button>
-          ) : (
-            <Button onClick={handleInstall} disabled={saving}>
-              {saving ? (initialInstallation ? 'Saving...' : 'Installing...') : (initialInstallation ? 'Save Setup' : 'Install')}
-            </Button>
-          )}
-        </div>
+        ) : currentStepIndex < lastSetupStepIndex ? (
+          <Button onClick={nextStep} disabled={saving}>
+            Next
+          </Button>
+        ) : (
+          <Button onClick={() => persistInstallation({ continueToAccess: presentation === 'page' && accessStepIndex >= 0 })} disabled={saving}>
+            {saving
+              ? (currentInstallation || initialInstallation ? 'Saving...' : 'Installing...')
+              : presentation === 'page' && accessStepIndex >= 0
+                ? (currentInstallation || initialInstallation ? 'Save & Continue to Access' : 'Install & Continue to Access')
+                : (currentInstallation || initialInstallation ? 'Save Setup' : 'Install')}
+          </Button>
+        )}
       </div>
     </div>
   );
 
+  const pageContent = (
+    <>
+      {showPluginHeader ? (
+        <div className="border-b border-gray-200 px-6 py-6 dark:border-white/10">
+          <div className="flex">
+            <div className="mr-4 shrink-0">
+              <PluginIcon
+                iconUrl={plugin.icon_url}
+                title={translate(plugin.display_name_i18n, locale, plugin.default_locale || 'en') || plugin.display_name}
+                transport={plugin.transport}
+                className="h-8 w-8"
+                containerClassName="h-16 w-16 rounded-none border border-gray-300 bg-white dark:border-white/15 dark:bg-gray-900"
+              />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900 dark:text-white">
+                {translate(plugin.display_name_i18n, locale, plugin.default_locale || 'en') || plugin.display_name}
+              </h2>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {translate(plugin.description_i18n, locale, plugin.default_locale || 'en') || 'Install this plugin by following its guided setup flow.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className={pageChrome === 'card' ? 'flex min-h-0 flex-1 flex-col' : 'flex min-h-0 flex-1 flex-col'}>
+        <div className="sticky top-0 z-10 border-b border-gray-200 bg-card px-6 py-4 dark:border-white/10">
+          {renderStepBreadcrumbs()}
+        </div>
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="px-6 py-6">
+            {renderStepBody()}
+          </div>
+        </ScrollArea>
+        <div className="border-t border-gray-200 px-6 py-4 dark:border-white/10">
+          {renderStepFooter()}
+        </div>
+      </div>
+    </>
+  );
+
   const content = presentation === 'page' ? (
-    <div className="overflow-hidden rounded-lg bg-white shadow-sm dark:bg-gray-800/50 dark:shadow-none dark:outline dark:-outline-offset-1 dark:outline-white/10">
-      <div className="border-b border-gray-200 px-4 py-5 sm:px-6 dark:border-white/10">
-        <div className="flex">
-          <div className="mr-4 shrink-0">
-            <PluginIcon
-              iconUrl={plugin.icon_url}
-              title={translate(plugin.display_name_i18n, locale, plugin.default_locale || 'en') || plugin.display_name}
-              transport={plugin.transport}
-              className="h-8 w-8"
-              containerClassName="h-16 w-16 rounded-none border border-gray-300 bg-white dark:border-white/15 dark:bg-gray-900"
-            />
-          </div>
-          <div>
-            <h2 className="text-lg font-bold text-gray-900 dark:text-white">
-              {translate(plugin.display_name_i18n, locale, plugin.default_locale || 'en') || plugin.display_name}
-            </h2>
-            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              {translate(plugin.description_i18n, locale, plugin.default_locale || 'en') || 'Install this plugin by following its guided setup flow.'}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="px-4 py-6 sm:px-6">
-        <div className="grid gap-10 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <nav aria-label="Progress">
-            <ol role="list" className="space-y-6">
-              {installSteps.map((step, index) => {
-                const status =
-                  index < currentStepIndex ? 'complete' : index === currentStepIndex ? 'current' : 'upcoming';
-                const label = translate(step.titleI18n, locale, plugin.default_locale || 'en') || step.id;
-
-                return (
-                  <li key={step.id}>
-                    <button
-                      type="button"
-                      onClick={() => setCurrentStepIndex(index)}
-                      className="group block w-full appearance-none bg-transparent p-0 text-left outline-none"
-                    >
-                      {status === 'complete' ? (
-                        <span className="flex items-start">
-                          <span className="relative flex size-5 shrink-0 items-center justify-center">
-                            <CheckCircleIcon
-                              aria-hidden="true"
-                              className="size-full text-indigo-600 group-hover:text-indigo-800 dark:text-indigo-400 dark:group-hover:text-indigo-300"
-                            />
-                          </span>
-                          <span className="ml-3 text-sm font-medium text-gray-500 group-hover:text-gray-900 dark:text-gray-400 dark:group-hover:text-white">
-                            {label}
-                          </span>
-                        </span>
-                      ) : status === 'current' ? (
-                        <span className="flex items-start" aria-current="step">
-                          <span aria-hidden="true" className="relative flex size-5 shrink-0 items-center justify-center">
-                            <span className="absolute size-4 rounded-full bg-indigo-200 dark:bg-indigo-900" />
-                            <span className="relative block size-2 rounded-full bg-indigo-600 dark:bg-indigo-400" />
-                          </span>
-                          <span className="ml-3 text-sm font-medium text-indigo-600 dark:text-indigo-400">{label}</span>
-                        </span>
-                      ) : (
-                        <span className="flex items-start">
-                          <span aria-hidden="true" className="relative flex size-5 shrink-0 items-center justify-center">
-                            <span className="size-2 rounded-full bg-gray-300 group-hover:bg-gray-400 dark:bg-white/15 dark:group-hover:bg-white/25" />
-                          </span>
-                          <span className="ml-3 text-sm font-medium text-gray-500 group-hover:text-gray-900 dark:text-gray-400 dark:group-hover:text-white">
-                            {label}
-                          </span>
-                        </span>
-                      )}
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-          </nav>
-
-          <div>{renderStepDetails()}</div>
-        </div>
-      </div>
-    </div>
+    pageChrome === 'card' ? (
+      <AppCard variant="panel" className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+        {pageContent}
+      </AppCard>
+    ) : (
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">{pageContent}</div>
+    )
   ) : (
-    <div className="space-y-5">{renderStepDetails()}</div>
+    <div className="space-y-5">
+      {renderStepBody()}
+      {renderStepFooter()}
+    </div>
   );
 
   if (presentation === 'page') return content;

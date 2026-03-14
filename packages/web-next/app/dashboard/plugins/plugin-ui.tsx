@@ -1,6 +1,6 @@
 'use client';
 
-import { Globe, Code, Puzzle } from 'lucide-react';
+import { BadgeCheck, Globe, Code, Puzzle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
 export function getLocale(defaultLocale?: string) {
@@ -15,16 +15,16 @@ export function translate(text: Record<string, string> | undefined, locale: stri
   return text[locale] || text[locale.split('-')[0]] || text[fallback || ''] || text.en || Object.values(text)[0] || fallback || '';
 }
 
-export const bindingScopeLabels: Record<string, string> = {
+export const attachmentTypeLabels: Record<string, string> = {
   platform: 'Platform',
   workspace: 'Workspace',
   conversation: 'Conversation',
   actor_global: 'Actor',
-  actor_conversation: 'Actor + Conversation',
-  user: 'User',
+  actor_conversation: 'Actor in Conversation',
+  user: 'Personal',
 };
 
-export const bindingScopeColors: Record<string, string> = {
+export const attachmentTypeColors: Record<string, string> = {
   platform: 'border-violet-500/30 text-violet-500 dark:text-violet-300',
   workspace: 'border-blue-500/30 text-blue-500 dark:text-blue-300',
   conversation: 'border-orange-500/30 text-orange-500 dark:text-orange-300',
@@ -44,32 +44,42 @@ export function PluginIcon({
   iconUrl,
   title,
   transport,
+  verified = false,
   className = 'h-7 w-7',
   containerClassName = 'h-[60px] w-[60px] rounded-[18px]',
 }: {
   iconUrl?: string | null;
   title: string;
   transport?: string;
+  verified?: boolean;
   className?: string;
   containerClassName?: string;
 }) {
   const Icon = transport === 'http' ? Globe : transport === 'builtin' ? Code : Puzzle;
 
   return (
-    <div className={`flex flex-shrink-0 items-center justify-center overflow-hidden border border-slate-200 bg-slate-100 text-slate-700 shadow-sm dark:border-white/10 dark:bg-white/5 dark:text-slate-200 ${containerClassName}`}>
-      {iconUrl ? (
-        <img src={iconUrl} alt={title} className="h-full w-full object-cover" />
-      ) : (
-        <Icon className={className} />
-      )}
+    <div className="relative flex-shrink-0">
+      <div className={`flex items-center justify-center overflow-hidden border border-slate-200 bg-slate-100 text-slate-700 shadow-sm dark:border-white/10 dark:bg-white/5 dark:text-slate-200 ${containerClassName}`}>
+        {iconUrl ? (
+          <img src={iconUrl} alt={title} className="h-full w-full object-cover" />
+        ) : (
+          <Icon className={className} />
+        )}
+      </div>
+      {verified ? (
+        <div className="absolute -bottom-1 -right-1 rounded-full bg-background p-0.5 shadow-sm ring-1 ring-border/80">
+          <BadgeCheck className="size-4 fill-sky-500 text-sky-500" />
+          <span className="sr-only">Verified official plugin</span>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 export function ScopeBadge({ scope }: { scope: string }) {
   return (
-    <Badge variant="outline" className={bindingScopeColors[scope] || 'border-gray-200 text-gray-600 dark:border-white/10 dark:text-gray-300'}>
-      {bindingScopeLabels[scope] || scope}
+    <Badge variant="outline" className={attachmentTypeColors[scope] || 'border-gray-200 text-gray-600 dark:border-white/10 dark:text-gray-300'}>
+      {attachmentTypeLabels[scope] || scope}
     </Badge>
   );
 }

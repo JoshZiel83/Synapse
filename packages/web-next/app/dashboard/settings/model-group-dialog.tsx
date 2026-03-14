@@ -18,6 +18,8 @@ import {
 interface ModelGroupDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  scope?: 'workspace' | 'platform' | 'user';
+  availableScopes?: Array<'workspace' | 'platform' | 'user'>;
   group: any | null; // null = create, object = edit
   onSaved: () => void;
 }
@@ -28,12 +30,20 @@ const STRATEGIES = [
   { value: 'round_robin', label: 'Round Robin', desc: 'Cycle through models evenly' },
 ];
 
-export default function ModelGroupDialog({ open, onOpenChange, group, onSaved }: ModelGroupDialogProps) {
+export default function ModelGroupDialog({
+  open,
+  onOpenChange,
+  scope = 'workspace',
+  availableScopes,
+  group,
+  onSaved,
+}: ModelGroupDialogProps) {
   const { workspaceId } = useWorkspace();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [strategy, setStrategy] = useState('priority_failover');
   const [isDefault, setIsDefault] = useState(false);
+  const [selectedScope, setSelectedScope] = useState<'workspace' | 'platform' | 'user'>(scope);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -42,16 +52,19 @@ export default function ModelGroupDialog({ open, onOpenChange, group, onSaved }:
       setDescription(group.description || '');
       setStrategy(group.routing_strategy || 'priority_failover');
       setIsDefault(group.is_default || false);
+      setSelectedScope(scope);
     } else {
       setName('');
       setDescription('');
       setStrategy('priority_failover');
       setIsDefault(false);
+      setSelectedScope(availableScopes?.[0] || scope);
     }
-  }, [group, open]);
+  }, [availableScopes, group, open, scope]);
 
   const handleSave = async () => {
-    if (!workspaceId || !name.trim()) return;
+    const effectiveScope = group ? scope : selectedScope;
+    if ((!workspaceId && effectiveScope === 'workspace') || !name.trim()) return;
     setSaving(true);
     try {
       const data = {
@@ -60,10 +73,22 @@ export default function ModelGroupDialog({ open, onOpenChange, group, onSaved }:
         routingStrategy: strategy,
         isDefault,
       };
-      if (group) {
-        await api.updateModelGroup(workspaceId, group.id, data);
+      if (effectiveScope === 'platform') {
+        if (group) {
+          await api.updatePlatformModelGroup(group.id, data);
+        } else {
+          await api.createPlatformModelGroup(data);
+        }
+      } else if (effectiveScope === 'user') {
+        if (group) {
+          await api.updateUserModelGroup(group.id, data);
+        } else {
+          await api.createUserModelGroup(data);
+        }
+      } else if (group) {
+        await api.updateModelGroup(workspaceId!, group.id, data);
       } else {
-        await api.createModelGroup(workspaceId, data);
+        await api.createModelGroup(workspaceId!, data);
       }
       onSaved();
     } catch (err) {
@@ -84,6 +109,23 @@ export default function ModelGroupDialog({ open, onOpenChange, group, onSaved }:
         </DialogHeader>
 
         <div className="space-y-4 py-2">
+          {!group && (availableScopes?.length || 0) > 1 ? (
+            <div className="space-y-2">
+              <Label>Scope</Label>
+              <select
+                value={selectedScope}
+                onChange={(event) => setSelectedScope(event.target.value as 'workspace' | 'platform' | 'user')}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
+              >
+                {availableScopes?.map((option) => (
+                  <option key={option} value={option}>
+                    {option === 'workspace' ? 'Workspace' : option === 'platform' ? 'Platform' : 'User'}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
           <div className="space-y-2">
             <Label>Name</Label>
             <Input

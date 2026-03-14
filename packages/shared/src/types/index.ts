@@ -277,16 +277,19 @@ export interface Message {
 
 // ============ Memory ============
 export type MemoryScope = 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+export type MemoryGrantScope = MemoryScope | 'workspace_user';
 export type MemoryCategory = 'fact' | 'preference' | 'decision' | 'relationship' | 'procedure' | 'artifact' | 'summary';
 export type MemoryStatus = 'candidate' | 'established' | 'superseded' | 'retracted';
 export type MemoryStability = 'ephemeral' | 'durable';
 export type MemoryRecallType = 'bootstrap' | 'turn_recall' | 'manual_search';
+export type MemoryPermission = 'read' | 'edit' | 'grant' | 'retarget' | 'delete';
 
 export interface MemoryGrant {
   id: UUID;
   memoryId: UUID;
   workspaceId: UUID;
-  grantScope: MemoryScope;
+  permission: MemoryPermission;
+  grantScope: MemoryGrantScope;
   actorId?: UUID;
   conversationId?: UUID;
   userId?: UUID;
@@ -508,6 +511,9 @@ export type AIRequestStatus = 'success' | 'error' | 'timeout';
 
 export interface ModelGroup {
   id: UUID;
+  ownerType?: 'platform' | 'workspace' | 'user';
+  ownerWorkspaceId?: UUID | null;
+  ownerUserId?: UUID | null;
   workspaceId?: UUID;
   name: string;
   description: string;
@@ -555,6 +561,21 @@ export interface ActorModelGroup {
   createdAt: Timestamp;
 }
 
+export interface ModelGroupGrant {
+  id: UUID;
+  groupId: UUID;
+  grantScope: 'platform' | 'workspace' | 'user' | 'workspace_user' | 'actor';
+  workspaceId?: UUID | null;
+  userId?: UUID | null;
+  actorId?: UUID | null;
+  status: 'active' | 'revoked';
+  grantedBy?: UUID | null;
+  reason?: string | null;
+  metadata?: Record<string, unknown>;
+  createdAt?: Timestamp | null;
+  revokedAt?: Timestamp | null;
+}
+
 export interface AIRequestLog {
   id: UUID;
   workspaceId?: UUID;
@@ -582,9 +603,9 @@ export interface MultimodalConfig {
 }
 
 export interface ResolvedModelConfig {
-  routeId: UUID;
-  bindingId: UUID;
-  revisionId: UUID;
+  groupId: UUID;
+  profileId: UUID;
+  profileRevisionId: UUID;
   providerType: ProviderType;
   apiKey: string;
   baseUrl: string;
@@ -593,7 +614,6 @@ export interface ResolvedModelConfig {
   builtinTools?: AnthropicBuiltinTool[];
   multimodal?: MultimodalConfig;
   crossTurnToolHistory?: boolean;
-  bindingScope?: 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
   priority?: number;
   weight?: number;
   requestTimeoutMs?: number;
@@ -610,8 +630,8 @@ export interface ModelAttemptPolicy {
 }
 
 export interface ResolvedModelPlan {
-  routeId: UUID;
-  routeName: string;
+  groupId: UUID;
+  groupName: string;
   routingStrategy: 'weighted_random' | 'round_robin' | 'priority_failover';
   attemptPolicy: ModelAttemptPolicy;
   candidates: ResolvedModelConfig[];
@@ -1013,7 +1033,6 @@ export interface ToolResolveContext {
   groupId?: string;
   groupMembers?: GroupMemberEntry[];
   userId?: string;
-  userCount?: number;
   availableSkills?: CapabilityAvailableSkill[];
 }
 
@@ -1039,13 +1058,13 @@ export interface AIResponse {
 
 export type CapabilityPackageKind = 'plugin' | 'skill' | 'actor_template' | 'model';
 export type CapabilityTransport = 'builtin' | 'stdio' | 'http' | 'relay' | 'filesystem';
-export type CapabilityBindingScope = 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+export type CapabilityAttachmentType = 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
 export type CapabilityReuseScope = 'turn' | 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-export type CapabilityGrantScope = CapabilityBindingScope;
+export type CapabilityGrantScope = CapabilityAttachmentType;
 export type CapabilitySourceType = 'builtin' | 'official' | 'workspace_upload' | 'user_upload' | 'relay_derived';
 export type CapabilityRequirementKind = 'required' | 'recommended' | 'optional' | 'conflicts_with';
 export type CapabilityRequirementTargetKind = 'package' | 'tag';
-export type CapabilityBindingInstallMode =
+export type CapabilityInstanceInstallMode =
   | 'manual'
   | 'seeded'
   | 'relay_derived'
@@ -1070,7 +1089,7 @@ export type CapabilityInstallStepKind =
   | 'oauth'
   | 'check'
   | 'confirm'
-  | 'binding_scope'
+  | 'attachment_scope'
   | 'reuse_scope';
 export type CapabilityInstallActionKind = 'oauth_authorize' | 'external_link' | 'noop';
 export type CapabilityAuthProviderKind = 'oauth2_authorization_code_pkce';
@@ -1257,7 +1276,7 @@ export interface CapabilityPackage {
   isBuiltin: boolean;
   downloadCount: number;
   latestRevisionId?: string;
-  defaultBindingScope?: CapabilityBindingScope;
+  defaultInstanceScope?: CapabilityAttachmentType;
   defaultReuseScope?: CapabilityReuseScope;
   defaultIdleTtlMs?: number;
   defaultMaxAgeMs?: number;
@@ -1270,16 +1289,20 @@ export interface CapabilityPackage {
   latestRevision?: CapabilityPackageRevision;
 }
 
-export interface CapabilityBinding {
+export interface CapabilityInstance {
   id: string;
   workspaceId: string;
   packageId: string;
   revisionId: string;
-  bindingScope: CapabilityBindingScope;
+  attachmentType: CapabilityAttachmentType;
+  attachmentId?: string;
+  attachmentConversationId?: string;
+  attachmentActorId?: string;
+  attachmentUserId?: string;
   conversationId?: string;
   actorId?: string;
   userId?: string;
-  installMode: CapabilityBindingInstallMode;
+  installMode: CapabilityInstanceInstallMode;
   reuseScope: CapabilityReuseScope;
   idleTtlMs?: number;
   maxAgeMs?: number;
@@ -1297,7 +1320,7 @@ export interface CapabilityBinding {
 
 export interface CapabilityGrant {
   id: string;
-  bindingId: string;
+  instanceId: string;
   workspaceId: string;
   grantScope: CapabilityGrantScope;
   conversationId?: string;
@@ -1360,7 +1383,7 @@ export interface CapabilityRequirement {
   targetPublisherSlug?: string;
   targetPackageSlug?: string;
   targetTag?: string;
-  acceptableBindingScopes: CapabilityBindingScope[];
+  acceptableInstanceScopes: CapabilityAttachmentType[];
   acceptableReuseScopes: CapabilityReuseScope[];
   description: string;
   configPredicate: Record<string, unknown>;
@@ -1373,7 +1396,7 @@ export interface CapabilityRequirementCheck {
   requirementKind: CapabilityRequirementKind;
   status: CapabilityRequirementStatus;
   message: string;
-  matchedBindingIds: string[];
+  matchedInstanceIds: string[];
   missingPublisherSlug?: string;
   missingPackageSlug?: string;
   missingTag?: string;
@@ -1383,7 +1406,7 @@ export interface CapabilityInstallPlan {
   packageId: string;
   revisionId: string;
   workspaceId: string;
-  bindingScope: CapabilityBindingScope;
+  attachmentType: CapabilityAttachmentType;
   conversationId?: string;
   actorId?: string;
   userId?: string;
@@ -1412,7 +1435,7 @@ export interface ActorTemplateDependency {
   targetPackageKind: ActorTemplateTargetKind;
   targetPublisherSlug?: string;
   targetPackageSlug: string;
-  acceptableBindingScopes: CapabilityBindingScope[];
+  acceptableInstanceScopes: CapabilityAttachmentType[];
   acceptableReuseScopes: CapabilityReuseScope[];
   description: string;
   notes: CanonicalContentBlock[];
@@ -1460,14 +1483,14 @@ export interface ActorTemplateCloneResult {
 }
 
 export interface CapabilityAvailableSkill {
-  bindingId: string;
+  instanceId: string;
   packageId: string;
   revisionId: string;
   slug: string;
   name: string;
   description: string;
   version: string;
-  bindingScope: CapabilityBindingScope;
+  attachmentType: CapabilityAttachmentType;
   actorId?: string;
   conversationId?: string;
   userId?: string;
@@ -1476,7 +1499,7 @@ export interface CapabilityAvailableSkill {
 
 export type McpTransport = Exclude<CapabilityTransport, 'filesystem'>;
 export type McpLifecycleScope = CapabilityReuseScope;
-export type McpScopeType = CapabilityBindingScope;
+export type McpAttachmentType = CapabilityAttachmentType;
 
 export type McpOrganization = CapabilityPublisher;
 export type McpPluginTool = CapabilityPackageTool;
@@ -1485,10 +1508,10 @@ export interface McpPlugin extends CapabilityPackage {
   kind: 'plugin';
 }
 
-export interface McpInstallation extends CapabilityBinding {
+export interface McpInstallation extends CapabilityInstance {
   pluginId: string;
-  scopeType: McpScopeType;
-  scopeId: string;
+  attachmentType: McpAttachmentType;
+  attachmentId: string;
   lifecycleScope: McpLifecycleScope;
   plugin?: McpPlugin;
 }

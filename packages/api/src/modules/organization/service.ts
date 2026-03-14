@@ -1,5 +1,18 @@
+import type pg from 'pg';
 import { getFileUrl } from '../../infrastructure/storage/index.js';
 import { query, transaction } from '../../infrastructure/database/index.js';
+import {
+  authzEnabled,
+  buildWorkspaceUserContextId,
+  diffAuthzRelationships,
+  flushAuthzOutboxEntries,
+  lookupResources,
+  queueAuthzRelationships,
+  touchRelation,
+  touchWorkspaceUserContext,
+  type AuthzRelationMutation,
+  type AuthzSubject,
+} from '../../infrastructure/authz/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { createConversationEvent } from '../conversation/service.js';
 import {
@@ -47,6 +60,33 @@ import type {
 
 const ACTOR_ROLES: ActorRole[] = ['secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant'];
 
+type ActorGrantPermission =
+  | 'discover'
+  | 'invoke'
+  | 'receive_message'
+  | 'memory_read'
+  | 'memory_edit'
+  | 'memory_grant'
+  | 'memory_retarget'
+  | 'memory_delete';
+type ActorGrantScope = 'workspace' | 'user' | 'workspace_user' | 'conversation' | 'actor';
+type ActorGrantRow = {
+  id?: string;
+  actor_id?: string;
+  permission: ActorGrantPermission;
+  grant_scope: ActorGrantScope;
+  workspace_id: string | null;
+  user_id: string | null;
+  conversation_id: string | null;
+  actor_subject_id: string | null;
+  status: 'active' | 'revoked';
+  granted_by?: string | null;
+  reason?: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string;
+  revoked_at?: string | null;
+};
+
 const ACTOR_SELECT = `
   a.*,
   avatar_file.stored_name AS avatar_stored_name,
@@ -90,6 +130,7 @@ type ActorUpdateInput = Partial<{
 type ActorTemplateCloneInput = {
   workspaceId: UUID;
   templateId: UUID;
+  createdBy?: UUID;
   name?: string;
   title?: string;
   parentId?: UUID | null;
@@ -130,6 +171,313 @@ function normalizeContentBlocks(value: unknown) {
 
 function sanitizeCapabilities(capabilities?: string[]): string[] {
   return Array.from(new Set((capabilities || []).map((item) => item.trim()).filter(Boolean)));
+}
+
+async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
+  if (!authzEnabled() || entryIds.length === 0) return;
+
+  try {
+    await flushAuthzOutboxEntries(entryIds);
+  } catch (error) {
+    console.error(`[authz] Failed to flush ${source} relationship updates:`, error);
+  }
+}
+
+function defaultActorGrantRows(workspaceId: UUID): ActorGrantRow[] {
+  return [
+    {
+      permission: 'discover',
+      grant_scope: 'workspace',
+      workspace_id: workspaceId,
+      user_id: null,
+      conversation_id: null,
+      actor_subject_id: null,
+      status: 'active',
+    },
+    {
+      permission: 'invoke',
+      grant_scope: 'workspace',
+      workspace_id: workspaceId,
+      user_id: null,
+      conversation_id: null,
+      actor_subject_id: null,
+      status: 'active',
+    },
+  ];
+}
+
+async function insertActorGrantRows(
+  queryable: Pick<pg.PoolClient, 'query'>,
+  actorId: string,
+  grants: ActorGrantRow[],
+) {
+  for (const grant of grants) {
+    await queryable.query(
+      `INSERT INTO actor_grants (
+         actor_id,
+         permission,
+         grant_scope,
+         workspace_id,
+         user_id,
+         conversation_id,
+         actor_subject_id,
+         status,
+         granted_by,
+         reason,
+         metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)`,
+      [
+        actorId,
+        grant.permission,
+        grant.grant_scope,
+        grant.workspace_id,
+        grant.user_id,
+        grant.conversation_id,
+        grant.actor_subject_id,
+        grant.status,
+        grant.granted_by ?? null,
+        grant.reason ?? null,
+        JSON.stringify(grant.metadata ?? {}),
+      ],
+    );
+  }
+}
+
+function actorWorkspaceRelation(permission: ActorGrantPermission) {
+  switch (permission) {
+    case 'discover':
+      return 'discover_workspace';
+    case 'invoke':
+      return 'invoke_workspace';
+    case 'receive_message':
+      return 'receive_workspace';
+    case 'memory_read':
+      return 'memory_reader_workspace';
+    case 'memory_edit':
+      return 'memory_editor_workspace';
+    case 'memory_grant':
+      return 'memory_granter_workspace';
+    case 'memory_retarget':
+      return 'memory_retargeter_workspace';
+    case 'memory_delete':
+      return 'memory_deleter_workspace';
+    default:
+      return null;
+  }
+}
+
+function actorWorkspaceUserRelation(permission: ActorGrantPermission) {
+  switch (permission) {
+    case 'discover':
+      return 'discover_workspace_user';
+    case 'invoke':
+      return 'invoke_workspace_user';
+    case 'receive_message':
+      return 'receive_workspace_user';
+    case 'memory_read':
+      return 'memory_reader_workspace_user';
+    case 'memory_edit':
+      return 'memory_editor_workspace_user';
+    case 'memory_grant':
+      return 'memory_granter_workspace_user';
+    case 'memory_retarget':
+      return 'memory_retargeter_workspace_user';
+    case 'memory_delete':
+      return 'memory_deleter_workspace_user';
+    default:
+      return null;
+  }
+}
+
+function actorPrincipalRelation(permission: ActorGrantPermission) {
+  switch (permission) {
+    case 'discover':
+      return 'discover_principal';
+    case 'invoke':
+      return 'invoke_principal';
+    case 'receive_message':
+      return 'receive_principal';
+    case 'memory_read':
+      return 'memory_reader_principal';
+    case 'memory_edit':
+      return 'memory_editor_principal';
+    case 'memory_grant':
+      return 'memory_granter_principal';
+    case 'memory_retarget':
+      return 'memory_retargeter_principal';
+    case 'memory_delete':
+      return 'memory_deleter_principal';
+    default:
+      return null;
+  }
+}
+
+function actorConversationRelation(permission: ActorGrantPermission) {
+  switch (permission) {
+    case 'discover':
+      return 'discover_conversation';
+    case 'invoke':
+      return 'invoke_conversation';
+    case 'receive_message':
+      return 'receive_conversation';
+    case 'memory_read':
+      return 'memory_reader_conversation';
+    case 'memory_edit':
+      return 'memory_editor_conversation';
+    case 'memory_grant':
+      return 'memory_granter_conversation';
+    case 'memory_retarget':
+      return 'memory_retargeter_conversation';
+    case 'memory_delete':
+      return 'memory_deleter_conversation';
+    default:
+      return null;
+  }
+}
+
+function buildActorGrantRelations(actorId: string, grant: ActorGrantRow): AuthzRelationMutation[] {
+  if (grant.status !== 'active') {
+    return [];
+  }
+
+  switch (grant.grant_scope) {
+    case 'workspace': {
+      const relation = actorWorkspaceRelation(grant.permission);
+      return relation && grant.workspace_id
+        ? [touchRelation('actor', actorId, relation, 'workspace', grant.workspace_id)]
+        : [];
+    }
+    case 'user': {
+      const relation = actorPrincipalRelation(grant.permission);
+      return relation && grant.user_id
+        ? [touchRelation('actor', actorId, relation, 'user', grant.user_id)]
+        : [];
+    }
+    case 'workspace_user': {
+      const relation = actorWorkspaceUserRelation(grant.permission);
+      return relation && grant.workspace_id && grant.user_id
+        ? [
+            ...touchWorkspaceUserContext(grant.workspace_id, grant.user_id),
+            touchRelation(
+              'actor',
+              actorId,
+              relation,
+              'workspace_user',
+              buildWorkspaceUserContextId(grant.workspace_id, grant.user_id),
+            ),
+          ]
+        : [];
+    }
+    case 'conversation': {
+      const relation = actorConversationRelation(grant.permission);
+      return relation && grant.conversation_id
+        ? [touchRelation('actor', actorId, relation, 'conversation', grant.conversation_id)]
+        : [];
+    }
+    case 'actor': {
+      const relation = actorPrincipalRelation(grant.permission);
+      return relation && grant.actor_subject_id
+        ? [touchRelation('actor', actorId, relation, 'actor', grant.actor_subject_id)]
+        : [];
+    }
+    default:
+      return [];
+  }
+}
+
+function buildActorAuthzRelations(actorId: string, workspaceId: string, grants: ActorGrantRow[]): AuthzRelationMutation[] {
+  return [
+    touchRelation('workspace', workspaceId, 'actor', 'actor', actorId),
+    touchRelation('actor', actorId, 'workspace', 'workspace', workspaceId),
+    ...grants.flatMap((grant) => buildActorGrantRelations(actorId, grant)),
+  ];
+}
+
+async function listActorGrantRows(actorId: string, workspaceId: string) {
+  const result = await query<ActorGrantRow & { id: string; actor_id: string; created_at: string; revoked_at: string | null }>(
+    `SELECT *
+     FROM actor_grants
+     WHERE actor_id = $1
+       AND (
+         workspace_id = $2
+         OR workspace_id IS NULL
+       )
+     ORDER BY created_at DESC`,
+    [actorId, workspaceId],
+  );
+  return result.rows;
+}
+
+function mapActorGrantRow(row: ActorGrantRow & { id: string; actor_id: string; created_at: string; revoked_at: string | null }) {
+  return {
+    id: row.id,
+    actorId: row.actor_id,
+    permission: row.permission,
+    grantScope: row.grant_scope,
+    workspaceId: row.workspace_id || undefined,
+    userId: row.user_id || undefined,
+    conversationId: row.conversation_id || undefined,
+    actorSubjectId: row.actor_subject_id || undefined,
+    status: row.status,
+    grantedBy: row.granted_by || undefined,
+    reason: row.reason || undefined,
+    metadata: parseJsonObject(row.metadata),
+    createdAt: row.created_at,
+    revokedAt: row.revoked_at || undefined,
+  };
+}
+
+async function assertConversationInWorkspace(conversationId: string, workspaceId: string) {
+  const result = await query(
+    `SELECT 1
+     FROM conversations
+     WHERE id = $1 AND workspace_id = $2
+     LIMIT 1`,
+    [conversationId, workspaceId],
+  );
+  if (result.rows.length === 0) {
+    throw new Error('Conversation does not belong to this workspace');
+  }
+}
+
+async function assertActorInWorkspace(actorId: string, workspaceId: string) {
+  const result = await query(
+    `SELECT 1
+     FROM actors
+     WHERE id = $1 AND workspace_id = $2 AND is_active = TRUE
+     LIMIT 1`,
+    [actorId, workspaceId],
+  );
+  if (result.rows.length === 0) {
+    throw new Error('Actor does not belong to this workspace');
+  }
+}
+
+async function assertWorkspaceMember(userId: string, workspaceId: string) {
+  const result = await query(
+    `SELECT 1
+     FROM workspace_members
+     WHERE user_id = $1 AND workspace_id = $2
+     LIMIT 1`,
+    [userId, workspaceId],
+  );
+  if (result.rows.length === 0) {
+    throw new Error('User is not a member of this workspace');
+  }
+}
+
+async function assertUserExists(userId: string) {
+  const result = await query(
+    `SELECT 1
+     FROM users
+     WHERE id = $1
+     LIMIT 1`,
+    [userId],
+  );
+  if (result.rows.length === 0) {
+    throw new Error('User does not exist');
+  }
 }
 
 function buildDocsFromRow(row: any): ActorDoc[] {
@@ -420,7 +768,7 @@ function mapRequirementToTemplateDependency(requirement: CapabilityRequirement):
     targetPackageKind: requirement.targetPackageKind,
     targetPublisherSlug: requirement.targetPublisherSlug,
     targetPackageSlug: requirement.targetPackageSlug,
-    acceptableBindingScopes: requirement.acceptableBindingScopes,
+    acceptableInstanceScopes: requirement.acceptableInstanceScopes,
     acceptableReuseScopes: requirement.acceptableReuseScopes,
     description: requirement.description,
     notes: notesFromMetadata.length > 0
@@ -652,6 +1000,7 @@ async function emitConversationProfileChanges(params: {
 
 export async function createActor(params: {
   workspaceId: UUID;
+  createdBy?: UUID;
   name: string;
   role: ActorRole;
   title: string;
@@ -678,7 +1027,7 @@ export async function createActor(params: {
     },
   });
 
-  await transaction(async (client) => {
+  const authzEntryIds = await transaction(async (client) => {
     await insertActorSnapshot(client as any, {
       actorId: id,
       workspaceId: params.workspaceId,
@@ -686,7 +1035,25 @@ export async function createActor(params: {
       createdAt: now,
       currentVersion: 1,
     });
+
+    const grants = defaultActorGrantRows(params.workspaceId).map((grant) => ({
+      ...grant,
+      granted_by: params.createdBy ?? null,
+    }));
+    await insertActorGrantRows(client as any, id, grants);
+
+    return queueAuthzRelationships(
+      client,
+      buildActorAuthzRelations(id, params.workspaceId, grants),
+      {
+        source: 'actor.create',
+        workspaceId: params.workspaceId,
+        actorId: id,
+      },
+    );
   });
+
+  await flushQueuedAuthzEntries(authzEntryIds, 'actor.create');
 
   const actor = await getActor(id, params.workspaceId);
   if (!actor) {
@@ -695,7 +1062,28 @@ export async function createActor(params: {
   return actor;
 }
 
-export async function listActors(workspaceId: UUID): Promise<Actor[]> {
+export async function listActors(workspaceId: UUID, subject?: AuthzSubject): Promise<Actor[]> {
+  if (authzEnabled() && subject) {
+    const actorIds = await lookupResources({
+      resourceType: 'actor',
+      permission: 'discover',
+      subject,
+    });
+
+    if (actorIds.length === 0) {
+      return [];
+    }
+
+    const result = await query(
+      `SELECT ${ACTOR_SELECT}
+       ${ACTOR_JOINS}
+       WHERE a.workspace_id = $1 AND a.is_active = true AND a.id = ANY($2)
+       ORDER BY a.name`,
+      [workspaceId, actorIds],
+    );
+    return result.rows.map(mapRow);
+  }
+
   const result = await query(
     `SELECT ${ACTOR_SELECT}
      ${ACTOR_JOINS}
@@ -726,6 +1114,200 @@ export async function listActorVersions(actorId: UUID, workspaceId: UUID): Promi
     [actorId, workspaceId],
   );
   return result.rows.map(mapVersionRow);
+}
+
+export async function listActorGrants(actorId: UUID, workspaceId: UUID) {
+  const grants = await listActorGrantRows(actorId, workspaceId);
+  return grants.map(mapActorGrantRow);
+}
+
+export async function issueActorGrant(params: {
+  actorId: UUID;
+  workspaceId: UUID;
+  permission: ActorGrantPermission;
+  grantScope: ActorGrantScope;
+  userId?: UUID;
+  conversationId?: UUID;
+  actorSubjectId?: UUID;
+  grantedBy?: UUID;
+  reason?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  await assertActorInWorkspace(params.actorId, params.workspaceId);
+
+  if ((params.grantScope === 'user' || params.grantScope === 'workspace_user') && params.userId) {
+    await assertUserExists(params.userId);
+  }
+  if (params.grantScope === 'workspace_user' && params.userId) {
+    await assertWorkspaceMember(params.userId, params.workspaceId);
+  }
+  if (params.grantScope === 'conversation' && params.conversationId) {
+    await assertConversationInWorkspace(params.conversationId, params.workspaceId);
+  }
+  if (params.grantScope === 'actor' && params.actorSubjectId) {
+    await assertActorInWorkspace(params.actorSubjectId, params.workspaceId);
+  }
+
+  const result = await transaction(async (client) => {
+    const previousActiveResult = await client.query<ActorGrantRow>(
+      `SELECT *
+       FROM actor_grants
+       WHERE actor_id = $1
+         AND status = 'active'
+         AND (workspace_id = $2 OR workspace_id IS NULL)`,
+      [params.actorId, params.workspaceId],
+    );
+    const previousActive = previousActiveResult.rows;
+
+    const existingResult = await client.query<ActorGrantRow & { id: string; actor_id: string; created_at: string; revoked_at: string | null }>(
+      `SELECT *
+       FROM actor_grants
+       WHERE actor_id = $1
+         AND permission = $2
+         AND grant_scope = $3
+         AND COALESCE(workspace_id::text, '') = COALESCE($4::text, '')
+         AND COALESCE(user_id::text, '') = COALESCE($5::text, '')
+         AND COALESCE(conversation_id::text, '') = COALESCE($6::text, '')
+         AND COALESCE(actor_subject_id::text, '') = COALESCE($7::text, '')
+         AND status = 'active'
+       LIMIT 1`,
+      [
+        params.actorId,
+        params.permission,
+        params.grantScope,
+        params.grantScope === 'workspace' || params.grantScope === 'workspace_user' || params.grantScope === 'conversation' || params.grantScope === 'actor'
+          ? params.workspaceId
+          : null,
+        params.userId ?? null,
+        params.conversationId ?? null,
+        params.actorSubjectId ?? null,
+      ],
+    );
+
+    if (existingResult.rows[0]) {
+      return {
+        grant: existingResult.rows[0],
+        authzEntryIds: [] as string[],
+      };
+    }
+
+    const insertResult = await client.query<ActorGrantRow & { id: string; actor_id: string; created_at: string; revoked_at: string | null }>(
+      `INSERT INTO actor_grants (
+         actor_id,
+         permission,
+         grant_scope,
+         workspace_id,
+         user_id,
+         conversation_id,
+         actor_subject_id,
+         status,
+         granted_by,
+         reason,
+         metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10::jsonb)
+       RETURNING *`,
+      [
+        params.actorId,
+        params.permission,
+        params.grantScope,
+        params.grantScope === 'workspace' || params.grantScope === 'workspace_user' || params.grantScope === 'conversation' || params.grantScope === 'actor'
+          ? params.workspaceId
+          : null,
+        params.userId ?? null,
+        params.conversationId ?? null,
+        params.actorSubjectId ?? null,
+        params.grantedBy ?? null,
+        params.reason ?? null,
+        JSON.stringify(params.metadata ?? {}),
+      ],
+    );
+
+    const nextActive = [...previousActive, insertResult.rows[0]];
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      diffAuthzRelationships(
+        buildActorAuthzRelations(params.actorId, params.workspaceId, previousActive),
+        buildActorAuthzRelations(params.actorId, params.workspaceId, nextActive),
+      ),
+      {
+        source: 'actor.issue_grant',
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        permission: params.permission,
+      },
+    );
+
+    return {
+      grant: insertResult.rows[0],
+      authzEntryIds,
+    };
+  });
+
+  await flushQueuedAuthzEntries(result.authzEntryIds, 'actor.issue_grant');
+  return mapActorGrantRow(result.grant);
+}
+
+export async function revokeActorGrant(params: {
+  actorId: UUID;
+  workspaceId: UUID;
+  grantId: UUID;
+}) {
+  const result = await transaction(async (client) => {
+    const previousActiveResult = await client.query<ActorGrantRow>(
+      `SELECT *
+       FROM actor_grants
+       WHERE actor_id = $1
+         AND status = 'active'
+         AND (workspace_id = $2 OR workspace_id IS NULL)`,
+      [params.actorId, params.workspaceId],
+    );
+    const previousActive = previousActiveResult.rows;
+
+    const revokeResult = await client.query<ActorGrantRow & { id: string; actor_id: string; created_at: string; revoked_at: string | null }>(
+      `UPDATE actor_grants
+       SET status = 'revoked',
+           revoked_at = NOW()
+       WHERE id = $1
+         AND actor_id = $2
+         AND (workspace_id = $3 OR workspace_id IS NULL)
+         AND status = 'active'
+       RETURNING *`,
+      [params.grantId, params.actorId, params.workspaceId],
+    );
+
+    const revoked = revokeResult.rows[0];
+    if (!revoked) {
+      return null;
+    }
+
+    const nextActive = previousActive.filter((grant) => grant.id !== params.grantId);
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      diffAuthzRelationships(
+        buildActorAuthzRelations(params.actorId, params.workspaceId, previousActive),
+        buildActorAuthzRelations(params.actorId, params.workspaceId, nextActive),
+      ),
+      {
+        source: 'actor.revoke_grant',
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        grantId: params.grantId,
+      },
+    );
+
+    return {
+      grant: revoked,
+      authzEntryIds,
+    };
+  });
+
+  if (!result) {
+    return null;
+  }
+
+  await flushQueuedAuthzEntries(result.authzEntryIds, 'actor.revoke_grant');
+  return mapActorGrantRow(result.grant);
 }
 
 export async function updateActor(
@@ -831,12 +1413,30 @@ export async function updateActor(
       actorName: nextDefinition.name,
       nextVersion,
       delta,
+      avatarFileId: nextDefinition.avatarFileId,
+      avatarEmoji: typeof nextDefinition.config.avatar_emoji === 'string'
+        ? nextDefinition.config.avatar_emoji
+        : undefined,
     };
   });
 
   if (!outcome) return null;
 
   if (outcome.delta) {
+    let avatarUrl: string | undefined;
+    if (outcome.avatarFileId) {
+      const avatarFile = await query(
+        `SELECT stored_name
+         FROM files
+         WHERE id = $1
+         LIMIT 1`,
+        [outcome.avatarFileId],
+      );
+      const storedName = avatarFile.rows[0]?.stored_name as string | undefined;
+      if (storedName) {
+        avatarUrl = getFileUrl(storedName);
+      }
+    }
     try {
       await emitConversationProfileChanges({
         workspaceId,
@@ -855,6 +1455,8 @@ export async function updateActor(
         payload: {
           actorId: outcome.actorId,
           name: outcome.actorName,
+          avatarUrl,
+          avatarEmoji: outcome.avatarEmoji,
           currentVersion: outcome.nextVersion,
           delta: {
             ...outcome.delta,
@@ -876,11 +1478,50 @@ export async function updateActor(
 }
 
 export async function deleteActor(actorId: UUID, workspaceId: UUID): Promise<boolean> {
-  const result = await query(
-    `UPDATE actors SET is_active = false, updated_at = $1 WHERE id = $2 AND workspace_id = $3 RETURNING id`,
-    [nowISO(), actorId, workspaceId],
-  );
-  return (result.rowCount ?? 0) > 0;
+  const result = await transaction(async (client) => {
+    const grantResult = await client.query<ActorGrantRow>(
+      `SELECT *
+       FROM actor_grants
+       WHERE actor_id = $1
+         AND status = 'active'
+         AND (workspace_id = $2 OR workspace_id IS NULL)`,
+      [actorId, workspaceId],
+    );
+
+    const actorResult = await client.query(
+      `UPDATE actors SET is_active = false, updated_at = $1 WHERE id = $2 AND workspace_id = $3 RETURNING id`,
+      [nowISO(), actorId, workspaceId],
+    );
+
+    if ((actorResult.rowCount ?? 0) === 0) {
+      return null;
+    }
+
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      diffAuthzRelationships(
+        buildActorAuthzRelations(actorId, workspaceId, grantResult.rows),
+        [],
+      ),
+      {
+        source: 'actor.delete',
+        workspaceId,
+        actorId,
+      },
+    );
+
+    return {
+      deleted: true,
+      authzEntryIds,
+    };
+  });
+
+  if (!result) {
+    return false;
+  }
+
+  await flushQueuedAuthzEntries(result.authzEntryIds, 'actor.delete');
+  return result.deleted;
 }
 
 // ─── Org Tree ───
@@ -1015,7 +1656,7 @@ export async function cloneActorTemplate(input: ActorTemplateCloneInput): Promis
     },
   });
 
-  await transaction(async (client) => {
+  const authzEntryIds = await transaction(async (client) => {
     await insertActorSnapshot(client as any, {
       actorId,
       workspaceId: input.workspaceId,
@@ -1045,7 +1686,26 @@ export async function cloneActorTemplate(input: ActorTemplateCloneInput): Promis
        WHERE id = $1`,
       [template.package.id],
     );
+
+    const grants = defaultActorGrantRows(input.workspaceId).map((grant) => ({
+      ...grant,
+      granted_by: input.createdBy ?? null,
+    }));
+    await insertActorGrantRows(client as any, actorId, grants);
+
+    return queueAuthzRelationships(
+      client,
+      buildActorAuthzRelations(actorId, input.workspaceId, grants),
+      {
+        source: 'actor.clone_template',
+        workspaceId: input.workspaceId,
+        actorId,
+        templateId: input.templateId,
+      },
+    );
   });
+
+  await flushQueuedAuthzEntries(authzEntryIds, 'actor.clone_template');
 
   const actor = await getActor(actorId, input.workspaceId);
   if (!actor || !actor.templateLink) {
@@ -1081,7 +1741,7 @@ export async function seedBuiltinActorTemplates() {
       tags: seed.tags,
       isBuiltin: true,
       isActive: true,
-      defaultBindingScope: 'workspace',
+      defaultInstanceScope: 'workspace',
       defaultReuseScope: 'workspace',
       metadata: {
         seededBy: 'builtin_actor_templates',
@@ -1115,7 +1775,7 @@ export async function seedBuiltinActorTemplates() {
         targetPackageKind: dependency.targetPackageKind,
         targetPublisherSlug: dependency.targetPublisherSlug,
         targetPackageSlug: dependency.targetPackageSlug,
-        acceptableBindingScopes: dependency.acceptableBindingScopes,
+        acceptableInstanceScopes: dependency.acceptableInstanceScopes,
         acceptableReuseScopes: dependency.acceptableReuseScopes,
         description: dependency.description,
         metadata: {

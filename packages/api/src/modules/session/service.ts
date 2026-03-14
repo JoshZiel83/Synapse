@@ -1,3 +1,10 @@
+import {
+  authzEnabled,
+  enqueueAuthzRelationships,
+  flushAuthzOutboxEntries,
+  touchActorConversationContext,
+  touchRelation,
+} from '../../infrastructure/authz/index.js';
 import { query } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { shutdownSessionInstances } from '../mcp-plugins/instance-manager.js';
@@ -85,6 +92,16 @@ function buildMetadataFromItem(item: any) {
     : { ...(item.metadata || {}) };
 }
 
+async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
+  if (!authzEnabled() || entryIds.length === 0) return;
+
+  try {
+    await flushAuthzOutboxEntries(entryIds);
+  } catch (error) {
+    console.error(`[authz] Failed to flush ${source} relationship updates:`, error);
+  }
+}
+
 // ============ Session CRUD ============
 
 export async function createSession(params: {
@@ -92,6 +109,7 @@ export async function createSession(params: {
   actorId: UUID;
   groupId?: UUID;
   conversationId?: UUID;
+  userId?: UUID;
   channelType?: string;
   trigger?: string;
   metadata?: Record<string, unknown>;
@@ -101,12 +119,15 @@ export async function createSession(params: {
     actorId,
     groupId,
     conversationId,
+    userId,
     channelType = 'web',
     trigger = 'user_message',
     metadata = {},
   } = params;
 
+  const resolvedUserId = userId || (typeof metadata.userId === 'string' ? metadata.userId as UUID : undefined);
   let resolvedConversationId = conversationId || groupId;
+  let directConversationCreated = false;
   if (!resolvedConversationId) {
     const conversation = await createConversation({
       workspaceId,
@@ -114,6 +135,7 @@ export async function createSession(params: {
       metadata: { channelType, trigger },
     });
     resolvedConversationId = conversation.id;
+    directConversationCreated = true;
   } else {
     const conversation = await getConversation(resolvedConversationId);
     if (!conversation) {
@@ -128,6 +150,14 @@ export async function createSession(params: {
     actorId,
   });
 
+  if (directConversationCreated && resolvedUserId) {
+    await ensureConversationMember({
+      conversationId: finalConversationId,
+      memberType: 'user',
+      userId: resolvedUserId,
+    });
+  }
+
   const id = uuidv4();
   const result = await query(
     `INSERT INTO sessions (id, workspace_id, actor_id, conversation_id, channel_type, trigger, status, metadata, created_at, updated_at)
@@ -135,6 +165,30 @@ export async function createSession(params: {
      RETURNING *`,
     [id, workspaceId, actorId, finalConversationId, channelType, trigger, JSON.stringify(metadata)],
   );
+
+  if (directConversationCreated) {
+    const authzEntryIds = await enqueueAuthzRelationships(
+      [
+        touchRelation('conversation', finalConversationId, 'workspace', 'workspace', workspaceId),
+        touchRelation('conversation', finalConversationId, 'participant', 'actor', actorId),
+        ...touchActorConversationContext(actorId, finalConversationId),
+        ...(resolvedUserId
+          ? [
+              touchRelation('conversation', finalConversationId, 'participant', 'user', resolvedUserId),
+              touchRelation('conversation', finalConversationId, 'admin', 'user', resolvedUserId),
+            ]
+          : []),
+      ],
+      {
+        source: 'session.create_direct_conversation',
+        workspaceId,
+        conversationId: finalConversationId,
+        actorId,
+        userId: resolvedUserId,
+      },
+    );
+    await flushQueuedAuthzEntries(authzEntryIds, 'session.create_direct_conversation');
+  }
 
   return loadSession(result.rows[0].id);
 }

@@ -44,6 +44,22 @@ import { listVisibleSkills } from '../modules/skills/service.js';
 import { sessionThinkingQueue } from './queues.js';
 import { registerWorker } from './registry.js';
 
+type ThinkingPhase = 'thinking' | 'tool';
+
+function deriveThinkingPhase(status: string): ThinkingPhase {
+  const normalized = status.trim().toLowerCase();
+
+  if (normalized.startsWith('searching ') || normalized.startsWith('fetching ')) {
+    return 'tool';
+  }
+
+  if (normalized.startsWith('calling ') && normalized !== 'calling ai model...') {
+    return 'tool';
+  }
+
+  return 'thinking';
+}
+
 async function loadNewContextItems(params: {
   groupId: string;
   memberId: string;
@@ -97,6 +113,7 @@ export function startSessionThinkingWorker() {
       }
 
       let turn: any = null;
+      let thinkingActorName = 'Unknown';
 
       try {
         const session = await getSession(sessionId);
@@ -115,11 +132,18 @@ export function startSessionThinkingWorker() {
         });
 
         const thinkingActorResult = await query('SELECT name FROM actors WHERE id = $1', [actorId]);
-        const thinkingActorName = thinkingActorResult.rows[0]?.name || 'Unknown';
+        thinkingActorName = thinkingActorResult.rows[0]?.name || 'Unknown';
 
         const thinkingRedisKey = `thinking:${groupId || sessionId}`;
         const emitThinkingStatus = async (status: string) => {
-          const thinkingPayload = { groupId, sessionId, actorId, actorName: thinkingActorName, status };
+          const thinkingPayload = {
+            groupId,
+            sessionId,
+            actorId,
+            actorName: thinkingActorName,
+            status,
+            phase: deriveThinkingPhase(status),
+          };
           await redis.set(thinkingRedisKey, JSON.stringify(thinkingPayload), 'EX', 300);
           await emitEvent({
             type: 'session.thinking',
@@ -141,7 +165,6 @@ export function startSessionThinkingWorker() {
         let groupMembers: any[] | undefined;
         let memberEntries: GroupMemberEntry[] = [];
         let groupUserId: string | undefined;
-        let groupUserCount = 0;
         let actorMemberId: string | undefined;
         let lastKnownGroupSequence = 0;
         let contextItems: CanonicalContextItem[];
@@ -163,7 +186,6 @@ export function startSessionThinkingWorker() {
                 title: member.actor_title,
               });
             } else if (member.user_id && member.state === 'active') {
-              groupUserCount += 1;
               memberEntries.push({
                 type: 'user',
                 id: member.user_id,
@@ -204,8 +226,6 @@ export function startSessionThinkingWorker() {
         const recallResult = await recallMemories(workspaceId, {
           actorId,
           conversationId: session.conversation_id,
-          userId: groupUserId || userId,
-          userCount: groupId ? groupUserCount : (userId ? 1 : 0),
           recallType,
           queryText: recallQuery,
           queryBlocks: recallQuery ? textBlocks(recallQuery) : [],
@@ -243,7 +263,6 @@ export function startSessionThinkingWorker() {
         const resolvedModelPlan = await resolveModelPlan(actorId, workspaceId, {
           conversationId: session.conversation_id,
           userId: groupUserId || userId,
-          userCount: groupId ? groupUserCount : (userId ? 1 : 0),
         });
         const primaryModel = resolvedModelPlan?.candidates[0] || null;
         let finalContextItems = contextItems;
@@ -289,7 +308,6 @@ export function startSessionThinkingWorker() {
             sessionId,
             conversationId: session.conversation_id,
             userId: groupUserId || userId,
-            userCount: groupId ? groupUserCount : (userId ? 1 : 0),
           });
           if (mcpTools.tools.length > 0) {
             console.log(`[session-thinking] Resolved ${mcpTools.tools.length} MCP tools for actor ${actorId}`);
@@ -302,8 +320,6 @@ export function startSessionThinkingWorker() {
           workspaceId,
           actorId,
           conversationId: session.conversation_id,
-          userId: groupUserId || userId,
-          userCount: groupId ? groupUserCount : (userId ? 1 : 0),
         });
 
         const { system } = buildActorPrompt(
@@ -498,7 +514,10 @@ export function startSessionThinkingWorker() {
           payload: {
             groupId: failedSession?.group_id,
             sessionId,
+            actorId,
+            actorName: thinkingActorName,
             status: 'failed',
+            phase: 'error',
             errorMessage: err.message || 'Unknown error',
           },
           timestamp: nowISO(),

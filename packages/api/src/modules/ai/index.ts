@@ -66,9 +66,9 @@ function getProvider(resolved?: ResolvedModelConfig | null): AIProvider {
 
 function getFallbackResolvedConfig(): ResolvedModelConfig {
   return {
-    routeId: 'env-fallback',
-    bindingId: 'env-fallback',
-    revisionId: 'env-fallback',
+    groupId: 'env-fallback',
+    profileId: 'env-fallback',
+    profileRevisionId: 'env-fallback',
     providerType: config.ai.provider === 'openai' ? 'openai' : 'anthropic',
     apiKey: config.ai.apiKey,
     baseUrl: config.ai.baseUrl,
@@ -234,8 +234,8 @@ export async function actorThink(
   const effectiveModelPlan = modelPlan && modelPlan.candidates.length > 0
     ? modelPlan
     : {
-        routeId: 'env-fallback',
-        routeName: 'Environment Fallback',
+        groupId: 'env-fallback',
+        groupName: 'Environment Fallback',
         routingStrategy: 'priority_failover' as const,
         attemptPolicy: DEFAULT_ATTEMPT_POLICY,
         candidates: [getFallbackResolvedConfig()],
@@ -266,9 +266,9 @@ export async function actorThink(
     model: resolved?.modelName || config.ai.model,
     round,
     attempt: attempt || 1,
-    routeId: effectiveModelPlan.routeId,
-    routeName: effectiveModelPlan.routeName,
-    candidateBindingIds: effectiveModelPlan.candidates.map((candidate: ResolvedModelConfig) => candidate.bindingId),
+    groupId: effectiveModelPlan.groupId,
+    groupName: effectiveModelPlan.groupName,
+    candidateProfileIds: effectiveModelPlan.candidates.map((candidate: ResolvedModelConfig) => candidate.profileId),
     system,
     contextWindow: allContextWindow,
     tools: allTools,
@@ -284,7 +284,6 @@ export async function actorThink(
     groupId: options?.groupId,
     groupMembers: options?.groupMembers,
     userId: options?.userId,
-    userCount: options?.groupMembers?.filter(m => m.type === 'user').length,
     availableSkills: options?.availableSkills,
   };
 
@@ -321,7 +320,7 @@ export async function actorThink(
     actorId: actor.id,
     sessionId: options?.sessionId,
     turnId,
-    routeId: effectiveModelPlan.routeId,
+    groupId: effectiveModelPlan.groupId,
     requestType: 'actor_think' as const,
   };
 
@@ -334,7 +333,6 @@ export async function actorThink(
         actorId: actor.id,
         workspaceId: workspaceId || '',
         userId: options.userId,
-        userCount: options.groupMembers?.filter((member) => member.type === 'user').length ?? (options.userId ? 1 : 0),
       },
       () => _actorThinkInner(),
     );
@@ -362,9 +360,9 @@ export async function actorThink(
           stepIndex,
           providerType: params.resolved.providerType === 'openai' ? 'openai' : 'anthropic',
           requestType: 'actor_think',
-          modelRouteId: effectiveModelPlan.routeId,
-          modelBindingId: params.resolved.bindingId,
-          modelRevisionId: params.resolved.revisionId,
+          modelGroupId: effectiveModelPlan.groupId,
+          modelProfileId: params.resolved.profileId,
+          modelProfileRevisionId: params.resolved.profileRevisionId,
           modelName: params.resolved.modelName || config.ai.model,
           capabilitiesSnapshot: {
             builtinTools: params.resolved.builtinTools || [],
@@ -387,8 +385,8 @@ export async function actorThink(
       await logAIRequest({
         ...logCommon,
         round: stepIndex,
-        bindingId: params.resolved.bindingId,
-        revisionId: params.resolved.revisionId,
+        profileId: params.resolved.profileId,
+        profileRevisionId: params.resolved.profileRevisionId,
         inputTokens: params.inputTokens,
         outputTokens: params.outputTokens,
         latencyMs: params.latencyMs,
@@ -402,7 +400,7 @@ export async function actorThink(
 
     const executeProviderRound = async (round: number) => {
       const routePolicy = effectiveModelPlan.attemptPolicy || DEFAULT_ATTEMPT_POLICY;
-      const perBindingAttempts = new Map<string, number>();
+      const perProfileAttempts = new Map<string, number>();
       let totalAttempts = 0;
       let lastError: Error | null = null;
 
@@ -410,12 +408,12 @@ export async function actorThink(
       for (const candidate of effectiveModelPlan.candidates) {
         const candidatePolicy = effectiveAttemptPolicy(routePolicy, candidate);
         while (true) {
-          const priorAttempts = perBindingAttempts.get(candidate.bindingId) || 0;
+          const priorAttempts = perProfileAttempts.get(candidate.profileId) || 0;
           if (priorAttempts >= candidatePolicy.maxAttemptsPerBinding) break;
           if (totalAttempts >= routePolicy.maxAttemptsTotal) break candidateLoop;
 
           const attempt = priorAttempts + 1;
-          perBindingAttempts.set(candidate.bindingId, attempt);
+          perProfileAttempts.set(candidate.profileId, attempt);
           totalAttempts += 1;
 
           const provider = getProvider(candidate);
@@ -991,9 +989,9 @@ export async function aiComplete(
     await logAIRequest({
       workspaceId: logContext?.workspaceId,
       actorId: logContext?.actorId,
-      routeId: resolved?.routeId,
-      bindingId: resolved?.bindingId,
-      revisionId: resolved?.revisionId,
+      groupId: resolved?.groupId,
+      profileId: resolved?.profileId,
+      profileRevisionId: resolved?.profileRevisionId,
       requestType: 'ai_complete',
       inputTokens: 0,
       outputTokens: 0,
@@ -1012,9 +1010,9 @@ export async function aiComplete(
   await logAIRequest({
     workspaceId: logContext?.workspaceId,
     actorId: logContext?.actorId,
-    routeId: resolved?.routeId,
-    bindingId: resolved?.bindingId,
-    revisionId: resolved?.revisionId,
+    groupId: resolved?.groupId,
+    profileId: resolved?.profileId,
+    profileRevisionId: resolved?.profileRevisionId,
     requestType: 'ai_complete',
     inputTokens: response.tokensUsed.input,
     outputTokens: response.tokensUsed.output,

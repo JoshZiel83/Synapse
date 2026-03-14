@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { authzEnabled, checkPermission } from '../../infrastructure/authz/index.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
+import { query } from '../../infrastructure/database/index.js';
 import {
   listOrganizations, getOrganization,
   listPlugins, getPlugin,
@@ -23,7 +25,7 @@ import { getToolCallLogs, getEventLogs } from './audit.js';
 
 const installSchema = z.object({
   pluginId: z.string().uuid(),
-  scopeType: z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']),
+  attachmentType: z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']),
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
@@ -36,7 +38,7 @@ const updateInstallSchema = z.object({
   isEnabled: z.boolean().optional(),
   configData: z.record(z.unknown()).optional(),
   lifecycleScope: z.enum(['turn', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']).optional(),
-  scopeType: z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']).optional(),
+  attachmentType: z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']).optional(),
   actorId: z.string().uuid().nullable().optional(),
   conversationId: z.string().uuid().nullable().optional(),
   userId: z.string().uuid().nullable().optional(),
@@ -44,7 +46,7 @@ const updateInstallSchema = z.object({
 });
 
 const installPlanSchema = z.object({
-  scopeType: z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']),
+  attachmentType: z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']),
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
@@ -64,6 +66,50 @@ function handleError(reply: FastifyReply, error: unknown) {
   }
   console.error('[MCP Controller]', error);
   return reply.status(500).send({ error: 'Internal server error' });
+}
+
+async function hasWorkspaceMembership(workspaceId: string, userId: string) {
+  const result = await query(
+    `SELECT 1
+     FROM workspace_members
+     WHERE workspace_id = $1 AND user_id = $2
+     LIMIT 1`,
+    [workspaceId, userId],
+  );
+  return result.rows.length > 0;
+}
+
+async function requireWorkspacePermission(
+  request: any,
+  reply: FastifyReply,
+  permission: string,
+  errorMessage: string,
+) {
+  const { workspaceId } = request.params as { workspaceId: string };
+  const userId = (request as any).user.userId;
+
+  if (!authzEnabled()) {
+    const allowed = await hasWorkspaceMembership(workspaceId, userId);
+    if (!allowed) {
+      reply.status(403).send({ error: errorMessage });
+      return false;
+    }
+    return true;
+  }
+
+  const allowed = await checkPermission({
+    resourceType: 'workspace',
+    resourceId: workspaceId,
+    permission,
+    subject: { type: 'user', id: userId },
+  });
+
+  if (!allowed) {
+    reply.status(403).send({ error: errorMessage });
+    return false;
+  }
+
+  return true;
 }
 
 // ============ Route registration ============
@@ -110,12 +156,20 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.post('/api/v1/workspaces/:workspaceId/mcp/plugins/:pluginId/install-plan', { preHandler: wsPreHandler }, async (request, reply) => {
     try {
+      const allowed = await requireWorkspacePermission(
+        request,
+        reply,
+        'manage_capabilities',
+        'Not allowed to manage plugin installations in this workspace',
+      );
+      if (!allowed) return;
+
       const { workspaceId, pluginId } = request.params as { workspaceId: string; pluginId: string };
       const data = installPlanSchema.parse(request.body);
       const plan = await createPluginInstallPlan({
         workspaceId,
         pluginId,
-        bindingScope: data.scopeType,
+        attachmentType: data.attachmentType,
         actorId: data.actorId,
         conversationId: data.conversationId,
         userId: data.userId,
@@ -128,6 +182,14 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.post('/api/v1/workspaces/:workspaceId/mcp/plugins/:pluginId/auth/:providerKey/start', { preHandler: wsPreHandler }, async (request, reply) => {
     try {
+      const allowed = await requireWorkspacePermission(
+        request,
+        reply,
+        'manage_capabilities',
+        'Not allowed to manage plugin installations in this workspace',
+      );
+      if (!allowed) return;
+
       const { workspaceId, pluginId, providerKey } = request.params as { workspaceId: string; pluginId: string; providerKey: string };
       const user = (request as any).user;
       const result = await startPluginAuthSession({
@@ -144,6 +206,14 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/workspaces/:workspaceId/mcp/auth/sessions/:sessionId', { preHandler: wsPreHandler }, async (request, reply) => {
     try {
+      const allowed = await requireWorkspacePermission(
+        request,
+        reply,
+        'manage_capabilities',
+        'Not allowed to manage plugin installations in this workspace',
+      );
+      if (!allowed) return;
+
       const { workspaceId, sessionId } = request.params as { workspaceId: string; sessionId: string };
       const user = (request as any).user;
       const session = await getPluginAuthSession(sessionId, workspaceId, user.id || user.userId);
@@ -200,11 +270,19 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/workspaces/:workspaceId/mcp/installations', { preHandler: wsPreHandler }, async (request, reply) => {
     try {
+      const allowed = await requireWorkspacePermission(
+        request,
+        reply,
+        'manage_capabilities',
+        'Not allowed to view plugin installations in this workspace',
+      );
+      if (!allowed) return;
+
       const { workspaceId } = request.params as { workspaceId: string };
-      const { scopeType, conversationId, actorId, userId, pluginId } = request.query as {
-        scopeType?: any; conversationId?: string; actorId?: string; userId?: string; pluginId?: string;
+      const { attachmentType, conversationId, actorId, userId, pluginId } = request.query as {
+        attachmentType?: any; conversationId?: string; actorId?: string; userId?: string; pluginId?: string;
       };
-      const installations = await getInstallations(workspaceId, { scopeType, conversationId, actorId, userId, pluginId });
+      const installations = await getInstallations(workspaceId, { attachmentType, conversationId, actorId, userId, pluginId });
       reply.send(installations);
     } catch (error) {
       handleError(reply, error);
@@ -213,6 +291,14 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/workspaces/:workspaceId/mcp/installations/:installId', { preHandler: wsPreHandler }, async (request, reply) => {
     try {
+      const allowed = await requireWorkspacePermission(
+        request,
+        reply,
+        'manage_capabilities',
+        'Not allowed to view plugin installations in this workspace',
+      );
+      if (!allowed) return;
+
       const { workspaceId, installId } = request.params as { workspaceId: string; installId: string };
       const installation = await getInstallation(workspaceId, installId);
       reply.send({ installation });
@@ -223,6 +309,14 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.post('/api/v1/workspaces/:workspaceId/mcp/installations', { preHandler: wsPreHandler }, async (request, reply) => {
     try {
+      const allowed = await requireWorkspacePermission(
+        request,
+        reply,
+        'manage_capabilities',
+        'Not allowed to manage plugin installations in this workspace',
+      );
+      if (!allowed) return;
+
       const { workspaceId } = request.params as { workspaceId: string };
       const data = installSchema.parse(request.body);
       const user = (request as any).user;
@@ -242,7 +336,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const installation = await installPluginUnified({
         workspaceId,
         pluginId: data.pluginId,
-        scopeType: data.scopeType,
+        attachmentType: data.attachmentType,
         actorId: data.actorId,
         conversationId: data.conversationId,
         userId: data.userId,
@@ -259,13 +353,21 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.put('/api/v1/workspaces/:workspaceId/mcp/installations/:installId', { preHandler: wsPreHandler }, async (request, reply) => {
     try {
+      const allowed = await requireWorkspacePermission(
+        request,
+        reply,
+        'manage_capabilities',
+        'Not allowed to manage plugin installations in this workspace',
+      );
+      if (!allowed) return;
+
       const { installId } = request.params as { installId: string };
       const data = updateInstallSchema.parse(request.body);
 
       // Validate config against plugin's validation rules if updating config
       if (data.configData) {
         const { query: dbQuery } = await import('../../infrastructure/database/index.js');
-        const installRow = await dbQuery('SELECT package_id FROM capability_bindings WHERE id = $1', [installId]);
+        const installRow = await dbQuery('SELECT package_id FROM capability_instances WHERE id = $1', [installId]);
         if (installRow.rows.length > 0) {
           const plugin = await getPlugin(installRow.rows[0].package_id);
           const rules = plugin.validation_rules || [];
@@ -291,6 +393,14 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.delete('/api/v1/workspaces/:workspaceId/mcp/installations/:installId', { preHandler: wsPreHandler }, async (request, reply) => {
     try {
+      const allowed = await requireWorkspacePermission(
+        request,
+        reply,
+        'manage_capabilities',
+        'Not allowed to manage plugin installations in this workspace',
+      );
+      if (!allowed) return;
+
       const { installId } = request.params as { installId: string };
       await uninstallPluginUnified(installId);
       reply.send({ success: true });
@@ -303,6 +413,14 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/workspaces/:workspaceId/mcp/audit/tool-calls', { preHandler: wsPreHandler }, async (request, reply) => {
     try {
+      const allowed = await requireWorkspacePermission(
+        request,
+        reply,
+        'manage_capabilities',
+        'Not allowed to view plugin audit logs in this workspace',
+      );
+      if (!allowed) return;
+
       const { workspaceId } = request.params as { workspaceId: string };
       const { pluginId, sessionId, actorId, limit, before } = request.query as {
         pluginId?: string; sessionId?: string; actorId?: string; limit?: string; before?: string;
@@ -320,6 +438,14 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/workspaces/:workspaceId/mcp/audit/events', { preHandler: wsPreHandler }, async (request, reply) => {
     try {
+      const allowed = await requireWorkspacePermission(
+        request,
+        reply,
+        'manage_capabilities',
+        'Not allowed to view plugin audit logs in this workspace',
+      );
+      if (!allowed) return;
+
       const { workspaceId } = request.params as { workspaceId: string };
       const { eventType, pluginId, limit, before } = request.query as {
         eventType?: string; pluginId?: string; limit?: string; before?: string;

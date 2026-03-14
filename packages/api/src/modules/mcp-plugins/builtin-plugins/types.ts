@@ -21,7 +21,7 @@ export interface BuiltinPluginSeed {
   defaultLocale?: string;
   transport: string;
   entryPoint: string;
-  defaultBindingScope: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+  defaultInstanceScope: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
   defaultReuseScope: CapabilityReuseScope;
   requiresHandshake?: boolean;
   tags: string[];

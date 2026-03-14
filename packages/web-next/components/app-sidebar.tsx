@@ -6,24 +6,28 @@ import Image from "next/image"
 import { usePathname, useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
 import {
+  Bot,
   Brain,
   ChevronsUpDown,
   ContactRound,
+  Cpu,
   FileText,
-  LayoutDashboard,
+  ImagePlus,
+  Loader2,
   LogOut,
   MessageSquare,
   Moon,
-  Plus,
   Puzzle,
-  Settings,
   ShieldCheck,
   Sun,
+  UsersRound,
 } from "lucide-react"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { useChatStore } from "@/stores/chat-store"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { useAuthStore } from "@/stores/auth-store"
+import { api } from "@/lib/api"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -49,7 +53,6 @@ import {
 import { TeamSwitcher } from "@/components/team-switcher"
 
 const mainItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
   { href: "/dashboard/contacts", label: "Contacts", icon: ContactRound },
 ]
@@ -57,11 +60,30 @@ const mainItems = [
 const knowledgeItems = [
   { href: "/dashboard/memories", label: "Memories", icon: Brain },
   { href: "/dashboard/plugins", label: "Plugins", icon: Puzzle },
-  { href: "/dashboard/authorizations", label: "Authorizations", icon: ShieldCheck },
   { href: "/dashboard/audit", label: "Audit Log", icon: FileText },
 ]
 
-const secondaryItems = [{ href: "/dashboard/settings", label: "Settings", icon: Settings }]
+const modelItems = [
+  { href: "/settings/models", label: "Groups", icon: Cpu },
+  { href: "/settings/models/actors", label: "Actors", icon: Bot },
+]
+
+const roleItems = [
+  { href: "/roles/workspace", label: "Workspace", icon: UsersRound },
+  { href: "/roles/platform", label: "Platform", icon: ShieldCheck },
+]
+
+const emptyWorkspaceNavigation = {
+  canViewWorkspace: false,
+  canAccessWorkspaceModels: false,
+  canAccessWorkspaceUserModels: false,
+  canAccessWorkspaceRoles: false,
+}
+
+const emptyPlatformNavigation = {
+  canAccessPlatformModels: false,
+  canAccessPlatformRoles: false,
+}
 
 function SynapseLogo({ className }: { className?: string }) {
   return (
@@ -75,6 +97,22 @@ function SynapseLogo({ className }: { className?: string }) {
   )
 }
 
+function isItemActive(pathname: string, href: string) {
+  if (href === "/dashboard/contacts") {
+    return pathname.startsWith("/dashboard/contacts") || pathname.startsWith("/dashboard/actors")
+  }
+
+  if (href === "/dashboard/memories") {
+    return pathname === href || pathname.startsWith("/dashboard/memories/")
+  }
+
+  if (href === "/dashboard/plugins") {
+    return pathname === href || pathname.startsWith("/dashboard/plugins/")
+  }
+
+  return pathname === href
+}
+
 function NavSection({
   label,
   items,
@@ -86,6 +124,10 @@ function NavSection({
   pathname: string
   unreadCount?: number
 }) {
+  if (items.length === 0) {
+    return null
+  }
+
   return (
     <SidebarGroup>
       {label ? <SidebarGroupLabel>{label}</SidebarGroupLabel> : null}
@@ -95,9 +137,7 @@ function NavSection({
             const active =
               item.href === "/dashboard"
                 ? pathname === item.href
-                : item.href === "/dashboard/contacts"
-                  ? pathname.startsWith("/dashboard/contacts") || pathname.startsWith("/dashboard/actors")
-                  : pathname.startsWith(item.href)
+                : isItemActive(pathname, item.href)
             const Icon = item.icon
             const badge = item.href === "/dashboard/chat" ? unreadCount : 0
 
@@ -127,12 +167,15 @@ function NavUser({
   user,
   onLogout,
 }: {
-  user: { name?: string; email?: string } | null
+  user: { name?: string; email?: string; avatarUrl?: string } | null
   onLogout: () => void
 }) {
   const { isMobile } = useSidebar()
   const { theme, setTheme } = useTheme()
+  const { workspaceId } = useWorkspace()
   const [mounted, setMounted] = React.useState(false)
+  const [avatarUploading, setAvatarUploading] = React.useState(false)
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
 
   React.useEffect(() => {
     setMounted(true)
@@ -147,6 +190,20 @@ function NavUser({
         .slice(0, 2)
     : "U"
 
+  async function handleAvatarFile(file: File | null) {
+    if (!file || !workspaceId) return
+    setAvatarUploading(true)
+    try {
+      const uploaded = await api.uploadFile(workspaceId, file)
+      const updated = await api.updateMe({ avatarUrl: uploaded.url || uploaded.fullUrl || null })
+      useAuthStore.getState().setUser(updated?.user || updated)
+    } catch (error) {
+      console.error("Failed to update user avatar:", error)
+    } finally {
+      setAvatarUploading(false)
+    }
+  }
+
   return (
     <SidebarMenu>
       <SidebarMenuItem>
@@ -157,6 +214,7 @@ function NavUser({
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
               <Avatar className="size-8 rounded-lg">
+                <AvatarImage src={user?.avatarUrl || undefined} alt={user?.name || "User"} />
                 <AvatarFallback className="rounded-lg bg-sidebar-primary text-xs text-sidebar-primary-foreground">{initials}</AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left text-sm leading-tight">
@@ -172,9 +230,21 @@ function NavUser({
             align="end"
             sideOffset={4}
           >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0] || null
+                void handleAvatarFile(file)
+                event.target.value = ""
+              }}
+            />
             <DropdownMenuLabel className="p-0 font-normal">
               <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                 <Avatar className="size-8 rounded-lg">
+                  <AvatarImage src={user?.avatarUrl || undefined} alt={user?.name || "User"} />
                   <AvatarFallback className="rounded-lg bg-sidebar-primary text-xs text-sidebar-primary-foreground">{initials}</AvatarFallback>
                 </Avatar>
                 <div className="grid flex-1 text-left text-sm leading-tight">
@@ -188,6 +258,10 @@ function NavUser({
               <DropdownMenuItem onClick={() => setTheme(mounted && theme === "dark" ? "light" : "dark")}>
                 {mounted && theme === "dark" ? <Sun /> : <Moon />}
                 {mounted && theme === "dark" ? "Light mode" : "Dark mode"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => fileInputRef.current?.click()} disabled={!workspaceId || avatarUploading}>
+                {avatarUploading ? <Loader2 className="animate-spin" /> : <ImagePlus />}
+                {avatarUploading ? "Uploading avatar..." : "Change avatar"}
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
@@ -207,13 +281,15 @@ export function AppSidebar({
   onLogout,
   ...props
 }: {
-  user: { name?: string; email?: string } | null
+  user: { name?: string; email?: string; avatarUrl?: string } | null
   onLogout: () => void
 } & React.ComponentProps<typeof Sidebar>) {
   const pathname = usePathname()
   const router = useRouter()
   const unreadCount = useChatStore((state) => state.totalUnread)
   const { workspaceId, workspaces, setWorkspaceId } = useWorkspace()
+  const [workspaceNavigation, setWorkspaceNavigation] = React.useState(emptyWorkspaceNavigation)
+  const [platformNavigation, setPlatformNavigation] = React.useState(emptyPlatformNavigation)
 
   const teams = React.useMemo(
     () =>
@@ -225,6 +301,59 @@ export function AppSidebar({
       })),
     [workspaces]
   )
+
+  React.useEffect(() => {
+    let cancelled = false
+
+    const workspaceNavigationPromise = workspaceId
+      ? api.getWorkspaceNavigation(workspaceId).catch(() => ({ data: emptyWorkspaceNavigation }))
+      : Promise.resolve({ data: emptyWorkspaceNavigation })
+
+    const platformNavigationPromise = api
+      .getPlatformNavigation()
+      .catch(() => ({ data: emptyPlatformNavigation }))
+
+    Promise.all([workspaceNavigationPromise, platformNavigationPromise]).then(
+      ([workspaceResponse, platformResponse]) => {
+        if (cancelled) {
+          return
+        }
+
+        setWorkspaceNavigation(workspaceResponse?.data ?? emptyWorkspaceNavigation)
+        setPlatformNavigation(platformResponse?.data ?? emptyPlatformNavigation)
+      }
+    )
+
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceId])
+
+  const visibleModelItems = React.useMemo(() => {
+    const items = []
+
+    if (workspaceNavigation.canAccessWorkspaceModels || workspaceNavigation.canAccessWorkspaceUserModels || platformNavigation.canAccessPlatformModels || user) {
+      items.push(modelItems[0])
+    }
+    if (workspaceNavigation.canAccessWorkspaceModels) {
+      items.push(modelItems[1])
+    }
+
+    return items
+  }, [platformNavigation.canAccessPlatformModels, user, workspaceNavigation.canAccessWorkspaceModels, workspaceNavigation.canAccessWorkspaceUserModels])
+
+  const visibleRoleItems = React.useMemo(() => {
+    const items = []
+
+    if (workspaceNavigation.canAccessWorkspaceRoles) {
+      items.push(roleItems[0])
+    }
+    if (platformNavigation.canAccessPlatformRoles) {
+      items.push(roleItems[1])
+    }
+
+    return items
+  }, [platformNavigation.canAccessPlatformRoles, workspaceNavigation.canAccessWorkspaceRoles])
 
   return (
     <Sidebar collapsible="offcanvas" variant="inset" {...props}>
@@ -241,7 +370,8 @@ export function AppSidebar({
       <SidebarContent>
         <NavSection items={mainItems} pathname={pathname} unreadCount={unreadCount} />
         <NavSection label="Workspace" items={knowledgeItems} pathname={pathname} />
-        <NavSection label="Preferences" items={secondaryItems} pathname={pathname} />
+        <NavSection label="Models" items={visibleModelItems} pathname={pathname} />
+        <NavSection label="Roles" items={visibleRoleItems} pathname={pathname} />
       </SidebarContent>
 
       <SidebarFooter>

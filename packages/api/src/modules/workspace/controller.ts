@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { authMiddleware, optionalAuth } from '../../infrastructure/middleware/auth.js';
+import { authzEnabled, checkPermission } from '../../infrastructure/authz/index.js';
 import {
   createWorkspace,
   listUserWorkspaces,
@@ -9,6 +10,10 @@ import {
   checkMembership,
   addMember,
   listMembers,
+  listWorkspaceRoleAssignments,
+  assignWorkspaceRole,
+  revokeWorkspaceRole,
+  type WorkspaceSupplementalRole,
 } from './service.js';
 import {
   createInvite,
@@ -41,22 +46,73 @@ const createInviteSchema = z.object({
   expiresAt: z.string().optional(),
 });
 
+const workspaceRoleSchema = z.object({
+  userId: z.string().uuid(),
+  role: z.enum(['model_admin', 'actor_admin', 'capability_admin', 'memory_admin', 'relay_admin', 'conversation_admin']),
+  metadata: z.record(z.unknown()).optional(),
+});
+
 // ── Helpers ──
 
 type WorkspaceParams = { workspaceId: string };
 
-async function requireMembership(
+function hasLegacyWorkspacePermission(
+  trustLevel: string | null,
+  permission: string,
+) {
+  switch (permission) {
+    case 'view':
+      return Boolean(trustLevel);
+    case 'create_conversation':
+      return trustLevel === 'owner' || trustLevel === 'admin' || trustLevel === 'member';
+    case 'manage':
+    case 'manage_members':
+    case 'manage_actors':
+    case 'manage_conversations':
+    case 'manage_capabilities':
+    case 'manage_memories':
+    case 'manage_relays':
+    case 'manage_models':
+      return trustLevel === 'owner' || trustLevel === 'admin';
+    default:
+      return false;
+  }
+}
+
+async function canWorkspacePermission(
+  workspaceId: string,
+  userId: string,
+  permission: string,
+): Promise<boolean> {
+  if (!authzEnabled()) {
+    const trustLevel = await checkMembership(workspaceId, userId);
+    return hasLegacyWorkspacePermission(trustLevel, permission);
+  }
+
+  return checkPermission({
+    resourceType: 'workspace',
+    resourceId: workspaceId,
+    permission,
+    subject: { type: 'user', id: userId },
+  });
+}
+
+async function requireWorkspacePermission(
   request: FastifyRequest<{ Params: WorkspaceParams }>,
-  reply: FastifyReply
-): Promise<string | null> {
+  reply: FastifyReply,
+  permission: string,
+  errorMessage = 'Forbidden'
+): Promise<boolean> {
   const { workspaceId } = request.params;
   const userId = (request as any).user!.userId;
-  const trustLevel = await checkMembership(workspaceId, userId);
-  if (!trustLevel) {
-    reply.status(403).send({ error: 'Not a member of this workspace' });
-    return null;
+
+  const allowed = await canWorkspacePermission(workspaceId, userId, permission);
+  if (!allowed) {
+    reply.status(403).send({ error: errorMessage });
+    return false;
   }
-  return trustLevel;
+
+  return true;
 }
 
 // ── Handlers ──
@@ -91,8 +147,8 @@ export async function handleGetWorkspace(
   request: FastifyRequest<{ Params: WorkspaceParams }>,
   reply: FastifyReply
 ) {
-  const trustLevel = await requireMembership(request, reply);
-  if (!trustLevel) return;
+  const allowed = await requireWorkspacePermission(request, reply, 'view', 'Not allowed to view this workspace');
+  if (!allowed) return;
 
   const workspace = await getWorkspaceById(request.params.workspaceId);
   if (!workspace) {
@@ -106,12 +162,8 @@ export async function handleUpdateWorkspace(
   request: FastifyRequest<{ Params: WorkspaceParams }>,
   reply: FastifyReply
 ) {
-  const trustLevel = await requireMembership(request, reply);
-  if (!trustLevel) return;
-
-  if (trustLevel !== 'owner' && trustLevel !== 'admin') {
-    return reply.status(403).send({ error: 'Only owners and admins can update workspaces' });
-  }
+  const allowed = await requireWorkspacePermission(request, reply, 'manage', 'Not allowed to manage this workspace');
+  if (!allowed) return;
 
   const parsed = updateWorkspaceSchema.safeParse(request.body);
   if (!parsed.success) {
@@ -130,12 +182,13 @@ export async function handleAddMember(
   request: FastifyRequest<{ Params: WorkspaceParams }>,
   reply: FastifyReply
 ) {
-  const trustLevel = await requireMembership(request, reply);
-  if (!trustLevel) return;
-
-  if (trustLevel !== 'owner' && trustLevel !== 'admin') {
-    return reply.status(403).send({ error: 'Only owners and admins can add members' });
-  }
+  const allowed = await requireWorkspacePermission(
+    request,
+    reply,
+    'manage_members',
+    'Not allowed to manage workspace members'
+  );
+  if (!allowed) return;
 
   const parsed = addMemberSchema.safeParse(request.body);
   if (!parsed.success) {
@@ -159,11 +212,117 @@ export async function handleListMembers(
   request: FastifyRequest<{ Params: WorkspaceParams }>,
   reply: FastifyReply
 ) {
-  const trustLevel = await requireMembership(request, reply);
-  if (!trustLevel) return;
+  const allowed = await requireWorkspacePermission(
+    request,
+    reply,
+    'manage_members',
+    'Not allowed to view workspace members'
+  );
+  if (!allowed) return;
 
   const members = await listMembers(request.params.workspaceId);
   return reply.send({ data: members });
+}
+
+export async function handleListWorkspaceRoles(
+  request: FastifyRequest<{ Params: WorkspaceParams }>,
+  reply: FastifyReply
+) {
+  const allowed = await requireWorkspacePermission(
+    request,
+    reply,
+    'manage_members',
+    'Not allowed to view workspace roles'
+  );
+  if (!allowed) return;
+
+  const roles = await listWorkspaceRoleAssignments(request.params.workspaceId);
+  return reply.send({ data: roles });
+}
+
+export async function handleGetWorkspaceNavigation(
+  request: FastifyRequest<{ Params: WorkspaceParams }>,
+  reply: FastifyReply
+) {
+  const userId = (request as any).user!.userId;
+  const { workspaceId } = request.params;
+
+  const [canViewWorkspace, canAccessWorkspaceModels, canAccessWorkspaceRoles] = await Promise.all([
+    canWorkspacePermission(workspaceId, userId, 'view'),
+    canWorkspacePermission(workspaceId, userId, 'manage_models'),
+    canWorkspacePermission(workspaceId, userId, 'manage_members'),
+  ]);
+
+  return reply.send({
+    data: {
+      canViewWorkspace,
+      canAccessWorkspaceModels,
+      canAccessWorkspaceUserModels: canViewWorkspace,
+      canAccessWorkspaceRoles,
+    },
+  });
+}
+
+export async function handleAssignWorkspaceRole(
+  request: FastifyRequest<{ Params: WorkspaceParams }>,
+  reply: FastifyReply
+) {
+  const allowed = await requireWorkspacePermission(
+    request,
+    reply,
+    'manage_members',
+    'Not allowed to manage workspace roles'
+  );
+  if (!allowed) return;
+
+  const parsed = workspaceRoleSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.status(400).send({ error: 'Validation failed', details: parsed.error.flatten() });
+  }
+
+  try {
+    const role = await assignWorkspaceRole({
+      workspaceId: request.params.workspaceId,
+      userId: parsed.data.userId,
+      role: parsed.data.role as WorkspaceSupplementalRole,
+      assignedBy: (request as any).user!.userId,
+      metadata: parsed.data.metadata as Record<string, unknown> | undefined,
+    });
+    return reply.status(201).send(role);
+  } catch (err: any) {
+    const msg = err.message || 'Failed to assign workspace role';
+    if (msg === 'User is not a member of this workspace') {
+      return reply.status(400).send({ error: msg });
+    }
+    if (msg === 'Role already assigned') {
+      return reply.status(409).send({ error: msg });
+    }
+    throw err;
+  }
+}
+
+export async function handleRevokeWorkspaceRole(
+  request: FastifyRequest<{ Params: WorkspaceParams & { userId: string; role: WorkspaceSupplementalRole } }>,
+  reply: FastifyReply
+) {
+  const allowed = await requireWorkspacePermission(
+    request as FastifyRequest<{ Params: WorkspaceParams }>,
+    reply,
+    'manage_members',
+    'Not allowed to manage workspace roles'
+  );
+  if (!allowed) return;
+
+  try {
+    await revokeWorkspaceRole(request.params.workspaceId, request.params.userId, request.params.role);
+    return reply.status(204).send();
+  } catch (err: any) {
+    const msg = err.message || 'Failed to revoke workspace role';
+    if (msg === 'Role not found') {
+      return reply.status(404).send({ error: msg });
+    }
+    throw err;
+  }
 }
 
 // ── Invite Handlers ──
@@ -175,11 +334,13 @@ export async function handleCreateInvite(
   request: FastifyRequest<{ Params: WorkspaceParams }>,
   reply: FastifyReply
 ) {
-  const trustLevel = await requireMembership(request, reply);
-  if (!trustLevel) return;
-  if (trustLevel !== 'owner' && trustLevel !== 'admin') {
-    return reply.status(403).send({ error: 'Only owners and admins can create invites' });
-  }
+  const allowed = await requireWorkspacePermission(
+    request,
+    reply,
+    'manage_members',
+    'Not allowed to manage workspace invites'
+  );
+  if (!allowed) return;
 
   const parsed = createInviteSchema.safeParse(request.body);
   if (!parsed.success) {
@@ -201,11 +362,13 @@ export async function handleListInvites(
   request: FastifyRequest<{ Params: WorkspaceParams }>,
   reply: FastifyReply
 ) {
-  const trustLevel = await requireMembership(request, reply);
-  if (!trustLevel) return;
-  if (trustLevel !== 'owner' && trustLevel !== 'admin') {
-    return reply.status(403).send({ error: 'Only owners and admins can view invites' });
-  }
+  const allowed = await requireWorkspacePermission(
+    request,
+    reply,
+    'manage_members',
+    'Not allowed to view workspace invites'
+  );
+  if (!allowed) return;
 
   const invites = await listWorkspaceInvites(request.params.workspaceId);
   return reply.send({ data: invites });
@@ -215,12 +378,15 @@ export async function handleRevokeInvite(
   request: FastifyRequest<{ Params: InviteParams }>,
   reply: FastifyReply
 ) {
+  const allowed = await requireWorkspacePermission(
+    request as FastifyRequest<{ Params: WorkspaceParams }>,
+    reply,
+    'manage_members',
+    'Not allowed to manage workspace invites'
+  );
+  if (!allowed) return;
+
   const { workspaceId, inviteId } = request.params;
-  const userId = (request as any).user!.userId;
-  const tl = await checkMembership(workspaceId, userId);
-  if (!tl || (tl !== 'owner' && tl !== 'admin')) {
-    return reply.status(403).send({ error: 'Only owners and admins can revoke invites' });
-  }
 
   const revoked = await revokeInvite(inviteId, workspaceId);
   if (!revoked) {
@@ -302,6 +468,26 @@ export async function registerWorkspaceRoutes(fastify: FastifyInstance) {
     '/api/v1/workspaces/:workspaceId/members',
     workspaceAuthHook,
     handleListMembers
+  );
+  fastify.get<{ Params: WorkspaceParams }>(
+    '/api/v1/workspaces/:workspaceId/navigation',
+    authHook,
+    handleGetWorkspaceNavigation
+  );
+  fastify.get<{ Params: WorkspaceParams }>(
+    '/api/v1/workspaces/:workspaceId/roles',
+    workspaceAuthHook,
+    handleListWorkspaceRoles
+  );
+  fastify.post<{ Params: WorkspaceParams }>(
+    '/api/v1/workspaces/:workspaceId/roles',
+    workspaceAuthHook,
+    handleAssignWorkspaceRole
+  );
+  fastify.post<{ Params: WorkspaceParams & { userId: string; role: WorkspaceSupplementalRole } }>(
+    '/api/v1/workspaces/:workspaceId/roles/:role/users/:userId/revoke',
+    workspaceAuthHook,
+    handleRevokeWorkspaceRole
   );
 
   // Workspace invite management (requires workspace membership)

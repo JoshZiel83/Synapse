@@ -9,16 +9,37 @@ export interface GroupParticipant {
   name: string;
   role: string;
   emoji?: string;
+  avatarUrl?: string;
+  title?: string;
+}
+
+export interface GroupMember {
+  memberId: string;
+  type: 'actor' | 'user';
+  id: string;
+  name: string;
+  role?: string;
+  title?: string;
+  emoji?: string;
+  avatarUrl?: string;
+  sessionStatus?: string;
 }
 
 export interface Group {
   id: string;
   status: 'active' | 'completed' | 'failed';
   participants: GroupParticipant[];
+  members: GroupMember[];
   lastMessage?: { content: string; role: string; actorName?: string; createdAt: string };
   unreadCount: number;
   createdAt: string;
   title?: string;
+  name?: string;
+  avatarUrl?: string;
+  permissions?: {
+    canManage?: boolean;
+    canManageMembers?: boolean;
+  };
 }
 
 export interface ServerToolCall {
@@ -48,10 +69,13 @@ export interface GroupMessage {
   targetActorNames?: string[]; // names of @mentioned actors
 }
 
-interface ThinkingState {
+export type ThinkingPhase = 'thinking' | 'tool' | 'error';
+
+export interface ThinkingState {
   actorId: string;
   actorName: string;
   status?: string;
+  phase?: ThinkingPhase;
 }
 
 interface ChatState {
@@ -317,11 +341,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (g.id !== groupId) return g;
         const unreadCount = s.selectedGroupId === groupId ? g.unreadCount : g.unreadCount + 1;
         let participants = g.participants;
+        let members = g.members;
         if (noticeType === 'actor_renamed' && noticeActorId && newActorName) {
           participants = participants.map((participant) => (
             participant.id === noticeActorId
               ? { ...participant, name: newActorName }
               : participant
+          ));
+          members = members.map((member) => (
+            member.type === 'actor' && member.id === noticeActorId
+              ? { ...member, name: newActorName }
+              : member
           ));
         }
         if (noticeType === 'actor_avatar_changed' && noticeActorId && avatarEmoji) {
@@ -330,10 +360,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ? { ...participant, emoji: avatarEmoji }
               : participant
           ));
+          members = members.map((member) => (
+            member.type === 'actor' && member.id === noticeActorId
+              ? { ...member, emoji: avatarEmoji }
+              : member
+          ));
         }
         return {
           ...g,
           participants,
+          members,
           lastMessage: {
             content: extractText(messageContentBlocks),
             role: effectiveRole,
@@ -358,7 +394,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   handleStatusChanged: (payload) => {
     const groupId = getGroupId(payload);
     if (!groupId) return;
-    const { status, errorMessage } = payload;
+    const { status, errorMessage, actorId, actorName, phase } = payload;
 
     // Map session status to group-level status
     let groupStatus = status;
@@ -376,7 +412,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (status === 'failed') {
       set((s) => {
         const newMap = { ...s.thinkingMap };
-        delete newMap[groupId];
+        if (actorId) {
+          newMap[groupId] = {
+            actorId,
+            actorName: actorName || 'Unknown',
+            status: errorMessage || 'Something went wrong',
+            phase: phase || 'error',
+          };
+        } else {
+          delete newMap[groupId];
+        }
 
         // Only inject if this group is currently selected
         if (s.selectedGroupId !== groupId) {
@@ -403,11 +448,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   handleThinking: (payload) => {
     const groupId = getGroupId(payload);
     if (!groupId) return;
-    const { actorId, actorName, status } = payload;
+    const { actorId, actorName, status, phase } = payload;
     set((s) => ({
       thinkingMap: {
         ...s.thinkingMap,
-        [groupId]: { actorId, actorName, status },
+        [groupId]: { actorId, actorName, status, phase },
       },
     }));
   },
@@ -415,7 +460,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
   handleGroupUpdated: (payload) => {
     const groupId = getGroupId(payload);
     if (!groupId) return;
-    const { newParticipant, action } = payload;
+    const { newParticipant, action, title, avatarUrl } = payload;
+
+    if (action === 'profile_updated') {
+      set((s) => ({
+        groups: s.groups.map((g) => (
+          g.id === groupId
+            ? {
+                ...g,
+                title: title || g.title,
+                name: title || g.title,
+                avatarUrl: avatarUrl === undefined ? g.avatarUrl : avatarUrl || undefined,
+              }
+            : g
+        )),
+      }));
+      return;
+    }
 
     if (action === 'member_added' && payload.actorId && payload.actorName) {
       // New member added to group
@@ -455,7 +516,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   handleMemberJoined: (payload) => {
     const groupId = payload.groupId;
     if (!groupId) return;
-    const { actorId, actorName } = payload;
+    const joinedMembers = Array.isArray(payload.members) && payload.members.length > 0
+      ? payload.members
+      : (payload.actorId ? [{
+          type: 'actor',
+          actorId: payload.actorId,
+          id: payload.actorId,
+          name: payload.actorName || 'Unknown',
+        }] : []);
 
     const state = get();
 
@@ -463,18 +531,52 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({
       groups: s.groups.map((g) => {
         if (g.id !== groupId) return g;
-        if (actorId && !g.participants.some((p) => p.id === actorId)) {
-          return {
-            ...g,
-            participants: [...g.participants, { id: actorId, name: actorName || 'Unknown', role: 'specialist' }],
+        const nextMembers = [...g.members];
+        const nextParticipants = [...g.participants];
+
+        for (const member of joinedMembers) {
+          const memberId = member.actorId || member.userId || member.id;
+          if (!memberId) continue;
+
+          const normalizedMember: GroupMember = {
+            memberId: member.memberId || memberId,
+            type: member.type === 'user' ? 'user' : 'actor',
+            id: memberId,
+            name: member.name || 'Unknown',
+            role: member.role,
+            title: member.title,
+            emoji: member.emoji,
+            avatarUrl: member.avatarUrl,
+            sessionStatus: member.sessionStatus,
           };
+
+          if (!nextMembers.some((existing) => existing.memberId === normalizedMember.memberId || (existing.type === normalizedMember.type && existing.id === normalizedMember.id))) {
+            nextMembers.push(normalizedMember);
+          }
+
+          if (normalizedMember.type === 'actor' && !nextParticipants.some((participant) => participant.id === normalizedMember.id)) {
+            nextParticipants.push({
+              id: normalizedMember.id,
+              name: normalizedMember.name,
+              role: normalizedMember.role || 'specialist',
+              emoji: normalizedMember.emoji,
+              avatarUrl: normalizedMember.avatarUrl,
+              title: normalizedMember.title,
+            });
+          }
         }
-        return g;
+
+        return {
+          ...g,
+          members: nextMembers,
+          participants: nextParticipants,
+        };
       }),
     }));
 
     // Insert system message if this group is selected
     if (state.selectedGroupId === groupId) {
+      const joinedNames = joinedMembers.map((member: any) => member.name).filter(Boolean);
       set((s) => ({
         messages: [
           ...s.messages,
@@ -482,8 +584,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             id: `sys-join-${Date.now()}`,
             sessionId: '',
             role: 'system',
-            content: `${actorName || 'An actor'} joined the group`,
-            contentBlocks: textBlocks(`${actorName || 'An actor'} joined the group`),
+            content: `${joinedNames.join(', ') || 'A member'} joined the group`,
+            contentBlocks: textBlocks(`${joinedNames.join(', ') || 'A member'} joined the group`),
             createdAt: new Date().toISOString(),
           },
         ],
@@ -494,7 +596,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   handleMemberKicked: (payload) => {
     const groupId = payload.groupId;
     if (!groupId) return;
-    const { actorId, actorName } = payload;
+    const removedMembers = Array.isArray(payload.members) && payload.members.length > 0
+      ? payload.members
+      : (payload.actorId ? [{
+          type: 'actor',
+          actorId: payload.actorId,
+          id: payload.actorId,
+          name: payload.actorName || 'Unknown',
+        }] : []);
 
     const state = get();
 
@@ -502,15 +611,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({
       groups: s.groups.map((g) => {
         if (g.id !== groupId) return g;
+        const removedActorIds = new Set(
+          removedMembers
+            .filter((member: any) => member.type !== 'user')
+            .map((member: any) => member.actorId || member.id)
+            .filter(Boolean),
+        );
+        const removedUserIds = new Set(
+          removedMembers
+            .filter((member: any) => member.type === 'user')
+            .map((member: any) => member.userId || member.id)
+            .filter(Boolean),
+        );
         return {
           ...g,
-          participants: g.participants.filter((p) => p.id !== actorId),
+          participants: g.participants.filter((p) => !removedActorIds.has(p.id)),
+          members: g.members.filter((member) => (
+            member.type === 'actor'
+              ? !removedActorIds.has(member.id)
+              : !removedUserIds.has(member.id)
+          )),
         };
       }),
     }));
 
     // Insert system message if this group is selected
     if (state.selectedGroupId === groupId) {
+      const removedNames = removedMembers.map((member: any) => member.name).filter(Boolean);
       set((s) => ({
         messages: [
           ...s.messages,
@@ -518,8 +645,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             id: `sys-kick-${Date.now()}`,
             sessionId: '',
             role: 'system',
-            content: `${actorName || 'An actor'} was removed from the group`,
-            contentBlocks: textBlocks(`${actorName || 'An actor'} was removed from the group`),
+            content: `${removedNames.join(', ') || 'A member'} was removed from the group`,
+            contentBlocks: textBlocks(`${removedNames.join(', ') || 'A member'} was removed from the group`),
             createdAt: new Date().toISOString(),
           },
         ],
@@ -528,8 +655,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   handleActorVersionChanged: (payload) => {
-    const { actorId, name: actorName } = payload;
+    const { actorId, name: actorName, avatarUrl, avatarEmoji } = payload;
     const state = get();
+
+    set((s) => ({
+      groups: s.groups.map((group) => ({
+        ...group,
+        participants: group.participants.map((participant) => (
+          participant.id === actorId
+            ? {
+                ...participant,
+                name: actorName || participant.name,
+                avatarUrl: avatarUrl || participant.avatarUrl,
+                emoji: avatarEmoji === undefined ? participant.emoji : avatarEmoji,
+              }
+            : participant
+        )),
+        members: group.members.map((member) => (
+          member.type === 'actor' && member.id === actorId
+            ? {
+                ...member,
+                name: actorName || member.name,
+                avatarUrl: avatarUrl || member.avatarUrl,
+                emoji: avatarEmoji === undefined ? member.emoji : avatarEmoji,
+              }
+            : member
+        )),
+      })),
+    }));
 
     // Find which groups this actor is in and insert a system message if selected
     const relevantGroup = state.groups.find(

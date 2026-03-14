@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Plus, Search } from 'lucide-react';
-import type { Group } from '@/stores/chat-store';
+import ChatAvatar from './chat-avatar';
+import type { Group, ThinkingState } from '@/stores/chat-store';
 
 function formatRelativeTime(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -21,7 +22,7 @@ function formatRelativeTime(dateStr: string) {
 interface GroupListProps {
   groups: Group[];
   selectedId: string | null;
-  thinkingMap: Record<string, { actorName: string; status?: string }>;
+  thinkingMap: Record<string, ThinkingState>;
   onSelect: (id: string) => void;
   onNewConversation: () => void;
 }
@@ -72,8 +73,8 @@ export default function GroupList({ groups, selectedId, thinkingMap, onSelect, o
       <div className="min-h-0 flex-1 overflow-y-auto">
         {filtered.map((group) => {
           const isSelected = group.id === selectedId;
-          const isThinking = !!thinkingMap[group.id];
-          const avatar = group.participants[0]?.emoji || group.participants[0]?.name?.charAt(0).toUpperCase() || '?';
+          const thinking = thinkingMap[group.id];
+          const isThinking = !!thinking;
           const name = group.title || group.participants.map((p) => p.name).join(', ');
 
           const preview = group.lastMessage
@@ -102,9 +103,12 @@ export default function GroupList({ groups, selectedId, thinkingMap, onSelect, o
               <div className="flex items-center gap-3">
                 {/* Avatar */}
                 <div className="relative shrink-0">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white text-sm font-medium">
-                    {avatar.length <= 2 ? avatar : avatar.charAt(0)}
-                  </div>
+                  <ChatAvatar
+                    name={name}
+                    avatarUrl={group.avatarUrl}
+                    entityType="group"
+                    size="lg"
+                  />
                   {group.unreadCount > 0 && (
                     <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold">
                       {group.unreadCount > 99 ? '99+' : group.unreadCount}
@@ -124,9 +128,9 @@ export default function GroupList({ groups, selectedId, thinkingMap, onSelect, o
                   </div>
                   <p className="mt-0.5 truncate text-sm text-muted-foreground">
                     {isThinking
-                      ? (thinkingMap[group.id].status
-                          ? `${thinkingMap[group.id].actorName} · ${thinkingMap[group.id].status}`
-                          : `${thinkingMap[group.id].actorName} is thinking...`)
+                      ? (thinking?.status
+                          ? `${thinking.actorName} · ${thinking.status}`
+                          : `${thinking?.actorName} is thinking...`)
                       : previewTrunc || 'No messages yet'
                     }
                   </p>

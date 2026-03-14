@@ -5,6 +5,7 @@ import { query } from '../../infrastructure/database/index.js';
 import { redis } from '../../infrastructure/redis/index.js';
 import type { FastifyInstance } from 'fastify';
 import type { User, AuthTokens } from '@synapse/shared';
+import { ensureConfiguredPlatformAdminForUser } from '../platform/admin-service.js';
 
 const SALT_ROUNDS = 10;
 const REFRESH_TOKEN_TTL = 7 * 24 * 60 * 60; // 7 days in seconds
@@ -82,6 +83,7 @@ export function createAuthService(app: FastifyInstance) {
     );
 
     const user = mapUserRow(result.rows[0]);
+    await ensureConfiguredPlatformAdminForUser({ id: user.id, email: user.email });
     const tokens = await generateTokens(user.id, user.email);
 
     return { user, tokens };
@@ -108,6 +110,7 @@ export function createAuthService(app: FastifyInstance) {
     }
 
     const user = mapUserRow(row);
+    await ensureConfiguredPlatformAdminForUser({ id: user.id, email: user.email });
     const tokens = await generateTokens(user.id, user.email);
 
     return { user, tokens };
@@ -150,7 +153,29 @@ export function createAuthService(app: FastifyInstance) {
     return mapUserRow(result.rows[0]);
   }
 
-  return { register, login, refreshTokens, getProfile };
+  async function updateProfile(userId: string, input: { name?: string; avatarUrl?: string | null }): Promise<User> {
+    const current = await getProfile(userId);
+    const nextName = input.name === undefined ? current.name : input.name.trim();
+    const nextAvatarUrl = input.avatarUrl === undefined ? current.avatarUrl ?? null : input.avatarUrl;
+
+    const result = await query<UserRow>(
+      `UPDATE users
+       SET name = $2,
+           avatar_url = $3,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, email, name, avatar_url, password_hash, created_at, updated_at`,
+      [userId, nextName, nextAvatarUrl ?? null],
+    );
+
+    if (!result.rowCount || result.rowCount === 0) {
+      throw new AuthError('User not found', 404);
+    }
+
+    return mapUserRow(result.rows[0]);
+  }
+
+  return { register, login, refreshTokens, getProfile, updateProfile };
 }
 
 export class AuthError extends Error {

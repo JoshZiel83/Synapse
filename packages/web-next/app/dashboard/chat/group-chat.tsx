@@ -1,45 +1,80 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { fileRefBlock, textBlock, type CanonicalContentBlock } from '@synapse/shared';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Send, ArrowDown, Bot, Paperclip, X, AtSign, Users } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Send, ArrowDown, Bot, Paperclip, X, Pencil, Check } from 'lucide-react';
 import MessageBubble from './message-bubble';
-import type { Group, GroupMessage } from '@/stores/chat-store';
+import type { Group, GroupMessage, ThinkingState } from '@/stores/chat-store';
 import { api } from '@/lib/api';
+import ChatAvatar from './chat-avatar';
+import ChatMemberStrip from './chat-member-strip';
+import GroupMemberPickerDialog from './group-member-picker-dialog';
+import ChatMentionsInput, { type MentionableActor } from './chat-mentions-input';
 
 interface GroupChatProps {
   group: Group;
   messages: GroupMessage[];
   loading: boolean;
-  thinking?: { actorId: string; actorName: string; status?: string };
+  thinking?: ThinkingState;
   onSend: (contentBlocks: CanonicalContentBlock[], targetActorIds?: string[]) => Promise<void> | void;
   onBack?: () => void;
   workspaceId?: string;
+  onRefreshGroup?: () => Promise<void> | void;
 }
 
-function statusLabel(status: string) {
-  switch (status) {
-    case 'active': return { text: 'Active', cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' };
-    case 'completed': return { text: 'Completed', cls: 'bg-blue-500/10 text-blue-400 border-blue-500/20' };
-    case 'failed': return { text: 'Failed', cls: 'bg-red-500/10 text-red-400 border-red-500/20' };
-    default: return { text: status, cls: 'bg-muted text-muted-foreground' };
-  }
+function summarizeMemberCounts(group: Group) {
+  const userCount = group.members.filter((member) => member.type === 'user').length;
+  const actorCount = group.members.filter((member) => member.type === 'actor').length;
+  const userLabel = `${userCount} user${userCount === 1 ? '' : 's'}`;
+  const actorLabel = `${actorCount} actor${actorCount === 1 ? '' : 's'}`;
+  return `${userLabel} · ${actorLabel}`;
 }
 
-export default function GroupChat({ group, messages, loading, thinking, onSend, onBack, workspaceId }: GroupChatProps) {
-  const [input, setInput] = useState('');
+export default function GroupChat({
+  group,
+  messages,
+  loading,
+  thinking,
+  onSend,
+  onBack,
+  workspaceId,
+  onRefreshGroup,
+}: GroupChatProps) {
+  const [inputValue, setInputValue] = useState('');
+  const [inputPlainTextValue, setInputPlainTextValue] = useState('');
+  const [mentionedActorIds, setMentionedActorIds] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
-  const [mentionTarget, setMentionTarget] = useState<string | null>(null); // actorId or null (all)
-  const [showMentionPicker, setShowMentionPicker] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(group.title || '');
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [savingTitle, setSavingTitle] = useState(false);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [memberDialogOpen, setMemberDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const groupAvatarInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [showJumpButton, setShowJumpButton] = useState(false);
   const prevMsgCount = useRef(messages.length);
+  const mentionableActors = useMemo<MentionableActor[]>(
+    () => group.participants.map((participant) => ({
+      id: participant.id,
+      name: participant.name,
+      role: participant.role,
+      avatarUrl: participant.avatarUrl,
+      emoji: participant.emoji,
+    })),
+    [group.participants],
+  );
+  const mentionedActors = useMemo(
+    () => mentionedActorIds
+      .map((actorId) => mentionableActors.find((actor) => actor.id === actorId))
+      .filter((actor): actor is MentionableActor => Boolean(actor)),
+    [mentionedActorIds, mentionableActors],
+  );
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -64,6 +99,11 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
     }, 100);
   }, [group.id]);
 
+  useEffect(() => {
+    setTitleDraft(group.title || '');
+    setEditingTitle(false);
+  }, [group.id, group.title]);
+
   // Track scroll position
   const handleScroll = () => {
     const el = scrollRef.current;
@@ -77,13 +117,14 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
     setShowJumpButton(false);
   };
 
-  async function handleSend(e: React.FormEvent) {
-    e.preventDefault();
-    if ((!input.trim() && pendingFiles.length === 0) || sending) return;
+  async function submitMessage() {
+    if ((!inputPlainTextValue.trim() && pendingFiles.length === 0) || sending) return;
 
-    const textContent = input.trim();
+    const textContent = inputPlainTextValue.trim();
     const filesToUpload = [...pendingFiles];
-    setInput('');
+    setInputValue('');
+    setInputPlainTextValue('');
+    setMentionedActorIds([]);
     setPendingFiles([]);
     setSending(true);
 
@@ -112,7 +153,7 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
           }));
         }
       }
-      const targetIds = mentionTarget ? [mentionTarget] : undefined;
+      const targetIds = mentionedActorIds.length > 0 ? mentionedActorIds : undefined;
       await onSend(contentBlocks, targetIds);
     } catch {
       // error handled upstream
@@ -121,13 +162,6 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
       setTimeout(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 50);
-    }
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend(e as any);
     }
   }
 
@@ -148,77 +182,176 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  const status = statusLabel(group.status);
   const title = group.title || group.participants.map((p) => p.name).join(', ');
+  const memberSummary = summarizeMemberCounts(group);
+
+  async function handleSaveTitle() {
+    if (!workspaceId || !group.permissions?.canManage) {
+      setEditingTitle(false);
+      setTitleDraft(group.title || '');
+      return;
+    }
+
+    const nextTitle = titleDraft.trim();
+    if (!nextTitle || nextTitle === (group.title || '').trim()) {
+      setEditingTitle(false);
+      setTitleDraft(group.title || '');
+      return;
+    }
+
+    setSavingTitle(true);
+    try {
+      await api.updateGroup(workspaceId, group.id, { title: nextTitle });
+      await onRefreshGroup?.();
+      setEditingTitle(false);
+    } catch (error) {
+      console.error('Failed to update group title:', error);
+      setTitleDraft(group.title || '');
+    } finally {
+      setSavingTitle(false);
+    }
+  }
+
+  async function handleGroupAvatarFile(file: File | null) {
+    if (!file || !workspaceId || !group.permissions?.canManage) return;
+    setAvatarUploading(true);
+    try {
+      const uploaded = await api.uploadFile(workspaceId, file);
+      await api.updateGroup(workspaceId, group.id, { avatarFileId: uploaded.id });
+      await onRefreshGroup?.();
+    } catch (error) {
+      console.error('Failed to update group avatar:', error);
+    } finally {
+      setAvatarUploading(false);
+    }
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       {/* Header */}
-      <div className="flex h-[65px] shrink-0 items-center justify-between border-b border-border px-6">
+      <div className="flex shrink-0 items-center justify-between border-b border-border bg-background px-6 py-4">
         <div className="flex min-w-0 items-center gap-3">
           {onBack && (
             <Button variant="ghost" size="icon" className="lg:hidden h-8 w-8" onClick={onBack}>
               <ArrowDown className="w-4 h-4 rotate-90" />
             </Button>
           )}
-          {/* Participant avatars */}
-          <div className="flex -space-x-2">
-            {group.participants.slice(0, 3).map((p) => (
-              <div key={p.id} className="w-9 h-9 bg-indigo-100 dark:bg-indigo-500/20 rounded-full flex items-center justify-center ring-2 ring-white dark:ring-gray-900">
-                {p.emoji ? (
-                  <span className="text-sm">{p.emoji}</span>
-                ) : (
-                  <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400">{p.name.charAt(0)}</span>
-                )}
+          <div className="group relative">
+            <button
+              type="button"
+              className="rounded-full transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-70"
+              onClick={() => groupAvatarInputRef.current?.click()}
+              disabled={!group.permissions?.canManage || avatarUploading}
+              title={group.permissions?.canManage ? 'Change group avatar' : undefined}
+            >
+              <ChatAvatar
+                name={title}
+                avatarUrl={group.avatarUrl}
+                entityType="group"
+                size="lg"
+                className="size-12"
+              />
+            </button>
+            {group.permissions?.canManage ? (
+              <div className="pointer-events-none absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                <Pencil className="size-3" />
               </div>
-            ))}
-            {group.participants.length > 3 && (
-              <div className="w-9 h-9 bg-gray-100 dark:bg-white/10 rounded-full flex items-center justify-center ring-2 ring-white dark:ring-gray-900">
-                <span className="text-xs font-medium text-gray-500">+{group.participants.length - 3}</span>
-              </div>
-            )}
+            ) : null}
+            <input
+              ref={groupAvatarInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0] || null;
+                void handleGroupAvatarFile(file);
+                event.target.value = '';
+              }}
+            />
           </div>
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
-              {title}
-            </h2>
-            <div className="flex items-center gap-1.5 mt-0.5">
-              <Users className="w-3 h-3 text-muted-foreground/50" />
-              <span className="text-[11px] text-muted-foreground">
-                {group.participants.length} member{group.participants.length > 1 ? 's' : ''}
-              </span>
-              <Badge variant="outline" className={`text-[10px] px-1.5 py-0 shrink-0 ${status.cls}`}>
-                {status.text}
-              </Badge>
+            <div className="flex items-center gap-2">
+              {editingTitle ? (
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={titleDraft}
+                    onChange={(event) => setTitleDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        void handleSaveTitle();
+                      }
+                      if (event.key === 'Escape') {
+                        setEditingTitle(false);
+                        setTitleDraft(group.title || '');
+                      }
+                    }}
+                    className="h-8 w-[220px]"
+                    autoFocus
+                  />
+                  <Button size="icon" variant="ghost" className="size-8" onClick={() => void handleSaveTitle()} disabled={savingTitle}>
+                    <Check className="size-4" />
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+                    {title}
+                  </h2>
+                  {group.permissions?.canManage ? (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-7 text-muted-foreground"
+                      onClick={() => setEditingTitle(true)}
+                    >
+                      <Pencil className="size-3.5" />
+                    </Button>
+                  ) : null}
+                </>
+              )}
+            </div>
+            <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+              {memberSummary || `${group.members.length} member${group.members.length > 1 ? 's' : ''}`}
             </div>
           </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <ChatMemberStrip
+            members={group.members}
+            activeActorId={thinking?.actorId}
+            activePhase={thinking?.phase}
+            max={5}
+            size="lg"
+            onAdd={group.permissions?.canManageMembers ? () => setMemberDialogOpen(true) : undefined}
+          />
         </div>
       </div>
 
       {/* Messages */}
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-background p-4 lg:p-6"
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-muted/20 px-4 py-5 lg:px-6"
         onScroll={handleScroll}
       >
         {loading ? (
-          <div className="flex items-center justify-center h-full">
-            <div className="h-8 w-8 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
+          <div className="flex h-full items-center justify-center">
+            <div className="size-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center space-y-4">
-            <div className="w-20 h-20 rounded-3xl bg-gray-100 dark:bg-white/5 flex items-center justify-center">
-              {group.participants[0]?.emoji ? (
-                <span className="text-3xl">{group.participants[0].emoji}</span>
-              ) : (
-                <Bot className="w-10 h-10 text-indigo-500" />
-              )}
-            </div>
+          <div className="flex h-full flex-col items-center justify-center gap-4 rounded-[28px] border border-dashed border-border bg-background px-6 py-10 text-center shadow-sm">
+            <ChatAvatar
+              name={title}
+              avatarUrl={group.avatarUrl}
+              entityType="group"
+              size="lg"
+              className="size-20 rounded-3xl"
+            />
             <div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">
-                Chat with {group.participants.map((p) => p.name).join(', ')}
+              <h3 className="mb-2 text-lg font-semibold text-foreground">
+                Chat in {title}
               </h3>
-              <p className="text-sm text-muted-foreground max-w-md">
+              <p className="max-w-md text-sm text-muted-foreground">
                 Messages from all participants will appear here.
               </p>
             </div>
@@ -295,60 +428,13 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
             </span>
           </div>
         )}
-        {/* @mention target indicator */}
-        {mentionTarget && (
-          <div className="flex items-center gap-2 mb-2 px-1">
-            <AtSign className="w-3 h-3 text-indigo-500" />
-            <span className="text-xs text-indigo-600 dark:text-indigo-400 font-medium">
-              {group.participants.find(p => p.id === mentionTarget)?.name || 'Unknown'}
-            </span>
-            <button onClick={() => setMentionTarget(null)} className="text-muted-foreground/50 hover:text-muted-foreground">
-              <X className="w-3 h-3" />
-            </button>
-          </div>
-        )}
-        {/* @mention picker dropdown */}
-        {showMentionPicker && (
-          <div className="mb-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-lg shadow-lg overflow-hidden">
-            <div className="px-3 py-1.5 text-[11px] text-muted-foreground border-b border-gray-200 dark:border-white/10 font-medium">
-              Send to... {mentionTarget && <span className="text-indigo-500 ml-1">(click again to deselect)</span>}
-            </div>
-            {group.participants.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => {
-                  if (mentionTarget === p.id) {
-                    setMentionTarget(null);
-                  } else {
-                    setMentionTarget(p.id);
-                  }
-                  setShowMentionPicker(false);
-                }}
-                className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-white/5 flex items-center gap-2 transition-colors ${mentionTarget === p.id ? 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400' : 'text-foreground'}`}
-              >
-                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0">
-                  {p.emoji ? (
-                    <span className="text-[10px]">{p.emoji}</span>
-                  ) : (
-                    <span className="text-[10px] text-white font-medium">{p.name.charAt(0)}</span>
-                  )}
-                </div>
-                <span>{p.name}</span>
-                <span className="text-[10px] text-muted-foreground ml-auto">{p.role}</span>
-              </button>
-            ))}
-            <div className="px-3 py-1.5 text-[10px] text-muted-foreground/60 border-t border-gray-200 dark:border-white/10">
-              No @mention → sends to all members
-            </div>
-          </div>
-        )}
         {/* Pending file previews */}
         {pendingFiles.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-3">
             {pendingFiles.map((file, i) => (
               <div
                 key={`${file.name}-${i}`}
-                className="flex items-center gap-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-lg px-3 py-1.5 text-xs text-muted-foreground"
+                className="flex items-center gap-2 rounded-2xl border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground shadow-sm"
               >
                 <span className="truncate max-w-[150px]">{file.name}</span>
                 <span className="text-muted-foreground/50">{formatFileSize(file.size)}</span>
@@ -363,8 +449,11 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
           </div>
         )}
         <form
-          onSubmit={handleSend}
-          className="relative overflow-hidden rounded-lg border border-input bg-background shadow-sm transition-colors focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submitMessage();
+          }}
+          className="relative overflow-hidden rounded-3xl border border-border bg-background shadow-sm transition-colors focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/40"
         >
           <input
             ref={fileInputRef}
@@ -374,16 +463,42 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
             onChange={handleFileSelect}
             className="hidden"
           />
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a message..."
-            rows={2}
-            disabled={sending}
-            className="block w-full resize-none border-0 bg-transparent px-4 py-3 text-foreground placeholder:text-muted-foreground focus:ring-0 focus:outline-none sm:text-sm/6"
-          />
+          {mentionedActors.length > 0 ? (
+            <div className="flex flex-wrap gap-2 border-b border-border/70 px-3 pt-3 pb-2">
+              {mentionedActors.map((actor) => (
+                <div
+                  key={actor.id}
+                  className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs text-foreground"
+                >
+                  <ChatAvatar
+                    name={actor.name}
+                    avatarUrl={actor.avatarUrl}
+                    emoji={actor.emoji}
+                    entityType="actor"
+                    size="sm"
+                  />
+                  <span className="font-medium">@{actor.name}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="relative">
+            <ChatMentionsInput
+              actors={mentionableActors}
+              value={inputValue}
+              plainTextValue={inputPlainTextValue}
+              inputRef={textareaRef}
+              onChange={(nextValue, nextPlainTextValue, nextMentionedActorIds) => {
+                setInputValue(nextValue);
+                setInputPlainTextValue(nextPlainTextValue);
+                setMentionedActorIds(nextMentionedActorIds);
+              }}
+              onSubmit={() => {
+                void submitMessage();
+              }}
+              disabled={sending}
+            />
+          </div>
           {/* Spacer for toolbar */}
           <div className="py-1" aria-hidden="true">
             <div className="h-9" />
@@ -399,25 +514,11 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
               >
                 <Paperclip className="w-5 h-5" />
               </button>
-              {group.participants.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => setShowMentionPicker(!showMentionPicker)}
-                  disabled={sending}
-                  className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
-                    mentionTarget || showMentionPicker
-                      ? 'text-indigo-500 bg-indigo-50 dark:bg-indigo-500/10'
-                      : 'text-gray-400 hover:text-gray-500 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/10'
-                  }`}
-                >
-                  <AtSign className="w-5 h-5" />
-                </button>
-              )}
             </div>
             <div className="flex-shrink-0">
               <button
                 type="submit"
-                disabled={(!input.trim() && pendingFiles.length === 0) || sending}
+                disabled={(!inputPlainTextValue.trim() && pendingFiles.length === 0) || sending}
                 className="inline-flex items-center rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:bg-gray-200 dark:disabled:bg-gray-800 disabled:text-gray-400 dark:disabled:text-gray-500 disabled:cursor-not-allowed transition-all"
               >
                 <span className="mr-1.5">Send</span>
@@ -427,6 +528,16 @@ export default function GroupChat({ group, messages, loading, thinking, onSend, 
           </div>
         </form>
       </div>
+      <GroupMemberPickerDialog
+        open={memberDialogOpen}
+        onOpenChange={setMemberDialogOpen}
+        workspaceId={workspaceId || ''}
+        groupId={group.id}
+        existingMembers={group.members}
+        onAdded={async () => {
+          await onRefreshGroup?.();
+        }}
+      />
     </div>
   );
 }

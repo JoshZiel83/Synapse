@@ -96,9 +96,9 @@ export async function logProviderStep(params: {
   stepIndex: number;
   providerType: 'anthropic' | 'openai';
   requestType: 'actor_think' | 'ai_complete';
-  modelRouteId?: string;
-  modelBindingId?: string;
-  modelRevisionId?: string;
+  modelGroupId?: string;
+  modelProfileId?: string;
+  modelProfileRevisionId?: string;
   modelName: string;
   capabilitiesSnapshot?: Record<string, unknown>;
   requestPayload?: unknown;
@@ -120,17 +120,17 @@ export async function logProviderStep(params: {
 
   const result = await query(
     `INSERT INTO provider_steps
-       (id, turn_id, step_index, provider_type, request_type, model_route_id, model_binding_id,
-        model_revision_id, model_name, capabilities_snapshot, request_payload_blob_id, response_payload_blob_id,
+       (id, turn_id, step_index, provider_type, request_type, model_group_id, model_profile_id,
+        model_profile_revision_id, model_name, capabilities_snapshot, request_payload_blob_id, response_payload_blob_id,
         stop_reason, input_tokens, output_tokens, cost_micros, latency_ms, status, error_message, created_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
      ON CONFLICT (turn_id, step_index)
      DO UPDATE SET
        provider_type = EXCLUDED.provider_type,
        request_type = EXCLUDED.request_type,
-       model_route_id = EXCLUDED.model_route_id,
-       model_binding_id = EXCLUDED.model_binding_id,
-       model_revision_id = EXCLUDED.model_revision_id,
+       model_group_id = EXCLUDED.model_group_id,
+       model_profile_id = EXCLUDED.model_profile_id,
+       model_profile_revision_id = EXCLUDED.model_profile_revision_id,
        model_name = EXCLUDED.model_name,
        capabilities_snapshot = EXCLUDED.capabilities_snapshot,
        request_payload_blob_id = EXCLUDED.request_payload_blob_id,
@@ -149,9 +149,9 @@ export async function logProviderStep(params: {
       params.stepIndex,
       params.providerType,
       params.requestType,
-      params.modelRouteId || null,
-      params.modelBindingId || null,
-      params.modelRevisionId || null,
+      params.modelGroupId || null,
+      params.modelProfileId || null,
+      params.modelProfileRevisionId || null,
       params.modelName,
       JSON.stringify(params.capabilitiesSnapshot || {}),
       requestPayloadBlobId,

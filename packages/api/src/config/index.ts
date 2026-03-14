@@ -49,4 +49,16 @@ export const config = {
       timeoutMs: parseInt(process.env.MEMORY_EMBEDDINGS_TIMEOUT_MS || '12000'),
     },
   },
+  authz: {
+    enabled: process.env.AUTHZ_ENABLED !== 'false',
+    endpoint: process.env.SPICEDB_ENDPOINT || 'localhost:50051',
+    token: process.env.SPICEDB_TOKEN || 'synapse-dev-token',
+    insecure: process.env.SPICEDB_INSECURE !== 'false',
+    schemaPath: process.env.SPICEDB_SCHEMA_PATH || '',
+    outboxBatchSize: parseInt(process.env.AUTHZ_OUTBOX_BATCH_SIZE || '100'),
+    platformAdminEmails: (process.env.PLATFORM_ADMIN_EMAILS || '')
+      .split(',')
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  },
 } as const;

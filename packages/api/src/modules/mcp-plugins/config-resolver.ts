@@ -34,7 +34,7 @@ export async function resolveInstallationConfig(installationId: string): Promise
         b.config_data,
         r.default_config,
         r.config_schema
-     FROM capability_bindings b
+     FROM capability_instances b
      JOIN capability_package_revisions r ON r.id = b.revision_id
      WHERE b.id = $1`,
     [installationId],

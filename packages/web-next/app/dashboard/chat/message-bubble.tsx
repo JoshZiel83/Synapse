@@ -374,11 +374,11 @@ export default function MessageBubble({
   if (isError) {
     return (
       <div className="flex gap-3">
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-red-500 to-rose-600 flex items-center justify-center shrink-0 mt-1">
+        <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-2xl bg-destructive text-destructive-foreground shadow-sm">
           <AlertTriangle className="w-4 h-4 text-white" />
         </div>
         <div className="max-w-[75%] min-w-0 flex flex-col">
-          <div className="rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400">
+          <div className="rounded-3xl rounded-tl-sm border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm leading-relaxed text-destructive shadow-sm">
             <p className="whitespace-pre-wrap">{textContent}</p>
           </div>
           {timestamp && (
@@ -394,7 +394,7 @@ export default function MessageBubble({
   if (isSystem) {
     return (
       <div className="flex justify-center my-2">
-        <div className="text-xs text-muted-foreground/60 bg-gray-100 dark:bg-white/5 rounded-full px-4 py-1.5 max-w-[80%] text-center">
+        <div className="max-w-[80%] rounded-full border border-border bg-background px-4 py-1.5 text-center text-xs text-muted-foreground shadow-sm">
           {textContent.length > 200 ? textContent.substring(0, 200) + '...' : textContent}
         </div>
       </div>
@@ -409,14 +409,14 @@ export default function MessageBubble({
   // Coordination messages (send_to between actors) — render in a compact style
   if (coordination && !isUser) {
     return (
-      <div className="flex gap-2 ml-10 opacity-70">
+      <div className="ml-10 flex gap-2 opacity-70">
         <div className="flex items-start gap-2 max-w-[70%]">
-          <AtSign className="w-3 h-3 text-indigo-400/60 mt-1 shrink-0" />
+          <AtSign className="mt-1 h-3 w-3 shrink-0 text-primary/60" />
           <div>
             <div className="flex items-center gap-1.5 mb-0.5">
               <span className="text-[11px] font-medium text-muted-foreground/80">{actorName}</span>
               {targetActorNames && targetActorNames.length > 0 && (
-                <span className="text-[10px] text-indigo-400/60">→ {targetActorNames.join(', ')}</span>
+                <span className="text-[10px] text-primary/60">→ {targetActorNames.join(', ')}</span>
               )}
             </div>
             {hasFileBlocks && <FileBlockPreview blocks={fileBlocks} />}
@@ -442,10 +442,10 @@ export default function MessageBubble({
         <AvatarFallback
           className={
             isUser
-              ? 'bg-gradient-to-br from-blue-500 to-blue-600 text-white text-xs'
+              ? 'bg-primary text-primary-foreground text-xs'
               : isChildResult
-              ? 'bg-gradient-to-br from-amber-500 to-orange-600 text-white text-xs'
-              : 'bg-gradient-to-br from-emerald-500 to-teal-600 text-white text-xs'
+              ? 'bg-amber-500 text-white text-xs'
+              : 'bg-card text-foreground text-xs border border-border'
           }
         >
           {isUser ? (
@@ -466,12 +466,12 @@ export default function MessageBubble({
         )}
         <div
           className={`
-            rounded-2xl px-4 py-3 text-sm leading-relaxed
+            rounded-3xl border px-4 py-3 text-sm leading-relaxed shadow-sm
             ${isUser
-              ? 'bg-indigo-600 text-white rounded-tr-sm'
+              ? 'rounded-tr-sm border-primary/10 bg-primary text-primary-foreground'
               : isChildResult
-              ? 'bg-white ring-1 ring-amber-200 dark:bg-white/5 dark:ring-amber-500/20 text-foreground rounded-tl-sm'
-              : 'bg-white ring-1 ring-gray-200 dark:bg-white/5 dark:ring-white/10 text-foreground rounded-tl-sm'
+              ? 'rounded-tl-sm border-amber-500/20 bg-amber-500/10 text-foreground'
+              : 'rounded-tl-sm border-border bg-background text-foreground'
             }
           `}
         >
@@ -479,7 +479,7 @@ export default function MessageBubble({
 
           {!isUser ? (
             textContent ? (
-            <div className="prose dark:prose-invert prose-sm max-w-none prose-p:my-1.5 prose-headings:text-foreground prose-code:text-indigo-600 dark:prose-code:text-indigo-300 prose-code:bg-indigo-500/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:font-mono prose-code:before:content-none prose-code:after:content-none prose-pre:bg-black/30 prose-pre:border prose-pre:border-gray-200 dark:prose-pre:border-white/10 prose-pre:rounded-lg">
+            <div className="prose prose-sm max-w-none prose-p:my-1.5 prose-headings:text-foreground prose-code:rounded prose-code:bg-primary/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-xs prose-code:text-primary prose-code:before:content-none prose-code:after:content-none prose-pre:rounded-2xl prose-pre:border prose-pre:border-border prose-pre:bg-muted prose-strong:text-foreground dark:prose-invert">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
@@ -497,7 +497,7 @@ export default function MessageBubble({
                       );
                     }
                     return (
-                      <a href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 hover:underline" {...props}>
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" {...props}>
                         {children}
                       </a>
                     );

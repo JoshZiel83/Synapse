@@ -1,5 +1,12 @@
 import { query } from './index.js';
 import bcryptjs from 'bcryptjs';
+import {
+  AUTHZ_PLATFORM_ID,
+  enqueueAuthzRelationships,
+  flushAuthzOutboxEntries,
+  touchRelation,
+} from '../authz/index.js';
+import { ensureSeedPlatformAdminForUser } from '../../modules/platform/admin-service.js';
 const { hash } = bcryptjs;
 import { normalizeActorDocs, SECRETARY_DEFAULT_DOCS, textBlocks } from '@synapse/shared';
 
@@ -29,8 +36,27 @@ function buildSeedDocs(title: string, roleCharter: string, workDoctrine: string)
   ]);
 }
 
+async function insertDefaultActorGrants(actorId: string, workspaceId: string, grantedBy?: string | null) {
+  await query(
+    `INSERT INTO actor_grants (
+       actor_id,
+       permission,
+       grant_scope,
+       workspace_id,
+       status,
+       granted_by,
+       metadata
+     )
+     VALUES
+       ($1, 'discover', 'workspace', $2, 'active', $3, '{}'::jsonb),
+       ($1, 'invoke', 'workspace', $2, 'active', $3, '{}'::jsonb)`,
+    [actorId, workspaceId, grantedBy ?? null],
+  );
+}
+
 async function seed() {
   console.log('Seeding database...');
+  const authzEntries = [];
 
   // Create demo user
   const passwordHash = await hash('demo1234', 10);
@@ -43,6 +69,7 @@ async function seed() {
   );
   const userId = userResult.rows[0].id;
   console.log('Created demo user:', userId);
+  await ensureSeedPlatformAdminForUser({ id: userId, email: 'demo@synapse.dev' });
 
   // Create demo workspace
   const wsResult = await query(
@@ -62,6 +89,11 @@ async function seed() {
      ON CONFLICT (workspace_id, user_id) DO NOTHING`,
     [workspaceId, userId]
   );
+  authzEntries.push(
+    touchRelation('platform', AUTHZ_PLATFORM_ID, 'workspace', 'workspace', workspaceId),
+    touchRelation('workspace', workspaceId, 'platform', 'platform', AUTHZ_PLATFORM_ID),
+    touchRelation('workspace', workspaceId, 'owner', 'user', userId),
+  );
 
   // Create secretary
   const secretaryDocs = SECRETARY_DEFAULT_DOCS;
@@ -80,6 +112,13 @@ async function seed() {
   if (secResult.rows.length > 0) {
     const secretaryId = secResult.rows[0].id;
     console.log('Created secretary:', secretaryId);
+    await insertDefaultActorGrants(secretaryId, workspaceId, userId);
+    authzEntries.push(
+      touchRelation('workspace', workspaceId, 'actor', 'actor', secretaryId),
+      touchRelation('actor', secretaryId, 'workspace', 'workspace', workspaceId),
+      touchRelation('actor', secretaryId, 'discover_workspace', 'workspace', workspaceId),
+      touchRelation('actor', secretaryId, 'invoke_workspace', 'workspace', workspaceId),
+    );
 
     await query(
       `INSERT INTO actor_versions (
@@ -102,6 +141,13 @@ async function seed() {
       [workspaceId, JSON.stringify(developerDocs), secretaryId, ['code.write', 'code.review', 'code.debug']]
     );
     console.log('Created developer:', devResult.rows[0].id);
+    await insertDefaultActorGrants(devResult.rows[0].id, workspaceId, userId);
+    authzEntries.push(
+      touchRelation('workspace', workspaceId, 'actor', 'actor', devResult.rows[0].id),
+      touchRelation('actor', devResult.rows[0].id, 'workspace', 'workspace', workspaceId),
+      touchRelation('actor', devResult.rows[0].id, 'discover_workspace', 'workspace', workspaceId),
+      touchRelation('actor', devResult.rows[0].id, 'invoke_workspace', 'workspace', workspaceId),
+    );
     await query(
       `INSERT INTO actor_versions (
          actor_id, version, name, role, title, avatar_file_id, parent_id, can_represent_user, docs, config, capabilities
@@ -123,6 +169,13 @@ async function seed() {
       [workspaceId, JSON.stringify(researcherDocs), secretaryId, ['research', 'analysis', 'summarization']]
     );
     console.log('Created researcher:', resResult.rows[0].id);
+    await insertDefaultActorGrants(resResult.rows[0].id, workspaceId, userId);
+    authzEntries.push(
+      touchRelation('workspace', workspaceId, 'actor', 'actor', resResult.rows[0].id),
+      touchRelation('actor', resResult.rows[0].id, 'workspace', 'workspace', workspaceId),
+      touchRelation('actor', resResult.rows[0].id, 'discover_workspace', 'workspace', workspaceId),
+      touchRelation('actor', resResult.rows[0].id, 'invoke_workspace', 'workspace', workspaceId),
+    );
     await query(
       `INSERT INTO actor_versions (
          actor_id, version, name, role, title, avatar_file_id, parent_id, can_represent_user, docs, config, capabilities
@@ -130,6 +183,18 @@ async function seed() {
        VALUES ($1, 1, 'Researcher', 'specialist', 'Research Analyst', NULL, $2, false, $3, '{}', $4)`,
       [resResult.rows[0].id, secretaryId, JSON.stringify(researcherDocs), ['research', 'analysis', 'summarization']]
     );
+  }
+
+  const authzEntryIds = await enqueueAuthzRelationships(authzEntries, {
+    source: 'db.seed',
+    workspaceId,
+  });
+  if (authzEntryIds.length > 0) {
+    try {
+      await flushAuthzOutboxEntries(authzEntryIds);
+    } catch (error) {
+      console.error('[authz] Failed to flush db.seed relationship updates:', error);
+    }
   }
 
   console.log('Seed completed');

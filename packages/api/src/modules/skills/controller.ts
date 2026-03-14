@@ -37,7 +37,7 @@ const uploadSkillSchema = z.object({
 
 const installSchema = z.object({
   skillId: z.string().uuid(),
-  scopeType: scopeEnum,
+  attachmentType: scopeEnum,
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
@@ -45,14 +45,14 @@ const installSchema = z.object({
 
 const updateInstallSchema = z.object({
   isEnabled: z.boolean().optional(),
-  scopeType: scopeEnum.optional(),
+  attachmentType: scopeEnum.optional(),
   actorId: z.string().uuid().nullable().optional(),
   conversationId: z.string().uuid().nullable().optional(),
   userId: z.string().uuid().nullable().optional(),
 });
 
 const installPlanSchema = z.object({
-  scopeType: scopeEnum,
+  attachmentType: scopeEnum,
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
@@ -145,7 +145,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
       const plan = await createSkillInstallPlan({
         workspaceId,
         skillId,
-        bindingScope: body.scopeType,
+        attachmentType: body.attachmentType,
         actorId: body.actorId,
         conversationId: body.conversationId,
         userId: body.userId,
@@ -159,15 +159,15 @@ export function registerSkillRoutes(app: FastifyInstance) {
   app.get(`${prefix}/installations`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId } = request.params as { workspaceId: string };
-      const { scopeType, actorId, conversationId, userId, skillId } = request.query as {
-        scopeType?: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+      const { attachmentType, actorId, conversationId, userId, skillId } = request.query as {
+        attachmentType?: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
         actorId?: string;
         conversationId?: string;
         userId?: string;
         skillId?: string;
       };
       const installations = await listSkillInstallations(workspaceId, {
-        scopeType,
+        attachmentType,
         actorId,
         conversationId,
         userId,
@@ -187,7 +187,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
       const installation = await installSkill({
         workspaceId,
         skillId: body.skillId,
-        scopeType: body.scopeType,
+        attachmentType: body.attachmentType,
         actorId: body.actorId,
         conversationId: body.conversationId,
         userId: body.userId,
@@ -199,21 +199,21 @@ export function registerSkillRoutes(app: FastifyInstance) {
     }
   });
 
-  app.put(`${prefix}/installations/:bindingId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+  app.put(`${prefix}/installations/:installationId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { bindingId } = request.params as { bindingId: string };
+      const { installationId } = request.params as { installationId: string };
       const body = updateInstallSchema.parse(request.body);
-      const installation = await updateSkillInstallation(bindingId, body);
+      const installation = await updateSkillInstallation(installationId, body);
       return reply.status(200).send({ installation });
     } catch (error) {
       return handleError(reply, error);
     }
   });
 
-  app.delete(`${prefix}/installations/:bindingId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+  app.delete(`${prefix}/installations/:installationId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { bindingId } = request.params as { bindingId: string };
-      await uninstallSkill(bindingId);
+      const { installationId } = request.params as { installationId: string };
+      await uninstallSkill(installationId);
       return reply.status(204).send();
     } catch (error) {
       return handleError(reply, error);

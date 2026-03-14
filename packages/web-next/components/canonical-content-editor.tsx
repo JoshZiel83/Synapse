@@ -122,11 +122,17 @@ export function CanonicalContentEditor({
   value,
   onChange,
   placeholder,
+  label = "Block editor",
+  description,
+  showCount = true,
 }: {
   workspaceId: string | null
   value: CanonicalContentBlock[]
   onChange: (value: CanonicalContentBlock[]) => void
   placeholder?: string
+  label?: string
+  description?: string | null
+  showCount?: boolean
 }) {
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -211,19 +217,24 @@ export function CanonicalContentEditor({
     }
   }
 
+  const helperText =
+    description !== undefined
+      ? description
+      : placeholder || "Compose the section as ordered text blocks and file blocks."
+
   return (
     <div className="flex flex-col gap-5">
       <FieldGroup>
         <Field>
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <FieldLabel>Block editor</FieldLabel>
-              <FieldDescription>
-                {placeholder || "Compose the section as ordered text blocks and file blocks."}
-              </FieldDescription>
+          {(label || helperText || showCount) ? (
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                {label ? <FieldLabel>{label}</FieldLabel> : null}
+                {helperText ? <FieldDescription>{helperText}</FieldDescription> : null}
+              </div>
+              {showCount ? <Badge variant="outline">{value.length} blocks</Badge> : null}
             </div>
-            <Badge variant="outline">{value.length} blocks</Badge>
-          </div>
+          ) : null}
 
           <input
             ref={fileInputRef}

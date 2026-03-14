@@ -2,8 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { nowISO } from '@synapse/shared';
 import type {
+  CapabilityAttachmentType,
   CapabilityAuthProviderDefinition,
-  CapabilityBindingScope,
   CapabilityCategory,
   CapabilityConfigFieldDefinition,
   CapabilityConfigFieldState,
@@ -19,22 +19,22 @@ import {
   assignCapabilityPackageCategories,
   buildCapabilityGrantPlan,
   CapabilityError,
-  createCapabilityBinding,
+  createCapabilityInstance,
   createCapabilityCategory,
-  ensureDefaultCapabilityGrant,
+  ensureDefaultCapabilityInstanceGrant,
   createCapabilityPackage,
   createCapabilityPublisher,
   createCapabilityRevision,
-  deleteCapabilityBinding,
+  deleteCapabilityInstance,
   evaluateCapabilityRequirements,
-  getCapabilityBinding,
+  getCapabilityInstance,
   getCapabilityPackage,
   getCapabilityPublisher,
-  listCapabilityBindings,
+  listCapabilityInstances,
   listCapabilityCategories,
   listCapabilityPackages,
   listCapabilityPublishers,
-  updateCapabilityBinding,
+  updateCapabilityInstance,
 } from '../capabilities/service.js';
 import { saveFromBuffer } from '../../infrastructure/storage/file-io.js';
 import { attachAuthConnectionsToConfig } from './auth-service.js';
@@ -74,7 +74,7 @@ function mapPackageToPluginView(pkg: any) {
     transport: revision.transport || 'builtin',
     entry_point: revision.entryPoint || '',
     lifecycle_scope: pkg.defaultReuseScope,
-    default_binding_scope: pkg.defaultBindingScope,
+    default_instance_scope: pkg.defaultInstanceScope,
     config_schema: revision.configSchema || {},
     config_fields: revision.configFields || [],
     default_config: revision.defaultConfig || {},
@@ -244,26 +244,28 @@ function mapBindingToInstallationView(binding: any) {
     plugin.config_fields || [],
     plugin.auth_providers || [],
   );
-  const scopeId =
-    binding.bindingScope === 'workspace'
+  const attachmentType = binding.attachmentType;
+  const attachmentId =
+    binding.attachmentId ||
+    (attachmentType === 'workspace'
       ? binding.workspaceId
-      : binding.bindingScope === 'conversation'
-        ? binding.conversationId
-        : binding.bindingScope === 'actor_global'
-          ? binding.actorId
-          : binding.bindingScope === 'user'
-            ? binding.userId
-            : `${binding.actorId}:${binding.conversationId}`;
+      : attachmentType === 'conversation'
+        ? binding.attachmentConversationId || binding.conversationId
+        : attachmentType === 'actor_global'
+          ? binding.attachmentActorId || binding.actorId
+          : attachmentType === 'user'
+            ? binding.attachmentUserId || binding.userId
+            : `${binding.attachmentActorId || binding.actorId}:${binding.attachmentConversationId || binding.conversationId}`);
 
   return {
     id: binding.id,
     workspace_id: binding.workspaceId,
     plugin_id: binding.packageId,
-    scope_type: binding.bindingScope,
-    scope_id: scopeId,
-    actor_id: binding.actorId || null,
-    conversation_id: binding.conversationId || null,
-    user_id: binding.userId || null,
+    attachment_type: attachmentType,
+    attachment_id: attachmentId,
+    attachment_actor_id: binding.attachmentActorId || binding.actorId || null,
+    attachment_conversation_id: binding.attachmentConversationId || binding.conversationId || null,
+    attachment_user_id: binding.attachmentUserId || binding.userId || null,
     lifecycle_scope: binding.reuseScope,
     is_enabled: binding.isEnabled,
     config_data: sanitizedConfig,
@@ -300,8 +302,8 @@ function mapBindingToInstallationView(binding: any) {
   };
 }
 
-function scopeColumns(scopeType: CapabilityBindingScope, actorId?: string | null, conversationId?: string | null, userId?: string | null) {
-  switch (scopeType) {
+function attachmentColumns(attachmentType: CapabilityAttachmentType, actorId?: string | null, conversationId?: string | null, userId?: string | null) {
+  switch (attachmentType) {
     case 'workspace':
       return { actorId: null, conversationId: null, userId: null };
     case 'conversation':
@@ -319,7 +321,7 @@ function scopeColumns(scopeType: CapabilityBindingScope, actorId?: string | null
       if (!userId) throw new McpPluginError(400, 'userId is required for user scope');
       return { actorId: null, conversationId: null, userId };
     default:
-      throw new McpPluginError(400, `Unsupported binding scope: ${scopeType}`);
+      throw new McpPluginError(400, `Unsupported attachment type: ${attachmentType}`);
   }
 }
 
@@ -388,11 +390,11 @@ export async function createPlugin(data: {
   longDescriptionI18n?: Record<string, string>;
   summaryI18n?: Record<string, string>;
   defaultLocale?: string;
-  defaultBindingScope?: CapabilityBindingScope;
+  defaultInstanceScope?: CapabilityAttachmentType;
   requiresHandshake?: boolean;
   authorization?: {
     requiredPermissions?: string[];
-    defaultGrantScope?: CapabilityBindingScope;
+    defaultGrantScope?: CapabilityAttachmentType;
     reason?: string;
   };
 }) {
@@ -420,7 +422,7 @@ export async function createPlugin(data: {
           : 'official',
       tags: data.tags,
       isBuiltin: data.isBuiltin,
-      defaultBindingScope: data.defaultBindingScope || 'workspace',
+      defaultInstanceScope: data.defaultInstanceScope || 'workspace',
       defaultReuseScope: data.lifecycleScope || 'conversation',
       requiresHandshake: data.requiresHandshake ?? data.transport !== 'builtin',
     });
@@ -503,8 +505,8 @@ export async function getPlugin(id: string) {
   }
 }
 
-export function validateLifecycleHierarchy(scopeType: CapabilityBindingScope, lifecycleScope: CapabilityReuseScope): boolean {
-  switch (scopeType) {
+export function validateLifecycleHierarchy(attachmentType: CapabilityAttachmentType, lifecycleScope: CapabilityReuseScope): boolean {
+  switch (attachmentType) {
     case 'workspace':
       return ['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user', 'turn'].includes(lifecycleScope);
     case 'conversation':
@@ -523,7 +525,7 @@ export function validateLifecycleHierarchy(scopeType: CapabilityBindingScope, li
 export async function installPluginUnified(data: {
   workspaceId: string;
   pluginId: string;
-  scopeType: CapabilityBindingScope;
+  attachmentType: CapabilityAttachmentType;
   actorId?: string;
   conversationId?: string;
   userId?: string;
@@ -533,8 +535,8 @@ export async function installPluginUnified(data: {
   installedBy?: string;
 }) {
   const lifecycleScope = data.lifecycleScope || 'conversation';
-  if (!validateLifecycleHierarchy(data.scopeType, lifecycleScope)) {
-    throw new McpPluginError(400, `Reuse scope '${lifecycleScope}' is not valid for binding scope '${data.scopeType}'`);
+  if (!validateLifecycleHierarchy(data.attachmentType, lifecycleScope)) {
+    throw new McpPluginError(400, `Reuse scope '${lifecycleScope}' is not valid for attachment '${data.attachmentType}'`);
   }
 
   try {
@@ -550,15 +552,15 @@ export async function installPluginUnified(data: {
     const encrypted = Object.keys(normalizedConfig).length > 0
       ? encryptSensitiveFields(normalizedConfig, plugin.latestRevision?.configSchema || {})
       : {};
-    const scoped = scopeColumns(data.scopeType, data.actorId, data.conversationId, data.userId);
-    const binding = await createCapabilityBinding({
+    const attachment = attachmentColumns(data.attachmentType, data.actorId, data.conversationId, data.userId);
+    const instance = await createCapabilityInstance({
       workspaceId: data.workspaceId,
       packageId: data.pluginId,
       revisionId: plugin.latestRevisionId,
-      bindingScope: data.scopeType,
-      actorId: scoped.actorId || undefined,
-      conversationId: scoped.conversationId || undefined,
-      userId: scoped.userId || undefined,
+      attachmentType: data.attachmentType,
+      actorId: attachment.actorId || undefined,
+      conversationId: attachment.conversationId || undefined,
+      userId: attachment.userId || undefined,
       installMode: 'manual',
       reuseScope: lifecycleScope,
       requiresHandshake: plugin.requiresHandshake,
@@ -567,16 +569,16 @@ export async function installPluginUnified(data: {
     });
 
     try {
-      await ensureDefaultCapabilityGrant({
-        bindingId: binding.id,
+      await ensureDefaultCapabilityInstanceGrant({
+        instanceId: instance.id,
         workspaceId: data.workspaceId,
         grantedBy: data.installedBy,
       });
       await query('UPDATE capability_packages SET download_count = download_count + 1 WHERE id = $1', [data.pluginId]);
       await incrementMcpVersion(data.workspaceId);
-      return mapBindingToInstallationView(binding);
+      return mapBindingToInstallationView(instance);
     } catch (error) {
-      await deleteCapabilityBinding(binding.id).catch(() => {});
+      await deleteCapabilityInstance(instance.id).catch(() => {});
       throw error;
     }
   } catch (error) {
@@ -586,7 +588,7 @@ export async function installPluginUnified(data: {
 
 export async function uninstallPluginUnified(installId: string) {
   try {
-    const deleted = await deleteCapabilityBinding(installId);
+    const deleted = await deleteCapabilityInstance(installId);
     await incrementMcpVersion(deleted.workspace_id);
     return deleted;
   } catch (error) {
@@ -595,22 +597,22 @@ export async function uninstallPluginUnified(installId: string) {
 }
 
 export async function getInstallations(workspaceId: string, filters?: {
-  scopeType?: CapabilityBindingScope;
+  attachmentType?: CapabilityAttachmentType;
   conversationId?: string;
   actorId?: string;
   userId?: string;
   pluginId?: string;
 }) {
   try {
-    const bindings = await listCapabilityBindings(workspaceId, {
+    const instances = await listCapabilityInstances(workspaceId, {
       kind: 'plugin',
       packageId: filters?.pluginId,
-      bindingScope: filters?.scopeType,
+      attachmentType: filters?.attachmentType,
       conversationId: filters?.conversationId,
       actorId: filters?.actorId,
       userId: filters?.userId,
     });
-    return bindings.map(mapBindingToInstallationView);
+    return instances.map(mapBindingToInstallationView);
   } catch (error) {
     wrapCapabilityError(error);
   }
@@ -618,11 +620,11 @@ export async function getInstallations(workspaceId: string, filters?: {
 
 export async function getInstallation(workspaceId: string, installId: string) {
   try {
-    const binding = await getCapabilityBinding(installId);
-    if (binding.workspaceId !== workspaceId || binding.package?.kind !== 'plugin') {
+    const instance = await getCapabilityInstance(installId);
+    if (instance.workspaceId !== workspaceId || instance.package?.kind !== 'plugin') {
       throw new McpPluginError(404, 'Installation not found');
     }
-    return mapBindingToInstallationView(binding);
+    return mapBindingToInstallationView(instance);
   } catch (error) {
     wrapCapabilityError(error);
   }
@@ -633,7 +635,7 @@ export async function updateInstallation(installId: string, data: {
   configData?: Record<string, unknown>;
   authSessionIds?: Record<string, string>;
   lifecycleScope?: CapabilityReuseScope;
-  scopeType?: CapabilityBindingScope;
+  attachmentType?: CapabilityAttachmentType;
   actorId?: string | null;
   conversationId?: string | null;
   userId?: string | null;
@@ -642,7 +644,7 @@ export async function updateInstallation(installId: string, data: {
   try {
     const existingResult = await query(
       `SELECT b.workspace_id, b.package_id, b.config_data, r.config_schema, b.revision_id
-       FROM capability_bindings b
+       FROM capability_instances b
        JOIN capability_package_revisions r ON r.id = b.revision_id
        WHERE b.id = $1`,
       [installId],
@@ -650,12 +652,12 @@ export async function updateInstallation(installId: string, data: {
     if (existingResult.rows.length === 0) throw new McpPluginError(404, 'Installation not found');
     const existing = existingResult.rows[0];
 
-    const scopeType = data.scopeType;
-    if (scopeType && data.lifecycleScope && !validateLifecycleHierarchy(scopeType, data.lifecycleScope)) {
-      throw new McpPluginError(400, `Reuse scope '${data.lifecycleScope}' is not valid for binding scope '${scopeType}'`);
+    const attachmentType = data.attachmentType;
+    if (attachmentType && data.lifecycleScope && !validateLifecycleHierarchy(attachmentType, data.lifecycleScope)) {
+      throw new McpPluginError(400, `Reuse scope '${data.lifecycleScope}' is not valid for attachment '${attachmentType}'`);
     }
 
-    const scoped = scopeType ? scopeColumns(scopeType, data.actorId ?? undefined, data.conversationId ?? undefined, data.userId ?? undefined) : null;
+    const attachment = attachmentType ? attachmentColumns(attachmentType, data.actorId ?? undefined, data.conversationId ?? undefined, data.userId ?? undefined) : null;
     const plugin = await getCapabilityPackage(existing.package_id);
     const mergedConfig = data.configData
       ? mergeConfigForUpdate(existing.config_data || {}, data.configData, plugin.latestRevision?.configFields || [])
@@ -674,13 +676,13 @@ export async function updateInstallation(installId: string, data: {
       ? encryptSensitiveFields(withAuthRefs, existing.config_schema || {})
       : undefined;
 
-    const updated = await updateCapabilityBinding(installId, {
+    const updated = await updateCapabilityInstance(installId, {
       isEnabled: data.isEnabled,
       configData: encrypted,
-      bindingScope: scopeType,
-      actorId: scoped ? scoped.actorId : undefined,
-      conversationId: scoped ? scoped.conversationId : undefined,
-      userId: scoped ? scoped.userId : undefined,
+      attachmentType,
+      actorId: attachment ? attachment.actorId : undefined,
+      conversationId: attachment ? attachment.conversationId : undefined,
+      userId: attachment ? attachment.userId : undefined,
       reuseScope: data.lifecycleScope,
     });
 
@@ -704,7 +706,7 @@ export async function updateInstallation(installId: string, data: {
 export async function createPluginInstallPlan(input: {
   workspaceId: string;
   pluginId: string;
-  bindingScope: CapabilityBindingScope;
+  attachmentType: CapabilityAttachmentType;
   actorId?: string;
   conversationId?: string;
   userId?: string;
@@ -722,14 +724,14 @@ export async function createPluginInstallPlan(input: {
       packageId: plugin.id,
       revisionId: plugin.latestRevisionId,
       workspaceId: input.workspaceId,
-      bindingScope: input.bindingScope,
+      attachmentType: input.attachmentType,
       actorId: input.actorId,
       conversationId: input.conversationId,
       userId: input.userId,
       checks,
       grantPlan: buildCapabilityGrantPlan({
         revision: plugin.latestRevision,
-        bindingScope: input.bindingScope,
+        attachmentType: input.attachmentType,
         actorId: input.actorId,
         conversationId: input.conversationId,
         userId: input.userId,
@@ -806,7 +808,7 @@ export async function seedBuiltinMcpPlugins() {
         transport: pluginSeed.transport,
         entryPoint: pluginSeed.entryPoint,
         lifecycleScope: pluginSeed.defaultReuseScope,
-        defaultBindingScope: pluginSeed.defaultBindingScope,
+        defaultInstanceScope: pluginSeed.defaultInstanceScope,
         requiresHandshake: pluginSeed.requiresHandshake,
         tags: pluginSeed.tags,
         categorySlugs: pluginSeed.categorySlugs,

@@ -31,12 +31,12 @@ const transportLabels: Record<string, string> = {
   relay: 'Relay Tunnel',
 };
 
-const bindingScopeLabels: Record<string, string> = {
+const attachmentTypeLabels: Record<string, string> = {
   workspace: 'Workspace',
   conversation: 'Conversation',
   actor_global: 'Actor',
-  actor_conversation: 'Actor + Conversation',
-  user: 'User',
+  actor_conversation: 'Actor in Conversation',
+  user: 'Personal',
 };
 
 export default function PluginDetailDialog({ plugin, installedCount, onInstall, onClose }: Props) {
@@ -72,7 +72,7 @@ export default function PluginDetailDialog({ plugin, installedCount, onInstall, 
           <div className="flex gap-2 flex-wrap">
             <Badge variant="outline" className="border-gray-200 dark:border-white/10">{transportLabels[plugin.transport] || plugin.transport}</Badge>
             <Badge variant="outline" className="border-gray-200 dark:border-white/10">
-              Install: {bindingScopeLabels[plugin.default_binding_scope] || plugin.default_binding_scope || 'workspace'}
+              Default owner: {attachmentTypeLabels[plugin.default_instance_scope] || plugin.default_instance_scope || 'Workspace'}
             </Badge>
             <Badge variant="outline" className="border-gray-200 dark:border-white/10">
               Runtime: {plugin.lifecycle_scope}
@@ -120,11 +120,11 @@ export default function PluginDetailDialog({ plugin, installedCount, onInstall, 
           <div className="flex gap-2 pt-2">
             {installedCount > 0 ? (
               <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
-                Installed{installedCount > 1 ? ` (${installedCount} scopes)` : ''}
+                Installed{installedCount > 1 ? ` (${installedCount} instances)` : ''}
               </Badge>
             ) : null}
             <Button onClick={onInstall} className="flex-1">
-              Install{installedCount > 0 ? ' at Another Scope' : ''}
+              {installedCount > 0 ? 'Create Another Installation' : 'Install'}
             </Button>
             <Button variant="outline" onClick={onClose}>Close</Button>
           </div>

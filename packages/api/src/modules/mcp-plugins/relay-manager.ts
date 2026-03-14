@@ -435,7 +435,7 @@ async function onServersRegister(
           transport: 'relay',
           entryPoint: JSON.stringify({ relayId, serverName: server.name }),
           lifecycleScope: 'conversation',
-          defaultBindingScope: 'workspace',
+          defaultInstanceScope: 'workspace',
           requiresHandshake: true,
           toolsManifest: server.tools || [],
           authorization: {
@@ -564,15 +564,15 @@ async function findRelayOrg(relayId: string) {
 
 async function ensureDefaultInstallation(workspaceId: string, pluginId: string) {
   const existing = await query(
-    `SELECT id FROM capability_bindings
-     WHERE package_id = $1 AND workspace_id = $2 AND binding_scope = 'workspace'`,
+    `SELECT id FROM capability_instances
+     WHERE package_id = $1 AND workspace_id = $2 AND attachment_type = 'workspace'`,
     [pluginId, workspaceId]
   );
   if (existing.rows.length > 0) return; // already has installation(s)
 
   await query(
-    `INSERT INTO capability_bindings (
-       workspace_id, package_id, revision_id, binding_scope, install_mode, is_enabled, config_data,
+    `INSERT INTO capability_instances (
+       workspace_id, package_id, revision_id, attachment_type, install_mode, is_enabled, config_data,
        reuse_scope, requires_handshake, metadata
      )
      SELECT $1, p.id, p.latest_revision_id, 'workspace', 'relay_derived', TRUE, '{}'::jsonb,

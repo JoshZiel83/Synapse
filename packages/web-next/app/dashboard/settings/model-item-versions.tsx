@@ -25,10 +25,12 @@ interface ConfigVersion {
 export default function ModelItemVersions({
   groupId,
   itemId,
+  scope = 'workspace',
   onBack,
 }: {
   groupId: string;
   itemId: string;
+  scope?: 'workspace' | 'platform' | 'user';
   onBack: () => void;
 }) {
   const { workspaceId } = useWorkspace();
@@ -36,13 +38,19 @@ export default function ModelItemVersions({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!workspaceId) return;
+    if (!workspaceId && scope === 'workspace') return;
     setLoading(true);
-    api.getItemVersions(workspaceId, groupId, itemId)
+    const request =
+      scope === 'platform'
+        ? api.getPlatformItemVersions(groupId, itemId)
+        : scope === 'user'
+          ? api.getUserItemVersions(groupId, itemId)
+          : api.getItemVersions(workspaceId!, groupId, itemId);
+    request
       .then((res) => setVersions(res.versions || []))
       .catch((err) => console.error('Failed to load versions:', err))
       .finally(() => setLoading(false));
-  }, [workspaceId, groupId, itemId]);
+  }, [workspaceId, groupId, itemId, scope]);
 
   return (
     <div className="space-y-6">

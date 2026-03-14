@@ -1,4 +1,5 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
+import { authzEnabled, checkPermission } from '../authz/index.js';
 import { query } from '../database/index.js';
 
 export async function workspaceMiddleware(request: FastifyRequest, reply: FastifyReply) {
@@ -12,15 +13,25 @@ export async function workspaceMiddleware(request: FastifyRequest, reply: Fastif
     return reply.status(401).send({ error: 'Authentication required' });
   }
 
-  // Check membership
   const result = await query(
     'SELECT trust_level FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
     [workspaceId, user.userId]
   );
 
-  if (result.rows.length === 0) {
+  if (authzEnabled()) {
+    const allowed = await checkPermission({
+      resourceType: 'workspace',
+      resourceId: workspaceId,
+      permission: 'view',
+      subject: { type: 'user', id: user.userId },
+    });
+
+    if (!allowed) {
+      return reply.status(403).send({ error: 'Not allowed to access this workspace' });
+    }
+  } else if (result.rows.length === 0) {
     return reply.status(403).send({ error: 'Not a member of this workspace' });
   }
 
-  (request as any).workspaceMember = result.rows[0];
+  (request as any).workspaceMember = result.rows[0] ?? null;
 }

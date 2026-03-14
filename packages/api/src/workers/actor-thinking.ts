@@ -58,7 +58,6 @@ export function startActorThinkingWorker() {
           queryText: `[Trigger: ${trigger}] Process any pending work.`,
           queryBlocks: textBlocks(`[Trigger: ${trigger}] Process any pending work.`),
           limit: 6,
-          userCount: 0,
           metadata: { trigger, mode: 'adhoc' },
         });
         if (recallResult.memories.length > 0) {

@@ -52,6 +52,7 @@ export async function processUserMessage(
     actorId: secretary.id,
     workspaceId,
     trigger: 'user_message',
+    userId,
   });
 
   // Emit events
@@ -114,10 +115,10 @@ export async function getConversation(
     const [messages, providerSteps, toolHistory] = await Promise.all([
       getSessionMessages(sessionRow.id),
       query(
-        `SELECT ps.*, mr.name AS model_route_name, mbr.provider_type, mbr.model_name
+        `SELECT ps.*, mg.name AS model_group_name, mpr.provider_type, mpr.model_name
          FROM provider_steps ps
-         LEFT JOIN model_routes mr ON mr.id = ps.model_route_id
-         LEFT JOIN model_binding_revisions mbr ON mbr.id = ps.model_revision_id
+         LEFT JOIN model_groups mg ON mg.id = ps.model_group_id
+         LEFT JOIN model_profile_revisions mpr ON mpr.id = ps.model_profile_revision_id
          JOIN turns t ON t.id = ps.turn_id
          WHERE t.session_id = $1
          ORDER BY ps.created_at DESC`,
@@ -141,15 +142,15 @@ export async function getConversation(
         metadata: message.metadata,
         created_at: message.created_at,
         session_id: message.session_id,
-        log_group_id: latestStep?.model_route_id,
-        log_config_id: latestStep?.model_revision_id,
+        log_group_id: latestStep?.model_group_id,
+        log_config_id: latestStep?.model_profile_revision_id,
         log_input_tokens: latestStep?.input_tokens,
         log_output_tokens: latestStep?.output_tokens,
         log_latency_ms: latestStep?.latency_ms,
         log_status: latestStep?.status,
         log_provider_type: latestStep?.provider_type,
         log_model_name: latestStep?.model_name,
-        log_group_name: latestStep?.model_route_name,
+        log_group_name: latestStep?.model_group_name,
         has_tool_history: hasToolHistory,
       });
     }

@@ -1,5 +1,17 @@
 import { query, transaction } from '../../infrastructure/database/index.js';
+import {
+  authzEnabled,
+  buildActorConversationContextId,
+  checkPermission,
+  diffAuthzRelationships,
+  deleteRelation,
+  flushAuthzOutboxEntries,
+  queueAuthzRelationships,
+  touchActorConversationContext,
+  touchRelation,
+} from '../../infrastructure/authz/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
+import { getFileUrl } from '../../infrastructure/storage/index.js';
 import { sessionThinkingQueue } from '../../workers/queues.js';
 import { nowISO } from '@synapse/shared';
 import { v4 as uuidv4 } from 'uuid';
@@ -21,6 +33,51 @@ import {
 } from '../conversation/message-content.js';
 import { createSession, getSession, updateSessionStatus } from '../session/service.js';
 
+type ConversationGrantPermission =
+  | 'send'
+  | 'moderate'
+  | 'manage'
+  | 'manage_members'
+  | 'attach_resources';
+
+type ConversationGrantRow = {
+  id?: string;
+  conversation_id?: string;
+  workspace_id: string;
+  permission: ConversationGrantPermission;
+  subject_type: 'user' | 'actor';
+  user_id: string | null;
+  actor_id: string | null;
+  status: 'active' | 'revoked';
+  granted_by?: string | null;
+  reason?: string | null;
+  metadata?: Record<string, unknown> | string | null;
+  created_at?: string;
+  revoked_at?: string | null;
+};
+
+type ConversationMemoryGrantPermission =
+  | 'memory_edit'
+  | 'memory_grant'
+  | 'memory_retarget'
+  | 'memory_delete';
+
+type ConversationMemoryGrantRow = {
+  id?: string;
+  conversation_id?: string;
+  workspace_id: string;
+  permission: ConversationMemoryGrantPermission;
+  subject_type: 'user' | 'actor';
+  user_id: string | null;
+  actor_id: string | null;
+  status: 'active' | 'revoked';
+  granted_by?: string | null;
+  reason?: string | null;
+  metadata?: Record<string, unknown> | string | null;
+  created_at?: string;
+  revoked_at?: string | null;
+};
+
 function normalizeGroupRow(row: any) {
   if (!row) return null;
   return {
@@ -38,6 +95,175 @@ function parseJson(value: unknown) {
     }
   }
   return value || {};
+}
+
+function parseConversationMetadata(value: unknown): Record<string, unknown> {
+  const parsed = parseJson(value);
+  return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+}
+
+function stripUndefined<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
+}
+
+async function resolveWorkspaceImageFile(workspaceId: string, fileId: string) {
+  const result = await query(
+    `SELECT id, stored_name, mime_type
+     FROM files
+     WHERE id = $1
+       AND workspace_id = $2
+     LIMIT 1`,
+    [fileId, workspaceId],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error('Avatar file not found in this workspace');
+  }
+  if (typeof row.mime_type !== 'string' || !row.mime_type.startsWith('image/')) {
+    throw new Error('Avatar file must be an image');
+  }
+
+  return {
+    fileId: row.id as string,
+    url: getFileUrl(row.stored_name as string),
+  };
+}
+
+function mapGroupMemberPayload(row: any) {
+  if (row.actor_id) {
+    return stripUndefined({
+      memberId: row.id as string,
+      type: 'actor' as const,
+      actorId: row.actor_id as string,
+      name: (row.actor_name as string) || 'Unknown',
+      title: (row.actor_title as string) || undefined,
+      role: (row.actor_role as string) || 'specialist',
+      emoji: (row.actor_avatar_emoji as string) || undefined,
+      avatarUrl: row.actor_avatar_stored_name ? getFileUrl(row.actor_avatar_stored_name as string) : undefined,
+      state: row.state as string,
+      sessionStatus: (row.session_status as string) || undefined,
+    });
+  }
+
+  return stripUndefined({
+    memberId: row.id as string,
+    type: 'user' as const,
+    userId: row.user_id as string,
+    name: (row.user_name as string) || 'User',
+    avatarUrl: (row.user_avatar_url as string) || undefined,
+    state: row.state as string,
+  });
+}
+
+function conversationGrantRelation(permission: ConversationGrantPermission) {
+  switch (permission) {
+    case 'send':
+      return 'sender';
+    case 'moderate':
+      return 'moderator';
+    case 'manage':
+      return 'manager';
+    case 'manage_members':
+      return 'member_manager';
+    case 'attach_resources':
+      return 'resource_attacher';
+    default:
+      return null;
+  }
+}
+
+function buildConversationGrantRelations(
+  conversationId: string,
+  grants: ConversationGrantRow[],
+) {
+  return grants
+    .filter((grant) => grant.status === 'active')
+    .flatMap((grant) => {
+      const relation = conversationGrantRelation(grant.permission);
+      if (!relation) return [];
+      if (grant.subject_type === 'user' && grant.user_id) {
+        return [touchRelation('conversation', conversationId, relation, 'user', grant.user_id)];
+      }
+      if (grant.subject_type === 'actor' && grant.actor_id) {
+        return [touchRelation('conversation', conversationId, relation, 'actor', grant.actor_id)];
+      }
+      return [];
+    });
+}
+
+function mapConversationGrant(
+  row: ConversationGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null },
+) {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    workspaceId: row.workspace_id,
+    permission: row.permission,
+    subjectType: row.subject_type,
+    userId: row.user_id || undefined,
+    actorId: row.actor_id || undefined,
+    status: row.status,
+    grantedBy: row.granted_by || undefined,
+    reason: row.reason || undefined,
+    metadata: parseJson(row.metadata),
+    createdAt: row.created_at,
+    revokedAt: row.revoked_at || undefined,
+  };
+}
+
+function conversationMemoryGrantRelation(permission: ConversationMemoryGrantPermission) {
+  switch (permission) {
+    case 'memory_edit':
+      return 'memory_editor';
+    case 'memory_grant':
+      return 'memory_granter';
+    case 'memory_retarget':
+      return 'memory_retargeter';
+    case 'memory_delete':
+      return 'memory_deleter';
+    default:
+      return null;
+  }
+}
+
+function buildConversationMemoryGrantRelations(
+  conversationId: string,
+  grants: ConversationMemoryGrantRow[],
+) {
+  return grants
+    .filter((grant) => grant.status === 'active')
+    .flatMap((grant) => {
+      const relation = conversationMemoryGrantRelation(grant.permission);
+      if (!relation) return [];
+      if (grant.subject_type === 'user' && grant.user_id) {
+        return [touchRelation('conversation', conversationId, relation, 'user', grant.user_id)];
+      }
+      if (grant.subject_type === 'actor' && grant.actor_id) {
+        return [touchRelation('conversation', conversationId, relation, 'actor', grant.actor_id)];
+      }
+      return [];
+    });
+}
+
+function mapConversationMemoryGrant(
+  row: ConversationMemoryGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null },
+) {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    workspaceId: row.workspace_id,
+    permission: row.permission,
+    subjectType: row.subject_type,
+    userId: row.user_id || undefined,
+    actorId: row.actor_id || undefined,
+    status: row.status,
+    grantedBy: row.granted_by || undefined,
+    reason: row.reason || undefined,
+    metadata: parseJson(row.metadata),
+    createdAt: row.created_at,
+    revokedAt: row.revoked_at || undefined,
+  };
 }
 
 function buildTextContentFromParts(parts: any[]) {
@@ -161,6 +387,82 @@ async function getDefaultTargetActorIds(groupId: string, senderActorId?: string)
     .map((member) => member.actor_id);
 }
 
+function buildSenderSubject(params: {
+  senderType: 'user' | 'actor';
+  senderUserId?: string;
+  senderActorId?: string;
+}) {
+  if (params.senderType === 'actor' && params.senderActorId) {
+    return { type: 'actor' as const, id: params.senderActorId };
+  }
+  if (params.senderType === 'user' && params.senderUserId) {
+    return { type: 'user' as const, id: params.senderUserId };
+  }
+  return null;
+}
+
+async function requireConversationSendPermission(params: {
+  conversationId: string;
+  senderType: 'user' | 'actor';
+  senderUserId?: string;
+  senderActorId?: string;
+}) {
+  if (!authzEnabled()) return;
+
+  const subject = buildSenderSubject(params);
+  if (!subject) {
+    throw new Error('Unable to resolve sender subject');
+  }
+
+  const allowed = await checkPermission({
+    resourceType: 'conversation',
+    resourceId: params.conversationId,
+    permission: 'send',
+    subject,
+  });
+
+  if (!allowed) {
+    throw new Error('Sender is not allowed to send messages to this conversation');
+  }
+}
+
+async function filterAllowedTargetActorIds(params: {
+  conversationId: string;
+  senderType: 'user' | 'actor';
+  senderUserId?: string;
+  senderActorId?: string;
+  targetActorIds: string[];
+  explicit: boolean;
+}) {
+  if (!authzEnabled() || params.targetActorIds.length === 0) {
+    return params.targetActorIds;
+  }
+
+  const subject = buildSenderSubject(params);
+  if (!subject) {
+    throw new Error('Unable to resolve sender subject');
+  }
+
+  const checks = await Promise.all(
+    params.targetActorIds.map(async (actorId) => ({
+      actorId,
+      allowed: await checkPermission({
+        resourceType: 'actor',
+        resourceId: actorId,
+        permission: 'receive_message',
+        subject,
+      }),
+    })),
+  );
+
+  const allowedActorIds = checks.filter((item) => item.allowed).map((item) => item.actorId);
+  if (params.explicit && allowedActorIds.length !== params.targetActorIds.length) {
+    throw new Error('One or more target actors are not allowed to receive messages from this sender');
+  }
+
+  return allowedActorIds;
+}
+
 function senderTypeFromItem(item: any): 'user' | 'actor' | 'system' {
   if (item.role === 'system' || item.author_member_type === 'system' || item.item_type === 'event') {
     return 'system';
@@ -169,6 +471,16 @@ function senderTypeFromItem(item: any): 'user' | 'actor' | 'system' {
     return 'actor';
   }
   return 'user';
+}
+
+async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
+  if (!authzEnabled() || entryIds.length === 0) return;
+
+  try {
+    await flushAuthzOutboxEntries(entryIds);
+  } catch (error) {
+    console.error(`[authz] Failed to flush ${source} relationship updates:`, error);
+  }
 }
 
 // ============ Group CRUD ============
@@ -192,6 +504,14 @@ export async function createGroup(params: {
           [actorIds],
         )).rows
       : [];
+    const userRow = (
+      await client.query(
+        `SELECT name
+         FROM users
+         WHERE id = $1`,
+        [createdBy],
+      )
+    ).rows[0];
     const actorMap = new Map<string, any>(actorRows.map((row: any) => [row.id, row]));
     const fallbackTitle = title?.trim()
       || actorRows.map((row: any) => row.name).filter(Boolean).join(', ')
@@ -225,7 +545,7 @@ export async function createGroup(params: {
       memberId: userMemberId,
       memberType: 'user' as const,
       userId: createdBy,
-      name: 'User',
+      name: userRow?.name || 'User',
     }];
 
     for (const actorId of actorIds) {
@@ -285,8 +605,35 @@ export async function createGroup(params: {
       msgId = itemId;
     }
 
-    return { group, members, joinedMembers, message: msgId ? { id: msgId } : null };
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      [
+        touchRelation('conversation', groupId, 'workspace', 'workspace', workspaceId),
+        touchRelation('conversation', groupId, 'participant', 'user', createdBy),
+        touchRelation('conversation', groupId, 'admin', 'user', createdBy),
+        ...actorIds.flatMap((actorId) => [
+          touchRelation('conversation', groupId, 'participant', 'actor', actorId),
+          ...touchActorConversationContext(actorId, groupId),
+        ]),
+      ],
+      {
+        source: 'group.create',
+        workspaceId,
+        groupId,
+        createdBy,
+      },
+    );
+
+    return {
+      group,
+      members,
+      joinedMembers,
+      message: msgId ? { id: msgId } : null,
+      authzEntryIds,
+    };
   });
+
+  await flushQueuedAuthzEntries(result.authzEntryIds, 'group.create');
 
   await recordMembershipEvent({
     conversationId: groupId,
@@ -321,18 +668,109 @@ export async function getGroup(groupId: string): Promise<any | null> {
   return normalizeGroupRow(result.rows[0] ?? null);
 }
 
-export async function getGroupsByWorkspace(workspaceId: string, userId: string): Promise<any[]> {
-  const groups = await listUserGroupConversations(workspaceId, userId);
+export async function updateGroupProfile(params: {
+  groupId: string;
+  workspaceId: string;
+  updatedBy: string;
+  title?: string;
+  avatarFileId?: string | null;
+}) {
+  const group = await getGroup(params.groupId);
+  if (!group || group.workspace_id !== params.workspaceId) {
+    throw new Error('Group not found');
+  }
+
+  const currentMetadata = parseConversationMetadata(group.metadata);
+  const nextMetadata = { ...currentMetadata };
+
+  if (params.avatarFileId !== undefined) {
+    if (params.avatarFileId === null) {
+      delete nextMetadata.avatarFileId;
+      delete nextMetadata.avatarUrl;
+    } else {
+      const file = await resolveWorkspaceImageFile(params.workspaceId, params.avatarFileId);
+      nextMetadata.avatarFileId = file.fileId;
+      nextMetadata.avatarUrl = file.url;
+    }
+  }
+
+  const title = typeof params.title === 'string' ? params.title.trim() : undefined;
+  const nextTitle = title === undefined ? group.title : title || group.title;
+
+  const result = await query(
+    `UPDATE conversations
+     SET title = $2,
+         metadata = $3::jsonb,
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [params.groupId, nextTitle, JSON.stringify(nextMetadata)],
+  );
+
+  const updated = normalizeGroupRow(result.rows[0]);
+  const updatedMetadata = parseConversationMetadata(updated.metadata);
+
+  await emitEvent({
+    type: 'group.updated',
+    workspaceId: params.workspaceId,
+    payload: {
+      groupId: params.groupId,
+      action: 'profile_updated',
+      title: updated.title,
+      avatarUrl: typeof updatedMetadata.avatarUrl === 'string' ? updatedMetadata.avatarUrl : null,
+    },
+    timestamp: nowISO(),
+  });
+
+  return updated;
+}
+
+export async function getGroupsByWorkspace(
+  workspaceId: string,
+  userId: string,
+  groupIds?: string[],
+): Promise<any[]> {
+  const groups = groupIds
+    ? (groupIds.length > 0
+      ? (await query(
+          `SELECT c.*,
+                  cr.last_read_at,
+                  (
+                    SELECT COUNT(*)::int
+                    FROM conversation_items ci
+                    JOIN conversation_members cm_u
+                      ON cm_u.conversation_id = c.id
+                     AND cm_u.user_id = $2
+                    WHERE ci.conversation_id = c.id
+                      AND ci.scope = 'shared'
+                      AND ci.surface = 'visible'
+                      AND (
+                        ci.author_member_id = cm_u.id
+                        OR NOT EXISTS (SELECT 1 FROM conversation_item_targets t0 WHERE t0.item_id = ci.id)
+                        OR EXISTS (SELECT 1 FROM conversation_item_targets t1 WHERE t1.item_id = ci.id AND t1.target_member_id = cm_u.id)
+                      )
+                      AND ci.created_at > COALESCE(cr.last_read_at, '1970-01-01'::timestamptz)
+                  ) AS unread_count
+           FROM conversations c
+           LEFT JOIN conversation_reads cr ON cr.conversation_id = c.id AND cr.user_id = $2
+           WHERE c.workspace_id = $1
+             AND c.kind = 'group'
+             AND c.id = ANY($3)
+           ORDER BY c.updated_at DESC, c.created_at DESC`,
+          [workspaceId, userId, groupIds],
+        )).rows
+      : [])
+    : await listUserGroupConversations(workspaceId, userId);
   if (groups.length === 0) return [];
 
-  const groupIds = groups.map((group: any) => group.id);
+  const resolvedGroupIds = groups.map((group: any) => group.id);
   const activeCountsResult = await query(
     `SELECT conversation_id, COUNT(*)::int AS active_count
      FROM sessions
      WHERE conversation_id = ANY($1)
        AND status = 'active'
      GROUP BY conversation_id`,
-    [groupIds],
+    [resolvedGroupIds],
   );
   const activeCountMap = new Map<string, number>(
     activeCountsResult.rows.map((row: any) => [row.conversation_id, row.active_count]),
@@ -355,7 +793,7 @@ export async function getGroupsByWorkspace(workspaceId: string, userId: string):
        AND ci.scope = 'shared'
        AND ci.surface = 'visible'
      ORDER BY ci.conversation_id, ci.sequence DESC`,
-    [groupIds],
+    [resolvedGroupIds],
   );
 
   const lastItemMap = new Map<string, any>(lastItemsResult.rows.map((row: any) => [row.conversation_id, row]));
@@ -418,20 +856,39 @@ export async function addActorToGroup(
     [actorId],
   );
   const actorInfo = actorResult.rows[0];
-  const member = await ensureConversationMember({
-    conversationId: groupId,
-    memberType: 'actor',
-    actorId,
+  const result = await transaction(async (client) => {
+    const member = await ensureConversationMember({
+      conversationId: groupId,
+      memberType: 'actor',
+      actorId,
+    });
+    const session = await createSession({
+      workspaceId: group.workspace_id,
+      actorId,
+      conversationId: groupId,
+      channelType: 'web',
+      trigger: 'actor_invite',
+      metadata: { lane: 'group' },
+    });
+    await updateSessionStatus(session.id, 'sleeping');
+
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      [
+        touchRelation('conversation', groupId, 'participant', 'actor', actorId),
+        ...touchActorConversationContext(actorId, groupId),
+      ],
+      {
+        source: 'group.add_actor',
+        groupId,
+        actorId,
+      },
+    );
+
+    return { member, session, authzEntryIds };
   });
-  const session = await createSession({
-    workspaceId: group.workspace_id,
-    actorId,
-    conversationId: groupId,
-    channelType: 'web',
-    trigger: 'actor_invite',
-    metadata: { lane: 'group' },
-  });
-  await updateSessionStatus(session.id, 'sleeping');
+
+  await flushQueuedAuthzEntries(result.authzEntryIds, 'group.add_actor');
 
   const eventBatchId = batchId || uuidv4();
   await recordMembershipEvent({
@@ -439,7 +896,7 @@ export async function addActorToGroup(
     subtype: 'member_joined',
     batchId: eventBatchId,
     members: [{
-      memberId: member.id,
+      memberId: result.member.id,
       memberType: 'actor',
       actorId,
       name: actorInfo?.name || 'Unknown',
@@ -450,14 +907,192 @@ export async function addActorToGroup(
   await emitEvent({
     type: 'group.member_joined',
     workspaceId: group.workspace_id,
-    payload: { groupId, actorId, actorName: actorInfo?.name || 'Unknown', batchId: eventBatchId },
+    payload: {
+      groupId,
+      actorId,
+      actorName: actorInfo?.name || 'Unknown',
+      batchId: eventBatchId,
+      members: [{
+        memberId: result.member.id,
+        type: 'actor' as const,
+        actorId,
+        name: actorInfo?.name || 'Unknown',
+        title: actorInfo?.title,
+      }],
+    },
     timestamp: nowISO(),
   });
 
   return {
-    member: { id: member.id, groupId, actorId, sessionId: session.id },
-    session: { id: session.id },
+    member: { id: result.member.id, groupId, actorId, sessionId: result.session.id },
+    session: { id: result.session.id },
   };
+}
+
+export async function addMembersToGroup(params: {
+  groupId: string;
+  workspaceId: string;
+  actorIds?: string[];
+  userIds?: string[];
+}) {
+  const actorIds = [...new Set((params.actorIds || []).filter(Boolean))];
+  const userIds = [...new Set((params.userIds || []).filter(Boolean))];
+  if (actorIds.length === 0 && userIds.length === 0) {
+    throw new Error('At least one actor or user is required');
+  }
+
+  const group = await getGroup(params.groupId);
+  if (!group || group.workspace_id !== params.workspaceId) {
+    throw new Error('Group not found');
+  }
+
+  const actorResult = actorIds.length > 0
+    ? await query(
+        `SELECT id, name, title, role, config, avatar_file.stored_name AS avatar_stored_name
+         FROM actors a
+         LEFT JOIN files avatar_file ON avatar_file.id = a.avatar_file_id
+         WHERE a.workspace_id = $1
+           AND a.id = ANY($2)`,
+        [params.workspaceId, actorIds],
+      )
+    : { rows: [] as any[] };
+  const userResult = userIds.length > 0
+    ? await query(
+        `SELECT u.id, u.name, u.avatar_url
+         FROM workspace_members wm
+         JOIN users u ON u.id = wm.user_id
+         WHERE wm.workspace_id = $1
+           AND u.id = ANY($2)`,
+        [params.workspaceId, userIds],
+      )
+    : { rows: [] as any[] };
+
+  if (actorResult.rows.length !== actorIds.length) {
+    throw new Error('One or more actors are not available in this workspace');
+  }
+  if (userResult.rows.length !== userIds.length) {
+    throw new Error('One or more users are not members of this workspace');
+  }
+
+  const actorMap = new Map(actorResult.rows.map((row) => [row.id as string, row]));
+  const userMap = new Map(userResult.rows.map((row) => [row.id as string, row]));
+  const batchId = uuidv4();
+
+  const result = await transaction(async (client) => {
+    const relationships = [];
+    const addedMembers: any[] = [];
+    const joinedMembers: Array<{ memberId: string; memberType: 'actor' | 'user'; actorId?: string; userId?: string; name: string; title?: string }> = [];
+
+    for (const actorId of actorIds) {
+      const existing = await getConversationMember({ conversationId: params.groupId, actorId });
+      if (existing?.state === 'active') continue;
+
+      const member = await ensureConversationMember({
+        conversationId: params.groupId,
+        memberType: 'actor',
+        actorId,
+      });
+      const session = await createSession({
+        workspaceId: params.workspaceId,
+        actorId,
+        conversationId: params.groupId,
+        channelType: 'web',
+        trigger: 'actor_invite',
+        metadata: { lane: 'group' },
+      });
+      await updateSessionStatus(session.id, 'sleeping');
+
+      const actorInfo = actorMap.get(actorId)!;
+      relationships.push(
+        touchRelation('conversation', params.groupId, 'participant', 'actor', actorId),
+        ...touchActorConversationContext(actorId, params.groupId),
+      );
+      addedMembers.push({
+        memberId: member.id,
+        type: 'actor' as const,
+        actorId,
+        name: actorInfo.name || 'Unknown',
+        title: actorInfo.title || undefined,
+        role: actorInfo.role || 'specialist',
+        emoji: actorInfo.config?.avatar_emoji || undefined,
+        avatarUrl: actorInfo.avatar_stored_name ? getFileUrl(actorInfo.avatar_stored_name) : undefined,
+      });
+      joinedMembers.push({
+        memberId: member.id,
+        memberType: 'actor',
+        actorId,
+        name: actorInfo.name || 'Unknown',
+        title: actorInfo.title || undefined,
+      });
+    }
+
+    for (const userId of userIds) {
+      const existing = await getConversationMember({ conversationId: params.groupId, userId });
+      if (existing?.state === 'active') continue;
+
+      const member = await ensureConversationMember({
+        conversationId: params.groupId,
+        memberType: 'user',
+        userId,
+      });
+      const userInfo = userMap.get(userId)!;
+      relationships.push(touchRelation('conversation', params.groupId, 'participant', 'user', userId));
+      addedMembers.push({
+        memberId: member.id,
+        type: 'user' as const,
+        userId,
+        name: userInfo.name || 'User',
+        avatarUrl: userInfo.avatar_url || undefined,
+      });
+      joinedMembers.push({
+        memberId: member.id,
+        memberType: 'user',
+        userId,
+        name: userInfo.name || 'User',
+      });
+    }
+
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      relationships,
+      {
+        source: 'group.add_members',
+        groupId: params.groupId,
+        actorIds,
+        userIds,
+      },
+    );
+
+    return {
+      addedMembers,
+      joinedMembers,
+      authzEntryIds,
+    };
+  });
+
+  await flushQueuedAuthzEntries(result.authzEntryIds, 'group.add_members');
+
+  if (result.joinedMembers.length > 0) {
+    await recordMembershipEvent({
+      conversationId: params.groupId,
+      subtype: 'member_joined',
+      batchId,
+      members: result.joinedMembers,
+    });
+
+    await emitEvent({
+      type: 'group.member_joined',
+      workspaceId: params.workspaceId,
+      payload: {
+        groupId: params.groupId,
+        batchId,
+        members: result.addedMembers,
+      },
+      timestamp: nowISO(),
+    });
+  }
+
+  return { members: result.addedMembers };
 }
 
 export async function removeActorFromGroup(groupId: string, actorId: string): Promise<void> {
@@ -467,18 +1102,36 @@ export async function removeActorFromGroup(groupId: string, actorId: string): Pr
   const member = await getConversationMember({ conversationId: groupId, actorId });
   if (!member) return;
 
-  await query(
-    `UPDATE conversation_members
-     SET state = 'kicked', left_at = NOW()
-     WHERE id = $1`,
-    [member.id],
-  );
-  await query(
-    `UPDATE sessions
-     SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
-     WHERE conversation_id = $1 AND actor_id = $2 AND status IN ('active', 'sleeping')`,
-    [groupId, actorId],
-  );
+  const authzEntryIds = await transaction(async (client) => {
+    await client.query(
+      `UPDATE conversation_members
+       SET state = 'kicked', left_at = NOW()
+       WHERE id = $1`,
+      [member.id],
+    );
+    await client.query(
+      `UPDATE sessions
+       SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
+       WHERE conversation_id = $1 AND actor_id = $2 AND status IN ('active', 'sleeping')`,
+      [groupId, actorId],
+    );
+
+    return queueAuthzRelationships(
+      client,
+      [
+        deleteRelation('conversation', groupId, 'participant', 'actor', actorId),
+        deleteRelation('actor_conversation', buildActorConversationContextId(actorId, groupId), 'actor', 'actor', actorId),
+        deleteRelation('actor_conversation', buildActorConversationContextId(actorId, groupId), 'conversation', 'conversation', groupId),
+      ],
+      {
+        source: 'group.remove_actor',
+        groupId,
+        actorId,
+      },
+    );
+  });
+
+  await flushQueuedAuthzEntries(authzEntryIds, 'group.remove_actor');
 
   const actorResult = await query('SELECT name, title FROM actors WHERE id = $1', [actorId]);
   const actorInfo = actorResult.rows[0];
@@ -499,7 +1152,19 @@ export async function removeActorFromGroup(groupId: string, actorId: string): Pr
   await emitEvent({
     type: 'group.member_kicked',
     workspaceId: group.workspace_id,
-    payload: { groupId, actorId, actorName: actorInfo?.name || 'Unknown', batchId: eventBatchId },
+    payload: {
+      groupId,
+      actorId,
+      actorName: actorInfo?.name || 'Unknown',
+      batchId: eventBatchId,
+      members: [{
+        memberId: member.id,
+        type: 'actor' as const,
+        actorId,
+        name: actorInfo?.name || 'Unknown',
+        title: actorInfo?.title,
+      }],
+    },
     timestamp: nowISO(),
   });
 }
@@ -513,11 +1178,15 @@ export async function getGroupMembers(groupId: string): Promise<any[]> {
             a.docs AS actor_docs,
             a.can_represent_user AS actor_can_represent_user,
             a.current_version AS actor_current_version,
+            a.config->>'avatar_emoji' AS actor_avatar_emoji,
+            actor_avatar_file.stored_name AS actor_avatar_stored_name,
             u.name AS user_name,
+            u.avatar_url AS user_avatar_url,
             ls.id AS session_id,
             ls.status AS session_status
      FROM conversation_members cm
      LEFT JOIN actors a ON a.id = cm.actor_id
+     LEFT JOIN files actor_avatar_file ON actor_avatar_file.id = a.avatar_file_id
      LEFT JOIN users u ON u.id = cm.user_id
      LEFT JOIN LATERAL (
        SELECT s.id, s.status
@@ -564,10 +1233,31 @@ export async function sendGroupMessage(params: {
   const group = await getGroup(groupId);
   if (!group) throw new Error('Group not found');
 
+  await requireConversationSendPermission({
+    conversationId: groupId,
+    senderType,
+    senderUserId,
+    senderActorId,
+  });
+
+  const explicitActorTargets = Array.isArray(params.targetActorIds) && params.targetActorIds.length > 0;
   let targetActorIds = params.targetActorIds || [];
   let targetUserIds = params.targetUserIds || [];
   if (targetActorIds.length === 0 && targetUserIds.length === 0) {
     targetActorIds = await getDefaultTargetActorIds(groupId, senderActorId);
+  }
+
+  targetActorIds = await filterAllowedTargetActorIds({
+    conversationId: groupId,
+    senderType,
+    senderUserId,
+    senderActorId,
+    targetActorIds,
+    explicit: explicitActorTargets,
+  });
+
+  if (targetActorIds.length === 0 && targetUserIds.length === 0) {
+    throw new Error('No eligible recipients are available for this message');
   }
 
   const authorMember = senderType === 'actor'
@@ -737,26 +1427,29 @@ export async function wakeActor(groupId: string, actorId: string): Promise<void>
   session = await getSession(session.id);
   if (!session) return;
 
+  const previousStatus = session.status;
+
   if (session.status === 'sleeping' || session.status === 'completed' || session.status === 'failed' || session.status === 'cancelled' || session.status === 'timed_out') {
     await query(
       `UPDATE sessions SET status = 'active', error_message = NULL, completed_at = NULL, updated_at = NOW() WHERE id = $1`,
       [session.id],
     );
-
-    await sessionThinkingQueue.add('think', {
-      sessionId: session.id,
-      actorId,
-      workspaceId: group.workspace_id,
-      trigger: 'group_message',
-    });
+    session = { ...session, status: 'active' };
 
     await emitEvent({
       type: 'session.status.changed',
       workspaceId: group.workspace_id,
-      payload: { groupId, sessionId: session.id, actorId, status: 'active', previousStatus: session.status },
+      payload: { groupId, sessionId: session.id, actorId, status: 'active', previousStatus },
       timestamp: nowISO(),
     });
   }
+
+  await sessionThinkingQueue.add('think', {
+    sessionId: session.id,
+    actorId,
+    workspaceId: group.workspace_id,
+    trigger: 'group_message',
+  });
 }
 
 export async function sleepActor(sessionId: string): Promise<void> {
@@ -780,6 +1473,392 @@ export async function sleepActor(sessionId: string): Promise<void> {
     },
     timestamp: nowISO(),
   });
+}
+
+export async function listConversationGrants(groupId: string, workspaceId: string) {
+  const result = await query<ConversationGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null }>(
+    `SELECT *
+     FROM conversation_grants
+     WHERE conversation_id = $1
+       AND workspace_id = $2
+     ORDER BY created_at DESC`,
+    [groupId, workspaceId],
+  );
+
+  return result.rows.map(mapConversationGrant);
+}
+
+export async function issueConversationGrant(params: {
+  groupId: string;
+  workspaceId: string;
+  permission: ConversationGrantPermission;
+  userId?: string;
+  actorId?: string;
+  grantedBy?: string;
+  reason?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  const subjectType = params.userId ? 'user' : 'actor';
+  if (!params.userId && !params.actorId) {
+    throw new Error('userId or actorId is required');
+  }
+
+  if (params.userId) {
+    await assertActiveConversationUserMember(params.groupId, params.userId);
+  }
+  if (params.actorId) {
+    await assertActiveConversationActorMember(params.groupId, params.actorId);
+  }
+
+  const result = await transaction(async (client) => {
+    const previousResult = await client.query<ConversationGrantRow>(
+      `SELECT *
+       FROM conversation_grants
+       WHERE conversation_id = $1
+         AND workspace_id = $2
+         AND status = 'active'`,
+      [params.groupId, params.workspaceId],
+    );
+    const previous = previousResult.rows;
+
+    const existingResult = await client.query<ConversationGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null }>(
+      `SELECT *
+       FROM conversation_grants
+       WHERE conversation_id = $1
+         AND workspace_id = $2
+         AND permission = $3
+         AND subject_type = $4
+         AND COALESCE(user_id::text, '') = COALESCE($5::text, '')
+         AND COALESCE(actor_id::text, '') = COALESCE($6::text, '')
+         AND status = 'active'
+       LIMIT 1`,
+      [
+        params.groupId,
+        params.workspaceId,
+        params.permission,
+        subjectType,
+        params.userId ?? null,
+        params.actorId ?? null,
+      ],
+    );
+
+    if (existingResult.rows[0]) {
+      return { grant: existingResult.rows[0], authzEntryIds: [] as string[] };
+    }
+
+    const insertResult = await client.query<ConversationGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null }>(
+      `INSERT INTO conversation_grants (
+         conversation_id,
+         workspace_id,
+         permission,
+         subject_type,
+         user_id,
+         actor_id,
+         status,
+         granted_by,
+         reason,
+         metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9::jsonb)
+       RETURNING *`,
+      [
+        params.groupId,
+        params.workspaceId,
+        params.permission,
+        subjectType,
+        params.userId ?? null,
+        params.actorId ?? null,
+        params.grantedBy ?? null,
+        params.reason ?? null,
+        JSON.stringify(params.metadata ?? {}),
+      ],
+    );
+
+    const next = [...previous, insertResult.rows[0]];
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      diffAuthzRelationships(
+        buildConversationGrantRelations(params.groupId, previous),
+        buildConversationGrantRelations(params.groupId, next),
+      ),
+      {
+        source: 'conversation.issue_grant',
+        workspaceId: params.workspaceId,
+        conversationId: params.groupId,
+        permission: params.permission,
+      },
+    );
+
+    return {
+      grant: insertResult.rows[0],
+      authzEntryIds,
+    };
+  });
+
+  await flushQueuedAuthzEntries(result.authzEntryIds, 'conversation.issue_grant');
+  return mapConversationGrant(result.grant);
+}
+
+export async function revokeConversationGrant(params: {
+  groupId: string;
+  workspaceId: string;
+  grantId: string;
+}) {
+  const result = await transaction(async (client) => {
+    const previousResult = await client.query<ConversationGrantRow & { id: string }>(
+      `SELECT *
+       FROM conversation_grants
+       WHERE conversation_id = $1
+         AND workspace_id = $2
+         AND status = 'active'`,
+      [params.groupId, params.workspaceId],
+    );
+    const previous = previousResult.rows;
+
+    const revokeResult = await client.query<ConversationGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null }>(
+      `UPDATE conversation_grants
+       SET status = 'revoked',
+           revoked_at = NOW()
+       WHERE id = $1
+         AND conversation_id = $2
+         AND workspace_id = $3
+         AND status = 'active'
+       RETURNING *`,
+      [params.grantId, params.groupId, params.workspaceId],
+    );
+
+    const revoked = revokeResult.rows[0];
+    if (!revoked) {
+      return null;
+    }
+
+    const next = previous.filter((grant) => grant.id !== params.grantId);
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      diffAuthzRelationships(
+        buildConversationGrantRelations(params.groupId, previous),
+        buildConversationGrantRelations(params.groupId, next),
+      ),
+      {
+        source: 'conversation.revoke_grant',
+        workspaceId: params.workspaceId,
+        conversationId: params.groupId,
+        grantId: params.grantId,
+      },
+    );
+
+    return {
+      grant: revoked,
+      authzEntryIds,
+    };
+  });
+
+  if (!result) {
+    return null;
+  }
+
+  await flushQueuedAuthzEntries(result.authzEntryIds, 'conversation.revoke_grant');
+  return mapConversationGrant(result.grant);
+}
+
+export async function listConversationMemoryGrants(groupId: string, workspaceId: string) {
+  const result = await query<ConversationMemoryGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null }>(
+    `SELECT *
+     FROM conversation_memory_grants
+     WHERE conversation_id = $1
+       AND workspace_id = $2
+     ORDER BY created_at DESC`,
+    [groupId, workspaceId],
+  );
+
+  return result.rows.map(mapConversationMemoryGrant);
+}
+
+async function assertActiveConversationUserMember(groupId: string, userId: string) {
+  const member = await getConversationMember({ conversationId: groupId, userId });
+  if (!member || member.state !== 'active') {
+    throw new Error('User is not an active member of this conversation');
+  }
+}
+
+async function assertActiveConversationActorMember(groupId: string, actorId: string) {
+  const member = await getConversationMember({ conversationId: groupId, actorId });
+  if (!member || member.state !== 'active') {
+    throw new Error('Actor is not an active member of this conversation');
+  }
+}
+
+export async function issueConversationMemoryGrant(params: {
+  groupId: string;
+  workspaceId: string;
+  permission: ConversationMemoryGrantPermission;
+  userId?: string;
+  actorId?: string;
+  grantedBy?: string;
+  reason?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  const subjectType = params.userId ? 'user' : 'actor';
+  if (!params.userId && !params.actorId) {
+    throw new Error('userId or actorId is required');
+  }
+
+  if (params.userId) {
+    await assertActiveConversationUserMember(params.groupId, params.userId);
+  }
+  if (params.actorId) {
+    await assertActiveConversationActorMember(params.groupId, params.actorId);
+  }
+
+  const result = await transaction(async (client) => {
+    const previousResult = await client.query<ConversationMemoryGrantRow>(
+      `SELECT *
+       FROM conversation_memory_grants
+       WHERE conversation_id = $1
+         AND workspace_id = $2
+         AND status = 'active'`,
+      [params.groupId, params.workspaceId],
+    );
+    const previous = previousResult.rows;
+
+    const existingResult = await client.query<ConversationMemoryGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null }>(
+      `SELECT *
+       FROM conversation_memory_grants
+       WHERE conversation_id = $1
+         AND workspace_id = $2
+         AND permission = $3
+         AND subject_type = $4
+         AND COALESCE(user_id::text, '') = COALESCE($5::text, '')
+         AND COALESCE(actor_id::text, '') = COALESCE($6::text, '')
+         AND status = 'active'
+       LIMIT 1`,
+      [
+        params.groupId,
+        params.workspaceId,
+        params.permission,
+        subjectType,
+        params.userId ?? null,
+        params.actorId ?? null,
+      ],
+    );
+
+    if (existingResult.rows[0]) {
+      return { grant: existingResult.rows[0], authzEntryIds: [] as string[] };
+    }
+
+    const insertResult = await client.query<ConversationMemoryGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null }>(
+      `INSERT INTO conversation_memory_grants (
+         conversation_id,
+         workspace_id,
+         permission,
+         subject_type,
+         user_id,
+         actor_id,
+         status,
+         granted_by,
+         reason,
+         metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9::jsonb)
+       RETURNING *`,
+      [
+        params.groupId,
+        params.workspaceId,
+        params.permission,
+        subjectType,
+        params.userId ?? null,
+        params.actorId ?? null,
+        params.grantedBy ?? null,
+        params.reason ?? null,
+        JSON.stringify(params.metadata ?? {}),
+      ],
+    );
+
+    const next = [...previous, insertResult.rows[0]];
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      diffAuthzRelationships(
+        buildConversationMemoryGrantRelations(params.groupId, previous),
+        buildConversationMemoryGrantRelations(params.groupId, next),
+      ),
+      {
+        source: 'conversation.issue_memory_grant',
+        workspaceId: params.workspaceId,
+        conversationId: params.groupId,
+        permission: params.permission,
+      },
+    );
+
+    return {
+      grant: insertResult.rows[0],
+      authzEntryIds,
+    };
+  });
+
+  await flushQueuedAuthzEntries(result.authzEntryIds, 'conversation.issue_memory_grant');
+  return mapConversationMemoryGrant(result.grant);
+}
+
+export async function revokeConversationMemoryGrant(params: {
+  groupId: string;
+  workspaceId: string;
+  grantId: string;
+}) {
+  const result = await transaction(async (client) => {
+    const previousResult = await client.query<ConversationMemoryGrantRow & { id: string }>(
+      `SELECT *
+       FROM conversation_memory_grants
+       WHERE conversation_id = $1
+         AND workspace_id = $2
+         AND status = 'active'`,
+      [params.groupId, params.workspaceId],
+    );
+    const previous = previousResult.rows;
+
+    const revokeResult = await client.query<ConversationMemoryGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null }>(
+      `UPDATE conversation_memory_grants
+       SET status = 'revoked',
+           revoked_at = NOW()
+       WHERE id = $1
+         AND conversation_id = $2
+         AND workspace_id = $3
+         AND status = 'active'
+       RETURNING *`,
+      [params.grantId, params.groupId, params.workspaceId],
+    );
+
+    const revoked = revokeResult.rows[0];
+    if (!revoked) {
+      return null;
+    }
+
+    const next = previous.filter((grant) => grant.id !== params.grantId);
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      diffAuthzRelationships(
+        buildConversationMemoryGrantRelations(params.groupId, previous),
+        buildConversationMemoryGrantRelations(params.groupId, next),
+      ),
+      {
+        source: 'conversation.revoke_memory_grant',
+        workspaceId: params.workspaceId,
+        conversationId: params.groupId,
+        grantId: params.grantId,
+      },
+    );
+
+    return {
+      grant: revoked,
+      authzEntryIds,
+    };
+  });
+
+  if (!result) {
+    return null;
+  }
+
+  await flushQueuedAuthzEntries(result.authzEntryIds, 'conversation.revoke_memory_grant');
+  return mapConversationMemoryGrant(result.grant);
 }
 
 // ============ Mark Read ============

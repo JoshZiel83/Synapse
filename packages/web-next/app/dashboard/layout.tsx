@@ -7,14 +7,15 @@ import { WorkspaceProvider, useWorkspace } from './workspace-provider';
 import { AppSidebar } from '@/components/app-sidebar';
 import { SiteHeader } from '@/components/site-header';
 import {
+  Bot,
   ContactRound,
-  LayoutDashboard,
   MessageSquare,
   Brain,
   FileText,
   ShieldCheck,
-  Settings,
   Puzzle,
+  Cpu,
+  UsersRound,
 } from 'lucide-react';
 import {
   SidebarInset,
@@ -22,14 +23,15 @@ import {
 } from '@/components/ui/sidebar';
 
 const navItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/dashboard/chat', label: 'Chat', icon: MessageSquare },
   { href: '/dashboard/contacts', label: 'Contacts', icon: ContactRound },
   { href: '/dashboard/memories', label: 'Memories', icon: Brain },
   { href: '/dashboard/audit', label: 'Audit Log', icon: FileText },
   { href: '/dashboard/plugins', label: 'Plugins', icon: Puzzle },
-  { href: '/dashboard/authorizations', label: 'Authorizations', icon: ShieldCheck },
-  { href: '/dashboard/settings', label: 'Settings', icon: Settings },
+  { href: '/settings/models', label: 'Model Groups', icon: Cpu },
+  { href: '/settings/models/actors', label: 'Actor Assignment', icon: Bot },
+  { href: '/roles/workspace', label: 'Workspace Roles', icon: UsersRound },
+  { href: '/roles/platform', label: 'Platform Roles', icon: ShieldCheck },
 ];
 
 function OnboardingGuard({ children }: { children: ReactNode }) {
@@ -65,10 +67,18 @@ function DashboardInner({ children }: { children: ReactNode }) {
   const isFullPaneRoute =
     pathname.startsWith('/dashboard/chat') ||
     pathname.startsWith('/dashboard/contacts') ||
-    pathname.startsWith('/dashboard/actors');
+    pathname.startsWith('/dashboard/memories') ||
+    pathname.startsWith('/dashboard/actors') ||
+    pathname.startsWith('/dashboard/plugins/') ||
+    pathname.startsWith('/settings/models');
+  const matchedNavItem = navItems
+    .filter((item) =>
+      pathname === item.href || pathname.startsWith(`${item.href}/`)
+    )
+    .sort((left, right) => right.href.length - left.href.length)[0];
   const pageTitle = pathname.startsWith('/dashboard/actors')
     ? 'Actors'
-    : navItems.find((item) => item.href === pathname)?.label || 'Dashboard';
+    : matchedNavItem?.label || 'Chat';
 
   const handleLogout = () => {
     useAuthStore.getState().logout();
@@ -83,11 +93,11 @@ function DashboardInner({ children }: { children: ReactNode }) {
           <SiteHeader title={pageTitle} />
           <div className="flex flex-1 min-h-0 flex-col">
             <div className="@container/main flex flex-1 min-h-0 flex-col">
-              <div className="flex flex-1 min-h-0 flex-col gap-4 md:gap-6">
+              <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto md:gap-6">
                 <div
                   className={
                     isFullPaneRoute
-                      ? 'flex-1 min-h-0 overflow-hidden'
+                      ? 'flex-1 min-h-0'
                       : 'flex-1 px-4 lg:px-6'
                   }
                 >

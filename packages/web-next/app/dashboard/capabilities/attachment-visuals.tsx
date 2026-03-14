@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { CapabilityBindingScope, CapabilityReuseScope } from '@synapse/shared';
+import type { CapabilityAttachmentType, CapabilityReuseScope } from '@synapse/shared';
 import {
   Activity,
   Bot,
@@ -14,7 +14,23 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field';
 import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 
 export type CapabilityVisualActor = {
@@ -30,8 +46,13 @@ export type CapabilityVisualConversation = {
   participants?: Array<{ id: string; name: string }>;
 };
 
+export type CapabilityVisualUser = {
+  id: string;
+  name: string;
+};
+
 type ScopeOptionDef = {
-  value: CapabilityBindingScope;
+  value: CapabilityAttachmentType;
   label: string;
   shortLabel: string;
   hint: string;
@@ -76,57 +97,114 @@ type FakeLifecycleNode = FakeLifecycleCall & {
   instance: { key: string; label: string } | null;
 };
 
-export const bindingScopeOptionDefs: ScopeOptionDef[] = [
+export const attachmentTypeOptionDefs: ScopeOptionDef[] = [
   {
     value: 'workspace',
-    label: 'Workspace Install',
+    label: 'Workspace Owner',
     shortLabel: 'Workspace',
-    hint: 'Install once for the whole workspace',
+    hint: 'Belongs to the workspace',
     icon: Briefcase,
     tone: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-200',
     ring: 'ring-sky-500/20',
   },
   {
     value: 'conversation',
-    label: 'Conversation Install',
+    label: 'Conversation Owner',
     shortLabel: 'Conversation',
-    hint: 'Limit the install to one conversation',
+    hint: 'Belongs to one conversation',
     icon: MessageSquareText,
     tone: 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-500/20 dark:bg-orange-500/10 dark:text-orange-200',
     ring: 'ring-orange-500/20',
   },
   {
     value: 'actor_global',
-    label: 'Actor Install',
+    label: 'Actor Owner',
     shortLabel: 'Actor',
-    hint: 'One actor uses it everywhere',
+    hint: 'Belongs to one actor',
     icon: Bot,
     tone: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200',
     ring: 'ring-emerald-500/20',
   },
   {
     value: 'actor_conversation',
-    label: 'Actor + Conversation',
+    label: 'Actor + Conversation Owner',
     shortLabel: 'Actor + Conversation',
-    hint: 'One actor uses it inside one conversation',
+    hint: 'Belongs to one actor in one conversation',
     icon: Layers3,
     tone: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200',
     ring: 'ring-amber-500/20',
   },
   {
     value: 'user',
-    label: 'User Install',
-    shortLabel: 'User',
-    hint: 'Private install that belongs to you',
+    label: 'Personal Owner',
+    shortLabel: 'Personal',
+    hint: 'Belongs to you personally',
     icon: UserRound,
     tone: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 dark:border-fuchsia-500/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-200',
     ring: 'ring-fuchsia-500/20',
   },
   {
     value: 'platform',
-    label: 'Platform Install',
+    label: 'Platform Owner',
     shortLabel: 'Platform',
-    hint: 'Managed at platform level',
+    hint: 'Belongs to the platform',
+    icon: Workflow,
+    tone: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-200',
+    ring: 'ring-violet-500/20',
+  },
+];
+
+const accessTypeOptionDefs: ScopeOptionDef[] = [
+  {
+    value: 'workspace',
+    label: 'Workspace Access',
+    shortLabel: 'Workspace',
+    hint: 'Anyone in this workspace can use this installation',
+    icon: Briefcase,
+    tone: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-200',
+    ring: 'ring-sky-500/20',
+  },
+  {
+    value: 'conversation',
+    label: 'Conversation Access',
+    shortLabel: 'Conversation',
+    hint: 'Only one conversation can use this installation',
+    icon: MessageSquareText,
+    tone: 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-500/20 dark:bg-orange-500/10 dark:text-orange-200',
+    ring: 'ring-orange-500/20',
+  },
+  {
+    value: 'actor_global',
+    label: 'Actor Access',
+    shortLabel: 'Actor',
+    hint: 'Only one actor can use this installation',
+    icon: Bot,
+    tone: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200',
+    ring: 'ring-emerald-500/20',
+  },
+  {
+    value: 'actor_conversation',
+    label: 'Actor + Conversation Access',
+    shortLabel: 'Actor + Conversation',
+    hint: 'Only one actor can use this installation in one conversation',
+    icon: Layers3,
+    tone: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200',
+    ring: 'ring-amber-500/20',
+  },
+  {
+    value: 'user',
+    label: 'User Access',
+    shortLabel: 'Personal',
+    hint: 'Only one user can use this installation personally',
+    icon: UserRound,
+    tone: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 dark:border-fuchsia-500/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-200',
+    ring: 'ring-fuchsia-500/20',
+  },
+  {
+    value: 'platform',
+    label: 'Platform Access',
+    shortLabel: 'Platform',
+    hint: 'Anyone on the platform can use this installation',
     icon: Workflow,
     tone: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-200',
     ring: 'ring-violet-500/20',
@@ -199,7 +277,7 @@ const reuseOptionDefs: ReuseOptionDef[] = [
   },
 ];
 
-const lifecycleOptionMap: Record<CapabilityBindingScope, CapabilityReuseScope[]> = {
+const lifecycleOptionMap: Record<CapabilityAttachmentType, CapabilityReuseScope[]> = {
   platform: ['platform', 'workspace', 'user', 'conversation', 'actor_global', 'actor_conversation', 'turn'],
   workspace: ['workspace', 'user', 'conversation', 'actor_global', 'actor_conversation', 'turn'],
   conversation: ['conversation', 'actor_conversation', 'turn'],
@@ -208,8 +286,8 @@ const lifecycleOptionMap: Record<CapabilityBindingScope, CapabilityReuseScope[]>
   user: ['user', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'turn'],
 };
 
-export function getAllowedReuseScopes(bindingScope: CapabilityBindingScope) {
-  const allowedScopes = new Set(lifecycleOptionMap[bindingScope] || ['turn']);
+export function getAllowedReuseScopes(attachmentType: CapabilityAttachmentType) {
+  const allowedScopes = new Set(lifecycleOptionMap[attachmentType] || ['turn']);
   return reuseOptionDefs
     .map((option) => option.value)
     .filter((scope) => allowedScopes.has(scope));
@@ -226,8 +304,8 @@ export function getConversationDisplayName(conversation: CapabilityVisualConvers
   return 'Untitled conversation';
 }
 
-function getScopeOption(scope: CapabilityBindingScope) {
-  return bindingScopeOptionDefs.find((option) => option.value === scope) || bindingScopeOptionDefs[0];
+function getScopeOption(scope: CapabilityAttachmentType) {
+  return attachmentTypeOptionDefs.find((option) => option.value === scope) || attachmentTypeOptionDefs[0];
 }
 
 function getReuseOption(scope: CapabilityReuseScope) {
@@ -367,6 +445,19 @@ function pickSelectedActorName(actors: CapabilityVisualActor[], selectedActorId?
 function pickSecondaryActorName(actors: CapabilityVisualActor[], selectedActorId?: string) {
   const primaryActorName = pickSelectedActorName(actors, selectedActorId);
   return pickAlternativeActorName(primaryActorName, actors, 'Researcher');
+}
+
+function pickSelectedUserName(
+  users: CapabilityVisualUser[],
+  selectedUserId?: string,
+  fallbackName = 'You',
+) {
+  if (selectedUserId) {
+    const selected = users.find((user) => user.id === selectedUserId);
+    if (selected?.name) return selected.name;
+  }
+  if (users[0]?.name) return users[0].name;
+  return fallbackName;
 }
 
 function pickConversationChoices(conversations: CapabilityVisualConversation[]) {
@@ -624,7 +715,7 @@ function ScopeConversationCard({
   );
 }
 
-export function CapabilityBindingScopeStep({
+export function CapabilityAttachmentTypeStep({
   value,
   onChange,
   allowedScopes,
@@ -634,28 +725,247 @@ export function CapabilityBindingScopeStep({
   onActorChange,
   selectedConversationId,
   onConversationChange,
-  currentUserLabel,
   error,
 }: {
-  value: CapabilityBindingScope;
-  onChange: (value: CapabilityBindingScope) => void;
-  allowedScopes?: CapabilityBindingScope[];
+  value: CapabilityAttachmentType;
+  onChange: (value: CapabilityAttachmentType) => void;
+  allowedScopes?: CapabilityAttachmentType[];
   actors: CapabilityVisualActor[];
   conversations: CapabilityVisualConversation[];
   selectedActorId?: string;
   onActorChange?: (value: string) => void;
   selectedConversationId?: string;
   onConversationChange?: (value: string) => void;
+  error?: string;
+}) {
+  const allowedScopeSet = allowedScopes ? new Set(allowedScopes) : null;
+  const availableOptions = attachmentTypeOptionDefs
+    .filter((option) => option.value !== 'platform')
+    .filter((option) => !allowedScopeSet || allowedScopeSet.has(option.value));
+  const activeScope = availableOptions.find((option) => option.value === value) || availableOptions[0];
+  const conversationChoices = pickConversationChoices(conversations);
+  const selectedActorName = actors.find((actor) => actor.id === selectedActorId)?.name || 'No actor selected';
+  const selectedConversationName =
+    conversationChoices.find((conversation) => conversation.id === selectedConversationId)?.name ||
+    'No conversation selected';
+
+  const detailContent = (() => {
+    switch (value) {
+      case 'workspace':
+        return {
+          title: 'Workspace owner',
+          description: 'The installation belongs to the workspace and is managed at the workspace level.',
+          fields: null,
+        };
+      case 'user':
+        return {
+          title: 'Personal owner',
+          description: 'The installation belongs to your personal space inside this workspace.',
+          fields: null,
+        };
+      case 'conversation':
+        return {
+          title: 'Conversation owner',
+          description: 'Pick the single conversation that this installation should belong to.',
+          fields: (
+            <Field>
+              <FieldLabel>Conversation</FieldLabel>
+              <Select value={selectedConversationId} onValueChange={onConversationChange}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select a conversation" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {conversationChoices.map((conversation) => (
+                      <SelectItem key={conversation.id} value={conversation.id}>
+                        {conversation.name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <FieldDescription>
+                Current selection: {selectedConversationName}
+              </FieldDescription>
+            </Field>
+          ),
+        };
+      case 'actor_global':
+        return {
+          title: 'Actor owner',
+          description: 'Pick the single actor that should own and manage this installation.',
+          fields: (
+            <Field>
+              <FieldLabel>Actor</FieldLabel>
+              <Select value={selectedActorId} onValueChange={onActorChange}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select an actor" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {actors.map((actor) => (
+                      <SelectItem key={actor.id} value={actor.id}>
+                        {actor.name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <FieldDescription>
+                Current selection: {selectedActorName}
+              </FieldDescription>
+            </Field>
+          ),
+        };
+      case 'actor_conversation':
+        return {
+          title: 'Actor + conversation owner',
+          description: 'Pick one actor and one conversation for this installation owner.',
+          fields: (
+            <FieldGroup>
+              <Field>
+                <FieldLabel>Actor</FieldLabel>
+                <Select value={selectedActorId} onValueChange={onActorChange}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select an actor" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {actors.map((actor) => (
+                        <SelectItem key={actor.id} value={actor.id}>
+                          {actor.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>
+                  Current selection: {selectedActorName}
+                </FieldDescription>
+              </Field>
+
+              <Field>
+                <FieldLabel>Conversation</FieldLabel>
+                <Select value={selectedConversationId} onValueChange={onConversationChange}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a conversation" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {conversationChoices.map((conversation) => (
+                        <SelectItem key={conversation.id} value={conversation.id}>
+                          {conversation.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>
+                  Current selection: {selectedConversationName}
+                </FieldDescription>
+              </Field>
+
+              <Field>
+                <FieldDescription>
+                  One installation can only belong to one actor + one conversation pair. If you need more pairs, create more installations.
+                </FieldDescription>
+              </Field>
+            </FieldGroup>
+          ),
+        };
+      default:
+        return {
+          title: 'Owner',
+          description: activeScope?.hint || 'Choose where this installation belongs.',
+          fields: null,
+        };
+    }
+  })();
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
+        <RadioGroup
+          value={value}
+          onValueChange={(nextValue) => onChange(nextValue as CapabilityAttachmentType)}
+          className="w-full"
+        >
+          {availableOptions.map((option) => (
+            <Field
+              key={option.value}
+              orientation="horizontal"
+              className="rounded-3xl border border-border p-4"
+            >
+              <RadioGroupItem value={option.value} id={`owner-scope-${option.value}`} />
+              <FieldContent>
+                <FieldLabel htmlFor={`owner-scope-${option.value}`}>{option.label}</FieldLabel>
+                <FieldDescription>{option.hint}</FieldDescription>
+              </FieldContent>
+            </Field>
+          ))}
+        </RadioGroup>
+
+        <div className="rounded-[28px] border border-border bg-muted/20 p-5">
+          <div className="flex flex-col gap-5">
+            <div className="flex flex-col gap-1">
+              <div className="text-base font-medium text-foreground">{detailContent.title}</div>
+              <p className="text-sm text-muted-foreground">{detailContent.description}</p>
+            </div>
+
+            {detailContent.fields ? (
+              detailContent.fields
+            ) : (
+              <div className="rounded-2xl border border-dashed border-border bg-background p-4 text-sm text-muted-foreground">
+                No extra selection is needed for this owner type.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+  {error ? <p className="text-xs text-red-500">{error}</p> : null}
+    </div>
+  );
+}
+
+export function CapabilityUseGrantScopeStep({
+  value,
+  onChange,
+  allowedScopes,
+  actors,
+  conversations,
+  users,
+  selectedActorId,
+  onActorChange,
+  selectedConversationId,
+  onConversationChange,
+  selectedUserId,
+  onUserChange,
+  currentUserLabel,
+  error,
+}: {
+  value: CapabilityAttachmentType;
+  onChange: (value: CapabilityAttachmentType) => void;
+  allowedScopes?: CapabilityAttachmentType[];
+  actors: CapabilityVisualActor[];
+  conversations: CapabilityVisualConversation[];
+  users: CapabilityVisualUser[];
+  selectedActorId?: string;
+  onActorChange?: (value: string) => void;
+  selectedConversationId?: string;
+  onConversationChange?: (value: string) => void;
+  selectedUserId?: string;
+  onUserChange?: (value: string) => void;
   currentUserLabel?: string;
   error?: string;
 }) {
   const allowedScopeSet = allowedScopes ? new Set(allowedScopes) : null;
-  const activeScope = getScopeOption(value);
+  const activeScope = accessTypeOptionDefs.find((option) => option.value === value) || accessTypeOptionDefs[0];
   const selectedActorName = pickSelectedActorName(actors, selectedActorId);
   const secondaryActorName = pickSecondaryActorName(actors, selectedActorId);
   const fakeConversations = buildFakeConversations(selectedActorName, secondaryActorName);
   const conversationChoices = pickConversationChoices(conversations);
-  const currentUserName = currentUserLabel || 'You';
+  const selectedUserName = pickSelectedUserName(users, selectedUserId, currentUserLabel || 'You');
 
   const isConversationActive = (conversation: FakeConversationPreview, index: number) => {
     switch (value) {
@@ -695,8 +1005,7 @@ export function CapabilityBindingScopeStep({
   return (
     <div className="space-y-5">
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {bindingScopeOptionDefs
-          .filter((option) => option.value !== 'platform')
+        {accessTypeOptionDefs
           .filter((option) => !allowedScopeSet || allowedScopeSet.has(option.value))
           .map((option) => (
             <ScopeOptionCard
@@ -710,7 +1019,7 @@ export function CapabilityBindingScopeStep({
 
       {(value === 'actor_global' || value === 'actor_conversation') && (
         <div className="space-y-2">
-          <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Actor target</Label>
+          <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Authorized actor</Label>
           <div className="flex flex-wrap gap-2">
             {actors.length > 0 ? actors.map((actor) => (
               <Button
@@ -731,7 +1040,7 @@ export function CapabilityBindingScopeStep({
 
       {(value === 'conversation' || value === 'actor_conversation') && (
         <div className="space-y-2">
-          <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Conversation target</Label>
+          <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Authorized conversation</Label>
           <div className="flex flex-wrap gap-2">
             {conversationChoices.length > 0 ? conversationChoices.map((conversation) => (
               <Button
@@ -750,11 +1059,32 @@ export function CapabilityBindingScopeStep({
         </div>
       )}
 
+      {value === 'user' && (
+        <div className="space-y-2">
+          <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Authorized user</Label>
+          <div className="flex flex-wrap gap-2">
+            {users.length > 0 ? users.map((member) => (
+              <Button
+                key={member.id}
+                type="button"
+                variant={selectedUserId === member.id ? 'default' : 'outline'}
+                className="rounded-full"
+                onClick={() => onUserChange?.(member.id)}
+              >
+                {member.name}
+              </Button>
+            )) : (
+              <div className="text-xs text-muted-foreground">No workspace users are available yet.</div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="rounded-[28px] border border-gray-200 bg-gradient-to-br from-white via-gray-50 to-white p-5 shadow-sm dark:border-white/10 dark:from-gray-900 dark:via-gray-950 dark:to-gray-900">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-foreground">Scope preview</div>
-            <div className="mt-1 text-xs text-muted-foreground">固定示例群聊只用于解释安装边界，不读取真实聊天记录。</div>
+            <div className="text-sm font-semibold text-foreground">Access preview</div>
+            <div className="mt-1 text-xs text-muted-foreground">This only explains which contexts can use the installation. Ownership stays where it is.</div>
           </div>
           <Badge variant="outline" className={activeScope.tone}>
             {activeScope.shortLabel}
@@ -772,7 +1102,7 @@ export function CapabilityBindingScopeStep({
               <ScopeConversationCard
                 key={conversation.id}
                 conversation={conversation}
-                currentUserName={currentUserName}
+                currentUserName={selectedUserName}
                 available={conversationActive}
                 primaryActorName={selectedActorName}
                 secondaryActorName={conversationSecondaryActorName}
@@ -790,14 +1120,14 @@ export function CapabilityBindingScopeStep({
 }
 
 export function CapabilityReuseScopeStep({
-  bindingScope,
+  attachmentType,
   value,
   onChange,
   actors,
   selectedActorId,
   allowedReuseScopes,
 }: {
-  bindingScope: CapabilityBindingScope;
+  attachmentType: CapabilityAttachmentType;
   value: CapabilityReuseScope;
   onChange: (value: CapabilityReuseScope) => void;
   actors: CapabilityVisualActor[];
@@ -806,7 +1136,7 @@ export function CapabilityReuseScopeStep({
   selectedConversationId?: string;
   allowedReuseScopes?: CapabilityReuseScope[];
 }) {
-  const allowedOptions = (allowedReuseScopes || getAllowedReuseScopes(bindingScope)).map(getReuseOption);
+  const allowedOptions = (allowedReuseScopes || getAllowedReuseScopes(attachmentType)).map(getReuseOption);
   const primaryActorName = pickSelectedActorName(actors, selectedActorId);
   const secondaryActorName = pickSecondaryActorName(actors, selectedActorId);
   const calls = buildFakeLifecycleCalls(primaryActorName, secondaryActorName);
@@ -837,7 +1167,7 @@ export function CapabilityReuseScopeStep({
   };
 
   const isCallAvailable = (call: FakeLifecycleCall) => {
-    switch (bindingScope) {
+    switch (attachmentType) {
       case 'platform':
       case 'workspace':
         return true;
@@ -863,7 +1193,7 @@ export function CapabilityReuseScopeStep({
         instance: available ? instanceForCall(call) : null,
       } satisfies FakeLifecycleNode;
     }),
-    [calls, value, bindingScope, primaryConversationId, primaryActorName],
+    [calls, value, attachmentType, primaryConversationId, primaryActorName],
   );
 
   const conversationCards = useMemo(() => {
@@ -911,7 +1241,7 @@ export function CapabilityReuseScopeStep({
 
   useEffect(() => {
     setSelectedCallId(callNodes.find((call) => call.available)?.id || null);
-  }, [value, primaryActorName, secondaryActorName, bindingScope]);
+  }, [value, primaryActorName, secondaryActorName, attachmentType]);
 
   const selectedInstanceKey =
     callNodes.find((call) => call.id === selectedCallId)?.instance?.key ||
@@ -920,20 +1250,27 @@ export function CapabilityReuseScopeStep({
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {allowedOptions.map((option) => (
-          <ReuseOptionCard
-            key={option.value}
-            option={option}
-            active={value === option.value}
-            onClick={() => onChange(option.value)}
-          />
-        ))}
-      </div>
+      <Field>
+        <FieldLabel>Lifecycle</FieldLabel>
+        <Select value={value} onValueChange={(nextValue) => onChange(nextValue as CapabilityReuseScope)}>
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="Select a lifecycle" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {allowedOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
 
       <div className="rounded-[28px] border border-gray-200 bg-gradient-to-br from-white via-gray-50 to-white p-5 shadow-sm dark:border-white/10 dark:from-gray-900 dark:via-gray-950 dark:to-gray-900">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm font-semibold text-foreground">Lifecycle preview</div>
+          <div className="text-sm font-semibold text-foreground">Preview</div>
           <Badge variant="outline" className={instanceTone}>
             {selectedReuseOption.label}
           </Badge>

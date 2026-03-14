@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
 
 export default function OverviewPage() {
-  redirect('/dashboard/contacts')
+  redirect('/dashboard/chat')
 }

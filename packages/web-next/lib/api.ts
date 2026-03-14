@@ -29,12 +29,51 @@ class ApiClient {
   register(email: string, password: string, name: string) { return this.fetch('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, name }) }); }
   login(email: string, password: string) { return this.fetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }); }
   getMe() { return this.fetch('/auth/me'); }
+  updateMe(data: { name?: string; avatarUrl?: string | null }) { return this.fetch('/auth/me', { method: 'PUT', body: JSON.stringify(data) }); }
 
   // Workspaces
   getWorkspaces() { return this.fetch('/workspaces'); }
   createWorkspace(name: string, description?: string) { return this.fetch('/workspaces', { method: 'POST', body: JSON.stringify({ name, description }) }); }
   getWorkspace(id: string) { return this.fetch(`/workspaces/${id}`); }
   getWorkspaceMembers(wsId: string) { return this.fetch(`/workspaces/${wsId}/members`); }
+  getWorkspaceNavigation(wsId: string) { return this.fetch(`/workspaces/${wsId}/navigation`); }
+  getWorkspaceRoles(wsId: string) { return this.fetch(`/workspaces/${wsId}/roles`); }
+  assignWorkspaceRole(
+    wsId: string,
+    data: {
+      userId: string;
+      role: 'model_admin' | 'actor_admin' | 'capability_admin' | 'memory_admin' | 'relay_admin' | 'conversation_admin';
+      metadata?: Record<string, unknown>;
+    },
+  ) {
+    return this.fetch(`/workspaces/${wsId}/roles`, { method: 'POST', body: JSON.stringify(data) });
+  }
+  revokeWorkspaceRole(
+    wsId: string,
+    userId: string,
+    role: 'model_admin' | 'actor_admin' | 'capability_admin' | 'memory_admin' | 'relay_admin' | 'conversation_admin',
+  ) {
+    return this.fetch(`/workspaces/${wsId}/roles/${role}/users/${userId}/revoke`, { method: 'POST', body: '{}' });
+  }
+
+  // Platform Roles
+  getPlatformNavigation() { return this.fetch('/platform/navigation'); }
+  getPlatformRoles() { return this.fetch('/platform/roles'); }
+  assignPlatformRole(
+    data: {
+      userId: string;
+      role: 'super_admin' | 'workspace_admin' | 'model_admin' | 'support' | 'auditor';
+      metadata?: Record<string, unknown>;
+    },
+  ) {
+    return this.fetch('/platform/roles', { method: 'POST', body: JSON.stringify(data) });
+  }
+  revokePlatformRole(
+    userId: string,
+    role: 'super_admin' | 'workspace_admin' | 'model_admin' | 'support' | 'auditor',
+  ) {
+    return this.fetch(`/platform/roles/${role}/users/${userId}/revoke`, { method: 'POST', body: '{}' });
+  }
 
   // Workspace Invites
   getInviteInfo(token: string) { return this.fetch(`/invites/${token}`); }
@@ -89,6 +128,7 @@ class ApiClient {
 
   // Memories
   getMemories(wsId: string, params?: string) { return this.fetch(`/workspaces/${wsId}/memories${params ? '?' + params : ''}`); }
+  getMemory(wsId: string, id: string) { return this.fetch(`/workspaces/${wsId}/memories/${id}`); }
   createMemory(wsId: string, data: any) { return this.fetch(`/workspaces/${wsId}/memories`, { method: 'POST', body: JSON.stringify(data) }); }
   updateMemory(wsId: string, id: string, data: any) { return this.fetch(`/workspaces/${wsId}/memories/${id}`, { method: 'PUT', body: JSON.stringify(data) }); }
   deleteMemory(wsId: string, id: string) { return this.fetch(`/workspaces/${wsId}/memories/${id}`, { method: 'DELETE' }); }
@@ -102,6 +142,9 @@ class ApiClient {
   getModelGroup(wsId: string, groupId: string) { return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`); }
   updateModelGroup(wsId: string, groupId: string, data: any) { return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`, { method: 'PUT', body: JSON.stringify(data) }); }
   deleteModelGroup(wsId: string, groupId: string) { return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}`, { method: 'DELETE' }); }
+  getModelGroupGrants(wsId: string, groupId: string) { return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/grants`); }
+  issueModelGroupGrant(wsId: string, groupId: string, data: any) { return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/grants`, { method: 'POST', body: JSON.stringify(data) }); }
+  revokeModelGroupGrant(wsId: string, groupId: string, grantId: string) { return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/grants/${grantId}/revoke`, { method: 'POST', body: '{}' }); }
   addModelItem(wsId: string, groupId: string, data: any) { return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/items`, { method: 'POST', body: JSON.stringify(data) }); }
   updateModelItem(wsId: string, groupId: string, itemId: string, data: any) { return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/items/${itemId}`, { method: 'PUT', body: JSON.stringify(data) }); }
   deleteModelItem(wsId: string, groupId: string, itemId: string) { return this.fetch(`/workspaces/${wsId}/model-groups/${groupId}/items/${itemId}`, { method: 'DELETE' }); }
@@ -113,13 +156,31 @@ class ApiClient {
   getPlatformModelGroup(groupId: string) { return this.fetch(`/platform/model-groups/${groupId}`); }
   updatePlatformModelGroup(groupId: string, data: any) { return this.fetch(`/platform/model-groups/${groupId}`, { method: 'PUT', body: JSON.stringify(data) }); }
   deletePlatformModelGroup(groupId: string) { return this.fetch(`/platform/model-groups/${groupId}`, { method: 'DELETE' }); }
+  getPlatformModelGroupGrants(groupId: string) { return this.fetch(`/platform/model-groups/${groupId}/grants`); }
+  issuePlatformModelGroupGrant(groupId: string, data: any) { return this.fetch(`/platform/model-groups/${groupId}/grants`, { method: 'POST', body: JSON.stringify(data) }); }
+  revokePlatformModelGroupGrant(groupId: string, grantId: string) { return this.fetch(`/platform/model-groups/${groupId}/grants/${grantId}/revoke`, { method: 'POST', body: '{}' }); }
   addPlatformModelItem(groupId: string, data: any) { return this.fetch(`/platform/model-groups/${groupId}/items`, { method: 'POST', body: JSON.stringify(data) }); }
   updatePlatformModelItem(groupId: string, itemId: string, data: any) { return this.fetch(`/platform/model-groups/${groupId}/items/${itemId}`, { method: 'PUT', body: JSON.stringify(data) }); }
   deletePlatformModelItem(groupId: string, itemId: string) { return this.fetch(`/platform/model-groups/${groupId}/items/${itemId}`, { method: 'DELETE' }); }
   getPlatformItemVersions(groupId: string, itemId: string) { return this.fetch(`/platform/model-groups/${groupId}/items/${itemId}/versions`); }
 
+  // Model Groups - User
+  getUserModelGroups() { return this.fetch('/me/model-groups'); }
+  createUserModelGroup(data: any) { return this.fetch('/me/model-groups', { method: 'POST', body: JSON.stringify(data) }); }
+  getUserModelGroup(groupId: string) { return this.fetch(`/me/model-groups/${groupId}`); }
+  updateUserModelGroup(groupId: string, data: any) { return this.fetch(`/me/model-groups/${groupId}`, { method: 'PUT', body: JSON.stringify(data) }); }
+  deleteUserModelGroup(groupId: string) { return this.fetch(`/me/model-groups/${groupId}`, { method: 'DELETE' }); }
+  getUserModelGroupGrants(groupId: string) { return this.fetch(`/me/model-groups/${groupId}/grants`); }
+  issueUserModelGroupGrant(groupId: string, data: any) { return this.fetch(`/me/model-groups/${groupId}/grants`, { method: 'POST', body: JSON.stringify(data) }); }
+  revokeUserModelGroupGrant(groupId: string, grantId: string) { return this.fetch(`/me/model-groups/${groupId}/grants/${grantId}/revoke`, { method: 'POST', body: '{}' }); }
+  addUserModelItem(groupId: string, data: any) { return this.fetch(`/me/model-groups/${groupId}/items`, { method: 'POST', body: JSON.stringify(data) }); }
+  updateUserModelItem(groupId: string, itemId: string, data: any) { return this.fetch(`/me/model-groups/${groupId}/items/${itemId}`, { method: 'PUT', body: JSON.stringify(data) }); }
+  deleteUserModelItem(groupId: string, itemId: string) { return this.fetch(`/me/model-groups/${groupId}/items/${itemId}`, { method: 'DELETE' }); }
+  getUserItemVersions(groupId: string, itemId: string) { return this.fetch(`/me/model-groups/${groupId}/items/${itemId}/versions`); }
+
   // Actor Model Group Assignment
   getActorModelGroups(wsId: string, actorId: string) { return this.fetch(`/workspaces/${wsId}/actors/${actorId}/model-groups`); }
+  getVisibleActorModelGroups(wsId: string, actorId: string) { return this.fetch(`/workspaces/${wsId}/actors/${actorId}/model-groups/visible`); }
   setActorModelGroups(wsId: string, actorId: string, groups: { groupId: string; priority: number }[]) {
     return this.fetch(`/workspaces/${wsId}/actors/${actorId}/model-groups`, { method: 'PUT', body: JSON.stringify({ groups }) });
   }
@@ -142,6 +203,9 @@ class ApiClient {
 
   // Chat Groups
   getGroups(wsId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups`); }
+  updateGroup(wsId: string, groupId: string, data: { title?: string; avatarFileId?: string | null }) {
+    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
   createGroup(wsId: string, actorIds: string[], content?: string, targetActorId?: string) {
     const body: any = actorIds.length === 1
       ? { actorId: actorIds[0], ...(content && { content }) }
@@ -154,6 +218,10 @@ class ApiClient {
     if (before) params.set('before', before);
     const qs = params.toString();
     return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/messages${qs ? '?' + qs : ''}`);
+  }
+  getGroupMembers(wsId: string, groupId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/members`); }
+  addGroupMembers(wsId: string, groupId: string, data: { actorIds?: string[]; userIds?: string[] }) {
+    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/members`, { method: 'POST', body: JSON.stringify(data) });
   }
   sendGroupMessage(wsId: string, groupId: string, contentBlocks: CanonicalContentBlock[], targetActorIds?: string[]) {
     const body: any = { contentBlocks };
@@ -177,7 +245,7 @@ class ApiClient {
     wsId: string,
     data: {
       pluginId: string;
-      scopeType: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+      attachmentType: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
       actorId?: string;
       conversationId?: string;
       userId?: string;
@@ -196,15 +264,15 @@ class ApiClient {
   getPluginAuthSession(wsId: string, sessionId: string) {
     return this.fetch(`/workspaces/${wsId}/mcp/auth/sessions/${sessionId}`);
   }
-  getCapabilityGrants(wsId: string, bindingId: string) {
-    return this.fetch(`/workspaces/${wsId}/capabilities/bindings/${bindingId}/grants`);
+  getCapabilityInstanceGrants(wsId: string, instanceId: string) {
+    return this.fetch(`/workspaces/${wsId}/capabilities/instances/${instanceId}/grants`);
   }
-  getCapabilityAuthorization(wsId: string, bindingId: string, params?: string) {
-    return this.fetch(`/workspaces/${wsId}/capabilities/bindings/${bindingId}/authorization${params ? `?${params}` : ''}`);
+  getCapabilityInstanceAuthorization(wsId: string, instanceId: string, params?: string) {
+    return this.fetch(`/workspaces/${wsId}/capabilities/instances/${instanceId}/authorization${params ? `?${params}` : ''}`);
   }
-  issueCapabilityGrant(
+  issueCapabilityInstanceGrant(
     wsId: string,
-    bindingId: string,
+    instanceId: string,
     data: {
       grantScope?: 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
       conversationId?: string;
@@ -215,7 +283,7 @@ class ApiClient {
       metadata?: Record<string, unknown>;
     },
   ) {
-    return this.fetch(`/workspaces/${wsId}/capabilities/bindings/${bindingId}/grants`, { method: 'POST', body: JSON.stringify(data) });
+    return this.fetch(`/workspaces/${wsId}/capabilities/instances/${instanceId}/grants`, { method: 'POST', body: JSON.stringify(data) });
   }
   revokeCapabilityGrant(wsId: string, grantId: string) {
     return this.fetch(`/workspaces/${wsId}/capabilities/grants/${grantId}`, { method: 'DELETE' });

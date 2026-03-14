@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CanonicalContentBlock } from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
+import { authzEnabled, checkPermission } from '../../infrastructure/authz/index.js';
+import { query } from '../../infrastructure/database/index.js';
 import {
   createSession,
   getSession,
@@ -30,6 +32,89 @@ const sendMessageSchema = z.object({
   { message: 'content or contentBlocks is required' },
 );
 
+async function hasWorkspaceMembership(workspaceId: string, userId: string) {
+  const result = await query(
+    `SELECT 1
+     FROM workspace_members
+     WHERE workspace_id = $1 AND user_id = $2
+     LIMIT 1`,
+    [workspaceId, userId],
+  );
+  return result.rows.length > 0;
+}
+
+async function requireActorPermission(
+  request: any,
+  reply: any,
+  actorId: string,
+  permission: string,
+  errorMessage: string,
+) {
+  const { workspaceId } = request.params as { workspaceId: string };
+  const userId = (request as any).user!.userId;
+
+  if (!authzEnabled()) {
+    const allowed = await hasWorkspaceMembership(workspaceId, userId);
+    if (!allowed) {
+      reply.status(403).send({ error: errorMessage });
+      return false;
+    }
+    return true;
+  }
+
+  const allowed = await checkPermission({
+    resourceType: 'actor',
+    resourceId: actorId,
+    permission,
+    subject: { type: 'user', id: userId },
+  });
+
+  if (!allowed) {
+    reply.status(403).send({ error: errorMessage });
+    return false;
+  }
+
+  return true;
+}
+
+async function requireSessionConversationPermission(
+  request: any,
+  reply: any,
+  permission: string,
+  errorMessage: string,
+) {
+  const { workspaceId, sessionId } = request.params as { workspaceId: string; sessionId: string };
+  const session = await getSession(sessionId);
+  if (!session || session.workspace_id !== workspaceId) {
+    reply.status(404).send({ error: 'Session not found' });
+    return null;
+  }
+
+  const userId = (request as any).user!.userId;
+  if (!authzEnabled()) {
+    const allowed = await hasWorkspaceMembership(workspaceId, userId);
+    if (!allowed) {
+      reply.status(403).send({ error: errorMessage });
+      return null;
+    }
+    return session;
+  }
+
+  const allowed = await checkPermission({
+    resourceType: 'conversation',
+    resourceId: session.conversation_id,
+    permission,
+    subject: { type: 'user', id: userId },
+  });
+
+  if (!allowed) {
+    reply.status(403).send({ error: errorMessage });
+    return null;
+  }
+
+  return session;
+}
+
 export async function sessionController(app: FastifyInstance) {
   app.addHook('onRequest', authMiddleware);
 
@@ -46,9 +131,19 @@ export async function sessionController(app: FastifyInstance) {
     };
     const userId = (request as any).user!.userId;
 
+    const allowed = await requireActorPermission(
+      request,
+      reply,
+      actorId,
+      'invoke',
+      'Not allowed to invoke this actor',
+    );
+    if (!allowed) return;
+
     const session = await createSession({
       workspaceId,
       actorId,
+      userId,
       channelType,
       trigger: 'user_message',
       metadata: { userId },
@@ -70,6 +165,7 @@ export async function sessionController(app: FastifyInstance) {
       actorId,
       workspaceId,
       trigger: 'user_message',
+      userId,
     });
 
     return reply.status(201).send({
@@ -90,13 +186,13 @@ export async function sessionController(app: FastifyInstance) {
     };
     const userId = (request as any).user!.userId;
 
-    const session = await getSession(sessionId);
-    if (!session) {
-      return reply.status(404).send({ error: 'Session not found' });
-    }
-    if (session.workspace_id !== workspaceId) {
-      return reply.status(404).send({ error: 'Session not found in this workspace' });
-    }
+    const session = await requireSessionConversationPermission(
+      request,
+      reply,
+      'send',
+      'Not allowed to send messages in this session',
+    );
+    if (!session) return;
 
     if (session.status === 'completed' || session.status === 'failed' || session.status === 'cancelled') {
       return reply.status(400).send({ error: `Cannot send message to ${session.status} session` });
@@ -131,12 +227,13 @@ export async function sessionController(app: FastifyInstance) {
   app.get<{
     Params: { workspaceId: string; sessionId: string };
   }>('/workspaces/:workspaceId/sessions/:sessionId', async (request, reply) => {
-    const { workspaceId, sessionId } = request.params;
-
-    const session = await getSession(sessionId);
-    if (!session || session.workspace_id !== workspaceId) {
-      return reply.status(404).send({ error: 'Session not found' });
-    }
+    const session = await requireSessionConversationPermission(
+      request,
+      reply,
+      'view',
+      'Not allowed to view this session',
+    );
+    if (!session) return;
 
     return reply.send({ session });
   });
@@ -145,12 +242,14 @@ export async function sessionController(app: FastifyInstance) {
   app.get<{
     Params: { workspaceId: string; sessionId: string };
   }>('/workspaces/:workspaceId/sessions/:sessionId/messages', async (request, reply) => {
-    const { workspaceId, sessionId } = request.params;
-
-    const session = await getSession(sessionId);
-    if (!session || session.workspace_id !== workspaceId) {
-      return reply.status(404).send({ error: 'Session not found' });
-    }
+    const { sessionId } = request.params;
+    const session = await requireSessionConversationPermission(
+      request,
+      reply,
+      'view',
+      'Not allowed to view this session',
+    );
+    if (!session) return;
 
     const messages = await getSessionMessages(sessionId);
     return reply.send({ messages });
@@ -164,6 +263,15 @@ export async function sessionController(app: FastifyInstance) {
     const { workspaceId, actorId } = request.params;
     const { status } = request.query as any;
 
+    const allowed = await requireActorPermission(
+      request,
+      reply,
+      actorId,
+      'view',
+      'Not allowed to view this actor',
+    );
+    if (!allowed) return;
+
     const sessions = await getSessionsByActor(workspaceId, actorId, status);
     return reply.send({ sessions });
   });
@@ -172,12 +280,14 @@ export async function sessionController(app: FastifyInstance) {
   app.delete<{
     Params: { workspaceId: string; sessionId: string };
   }>('/workspaces/:workspaceId/sessions/:sessionId', async (request, reply) => {
-    const { workspaceId, sessionId } = request.params;
-
-    const session = await getSession(sessionId);
-    if (!session || session.workspace_id !== workspaceId) {
-      return reply.status(404).send({ error: 'Session not found' });
-    }
+    const { sessionId } = request.params;
+    const session = await requireSessionConversationPermission(
+      request,
+      reply,
+      'manage',
+      'Not allowed to manage this session',
+    );
+    if (!session) return;
 
     await cancelSession(sessionId);
     return reply.status(204).send();

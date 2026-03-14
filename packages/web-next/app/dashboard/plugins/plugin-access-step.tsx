@@ -1,0 +1,849 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import type { CapabilityGrantScope } from '@synapse/shared';
+import { Bot, Plus, ShieldCheck, Trash2, UserRound } from 'lucide-react';
+import { AppCard, AppCardContent, AppCardHeader, AppCardTitle } from '@/components/app-card';
+import { getConversationDisplayName } from '@/app/dashboard/capabilities/attachment-visuals';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { useWorkspace } from '@/app/dashboard/workspace-provider';
+import { useAuthStore } from '@/stores/auth-store';
+import { api } from '@/lib/api';
+
+const allowedGrantScopes: CapabilityGrantScope[] = [
+  'workspace',
+  'conversation',
+  'actor_global',
+  'actor_conversation',
+  'user',
+];
+
+const grantScopeOptions: Array<{
+  value: CapabilityGrantScope;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'workspace',
+    label: 'Workspace',
+    description: 'Anyone in this workspace can use this installation.',
+  },
+  {
+    value: 'conversation',
+    label: 'Conversation',
+    description: 'Only one conversation can use this installation.',
+  },
+  {
+    value: 'actor_global',
+    label: 'Actor',
+    description: 'Only one actor can use this installation anywhere it appears.',
+  },
+  {
+    value: 'actor_conversation',
+    label: 'Actor in Conversation',
+    description: 'Only one actor can use this installation inside one conversation.',
+  },
+  {
+    value: 'user',
+    label: 'User',
+    description: 'Only one user can use this installation personally.',
+  },
+];
+
+const PREVIEW_PRIMARY_USER = 'Maya';
+const PREVIEW_SECONDARY_USER = 'Iris';
+const PREVIEW_PRIMARY_ACTOR = 'Nova';
+const PREVIEW_SECONDARY_ACTOR = 'Atlas';
+const PREVIEW_CONVERSATION = 'Project Sync';
+
+type ActorOption = {
+  id: string;
+  name: string;
+};
+
+type ConversationOption = {
+  id: string;
+  name: string;
+  title?: string;
+  participants?: Array<{ id: string; name: string }>;
+};
+
+type MemberOption = {
+  id: string;
+  name: string;
+};
+
+type AccessPreviewScenario = {
+  title: string;
+  subtitle: string;
+  identities: Array<{ label: string; kind: 'user' | 'actor'; active: boolean }>;
+  userMessage: string;
+  actorName: string;
+  actorMessage: string;
+  secondaryActorName: string;
+  secondaryActorMessage: string;
+  secondaryActorActive: boolean;
+  footer: string;
+};
+
+function normalizeActorOption(actor: any): ActorOption {
+  const definition = actor?.definition || actor;
+  return {
+    id: actor.id,
+    name: definition.name || definition.title || 'Untitled actor',
+  };
+}
+
+function normalizeConversationOption(group: any): ConversationOption {
+  return {
+    id: group.id,
+    name: group.name || group.title || 'Untitled conversation',
+    title: group.title,
+    participants: group.participants,
+  };
+}
+
+function normalizeMemberOption(member: any): MemberOption {
+  return {
+    id: member.userId,
+    name: member.userName || member.userEmail || member.userId,
+  };
+}
+
+function getScopeLabel(scope: CapabilityGrantScope) {
+  return grantScopeOptions.find((option) => option.value === scope)?.label || scope;
+}
+
+function formatGrantTarget(
+  grant: any,
+  actorsById: Map<string, string>,
+  conversationsById: Map<string, string>,
+  membersById: Map<string, string>,
+) {
+  switch (grant.grantScope) {
+    case 'workspace':
+      return 'Entire workspace';
+    case 'conversation':
+      return conversationsById.get(grant.conversationId) || 'Selected conversation';
+    case 'actor_global':
+      return actorsById.get(grant.actorId) || 'Selected actor';
+    case 'actor_conversation': {
+      const actorName = actorsById.get(grant.actorId) || 'Selected actor';
+      const conversationName = conversationsById.get(grant.conversationId) || 'Selected conversation';
+      return `${actorName} in ${conversationName}`;
+    }
+    case 'user':
+      return membersById.get(grant.userId) || 'Selected user';
+    case 'platform':
+      return 'Entire platform';
+    default:
+      return grant.grantScope;
+  }
+}
+
+function formatTimestamp(value?: string | null) {
+  if (!value) return 'Just now';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Just now';
+  return date.toLocaleString();
+}
+
+function IdentityPill({
+  label,
+  kind,
+  active,
+}: {
+  label: string;
+  kind: 'user' | 'actor';
+  active: boolean;
+}) {
+  const Icon = kind === 'user' ? UserRound : Bot;
+
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1 text-xs text-foreground">
+      <span className="inline-flex size-5 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <Icon className="size-3" />
+      </span>
+      <span className="truncate">{label}</span>
+      <span
+        className={
+          active
+            ? 'rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300'
+            : 'rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground'
+        }
+      >
+        {active ? 'Can use' : 'Blocked'}
+      </span>
+    </div>
+  );
+}
+
+function AccessPreviewCard({
+  scenario,
+  selectedTarget,
+}: {
+  scenario: AccessPreviewScenario;
+  selectedTarget: string;
+}) {
+  return (
+    <div className="overflow-hidden rounded-[26px] border border-border bg-background shadow-sm">
+      <div className="border-b border-border bg-muted/30 px-4 py-4">
+        <div className="flex flex-col gap-1">
+          <div className="text-sm font-semibold text-foreground">{scenario.title}</div>
+          <div className="text-xs text-muted-foreground">{scenario.subtitle}</div>
+          <div className="text-xs text-muted-foreground">Selected target: {selectedTarget}</div>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {scenario.identities.map((identity) => (
+            <IdentityPill
+              key={`${identity.kind}-${identity.label}-${identity.active ? 'on' : 'off'}`}
+              label={identity.label}
+              kind={identity.kind}
+              active={identity.active}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 p-4">
+        <div className="flex justify-end">
+          <div className="max-w-[80%] rounded-2xl rounded-tr-sm bg-foreground px-3 py-2 text-sm text-background">
+            {scenario.userMessage}
+          </div>
+        </div>
+        <div className="flex items-start gap-3">
+          <div className="mt-1 inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/12 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+            {scenario.actorName.slice(0, 1).toUpperCase()}
+          </div>
+          <div className="min-w-0">
+            <div className="mb-1 text-xs font-medium text-muted-foreground">{scenario.actorName}</div>
+            <div className="rounded-2xl rounded-tl-sm border border-border bg-muted/20 px-3 py-2 text-sm text-foreground">
+              {scenario.actorMessage}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-start gap-3">
+          <div
+            className={
+              scenario.secondaryActorActive
+                ? 'mt-1 inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/12 text-xs font-semibold text-emerald-700 dark:text-emerald-300'
+                : 'mt-1 inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground'
+            }
+          >
+            {scenario.secondaryActorName.slice(0, 1).toUpperCase()}
+          </div>
+          <div className="min-w-0">
+            <div className="mb-1 text-xs font-medium text-muted-foreground">{scenario.secondaryActorName}</div>
+            <div
+              className={
+                scenario.secondaryActorActive
+                  ? 'rounded-2xl rounded-tl-sm border border-border bg-muted/20 px-3 py-2 text-sm text-foreground'
+                  : 'rounded-2xl rounded-tl-sm border border-dashed border-border bg-muted/10 px-3 py-2 text-sm text-muted-foreground'
+              }
+            >
+              {scenario.secondaryActorMessage}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function PluginAccessStep({
+  installation,
+}: {
+  installation: any | null;
+}) {
+  const { workspaceId } = useWorkspace();
+  const { user } = useAuthStore();
+  const [actors, setActors] = useState<any[]>([]);
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [members, setMembers] = useState<any[]>([]);
+  const [summary, setSummary] = useState<any>(null);
+  const [grants, setGrants] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [grantScope, setGrantScope] = useState<CapabilityGrantScope>('workspace');
+  const [conversationId, setConversationId] = useState('');
+  const [actorId, setActorId] = useState('');
+  const [userId, setUserId] = useState('');
+
+  const installationId = installation?.id || null;
+  const currentUserId = user?.id || user?.userId || '';
+  const currentUserLabel = user?.name || user?.email || 'You';
+
+  const actorOptions = useMemo(() => actors.map(normalizeActorOption), [actors]);
+  const conversationOptions = useMemo(() => conversations.map(normalizeConversationOption), [conversations]);
+  const memberOptions = useMemo(() => members.map(normalizeMemberOption), [members]);
+
+  const actorNamesById = useMemo(
+    () => new Map(actorOptions.map((actor) => [actor.id, actor.name])),
+    [actorOptions],
+  );
+  const conversationNamesById = useMemo(
+    () =>
+      new Map(
+        conversationOptions.map((conversation) => [
+          conversation.id,
+          getConversationDisplayName(conversation),
+        ]),
+      ),
+    [conversationOptions],
+  );
+  const memberNamesById = useMemo(
+    () => new Map(memberOptions.map((member) => [member.id, member.name])),
+    [memberOptions],
+  );
+
+  const selectedScopeOption = useMemo(
+    () => grantScopeOptions.find((option) => option.value === grantScope) || grantScopeOptions[0],
+    [grantScope],
+  );
+
+  const previewTarget = useMemo(() => {
+    if (grantScope === 'workspace') {
+      return 'The entire workspace';
+    }
+    if (grantScope === 'conversation') {
+      return conversationId ? 'The conversation you selected on the left' : 'Choose a conversation on the left';
+    }
+    if (grantScope === 'actor_global') {
+      return actorId ? 'The actor you selected on the left' : 'Choose an actor on the left';
+    }
+    if (grantScope === 'actor_conversation') {
+      return actorId && conversationId
+        ? 'The actor + conversation pair you selected on the left'
+        : 'Choose one actor and one conversation on the left';
+    }
+    if (grantScope === 'user') {
+      return userId || currentUserId ? 'The user you selected on the left' : 'Choose a user on the left';
+    }
+    return getScopeLabel(grantScope);
+  }, [
+    actorId,
+    conversationId,
+    currentUserId,
+    grantScope,
+    userId,
+  ]);
+
+  const previewScenario = useMemo<AccessPreviewScenario>(() => {
+    switch (grantScope) {
+      case 'workspace':
+        return {
+          title: 'Workspace planning room',
+          subtitle: 'Shared with the whole workspace',
+          identities: [
+            { label: PREVIEW_PRIMARY_USER, kind: 'user', active: true },
+            { label: PREVIEW_SECONDARY_USER, kind: 'user', active: true },
+            { label: PREVIEW_PRIMARY_ACTOR, kind: 'actor', active: true },
+            { label: PREVIEW_SECONDARY_ACTOR, kind: 'actor', active: true },
+          ],
+          userMessage: `${PREVIEW_PRIMARY_USER}: Can someone pull the latest roadmap notes for this workspace?`,
+          actorName: PREVIEW_PRIMARY_ACTOR,
+          actorMessage:
+            'Yes. This installation is shared with the workspace, so actors can use it from any workspace conversation.',
+          secondaryActorName: PREVIEW_SECONDARY_ACTOR,
+          secondaryActorMessage:
+            'I can use it too, because workspace access does not limit this installation to one room or one actor.',
+          secondaryActorActive: true,
+          footer: 'Best when this install should feel like shared workspace infrastructure.',
+        };
+      case 'conversation':
+        return {
+          title: PREVIEW_CONVERSATION,
+          subtitle: 'Only this conversation can use it',
+          identities: [
+            { label: PREVIEW_PRIMARY_USER, kind: 'user', active: true },
+            { label: PREVIEW_SECONDARY_USER, kind: 'user', active: true },
+            { label: PREVIEW_PRIMARY_ACTOR, kind: 'actor', active: true },
+            { label: PREVIEW_SECONDARY_ACTOR, kind: 'actor', active: true },
+          ],
+          userMessage: `${PREVIEW_PRIMARY_USER}: Use this installation for the notes in this room only.`,
+          actorName: PREVIEW_PRIMARY_ACTOR,
+          actorMessage:
+            'I can use it here because access is tied to this conversation. Other conversations still will not see it.',
+          secondaryActorName: PREVIEW_SECONDARY_ACTOR,
+          secondaryActorMessage:
+            'I can use it too, but only inside this same conversation with these participants.',
+          secondaryActorActive: true,
+          footer: 'Useful when one shared room needs the plugin but the rest of the workspace should not.',
+        };
+      case 'actor_global':
+        return {
+          title: `Any thread with ${PREVIEW_PRIMARY_ACTOR}`,
+          subtitle: 'Only this actor can use it',
+          identities: [
+            { label: PREVIEW_PRIMARY_USER, kind: 'user', active: true },
+            { label: PREVIEW_SECONDARY_USER, kind: 'user', active: true },
+            { label: PREVIEW_PRIMARY_ACTOR, kind: 'actor', active: true },
+            { label: PREVIEW_SECONDARY_ACTOR, kind: 'actor', active: false },
+          ],
+          userMessage: `${PREVIEW_PRIMARY_USER}: @${PREVIEW_PRIMARY_ACTOR} check the vendor workspace with this install.`,
+          actorName: PREVIEW_PRIMARY_ACTOR,
+          actorMessage:
+            'I can use this installation anywhere I appear, but other actors in the same conversation still cannot.',
+          secondaryActorName: PREVIEW_SECONDARY_ACTOR,
+          secondaryActorMessage:
+            'I am in the same room, but I still cannot use it because access belongs only to the selected actor.',
+          secondaryActorActive: false,
+          footer: 'Good when one actor owns the tool across every conversation it joins.',
+        };
+      case 'actor_conversation':
+        return {
+          title: `${PREVIEW_PRIMARY_ACTOR} in ${PREVIEW_CONVERSATION}`,
+          subtitle: 'Only this actor in this conversation can use it',
+          identities: [
+            { label: PREVIEW_PRIMARY_USER, kind: 'user', active: true },
+            { label: PREVIEW_SECONDARY_USER, kind: 'user', active: true },
+            { label: PREVIEW_PRIMARY_ACTOR, kind: 'actor', active: true },
+            { label: PREVIEW_SECONDARY_ACTOR, kind: 'actor', active: false },
+          ],
+          userMessage: `${PREVIEW_PRIMARY_USER}: @${PREVIEW_PRIMARY_ACTOR} use this install for this room's follow-up.`,
+          actorName: PREVIEW_PRIMARY_ACTOR,
+          actorMessage:
+            'I can use this installation here, but not in other conversations and not for other actors in this room.',
+          secondaryActorName: PREVIEW_SECONDARY_ACTOR,
+          secondaryActorMessage:
+            'I cannot use it here, because this grant is restricted to one actor and one conversation together.',
+          secondaryActorActive: false,
+          footer: 'This is the narrowest option when both the actor and the room matter.',
+        };
+      case 'user':
+        return {
+          title: `${PREVIEW_PRIMARY_USER}'s personal thread`,
+          subtitle: 'Only this user can use it',
+          identities: [
+            { label: PREVIEW_PRIMARY_USER, kind: 'user', active: true },
+            { label: PREVIEW_SECONDARY_USER, kind: 'user', active: false },
+            { label: PREVIEW_PRIMARY_ACTOR, kind: 'actor', active: true },
+            { label: PREVIEW_SECONDARY_ACTOR, kind: 'actor', active: true },
+          ],
+          userMessage: `${PREVIEW_PRIMARY_USER}: Use my personal account connection for this lookup.`,
+          actorName: PREVIEW_PRIMARY_ACTOR,
+          actorMessage:
+            `I can use this installation only when I'm working on behalf of ${PREVIEW_PRIMARY_USER}.`,
+          secondaryActorName: PREVIEW_SECONDARY_ACTOR,
+          secondaryActorMessage:
+            `${PREVIEW_SECONDARY_USER} cannot use this installation, even if the same actors are available elsewhere.`,
+          secondaryActorActive: true,
+          footer: 'Best for personal accounts, private data, or user-specific credentials.',
+        };
+      default:
+        return {
+          title: previewTarget,
+          subtitle: selectedScopeOption.description,
+          identities: [
+            { label: PREVIEW_PRIMARY_USER, kind: 'user', active: true },
+            { label: PREVIEW_SECONDARY_USER, kind: 'user', active: false },
+            { label: PREVIEW_PRIMARY_ACTOR, kind: 'actor', active: true },
+            { label: PREVIEW_SECONDARY_ACTOR, kind: 'actor', active: false },
+          ],
+          userMessage: `${PREVIEW_PRIMARY_USER}: Use this installation here.`,
+          actorName: PREVIEW_PRIMARY_ACTOR,
+          actorMessage: `${previewTarget} will be able to use this installation.`,
+          secondaryActorName: PREVIEW_SECONDARY_ACTOR,
+          secondaryActorMessage: 'This second actor is outside the selected grant target.',
+          secondaryActorActive: false,
+          footer: 'This only grants use access.',
+        };
+    }
+  }, [
+    grantScope,
+    previewTarget,
+    selectedScopeOption.description,
+  ]);
+
+  const canCreateGrant = useMemo(() => {
+    if (grantScope === 'conversation') return Boolean(conversationId);
+    if (grantScope === 'actor_global') return Boolean(actorId);
+    if (grantScope === 'actor_conversation') return Boolean(actorId && conversationId);
+    if (grantScope === 'user') return Boolean(userId || currentUserId);
+    return true;
+  }, [actorId, conversationId, currentUserId, grantScope, userId]);
+
+  const loadAccessState = async () => {
+    if (!workspaceId || !installationId) return;
+    const [grantData, authData, actorData, groupData, memberData] = await Promise.all([
+      api.getCapabilityInstanceGrants(workspaceId, installationId),
+      api.getCapabilityInstanceAuthorization(workspaceId, installationId),
+      api.getActors(workspaceId),
+      api.getGroups(workspaceId),
+      api.getWorkspaceMembers(workspaceId),
+    ]);
+
+    setGrants(grantData.grants || []);
+    setSummary(authData.summary || null);
+    const suggestedGrantScope = authData.summary?.suggestedGrantScope as CapabilityGrantScope | undefined;
+    if (suggestedGrantScope && allowedGrantScopes.includes(suggestedGrantScope)) {
+      setGrantScope(suggestedGrantScope);
+    }
+    setActors(Array.isArray(actorData) ? actorData : []);
+    setConversations(groupData.groups || []);
+    setMembers(memberData.data || []);
+  };
+
+  useEffect(() => {
+    if (!workspaceId || !installationId) {
+      setSummary(null);
+      setGrants([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        setLoading(true);
+        await loadAccessState();
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [installationId, workspaceId]);
+
+  const resetDialogState = () => {
+    setConversationId('');
+    setActorId('');
+    setUserId('');
+  };
+
+  const createGrant = async () => {
+    if (!workspaceId || !installationId || !canCreateGrant) return;
+    setSaving(true);
+    try {
+      await api.issueCapabilityInstanceGrant(workspaceId, installationId, {
+        grantScope,
+        actorId: grantScope === 'actor_global' || grantScope === 'actor_conversation' ? actorId : undefined,
+        conversationId:
+          grantScope === 'conversation' || grantScope === 'actor_conversation' ? conversationId : undefined,
+        userId: grantScope === 'user' ? userId || currentUserId : undefined,
+        permissions: summary?.requiredPermissions?.length ? summary.requiredPermissions : ['use'],
+      });
+      await loadAccessState();
+      setDialogOpen(false);
+      resetDialogState();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const revokeGrant = async (grantId: string) => {
+    if (!workspaceId || !installationId) return;
+    await api.revokeCapabilityGrant(workspaceId, grantId);
+    await loadAccessState();
+  };
+
+  const renderTargetSelector = () => {
+    if (grantScope === 'workspace') return null;
+
+    if (grantScope === 'conversation') {
+      return (
+        <Field>
+          <FieldLabel>Conversation</FieldLabel>
+          <Select value={conversationId} onValueChange={setConversationId}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select a conversation" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {conversationOptions.map((conversation) => (
+                  <SelectItem key={conversation.id} value={conversation.id}>
+                    {getConversationDisplayName(conversation)}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
+      );
+    }
+
+    if (grantScope === 'actor_global') {
+      return (
+        <Field>
+          <FieldLabel>Actor</FieldLabel>
+          <Select value={actorId} onValueChange={setActorId}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select an actor" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {actorOptions.map((actor) => (
+                  <SelectItem key={actor.id} value={actor.id}>
+                    {actor.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
+      );
+    }
+
+    if (grantScope === 'actor_conversation') {
+      return (
+        <FieldGroup>
+          <Field>
+            <FieldLabel>Conversation</FieldLabel>
+            <Select value={conversationId} onValueChange={setConversationId}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select a conversation" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {conversationOptions.map((conversation) => (
+                    <SelectItem key={conversation.id} value={conversation.id}>
+                      {getConversationDisplayName(conversation)}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+
+          <Field>
+            <FieldLabel>Actor</FieldLabel>
+            <Select value={actorId} onValueChange={setActorId}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select an actor" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {actorOptions.map((actor) => (
+                    <SelectItem key={actor.id} value={actor.id}>
+                      {actor.name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+        </FieldGroup>
+      );
+    }
+
+    if (grantScope === 'user') {
+      return (
+        <Field>
+          <FieldLabel>User</FieldLabel>
+          <Select value={userId || currentUserId} onValueChange={setUserId}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select a user" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {memberOptions.map((member) => (
+                  <SelectItem key={member.id} value={member.id}>
+                    {member.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
+      );
+    }
+
+    return null;
+  };
+
+  if (!installationId) {
+    return (
+      <AppCard variant="panel">
+        <AppCardContent className="p-6 text-sm text-muted-foreground">
+          Finish setup first. Once the installation exists, you can grant use access here.
+        </AppCardContent>
+      </AppCard>
+    );
+  }
+
+  if (loading) {
+    return (
+      <AppCard variant="panel">
+        <AppCardContent className="p-6 text-sm text-muted-foreground">
+          Loading access settings...
+        </AppCardContent>
+      </AppCard>
+    );
+  }
+
+  return (
+    <>
+      <AppCard variant="panel">
+        <AppCardHeader className="px-6 py-6">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-muted-foreground" />
+              <AppCardTitle>Use Access</AppCardTitle>
+            </div>
+            <Button onClick={() => setDialogOpen(true)}>
+              <Plus data-icon="inline-start" />
+              Add Access
+            </Button>
+          </div>
+        </AppCardHeader>
+        <AppCardContent className="px-0 pb-2">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="px-6">Type</TableHead>
+                <TableHead>Who Can Use It</TableHead>
+                <TableHead>Added</TableHead>
+                <TableHead className="w-[96px] px-6 text-right">Action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {grants.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="px-6 py-8 text-sm text-muted-foreground">
+                    No use access has been granted yet.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                grants.map((grant) => (
+                  <TableRow key={grant.id}>
+                    <TableCell className="px-6 font-medium">
+                      {getScopeLabel(grant.grantScope)}
+                    </TableCell>
+                    <TableCell className="max-w-0">
+                      <div className="truncate">
+                        {formatGrantTarget(grant, actorNamesById, conversationNamesById, memberNamesById)}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatTimestamp(grant.createdAt || grant.grantedAt)}
+                    </TableCell>
+                    <TableCell className="px-6 text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-muted-foreground hover:text-destructive"
+                        onClick={() => revokeGrant(grant.id)}
+                      >
+                        <Trash2 />
+                        <span className="sr-only">Remove access</span>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </AppCardContent>
+      </AppCard>
+
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          setDialogOpen(open);
+          if (!open) {
+            resetDialogState();
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>Add use access</DialogTitle>
+            <DialogDescription>
+              Choose who can use this installation. Ownership stays where it is.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
+            <div className="flex flex-col gap-5">
+              <RadioGroup
+                value={grantScope}
+                onValueChange={(value) => setGrantScope(value as CapabilityGrantScope)}
+                className="w-full"
+              >
+                {grantScopeOptions.map((option) => (
+                  <Field
+                    key={option.value}
+                    orientation="horizontal"
+                    className="rounded-3xl border border-border p-4"
+                  >
+                    <RadioGroupItem value={option.value} id={`access-scope-${option.value}`} />
+                    <FieldContent>
+                      <FieldLabel htmlFor={`access-scope-${option.value}`}>{option.label}</FieldLabel>
+                      <FieldDescription>{option.description}</FieldDescription>
+                    </FieldContent>
+                  </Field>
+                ))}
+              </RadioGroup>
+
+              {renderTargetSelector()}
+            </div>
+
+            <div className="rounded-3xl border border-border bg-muted/20 p-5">
+              <div className="flex flex-col gap-5">
+                <div className="flex flex-col gap-1">
+                  <h3 className="text-base font-medium">{selectedScopeOption.label} preview</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {selectedScopeOption.description}
+                  </p>
+                </div>
+
+                <AccessPreviewCard scenario={previewScenario} selectedTarget={previewTarget} />
+
+                <div className="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground">
+                  {previewScenario.footer}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={createGrant} disabled={saving || !canCreateGrant}>
+              {saving ? 'Adding access...' : 'Add Access'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}

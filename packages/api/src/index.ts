@@ -11,6 +11,11 @@ import { setupWebSocket, shutdownWebSockets } from './infrastructure/websocket/i
 import { auditMiddleware } from './infrastructure/middleware/audit.js';
 import { beginShutdown } from './infrastructure/shutdown/state.js';
 import { ensureStorageDir } from './infrastructure/storage/index.js';
+import {
+  closeAuthzClient,
+  initializeAuthz,
+  testAuthzConnection,
+} from './infrastructure/authz/index.js';
 
 // Module imports
 import authModule from './modules/auth/index.js';
@@ -30,6 +35,8 @@ import groupModule from './modules/group/index.js';
 import mcpPluginsModule from './modules/mcp-plugins/index.js';
 import filesModule from './modules/files/index.js';
 import a2aModule from './modules/a2a/index.js';
+import platformModule from './modules/platform/index.js';
+import { syncConfiguredPlatformAdmins } from './modules/platform/admin-service.js';
 import { seedPlatformDefaultGroup } from './modules/model-groups/service.js';
 import { seedBuiltinMcpPlugins } from './modules/mcp-plugins/service.js';
 import { seedBuiltinActorTemplates } from './modules/organization/service.js';
@@ -75,6 +82,31 @@ async function main() {
   // Initialize event bus
   await initEventBus();
 
+  // Initialize SpiceDB schema and replay pending relationship writes
+  try {
+    const authz = await initializeAuthz();
+    if (authz.enabled) {
+      console.log(
+        `SpiceDB initialized (schemaUpdated=${authz.schemaUpdated}, drainedOutboxEntries=${authz.drainedOutboxEntries})`,
+      );
+    } else {
+      console.warn('SpiceDB authorization is disabled');
+    }
+  } catch (err) {
+    console.error('Failed to initialize SpiceDB authorization:', err);
+    process.exit(1);
+  }
+
+  try {
+    const platformAdmins = await syncConfiguredPlatformAdmins();
+    console.log(
+      `Platform admins synchronized (configuredEmails=${platformAdmins.configuredEmailCount}, matchedUsers=${platformAdmins.matchedUserCount}, platformAdmins=${platformAdmins.platformAdminCount})`,
+    );
+  } catch (err) {
+    console.error('Failed to synchronize platform admins:', err);
+    process.exit(1);
+  }
+
   // Register modules
   await app.register(authModule);
   await app.register(workspaceModule);
@@ -93,6 +125,7 @@ async function main() {
   await app.register(mcpPluginsModule);
   await app.register(filesModule);
   await app.register(a2aModule);
+  await app.register(platformModule);
 
   // Seed platform default model group
   try {
@@ -120,10 +153,15 @@ async function main() {
 
   // Health check
   app.get('/api/v1/health', async () => {
-    const [db, rds] = await Promise.all([testConnection(), testRedisConnection()]);
+    const [db, rds, authz] = await Promise.all([
+      testConnection(),
+      testRedisConnection(),
+      testAuthzConnection(),
+    ]);
     return {
-      status: db && rds ? 'healthy' : 'degraded',
-      services: { database: db, redis: rds },
+      status: db && rds && authz ? 'healthy' : 'degraded',
+      services: { database: db, redis: rds, authz },
+      authzEnabled: config.authz.enabled,
       timestamp: new Date().toISOString(),
     };
   });
@@ -196,6 +234,9 @@ async function main() {
       });
       await waitWithTimeout('event bus shutdown', shutdownEventBus(), 3000).catch((err) => {
         app.log.error({ err }, 'Event bus shutdown timed out');
+      });
+      await waitWithTimeout('authz shutdown', closeAuthzClient(), 3000).catch((err) => {
+        app.log.error({ err }, 'Authz shutdown timed out');
       });
       await waitWithTimeout('database pool shutdown', closeDatabasePool(), 3000).catch((err) => {
         app.log.error({ err }, 'Database pool shutdown timed out');

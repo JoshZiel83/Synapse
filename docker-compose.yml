@@ -30,6 +30,13 @@ services:
       timeout: 5s
       retries: 5
 
+  spicedb:
+    image: quay.io/authzed/spicedb:latest
+    container_name: synapse-spicedb
+    command: serve-testing
+    ports:
+      - "127.0.0.1:50051:50051"
+
   api:
     build:
       context: .
@@ -46,6 +53,11 @@ services:
       NODE_ENV: production
       PORT: "3001"
       HOST: "0.0.0.0"
+      AUTHZ_ENABLED: "true"
+      SPICEDB_ENDPOINT: spicedb:50051
+      SPICEDB_TOKEN: ${SPICEDB_TOKEN:-synapse-dev-token}
+      SPICEDB_INSECURE: "true"
+      PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-demo@synapse.dev}
     ports:
       - "127.0.0.1:3001:3001"
     depends_on:
@@ -53,6 +65,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      spicedb:
+        condition: service_started
     profiles:
       - production
 

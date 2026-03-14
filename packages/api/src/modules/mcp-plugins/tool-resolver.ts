@@ -1,9 +1,9 @@
 import { randomUUID } from 'crypto';
 import type { ToolDefinition } from '@synapse/shared';
 import type { NormalizedMcpToolResult } from '@synapse/shared/types';
-import type { CapabilityBinding, CapabilityPackageTool } from '@synapse/shared';
+import type { CapabilityInstance, CapabilityPackageTool } from '@synapse/shared';
 
-import { listAuthorizedCapabilityBindings } from '../capabilities/service.js';
+import { listAuthorizedCapabilityInstances } from '../capabilities/service.js';
 import { resolveInstallationConfig } from './config-resolver.js';
 import { getOrCreateInstance, getMcpVersion, type McpInstance } from './instance-manager.js';
 import { logToolCall } from './audit.js';
@@ -26,22 +26,21 @@ interface ResolveParams {
   sessionId: string;
   conversationId: string;
   userId?: string;
-  userCount?: number;
 }
 
-function dedupeBindings(bindings: CapabilityBinding[]) {
+function dedupeInstances(instances: CapabilityInstance[]) {
   const seenPackages = new Set<string>();
-  const deduped: CapabilityBinding[] = [];
-  for (const binding of bindings) {
-    if (seenPackages.has(binding.packageId)) continue;
-    seenPackages.add(binding.packageId);
-    deduped.push(binding);
+  const deduped: CapabilityInstance[] = [];
+  for (const instance of instances) {
+    if (seenPackages.has(instance.packageId)) continue;
+    seenPackages.add(instance.packageId);
+    deduped.push(instance);
   }
   return deduped;
 }
 
-function resolveReuseOwnerKey(binding: CapabilityBinding, params: ResolveParams, turnOwnerKey: string) {
-  switch (binding.reuseScope) {
+function resolveReuseOwnerKey(instance: CapabilityInstance, params: ResolveParams, turnOwnerKey: string) {
+  switch (instance.reuseScope) {
     case 'workspace':
       return params.workspaceId;
     case 'conversation':
@@ -51,7 +50,7 @@ function resolveReuseOwnerKey(binding: CapabilityBinding, params: ResolveParams,
     case 'actor_conversation':
       return `${params.actorId}:${params.conversationId}`;
     case 'user':
-      return params.userId && params.userCount === 1
+      return params.userId
         ? `workspace:${params.workspaceId}:user:${params.userId}`
         : params.conversationId;
     case 'turn':
@@ -88,22 +87,20 @@ async function resolveTools(
   instances: Map<string, McpInstance>,
   turnOwnerKey: string,
 ): Promise<ToolDefinition[]> {
-  const bindings = dedupeBindings(
-    await listAuthorizedCapabilityBindings({
+  const instancesToUse = dedupeInstances(
+    await listAuthorizedCapabilityInstances({
       workspaceId: params.workspaceId,
       kind: 'plugin',
       actorId: params.actorId,
       conversationId: params.conversationId,
-      userId: params.userId,
-      userCount: params.userCount,
     }),
   );
 
   const allTools: ToolDefinition[] = [];
 
-  for (const binding of bindings) {
-    const pkg = binding.package;
-    const revision = binding.revision;
+  for (const instance of instancesToUse) {
+    const pkg = instance.package;
+    const revision = instance.revision;
     if (!pkg || !revision || !revision.transport) {
       continue;
     }
@@ -124,12 +121,12 @@ async function resolveTools(
           ? revision.toolsManifest.map(manifestToolToDefinition)
           : [];
         const relayInstance: McpInstance = {
-          pluginId: binding.packageId,
+          pluginId: instance.packageId,
           pluginSlug: pkg.slug,
           orgSlug: pkg.publisher?.slug || 'plugin',
           transport: 'relay',
-          scope: binding.reuseScope,
-          scopeId: resolveReuseOwnerKey(binding, params, turnOwnerKey),
+          scope: instance.reuseScope,
+          scopeId: resolveReuseOwnerKey(instance, params, turnOwnerKey),
           workspaceId: params.workspaceId,
           configHash: `relay:${relayId}:${serverName}`,
           tools,
@@ -141,8 +138,8 @@ async function resolveTools(
           },
           lastUsed: Date.now(),
           createdAt: Date.now(),
-          idleTtlMs: binding.idleTtlMs ?? 0,
-          maxAgeMs: binding.maxAgeMs ?? undefined,
+          idleTtlMs: instance.idleTtlMs ?? 0,
+          maxAgeMs: instance.maxAgeMs ?? undefined,
         };
 
         const namespacedTools = tools.map((tool: ToolDefinition) => ({
@@ -156,32 +153,32 @@ async function resolveTools(
         continue;
       }
 
-      const resolved = await resolveInstallationConfig(binding.id);
-      const instance = await getOrCreateInstance({
-        pluginId: binding.packageId,
+      const resolved = await resolveInstallationConfig(instance.id);
+      const runtimeInstance = await getOrCreateInstance({
+        pluginId: instance.packageId,
         pluginSlug: pkg.slug,
         orgSlug: pkg.publisher?.slug || 'plugin',
         transport: revision.transport,
         entryPoint: revision.entryPoint || '',
-        scope: binding.reuseScope,
-        scopeId: resolveReuseOwnerKey(binding, params, turnOwnerKey),
+        scope: instance.reuseScope,
+        scopeId: resolveReuseOwnerKey(instance, params, turnOwnerKey),
         config: resolved.config,
         workspaceId: params.workspaceId,
-        idleTtlMs: binding.idleTtlMs ?? undefined,
-        maxAgeMs: binding.maxAgeMs ?? undefined,
+        idleTtlMs: instance.idleTtlMs ?? undefined,
+        maxAgeMs: instance.maxAgeMs ?? undefined,
       });
 
-      const namespacedTools = instance.tools.map((tool: ToolDefinition) => ({
+      const namespacedTools = runtimeInstance.tools.map((tool: ToolDefinition) => ({
         ...tool,
         name: `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.name}`,
         description: `[${pkg.publisher?.slug || 'plugin'}/${pkg.slug}] ${tool.description}`,
       }));
 
       allTools.push(...namespacedTools);
-      instances.set(namespace, instance);
+      instances.set(namespace, runtimeInstance);
     } catch (error: any) {
       console.error(
-        `[MCP ToolResolver] Failed to initialize plugin ${binding.package?.publisher?.slug || 'plugin'}/${binding.package?.slug}:`,
+        `[MCP ToolResolver] Failed to initialize plugin ${instance.package?.publisher?.slug || 'plugin'}/${instance.package?.slug}:`,
         error.message,
       );
     }

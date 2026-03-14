@@ -23,7 +23,7 @@ CREATE TABLE workspaces (
   slug VARCHAR(255) UNIQUE NOT NULL,
   description TEXT,
   owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  default_model_route_id UUID,
+  default_model_group_id UUID,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -34,11 +34,27 @@ CREATE INDEX idx_workspaces_slug ON workspaces(slug);
 -- ============ Platform Settings ============
 CREATE TABLE platform_settings (
   id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id = TRUE),
-  default_model_route_id UUID,
+  default_model_group_id UUID,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE platform_user_roles (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role VARCHAR(30) NOT NULL
+    CHECK (role IN ('super_admin', 'workspace_admin', 'model_admin', 'support', 'auditor')),
+  source VARCHAR(20) NOT NULL DEFAULT 'manual'
+    CHECK (source IN ('config', 'manual')),
+  assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (user_id, role)
+);
+
+CREATE INDEX idx_platform_user_roles_role ON platform_user_roles(role, created_at DESC);
+CREATE INDEX idx_platform_user_roles_source ON platform_user_roles(source, created_at DESC);
 
 -- ============ Workspace Members ============
 CREATE TABLE workspace_members (
@@ -53,6 +69,22 @@ CREATE TABLE workspace_members (
 
 CREATE INDEX idx_workspace_members_workspace ON workspace_members(workspace_id);
 CREATE INDEX idx_workspace_members_user ON workspace_members(user_id);
+
+CREATE TABLE workspace_member_roles (
+  workspace_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  role VARCHAR(30) NOT NULL
+    CHECK (role IN ('model_admin', 'actor_admin', 'capability_admin', 'memory_admin', 'relay_admin', 'conversation_admin')),
+  assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (workspace_id, user_id, role),
+  FOREIGN KEY (workspace_id, user_id) REFERENCES workspace_members(workspace_id, user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_workspace_member_roles_workspace ON workspace_member_roles(workspace_id, role, created_at DESC);
+CREATE INDEX idx_workspace_member_roles_user ON workspace_member_roles(user_id, role, created_at DESC);
 
 -- ============ Workspace Invites ============
 CREATE TABLE workspace_invites (
@@ -236,6 +268,31 @@ CREATE INDEX idx_audit_logs_workspace ON audit_logs(workspace_id, created_at DES
 CREATE INDEX idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
 
+-- ============ Authz Outbox ============
+CREATE TABLE authz_outbox (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  operation VARCHAR(16) NOT NULL
+    CHECK (operation IN ('touch', 'delete')),
+  resource_type VARCHAR(64) NOT NULL,
+  resource_id TEXT NOT NULL,
+  relation VARCHAR(64) NOT NULL,
+  subject_type VARCHAR(64) NOT NULL,
+  subject_id TEXT NOT NULL,
+  subject_relation VARCHAR(64),
+  status VARCHAR(16) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'processing', 'applied', 'failed')),
+  attempts INT NOT NULL DEFAULT 0,
+  last_error TEXT,
+  zed_token TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  applied_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_authz_outbox_status_created ON authz_outbox(status, created_at);
+CREATE INDEX idx_authz_outbox_resource ON authz_outbox(resource_type, resource_id, relation);
+
 -- ============ Files ============
 CREATE TABLE files (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -258,15 +315,13 @@ ALTER TABLE actors ADD CONSTRAINT fk_actors_avatar_file
 ALTER TABLE actor_versions ADD CONSTRAINT fk_actor_versions_avatar_file
   FOREIGN KEY (avatar_file_id) REFERENCES files(id) ON DELETE SET NULL;
 
--- ============ Model Routes ============
-CREATE TABLE model_routes (
+-- ============ Model Groups ============
+CREATE TABLE model_groups (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  route_scope VARCHAR(30) NOT NULL
-    CHECK (route_scope IN ('platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
-  conversation_id UUID,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  owner_type VARCHAR(20) NOT NULL
+    CHECK (owner_type IN ('platform', 'workspace', 'user')),
+  owner_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  owner_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   name VARCHAR(255) NOT NULL,
   description TEXT DEFAULT '',
   routing_strategy VARCHAR(30) NOT NULL DEFAULT 'priority_failover'
@@ -278,97 +333,46 @@ CREATE TABLE model_routes (
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CONSTRAINT chk_model_routes_target CHECK (
-    (route_scope = 'platform' AND workspace_id IS NULL AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (route_scope = 'workspace' AND workspace_id IS NOT NULL AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (route_scope = 'conversation' AND workspace_id IS NOT NULL AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (route_scope = 'actor_global' AND workspace_id IS NOT NULL AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
-    (route_scope = 'actor_conversation' AND workspace_id IS NOT NULL AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
-    (route_scope = 'user' AND workspace_id IS NOT NULL AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
+  CHECK (
+    (owner_type = 'platform' AND owner_workspace_id IS NULL AND owner_user_id IS NULL) OR
+    (owner_type = 'workspace' AND owner_workspace_id IS NOT NULL AND owner_user_id IS NULL) OR
+    (owner_type = 'user' AND owner_workspace_id IS NULL AND owner_user_id IS NOT NULL)
   )
 );
 
-CREATE INDEX idx_model_routes_workspace ON model_routes(workspace_id, created_at DESC);
-CREATE INDEX idx_model_routes_scope ON model_routes(route_scope, created_at DESC);
-CREATE UNIQUE INDEX idx_model_routes_default_platform
-  ON model_routes ((1)) WHERE route_scope = 'platform' AND is_default = TRUE AND is_enabled = TRUE;
-CREATE UNIQUE INDEX idx_model_routes_default_workspace
-  ON model_routes (workspace_id) WHERE route_scope = 'workspace' AND workspace_id IS NOT NULL AND is_default = TRUE AND is_enabled = TRUE;
+CREATE INDEX idx_model_groups_owner_workspace ON model_groups(owner_workspace_id, created_at DESC);
+CREATE INDEX idx_model_groups_owner_user ON model_groups(owner_user_id, created_at DESC);
+CREATE UNIQUE INDEX idx_model_groups_default_platform
+  ON model_groups ((1)) WHERE owner_type = 'platform' AND is_default = TRUE AND is_enabled = TRUE;
+CREATE UNIQUE INDEX idx_model_groups_default_workspace
+  ON model_groups (owner_workspace_id) WHERE owner_type = 'workspace' AND owner_workspace_id IS NOT NULL AND is_default = TRUE AND is_enabled = TRUE;
+CREATE UNIQUE INDEX idx_model_groups_default_user
+  ON model_groups (owner_user_id) WHERE owner_type = 'user' AND owner_user_id IS NOT NULL AND is_default = TRUE AND is_enabled = TRUE;
 
-ALTER TABLE workspaces ADD CONSTRAINT fk_workspaces_default_model_route
-  FOREIGN KEY (default_model_route_id) REFERENCES model_routes(id) ON DELETE SET NULL;
-ALTER TABLE platform_settings ADD CONSTRAINT fk_platform_settings_default_model_route
-  FOREIGN KEY (default_model_route_id) REFERENCES model_routes(id) ON DELETE SET NULL;
+ALTER TABLE workspaces ADD CONSTRAINT fk_workspaces_default_model_group
+  FOREIGN KEY (default_model_group_id) REFERENCES model_groups(id) ON DELETE SET NULL;
+ALTER TABLE platform_settings ADD CONSTRAINT fk_platform_settings_default_model_group
+  FOREIGN KEY (default_model_group_id) REFERENCES model_groups(id) ON DELETE SET NULL;
 
--- ============ Model Route Grants ============
-CREATE TABLE model_route_grants (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  route_id UUID NOT NULL REFERENCES model_routes(id) ON DELETE CASCADE,
-  grant_scope VARCHAR(30) NOT NULL
-    CHECK (grant_scope IN ('platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  conversation_id UUID,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'revoked')),
-  granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  reason TEXT,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ,
-  CONSTRAINT chk_model_route_grants_target CHECK (
-    (grant_scope = 'platform' AND workspace_id IS NULL AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'workspace' AND workspace_id IS NOT NULL AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'conversation' AND workspace_id IS NOT NULL AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'actor_global' AND workspace_id IS NOT NULL AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'actor_conversation' AND workspace_id IS NOT NULL AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
-    (grant_scope = 'user' AND workspace_id IS NOT NULL AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
-  )
-);
-
-CREATE INDEX idx_model_route_grants_route ON model_route_grants(route_id, created_at DESC);
-CREATE INDEX idx_model_route_grants_workspace ON model_route_grants(workspace_id, created_at DESC);
-CREATE INDEX idx_model_route_grants_conversation ON model_route_grants(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
-CREATE INDEX idx_model_route_grants_actor ON model_route_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_model_route_grants_user ON model_route_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
-
--- ============ Model Bindings ============
-CREATE TABLE model_bindings (
+-- ============ Model Profiles ============
+CREATE TABLE model_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  binding_scope VARCHAR(30) NOT NULL
-    CHECK (binding_scope IN ('platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
-  conversation_id UUID,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   display_name VARCHAR(255) NOT NULL,
   current_revision_id UUID,
   is_enabled BOOLEAN DEFAULT TRUE,
   installed_by UUID REFERENCES users(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CONSTRAINT chk_model_bindings_target CHECK (
-    (binding_scope = 'platform' AND workspace_id IS NULL AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (binding_scope = 'workspace' AND workspace_id IS NOT NULL AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (binding_scope = 'conversation' AND workspace_id IS NOT NULL AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (binding_scope = 'actor_global' AND workspace_id IS NOT NULL AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
-    (binding_scope = 'actor_conversation' AND workspace_id IS NOT NULL AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
-    (binding_scope = 'user' AND workspace_id IS NOT NULL AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
-  )
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_model_bindings_workspace ON model_bindings(workspace_id, created_at DESC);
-CREATE INDEX idx_model_bindings_scope ON model_bindings(binding_scope, created_at DESC);
-CREATE INDEX idx_model_bindings_user ON model_bindings(user_id, created_at DESC) WHERE user_id IS NOT NULL;
-CREATE INDEX idx_model_bindings_actor ON model_bindings(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_model_bindings_conversation ON model_bindings(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
+CREATE INDEX idx_model_profiles_workspace ON model_profiles(workspace_id, created_at DESC);
 
--- ============ Model Binding Revisions ============
-CREATE TABLE model_binding_revisions (
+-- ============ Model Profile Revisions ============
+CREATE TABLE model_profile_revisions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  binding_id UUID NOT NULL REFERENCES model_bindings(id) ON DELETE CASCADE,
+  profile_id UUID NOT NULL REFERENCES model_profiles(id) ON DELETE CASCADE,
   version INT NOT NULL DEFAULT 1,
   provider_type VARCHAR(30) NOT NULL CHECK (provider_type IN ('anthropic', 'openai')),
   api_key TEXT NOT NULL,
@@ -381,24 +385,23 @@ CREATE TABLE model_binding_revisions (
   max_retries INT,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(binding_id, version)
+  UNIQUE(profile_id, version)
 );
 
-CREATE INDEX idx_model_binding_revisions_binding ON model_binding_revisions(binding_id, version DESC);
+CREATE INDEX idx_model_profile_revisions_profile ON model_profile_revisions(profile_id, version DESC);
 
-ALTER TABLE model_bindings ADD CONSTRAINT fk_model_bindings_current_revision
-  FOREIGN KEY (current_revision_id) REFERENCES model_binding_revisions(id) ON DELETE SET NULL;
+ALTER TABLE model_profiles ADD CONSTRAINT fk_model_profiles_current_revision
+  FOREIGN KEY (current_revision_id) REFERENCES model_profile_revisions(id) ON DELETE SET NULL;
 
--- ============ Model Binding Grants ============
-CREATE TABLE model_binding_grants (
+-- ============ Model Group Grants ============
+CREATE TABLE model_group_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  binding_id UUID NOT NULL REFERENCES model_bindings(id) ON DELETE CASCADE,
+  group_id UUID NOT NULL REFERENCES model_groups(id) ON DELETE CASCADE,
   grant_scope VARCHAR(30) NOT NULL
-    CHECK (grant_scope IN ('platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
+    CHECK (grant_scope IN ('platform', 'workspace', 'user', 'workspace_user', 'actor')),
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  conversation_id UUID,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   status VARCHAR(20) NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'revoked')),
   granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -406,48 +409,46 @@ CREATE TABLE model_binding_grants (
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
-  CONSTRAINT chk_model_binding_grants_target CHECK (
-    (grant_scope = 'platform' AND workspace_id IS NULL AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'workspace' AND workspace_id IS NOT NULL AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'conversation' AND workspace_id IS NOT NULL AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'actor_global' AND workspace_id IS NOT NULL AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'actor_conversation' AND workspace_id IS NOT NULL AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
-    (grant_scope = 'user' AND workspace_id IS NOT NULL AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
+  CONSTRAINT chk_model_group_grants_target CHECK (
+    (grant_scope = 'platform' AND workspace_id IS NULL AND user_id IS NULL AND actor_id IS NULL) OR
+    (grant_scope = 'workspace' AND workspace_id IS NOT NULL AND user_id IS NULL AND actor_id IS NULL) OR
+    (grant_scope = 'user' AND workspace_id IS NULL AND user_id IS NOT NULL AND actor_id IS NULL) OR
+    (grant_scope = 'workspace_user' AND workspace_id IS NOT NULL AND user_id IS NOT NULL AND actor_id IS NULL) OR
+    (grant_scope = 'actor' AND workspace_id IS NOT NULL AND actor_id IS NOT NULL AND user_id IS NULL)
   )
 );
 
-CREATE INDEX idx_model_binding_grants_binding ON model_binding_grants(binding_id, created_at DESC);
-CREATE INDEX idx_model_binding_grants_workspace ON model_binding_grants(workspace_id, created_at DESC);
-CREATE INDEX idx_model_binding_grants_conversation ON model_binding_grants(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
-CREATE INDEX idx_model_binding_grants_actor ON model_binding_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_model_binding_grants_user ON model_binding_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
+CREATE INDEX idx_model_group_grants_group ON model_group_grants(group_id, created_at DESC);
+CREATE INDEX idx_model_group_grants_workspace ON model_group_grants(workspace_id, created_at DESC) WHERE workspace_id IS NOT NULL;
+CREATE INDEX idx_model_group_grants_actor ON model_group_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
+CREATE INDEX idx_model_group_grants_user ON model_group_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
 
--- ============ Model Route Items ============
-CREATE TABLE model_route_items (
+-- ============ Model Group Profiles ============
+CREATE TABLE model_group_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  route_id UUID NOT NULL REFERENCES model_routes(id) ON DELETE CASCADE,
-  binding_id UUID NOT NULL REFERENCES model_bindings(id) ON DELETE CASCADE,
+  group_id UUID NOT NULL REFERENCES model_groups(id) ON DELETE CASCADE,
+  profile_id UUID NOT NULL REFERENCES model_profiles(id) ON DELETE CASCADE,
   priority INT NOT NULL DEFAULT 0,
   weight INT NOT NULL DEFAULT 100 CHECK (weight >= 0 AND weight <= 1000),
   is_enabled BOOLEAN DEFAULT TRUE,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(route_id, binding_id)
+  UNIQUE(group_id, profile_id)
 );
 
-CREATE INDEX idx_model_route_items_route ON model_route_items(route_id, priority, created_at DESC);
+CREATE INDEX idx_model_group_profiles_group ON model_group_profiles(group_id, priority, created_at DESC);
 
--- ============ Actor Model Routes ============
-CREATE TABLE actor_model_routes (
+-- ============ Actor Model Group Assignments ============
+CREATE TABLE actor_model_group_assignments (
   actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
-  route_id UUID NOT NULL REFERENCES model_routes(id) ON DELETE CASCADE,
+  group_id UUID NOT NULL REFERENCES model_groups(id) ON DELETE CASCADE,
   priority INT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  PRIMARY KEY (actor_id, route_id)
+  PRIMARY KEY (actor_id, group_id)
 );
 
-CREATE INDEX idx_actor_model_routes_actor ON actor_model_routes(actor_id);
+CREATE INDEX idx_actor_model_group_assignments_actor ON actor_model_group_assignments(actor_id);
 
 -- ============ Conversations ============
 CREATE TABLE conversations (
@@ -462,15 +463,6 @@ CREATE TABLE conversations (
 );
 
 CREATE INDEX idx_conversations_workspace_kind ON conversations(workspace_id, kind);
-
-ALTER TABLE model_routes ADD CONSTRAINT fk_model_routes_conversation
-  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
-ALTER TABLE model_route_grants ADD CONSTRAINT fk_model_route_grants_conversation
-  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
-ALTER TABLE model_bindings ADD CONSTRAINT fk_model_bindings_conversation
-  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
-ALTER TABLE model_binding_grants ADD CONSTRAINT fk_model_binding_grants_conversation
-  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
 
 -- ============ Sessions ============
 CREATE TABLE sessions (
@@ -521,6 +513,97 @@ CREATE UNIQUE INDEX idx_conversation_members_unique_actor
   ON conversation_members(conversation_id, actor_id) WHERE actor_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_conversation_members_unique_user
   ON conversation_members(conversation_id, user_id) WHERE user_id IS NOT NULL;
+
+-- ============ Conversation Memory Grants ============
+CREATE TABLE conversation_memory_grants (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  permission VARCHAR(30) NOT NULL
+    CHECK (permission IN ('memory_edit', 'memory_grant', 'memory_retarget', 'memory_delete')),
+  subject_type VARCHAR(20) NOT NULL
+    CHECK (subject_type IN ('user', 'actor')),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'revoked')),
+  granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  reason TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ,
+  CONSTRAINT chk_conversation_memory_grants_target CHECK (
+    (subject_type = 'user' AND user_id IS NOT NULL AND actor_id IS NULL) OR
+    (subject_type = 'actor' AND actor_id IS NOT NULL AND user_id IS NULL)
+  )
+);
+
+CREATE INDEX idx_conversation_memory_grants_conversation ON conversation_memory_grants(conversation_id, created_at DESC);
+CREATE INDEX idx_conversation_memory_grants_workspace ON conversation_memory_grants(workspace_id, created_at DESC);
+CREATE INDEX idx_conversation_memory_grants_user ON conversation_memory_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
+CREATE INDEX idx_conversation_memory_grants_actor ON conversation_memory_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
+
+CREATE TABLE conversation_grants (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  permission VARCHAR(30) NOT NULL
+    CHECK (permission IN ('send', 'moderate', 'manage', 'manage_members', 'attach_resources')),
+  subject_type VARCHAR(20) NOT NULL
+    CHECK (subject_type IN ('user', 'actor')),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'revoked')),
+  granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  reason TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ,
+  CONSTRAINT chk_conversation_grants_target CHECK (
+    (subject_type = 'user' AND user_id IS NOT NULL AND actor_id IS NULL) OR
+    (subject_type = 'actor' AND actor_id IS NOT NULL AND user_id IS NULL)
+  )
+);
+
+CREATE INDEX idx_conversation_grants_conversation ON conversation_grants(conversation_id, created_at DESC);
+CREATE INDEX idx_conversation_grants_workspace ON conversation_grants(workspace_id, created_at DESC);
+CREATE INDEX idx_conversation_grants_user ON conversation_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
+CREATE INDEX idx_conversation_grants_actor ON conversation_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
+
+-- ============ Actor Grants ============
+CREATE TABLE actor_grants (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+  permission VARCHAR(30) NOT NULL
+    CHECK (permission IN ('discover', 'invoke', 'receive_message', 'memory_read', 'memory_edit', 'memory_grant', 'memory_retarget', 'memory_delete')),
+  grant_scope VARCHAR(30) NOT NULL
+    CHECK (grant_scope IN ('workspace', 'user', 'workspace_user', 'conversation', 'actor')),
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  actor_subject_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'revoked')),
+  granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  reason TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ,
+  CONSTRAINT chk_actor_grants_target CHECK (
+    (grant_scope = 'workspace' AND workspace_id IS NOT NULL AND user_id IS NULL AND conversation_id IS NULL AND actor_subject_id IS NULL) OR
+    (grant_scope = 'user' AND workspace_id IS NULL AND user_id IS NOT NULL AND conversation_id IS NULL AND actor_subject_id IS NULL) OR
+    (grant_scope = 'workspace_user' AND workspace_id IS NOT NULL AND user_id IS NOT NULL AND conversation_id IS NULL AND actor_subject_id IS NULL) OR
+    (grant_scope = 'conversation' AND workspace_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL AND actor_subject_id IS NULL) OR
+    (grant_scope = 'actor' AND workspace_id IS NOT NULL AND actor_subject_id IS NOT NULL AND user_id IS NULL AND conversation_id IS NULL)
+  )
+);
+
+CREATE INDEX idx_actor_grants_actor ON actor_grants(actor_id, created_at DESC);
+CREATE INDEX idx_actor_grants_workspace ON actor_grants(workspace_id, created_at DESC) WHERE workspace_id IS NOT NULL;
+CREATE INDEX idx_actor_grants_user ON actor_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
+CREATE INDEX idx_actor_grants_conversation ON actor_grants(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
+CREATE INDEX idx_actor_grants_actor_subject ON actor_grants(actor_subject_id, created_at DESC) WHERE actor_subject_id IS NOT NULL;
 
 -- ============ Conversation Items ============
 CREATE TABLE conversation_items (
@@ -656,9 +739,9 @@ CREATE TABLE provider_steps (
   step_index INT NOT NULL,
   provider_type VARCHAR(30) NOT NULL CHECK (provider_type IN ('anthropic', 'openai')),
   request_type VARCHAR(30) NOT NULL CHECK (request_type IN ('actor_think', 'ai_complete')),
-  model_route_id UUID REFERENCES model_routes(id) ON DELETE SET NULL,
-  model_binding_id UUID REFERENCES model_bindings(id) ON DELETE SET NULL,
-  model_revision_id UUID REFERENCES model_binding_revisions(id) ON DELETE SET NULL,
+  model_group_id UUID REFERENCES model_groups(id) ON DELETE SET NULL,
+  model_profile_id UUID REFERENCES model_profiles(id) ON DELETE SET NULL,
+  model_profile_revision_id UUID REFERENCES model_profile_revisions(id) ON DELETE SET NULL,
   model_name VARCHAR(255) NOT NULL,
   capabilities_snapshot JSONB DEFAULT '{}',
   request_payload_blob_id UUID REFERENCES payload_blobs(id) ON DELETE SET NULL,
@@ -676,8 +759,8 @@ CREATE TABLE provider_steps (
 );
 
 CREATE INDEX idx_provider_steps_turn ON provider_steps(turn_id, step_index);
-CREATE INDEX idx_provider_steps_binding ON provider_steps(model_binding_id);
-CREATE INDEX idx_provider_steps_revision ON provider_steps(model_revision_id);
+CREATE INDEX idx_provider_steps_profile ON provider_steps(model_profile_id);
+CREATE INDEX idx_provider_steps_revision ON provider_steps(model_profile_revision_id);
 
 -- ============ Tool Calls ============
 CREATE TABLE tool_calls (
@@ -836,8 +919,10 @@ CREATE TABLE memory_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   memory_entry_id UUID NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  permission VARCHAR(20) NOT NULL DEFAULT 'read'
+    CHECK (permission IN ('read', 'edit', 'grant', 'retarget', 'delete')),
   grant_scope VARCHAR(30) NOT NULL
-    CHECK (grant_scope IN ('workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
+    CHECK (grant_scope IN ('workspace', 'conversation', 'actor_global', 'actor_conversation', 'user', 'workspace_user')),
   actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -853,7 +938,8 @@ CREATE TABLE memory_grants (
     (grant_scope = 'conversation' AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
     (grant_scope = 'actor_global' AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
     (grant_scope = 'actor_conversation' AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
-    (grant_scope = 'user' AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
+    (grant_scope = 'user' AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL) OR
+    (grant_scope = 'workspace_user' AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
   )
 );
 
@@ -1128,8 +1214,8 @@ CREATE TABLE capability_packages (
   is_builtin BOOLEAN DEFAULT FALSE,
   download_count INT DEFAULT 0,
   latest_revision_id UUID,
-  default_binding_scope VARCHAR(30) NOT NULL DEFAULT 'workspace'
-    CHECK (default_binding_scope IN ('platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
+  default_instance_scope VARCHAR(30) NOT NULL DEFAULT 'workspace'
+    CHECK (default_instance_scope IN ('platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
   default_reuse_scope VARCHAR(30) NOT NULL DEFAULT 'conversation'
     CHECK (default_reuse_scope IN ('turn', 'platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
   default_idle_ttl_ms INT,
@@ -1225,17 +1311,17 @@ CREATE TABLE capability_assets (
 
 CREATE INDEX idx_capability_assets_revision ON capability_assets(revision_id, path);
 
--- ============ Capability Bindings ============
-CREATE TABLE capability_bindings (
+-- ============ Capability Instances ============
+CREATE TABLE capability_instances (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE CASCADE,
   revision_id UUID NOT NULL REFERENCES capability_package_revisions(id) ON DELETE CASCADE,
-  binding_scope VARCHAR(30) NOT NULL
-    CHECK (binding_scope IN ('platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
-  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  attachment_type VARCHAR(30) NOT NULL
+    CHECK (attachment_type IN ('platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
+  attachment_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  attachment_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  attachment_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   install_mode VARCHAR(30) NOT NULL DEFAULT 'manual'
     CHECK (install_mode IN ('manual', 'seeded', 'relay_derived', 'template_required', 'template_recommended')),
   is_enabled BOOLEAN DEFAULT TRUE,
@@ -1249,26 +1335,26 @@ CREATE TABLE capability_bindings (
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CONSTRAINT chk_capability_binding_target CHECK (
-    (binding_scope = 'platform' AND workspace_id IS NULL AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (binding_scope = 'workspace' AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (binding_scope = 'conversation' AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (binding_scope = 'actor_global' AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
-    (binding_scope = 'actor_conversation' AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
-    (binding_scope = 'user' AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
+  CONSTRAINT chk_capability_instance_attachment CHECK (
+    (attachment_type = 'platform' AND workspace_id IS NULL AND attachment_conversation_id IS NULL AND attachment_actor_id IS NULL AND attachment_user_id IS NULL) OR
+    (attachment_type = 'workspace' AND attachment_conversation_id IS NULL AND attachment_actor_id IS NULL AND attachment_user_id IS NULL) OR
+    (attachment_type = 'conversation' AND attachment_conversation_id IS NOT NULL AND attachment_actor_id IS NULL AND attachment_user_id IS NULL) OR
+    (attachment_type = 'actor_global' AND attachment_actor_id IS NOT NULL AND attachment_conversation_id IS NULL AND attachment_user_id IS NULL) OR
+    (attachment_type = 'actor_conversation' AND attachment_actor_id IS NOT NULL AND attachment_conversation_id IS NOT NULL AND attachment_user_id IS NULL) OR
+    (attachment_type = 'user' AND attachment_user_id IS NOT NULL AND attachment_actor_id IS NULL AND attachment_conversation_id IS NULL)
   )
 );
 
-CREATE INDEX idx_capability_bindings_workspace ON capability_bindings(workspace_id, created_at DESC);
-CREATE INDEX idx_capability_bindings_package ON capability_bindings(package_id, created_at DESC);
-CREATE INDEX idx_capability_bindings_conversation ON capability_bindings(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
-CREATE INDEX idx_capability_bindings_actor ON capability_bindings(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_capability_bindings_user ON capability_bindings(user_id, created_at DESC) WHERE user_id IS NOT NULL;
+CREATE INDEX idx_capability_instances_workspace ON capability_instances(workspace_id, created_at DESC);
+CREATE INDEX idx_capability_instances_package ON capability_instances(package_id, created_at DESC);
+CREATE INDEX idx_capability_instances_conversation ON capability_instances(attachment_conversation_id, created_at DESC) WHERE attachment_conversation_id IS NOT NULL;
+CREATE INDEX idx_capability_instances_actor ON capability_instances(attachment_actor_id, created_at DESC) WHERE attachment_actor_id IS NOT NULL;
+CREATE INDEX idx_capability_instances_user ON capability_instances(attachment_user_id, created_at DESC) WHERE attachment_user_id IS NOT NULL;
 
--- ============ Capability Grants ============
-CREATE TABLE capability_grants (
+-- ============ Capability Instance Grants ============
+CREATE TABLE capability_instance_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  binding_id UUID NOT NULL REFERENCES capability_bindings(id) ON DELETE CASCADE,
+  instance_id UUID NOT NULL REFERENCES capability_instances(id) ON DELETE CASCADE,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   grant_scope VARCHAR(30) NOT NULL
     CHECK (grant_scope IN ('platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
@@ -1283,7 +1369,7 @@ CREATE TABLE capability_grants (
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
-  CONSTRAINT chk_capability_grant_target CHECK (
+  CONSTRAINT chk_capability_instance_grant_target CHECK (
     (grant_scope = 'platform' AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
     (grant_scope = 'workspace' AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
     (grant_scope = 'conversation' AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
@@ -1293,11 +1379,11 @@ CREATE TABLE capability_grants (
   )
 );
 
-CREATE INDEX idx_capability_grants_binding ON capability_grants(binding_id, created_at DESC);
-CREATE INDEX idx_capability_grants_workspace ON capability_grants(workspace_id, created_at DESC);
-CREATE INDEX idx_capability_grants_actor ON capability_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_capability_grants_conversation ON capability_grants(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
-CREATE INDEX idx_capability_grants_user ON capability_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
+CREATE INDEX idx_capability_instance_grants_instance ON capability_instance_grants(instance_id, created_at DESC);
+CREATE INDEX idx_capability_instance_grants_workspace ON capability_instance_grants(workspace_id, created_at DESC);
+CREATE INDEX idx_capability_instance_grants_actor ON capability_instance_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
+CREATE INDEX idx_capability_instance_grants_conversation ON capability_instance_grants(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
+CREATE INDEX idx_capability_instance_grants_user ON capability_instance_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
 
 -- ============ Capability Requirements ============
 CREATE TABLE capability_requirements (
@@ -1312,7 +1398,7 @@ CREATE TABLE capability_requirements (
   target_publisher_slug VARCHAR(100),
   target_package_slug VARCHAR(100),
   target_tag VARCHAR(100),
-  acceptable_binding_scopes TEXT[] DEFAULT '{}',
+  acceptable_instance_scopes TEXT[] DEFAULT '{}',
   acceptable_reuse_scopes TEXT[] DEFAULT '{}',
   description TEXT DEFAULT '',
   config_predicate JSONB DEFAULT '{}',
@@ -1326,10 +1412,10 @@ CREATE TABLE capability_requirements (
 
 CREATE INDEX idx_capability_requirements_revision ON capability_requirements(revision_id, created_at);
 
--- ============ Capability Runtime Leases ============
-CREATE TABLE capability_runtime_leases (
+-- ============ Capability Instance Leases ============
+CREATE TABLE capability_instance_leases (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  binding_id UUID NOT NULL REFERENCES capability_bindings(id) ON DELETE CASCADE,
+  instance_id UUID NOT NULL REFERENCES capability_instances(id) ON DELETE CASCADE,
   package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE CASCADE,
   revision_id UUID NOT NULL REFERENCES capability_package_revisions(id) ON DELETE CASCADE,
   reuse_scope VARCHAR(30) NOT NULL
@@ -1346,8 +1432,8 @@ CREATE TABLE capability_runtime_leases (
   closed_at TIMESTAMPTZ
 );
 
-CREATE INDEX idx_capability_runtime_leases_binding ON capability_runtime_leases(binding_id, created_at DESC);
-CREATE INDEX idx_capability_runtime_leases_owner ON capability_runtime_leases(owner_key, created_at DESC);
+CREATE INDEX idx_capability_instance_leases_instance ON capability_instance_leases(instance_id, created_at DESC);
+CREATE INDEX idx_capability_instance_leases_owner ON capability_instance_leases(owner_key, created_at DESC);
 
 -- ============ Capability Auth Connections ============
 CREATE TABLE capability_auth_connections (
@@ -1420,6 +1506,37 @@ CREATE TABLE mcp_relays (
 
 CREATE INDEX idx_mcp_relays_user ON mcp_relays(user_id);
 CREATE INDEX idx_mcp_relays_workspace ON mcp_relays(workspace_id);
+
+CREATE TABLE mcp_relay_grants (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  relay_id UUID NOT NULL REFERENCES mcp_relays(id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  grant_scope VARCHAR(30) NOT NULL
+    CHECK (grant_scope IN ('workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
+  conversation_id UUID,
+  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'revoked')),
+  granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  reason TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ,
+  CONSTRAINT chk_mcp_relay_grants_target CHECK (
+    (grant_scope = 'workspace' AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
+    (grant_scope = 'conversation' AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
+    (grant_scope = 'actor_global' AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
+    (grant_scope = 'actor_conversation' AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
+    (grant_scope = 'user' AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
+  )
+);
+
+CREATE INDEX idx_mcp_relay_grants_relay ON mcp_relay_grants(relay_id, created_at DESC);
+CREATE INDEX idx_mcp_relay_grants_workspace ON mcp_relay_grants(workspace_id, created_at DESC);
+CREATE INDEX idx_mcp_relay_grants_conversation ON mcp_relay_grants(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
+CREATE INDEX idx_mcp_relay_grants_actor ON mcp_relay_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
+CREATE INDEX idx_mcp_relay_grants_user ON mcp_relay_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
 
 -- ============ MCP Relay Servers ============
 CREATE TABLE mcp_relay_servers (
@@ -1572,9 +1689,9 @@ DECLARE
 BEGIN
   FOR tbl IN SELECT unnest(ARRAY[
     'users', 'workspaces', 'workspace_invites', 'actors', 'work_items',
-    'standing_orders', 'platform_settings', 'model_routes', 'model_bindings', 'model_binding_revisions', 'conversations', 'sessions',
+    'standing_orders', 'platform_settings', 'model_groups', 'model_profiles', 'model_group_profiles', 'conversations', 'sessions',
     'memory_entries', 'memory_index_chunks',
-    'capability_publishers', 'capability_packages', 'capability_bindings', 'mcp_relays', 'mcp_relay_servers',
+    'capability_publishers', 'capability_packages', 'capability_instances', 'mcp_relays', 'mcp_relay_servers',
     'a2a_apps', 'agent_endpoints', 'endpoint_agents', 'conversation_bridges'
   ])
   LOOP

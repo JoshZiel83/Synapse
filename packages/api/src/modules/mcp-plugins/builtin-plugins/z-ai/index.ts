@@ -205,7 +205,7 @@ export const zAiSeed: BuiltinOrgSeed = {
       defaultLocale: 'zh-CN',
       transport: 'builtin',
       entryPoint: 'z_ai/toolkit',
-      defaultBindingScope: 'workspace',
+      defaultInstanceScope: 'workspace',
       defaultReuseScope: 'workspace',
       requiresHandshake: false,
       iconAssetPath: 'assets/icons/z_ai.svg',

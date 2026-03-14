@@ -74,10 +74,10 @@ interface RelayServer {
   isEnabled: boolean;
   createdAt: string;
   installId: string | null;
-  scopeType: string | null;
-  actorId: string | null;
-  conversationId: string | null;
-  userId: string | null;
+  attachmentType: string | null;
+  attachmentActorId: string | null;
+  attachmentConversationId: string | null;
+  attachmentUserId: string | null;
   lifecycleScope: string | null;
   installEnabled: boolean | null;
 }
@@ -221,7 +221,7 @@ export default function RelayList() {
   const handleUpdateServerScope = async (
     relayId: string,
     server: RelayServer,
-    scopeType: string,
+    attachmentType: string,
     actorId?: string,
     conversationId?: string,
     lifecycleScope?: string,
@@ -229,13 +229,13 @@ export default function RelayList() {
     if (!workspaceId || !server.installId) return;
     try {
       const data: any = {
-        scopeType,
-        actorId: scopeType === 'actor_global' || scopeType === 'actor_conversation' ? actorId || null : null,
-        conversationId: scopeType === 'conversation' || scopeType === 'actor_conversation' ? conversationId || null : null,
-        userId: scopeType === 'user' ? currentUserId || null : null,
+        attachmentType,
+        actorId: attachmentType === 'actor_global' || attachmentType === 'actor_conversation' ? actorId || null : null,
+        conversationId: attachmentType === 'conversation' || attachmentType === 'actor_conversation' ? conversationId || null : null,
+        userId: attachmentType === 'user' ? currentUserId || null : null,
       };
       // Auto-adjust lifecycle if current one is invalid for new scope
-      const validLifecycles = lifecycleOptionsForScope[scopeType] || ['turn'];
+      const validLifecycles = lifecycleOptionsForScope[attachmentType] || ['turn'];
       const currentLifecycle = lifecycleScope || server.lifecycleScope || 'turn';
       if (!validLifecycles.includes(currentLifecycle)) {
         data.lifecycleScope = validLifecycles[0];
@@ -486,16 +486,16 @@ export default function RelayList() {
                                 <Shield className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
                                 <select
                                   className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900"
-                                  value={server.scopeType || 'workspace'}
+                                  value={server.attachmentType || 'workspace'}
                                   onChange={(e) => {
                                     const newScope = e.target.value;
                                     const nextActorId =
                                       newScope === 'actor_global' || newScope === 'actor_conversation'
-                                        ? server.actorId || actors[0]?.id || ''
+                                        ? server.attachmentActorId || actors[0]?.id || ''
                                         : undefined;
                                     const nextConversationId =
                                       newScope === 'conversation' || newScope === 'actor_conversation'
-                                        ? server.conversationId || conversations[0]?.id || ''
+                                        ? server.attachmentConversationId || conversations[0]?.id || ''
                                         : undefined;
                                     handleUpdateServerScope(relay.id, server, newScope, nextActorId, nextConversationId);
                                   }}
@@ -504,10 +504,10 @@ export default function RelayList() {
                                     <option key={value} value={value}>{label}</option>
                                   ))}
                                 </select>
-                                {server.scopeType === 'actor_global' && (
+                                {server.attachmentType === 'actor_global' && (
                                   <select
                                     className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 max-w-[140px]"
-                                    value={server.actorId || ''}
+                                    value={server.attachmentActorId || ''}
                                     onChange={(e) => handleUpdateServerScope(relay.id, server, 'actor_global', e.target.value)}
                                   >
                                     {actors.map((a: any) => (
@@ -515,10 +515,10 @@ export default function RelayList() {
                                     ))}
                                   </select>
                                 )}
-                                {server.scopeType === 'conversation' && (
+                                {server.attachmentType === 'conversation' && (
                                   <select
                                     className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 max-w-[140px]"
-                                    value={server.conversationId || ''}
+                                    value={server.attachmentConversationId || ''}
                                     onChange={(e) => handleUpdateServerScope(relay.id, server, 'conversation', undefined, e.target.value)}
                                   >
                                     {conversations.map((conversation: any) => (
@@ -526,12 +526,12 @@ export default function RelayList() {
                                     ))}
                                   </select>
                                 )}
-                                {server.scopeType === 'actor_conversation' && (
+                                {server.attachmentType === 'actor_conversation' && (
                                   <>
                                     <select
                                       className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 max-w-[140px]"
-                                      value={server.actorId || ''}
-                                      onChange={(e) => handleUpdateServerScope(relay.id, server, 'actor_conversation', e.target.value, server.conversationId || conversations[0]?.id || '')}
+                                      value={server.attachmentActorId || ''}
+                                      onChange={(e) => handleUpdateServerScope(relay.id, server, 'actor_conversation', e.target.value, server.attachmentConversationId || conversations[0]?.id || '')}
                                     >
                                       {actors.map((a: any) => (
                                         <option key={a.id} value={a.id}>{a.name}</option>
@@ -539,8 +539,8 @@ export default function RelayList() {
                                     </select>
                                     <select
                                       className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 max-w-[140px]"
-                                      value={server.conversationId || ''}
-                                      onChange={(e) => handleUpdateServerScope(relay.id, server, 'actor_conversation', server.actorId || actors[0]?.id || '', e.target.value)}
+                                      value={server.attachmentConversationId || ''}
+                                      onChange={(e) => handleUpdateServerScope(relay.id, server, 'actor_conversation', server.attachmentActorId || actors[0]?.id || '', e.target.value)}
                                     >
                                       {conversations.map((conversation: any) => (
                                         <option key={conversation.id} value={conversation.id}>{conversation.name}</option>
@@ -548,7 +548,7 @@ export default function RelayList() {
                                     </select>
                                   </>
                                 )}
-                                {server.scopeType === 'user' && (
+                                {server.attachmentType === 'user' && (
                                   <div className="h-7 rounded-md border border-gray-200 dark:border-white/10 bg-transparent px-2 text-xs bg-white dark:bg-gray-900 flex items-center max-w-[180px] text-muted-foreground">
                                     {user?.name || user?.email || 'Current user'}
                                   </div>
@@ -559,7 +559,7 @@ export default function RelayList() {
                                   value={server.lifecycleScope || 'turn'}
                                   onChange={(e) => handleUpdateServerLifecycle(relay.id, server, e.target.value)}
                                 >
-                                  {(lifecycleOptionsForScope[server.scopeType || 'workspace'] || ['turn']).map(opt => (
+                                  {(lifecycleOptionsForScope[server.attachmentType || 'workspace'] || ['turn']).map(opt => (
                                     <option key={opt} value={opt}>{opt}</option>
                                   ))}
                                 </select>

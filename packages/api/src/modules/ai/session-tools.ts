@@ -82,8 +82,6 @@ export function registerCallableToolPlugins(): void {
           workspaceId: context.workspaceId,
           actorId: context.actorId,
           conversationId: session.conversation_id,
-          userId: context.userId,
-          userCount: context.userCount,
           skillName,
           assetPath: path || undefined,
         });
@@ -376,8 +374,6 @@ export function registerCallableToolPlugins(): void {
         queryText,
         actorId: context.actorId,
         conversationId: session.conversation_id,
-        userId: context.userId,
-        userCount: context.userCount,
         limit,
         metadata: {
           sessionId: context.sessionId,
@@ -477,7 +473,6 @@ interface ToolExecutionContext {
   actorId: string;
   workspaceId: string;
   userId?: string;
-  userCount?: number;
 }
 
 const contextStorage = new AsyncLocalStorage<ToolExecutionContext>();

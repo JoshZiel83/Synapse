@@ -1,15 +1,15 @@
 import type {
   CapabilityAvailableSkill,
+  CapabilityAttachmentType,
   CapabilityAuthProviderDefinition,
   CapabilityAuthorizationManifest,
   CapabilityAsset,
-  CapabilityBinding,
-  CapabilityBindingInstallMode,
-  CapabilityBindingScope,
   CapabilityCategory,
   CapabilityConfigFieldDefinition,
   CapabilityGrant,
   CapabilityGrantScope,
+  CapabilityInstance,
+  CapabilityInstanceInstallMode,
   CapabilityInstallFlow,
   CapabilityInstallStep,
   CapabilityPackage,
@@ -26,6 +26,19 @@ import type {
   McpSetupStep,
   McpValidationRule,
 } from '@synapse/shared';
+import {
+  AUTHZ_PLATFORM_ID,
+  authzEnabled,
+  buildActorConversationContextId,
+  diffAuthzRelationships,
+  enqueueAuthzRelationships,
+  flushAuthzOutboxEntries,
+  touchActorConversationContext,
+  lookupResources,
+  touchRelation,
+  type AuthzObjectType,
+  type AuthzRelationMutation,
+} from '../../infrastructure/authz/index.js';
 import { query } from '../../infrastructure/database/index.js';
 
 export class CapabilityError extends Error {
@@ -35,6 +48,16 @@ export class CapabilityError extends Error {
 }
 
 type JsonMap = Record<string, unknown>;
+
+async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
+  if (!authzEnabled() || entryIds.length === 0) return;
+
+  try {
+    await flushAuthzOutboxEntries(entryIds);
+  } catch (error) {
+    console.error(`[authz] Failed to flush ${source} relationship updates:`, error);
+  }
+}
 
 function asObject(value: unknown): JsonMap {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -226,7 +249,6 @@ function grantCoversRuntimeTarget(grant: CapabilityGrant, target: {
   actorId?: string;
   conversationId?: string;
   userId?: string;
-  userCount?: number;
 }) {
   switch (grant.grantScope) {
     case 'platform':
@@ -247,7 +269,6 @@ function grantCoversRuntimeTarget(grant: CapabilityGrant, target: {
     case 'user':
       return Boolean(
         target.userId &&
-        target.userCount === 1 &&
         grant.userId === target.userId,
       );
     default:
@@ -255,51 +276,18 @@ function grantCoversRuntimeTarget(grant: CapabilityGrant, target: {
   }
 }
 
-function bindingMatchesRuntimeTarget(binding: CapabilityBinding, target: {
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
-  userCount?: number;
-}) {
-  switch (binding.bindingScope) {
-    case 'platform':
-      return true;
-    case 'workspace':
-      return true;
-    case 'conversation':
-      return Boolean(target.conversationId && binding.conversationId === target.conversationId);
-    case 'actor_global':
-      return Boolean(target.actorId && binding.actorId === target.actorId);
-    case 'actor_conversation':
-      return Boolean(
-        target.actorId &&
-        target.conversationId &&
-        binding.actorId === target.actorId &&
-        binding.conversationId === target.conversationId,
-      );
-    case 'user':
-      return Boolean(
-        target.userId &&
-        target.userCount === 1 &&
-        binding.userId === target.userId,
-      );
-    default:
-      return false;
-  }
-}
-
-function inferDefaultGrantScope(binding: CapabilityBinding): CapabilityGrantScope {
-  const requested = binding.revision?.authorization?.defaultGrantScope;
-  if (requested && validateGrantHierarchy(binding.bindingScope, requested)) {
+function inferDefaultGrantScope(instance: CapabilityInstance): CapabilityGrantScope {
+  const requested = instance.revision?.authorization?.defaultGrantScope;
+  if (requested && validateGrantHierarchy(instance.attachmentType, requested)) {
     if (requested === 'workspace') return requested;
     if (requested === 'platform') return requested;
-    if (requested === 'conversation' && binding.conversationId) return requested;
-    if (requested === 'actor_global' && binding.actorId) return requested;
-    if (requested === 'actor_conversation' && binding.actorId && binding.conversationId) return requested;
-    if (requested === 'user' && binding.userId) return requested;
+    if (requested === 'conversation' && instance.conversationId) return requested;
+    if (requested === 'actor_global' && instance.actorId) return requested;
+    if (requested === 'actor_conversation' && instance.actorId && instance.conversationId) return requested;
+    if (requested === 'user' && instance.userId) return requested;
   }
 
-  switch (binding.bindingScope) {
+  switch (instance.attachmentType) {
     case 'platform':
       return 'platform';
     case 'workspace':
@@ -436,7 +424,7 @@ function mapPackage(row: any): CapabilityPackage {
     isBuiltin: Boolean(row.is_builtin),
     downloadCount: Number(row.download_count || 0),
     latestRevisionId: row.latest_revision_id || undefined,
-    defaultBindingScope: row.default_binding_scope,
+    defaultInstanceScope: row.default_instance_scope,
     defaultReuseScope: row.default_reuse_scope,
     defaultIdleTtlMs: row.default_idle_ttl_ms ?? undefined,
     defaultMaxAgeMs: row.default_max_age_ms ?? undefined,
@@ -485,18 +473,18 @@ async function hydratePackageCategories<T extends CapabilityPackage>(packages: T
   }));
 }
 
-async function hydrateBindingPackageCategories<T extends CapabilityBinding>(bindings: T[]): Promise<T[]> {
-  const packages = bindings
-    .map((binding) => binding.package)
+async function hydrateInstancePackageCategories<T extends CapabilityInstance>(instances: T[]): Promise<T[]> {
+  const packages = instances
+    .map((instance) => instance.package)
     .filter((pkg): pkg is CapabilityPackage => Boolean(pkg));
-  if (packages.length === 0) return bindings;
+  if (packages.length === 0) return instances;
 
   const hydratedPackages = await hydratePackageCategories(packages);
   const packageMap = new Map(hydratedPackages.map((pkg) => [pkg.id, pkg]));
-  return bindings.map((binding) => (
-    binding.package
-      ? { ...binding, package: packageMap.get(binding.package.id) || binding.package }
-      : binding
+  return instances.map((instance) => (
+    instance.package
+      ? { ...instance, package: packageMap.get(instance.package.id) || instance.package }
+      : instance
   ));
 }
 
@@ -515,25 +503,50 @@ function mapAsset(row: any): CapabilityAsset {
   };
 }
 
-function mapBinding(row: any): CapabilityBinding {
+function resolveInstanceAttachmentId(instance: {
+  workspaceId: string;
+  attachmentType: CapabilityAttachmentType;
+  conversationId?: string;
+  actorId?: string;
+  userId?: string;
+}) {
+  switch (instance.attachmentType) {
+    case 'workspace':
+      return instance.workspaceId;
+    case 'conversation':
+      return instance.conversationId;
+    case 'actor_global':
+      return instance.actorId;
+    case 'user':
+      return instance.userId;
+    case 'actor_conversation':
+      return instance.actorId && instance.conversationId
+        ? `${instance.actorId}:${instance.conversationId}`
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function mapInstance(row: any): CapabilityInstance {
   const pkg = row.package_id ? mapPackage(row) : undefined;
-  const revision = row.binding_revision_id
+  const revision = row.instance_revision_id || row.binding_revision_id
     ? mapRevision({
-        revision_id: row.binding_revision_id,
+        revision_id: row.instance_revision_id || row.binding_revision_id,
         package_id: row.package_id,
-        version: row.binding_revision_version,
-        status: row.binding_revision_status,
-        manifest: row.binding_revision_manifest,
-        config_schema: row.binding_revision_config_schema,
-        default_config: row.binding_revision_default_config,
-        transport: row.binding_revision_transport,
-        entry_point: row.binding_revision_entry_point,
-        tools_manifest: row.binding_revision_tools_manifest,
-        validation_rules: row.binding_revision_validation_rules,
-        setup_steps: row.binding_revision_setup_steps,
-        metadata: row.binding_revision_metadata,
-        created_by: row.binding_revision_created_by,
-        created_at: row.binding_revision_created_at,
+        version: row.instance_revision_version || row.binding_revision_version,
+        status: row.instance_revision_status || row.binding_revision_status,
+        manifest: row.instance_revision_manifest || row.binding_revision_manifest,
+        config_schema: row.instance_revision_config_schema || row.binding_revision_config_schema,
+        default_config: row.instance_revision_default_config || row.binding_revision_default_config,
+        transport: row.instance_revision_transport || row.binding_revision_transport,
+        entry_point: row.instance_revision_entry_point || row.binding_revision_entry_point,
+        tools_manifest: row.instance_revision_tools_manifest || row.binding_revision_tools_manifest,
+        validation_rules: row.instance_revision_validation_rules || row.binding_revision_validation_rules,
+        setup_steps: row.instance_revision_setup_steps || row.binding_revision_setup_steps,
+        metadata: row.instance_revision_metadata || row.binding_revision_metadata,
+        created_by: row.instance_revision_created_by || row.binding_revision_created_by,
+        created_at: row.instance_revision_created_at || row.binding_revision_created_at,
       })
     : undefined;
 
@@ -542,7 +555,17 @@ function mapBinding(row: any): CapabilityBinding {
     workspaceId: row.workspace_id,
     packageId: row.package_id,
     revisionId: row.revision_id,
-    bindingScope: row.binding_scope,
+    attachmentType: row.attachment_type,
+    attachmentId: resolveInstanceAttachmentId({
+      workspaceId: row.workspace_id,
+      attachmentType: row.attachment_type,
+      conversationId: row.conversation_id || undefined,
+      actorId: row.actor_id || undefined,
+      userId: row.user_id || undefined,
+    }),
+    attachmentConversationId: row.attachment_conversation_id || row.conversation_id || undefined,
+    attachmentActorId: row.attachment_actor_id || row.actor_id || undefined,
+    attachmentUserId: row.attachment_user_id || row.user_id || undefined,
     conversationId: row.conversation_id || undefined,
     actorId: row.actor_id || undefined,
     userId: row.user_id || undefined,
@@ -563,6 +586,104 @@ function mapBinding(row: any): CapabilityBinding {
   };
 }
 
+function capabilityInstanceAuthzObjectType(kind?: CapabilityPackageKind): Extract<AuthzObjectType, 'plugin_instance' | 'skill_instance'> | null {
+  if (kind === 'plugin') return 'plugin_instance';
+  if (kind === 'skill') return 'skill_instance';
+  return null;
+}
+
+function buildCapabilityScopeRelations(params: {
+  objectType: Extract<AuthzObjectType, 'plugin_instance' | 'skill_instance'>;
+  instanceId: string;
+  scope: CapabilityAttachmentType | CapabilityGrantScope;
+  workspaceId: string;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+  enabled?: boolean;
+}): AuthzRelationMutation[] {
+  if (params.enabled === false) {
+    return [];
+  }
+
+  switch (params.scope) {
+    case 'platform':
+      return [
+        touchRelation(params.objectType, params.instanceId, 'use_platform', 'platform', AUTHZ_PLATFORM_ID),
+      ];
+    case 'workspace':
+      return [
+        touchRelation(params.objectType, params.instanceId, 'use_workspace', 'workspace', params.workspaceId),
+      ];
+    case 'conversation':
+      return params.conversationId
+        ? [touchRelation(params.objectType, params.instanceId, 'use_conversation', 'conversation', params.conversationId)]
+        : [];
+    case 'actor_global':
+      return params.actorId
+        ? [touchRelation(params.objectType, params.instanceId, 'use_principal', 'actor', params.actorId)]
+        : [];
+    case 'actor_conversation':
+      return params.actorId && params.conversationId
+        ? [
+            ...touchActorConversationContext(params.actorId, params.conversationId),
+            touchRelation(
+              params.objectType,
+              params.instanceId,
+              'use_actor_conversation',
+              'actor_conversation',
+              buildActorConversationContextId(params.actorId, params.conversationId),
+            ),
+          ]
+        : [];
+    case 'user':
+      return params.userId
+        ? [touchRelation(params.objectType, params.instanceId, 'use_principal', 'user', params.userId)]
+        : [];
+    default:
+      return [];
+  }
+}
+
+function buildCapabilityInstanceAuthzRelations(instance: CapabilityInstance): AuthzRelationMutation[] {
+  const objectType = capabilityInstanceAuthzObjectType(instance.package?.kind);
+  if (!objectType) {
+    return [];
+  }
+
+  return [
+    touchRelation(objectType, instance.id, 'workspace', 'workspace', instance.workspaceId),
+    ...(instance.installedBy
+      ? [touchRelation(objectType, instance.id, 'owner', 'user', instance.installedBy)]
+      : []),
+  ];
+}
+
+function buildCapabilityGrantAuthzRelations(
+  instance: CapabilityInstance,
+  grants: CapabilityGrant[],
+): AuthzRelationMutation[] {
+  const objectType = capabilityInstanceAuthzObjectType(instance.package?.kind);
+  if (!objectType || !instance.isEnabled) {
+    return [];
+  }
+
+  return grants
+    .filter((grant) => grant.status === 'active')
+    .flatMap((grant) =>
+      buildCapabilityScopeRelations({
+        objectType,
+        instanceId: instance.id,
+        scope: grant.grantScope,
+        workspaceId: instance.workspaceId,
+        actorId: grant.actorId,
+        conversationId: grant.conversationId,
+        userId: grant.userId,
+        enabled: true,
+      }),
+    );
+}
+
 function mapRequirement(row: any): CapabilityRequirement {
   return {
     id: row.id,
@@ -573,7 +694,7 @@ function mapRequirement(row: any): CapabilityRequirement {
     targetPublisherSlug: row.target_publisher_slug || undefined,
     targetPackageSlug: row.target_package_slug || undefined,
     targetTag: row.target_tag || undefined,
-    acceptableBindingScopes: asArray<CapabilityBindingScope>(row.acceptable_binding_scopes),
+    acceptableInstanceScopes: asArray<CapabilityAttachmentType>(row.acceptable_instance_scopes),
     acceptableReuseScopes: asArray<CapabilityReuseScope>(row.acceptable_reuse_scopes),
     description: row.description || '',
     configPredicate: asObject(row.config_predicate),
@@ -588,18 +709,18 @@ function configPredicateSatisfied(config: JsonMap, predicate: JsonMap): boolean 
   return requiredKeys.every((key) => key in config) && truthyKeys.every((key) => Boolean(config[key]));
 }
 
-function targetMatchesBinding(requirement: CapabilityRequirement, binding: CapabilityBinding): boolean {
-  if (!binding.package) return false;
+function targetMatchesInstance(requirement: CapabilityRequirement, instance: CapabilityInstance): boolean {
+  if (!instance.package) return false;
   if (requirement.targetKind === 'tag') {
-    return Boolean(requirement.targetTag && binding.package.tags.includes(requirement.targetTag));
+    return Boolean(requirement.targetTag && instance.package.tags.includes(requirement.targetTag));
   }
-  if (requirement.targetPackageKind && binding.package.kind !== requirement.targetPackageKind) {
+  if (requirement.targetPackageKind && instance.package.kind !== requirement.targetPackageKind) {
     return false;
   }
-  if (requirement.targetPublisherSlug && binding.package.publisher?.slug !== requirement.targetPublisherSlug) {
+  if (requirement.targetPublisherSlug && instance.package.publisher?.slug !== requirement.targetPublisherSlug) {
     return false;
   }
-  return binding.package.slug === requirement.targetPackageSlug;
+  return instance.package.slug === requirement.targetPackageSlug;
 }
 
 export async function createCapabilityPublisher(data: {
@@ -783,7 +904,7 @@ export async function createCapabilityPackage(input: {
   tags?: string[];
   isBuiltin?: boolean;
   isActive?: boolean;
-  defaultBindingScope?: CapabilityBindingScope;
+  defaultInstanceScope?: CapabilityAttachmentType;
   defaultReuseScope?: CapabilityReuseScope;
   defaultIdleTtlMs?: number;
   defaultMaxAgeMs?: number;
@@ -816,7 +937,7 @@ export async function createCapabilityPackage(input: {
            tags = $7,
            is_builtin = $8,
            is_active = $9,
-           default_binding_scope = $10,
+           default_instance_scope = $10,
            default_reuse_scope = $11,
            default_idle_ttl_ms = $12,
            default_max_age_ms = $13,
@@ -835,7 +956,7 @@ export async function createCapabilityPackage(input: {
         input.tags || [],
         input.isBuiltin || false,
         input.isActive ?? true,
-        input.defaultBindingScope || 'workspace',
+        input.defaultInstanceScope || 'workspace',
         input.defaultReuseScope || 'conversation',
         input.defaultIdleTtlMs ?? null,
         input.defaultMaxAgeMs ?? null,
@@ -850,7 +971,7 @@ export async function createCapabilityPackage(input: {
   const result = await query(
     `INSERT INTO capability_packages (
        publisher_id, workspace_id, kind, slug, display_name, description, long_description, icon_url,
-       source_type, tags, is_builtin, is_active, default_binding_scope, default_reuse_scope,
+       source_type, tags, is_builtin, is_active, default_instance_scope, default_reuse_scope,
        default_idle_ttl_ms, default_max_age_ms, requires_handshake, metadata
      )
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
@@ -868,7 +989,7 @@ export async function createCapabilityPackage(input: {
       input.tags || [],
       input.isBuiltin || false,
       input.isActive ?? true,
-      input.defaultBindingScope || 'workspace',
+      input.defaultInstanceScope || 'workspace',
       input.defaultReuseScope || 'conversation',
       input.defaultIdleTtlMs ?? null,
       input.defaultMaxAgeMs ?? null,
@@ -1183,9 +1304,9 @@ export async function getCapabilityAssetByPath(revisionId: string, assetPath: st
   return mapAsset(result.rows[0]);
 }
 
-export async function listCapabilityBindings(workspaceId: string, filters?: {
+export async function listCapabilityInstances(workspaceId: string, filters?: {
   packageId?: string;
-  bindingScope?: CapabilityBindingScope;
+  attachmentType?: CapabilityAttachmentType;
   conversationId?: string;
   actorId?: string;
   userId?: string;
@@ -1199,20 +1320,20 @@ export async function listCapabilityBindings(workspaceId: string, filters?: {
     where.push(`b.package_id = $${idx++}`);
     values.push(filters.packageId);
   }
-  if (filters?.bindingScope) {
-    where.push(`b.binding_scope = $${idx++}`);
-    values.push(filters.bindingScope);
+  if (filters?.attachmentType) {
+    where.push(`b.attachment_type = $${idx++}`);
+    values.push(filters.attachmentType);
   }
   if (filters?.conversationId) {
-    where.push(`b.conversation_id = $${idx++}`);
+    where.push(`b.attachment_conversation_id = $${idx++}`);
     values.push(filters.conversationId);
   }
   if (filters?.actorId) {
-    where.push(`b.actor_id = $${idx++}`);
+    where.push(`b.attachment_actor_id = $${idx++}`);
     values.push(filters.actorId);
   }
   if (filters?.userId) {
-    where.push(`b.user_id = $${idx++}`);
+    where.push(`b.attachment_user_id = $${idx++}`);
     values.push(filters.userId);
   }
   if (filters?.kind) {
@@ -1223,6 +1344,10 @@ export async function listCapabilityBindings(workspaceId: string, filters?: {
   const result = await query(
     `SELECT
         b.*,
+        b.attachment_type AS attachment_type,
+        b.attachment_conversation_id AS conversation_id,
+        b.attachment_actor_id AS actor_id,
+        b.attachment_user_id AS user_id,
         p.id AS package_id,
         p.workspace_id AS package_workspace_id,
         p.publisher_id,
@@ -1238,7 +1363,7 @@ export async function listCapabilityBindings(workspaceId: string, filters?: {
         p.is_builtin,
         p.download_count,
         p.latest_revision_id,
-        p.default_binding_scope,
+        p.default_instance_scope,
         p.default_reuse_scope,
         p.default_idle_ttl_ms,
         p.default_max_age_ms,
@@ -1255,21 +1380,21 @@ export async function listCapabilityBindings(workspaceId: string, filters?: {
         pub.owner_user_id AS publisher_owner_user_id,
         pub.created_at AS publisher_created_at,
         pub.updated_at AS publisher_updated_at,
-        r.id AS binding_revision_id,
-        r.version AS binding_revision_version,
-        r.status AS binding_revision_status,
-        r.manifest AS binding_revision_manifest,
-        r.config_schema AS binding_revision_config_schema,
-        r.default_config AS binding_revision_default_config,
-        r.transport AS binding_revision_transport,
-        r.entry_point AS binding_revision_entry_point,
-        r.tools_manifest AS binding_revision_tools_manifest,
-        r.validation_rules AS binding_revision_validation_rules,
-        r.setup_steps AS binding_revision_setup_steps,
-        r.metadata AS binding_revision_metadata,
-        r.created_by AS binding_revision_created_by,
-        r.created_at AS binding_revision_created_at
-     FROM capability_bindings b
+        r.id AS instance_revision_id,
+        r.version AS instance_revision_version,
+        r.status AS instance_revision_status,
+        r.manifest AS instance_revision_manifest,
+        r.config_schema AS instance_revision_config_schema,
+        r.default_config AS instance_revision_default_config,
+        r.transport AS instance_revision_transport,
+        r.entry_point AS instance_revision_entry_point,
+        r.tools_manifest AS instance_revision_tools_manifest,
+        r.validation_rules AS instance_revision_validation_rules,
+        r.setup_steps AS instance_revision_setup_steps,
+        r.metadata AS instance_revision_metadata,
+        r.created_by AS instance_revision_created_by,
+        r.created_at AS instance_revision_created_at
+     FROM capability_instances b
      JOIN capability_packages p ON p.id = b.package_id
      JOIN capability_publishers pub ON pub.id = p.publisher_id
      JOIN capability_package_revisions r ON r.id = b.revision_id
@@ -1277,13 +1402,17 @@ export async function listCapabilityBindings(workspaceId: string, filters?: {
      ORDER BY b.created_at DESC`,
     values,
   );
-  return hydrateBindingPackageCategories(result.rows.map(mapBinding));
+  return hydrateInstancePackageCategories(result.rows.map(mapInstance));
 }
 
-export async function getCapabilityBinding(bindingId: string) {
+export async function getCapabilityInstance(instanceId: string) {
   const result = await query(
     `SELECT
         b.*,
+        b.attachment_type AS attachment_type,
+        b.attachment_conversation_id AS conversation_id,
+        b.attachment_actor_id AS actor_id,
+        b.attachment_user_id AS user_id,
         p.id AS package_id,
         p.publisher_id,
         p.workspace_id AS package_workspace_id,
@@ -1299,7 +1428,7 @@ export async function getCapabilityBinding(bindingId: string) {
         p.is_builtin,
         p.download_count,
         p.latest_revision_id,
-        p.default_binding_scope,
+        p.default_instance_scope,
         p.default_reuse_scope,
         p.default_idle_ttl_ms,
         p.default_max_age_ms,
@@ -1316,51 +1445,51 @@ export async function getCapabilityBinding(bindingId: string) {
         pub.owner_user_id AS publisher_owner_user_id,
         pub.created_at AS publisher_created_at,
         pub.updated_at AS publisher_updated_at,
-        r.id AS binding_revision_id,
-        r.version AS binding_revision_version,
-        r.status AS binding_revision_status,
-        r.manifest AS binding_revision_manifest,
-        r.config_schema AS binding_revision_config_schema,
-        r.default_config AS binding_revision_default_config,
-        r.transport AS binding_revision_transport,
-        r.entry_point AS binding_revision_entry_point,
-        r.tools_manifest AS binding_revision_tools_manifest,
-        r.validation_rules AS binding_revision_validation_rules,
-        r.setup_steps AS binding_revision_setup_steps,
-        r.metadata AS binding_revision_metadata,
-        r.created_by AS binding_revision_created_by,
-        r.created_at AS binding_revision_created_at
-     FROM capability_bindings b
+        r.id AS instance_revision_id,
+        r.version AS instance_revision_version,
+        r.status AS instance_revision_status,
+        r.manifest AS instance_revision_manifest,
+        r.config_schema AS instance_revision_config_schema,
+        r.default_config AS instance_revision_default_config,
+        r.transport AS instance_revision_transport,
+        r.entry_point AS instance_revision_entry_point,
+        r.tools_manifest AS instance_revision_tools_manifest,
+        r.validation_rules AS instance_revision_validation_rules,
+        r.setup_steps AS instance_revision_setup_steps,
+        r.metadata AS instance_revision_metadata,
+        r.created_by AS instance_revision_created_by,
+        r.created_at AS instance_revision_created_at
+     FROM capability_instances b
      JOIN capability_packages p ON p.id = b.package_id
      JOIN capability_publishers pub ON pub.id = p.publisher_id
      JOIN capability_package_revisions r ON r.id = b.revision_id
      WHERE b.id = $1
      LIMIT 1`,
-    [bindingId],
+    [instanceId],
   );
 
   if (result.rows.length === 0) {
-    throw new CapabilityError(404, 'Capability binding not found');
+    throw new CapabilityError(404, 'Capability instance not found');
   }
 
-  const [binding] = await hydrateBindingPackageCategories([mapBinding(result.rows[0])]);
-  return binding;
+  const [instance] = await hydrateInstancePackageCategories([mapInstance(result.rows[0])]);
+  return instance;
 }
 
-export function validateGrantHierarchy(bindingScope: CapabilityBindingScope, grantScope: CapabilityGrantScope): boolean {
-  void bindingScope;
+export function validateGrantHierarchy(attachmentType: CapabilityAttachmentType, grantScope: CapabilityGrantScope): boolean {
+  void attachmentType;
   return ['platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user'].includes(grantScope);
 }
 
-export async function createCapabilityBinding(input: {
+export async function createCapabilityInstance(input: {
   workspaceId: string;
   packageId: string;
   revisionId?: string;
-  bindingScope: CapabilityBindingScope;
+  attachmentType: CapabilityAttachmentType;
   conversationId?: string;
   actorId?: string;
   userId?: string;
-  installMode?: CapabilityBindingInstallMode;
+  installMode?: CapabilityInstanceInstallMode;
   reuseScope?: CapabilityReuseScope;
   idleTtlMs?: number;
   maxAgeMs?: number;
@@ -1374,28 +1503,28 @@ export async function createCapabilityBinding(input: {
   const revisionId = input.revisionId || pkg.latestRevisionId;
   if (!revisionId) throw new CapabilityError(400, 'Capability package has no active revision');
 
-  const existing = await listCapabilityBindings(input.workspaceId, {
+  const existing = await listCapabilityInstances(input.workspaceId, {
     packageId: input.packageId,
-    bindingScope: input.bindingScope,
+    attachmentType: input.attachmentType,
     conversationId: input.conversationId,
     actorId: input.actorId,
     userId: input.userId,
   });
-  const duplicate = existing.find((binding) =>
-    binding.revisionId === revisionId &&
-    JSON.stringify(binding.configData || {}) === JSON.stringify(input.configData || {}) &&
-    binding.reuseScope === (input.reuseScope || pkg.defaultReuseScope || 'conversation') &&
-    (binding.idleTtlMs ?? null) === (input.idleTtlMs ?? pkg.defaultIdleTtlMs ?? null) &&
-    (binding.maxAgeMs ?? null) === (input.maxAgeMs ?? pkg.defaultMaxAgeMs ?? null) &&
-    binding.requiresHandshake === (input.requiresHandshake ?? pkg.requiresHandshake),
+  const duplicate = existing.find((instance) =>
+    instance.revisionId === revisionId &&
+    JSON.stringify(instance.configData || {}) === JSON.stringify(input.configData || {}) &&
+    instance.reuseScope === (input.reuseScope || pkg.defaultReuseScope || 'conversation') &&
+    (instance.idleTtlMs ?? null) === (input.idleTtlMs ?? pkg.defaultIdleTtlMs ?? null) &&
+    (instance.maxAgeMs ?? null) === (input.maxAgeMs ?? pkg.defaultMaxAgeMs ?? null) &&
+    instance.requiresHandshake === (input.requiresHandshake ?? pkg.requiresHandshake),
   );
   if (duplicate) {
     return duplicate;
   }
 
   const result = await query(
-    `INSERT INTO capability_bindings (
-       workspace_id, package_id, revision_id, binding_scope, conversation_id, actor_id, user_id,
+    `INSERT INTO capability_instances (
+       workspace_id, package_id, revision_id, attachment_type, attachment_conversation_id, attachment_actor_id, attachment_user_id,
        install_mode, is_enabled, config_data, reuse_scope, idle_ttl_ms, max_age_ms,
        requires_handshake, installed_by, metadata
      )
@@ -1405,7 +1534,7 @@ export async function createCapabilityBinding(input: {
       input.workspaceId,
       input.packageId,
       revisionId,
-      input.bindingScope,
+      input.attachmentType,
       input.conversationId || null,
       input.actorId || null,
       input.userId || null,
@@ -1420,14 +1549,25 @@ export async function createCapabilityBinding(input: {
     ],
   );
 
-  const bindings = await listCapabilityBindings(input.workspaceId, { packageId: input.packageId });
-  return bindings.find((binding) => binding.id === result.rows[0].id)!;
+  const instances = await listCapabilityInstances(input.workspaceId, { packageId: input.packageId });
+  const instance = instances.find((candidate) => candidate.id === result.rows[0].id)!;
+  const authzEntryIds = await enqueueAuthzRelationships(
+    buildCapabilityInstanceAuthzRelations(instance),
+    {
+      source: 'capability_instance.create',
+      instanceId: instance.id,
+      packageId: instance.packageId,
+      packageKind: instance.package?.kind,
+    },
+  );
+  await flushQueuedAuthzEntries(authzEntryIds, 'capability_instance.create');
+  return instance;
 }
 
-export async function updateCapabilityBinding(bindingId: string, data: {
+export async function updateCapabilityInstance(instanceId: string, data: {
   isEnabled?: boolean;
   configData?: JsonMap;
-  bindingScope?: CapabilityBindingScope;
+  attachmentType?: CapabilityAttachmentType;
   conversationId?: string | null;
   actorId?: string | null;
   userId?: string | null;
@@ -1437,6 +1577,8 @@ export async function updateCapabilityBinding(bindingId: string, data: {
   requiresHandshake?: boolean;
   metadata?: JsonMap;
 }) {
+  const previousInstance = await getCapabilityInstance(instanceId);
+  const previousGrants = await listCapabilityGrants(instanceId);
   const sets: string[] = [];
   const values: unknown[] = [];
   let idx = 1;
@@ -1445,20 +1587,20 @@ export async function updateCapabilityBinding(bindingId: string, data: {
     sets.push(`is_enabled = $${idx++}`);
     values.push(data.isEnabled);
   }
-  if (data.bindingScope !== undefined) {
-    sets.push(`binding_scope = $${idx++}`);
-    values.push(data.bindingScope);
+  if (data.attachmentType !== undefined) {
+    sets.push(`attachment_type = $${idx++}`);
+    values.push(data.attachmentType);
   }
   if (data.conversationId !== undefined) {
-    sets.push(`conversation_id = $${idx++}`);
+    sets.push(`attachment_conversation_id = $${idx++}`);
     values.push(data.conversationId);
   }
   if (data.actorId !== undefined) {
-    sets.push(`actor_id = $${idx++}`);
+    sets.push(`attachment_actor_id = $${idx++}`);
     values.push(data.actorId);
   }
   if (data.userId !== undefined) {
-    sets.push(`user_id = $${idx++}`);
+    sets.push(`attachment_user_id = $${idx++}`);
     values.push(data.userId);
   }
   if (data.configData !== undefined) {
@@ -1488,24 +1630,62 @@ export async function updateCapabilityBinding(bindingId: string, data: {
 
   if (sets.length === 0) throw new CapabilityError(400, 'No fields to update');
 
-  values.push(bindingId);
+  values.push(instanceId);
   const result = await query(
-    `UPDATE capability_bindings
+    `UPDATE capability_instances
      SET ${sets.join(', ')}
      WHERE id = $${idx}
      RETURNING *`,
     values,
   );
 
-  if (result.rows.length === 0) throw new CapabilityError(404, 'Capability binding not found');
+  if (result.rows.length === 0) throw new CapabilityError(404, 'Capability instance not found');
   const workspaceId = result.rows[0].workspace_id;
-  const bindings = await listCapabilityBindings(workspaceId, { packageId: result.rows[0].package_id });
-  return bindings.find((binding) => binding.id === bindingId)!;
+  const instances = await listCapabilityInstances(workspaceId, { packageId: result.rows[0].package_id });
+  const instance = instances.find((candidate) => candidate.id === instanceId)!;
+  const authzEntryIds = await enqueueAuthzRelationships(
+    diffAuthzRelationships(
+      [
+        ...buildCapabilityInstanceAuthzRelations(previousInstance),
+        ...buildCapabilityGrantAuthzRelations(previousInstance, previousGrants),
+      ],
+      [
+        ...buildCapabilityInstanceAuthzRelations(instance),
+        ...buildCapabilityGrantAuthzRelations(instance, previousGrants),
+      ],
+    ),
+    {
+      source: 'capability_instance.update',
+      instanceId: instance.id,
+      packageId: instance.packageId,
+      packageKind: instance.package?.kind,
+    },
+  );
+  await flushQueuedAuthzEntries(authzEntryIds, 'capability_instance.update');
+  return instance;
 }
 
-export async function deleteCapabilityBinding(bindingId: string) {
-  const result = await query(`DELETE FROM capability_bindings WHERE id = $1 RETURNING *`, [bindingId]);
-  if (result.rows.length === 0) throw new CapabilityError(404, 'Capability binding not found');
+export async function deleteCapabilityInstance(instanceId: string) {
+  const instance = await getCapabilityInstance(instanceId);
+  const grants = await listCapabilityGrants(instanceId);
+  const result = await query(`DELETE FROM capability_instances WHERE id = $1 RETURNING *`, [instanceId]);
+  if (result.rows.length === 0) throw new CapabilityError(404, 'Capability instance not found');
+  const authzEntryIds = await enqueueAuthzRelationships(
+    diffAuthzRelationships(
+      [
+        ...buildCapabilityInstanceAuthzRelations(instance),
+        ...buildCapabilityGrantAuthzRelations(instance, grants),
+      ],
+      [],
+    ),
+    {
+      source: 'capability_instance.delete',
+      instanceId,
+      packageId: instance.packageId,
+      packageKind: instance.package?.kind,
+    },
+  );
+  await flushQueuedAuthzEntries(authzEntryIds, 'capability_instance.delete');
   return result.rows[0];
 }
 
@@ -1524,7 +1704,7 @@ export async function replaceRevisionRequirements(revisionId: string, requiremen
   targetPublisherSlug?: string;
   targetPackageSlug?: string;
   targetTag?: string;
-  acceptableBindingScopes?: CapabilityBindingScope[];
+  acceptableInstanceScopes?: CapabilityAttachmentType[];
   acceptableReuseScopes?: CapabilityReuseScope[];
   description?: string;
   configPredicate?: JsonMap;
@@ -1535,7 +1715,7 @@ export async function replaceRevisionRequirements(revisionId: string, requiremen
     await query(
       `INSERT INTO capability_requirements (
          revision_id, requirement_kind, target_kind, target_package_kind,
-         target_publisher_slug, target_package_slug, target_tag, acceptable_binding_scopes,
+         target_publisher_slug, target_package_slug, target_tag, acceptable_instance_scopes,
          acceptable_reuse_scopes, description, config_predicate, metadata
        )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
@@ -1547,7 +1727,7 @@ export async function replaceRevisionRequirements(revisionId: string, requiremen
         requirement.targetPublisherSlug || null,
         requirement.targetPackageSlug || null,
         requirement.targetTag || null,
-        requirement.acceptableBindingScopes || [],
+        requirement.acceptableInstanceScopes || [],
         requirement.acceptableReuseScopes || [],
         requirement.description || '',
         JSON.stringify(requirement.configPredicate || {}),
@@ -1561,23 +1741,23 @@ export async function evaluateCapabilityRequirements(input: {
   workspaceId: string;
   revisionId: string;
 }) {
-  const [requirements, bindings] = await Promise.all([
+  const [requirements, instances] = await Promise.all([
     listRevisionRequirements(input.revisionId),
-    listCapabilityBindings(input.workspaceId),
+    listCapabilityInstances(input.workspaceId),
   ]);
 
   const checks: CapabilityRequirementCheck[] = requirements.map((requirement) => {
-    const matchedBindings = bindings.filter((binding) => targetMatchesBinding(requirement, binding));
-    const scopeCompatible = matchedBindings.filter((binding) =>
-      requirement.acceptableBindingScopes.length === 0 ||
-      requirement.acceptableBindingScopes.includes(binding.bindingScope),
+    const matchedInstances = instances.filter((instance) => targetMatchesInstance(requirement, instance));
+    const scopeCompatible = matchedInstances.filter((instance) =>
+      requirement.acceptableInstanceScopes.length === 0 ||
+      requirement.acceptableInstanceScopes.includes(instance.attachmentType),
     );
-    const reuseCompatible = scopeCompatible.filter((binding) =>
+    const reuseCompatible = scopeCompatible.filter((instance) =>
       requirement.acceptableReuseScopes.length === 0 ||
-      requirement.acceptableReuseScopes.includes(binding.reuseScope),
+      requirement.acceptableReuseScopes.includes(instance.reuseScope),
     );
-    const configCompatible = reuseCompatible.filter((binding) =>
-      configPredicateSatisfied(binding.configData, requirement.configPredicate),
+    const configCompatible = reuseCompatible.filter((instance) =>
+      configPredicateSatisfied(instance.configData, requirement.configPredicate),
     );
 
     if (configCompatible.length > 0) {
@@ -1586,7 +1766,7 @@ export async function evaluateCapabilityRequirements(input: {
         requirementKind: requirement.requirementKind,
         status: 'satisfied',
         message: requirement.description || 'Requirement satisfied',
-        matchedBindingIds: configCompatible.map((binding) => binding.id),
+        matchedInstanceIds: configCompatible.map((instance) => instance.id),
       };
     }
 
@@ -1595,8 +1775,8 @@ export async function evaluateCapabilityRequirements(input: {
         requirementId: requirement.id,
         requirementKind: requirement.requirementKind,
         status: 'config_incomplete',
-        message: requirement.description || 'Binding exists but configuration is incomplete',
-        matchedBindingIds: reuseCompatible.map((binding) => binding.id),
+        message: requirement.description || 'Instance exists but configuration is incomplete',
+        matchedInstanceIds: reuseCompatible.map((instance) => instance.id),
       };
     }
 
@@ -1605,18 +1785,18 @@ export async function evaluateCapabilityRequirements(input: {
         requirementId: requirement.id,
         requirementKind: requirement.requirementKind,
         status: 'scope_mismatch',
-        message: requirement.description || 'Binding exists but reuse policy does not match',
-        matchedBindingIds: scopeCompatible.map((binding) => binding.id),
+        message: requirement.description || 'Instance exists but reuse policy does not match',
+        matchedInstanceIds: scopeCompatible.map((instance) => instance.id),
       };
     }
 
-    if (matchedBindings.length > 0) {
+    if (matchedInstances.length > 0) {
       return {
         requirementId: requirement.id,
         requirementKind: requirement.requirementKind,
         status: 'scope_mismatch',
-        message: requirement.description || 'Binding exists but scope does not match',
-        matchedBindingIds: matchedBindings.map((binding) => binding.id),
+        message: requirement.description || 'Instance exists but attachment does not match',
+        matchedInstanceIds: matchedInstances.map((instance) => instance.id),
       };
     }
 
@@ -1626,7 +1806,7 @@ export async function evaluateCapabilityRequirements(input: {
       requirementKind: requirement.requirementKind,
       status: missingStatus,
       message: requirement.description || 'Requirement is not installed',
-      matchedBindingIds: [],
+      matchedInstanceIds: [],
       missingPublisherSlug: requirement.targetPublisherSlug,
       missingPackageSlug: requirement.targetPackageSlug,
       missingTag: requirement.targetTag,
@@ -1636,14 +1816,14 @@ export async function evaluateCapabilityRequirements(input: {
   return checks;
 }
 
-export async function listCapabilityGrants(bindingId: string) {
+export async function listCapabilityGrants(instanceId: string) {
   const result = await query(
-    `SELECT * FROM capability_grants WHERE binding_id = $1 ORDER BY created_at DESC`,
-    [bindingId],
+    `SELECT * FROM capability_instance_grants WHERE instance_id = $1 ORDER BY created_at DESC`,
+    [instanceId],
   );
   return result.rows.map((row: any): CapabilityGrant => ({
     id: row.id,
-    bindingId: row.binding_id,
+    instanceId: row.instance_id,
     workspaceId: row.workspace_id,
     grantScope: row.grant_scope,
     conversationId: row.conversation_id || undefined,
@@ -1659,8 +1839,12 @@ export async function listCapabilityGrants(bindingId: string) {
   }));
 }
 
-export async function issueCapabilityGrant(input: {
-  bindingId: string;
+export async function listCapabilityInstanceGrants(instanceId: string) {
+  return listCapabilityGrants(instanceId);
+}
+
+export async function issueCapabilityInstanceGrant(input: {
+  instanceId: string;
   workspaceId: string;
   grantScope?: CapabilityGrantScope;
   conversationId?: string;
@@ -1671,19 +1855,19 @@ export async function issueCapabilityGrant(input: {
   reason?: string;
   metadata?: JsonMap;
 }) {
-  const binding = await getCapabilityBinding(input.bindingId);
-  if (binding.workspaceId !== input.workspaceId) {
-    throw new CapabilityError(404, 'Capability binding not found');
+  const instance = await getCapabilityInstance(input.instanceId);
+  if (instance.workspaceId !== input.workspaceId) {
+    throw new CapabilityError(404, 'Capability instance not found');
   }
 
-  const requiredPermissions = binding.revision?.authorization?.requiredPermissions || [];
+  const requiredPermissions = instance.revision?.authorization?.requiredPermissions || [];
   const permissions = (input.permissions && input.permissions.length > 0)
     ? Array.from(new Set(input.permissions))
     : requiredPermissions;
 
-  const grantScope = input.grantScope || inferDefaultGrantScope(binding);
-  if (!validateGrantHierarchy(binding.bindingScope, grantScope)) {
-    throw new CapabilityError(400, `Grant scope '${grantScope}' is not valid for binding scope '${binding.bindingScope}'`);
+  const grantScope = input.grantScope || inferDefaultGrantScope(instance);
+  if (!validateGrantHierarchy(instance.attachmentType, grantScope)) {
+    throw new CapabilityError(400, `Grant scope '${grantScope}' is not valid for attachment type '${instance.attachmentType}'`);
   }
 
   let conversationId = input.conversationId;
@@ -1691,28 +1875,28 @@ export async function issueCapabilityGrant(input: {
   let userId = input.userId;
 
   if (grantScope === 'conversation') {
-    conversationId = conversationId || binding.conversationId;
+    conversationId = conversationId || instance.conversationId;
     if (!conversationId) {
       throw new CapabilityError(400, 'conversationId is required for conversation grants');
     }
     actorId = undefined;
     userId = undefined;
   } else if (grantScope === 'actor_global') {
-    actorId = actorId || binding.actorId;
+    actorId = actorId || instance.actorId;
     if (!actorId) {
       throw new CapabilityError(400, 'actorId is required for actor_global grants');
     }
     conversationId = undefined;
     userId = undefined;
   } else if (grantScope === 'actor_conversation') {
-    actorId = actorId || binding.actorId;
-    conversationId = conversationId || binding.conversationId;
+    actorId = actorId || instance.actorId;
+    conversationId = conversationId || instance.conversationId;
     if (!actorId || !conversationId) {
       throw new CapabilityError(400, 'actorId and conversationId are required for actor_conversation grants');
     }
     userId = undefined;
   } else if (grantScope === 'user') {
-    userId = userId || binding.userId;
+    userId = userId || instance.userId;
     if (!userId) {
       throw new CapabilityError(400, 'userId is required for user grants');
     }
@@ -1728,7 +1912,7 @@ export async function issueCapabilityGrant(input: {
     userId = undefined;
   }
 
-  const existingGrants = await listCapabilityGrants(binding.id);
+  const existingGrants = await listCapabilityGrants(instance.id);
   const existing = existingGrants.find((grant) =>
     grant.status === 'active' &&
     grant.grantScope === grantScope &&
@@ -1742,14 +1926,14 @@ export async function issueCapabilityGrant(input: {
   }
 
   const result = await query(
-    `INSERT INTO capability_grants (
-       binding_id, workspace_id, grant_scope, conversation_id, actor_id, user_id,
+    `INSERT INTO capability_instance_grants (
+       instance_id, workspace_id, grant_scope, conversation_id, actor_id, user_id,
        permissions, status, granted_by, reason, metadata
      )
      VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10)
      RETURNING *`,
     [
-      binding.id,
+      instance.id,
       input.workspaceId,
       grantScope,
       conversationId || null,
@@ -1757,17 +1941,42 @@ export async function issueCapabilityGrant(input: {
       userId || null,
       permissions,
       input.grantedBy || null,
-      input.reason || binding.revision?.authorization?.reason || null,
+      input.reason || instance.revision?.authorization?.reason || null,
       JSON.stringify(input.metadata || {}),
     ],
   );
 
-  return listCapabilityGrants(binding.id).then((grants) => grants.find((grant) => grant.id === result.rows[0].id)!);
+  const grants = await listCapabilityGrants(instance.id);
+  const issued = grants.find((grant) => grant.id === result.rows[0].id)!;
+  const authzEntryIds = await enqueueAuthzRelationships(
+    diffAuthzRelationships(
+      buildCapabilityGrantAuthzRelations(instance, existingGrants),
+      buildCapabilityGrantAuthzRelations(instance, grants),
+    ),
+    {
+      source: 'capability_instance_grant.issue',
+      instanceId: instance.id,
+      grantId: issued.id,
+      packageKind: instance.package?.kind,
+    },
+  );
+  await flushQueuedAuthzEntries(authzEntryIds, 'capability_instance_grant.issue');
+  return issued;
 }
 
 export async function revokeCapabilityGrant(grantId: string, workspaceId: string) {
+  const currentGrantResult = await query(
+    `SELECT * FROM capability_instance_grants WHERE id = $1 AND workspace_id = $2 LIMIT 1`,
+    [grantId, workspaceId],
+  );
+  if (currentGrantResult.rows.length === 0) {
+    throw new CapabilityError(404, 'Capability grant not found');
+  }
+  const currentGrantRow = currentGrantResult.rows[0];
+  const instance = await getCapabilityInstance(currentGrantRow.instance_id);
+  const previousGrants = await listCapabilityGrants(instance.id);
   const result = await query(
-    `UPDATE capability_grants
+    `UPDATE capability_instance_grants
      SET status = 'revoked', revoked_at = NOW()
      WHERE id = $1 AND workspace_id = $2 AND status = 'active'
      RETURNING *`,
@@ -1779,9 +1988,24 @@ export async function revokeCapabilityGrant(grantId: string, workspaceId: string
   }
 
   const row = result.rows[0];
+  const nextGrants = await listCapabilityGrants(instance.id);
+  const authzEntryIds = await enqueueAuthzRelationships(
+    diffAuthzRelationships(
+      buildCapabilityGrantAuthzRelations(instance, previousGrants),
+      buildCapabilityGrantAuthzRelations(instance, nextGrants),
+    ),
+    {
+      source: 'capability_instance_grant.revoke',
+      instanceId: instance.id,
+      grantId,
+      packageKind: instance.package?.kind,
+    },
+  );
+  await flushQueuedAuthzEntries(authzEntryIds, 'capability_instance_grant.revoke');
+
   return {
     id: row.id,
-    bindingId: row.binding_id,
+    instanceId: row.instance_id,
     workspaceId: row.workspace_id,
     grantScope: row.grant_scope,
     conversationId: row.conversation_id || undefined,
@@ -1797,83 +2021,78 @@ export async function revokeCapabilityGrant(grantId: string, workspaceId: string
   } satisfies CapabilityGrant;
 }
 
-export async function getCapabilityAuthorizationSummary(input: {
-  bindingId: string;
+export async function getCapabilityInstanceAuthorizationSummary(input: {
+  instanceId: string;
   workspaceId: string;
   actorId?: string;
   conversationId?: string;
   userId?: string;
-  userCount?: number;
 }) {
-  const binding = await getCapabilityBinding(input.bindingId);
-  if (binding.workspaceId !== input.workspaceId) {
-    throw new CapabilityError(404, 'Capability binding not found');
+  const instance = await getCapabilityInstance(input.instanceId);
+  if (instance.workspaceId !== input.workspaceId) {
+    throw new CapabilityError(404, 'Capability instance not found');
   }
 
-  const grants = await listCapabilityGrants(binding.id);
+  const grants = await listCapabilityGrants(instance.id);
   const activeGrants = grants.filter((grant) => grant.status === 'active');
-  const requiredPermissions = binding.revision?.authorization?.requiredPermissions || [];
-  const matchingGrants = activeGrants.filter((grant) =>
-    grantCoversRuntimeTarget(grant, {
-      actorId: input.actorId,
-      conversationId: input.conversationId,
-      userId: input.userId,
-      userCount: input.userCount,
-    }),
+  const requiredPermissions = instance.revision?.authorization?.requiredPermissions || [];
+  const hasConcreteRuntimeTarget = Boolean(
+    input.actorId ||
+    input.conversationId ||
+    input.userId,
   );
+  const matchingGrants = hasConcreteRuntimeTarget
+    ? activeGrants.filter((grant) =>
+        grantCoversRuntimeTarget(grant, {
+          actorId: input.actorId,
+          conversationId: input.conversationId,
+          userId: input.userId,
+        }),
+      )
+    : activeGrants;
   const effectivePermissions = Array.from(new Set(matchingGrants.flatMap((grant) => grant.permissions)));
   const matchingGrantIds = matchingGrants
     .filter((grant) => requiredPermissions.length === 0 || isPermissionSubset(requiredPermissions, effectivePermissions))
     .map((grant) => grant.id);
-  const visibleByBinding = bindingMatchesRuntimeTarget(binding, {
-    actorId: input.actorId,
-    conversationId: input.conversationId,
-    userId: input.userId,
-    userCount: input.userCount,
-  });
 
   return {
-    binding,
+    instance,
     requiredPermissions,
-    suggestedGrantScope: requiredPermissions.length > 0 ? inferDefaultGrantScope(binding) : undefined,
-    reason: binding.revision?.authorization?.reason,
+    suggestedGrantScope: requiredPermissions.length > 0 ? inferDefaultGrantScope(instance) : undefined,
+    reason: instance.revision?.authorization?.reason,
     grants,
     effectivePermissions,
-    isVisible: visibleByBinding || matchingGrantIds.length > 0,
+    isVisible: matchingGrants.length > 0,
     isAuthorized:
-      (requiredPermissions.length === 0 && (visibleByBinding || matchingGrantIds.length > 0)) ||
+      (requiredPermissions.length === 0 && matchingGrants.length > 0) ||
       (requiredPermissions.length > 0 && isPermissionSubset(requiredPermissions, effectivePermissions)),
     matchingGrantIds,
   };
 }
 
-export async function ensureDefaultCapabilityGrant(input: {
-  bindingId: string;
+export async function ensureDefaultCapabilityInstanceGrant(input: {
+  instanceId: string;
   workspaceId: string;
   grantedBy?: string;
 }) {
-  const summary = await getCapabilityAuthorizationSummary({
-    bindingId: input.bindingId,
-    workspaceId: input.workspaceId,
-  });
-
-  if (summary.requiredPermissions.length === 0 || summary.isAuthorized) {
-    return null;
+  const instance = await getCapabilityInstance(input.instanceId);
+  if (instance.workspaceId !== input.workspaceId) {
+    throw new CapabilityError(404, 'Capability instance not found');
   }
 
-  return issueCapabilityGrant({
-    bindingId: input.bindingId,
+  return issueCapabilityInstanceGrant({
+    instanceId: input.instanceId,
     workspaceId: input.workspaceId,
-    grantScope: summary.suggestedGrantScope,
-    permissions: summary.requiredPermissions,
+    grantScope: inferDefaultGrantScope(instance),
+    permissions: instance.revision?.authorization?.requiredPermissions || [],
     grantedBy: input.grantedBy,
-    reason: summary.reason,
+    reason: instance.revision?.authorization?.reason,
   });
 }
 
 export function buildCapabilityGrantPlan(input: {
   revision?: CapabilityPackageRevision;
-  bindingScope: CapabilityBindingScope;
+  attachmentType: CapabilityAttachmentType;
   actorId?: string;
   conversationId?: string;
   userId?: string;
@@ -1888,8 +2107,8 @@ export function buildCapabilityGrantPlan(input: {
   }
 
   let suggestedGrantScope = authorization?.defaultGrantScope;
-  if (!suggestedGrantScope || !validateGrantHierarchy(input.bindingScope, suggestedGrantScope)) {
-    suggestedGrantScope = input.bindingScope;
+  if (!suggestedGrantScope || !validateGrantHierarchy(input.attachmentType, suggestedGrantScope)) {
+    suggestedGrantScope = input.attachmentType;
   }
 
   if (suggestedGrantScope === 'platform') {
@@ -1902,16 +2121,16 @@ export function buildCapabilityGrantPlan(input: {
   }
 
   if (suggestedGrantScope === 'conversation' && !input.conversationId) {
-    suggestedGrantScope = input.bindingScope;
+    suggestedGrantScope = input.attachmentType;
   }
   if (suggestedGrantScope === 'actor_global' && !input.actorId) {
-    suggestedGrantScope = input.bindingScope;
+    suggestedGrantScope = input.attachmentType;
   }
   if (suggestedGrantScope === 'actor_conversation' && (!input.actorId || !input.conversationId)) {
-    suggestedGrantScope = input.bindingScope;
+    suggestedGrantScope = input.attachmentType;
   }
   if (suggestedGrantScope === 'user' && !input.userId) {
-    suggestedGrantScope = input.bindingScope;
+    suggestedGrantScope = input.attachmentType;
   }
 
   return {
@@ -1922,41 +2141,69 @@ export function buildCapabilityGrantPlan(input: {
   };
 }
 
-export async function listAuthorizedCapabilityBindings(input: {
+export async function listAuthorizedCapabilityInstances(input: {
   workspaceId: string;
   kind?: CapabilityPackageKind;
   conversationId?: string;
   actorId?: string;
   userId?: string;
-  userCount?: number;
 }) {
-  const bindings = await listCapabilityBindings(input.workspaceId, {
+  const instances = await listCapabilityInstances(input.workspaceId, {
     kind: input.kind,
   });
-  const candidates: Array<{ binding: CapabilityBinding; grantScore: number; bindingScore: number; sortTime: number }> = [];
+  let candidateInstances = instances;
 
-  for (const binding of bindings) {
-    const requiredPermissions = binding.revision?.authorization?.requiredPermissions || [];
-    const grants = await listCapabilityGrants(binding.id);
+  const authzObjectType = capabilityInstanceAuthzObjectType(input.kind);
+  if (authzEnabled() && authzObjectType && (input.actorId || input.userId)) {
+    const authorizedIds = new Set<string>();
+
+    if (input.actorId) {
+      const actorIds = await lookupResources({
+        resourceType: authzObjectType,
+        permission: 'use',
+        subject: { type: 'actor', id: input.actorId },
+      });
+      for (const id of actorIds) authorizedIds.add(id);
+    }
+
+    if (!input.actorId && input.userId) {
+      const userIds = await lookupResources({
+        resourceType: authzObjectType,
+        permission: 'use',
+        subject: { type: 'user', id: input.userId },
+      });
+      for (const id of userIds) authorizedIds.add(id);
+    }
+
+    if (authorizedIds.size === 0) {
+      return [];
+    }
+
+    candidateInstances = instances.filter((instance) => authorizedIds.has(instance.id));
+  }
+
+  const candidates: Array<{ instance: CapabilityInstance; grantScore: number; attachmentScore: number; sortTime: number }> = [];
+
+  for (const instance of candidateInstances) {
+    const requiredPermissions = instance.revision?.authorization?.requiredPermissions || [];
+    const grants = await listCapabilityGrants(instance.id);
+    const runtimeTarget = input.actorId
+      ? {
+          actorId: input.actorId,
+          conversationId: input.conversationId,
+        }
+      : {
+          conversationId: input.conversationId,
+          userId: input.userId,
+        };
+
     const matchingGrants = grants.filter((grant) =>
       grant.status === 'active' &&
-      grantCoversRuntimeTarget(grant, {
-        actorId: input.actorId,
-        conversationId: input.conversationId,
-        userId: input.userId,
-        userCount: input.userCount,
-      }),
+      grantCoversRuntimeTarget(grant, runtimeTarget),
     );
     const effectivePermissions = Array.from(new Set(matchingGrants.flatMap((grant) => grant.permissions)));
-    const visibleByBinding = bindingMatchesRuntimeTarget(binding, {
-      actorId: input.actorId,
-      conversationId: input.conversationId,
-      userId: input.userId,
-      userCount: input.userCount,
-    });
-    const isVisible = visibleByBinding || matchingGrants.length > 0;
     const isAuthorized = requiredPermissions.length === 0
-      ? isVisible
+      ? matchingGrants.length > 0
       : isPermissionSubset(requiredPermissions, effectivePermissions);
 
     if (isAuthorized) {
@@ -1973,8 +2220,8 @@ export async function listAuthorizedCapabilityBindings(input: {
           }
         }),
       );
-      const bindingScore = (() => {
-        switch (binding.bindingScope) {
+      const attachmentScore = (() => {
+        switch (instance.attachmentType) {
           case 'actor_conversation': return 5;
           case 'conversation': return 4;
           case 'actor_global': return 3;
@@ -1984,10 +2231,10 @@ export async function listAuthorizedCapabilityBindings(input: {
         }
       })();
       candidates.push({
-        binding,
+        instance,
         grantScore: bestGrantScore,
-        bindingScore,
-        sortTime: new Date(binding.updatedAt).getTime(),
+        attachmentScore,
+        sortTime: new Date(instance.updatedAt).getTime(),
       });
     }
   }
@@ -1995,160 +2242,57 @@ export async function listAuthorizedCapabilityBindings(input: {
   return candidates
     .sort((left, right) =>
       right.grantScore - left.grantScore ||
-      right.bindingScore - left.bindingScore ||
+      right.attachmentScore - left.attachmentScore ||
       right.sortTime - left.sortTime,
     )
-    .map((entry) => entry.binding);
+    .map((entry) => entry.instance);
 }
 
-export async function listVisibleCapabilityBindings(input: {
+export async function listVisibleCapabilityInstances(input: {
   workspaceId: string;
   kind?: CapabilityPackageKind;
   conversationId?: string;
   actorId?: string;
   userId?: string;
-  userCount?: number;
 }) {
-  const values: unknown[] = [input.workspaceId];
-  let idx = 2;
-  const where = ['b.workspace_id = $1', 'b.is_enabled = TRUE', 'p.is_active = TRUE'];
-
-  if (input.kind) {
-    where.push(`p.kind = $${idx++}`);
-    values.push(input.kind);
-  }
-
-  if (input.actorId && input.conversationId) {
-    where.push(
-      `(b.binding_scope = 'workspace'
-        OR (b.binding_scope = 'conversation' AND b.conversation_id = $${idx})
-        OR (b.binding_scope = 'actor_global' AND b.actor_id = $${idx + 1})
-        OR (b.binding_scope = 'actor_conversation' AND b.conversation_id = $${idx} AND b.actor_id = $${idx + 1})
-        OR (b.binding_scope = 'user' AND $${idx + 2}::uuid IS NOT NULL AND $${idx + 3}::int = 1 AND b.user_id = $${idx + 2}))`,
-    );
-    values.push(input.conversationId, input.actorId, input.userId || null, input.userCount ?? 0);
-    idx += 4;
-  } else if (input.conversationId) {
-    where.push(
-      `(b.binding_scope = 'workspace'
-        OR (b.binding_scope = 'conversation' AND b.conversation_id = $${idx})
-        OR (b.binding_scope = 'user' AND $${idx + 1}::uuid IS NOT NULL AND $${idx + 2}::int = 1 AND b.user_id = $${idx + 1}))`,
-    );
-    values.push(input.conversationId, input.userId || null, input.userCount ?? 0);
-    idx += 3;
-  } else if (input.actorId) {
-    where.push(
-      `(b.binding_scope = 'workspace'
-        OR (b.binding_scope = 'actor_global' AND b.actor_id = $${idx})
-        OR (b.binding_scope = 'user' AND $${idx + 1}::uuid IS NOT NULL AND $${idx + 2}::int = 1 AND b.user_id = $${idx + 1}))`,
-    );
-    values.push(input.actorId, input.userId || null, input.userCount ?? 0);
-    idx += 3;
-  } else if (input.userId && input.userCount === 1) {
-    where.push(
-      `(b.binding_scope = 'workspace' OR (b.binding_scope = 'user' AND b.user_id = $${idx}))`,
-    );
-    values.push(input.userId);
-    idx += 1;
-  } else {
-    where.push(`b.binding_scope = 'workspace'`);
-  }
-
-  const result = await query(
-    `SELECT
-        b.*,
-        p.id AS package_id,
-        p.publisher_id,
-        p.workspace_id AS package_workspace_id,
-        p.kind,
-        p.slug,
-        p.display_name,
-        p.description,
-        p.long_description,
-        p.icon_url,
-        p.source_type,
-        p.tags,
-        p.is_active,
-        p.is_builtin,
-        p.download_count,
-        p.latest_revision_id,
-        p.default_binding_scope,
-        p.default_reuse_scope,
-        p.default_idle_ttl_ms,
-        p.default_max_age_ms,
-        p.requires_handshake AS package_requires_handshake,
-        p.metadata AS package_metadata,
-        p.created_at AS package_created_at,
-        p.updated_at AS package_updated_at,
-        pub.slug AS publisher_slug,
-        pub.display_name AS publisher_display_name,
-        pub.description AS publisher_description,
-        pub.logo_url AS publisher_logo_url,
-        pub.is_builtin AS publisher_is_builtin,
-        pub.is_verified AS publisher_is_verified,
-        pub.owner_user_id AS publisher_owner_user_id,
-        pub.created_at AS publisher_created_at,
-        pub.updated_at AS publisher_updated_at,
-        r.id AS binding_revision_id,
-        r.version AS binding_revision_version,
-        r.status AS binding_revision_status,
-        r.manifest AS binding_revision_manifest,
-        r.config_schema AS binding_revision_config_schema,
-        r.default_config AS binding_revision_default_config,
-        r.transport AS binding_revision_transport,
-        r.entry_point AS binding_revision_entry_point,
-        r.tools_manifest AS binding_revision_tools_manifest,
-        r.validation_rules AS binding_revision_validation_rules,
-        r.setup_steps AS binding_revision_setup_steps,
-        r.metadata AS binding_revision_metadata,
-        r.created_by AS binding_revision_created_by,
-        r.created_at AS binding_revision_created_at
-     FROM capability_bindings b
-     JOIN capability_packages p ON p.id = b.package_id
-     JOIN capability_publishers pub ON pub.id = p.publisher_id
-     JOIN capability_package_revisions r ON r.id = b.revision_id
-     WHERE ${where.join(' AND ')}
-     ORDER BY b.created_at DESC`,
-    values,
-  );
-  return result.rows.map(mapBinding);
+  return listAuthorizedCapabilityInstances(input);
 }
 
-export function dedupeVisibleBindings<T extends CapabilityBinding>(
-  bindings: T[],
-  keySelector: (binding: T) => string,
+export function dedupeVisibleInstances<T extends CapabilityInstance>(
+  instances: T[],
+  keySelector: (instance: T) => string,
 ) {
   const deduped = new Map<string, T>();
-  for (const binding of bindings) {
-    const key = keySelector(binding);
+  for (const instance of instances) {
+    const key = keySelector(instance);
     if (!deduped.has(key)) {
-      deduped.set(key, binding);
+      deduped.set(key, instance);
     }
   }
   return Array.from(deduped.values());
 }
 
-export function bindingToAvailableSkill(binding: CapabilityBinding): CapabilityAvailableSkill | null {
-  if (!binding.package || !binding.revision || binding.package.kind !== 'skill') return null;
-  const frontmatter = asObject(asObject(binding.revision.manifest).frontmatter);
+export function instanceToAvailableSkill(instance: CapabilityInstance): CapabilityAvailableSkill | null {
+  if (!instance.package || !instance.revision || instance.package.kind !== 'skill') return null;
+  const frontmatter = asObject(asObject(instance.revision.manifest).frontmatter);
   const name = typeof frontmatter.name === 'string' && frontmatter.name.trim().length > 0
     ? frontmatter.name.trim()
-    : binding.package.slug;
+    : instance.package.slug;
   const description = typeof frontmatter.description === 'string' && frontmatter.description.trim().length > 0
     ? frontmatter.description.trim()
-    : binding.package.description;
+    : instance.package.description;
   return {
-    bindingId: binding.id,
-    packageId: binding.packageId,
-    revisionId: binding.revisionId,
-    slug: binding.package.slug,
+    instanceId: instance.id,
+    packageId: instance.packageId,
+    revisionId: instance.revisionId,
+    slug: instance.package.slug,
     name,
     description,
-    version: binding.revision.version,
-    bindingScope: binding.bindingScope,
-    actorId: binding.actorId,
-    conversationId: binding.conversationId,
-    userId: binding.userId,
-    entryPoint: binding.revision.entryPoint || undefined,
+    version: instance.revision.version,
+    attachmentType: instance.attachmentType,
+    actorId: instance.actorId,
+    conversationId: instance.conversationId,
+    userId: instance.userId,
+    entryPoint: instance.revision.entryPoint || undefined,
   };
 }

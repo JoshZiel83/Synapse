@@ -1,0 +1,290 @@
+// Draft SpiceDB schema for the Synapse authorization redesign.
+//
+// Notes:
+// - PostgreSQL remains the business datastore.
+// - SpiceDB is the authorization datastore.
+// - platform:synapse is the singleton platform object.
+// - This schema focuses on runtime authorization objects, not marketplace catalog editing.
+
+definition user {}
+
+definition platform {
+    relation super_admin: user
+    relation workspace_admin: user
+    relation model_admin: user
+    relation support: user
+    relation auditor: user
+    relation workspace: workspace
+
+    permission principal = workspace->principal + super_admin + workspace_admin + model_admin
+    permission manage = super_admin
+    permission manage_workspaces = super_admin + workspace_admin
+    permission manage_models = super_admin + model_admin
+    permission support_access = super_admin + support
+    permission audit = super_admin + auditor
+}
+
+definition workspace {
+    relation platform: platform
+    relation owner: user
+    relation admin: user
+    relation member: user
+    relation guest: user
+    relation model_admin: user
+    relation actor_admin: user
+    relation capability_admin: user
+    relation memory_admin: user
+    relation relay_admin: user
+    relation conversation_admin: user
+    relation actor: actor
+
+    permission principal = owner + admin + member + model_admin + actor_admin + capability_admin + memory_admin + relay_admin + conversation_admin + actor
+    permission view = principal + guest
+    permission manage = owner + admin + platform->manage_workspaces
+    permission manage_members = owner + admin + platform->manage_workspaces
+    permission manage_actors = owner + admin + actor_admin + platform->manage_workspaces
+    permission use_actors = owner + admin + member + model_admin + actor_admin + capability_admin + memory_admin + relay_admin + conversation_admin
+    permission manage_conversations = owner + admin + conversation_admin + platform->manage_workspaces
+    permission create_conversation = owner + admin + member + model_admin + actor_admin + capability_admin + memory_admin + relay_admin + conversation_admin
+    permission manage_capabilities = owner + admin + capability_admin + platform->manage_workspaces
+    permission manage_memories = owner + admin + memory_admin + platform->manage_workspaces
+    permission manage_relays = owner + admin + relay_admin + platform->manage_workspaces
+    permission manage_models = owner + admin + model_admin + platform->manage_models
+}
+
+definition workspace_user {
+    relation workspace: workspace
+    relation user: user
+
+    permission principal = user & workspace->view
+}
+
+definition actor {
+    relation workspace: workspace
+    relation owner: user
+    relation editor: user | actor
+    relation discover_workspace: workspace
+    relation discover_workspace_user: workspace_user
+    relation discover_principal: user | actor
+    relation discover_conversation: conversation
+    relation invoke_workspace: workspace
+    relation invoke_workspace_user: workspace_user
+    relation invoke_principal: user | actor
+    relation invoke_conversation: conversation
+    relation receive_workspace: workspace
+    relation receive_workspace_user: workspace_user
+    relation receive_principal: user | actor
+    relation receive_conversation: conversation
+    relation memory_reader_workspace: workspace
+    relation memory_reader_workspace_user: workspace_user
+    relation memory_reader_principal: user | actor
+    relation memory_reader_conversation: conversation
+    relation memory_editor_workspace: workspace
+    relation memory_editor_workspace_user: workspace_user
+    relation memory_editor_principal: user | actor
+    relation memory_editor_conversation: conversation
+    relation memory_granter_workspace: workspace
+    relation memory_granter_workspace_user: workspace_user
+    relation memory_granter_principal: user | actor
+    relation memory_granter_conversation: conversation
+    relation memory_retargeter_workspace: workspace
+    relation memory_retargeter_workspace_user: workspace_user
+    relation memory_retargeter_principal: user | actor
+    relation memory_retargeter_conversation: conversation
+    relation memory_deleter_workspace: workspace
+    relation memory_deleter_workspace_user: workspace_user
+    relation memory_deleter_principal: user | actor
+    relation memory_deleter_conversation: conversation
+
+    permission discover = owner + editor + workspace->manage_actors + discover_workspace->principal + discover_workspace_user->principal + discover_principal + discover_conversation->principal
+    permission view = discover
+    permission invoke = owner + editor + workspace->manage_actors + invoke_workspace->principal + invoke_workspace_user->principal + invoke_principal + invoke_conversation->principal
+    permission receive_message = owner + editor + workspace->manage_actors + receive_workspace->principal + receive_workspace_user->principal + receive_principal + receive_conversation->principal
+    permission memory_read = owner + editor + workspace->manage_actors + memory_reader_workspace->principal + memory_reader_workspace_user->principal + memory_reader_principal + memory_reader_conversation->memory_read
+    permission memory_edit = owner + editor + workspace->manage_actors + memory_editor_workspace->manage_memories + memory_editor_workspace_user->principal + memory_editor_principal + memory_editor_conversation->memory_edit
+    permission memory_grant = owner + editor + workspace->manage_actors + memory_granter_workspace->manage_memories + memory_granter_workspace_user->principal + memory_granter_principal + memory_granter_conversation->memory_grant
+    permission memory_retarget = owner + editor + workspace->manage_actors + memory_retargeter_workspace->manage_memories + memory_retargeter_workspace_user->principal + memory_retargeter_principal + memory_retargeter_conversation->memory_retarget
+    permission memory_delete = owner + workspace->manage_actors + memory_deleter_workspace->manage_memories + memory_deleter_workspace_user->principal + memory_deleter_principal + memory_deleter_conversation->memory_delete
+    permission edit = owner + editor + workspace->manage_actors
+    permission grant = edit
+    permission delete = owner + workspace->manage_actors
+}
+
+definition actor_conversation {
+    relation actor: actor
+    relation conversation: conversation
+
+    permission principal = actor & conversation->principal
+    permission memory_read = actor->memory_read & conversation->memory_read
+    permission memory_edit = actor->memory_edit & conversation->memory_edit
+    permission memory_grant = actor->memory_grant & conversation->memory_grant
+    permission memory_retarget = actor->memory_retarget & conversation->memory_retarget
+    permission memory_delete = actor->memory_delete & conversation->memory_delete
+}
+
+definition conversation {
+    relation workspace: workspace
+    relation participant: user | actor
+    relation moderator: user | actor
+    relation admin: user | actor
+    relation blocked: user | actor
+    relation sender: user | actor
+    relation manager: user | actor
+    relation member_manager: user | actor
+    relation resource_attacher: user | actor
+    relation memory_reader: user | actor
+    relation memory_editor: user | actor
+    relation memory_granter: user | actor
+    relation memory_retargeter: user | actor
+    relation memory_deleter: user | actor
+
+    permission principal = participant + moderator + admin
+    permission view = (participant + moderator + admin) - blocked
+    permission send = (participant + moderator + admin + sender + workspace->manage_conversations) & view
+    permission moderate = (moderator + admin + workspace->manage_conversations) & view
+    permission manage = (admin + manager + workspace->manage_conversations) & view
+    permission manage_members = (admin + manager + member_manager + workspace->manage_conversations) & view
+    permission attach_resources = (moderator + admin + resource_attacher + workspace->manage_conversations) & view
+    permission memory_read = view
+    permission memory_edit = (moderator + admin + workspace->manage_conversations + memory_editor) & view
+    permission memory_grant = (admin + workspace->manage_conversations + memory_granter) & view
+    permission memory_retarget = (admin + workspace->manage_conversations + memory_retargeter) & view
+    permission memory_delete = (admin + workspace->manage_conversations + memory_deleter) & view
+}
+
+definition skill_instance {
+    relation workspace: workspace
+    relation owner: user | actor
+    relation editor: user | actor
+    relation use_principal: user | actor
+    relation use_actor_conversation: actor_conversation
+    relation use_conversation: conversation
+    relation use_workspace: workspace
+    relation use_platform: platform
+
+    permission use = owner + editor + workspace->manage_capabilities + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal + use_platform->principal
+    permission view = use + workspace->manage_capabilities
+    permission edit = owner + editor + workspace->manage_capabilities
+    permission grant = edit
+    permission delete = owner + workspace->manage_capabilities
+}
+
+definition plugin_instance {
+    relation workspace: workspace
+    relation owner: user | actor
+    relation editor: user | actor
+    relation use_principal: user | actor
+    relation use_actor_conversation: actor_conversation
+    relation use_conversation: conversation
+    relation use_workspace: workspace
+    relation use_platform: platform
+
+    permission use = owner + editor + workspace->manage_capabilities + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal + use_platform->principal
+    permission view = use + workspace->manage_capabilities
+    permission edit = owner + editor + workspace->manage_capabilities
+    permission grant = edit
+    permission delete = owner + workspace->manage_capabilities
+}
+
+definition memory {
+    relation workspace: workspace
+    relation owner_user: user
+    relation owner_workspace: workspace
+    relation owner_conversation: conversation
+    relation owner_actor: actor
+    relation owner_actor_conversation: actor_conversation
+    relation reader_principal: user | actor
+    relation reader_workspace_user: workspace_user
+    relation reader_actor_conversation: actor_conversation
+    relation reader_conversation: conversation
+    relation reader_workspace: workspace
+    relation editor_principal: user | actor
+    relation editor_workspace_user: workspace_user
+    relation editor_actor_conversation: actor_conversation
+    relation editor_conversation: conversation
+    relation editor_workspace: workspace
+    relation granter_principal: user | actor
+    relation granter_workspace_user: workspace_user
+    relation granter_actor_conversation: actor_conversation
+    relation granter_conversation: conversation
+    relation granter_workspace: workspace
+    relation retargeter_principal: user | actor
+    relation retargeter_workspace_user: workspace_user
+    relation retargeter_actor_conversation: actor_conversation
+    relation retargeter_conversation: conversation
+    relation retargeter_workspace: workspace
+    relation deleter_principal: user | actor
+    relation deleter_workspace_user: workspace_user
+    relation deleter_actor_conversation: actor_conversation
+    relation deleter_conversation: conversation
+    relation deleter_workspace: workspace
+
+    permission read = owner_user + owner_workspace->view + owner_conversation->memory_read + owner_actor->memory_read + owner_actor_conversation->memory_read + workspace->manage_memories + reader_principal + reader_workspace_user->principal + reader_actor_conversation->memory_read + reader_conversation->memory_read + reader_workspace->view
+    permission recall = read
+    permission edit = owner_user + owner_workspace->manage_memories + owner_conversation->memory_edit + owner_actor->memory_edit + owner_actor_conversation->memory_edit + workspace->manage_memories + editor_principal + editor_workspace_user->principal + editor_actor_conversation->memory_edit + editor_conversation->memory_edit + editor_workspace->manage_memories
+    permission grant = owner_user + owner_workspace->manage_memories + owner_conversation->memory_grant + owner_actor->memory_grant + owner_actor_conversation->memory_grant + workspace->manage_memories + granter_principal + granter_workspace_user->principal + granter_actor_conversation->memory_grant + granter_conversation->memory_grant + granter_workspace->manage_memories
+    permission retarget = owner_user + owner_workspace->manage_memories + owner_conversation->memory_retarget + owner_actor->memory_retarget + owner_actor_conversation->memory_retarget + workspace->manage_memories + retargeter_principal + retargeter_workspace_user->principal + retargeter_actor_conversation->memory_retarget + retargeter_conversation->memory_retarget + retargeter_workspace->manage_memories
+    permission delete = owner_user + owner_workspace->manage_memories + owner_conversation->memory_delete + owner_actor->memory_delete + owner_actor_conversation->memory_delete + workspace->manage_memories + deleter_principal + deleter_workspace_user->principal + deleter_actor_conversation->memory_delete + deleter_conversation->memory_delete + deleter_workspace->manage_memories
+}
+
+definition mcp_relay {
+    relation workspace: workspace
+    relation owner: user | actor
+    relation operator: user | actor
+    relation use_principal: user | actor
+    relation use_actor_conversation: actor_conversation
+    relation use_conversation: conversation
+    relation use_workspace: workspace
+
+    permission invoke = owner + operator + workspace->manage_relays + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal
+    permission view = invoke + workspace->manage_relays
+    permission edit = owner + operator + workspace->manage_relays
+    permission grant = edit
+    permission rotate_token = owner + workspace->manage_relays
+    permission delete = owner + workspace->manage_relays
+}
+
+definition model_profile {
+    relation group: model_group
+
+    permission use = group->use
+    permission view = group->view
+    permission edit = group->edit
+    permission attach = group->attach
+    permission grant = group->grant
+    permission delete = group->delete
+}
+
+definition model_group {
+    relation owner_platform: platform
+    relation owner_workspace: workspace
+    relation owner_user: user
+    relation editor: user
+    relation use_platform: platform
+    relation use_workspace: workspace
+    relation use_principal: user
+    relation use_workspace_user: workspace_user
+    relation use_actor: actor
+
+    permission use = owner_user + owner_workspace->manage_models + owner_platform->manage_models + editor + use_platform->principal + use_workspace->principal + use_principal + use_workspace_user->principal + use_actor
+    permission view = edit + use
+    permission edit = owner_user + owner_workspace->manage_models + owner_platform->manage_models + editor
+    permission attach = edit
+    permission grant = edit
+    permission delete = edit
+}
+
+// Example tuples:
+//
+// platform:synapse#workspace@workspace:ws_01
+// workspace:ws_01#owner@user:u_01
+// workspace:ws_01#member@user:u_02
+// workspace:ws_01#actor@actor:a_01
+// conversation:conv_01#workspace@workspace:ws_01
+// conversation:conv_01#participant@user:u_02
+// conversation:conv_01#participant@actor:a_01
+// workspace_user:ws_01:u_02#workspace@workspace:ws_01
+// workspace_user:ws_01:u_02#user@user:u_02
+// model_group:group_01#owner_workspace@workspace:ws_01
+// model_group:group_01#use_workspace@workspace:ws_01
+// model_profile:profile_01#group@model_group:group_01

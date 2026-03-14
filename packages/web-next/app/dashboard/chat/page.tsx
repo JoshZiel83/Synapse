@@ -179,6 +179,7 @@ export default function ChatPage() {
             onSend={handleSend}
             onBack={() => setMobileView('list')}
             workspaceId={workspaceId}
+            onRefreshGroup={() => loadGroups(workspaceId)}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center text-center space-y-4 p-8">

@@ -5,6 +5,8 @@ import type {
   Memory,
   MemoryCategory,
   MemoryGrant,
+  MemoryGrantScope,
+  MemoryPermission,
   MemoryRecallResult,
   MemoryRecallRun,
   MemoryRecallType,
@@ -17,6 +19,18 @@ import { extractText, normalizeCanonicalContentBlocks, textBlocks } from '@synap
 import { query, transaction } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { config } from '../../config/index.js';
+import {
+  authzEnabled,
+  buildActorConversationContextId,
+  buildWorkspaceUserContextId,
+  diffAuthzRelationships,
+  flushAuthzOutboxEntries,
+  queueAuthzRelationships,
+  touchActorConversationContext,
+  touchRelation,
+  touchWorkspaceUserContext,
+  type AuthzRelationMutation,
+} from '../../infrastructure/authz/index.js';
 import {
   buildMemorySearchText,
   buildMemoryTextDigest,
@@ -60,7 +74,8 @@ type MemoryGrantRow = {
   id: string;
   memory_entry_id: string;
   workspace_id: string;
-  grant_scope: MemoryScope;
+  permission: MemoryPermission;
+  grant_scope: MemoryGrantScope;
   actor_id: string | null;
   conversation_id: string | null;
   user_id: string | null;
@@ -99,16 +114,26 @@ type MemoryAccessTarget = {
   actorId?: string;
   conversationId?: string;
   userId?: string;
-  userCount?: number;
 };
 
 export interface MemoryGrantInput {
-  grantScope: MemoryScope;
+  permission?: MemoryPermission;
+  grantScope: MemoryGrantScope;
   actorId?: string;
   conversationId?: string;
   userId?: string;
   reason?: string;
   metadata?: Record<string, unknown>;
+}
+
+async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
+  if (!authzEnabled() || entryIds.length === 0) return;
+
+  try {
+    await flushAuthzOutboxEntries(entryIds);
+  } catch (error) {
+    console.error(`[authz] Failed to flush ${source} relationship updates:`, error);
+  }
 }
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
@@ -145,7 +170,7 @@ function computeMatchedTerms(queryText: string, candidateText: string) {
   return queryTokens.filter((token) => haystack.includes(token));
 }
 
-function scopeRank(scope: MemoryScope) {
+function scopeRank(scope: MemoryScope | MemoryGrantScope) {
   switch (scope) {
     case 'actor_conversation':
       return 5;
@@ -153,6 +178,8 @@ function scopeRank(scope: MemoryScope) {
       return 4;
     case 'actor_global':
       return 3;
+    case 'workspace_user':
+      return 2;
     case 'user':
       return 2;
     case 'workspace':
@@ -180,7 +207,6 @@ function ownerMatchesTarget(memory: Pick<MemoryRow, 'owner_scope' | 'owner_actor
     case 'user':
       return Boolean(
         target.userId &&
-        target.userCount === 1 &&
         memory.owner_user_id === target.userId,
       );
     default:
@@ -206,7 +232,11 @@ function grantMatchesTarget(grant: MemoryGrant, target: MemoryAccessTarget) {
     case 'user':
       return Boolean(
         target.userId &&
-        target.userCount === 1 &&
+        grant.userId === target.userId,
+      );
+    case 'workspace_user':
+      return Boolean(
+        target.userId &&
         grant.userId === target.userId,
       );
     default:
@@ -273,6 +303,7 @@ function mapMemoryGrantRow(row: MemoryGrantRow): MemoryGrant {
     id: row.id,
     memoryId: row.memory_entry_id,
     workspaceId: row.workspace_id,
+    permission: row.permission,
     grantScope: row.grant_scope,
     actorId: row.actor_id ?? undefined,
     conversationId: row.conversation_id ?? undefined,
@@ -284,6 +315,10 @@ function mapMemoryGrantRow(row: MemoryGrantRow): MemoryGrant {
     createdAt: row.created_at,
     revokedAt: row.revoked_at ?? undefined,
   };
+}
+
+function normalizeGrantPermission(permission?: MemoryPermission): MemoryPermission {
+  return permission || 'read';
 }
 
 function mapMemoryRow(row: MemoryRow, contentBlocks: CanonicalContentBlock[], grants: MemoryGrant[]): Memory {
@@ -386,7 +421,7 @@ async function getMemoryRow(workspaceId: string, memoryId: string) {
   return result.rows[0] ?? null;
 }
 
-function validateMemoryScopeBinding(input: {
+function validateMemoryOwnerBinding(input: {
   scope: MemoryScope;
   actorId?: string;
   conversationId?: string;
@@ -421,8 +456,390 @@ function validateMemoryScopeBinding(input: {
   }
 }
 
+function validateMemoryGrantBinding(input: {
+  scope: MemoryGrantScope;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+}, label: string) {
+  if (input.scope === 'workspace_user') {
+    if (!input.userId || input.actorId || input.conversationId) {
+      throw new MemoryError(`${label} workspace_user scope requires userId and no actorId or conversationId`, 400);
+    }
+    return;
+  }
+
+  validateMemoryOwnerBinding(
+    {
+      scope: input.scope,
+      actorId: input.actorId,
+      conversationId: input.conversationId,
+      userId: input.userId,
+    },
+    label,
+  );
+}
+
 function normalizeGrantInputs(grants?: MemoryGrantInput[]) {
-  return Array.isArray(grants) ? grants : [];
+  return Array.isArray(grants)
+    ? grants.map((grant) => ({
+        ...grant,
+        permission: normalizeGrantPermission(grant.permission),
+      }))
+    : [];
+}
+
+function buildMemoryOwnerRelations(params: {
+  workspaceId: string;
+  memoryId: string;
+  scope: MemoryScope;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+}): AuthzRelationMutation[] {
+  switch (params.scope) {
+    case 'workspace':
+      return [
+        touchRelation('memory', params.memoryId, 'owner_workspace', 'workspace', params.workspaceId),
+      ];
+    case 'conversation':
+      return params.conversationId
+        ? [touchRelation('memory', params.memoryId, 'owner_conversation', 'conversation', params.conversationId)]
+        : [];
+    case 'actor_global':
+      return params.actorId
+        ? [touchRelation('memory', params.memoryId, 'owner_actor', 'actor', params.actorId)]
+        : [];
+    case 'actor_conversation':
+      return params.actorId && params.conversationId
+        ? [
+            ...touchActorConversationContext(params.actorId, params.conversationId),
+            touchRelation(
+              'memory',
+              params.memoryId,
+              'owner_actor_conversation',
+              'actor_conversation',
+              buildActorConversationContextId(params.actorId, params.conversationId),
+            ),
+          ]
+        : [];
+    case 'user':
+      return params.userId
+        ? [touchRelation('memory', params.memoryId, 'owner_user', 'user', params.userId)]
+        : [];
+    default:
+      return [];
+  }
+}
+
+function buildMemoryGrantRelationName(permission: MemoryPermission, scope: MemoryGrantScope) {
+  switch (permission) {
+    case 'read':
+      switch (scope) {
+        case 'workspace':
+          return 'reader_workspace';
+        case 'workspace_user':
+          return 'reader_workspace_user';
+        case 'conversation':
+          return 'reader_conversation';
+        case 'actor_conversation':
+          return 'reader_actor_conversation';
+        default:
+          return 'reader_principal';
+      }
+    case 'edit':
+      switch (scope) {
+        case 'workspace':
+          return 'editor_workspace';
+        case 'workspace_user':
+          return 'editor_workspace_user';
+        case 'conversation':
+          return 'editor_conversation';
+        case 'actor_conversation':
+          return 'editor_actor_conversation';
+        default:
+          return 'editor_principal';
+      }
+    case 'grant':
+      switch (scope) {
+        case 'workspace':
+          return 'granter_workspace';
+        case 'workspace_user':
+          return 'granter_workspace_user';
+        case 'conversation':
+          return 'granter_conversation';
+        case 'actor_conversation':
+          return 'granter_actor_conversation';
+        default:
+          return 'granter_principal';
+      }
+    case 'retarget':
+      switch (scope) {
+        case 'workspace':
+          return 'retargeter_workspace';
+        case 'workspace_user':
+          return 'retargeter_workspace_user';
+        case 'conversation':
+          return 'retargeter_conversation';
+        case 'actor_conversation':
+          return 'retargeter_actor_conversation';
+        default:
+          return 'retargeter_principal';
+      }
+    case 'delete':
+      switch (scope) {
+        case 'workspace':
+          return 'deleter_workspace';
+        case 'workspace_user':
+          return 'deleter_workspace_user';
+        case 'conversation':
+          return 'deleter_conversation';
+        case 'actor_conversation':
+          return 'deleter_actor_conversation';
+        default:
+          return 'deleter_principal';
+      }
+    default:
+      return null;
+  }
+}
+
+function buildMemoryGrantRelations(params: {
+  workspaceId: string;
+  memoryId: string;
+  permission: MemoryPermission;
+  scope: MemoryGrantScope;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+}): AuthzRelationMutation[] {
+  const relation = buildMemoryGrantRelationName(params.permission, params.scope);
+  if (!relation) {
+    return [];
+  }
+
+  switch (params.scope) {
+    case 'workspace':
+      return [touchRelation('memory', params.memoryId, relation, 'workspace', params.workspaceId)];
+    case 'workspace_user':
+      return params.userId
+        ? [
+            ...touchWorkspaceUserContext(params.workspaceId, params.userId),
+            touchRelation(
+              'memory',
+              params.memoryId,
+              relation,
+              'workspace_user',
+              buildWorkspaceUserContextId(params.workspaceId, params.userId),
+            ),
+          ]
+        : [];
+    case 'conversation':
+      return params.conversationId
+        ? [touchRelation('memory', params.memoryId, relation, 'conversation', params.conversationId)]
+        : [];
+    case 'actor_global':
+      return params.actorId
+        ? [touchRelation('memory', params.memoryId, relation, 'actor', params.actorId)]
+        : [];
+    case 'actor_conversation':
+      return params.actorId && params.conversationId
+        ? [
+            ...touchActorConversationContext(params.actorId, params.conversationId),
+            touchRelation(
+              'memory',
+              params.memoryId,
+              relation,
+              'actor_conversation',
+              buildActorConversationContextId(params.actorId, params.conversationId),
+            ),
+          ]
+        : [];
+    case 'user':
+      return params.userId
+        ? [touchRelation('memory', params.memoryId, relation, 'user', params.userId)]
+        : [];
+    default:
+      return [];
+  }
+}
+
+function buildMemoryAuthzRelations(params: {
+  workspaceId: string;
+  memoryId: string;
+  ownerScope: MemoryScope;
+  ownerActorId?: string;
+  ownerConversationId?: string;
+  ownerUserId?: string;
+  grants: MemoryGrantInput[];
+}): AuthzRelationMutation[] {
+  return [
+    touchRelation('memory', params.memoryId, 'workspace', 'workspace', params.workspaceId),
+    ...buildMemoryOwnerRelations({
+      workspaceId: params.workspaceId,
+      memoryId: params.memoryId,
+      scope: params.ownerScope,
+      actorId: params.ownerActorId,
+      conversationId: params.ownerConversationId,
+      userId: params.ownerUserId,
+    }),
+    ...params.grants.flatMap((grant) =>
+      buildMemoryGrantRelations({
+        workspaceId: params.workspaceId,
+        memoryId: params.memoryId,
+        permission: normalizeGrantPermission(grant.permission),
+        scope: grant.grantScope,
+        actorId: grant.actorId,
+        conversationId: grant.conversationId,
+        userId: grant.userId,
+      }),
+    ),
+  ];
+}
+
+async function assertUserExists(userId: string) {
+  const result = await query(
+    `SELECT 1
+     FROM users
+     WHERE id = $1
+     LIMIT 1`,
+    [userId],
+  );
+  if (result.rows.length === 0) {
+    throw new MemoryError('User not found', 404);
+  }
+}
+
+async function assertWorkspaceMember(workspaceId: string, userId: string) {
+  const result = await query(
+    `SELECT 1
+     FROM workspace_members
+     WHERE workspace_id = $1
+       AND user_id = $2
+     LIMIT 1`,
+    [workspaceId, userId],
+  );
+  if (result.rows.length === 0) {
+    throw new MemoryError('User is not a member of this workspace', 400);
+  }
+}
+
+async function assertActorInWorkspace(workspaceId: string, actorId: string) {
+  const result = await query(
+    `SELECT 1
+     FROM actors
+     WHERE id = $1
+       AND workspace_id = $2
+       AND is_active = true
+     LIMIT 1`,
+    [actorId, workspaceId],
+  );
+  if (result.rows.length === 0) {
+    throw new MemoryError('Actor not found in this workspace', 404);
+  }
+}
+
+async function assertConversationInWorkspace(workspaceId: string, conversationId: string) {
+  const result = await query(
+    `SELECT 1
+     FROM conversations
+     WHERE id = $1
+       AND workspace_id = $2
+     LIMIT 1`,
+    [conversationId, workspaceId],
+  );
+  if (result.rows.length === 0) {
+    throw new MemoryError('Conversation not found in this workspace', 404);
+  }
+}
+
+async function assertActorInConversation(conversationId: string, actorId: string) {
+  const result = await query(
+    `SELECT 1
+     FROM conversation_members
+     WHERE conversation_id = $1
+       AND actor_id = $2
+       AND state = 'active'
+     LIMIT 1`,
+    [conversationId, actorId],
+  );
+  if (result.rows.length === 0) {
+    throw new MemoryError('Actor is not an active member of this conversation', 400);
+  }
+}
+
+async function validateMemoryOwnerTarget(workspaceId: string, input: {
+  scope: MemoryScope;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+}) {
+  switch (input.scope) {
+    case 'workspace':
+      return;
+    case 'conversation':
+      if (input.conversationId) {
+        await assertConversationInWorkspace(workspaceId, input.conversationId);
+      }
+      return;
+    case 'actor_global':
+      if (input.actorId) {
+        await assertActorInWorkspace(workspaceId, input.actorId);
+      }
+      return;
+    case 'actor_conversation':
+      if (input.actorId && input.conversationId) {
+        await assertActorInWorkspace(workspaceId, input.actorId);
+        await assertConversationInWorkspace(workspaceId, input.conversationId);
+        await assertActorInConversation(input.conversationId, input.actorId);
+      }
+      return;
+    case 'user':
+      if (input.userId) {
+        await assertUserExists(input.userId);
+      }
+      return;
+  }
+}
+
+async function validateMemoryGrantTarget(workspaceId: string, input: {
+  scope: MemoryGrantScope;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+}) {
+  switch (input.scope) {
+    case 'workspace':
+      return;
+    case 'workspace_user':
+      if (input.userId) {
+        await assertUserExists(input.userId);
+        await assertWorkspaceMember(workspaceId, input.userId);
+      }
+      return;
+    case 'conversation':
+      if (input.conversationId) {
+        await assertConversationInWorkspace(workspaceId, input.conversationId);
+      }
+      return;
+    case 'actor_global':
+      if (input.actorId) {
+        await assertActorInWorkspace(workspaceId, input.actorId);
+      }
+      return;
+    case 'actor_conversation':
+      if (input.actorId && input.conversationId) {
+        await assertActorInWorkspace(workspaceId, input.actorId);
+        await assertConversationInWorkspace(workspaceId, input.conversationId);
+        await assertActorInConversation(input.conversationId, input.actorId);
+      }
+      return;
+    case 'user':
+      if (input.userId) {
+        await assertUserExists(input.userId);
+      }
+      return;
+  }
 }
 
 async function normalizeMemoryContent(input: {
@@ -494,7 +911,8 @@ async function replaceMemoryGrants(
   await client.query(`DELETE FROM memory_grants WHERE memory_entry_id = $1`, [memoryId]);
 
   for (const grant of grants) {
-    validateMemoryScopeBinding(
+    const permission = normalizeGrantPermission(grant.permission);
+    validateMemoryGrantBinding(
       {
         scope: grant.grantScope,
         actorId: grant.actorId,
@@ -503,15 +921,22 @@ async function replaceMemoryGrants(
       },
       'Memory grant',
     );
+    await validateMemoryGrantTarget(workspaceId, {
+      scope: grant.grantScope,
+      actorId: grant.actorId,
+      conversationId: grant.conversationId,
+      userId: grant.userId,
+    });
 
     await client.query(
       `INSERT INTO memory_grants
-         (id, memory_entry_id, workspace_id, grant_scope, actor_id, conversation_id, user_id, status, granted_by, reason, metadata, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10, NOW())`,
+         (id, memory_entry_id, workspace_id, permission, grant_scope, actor_id, conversation_id, user_id, status, granted_by, reason, metadata, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, NOW())`,
       [
         uuidv4(),
         memoryId,
         workspaceId,
+        permission,
         grant.grantScope,
         grant.actorId || null,
         grant.conversationId || null,
@@ -608,20 +1033,20 @@ export interface RecallMemoriesInput extends SearchMemoriesInput {
 
 function buildVisibilityClause(target: MemoryAccessTarget, startIndex: number, alias = 'me') {
   const ownerClauses = [`${alias}.owner_scope = 'workspace'`];
-  const grantClauses = [`mg.grant_scope = 'workspace'`];
+  const grantClauses = [`(mg.permission = 'read' AND mg.grant_scope = 'workspace')`];
   const params: unknown[] = [];
   let index = startIndex;
 
   if (target.conversationId) {
     ownerClauses.push(`(${alias}.owner_scope = 'conversation' AND ${alias}.owner_conversation_id = $${index})`);
-    grantClauses.push(`(mg.grant_scope = 'conversation' AND mg.conversation_id = $${index})`);
+    grantClauses.push(`(mg.permission = 'read' AND mg.grant_scope = 'conversation' AND mg.conversation_id = $${index})`);
     params.push(target.conversationId);
     index += 1;
   }
 
   if (target.actorId) {
     ownerClauses.push(`(${alias}.owner_scope = 'actor_global' AND ${alias}.owner_actor_id = $${index})`);
-    grantClauses.push(`(mg.grant_scope = 'actor_global' AND mg.actor_id = $${index})`);
+    grantClauses.push(`(mg.permission = 'read' AND mg.grant_scope = 'actor_global' AND mg.actor_id = $${index})`);
     params.push(target.actorId);
     index += 1;
   }
@@ -631,7 +1056,7 @@ function buildVisibilityClause(target: MemoryAccessTarget, startIndex: number, a
       `(${alias}.owner_scope = 'actor_conversation' AND ${alias}.owner_actor_id = $${index} AND ${alias}.owner_conversation_id = $${index + 1})`,
     );
     grantClauses.push(
-      `(mg.grant_scope = 'actor_conversation' AND mg.actor_id = $${index} AND mg.conversation_id = $${index + 1})`,
+      `(mg.permission = 'read' AND mg.grant_scope = 'actor_conversation' AND mg.actor_id = $${index} AND mg.conversation_id = $${index + 1})`,
     );
     params.push(target.actorId, target.conversationId);
     index += 2;
@@ -639,13 +1064,13 @@ function buildVisibilityClause(target: MemoryAccessTarget, startIndex: number, a
 
   if (target.userId) {
     ownerClauses.push(
-      `(${alias}.owner_scope = 'user' AND $${index}::uuid IS NOT NULL AND $${index + 1}::int = 1 AND ${alias}.owner_user_id = $${index})`,
+      `(${alias}.owner_scope = 'user' AND ${alias}.owner_user_id = $${index})`,
     );
     grantClauses.push(
-      `(mg.grant_scope = 'user' AND $${index}::uuid IS NOT NULL AND $${index + 1}::int = 1 AND mg.user_id = $${index})`,
+      `(mg.permission = 'read' AND ((mg.grant_scope = 'user' AND mg.user_id = $${index}) OR (mg.grant_scope = 'workspace_user' AND mg.user_id = $${index})))`,
     );
-    params.push(target.userId, target.userCount ?? 0);
-    index += 2;
+    params.push(target.userId);
+    index += 1;
   }
 
   const clause = `(${ownerClauses.join(' OR ')} OR EXISTS (
@@ -719,6 +1144,7 @@ function buildSearchFilters(workspaceId: string, input: SearchMemoriesInput, ali
          SELECT 1 FROM memory_grants mg_scope
          WHERE mg_scope.memory_entry_id = ${alias}.id
            AND mg_scope.status = 'active'
+           AND mg_scope.permission = 'read'
            AND mg_scope.grant_scope = ANY($${index}::text[])
        ))`,
     );
@@ -997,14 +1423,14 @@ function buildDefaultRecallReason(memory: Memory, target: MemoryAccessTarget) {
     case 3:
       return 'Actor global memory matched the current task';
     case 2:
-      return 'User-scoped memory matched the sole active user context';
+      return 'User-scoped memory matched the current user context';
     default:
       return 'Workspace memory matched the current task';
   }
 }
 
 export async function createMemory(workspaceId: UUID, input: CreateMemoryInput) {
-  validateMemoryScopeBinding(
+  validateMemoryOwnerBinding(
     {
       scope: input.ownerScope,
       actorId: input.ownerActorId,
@@ -1013,12 +1439,18 @@ export async function createMemory(workspaceId: UUID, input: CreateMemoryInput) 
     },
     'Memory owner',
   );
+  await validateMemoryOwnerTarget(workspaceId, {
+    scope: input.ownerScope,
+    actorId: input.ownerActorId,
+    conversationId: input.ownerConversationId,
+    userId: input.ownerUserId,
+  });
 
   const grants = normalizeGrantInputs(input.grants);
   const normalizedContent = await normalizeMemoryContent(input);
   const memoryId = uuidv4();
 
-  await transaction(async (client) => {
+  const authzEntryIds = await transaction(async (client) => {
     await client.query(
       `INSERT INTO memory_entries
          (id, workspace_id, owner_scope, owner_actor_id, owner_conversation_id, owner_user_id, category, status, stability, importance, confidence,
@@ -1050,7 +1482,26 @@ export async function createMemory(workspaceId: UUID, input: CreateMemoryInput) 
     await insertMemoryParts(client, memoryId, normalizedContent.parts);
     await replaceMemoryGrants(client, workspaceId, memoryId, grants, input.grantedBy);
     await maybeMarkSuperseded(client, input.supersedesMemoryId);
+    return queueAuthzRelationships(
+      client,
+      buildMemoryAuthzRelations({
+        workspaceId,
+        memoryId,
+        ownerScope: input.ownerScope,
+        ownerActorId: input.ownerActorId,
+        ownerConversationId: input.ownerConversationId,
+        ownerUserId: input.ownerUserId,
+        grants,
+      }),
+      {
+        source: 'memory.create',
+        workspaceId,
+        memoryId,
+      },
+    );
   });
+
+  await flushQueuedAuthzEntries(authzEntryIds, 'memory.create');
 
   await reindexMemoryEntry(memoryId);
 
@@ -1087,7 +1538,7 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
   const ownerConversationId = input.ownerConversationId !== undefined ? input.ownerConversationId : existing.ownerConversationId;
   const ownerUserId = input.ownerUserId !== undefined ? input.ownerUserId : existing.ownerUserId;
 
-  validateMemoryScopeBinding(
+  validateMemoryOwnerBinding(
     {
       scope: ownerScope,
       actorId: ownerActorId,
@@ -1096,6 +1547,12 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
     },
     'Memory owner',
   );
+  await validateMemoryOwnerTarget(workspaceId, {
+    scope: ownerScope,
+    actorId: ownerActorId || undefined,
+    conversationId: ownerConversationId || undefined,
+    userId: ownerUserId || undefined,
+  });
 
   const normalizedContent = await normalizeMemoryContent({
     content: input.content,
@@ -1106,7 +1563,19 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
     category: input.category || existing.category,
   });
 
-  await transaction(async (client) => {
+  const nextGrants = input.grants !== undefined
+    ? normalizeGrantInputs(input.grants)
+    : existing.grants.map((grant) => ({
+        permission: grant.permission,
+        grantScope: grant.grantScope,
+        actorId: grant.actorId,
+        conversationId: grant.conversationId,
+        userId: grant.userId,
+        reason: grant.reason,
+        metadata: grant.metadata,
+      }));
+
+  const authzEntryIds = await transaction(async (client) => {
     await client.query(
       `UPDATE memory_entries
        SET owner_scope = $3,
@@ -1153,29 +1622,100 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
 
     await client.query('DELETE FROM memory_entry_parts WHERE memory_entry_id = $1', [memoryId]);
     await insertMemoryParts(client, memoryId, normalizedContent.parts);
-    await replaceMemoryGrants(client, workspaceId, memoryId, input.grants !== undefined ? normalizeGrantInputs(input.grants) : existing.grants.map((grant) => ({
-      grantScope: grant.grantScope,
-      actorId: grant.actorId,
-      conversationId: grant.conversationId,
-      userId: grant.userId,
-      reason: grant.reason,
-      metadata: grant.metadata,
-    })), input.grantedBy);
+    await replaceMemoryGrants(client, workspaceId, memoryId, nextGrants, input.grantedBy);
     await maybeMarkSuperseded(client, input.supersedesMemoryId);
+    return queueAuthzRelationships(
+      client,
+      diffAuthzRelationships(
+        buildMemoryAuthzRelations({
+          workspaceId,
+          memoryId,
+          ownerScope: existing.ownerScope,
+          ownerActorId: existing.ownerActorId,
+          ownerConversationId: existing.ownerConversationId,
+          ownerUserId: existing.ownerUserId,
+          grants: existing.grants.map((grant) => ({
+            permission: grant.permission,
+            grantScope: grant.grantScope,
+            actorId: grant.actorId,
+            conversationId: grant.conversationId,
+            userId: grant.userId,
+            reason: grant.reason,
+            metadata: grant.metadata,
+          })),
+        }),
+        buildMemoryAuthzRelations({
+          workspaceId,
+          memoryId,
+          ownerScope,
+          ownerActorId: ownerActorId || undefined,
+          ownerConversationId: ownerConversationId || undefined,
+          ownerUserId: ownerUserId || undefined,
+          grants: nextGrants,
+        }),
+      ),
+      {
+        source: 'memory.update',
+        workspaceId,
+        memoryId,
+      },
+    );
   });
+
+  await flushQueuedAuthzEntries(authzEntryIds, 'memory.update');
 
   await reindexMemoryEntry(memoryId);
   return getMemory(workspaceId, memoryId);
 }
 
 export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
-  const result = await query(
-    `DELETE FROM memory_entries WHERE workspace_id = $1 AND id = $2`,
-    [workspaceId, memoryId],
-  );
-  if (result.rowCount === 0) {
+  const existing = await getMemory(workspaceId, memoryId);
+  const result = await transaction(async (client) => {
+    const deleted = await client.query(
+      `DELETE FROM memory_entries WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, memoryId],
+    );
+    if ((deleted.rowCount ?? 0) === 0) {
+      return null;
+    }
+
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      diffAuthzRelationships(
+        buildMemoryAuthzRelations({
+          workspaceId,
+          memoryId,
+          ownerScope: existing.ownerScope,
+          ownerActorId: existing.ownerActorId,
+          ownerConversationId: existing.ownerConversationId,
+          ownerUserId: existing.ownerUserId,
+          grants: existing.grants.map((grant) => ({
+            permission: grant.permission,
+            grantScope: grant.grantScope,
+            actorId: grant.actorId,
+            conversationId: grant.conversationId,
+            userId: grant.userId,
+            reason: grant.reason,
+            metadata: grant.metadata,
+          })),
+        }),
+        [],
+      ),
+      {
+        source: 'memory.delete',
+        workspaceId,
+        memoryId,
+      },
+    );
+
+    return { authzEntryIds };
+  });
+
+  if (!result) {
     throw new MemoryError('Memory not found', 404);
   }
+
+  await flushQueuedAuthzEntries(result.authzEntryIds, 'memory.delete');
 }
 
 export async function listMemories(workspaceId: UUID, input: ListMemoriesInput) {

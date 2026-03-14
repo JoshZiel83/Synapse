@@ -1,7 +1,12 @@
 import crypto from 'node:crypto';
 import type pg from 'pg';
 import { query, transaction } from '../../infrastructure/database/index.js';
-import { checkMembership } from './service.js';
+import {
+  authzEnabled,
+  flushAuthzOutboxEntries,
+  queueAuthzRelationships,
+  touchRelation,
+} from '../../infrastructure/authz/index.js';
 
 // ── Token generation ──
 
@@ -66,7 +71,7 @@ export async function getInviteByToken(token: string) {
 }
 
 export async function redeemInvite(token: string, userId: string) {
-  return transaction(async (client: pg.PoolClient) => {
+  const result = await transaction(async (client: pg.PoolClient) => {
     // Lock the invite row
     const inviteRes = await client.query(
       `SELECT wi.*, w.name AS workspace_name
@@ -115,12 +120,40 @@ export async function redeemInvite(token: string, userId: string) {
       [invite.id]
     );
 
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      [
+        touchRelation('workspace', invite.workspace_id, invite.trust_level, 'user', userId),
+      ],
+      {
+        source: 'workspace.redeem_invite',
+        workspaceId: invite.workspace_id,
+        userId,
+        trustLevel: invite.trust_level,
+      },
+    );
+
     return {
       workspaceId: invite.workspace_id,
       workspaceName: invite.workspace_name,
       trustLevel: invite.trust_level,
+      authzEntryIds,
     };
   });
+
+  if (authzEnabled() && result.authzEntryIds.length > 0) {
+    try {
+      await flushAuthzOutboxEntries(result.authzEntryIds);
+    } catch (error) {
+      console.error('[authz] Failed to flush workspace.redeem_invite relationship updates:', error);
+    }
+  }
+
+  return {
+    workspaceId: result.workspaceId,
+    workspaceName: result.workspaceName,
+    trustLevel: result.trustLevel,
+  };
 }
 
 export async function listWorkspaceInvites(workspaceId: string) {

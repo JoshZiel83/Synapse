@@ -11,7 +11,7 @@ import { usePluginStore } from '@/stores/plugin-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 
-type BindingScope = 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+type AttachmentType = 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
 type ReuseScope = 'turn' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
 
 interface SetupStep {
@@ -27,7 +27,7 @@ interface SetupStep {
 
 interface Props {
   plugin: any;
-  scopeType?: BindingScope;
+  attachmentType?: AttachmentType;
   actorId?: string;
   conversationId?: string;
   userId?: string;
@@ -38,7 +38,7 @@ interface Props {
 
 export default function SetupWizardDialog({
   plugin,
-  scopeType = 'workspace',
+  attachmentType = 'workspace',
   actorId,
   conversationId,
   userId,
@@ -110,10 +110,10 @@ export default function SetupWizardDialog({
 
         await installPlugin(workspaceId!, {
           pluginId: plugin.id,
-          scopeType,
+          attachmentType,
           actorId,
           conversationId,
-          userId: scopeType === 'user' ? userId || currentUserId : undefined,
+          userId: attachmentType === 'user' ? userId || currentUserId : undefined,
           lifecycleScope,
           configData: Object.keys(allConfig).length > 0 ? allConfig : undefined,
         });
@@ -134,10 +134,10 @@ export default function SetupWizardDialog({
       setSaving(true);
       installPlugin(workspaceId!, {
         pluginId: plugin.id,
-        scopeType,
+        attachmentType,
         actorId,
         conversationId,
-        userId: scopeType === 'user' ? userId || currentUserId : undefined,
+        userId: attachmentType === 'user' ? userId || currentUserId : undefined,
         lifecycleScope,
       })
         .then(() => onComplete())

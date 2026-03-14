@@ -3,8 +3,7 @@ import { Buffer } from 'node:buffer';
 import type {
   CapabilityAssetKind,
   CapabilityAvailableSkill,
-  CapabilityBinding,
-  CapabilityBindingScope,
+  CapabilityAttachmentType,
   CapabilityInstallPlan,
   CapabilityRequirementKind,
   CapabilityReuseScope,
@@ -12,23 +11,23 @@ import type {
 import {
   buildCapabilityGrantPlan,
   CapabilityError,
-  bindingToAvailableSkill,
-  createCapabilityBinding,
+  createCapabilityInstance,
   createCapabilityPackage,
   createCapabilityPublisher,
   createCapabilityRevision,
-  dedupeVisibleBindings,
-  deleteCapabilityBinding,
-  ensureDefaultCapabilityGrant,
+  dedupeVisibleInstances,
+  deleteCapabilityInstance,
+  ensureDefaultCapabilityInstanceGrant,
   evaluateCapabilityRequirements,
   getCapabilityAssetByPath,
   getCapabilityPackage,
   listCapabilityAssets,
-  listCapabilityBindings,
+  listCapabilityInstances,
   listCapabilityPackages,
-  listAuthorizedCapabilityBindings,
+  listAuthorizedCapabilityInstances,
+  instanceToAvailableSkill,
   replaceRevisionRequirements,
-  updateCapabilityBinding,
+  updateCapabilityInstance,
 } from '../capabilities/service.js';
 
 type JsonMap = Record<string, unknown>;
@@ -53,7 +52,7 @@ type CapabilityRequirementInput = {
   targetPublisherSlug?: string;
   targetPackageSlug?: string;
   targetTag?: string;
-  acceptableBindingScopes?: CapabilityBindingScope[];
+  acceptableInstanceScopes?: CapabilityAttachmentType[];
   acceptableReuseScopes?: CapabilityReuseScope[];
   description?: string;
   configPredicate?: JsonMap;
@@ -215,6 +214,11 @@ function parseRequirementItems(
 ): CapabilityRequirementInput[] {
   if (!Array.isArray(items)) return [];
 
+  const readInstanceScopes = (value: Record<string, unknown>) =>
+    Array.isArray(value.instanceScopes)
+      ? value.instanceScopes.filter((v): v is CapabilityAttachmentType => typeof v === 'string')
+      : [];
+
   const results: CapabilityRequirementInput[] = [];
   for (const item of items) {
     if (typeof item === 'string') {
@@ -237,7 +241,7 @@ function parseRequirementItems(
         targetKind: 'tag' as const,
         targetTag,
         description: typeof obj.description === 'string' ? obj.description : '',
-        acceptableBindingScopes: Array.isArray(obj.bindingScopes) ? obj.bindingScopes.filter((v): v is CapabilityBindingScope => typeof v === 'string') : [],
+        acceptableInstanceScopes: readInstanceScopes(obj),
         acceptableReuseScopes: Array.isArray(obj.reuseScopes) ? obj.reuseScopes.filter((v): v is CapabilityReuseScope => typeof v === 'string') : [],
         configPredicate: typeof obj.configPredicate === 'object' && obj.configPredicate && !Array.isArray(obj.configPredicate)
           ? obj.configPredicate as JsonMap
@@ -265,7 +269,7 @@ function parseRequirementItems(
         typeof obj.publisher === 'string' ? obj.publisher :
         undefined,
       targetPackageSlug,
-      acceptableBindingScopes: Array.isArray(obj.bindingScopes) ? obj.bindingScopes.filter((v): v is CapabilityBindingScope => typeof v === 'string') : [],
+      acceptableInstanceScopes: readInstanceScopes(obj),
       acceptableReuseScopes: Array.isArray(obj.reuseScopes) ? obj.reuseScopes.filter((v): v is CapabilityReuseScope => typeof v === 'string') : [],
       description: typeof obj.description === 'string' ? obj.description : '',
       configPredicate: typeof obj.configPredicate === 'object' && obj.configPredicate && !Array.isArray(obj.configPredicate)
@@ -391,7 +395,7 @@ export async function createSkill(input: {
     iconUrl: input.iconUrl,
     sourceType: 'workspace_upload',
     tags: input.tags || [],
-    defaultBindingScope: 'workspace',
+    defaultInstanceScope: 'workspace',
     defaultReuseScope: 'workspace',
     requiresHandshake: false,
     metadata: {
@@ -484,16 +488,16 @@ export async function getSkillAsset(workspaceId: string, skillId: string, assetP
 }
 
 export async function listSkillInstallations(workspaceId: string, filters?: {
-  scopeType?: CapabilityBindingScope;
+  attachmentType?: CapabilityAttachmentType;
   actorId?: string;
   conversationId?: string;
   userId?: string;
   skillId?: string;
 }) {
-  return listCapabilityBindings(workspaceId, {
+  return listCapabilityInstances(workspaceId, {
     kind: 'skill',
     packageId: filters?.skillId,
-    bindingScope: filters?.scopeType,
+    attachmentType: filters?.attachmentType,
     actorId: filters?.actorId,
     conversationId: filters?.conversationId,
     userId: filters?.userId,
@@ -503,7 +507,7 @@ export async function listSkillInstallations(workspaceId: string, filters?: {
 export async function installSkill(input: {
   workspaceId: string;
   skillId: string;
-  scopeType: CapabilityBindingScope;
+  attachmentType: CapabilityAttachmentType;
   actorId?: string;
   conversationId?: string;
   userId?: string;
@@ -511,11 +515,11 @@ export async function installSkill(input: {
 }) {
   const skill = await getSkill(input.workspaceId, input.skillId);
   if (!skill.latestRevisionId) throw new SkillError(400, 'Skill has no active revision');
-  const binding = await createCapabilityBinding({
+  const instance = await createCapabilityInstance({
     workspaceId: input.workspaceId,
     packageId: skill.id,
     revisionId: skill.latestRevisionId,
-    bindingScope: input.scopeType,
+    attachmentType: input.attachmentType,
     actorId: input.actorId,
     conversationId: input.conversationId,
     userId: input.userId,
@@ -527,42 +531,42 @@ export async function installSkill(input: {
   });
 
   try {
-    await ensureDefaultCapabilityGrant({
-      bindingId: binding.id,
+    await ensureDefaultCapabilityInstanceGrant({
+      instanceId: instance.id,
       workspaceId: input.workspaceId,
       grantedBy: input.installedBy,
     });
-    return binding;
+    return instance;
   } catch (error) {
-    await deleteCapabilityBinding(binding.id).catch(() => {});
+    await deleteCapabilityInstance(instance.id).catch(() => {});
     throw error;
   }
 }
 
-export async function updateSkillInstallation(bindingId: string, data: {
+export async function updateSkillInstallation(installationId: string, data: {
   isEnabled?: boolean;
-  scopeType?: CapabilityBindingScope;
+  attachmentType?: CapabilityAttachmentType;
   actorId?: string | null;
   conversationId?: string | null;
   userId?: string | null;
 }) {
-  return updateCapabilityBinding(bindingId, {
+  return updateCapabilityInstance(installationId, {
     isEnabled: data.isEnabled,
-    bindingScope: data.scopeType,
+    attachmentType: data.attachmentType,
     actorId: data.actorId,
     conversationId: data.conversationId,
     userId: data.userId,
   });
 }
 
-export async function uninstallSkill(bindingId: string) {
-  return deleteCapabilityBinding(bindingId);
+export async function uninstallSkill(installationId: string) {
+  return deleteCapabilityInstance(installationId);
 }
 
 export async function createSkillInstallPlan(input: {
   workspaceId: string;
   skillId: string;
-  bindingScope: CapabilityBindingScope;
+  attachmentType: CapabilityAttachmentType;
   actorId?: string;
   conversationId?: string;
   userId?: string;
@@ -577,14 +581,14 @@ export async function createSkillInstallPlan(input: {
     packageId: skill.id,
     revisionId: skill.latestRevisionId,
     workspaceId: input.workspaceId,
-    bindingScope: input.bindingScope,
+    attachmentType: input.attachmentType,
     actorId: input.actorId,
     conversationId: input.conversationId,
     userId: input.userId,
     checks,
     grantPlan: buildCapabilityGrantPlan({
       revision: skill.latestRevision,
-      bindingScope: input.bindingScope,
+      attachmentType: input.attachmentType,
       actorId: input.actorId,
       conversationId: input.conversationId,
       userId: input.userId,
@@ -597,19 +601,17 @@ export async function listVisibleSkills(input: {
   actorId?: string;
   conversationId?: string;
   userId?: string;
-  userCount?: number;
 }) {
-  const bindings = await listAuthorizedCapabilityBindings({
+  const instances = await listAuthorizedCapabilityInstances({
     workspaceId: input.workspaceId,
     kind: 'skill',
     actorId: input.actorId,
     conversationId: input.conversationId,
     userId: input.userId,
-    userCount: input.userCount,
   });
 
-  return dedupeVisibleBindings(bindings, (binding) => binding.package?.slug || binding.packageId)
-    .map(bindingToAvailableSkill)
+  return dedupeVisibleInstances(instances, (instance) => instance.package?.slug || instance.packageId)
+    .map(instanceToAvailableSkill)
     .filter((skill): skill is CapabilityAvailableSkill => Boolean(skill));
 }
 
@@ -618,7 +620,6 @@ export async function readVisibleSkill(input: {
   actorId?: string;
   conversationId?: string;
   userId?: string;
-  userCount?: number;
   skillName: string;
   assetPath?: string;
 }) {
@@ -627,7 +628,6 @@ export async function readVisibleSkill(input: {
     actorId: input.actorId,
     conversationId: input.conversationId,
     userId: input.userId,
-    userCount: input.userCount,
   });
 
   const normalizedName = input.skillName.trim().toLowerCase();

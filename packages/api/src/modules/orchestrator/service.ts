@@ -8,6 +8,8 @@ import { createConversationEvent, listConversationMembers } from '../conversatio
 import { renderConversationEventTimelineBlocks } from '../conversation/event-registry.js';
 import { extractText } from '@synapse/shared';
 
+const ACTOR_MEMORY_SCOPES = new Set(['actor_conversation', 'conversation', 'actor_global']);
+
 async function emitUserVisibleSystemNotice(params: {
   workspaceId: UUID;
   actorId: UUID;
@@ -111,17 +113,23 @@ async function handleCreateMemory(
 ): Promise<void> {
   const metadata = action.metadata ?? {};
   const session = sessionId ? await getSession(sessionId) : null;
-  const requestedScope = (metadata.scope as string | undefined) ?? 'actor_conversation';
-  const conversationId = (requestedScope === 'actor_global' || requestedScope === 'workspace' || requestedScope === 'user')
+  const requestedScope = typeof metadata.scope === 'string' ? metadata.scope : 'actor_conversation';
+  const normalizedRequestedScope = ACTOR_MEMORY_SCOPES.has(requestedScope) ? requestedScope : 'actor_conversation';
+  const effectiveScope =
+    normalizedRequestedScope === 'conversation' && !session?.conversation_id
+      ? 'actor_global'
+      : normalizedRequestedScope === 'actor_conversation' && !session?.conversation_id
+          ? 'actor_global'
+          : normalizedRequestedScope;
+  const conversationId = effectiveScope === 'actor_global'
     ? undefined
     : session?.conversation_id;
-  const ownerUserId = requestedScope === 'user' ? session?.user_id || undefined : undefined;
 
   const memory = await createMemory(workspaceId, {
-    ownerScope: requestedScope as any,
-    ownerActorId: requestedScope === 'conversation' || requestedScope === 'workspace' || requestedScope === 'user' ? undefined : actorId,
+    ownerScope: effectiveScope as any,
+    ownerActorId: effectiveScope === 'conversation' ? undefined : actorId,
     ownerConversationId: conversationId,
-    ownerUserId,
+    ownerUserId: undefined,
     category: ((metadata.category as string | undefined) ?? 'fact') as any,
     stability: ((metadata.stability as string | undefined) ?? 'durable') as any,
     importance: (metadata.importance as number | undefined) ?? 0.5,
@@ -138,11 +146,7 @@ async function handleCreateMemory(
       ? 'shared conversation memory'
       : memory.ownerScope === 'actor_global'
         ? 'global actor memory'
-        : memory.ownerScope === 'user'
-          ? 'single-user memory'
-          : memory.ownerScope === 'workspace'
-            ? 'workspace memory'
-            : 'private actor-conversation memory';
+        : 'private actor-conversation memory';
   const summary = memory.textDigest?.trim() || 'durable memory saved';
 
   await emitUserVisibleSystemNotice({

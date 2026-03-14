@@ -4,9 +4,9 @@ import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import {
   CapabilityError,
-  getCapabilityAuthorizationSummary,
-  issueCapabilityGrant,
-  listCapabilityGrants,
+  getCapabilityInstanceAuthorizationSummary,
+  issueCapabilityInstanceGrant,
+  listCapabilityInstanceGrants,
   revokeCapabilityGrant,
 } from './service.js';
 
@@ -26,7 +26,6 @@ const authorizationQuerySchema = z.object({
   conversationId: z.string().uuid().optional(),
   actorId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
-  userCount: z.coerce.number().int().min(0).optional(),
 });
 
 function handleError(reply: FastifyReply, error: unknown) {
@@ -49,12 +48,12 @@ export function registerCapabilityRoutes(app: FastifyInstance) {
   const preHandler = [authMiddleware, workspaceMiddleware];
   const prefix = '/api/v1/workspaces/:workspaceId/capabilities';
 
-  app.get(`${prefix}/bindings/:bindingId/grants`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+  app.get(`${prefix}/instances/:instanceId/grants`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { workspaceId, bindingId } = request.params as { workspaceId: string; bindingId: string };
-      const summary = await getCapabilityAuthorizationSummary({ workspaceId, bindingId });
+      const { workspaceId, instanceId } = request.params as { workspaceId: string; instanceId: string };
+      const summary = await getCapabilityInstanceAuthorizationSummary({ workspaceId, instanceId });
       return reply.status(200).send({
-        grants: await listCapabilityGrants(bindingId),
+        grants: await listCapabilityInstanceGrants(instanceId),
         requiredPermissions: summary.requiredPermissions,
         suggestedGrantScope: summary.suggestedGrantScope,
         reason: summary.reason,
@@ -64,17 +63,16 @@ export function registerCapabilityRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get(`${prefix}/bindings/:bindingId/authorization`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+  app.get(`${prefix}/instances/:instanceId/authorization`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { workspaceId, bindingId } = request.params as { workspaceId: string; bindingId: string };
+      const { workspaceId, instanceId } = request.params as { workspaceId: string; instanceId: string };
       const query = authorizationQuerySchema.parse(request.query ?? {});
-      const summary = await getCapabilityAuthorizationSummary({
+      const summary = await getCapabilityInstanceAuthorizationSummary({
         workspaceId,
-        bindingId,
+        instanceId,
         actorId: query.actorId,
         conversationId: query.conversationId,
         userId: query.userId,
-        userCount: query.userCount,
       });
       return reply.status(200).send({ summary });
     } catch (error) {
@@ -82,13 +80,13 @@ export function registerCapabilityRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post(`${prefix}/bindings/:bindingId/grants`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post(`${prefix}/instances/:instanceId/grants`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { workspaceId, bindingId } = request.params as { workspaceId: string; bindingId: string };
+      const { workspaceId, instanceId } = request.params as { workspaceId: string; instanceId: string };
       const user = (request as any).user;
       const body = issueGrantSchema.parse(request.body);
-      const grant = await issueCapabilityGrant({
-        bindingId,
+      const grant = await issueCapabilityInstanceGrant({
+        instanceId,
         workspaceId,
         grantScope: body.grantScope,
         conversationId: body.conversationId,

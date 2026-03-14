@@ -1,23 +1,25 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Sparkles, ShieldCheck } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
+import { AppCard, AppCardContent } from '@/components/app-card';
 import { Button } from '@/components/ui/button';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
-import PluginConfigDialog from '../../plugin-config-dialog';
-import { PluginIcon, ScopeBadge, getLocale, translate } from '../../plugin-ui';
+import PluginInstallationWorkbench from '../../plugin-installation-workbench';
+import { PluginIcon, getLocale, translate } from '../../plugin-ui';
 
 export default function PluginInstallationPage() {
   const params = useParams<{ installationId: string }>();
   const router = useRouter();
   const { workspaceId } = useWorkspace();
+  const [plugin, setPlugin] = useState<any>(null);
+  const [installations, setInstallations] = useState<any[]>([]);
   const [installation, setInstallation] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const installationId = params.installationId;
-  const locale = useMemo(() => getLocale(installation?.default_locale), [installation?.default_locale]);
+  const locale = useMemo(() => getLocale((plugin || installation)?.default_locale), [installation?.default_locale, plugin?.default_locale]);
 
   useEffect(() => {
     if (!workspaceId || !installationId) return;
@@ -27,7 +29,19 @@ export default function PluginInstallationPage() {
       try {
         setLoading(true);
         const data = await api.getInstallation(workspaceId, installationId);
-        if (!cancelled) setInstallation(data.installation);
+        if (cancelled) return;
+
+        const currentInstallation = data.installation;
+        const [pluginData, installData] = await Promise.all([
+          api.getMarketplacePlugin(currentInstallation.plugin_id),
+          api.getInstallations(workspaceId, new URLSearchParams({ pluginId: currentInstallation.plugin_id }).toString()),
+        ]);
+
+        if (!cancelled) {
+          setInstallation(currentInstallation);
+          setPlugin(pluginData);
+          setInstallations(installData);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -43,56 +57,58 @@ export default function PluginInstallationPage() {
     return <div className="py-16 text-center text-sm text-muted-foreground">Loading installation...</div>;
   }
 
-  if (!installation) {
+  if (!installation || !plugin) {
     return <div className="py-16 text-center text-sm text-muted-foreground">Installation not found.</div>;
   }
 
-  const title = translate(installation.plugin_display_name_i18n, locale, installation.default_locale || 'en') || installation.plugin_display_name;
+  const title = translate(plugin.display_name_i18n, locale, plugin.default_locale || 'en') || plugin.display_name;
+  const description = translate(plugin.long_description_i18n || plugin.description_i18n, locale, plugin.default_locale || 'en') || plugin.long_description || plugin.description;
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Link href={`/dashboard/plugins/${installation.plugin_id}`} className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-4 w-4" />
-          Back to plugin
-        </Link>
-        <div className="flex items-center gap-2">
-          <Button asChild variant="outline" className="gap-2">
-            <Link href={`/dashboard/plugins/${installation.plugin_id}/install?reconfigure=${installation.id}`}>
-              <Sparkles className="h-4 w-4" />
-              重新按流程配置
-            </Link>
-          </Button>
-          <Button asChild variant="outline" className="gap-2">
-            <Link href={`/dashboard/authorizations?bindingId=${installation.id}`}>
-              <ShieldCheck className="h-4 w-4" />
-              授权管理
-            </Link>
-          </Button>
-        </div>
+    <div className="flex flex-col gap-6 px-4 pb-6 pt-6 lg:px-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => router.push(`/dashboard/plugins/${installation.plugin_id}?installationId=${installation.id}`)}
+        >
+          <ArrowLeft data-icon="inline-start" />
+          Back
+        </Button>
       </div>
 
-      <section className="rounded-[28px] border border-gray-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-gray-900">
-        <div className="flex items-center gap-4">
-          <PluginIcon iconUrl={installation.plugin_icon_url} title={title} transport={installation.transport} containerClassName="h-16 w-16 rounded-[20px]" className="h-7 w-7" />
-          <div className="min-w-0 space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
+      <AppCard variant="panel">
+        <AppCardContent className="p-6">
+          <div className="flex items-center gap-4">
+            <PluginIcon iconUrl={plugin.icon_url} title={title} transport={plugin.transport} verified={plugin.is_builtin} containerClassName="h-16 w-16 rounded-[20px]" className="h-7 w-7" />
+            <div className="min-w-0 space-y-2">
               <h1 className="text-2xl font-semibold text-foreground">{title}</h1>
-              <ScopeBadge scope={installation.scope_type} />
+              <p className="text-sm text-muted-foreground">{description}</p>
             </div>
-            <p className="text-sm text-muted-foreground">
-              Adjust configuration, reconnect OAuth providers, or change the binding scope for this installation.
-            </p>
           </div>
-        </div>
-      </section>
+        </AppCardContent>
+      </AppCard>
 
-      <PluginConfigDialog
-        installation={installation}
-        presentation="page"
-        onClose={() => router.push(`/dashboard/plugins/${installation.plugin_id}`)}
-        onSuccess={() => router.push(`/dashboard/plugins/${installation.plugin_id}`)}
-      />
+      <div>
+        <PluginInstallationWorkbench
+          plugin={plugin}
+          installations={installations}
+          selectedInstallationId={installation.id}
+          initialInstallation={installation}
+          onSelectInstallation={(nextInstallationId) => router.replace(`/dashboard/plugins/installations/${nextInstallationId}`, { scroll: false })}
+          onCreateInstallation={() => router.push(`/dashboard/plugins/${installation.plugin_id}/install`)}
+          onInstallationsChanged={async (updatedInstallation) => {
+            if (!workspaceId) return;
+            const [freshInstallation, freshInstallations] = await Promise.all([
+              api.getInstallation(workspaceId, updatedInstallation.id),
+              api.getInstallations(workspaceId, new URLSearchParams({ pluginId: installation.plugin_id }).toString()),
+            ]);
+            setInstallation(freshInstallation.installation);
+            setInstallations(freshInstallations);
+          }}
+        />
+      </div>
     </div>
   );
 }

@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { Settings, Trash2, AlertTriangle } from 'lucide-react';
 import { usePluginStore } from '@/stores/plugin-store';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
-import { bindingScopeColors, bindingScopeLabels, PluginIcon, getLocale, translate } from './plugin-ui';
+import { attachmentTypeColors, attachmentTypeLabels, PluginIcon, getLocale, translate } from './plugin-ui';
 
 export default function InstalledList() {
   const router = useRouter();
@@ -62,6 +62,7 @@ export default function InstalledList() {
     <div className="space-y-3">
       {installations.map((install: any) => {
         const configMissing = hasRequiredConfigMissing(install);
+        const attachmentType = install.attachment_type;
         return (
           <Card key={install.id} className={`bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 ${configMissing ? 'border-amber-500/20' : 'border-gray-200 dark:border-white/10'}`}>
             <CardContent className="flex items-center justify-between p-4">
@@ -78,8 +79,8 @@ export default function InstalledList() {
                     <Link href={`/dashboard/plugins/${install.plugin_id}`} className="font-medium text-sm hover:text-blue-600">
                       {translate(install.plugin_display_name_i18n, locale, install.default_locale || 'en') || install.plugin_display_name}
                     </Link>
-                    <Badge variant="outline" className={`text-xs ${bindingScopeColors[install.scope_type] || 'border-gray-200 dark:border-white/10'}`}>
-                      {bindingScopeLabels[install.scope_type] || install.scope_type}
+                    <Badge variant="outline" className={`text-xs ${attachmentTypeColors[attachmentType] || 'border-gray-200 dark:border-white/10'}`}>
+                      Owner: {attachmentTypeLabels[attachmentType] || attachmentType}
                     </Badge>
                     <Badge variant="outline" className="text-xs border-gray-200 dark:border-white/10 text-muted-foreground">
                       {install.lifecycle_scope}

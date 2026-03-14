@@ -2,7 +2,7 @@ import { normalizeActorDocs, textBlocks } from '@synapse/shared';
 import type {
   ActorDefinition,
   ActorTemplateDependency,
-  CapabilityBindingScope,
+  CapabilityAttachmentType,
   CapabilityReuseScope,
 } from '@synapse/shared';
 
@@ -20,7 +20,7 @@ interface BuiltinActorTemplateSeed {
     targetPackageKind: ActorTemplateDependency['targetPackageKind'];
     targetPublisherSlug?: string;
     targetPackageSlug: string;
-    acceptableBindingScopes?: CapabilityBindingScope[];
+    acceptableInstanceScopes?: CapabilityAttachmentType[];
     acceptableReuseScopes?: CapabilityReuseScope[];
     description: string;
     notes?: ReturnType<typeof textBlocks>;
@@ -111,7 +111,7 @@ export const builtinActorTemplateSeeds: BuiltinActorTemplateSeed[] = [
         targetPackageKind: 'plugin',
         targetPublisherSlug: 'z_ai',
         targetPackageSlug: 'toolkit',
-        acceptableBindingScopes: ['workspace', 'actor_global'],
+        acceptableInstanceScopes: ['workspace', 'actor_global'],
         acceptableReuseScopes: ['workspace', 'actor_global', 'conversation'],
         description: 'Mira needs the official ZhipuAI Toolkit for live research and document-reading workflows.',
         notes: textBlocks('Without this plugin, Mira can still reason from existing context, but she cannot reliably gather fresh external evidence or inspect uploaded documents.'),
@@ -207,7 +207,7 @@ export const builtinActorTemplateSeeds: BuiltinActorTemplateSeed[] = [
         targetPackageKind: 'plugin',
         targetPublisherSlug: 'z_ai',
         targetPackageSlug: 'toolkit',
-        acceptableBindingScopes: ['workspace', 'actor_global'],
+        acceptableInstanceScopes: ['workspace', 'actor_global'],
         acceptableReuseScopes: ['workspace', 'actor_global', 'conversation'],
         description: 'Recommended if Orian needs to inspect uploaded documents, screenshots, or external references during coordination.',
         notes: textBlocks('This is optional. Orian can still coordinate using existing conversation context and workspace state without the plugin.'),

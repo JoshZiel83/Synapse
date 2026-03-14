@@ -18,6 +18,13 @@ const refreshSchema = z.object({
   refreshToken: z.string().min(1, 'Refresh token is required'),
 });
 
+const updateMeSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  avatarUrl: z.string().min(1).nullable().optional(),
+}).refine((body) => body.name !== undefined || body.avatarUrl !== undefined, {
+  message: 'At least one field is required',
+});
+
 function handleAuthError(error: unknown, reply: FastifyReply) {
   if (error instanceof AuthError) {
     return reply.status(error.statusCode).send({ error: error.message });
@@ -73,6 +80,23 @@ export function registerAuthRoutes(app: FastifyInstance) {
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = await authService.getProfile((request as any).user!.userId);
+        return reply.status(200).send({ user });
+      } catch (error) {
+        return handleAuthError(error, reply);
+      }
+    },
+  );
+
+  app.put(
+    '/api/v1/auth/me',
+    { preHandler: [authMiddleware] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const body = updateMeSchema.parse(request.body);
+        const user = await authService.updateProfile((request as any).user!.userId, {
+          name: body.name,
+          avatarUrl: body.avatarUrl,
+        });
         return reply.status(200).send({ user });
       } catch (error) {
         return handleAuthError(error, reply);

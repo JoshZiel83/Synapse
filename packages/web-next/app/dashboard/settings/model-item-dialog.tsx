@@ -20,6 +20,7 @@ interface ModelItemDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   groupId: string;
+  scope?: 'workspace' | 'platform' | 'user';
   item: any | null;
   onSaved: () => void;
 }
@@ -46,7 +47,14 @@ const MULTIMODAL_TYPES = [
   { key: 'document', label: 'Documents', description: 'Send PDF and document files to the model', icon: FileIcon },
 ];
 
-export default function ModelItemDialog({ open, onOpenChange, groupId, item, onSaved }: ModelItemDialogProps) {
+export default function ModelItemDialog({
+  open,
+  onOpenChange,
+  groupId,
+  scope = 'workspace',
+  item,
+  onSaved,
+}: ModelItemDialogProps) {
   const { workspaceId } = useWorkspace();
   const [displayName, setDisplayName] = useState('');
   const [providerType, setProviderType] = useState('anthropic');
@@ -101,7 +109,7 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
   };
 
   const handleSave = async () => {
-    if (!workspaceId || !displayName.trim()) return;
+    if ((!workspaceId && scope === 'workspace') || !displayName.trim()) return;
     setSaving(true);
     try {
       // Build extraConfig with builtin_tools and multimodal
@@ -128,10 +136,16 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
         if (providerType) updateData.providerType = providerType;
         updateData.maxTokens = parseInt(maxTokens);
 
-        await api.updateModelItem(workspaceId, groupId, item.id, updateData);
+        if (scope === 'platform') {
+          await api.updatePlatformModelItem(groupId, item.id, updateData);
+        } else if (scope === 'user') {
+          await api.updateUserModelItem(groupId, item.id, updateData);
+        } else {
+          await api.updateModelItem(workspaceId!, groupId, item.id, updateData);
+        }
       } else {
         // Create new
-        await api.addModelItem(workspaceId, groupId, {
+        const payload = {
           displayName: displayName.trim(),
           priority: parseInt(priority),
           weight: parseInt(weight),
@@ -141,7 +155,14 @@ export default function ModelItemDialog({ open, onOpenChange, groupId, item, onS
           modelName: modelName.trim(),
           maxTokens: parseInt(maxTokens),
           extraConfig,
-        });
+        };
+        if (scope === 'platform') {
+          await api.addPlatformModelItem(groupId, payload);
+        } else if (scope === 'user') {
+          await api.addUserModelItem(groupId, payload);
+        } else {
+          await api.addModelItem(workspaceId!, groupId, payload);
+        }
       }
       onSaved();
     } catch (err) {

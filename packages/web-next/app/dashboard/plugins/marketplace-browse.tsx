@@ -117,16 +117,16 @@ export default function MarketplaceBrowse({ defaultActorId: _defaultActorId }: {
                 className="-mx-4 flex cursor-pointer items-center rounded-2xl border-b border-gray-100 px-4 py-5 transition-colors hover:bg-gray-50/70"
                 onClick={() => openPlugin(plugin.id)}
               >
-                <PluginIcon iconUrl={plugin.icon_url} title={title} transport={plugin.transport} />
+                <PluginIcon
+                  iconUrl={plugin.icon_url}
+                  title={title}
+                  transport={plugin.transport}
+                  verified={plugin.is_builtin}
+                />
 
                 <div className="ml-4 min-w-0 flex-1">
                   <div className="flex items-start gap-2">
                     <h3 className="truncate text-[15px] font-medium text-gray-900">{title}</h3>
-                    {plugin.is_builtin ? (
-                      <Badge variant="outline" className="border-blue-200 text-[10px] text-blue-600">
-                        官方
-                      </Badge>
-                    ) : null}
                   </div>
 
                   <div className="mt-0.5 flex flex-col">

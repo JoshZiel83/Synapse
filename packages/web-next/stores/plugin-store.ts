@@ -18,7 +18,7 @@ interface PluginState {
     wsId: string,
     data: {
       pluginId: string;
-      scopeType: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+      attachmentType: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
       actorId?: string;
       conversationId?: string;
       userId?: string;
@@ -26,9 +26,9 @@ interface PluginState {
       configData?: Record<string, unknown>;
       authSessionIds?: Record<string, string>;
     },
-  ) => Promise<void>;
+  ) => Promise<any>;
   uninstallPlugin: (wsId: string, installId: string) => Promise<void>;
-  updateInstallation: (wsId: string, installId: string, data: any) => Promise<void>;
+  updateInstallation: (wsId: string, installId: string, data: any) => Promise<any>;
 }
 
 export const usePluginStore = create<PluginState>((set, get) => ({
@@ -85,8 +85,9 @@ export const usePluginStore = create<PluginState>((set, get) => ({
   },
 
   installPlugin: async (wsId, data) => {
-    await api.installPlugin(wsId, data);
+    const installation = await api.installPlugin(wsId, data);
     await get().loadInstallations(wsId);
+    return installation;
   },
 
   uninstallPlugin: async (wsId: string, installId: string) => {
@@ -95,7 +96,8 @@ export const usePluginStore = create<PluginState>((set, get) => ({
   },
 
   updateInstallation: async (wsId: string, installId: string, data: any) => {
-    await api.updateInstallation(wsId, installId, data);
+    const installation = await api.updateInstallation(wsId, installId, data);
     await get().loadInstallations(wsId);
+    return installation;
   },
 }));
