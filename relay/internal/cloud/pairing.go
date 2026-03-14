@@ -37,9 +37,13 @@ func ClaimPairing(ctx context.Context, relayCfg config.RelayConfig, pairingCode,
 	if strings.TrimSpace(pairingCode) == "" {
 		return nil, nil, fmt.Errorf("pairing code is required")
 	}
+	privateKeyPath := strings.TrimSpace(relayCfg.PrivateKeyPath)
+	if privateKeyPath == "" {
+		privateKeyPath = config.DefaultPrivateKeyPath()
+	}
 	resolvedDisplayName := ResolveRelayDisplayName(displayName)
 
-	identity, err := deviceauth.EnsureIdentity(relayCfg.PrivateKeyPath)
+	identity, err := deviceauth.EnsureIdentity(privateKeyPath)
 	if err != nil {
 		return nil, nil, err
 	}
