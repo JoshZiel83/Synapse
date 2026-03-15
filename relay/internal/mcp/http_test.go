@@ -133,6 +133,25 @@ func TestHTTPServerParsesSSEResponseAndNotification(t *testing.T) {
 	}
 }
 
+func TestHTTPServerCallToolHonorsContextCancellation(t *testing.T) {
+	server := NewHTTPServer("http://relay.test/mcp")
+	server.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := server.CallTool(ctx, "search", map[string]interface{}{"q": "demo"})
+	if err == nil {
+		t.Fatalf("expected call to be cancelled")
+	}
+	if !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("expected cancelled error, got %v", err)
+	}
+}
+
 func requestMethod(t *testing.T, r *http.Request) string {
 	t.Helper()
 

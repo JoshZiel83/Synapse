@@ -8,6 +8,24 @@ export interface RelaySettings {
   privateKeyPath?: string
 }
 
+export interface StartupSettings {
+  runAtLogin?: boolean
+  autoConnect?: boolean
+  launchHidden?: boolean
+}
+
+export interface NotificationSettings {
+  backgroundEnabled?: boolean
+}
+
+export interface UpdateSettings {
+  channel?: string
+  lastCheckedAt?: string
+  lastVersion?: string
+  pendingVersion?: string
+  pendingInstaller?: string
+}
+
 export interface ServerConfig {
   stableKey?: string
   syncSourceKey?: string
@@ -34,6 +52,9 @@ export interface SyncSourceConfig {
 
 export interface RelayConfig {
   relay?: RelaySettings
+  startup?: StartupSettings
+  notifications?: NotificationSettings
+  update?: UpdateSettings
   logLevel?: string
   syncSources?: SyncSourceConfig[]
   servers?: ServerConfig[]

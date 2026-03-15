@@ -27,15 +27,17 @@ const catalogRefreshInterval = 10 * time.Second
 
 // Engine orchestrates the relay lifecycle: MCP servers + cloud connection
 type Engine struct {
-	cfg       *config.Config
-	mgr       *mcp.Manager
-	client    *cloud.Client
-	state     State
-	cancel    context.CancelFunc
-	listeners []EventListener
-	lastErr   error
-	mu        sync.RWMutex
-	done      chan struct{}
+	cfg           *config.Config
+	mgr           *mcp.Manager
+	client        *cloud.Client
+	clientVersion string
+	state         State
+	cancel        context.CancelFunc
+	listeners     []EventListener
+	lastErr       error
+	beforeConnect func(context.Context) error
+	mu            sync.RWMutex
+	done          chan struct{}
 }
 
 // New creates a new relay engine with the given config
@@ -51,6 +53,18 @@ func (e *Engine) OnEvent(listener EventListener) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.listeners = append(e.listeners, listener)
+}
+
+func (e *Engine) SetBeforeConnect(handler func(context.Context) error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.beforeConnect = handler
+}
+
+func (e *Engine) SetClientVersion(version string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.clientVersion = version
 }
 
 func (e *Engine) emit(evt Event) {
@@ -131,6 +145,8 @@ func (e *Engine) run(ctx context.Context) {
 	client := cloud.NewClient(e.cfg.Relay, mgr)
 	client.SetSyncSources(e.cfg.SyncSources)
 	client.SetExposures(servers)
+	client.BeforeConnect = e.beforeConnect
+	client.SetClientVersion(e.clientVersion)
 
 	// Wire event callback to client
 	client.OnEvent = func(evtType string, msg string, data map[string]interface{}) {

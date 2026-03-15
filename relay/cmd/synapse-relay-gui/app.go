@@ -16,6 +16,8 @@ import (
 	"github.com/PekingSpades/Synapse/relay/internal/localapi"
 	"github.com/PekingSpades/Synapse/relay/internal/mcp"
 	"github.com/PekingSpades/Synapse/relay/internal/relay"
+	"github.com/PekingSpades/Synapse/relay/internal/startup"
+	"github.com/PekingSpades/Synapse/relay/internal/tray"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -72,6 +74,7 @@ type App struct {
 	cfgPath              string
 	cfgHash              string
 	cfgMu                sync.RWMutex
+	updateMu             sync.Mutex
 	logs                 []LogEntry
 	logsMu               sync.Mutex
 	authFailureMu        sync.RWMutex
@@ -80,6 +83,11 @@ type App struct {
 	authFailurePermanent bool
 	localAPI             *localapi.Server
 	watchCfgCancel       context.CancelFunc
+	tray                 tray.Manager
+	windowStateMu        sync.RWMutex
+	windowHidden         bool
+	allowQuit            bool
+	launchedAtLogin      bool
 }
 
 // NewApp creates a new App instance
@@ -89,6 +97,7 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.launchedAtLogin = hasLaunchAtLoginArg(os.Args[1:])
 
 	// Load config
 	cfgPath := config.Resolve("")
@@ -101,8 +110,16 @@ func (a *App) startup(ctx context.Context) {
 	if err != nil {
 		cfg = &config.Config{LogLevel: "info"}
 	}
+	if changed, syncErr := a.syncStartupStateFromSystem(cfg); syncErr != nil {
+		log.Printf("Warning: failed to read startup preference: %v", syncErr)
+	} else if changed {
+		if err := a.persistConfigSilently(cfg); err != nil {
+			log.Printf("Warning: failed to persist startup preference: %v", err)
+		}
+	}
 	a.cfg = config.Clone(cfg)
 	a.cfgHash = config.Fingerprint(a.cfg)
+	a.setWindowHidden(a.launchedAtLogin && a.cfg.Startup.LaunchHidden)
 
 	watchCtx, cancel := context.WithCancel(context.Background())
 	a.watchCfgCancel = cancel
@@ -114,8 +131,29 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("Warning: failed to start local API: %v", err)
 	}
 
+	if err := a.syncStartupPreference(a.cfg); err != nil {
+		log.Printf("Warning: failed to sync startup preference: %v", err)
+	}
+	if err := a.initialiseTray(); err != nil {
+		log.Printf("Warning: failed to initialise tray: %v", err)
+	}
+
 	// Check for deep link URL in args (synapse-relay://pair?serverBaseUrl=...&code=...)
 	a.handleDeepLinkArgs()
+
+	if a.cfg.Startup.AutoConnect {
+		go a.autoConnectAfterLaunch()
+	}
+}
+
+func (a *App) domReady(ctx context.Context) {
+	if !a.isWindowHidden() {
+		return
+	}
+	if a.tray == nil || !a.tray.Available() {
+		wailsRuntime.WindowShow(ctx)
+		a.setWindowHidden(false)
+	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -128,6 +166,26 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.engine != nil && (a.engine.State() == relay.StateRunning || a.engine.State() == relay.StateStarting) {
 		a.engine.Stop()
 	}
+	if a.tray != nil {
+		_ = a.tray.Close()
+	}
+}
+
+func (a *App) beforeClose(ctx context.Context) bool {
+	if a.shouldAllowQuit() {
+		return false
+	}
+	if a.engine == nil || a.engine.State() != relay.StateRunning {
+		return false
+	}
+	if a.tray == nil || !a.tray.Available() {
+		return false
+	}
+
+	wailsRuntime.WindowHide(ctx)
+	a.setWindowHidden(true)
+	a.notifyTray("Synapse Relay", "Relay is still running in the background.", false)
+	return true
 }
 
 // handleRemotePairing is called by the local API when the web UI sends a pairing request.
@@ -264,6 +322,7 @@ func (a *App) claimPairing(serverBaseURL, pairingCode, displayName string) (*clo
 	}
 
 	a.emitConfigUpdated(cfg, message, autoApplied)
+	go a.prefetchUpdateAfterPairing()
 	return result, nil
 }
 
@@ -281,6 +340,8 @@ func (a *App) StartRelay() error {
 	}
 
 	a.engine = relay.New(cfg)
+	a.engine.SetClientVersion(Version)
+	a.engine.SetBeforeConnect(a.beforeRelayConnect)
 	a.clearAuthFailure()
 	a.engine.OnEvent(func(evt relay.Event) {
 		switch evt.Type {
@@ -313,6 +374,7 @@ func (a *App) StartRelay() error {
 			"time":    evt.Timestamp.Format("15:04:05"),
 			"data":    evt.Data,
 		})
+		a.maybeNotifyBackgroundEvent(evt)
 	})
 
 	return a.engine.Start(context.Background())
@@ -335,6 +397,14 @@ func (a *App) RestartRelay() error {
 }
 
 func (a *App) GetStatus() StatusInfo {
+	return a.getStatusInfo(true)
+}
+
+func (a *App) GetStatusSummary() StatusInfo {
+	return a.getStatusInfo(false)
+}
+
+func (a *App) getStatusInfo(includeServers bool) StatusInfo {
 	info := StatusInfo{State: "stopped"}
 	if a.engine != nil {
 		info.State = string(a.engine.State())
@@ -344,7 +414,9 @@ func (a *App) GetStatus() StatusInfo {
 		info.AuthFailureCode = a.getAuthFailureCode()
 		info.AuthFailureMessage = a.getAuthFailureMessage()
 		info.AuthFailurePermanent = a.getAuthFailurePermanent()
-		info.Servers = a.engine.ServerInfo()
+		if includeServers {
+			info.Servers = a.engine.ServerInfo()
+		}
 	}
 	return info
 }
@@ -421,9 +493,6 @@ func (a *App) DetectSources() []GUISource {
 			LinkedMCPs: linkedServers[s.SourceKey],
 			Error:      s.Error,
 			Servers:    make([]GUIImportServer, len(s.Servers)),
-		}
-		if gs.SyncMode == "" {
-			gs.SyncMode = "observe"
 		}
 		gs.Status = syncSourceStatusForDetection(s.Available, s.Error)
 		for j, srv := range s.Servers {
@@ -773,10 +842,28 @@ func (a *App) persistConfig(cfg *config.Config) (string, bool, error) {
 	if err := config.Save(a.cfgPath, cfg); err != nil {
 		return "", false, err
 	}
+	if err := a.syncStartupPreference(cfg); err != nil {
+		return "", false, err
+	}
 
 	a.setConfigHash(config.Fingerprint(cfg))
 	message, autoApplied, _ := a.applyConfigToRunningRelay(cfg)
 	return message, autoApplied, nil
+}
+
+func (a *App) persistConfigSilently(cfg *config.Config) error {
+	if cfg == nil {
+		return nil
+	}
+	if err := config.EnsureDir(); err != nil {
+		return err
+	}
+	if err := config.Save(a.cfgPath, cfg); err != nil {
+		return err
+	}
+	a.setConfig(cfg)
+	a.setConfigHash(config.Fingerprint(cfg))
+	return nil
 }
 
 func (a *App) applyConfigToRunningRelay(cfg *config.Config) (string, bool, bool) {
@@ -822,4 +909,267 @@ func (a *App) setConfigHash(hash string) {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 	a.cfgHash = hash
+}
+
+func (a *App) syncStartupPreference(cfg *config.Config) error {
+	if cfg == nil || !startup.IsSupported() {
+		return nil
+	}
+
+	command, err := startup.Command(cfg.Startup.LaunchHidden)
+	if err != nil {
+		return err
+	}
+	return startup.Sync(cfg.Startup.RunAtLogin, command)
+}
+
+func (a *App) beforeRelayConnect(ctx context.Context) error {
+	result, applied, err := a.syncDesktopUpdate(ctx, true)
+	if err != nil {
+		a.emitLocalLog("update", fmt.Sprintf("Update check failed: %v", err))
+		return nil
+	}
+	if result != nil && result.Available && result.Manifest != nil && !applied && result.Downloaded {
+		a.emitLocalLog("update", fmt.Sprintf("Update %s is staged and will be installed before the next launch.", result.Manifest.Version))
+	}
+	if !applied {
+		return nil
+	}
+
+	version := ""
+	if result != nil && result.Manifest != nil {
+		version = result.Manifest.Version
+	}
+	if version != "" {
+		a.emitLocalLog("update", fmt.Sprintf("Installing update %s and closing the app.", version))
+	} else {
+		a.emitLocalLog("update", "Installing update and closing the app.")
+	}
+
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		if a.ctx != nil {
+			wailsRuntime.Quit(a.ctx)
+		}
+	}()
+	return cloud.ErrRestartRequired
+}
+
+func (a *App) prefetchUpdateAfterPairing() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	result, _, err := a.syncDesktopUpdate(ctx, false)
+	if err != nil {
+		a.emitLocalLog("update", fmt.Sprintf("Update prefetch failed: %v", err))
+		return
+	}
+	if result != nil && result.Available && result.Downloaded && result.Manifest != nil {
+		a.emitLocalLog("update", fmt.Sprintf("Downloaded update %s. It will install before the next connection.", result.Manifest.Version))
+	}
+}
+
+func (a *App) syncDesktopUpdate(ctx context.Context, apply bool) (*cloud.DesktopUpdateResult, bool, error) {
+	a.updateMu.Lock()
+	defer a.updateMu.Unlock()
+
+	cfg := a.getConfigSnapshot()
+	if cfg == nil || strings.TrimSpace(cfg.Relay.DeviceID) == "" || strings.TrimSpace(cfg.Relay.ServerBaseURL) == "" {
+		return nil, false, nil
+	}
+
+	result, err := cloud.CheckForDesktopUpdate(ctx, cfg.Relay, cfg.Update, Version)
+	if err != nil {
+		return nil, false, err
+	}
+
+	changed := false
+	if result != nil {
+		if cfg.Update.LastCheckedAt != result.CheckedAt {
+			cfg.Update.LastCheckedAt = result.CheckedAt
+			changed = true
+		}
+
+		latestVersion := ""
+		if result.Manifest != nil {
+			latestVersion = result.Manifest.Version
+		}
+		if cfg.Update.LastVersion != latestVersion {
+			cfg.Update.LastVersion = latestVersion
+			changed = true
+		}
+
+		if result.Available && result.Downloaded {
+			if cfg.Update.PendingVersion != result.Manifest.Version {
+				cfg.Update.PendingVersion = result.Manifest.Version
+				changed = true
+			}
+			if cfg.Update.PendingInstaller != result.DownloadPath {
+				cfg.Update.PendingInstaller = result.DownloadPath
+				changed = true
+			}
+		} else if strings.TrimSpace(cfg.Update.PendingVersion) == strings.TrimSpace(Version) {
+			cfg.Update.PendingVersion = ""
+			cfg.Update.PendingInstaller = ""
+			changed = true
+		}
+	}
+
+	if changed {
+		if err := a.persistConfigSilently(cfg); err != nil {
+			return result, false, err
+		}
+	}
+
+	if !apply || result == nil || !result.Available || !result.Downloaded {
+		return result, false, nil
+	}
+	if err := cloud.LaunchPreparedUpdate(result.DownloadPath, true); err != nil {
+		return result, false, err
+	}
+	return result, true, nil
+}
+
+func (a *App) autoConnectAfterLaunch() {
+	time.Sleep(900 * time.Millisecond)
+	if err := a.StartRelay(); err != nil {
+		a.emitLocalLog("auto_connect", fmt.Sprintf("Auto-connect failed: %v", err))
+	}
+}
+
+func (a *App) emitLocalLog(kind, message string) {
+	entry := LogEntry{
+		Time:    time.Now().Format("15:04:05"),
+		Type:    kind,
+		Message: message,
+	}
+
+	a.logsMu.Lock()
+	a.logs = append(a.logs, entry)
+	if len(a.logs) > 500 {
+		a.logs = a.logs[len(a.logs)-500:]
+	}
+	a.logsMu.Unlock()
+
+	if a.ctx != nil {
+		wailsRuntime.EventsEmit(a.ctx, "relay:event", map[string]interface{}{
+			"type":    entry.Type,
+			"message": entry.Message,
+			"time":    entry.Time,
+			"data":    map[string]interface{}{},
+		})
+	}
+}
+
+func (a *App) initialiseTray() error {
+	manager, err := tray.New("Synapse Relay", a.showWindowFromTray, a.quitFromTray)
+	if err != nil {
+		return err
+	}
+	a.tray = manager
+	return nil
+}
+
+func (a *App) showWindowFromTray() {
+	if a.ctx == nil {
+		return
+	}
+	wailsRuntime.WindowShow(a.ctx)
+	a.setWindowHidden(false)
+}
+
+func (a *App) quitFromTray() {
+	if a.ctx == nil {
+		return
+	}
+	a.setAllowQuit(true)
+	wailsRuntime.Quit(a.ctx)
+}
+
+func (a *App) syncStartupStateFromSystem(cfg *config.Config) (bool, error) {
+	if cfg == nil || !startup.IsSupported() {
+		return false, nil
+	}
+
+	enabled, err := startup.IsEnabled()
+	if err != nil {
+		return false, err
+	}
+	if cfg.Startup.RunAtLogin == enabled {
+		return false, nil
+	}
+
+	cfg.Startup.RunAtLogin = enabled
+	return true, nil
+}
+
+func (a *App) maybeNotifyBackgroundEvent(evt relay.Event) {
+	if !a.isWindowHidden() || a.tray == nil || !a.tray.Available() {
+		return
+	}
+
+	cfg := a.getConfigSnapshot()
+	if cfg == nil || !cfg.Notifications.BackgroundEnabled {
+		return
+	}
+
+	switch evt.Type {
+	case relay.EventConnected:
+		a.notifyTray("Synapse Relay", "Relay connected successfully.", false)
+	case relay.EventDisconnected:
+		if a.engine != nil {
+			state := a.engine.State()
+			if state == relay.StateStopping || state == relay.StateStopped {
+				return
+			}
+		}
+		a.notifyTray("Synapse Relay", "Relay disconnected and will retry.", true)
+	case relay.EventAuthFailed, relay.EventError:
+		if strings.TrimSpace(evt.Message) == "" {
+			return
+		}
+		a.notifyTray("Synapse Relay", evt.Message, true)
+	}
+}
+
+func (a *App) notifyTray(title, message string, warning bool) {
+	if a.tray == nil || !a.tray.Available() || strings.TrimSpace(message) == "" {
+		return
+	}
+	if err := a.tray.ShowNotification(title, message, warning); err != nil {
+		log.Printf("Warning: failed to show tray notification: %v", err)
+	}
+}
+
+func (a *App) setWindowHidden(hidden bool) {
+	a.windowStateMu.Lock()
+	defer a.windowStateMu.Unlock()
+	a.windowHidden = hidden
+}
+
+func (a *App) isWindowHidden() bool {
+	a.windowStateMu.RLock()
+	defer a.windowStateMu.RUnlock()
+	return a.windowHidden
+}
+
+func (a *App) setAllowQuit(allow bool) {
+	a.windowStateMu.Lock()
+	defer a.windowStateMu.Unlock()
+	a.allowQuit = allow
+}
+
+func (a *App) shouldAllowQuit() bool {
+	a.windowStateMu.RLock()
+	defer a.windowStateMu.RUnlock()
+	return a.allowQuit
+}
+
+func hasLaunchAtLoginArg(args []string) bool {
+	for _, arg := range args {
+		if strings.TrimSpace(arg) == startup.LaunchAtLoginFlag {
+			return true
+		}
+	}
+	return false
 }

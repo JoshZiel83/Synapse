@@ -26,6 +26,7 @@ const (
 )
 
 var ErrPermanentAuthFailure = errors.New("permanent auth failure")
+var ErrRestartRequired = errors.New("relay restart required")
 
 type disconnectError struct{ err error }
 
@@ -74,6 +75,7 @@ type Client struct {
 	writeMu       sync.Mutex
 	catalogSyncMu sync.Mutex
 	catalogSyncCh chan error
+	BeforeConnect func(ctx context.Context) error
 	OnEvent       func(evtType string, msg string, data map[string]interface{})
 }
 
@@ -114,6 +116,15 @@ func (c *Client) Run(ctx context.Context) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+
+		if c.BeforeConnect != nil {
+			if err := c.BeforeConnect(ctx); err != nil {
+				if errors.Is(err, ErrRestartRequired) {
+					return nil
+				}
+				return err
+			}
 		}
 
 		err := c.connectAndServe(ctx)
@@ -319,10 +330,10 @@ func classifyAuthFailure(msg AuthErrorMessage, defaultPermanent bool) error {
 }
 
 func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
-	go func() {
-		<-ctx.Done()
-		_ = conn.Close()
-	}()
+	loopDone := make(chan struct{})
+	defer close(loopDone)
+
+	go closeConnectionOnContext(ctx, conn, loopDone)
 
 	for {
 		_, raw, err := conn.ReadMessage()
@@ -359,12 +370,25 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 				log.Printf("Failed to parse relay dispatch: %v", err)
 				continue
 			}
-			go c.handleOperationDispatch(ctx, conn, dispatch)
+			go c.handleOperationDispatch(ctx, conn, loopDone, dispatch)
 		}
 	}
 }
 
-func (c *Client) handleOperationDispatch(ctx context.Context, conn *websocket.Conn, dispatch RelayDispatchMessage) {
+func closeConnectionOnContext(ctx context.Context, conn interface{ Close() error }, done <-chan struct{}) {
+	select {
+	case <-ctx.Done():
+		_ = conn.Close()
+	case <-done:
+	}
+}
+
+func (c *Client) handleOperationDispatch(
+	ctx context.Context,
+	conn *websocket.Conn,
+	connDone <-chan struct{},
+	dispatch RelayDispatchMessage,
+) {
 	c.emit("tool_call", dispatch.Payload.ToolName, map[string]interface{}{
 		"operationId":       dispatch.OperationID,
 		"exposureStableKey": dispatch.Payload.ExposureStableKey,
@@ -406,7 +430,7 @@ func (c *Client) handleOperationDispatch(ctx context.Context, conn *websocket.Co
 	c.mu.Unlock()
 
 	if !isNewExecution {
-		c.waitAndSendRunningOutcome(ctx, conn, dispatch.OperationID, dispatch.DeliveryID, inflight)
+		c.waitAndSendRunningOutcome(ctx, conn, connDone, dispatch.OperationID, dispatch.DeliveryID, inflight)
 		return
 	}
 
@@ -420,7 +444,14 @@ func (c *Client) handleOperationDispatch(ctx context.Context, conn *websocket.Co
 
 	c.journal.UpsertPending(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, "started")
 
-	result, err := c.caller.CallTool(ctx, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, dispatch.Payload.Arguments)
+	callCtx := ctx
+	cancel := func() {}
+	if dispatch.Payload.ExpiresInMs > 0 {
+		callCtx, cancel = context.WithTimeout(ctx, time.Duration(dispatch.Payload.ExpiresInMs)*time.Millisecond)
+	}
+	defer cancel()
+
+	result, err := c.caller.CallTool(callCtx, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, dispatch.Payload.Arguments)
 	if err != nil {
 		opErr := normalizeOperationError(err)
 		outcome := operationOutcome{success: false, err: opErr}
@@ -472,6 +503,7 @@ func (c *Client) sendJournalOutcome(conn *websocket.Conn, operationID, deliveryI
 func (c *Client) waitAndSendRunningOutcome(
 	ctx context.Context,
 	conn *websocket.Conn,
+	connDone <-chan struct{},
 	operationID string,
 	deliveryID string,
 	inflight *runningOperation,
@@ -485,6 +517,8 @@ func (c *Client) waitAndSendRunningOutcome(
 	go func() {
 		select {
 		case <-ctx.Done():
+			return
+		case <-connDone:
 			return
 		case <-inflight.done:
 			c.sendOperationOutcome(conn, operationID, deliveryID, inflight.outcome)
@@ -533,6 +567,18 @@ func (c *Client) SyncCatalog(ctx context.Context) error {
 func normalizeOperationError(err error) *RelayOperationError {
 	message := err.Error()
 	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return &RelayOperationError{
+			Code:      "operation_expired",
+			Message:   "Relay operation timed out before completion",
+			Retryable: true,
+		}
+	case errors.Is(err, context.Canceled):
+		return &RelayOperationError{
+			Code:      "delivery_rejected",
+			Message:   "Relay operation was cancelled",
+			Retryable: true,
+		}
 	case strings.Contains(message, "relay exposure"):
 		return &RelayOperationError{
 			Code:      "mcp_unavailable",

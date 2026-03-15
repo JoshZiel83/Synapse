@@ -24,6 +24,9 @@ declare const window: any
 function normalizeConfig(cfg?: RelayConfig | null): RelayConfig {
   return {
     relay: cfg?.relay || {},
+    startup: cfg?.startup || {},
+    notifications: cfg?.notifications || {},
+    update: cfg?.update || {},
     logLevel: cfg?.logLevel || 'info',
     syncSources: cfg?.syncSources || [],
     servers: cfg?.servers || [],
@@ -50,7 +53,7 @@ export function useRelayDesktop() {
   })
 
   const refreshStatus = useEffectEvent(async () => {
-    const nextStatus = await callGo<StatusInfo>('GetStatus')
+    const nextStatus = await callGo<StatusInfo>('GetStatusSummary')
     startTransition(() => {
       setStatus(nextStatus)
     })
@@ -79,7 +82,7 @@ export function useRelayDesktop() {
   })
 
   const refreshRuntime = useEffectEvent(async () => {
-    await Promise.all([refreshStatus(), refreshLogs()])
+    await refreshStatus()
   })
 
   const saveConfig = useEffectEvent(async (nextConfig: RelayConfig) => {
@@ -135,6 +138,41 @@ export function useRelayDesktop() {
     await detectSources()
   })
 
+  const addSyncSource = useEffectEvent(async (source: ImportSource, syncMode: SyncSourceConfig['syncMode']) => {
+    const currentConfig = normalizeConfig(config)
+    if ((currentConfig.syncSources || []).some((item) => item.sourceKey === source.sourceKey)) {
+      throw new Error('This target already exists.')
+    }
+
+    const nextSource: SyncSourceConfig = {
+      sourceKind: source.kind,
+      sourceKey: source.sourceKey,
+      configPath: source.configPath,
+      syncMode,
+      status: source.status || (source.available ? 'idle' : source.error ? 'error' : 'disabled'),
+      lastError: source.error,
+      metadata: {
+        displayName: source.name,
+        detectedServerCount: source.servers.length,
+      },
+    }
+
+    await saveConfig({
+      ...currentConfig,
+      syncSources: [...(currentConfig.syncSources || []), nextSource],
+    })
+    await detectSources()
+  })
+
+  const removeSyncSource = useEffectEvent(async (sourceKey: string) => {
+    const currentConfig = normalizeConfig(config)
+    await saveConfig({
+      ...currentConfig,
+      syncSources: (currentConfig.syncSources || []).filter((item) => item.sourceKey !== sourceKey),
+    })
+    await detectSources()
+  })
+
   const claimPairing = useEffectEvent(async (serverBaseUrl: string, pairingCode: string, displayName: string) => {
     const result = await callGo<string>('ClaimPairing', serverBaseUrl, pairingCode, displayName)
     await Promise.all([loadConfig(), refreshStatus()])
@@ -157,14 +195,14 @@ export function useRelayDesktop() {
   })
 
   useEffect(() => {
-    void Promise.all([loadConfig(), refreshRuntime(), detectSources()])
+    void Promise.all([loadConfig(), refreshStatus(), refreshLogs(), detectSources()])
 
     const poll = window.setInterval(() => {
-      void refreshRuntime()
+      void refreshStatus()
     }, 2000)
 
     if (window.runtime?.EventsOn) {
-      window.runtime.EventsOn('relay:event', (evt: RelayEventPayload) => {
+      const offRelayEvent = window.runtime.EventsOn('relay:event', (evt: RelayEventPayload) => {
         startTransition(() => {
           setLogs((current) => [...current.slice(-199), {
             time: evt.time,
@@ -175,16 +213,16 @@ export function useRelayDesktop() {
         void refreshStatus()
       })
 
-      window.runtime.EventsOn('config:updated', (evt: ConfigUpdatedEvent) => {
+      const offConfigUpdated = window.runtime.EventsOn('config:updated', (evt: ConfigUpdatedEvent) => {
         setBanner(
           evt?.message ||
             (evt?.autoApplied ? 'Configuration updated and relay restarted.' : 'Configuration updated.'),
         )
         void loadConfig()
-        void refreshRuntime()
+        void Promise.all([refreshStatus(), refreshLogs()])
       })
 
-      window.runtime.EventsOn('config:external-change', (evt: ConfigChangeEvent) => {
+      const offConfigExternalChange = window.runtime.EventsOn('config:external-change', (evt: ConfigChangeEvent) => {
         if (evt?.kind === 'changed') {
           setBanner(
             evt.message ||
@@ -195,24 +233,26 @@ export function useRelayDesktop() {
                   : 'Configuration reloaded from disk.'),
           )
           void loadConfig()
-          void refreshRuntime()
+          void Promise.all([refreshStatus(), refreshLogs()])
         } else if (evt?.kind === 'deleted') {
           setBanner('The relay configuration file was removed outside the app.')
         } else if (evt?.kind === 'error') {
           setBanner(evt.message || 'Failed to reload updated configuration.')
         }
       })
+
+      return () => {
+        window.clearInterval(poll)
+        offRelayEvent?.()
+        offConfigUpdated?.()
+        offConfigExternalChange?.()
+      }
     }
 
     return () => {
       window.clearInterval(poll)
-      if (window.runtime?.EventsOff) {
-        window.runtime.EventsOff('relay:event')
-        window.runtime.EventsOff('config:updated')
-        window.runtime.EventsOff('config:external-change')
-      }
     }
-  }, [detectSources, loadConfig, refreshRuntime, refreshStatus])
+  }, [detectSources, loadConfig, refreshLogs, refreshStatus])
 
   return {
     config,
@@ -231,6 +271,8 @@ export function useRelayDesktop() {
       removeServer,
       saveConfig,
       importServers,
+      addSyncSource,
+      removeSyncSource,
       setSyncSourceMode,
       claimPairing,
       startRelay,

@@ -1,6 +1,10 @@
 package mcp
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+)
 
 func TestStdioServerHandleToolsListChangedNotification(t *testing.T) {
 	server := NewStdioServer("test", nil, nil)
@@ -47,5 +51,25 @@ func TestStdioServerHandleNotificationSwallowsOtherNotifications(t *testing.T) {
 	}
 	if called != 0 {
 		t.Fatalf("expected tools/list_changed handler not to run for unrelated notifications")
+	}
+}
+
+func TestStdioServerReadMessageHonorsContextCancellation(t *testing.T) {
+	server := NewStdioServer("test", nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var result map[string]any
+	start := time.Now()
+	err := server.readMessage(ctx, &result, time.Second)
+	if err == nil {
+		t.Fatalf("expected cancellation error")
+	}
+	if err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if time.Since(start) > 200*time.Millisecond {
+		t.Fatalf("expected cancellation to return promptly")
 	}
 }

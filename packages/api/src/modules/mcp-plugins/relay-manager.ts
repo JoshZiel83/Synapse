@@ -1035,11 +1035,11 @@ async function syncDeviceCatalog(
 
 async function upsertExposure(deviceId: string, exposure: RelayExposureRegistration, syncSourceId: string | null) {
   const result = await query(
-    `INSERT INTO relay_exposures (
+     `INSERT INTO relay_exposures (
        device_id, sync_source_id, stable_key, display_name, transport, runtime_status, management_mode,
        last_seen_at, last_healthy_at, metadata
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), CASE WHEN $6 IN ('healthy', 'degraded') THEN NOW() ELSE NULL END, $8)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), CASE WHEN $8 IN ('healthy', 'degraded') THEN NOW() ELSE NULL END, $9)
      ON CONFLICT (device_id, stable_key) DO UPDATE SET
        sync_source_id = EXCLUDED.sync_source_id,
        display_name = EXCLUDED.display_name,
@@ -1062,6 +1062,7 @@ async function upsertExposure(deviceId: string, exposure: RelayExposureRegistrat
       exposure.transport,
       exposure.runtimeStatus,
       exposure.managementMode,
+      exposure.runtimeStatus,
       JSON.stringify(exposure.metadata),
     ],
   );

@@ -4,17 +4,13 @@ import Link from 'next/link';
 import QRCode from 'qrcode';
 import type {
   RelayDashboardView,
-  RelayDeviceDetailView,
   RelayDeviceSummaryView,
-  RelayExposureView,
   RelayLocalDesktopStatusView,
   RelayPairingSessionView,
-  RelaySyncSourceView,
 } from '@synapse/shared';
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  CheckCircle2,
   Copy,
   Link2,
   Monitor,
@@ -26,10 +22,8 @@ import {
   Send,
   Settings,
   Store,
-  Unplug,
   Wifi,
   WifiOff,
-  Wrench,
   XCircle,
 } from 'lucide-react';
 
@@ -64,8 +58,6 @@ import {
   FieldLabel,
 } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 function formatDateTime(value?: string) {
@@ -97,38 +89,6 @@ function relayTrustVariant(trustStatus: RelayDeviceSummaryView['trustStatus']) {
       return 'outline';
   }
 }
-
-function exposureVariant(runtimeStatus: RelayExposureView['runtimeStatus']) {
-  switch (runtimeStatus) {
-    case 'healthy':
-      return 'secondary';
-    case 'degraded':
-    case 'starting':
-      return 'outline';
-    default:
-      return 'destructive';
-  }
-}
-
-function syncSourceVariant(status: RelaySyncSourceView['status']) {
-  switch (status) {
-    case 'idle':
-      return 'secondary';
-    case 'syncing':
-      return 'outline';
-    case 'error':
-      return 'destructive';
-    default:
-      return 'outline';
-  }
-}
-
-type RelaySyncSourceSummary = {
-  source: RelaySyncSourceView;
-  linkedExposureCount: number;
-  healthyExposureCount: number;
-  linkedExposureNames: string[];
-};
 
 type RelayDashboardPayload = Partial<RelayDashboardView> & {
   pairings?: RelayPairingSessionView[];
@@ -213,11 +173,6 @@ export default function PluginsPage() {
   const [pairingName, setPairingName] = useState('');
   const [creatingPairing, setCreatingPairing] = useState(false);
   const [activePairing, setActivePairing] = useState<RelayPairingSessionView | null>(null);
-  const [selectedRelay, setSelectedRelay] = useState<RelayDeviceSummaryView | null>(null);
-  const [relayDetail, setRelayDetail] = useState<RelayDeviceDetailView | null>(null);
-  const [relayDetailLoading, setRelayDetailLoading] = useState(false);
-  const [relayDraftName, setRelayDraftName] = useState('');
-  const [savingRelay, setSavingRelay] = useState(false);
   const [localRelayDesktop, setLocalRelayDesktop] = useState<RelayLocalDesktopStatusView | null>(null);
   const [probingLocalRelayDesktop, setProbingLocalRelayDesktop] = useState(true);
   const [sendingToDesktop, setSendingToDesktop] = useState(false);
@@ -248,32 +203,6 @@ export default function PluginsPage() {
     void loadInstallations(workspaceId);
     void loadRelayDashboard();
   }, [loadInstallations, workspaceId]);
-
-  useEffect(() => {
-    if (!workspaceId || !selectedRelay) {
-      setRelayDetail(null);
-      return;
-    }
-
-    let cancelled = false;
-    setRelayDetailLoading(true);
-
-    void api.getRelayDevice(workspaceId, selectedRelay.id)
-      .then((detail) => {
-        if (!cancelled) setRelayDetail(detail);
-      })
-      .catch((error) => {
-        console.error('Failed to load relay detail:', error);
-        if (!cancelled) toast.error(error instanceof Error ? error.message : 'Failed to load relay detail');
-      })
-      .finally(() => {
-        if (!cancelled) setRelayDetailLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedRelay, workspaceId]);
 
   useEffect(() => {
     if (!workspaceId || !activePairing) return;
@@ -402,39 +331,6 @@ export default function PluginsPage() {
     [filteredPlugins, pluginInstallationsByPluginId],
   );
 
-  const relaySyncSources = useMemo<RelaySyncSourceSummary[]>(() => {
-    if (!relayDetail) return [];
-
-    const summaries = new Map<string, RelaySyncSourceSummary>();
-    for (const source of relayDetail.syncSources) {
-      summaries.set(source.id, {
-        source,
-        linkedExposureCount: 0,
-        healthyExposureCount: 0,
-        linkedExposureNames: [],
-      });
-    }
-
-    for (const exposure of relayDetail.exposures) {
-      if (!exposure.syncSource) continue;
-
-      const current = summaries.get(exposure.syncSource.id) || {
-        source: exposure.syncSource,
-        linkedExposureCount: 0,
-        healthyExposureCount: 0,
-        linkedExposureNames: [],
-      };
-      current.linkedExposureCount += 1;
-      if (exposure.runtimeStatus === 'healthy') {
-        current.healthyExposureCount += 1;
-      }
-      current.linkedExposureNames.push(exposure.displayName);
-      summaries.set(exposure.syncSource.id, current);
-    }
-
-    return [...summaries.values()].sort((left, right) => left.source.sourceKind.localeCompare(right.source.sourceKind));
-  }, [relayDetail]);
-
   async function handleCreatePairing() {
     if (!workspaceId) return;
     setCreatingPairing(true);
@@ -498,86 +394,6 @@ export default function PluginsPage() {
   function handleOpenDesktopApp() {
     if (!activePairing) return;
     window.location.href = buildRelayDesktopDeepLink(activePairing);
-  }
-
-  async function handleSaveRelay() {
-    if (!workspaceId || !selectedRelay || !relayDraftName.trim()) return;
-    setSavingRelay(true);
-    try {
-      const updated = await api.updateRelayDevice(workspaceId, selectedRelay.id, { displayName: relayDraftName.trim() });
-      setSelectedRelay(updated);
-      setRelayDraftName(updated.displayName);
-      const detail = await api.getRelayDevice(workspaceId, updated.id);
-      setRelayDetail(detail);
-      await loadRelayDashboard();
-      toast.success('Relay device updated');
-    } catch (error) {
-      console.error('Failed to update relay device:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update relay device');
-    } finally {
-      setSavingRelay(false);
-    }
-  }
-
-  async function handleDisconnectRelay() {
-    if (!workspaceId || !selectedRelay) return;
-    if (!window.confirm(`Disconnect relay device "${selectedRelay.displayName}"?`)) return;
-
-    setSavingRelay(true);
-    try {
-      await api.disconnectRelayDevice(workspaceId, selectedRelay.id);
-      await loadRelayDashboard();
-      const detail = await api.getRelayDevice(workspaceId, selectedRelay.id);
-      setRelayDetail(detail);
-      setSelectedRelay(detail.device);
-      toast.success('Disconnect requested');
-    } catch (error) {
-      console.error('Failed to disconnect relay device:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to disconnect relay device');
-    } finally {
-      setSavingRelay(false);
-    }
-  }
-
-  async function handleDeleteRelay() {
-    if (!workspaceId || !selectedRelay) return;
-    if (!window.confirm(`Delete relay device "${selectedRelay.displayName}"?`)) return;
-
-    setSavingRelay(true);
-    try {
-      await api.deleteRelayDevice(workspaceId, selectedRelay.id);
-      setSelectedRelay(null);
-      setRelayDetail(null);
-      await loadRelayDashboard();
-      toast.success('Relay device deleted');
-    } catch (error) {
-      console.error('Failed to delete relay device:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to delete relay device');
-    } finally {
-      setSavingRelay(false);
-    }
-  }
-
-  async function handleUpdateRelayTrustStatus(nextTrustStatus: 'active' | 'revoked' | 'blocked') {
-    if (!workspaceId || !selectedRelay) return;
-
-    const actionLabel = nextTrustStatus === 'active' ? 'reactivate' : nextTrustStatus;
-    if (!window.confirm(`${actionLabel[0].toUpperCase()}${actionLabel.slice(1)} relay device "${selectedRelay.displayName}"?`)) return;
-
-    setSavingRelay(true);
-    try {
-      const result = await api.updateRelayTrustStatus(workspaceId, selectedRelay.id, nextTrustStatus);
-      const detail = await api.getRelayDevice(workspaceId, result.device.id);
-      setRelayDetail(detail);
-      setSelectedRelay(detail.device);
-      await loadRelayDashboard();
-      toast.success(`Relay device ${actionLabel}d`);
-    } catch (error) {
-      console.error('Failed to update relay trust status:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update relay trust status');
-    } finally {
-      setSavingRelay(false);
-    }
   }
 
   const loading = loadingMarketplace || loadingRelays;
@@ -659,10 +475,7 @@ export default function PluginsPage() {
               key={relay.id}
               variant="interactive"
               size="sm"
-              onClick={() => {
-                setRelayDraftName(relay.displayName);
-                setSelectedRelay(relay);
-              }}
+              onClick={() => router.push(`/dashboard/plugins/relays/${relay.id}`)}
             >
               <AppCardHeader className="gap-3">
                 <div className="flex items-start justify-between gap-3">
@@ -697,12 +510,11 @@ export default function PluginsPage() {
                     className="shrink-0"
                     onClick={(event) => {
                       event.stopPropagation();
-                      setRelayDraftName(relay.displayName);
-                      setSelectedRelay(relay);
+                      router.push(`/dashboard/plugins/relays/${relay.id}`);
                     }}
                   >
                     <Settings data-icon="inline-start" />
-                    Configure
+                    Manage
                   </Button>
                 </div>
               </AppCardHeader>
@@ -1117,219 +929,6 @@ export default function PluginsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={selectedRelay !== null} onOpenChange={(open) => !open && !savingRelay && setSelectedRelay(null)}>
-        <DialogContent className="sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Relay Device</DialogTitle>
-            <DialogDescription>
-              Review the bound device, inspect exposed MCP servers, and manage its lifecycle.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex flex-col gap-5">
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="relay-display-name">Display name</FieldLabel>
-                <FieldContent>
-                  <Input
-                    id="relay-display-name"
-                    value={relayDraftName}
-                    onChange={(event) => setRelayDraftName(event.target.value)}
-                    placeholder="Relay device name"
-                  />
-                  <FieldDescription>Used in the workspace UI and relay-derived plugin labels.</FieldDescription>
-                </FieldContent>
-              </Field>
-            </FieldGroup>
-
-            {relayDetailLoading ? (
-              <div className="rounded-2xl border border-border/70 px-4 py-8 text-center text-sm text-muted-foreground">
-                Loading relay device...
-              </div>
-            ) : relayDetail ? (
-              <>
-                <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-col gap-1">
-                      <div className="flex flex-wrap items-center gap-2 text-foreground">
-                        <Wrench className="size-4" />
-                        <span className="font-medium">{relayDetail.device.displayName}</span>
-                      </div>
-                      <div className="text-sm text-muted-foreground">
-                        {relayDetail.device.clientKind}
-                        {relayDetail.device.platform ? ` on ${relayDetail.device.platform}` : ''}
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Badge variant={relayTrustVariant(relayDetail.device.trustStatus)}>{relayDetail.device.trustStatus}</Badge>
-                      <Badge variant={relayDetail.device.isConnected ? 'secondary' : 'outline'}>
-                        {relayDetail.device.isConnected ? 'connected' : 'offline'}
-                      </Badge>
-                    </div>
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-2 text-sm text-muted-foreground">
-                    <Badge variant="outline">Last seen {formatDateTime(relayDetail.device.lastSeenAt)}</Badge>
-                    <Badge variant="outline">Last connected {formatDateTime(relayDetail.device.lastConnectedAt)}</Badge>
-                    <Badge variant="outline">Fingerprint {relayDetail.device.publicKeyFingerprint}</Badge>
-                  </div>
-                </div>
-
-                <Separator />
-
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-medium text-foreground">Sync Sources</div>
-                      <div className="text-sm text-muted-foreground">
-                        {relaySyncSources.length} source{relaySyncSources.length === 1 ? '' : 's'} currently tracked for this device.
-                      </div>
-                    </div>
-                  </div>
-
-                  {relaySyncSources.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-                      No external MCP sync sources have reported from this device yet.
-                    </div>
-                  ) : (
-                    <div className="grid gap-3 md:grid-cols-2">
-                      {relaySyncSources.map(({ source, linkedExposureCount, healthyExposureCount, linkedExposureNames }) => (
-                        <div key={source.id} className="rounded-2xl border border-border/70 px-4 py-4">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="flex flex-col gap-1">
-                              <div className="font-medium text-foreground">{source.sourceKind}</div>
-                              <div className="text-sm text-muted-foreground">{source.sourceKey}</div>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              <Badge variant={syncSourceVariant(source.status)}>{source.status}</Badge>
-                              <Badge variant="outline">{source.syncMode}</Badge>
-                            </div>
-                          </div>
-
-                          <div className="mt-3 flex flex-wrap gap-2 text-sm text-muted-foreground">
-                            <Badge variant="outline">{linkedExposureCount} linked MCPs</Badge>
-                            <Badge variant="outline">{healthyExposureCount} healthy</Badge>
-                            <Badge variant="outline">Last sync {formatDateTime(source.lastSyncedAt)}</Badge>
-                          </div>
-
-                          {source.configPath ? (
-                            <div className="mt-3 truncate text-sm text-muted-foreground">
-                              {source.configPath}
-                            </div>
-                          ) : null}
-
-                          {source.lastError ? (
-                            <div className="mt-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                              {source.lastError}
-                            </div>
-                          ) : null}
-
-                          {linkedExposureNames.length > 0 ? (
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              {linkedExposureNames.map((name) => (
-                                <Badge key={`${source.id}:${name}`} variant="secondary">
-                                  {name}
-                                </Badge>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <Separator />
-
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-medium text-foreground">MCP Exposures</div>
-                      <div className="text-sm text-muted-foreground">
-                        {relayDetail.exposures.length} exposure{relayDetail.exposures.length === 1 ? '' : 's'} currently registered.
-                      </div>
-                    </div>
-                  </div>
-
-                  {relayDetail.exposures.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-                      No MCP exposures have synced from this device yet.
-                    </div>
-                  ) : (
-                    <ScrollArea className="max-h-[22rem] pr-4">
-                      <div className="flex flex-col gap-3">
-                        {relayDetail.exposures.map((exposure) => (
-                          <div key={exposure.id} className="rounded-2xl border border-border/70 px-4 py-4">
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div className="flex flex-col gap-1">
-                                <div className="font-medium text-foreground">{exposure.displayName}</div>
-                                <div className="text-sm text-muted-foreground">
-                                  {exposure.transport} · {exposure.managementMode}
-                                </div>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                <Badge variant={exposureVariant(exposure.runtimeStatus)}>{exposure.runtimeStatus}</Badge>
-                                <Badge variant="outline">{exposure.tools.length} tools</Badge>
-                              </div>
-                            </div>
-
-                            {exposure.syncSource ? (
-                              <div className="mt-3 flex flex-wrap gap-2 text-sm text-muted-foreground">
-                                <Badge variant="outline">{exposure.syncSource.sourceKind}</Badge>
-                                <Badge variant="outline">{exposure.syncSource.syncMode}</Badge>
-                                <Badge variant="outline">{exposure.syncSource.sourceKey}</Badge>
-                              </div>
-                            ) : null}
-
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              {exposure.tools.map((tool) => (
-                                <Badge key={tool.id} variant="secondary">
-                                  {tool.currentName}
-                                </Badge>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </ScrollArea>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div className="rounded-2xl border border-border/70 px-4 py-8 text-center text-sm text-muted-foreground">
-                Relay device details unavailable.
-              </div>
-            )}
-          </div>
-
-          <DialogFooter className="justify-between gap-2">
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="destructive" onClick={() => void handleDeleteRelay()} disabled={savingRelay}>
-                Delete Relay
-              </Button>
-              {relayDetail?.device.trustStatus === 'active' ? (
-                <Button type="button" variant="outline" onClick={() => void handleUpdateRelayTrustStatus('revoked')} disabled={savingRelay}>
-                  <XCircle data-icon="inline-start" />
-                  Revoke
-                </Button>
-              ) : (
-                <Button type="button" variant="outline" onClick={() => void handleUpdateRelayTrustStatus('active')} disabled={savingRelay}>
-                  <CheckCircle2 data-icon="inline-start" />
-                  Reactivate
-                </Button>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" onClick={() => void handleDisconnectRelay()} disabled={savingRelay || !selectedRelay}>
-                <Unplug data-icon="inline-start" />
-                Disconnect
-              </Button>
-              <Button type="button" onClick={() => void handleSaveRelay()} disabled={savingRelay || !relayDraftName.trim() || !selectedRelay}>
-                Save
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

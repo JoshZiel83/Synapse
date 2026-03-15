@@ -23,6 +23,24 @@ type RelayConfig struct {
 	PrivateKeyPath        string `yaml:"private_key_path" json:"privateKeyPath"`
 }
 
+type StartupConfig struct {
+	RunAtLogin   bool `yaml:"run_at_login" json:"runAtLogin"`
+	AutoConnect  bool `yaml:"auto_connect" json:"autoConnect"`
+	LaunchHidden bool `yaml:"launch_hidden" json:"launchHidden"`
+}
+
+type NotificationConfig struct {
+	BackgroundEnabled bool `yaml:"background_enabled" json:"backgroundEnabled"`
+}
+
+type UpdateConfig struct {
+	Channel          string `yaml:"channel" json:"channel"`
+	LastCheckedAt    string `yaml:"last_checked_at" json:"lastCheckedAt,omitempty"`
+	LastVersion      string `yaml:"last_version" json:"lastVersion,omitempty"`
+	PendingVersion   string `yaml:"pending_version" json:"pendingVersion,omitempty"`
+	PendingInstaller string `yaml:"pending_installer" json:"pendingInstaller,omitempty"`
+}
+
 type SyncSourceConfig struct {
 	SourceKind   string                 `yaml:"source_kind" json:"sourceKind"`
 	SourceKey    string                 `yaml:"source_key" json:"sourceKey"`
@@ -35,10 +53,13 @@ type SyncSourceConfig struct {
 }
 
 type Config struct {
-	Relay       RelayConfig        `yaml:"relay" json:"relay"`
-	LogLevel    string             `yaml:"log_level" json:"logLevel"`
-	SyncSources []SyncSourceConfig `yaml:"sync_sources" json:"syncSources"`
-	Servers     []ServerConfig     `yaml:"servers" json:"servers"`
+	Relay         RelayConfig        `yaml:"relay" json:"relay"`
+	Startup       StartupConfig      `yaml:"startup" json:"startup"`
+	Notifications NotificationConfig `yaml:"notifications" json:"notifications"`
+	Update        UpdateConfig       `yaml:"update" json:"update"`
+	LogLevel      string             `yaml:"log_level" json:"logLevel"`
+	SyncSources   []SyncSourceConfig `yaml:"sync_sources" json:"syncSources"`
+	Servers       []ServerConfig     `yaml:"servers" json:"servers"`
 }
 
 type ServerConfig struct {
@@ -68,6 +89,21 @@ func Clone(cfg *Config) *Config {
 			PublicKeyFingerprint:  cfg.Relay.PublicKeyFingerprint,
 			ServerTLSPublicKeyPin: cfg.Relay.ServerTLSPublicKeyPin,
 			PrivateKeyPath:        cfg.Relay.PrivateKeyPath,
+		},
+		Startup: StartupConfig{
+			RunAtLogin:   cfg.Startup.RunAtLogin,
+			AutoConnect:  cfg.Startup.AutoConnect,
+			LaunchHidden: cfg.Startup.LaunchHidden,
+		},
+		Notifications: NotificationConfig{
+			BackgroundEnabled: cfg.Notifications.BackgroundEnabled,
+		},
+		Update: UpdateConfig{
+			Channel:          cfg.Update.Channel,
+			LastCheckedAt:    cfg.Update.LastCheckedAt,
+			LastVersion:      cfg.Update.LastVersion,
+			PendingVersion:   cfg.Update.PendingVersion,
+			PendingInstaller: cfg.Update.PendingInstaller,
 		},
 		LogLevel:    cfg.LogLevel,
 		SyncSources: make([]SyncSourceConfig, len(cfg.SyncSources)),
@@ -281,6 +317,9 @@ func applyDefaults(cfg *Config) {
 
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
+	}
+	if cfg.Update.Channel == "" {
+		cfg.Update.Channel = "stable"
 	}
 
 	if cfg.Relay.PrivateKeyPath == "" {

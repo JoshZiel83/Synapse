@@ -129,7 +129,7 @@ func (s *StdioServer) Initialize() error {
 	}
 
 	var result InitializeResult
-	if err := s.readMessage(&result, 30*time.Second); err != nil {
+	if err := s.readMessage(context.Background(), &result, 30*time.Second); err != nil {
 		return fmt.Errorf("read initialize response: %w", err)
 	}
 
@@ -165,7 +165,7 @@ func (s *StdioServer) ListTools() ([]Tool, error) {
 	}
 
 	var result ToolsListResult
-	if err := s.readMessage(&result, 30*time.Second); err != nil {
+	if err := s.readMessage(context.Background(), &result, 30*time.Second); err != nil {
 		return nil, fmt.Errorf("read tools/list response: %w", err)
 	}
 
@@ -202,7 +202,7 @@ func (s *StdioServer) CallTool(ctx context.Context, toolName string, args map[st
 	}
 
 	var result ToolCallResult
-	if err := s.readMessage(&result, stdioCallTimeout); err != nil {
+	if err := s.readMessage(ctx, &result, stdioCallTimeout); err != nil {
 		return nil, fmt.Errorf("read tools/call response: %w", err)
 	}
 
@@ -251,12 +251,19 @@ func (s *StdioServer) writeMessage(msg interface{}) error {
 // readMessage reads the next JSON-RPC response from the child process stdout,
 // skipping notifications (messages without an "id" field).
 // Returns error if no response arrives within the given timeout.
-func (s *StdioServer) readMessage(target interface{}, timeout time.Duration) error {
-	deadline := time.After(timeout)
+func (s *StdioServer) readMessage(ctx context.Context, target interface{}, timeout time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
 	for {
 		select {
-		case <-deadline:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
 			return fmt.Errorf("timeout waiting for response after %v", timeout)
 		case lr, ok := <-s.lines:
 			if !ok {

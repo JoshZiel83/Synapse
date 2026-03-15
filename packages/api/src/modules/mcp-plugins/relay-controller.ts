@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type {
   RelayDashboardView,
+  RelayDerivedInstallationView,
   RelayDeviceDetailView,
   RelayDeviceSummaryView,
   RelayExposureView,
@@ -23,6 +24,12 @@ import { logEvent } from './audit.js';
 const createPairingSchema = z.object({
   displayName: z.string().trim().min(1).max(255).optional(),
   metadata: z.record(z.unknown()).optional(),
+});
+
+const relayDesktopUpdateQuerySchema = z.object({
+  channel: z.string().trim().min(1).max(40).default('stable'),
+  platform: z.string().trim().min(1).max(40),
+  arch: z.string().trim().min(1).max(40),
 });
 
 const updateRelayDeviceSchema = z.object({
@@ -130,6 +137,10 @@ type RelayExposureToolRow = {
   sync_source_metadata: Record<string, unknown> | string | null;
   sync_source_created_at: string | null;
   sync_source_updated_at: string | null;
+  derived_installation_id: string | null;
+  derived_plugin_id: string | null;
+  derived_plugin_slug: string | null;
+  derived_plugin_display_name: string | null;
   tool_id: string | null;
   tool_stable_key: string | null;
   tool_current_name: string | null;
@@ -144,6 +155,24 @@ type RelayExposureToolRow = {
   tool_input_schema: Record<string, unknown> | string | null;
   tool_annotations: Record<string, unknown> | string | null;
   tool_definition_hash: string | null;
+};
+
+type RelayDesktopReleaseView = {
+  channel: string;
+  platform: string;
+  arch: string;
+  version: string;
+  downloadUrl: string;
+  sha256?: string;
+  notes?: string;
+  publishedAt?: string;
+};
+
+type ReleaseVersion = {
+  major: number;
+  minor: number;
+  patch: number;
+  prerelease: string;
 };
 
 function handleError(reply: FastifyReply, error: unknown) {
@@ -364,6 +393,24 @@ function mapInlineSyncSource(row: RelayExposureToolRow): RelaySyncSourceView | u
   };
 }
 
+function mapDerivedInstallation(row: RelayExposureToolRow): RelayDerivedInstallationView | undefined {
+  if (
+    !row.derived_installation_id ||
+    !row.derived_plugin_id ||
+    !row.derived_plugin_slug ||
+    !row.derived_plugin_display_name
+  ) {
+    return undefined;
+  }
+
+  return {
+    installationId: row.derived_installation_id,
+    pluginId: row.derived_plugin_id,
+    pluginSlug: row.derived_plugin_slug,
+    pluginDisplayName: row.derived_plugin_display_name,
+  };
+}
+
 function groupRelayExposures(rows: RelayExposureToolRow[]): RelayExposureView[] {
   const exposures = new Map<string, RelayExposureView>();
 
@@ -382,6 +429,7 @@ function groupRelayExposures(rows: RelayExposureToolRow[]): RelayExposureView[] 
         lastError: row.exposure_last_error || undefined,
         metadata: parseJsonObject(row.exposure_metadata),
         syncSource: mapInlineSyncSource(row),
+        derivedInstallation: mapDerivedInstallation(row),
         tools: [],
         createdAt: row.exposure_created_at,
         updatedAt: row.exposure_updated_at,
@@ -416,6 +464,82 @@ function generatePairingCode() {
 
 function normalizePairingCode(code: string) {
   return code.trim().toUpperCase();
+}
+
+function parseReleaseVersion(value: string): ReleaseVersion | null {
+  const normalized = value.trim().replace(/^v/i, '').split('+')[0] || '';
+  if (!normalized) return null;
+
+  const [core, prerelease = ''] = normalized.split('-', 2);
+  const parts = core.split('.');
+  if (parts.length !== 3) return null;
+
+  const major = Number(parts[0]);
+  const minor = Number(parts[1]);
+  const patch = Number(parts[2]);
+  if (![major, minor, patch].every((part) => Number.isInteger(part) && part >= 0)) {
+    return null;
+  }
+
+  return { major, minor, patch, prerelease };
+}
+
+function compareReleaseVersions(left: string, right: string) {
+  const leftVersion = parseReleaseVersion(left);
+  const rightVersion = parseReleaseVersion(right);
+  if (!leftVersion || !rightVersion) {
+    return left.localeCompare(right);
+  }
+
+  if (leftVersion.major !== rightVersion.major) return leftVersion.major - rightVersion.major;
+  if (leftVersion.minor !== rightVersion.minor) return leftVersion.minor - rightVersion.minor;
+  if (leftVersion.patch !== rightVersion.patch) return leftVersion.patch - rightVersion.patch;
+  if (leftVersion.prerelease === rightVersion.prerelease) return 0;
+  if (!leftVersion.prerelease) return 1;
+  if (!rightVersion.prerelease) return -1;
+  return leftVersion.prerelease.localeCompare(rightVersion.prerelease);
+}
+
+function resolveRelayDesktopUpdate(serverBaseUrl: string, channel: string, platform: string, arch: string): RelayDesktopReleaseView | null {
+  const releasesJson = process.env.RELAY_DESKTOP_RELEASES_JSON;
+  if (!releasesJson) return null;
+
+  try {
+    const parsed = z.array(z.object({
+      channel: z.string().trim().min(1).max(40),
+      platform: z.string().trim().min(1).max(40),
+      arch: z.string().trim().min(1).max(40),
+      version: z.string().trim().min(1).max(64),
+      downloadUrl: z.string().trim().min(1),
+      sha256: z.string().trim().min(1).max(128).optional(),
+      notes: z.string().trim().max(2000).optional(),
+      publishedAt: z.string().trim().min(1).max(128).optional(),
+    })).parse(JSON.parse(releasesJson));
+
+    const match = parsed
+      .filter((release) =>
+        release.channel.toLowerCase() === channel.toLowerCase() &&
+        release.platform.toLowerCase() === platform.toLowerCase() &&
+        release.arch.toLowerCase() === arch.toLowerCase(),
+      )
+      .sort((left, right) => compareReleaseVersions(right.version, left.version))[0];
+
+    if (!match) return null;
+
+    return {
+      channel: match.channel,
+      platform: match.platform,
+      arch: match.arch,
+      version: match.version,
+      downloadUrl: new URL(match.downloadUrl, `${serverBaseUrl}/`).toString(),
+      sha256: match.sha256,
+      notes: match.notes,
+      publishedAt: match.publishedAt,
+    };
+  } catch (error) {
+    console.error('[Relay Controller] Invalid RELAY_DESKTOP_RELEASES_JSON', error);
+    return null;
+  }
 }
 
 function resolveServerBaseUrl(request: FastifyRequest) {
@@ -687,6 +811,10 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
           source.metadata AS sync_source_metadata,
           source.created_at AS sync_source_created_at,
           source.updated_at AS sync_source_updated_at,
+          derived.installation_id AS derived_installation_id,
+          derived.plugin_id AS derived_plugin_id,
+          derived.plugin_slug AS derived_plugin_slug,
+          derived.plugin_display_name AS derived_plugin_display_name,
           t.id AS tool_id,
           t.stable_key AS tool_stable_key,
           t.current_name AS tool_current_name,
@@ -704,6 +832,28 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
        FROM relay_exposures e
        LEFT JOIN relay_sync_sources source
          ON source.id = e.sync_source_id
+       LEFT JOIN LATERAL (
+         SELECT
+           ci.id AS installation_id,
+           pkg.id AS plugin_id,
+           pkg.slug AS plugin_slug,
+           pkg.display_name AS plugin_display_name
+         FROM capability_instances ci
+         INNER JOIN capability_packages pkg
+           ON pkg.id = ci.package_id
+         INNER JOIN capability_package_revisions revision
+           ON revision.id = ci.revision_id
+         WHERE ci.workspace_id = $2
+           AND ci.install_mode = 'relay_derived'
+           AND ci.attachment_type = 'workspace'
+           AND pkg.kind = 'plugin'
+           AND revision.transport = 'relay'
+           AND revision.entry_point IS NOT NULL
+           AND revision.entry_point::jsonb->>'deviceId' = $3
+           AND revision.entry_point::jsonb->>'exposureId' = e.id::text
+         ORDER BY ci.created_at DESC
+         LIMIT 1
+       ) derived ON TRUE
        LEFT JOIN relay_tools t
          ON t.exposure_id = e.id
        LEFT JOIN relay_tool_revisions tr
@@ -712,7 +862,7 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
          ON cr.id = tr.catalog_revision_id
        WHERE e.device_id = $1
        ORDER BY e.display_name ASC, t.current_name ASC NULLS LAST`,
-      [deviceId],
+      [deviceId, workspaceId, deviceId],
     ),
   ]);
 
@@ -915,6 +1065,27 @@ function computeRelayPublicKeyFingerprint(publicKeyPem: string) {
 
 export function registerRelayRoutes(app: FastifyInstance) {
   const workspacePreHandler = [authMiddleware, workspaceMiddleware];
+
+  app.get('/api/v1/mcp/relay/updates/latest', async (request, reply) => {
+    try {
+      const queryParams = relayDesktopUpdateQuerySchema.parse(request.query ?? {});
+      const release = resolveRelayDesktopUpdate(
+        resolveServerBaseUrl(request),
+        queryParams.channel,
+        queryParams.platform,
+        queryParams.arch,
+      );
+
+      if (!release) {
+        reply.status(204).send();
+        return;
+      }
+
+      reply.send(release);
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
 
   app.get('/api/v1/workspaces/:workspaceId/mcp/relays', { preHandler: workspacePreHandler }, async (request, reply) => {
     try {

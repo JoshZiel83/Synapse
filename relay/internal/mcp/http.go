@@ -71,7 +71,7 @@ func (h *HTTPServer) Initialize() error {
 	}
 
 	var result InitializeResult
-	if err := h.doRequest(req, &result); err != nil {
+	if err := h.doRequest(context.Background(), req, &result); err != nil {
 		return err
 	}
 
@@ -84,7 +84,7 @@ func (h *HTTPServer) Initialize() error {
 		JSONRPC: "2.0",
 		Method:  "notifications/initialized",
 	}
-	h.doRequest(notif, nil) // ignore response for notifications
+	h.doRequest(context.Background(), notif, nil) // ignore response for notifications
 	h.ensureEventStream()
 
 	return nil
@@ -102,7 +102,7 @@ func (h *HTTPServer) ListTools() ([]Tool, error) {
 	}
 
 	var result ToolsListResult
-	if err := h.doRequest(req, &result); err != nil {
+	if err := h.doRequest(context.Background(), req, &result); err != nil {
 		return nil, err
 	}
 
@@ -135,7 +135,7 @@ func (h *HTTPServer) CallTool(ctx context.Context, toolName string, args map[str
 	req.Params.Arguments = args
 
 	var result ToolCallResult
-	if err := h.doRequest(req, &result); err != nil {
+	if err := h.doRequest(ctx, req, &result); err != nil {
 		return nil, err
 	}
 
@@ -168,13 +168,16 @@ func (h *HTTPServer) SetToolsChangedHandler(handler func()) {
 	h.ensureEventStream()
 }
 
-func (h *HTTPServer) doRequest(body interface{}, target interface{}) error {
+func (h *HTTPServer) doRequest(ctx context.Context, body interface{}, target interface{}) error {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
 
-	reqCtx, cancel := context.WithTimeout(context.Background(), httpRequestTimeout)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, httpRequestTimeout)
 	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", h.endpoint, bytes.NewReader(data))
