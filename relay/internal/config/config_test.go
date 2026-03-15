@@ -54,3 +54,61 @@ func TestNormalizeServerBaseURLAndDeriveWebSocketURL(t *testing.T) {
 		t.Fatalf("expected derived websocket URL, got %q", wsURL)
 	}
 }
+
+func TestValidateBuiltinCUAServer(t *testing.T) {
+	cfg := &Config{
+		Relay: RelayConfig{
+			ServerBaseURL:         "http://127.0.0.1:3001",
+			WebSocketURL:          "ws://127.0.0.1:3001/ws/relay",
+			DeviceID:              "device-123",
+			PrivateKeyPath:        "/tmp/device-key.pem",
+			ServerTLSPublicKeyPin: "",
+		},
+		Servers: []ServerConfig{
+			{
+				Name:      "computer-use",
+				Transport: "builtin",
+				Builtin: &BuiltinServerConfig{
+					Kind:       "cua",
+					InstanceID: "cua_default",
+					CUA: &BuiltinCUAConfig{
+						ReadOnly:         boolPtr(true),
+						ImageSize:        [2]int{1280, 800},
+						RelativeSize:     [2]int{1000, 1000},
+						ScrollMultiplier: 1,
+						DisplaySelector: BuiltinDisplaySelectorConfig{
+							Mode: "main",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if errs := Validate(cfg); len(errs) != 0 {
+		t.Fatalf("expected builtin CUA config to validate, got %v", errs)
+	}
+}
+
+func TestStableKeyForBuiltinIgnoresDisplayName(t *testing.T) {
+	first := StableKeyForServer(ServerConfig{
+		Name:      "computer-use",
+		Transport: "builtin",
+		Builtin: &BuiltinServerConfig{
+			Kind:       "cua",
+			InstanceID: "cua_default",
+		},
+	})
+	second := StableKeyForServer(ServerConfig{
+		Name:      "desktop-tools",
+		Transport: "builtin",
+		Builtin: &BuiltinServerConfig{
+			Kind:       "cua",
+			InstanceID: "cua_default",
+		},
+	})
+
+	if first != second {
+		t.Fatalf("expected builtin stable key to ignore display name, got %q and %q", first, second)
+	}
+}

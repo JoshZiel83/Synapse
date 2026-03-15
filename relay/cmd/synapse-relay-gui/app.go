@@ -726,6 +726,10 @@ func normalizeLinkedServerManagementModes(cfg *config.Config) {
 	}
 
 	for i := range cfg.Servers {
+		if cfg.Servers[i].Transport == "builtin" {
+			cfg.Servers[i].ManagementMode = "builtin"
+			continue
+		}
 		if strings.TrimSpace(cfg.Servers[i].SyncSourceKey) == "" {
 			cfg.Servers[i].ManagementMode = "manual"
 			continue

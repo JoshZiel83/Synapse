@@ -1,5 +1,6 @@
 import {
   ArrowRightLeft,
+  Blocks,
   Cable,
   CircleAlert,
   Link2,
@@ -14,13 +15,14 @@ import { useRelayDesktop } from './hooks/use-relay-desktop'
 import { useSystemTheme } from './hooks/use-system-theme'
 import { cn } from './lib/utils'
 import { LogsPanel } from './views/logs-panel'
+import { AppsPanel } from './views/apps-panel'
 import { PairingPanel } from './views/pairing-panel'
 import { ServersPanel } from './views/servers-panel'
 import { SettingsPanel } from './views/settings-panel'
 import { StatusPanel } from './views/status-panel'
 import { SyncPanel } from './views/sync-panel'
 
-type View = 'status' | 'logs' | 'pairing' | 'servers' | 'sync' | 'settings'
+type View = 'status' | 'logs' | 'pairing' | 'apps' | 'servers' | 'sync' | 'settings'
 
 const navItems: Array<{
   value: View
@@ -36,6 +38,11 @@ const navItems: Array<{
     value: 'pairing',
     label: 'Pair',
     icon: Link2,
+  },
+  {
+    value: 'apps',
+    label: 'Apps',
+    icon: Blocks,
   },
   {
     value: 'servers',
@@ -61,7 +68,7 @@ const navItems: Array<{
 
 function recommendedView(deviceId?: string, serverCount = 0): View {
   if (!deviceId) return 'pairing'
-  if (serverCount === 0) return 'servers'
+  if (serverCount === 0) return 'apps'
   return 'status'
 }
 
@@ -83,12 +90,12 @@ export default function App() {
 
   useEffect(() => {
     setView((current) => {
-      const next = recommendedView(config.relay?.deviceId, config.servers?.length || 0)
+      const next = recommendedView(config.relay?.deviceId, (config.servers || []).filter((server) => server.enabled !== false).length)
       if (current === 'pairing' && config.relay?.deviceId) return next
       if (current === 'status' && !config.relay?.deviceId) return 'pairing'
       return current || next
     })
-  }, [config.relay?.deviceId, config.servers?.length])
+  }, [config.relay?.deviceId, config.servers])
 
   async function handleStart() {
     setBusy('starting')
@@ -186,6 +193,13 @@ export default function App() {
                 config={config}
                 onAddServer={(server) => actions.addServer(server)}
                 onRemoveServer={(name) => actions.removeServer(name)}
+              />
+            ) : null}
+
+            {view === 'apps' ? (
+              <AppsPanel
+                config={config}
+                onSave={(nextConfig) => actions.saveConfig(nextConfig)}
               />
             ) : null}
 

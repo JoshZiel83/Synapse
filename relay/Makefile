@@ -1,19 +1,23 @@
 VERSION ?= dev
 LDFLAGS = -s -w -X main.Version=$(VERSION)
 
-.PHONY: cli gui gui-dev clean test cli-all
+.PHONY: cli cli-desktop gui gui-dev clean test cli-all
 
 # CLI binary (no CGO, pure Go)
 cli:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o synapse-relay ./cmd/synapse-relay
 
+# CLI binary with built-in desktop CUA support (requires CGO + desktop libs)
+cli-desktop:
+	CGO_ENABLED=1 go build -tags=desktop_cua -ldflags="$(LDFLAGS)" -o synapse-relay-desktop ./cmd/synapse-relay
+
 # GUI binary (requires Wails + WebView libs)
 gui:
-	cd cmd/synapse-relay-gui && wails build -ldflags="$(LDFLAGS)"
+	cd cmd/synapse-relay-gui && wails build -tags desktop_cua -ldflags="$(LDFLAGS)"
 
 # GUI dev mode with hot reload
 gui-dev:
-	cd cmd/synapse-relay-gui && wails dev
+	cd cmd/synapse-relay-gui && wails dev -tags desktop_cua
 
 clean:
 	rm -f synapse-relay synapse-relay-*

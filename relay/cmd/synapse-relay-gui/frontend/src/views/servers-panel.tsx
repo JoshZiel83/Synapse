@@ -38,6 +38,8 @@ export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPan
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
+  const externalServers = (config.servers || []).filter((server) => server.transport !== 'builtin')
+
   async function handleAddServer() {
     const payload: ServerConfig = {
       name: name.trim(),
@@ -75,18 +77,10 @@ export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPan
 
   return (
     <>
-      <section className="flex flex-col gap-4">
+      <section className="flex flex-col gap-5">
         <div>
           <h1 className="text-[28px] leading-none font-semibold tracking-tight text-foreground">MCP</h1>
-          <div className="mt-3 text-sm text-muted-foreground">These are exposed when the relay starts.</div>
-        </div>
-
-        <div className="flex items-center justify-between gap-3">
-          <div />
-          <Button onClick={() => setOpen(true)}>
-            <Plus data-icon="inline-start" />
-            Add
-          </Button>
+          <div className="mt-3 text-sm text-muted-foreground">External MCP processes and HTTP endpoints. Built-in apps are managed from the Apps section.</div>
         </div>
 
         {error ? (
@@ -95,13 +89,21 @@ export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPan
           </div>
         ) : null}
 
-        {(config.servers?.length || 0) === 0 ? (
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm text-muted-foreground">Add stdio or HTTP MCP targets exposed by other processes.</div>
+          <Button onClick={() => setOpen(true)}>
+            <Plus data-icon="inline-start" />
+            Add
+          </Button>
+        </div>
+
+        {externalServers.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-border/70 px-4 py-8 text-center text-sm text-muted-foreground">
-            No MCP configured yet.
+            No external MCP configured yet.
           </div>
         ) : (
           <div className="flex flex-col">
-            {config.servers?.map((server, index) => (
+            {externalServers.map((server, index) => (
               <div key={server.stableKey || server.name}>
                 {index > 0 ? <Separator className="my-4" /> : null}
                 <div className="flex items-start justify-between gap-4">
@@ -109,6 +111,7 @@ export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPan
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="font-medium">{server.name}</div>
                       <Badge variant="secondary">{server.transport}</Badge>
+                      {server.enabled === false ? <Badge>disabled</Badge> : null}
                     </div>
                     <div className="mt-2 break-all font-mono text-xs text-muted-foreground">
                       {server.transport === 'stdio'
@@ -189,12 +192,6 @@ export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPan
                 </Field>
               )}
             </FieldGroup>
-
-            {error ? (
-              <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                {error}
-              </div>
-            ) : null}
           </div>
 
           <DialogFooter className="mt-6">

@@ -12,6 +12,25 @@ log_level: "info"
 
 # Local MCP servers to expose
 servers:
+  # Example: built-in CUA desktop automation
+  # - name: "computer-use"
+  #   enabled: true
+  #   transport: "builtin"
+  #   management_mode: "builtin"
+  #   builtin:
+  #     kind: "cua"
+  #     instance_id: "cua_default"
+  #     cua:
+  #       read_only: false
+  #       image_size: [1280, 800]
+  #       relative_coordinate: false
+  #       relative_size: [1000, 1000]
+  #       scroll_multiplier: 1
+  #       allow_display_override: true
+  #       include_overview_tool: true
+  #       display_selector:
+  #         mode: "main"
+
   # Example: filesystem server via stdio
   - name: "filesystem"
     transport: "stdio"

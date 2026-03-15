@@ -9,6 +9,8 @@ export interface RelayUiStatus {
 }
 
 export function getRelayUiStatus(config: RelayConfig, status: StatusInfo): RelayUiStatus {
+  const enabledServerCount = (config.servers || []).filter((server) => server.enabled !== false).length
+
   if (!config.relay?.deviceId) {
     return {
       label: 'Not Paired',
@@ -57,7 +59,7 @@ export function getRelayUiStatus(config: RelayConfig, status: StatusInfo): Relay
     }
   }
 
-  if ((config.servers?.length || 0) === 0) {
+  if (enabledServerCount === 0) {
     return {
       label: 'No MCP',
       variant: 'warning',

@@ -52,6 +52,31 @@ type SyncSourceConfig struct {
 	Metadata     map[string]interface{} `yaml:"metadata" json:"metadata,omitempty"`
 }
 
+type BuiltinDisplaySelectorConfig struct {
+	Mode       string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Index      int    `yaml:"index,omitempty" json:"index,omitempty"`
+	ID         int    `yaml:"id,omitempty" json:"id,omitempty"`
+	ElectronID int64  `yaml:"electron_id,omitempty" json:"electronId,omitempty"`
+}
+
+type BuiltinCUAConfig struct {
+	ReadOnly             *bool                        `yaml:"read_only,omitempty" json:"readOnly,omitempty"`
+	RelativeCoordinate   bool                         `yaml:"relative_coordinate,omitempty" json:"relativeCoordinate,omitempty"`
+	ImageSize            [2]int                       `yaml:"image_size,omitempty" json:"imageSize,omitempty"`
+	RelativeSize         [2]int                       `yaml:"relative_size,omitempty" json:"relativeSize,omitempty"`
+	ScrollMultiplier     float64                      `yaml:"scroll_multiplier,omitempty" json:"scrollMultiplier,omitempty"`
+	LogDir               string                       `yaml:"log_dir,omitempty" json:"logDir,omitempty"`
+	AllowDisplayOverride *bool                        `yaml:"allow_display_override,omitempty" json:"allowDisplayOverride,omitempty"`
+	IncludeOverviewTool  *bool                        `yaml:"include_overview_tool,omitempty" json:"includeOverviewTool,omitempty"`
+	DisplaySelector      BuiltinDisplaySelectorConfig `yaml:"display_selector,omitempty" json:"displaySelector,omitempty"`
+}
+
+type BuiltinServerConfig struct {
+	Kind       string            `yaml:"kind" json:"kind"`
+	InstanceID string            `yaml:"instance_id,omitempty" json:"instanceId,omitempty"`
+	CUA        *BuiltinCUAConfig `yaml:"cua,omitempty" json:"cua,omitempty"`
+}
+
 type Config struct {
 	Relay         RelayConfig        `yaml:"relay" json:"relay"`
 	Startup       StartupConfig      `yaml:"startup" json:"startup"`
@@ -66,12 +91,14 @@ type ServerConfig struct {
 	StableKey      string                 `yaml:"stable_key" json:"stableKey,omitempty"`
 	SyncSourceKey  string                 `yaml:"sync_source_key" json:"syncSourceKey,omitempty"`
 	ManagementMode string                 `yaml:"management_mode" json:"managementMode,omitempty"`
+	Enabled        *bool                  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Name           string                 `yaml:"name" json:"name"`
 	Transport      string                 `yaml:"transport" json:"transport"`
 	Command        string                 `yaml:"command" json:"command,omitempty"`
 	Args           []string               `yaml:"args" json:"args,omitempty"`
 	Env            map[string]string      `yaml:"env" json:"env,omitempty"`
 	Endpoint       string                 `yaml:"endpoint" json:"endpoint,omitempty"`
+	Builtin        *BuiltinServerConfig   `yaml:"builtin,omitempty" json:"builtin,omitempty"`
 	Metadata       map[string]interface{} `yaml:"metadata" json:"metadata,omitempty"`
 }
 
@@ -136,12 +163,14 @@ func Clone(cfg *Config) *Config {
 			StableKey:      server.StableKey,
 			SyncSourceKey:  server.SyncSourceKey,
 			ManagementMode: server.ManagementMode,
+			Enabled:        cloneBoolPtr(server.Enabled),
 			Name:           server.Name,
 			Transport:      server.Transport,
 			Command:        server.Command,
 			Args:           args,
 			Env:            env,
 			Endpoint:       server.Endpoint,
+			Builtin:        cloneBuiltin(server.Builtin),
 			Metadata:       cloneMetadata(server.Metadata),
 		}
 	}
@@ -209,17 +238,8 @@ func Load(path string) (*Config, error) {
 		if s.Name == "" {
 			return nil, fmt.Errorf("server[%d]: name is required", i)
 		}
-		switch s.Transport {
-		case "stdio":
-			if s.Command == "" {
-				return nil, fmt.Errorf("server[%d] (%s): command is required for stdio transport", i, s.Name)
-			}
-		case "http":
-			if s.Endpoint == "" {
-				return nil, fmt.Errorf("server[%d] (%s): endpoint is required for http transport", i, s.Name)
-			}
-		default:
-			return nil, fmt.Errorf("server[%d] (%s): unsupported transport %q", i, s.Name, s.Transport)
+		if err := validateServerConfig(s); err != nil {
+			return nil, fmt.Errorf("server[%d] (%s): %w", i, s.Name, err)
 		}
 	}
 
@@ -266,17 +286,8 @@ func Validate(cfg *Config) []string {
 			errs = append(errs, fmt.Sprintf("server[%d]: name is required", i))
 			continue
 		}
-		switch s.Transport {
-		case "stdio":
-			if s.Command == "" {
-				errs = append(errs, fmt.Sprintf("server %q: command is required for stdio transport", s.Name))
-			}
-		case "http":
-			if s.Endpoint == "" {
-				errs = append(errs, fmt.Sprintf("server %q: endpoint is required for http transport", s.Name))
-			}
-		default:
-			errs = append(errs, fmt.Sprintf("server %q: unsupported transport %q", s.Name, s.Transport))
+		if err := validateServerConfig(s); err != nil {
+			errs = append(errs, fmt.Sprintf("server %q: %s", s.Name, err.Error()))
 		}
 	}
 
@@ -345,13 +356,19 @@ func applyDefaults(cfg *Config) {
 		if cfg.Servers[i].Transport == "" {
 			cfg.Servers[i].Transport = "stdio"
 		}
+		if cfg.Servers[i].Enabled == nil {
+			cfg.Servers[i].Enabled = boolPtr(true)
+		}
 		if cfg.Servers[i].ManagementMode == "" {
-			if cfg.Servers[i].SyncSourceKey != "" {
+			if cfg.Servers[i].Transport == "builtin" {
+				cfg.Servers[i].ManagementMode = "builtin"
+			} else if cfg.Servers[i].SyncSourceKey != "" {
 				cfg.Servers[i].ManagementMode = "imported"
 			} else {
 				cfg.Servers[i].ManagementMode = "manual"
 			}
 		}
+		applyBuiltinDefaults(&cfg.Servers[i])
 		if cfg.Servers[i].StableKey == "" {
 			cfg.Servers[i].StableKey = StableKeyForServer(cfg.Servers[i])
 		}
@@ -362,12 +379,24 @@ func applyDefaults(cfg *Config) {
 }
 
 func StableKeyForServer(server ServerConfig) string {
+	builtinKind := ""
+	builtinInstance := ""
+	if server.Builtin != nil {
+		builtinKind = server.Builtin.Kind
+		builtinInstance = server.Builtin.InstanceID
+	}
+	name := server.Name
+	if server.Transport == "builtin" {
+		name = ""
+	}
 	base := strings.Join([]string{
 		server.Transport,
+		builtinKind,
+		builtinInstance,
 		server.Command,
 		strings.Join(server.Args, "\x00"),
 		server.Endpoint,
-		server.Name,
+		name,
 	}, "\x1f")
 	hash := sha256.Sum256([]byte(base))
 	return "srv_" + hex.EncodeToString(hash[:12])
@@ -383,6 +412,144 @@ func cloneMetadata(input map[string]interface{}) map[string]interface{} {
 		output[key] = value
 	}
 	return output
+}
+
+func cloneBuiltin(input *BuiltinServerConfig) *BuiltinServerConfig {
+	if input == nil {
+		return nil
+	}
+
+	clone := &BuiltinServerConfig{
+		Kind:       input.Kind,
+		InstanceID: input.InstanceID,
+	}
+	if input.CUA != nil {
+		clone.CUA = &BuiltinCUAConfig{
+			ReadOnly:             cloneBoolPtr(input.CUA.ReadOnly),
+			RelativeCoordinate:   input.CUA.RelativeCoordinate,
+			ImageSize:            input.CUA.ImageSize,
+			RelativeSize:         input.CUA.RelativeSize,
+			ScrollMultiplier:     input.CUA.ScrollMultiplier,
+			LogDir:               input.CUA.LogDir,
+			AllowDisplayOverride: cloneBoolPtr(input.CUA.AllowDisplayOverride),
+			IncludeOverviewTool:  cloneBoolPtr(input.CUA.IncludeOverviewTool),
+			DisplaySelector:      input.CUA.DisplaySelector,
+		}
+	}
+	return clone
+}
+
+func ServerEnabled(server ServerConfig) bool {
+	return server.Enabled == nil || *server.Enabled
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func applyBuiltinDefaults(server *ServerConfig) {
+	if server == nil || server.Transport != "builtin" {
+		return
+	}
+	if server.Builtin == nil {
+		server.Builtin = &BuiltinServerConfig{}
+	}
+	if server.Builtin.InstanceID == "" {
+		server.Builtin.InstanceID = "default"
+	}
+	switch server.Builtin.Kind {
+	case "", "cua":
+		server.Builtin.Kind = "cua"
+		if server.Builtin.CUA == nil {
+			server.Builtin.CUA = &BuiltinCUAConfig{}
+		}
+		if server.Builtin.CUA.ImageSize == [2]int{} {
+			server.Builtin.CUA.ImageSize = [2]int{1280, 800}
+		}
+		if server.Builtin.CUA.RelativeSize == [2]int{} {
+			server.Builtin.CUA.RelativeSize = [2]int{1000, 1000}
+		}
+		if server.Builtin.CUA.ReadOnly == nil {
+			server.Builtin.CUA.ReadOnly = boolPtr(false)
+		}
+		if server.Builtin.CUA.ScrollMultiplier == 0 {
+			server.Builtin.CUA.ScrollMultiplier = 1
+		}
+		if server.Builtin.CUA.AllowDisplayOverride == nil {
+			server.Builtin.CUA.AllowDisplayOverride = boolPtr(true)
+		}
+		if server.Builtin.CUA.IncludeOverviewTool == nil {
+			server.Builtin.CUA.IncludeOverviewTool = boolPtr(true)
+		}
+		if server.Builtin.CUA.DisplaySelector.Mode == "" {
+			server.Builtin.CUA.DisplaySelector.Mode = "main"
+		}
+	}
+}
+
+func validateServerConfig(server ServerConfig) error {
+	switch server.Transport {
+	case "stdio":
+		if server.Command == "" {
+			return fmt.Errorf("command is required for stdio transport")
+		}
+	case "http":
+		if server.Endpoint == "" {
+			return fmt.Errorf("endpoint is required for http transport")
+		}
+	case "builtin":
+		if server.Builtin == nil {
+			return fmt.Errorf("builtin config is required for builtin transport")
+		}
+		if strings.TrimSpace(server.Builtin.Kind) == "" {
+			return fmt.Errorf("builtin.kind is required for builtin transport")
+		}
+		switch server.Builtin.Kind {
+		case "cua":
+			if server.Builtin.CUA == nil {
+				return fmt.Errorf("builtin.cua is required for builtin kind %q", server.Builtin.Kind)
+			}
+			if server.Builtin.CUA.ImageSize[0] <= 0 || server.Builtin.CUA.ImageSize[1] <= 0 {
+				return fmt.Errorf("builtin.cua.image_size must contain positive width and height")
+			}
+			if server.Builtin.CUA.RelativeSize[0] <= 0 || server.Builtin.CUA.RelativeSize[1] <= 0 {
+				return fmt.Errorf("builtin.cua.relative_size must contain positive width and height")
+			}
+			if server.Builtin.CUA.ScrollMultiplier <= 0 {
+				return fmt.Errorf("builtin.cua.scroll_multiplier must be greater than 0")
+			}
+			switch server.Builtin.CUA.DisplaySelector.Mode {
+			case "", "main", "mouse":
+			case "index":
+				if server.Builtin.CUA.DisplaySelector.Index < 0 {
+					return fmt.Errorf("builtin.cua.display_selector.index must be >= 0")
+				}
+			case "id":
+				if server.Builtin.CUA.DisplaySelector.ID == 0 {
+					return fmt.Errorf("builtin.cua.display_selector.id is required")
+				}
+			case "electron_id":
+				if server.Builtin.CUA.DisplaySelector.ElectronID == 0 {
+					return fmt.Errorf("builtin.cua.display_selector.electron_id is required")
+				}
+			default:
+				return fmt.Errorf("builtin.cua.display_selector.mode %q is unsupported", server.Builtin.CUA.DisplaySelector.Mode)
+			}
+		default:
+			return fmt.Errorf("builtin kind %q is unsupported", server.Builtin.Kind)
+		}
+	default:
+		return fmt.Errorf("unsupported transport %q", server.Transport)
+	}
+	return nil
 }
 
 func Fingerprint(cfg *Config) string {

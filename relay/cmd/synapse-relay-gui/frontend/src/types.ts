@@ -26,16 +26,43 @@ export interface UpdateSettings {
   pendingInstaller?: string
 }
 
+export interface BuiltinDisplaySelectorConfig {
+  mode?: 'main' | 'mouse' | 'index' | 'id' | 'electron_id'
+  index?: number
+  id?: number
+  electronId?: number
+}
+
+export interface BuiltinCUAConfig {
+  readOnly?: boolean
+  relativeCoordinate?: boolean
+  imageSize?: [number, number]
+  relativeSize?: [number, number]
+  scrollMultiplier?: number
+  logDir?: string
+  allowDisplayOverride?: boolean
+  includeOverviewTool?: boolean
+  displaySelector?: BuiltinDisplaySelectorConfig
+}
+
+export interface BuiltinServerConfig {
+  kind: 'cua'
+  instanceId?: string
+  cua?: BuiltinCUAConfig
+}
+
 export interface ServerConfig {
   stableKey?: string
   syncSourceKey?: string
-  managementMode?: 'manual' | 'imported' | 'mirrored' | 'managed'
+  managementMode?: 'manual' | 'imported' | 'mirrored' | 'managed' | 'builtin'
+  enabled?: boolean
   name: string
-  transport: 'stdio' | 'http'
+  transport: 'stdio' | 'http' | 'builtin'
   command?: string
   args?: string[]
   env?: Record<string, string>
   endpoint?: string
+  builtin?: BuiltinServerConfig
   metadata?: Record<string, unknown>
 }
 

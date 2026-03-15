@@ -79,6 +79,14 @@ func (m *Manager) emit(evtType, msg string, data map[string]interface{}) {
 // InitAll starts all configured MCP servers, initializes them, and discovers their tools
 func (m *Manager) InitAll(ctx context.Context) error {
 	for _, cfg := range m.configs {
+		if !config.ServerEnabled(cfg) {
+			m.emit("server_skipped", fmt.Sprintf("Skipping disabled server %s", cfg.Name), map[string]interface{}{
+				"server":    cfg.Name,
+				"stableKey": cfg.StableKey,
+			})
+			continue
+		}
+
 		var srv Server
 
 		m.emit("server_init", fmt.Sprintf("Initializing server %s (%s)", cfg.Name, cfg.Transport), map[string]interface{}{"server": cfg.Name, "transport": cfg.Transport})
@@ -90,8 +98,25 @@ func (m *Manager) InitAll(ctx context.Context) error {
 		case "http":
 			srv = NewHTTPServer(cfg.Endpoint)
 
+		case "builtin":
+			var err error
+			srv, err = newBuiltinServer(cfg)
+			if err != nil {
+				log.Printf("Warning: server %s builtin init failed: %v", cfg.Name, err)
+				m.emit("server_failed", fmt.Sprintf("Server %s builtin init failed: %v", cfg.Name, err), map[string]interface{}{
+					"server":    cfg.Name,
+					"stableKey": cfg.StableKey,
+				})
+				continue
+			}
+
 		default:
-			return fmt.Errorf("server %s: unsupported transport %q", cfg.Name, cfg.Transport)
+			log.Printf("Warning: server %s has unsupported transport %q", cfg.Name, cfg.Transport)
+			m.emit("server_failed", fmt.Sprintf("Server %s has unsupported transport %q", cfg.Name, cfg.Transport), map[string]interface{}{
+				"server":    cfg.Name,
+				"stableKey": cfg.StableKey,
+			})
+			continue
 		}
 
 		serverName := cfg.Name
@@ -102,7 +127,12 @@ func (m *Manager) InitAll(ctx context.Context) error {
 			})
 		}
 		if err := srv.Start(ctx); err != nil {
-			return fmt.Errorf("server %s: start: %w", cfg.Name, err)
+			log.Printf("Warning: server %s start failed: %v", cfg.Name, err)
+			m.emit("server_failed", fmt.Sprintf("Server %s start failed: %v", cfg.Name, err), map[string]interface{}{
+				"server":    cfg.Name,
+				"stableKey": cfg.StableKey,
+			})
+			continue
 		}
 
 		// Initialize
