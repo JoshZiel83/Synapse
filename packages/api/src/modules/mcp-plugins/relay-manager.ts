@@ -31,9 +31,9 @@ interface RelayExposureRegistration {
   stableKey: string;
   syncSourceKey: string | null;
   displayName: string;
-  transport: 'stdio' | 'http' | 'sse' | 'custom';
+  transport: 'builtin' | 'stdio' | 'http' | 'sse' | 'custom';
   runtimeStatus: 'discovered' | 'starting' | 'healthy' | 'degraded' | 'failed' | 'quarantined' | 'offline';
-  managementMode: 'manual' | 'imported' | 'mirrored' | 'managed';
+  managementMode: 'manual' | 'imported' | 'mirrored' | 'managed' | 'builtin';
   metadata: Record<string, unknown>;
   tools: RelayToolRegistration[];
 }

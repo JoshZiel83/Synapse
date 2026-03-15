@@ -173,6 +173,7 @@ function NavUser({
   const { isMobile } = useSidebar()
   const { theme, setTheme } = useTheme()
   const { workspaceId } = useWorkspace()
+  const setUser = useAuthStore((state) => state.setUser)
   const [mounted, setMounted] = React.useState(false)
   const [avatarUploading, setAvatarUploading] = React.useState(false)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
@@ -196,7 +197,7 @@ function NavUser({
     try {
       const uploaded = await api.uploadFile(workspaceId, file)
       const updated = await api.updateMe({ avatarUrl: uploaded.url || uploaded.fullUrl || null })
-      useAuthStore.getState().setUser(updated?.user || updated)
+      setUser(updated?.user || updated)
     } catch (error) {
       console.error("Failed to update user avatar:", error)
     } finally {

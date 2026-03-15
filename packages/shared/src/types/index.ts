@@ -21,14 +21,27 @@ export interface User {
   updatedAt: Timestamp;
 }
 
-export interface AuthTokens {
-  accessToken: string;
-  refreshToken: string;
+export type AuthClientType = 'web' | 'android' | 'windows' | 'ios' | 'cli' | 'api';
+
+export type AuthTransport = 'cookie' | 'token';
+
+export interface AuthSessionSummary {
+  id: UUID;
+  clientType: AuthClientType;
+  transport: AuthTransport;
+  deviceName?: string;
+  platform?: string;
+  current: boolean;
+  createdAt: Timestamp;
+  lastSeenAt: Timestamp;
+  expiresAt: Timestamp;
+  revokedAt?: Timestamp;
 }
 
-export interface JWTPayload {
-  userId: UUID;
-  email: string;
+export interface AuthResponse {
+  user: User;
+  session: AuthSessionSummary;
+  sessionToken?: string;
 }
 
 // ============ Workspace ============
@@ -1610,7 +1623,7 @@ export interface McpRelayServer {
   id: string;
   relayId: string;
   name: string;
-  transport: 'stdio' | 'http';
+  transport: 'builtin' | 'stdio' | 'http';
   command?: string;
   endpoint?: string;
   envVars: Record<string, unknown>;

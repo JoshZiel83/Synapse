@@ -97,7 +97,7 @@ export default function MemoryBrowser() {
   const searchParams = useSearchParams()
   const { workspaceId, workspaceName } = useWorkspace()
   const { user } = useAuthStore()
-  const currentUserId = user?.id || user?.userId || ""
+  const currentUserId = user?.id || ""
   const currentUserLabel = user?.name || user?.email || "Me"
 
   const [loading, setLoading] = useState(true)

@@ -60,7 +60,7 @@ export default function GroupChat({
   onRefreshGroup,
 }: GroupChatProps) {
   const { user } = useAuthStore();
-  const currentUserId = user?.id || user?.userId || '';
+  const currentUserId = user?.id || '';
   const [inputValue, setInputValue] = useState('');
   const [inputPlainTextValue, setInputPlainTextValue] = useState('');
   const [mentionedActorIds, setMentionedActorIds] = useState<string[]>([]);

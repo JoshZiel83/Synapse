@@ -6,7 +6,7 @@ const AUTH_TAG_LENGTH = 16;
 const ENCRYPTED_PREFIX = 'enc:';
 
 function getEncryptionKey(): Buffer {
-  const keySource = process.env.MCP_ENCRYPTION_KEY || process.env.JWT_SECRET || 'default-dev-key-change-in-production';
+  const keySource = process.env.MCP_ENCRYPTION_KEY || process.env.APP_SECRET || 'default-dev-key-change-in-production';
   return createHash('sha256').update(keySource).digest();
 }
 

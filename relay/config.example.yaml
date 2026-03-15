@@ -31,8 +31,32 @@ servers:
   #       display_selector:
   #         mode: "main"
 
+  # Example: built-in filesystem MCP
+  # - name: "filesystem"
+  #   enabled: true
+  #   transport: "builtin"
+  #   management_mode: "builtin"
+  #   builtin:
+  #     kind: "filesystem"
+  #     instance_id: "filesystem_default"
+  #     filesystem:
+  #       read_only: false
+  #       scope: "roots"        # roots | global
+  #       global_access: "ro"   # ro | rw, only used when scope=global
+  #       roots:
+  #         - path: "/workspace"
+  #           access: "rw"
+  #         - path: "/workspace/docs"
+  #           access: "ro"
+  #       index:
+  #         content_enabled: true
+  #         file_types: [".go", ".md", ".pdf", ".xlsx", ".xls", ".doc", ".ppt", ".docx", "Dockerfile"]
+  #         max_file_size_bytes: 8388608
+  #         parse_pdf: true
+  #         parse_office: true
+
   # Example: filesystem server via stdio
-  - name: "filesystem"
+  - name: "filesystem-stdio"
     transport: "stdio"
     command: "npx"
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"]

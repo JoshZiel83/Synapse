@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import jwt from '@fastify/jwt';
+import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
 import { config } from './config/index.js';
@@ -66,7 +66,7 @@ async function main() {
 
   // Plugins
   await app.register(cors, { origin: true, credentials: true });
-  await app.register(jwt, { secret: config.jwt.secret });
+  await app.register(cookie);
   await app.register(websocket);
   await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } });
 

@@ -39,7 +39,7 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
   const searchParams = useSearchParams()
   const { workspaceId } = useWorkspace()
   const { user } = useAuthStore()
-  const currentUserId = user?.id || user?.userId || ""
+  const currentUserId = user?.id || ""
   const currentUserLabel = user?.name || user?.email || "Me"
 
   const returnTo = searchParams.get("returnTo") || "/dashboard/memories"

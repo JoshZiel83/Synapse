@@ -303,7 +303,7 @@ export default function PluginAccessStep({
   const [userId, setUserId] = useState('');
 
   const installationId = installation?.id || null;
-  const currentUserId = user?.id || user?.userId || '';
+  const currentUserId = user?.id || '';
   const currentUserLabel = user?.name || user?.email || 'You';
 
   const actorOptions = useMemo(() => actors.map(normalizeActorOption), [actors]);

@@ -1,31 +1,36 @@
-import type { FastifyRequest, FastifyReply } from 'fastify';
-import type { JWTPayload } from '@synapse/shared';
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import { AUTH_SESSION_COOKIE_NAME } from '@synapse/shared';
+import { authenticateRequestSession } from '../../modules/auth/service.js';
+
+async function attachAuthenticatedRequest(request: FastifyRequest) {
+  const authenticated = await authenticateRequestSession(request);
+  if (!authenticated) return null;
+
+  (request as any).user = {
+    userId: authenticated.user.id,
+    email: authenticated.user.email,
+  };
+  (request as any).authSession = authenticated.session;
+
+  return authenticated;
+}
 
 export async function authMiddleware(request: FastifyRequest, reply: FastifyReply) {
-  try {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return reply.status(401).send({ error: 'Missing or invalid authorization header' });
-    }
+  const authenticated = await attachAuthenticatedRequest(request);
+  if (authenticated) return;
 
-    const token = authHeader.slice(7);
-    const decoded = await request.server.jwt.verify<JWTPayload>(token);
-    (request as any).user = decoded;
-  } catch {
-    return reply.status(401).send({ error: 'Invalid or expired token' });
+  if (request.cookies?.[AUTH_SESSION_COOKIE_NAME]) {
+    reply.clearCookie(AUTH_SESSION_COOKIE_NAME, { path: '/' });
   }
+
+  return reply.status(401).send({
+    error: 'Authentication required',
+    code: 'UNAUTHENTICATED',
+  });
 }
 
 export async function optionalAuth(request: FastifyRequest) {
-  try {
-    const authHeader = request.headers.authorization;
-    if (authHeader?.startsWith('Bearer ')) {
-      const token = authHeader.slice(7);
-      (request as any).user = await request.server.jwt.verify<JWTPayload>(token);
-    }
-  } catch {
-    // ignore - auth is optional
-  }
+  await attachAuthenticatedRequest(request);
 }
 
 export function getUserId(request: FastifyRequest): string {

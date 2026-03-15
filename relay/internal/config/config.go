@@ -71,10 +71,52 @@ type BuiltinCUAConfig struct {
 	DisplaySelector      BuiltinDisplaySelectorConfig `yaml:"display_selector,omitempty" json:"displaySelector,omitempty"`
 }
 
+type BuiltinFilesystemRootConfig struct {
+	Path   string `yaml:"path" json:"path"`
+	Access string `yaml:"access,omitempty" json:"access,omitempty"`
+}
+
+type BuiltinFilesystemIndexConfig struct {
+	ContentEnabled   *bool    `yaml:"content_enabled,omitempty" json:"contentEnabled,omitempty"`
+	FileTypes        []string `yaml:"file_types,omitempty" json:"fileTypes,omitempty"`
+	MaxFileSizeBytes int64    `yaml:"max_file_size_bytes,omitempty" json:"maxFileSizeBytes,omitempty"`
+	ParsePDF         *bool    `yaml:"parse_pdf,omitempty" json:"parsePdf,omitempty"`
+	ParseOffice      *bool    `yaml:"parse_office,omitempty" json:"parseOffice,omitempty"`
+}
+
+type BuiltinFilesystemConfig struct {
+	ReadOnly     *bool                         `yaml:"read_only,omitempty" json:"readOnly,omitempty"`
+	Scope        string                        `yaml:"scope,omitempty" json:"scope,omitempty"`
+	GlobalAccess string                        `yaml:"global_access,omitempty" json:"globalAccess,omitempty"`
+	Roots        []BuiltinFilesystemRootConfig `yaml:"roots,omitempty" json:"roots,omitempty"`
+	Index        BuiltinFilesystemIndexConfig  `yaml:"index,omitempty" json:"index,omitempty"`
+}
+
+type BuiltinChromeConfig struct {
+	ConnectionMode          string            `yaml:"connection_mode,omitempty" json:"connectionMode,omitempty"`
+	Channel                 string            `yaml:"channel,omitempty" json:"channel,omitempty"`
+	ExecutablePath          string            `yaml:"executable_path,omitempty" json:"executablePath,omitempty"`
+	UserDataDir             string            `yaml:"user_data_dir,omitempty" json:"userDataDir,omitempty"`
+	BrowserURL              string            `yaml:"browser_url,omitempty" json:"browserUrl,omitempty"`
+	WSEndpoint              string            `yaml:"ws_endpoint,omitempty" json:"wsEndpoint,omitempty"`
+	WSHeaders               map[string]string `yaml:"ws_headers,omitempty" json:"wsHeaders,omitempty"`
+	Headless                *bool             `yaml:"headless,omitempty" json:"headless,omitempty"`
+	Isolated                *bool             `yaml:"isolated,omitempty" json:"isolated,omitempty"`
+	AcceptInsecureCerts     *bool             `yaml:"accept_insecure_certs,omitempty" json:"acceptInsecureCerts,omitempty"`
+	LogFile                 string            `yaml:"log_file,omitempty" json:"logFile,omitempty"`
+	ChromeArgs              []string          `yaml:"chrome_args,omitempty" json:"chromeArgs,omitempty"`
+	IgnoreDefaultChromeArgs []string          `yaml:"ignore_default_chrome_args,omitempty" json:"ignoreDefaultChromeArgs,omitempty"`
+	Slim                    *bool             `yaml:"slim,omitempty" json:"slim,omitempty"`
+	UsageStatistics         *bool             `yaml:"usage_statistics,omitempty" json:"usageStatistics,omitempty"`
+	PerformanceCrux         *bool             `yaml:"performance_crux,omitempty" json:"performanceCrux,omitempty"`
+}
+
 type BuiltinServerConfig struct {
-	Kind       string            `yaml:"kind" json:"kind"`
-	InstanceID string            `yaml:"instance_id,omitempty" json:"instanceId,omitempty"`
-	CUA        *BuiltinCUAConfig `yaml:"cua,omitempty" json:"cua,omitempty"`
+	Kind       string                   `yaml:"kind" json:"kind"`
+	InstanceID string                   `yaml:"instance_id,omitempty" json:"instanceId,omitempty"`
+	CUA        *BuiltinCUAConfig        `yaml:"cua,omitempty" json:"cua,omitempty"`
+	Filesystem *BuiltinFilesystemConfig `yaml:"filesystem,omitempty" json:"filesystem,omitempty"`
+	Chrome     *BuiltinChromeConfig     `yaml:"chrome,omitempty" json:"chrome,omitempty"`
 }
 
 type Config struct {
@@ -436,6 +478,58 @@ func cloneBuiltin(input *BuiltinServerConfig) *BuiltinServerConfig {
 			DisplaySelector:      input.CUA.DisplaySelector,
 		}
 	}
+	if input.Filesystem != nil {
+		fileTypes := make([]string, len(input.Filesystem.Index.FileTypes))
+		copy(fileTypes, input.Filesystem.Index.FileTypes)
+
+		roots := make([]BuiltinFilesystemRootConfig, len(input.Filesystem.Roots))
+		copy(roots, input.Filesystem.Roots)
+
+		clone.Filesystem = &BuiltinFilesystemConfig{
+			ReadOnly:     cloneBoolPtr(input.Filesystem.ReadOnly),
+			Scope:        input.Filesystem.Scope,
+			GlobalAccess: input.Filesystem.GlobalAccess,
+			Roots:        roots,
+			Index: BuiltinFilesystemIndexConfig{
+				ContentEnabled:   cloneBoolPtr(input.Filesystem.Index.ContentEnabled),
+				FileTypes:        fileTypes,
+				MaxFileSizeBytes: input.Filesystem.Index.MaxFileSizeBytes,
+				ParsePDF:         cloneBoolPtr(input.Filesystem.Index.ParsePDF),
+				ParseOffice:      cloneBoolPtr(input.Filesystem.Index.ParseOffice),
+			},
+		}
+	}
+	if input.Chrome != nil {
+		chromeArgs := make([]string, len(input.Chrome.ChromeArgs))
+		copy(chromeArgs, input.Chrome.ChromeArgs)
+
+		ignoreDefaultChromeArgs := make([]string, len(input.Chrome.IgnoreDefaultChromeArgs))
+		copy(ignoreDefaultChromeArgs, input.Chrome.IgnoreDefaultChromeArgs)
+
+		wsHeaders := make(map[string]string, len(input.Chrome.WSHeaders))
+		for key, value := range input.Chrome.WSHeaders {
+			wsHeaders[key] = value
+		}
+
+		clone.Chrome = &BuiltinChromeConfig{
+			ConnectionMode:          input.Chrome.ConnectionMode,
+			Channel:                 input.Chrome.Channel,
+			ExecutablePath:          input.Chrome.ExecutablePath,
+			UserDataDir:             input.Chrome.UserDataDir,
+			BrowserURL:              input.Chrome.BrowserURL,
+			WSEndpoint:              input.Chrome.WSEndpoint,
+			WSHeaders:               wsHeaders,
+			Headless:                cloneBoolPtr(input.Chrome.Headless),
+			Isolated:                cloneBoolPtr(input.Chrome.Isolated),
+			AcceptInsecureCerts:     cloneBoolPtr(input.Chrome.AcceptInsecureCerts),
+			LogFile:                 input.Chrome.LogFile,
+			ChromeArgs:              chromeArgs,
+			IgnoreDefaultChromeArgs: ignoreDefaultChromeArgs,
+			Slim:                    cloneBoolPtr(input.Chrome.Slim),
+			UsageStatistics:         cloneBoolPtr(input.Chrome.UsageStatistics),
+			PerformanceCrux:         cloneBoolPtr(input.Chrome.PerformanceCrux),
+		}
+	}
 	return clone
 }
 
@@ -462,12 +556,15 @@ func applyBuiltinDefaults(server *ServerConfig) {
 	if server.Builtin == nil {
 		server.Builtin = &BuiltinServerConfig{}
 	}
-	if server.Builtin.InstanceID == "" {
-		server.Builtin.InstanceID = "default"
+	if server.Builtin.Kind == "" && server.Builtin.Filesystem != nil {
+		server.Builtin.Kind = "filesystem"
 	}
 	switch server.Builtin.Kind {
 	case "", "cua":
 		server.Builtin.Kind = "cua"
+		if server.Builtin.InstanceID == "" {
+			server.Builtin.InstanceID = "cua_default"
+		}
 		if server.Builtin.CUA == nil {
 			server.Builtin.CUA = &BuiltinCUAConfig{}
 		}
@@ -491,6 +588,79 @@ func applyBuiltinDefaults(server *ServerConfig) {
 		}
 		if server.Builtin.CUA.DisplaySelector.Mode == "" {
 			server.Builtin.CUA.DisplaySelector.Mode = "main"
+		}
+	case "filesystem":
+		if server.Builtin.InstanceID == "" {
+			server.Builtin.InstanceID = "filesystem_default"
+		}
+		if server.Builtin.Filesystem == nil {
+			server.Builtin.Filesystem = &BuiltinFilesystemConfig{}
+		}
+		if server.Builtin.Filesystem.ReadOnly == nil {
+			server.Builtin.Filesystem.ReadOnly = boolPtr(false)
+		}
+		if strings.TrimSpace(server.Builtin.Filesystem.Scope) == "" {
+			server.Builtin.Filesystem.Scope = "roots"
+		}
+		if strings.TrimSpace(server.Builtin.Filesystem.GlobalAccess) == "" {
+			server.Builtin.Filesystem.GlobalAccess = "ro"
+		}
+		if server.Builtin.Filesystem.Index.ContentEnabled == nil {
+			server.Builtin.Filesystem.Index.ContentEnabled = boolPtr(false)
+		}
+		if len(server.Builtin.Filesystem.Index.FileTypes) == 0 {
+			server.Builtin.Filesystem.Index.FileTypes = []string{
+				".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".toml", ".ini",
+				".csv", ".tsv", ".xml", ".html", ".htm", ".go", ".js", ".jsx", ".ts",
+				".tsx", ".py", ".java", ".c", ".cc", ".cpp", ".h", ".hpp", ".rs", ".sh",
+				".sql", ".css", ".scss", ".less", ".vue", ".svelte", ".php", ".rb",
+				".swift", ".kt", ".kts", ".scala", ".dart", ".lua", ".r", ".pl", ".proto",
+				"Dockerfile", "Makefile", ".pdf", ".xlsx", ".xlsm", ".xltx", ".xltm",
+				".xls", ".doc", ".ppt", ".docx", ".pptx", ".odt", ".ods", ".odp",
+			}
+		}
+		if server.Builtin.Filesystem.Index.MaxFileSizeBytes <= 0 {
+			server.Builtin.Filesystem.Index.MaxFileSizeBytes = 8 * 1024 * 1024
+		}
+		if server.Builtin.Filesystem.Index.ParsePDF == nil {
+			server.Builtin.Filesystem.Index.ParsePDF = boolPtr(true)
+		}
+		if server.Builtin.Filesystem.Index.ParseOffice == nil {
+			server.Builtin.Filesystem.Index.ParseOffice = boolPtr(true)
+		}
+	case "chrome":
+		if server.Builtin.InstanceID == "" {
+			server.Builtin.InstanceID = "chrome_default"
+		}
+		if server.Builtin.Chrome == nil {
+			server.Builtin.Chrome = &BuiltinChromeConfig{}
+		}
+		if strings.TrimSpace(server.Builtin.Chrome.ConnectionMode) == "" {
+			server.Builtin.Chrome.ConnectionMode = "managed"
+		}
+		if strings.TrimSpace(server.Builtin.Chrome.Channel) == "" {
+			server.Builtin.Chrome.Channel = "stable"
+		}
+		if server.Builtin.Chrome.Headless == nil {
+			server.Builtin.Chrome.Headless = boolPtr(false)
+		}
+		if server.Builtin.Chrome.Isolated == nil {
+			server.Builtin.Chrome.Isolated = boolPtr(false)
+		}
+		if server.Builtin.Chrome.AcceptInsecureCerts == nil {
+			server.Builtin.Chrome.AcceptInsecureCerts = boolPtr(false)
+		}
+		if server.Builtin.Chrome.Slim == nil {
+			server.Builtin.Chrome.Slim = boolPtr(true)
+		}
+		if server.Builtin.Chrome.UsageStatistics == nil {
+			server.Builtin.Chrome.UsageStatistics = boolPtr(false)
+		}
+		if server.Builtin.Chrome.PerformanceCrux == nil {
+			server.Builtin.Chrome.PerformanceCrux = boolPtr(false)
+		}
+		if strings.TrimSpace(server.Builtin.Chrome.UserDataDir) == "" && server.Builtin.Chrome.ConnectionMode == "managed" && (server.Builtin.Chrome.Isolated == nil || !*server.Builtin.Chrome.Isolated) {
+			server.Builtin.Chrome.UserDataDir = filepath.Join(DefaultDir(), "browsers", "chrome", server.Builtin.InstanceID, "profile")
 		}
 	}
 }
@@ -542,6 +712,68 @@ func validateServerConfig(server ServerConfig) error {
 				}
 			default:
 				return fmt.Errorf("builtin.cua.display_selector.mode %q is unsupported", server.Builtin.CUA.DisplaySelector.Mode)
+			}
+		case "filesystem":
+			if server.Builtin.Filesystem == nil {
+				return fmt.Errorf("builtin.filesystem is required for builtin kind %q", server.Builtin.Kind)
+			}
+			switch server.Builtin.Filesystem.Scope {
+			case "roots":
+				if len(server.Builtin.Filesystem.Roots) == 0 {
+					return fmt.Errorf("builtin.filesystem.roots must contain at least one root when scope is roots")
+				}
+			case "global":
+				switch server.Builtin.Filesystem.GlobalAccess {
+				case "ro", "rw":
+				default:
+					return fmt.Errorf("builtin.filesystem.global_access must be ro or rw when scope is global")
+				}
+			default:
+				return fmt.Errorf("builtin.filesystem.scope %q is unsupported", server.Builtin.Filesystem.Scope)
+			}
+			for i, root := range server.Builtin.Filesystem.Roots {
+				if strings.TrimSpace(root.Path) == "" {
+					return fmt.Errorf("builtin.filesystem.roots[%d].path is required", i)
+				}
+				switch root.Access {
+				case "ro", "rw":
+				default:
+					return fmt.Errorf("builtin.filesystem.roots[%d].access must be ro or rw", i)
+				}
+			}
+			if server.Builtin.Filesystem.Index.MaxFileSizeBytes <= 0 {
+				return fmt.Errorf("builtin.filesystem.index.max_file_size_bytes must be greater than 0")
+			}
+		case "chrome":
+			if server.Builtin.Chrome == nil {
+				return fmt.Errorf("builtin.chrome is required for builtin kind %q", server.Builtin.Kind)
+			}
+			switch server.Builtin.Chrome.ConnectionMode {
+			case "managed", "attach_existing", "attach_url":
+			default:
+				return fmt.Errorf("builtin.chrome.connection_mode %q is unsupported", server.Builtin.Chrome.ConnectionMode)
+			}
+			switch server.Builtin.Chrome.Channel {
+			case "", "stable", "beta", "dev", "canary":
+			default:
+				return fmt.Errorf("builtin.chrome.channel %q is unsupported", server.Builtin.Chrome.Channel)
+			}
+			if strings.TrimSpace(server.Builtin.Chrome.BrowserURL) != "" && strings.TrimSpace(server.Builtin.Chrome.WSEndpoint) != "" {
+				return fmt.Errorf("builtin.chrome.browser_url and builtin.chrome.ws_endpoint are mutually exclusive")
+			}
+			switch server.Builtin.Chrome.ConnectionMode {
+			case "managed":
+				if strings.TrimSpace(server.Builtin.Chrome.BrowserURL) != "" || strings.TrimSpace(server.Builtin.Chrome.WSEndpoint) != "" {
+					return fmt.Errorf("builtin.chrome.browser_url and builtin.chrome.ws_endpoint are only valid when connection_mode is attach_url")
+				}
+			case "attach_existing":
+				if strings.TrimSpace(server.Builtin.Chrome.BrowserURL) != "" || strings.TrimSpace(server.Builtin.Chrome.WSEndpoint) != "" {
+					return fmt.Errorf("builtin.chrome.browser_url and builtin.chrome.ws_endpoint are not used when connection_mode is attach_existing")
+				}
+			case "attach_url":
+				if strings.TrimSpace(server.Builtin.Chrome.BrowserURL) == "" && strings.TrimSpace(server.Builtin.Chrome.WSEndpoint) == "" {
+					return fmt.Errorf("builtin.chrome.browser_url or builtin.chrome.ws_endpoint is required when connection_mode is attach_url")
+				}
 			}
 		default:
 			return fmt.Errorf("builtin kind %q is unsupported", server.Builtin.Kind)

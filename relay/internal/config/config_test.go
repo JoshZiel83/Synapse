@@ -112,3 +112,79 @@ func TestStableKeyForBuiltinIgnoresDisplayName(t *testing.T) {
 		t.Fatalf("expected builtin stable key to ignore display name, got %q and %q", first, second)
 	}
 }
+
+func TestValidateBuiltinFilesystemServer(t *testing.T) {
+	cfg := &Config{
+		Relay: RelayConfig{
+			ServerBaseURL:         "http://127.0.0.1:3001",
+			WebSocketURL:          "ws://127.0.0.1:3001/ws/relay",
+			DeviceID:              "device-123",
+			PrivateKeyPath:        "/tmp/device-key.pem",
+			ServerTLSPublicKeyPin: "",
+		},
+		Servers: []ServerConfig{
+			{
+				Name:      "filesystem",
+				Transport: "builtin",
+				Builtin: &BuiltinServerConfig{
+					Kind:       "filesystem",
+					InstanceID: "filesystem_default",
+					Filesystem: &BuiltinFilesystemConfig{
+						ReadOnly: boolPtr(true),
+						Scope:    "roots",
+						Roots: []BuiltinFilesystemRootConfig{
+							{Path: "/tmp", Access: "ro"},
+						},
+						Index: BuiltinFilesystemIndexConfig{
+							ContentEnabled:   boolPtr(true),
+							FileTypes:        []string{".go", ".md", ".pdf"},
+							MaxFileSizeBytes: 1024,
+							ParsePDF:         boolPtr(true),
+							ParseOffice:      boolPtr(true),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if errs := Validate(cfg); len(errs) != 0 {
+		t.Fatalf("expected builtin filesystem config to validate, got %v", errs)
+	}
+}
+
+func TestValidateBuiltinChromeServer(t *testing.T) {
+	cfg := &Config{
+		Relay: RelayConfig{
+			ServerBaseURL:         "http://127.0.0.1:3001",
+			WebSocketURL:          "ws://127.0.0.1:3001/ws/relay",
+			DeviceID:              "device-123",
+			PrivateKeyPath:        "/tmp/device-key.pem",
+			ServerTLSPublicKeyPin: "",
+		},
+		Servers: []ServerConfig{
+			{
+				Name:      "chrome-browser",
+				Transport: "builtin",
+				Builtin: &BuiltinServerConfig{
+					Kind:       "chrome",
+					InstanceID: "chrome_default",
+					Chrome: &BuiltinChromeConfig{
+						ConnectionMode:  "managed",
+						Channel:         "stable",
+						UserDataDir:     "/tmp/chrome-profile",
+						Headless:        boolPtr(false),
+						Isolated:        boolPtr(false),
+						Slim:            boolPtr(false),
+						UsageStatistics: boolPtr(false),
+						PerformanceCrux: boolPtr(false),
+					},
+				},
+			},
+		},
+	}
+
+	if errs := Validate(cfg); len(errs) != 0 {
+		t.Fatalf("expected builtin chrome config to validate, got %v", errs)
+	}
+}

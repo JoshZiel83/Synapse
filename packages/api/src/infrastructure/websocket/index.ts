@@ -1,13 +1,23 @@
 import type { FastifyInstance } from 'fastify';
+import { AUTH_SESSION_COOKIE_NAME } from '@synapse/shared';
 import type { SystemEvent } from '@synapse/shared';
 import { WS_AUTH_TIMEOUT, WS_HEARTBEAT_INTERVAL } from '@synapse/shared';
 import { onEvent } from '../events/index.js';
+import { authzEnabled, checkPermission } from '../authz/index.js';
+import { query } from '../database/index.js';
 import { handleRelayConnection } from '../../modules/mcp-plugins/relay-manager.js';
 import { isShuttingDown } from '../shutdown/state.js';
+import { authenticateSessionToken } from '../../modules/auth/service.js';
+import {
+  initAuthSessionRegistry,
+  registerAuthenticatedSocket,
+  unregisterAuthenticatedSocket,
+} from './auth-session-registry.js';
 
 interface WSClient {
   ws: any;
   userId: string;
+  sessionId?: string;
   workspaceId?: string;
   authenticated: boolean;
   authTimer?: ReturnType<typeof setTimeout>;
@@ -19,8 +29,59 @@ const clients: Map<string, WSClient> = new Map();
 
 let appRef: FastifyInstance | null = null;
 
+function parseCookieHeader(cookieHeader: string | string[] | undefined) {
+  const source = Array.isArray(cookieHeader) ? cookieHeader.join(';') : cookieHeader || '';
+  return source.split(';').reduce<Record<string, string>>((acc, part) => {
+    const [key, ...rest] = part.split('=');
+    const trimmedKey = key?.trim();
+    if (!trimmedKey) return acc;
+    acc[trimmedKey] = decodeURIComponent(rest.join('=').trim());
+    return acc;
+  }, {});
+}
+
+async function canUserAccessWorkspace(workspaceId: string, userId: string) {
+  if (authzEnabled()) {
+    return checkPermission({
+      resourceType: 'workspace',
+      resourceId: workspaceId,
+      permission: 'view',
+      subject: { type: 'user', id: userId },
+    });
+  }
+
+  const result = await query(
+    'SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2 LIMIT 1',
+    [workspaceId, userId],
+  );
+
+  return (result.rowCount ?? 0) > 0;
+}
+
+function closeClient(clientId: string, message: string, closeCode = 1008) {
+  const client = clients.get(clientId);
+  if (!client) return;
+
+  if (client.ws.readyState === 1) {
+    try {
+      client.ws.send(JSON.stringify({ type: 'auth_error', message }));
+    } catch {}
+  }
+
+  try {
+    if (client.ws.readyState === 0 || client.ws.readyState === 1) {
+      client.ws.close(closeCode, message);
+    }
+  } catch {}
+
+  cleanup(clientId);
+}
+
 export function setupWebSocket(app: FastifyInstance) {
   appRef = app;
+  void initAuthSessionRegistry().catch((error) => {
+    app.log.error({ error }, 'Failed to initialize auth session registry');
+  });
 
   app.addHook('onRequest', async (request, reply) => {
     const isUpgrade = request.headers.upgrade?.toLowerCase() === 'websocket';
@@ -73,33 +134,56 @@ export function setupWebSocket(app: FastifyInstance) {
     // Auth timeout - must authenticate within WS_AUTH_TIMEOUT
     client.authTimer = setTimeout(() => {
       if (!client.authenticated) {
-        try {
-          socket.send(JSON.stringify({ type: 'auth_error', message: 'Authentication timeout' }));
-        } catch {}
-        socket.close();
-        clients.delete(clientId);
+        closeClient(clientId, 'Authentication timeout');
       }
     }, WS_AUTH_TIMEOUT);
 
-    socket.on('message', (raw: any) => {
+    const cookieToken = parseCookieHeader(req.headers.cookie)[AUTH_SESSION_COOKIE_NAME];
+
+    socket.on('message', async (raw: any) => {
       try {
         const msg = JSON.parse(raw.toString());
 
         if (msg.type === 'auth') {
-          // JWT auth: verify token
-          const token = msg.token;
+          const workspaceId = typeof msg.workspaceId === 'string' ? msg.workspaceId : '';
+          const token = typeof msg.token === 'string' && msg.token.trim().length > 0
+            ? msg.token.trim()
+            : cookieToken;
+
           if (!token) {
-            socket.send(JSON.stringify({ type: 'auth_error', message: 'No token provided' }));
-            socket.close();
-            clients.delete(clientId);
+            closeClient(clientId, 'No session provided');
+            return;
+          }
+
+          if (!workspaceId) {
+            closeClient(clientId, 'No workspace selected');
+            return;
+          }
+
+          const authenticated = await authenticateSessionToken(token);
+          if (!authenticated) {
+            closeClient(clientId, 'Invalid or expired session');
+            return;
+          }
+
+          const canAccessWorkspace = await canUserAccessWorkspace(workspaceId, authenticated.user.id);
+          if (!canAccessWorkspace) {
+            closeClient(clientId, 'Not allowed to access this workspace');
             return;
           }
 
           try {
-            const decoded = app.jwt.verify<{ userId: string; email: string }>(token);
-            client.userId = decoded.userId;
-            client.workspaceId = msg.workspaceId;
+            client.userId = authenticated.user.id;
+            client.sessionId = authenticated.session.id;
+            client.workspaceId = workspaceId;
             client.authenticated = true;
+
+            registerAuthenticatedSocket({
+              clientId,
+              sessionId: authenticated.session.id,
+              userId: authenticated.user.id,
+              disconnect: (reason) => closeClient(clientId, reason),
+            });
 
             // Clear auth timeout
             if (client.authTimer) {
@@ -122,9 +206,7 @@ export function setupWebSocket(app: FastifyInstance) {
               }
             }, WS_HEARTBEAT_INTERVAL);
           } catch (err: any) {
-            socket.send(JSON.stringify({ type: 'auth_error', message: 'Invalid token' }));
-            socket.close();
-            clients.delete(clientId);
+            closeClient(clientId, 'Session authentication failed');
           }
           return;
         }
@@ -164,6 +246,7 @@ export function setupWebSocket(app: FastifyInstance) {
 function cleanup(clientId: string) {
   const client = clients.get(clientId);
   if (client) {
+    unregisterAuthenticatedSocket(clientId);
     if (client.authTimer) clearTimeout(client.authTimer);
     if (client.heartbeatTimer) clearInterval(client.heartbeatTimer);
     if (client.pongTimer) clearTimeout(client.pongTimer);

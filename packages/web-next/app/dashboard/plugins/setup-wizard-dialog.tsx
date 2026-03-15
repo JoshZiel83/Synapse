@@ -49,7 +49,7 @@ export default function SetupWizardDialog({
   const { workspaceId } = useWorkspace();
   const { installPlugin } = usePluginStore();
   const { user } = useAuthStore();
-  const currentUserId = user?.id || user?.userId || '';
+  const currentUserId = user?.id || '';
 
   const allSteps: SetupStep[] = plugin.setup_steps || [];
 

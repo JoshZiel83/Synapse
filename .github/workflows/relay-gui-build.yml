@@ -22,6 +22,10 @@ on:
 permissions:
   contents: write
 
+env:
+  BUNDLED_NODE_VERSION: '20.19.5'
+  CHROME_DEVTOOLS_MCP_VERSION: '0.20.0'
+
 jobs:
   build:
     strategy:
@@ -65,7 +69,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.BUNDLED_NODE_VERSION }}
 
       - name: Platform setup
         if: matrix.setup != ''
@@ -85,6 +89,9 @@ jobs:
           else
             echo "version=dev-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
           fi
+
+      - name: Prepare bundled Chrome DevTools runtime
+        run: node relay/scripts/prepare-chrome-devtools-bundle.mjs --target-platform=${{ matrix.goos }}-${{ matrix.goarch }} --node-version=${{ env.BUNDLED_NODE_VERSION }} --package-version=${{ env.CHROME_DEVTOOLS_MCP_VERSION }}
 
       - name: Build GUI
         working-directory: relay/cmd/synapse-relay-gui

@@ -62,13 +62,7 @@ export function useWebSocket({ workspaceId, onEvent }: UseWebSocketOptions) {
     ws.current = socket;
 
     socket.onopen = () => {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        socket.close();
-        setConnecting(false);
-        return;
-      }
-      socket.send(JSON.stringify({ type: 'auth', token, workspaceId }));
+      socket.send(JSON.stringify({ type: 'auth', workspaceId }));
     };
 
     socket.onmessage = (e) => {
@@ -87,6 +81,7 @@ export function useWebSocket({ workspaceId, onEvent }: UseWebSocketOptions) {
 
         if (msg.type === 'auth_error') {
           setConnecting(false);
+          reconnectAttempts.current = maxReconnectAttempts;
           socket.close();
           return;
         }

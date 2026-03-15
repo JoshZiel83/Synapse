@@ -2,9 +2,9 @@ export const APP_NAME = 'Synapse';
 export const API_VERSION = 'v1';
 export const API_PREFIX = `/api/${API_VERSION}`;
 
-export const JWT_ACCESS_EXPIRY = '15m';
-export const JWT_REFRESH_EXPIRY = '7d';
-export const SESSION_TTL = 7 * 24 * 60 * 60; // 7 days in seconds
+export const AUTH_SESSION_COOKIE_NAME = 'synapse_session';
+export const AUTH_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+export const AUTH_SESSION_TOUCH_INTERVAL_SECONDS = 60;
 
 export const DEFAULT_PAGE_SIZE = 20;
 export const MAX_PAGE_SIZE = 100;

@@ -45,10 +45,52 @@ export interface BuiltinCUAConfig {
   displaySelector?: BuiltinDisplaySelectorConfig
 }
 
+export interface BuiltinFilesystemRootConfig {
+  path: string
+  access?: 'ro' | 'rw'
+}
+
+export interface BuiltinFilesystemIndexConfig {
+  contentEnabled?: boolean
+  fileTypes?: string[]
+  maxFileSizeBytes?: number
+  parsePdf?: boolean
+  parseOffice?: boolean
+}
+
+export interface BuiltinFilesystemConfig {
+  readOnly?: boolean
+  scope?: 'roots' | 'global'
+  globalAccess?: 'ro' | 'rw'
+  roots?: BuiltinFilesystemRootConfig[]
+  index?: BuiltinFilesystemIndexConfig
+}
+
+export interface BuiltinChromeConfig {
+  connectionMode?: 'managed' | 'attach_existing' | 'attach_url'
+  channel?: 'stable' | 'beta' | 'dev' | 'canary'
+  executablePath?: string
+  userDataDir?: string
+  browserUrl?: string
+  wsEndpoint?: string
+  wsHeaders?: Record<string, string>
+  headless?: boolean
+  isolated?: boolean
+  acceptInsecureCerts?: boolean
+  logFile?: string
+  chromeArgs?: string[]
+  ignoreDefaultChromeArgs?: string[]
+  slim?: boolean
+  usageStatistics?: boolean
+  performanceCrux?: boolean
+}
+
 export interface BuiltinServerConfig {
-  kind: 'cua'
+  kind: 'chrome' | 'cua' | 'filesystem'
   instanceId?: string
+  chrome?: BuiltinChromeConfig
   cua?: BuiltinCUAConfig
+  filesystem?: BuiltinFilesystemConfig
 }
 
 export interface ServerConfig {

@@ -3,9 +3,12 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
+	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/chrome"
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/cua"
+	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/filesystem"
 	"github.com/PekingSpades/Synapse/relay/internal/config"
 )
 
@@ -19,6 +22,35 @@ func newBuiltinServer(cfg config.ServerConfig) (Server, error) {
 	}
 
 	switch cfg.Builtin.Kind {
+	case "chrome":
+		if cfg.Builtin.Chrome == nil {
+			return nil, fmt.Errorf("builtin.chrome config is required")
+		}
+
+		server, err := chrome.New(chrome.Config{
+			Name:                    cfg.Name,
+			InstanceID:              cfg.Builtin.InstanceID,
+			ConnectionMode:          cfg.Builtin.Chrome.ConnectionMode,
+			Channel:                 cfg.Builtin.Chrome.Channel,
+			ExecutablePath:          cfg.Builtin.Chrome.ExecutablePath,
+			UserDataDir:             cfg.Builtin.Chrome.UserDataDir,
+			BrowserURL:              cfg.Builtin.Chrome.BrowserURL,
+			WSEndpoint:              cfg.Builtin.Chrome.WSEndpoint,
+			WSHeaders:               cfg.Builtin.Chrome.WSHeaders,
+			Headless:                cfg.Builtin.Chrome.Headless != nil && *cfg.Builtin.Chrome.Headless,
+			Isolated:                cfg.Builtin.Chrome.Isolated != nil && *cfg.Builtin.Chrome.Isolated,
+			AcceptInsecureCerts:     cfg.Builtin.Chrome.AcceptInsecureCerts != nil && *cfg.Builtin.Chrome.AcceptInsecureCerts,
+			LogFile:                 cfg.Builtin.Chrome.LogFile,
+			ChromeArgs:              cfg.Builtin.Chrome.ChromeArgs,
+			IgnoreDefaultChromeArgs: cfg.Builtin.Chrome.IgnoreDefaultChromeArgs,
+			Slim:                    cfg.Builtin.Chrome.Slim == nil || *cfg.Builtin.Chrome.Slim,
+			UsageStatistics:         cfg.Builtin.Chrome.UsageStatistics != nil && *cfg.Builtin.Chrome.UsageStatistics,
+			PerformanceCrux:         cfg.Builtin.Chrome.PerformanceCrux != nil && *cfg.Builtin.Chrome.PerformanceCrux,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &builtinAdapter{inner: server}, nil
 	case "cua":
 		if cfg.Builtin.CUA == nil {
 			return nil, fmt.Errorf("builtin.cua config is required")
@@ -37,6 +69,40 @@ func newBuiltinServer(cfg config.ServerConfig) (Server, error) {
 				Index:      cfg.Builtin.CUA.DisplaySelector.Index,
 				ID:         cfg.Builtin.CUA.DisplaySelector.ID,
 				ElectronID: cfg.Builtin.CUA.DisplaySelector.ElectronID,
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &builtinAdapter{inner: server}, nil
+	case "filesystem":
+		if cfg.Builtin.Filesystem == nil {
+			return nil, fmt.Errorf("builtin.filesystem config is required")
+		}
+
+		roots := make([]filesystem.Root, 0, len(cfg.Builtin.Filesystem.Roots))
+		for index, root := range cfg.Builtin.Filesystem.Roots {
+			roots = append(roots, filesystem.Root{
+				ID:     fmt.Sprintf("root_%d", index),
+				Path:   root.Path,
+				Access: root.Access,
+			})
+		}
+
+		server, err := filesystem.New(filesystem.Config{
+			StableKey:    cfg.StableKey,
+			Name:         cfg.Name,
+			ReadOnly:     cfg.Builtin.Filesystem.ReadOnly != nil && *cfg.Builtin.Filesystem.ReadOnly,
+			Scope:        cfg.Builtin.Filesystem.Scope,
+			GlobalAccess: cfg.Builtin.Filesystem.GlobalAccess,
+			Roots:        roots,
+			Index: filesystem.IndexConfig{
+				Dir:              filepath.Join(config.DefaultDir(), "indexes", "filesystem", cfg.StableKey),
+				ContentEnabled:   cfg.Builtin.Filesystem.Index.ContentEnabled != nil && *cfg.Builtin.Filesystem.Index.ContentEnabled,
+				FileTypes:        cfg.Builtin.Filesystem.Index.FileTypes,
+				MaxFileSizeBytes: cfg.Builtin.Filesystem.Index.MaxFileSizeBytes,
+				ParsePDF:         cfg.Builtin.Filesystem.Index.ParsePDF == nil || *cfg.Builtin.Filesystem.Index.ParsePDF,
+				ParseOffice:      cfg.Builtin.Filesystem.Index.ParseOffice == nil || *cfg.Builtin.Filesystem.Index.ParseOffice,
 			},
 		})
 		if err != nil {

@@ -260,7 +260,7 @@ export default function InstallDialog({
   const { workspaceId } = useWorkspace();
   const { installPlugin, updateInstallation } = usePluginStore();
   const { user } = useAuthStore();
-  const currentUserId = user?.id || user?.userId || '';
+  const currentUserId = user?.id || '';
 
   const locale = useMemo(() => getLocale(plugin.default_locale), [plugin.default_locale]);
   const configFields = useMemo(() => deriveConfigFields(plugin), [plugin]);

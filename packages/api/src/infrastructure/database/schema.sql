@@ -16,6 +16,33 @@ CREATE TABLE users (
 
 CREATE INDEX idx_users_email ON users(email);
 
+-- ============ Auth Sessions ============
+CREATE TABLE auth_sessions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  client_type VARCHAR(20) NOT NULL DEFAULT 'web'
+    CHECK (client_type IN ('web', 'android', 'windows', 'ios', 'cli', 'api')),
+  transport VARCHAR(20) NOT NULL DEFAULT 'cookie'
+    CHECK (transport IN ('cookie', 'token')),
+  device_name VARCHAR(255),
+  platform VARCHAR(120),
+  token_hash VARCHAR(128) UNIQUE NOT NULL,
+  token_hint VARCHAR(16) NOT NULL,
+  ip_address VARCHAR(120),
+  user_agent TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  revoke_reason VARCHAR(50)
+);
+
+CREATE INDEX idx_auth_sessions_user ON auth_sessions(user_id, created_at DESC);
+CREATE INDEX idx_auth_sessions_active ON auth_sessions(user_id, revoked_at, expires_at DESC);
+CREATE INDEX idx_auth_sessions_expires ON auth_sessions(expires_at);
+
 -- ============ Workspaces ============
 CREATE TABLE workspaces (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1619,11 +1646,11 @@ CREATE TABLE relay_exposures (
   stable_key VARCHAR(255) NOT NULL,
   display_name VARCHAR(255) NOT NULL,
   transport VARCHAR(20) NOT NULL
-    CHECK (transport IN ('stdio', 'http', 'sse', 'custom')),
+    CHECK (transport IN ('builtin', 'stdio', 'http', 'sse', 'custom')),
   runtime_status VARCHAR(20) NOT NULL DEFAULT 'discovered'
     CHECK (runtime_status IN ('discovered', 'starting', 'healthy', 'degraded', 'failed', 'quarantined', 'offline')),
   management_mode VARCHAR(20) NOT NULL DEFAULT 'manual'
-    CHECK (management_mode IN ('manual', 'imported', 'mirrored', 'managed')),
+    CHECK (management_mode IN ('manual', 'imported', 'mirrored', 'managed', 'builtin')),
   last_seen_at TIMESTAMPTZ,
   last_healthy_at TIMESTAMPTZ,
   last_error TEXT,

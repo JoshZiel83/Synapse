@@ -1,5 +1,7 @@
 import type {
   ActorTemplateCloneResult,
+  AuthResponse,
+  AuthSessionSummary,
   ActorTemplateRecord,
   CanonicalContentBlock,
   RelayDashboardView,
@@ -8,30 +10,67 @@ import type {
   RelayPairingSessionView,
 } from '@synapse/shared';
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api/v1';
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly code?: string,
+    public readonly details?: unknown,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
 
 class ApiClient {
-  private token: string | null = null;
-
-  setToken(token: string) { this.token = token; if (typeof window !== 'undefined') localStorage.setItem('token', token); }
-  getToken() { if (!this.token && typeof window !== 'undefined') this.token = localStorage.getItem('token'); return this.token; }
-  clearToken() { this.token = null; if (typeof window !== 'undefined') localStorage.removeItem('token'); }
-
   private async fetch(path: string, options: RequestInit = {}) {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', ...options.headers as any };
-    const token = this.getToken();
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
-    if (res.status === 401) { this.clearToken(); if (typeof window !== 'undefined') window.location.href = '/login'; }
+    const body = options.body;
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+    const headers = new Headers(options.headers as HeadersInit | undefined);
+    if (!isFormData && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers,
+      credentials: 'include',
+    });
+
     if (res.status === 204) return null;
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'API error');
+
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new ApiError(
+        (data && typeof data.error === 'string' ? data.error : 'API error'),
+        res.status,
+        data && typeof data.code === 'string' ? data.code : undefined,
+        data,
+      );
+    }
+
     return data;
   }
 
   // Auth
-  register(email: string, password: string, name: string) { return this.fetch('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, name }) }); }
-  login(email: string, password: string) { return this.fetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }); }
+  register(email: string, password: string, name: string): Promise<AuthResponse> {
+    return this.fetch('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, name, clientType: 'web', transport: 'cookie' }),
+    });
+  }
+  login(email: string, password: string): Promise<AuthResponse> {
+    return this.fetch('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, clientType: 'web', transport: 'cookie' }),
+    });
+  }
+  logout() { return this.fetch('/auth/logout', { method: 'POST' }); }
+  logoutAll() { return this.fetch('/auth/logout-all', { method: 'POST' }); }
+  getSessions(): Promise<{ sessions: AuthSessionSummary[] }> { return this.fetch('/auth/sessions'); }
+  revokeSession(sessionId: string) { return this.fetch(`/auth/sessions/${sessionId}`, { method: 'DELETE' }); }
   getMe() { return this.fetch('/auth/me'); }
   updateMe(data: { name?: string; avatarUrl?: string | null }) { return this.fetch('/auth/me', { method: 'PUT', body: JSON.stringify(data) }); }
 
@@ -360,13 +399,10 @@ class ApiClient {
   async uploadFile(wsId: string, file: File) {
     const formData = new FormData();
     formData.append('file', file);
-    const token = this.getToken();
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
     const res = await fetch(`${API_BASE}/workspaces/${wsId}/files`, {
       method: 'POST',
-      headers,
       body: formData,
+      credentials: 'include',
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
