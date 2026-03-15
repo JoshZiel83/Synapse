@@ -75,6 +75,7 @@ async function downloadFile(url, destinationPath) {
 
 function runCommand(command, args, options = {}) {
   return new Promise((resolveCommand, rejectCommand) => {
+    const commandLabel = [command, ...args].join(' ')
     const child = spawn(command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       ...options,
@@ -89,20 +90,24 @@ function runCommand(command, args, options = {}) {
     child.stderr.on('data', (chunk) => {
       stderr += String(chunk)
     })
-    child.on('error', rejectCommand)
+    child.on('error', (error) => {
+      rejectCommand(new Error(`${commandLabel} failed to start: ${error instanceof Error ? error.message : String(error)}`))
+    })
     child.on('close', (code) => {
       if (code === 0) {
         resolveCommand({ stdout, stderr })
         return
       }
-      rejectCommand(new Error(`${command} ${args.join(' ')} failed with exit code ${code}\n${stderr || stdout}`))
+      rejectCommand(new Error(`${commandLabel} failed with exit code ${code}\n${stderr || stdout}`))
     })
   })
 }
 
 async function extractArchive(archivePath, destinationPath, archiveType) {
   if (archiveType === 'tar') {
-    await runCommand('tar', ['-xf', archivePath, '-C', destinationPath])
+    await runCommand('tar', ['-xf', archivePath, '-C', destinationPath], {
+      shell: process.platform === 'win32',
+    })
     return
   }
 
@@ -129,11 +134,13 @@ async function extractArchive(archivePath, destinationPath, archiveType) {
 }
 
 async function npmPack(packageVersion, workingDirectory) {
-  const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
   const { stdout } = await runCommand(
-    npmCommand,
+    'npm',
     ['pack', `chrome-devtools-mcp@${packageVersion}`, '--silent'],
-    { cwd: workingDirectory },
+    {
+      cwd: workingDirectory,
+      shell: process.platform === 'win32',
+    },
   )
 
   const archiveFileName = stdout.trim().split(/\r?\n/).filter(Boolean).at(-1)
