@@ -352,6 +352,13 @@ function ScopeButton({
 }
 
 export function AppsPanel({ config, onSave }: AppsPanelProps) {
+  const chromeServer = chromeServerFromConfig(config)
+  const cuaServer = cuaServerFromConfig(config)
+  const filesystemServer = filesystemServerFromConfig(config)
+  const chromeServerSignature = JSON.stringify(chromeServer || null)
+  const cuaServerSignature = JSON.stringify(cuaServer || null)
+  const filesystemServerSignature = JSON.stringify(filesystemServer || null)
+
   const [chromeDraft, setChromeDraft] = useState<ServerConfig>(() => normalizeChromeServer(chromeServerFromConfig(config)))
   const [cuaDraft, setCuaDraft] = useState<ServerConfig>(() => normalizeCUAServer(cuaServerFromConfig(config)))
   const [filesystemDraft, setFilesystemDraft] = useState<ServerConfig>(() => normalizeFilesystemServer(filesystemServerFromConfig(config)))
@@ -365,10 +372,16 @@ export function AppsPanel({ config, onSave }: AppsPanelProps) {
   const filesystemIndex = filesystem.index || defaultFilesystemServer().builtin?.filesystem?.index || {}
 
   useEffect(() => {
-    setChromeDraft(normalizeChromeServer(chromeServerFromConfig(config)))
-    setCuaDraft(normalizeCUAServer(cuaServerFromConfig(config)))
-    setFilesystemDraft(normalizeFilesystemServer(filesystemServerFromConfig(config)))
-  }, [config])
+    setChromeDraft(normalizeChromeServer(chromeServer))
+  }, [chromeServer, chromeServerSignature])
+
+  useEffect(() => {
+    setCuaDraft(normalizeCUAServer(cuaServer))
+  }, [cuaServer, cuaServerSignature])
+
+  useEffect(() => {
+    setFilesystemDraft(normalizeFilesystemServer(filesystemServer))
+  }, [filesystemServer, filesystemServerSignature])
 
   useEffect(() => {
     setExpanded((current) => ({
