@@ -4,10 +4,10 @@ go 1.22.10
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/PekingSpades/DeskAct v0.0.0
+	github.com/PekingSpades/DeskAct v0.0.0-20260228104223-b1be287e5b22
 	github.com/gorilla/websocket v1.5.3
 	github.com/wailsapp/wails/v2 v2.11.0
-	golang.org/x/image v0.12.0
+	golang.org/x/image v0.22.0
 	golang.org/x/sys v0.30.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -42,5 +42,3 @@ require (
 	golang.org/x/net v0.35.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
 )
-
-replace github.com/PekingSpades/DeskAct => ../.refer/DeskAct.dev
