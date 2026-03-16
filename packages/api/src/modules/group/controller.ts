@@ -22,6 +22,7 @@ import { getGroupRuntimeMap } from '../session/runtime.js';
 const sendGroupMessageSchema = z.object({
   content: z.string().max(10000).optional().default(''),
   contentBlocks: z.array(z.any()).optional(),
+  clientMessageId: z.string().min(1).max(128).optional(),
   targetActorIds: z.array(z.string().uuid()).optional(),
   targetUserIds: z.array(z.string().uuid()).optional(),
 }).refine(
@@ -320,8 +321,8 @@ export default async function groupController(app: FastifyInstance) {
       const userId = (request as any).user!.userId;
       const limit = parseInt(request.query.limit || '100', 10);
       const before = request.query.before;
-      const messages = await getGroupMessages(group.id, { userId }, limit, before);
-      return reply.send({ messages });
+      const page = await getGroupMessages(group.id, { userId }, limit, before);
+      return reply.send(page);
     }
   );
 
@@ -340,6 +341,7 @@ export default async function groupController(app: FastifyInstance) {
       const body = sendGroupMessageSchema.parse(request.body) as {
         content: string;
         contentBlocks?: CanonicalContentBlock[];
+        clientMessageId?: string;
         targetActorIds?: string[];
         targetUserIds?: string[];
       };
@@ -349,6 +351,7 @@ export default async function groupController(app: FastifyInstance) {
         groupId: group.id,
         senderType: 'user',
         senderUserId: userId,
+        clientMessageId: body.clientMessageId,
         targetActorIds: body.targetActorIds,
         targetUserIds: body.targetUserIds,
         content: body.content,

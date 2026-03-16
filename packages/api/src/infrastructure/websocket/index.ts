@@ -1,13 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { AUTH_SESSION_COOKIE_NAME } from '@synapse/shared';
-import type { SystemEvent } from '@synapse/shared';
+import type { ChatSocketEvent, ChatSocketEventPayloadMap, SystemEvent, WorkspaceFeedEventRecord } from '@synapse/shared';
 import { WS_AUTH_TIMEOUT, WS_HEARTBEAT_INTERVAL } from '@synapse/shared';
 import { onEvent } from '../events/index.js';
-import { authzEnabled, checkPermission } from '../authz/index.js';
+import { authzEnabled, checkPermission, lookupResources } from '../authz/index.js';
 import { query } from '../database/index.js';
 import { handleRelayConnection } from '../../modules/mcp-plugins/relay-manager.js';
 import { isShuttingDown } from '../shutdown/state.js';
 import { authenticateSessionToken } from '../../modules/auth/service.js';
+import { listWorkspaceFeedEventsAfter } from '../../modules/conversation/service.js';
 import {
   initAuthSessionRegistry,
   registerAuthenticatedSocket,
@@ -56,6 +57,102 @@ async function canUserAccessWorkspace(workspaceId: string, userId: string) {
   );
 
   return (result.rowCount ?? 0) > 0;
+}
+
+async function getVisibleConversationIdsForUser(workspaceId: string, userId: string) {
+  if (authzEnabled()) {
+    const conversationIds = await lookupResources({
+      resourceType: 'conversation',
+      permission: 'view',
+      subject: { type: 'user', id: userId },
+    });
+    if (conversationIds.length === 0) return [];
+    const result = await query(
+      `SELECT id
+       FROM conversations
+       WHERE workspace_id = $1
+         AND id = ANY($2)`,
+      [workspaceId, conversationIds],
+    );
+    return result.rows.map((row: any) => row.id as string);
+  }
+
+  const result = await query(
+    `SELECT c.id
+     FROM conversations c
+     JOIN conversation_members cm ON cm.conversation_id = c.id
+     WHERE c.workspace_id = $1
+       AND cm.user_id = $2
+       AND cm.state = 'active'`,
+    [workspaceId, userId],
+  );
+  return result.rows.map((row: any) => row.id as string);
+}
+
+async function canUserAccessConversation(conversationId: string, userId: string) {
+  if (authzEnabled()) {
+    return checkPermission({
+      resourceType: 'conversation',
+      resourceId: conversationId,
+      permission: 'view',
+      subject: { type: 'user', id: userId },
+    });
+  }
+
+  const result = await query(
+    `SELECT 1
+     FROM conversation_members
+     WHERE conversation_id = $1
+       AND user_id = $2
+       AND state = 'active'
+     LIMIT 1`,
+    [conversationId, userId],
+  );
+
+  return (result.rowCount ?? 0) > 0;
+}
+
+function mapInternalEventToSocketEvent(event: SystemEvent): ChatSocketEvent | SystemEvent | null {
+  switch (event.type) {
+    case 'chat.feed.item.created':
+      return {
+        type: 'feed.item.created',
+        payload: event.payload as unknown as WorkspaceFeedEventRecord,
+      };
+    case 'chat.runtime.updated':
+      return {
+        type: 'runtime.updated',
+        payload: event.payload as ChatSocketEventPayloadMap['runtime.updated'],
+      };
+    case 'chat.conversation.updated':
+      return {
+        type: 'conversation.updated',
+        payload: event.payload as ChatSocketEventPayloadMap['conversation.updated'],
+      };
+    case 'session.message.new':
+    case 'session.status.changed':
+    case 'session.thinking':
+    case 'group.actor.runtime.updated':
+    case 'group.updated':
+    case 'group.member_joined':
+    case 'group.member_kicked':
+    case 'actor.version_changed':
+      return null;
+    default:
+      return event;
+  }
+}
+
+function getConversationIdFromSocketEvent(event: ChatSocketEvent | SystemEvent) {
+  switch (event.type) {
+    case 'feed.item.created':
+      return (event.payload as WorkspaceFeedEventRecord).item.conversationId;
+    case 'runtime.updated':
+    case 'conversation.updated':
+      return (event.payload as { conversationId: string }).conversationId;
+    default:
+      return undefined;
+  }
 }
 
 function closeClient(clientId: string, message: string, closeCode = 1008) {
@@ -146,6 +243,9 @@ export function setupWebSocket(app: FastifyInstance) {
 
         if (msg.type === 'auth') {
           const workspaceId = typeof msg.workspaceId === 'string' ? msg.workspaceId : '';
+          const lastWorkspaceSequence = typeof msg.lastWorkspaceSequence === 'number'
+            ? Math.max(0, Math.floor(msg.lastWorkspaceSequence))
+            : 0;
           const token = typeof msg.token === 'string' && msg.token.trim().length > 0
             ? msg.token.trim()
             : cookieToken;
@@ -191,12 +291,35 @@ export function setupWebSocket(app: FastifyInstance) {
               client.authTimer = undefined;
             }
 
-            socket.send(JSON.stringify({ type: 'auth_ok' }));
+            socket.send(JSON.stringify({
+              type: 'auth.ok',
+              payload: {
+                connectionId: clientId,
+                heartbeatMs: WS_HEARTBEAT_INTERVAL,
+                workspaceId,
+                lastWorkspaceSequence,
+              },
+            }));
+
+            const visibleConversationIds = await getVisibleConversationIdsForUser(workspaceId, authenticated.user.id);
+            const records = await listWorkspaceFeedEventsAfter({
+              workspaceId,
+              conversationIds: visibleConversationIds,
+              afterSequence: lastWorkspaceSequence,
+              limit: 500,
+            });
+            for (const record of records) {
+              if (socket.readyState !== 1) break;
+              socket.send(JSON.stringify({
+                type: 'feed.item.created',
+                payload: record,
+              }));
+            }
 
             // Start heartbeat
             client.heartbeatTimer = setInterval(() => {
               if (socket.readyState === 1) {
-                socket.send(JSON.stringify({ type: 'ping' }));
+                socket.send(JSON.stringify({ type: 'ping', payload: { at: new Date().toISOString() } }));
                 // Expect pong within 10s
                 client.pongTimer = setTimeout(() => {
                   // No pong received, close dead connection
@@ -235,11 +358,29 @@ export function setupWebSocket(app: FastifyInstance) {
 
   // Forward events to relevant WebSocket clients
   onEvent('*', (event: SystemEvent) => {
-    for (const [, client] of clients) {
-      if (client.authenticated && client.workspaceId === event.workspaceId && client.ws.readyState === 1) {
-        client.ws.send(JSON.stringify(event));
+    void (async () => {
+      const outbound = mapInternalEventToSocketEvent(event);
+      if (!outbound) return;
+
+      const conversationId = getConversationIdFromSocketEvent(outbound);
+
+      for (const [, client] of clients) {
+        if (!client.authenticated || client.workspaceId !== event.workspaceId || client.ws.readyState !== 1) {
+          continue;
+        }
+
+        if (conversationId) {
+          const allowed = await canUserAccessConversation(conversationId, client.userId);
+          if (!allowed) {
+            continue;
+          }
+        }
+
+        client.ws.send(JSON.stringify(outbound));
       }
-    }
+    })().catch((error) => {
+      appRef?.log.error({ error, eventType: event.type }, 'Failed to broadcast websocket event');
+    });
   });
 }
 

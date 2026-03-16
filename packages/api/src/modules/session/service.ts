@@ -12,6 +12,7 @@ import {
   createConversation,
   createConversationItem,
   ensureConversationMember,
+  getConversationFeedItemById,
   getConversation,
 } from '../conversation/service.js';
 import {
@@ -28,6 +29,21 @@ function normalizeSessionRow(row: any) {
     ...row,
     group_id: row.conversation_kind === 'group' ? row.conversation_id : null,
   };
+}
+
+async function emitChatFeedItem(workspaceId: string, itemId: string) {
+  const item = await getConversationFeedItemById(itemId);
+  if (!item || item.workspaceSequence === undefined) return;
+
+  await emitEvent({
+    type: 'chat.feed.item.created',
+    workspaceId,
+    payload: {
+      workspaceSequence: item.workspaceSequence,
+      item,
+    },
+    timestamp: nowISO(),
+  });
 }
 
 async function loadSession(sessionId: UUID): Promise<any | null> {
@@ -278,6 +294,7 @@ export async function addSessionMessage(params: {
   const subtype = role;
 
   const item = await createConversationItem({
+    workspaceId,
     conversationId: session.conversation_id,
     sessionId,
     scope,
@@ -289,6 +306,10 @@ export async function addSessionMessage(params: {
     metadata: normalizedMessage.normalizedMetadata,
     parts: normalizedMessage.parts,
   });
+
+  if (scope === 'shared' && surface === 'visible' && (role === 'user' || role === 'assistant' || role === 'system')) {
+    await emitChatFeedItem(workspaceId, item.id);
+  }
 
   if (!session.group_id && (role === 'user' || role === 'assistant')) {
     let actorName: string | undefined;

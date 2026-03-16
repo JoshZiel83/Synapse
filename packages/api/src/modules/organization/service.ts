@@ -14,7 +14,7 @@ import {
   type AuthzSubject,
 } from '../../infrastructure/authz/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
-import { createConversationEvent } from '../conversation/service.js';
+import { createConversationEvent, getConversationFeedItemById } from '../conversation/service.js';
 import {
   createCapabilityPackage,
   createCapabilityPublisher,
@@ -964,7 +964,8 @@ async function emitConversationProfileChanges(params: {
     const filteredDelta = filterDeltaForConversation(params.delta, row.kind);
     if (!filteredDelta) continue;
 
-    await createConversationEvent({
+    const created = await createConversationEvent({
+      workspaceId: params.workspaceId,
       conversationId: row.conversation_id,
       eventType: 'actor_version_changed',
       timelinePolicy: 'all_members',
@@ -976,8 +977,11 @@ async function emitConversationProfileChanges(params: {
         toVersion: filteredDelta.toVersion,
       },
       eventPayload: {
-        actorId: params.actorId,
-        actorName: params.actorName,
+        actor: {
+          memberType: 'actor',
+          actorId: params.actorId,
+          name: params.actorName,
+        },
         fromVersion: filteredDelta.fromVersion,
         toVersion: filteredDelta.toVersion,
         changedFields: filteredDelta.changedFields,
@@ -990,9 +994,21 @@ async function emitConversationProfileChanges(params: {
           priority: change.priority,
           summaryText: extractText(change.summary).trim(),
         })),
-        summaryText: extractText(filteredDelta.summary).trim(),
       },
     });
+
+    const item = await getConversationFeedItemById(created.item.id);
+    if (item && item.workspaceSequence !== undefined) {
+      await emitEvent({
+        type: 'chat.feed.item.created',
+        workspaceId: params.workspaceId,
+        payload: {
+          workspaceSequence: item.workspaceSequence,
+          item,
+        },
+        timestamp: nowISO(),
+      });
+    }
   }
 }
 

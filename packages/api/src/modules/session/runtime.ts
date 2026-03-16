@@ -16,6 +16,10 @@ function runtimeHashKey(groupId: string) {
   return `runtime:group:${groupId}`;
 }
 
+function runtimeSequenceKey(groupId: string) {
+  return `runtime:group:${groupId}:seq`;
+}
+
 function parseMetadata(value: unknown): Record<string, unknown> {
   if (typeof value === 'string') {
     try {
@@ -218,6 +222,17 @@ export async function publishSessionRuntime(
   if (!snapshot) return null;
 
   await redis.hset(runtimeHashKey(snapshot.groupId), snapshot.actorId, JSON.stringify(snapshot));
+  const runtimeSeq = await redis.incr(runtimeSequenceKey(snapshot.groupId));
+  await emitEvent({
+    type: 'chat.runtime.updated',
+    workspaceId,
+    payload: {
+      conversationId: snapshot.groupId,
+      runtimeSeq,
+      snapshot,
+    },
+    timestamp: nowISO(),
+  });
   await emitEvent({
     type: 'group.actor.runtime.updated',
     workspaceId,

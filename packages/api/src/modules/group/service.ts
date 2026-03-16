@@ -15,7 +15,9 @@ import { getFileUrl } from '../../infrastructure/storage/index.js';
 import { nowISO } from '@synapse/shared';
 import { v4 as uuidv4 } from 'uuid';
 import {
+  conversationItemRowToFeedItem,
   createConversationEvent,
+  getConversationFeedItemById,
   createConversationItem,
   ensureConversationMember,
   getConversation,
@@ -292,6 +294,59 @@ function buildTextContentFromParts(parts: any[]) {
   return jsonParts.join('\n');
 }
 
+async function emitChatFeedItem(workspaceId: string, itemId: string) {
+  const item = await getConversationFeedItemById(itemId);
+  if (!item || item.workspaceSequence === undefined) return;
+
+  await emitEvent({
+    type: 'chat.feed.item.created',
+    workspaceId,
+    payload: {
+      workspaceSequence: item.workspaceSequence,
+      item,
+    },
+    timestamp: nowISO(),
+  });
+}
+
+async function emitChatConversationUpdated(params: {
+  workspaceId: string;
+  conversationId: string;
+  action: 'created' | 'profile_updated' | 'cancelled';
+  title?: string | null;
+  avatarUrl?: string | null;
+}) {
+  await emitEvent({
+    type: 'chat.conversation.updated',
+    workspaceId: params.workspaceId,
+    payload: {
+      conversationId: params.conversationId,
+      action: params.action,
+      title: params.title,
+      avatarUrl: params.avatarUrl,
+    },
+    timestamp: nowISO(),
+  });
+}
+
+async function findFeedItemByClientMessageId(params: {
+  conversationId: string;
+  authorMemberId: string;
+  clientMessageId: string;
+}) {
+  const result = await query(
+    `SELECT id
+     FROM conversation_items
+     WHERE conversation_id = $1
+       AND author_member_id = $2
+       AND client_message_id = $3
+     LIMIT 1`,
+    [params.conversationId, params.authorMemberId, params.clientMessageId],
+  );
+  const itemId = result.rows[0]?.id as string | undefined;
+  return itemId ? getConversationFeedItemById(itemId) : null;
+}
+
 async function getLatestActorSession(conversationId: string, actorId: string) {
   const result = await query(
     `SELECT *
@@ -324,12 +379,21 @@ async function ensureActorSession(params: {
 }
 
 async function recordMembershipEvent(params: {
+  workspaceId: string;
   conversationId: string;
   subtype: 'member_joined' | 'member_kicked' | 'member_left';
   batchId: string;
+  initiator?: {
+    memberType: 'actor' | 'user';
+    memberId?: string;
+    actorId?: string;
+    userId?: string;
+    name?: string;
+  };
   members: Array<{ memberId: string; memberType: 'actor' | 'user'; actorId?: string; userId?: string; name: string; title?: string }>;
 }) {
-  await createConversationEvent({
+  const created = await createConversationEvent({
+    workspaceId: params.workspaceId,
     conversationId: params.conversationId,
     eventType: params.subtype,
     timelinePolicy: 'all_members',
@@ -339,6 +403,15 @@ async function recordMembershipEvent(params: {
     },
     eventPayload: {
       batchId: params.batchId,
+      initiator: params.initiator
+        ? {
+            memberId: params.initiator.memberId,
+            memberType: params.initiator.memberType,
+            actorId: params.initiator.actorId,
+            userId: params.initiator.userId,
+            name: params.initiator.name,
+          }
+        : undefined,
       members: params.members.map((member) => ({
         memberId: member.memberId,
         memberType: member.memberType,
@@ -349,6 +422,9 @@ async function recordMembershipEvent(params: {
       })),
     },
   });
+
+  await emitChatFeedItem(params.workspaceId, created.item.id);
+  return created;
 }
 
 async function resolveMemberTargets(params: {
@@ -594,35 +670,6 @@ export async function createGroup(params: {
       });
     }
 
-    let msgId: string | null = null;
-    if (initialMessage && targetActorId) {
-      const targetMember = members.find((member) => member.actorId === targetActorId);
-      const itemId = uuidv4();
-      const authorMemberId = userMemberId;
-
-      await client.query(
-        `INSERT INTO conversation_items
-           (id, conversation_id, scope, surface, item_type, subtype, role, author_member_id, metadata, created_at)
-         VALUES ($1, $2, 'shared', 'visible', 'message', 'chat', 'user', $3, '{}'::jsonb, NOW())`,
-        [itemId, groupId, authorMemberId],
-      );
-      await client.query(
-        `INSERT INTO conversation_item_parts
-           (id, item_id, ordinal, part_type, text_value, metadata)
-         VALUES ($1, $2, 0, 'text', $3, '{}'::jsonb)`,
-        [uuidv4(), itemId, initialMessage],
-      );
-      if (targetMember) {
-        await client.query(
-          `INSERT INTO conversation_item_targets (item_id, target_member_id, target_kind)
-           VALUES ($1, $2, 'to')`,
-          [itemId, targetMember.id],
-        );
-      }
-      await client.query('UPDATE conversations SET updated_at = NOW() WHERE id = $1', [groupId]);
-      msgId = itemId;
-    }
-
     const authzEntryIds = await queueAuthzRelationships(
       client,
       [
@@ -647,7 +694,6 @@ export async function createGroup(params: {
       members,
       joinedMembers,
       creatorName: userRow?.name || 'User',
-      message: msgId ? { id: msgId } : null,
       authzEntryIds,
     };
   });
@@ -655,26 +701,36 @@ export async function createGroup(params: {
   await flushQueuedAuthzEntries(result.authzEntryIds, 'group.create');
 
   await recordMembershipEvent({
+    workspaceId,
     conversationId: groupId,
     subtype: 'member_joined',
     batchId,
+    initiator: {
+      memberType: 'user',
+      memberId: result.joinedMembers[0]?.memberId,
+      userId: createdBy,
+      name: result.creatorName,
+    },
     members: result.joinedMembers,
   });
 
   await Promise.all(result.members.map((member: any) => publishSessionRuntime(workspaceId, member.sessionId)));
 
   if (targetActorId && initialMessage) {
-    await wakeActor({
+    await sendGroupMessage({
       groupId,
-      actorId: targetActorId,
-      sourceType: 'user_message',
-      sourceItemId: result.message?.id,
-      sourceMemberType: 'user',
-      sourceMemberId: createdBy,
-      sourceName: result.creatorName,
-      summary: buildWakeupSummary(result.creatorName, initialMessage),
+      senderType: 'user',
+      senderUserId: createdBy,
+      content: initialMessage,
+      targetActorIds: [targetActorId],
     });
   }
+
+  await emitChatConversationUpdated({
+    workspaceId,
+    conversationId: groupId,
+    action: 'created',
+  });
 
   await emitEvent({
     type: 'group.updated',
@@ -686,7 +742,7 @@ export async function createGroup(params: {
   return {
     group: result.group,
     members: result.members,
-    message: result.message,
+    message: null,
   };
 }
 
@@ -739,6 +795,14 @@ export async function updateGroupProfile(params: {
 
   const updated = normalizeGroupRow(result.rows[0]);
   const updatedMetadata = parseConversationMetadata(updated.metadata);
+
+  await emitChatConversationUpdated({
+    workspaceId: params.workspaceId,
+    conversationId: params.groupId,
+    action: 'profile_updated',
+    title: updated.title,
+    avatarUrl: typeof updatedMetadata.avatarUrl === 'string' ? updatedMetadata.avatarUrl : null,
+  });
 
   await emitEvent({
     type: 'group.updated',
@@ -917,6 +981,7 @@ export async function addActorToGroup(
 
   const eventBatchId = batchId || uuidv4();
   await recordMembershipEvent({
+    workspaceId: group.workspace_id,
     conversationId: groupId,
     subtype: 'member_joined',
     batchId: eventBatchId,
@@ -1108,6 +1173,7 @@ export async function addMembersToGroup(params: {
 
   if (result.joinedMembers.length > 0) {
     await recordMembershipEvent({
+      workspaceId: params.workspaceId,
       conversationId: params.groupId,
       subtype: 'member_joined',
       batchId,
@@ -1176,6 +1242,7 @@ export async function removeActorFromGroup(groupId: string, actorId: string): Pr
   const actorInfo = actorResult.rows[0];
   const eventBatchId = uuidv4();
   await recordMembershipEvent({
+    workspaceId: group.workspace_id,
     conversationId: groupId,
     subtype: 'member_kicked',
     batchId: eventBatchId,
@@ -1253,6 +1320,7 @@ export async function sendGroupMessage(params: {
   senderUserId?: string;
   senderActorId?: string;
   senderSessionId?: string;
+  clientMessageId?: string;
   targetActorIds?: string[];
   targetUserIds?: string[];
   content: string;
@@ -1265,6 +1333,7 @@ export async function sendGroupMessage(params: {
     senderUserId,
     senderActorId,
     senderSessionId,
+    clientMessageId,
     content,
     contentBlocks,
     metadata = {},
@@ -1315,20 +1384,36 @@ export async function sendGroupMessage(params: {
   });
   const wakeActorIds = Array.from(new Set([...targetActorIds, ...automaticWakeActorIds]));
   const normalizedMessage = await buildNormalizedMessageContent({ content, contentBlocks, metadata });
-
-  const item = await createConversationItem({
-    conversationId: groupId,
-    sessionId: senderSessionId,
-    scope: 'shared',
-    surface: 'visible',
-    itemType: 'message',
-    subtype: 'chat',
-    role: senderType === 'actor' ? 'assistant' : 'user',
-    authorMemberId: authorMember?.id,
-    metadata: normalizedMessage.normalizedMetadata,
-    parts: normalizedMessage.parts,
-    targetMemberIds,
-  });
+  let item: any;
+  try {
+    item = await createConversationItem({
+      workspaceId: group.workspace_id,
+      conversationId: groupId,
+      sessionId: senderSessionId,
+      clientMessageId,
+      scope: 'shared',
+      surface: 'visible',
+      itemType: 'message',
+      subtype: 'chat',
+      role: senderType === 'actor' ? 'assistant' : 'user',
+      authorMemberId: authorMember?.id,
+      metadata: normalizedMessage.normalizedMetadata,
+      parts: normalizedMessage.parts,
+      targetMemberIds,
+    });
+  } catch (error: any) {
+    if (clientMessageId && authorMember?.id && error?.code === '23505') {
+      const existing = await findFeedItemByClientMessageId({
+        conversationId: groupId,
+        authorMemberId: authorMember.id,
+        clientMessageId,
+      });
+      if (existing) {
+        return { item: existing };
+      }
+    }
+    throw error;
+  }
 
   let senderName: string | undefined;
   if (senderActorId) {
@@ -1339,26 +1424,7 @@ export async function sendGroupMessage(params: {
     senderName = userResult.rows[0]?.name;
   }
 
-  await emitEvent({
-    type: 'session.message.new',
-    workspaceId: group.workspace_id,
-    payload: {
-      groupId,
-      messageId: item.id,
-      sessionId: senderSessionId || '',
-      role: senderType === 'actor' ? 'assistant' : 'user',
-      fromActorId: senderActorId,
-      fromUserId: senderUserId,
-      actorName: senderType === 'actor' ? senderName : undefined,
-      targetActorIds,
-      targetUserIds,
-      content: normalizedMessage.normalizedContent,
-      contentBlocks: normalizedMessage.contentBlocks,
-      metadata: normalizedMessage.normalizedMetadata,
-      createdAt: item.created_at,
-    },
-    timestamp: nowISO(),
-  });
+  await emitChatFeedItem(group.workspace_id, item.id);
 
   const wakeupSourceType = senderType === 'actor' ? 'actor_message' as const : 'user_message' as const;
   const wakeupSummary = buildWakeupSummary(senderName, normalizedMessage.normalizedContent);
@@ -1385,19 +1451,7 @@ export async function sendGroupMessage(params: {
   }
 
   return {
-    id: item.id,
-    groupId,
-    sessionId: senderSessionId || '',
-    role: senderType === 'actor' ? 'assistant' : 'user',
-    fromUserId: senderUserId,
-    fromActorId: senderActorId,
-    actorName: senderType === 'actor' ? senderName : undefined,
-    targetActorIds,
-    targetUserIds,
-    content: normalizedMessage.normalizedContent,
-    contentBlocks: normalizedMessage.contentBlocks,
-    metadata: normalizedMessage.normalizedMetadata,
-    createdAt: item.created_at,
+    item: await getConversationFeedItemById(item.id),
   };
 }
 
@@ -1406,16 +1460,16 @@ export async function getGroupMessages(
   viewer: { userId?: string; actorId?: string },
   limit = 100,
   before?: string,
-): Promise<any[]> {
+): Promise<{ items: any[]; hasMore: boolean; nextBeforeSequence?: number }> {
   const group = await getGroup(groupId);
-  if (!group) return [];
+  if (!group) return { items: [], hasMore: false };
 
   const viewerMember = viewer.userId
     ? await getConversationMember({ conversationId: groupId, userId: viewer.userId })
     : viewer.actorId
       ? await getConversationMember({ conversationId: groupId, actorId: viewer.actorId })
       : null;
-  if (!viewerMember) return [];
+  if (!viewerMember) return { items: [], hasMore: false };
 
   let beforeSequence: number | undefined;
   if (before) {
@@ -1434,36 +1488,16 @@ export async function getGroupMessages(
     conversationId: groupId,
     memberId: viewerMember.id,
     beforeSequence,
-    limit,
+    limit: limit + 1,
   });
+  const hasMore = items.length > limit;
+  const pageItems = hasMore ? items.slice(1) : items;
 
-  return items.map((item: any) => {
-    const metadata = parseJson(item.metadata);
-    const senderType = senderTypeFromItem(item);
-    const role = senderType === 'user' ? 'user' : senderType === 'actor' ? 'assistant' : 'system';
-
-    return {
-      id: item.id,
-      groupId,
-      sessionId: item.session_id || '',
-      role,
-      eventType: item.item_type === 'event' ? item.subtype : undefined,
-      eventPayload: item.item_type === 'event' ? parseJson(item.event_payload) : undefined,
-      fromUserId: item.author_user_id || null,
-      fromActorId: item.author_actor_id || null,
-      actorName: role === 'assistant' ? item.author_name || 'System' : undefined,
-      targetActorIds: (item.targets || [])
-        .filter((target: any) => target.member_type === 'actor' && target.actor_id)
-        .map((target: any) => target.actor_id),
-      targetUserIds: (item.targets || [])
-        .filter((target: any) => target.member_type === 'user' && target.user_id)
-        .map((target: any) => target.user_id),
-      content: buildTextContentFromParts(item.parts || []),
-      contentBlocks: itemPartsToCanonicalContentBlocks(item.parts || []),
-      metadata,
-      createdAt: item.created_at,
-    };
-  });
+  return {
+    items: pageItems.map((item: any) => conversationItemRowToFeedItem(item)),
+    hasMore,
+    nextBeforeSequence: pageItems[0]?.sequence ? Number(pageItems[0].sequence) : undefined,
+  };
 }
 
 // ============ Actor Wake / Sleep ============
@@ -1939,6 +1973,11 @@ export async function cancelGroup(groupId: string): Promise<void> {
 
   const group = await getGroup(groupId);
   if (group) {
+    await emitChatConversationUpdated({
+      workspaceId: group.workspace_id,
+      conversationId: groupId,
+      action: 'cancelled',
+    });
     await emitEvent({
       type: 'group.updated',
       workspaceId: group.workspace_id,

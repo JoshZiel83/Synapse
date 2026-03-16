@@ -638,6 +638,7 @@ CREATE TABLE conversation_items (
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   turn_id UUID,
+  client_message_id VARCHAR(128),
   scope VARCHAR(20) NOT NULL CHECK (scope IN ('shared', 'private')),
   surface VARCHAR(20) NOT NULL CHECK (surface IN ('visible', 'internal')),
   item_type VARCHAR(30) NOT NULL
@@ -668,6 +669,9 @@ CREATE INDEX idx_conversation_items_turn
   ON conversation_items(turn_id) WHERE turn_id IS NOT NULL;
 CREATE INDEX idx_conversation_items_bundle
   ON conversation_items(bundle_id) WHERE bundle_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_conversation_items_client_message_unique
+  ON conversation_items(conversation_id, author_member_id, client_message_id)
+  WHERE client_message_id IS NOT NULL;
 
 -- ============ Conversation Item Parts ============
 CREATE TABLE conversation_item_parts (
@@ -719,6 +723,24 @@ CREATE TABLE conversation_reads (
   last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, conversation_id)
 );
+
+CREATE TABLE realtime_feed_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  item_id UUID NOT NULL REFERENCES conversation_items(id) ON DELETE CASCADE,
+  workspace_sequence BIGINT GENERATED ALWAYS AS IDENTITY,
+  conversation_sequence BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_realtime_feed_events_item_unique ON realtime_feed_events(item_id);
+CREATE UNIQUE INDEX idx_realtime_feed_events_workspace_sequence_unique
+  ON realtime_feed_events(workspace_id, workspace_sequence);
+CREATE INDEX idx_realtime_feed_events_workspace_created
+  ON realtime_feed_events(workspace_id, workspace_sequence DESC);
+CREATE INDEX idx_realtime_feed_events_conversation_created
+  ON realtime_feed_events(conversation_id, conversation_sequence DESC);
 
 -- ============ Turns ============
 CREATE TABLE turns (

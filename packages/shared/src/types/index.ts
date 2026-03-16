@@ -429,6 +429,7 @@ export type EventType =
   | 'actor.thinking' | 'actor.action'
   | 'session.message.new' | 'session.status.changed' | 'session.thinking' | 'group.actor.runtime.updated' | 'group.updated'
   | 'group.member_joined' | 'group.member_kicked' | 'actor.version_changed'
+  | 'chat.feed.item.created' | 'chat.runtime.updated' | 'chat.conversation.updated'
   | 'mcp.config.changed'
   | 'relay.connected' | 'relay.disconnected' | 'relay.servers_updated';
 
@@ -1727,6 +1728,231 @@ export interface GroupMessage {
   metadata: Record<string, unknown>;
   createdAt: Timestamp;
 }
+
+export type ConversationMemberType = 'actor' | 'user' | 'system';
+
+export interface ConversationEntityRef {
+  memberId?: UUID;
+  memberType: ConversationMemberType;
+  actorId?: UUID;
+  userId?: UUID;
+  name?: string;
+  title?: string;
+  role?: string;
+  avatarUrl?: string;
+  avatarEmoji?: string;
+}
+
+export type ConversationMemberRef = ConversationEntityRef & {
+  memberId: UUID;
+  memberType: 'actor' | 'user';
+};
+
+export interface ActorVersionDocChangeWire {
+  docId: UUID;
+  key: ActorDocKey;
+  title: string;
+  changeType: 'added' | 'updated' | 'removed';
+  visibility: ActorDocVisibility;
+  priority: number;
+  summaryText?: string;
+}
+
+export type ConversationFeedEventType =
+  | 'member_joined'
+  | 'member_kicked'
+  | 'member_left'
+  | 'memory_saved'
+  | 'memory_updated'
+  | 'actor_renamed'
+  | 'actor_avatar_changed'
+  | 'actor_version_changed';
+
+export interface ConversationFeedEventPayloadMap {
+  member_joined: {
+    batchId: UUID;
+    initiator?: ConversationEntityRef;
+    members: ConversationMemberRef[];
+    focusItemId?: UUID;
+  };
+  member_kicked: {
+    batchId: UUID;
+    initiator?: ConversationEntityRef;
+    members: ConversationMemberRef[];
+    focusItemId?: UUID;
+    reason?: string;
+  };
+  member_left: {
+    batchId: UUID;
+    initiator?: ConversationEntityRef;
+    members: ConversationMemberRef[];
+    focusItemId?: UUID;
+  };
+  memory_saved: {
+    actor: ConversationEntityRef;
+    memoryId: UUID;
+    memoryScope: MemoryScope;
+    memoryCategory: MemoryCategory;
+    textDigest?: string;
+    sourceItemId?: UUID;
+    sourceTurnId?: UUID;
+  };
+  memory_updated: {
+    actor: ConversationEntityRef;
+    memoryId: UUID;
+    supersedesMemoryId?: UUID;
+    memoryScope: MemoryScope;
+    memoryCategory: MemoryCategory;
+    textDigest?: string;
+    sourceItemId?: UUID;
+    sourceTurnId?: UUID;
+  };
+  actor_renamed: {
+    actor: ConversationEntityRef;
+    oldName?: string;
+    newName: string;
+    sourceTurnId?: UUID;
+  };
+  actor_avatar_changed: {
+    actor: ConversationEntityRef;
+    oldAvatarEmoji?: string;
+    newAvatarEmoji: string;
+    sourceTurnId?: UUID;
+  };
+  actor_version_changed: {
+    actor: ConversationEntityRef;
+    fromVersion: number;
+    toVersion: number;
+    changedFields: ActorVersionChangedField[];
+    changedDocs: ActorVersionDocChangeWire[];
+  };
+}
+
+export type ConversationFeedEventPayload<
+  T extends ConversationFeedEventType = ConversationFeedEventType,
+> = ConversationFeedEventPayloadMap[T];
+
+export interface ConversationFeedMessageItem {
+  kind: 'message';
+  itemId: UUID;
+  conversationId: UUID;
+  sequence: number;
+  workspaceSequence?: number;
+  sessionId?: UUID;
+  turnId?: UUID;
+  role: 'user' | 'assistant' | 'system';
+  author?: ConversationEntityRef;
+  targets: ConversationEntityRef[];
+  content: string;
+  contentBlocks: CanonicalContentBlock[];
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+  clientMessageId?: string;
+}
+
+export interface ConversationFeedEventItem<
+  T extends ConversationFeedEventType = ConversationFeedEventType,
+> {
+  kind: 'event';
+  itemId: UUID;
+  conversationId: UUID;
+  sequence: number;
+  workspaceSequence?: number;
+  sessionId?: UUID;
+  turnId?: UUID;
+  author?: ConversationEntityRef;
+  causedByItemId?: UUID;
+  eventType: T;
+  payload: ConversationFeedEventPayloadMap[T];
+  fallbackText?: string;
+  createdAt: Timestamp;
+}
+
+export type ConversationFeedItem =
+  | ConversationFeedMessageItem
+  | ConversationFeedEventItem;
+
+export interface ConversationSummary {
+  id: UUID;
+  workspaceId: UUID;
+  title: string;
+  avatarUrl?: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  unreadCount: number;
+  lastItem?: {
+    itemId: UUID;
+    sequence: number;
+    kind: ConversationFeedItem['kind'];
+    role?: 'user' | 'assistant' | 'system';
+    previewText: string;
+    authorName?: string;
+    createdAt: Timestamp;
+  };
+}
+
+export interface ConversationFeedPage {
+  items: ConversationFeedItem[];
+  hasMore: boolean;
+  nextBeforeSequence?: number;
+}
+
+export interface WorkspaceFeedEventRecord {
+  workspaceSequence: number;
+  item: ConversationFeedItem;
+}
+
+export type ChatSocketEventType =
+  | 'auth.ok'
+  | 'auth.error'
+  | 'ping'
+  | 'server.shutdown'
+  | 'feed.item.created'
+  | 'runtime.updated'
+  | 'conversation.updated'
+  | 'feed.resync.required';
+
+export interface ChatSocketEventPayloadMap {
+  'auth.ok': {
+    connectionId: UUID;
+    heartbeatMs: number;
+    workspaceId: UUID;
+    lastWorkspaceSequence: number;
+  };
+  'auth.error': {
+    message: string;
+  };
+  ping: {
+    at: Timestamp;
+  };
+  'server.shutdown': {
+    message: string;
+    retryable: boolean;
+  };
+  'feed.item.created': WorkspaceFeedEventRecord;
+  'runtime.updated': {
+    conversationId: UUID;
+    runtimeSeq: number;
+    snapshot: ActorRuntimeState;
+  };
+  'conversation.updated': {
+    conversationId: UUID;
+    action: 'created' | 'profile_updated' | 'cancelled';
+    title?: string | null;
+    avatarUrl?: string | null;
+  };
+  'feed.resync.required': {
+    expectedWorkspaceSequence: number;
+    actualWorkspaceSequence: number;
+  };
+}
+
+export type ChatSocketEvent<
+  T extends ChatSocketEventType = ChatSocketEventType,
+> = {
+  type: T;
+  payload: ChatSocketEventPayloadMap[T];
+};
 
 // ============ A2A (Agent-to-Agent) Protocol ============
 export type A2ATaskState = 'submitted' | 'working' | 'input-required' | 'completed' | 'failed' | 'canceled' | 'rejected';

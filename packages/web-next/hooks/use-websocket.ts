@@ -1,9 +1,10 @@
 'use client';
 import { useEffect, useRef, useState, useCallback } from 'react';
+import type { ChatSocketEvent } from '@synapse/shared';
 
 interface UseWebSocketOptions {
   workspaceId: string | null;
-  onEvent?: (event: any) => void;
+  onEvent?: (event: ChatSocketEvent | Record<string, unknown>) => void;
 }
 
 export function useWebSocket({ workspaceId, onEvent }: UseWebSocketOptions) {
@@ -14,8 +15,26 @@ export function useWebSocket({ workspaceId, onEvent }: UseWebSocketOptions) {
   const reconnectAttempts = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const workspaceSequenceRef = useRef(0);
   const maxReconnectAttempts = 20;
   const mountedRef = useRef(true);
+
+  const cursorStorageKey = useCallback(
+    (id: string) => `chat-ws-cursor:${id}`,
+    [],
+  );
+
+  const loadWorkspaceSequence = useCallback((id: string) => {
+    if (typeof window === 'undefined') return 0;
+    const raw = window.localStorage.getItem(cursorStorageKey(id));
+    const parsed = raw ? Number(raw) : 0;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }, [cursorStorageKey]);
+
+  const saveWorkspaceSequence = useCallback((id: string, sequence: number) => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(cursorStorageKey(id), String(sequence));
+  }, [cursorStorageKey]);
 
   // Keep onEvent ref updated without causing reconnects
   useEffect(() => {
@@ -62,38 +81,77 @@ export function useWebSocket({ workspaceId, onEvent }: UseWebSocketOptions) {
     ws.current = socket;
 
     socket.onopen = () => {
-      socket.send(JSON.stringify({ type: 'auth', workspaceId }));
+      workspaceSequenceRef.current = loadWorkspaceSequence(workspaceId);
+      socket.send(JSON.stringify({
+        type: 'auth',
+        workspaceId,
+        lastWorkspaceSequence: workspaceSequenceRef.current,
+      }));
     };
 
     socket.onmessage = (e) => {
       try {
-        const msg = JSON.parse(e.data);
+        const msg = JSON.parse(e.data) as Record<string, unknown>;
+        const rawType = typeof msg.type === 'string' ? msg.type : '';
+        const normalizedType = rawType === 'auth_ok'
+          ? 'auth.ok'
+          : rawType === 'auth_error'
+            ? 'auth.error'
+            : rawType === 'server_shutdown'
+              ? 'server.shutdown'
+              : rawType === 'chat.feed.item.created'
+                ? 'feed.item.created'
+                : rawType === 'chat.runtime.updated'
+                  ? 'runtime.updated'
+                  : rawType === 'chat.conversation.updated'
+                    ? 'conversation.updated'
+                    : rawType;
+        const normalizedMessage = {
+          ...msg,
+          type: normalizedType,
+        } as ChatSocketEvent | Record<string, unknown>;
 
-        if (msg.type === 'auth_ok') {
+        if (normalizedType === 'auth.ok') {
           setConnected(true);
           setConnecting(false);
           reconnectAttempts.current = 0;
+
+          const payload = (normalizedMessage as ChatSocketEvent<'auth.ok'>).payload;
+          const nextSequence = Number(payload.lastWorkspaceSequence || workspaceSequenceRef.current || 0);
+          workspaceSequenceRef.current = nextSequence;
+          saveWorkspaceSequence(workspaceId, nextSequence);
 
           // Start ping watchdog — expect a ping within 45s
           resetPingWatchdog();
           return;
         }
 
-        if (msg.type === 'auth_error') {
+        if (normalizedType === 'auth.error') {
           setConnecting(false);
           reconnectAttempts.current = maxReconnectAttempts;
           socket.close();
           return;
         }
 
-        if (msg.type === 'ping') {
+        if (normalizedType === 'ping') {
           socket.send(JSON.stringify({ type: 'pong' }));
           resetPingWatchdog();
           return;
         }
 
+        if (normalizedType === 'feed.item.created' && workspaceId) {
+          const payload = (normalizedMessage as ChatSocketEvent<'feed.item.created'>).payload;
+          const nextSequence = Number(payload.workspaceSequence || 0);
+          const currentSequence = workspaceSequenceRef.current;
+          if (nextSequence <= currentSequence) {
+            return;
+          }
+          workspaceSequenceRef.current = nextSequence;
+          saveWorkspaceSequence(workspaceId, nextSequence);
+        }
+
         // Forward all other events to the handler
-        onEventRef.current?.(msg);
+        onEventRef.current?.(normalizedMessage);
       } catch {
         // ignore parse errors
       }
@@ -109,8 +167,9 @@ export function useWebSocket({ workspaceId, onEvent }: UseWebSocketOptions) {
 
       // Reconnect with exponential backoff
       if (mountedRef.current && reconnectAttempts.current < maxReconnectAttempts) {
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
-        const jitter = Math.random() * 1000;
+        const retrySchedule = [250, 500, 1000, 2000, 3000, 5000];
+        const delay = retrySchedule[Math.min(reconnectAttempts.current, retrySchedule.length - 1)] || 5000;
+        const jitter = Math.random() * 250;
         reconnectAttempts.current++;
         reconnectTimer.current = setTimeout(() => {
           if (mountedRef.current) connect();

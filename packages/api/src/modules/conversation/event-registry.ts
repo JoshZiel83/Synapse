@@ -62,12 +62,15 @@ function actorRenameSummary(payload: Record<string, unknown>) {
 }
 
 function actorAvatarSummary(payload: Record<string, unknown>) {
-  const avatarEmoji = typeof payload.avatarEmoji === 'string' ? payload.avatarEmoji.trim() : '🙂';
+  const avatarEmoji = typeof payload.newAvatarEmoji === 'string' ? payload.newAvatarEmoji.trim() : '🙂';
   return `Actor avatar updated to ${avatarEmoji}.`;
 }
 
 function actorVersionSummary(payload: Record<string, unknown>) {
-  const actorName = typeof payload.actorName === 'string' ? payload.actorName.trim() : 'An actor';
+  const actor = payload.actor && typeof payload.actor === 'object'
+    ? payload.actor as { name?: string }
+    : undefined;
+  const actorName = typeof actor?.name === 'string' ? actor.name.trim() : 'An actor';
   const fromVersion = typeof payload.fromVersion === 'number' ? payload.fromVersion : null;
   const toVersion = typeof payload.toVersion === 'number' ? payload.toVersion : null;
   const changedFields = Array.isArray(payload.changedFields)

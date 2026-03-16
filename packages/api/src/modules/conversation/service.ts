@@ -1,10 +1,18 @@
 import { query, transaction } from '../../infrastructure/database/index.js';
 import { v4 as uuidv4 } from 'uuid';
 import type {
+  ConversationEntityRef,
+  ConversationFeedEventItem,
+  ConversationFeedEventPayloadMap,
+  ConversationFeedEventType,
+  ConversationFeedItem,
+  ConversationFeedMessageItem,
   ConversationEventContextPolicy,
   ConversationEventTimelinePolicy,
 } from '@synapse/shared/types';
+import { extractText } from '@synapse/shared';
 import { buildNormalizedMessageContent } from './message-content.js';
+import { itemPartsToCanonicalContentBlocks } from './message-content.js';
 import {
   getConversationEventSpec,
   renderConversationEventTimelineBlocks,
@@ -27,9 +35,11 @@ export interface ItemPartInput {
 }
 
 export interface CreateConversationItemParams {
+  workspaceId: string;
   conversationId: string;
   sessionId?: string;
   turnId?: string;
+  clientMessageId?: string;
   scope: ItemScope;
   surface: ItemSurface;
   itemType: ItemType;
@@ -48,14 +58,17 @@ export interface CreateConversationItemParams {
   contextTargetMemberIds?: string[];
 }
 
-export interface CreateConversationEventParams {
+export interface CreateConversationEventParams<
+  T extends ConversationFeedEventType = ConversationFeedEventType,
+> {
+  workspaceId: string;
   conversationId: string;
   sessionId?: string;
   turnId?: string;
-  eventType: string;
+  eventType: T;
   authorMemberId?: string;
   metadata?: Record<string, unknown>;
-  eventPayload?: Record<string, unknown>;
+  eventPayload?: ConversationFeedEventPayloadMap[T];
   timelinePolicy?: ConversationEventTimelinePolicy;
   contextPolicy?: ConversationEventContextPolicy;
   targetMemberIds?: string[];
@@ -281,16 +294,17 @@ export async function createConversationItem(params: CreateConversationItemParam
     const itemId = uuidv4();
     const itemResult = await client.query(
       `INSERT INTO conversation_items
-         (id, conversation_id, session_id, turn_id, scope, surface, item_type, subtype, role,
+         (id, conversation_id, session_id, turn_id, client_message_id, scope, surface, item_type, subtype, role,
           author_member_id, bundle_id, reply_to_item_id, caused_by_item_id, event_payload,
           event_timeline_policy, event_context_policy, metadata, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
        RETURNING *`,
       [
         itemId,
         params.conversationId,
         params.sessionId || null,
         params.turnId || null,
+        params.clientMessageId || null,
         params.scope,
         params.surface,
         params.itemType,
@@ -355,7 +369,29 @@ export async function createConversationItem(params: CreateConversationItemParam
       [params.conversationId],
     );
 
-    return itemResult.rows[0];
+    const item = itemResult.rows[0];
+    let workspaceSequence: number | undefined;
+    if (params.scope === 'shared' && params.surface === 'visible') {
+      const feedResult = await client.query(
+        `INSERT INTO realtime_feed_events
+           (id, workspace_id, conversation_id, item_id, conversation_sequence, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         RETURNING workspace_sequence`,
+        [
+          uuidv4(),
+          params.workspaceId,
+          params.conversationId,
+          itemId,
+          item.sequence,
+        ],
+      );
+      workspaceSequence = Number(feedResult.rows[0]?.workspace_sequence);
+    }
+
+    return {
+      ...item,
+      workspace_sequence: workspaceSequence,
+    };
   });
 }
 
@@ -383,6 +419,7 @@ export async function createConversationEvent(params: CreateConversationEventPar
   });
 
   const item = await createConversationItem({
+    workspaceId: params.workspaceId,
     conversationId: params.conversationId,
     sessionId: params.sessionId,
     turnId: params.turnId,
@@ -428,6 +465,12 @@ async function loadItemsWithRelations(itemRows: any[]) {
   if (itemRows.length === 0) return [];
 
   const itemIds = itemRows.map((row) => row.id);
+  const feedEventsResult = await query(
+    `SELECT item_id, workspace_sequence
+     FROM realtime_feed_events
+     WHERE item_id = ANY($1)`,
+    [itemIds],
+  );
   const partsResult = await query(
     `SELECT cip.*,
             f.original_name,
@@ -492,11 +535,160 @@ async function loadItemsWithRelations(itemRows: any[]) {
     contextTargetsByItem.get(row.item_id)!.push(row);
   }
 
+  const feedEventByItem = new Map<string, number>();
+  for (const row of feedEventsResult.rows) {
+    feedEventByItem.set(row.item_id, Number(row.workspace_sequence));
+  }
+
   return itemRows.map((row) => ({
     ...row,
+    workspace_sequence: feedEventByItem.get(row.id),
     parts: partsByItem.get(row.id) || [],
     targets: targetsByItem.get(row.id) || [],
     context_targets: contextTargetsByItem.get(row.id) || [],
+  }));
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function mapEntityRef(row: any): ConversationEntityRef | undefined {
+  if (!row) return undefined;
+  const memberType = row.member_type || row.author_member_type;
+  if (!memberType) return undefined;
+  return {
+    memberId: row.member_id || row.author_member_id || row.id,
+    memberType,
+    actorId: row.actor_id || row.author_actor_id || undefined,
+    userId: row.user_id || row.author_user_id || undefined,
+    name: row.member_name || row.author_name || undefined,
+    title: row.title || row.actor_title || undefined,
+    role: row.role || row.actor_role || undefined,
+    avatarUrl: row.avatar_url || undefined,
+    avatarEmoji: row.avatar_emoji || undefined,
+  };
+}
+
+function mapTargets(rows: any[]): ConversationEntityRef[] {
+  return rows
+    .map((row) => mapEntityRef(row))
+    .filter((row): row is ConversationEntityRef => Boolean(row));
+}
+
+function buildTextContentFromParts(parts: any[]) {
+  return extractText(itemPartsToCanonicalContentBlocks(parts || []));
+}
+
+export function conversationItemRowToFeedItem(row: any): ConversationFeedItem {
+  const author = mapEntityRef({
+    author_member_id: row.author_member_id,
+    author_member_type: row.author_member_type,
+    author_actor_id: row.author_actor_id,
+    author_user_id: row.author_user_id,
+    author_name: row.author_name,
+  });
+  const base = {
+    itemId: row.id,
+    conversationId: row.conversation_id,
+    sequence: Number(row.sequence),
+    workspaceSequence: row.workspace_sequence ? Number(row.workspace_sequence) : undefined,
+    sessionId: row.session_id || undefined,
+    turnId: row.turn_id || undefined,
+    author,
+    createdAt: row.created_at,
+  };
+
+  if (row.item_type === 'event') {
+    return {
+      kind: 'event',
+      ...base,
+      causedByItemId: row.caused_by_item_id || undefined,
+      eventType: row.subtype,
+      payload: parseJsonObject(row.event_payload) as ConversationFeedEventItem['payload'],
+      fallbackText: buildTextContentFromParts(row.parts || []),
+    };
+  }
+
+  return {
+    kind: 'message',
+    ...base,
+    role: row.role,
+    targets: mapTargets(row.targets || []),
+    content: buildTextContentFromParts(row.parts || []),
+    contentBlocks: itemPartsToCanonicalContentBlocks(row.parts || []),
+    metadata: parseJsonObject(row.metadata),
+    clientMessageId: row.client_message_id || undefined,
+  } satisfies ConversationFeedMessageItem;
+}
+
+export async function getConversationFeedItemById(itemId: string) {
+  const result = await query(
+    `SELECT ci.*,
+            cm.member_type AS author_member_type,
+            cm.actor_id AS author_actor_id,
+            cm.user_id AS author_user_id,
+            COALESCE(a.name, u.name, cm.display_name) AS author_name
+     FROM conversation_items ci
+     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
+     LEFT JOIN actors a ON a.id = cm.actor_id
+     LEFT JOIN users u ON u.id = cm.user_id
+     WHERE ci.id = $1
+     LIMIT 1`,
+    [itemId],
+  );
+  const [item] = await loadItemsWithRelations(result.rows);
+  return item ? conversationItemRowToFeedItem(item) : null;
+}
+
+export async function listWorkspaceFeedEventsAfter(params: {
+  workspaceId: string;
+  conversationIds: string[];
+  afterSequence: number;
+  limit?: number;
+}) {
+  if (params.conversationIds.length === 0) {
+    return [] as Array<{ workspaceSequence: number; item: ConversationFeedItem }>;
+  }
+
+  const result = await query(
+    `SELECT rfe.workspace_sequence,
+            ci.*,
+            cm.member_type AS author_member_type,
+            cm.actor_id AS author_actor_id,
+            cm.user_id AS author_user_id,
+            COALESCE(a.name, u.name, cm.display_name) AS author_name
+     FROM realtime_feed_events rfe
+     JOIN conversation_items ci ON ci.id = rfe.item_id
+     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
+     LEFT JOIN actors a ON a.id = cm.actor_id
+     LEFT JOIN users u ON u.id = cm.user_id
+     WHERE rfe.workspace_id = $1
+       AND rfe.conversation_id = ANY($2)
+       AND rfe.workspace_sequence > $3
+     ORDER BY rfe.workspace_sequence ASC
+     LIMIT $4`,
+    [
+      params.workspaceId,
+      params.conversationIds,
+      params.afterSequence,
+      params.limit || 500,
+    ],
+  );
+
+  const items = await loadItemsWithRelations(result.rows);
+  return items.map((item) => ({
+    workspaceSequence: Number(item.workspace_sequence || 0),
+    item: conversationItemRowToFeedItem(item),
   }));
 }
 
@@ -540,12 +732,13 @@ export async function getVisibleConversationItemsForMember(params: {
          )
        )
        ${extra}
-     ORDER BY ci.sequence ASC
+     ORDER BY ci.sequence DESC
      LIMIT $${values.length}`,
     values,
   );
 
-  return loadItemsWithRelations(items.rows);
+  const loaded = await loadItemsWithRelations(items.rows);
+  return loaded.reverse();
 }
 
 export async function getContextConversationItemsForMember(params: {
@@ -596,12 +789,13 @@ export async function getContextConversationItemsForMember(params: {
          )
        )
        ${extra}
-     ORDER BY ci.sequence ASC
+     ORDER BY ci.sequence DESC
      LIMIT $${values.length}`,
     values,
   );
 
-  return loadItemsWithRelations(items.rows);
+  const loaded = await loadItemsWithRelations(items.rows);
+  return loaded.reverse();
 }
 
 export async function getPrivateSessionItems(sessionId: string) {

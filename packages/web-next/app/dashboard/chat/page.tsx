@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { extractText, type CanonicalContentBlock } from '@synapse/shared';
+import { extractText, type CanonicalContentBlock, type ChatSocketEvent } from '@synapse/shared';
 import { useSearchParams } from 'next/navigation';
 import { useWorkspace } from '../workspace-provider';
 import { useWebSocket } from '@/hooks/use-websocket';
@@ -30,14 +30,9 @@ export default function ChatPage() {
     sendMessage,
     createGroup,
     markRead,
-    handleNewMessage,
-    handleStatusChanged,
-    handleThinking,
-    handleActorRuntimeUpdated,
-    handleGroupUpdated,
-    handleMemberJoined,
-    handleMemberKicked,
-    handleActorVersionChanged,
+    handleFeedItemCreated,
+    handleRuntimeUpdated,
+    handleConversationUpdated,
   } = useChatStore();
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -45,50 +40,58 @@ export default function ChatPage() {
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
   const { notify } = useNotifications();
 
-  // WS event handler
-  const onEvent = useCallback((event: any) => {
+  const onEvent = useCallback((event: ChatSocketEvent | Record<string, unknown>) => {
+    if (!event || typeof event !== 'object' || typeof event.type !== 'string') {
+      return;
+    }
+
     switch (event.type) {
-      case 'session.message.new':
-        handleNewMessage(event.payload);
-        // Notify on assistant messages when page is hidden
-        if (event.payload.role === 'assistant') {
-          const name = event.payload.actorName || 'Synapse';
-          const content = extractText(event.payload.contentBlocks || []);
-          notify(name, content, event.payload.groupId);
+      case 'feed.item.created': {
+        const payload = (event as ChatSocketEvent<'feed.item.created'>).payload;
+        handleFeedItemCreated(payload);
+        if (payload.item.kind === 'message' && payload.item.role === 'assistant') {
+          const name = payload.item.author?.name || 'Synapse';
+          const content = extractText(payload.item.contentBlocks || []);
+          notify(name, content, payload.item.conversationId);
         }
         break;
-      case 'session.status.changed':
-        handleStatusChanged(event.payload);
+      }
+      case 'runtime.updated':
+        handleRuntimeUpdated((event as ChatSocketEvent<'runtime.updated'>).payload);
         break;
-      case 'session.thinking':
-        handleThinking(event.payload);
+      case 'conversation.updated':
+        handleConversationUpdated((event as ChatSocketEvent<'conversation.updated'>).payload);
+        if (workspaceId && (event as ChatSocketEvent<'conversation.updated'>).payload.action === 'created') {
+          loadGroups(workspaceId);
+        }
         break;
-      case 'group.actor.runtime.updated':
-        handleActorRuntimeUpdated(event.payload);
+      case 'feed.resync.required':
+        if (workspaceId) {
+          loadGroups(workspaceId);
+          if (selectedGroupId) {
+            loadMessages(workspaceId, selectedGroupId);
+          }
+        }
         break;
-      case 'group.updated':
-        handleGroupUpdated(event.payload);
-        break;
-      case 'group.member_joined':
-        handleMemberJoined(event.payload);
-        break;
-      case 'group.member_kicked':
-        handleMemberKicked(event.payload);
-        break;
-      case 'actor.version_changed':
-        handleActorVersionChanged(event.payload);
-        break;
-      // Also handle legacy events to refresh groups
       case 'actor.action':
       case 'secretary.response':
         if (workspaceId) loadGroups(workspaceId);
         break;
+      default:
+        break;
     }
-  }, [handleNewMessage, handleStatusChanged, handleThinking, handleActorRuntimeUpdated, handleGroupUpdated,
-      handleMemberJoined, handleMemberKicked, handleActorVersionChanged,
-      loadGroups, workspaceId, notify]);
+  }, [
+    handleConversationUpdated,
+    handleFeedItemCreated,
+    handleRuntimeUpdated,
+    loadGroups,
+    loadMessages,
+    notify,
+    selectedGroupId,
+    workspaceId,
+  ]);
 
-  const { connected } = useWebSocket({ workspaceId, onEvent });
+  useWebSocket({ workspaceId, onEvent });
 
   // Load groups on mount
   useEffect(() => {

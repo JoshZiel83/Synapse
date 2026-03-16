@@ -4,6 +4,8 @@ import type {
   AuthSessionSummary,
   ActorTemplateRecord,
   CanonicalContentBlock,
+  ConversationFeedItem,
+  ConversationFeedPage,
   RelayDashboardView,
   RelayDeviceDetailView,
   RelayDeviceSummaryView,
@@ -255,7 +257,7 @@ class ApiClient {
       : { actorIds, ...(content && { content }), targetActorId: targetActorId || actorIds[0] };
     return this.fetch(`/workspaces/${wsId}/chat/groups`, { method: 'POST', body: JSON.stringify(body) });
   }
-  getGroupMessages(wsId: string, groupId: string, limit?: number, before?: string) {
+  getGroupMessages(wsId: string, groupId: string, limit?: number, before?: string): Promise<ConversationFeedPage> {
     const params = new URLSearchParams();
     if (limit) params.set('limit', String(limit));
     if (before) params.set('before', before);
@@ -272,10 +274,12 @@ class ApiClient {
     contentBlocks: CanonicalContentBlock[],
     targetActorIds?: string[],
     targetUserIds?: string[],
-  ) {
+    clientMessageId?: string,
+  ): Promise<{ item: ConversationFeedItem }> {
     const body: any = { contentBlocks };
     if (targetActorIds && targetActorIds.length > 0) body.targetActorIds = targetActorIds;
     if (targetUserIds && targetUserIds.length > 0) body.targetUserIds = targetUserIds;
+    if (clientMessageId) body.clientMessageId = clientMessageId;
     return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/messages`, { method: 'POST', body: JSON.stringify(body) });
   }
   markGroupRead(wsId: string, groupId: string) { return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/read`, { method: 'POST', body: '{}' }); }

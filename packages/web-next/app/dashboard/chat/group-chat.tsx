@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Send, ArrowDown, Paperclip, X, Pencil, Check } from 'lucide-react';
 import MessageBubble from './message-bubble';
-import type { Group, GroupMessage } from '@/stores/chat-store';
+import type { FeedMessage, Group } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
 import ChatAvatar from './chat-avatar';
@@ -17,7 +17,7 @@ import ChatMentionsInput, { type MentionableActor } from './chat-mentions-input'
 
 interface GroupChatProps {
   group: Group;
-  messages: GroupMessage[];
+  messages: FeedMessage[];
   loading: boolean;
   actorRuntimes?: Record<string, ActorRuntimeState>;
   onSend: (contentBlocks: CanonicalContentBlock[], targetActorIds?: string[]) => Promise<void> | void;
@@ -416,7 +416,7 @@ export default function GroupChat({
               actorRuntime={msg.fromActorId ? actorRuntimes?.[msg.fromActorId] : undefined}
               timestamp={msg.createdAt}
               isUser={msg.role === 'user'}
-              status={msg.status}
+              status={msg.deliveryStatus}
               toolsUsed={msg.toolsUsed}
               serverToolCalls={msg.serverToolCalls}
               citationSources={msg.citationSources}

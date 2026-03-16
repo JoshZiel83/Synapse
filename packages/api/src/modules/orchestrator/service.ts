@@ -1,21 +1,34 @@
 import { query } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
-import type { ActorAction, UUID } from '@synapse/shared';
+import type { ActorAction, ConversationFeedEventPayloadMap, UUID } from '@synapse/shared';
 import { createMemory } from '../memory/service.js';
 import { getActor, updateActor } from '../organization/service.js';
 import { getSession } from '../session/service.js';
-import { createConversationEvent, listConversationMembers } from '../conversation/service.js';
-import { renderConversationEventTimelineBlocks } from '../conversation/event-registry.js';
-import { extractText } from '@synapse/shared';
+import { createConversationEvent, getConversationFeedItemById, listConversationMembers } from '../conversation/service.js';
 
 const ACTOR_MEMORY_SCOPES = new Set(['actor_conversation', 'conversation', 'actor_global']);
 
-async function emitUserVisibleSystemNotice(params: {
+async function emitChatFeedItem(workspaceId: UUID, itemId: UUID) {
+  const item = await getConversationFeedItemById(itemId);
+  if (!item || item.workspaceSequence === undefined) return;
+
+  await emitEvent({
+    type: 'chat.feed.item.created',
+    workspaceId,
+    payload: {
+      workspaceSequence: item.workspaceSequence,
+      item,
+    },
+    timestamp: new Date().toISOString(),
+  });
+}
+
+async function emitUserVisibleSystemNotice<T extends 'memory_saved' | 'memory_updated' | 'actor_renamed' | 'actor_avatar_changed'>(params: {
   workspaceId: UUID;
   actorId: UUID;
   sessionId?: UUID;
-  eventType: 'memory_saved' | 'memory_updated' | 'actor_renamed' | 'actor_avatar_changed';
-  eventPayload: Record<string, unknown>;
+  eventType: T;
+  eventPayload: ConversationFeedEventPayloadMap[T];
   metadata?: Record<string, unknown>;
 }): Promise<void> {
   if (!params.sessionId) return;
@@ -28,6 +41,7 @@ async function emitUserVisibleSystemNotice(params: {
   if (targetUserMembers.length === 0) return;
 
   const created = await createConversationEvent({
+    workspaceId: params.workspaceId,
     conversationId: session.conversation_id,
     sessionId: params.sessionId,
     eventType: params.eventType,
@@ -39,32 +53,7 @@ async function emitUserVisibleSystemNotice(params: {
     eventPayload: params.eventPayload,
     targetMemberIds: targetUserMembers.map((member: any) => member.id),
   });
-
-  const timelineBlocks = created.timelineContentBlocks.length > 0
-    ? created.timelineContentBlocks
-    : renderConversationEventTimelineBlocks(params.eventType, params.eventPayload);
-  const content = extractText(timelineBlocks);
-
-  await emitEvent({
-    type: 'session.message.new',
-    workspaceId: params.workspaceId,
-    payload: {
-      groupId: session.group_id || undefined,
-      sessionId: params.sessionId,
-      messageId: created.item.id,
-      role: 'system',
-      fromActorId: params.actorId,
-      fromUserId: null,
-      targetUserIds: targetUserMembers.map((member: any) => member.user_id),
-      content,
-      contentBlocks: timelineBlocks,
-      metadata: created.metadata,
-      eventType: params.eventType,
-      eventPayload: params.eventPayload,
-      createdAt: created.item.created_at,
-    },
-    timestamp: new Date().toISOString(),
-  });
+  await emitChatFeedItem(params.workspaceId, created.item.id);
 }
 
 export async function executeActorActions(
@@ -138,16 +127,11 @@ async function handleCreateMemory(
     content: action.content,
     contentBlocks: action.contentBlocks,
     textDigest: typeof metadata.textDigest === 'string' ? metadata.textDigest : undefined,
+    sourceItemId: typeof metadata.sourceItemId === 'string' ? metadata.sourceItemId : undefined,
+    sourceTurnId: typeof metadata.sourceTurnId === 'string' ? metadata.sourceTurnId : undefined,
+    supersedesMemoryId: typeof metadata.supersedesMemoryId === 'string' ? metadata.supersedesMemoryId : undefined,
     metadata: typeof metadata === 'object' ? metadata : {},
   });
-
-  const scopeLabel =
-    memory.ownerScope === 'conversation'
-      ? 'shared conversation memory'
-      : memory.ownerScope === 'actor_global'
-        ? 'global actor memory'
-        : 'private actor-conversation memory';
-  const summary = memory.textDigest?.trim() || 'durable memory saved';
 
   await emitUserVisibleSystemNotice({
     workspaceId,
@@ -155,13 +139,17 @@ async function handleCreateMemory(
     sessionId,
     eventType: action.metadata?.supersedesMemoryId ? 'memory_updated' : 'memory_saved',
     eventPayload: {
-      actorId,
+      actor: {
+        memberType: 'actor',
+        actorId,
+      },
       memoryId: memory.id,
       memoryScope: memory.ownerScope,
       memoryCategory: memory.category,
       textDigest: memory.textDigest,
-      summary,
-      scopeLabel,
+      sourceItemId: memory.sourceItemId,
+      sourceTurnId: memory.sourceTurnId,
+      supersedesMemoryId: memory.supersedesMemoryId,
     },
     metadata: {
       noticeType: action.metadata?.supersedesMemoryId ? 'memory_updated' : 'memory_saved',
@@ -189,7 +177,11 @@ async function handleRenameSelf(
     sessionId,
     eventType: 'actor_renamed',
     eventPayload: {
-      actorId,
+      actor: {
+        memberType: 'actor',
+        actorId,
+        name: newName,
+      },
       newName,
     },
     metadata: {
@@ -221,8 +213,11 @@ async function handleChangeAvatar(
     sessionId,
     eventType: 'actor_avatar_changed',
     eventPayload: {
-      actorId,
-      avatarEmoji: emoji,
+      actor: {
+        memberType: 'actor',
+        actorId,
+      },
+      newAvatarEmoji: emoji,
     },
     metadata: {
       noticeType: 'actor_avatar_changed',
