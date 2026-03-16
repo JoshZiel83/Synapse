@@ -1745,6 +1745,75 @@ export interface CapabilityAvailableSkill {
   entryPoint?: string;
 }
 
+export type SkillUseScope =
+  | 'workspace'
+  | 'conversation'
+  | 'actor_global'
+  | 'actor_conversation'
+  | 'user';
+
+export interface SkillAssetFile {
+  id: string;
+  path: string;
+  contentBlocks: CanonicalContentBlock[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillMarketplaceVersion {
+  id: string;
+  skillId: string;
+  version: string;
+  changelog: string;
+  entryPath: string;
+  createdBy?: string;
+  createdByName?: string;
+  createdAt: string;
+  files?: SkillAssetFile[];
+}
+
+export interface SkillMarketplaceEntry {
+  id: string;
+  slug: string;
+  name: string;
+  summary: string;
+  iconUrl?: string;
+  tags: string[];
+  authorUserId?: string;
+  authorName?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  latestVersionId?: string;
+  latestVersion?: SkillMarketplaceVersion;
+}
+
+export interface InstalledSkill {
+  id: string;
+  workspaceId: string;
+  slug: string;
+  name: string;
+  summary: string;
+  iconUrl?: string;
+  tags: string[];
+  entryPath: string;
+  useScope: SkillUseScope;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+  isEnabled: boolean;
+  isCustomized: boolean;
+  installedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+  sourceSkillId?: string;
+  sourceVersionId?: string;
+  sourceVersion?: string;
+  upgradeAvailable: boolean;
+  latestSourceVersion?: string;
+  files?: SkillAssetFile[];
+}
+
 export type McpTransport = Exclude<CapabilityTransport, "filesystem">;
 export type McpLifecycleScope = CapabilityReuseScope;
 export type McpAttachmentType = CapabilityAttachmentType;

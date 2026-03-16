@@ -6,11 +6,14 @@ import type {
   CanonicalContentBlock,
   ConversationFeedItem,
   ConversationFeedPage,
+  InstalledSkill,
   WorkspaceFeedPage,
   RelayDashboardView,
   RelayDeviceDetailView,
   RelayDeviceSummaryView,
   RelayPairingSessionView,
+  SkillMarketplaceEntry,
+  SkillUseScope,
 } from "@synapse/shared"
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
@@ -197,6 +200,95 @@ class ApiClient {
     return this.fetch(`/platform/access/${accessKey}/users/${userId}/revoke`, {
       method: "POST",
       body: "{}",
+    })
+  }
+
+  // Skills Marketplace
+  getSkillMarketplace(params?: string): Promise<{ skills: SkillMarketplaceEntry[] }> {
+    return this.fetch(`/skills/marketplace${params ? "?" + params : ""}`)
+  }
+  getSkillMarketplaceItem(skillId: string): Promise<{ skill: SkillMarketplaceEntry }> {
+    return this.fetch(`/skills/marketplace/${skillId}`)
+  }
+  publishMarketplaceSkill(data: {
+    skillId?: string
+    slug: string
+    name: string
+    summary?: string
+    iconUrl?: string
+    tags?: string[]
+    version: string
+    entryPath?: string
+    changelog?: string
+    isActive?: boolean
+    metadata?: Record<string, unknown>
+    files: Array<{
+      path: string
+      contentBlocks: CanonicalContentBlock[]
+    }>
+  }): Promise<{ skill: SkillMarketplaceEntry }> {
+    return this.fetch("/skills/marketplace", {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+
+  // Installed Skills
+  getInstalledSkills(wsId: string, params?: string): Promise<{ skills: InstalledSkill[] }> {
+    return this.fetch(`/workspaces/${wsId}/skills${params ? "?" + params : ""}`)
+  }
+  getInstalledSkill(wsId: string, installedSkillId: string): Promise<{ skill: InstalledSkill }> {
+    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`)
+  }
+  installSkill(
+    wsId: string,
+    data: {
+      marketSkillId: string
+      useScope: SkillUseScope
+      actorId?: string
+      conversationId?: string
+      userId?: string
+    }
+  ): Promise<{ skill: InstalledSkill }> {
+    return this.fetch(`/workspaces/${wsId}/skills`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  updateInstalledSkill(
+    wsId: string,
+    installedSkillId: string,
+    data: {
+      name?: string
+      summary?: string
+      iconUrl?: string | null
+      tags?: string[]
+      entryPath?: string
+      useScope?: SkillUseScope
+      actorId?: string | null
+      conversationId?: string | null
+      userId?: string | null
+      isEnabled?: boolean
+      files?: Array<{
+        path: string
+        contentBlocks: CanonicalContentBlock[]
+      }>
+    }
+  ): Promise<{ skill: InstalledSkill }> {
+    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+  upgradeInstalledSkill(wsId: string, installedSkillId: string): Promise<{ skill: InstalledSkill }> {
+    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/upgrade`, {
+      method: "POST",
+      body: "{}",
+    })
+  }
+  uninstallInstalledSkill(wsId: string, installedSkillId: string) {
+    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`, {
+      method: "DELETE",
     })
   }
 

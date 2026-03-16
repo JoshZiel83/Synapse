@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Puzzle,
   Cpu,
+  ScrollText,
 } from 'lucide-react';
 import {
   SidebarInset,
@@ -26,6 +27,7 @@ const navItems = [
   { href: '/dashboard/chat', label: 'Chat', icon: MessageSquare },
   { href: '/dashboard/contacts', label: 'Contacts', icon: ContactRound },
   { href: '/dashboard/memories', label: 'Memories', icon: Brain },
+  { href: '/dashboard/skills', label: 'Skills', icon: ScrollText },
   { href: '/dashboard/audit', label: 'Audit Log', icon: FileText },
   { href: '/dashboard/plugins', label: 'Plugins', icon: Puzzle },
   { href: '/settings/models', label: 'Model Groups', icon: Cpu },
@@ -68,6 +70,7 @@ function DashboardInner({ children }: { children: ReactNode }) {
     pathname.startsWith('/dashboard/chat') ||
     pathname.startsWith('/dashboard/contacts') ||
     pathname.startsWith('/dashboard/memories') ||
+    pathname.startsWith('/dashboard/skills') ||
     pathname.startsWith('/dashboard/actors') ||
     pathname.startsWith('/dashboard/plugins/') ||
     pathname.startsWith('/settings/models');

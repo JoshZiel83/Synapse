@@ -18,6 +18,7 @@ import {
   MessageSquare,
   Moon,
   Puzzle,
+  ScrollText,
   ShieldCheck,
   Sun,
 } from "lucide-react"
@@ -58,6 +59,7 @@ const mainItems = [
 
 const knowledgeItems = [
   { href: "/dashboard/memories", label: "Memories", icon: Brain },
+  { href: "/dashboard/skills", label: "Skills", icon: ScrollText },
   { href: "/dashboard/plugins", label: "Plugins", icon: Puzzle },
   { href: "/dashboard/audit", label: "Audit Log", icon: FileText },
 ]
@@ -81,6 +83,7 @@ const emptyWorkspaceNavigation = {
 const emptyPlatformNavigation = {
   canAccessPlatformModels: false,
   canAccessPlatformAccess: false,
+  canAccessPlatformSkills: false,
 }
 
 function SynapseLogo({ className }: { className?: string }) {
@@ -106,6 +109,10 @@ function isItemActive(pathname: string, href: string) {
 
   if (href === "/dashboard/plugins") {
     return pathname === href || pathname.startsWith("/dashboard/plugins/")
+  }
+
+  if (href === "/dashboard/skills") {
+    return pathname === href || pathname.startsWith("/dashboard/skills/")
   }
 
   return pathname === href

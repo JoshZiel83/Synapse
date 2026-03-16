@@ -2,61 +2,63 @@ import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
+import { AUTHZ_PLATFORM_ID } from '../../infrastructure/authz/index.js';
 import { requireRequestAction } from '../access/guards.js';
 import {
   SkillError,
-  createSkill,
-  createSkillInstallPlan,
-  getSkill,
-  getSkillAsset,
-  installSkill,
-  listSkillAssets,
-  listSkillInstallations,
-  listSkills,
-  uninstallSkill,
-  updateSkillInstallation,
+  getInstalledSkill,
+  getMarketplaceSkill,
+  installMarketplaceSkill,
+  listInstalledSkills,
+  listMarketplaceSkills,
+  publishMarketplaceSkill,
+  uninstallInstalledSkill,
+  updateInstalledSkill,
+  upgradeInstalledSkill,
 } from './service.js';
 
-const scopeEnum = z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']);
+const useScopeSchema = z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']);
 
-const uploadSkillSchema = z.object({
-  slug: z.string().optional(),
-  version: z.string().optional(),
-  displayName: z.string().optional(),
-  description: z.string().optional(),
-  longDescription: z.string().optional(),
-  iconUrl: z.string().url().optional(),
-  tags: z.array(z.string()).optional(),
-  metadata: z.record(z.unknown()).optional(),
-  files: z.array(z.object({
-    path: z.string().min(1),
-    content: z.string().optional(),
-    binaryBase64: z.string().optional(),
-    mediaType: z.string().optional(),
-  })).min(1),
+const skillFileSchema = z.object({
+  path: z.string().min(1),
+  contentBlocks: z.array(z.any()).default([]),
 });
 
-const installSchema = z.object({
-  skillId: z.string().uuid(),
-  attachmentType: scopeEnum,
+const publishSkillSchema = z.object({
+  skillId: z.string().uuid().optional(),
+  slug: z.string().min(1),
+  name: z.string().min(1),
+  summary: z.string().optional(),
+  iconUrl: z.string().url().optional(),
+  tags: z.array(z.string()).optional(),
+  version: z.string().min(1),
+  entryPath: z.string().optional(),
+  changelog: z.string().optional(),
+  isActive: z.boolean().optional(),
+  metadata: z.record(z.unknown()).optional(),
+  files: z.array(skillFileSchema).min(1),
+});
+
+const installSkillSchema = z.object({
+  marketSkillId: z.string().uuid(),
+  useScope: useScopeSchema,
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
 });
 
-const updateInstallSchema = z.object({
-  isEnabled: z.boolean().optional(),
-  attachmentType: scopeEnum.optional(),
+const updateInstalledSkillSchema = z.object({
+  name: z.string().min(1).optional(),
+  summary: z.string().optional(),
+  iconUrl: z.string().url().nullable().optional(),
+  tags: z.array(z.string()).optional(),
+  entryPath: z.string().optional(),
+  useScope: useScopeSchema.optional(),
   actorId: z.string().uuid().nullable().optional(),
   conversationId: z.string().uuid().nullable().optional(),
   userId: z.string().uuid().nullable().optional(),
-});
-
-const installPlanSchema = z.object({
-  attachmentType: scopeEnum,
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  userId: z.string().uuid().optional(),
+  isEnabled: z.boolean().optional(),
+  files: z.array(skillFileSchema).optional(),
 });
 
 function handleError(reply: FastifyReply, error: unknown) {
@@ -75,35 +77,64 @@ function handleError(reply: FastifyReply, error: unknown) {
   throw error;
 }
 
+async function requirePlatformManage(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  errorMessage: string,
+) {
+  return requireRequestAction(
+    request,
+    reply,
+    'platform.manage',
+    AUTHZ_PLATFORM_ID,
+    errorMessage,
+  );
+}
+
 export function registerSkillRoutes(app: FastifyInstance) {
-  const preHandler = [authMiddleware, workspaceMiddleware];
-  const prefix = '/api/v1/workspaces/:workspaceId/skills';
+  const authHook = { preHandler: [authMiddleware] };
+  const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] };
 
-  app.get(prefix, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+  app.get('/api/v1/skills/marketplace', authHook, async (request, reply) => {
     try {
-      const { workspaceId } = request.params as { workspaceId: string };
-      const allowed = await requireRequestAction(request, reply, 'workspace.view', workspaceId, 'Not allowed to view skills in this workspace');
-      if (!allowed) return;
-
-      const skills = await listSkills(workspaceId);
+      const { search, tags } = request.query as {
+        search?: string;
+        tags?: string;
+      };
+      const skills = await listMarketplaceSkills({
+        search,
+        tags: tags ? tags.split(',').map((tag) => tag.trim()).filter(Boolean) : undefined,
+      });
       return reply.status(200).send({ skills });
     } catch (error) {
       return handleError(reply, error);
     }
   });
 
-  app.post(prefix, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+  app.get('/api/v1/skills/marketplace/:skillId', authHook, async (request, reply) => {
     try {
-      const { workspaceId } = request.params as { workspaceId: string };
-      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage skills in this workspace');
+      const { skillId } = request.params as { skillId: string };
+      const skill = await getMarketplaceSkill(skillId);
+      return reply.status(200).send({ skill });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.post('/api/v1/skills/marketplace', authHook, async (request, reply) => {
+    try {
+      const allowed = await requirePlatformManage(
+        request,
+        reply,
+        'Not allowed to publish marketplace skills',
+      );
       if (!allowed) return;
 
+      const body = publishSkillSchema.parse(request.body);
       const user = (request as any).user;
-      const body = uploadSkillSchema.parse(request.body);
-      const skill = await createSkill({
-        workspaceId,
-        uploadedBy: user?.id || user?.userId,
+      const skill = await publishMarketplaceSkill({
         ...body,
+        authorUserId: user?.id || user?.userId,
       });
       return reply.status(201).send({ skill });
     } catch (error) {
@@ -111,142 +142,146 @@ export function registerSkillRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get(`${prefix}/:skillId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+  app.get('/api/v1/workspaces/:workspaceId/skills', workspaceHook, async (request, reply) => {
     try {
-      const { workspaceId, skillId } = request.params as { workspaceId: string; skillId: string };
-      const allowed = await requireRequestAction(request, reply, 'workspace.view', workspaceId, 'Not allowed to view skills in this workspace');
+      const { workspaceId } = request.params as { workspaceId: string };
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        'workspace.view',
+        workspaceId,
+        'Not allowed to view installed skills in this workspace',
+      );
       if (!allowed) return;
 
-      const skill = await getSkill(workspaceId, skillId);
+      const { useScope, actorId, conversationId, userId, sourceSkillId } = request.query as {
+        useScope?: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+        actorId?: string;
+        conversationId?: string;
+        userId?: string;
+        sourceSkillId?: string;
+      };
+
+      const skills = await listInstalledSkills(workspaceId, {
+        useScope,
+        actorId,
+        conversationId,
+        userId,
+        sourceSkillId,
+      });
+      return reply.status(200).send({ skills });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.post('/api/v1/workspaces/:workspaceId/skills', workspaceHook, async (request, reply) => {
+    try {
+      const { workspaceId } = request.params as { workspaceId: string };
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        'workspace.manage_capabilities',
+        workspaceId,
+        'Not allowed to install skills in this workspace',
+      );
+      if (!allowed) return;
+
+      const body = installSkillSchema.parse(request.body);
+      const user = (request as any).user;
+      const skill = await installMarketplaceSkill({
+        workspaceId,
+        marketSkillId: body.marketSkillId,
+        useScope: body.useScope,
+        actorId: body.actorId,
+        conversationId: body.conversationId,
+        userId: body.userId,
+        installedBy: user?.id || user?.userId,
+      });
+      return reply.status(201).send({ skill });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/workspaces/:workspaceId/skills/:installedSkillId', workspaceHook, async (request, reply) => {
+    try {
+      const { workspaceId, installedSkillId } = request.params as { workspaceId: string; installedSkillId: string };
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        'workspace.view',
+        workspaceId,
+        'Not allowed to view installed skill details in this workspace',
+      );
+      if (!allowed) return;
+
+      const skill = await getInstalledSkill(workspaceId, installedSkillId);
       return reply.status(200).send({ skill });
     } catch (error) {
       return handleError(reply, error);
     }
   });
 
-  app.get(`${prefix}/:skillId/assets`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+  app.put('/api/v1/workspaces/:workspaceId/skills/:installedSkillId', workspaceHook, async (request, reply) => {
     try {
-      const { workspaceId, skillId } = request.params as { workspaceId: string; skillId: string };
-      const allowed = await requireRequestAction(request, reply, 'workspace.view', workspaceId, 'Not allowed to view skills in this workspace');
-      if (!allowed) return;
-
-      const assets = await listSkillAssets(workspaceId, skillId);
-      return reply.status(200).send({ assets });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
-  app.get(`${prefix}/:skillId/asset`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const { workspaceId, skillId } = request.params as { workspaceId: string; skillId: string };
-      const allowed = await requireRequestAction(request, reply, 'workspace.view', workspaceId, 'Not allowed to view skills in this workspace');
-      if (!allowed) return;
-
-      const { path } = request.query as { path?: string };
-      if (!path) {
-        return reply.status(400).send({ error: 'path is required' });
-      }
-      const asset = await getSkillAsset(workspaceId, skillId, path);
-      return reply.status(200).send({ asset });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
-  app.post(`${prefix}/:skillId/install-plan`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const { workspaceId, skillId } = request.params as { workspaceId: string; skillId: string };
-      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage skill installations in this workspace');
-      if (!allowed) return;
-
-      const body = installPlanSchema.parse(request.body);
-      const plan = await createSkillInstallPlan({
+      const { workspaceId, installedSkillId } = request.params as { workspaceId: string; installedSkillId: string };
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        'workspace.manage_capabilities',
         workspaceId,
-        skillId,
-        attachmentType: body.attachmentType,
-        actorId: body.actorId,
-        conversationId: body.conversationId,
-        userId: body.userId,
-      });
-      return reply.status(200).send({ plan });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
-  app.get(`${prefix}/installations`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const { workspaceId } = request.params as { workspaceId: string };
-      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to view skill installations in this workspace');
+        'Not allowed to edit installed skills in this workspace',
+      );
       if (!allowed) return;
 
-      const { attachmentType, actorId, conversationId, userId, skillId } = request.query as {
-        attachmentType?: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-        actorId?: string;
-        conversationId?: string;
-        userId?: string;
-        skillId?: string;
-      };
-      const installations = await listSkillInstallations(workspaceId, {
-        attachmentType,
-        actorId,
-        conversationId,
-        userId,
-        skillId,
-      });
-      return reply.status(200).send({ installations });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
-  app.post(`${prefix}/installations`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const { workspaceId } = request.params as { workspaceId: string };
-      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage skill installations in this workspace');
-      if (!allowed) return;
-
-      const user = (request as any).user;
-      const body = installSchema.parse(request.body);
-      const installation = await installSkill({
+      const body = updateInstalledSkillSchema.parse(request.body);
+      const skill = await updateInstalledSkill({
         workspaceId,
-        skillId: body.skillId,
-        attachmentType: body.attachmentType,
-        actorId: body.actorId,
-        conversationId: body.conversationId,
-        userId: body.userId,
-        installedBy: user?.id || user?.userId,
+        installedSkillId,
+        ...body,
       });
-      return reply.status(201).send({ installation });
+      return reply.status(200).send({ skill });
     } catch (error) {
       return handleError(reply, error);
     }
   });
 
-  app.put(`${prefix}/installations/:installationId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/v1/workspaces/:workspaceId/skills/:installedSkillId/upgrade', workspaceHook, async (request, reply) => {
     try {
-      const { workspaceId } = request.params as { workspaceId: string };
-      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage skill installations in this workspace');
+      const { workspaceId, installedSkillId } = request.params as { workspaceId: string; installedSkillId: string };
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        'workspace.manage_capabilities',
+        workspaceId,
+        'Not allowed to upgrade installed skills in this workspace',
+      );
       if (!allowed) return;
 
-      const { installationId } = request.params as { installationId: string };
-      const body = updateInstallSchema.parse(request.body);
-      const installation = await updateSkillInstallation(installationId, body);
-      return reply.status(200).send({ installation });
+      const skill = await upgradeInstalledSkill({
+        workspaceId,
+        installedSkillId,
+      });
+      return reply.status(200).send({ skill });
     } catch (error) {
       return handleError(reply, error);
     }
   });
 
-  app.delete(`${prefix}/installations/:installationId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
+  app.delete('/api/v1/workspaces/:workspaceId/skills/:installedSkillId', workspaceHook, async (request, reply) => {
     try {
-      const { workspaceId } = request.params as { workspaceId: string };
-      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage skill installations in this workspace');
+      const { workspaceId, installedSkillId } = request.params as { workspaceId: string; installedSkillId: string };
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        'workspace.manage_capabilities',
+        workspaceId,
+        'Not allowed to uninstall skills in this workspace',
+      );
       if (!allowed) return;
 
-      const { installationId } = request.params as { installationId: string };
-      await uninstallSkill(installationId);
+      await uninstallInstalledSkill(workspaceId, installedSkillId);
       return reply.status(204).send();
     } catch (error) {
       return handleError(reply, error);

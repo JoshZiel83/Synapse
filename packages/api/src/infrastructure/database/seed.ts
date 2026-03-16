@@ -309,6 +309,181 @@ export async function seedDatabase() {
     );
   }
 
+  await query<{ id: string }>(
+    `INSERT INTO skill_market_skills (slug, name, summary, tags, author_user_id, is_active, metadata)
+     VALUES
+       ('meeting-brief', 'Meeting Brief', 'Turn messy meeting notes into a tight action-oriented brief.', ARRAY['meetings', 'summary'], $1, TRUE, '{}'::jsonb),
+       ('spec-review', 'Spec Review', 'Review a product or engineering spec for ambiguity, risk, and missing decisions.', ARRAY['product', 'review'], $1, TRUE, '{}'::jsonb)
+     ON CONFLICT (slug) DO UPDATE SET
+       name = EXCLUDED.name,
+       summary = EXCLUDED.summary,
+       tags = EXCLUDED.tags,
+       author_user_id = EXCLUDED.author_user_id,
+       is_active = EXCLUDED.is_active,
+       updated_at = NOW()
+     RETURNING id`,
+    [userId],
+  );
+
+  const allSkills = await query<{ id: string; slug: string }>(
+    `SELECT id, slug FROM skill_market_skills WHERE slug = ANY($1::text[])`,
+    [["meeting-brief", "spec-review"]],
+  );
+  const skillIdsBySlug = new Map(allSkills.rows.map((row) => [row.slug, row.id]));
+
+  const meetingBriefVersion = await query<{ id: string }>(
+    `INSERT INTO skill_market_versions (skill_id, version, entry_path, changelog, metadata, created_by)
+     VALUES ($1, '1.0.0', 'SKILL.md', 'Initial release', '{}'::jsonb, $2)
+     ON CONFLICT (skill_id, version) DO UPDATE SET
+       entry_path = EXCLUDED.entry_path,
+       changelog = EXCLUDED.changelog,
+       updated_at = NOW()
+     RETURNING id`,
+    [skillIdsBySlug.get("meeting-brief"), userId],
+  );
+  await query(
+    `DELETE FROM skill_market_files WHERE version_id = $1`,
+    [meetingBriefVersion.rows[0].id],
+  );
+  await query(
+    `INSERT INTO skill_market_files (version_id, path, content_blocks)
+     VALUES
+       ($1, 'SKILL.md', $2::jsonb),
+       ($1, 'references/checklist.md', $3::jsonb)`,
+    [
+      meetingBriefVersion.rows[0].id,
+      JSON.stringify(textBlocks(
+        [
+          "# Meeting Brief",
+          "",
+          "You turn raw meeting notes into a concise brief with decisions, action items, owners, blockers, and follow-ups.",
+          "",
+          "Use a direct tone. Collapse repetition. Preserve concrete commitments and deadlines.",
+        ].join("\n"),
+      )),
+      JSON.stringify(textBlocks(
+        [
+          "# Checklist",
+          "",
+          "- Capture decisions",
+          "- Extract owners",
+          "- Flag missing owners",
+          "- Separate facts from open questions",
+        ].join("\n"),
+      )),
+    ],
+  );
+  await query(
+    `UPDATE skill_market_skills SET latest_version_id = $1 WHERE id = $2`,
+    [meetingBriefVersion.rows[0].id, skillIdsBySlug.get("meeting-brief")],
+  );
+
+  const specReviewVersion = await query<{ id: string }>(
+    `INSERT INTO skill_market_versions (skill_id, version, entry_path, changelog, metadata, created_by)
+     VALUES ($1, '1.0.0', 'SKILL.md', 'Initial release', '{}'::jsonb, $2)
+     ON CONFLICT (skill_id, version) DO UPDATE SET
+       entry_path = EXCLUDED.entry_path,
+       changelog = EXCLUDED.changelog,
+       updated_at = NOW()
+     RETURNING id`,
+    [skillIdsBySlug.get("spec-review"), userId],
+  );
+  await query(
+    `DELETE FROM skill_market_files WHERE version_id = $1`,
+    [specReviewVersion.rows[0].id],
+  );
+  await query(
+    `INSERT INTO skill_market_files (version_id, path, content_blocks)
+     VALUES
+       ($1, 'SKILL.md', $2::jsonb),
+       ($1, 'references/risk-lenses.md', $3::jsonb)`,
+    [
+      specReviewVersion.rows[0].id,
+      JSON.stringify(textBlocks(
+        [
+          "# Spec Review",
+          "",
+          "Review the spec for ambiguity, hidden scope, missing constraints, ownership gaps, rollout risk, and metrics blind spots.",
+          "",
+          "Return: strengths, risks, unclear areas, and decisions the team still needs to make.",
+        ].join("\n"),
+      )),
+      JSON.stringify(textBlocks(
+        [
+          "# Risk Lenses",
+          "",
+          "- Product ambiguity",
+          "- Operational risk",
+          "- Data and analytics gaps",
+          "- Rollback and failure handling",
+        ].join("\n"),
+      )),
+    ],
+  );
+  await query(
+    `UPDATE skill_market_skills SET latest_version_id = $1 WHERE id = $2`,
+    [specReviewVersion.rows[0].id, skillIdsBySlug.get("spec-review")],
+  );
+
+  await query(
+    `INSERT INTO installed_skills (
+       workspace_id, source_skill_id, source_version_id, source_version,
+       slug, name, summary, tags, entry_path, use_scope, installed_by
+     )
+     VALUES ($1, $2, $3, '1.0.0', 'meeting-brief', 'Meeting Brief', 'Turn messy meeting notes into a tight action-oriented brief.', ARRAY['meetings', 'summary'], 'SKILL.md', 'workspace', $4)
+     ON CONFLICT DO NOTHING`,
+    [
+      workspaceId,
+      skillIdsBySlug.get("meeting-brief"),
+      meetingBriefVersion.rows[0].id,
+      userId,
+    ],
+  );
+
+  const installedMeetingBrief = await query<{ id: string }>(
+    `SELECT id
+     FROM installed_skills
+     WHERE workspace_id = $1
+       AND slug = 'meeting-brief'
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [workspaceId],
+  );
+  if (installedMeetingBrief.rows.length > 0) {
+    await query(
+      `DELETE FROM installed_skill_files WHERE installed_skill_id = $1`,
+      [installedMeetingBrief.rows[0].id],
+    );
+    await query(
+      `INSERT INTO installed_skill_files (installed_skill_id, path, content_blocks)
+       VALUES
+         ($1, 'SKILL.md', $2::jsonb),
+         ($1, 'references/checklist.md', $3::jsonb)`,
+      [
+        installedMeetingBrief.rows[0].id,
+        JSON.stringify(textBlocks(
+          [
+            "# Meeting Brief",
+            "",
+            "You turn raw meeting notes into a concise brief with decisions, action items, owners, blockers, and follow-ups.",
+            "",
+            "Use a direct tone. Collapse repetition. Preserve concrete commitments and deadlines.",
+          ].join("\n"),
+        )),
+        JSON.stringify(textBlocks(
+          [
+            "# Checklist",
+            "",
+            "- Capture decisions",
+            "- Extract owners",
+            "- Flag missing owners",
+            "- Separate facts from open questions",
+          ].join("\n"),
+        )),
+      ],
+    );
+  }
+
   const authzEntryIds = await enqueueAuthzRelationships(authzEntries, {
     source: "db.seed",
     workspaceId,

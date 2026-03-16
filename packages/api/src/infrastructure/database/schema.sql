@@ -1399,6 +1399,109 @@ CREATE INDEX idx_capability_instance_grants_actor ON capability_instance_grants(
 CREATE INDEX idx_capability_instance_grants_conversation ON capability_instance_grants(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
 CREATE INDEX idx_capability_instance_grants_user ON capability_instance_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
 
+-- ============ Skill Marketplace ============
+CREATE TABLE skill_market_skills (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  slug VARCHAR(100) NOT NULL UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  summary TEXT DEFAULT '',
+  icon_url TEXT,
+  tags TEXT[] DEFAULT '{}',
+  author_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  latest_version_id UUID,
+  is_active BOOLEAN DEFAULT TRUE,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_skill_market_skills_active ON skill_market_skills(is_active, updated_at DESC);
+CREATE INDEX idx_skill_market_skills_tags ON skill_market_skills USING GIN(tags);
+
+CREATE TABLE skill_market_versions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  skill_id UUID NOT NULL REFERENCES skill_market_skills(id) ON DELETE CASCADE,
+  version VARCHAR(50) NOT NULL,
+  entry_path TEXT NOT NULL DEFAULT 'SKILL.md',
+  changelog TEXT DEFAULT '',
+  metadata JSONB DEFAULT '{}',
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(skill_id, version)
+);
+
+CREATE INDEX idx_skill_market_versions_skill ON skill_market_versions(skill_id, created_at DESC);
+
+ALTER TABLE skill_market_skills
+  ADD CONSTRAINT fk_skill_market_skills_latest_version
+  FOREIGN KEY (latest_version_id) REFERENCES skill_market_versions(id) ON DELETE SET NULL;
+
+CREATE TABLE skill_market_files (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  version_id UUID NOT NULL REFERENCES skill_market_versions(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  content_blocks JSONB NOT NULL DEFAULT '[]',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(version_id, path),
+  CHECK (jsonb_typeof(content_blocks) = 'array')
+);
+
+CREATE INDEX idx_skill_market_files_version ON skill_market_files(version_id, path);
+
+-- ============ Installed Skills ============
+CREATE TABLE installed_skills (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  source_skill_id UUID REFERENCES skill_market_skills(id) ON DELETE SET NULL,
+  source_version_id UUID REFERENCES skill_market_versions(id) ON DELETE SET NULL,
+  source_version VARCHAR(50),
+  slug VARCHAR(100) NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  summary TEXT DEFAULT '',
+  icon_url TEXT,
+  tags TEXT[] DEFAULT '{}',
+  entry_path TEXT NOT NULL DEFAULT 'SKILL.md',
+  use_scope VARCHAR(30) NOT NULL
+    CHECK (use_scope IN ('workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  is_enabled BOOLEAN DEFAULT TRUE,
+  is_customized BOOLEAN DEFAULT FALSE,
+  installed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT chk_installed_skill_scope_target CHECK (
+    (use_scope = 'workspace' AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
+    (use_scope = 'conversation' AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
+    (use_scope = 'actor_global' AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
+    (use_scope = 'actor_conversation' AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
+    (use_scope = 'user' AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
+  )
+);
+
+CREATE INDEX idx_installed_skills_workspace ON installed_skills(workspace_id, updated_at DESC);
+CREATE INDEX idx_installed_skills_source ON installed_skills(source_skill_id, source_version_id);
+CREATE INDEX idx_installed_skills_actor ON installed_skills(actor_id, updated_at DESC) WHERE actor_id IS NOT NULL;
+CREATE INDEX idx_installed_skills_conversation ON installed_skills(conversation_id, updated_at DESC) WHERE conversation_id IS NOT NULL;
+CREATE INDEX idx_installed_skills_user ON installed_skills(user_id, updated_at DESC) WHERE user_id IS NOT NULL;
+
+CREATE TABLE installed_skill_files (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  installed_skill_id UUID NOT NULL REFERENCES installed_skills(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  content_blocks JSONB NOT NULL DEFAULT '[]',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(installed_skill_id, path),
+  CHECK (jsonb_typeof(content_blocks) = 'array')
+);
+
+CREATE INDEX idx_installed_skill_files_skill ON installed_skill_files(installed_skill_id, path);
+
 -- ============ Capability Requirements ============
 CREATE TABLE capability_requirements (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

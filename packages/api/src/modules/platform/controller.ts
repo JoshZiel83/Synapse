@@ -56,6 +56,7 @@ export function registerPlatformRoutes(app: FastifyInstance) {
       data: {
         canAccessPlatformModels: canManagePlatform,
         canAccessPlatformAccess: canManagePlatform,
+        canAccessPlatformSkills: canManagePlatform,
       },
     });
   });
