@@ -8,14 +8,22 @@ import {
   Logs,
   Settings2,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { Button } from './components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './components/ui/dialog'
 import { useRelayDesktop } from './hooks/use-relay-desktop'
 import { useSystemTheme } from './hooks/use-system-theme'
 import { cn } from './lib/utils'
 import { LogsPanel } from './views/logs-panel'
-import { AppsPanel } from './views/apps-panel'
+import { AppsPanel, type AppsPanelHandle } from './views/apps-panel'
 import { PairingPanel } from './views/pairing-panel'
 import { ServersPanel } from './views/servers-panel'
 import { SettingsPanel } from './views/settings-panel'
@@ -82,20 +90,33 @@ export default function App() {
     sources,
     banner,
     setBanner,
+    ready,
     actions,
   } = useRelayDesktop()
 
   const [view, setView] = useState<View>('pairing')
   const [busy, setBusy] = useState<'starting' | 'stopping' | 'restarting' | null>(null)
+  const [pendingView, setPendingView] = useState<View | null>(null)
+  const [showUnsavedDialog, setShowUnsavedDialog] = useState(false)
+  const [savingBeforeNavigate, setSavingBeforeNavigate] = useState(false)
+  const didInitializeView = useRef(false)
+  const appsPanelRef = useRef<AppsPanelHandle>(null)
 
   useEffect(() => {
+    if (!ready) {
+      return
+    }
+
     setView((current) => {
       const next = recommendedView(config.relay?.deviceId, (config.servers || []).filter((server) => server.enabled !== false).length)
-      if (current === 'pairing' && config.relay?.deviceId) return next
+      if (!didInitializeView.current) {
+        didInitializeView.current = true
+        return next
+      }
       if (current === 'status' && !config.relay?.deviceId) return 'pairing'
       return current || next
     })
-  }, [config.relay?.deviceId, config.servers])
+  }, [config.relay?.deviceId, config.servers, ready])
 
   async function handleStart() {
     setBusy('starting')
@@ -130,6 +151,49 @@ export default function App() {
     }
   }
 
+  function closeUnsavedDialog() {
+    setShowUnsavedDialog(false)
+    setPendingView(null)
+  }
+
+  function handleNavigate(nextView: View) {
+    if (nextView === view) {
+      return
+    }
+
+    if (view === 'apps' && appsPanelRef.current?.hasUnsavedChanges()) {
+      setPendingView(nextView)
+      setShowUnsavedDialog(true)
+      return
+    }
+
+    setView(nextView)
+  }
+
+  async function handleSaveAndContinue() {
+    if (!pendingView || !appsPanelRef.current) {
+      closeUnsavedDialog()
+      return
+    }
+
+    setSavingBeforeNavigate(true)
+    const saved = await appsPanelRef.current.saveChanges()
+    setSavingBeforeNavigate(false)
+    if (!saved) {
+      return
+    }
+
+    setView(pendingView)
+    closeUnsavedDialog()
+  }
+
+  function handleDiscardAndContinue() {
+    if (pendingView) {
+      setView(pendingView)
+    }
+    closeUnsavedDialog()
+  }
+
   return (
     <div className="h-screen overflow-hidden text-foreground">
       <div className="relay-shell">
@@ -143,7 +207,7 @@ export default function App() {
                   key={item.value}
                   type="button"
                   className={cn('relay-sidebar__item', active && 'relay-sidebar__item--active')}
-                  onClick={() => setView(item.value)}
+                  onClick={() => handleNavigate(item.value)}
                 >
                   <Icon strokeWidth={1.8} />
                   <span>{item.label}</span>
@@ -198,7 +262,9 @@ export default function App() {
 
             {view === 'apps' ? (
               <AppsPanel
+                ref={appsPanelRef}
                 config={config}
+                onGetSuggestedFilesystemRoots={() => actions.getSuggestedFilesystemRoots()}
                 onSave={(nextConfig) => actions.saveConfig(nextConfig)}
               />
             ) : null}
@@ -224,6 +290,32 @@ export default function App() {
           </section>
         </main>
       </div>
+
+      <Dialog open={showUnsavedDialog} onOpenChange={(open) => {
+        if (!open) {
+          closeUnsavedDialog()
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save changes before leaving?</DialogTitle>
+            <DialogDescription>
+              You have unsaved built-in app changes. Save them before switching menus, or discard them and continue.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-6">
+            <Button variant="ghost" onClick={closeUnsavedDialog} disabled={savingBeforeNavigate}>
+              Stay
+            </Button>
+            <Button variant="outline" onClick={handleDiscardAndContinue} disabled={savingBeforeNavigate}>
+              Discard
+            </Button>
+            <Button onClick={() => void handleSaveAndContinue()} disabled={savingBeforeNavigate}>
+              {savingBeforeNavigate ? 'Saving...' : 'Save and Continue'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -3,6 +3,7 @@ module github.com/PekingSpades/Synapse/relay
 go 1.24.1
 
 require (
+	github.com/adrg/xdg v0.5.3
 	github.com/BurntSushi/toml v1.6.0
 	github.com/PekingSpades/DeskAct v0.0.0-20260228104223-b1be287e5b22
 	github.com/gorilla/websocket v1.5.3

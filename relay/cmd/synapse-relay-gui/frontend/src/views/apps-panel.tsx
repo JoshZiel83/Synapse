@@ -1,5 +1,5 @@
 import { Cable, ChevronDown, FolderTree, Globe, Plus, Search, Shield, SlidersHorizontal, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
 
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -24,7 +24,13 @@ import { cn } from '../lib/utils'
 
 interface AppsPanelProps {
   config: RelayConfig
+  onGetSuggestedFilesystemRoots: () => Promise<BuiltinFilesystemRootConfig[]>
   onSave: (nextConfig: RelayConfig) => Promise<void>
+}
+
+export interface AppsPanelHandle {
+  hasUnsavedChanges: () => boolean
+  saveChanges: () => Promise<boolean>
 }
 
 const defaultFilesystemFileTypes = [
@@ -253,6 +259,43 @@ function normalizeFilesystemServer(input?: ServerConfig): ServerConfig {
   }
 }
 
+function validateFilesystemServerDraft(server: ServerConfig): string {
+  const filesystem = server.builtin?.filesystem
+  if (!filesystem) {
+    return 'Filesystem settings are missing.'
+  }
+
+  if (filesystem.scope === 'global') {
+    if (filesystem.globalAccess !== 'ro' && filesystem.globalAccess !== 'rw') {
+      return 'Filesystem global access must be read-only or read/write.'
+    }
+    return ''
+  }
+
+  const roots = filesystem.roots || []
+  if (roots.length === 0) {
+    return 'Add at least one filesystem root before enabling Filesystem.'
+  }
+
+  const emptyRootIndex = roots.findIndex((root) => !root.path.trim())
+  if (emptyRootIndex >= 0) {
+    return `Filesystem root ${emptyRootIndex + 1} needs a path before you can save it.`
+  }
+
+  return ''
+}
+
+function hasConfiguredFilesystemScope(server?: ServerConfig): boolean {
+  const filesystem = server?.builtin?.filesystem
+  if (!filesystem) {
+    return false
+  }
+  if (filesystem.scope === 'global') {
+    return true
+  }
+  return (filesystem.roots || []).some((root) => root.path.trim())
+}
+
 function withChromeConfig(server: ServerConfig, update: (current: BuiltinChromeConfig) => BuiltinChromeConfig): ServerConfig {
   const next = normalizeChromeServer(server)
   return {
@@ -351,7 +394,7 @@ function ScopeButton({
   )
 }
 
-export function AppsPanel({ config, onSave }: AppsPanelProps) {
+export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function AppsPanel({ config, onGetSuggestedFilesystemRoots, onSave }: AppsPanelProps, ref) {
   const chromeServer = chromeServerFromConfig(config)
   const cuaServer = cuaServerFromConfig(config)
   const filesystemServer = filesystemServerFromConfig(config)
@@ -363,25 +406,41 @@ export function AppsPanel({ config, onSave }: AppsPanelProps) {
   const [cuaDraft, setCuaDraft] = useState<ServerConfig>(() => normalizeCUAServer(cuaServerFromConfig(config)))
   const [filesystemDraft, setFilesystemDraft] = useState<ServerConfig>(() => normalizeFilesystemServer(filesystemServerFromConfig(config)))
   const [expanded, setExpanded] = useState<{ chrome: boolean; cua: boolean; filesystem: boolean }>({ chrome: false, cua: false, filesystem: false })
+  const [dirty, setDirty] = useState<{ chrome: boolean; cua: boolean; filesystem: boolean }>({
+    chrome: false,
+    cua: false,
+    filesystem: false,
+  })
   const [saving, setSaving] = useState(false)
+  const [filesystemBootstrapping, setFilesystemBootstrapping] = useState(false)
   const [error, setError] = useState('')
 
   const chrome = chromeDraft.builtin?.chrome || defaultChromeServer().builtin?.chrome || {}
   const cua = cuaDraft.builtin?.cua || defaultCUAServer().builtin?.cua || {}
   const filesystem = filesystemDraft.builtin?.filesystem || defaultFilesystemServer().builtin?.filesystem || {}
   const filesystemIndex = filesystem.index || defaultFilesystemServer().builtin?.filesystem?.index || {}
+  const hasUnsavedChanges = dirty.chrome || dirty.cua || dirty.filesystem
 
   useEffect(() => {
+    if (dirty.chrome) {
+      return
+    }
     setChromeDraft(normalizeChromeServer(chromeServer))
-  }, [chromeServer, chromeServerSignature])
+  }, [chromeServer, chromeServerSignature, dirty.chrome])
 
   useEffect(() => {
+    if (dirty.cua) {
+      return
+    }
     setCuaDraft(normalizeCUAServer(cuaServer))
-  }, [cuaServer, cuaServerSignature])
+  }, [cuaServer, cuaServerSignature, dirty.cua])
 
   useEffect(() => {
+    if (dirty.filesystem) {
+      return
+    }
     setFilesystemDraft(normalizeFilesystemServer(filesystemServer))
-  }, [filesystemServer, filesystemServerSignature])
+  }, [filesystemServer, filesystemServerSignature, dirty.filesystem])
 
   useEffect(() => {
     setExpanded((current) => ({
@@ -392,22 +451,99 @@ export function AppsPanel({ config, onSave }: AppsPanelProps) {
   }, [chromeDraft.enabled, cuaDraft.enabled, filesystemDraft.enabled])
 
   function updateChromeDraft(update: (current: ServerConfig) => ServerConfig) {
+    setDirty((current) => ({ ...current, chrome: true }))
     setChromeDraft((current) => normalizeChromeServer(update(current)))
   }
 
   function updateCUADraft(update: (current: ServerConfig) => ServerConfig) {
+    setDirty((current) => ({ ...current, cua: true }))
     setCuaDraft((current) => normalizeCUAServer(update(current)))
   }
 
   function updateFilesystemDraft(update: (current: ServerConfig) => ServerConfig) {
+    setDirty((current) => ({ ...current, filesystem: true }))
     setFilesystemDraft((current) => normalizeFilesystemServer(update(current)))
+  }
+
+  async function handleFilesystemEnabledChange(checked: boolean) {
+    setError('')
+
+    if (!checked) {
+      updateFilesystemDraft((current) => ({
+        ...current,
+        enabled: false,
+      }))
+      return
+    }
+
+    const shouldApplySuggestedRoots =
+      filesystemDraft.enabled === false &&
+      !hasConfiguredFilesystemScope(filesystemServer) &&
+      !hasConfiguredFilesystemScope(filesystemDraft)
+
+    updateFilesystemDraft((current) => ({
+      ...current,
+      enabled: true,
+    }))
+
+    if (!shouldApplySuggestedRoots) {
+      return
+    }
+
+    setFilesystemBootstrapping(true)
+    try {
+      const suggestedRoots = (await onGetSuggestedFilesystemRoots())
+        .filter((root) => root.path.trim())
+        .map((root) => ({
+          path: root.path,
+          access: root.access || 'ro',
+        }))
+
+      if (suggestedRoots.length === 0) {
+        return
+      }
+
+      updateFilesystemDraft((current) =>
+        withFilesystemConfig(current, (currentFilesystem) => {
+          if (currentFilesystem.scope === 'global') {
+            return currentFilesystem
+          }
+          if ((currentFilesystem.roots || []).some((root) => root.path.trim())) {
+            return currentFilesystem
+          }
+          return {
+            ...currentFilesystem,
+            roots: suggestedRoots,
+          }
+        }),
+      )
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setFilesystemBootstrapping(false)
+    }
   }
 
   async function handleSave() {
     const nextServers = (config.servers || []).filter((server) => !(server.transport === 'builtin' && (server.builtin?.kind === 'chrome' || server.builtin?.kind === 'cua' || server.builtin?.kind === 'filesystem')))
-    nextServers.push(normalizeChromeServer(chromeDraft))
-    nextServers.push(normalizeCUAServer(cuaDraft))
-    nextServers.push(normalizeFilesystemServer(filesystemDraft))
+    const nextChrome = normalizeChromeServer(chromeDraft)
+    const nextCUA = normalizeCUAServer(cuaDraft)
+    const nextFilesystem = normalizeFilesystemServer(filesystemDraft)
+
+    nextServers.push(nextChrome)
+    nextServers.push(nextCUA)
+
+    const shouldPersistFilesystem = Boolean(filesystemServer) || nextFilesystem.enabled !== false
+    if (shouldPersistFilesystem) {
+      const filesystemError = nextFilesystem.enabled !== false
+        ? validateFilesystemServerDraft(nextFilesystem)
+        : ''
+      if (filesystemError) {
+        setError(filesystemError)
+        return false
+      }
+      nextServers.push(nextFilesystem)
+    }
 
     setSaving(true)
     setError('')
@@ -416,12 +552,24 @@ export function AppsPanel({ config, onSave }: AppsPanelProps) {
         ...config,
         servers: nextServers,
       })
+      setDirty({
+        chrome: false,
+        cua: false,
+        filesystem: false,
+      })
+      return true
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
+      return false
     } finally {
       setSaving(false)
     }
   }
+
+  useImperativeHandle(ref, () => ({
+    hasUnsavedChanges: () => hasUnsavedChanges,
+    saveChanges: () => handleSave(),
+  }), [hasUnsavedChanges, handleSave])
 
   function updateFilesystemRoot(index: number, update: (current: BuiltinFilesystemRootConfig) => BuiltinFilesystemRootConfig) {
     updateFilesystemDraft((current) =>
@@ -465,9 +613,9 @@ export function AppsPanel({ config, onSave }: AppsPanelProps) {
           <h1 className="text-[28px] leading-none font-semibold tracking-tight text-foreground">Apps</h1>
           <div className="mt-3 text-sm text-muted-foreground">Built-in MCPs run inside relay. Enable them selectively and save once when you are done.</div>
         </div>
-        <Button onClick={() => void handleSave()} disabled={saving}>
+        <Button onClick={() => void handleSave()} disabled={saving || filesystemBootstrapping}>
           <Cable data-icon="inline-start" />
-          {saving ? 'Saving...' : 'Save Built-ins'}
+          {saving ? 'Saving...' : filesystemBootstrapping ? 'Preparing...' : 'Save Built-ins'}
         </Button>
       </div>
 
@@ -1256,12 +1404,8 @@ export function AppsPanel({ config, onSave }: AppsPanelProps) {
                 type="checkbox"
                 className="size-4 accent-[color:var(--primary)]"
                 checked={filesystemDraft.enabled !== false}
-                onChange={(event) =>
-                  updateFilesystemDraft((current) => ({
-                    ...current,
-                    enabled: event.target.checked,
-                  }))
-                }
+                disabled={filesystemBootstrapping}
+                onChange={(event) => void handleFilesystemEnabledChange(event.target.checked)}
               />
             </label>
 
@@ -1269,7 +1413,7 @@ export function AppsPanel({ config, onSave }: AppsPanelProps) {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={filesystemDraft.enabled === false}
+              disabled={filesystemDraft.enabled === false || filesystemBootstrapping}
               onClick={() => setExpanded((current) => ({ ...current, filesystem: !current.filesystem }))}
             >
               <ChevronDown className={cn('transition-transform', expanded.filesystem && 'rotate-180')} />
@@ -1562,4 +1706,4 @@ export function AppsPanel({ config, onSave }: AppsPanelProps) {
       </section>
     </section>
   )
-}
+})

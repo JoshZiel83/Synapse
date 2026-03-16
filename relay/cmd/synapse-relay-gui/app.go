@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/PekingSpades/Synapse/relay/internal/relay"
 	"github.com/PekingSpades/Synapse/relay/internal/startup"
 	"github.com/PekingSpades/Synapse/relay/internal/tray"
+	"github.com/adrg/xdg"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -289,6 +291,11 @@ func (a *App) SaveConfig(cfg config.Config) error {
 	return nil
 }
 
+func (a *App) GetSuggestedFilesystemRoots() []config.BuiltinFilesystemRootConfig {
+	xdg.Reload()
+	return suggestedFilesystemRootsFromUserDirs(xdg.UserDirs.Download, xdg.UserDirs.Desktop)
+}
+
 func (a *App) ClaimPairing(serverBaseURL, pairingCode, displayName string) (string, error) {
 	result, err := a.claimPairing(serverBaseURL, pairingCode, displayName)
 	if err != nil {
@@ -324,6 +331,36 @@ func (a *App) claimPairing(serverBaseURL, pairingCode, displayName string) (*clo
 	a.emitConfigUpdated(cfg, message, autoApplied)
 	go a.prefetchUpdateAfterPairing()
 	return result, nil
+}
+
+func suggestedFilesystemRootsFromUserDirs(downloadDir, desktopDir string) []config.BuiltinFilesystemRootConfig {
+	candidates := []string{
+		strings.TrimSpace(downloadDir),
+		strings.TrimSpace(desktopDir),
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	roots := make([]config.BuiltinFilesystemRootConfig, 0, len(candidates))
+
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		cleaned := filepath.Clean(candidate)
+		if _, ok := seen[cleaned]; ok {
+			continue
+		}
+		info, err := os.Stat(cleaned)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		seen[cleaned] = struct{}{}
+		roots = append(roots, config.BuiltinFilesystemRootConfig{
+			Path:   cleaned,
+			Access: "ro",
+		})
+	}
+
+	return roots
 }
 
 // --- Relay control methods ---

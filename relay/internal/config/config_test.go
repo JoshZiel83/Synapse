@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestValidateRequiresServerPinForSecureRemoteRelay(t *testing.T) {
 	cfg := &Config{
@@ -150,6 +154,73 @@ func TestValidateBuiltinFilesystemServer(t *testing.T) {
 
 	if errs := Validate(cfg); len(errs) != 0 {
 		t.Fatalf("expected builtin filesystem config to validate, got %v", errs)
+	}
+}
+
+func TestValidateSkipsDisabledInvalidBuiltinFilesystemServer(t *testing.T) {
+	cfg := &Config{
+		Relay: RelayConfig{
+			ServerBaseURL:         "http://127.0.0.1:3001",
+			WebSocketURL:          "ws://127.0.0.1:3001/ws/relay",
+			DeviceID:              "device-123",
+			PrivateKeyPath:        "/tmp/device-key.pem",
+			ServerTLSPublicKeyPin: "",
+		},
+		Servers: []ServerConfig{
+			{
+				Name:      "filesystem",
+				Enabled:   boolPtr(false),
+				Transport: "builtin",
+				Builtin: &BuiltinServerConfig{
+					Kind:       "filesystem",
+					InstanceID: "filesystem_default",
+					Filesystem: &BuiltinFilesystemConfig{
+						Scope: "roots",
+						Roots: []BuiltinFilesystemRootConfig{
+							{Path: "", Access: "ro"},
+						},
+						Index: BuiltinFilesystemIndexConfig{
+							MaxFileSizeBytes: 1024,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if errs := Validate(cfg); len(errs) != 0 {
+		t.Fatalf("expected disabled invalid filesystem config to be ignored, got %v", errs)
+	}
+}
+
+func TestLoadAllowsDisabledInvalidBuiltinFilesystemServer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	data := []byte(`
+servers:
+  - name: filesystem
+    enabled: false
+    transport: builtin
+    builtin:
+      kind: filesystem
+      instance_id: filesystem_default
+      filesystem:
+        scope: roots
+        roots:
+          - path: ""
+            access: ro
+`)
+
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected disabled invalid filesystem config to load, got %v", err)
+	}
+	if len(cfg.Servers) != 1 || cfg.Servers[0].Name != "filesystem" {
+		t.Fatalf("expected filesystem server to load, got %+v", cfg.Servers)
 	}
 }
 

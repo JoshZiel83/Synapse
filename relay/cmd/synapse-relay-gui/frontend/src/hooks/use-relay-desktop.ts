@@ -7,6 +7,7 @@ import {
 
 import { callGo } from '../lib/wails'
 import type {
+  BuiltinFilesystemRootConfig,
   ConfigChangeEvent,
   ConfigUpdatedEvent,
   ImportServer,
@@ -39,6 +40,7 @@ export function useRelayDesktop() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [sources, setSources] = useState<ImportSource[]>([])
   const [banner, setBanner] = useState<string>('')
+  const [ready, setReady] = useState(false)
 
   const loadConfig = useEffectEvent(async () => {
     try {
@@ -98,6 +100,11 @@ export function useRelayDesktop() {
   const removeServer = useEffectEvent(async (name: string) => {
     await callGo('RemoveServer', name)
     await loadConfig()
+  })
+
+  const getSuggestedFilesystemRoots = useEffectEvent(async () => {
+    const roots = await callGo<BuiltinFilesystemRootConfig[]>('GetSuggestedFilesystemRoots')
+    return roots || []
   })
 
   const importServers = useEffectEvent(async (servers: ImportServer[]) => {
@@ -196,6 +203,9 @@ export function useRelayDesktop() {
 
   useEffect(() => {
     void Promise.all([loadConfig(), refreshStatus(), refreshLogs(), detectSources()])
+      .finally(() => {
+        setReady(true)
+      })
 
     const poll = window.setInterval(() => {
       void refreshStatus()
@@ -261,6 +271,7 @@ export function useRelayDesktop() {
     sources,
     banner,
     setBanner,
+    ready,
     actions: {
       loadConfig,
       refreshStatus,
@@ -269,6 +280,7 @@ export function useRelayDesktop() {
       detectSources,
       addServer,
       removeServer,
+      getSuggestedFilesystemRoots,
       saveConfig,
       importServers,
       addSyncSource,

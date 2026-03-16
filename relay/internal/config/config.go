@@ -280,6 +280,9 @@ func Load(path string) (*Config, error) {
 		if s.Name == "" {
 			return nil, fmt.Errorf("server[%d]: name is required", i)
 		}
+		if !ServerEnabled(s) {
+			continue
+		}
 		if err := validateServerConfig(s); err != nil {
 			return nil, fmt.Errorf("server[%d] (%s): %w", i, s.Name, err)
 		}
@@ -326,6 +329,9 @@ func Validate(cfg *Config) []string {
 	for i, s := range cfg.Servers {
 		if s.Name == "" {
 			errs = append(errs, fmt.Sprintf("server[%d]: name is required", i))
+			continue
+		}
+		if !ServerEnabled(s) {
 			continue
 		}
 		if err := validateServerConfig(s); err != nil {
