@@ -4,15 +4,15 @@ on:
   push:
     branches:
       - '**'
-    paths:
-      - 'relay/**'
-      - '.github/workflows/relay-build.yml'
+    # paths:
+    #   - 'relay/**'
+    #   - '.github/workflows/relay-build.yml'
     tags:
       - 'relay-v*'
   pull_request:
-    paths:
-      - 'relay/**'
-      - '.github/workflows/relay-build.yml'
+    # paths:
+    #   - 'relay/**'
+    #   - '.github/workflows/relay-build.yml'
   workflow_dispatch:
     inputs:
       version:
