@@ -67,21 +67,21 @@ CREATE TABLE platform_settings (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE platform_user_roles (
+CREATE TABLE platform_access_bindings (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role VARCHAR(30) NOT NULL
-    CHECK (role IN ('super_admin', 'workspace_admin', 'model_admin', 'support', 'auditor')),
+  access_key VARCHAR(30) NOT NULL
+    CHECK (access_key IN ('super_admin', 'workspace_admin', 'model_admin', 'support', 'auditor')),
   source VARCHAR(20) NOT NULL DEFAULT 'manual'
     CHECK (source IN ('config', 'manual')),
   assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  PRIMARY KEY (user_id, role)
+  PRIMARY KEY (user_id, access_key)
 );
 
-CREATE INDEX idx_platform_user_roles_role ON platform_user_roles(role, created_at DESC);
-CREATE INDEX idx_platform_user_roles_source ON platform_user_roles(source, created_at DESC);
+CREATE INDEX idx_platform_access_bindings_access_key ON platform_access_bindings(access_key, created_at DESC);
+CREATE INDEX idx_platform_access_bindings_source ON platform_access_bindings(source, created_at DESC);
 
 -- ============ Workspace Members ============
 CREATE TABLE workspace_members (
@@ -97,21 +97,21 @@ CREATE TABLE workspace_members (
 CREATE INDEX idx_workspace_members_workspace ON workspace_members(workspace_id);
 CREATE INDEX idx_workspace_members_user ON workspace_members(user_id);
 
-CREATE TABLE workspace_member_roles (
+CREATE TABLE workspace_access_bindings (
   workspace_id UUID NOT NULL,
   user_id UUID NOT NULL,
-  role VARCHAR(30) NOT NULL
-    CHECK (role IN ('model_admin', 'actor_admin', 'capability_admin', 'memory_admin', 'relay_admin', 'conversation_admin')),
+  access_key VARCHAR(30) NOT NULL
+    CHECK (access_key IN ('model_admin', 'actor_admin', 'capability_admin', 'memory_admin', 'relay_admin', 'conversation_admin')),
   assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  PRIMARY KEY (workspace_id, user_id, role),
+  PRIMARY KEY (workspace_id, user_id, access_key),
   FOREIGN KEY (workspace_id, user_id) REFERENCES workspace_members(workspace_id, user_id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_workspace_member_roles_workspace ON workspace_member_roles(workspace_id, role, created_at DESC);
-CREATE INDEX idx_workspace_member_roles_user ON workspace_member_roles(user_id, role, created_at DESC);
+CREATE INDEX idx_workspace_access_bindings_workspace ON workspace_access_bindings(workspace_id, access_key, created_at DESC);
+CREATE INDEX idx_workspace_access_bindings_user ON workspace_access_bindings(user_id, access_key, created_at DESC);
 
 -- ============ Workspace Invites ============
 CREATE TABLE workspace_invites (
@@ -541,35 +541,6 @@ CREATE UNIQUE INDEX idx_conversation_members_unique_actor
 CREATE UNIQUE INDEX idx_conversation_members_unique_user
   ON conversation_members(conversation_id, user_id) WHERE user_id IS NOT NULL;
 
--- ============ Conversation Memory Grants ============
-CREATE TABLE conversation_memory_grants (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  permission VARCHAR(30) NOT NULL
-    CHECK (permission IN ('memory_edit', 'memory_grant', 'memory_retarget', 'memory_delete')),
-  subject_type VARCHAR(20) NOT NULL
-    CHECK (subject_type IN ('user', 'actor')),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'revoked')),
-  granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  reason TEXT,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ,
-  CONSTRAINT chk_conversation_memory_grants_target CHECK (
-    (subject_type = 'user' AND user_id IS NOT NULL AND actor_id IS NULL) OR
-    (subject_type = 'actor' AND actor_id IS NOT NULL AND user_id IS NULL)
-  )
-);
-
-CREATE INDEX idx_conversation_memory_grants_conversation ON conversation_memory_grants(conversation_id, created_at DESC);
-CREATE INDEX idx_conversation_memory_grants_workspace ON conversation_memory_grants(workspace_id, created_at DESC);
-CREATE INDEX idx_conversation_memory_grants_user ON conversation_memory_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
-CREATE INDEX idx_conversation_memory_grants_actor ON conversation_memory_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
-
 CREATE TABLE conversation_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -603,7 +574,7 @@ CREATE TABLE actor_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
   permission VARCHAR(30) NOT NULL
-    CHECK (permission IN ('discover', 'invoke', 'receive_message', 'memory_read', 'memory_edit', 'memory_grant', 'memory_retarget', 'memory_delete')),
+    CHECK (permission IN ('discover', 'invoke', 'receive_message', 'memory_read', 'memory_edit', 'memory_retarget', 'memory_delete')),
   grant_scope VARCHAR(30) NOT NULL
     CHECK (grant_scope IN ('workspace', 'user', 'workspace_user', 'conversation', 'actor')),
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -991,41 +962,6 @@ CREATE TABLE memory_entry_parts (
 );
 
 CREATE INDEX idx_memory_entry_parts_entry ON memory_entry_parts(memory_entry_id, ordinal);
-
--- ============ Memory Grants ============
-CREATE TABLE memory_grants (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  memory_entry_id UUID NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  permission VARCHAR(20) NOT NULL DEFAULT 'read'
-    CHECK (permission IN ('read', 'edit', 'grant', 'retarget', 'delete')),
-  grant_scope VARCHAR(30) NOT NULL
-    CHECK (grant_scope IN ('workspace', 'conversation', 'actor_global', 'actor_conversation', 'user', 'workspace_user')),
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'revoked')),
-  granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  reason TEXT,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ,
-  CHECK (
-    (grant_scope = 'workspace' AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'conversation' AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'actor_global' AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'actor_conversation' AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
-    (grant_scope = 'user' AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL) OR
-    (grant_scope = 'workspace_user' AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
-  )
-);
-
-CREATE INDEX idx_memory_grants_entry ON memory_grants(memory_entry_id, created_at DESC);
-CREATE INDEX idx_memory_grants_workspace ON memory_grants(workspace_id, created_at DESC);
-CREATE INDEX idx_memory_grants_actor ON memory_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_memory_grants_conversation ON memory_grants(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
-CREATE INDEX idx_memory_grants_user ON memory_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
 
 -- ============ Memory Index Chunks ============
 CREATE TABLE memory_index_chunks (

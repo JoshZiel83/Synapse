@@ -1,15 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
-import { AppCard, AppCardContent } from '@/components/app-card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
 import PluginInstallationWorkbench from '../plugin-installation-workbench';
-import { PluginIcon, getLocale, translate } from '../plugin-ui';
+import PluginHeroCard from '../plugin-hero-card';
 
 export default function PluginDetailPage() {
   const params = useParams<{ pluginId: string }>();
@@ -21,7 +19,6 @@ export default function PluginDetailPage() {
   const [loading, setLoading] = useState(true);
   const pluginId = params.pluginId;
   const selectedInstallationId = searchParams.get('installationId');
-  const locale = useMemo(() => getLocale(plugin?.default_locale), [plugin?.default_locale]);
 
   useEffect(() => {
     if (!workspaceId || !pluginId) return;
@@ -66,12 +63,6 @@ export default function PluginDetailPage() {
     );
   }
 
-  const title = translate(plugin.display_name_i18n, locale, plugin.default_locale || 'en') || plugin.display_name;
-  const description = translate(plugin.long_description_i18n || plugin.description_i18n, locale, plugin.default_locale || 'en') || plugin.long_description || plugin.description;
-  const activeInstallationId = installations.some((installation) => installation.id === selectedInstallationId)
-    ? selectedInstallationId
-    : installations[0]?.id;
-
   return (
     <div className="flex flex-col gap-6 px-4 pb-6 pt-6 lg:px-6">
       <div className="flex flex-wrap items-center gap-3">
@@ -81,39 +72,7 @@ export default function PluginDetailPage() {
         </Button>
       </div>
 
-      <AppCard variant="panel">
-        <AppCardContent className="p-6">
-          <div className="flex flex-col gap-5 md:flex-row md:items-start">
-            <PluginIcon
-              iconUrl={plugin.icon_url}
-              title={title}
-              transport={plugin.transport}
-              verified={plugin.is_builtin}
-              containerClassName="h-20 w-20 rounded-[24px]"
-              className="h-8 w-8"
-            />
-            <div className="min-w-0 flex-1 space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-2xl font-semibold text-foreground">{title}</h1>
-                {plugin.org_display_name ? <Badge variant="secondary" className="bg-gray-100 text-gray-700 dark:bg-white/5 dark:text-gray-300">{plugin.org_display_name}</Badge> : null}
-              </div>
-              <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{description}</p>
-              <div className="flex flex-wrap gap-2">
-                {(plugin.categories || []).map((category: any) => (
-                  <Badge key={category.slug} variant="outline" className="border-blue-200 text-blue-600 dark:border-blue-500/20 dark:text-blue-300">
-                    {translate(category.displayNameI18n, locale, category.defaultLocale || 'en') || category.displayName}
-                  </Badge>
-                ))}
-                {(plugin.tags || []).map((tag: string) => (
-                  <Badge key={tag} variant="secondary" className="bg-gray-100 text-gray-700 dark:bg-white/5 dark:text-gray-300">
-                    {tag}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          </div>
-        </AppCardContent>
-      </AppCard>
+      <PluginHeroCard plugin={plugin} />
 
       <div>
         <PluginInstallationWorkbench

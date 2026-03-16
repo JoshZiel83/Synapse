@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { Settings, Trash2, AlertTriangle } from 'lucide-react';
 import { usePluginStore } from '@/stores/plugin-store';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
-import { attachmentTypeColors, attachmentTypeLabels, PluginIcon, getLocale, translate } from './plugin-ui';
+import { PluginIcon, getLocale, getPluginInstallationDetails, getPluginInstallationTitle, translate } from './plugin-ui';
 
 export default function InstalledList() {
   const router = useRouter();
@@ -62,7 +62,6 @@ export default function InstalledList() {
     <div className="space-y-3">
       {installations.map((install: any) => {
         const configMissing = hasRequiredConfigMissing(install);
-        const attachmentType = install.attachment_type;
         return (
           <Card key={install.id} className={`bg-white dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-white/10 ${configMissing ? 'border-amber-500/20' : 'border-gray-200 dark:border-white/10'}`}>
             <CardContent className="flex items-center justify-between p-4">
@@ -74,17 +73,11 @@ export default function InstalledList() {
                   containerClassName="h-10 w-10 rounded-lg bg-blue-500/10"
                   className="h-5 w-5"
                 />
-                <div>
-                  <div className="flex items-center gap-2">
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Link href={`/dashboard/plugins/${install.plugin_id}`} className="font-medium text-sm hover:text-blue-600">
                       {translate(install.plugin_display_name_i18n, locale, install.default_locale || 'en') || install.plugin_display_name}
                     </Link>
-                    <Badge variant="outline" className={`text-xs ${attachmentTypeColors[attachmentType] || 'border-gray-200 dark:border-white/10'}`}>
-                      Owner: {attachmentTypeLabels[attachmentType] || attachmentType}
-                    </Badge>
-                    <Badge variant="outline" className="text-xs border-gray-200 dark:border-white/10 text-muted-foreground">
-                      {install.lifecycle_scope}
-                    </Badge>
                     {configMissing && (
                       <Badge variant="outline" className="text-xs border-amber-500/30 text-amber-400 gap-1">
                         <AlertTriangle className="w-3 h-3" />
@@ -92,7 +85,15 @@ export default function InstalledList() {
                       </Badge>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground">{install.org_display_name} · v{install.plugin_version}</p>
+                  <p className="text-sm font-medium text-foreground">
+                    {getPluginInstallationTitle(install)}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {getPluginInstallationDetails(install)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {install.org_display_name ? `${install.org_display_name} · v${install.plugin_version}` : `Version ${install.plugin_version}`}
+                  </p>
                 </div>
               </div>
 

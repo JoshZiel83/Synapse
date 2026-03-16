@@ -1,35 +1,41 @@
-import { access, readFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import type pg from 'pg';
-import { v1 } from '@authzed/authzed-node';
-import { config } from '../../config/index.js';
-import { query, transaction } from '../database/index.js';
+import { access, readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import type pg from "pg";
+import { v1 } from "@authzed/authzed-node";
+import { config } from "../../config/index.js";
+import { query, transaction } from "../database/index.js";
 
-export const AUTHZ_PLATFORM_ID = 'synapse';
+export const AUTHZ_PLATFORM_ID = "synapse";
 
-export function buildActorConversationContextId(actorId: string, conversationId: string) {
+export function buildActorConversationContextId(
+  actorId: string,
+  conversationId: string,
+) {
   return `${actorId}|${conversationId}`;
 }
 
-export function buildWorkspaceUserContextId(workspaceId: string, userId: string) {
+export function buildWorkspaceUserContextId(
+  workspaceId: string,
+  userId: string,
+) {
   return `${workspaceId}|${userId}`;
 }
 
 export type AuthzObjectType =
-  | 'platform'
-  | 'workspace'
-  | 'workspace_user'
-  | 'user'
-  | 'actor'
-  | 'actor_conversation'
-  | 'conversation'
-  | 'skill_instance'
-  | 'plugin_instance'
-  | 'memory'
-  | 'mcp_relay'
-  | 'model_group'
-  | 'model_profile';
+  | "platform"
+  | "workspace"
+  | "workspace_user"
+  | "user"
+  | "actor"
+  | "actor_conversation"
+  | "conversation"
+  | "skill_instance"
+  | "plugin_instance"
+  | "memory"
+  | "mcp_relay"
+  | "model_group"
+  | "model_profile";
 
 export interface AuthzSubject {
   type: AuthzObjectType;
@@ -38,7 +44,7 @@ export interface AuthzSubject {
 }
 
 export interface AuthzRelationMutation {
-  operation?: 'touch' | 'delete';
+  operation?: "touch" | "delete";
   resourceType: AuthzObjectType;
   resourceId: string;
   relation: string;
@@ -47,9 +53,25 @@ export interface AuthzRelationMutation {
   subjectRelation?: string;
 }
 
+const AUTHZ_RESOURCE_TYPES: AuthzObjectType[] = [
+  "platform",
+  "workspace",
+  "workspace_user",
+  "user",
+  "actor",
+  "actor_conversation",
+  "conversation",
+  "skill_instance",
+  "plugin_instance",
+  "memory",
+  "mcp_relay",
+  "model_group",
+  "model_profile",
+];
+
 interface AuthzOutboxRow {
   id: string;
-  operation: 'touch' | 'delete';
+  operation: "touch" | "delete";
   resource_type: AuthzObjectType;
   resource_id: string;
   relation: string;
@@ -58,26 +80,26 @@ interface AuthzOutboxRow {
   subject_relation: string | null;
 }
 
-type Queryable = Pick<pg.PoolClient, 'query'>;
+type Queryable = Pick<pg.PoolClient, "query">;
 
 let authzClient: v1.ZedClientInterface | null = null;
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
-function relationMutationKey(entry: Omit<AuthzRelationMutation, 'operation'>) {
+function relationMutationKey(entry: Omit<AuthzRelationMutation, "operation">) {
   return [
     entry.resourceType,
     entry.resourceId,
     entry.relation,
     entry.subjectType,
     entry.subjectId,
-    entry.subjectRelation || '',
-  ].join('::');
+    entry.subjectRelation || "",
+  ].join("::");
 }
 
 function ensureAuthzEnabled() {
   if (!config.authz.enabled) {
-    throw new Error('SpiceDB authorization is disabled');
+    throw new Error("SpiceDB authorization is disabled");
   }
 }
 
@@ -102,7 +124,7 @@ function getAuthzClient() {
 function fullyConsistent() {
   return v1.Consistency.create({
     requirement: {
-      oneofKind: 'fullyConsistent',
+      oneofKind: "fullyConsistent",
       fullyConsistent: true,
     },
   });
@@ -118,14 +140,14 @@ function objectRef(objectType: AuthzObjectType, objectId: string) {
 function subjectRef(subject: AuthzSubject) {
   return v1.SubjectReference.create({
     object: objectRef(subject.type, subject.id),
-    optionalRelation: subject.relation || '',
+    optionalRelation: subject.relation || "",
   });
 }
 
 function relationshipUpdate(entry: AuthzOutboxRow) {
   return v1.RelationshipUpdate.create({
     operation:
-      entry.operation === 'delete'
+      entry.operation === "delete"
         ? v1.RelationshipUpdate_Operation.DELETE
         : v1.RelationshipUpdate_Operation.TOUCH,
     relationship: v1.Relationship.create({
@@ -141,14 +163,16 @@ function relationshipUpdate(entry: AuthzOutboxRow) {
 }
 
 function normalizeSchemaText(text: string) {
-  return text.trim().replace(/\r\n/g, '\n');
+  return text.trim().replace(/\r\n/g, "\n");
 }
 
 async function resolveSchemaPath() {
   const candidates = [
-    config.authz.schemaPath ? resolve(process.cwd(), config.authz.schemaPath) : '',
-    resolve(process.cwd(), 'docs/spicedb-schema.zed'),
-    resolve(moduleDir, '../../../../../docs/spicedb-schema.zed'),
+    config.authz.schemaPath
+      ? resolve(process.cwd(), config.authz.schemaPath)
+      : "",
+    resolve(process.cwd(), "docs/spicedb-schema.zed"),
+    resolve(moduleDir, "../../../../../docs/spicedb-schema.zed"),
   ].filter(Boolean);
 
   for (const candidate of candidates) {
@@ -160,12 +184,12 @@ async function resolveSchemaPath() {
     }
   }
 
-  throw new Error('Unable to locate SpiceDB schema file');
+  throw new Error("Unable to locate SpiceDB schema file");
 }
 
 async function readSchemaText() {
   const schemaPath = await resolveSchemaPath();
-  const schemaText = await readFile(schemaPath, 'utf-8');
+  const schemaText = await readFile(schemaPath, "utf-8");
   return {
     schemaPath,
     schemaText,
@@ -278,7 +302,7 @@ async function insertOutboxEntries(
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
        RETURNING id`,
       [
-        entry.operation || 'touch',
+        entry.operation || "touch",
         entry.resourceType,
         entry.resourceId,
         entry.relation,
@@ -312,7 +336,7 @@ export function uniqueAuthzRelationships(entries: AuthzRelationMutation[]) {
         subjectRelation: entry.subjectRelation,
       }),
       {
-        operation: entry.operation || 'touch',
+        operation: entry.operation || "touch",
         resourceType: entry.resourceType,
         resourceId: entry.resourceId,
         relation: entry.relation,
@@ -335,7 +359,7 @@ export function touchRelation(
   subjectRelation?: string,
 ): AuthzRelationMutation {
   return {
-    operation: 'touch',
+    operation: "touch",
     resourceType,
     resourceId,
     relation,
@@ -345,19 +369,37 @@ export function touchRelation(
   };
 }
 
-export function touchActorConversationContext(actorId: string, conversationId: string): AuthzRelationMutation[] {
+export function touchActorConversationContext(
+  actorId: string,
+  conversationId: string,
+): AuthzRelationMutation[] {
   const contextId = buildActorConversationContextId(actorId, conversationId);
   return [
-    touchRelation('actor_conversation', contextId, 'actor', 'actor', actorId),
-    touchRelation('actor_conversation', contextId, 'conversation', 'conversation', conversationId),
+    touchRelation("actor_conversation", contextId, "actor", "actor", actorId),
+    touchRelation(
+      "actor_conversation",
+      contextId,
+      "conversation",
+      "conversation",
+      conversationId,
+    ),
   ];
 }
 
-export function touchWorkspaceUserContext(workspaceId: string, userId: string): AuthzRelationMutation[] {
+export function touchWorkspaceUserContext(
+  workspaceId: string,
+  userId: string,
+): AuthzRelationMutation[] {
   const contextId = buildWorkspaceUserContextId(workspaceId, userId);
   return [
-    touchRelation('workspace_user', contextId, 'workspace', 'workspace', workspaceId),
-    touchRelation('workspace_user', contextId, 'user', 'user', userId),
+    touchRelation(
+      "workspace_user",
+      contextId,
+      "workspace",
+      "workspace",
+      workspaceId,
+    ),
+    touchRelation("workspace_user", contextId, "user", "user", userId),
   ];
 }
 
@@ -370,7 +412,7 @@ export function deleteRelation(
   subjectRelation?: string,
 ): AuthzRelationMutation {
   return {
-    operation: 'delete',
+    operation: "delete",
     resourceType,
     resourceId,
     relation,
@@ -401,8 +443,12 @@ export function diffAuthzRelationships(
     subjectRelation: entry.subjectRelation,
   }));
 
-  const previousMap = new Map(previous.map((entry) => [relationMutationKey(entry), entry]));
-  const nextMap = new Map(next.map((entry) => [relationMutationKey(entry), entry]));
+  const previousMap = new Map(
+    previous.map((entry) => [relationMutationKey(entry), entry]),
+  );
+  const nextMap = new Map(
+    next.map((entry) => [relationMutationKey(entry), entry]),
+  );
 
   const deletes = Array.from(previousMap.entries())
     .filter(([key]) => !nextMap.has(key))
@@ -444,12 +490,54 @@ export async function initializeAuthz() {
 
   await waitForAuthzReady();
   const schemaResult = await syncAuthzSchema();
-  const drainedOutboxEntries = await drainAuthzOutbox(config.authz.outboxBatchSize);
+  const drainedOutboxEntries = await drainAuthzOutbox(
+    config.authz.outboxBatchSize,
+  );
 
   return {
     enabled: true,
     schemaUpdated: schemaResult.updated,
     drainedOutboxEntries,
+  };
+}
+
+export async function resetAuthzRelationships() {
+  if (!config.authz.enabled) {
+    return {
+      enabled: false,
+      schemaUpdated: false,
+      relationshipsDeleted: 0,
+    };
+  }
+
+  await waitForAuthzReady();
+  const schemaResult = await syncAuthzSchema();
+
+  let relationshipsDeleted = 0;
+
+  for (const resourceType of AUTHZ_RESOURCE_TYPES) {
+    const response = await getAuthzClient().promises.deleteRelationships(
+      v1.DeleteRelationshipsRequest.create({
+        relationshipFilter: v1.RelationshipFilter.create({
+          resourceType,
+        }),
+        optionalTransactionMetadata: v1.createStructFromObject({
+          source: "synapse-authz-reset",
+          resourceType,
+        }),
+      }),
+    );
+
+    relationshipsDeleted += Number.parseInt(
+      response.relationshipsDeletedCount || "0",
+      10,
+    );
+  }
+
+  return {
+    enabled: true,
+    schemaUpdated: schemaResult.updated,
+    relationshipsDeleted,
   };
 }
 
@@ -459,7 +547,9 @@ export async function waitForAuthzReady(maxAttempts = 15) {
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      await getAuthzClient().promises.readSchema(v1.ReadSchemaRequest.create({}));
+      await getAuthzClient().promises.readSchema(
+        v1.ReadSchemaRequest.create({}),
+      );
       return;
     } catch (error) {
       if (authzSchemaMissing(error)) {
@@ -473,7 +563,7 @@ export async function waitForAuthzReady(maxAttempts = 15) {
 
   throw lastError instanceof Error
     ? lastError
-    : new Error('SpiceDB did not become ready in time');
+    : new Error("SpiceDB did not become ready in time");
 }
 
 export async function syncAuthzSchema() {
@@ -484,7 +574,7 @@ export async function syncAuthzSchema() {
   const client = getAuthzClient();
 
   const current = await readCurrentAuthzSchema(client);
-  const normalizedCurrent = normalizeSchemaText(current || '');
+  const normalizedCurrent = normalizeSchemaText(current || "");
 
   if (normalizedCurrent === normalizedDesired) {
     return { updated: false, schemaPath };
@@ -499,20 +589,27 @@ export async function syncAuthzSchema() {
   return { updated: true, schemaPath };
 }
 
-async function readCurrentAuthzSchema(client: ReturnType<typeof getAuthzClient>) {
+async function readCurrentAuthzSchema(
+  client: ReturnType<typeof getAuthzClient>,
+) {
   try {
-    const current = await client.promises.readSchema(v1.ReadSchemaRequest.create({}));
-    return current.schemaText || '';
+    const current = await client.promises.readSchema(
+      v1.ReadSchemaRequest.create({}),
+    );
+    return current.schemaText || "";
   } catch (error) {
     if (authzSchemaMissing(error)) {
-      return '';
+      return "";
     }
     throw error;
   }
 }
 
 function authzSchemaMissing(error: unknown) {
-  const code = typeof error === 'object' && error !== null && 'code' in error ? (error as { code?: unknown }).code : null;
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? (error as { code?: unknown }).code
+      : null;
   return code === 5;
 }
 
@@ -544,7 +641,9 @@ export async function enqueueAuthzRelationships(
   entries: AuthzRelationMutation[],
   metadata?: Record<string, unknown>,
 ) {
-  return transaction(async (client) => insertOutboxEntries(client, entries, metadata));
+  return transaction(async (client) =>
+    insertOutboxEntries(client, entries, metadata),
+  );
 }
 
 export async function flushAuthzOutboxEntries(entryIds: string[]) {
@@ -562,7 +661,7 @@ export async function flushAuthzOutboxEntries(entryIds: string[]) {
       v1.WriteRelationshipsRequest.create({
         updates: entries.map(relationshipUpdate),
         optionalTransactionMetadata: v1.createStructFromObject({
-          source: 'synapse-authz-outbox',
+          source: "synapse-authz-outbox",
           entryCount: entries.length,
         }),
       }),
@@ -582,7 +681,9 @@ export async function flushAuthzOutboxEntries(entryIds: string[]) {
   }
 }
 
-export async function drainAuthzOutbox(batchSize = config.authz.outboxBatchSize) {
+export async function drainAuthzOutbox(
+  batchSize = config.authz.outboxBatchSize,
+) {
   if (!config.authz.enabled) {
     return 0;
   }
@@ -600,7 +701,7 @@ export async function drainAuthzOutbox(batchSize = config.authz.outboxBatchSize)
         v1.WriteRelationshipsRequest.create({
           updates: entries.map(relationshipUpdate),
           optionalTransactionMetadata: v1.createStructFromObject({
-            source: 'synapse-authz-outbox-drain',
+            source: "synapse-authz-outbox-drain",
             entryCount: entries.length,
           }),
         }),
@@ -639,8 +740,10 @@ export async function checkPermission(params: {
   );
 
   return (
-    response.permissionship === v1.CheckPermissionResponse_Permissionship.HAS_PERMISSION ||
-    response.permissionship === v1.CheckPermissionResponse_Permissionship.CONDITIONAL_PERMISSION
+    response.permissionship ===
+      v1.CheckPermissionResponse_Permissionship.HAS_PERMISSION ||
+    response.permissionship ===
+      v1.CheckPermissionResponse_Permissionship.CONDITIONAL_PERMISSION
   );
 }
 
@@ -663,9 +766,11 @@ export async function lookupResources(params: {
   );
 
   return results
-    .filter((result) =>
-      result.permissionship === v1.LookupPermissionship.HAS_PERMISSION ||
-      result.permissionship === v1.LookupPermissionship.CONDITIONAL_PERMISSION,
+    .filter(
+      (result) =>
+        result.permissionship === v1.LookupPermissionship.HAS_PERMISSION ||
+        result.permissionship ===
+          v1.LookupPermissionship.CONDITIONAL_PERMISSION,
     )
     .map((result) => result.resourceObjectId);
 }

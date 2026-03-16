@@ -5,12 +5,15 @@ import { Loader2, Plus } from 'lucide-react';
 import { AppCard, AppCardContent, AppCardHeader, AppCardTitle } from '@/components/app-card';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Badge } from '@/components/ui/badge';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import InstallDialog from './install-dialog';
-import { ScopeBadge, attachmentTypeLabels } from './plugin-ui';
+import PluginAccessStep from './plugin-access-step';
+import PluginAdvancedStep from './plugin-advanced-step';
+import { getPluginInstallationDetails, getPluginInstallationTitle } from './plugin-ui';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 interface Props {
   plugin: any;
@@ -20,26 +23,6 @@ interface Props {
   onSelectInstallation: (installationId: string) => void;
   onCreateInstallation: () => void;
   onInstallationsChanged?: (installation: any) => void | Promise<void>;
-}
-
-function getInstallationSummary(installation: any) {
-  const attachmentType = installation.attachment_type;
-  if (attachmentType === 'workspace') {
-    return 'Managed by this workspace';
-  }
-  if (attachmentType === 'conversation') {
-    return 'Managed inside one conversation';
-  }
-  if (attachmentType === 'actor_global') {
-    return 'Managed by one actor';
-  }
-  if (attachmentType === 'actor_conversation') {
-    return 'Managed by one actor in one conversation';
-  }
-  if (attachmentType === 'user') {
-    return 'Managed by you';
-  }
-  return `Managed by ${attachmentTypeLabels[attachmentType] || attachmentType}`;
 }
 
 export default function PluginInstallationWorkbench({
@@ -114,18 +97,23 @@ export default function PluginInstallationWorkbench({
   return (
     <AppCard variant="panel" className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <AppCardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 px-6 py-6">
-        <AppCardTitle>安装记录</AppCardTitle>
+        <div className="space-y-1">
+          <AppCardTitle>Configurations</AppCardTitle>
+          <div className="text-sm text-muted-foreground">
+            Each installation is one configuration. Select one on the left, then manage setup, access, and advanced settings on the right.
+          </div>
+        </div>
         <Button size="sm" onClick={onCreateInstallation}>
           <Plus data-icon="inline-start" />
-          安装
+          New Configuration
         </Button>
       </AppCardHeader>
 
-      <AppCardContent className="min-h-0 flex-1 p-0">
-        <div className="grid min-h-0 grid-rows-[16rem_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)] xl:grid-rows-none">
-          <div className="border-t border-gray-200 dark:border-white/10 xl:border-r">
+      <AppCardContent className="min-h-0 flex-1 px-6 pb-6 pt-0">
+        <div className="grid min-h-0 gap-4 grid-rows-[16rem_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)] xl:grid-rows-none">
+          <Card className="min-h-0 rounded-[28px] py-0">
             <ScrollArea className="h-full">
-              <div className="flex flex-col gap-3 p-6">
+              <div className="flex flex-col gap-3 p-4">
                 {installations.map((installation) => {
                   const selected = installation.id === activeInstallationId;
                   return (
@@ -134,24 +122,36 @@ export default function PluginInstallationWorkbench({
                       type="button"
                       onClick={() => onSelectInstallation(installation.id)}
                       className={cn(
-                        'flex flex-col gap-3 rounded-[22px] px-4 py-4 text-left transition-colors',
+                        'flex flex-col gap-3 rounded-[22px] border px-4 py-4 text-left transition-all',
                         selected
-                          ? 'bg-accent text-accent-foreground'
-                          : 'hover:bg-muted/60',
+                          ? 'border-foreground/15 bg-accent/70 text-accent-foreground shadow-sm'
+                          : 'border-transparent bg-muted/30 hover:border-border hover:bg-muted/60',
                       )}
                     >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <ScopeBadge scope={installation.attachment_type} />
-                        <Badge variant="outline">Runtime: {installation.lifecycle_scope}</Badge>
-                        <Badge variant={installation.is_enabled ? 'default' : 'secondary'}>
-                          {installation.is_enabled ? 'Enabled' : 'Disabled'}
-                        </Badge>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-sm font-medium text-foreground">
-                          {getInstallationSummary(installation)}
+                      <div className="space-y-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="text-sm font-medium text-foreground">
+                            {getPluginInstallationTitle(installation)}
+                          </div>
+                          <div
+                            className={cn(
+                              'inline-flex items-center gap-2 whitespace-nowrap text-xs',
+                              installation.is_enabled ? 'text-emerald-600 dark:text-emerald-300' : 'text-muted-foreground',
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                'size-2 rounded-full',
+                                installation.is_enabled ? 'bg-emerald-500' : 'bg-muted-foreground/35',
+                              )}
+                            />
+                            {installation.is_enabled ? 'Enabled' : 'Disabled'}
+                          </div>
                         </div>
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-sm text-muted-foreground">
+                          {getPluginInstallationDetails(installation)}
+                        </p>
+                        <p className="text-xs text-muted-foreground/80">
                           {installation.org_display_name
                             ? `${installation.org_display_name} · v${installation.plugin_version}`
                             : `Version ${installation.plugin_version}`}
@@ -164,47 +164,89 @@ export default function PluginInstallationWorkbench({
                 <button
                   type="button"
                   onClick={onCreateInstallation}
-                  className="rounded-[22px] border border-dashed border-border px-4 py-4 text-left text-sm font-medium text-foreground transition-colors hover:bg-muted/60"
+                  className="rounded-[22px] border border-dashed border-border bg-muted/15 px-4 py-4 text-left text-sm font-medium text-foreground transition-colors hover:bg-muted/40"
                 >
-                  创建配置
+                  Create configuration
                 </button>
               </div>
             </ScrollArea>
-          </div>
+          </Card>
 
-          <div className="min-w-0 min-h-0 border-t border-gray-200 px-6 py-6 dark:border-white/10">
+          <div className="min-w-0 min-h-0">
             {!activeInstallationId ? (
-              <div className="flex min-h-[18rem] items-center justify-center text-sm text-muted-foreground">
-                Select an installation to configure it.
-              </div>
+              <Card className="rounded-[28px]">
+                <CardContent className="flex min-h-[18rem] items-center justify-center text-sm text-muted-foreground">
+                  Select a configuration from the left.
+                </CardContent>
+              </Card>
             ) : loadingInstallation || !selectedInstallation ? (
-              <div className="flex min-h-[18rem] items-center justify-center text-sm text-muted-foreground">
-                <Loader2 className="mr-2 animate-spin" />
-                Loading installation...
-              </div>
+              <Card className="rounded-[28px]">
+                <CardContent className="flex min-h-[18rem] items-center justify-center text-sm text-muted-foreground">
+                  <Loader2 className="mr-2 animate-spin" />
+                  Loading configuration...
+                </CardContent>
+              </Card>
             ) : (
-              <div className="flex h-full min-h-0 flex-col">
-                <InstallDialog
-                  key={`${selectedInstallation.id}:${editorVersion}`}
-                  plugin={plugin}
-                  initialInstallation={selectedInstallation}
-                  presentation="page"
-                  showPluginHeader={false}
-                  pageChrome="plain"
-                  onClose={() => {
-                    void resetSelectedInstallation();
-                  }}
-                  onInstallationSaved={async (installation) => {
-                    setSelectedInstallation(installation);
-                    await onInstallationsChanged?.(installation);
-                  }}
-                  onSuccess={async (installation) => {
-                    setSelectedInstallation(installation);
-                    setEditorVersion((value) => value + 1);
-                    await onInstallationsChanged?.(installation);
-                  }}
-                />
-              </div>
+              <Tabs defaultValue="setup" className="flex h-full min-h-0 flex-col gap-4">
+                <TabsList>
+                  <TabsTrigger value="setup">Setup</TabsTrigger>
+                  <TabsTrigger value="access">Access</TabsTrigger>
+                  <TabsTrigger value="advanced">Advanced</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="setup" className="mt-0 min-h-0 flex-1">
+                  <Card className="flex h-full min-h-0 flex-1 flex-col rounded-[28px]">
+                    <CardHeader>
+                      <CardTitle>Setup</CardTitle>
+                      <CardDescription>
+                        Configure this plugin installation. Owner, runtime lifecycle, and sharing are handled in their own tabs.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="min-h-0 flex-1 pb-6">
+                      <div className="flex h-full min-h-0 flex-col">
+                        <InstallDialog
+                          key={`${selectedInstallation.id}:${editorVersion}`}
+                          plugin={plugin}
+                          initialInstallation={selectedInstallation}
+                          presentation="page"
+                          showPluginHeader={false}
+                          pageChrome="tab"
+                          includePlacementSteps={false}
+                          includeAccessStep={false}
+                          closeLabel="Reset"
+                          onClose={() => {
+                            void resetSelectedInstallation();
+                          }}
+                          onInstallationSaved={async (installation) => {
+                            setSelectedInstallation(installation);
+                            await onInstallationsChanged?.(installation);
+                          }}
+                          onSuccess={async (installation) => {
+                            setSelectedInstallation(installation);
+                            setEditorVersion((value) => value + 1);
+                            await onInstallationsChanged?.(installation);
+                          }}
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+
+                <TabsContent value="access" className="mt-0 min-h-0 flex-1">
+                  <PluginAccessStep installation={selectedInstallation} />
+                </TabsContent>
+
+                <TabsContent value="advanced" className="mt-0 min-h-0 flex-1">
+                  <PluginAdvancedStep
+                    installation={selectedInstallation}
+                    onSaved={async (installation) => {
+                      setSelectedInstallation(installation);
+                      setEditorVersion((value) => value + 1);
+                      await onInstallationsChanged?.(installation);
+                    }}
+                  />
+                </TabsContent>
+              </Tabs>
             )}
           </div>
         </div>

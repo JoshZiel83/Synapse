@@ -76,7 +76,7 @@ function asObject(value: unknown): JsonMap {
 }
 
 async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (!authzEnabled() || entryIds.length === 0) return;
+  if (entryIds.length === 0) return;
 
   try {
     await flushAuthzOutboxEntries(entryIds);
@@ -1602,47 +1602,89 @@ export async function logAIRequest(data: {
 export async function seedPlatformDefaultGroup() {
   await ensurePlatformSettingsRow();
 
-  const existing = await query(
-    `SELECT ps.default_model_group_id
+  const defaultGroupResult = await query<{ group_id: string }>(
+    `SELECT ps.default_model_group_id AS group_id
      FROM platform_settings ps
-     WHERE ps.id = TRUE AND ps.default_model_group_id IS NOT NULL
+     JOIN model_groups mg ON mg.id = ps.default_model_group_id
+     WHERE ps.id = TRUE
+       AND ps.default_model_group_id IS NOT NULL
+       AND mg.owner_type = 'platform'
+       AND mg.is_enabled = TRUE
      LIMIT 1`,
     [],
   );
-  if (existing.rows[0]?.default_model_group_id) {
-    return existing.rows[0].default_model_group_id as string;
+
+  let groupId = defaultGroupResult.rows[0]?.group_id || null;
+
+  if (!groupId) {
+    const fallbackGroupResult = await query<{ id: string }>(
+      `SELECT id
+       FROM model_groups
+       WHERE owner_type = 'platform'
+         AND is_enabled = TRUE
+       ORDER BY is_default DESC, created_at ASC
+       LIMIT 1`,
+      [],
+    );
+
+    groupId = fallbackGroupResult.rows[0]?.id || null;
+
+    if (groupId) {
+      await clearExistingDefault('platform');
+      await query(
+        `UPDATE model_groups
+         SET is_default = TRUE, updated_at = NOW()
+         WHERE id = $1`,
+        [groupId],
+      );
+      await setDefaultGroup(groupId, 'platform');
+    }
   }
 
-  const group = await createModelGroup({
-    ownerType: 'platform',
-    name: 'Platform Default',
-    description: 'Auto-created from environment variables',
-    routingStrategy: 'priority_failover',
-    attemptPolicy: {
-      maxAttemptsTotal: 4,
-      maxAttemptsPerBinding: 2,
-      timeoutMsPerAttempt: 30000,
-      continueOn: ['timeout', '5xx', 'network', 'rate_limit'],
-      stopOn: ['auth_error', 'bad_request', 'policy_block'],
-      retryBackoffMs: [0, 1000, 3000],
-    },
-    isDefault: true,
-  });
-
-  if (config.ai.apiKey) {
-    await addModelItem(group.id, {
-      displayName: `${config.ai.model} (env)`,
-      priority: 0,
-      weight: 100,
-      providerType: config.ai.provider,
-      apiKey: config.ai.apiKey,
-      baseUrl: config.ai.baseUrl,
-      modelName: config.ai.model,
-      maxTokens: config.ai.maxTokens,
-      requestTimeoutMs: 30000,
-      maxRetries: 1,
+  if (!groupId) {
+    const group = await createModelGroup({
+      ownerType: 'platform',
+      name: 'Platform Default',
+      description: 'Auto-created from environment variables',
+      routingStrategy: 'priority_failover',
+      attemptPolicy: {
+        maxAttemptsTotal: 4,
+        maxAttemptsPerBinding: 2,
+        timeoutMsPerAttempt: 30000,
+        continueOn: ['timeout', '5xx', 'network', 'rate_limit'],
+        stopOn: ['auth_error', 'bad_request', 'policy_block'],
+        retryBackoffMs: [0, 1000, 3000],
+      },
+      isDefault: true,
     });
+    groupId = group.id;
   }
 
-  return group.id;
+  if (config.ai.apiKey && groupId) {
+    const existingItems = await query<{ id: string }>(
+      `SELECT id
+       FROM model_group_profiles
+       WHERE group_id = $1
+         AND is_enabled = TRUE
+       LIMIT 1`,
+      [groupId],
+    );
+
+    if (existingItems.rows.length === 0) {
+      await addModelItem(groupId, {
+        displayName: `${config.ai.model} (env)`,
+        priority: 0,
+        weight: 100,
+        providerType: config.ai.provider,
+        apiKey: config.ai.apiKey,
+        baseUrl: config.ai.baseUrl,
+        modelName: config.ai.model,
+        maxTokens: config.ai.maxTokens,
+        requestTimeoutMs: 30000,
+        maxRetries: 1,
+      });
+    }
+  }
+
+  return groupId;
 }

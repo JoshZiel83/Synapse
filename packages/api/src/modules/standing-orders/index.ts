@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { query } from '../../infrastructure/database/index.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
+import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
+import { requireRequestAction } from '../access/guards.js';
 import { standingOrdersQueue } from '../../workers/queues.js';
 import { z } from 'zod';
 
@@ -18,10 +20,14 @@ const updateSchema = createSchema.partial();
 
 export default async function standingOrdersModule(app: FastifyInstance) {
   const prefix = '/api/v1/workspaces/:workspaceId/standing-orders';
+  const preHandler = [authMiddleware, workspaceMiddleware];
 
   // Create standing order
-  app.post(prefix, { preHandler: [authMiddleware] }, async (request, reply) => {
+  app.post(prefix, { preHandler }, async (request, reply) => {
     const { workspaceId } = request.params as { workspaceId: string };
+    const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage_actors', workspaceId, 'Not allowed to manage standing orders in this workspace');
+    if (!allowed) return;
+
     const body = createSchema.parse(request.body);
 
     const result = await query(
@@ -45,8 +51,11 @@ export default async function standingOrdersModule(app: FastifyInstance) {
   });
 
   // List standing orders
-  app.get(prefix, { preHandler: [authMiddleware] }, async (request) => {
+  app.get(prefix, { preHandler }, async (request, reply) => {
     const { workspaceId } = request.params as { workspaceId: string };
+    const allowed = await requireRequestAction(request as any, reply as any, 'workspace.view', workspaceId, 'Not allowed to view standing orders in this workspace');
+    if (!allowed) return;
+
     const result = await query(
       'SELECT * FROM standing_orders WHERE workspace_id = $1 ORDER BY created_at DESC',
       [workspaceId]
@@ -55,16 +64,22 @@ export default async function standingOrdersModule(app: FastifyInstance) {
   });
 
   // Get standing order
-  app.get(`${prefix}/:orderId`, { preHandler: [authMiddleware] }, async (request, reply) => {
-    const { orderId } = request.params as { orderId: string };
-    const result = await query('SELECT * FROM standing_orders WHERE id = $1', [orderId]);
+  app.get(`${prefix}/:orderId`, { preHandler }, async (request, reply) => {
+    const { workspaceId, orderId } = request.params as { workspaceId: string; orderId: string };
+    const allowed = await requireRequestAction(request as any, reply as any, 'workspace.view', workspaceId, 'Not allowed to view standing orders in this workspace');
+    if (!allowed) return;
+
+    const result = await query('SELECT * FROM standing_orders WHERE id = $1 AND workspace_id = $2', [orderId, workspaceId]);
     if (result.rows.length === 0) return reply.status(404).send({ error: 'Not found' });
     return result.rows[0];
   });
 
   // Update standing order
-  app.put(`${prefix}/:orderId`, { preHandler: [authMiddleware] }, async (request, reply) => {
-    const { orderId } = request.params as { orderId: string };
+  app.put(`${prefix}/:orderId`, { preHandler }, async (request, reply) => {
+    const { workspaceId, orderId } = request.params as { workspaceId: string; orderId: string };
+    const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage_actors', workspaceId, 'Not allowed to manage standing orders in this workspace');
+    if (!allowed) return;
+
     const body = updateSchema.parse(request.body);
 
     const fields: string[] = [];
@@ -87,8 +102,8 @@ export default async function standingOrdersModule(app: FastifyInstance) {
 
     values.push(orderId);
     const result = await query(
-      `UPDATE standing_orders SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`,
-      values
+      `UPDATE standing_orders SET ${fields.join(', ')} WHERE id = $${idx} AND workspace_id = $${idx + 1} RETURNING *`,
+      [...values, workspaceId]
     );
 
     if (result.rows.length === 0) return reply.status(404).send({ error: 'Not found' });
@@ -109,10 +124,13 @@ export default async function standingOrdersModule(app: FastifyInstance) {
   });
 
   // Delete standing order
-  app.delete(`${prefix}/:orderId`, { preHandler: [authMiddleware] }, async (request, reply) => {
-    const { orderId } = request.params as { orderId: string };
+  app.delete(`${prefix}/:orderId`, { preHandler }, async (request, reply) => {
+    const { workspaceId, orderId } = request.params as { workspaceId: string; orderId: string };
+    const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage_actors', workspaceId, 'Not allowed to manage standing orders in this workspace');
+    if (!allowed) return;
+
     await standingOrdersQueue.removeRepeatableByKey(`so:${orderId}`).catch(() => {});
-    await query('DELETE FROM standing_orders WHERE id = $1', [orderId]);
+    await query('DELETE FROM standing_orders WHERE id = $1 AND workspace_id = $2', [orderId, workspaceId]);
     return { success: true };
   });
 }

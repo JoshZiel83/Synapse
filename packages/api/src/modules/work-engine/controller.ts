@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
+import { requireRequestAction } from '../access/guards.js';
 import * as service from './service.js';
 import { getAvailableTransitions } from './state-machine.js';
 import type { WorkItemStatus, WorkItemPriority, ParticipantRole } from '@synapse/shared';
@@ -51,6 +52,9 @@ export async function workEngineController(app: FastifyInstance) {
   // POST / - create work item
   app.post('/', async (request, reply) => {
     const { workspaceId } = request.params as { workspaceId: string };
+    const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage', workspaceId, 'Not allowed to manage work items in this workspace');
+    if (!allowed) return;
+
     const body = createWorkItemSchema.parse(request.body);
     const userId = (request as any).user?.userId;
 
@@ -66,6 +70,9 @@ export async function workEngineController(app: FastifyInstance) {
   // GET / - list work items with filters
   app.get('/', async (request, reply) => {
     const { workspaceId } = request.params as { workspaceId: string };
+    const allowed = await requireRequestAction(request as any, reply as any, 'workspace.view', workspaceId, 'Not allowed to view work items in this workspace');
+    if (!allowed) return;
+
     const queryParams = request.query as {
       status?: WorkItemStatus;
       assignedTo?: string;
@@ -84,6 +91,8 @@ export async function workEngineController(app: FastifyInstance) {
   // GET /:workItemId - get work item with participants
   app.get('/:workItemId', async (request, reply) => {
     const { workspaceId, workItemId } = request.params as { workspaceId: string; workItemId: string };
+    const allowed = await requireRequestAction(request as any, reply as any, 'workspace.view', workspaceId, 'Not allowed to view work items in this workspace');
+    if (!allowed) return;
 
     const details = await service.getWorkItemWithDetails(workItemId, workspaceId);
     if (!details) return reply.status(404).send({ error: 'Work item not found' });
@@ -94,6 +103,9 @@ export async function workEngineController(app: FastifyInstance) {
   // PUT /:workItemId - update work item
   app.put('/:workItemId', async (request, reply) => {
     const { workspaceId, workItemId } = request.params as { workspaceId: string; workItemId: string };
+    const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage', workspaceId, 'Not allowed to manage work items in this workspace');
+    if (!allowed) return;
+
     const body = updateWorkItemSchema.parse(request.body);
 
     const workItem = await service.updateWorkItem(workItemId, workspaceId, body);
@@ -105,6 +117,9 @@ export async function workEngineController(app: FastifyInstance) {
   // POST /:workItemId/transition - transition status
   app.post('/:workItemId/transition', async (request, reply) => {
     const { workspaceId, workItemId } = request.params as { workspaceId: string; workItemId: string };
+    const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage', workspaceId, 'Not allowed to manage work items in this workspace');
+    if (!allowed) return;
+
     const { status } = transitionSchema.parse(request.body);
 
     try {
@@ -123,7 +138,10 @@ export async function workEngineController(app: FastifyInstance) {
 
   // POST /:workItemId/participants - add participant
   app.post('/:workItemId/participants', async (request, reply) => {
-    const { workItemId } = request.params as { workItemId: string };
+    const { workspaceId, workItemId } = request.params as { workspaceId: string; workItemId: string };
+    const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage', workspaceId, 'Not allowed to manage work items in this workspace');
+    if (!allowed) return;
+
     const body = addParticipantSchema.parse(request.body);
 
     const participant = await service.addParticipant({
@@ -136,7 +154,10 @@ export async function workEngineController(app: FastifyInstance) {
 
   // GET /:workItemId/participants - list participants
   app.get('/:workItemId/participants', async (request, reply) => {
-    const { workItemId } = request.params as { workItemId: string };
+    const { workspaceId, workItemId } = request.params as { workspaceId: string; workItemId: string };
+    const allowed = await requireRequestAction(request as any, reply as any, 'workspace.view', workspaceId, 'Not allowed to view work items in this workspace');
+    if (!allowed) return;
+
     const participants = await service.getParticipants(workItemId);
     return reply.send(participants);
   });

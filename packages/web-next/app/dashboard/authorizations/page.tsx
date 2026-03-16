@@ -14,7 +14,7 @@ export default function AuthorizationsRedirectPage() {
       return;
     }
 
-    router.replace('/dashboard/plugins');
+    router.replace('/dashboard/access');
   }, [router, searchParams]);
 
   return <div className="py-16 text-center text-sm text-muted-foreground">Redirecting...</div>;

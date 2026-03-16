@@ -121,7 +121,6 @@ export default function MarketplaceBrowse({ defaultActorId: _defaultActorId }: {
                   iconUrl={plugin.icon_url}
                   title={title}
                   transport={plugin.transport}
-                  verified={plugin.is_builtin}
                 />
 
                 <div className="ml-4 min-w-0 flex-1">

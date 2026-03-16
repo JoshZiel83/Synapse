@@ -16,7 +16,6 @@ import {
   ShieldCheck,
   Puzzle,
   Cpu,
-  UsersRound,
 } from 'lucide-react';
 import {
   SidebarInset,
@@ -31,8 +30,7 @@ const navItems = [
   { href: '/dashboard/plugins', label: 'Plugins', icon: Puzzle },
   { href: '/settings/models', label: 'Model Groups', icon: Cpu },
   { href: '/settings/models/actors', label: 'Actor Assignment', icon: Bot },
-  { href: '/roles/workspace', label: 'Workspace Roles', icon: UsersRound },
-  { href: '/roles/platform', label: 'Platform Roles', icon: ShieldCheck },
+  { href: '/dashboard/access', label: 'Access', icon: ShieldCheck },
 ];
 
 function OnboardingGuard({ children }: { children: ReactNode }) {

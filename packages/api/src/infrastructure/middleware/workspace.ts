@@ -1,5 +1,5 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import { authzEnabled, checkPermission } from '../authz/index.js';
+import { requireRequestAction } from '../../modules/access/guards.js';
 import { query } from '../database/index.js';
 
 export async function workspaceMiddleware(request: FastifyRequest, reply: FastifyReply) {
@@ -18,19 +18,15 @@ export async function workspaceMiddleware(request: FastifyRequest, reply: Fastif
     [workspaceId, user.userId]
   );
 
-  if (authzEnabled()) {
-    const allowed = await checkPermission({
-      resourceType: 'workspace',
-      resourceId: workspaceId,
-      permission: 'view',
-      subject: { type: 'user', id: user.userId },
-    });
-
-    if (!allowed) {
-      return reply.status(403).send({ error: 'Not allowed to access this workspace' });
-    }
-  } else if (result.rows.length === 0) {
-    return reply.status(403).send({ error: 'Not a member of this workspace' });
+  const allowed = await requireRequestAction(
+    request,
+    reply,
+    'workspace.view',
+    workspaceId,
+    'Not allowed to access this workspace',
+  );
+  if (!allowed) {
+    return;
   }
 
   (request as any).workspaceMember = result.rows[0] ?? null;

@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
+import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import { a2aAuthMiddleware, a2aRateLimitMiddleware } from './middleware.js';
+import { requireRequestAction } from '../access/guards.js';
 import {
   createA2AApp, listA2AApps, getA2AAppById, updateA2AApp, deleteA2AApp,
   regenerateApiKey, setAppActors, getAppActors, createA2ATask, getA2ATask,
@@ -20,11 +22,15 @@ import { query } from '../../infrastructure/database/index.js';
 
 export async function a2aManagementController(app: FastifyInstance) {
   app.addHook('onRequest', authMiddleware);
+  app.addHook('onRequest', workspaceMiddleware);
 
   // List apps
   app.get<{ Params: { workspaceId: string } }>(
     '/api/v1/workspaces/:workspaceId/a2a/apps',
     async (request, reply) => {
+      const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage_capabilities', request.params.workspaceId, 'Not allowed to manage A2A apps in this workspace');
+      if (!allowed) return;
+
       const apps = await listA2AApps(request.params.workspaceId);
       // Attach actors for each app
       const appsWithActors = await Promise.all(apps.map(async (a) => {
@@ -39,6 +45,9 @@ export async function a2aManagementController(app: FastifyInstance) {
   app.post<{ Params: { workspaceId: string }; Body: any }>(
     '/api/v1/workspaces/:workspaceId/a2a/apps',
     async (request, reply) => {
+      const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage_capabilities', request.params.workspaceId, 'Not allowed to manage A2A apps in this workspace');
+      if (!allowed) return;
+
       const schema = z.object({
         name: z.string().min(1).max(255),
         description: z.string().max(2000).optional(),
@@ -66,6 +75,9 @@ export async function a2aManagementController(app: FastifyInstance) {
   app.get<{ Params: { workspaceId: string; appId: string } }>(
     '/api/v1/workspaces/:workspaceId/a2a/apps/:appId',
     async (request, reply) => {
+      const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage_capabilities', request.params.workspaceId, 'Not allowed to manage A2A apps in this workspace');
+      if (!allowed) return;
+
       const a2aApp = await getA2AAppById(request.params.appId);
       if (!a2aApp || a2aApp.workspaceId !== request.params.workspaceId) {
         return reply.status(404).send({ error: 'App not found' });
@@ -79,6 +91,9 @@ export async function a2aManagementController(app: FastifyInstance) {
   app.put<{ Params: { workspaceId: string; appId: string }; Body: any }>(
     '/api/v1/workspaces/:workspaceId/a2a/apps/:appId',
     async (request, reply) => {
+      const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage_capabilities', request.params.workspaceId, 'Not allowed to manage A2A apps in this workspace');
+      if (!allowed) return;
+
       const schema = z.object({
         name: z.string().min(1).max(255).optional(),
         description: z.string().max(2000).optional(),
@@ -105,6 +120,9 @@ export async function a2aManagementController(app: FastifyInstance) {
   app.delete<{ Params: { workspaceId: string; appId: string } }>(
     '/api/v1/workspaces/:workspaceId/a2a/apps/:appId',
     async (request, reply) => {
+      const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage_capabilities', request.params.workspaceId, 'Not allowed to manage A2A apps in this workspace');
+      if (!allowed) return;
+
       const deleted = await deleteA2AApp(request.params.appId);
       if (!deleted) return reply.status(404).send({ error: 'App not found' });
       return reply.status(204).send();
@@ -115,6 +133,9 @@ export async function a2aManagementController(app: FastifyInstance) {
   app.post<{ Params: { workspaceId: string; appId: string } }>(
     '/api/v1/workspaces/:workspaceId/a2a/apps/:appId/regenerate-key',
     async (request, reply) => {
+      const allowed = await requireRequestAction(request as any, reply as any, 'workspace.manage_capabilities', request.params.workspaceId, 'Not allowed to manage A2A apps in this workspace');
+      if (!allowed) return;
+
       const result = await regenerateApiKey(request.params.appId);
       if (!result) return reply.status(404).send({ error: 'App not found' });
       return reply.send(result);

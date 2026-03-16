@@ -1,5 +1,5 @@
-import RolesManagement from '@/app/dashboard/settings/roles-management';
+import { redirect } from 'next/navigation';
 
 export default function WorkspaceRolesPage() {
-  return <RolesManagement mode="workspace" showIntro={false} />;
+  redirect('/dashboard/access?scope=workspace');
 }

@@ -292,29 +292,10 @@ export interface Message {
 
 // ============ Memory ============
 export type MemoryScope = 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-export type MemoryGrantScope = MemoryScope | 'workspace_user';
 export type MemoryCategory = 'fact' | 'preference' | 'decision' | 'relationship' | 'procedure' | 'artifact' | 'summary';
 export type MemoryStatus = 'candidate' | 'established' | 'superseded' | 'retracted';
 export type MemoryStability = 'ephemeral' | 'durable';
 export type MemoryRecallType = 'bootstrap' | 'turn_recall' | 'manual_search';
-export type MemoryPermission = 'read' | 'edit' | 'grant' | 'retarget' | 'delete';
-
-export interface MemoryGrant {
-  id: UUID;
-  memoryId: UUID;
-  workspaceId: UUID;
-  permission: MemoryPermission;
-  grantScope: MemoryGrantScope;
-  actorId?: UUID;
-  conversationId?: UUID;
-  userId?: UUID;
-  status: 'active' | 'revoked';
-  grantedBy?: UUID;
-  reason?: string;
-  metadata: Record<string, unknown>;
-  createdAt: Timestamp;
-  revokedAt?: Timestamp;
-}
 
 export interface MemoryEntry {
   id: UUID;
@@ -336,7 +317,6 @@ export interface MemoryEntry {
   sourceToolCallId?: UUID;
   sourceTurnId?: UUID;
   supersedesMemoryId?: UUID;
-  grants: MemoryGrant[];
   metadata: Record<string, unknown>;
   createdAt: Timestamp;
   updatedAt: Timestamp;
@@ -355,7 +335,6 @@ export interface MemorySearchHit extends MemoryEntry {
   textScore?: number;
   similarityScore?: number;
   matchedTerms?: string[];
-  matchedGrantIds?: UUID[];
 }
 
 export interface MemoryRecallResult extends MemorySearchHit {

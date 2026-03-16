@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
+import { requireRequestAction } from '../access/guards.js';
 import {
   SkillError,
   createSkill,
@@ -81,6 +82,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
   app.get(prefix, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId } = request.params as { workspaceId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.view', workspaceId, 'Not allowed to view skills in this workspace');
+      if (!allowed) return;
+
       const skills = await listSkills(workspaceId);
       return reply.status(200).send({ skills });
     } catch (error) {
@@ -91,6 +95,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
   app.post(prefix, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId } = request.params as { workspaceId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage skills in this workspace');
+      if (!allowed) return;
+
       const user = (request as any).user;
       const body = uploadSkillSchema.parse(request.body);
       const skill = await createSkill({
@@ -107,6 +114,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
   app.get(`${prefix}/:skillId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId, skillId } = request.params as { workspaceId: string; skillId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.view', workspaceId, 'Not allowed to view skills in this workspace');
+      if (!allowed) return;
+
       const skill = await getSkill(workspaceId, skillId);
       return reply.status(200).send({ skill });
     } catch (error) {
@@ -117,6 +127,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
   app.get(`${prefix}/:skillId/assets`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId, skillId } = request.params as { workspaceId: string; skillId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.view', workspaceId, 'Not allowed to view skills in this workspace');
+      if (!allowed) return;
+
       const assets = await listSkillAssets(workspaceId, skillId);
       return reply.status(200).send({ assets });
     } catch (error) {
@@ -127,6 +140,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
   app.get(`${prefix}/:skillId/asset`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId, skillId } = request.params as { workspaceId: string; skillId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.view', workspaceId, 'Not allowed to view skills in this workspace');
+      if (!allowed) return;
+
       const { path } = request.query as { path?: string };
       if (!path) {
         return reply.status(400).send({ error: 'path is required' });
@@ -141,6 +157,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
   app.post(`${prefix}/:skillId/install-plan`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId, skillId } = request.params as { workspaceId: string; skillId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage skill installations in this workspace');
+      if (!allowed) return;
+
       const body = installPlanSchema.parse(request.body);
       const plan = await createSkillInstallPlan({
         workspaceId,
@@ -159,6 +178,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
   app.get(`${prefix}/installations`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId } = request.params as { workspaceId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to view skill installations in this workspace');
+      if (!allowed) return;
+
       const { attachmentType, actorId, conversationId, userId, skillId } = request.query as {
         attachmentType?: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
         actorId?: string;
@@ -182,6 +204,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
   app.post(`${prefix}/installations`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId } = request.params as { workspaceId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage skill installations in this workspace');
+      if (!allowed) return;
+
       const user = (request as any).user;
       const body = installSchema.parse(request.body);
       const installation = await installSkill({
@@ -201,6 +226,10 @@ export function registerSkillRoutes(app: FastifyInstance) {
 
   app.put(`${prefix}/installations/:installationId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
+      const { workspaceId } = request.params as { workspaceId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage skill installations in this workspace');
+      if (!allowed) return;
+
       const { installationId } = request.params as { installationId: string };
       const body = updateInstallSchema.parse(request.body);
       const installation = await updateSkillInstallation(installationId, body);
@@ -212,6 +241,10 @@ export function registerSkillRoutes(app: FastifyInstance) {
 
   app.delete(`${prefix}/installations/:installationId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
+      const { workspaceId } = request.params as { workspaceId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage skill installations in this workspace');
+      if (!allowed) return;
+
       const { installationId } = request.params as { installationId: string };
       await uninstallSkill(installationId);
       return reply.status(204).send();

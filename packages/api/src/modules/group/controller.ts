@@ -2,22 +2,20 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CanonicalContentBlock } from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
-import { checkPermission, lookupResources } from '../../infrastructure/authz/index.js';
-import { query } from '../../infrastructure/database/index.js';
+import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import {
   createGroup, getGroup, getGroupsByWorkspace, getGroupMessages,
   sendGroupMessage, markGroupRead, cancelGroup, getGroupMembers,
   addMembersToGroup,
   issueConversationGrant,
-  issueConversationMemoryGrant,
   listConversationGrants,
-  listConversationMemoryGrants,
   removeActorFromGroup,
   updateGroupProfile,
   revokeConversationGrant,
-  revokeConversationMemoryGrant,
 } from './service.js';
 import { getGroupRuntimeMap } from '../session/runtime.js';
+import { requireRequestAction } from '../access/guards.js';
+import { authorizeAction, listAuthorizedResourceIds, userSubject } from '../access/service.js';
 
 const sendGroupMessageSchema = z.object({
   content: z.string().max(10000).optional().default(''),
@@ -44,13 +42,6 @@ const addGroupMembersSchema = z.object({
   message: 'At least one actor or user is required',
 });
 
-const conversationMemoryGrantPermissionEnum = z.enum([
-  'memory_edit',
-  'memory_grant',
-  'memory_retarget',
-  'memory_delete',
-]);
-
 const conversationGrantPermissionEnum = z.enum([
   'send',
   'moderate',
@@ -72,42 +63,21 @@ const issueConversationGrantSchema = z.object({
   }
 });
 
-const issueConversationMemoryGrantSchema = z.object({
-  permission: conversationMemoryGrantPermissionEnum,
-  userId: z.string().uuid().optional(),
-  actorId: z.string().uuid().optional(),
-  reason: z.string().max(1000).optional(),
-  metadata: z.record(z.unknown()).optional(),
-}).superRefine((value, ctx) => {
-  const invalid = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message });
-  if ((value.userId && value.actorId) || (!value.userId && !value.actorId)) {
-    invalid('Exactly one of userId or actorId is required');
-  }
-});
-
 async function requireWorkspacePermission(request: any, reply: any, permission: string, errorMessage: string) {
   const { workspaceId } = request.params as { workspaceId: string };
-  const userId = (request as any).user!.userId;
-
-  const allowed = await checkPermission({
-    resourceType: 'workspace',
-    resourceId: workspaceId,
-    permission,
-    subject: { type: 'user', id: userId },
-  });
-
-  if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
-    return false;
-  }
-
-  return true;
+  return requireRequestAction(
+    request,
+    reply,
+    permission === 'create_conversation' ? 'workspace.create_conversation' : 'workspace.view',
+    workspaceId,
+    errorMessage,
+  );
 }
 
 async function requireGroupPermission(
   request: any,
   reply: any,
-  permission: string,
+  permission: 'view' | 'send' | 'manage' | 'manage_members',
   errorMessage: string,
 ) {
   const { workspaceId, groupId } = request.params as { workspaceId: string; groupId: string };
@@ -118,16 +88,22 @@ async function requireGroupPermission(
     return null;
   }
 
-  const userId = (request as any).user!.userId;
-  const allowed = await checkPermission({
-    resourceType: 'conversation',
-    resourceId: groupId,
-    permission,
-    subject: { type: 'user', id: userId },
-  });
-
+  const action =
+    permission === 'view'
+      ? 'conversation.view'
+      : permission === 'send'
+        ? 'conversation.send'
+        : permission === 'manage'
+          ? 'conversation.manage'
+          : 'conversation.manage_members';
+  const allowed = await requireRequestAction(
+    request,
+    reply,
+    action,
+    groupId,
+    errorMessage,
+  );
   if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
     return null;
   }
 
@@ -176,6 +152,7 @@ function mapMember(row: any) {
 
 export default async function groupController(app: FastifyInstance) {
   app.addHook('onRequest', authMiddleware);
+  app.addHook('onRequest', workspaceMiddleware);
 
   // List groups for current user
   app.get<{ Params: { workspaceId: string } }>(
@@ -191,10 +168,9 @@ export default async function groupController(app: FastifyInstance) {
       );
       if (!allowed) return;
 
-      const groupIds = await lookupResources({
-        resourceType: 'conversation',
-        permission: 'view',
-        subject: { type: 'user', id: userId },
+      const groupIds = await listAuthorizedResourceIds({
+        subject: userSubject(userId),
+        action: 'conversation.view',
       });
       const rawGroups = await getGroupsByWorkspace(workspaceId, userId, groupIds);
 
@@ -212,17 +188,15 @@ export default async function groupController(app: FastifyInstance) {
           || row.last_message?.substring(0, 100)
           || 'Untitled conversation';
         const [canManage, canManageMembers] = await Promise.all([
-          checkPermission({
-            resourceType: 'conversation',
+          authorizeAction({
+            subject: userSubject(userId),
+            action: 'conversation.manage',
             resourceId: row.id,
-            permission: 'manage',
-            subject: { type: 'user', id: userId },
           }),
-          checkPermission({
-            resourceType: 'conversation',
+          authorizeAction({
+            subject: userSubject(userId),
+            action: 'conversation.manage_members',
             resourceId: row.id,
-            permission: 'manage_members',
-            subject: { type: 'user', id: userId },
           }),
         ]);
 
@@ -582,86 +556,6 @@ export default async function groupController(app: FastifyInstance) {
         return reply.status(404).send({ error: 'Conversation grant not found' });
       }
       return reply.send({ grant: revoked });
-    },
-  );
-
-  app.get<{ Params: { workspaceId: string; groupId: string } }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/memory-grants',
-    async (request, reply) => {
-      const group = await requireGroupPermission(
-        request,
-        reply,
-        'memory_grant',
-        'Not allowed to manage conversation memory permissions',
-      );
-      if (!group) return;
-
-      const { workspaceId, groupId } = request.params;
-      const grants = await listConversationMemoryGrants(groupId, workspaceId);
-      return reply.send({ grants });
-    },
-  );
-
-  app.post<{ Params: { workspaceId: string; groupId: string }; Body: unknown }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/memory-grants',
-    async (request, reply) => {
-      const group = await requireGroupPermission(
-        request,
-        reply,
-        'memory_grant',
-        'Not allowed to manage conversation memory permissions',
-      );
-      if (!group) return;
-
-      try {
-        const body = issueConversationMemoryGrantSchema.parse(request.body);
-        const grant = await issueConversationMemoryGrant({
-          groupId: group.id,
-          workspaceId: group.workspace_id,
-          permission: body.permission,
-          userId: body.userId,
-          actorId: body.actorId,
-          grantedBy: (request as any).user!.userId,
-          reason: body.reason,
-          metadata: body.metadata,
-        });
-        return reply.status(201).send({ grant });
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          return reply.status(400).send({
-            error: 'Validation failed',
-            details: error.errors.map((item) => ({
-              field: item.path.join('.'),
-              message: item.message,
-            })),
-          });
-        }
-        return reply.status(400).send({ error: error instanceof Error ? error.message : 'Failed to issue conversation memory grant' });
-      }
-    },
-  );
-
-  app.post<{ Params: { workspaceId: string; groupId: string; grantId: string } }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/memory-grants/:grantId/revoke',
-    async (request, reply) => {
-      const group = await requireGroupPermission(
-        request,
-        reply,
-        'memory_grant',
-        'Not allowed to manage conversation memory permissions',
-      );
-      if (!group) return;
-
-      const { groupId, grantId } = request.params;
-      const grant = await revokeConversationMemoryGrant({
-        groupId,
-        workspaceId: group.workspace_id,
-        grantId,
-      });
-      if (!grant) {
-        return reply.status(404).send({ error: 'Conversation memory grant not found' });
-      }
-      return reply.send({ grant });
     },
   );
 }

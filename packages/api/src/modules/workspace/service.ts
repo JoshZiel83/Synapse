@@ -1,19 +1,15 @@
-import crypto from 'node:crypto';
-import type pg from 'pg';
-import { query, transaction } from '../../infrastructure/database/index.js';
+import crypto from "node:crypto";
+import type pg from "pg";
+import { query, transaction } from "../../infrastructure/database/index.js";
 import {
   AUTHZ_PLATFORM_ID,
-  authzEnabled,
   deleteRelation,
   flushAuthzOutboxEntries,
-  lookupResources,
   queueAuthzRelationships,
   touchRelation,
-} from '../../infrastructure/authz/index.js';
-import {
-  normalizeActorDocs,
-  SECRETARY_DEFAULT_DOCS,
-} from '@synapse/shared';
+} from "../../infrastructure/authz/index.js";
+import { normalizeActorDocs, SECRETARY_DEFAULT_DOCS } from "@synapse/shared";
+import { listAuthorizedResourceIds, userSubject } from "../access/service.js";
 
 export interface CreateWorkspaceInput {
   name: string;
@@ -24,28 +20,33 @@ export interface CreateWorkspaceInput {
 export interface AddMemberInput {
   workspaceId: string;
   userId: string;
-  trustLevel: 'admin' | 'member' | 'guest';
+  trustLevel: "admin" | "member" | "guest";
 }
 
-export type WorkspaceSupplementalRole =
-  | 'model_admin'
-  | 'actor_admin'
-  | 'capability_admin'
-  | 'memory_admin'
-  | 'relay_admin'
-  | 'conversation_admin';
+export type WorkspaceAccessKey =
+  | "model_admin"
+  | "actor_admin"
+  | "capability_admin"
+  | "memory_admin"
+  | "relay_admin"
+  | "conversation_admin";
 
-function workspaceRelationFromTrustLevel(trustLevel: 'owner' | 'admin' | 'member' | 'guest') {
+function workspaceRelationFromTrustLevel(
+  trustLevel: "owner" | "admin" | "member" | "guest",
+) {
   return trustLevel;
 }
 
 async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (!authzEnabled() || entryIds.length === 0) return;
+  if (entryIds.length === 0) return;
 
   try {
     await flushAuthzOutboxEntries(entryIds);
   } catch (error) {
-    console.error(`[authz] Failed to flush ${source} relationship updates:`, error);
+    console.error(
+      `[authz] Failed to flush ${source} relationship updates:`,
+      error,
+    );
   }
 }
 
@@ -53,16 +54,16 @@ function generateSlug(name: string): string {
   const base = name
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-  const suffix = crypto.randomBytes(4).toString('hex');
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  const suffix = crypto.randomBytes(4).toString("hex");
   return `${base}-${suffix}`;
 }
 
 async function insertDefaultActorGrants(
-  queryable: Pick<pg.PoolClient, 'query'>,
+  queryable: Pick<pg.PoolClient, "query">,
   actorId: string,
   workspaceId: string,
   grantedBy?: string | null,
@@ -93,7 +94,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       `INSERT INTO workspaces (name, slug, description, owner_id)
        VALUES ($1, $2, $3, $4)
        RETURNING *`,
-      [input.name, slug, input.description ?? null, input.userId]
+      [input.name, slug, input.description ?? null, input.userId],
     );
     const workspace = wsResult.rows[0];
 
@@ -101,7 +102,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     await client.query(
       `INSERT INTO workspace_members (workspace_id, user_id, trust_level)
        VALUES ($1, $2, 'owner')`,
-      [workspace.id, input.userId]
+      [workspace.id, input.userId],
     );
 
     // 3. Auto-create secretary actor
@@ -114,13 +115,13 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
        RETURNING *`,
       [
         workspace.id,
-        'Secretary',
-        'secretary',
-        'Personal Secretary',
+        "Secretary",
+        "secretary",
+        "Personal Secretary",
         JSON.stringify(secretaryDocs),
         null,
-        ['delegation', 'reporting', 'organization'],
-      ]
+        ["delegation", "reporting", "organization"],
+      ],
     );
     const secretary = secretaryResult.rows[0];
 
@@ -138,30 +139,71 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
         secretary.title,
         JSON.stringify(secretaryDocs),
         secretary.capabilities,
-      ]
+      ],
     );
 
-    await insertDefaultActorGrants(client, secretary.id, workspace.id, input.userId);
+    await insertDefaultActorGrants(
+      client,
+      secretary.id,
+      workspace.id,
+      input.userId,
+    );
 
     const authzEntryIds = await queueAuthzRelationships(
       client,
       [
-        touchRelation('platform', AUTHZ_PLATFORM_ID, 'workspace', 'workspace', workspace.id),
-        touchRelation('workspace', workspace.id, 'platform', 'platform', AUTHZ_PLATFORM_ID),
         touchRelation(
-          'workspace',
+          "platform",
+          AUTHZ_PLATFORM_ID,
+          "workspace",
+          "workspace",
           workspace.id,
-          workspaceRelationFromTrustLevel('owner'),
-          'user',
+        ),
+        touchRelation(
+          "workspace",
+          workspace.id,
+          "platform",
+          "platform",
+          AUTHZ_PLATFORM_ID,
+        ),
+        touchRelation(
+          "workspace",
+          workspace.id,
+          workspaceRelationFromTrustLevel("owner"),
+          "user",
           input.userId,
         ),
-        touchRelation('workspace', workspace.id, 'actor', 'actor', secretary.id),
-        touchRelation('actor', secretary.id, 'workspace', 'workspace', workspace.id),
-        touchRelation('actor', secretary.id, 'discover_workspace', 'workspace', workspace.id),
-        touchRelation('actor', secretary.id, 'invoke_workspace', 'workspace', workspace.id),
+        touchRelation(
+          "workspace",
+          workspace.id,
+          "actor",
+          "actor",
+          secretary.id,
+        ),
+        touchRelation(
+          "actor",
+          secretary.id,
+          "workspace",
+          "workspace",
+          workspace.id,
+        ),
+        touchRelation(
+          "actor",
+          secretary.id,
+          "discover_workspace",
+          "workspace",
+          workspace.id,
+        ),
+        touchRelation(
+          "actor",
+          secretary.id,
+          "invoke_workspace",
+          "workspace",
+          workspace.id,
+        ),
       ],
       {
-        source: 'workspace.create',
+        source: "workspace.create",
         workspaceId: workspace.id,
         userId: input.userId,
       },
@@ -174,7 +216,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     };
   });
 
-  await flushQueuedAuthzEntries(result.authzEntryIds, 'workspace.create');
+  await flushQueuedAuthzEntries(result.authzEntryIds, "workspace.create");
 
   return {
     ...result.workspace,
@@ -183,50 +225,33 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
 }
 
 export async function listUserWorkspaces(userId: string) {
-  if (authzEnabled()) {
-    const workspaceIds = await lookupResources({
-      resourceType: 'workspace',
-      permission: 'view',
-      subject: { type: 'user', id: userId },
-    });
+  const workspaceIds = await listAuthorizedResourceIds({
+    subject: userSubject(userId),
+    action: "workspace.view",
+  });
 
-    if (workspaceIds.length === 0) {
-      return [];
-    }
-
-    const result = await query(
-      `SELECT w.*, wm.trust_level
-       FROM workspaces w
-       LEFT JOIN workspace_members wm
-         ON wm.workspace_id = w.id
-        AND wm.user_id = $1
-       WHERE w.id = ANY($2)
-       ORDER BY w.created_at DESC`,
-      [userId, workspaceIds]
-    );
-
-    return result.rows.map((row) => ({
-      ...mapWorkspaceRow(row),
-      trustLevel: row.trust_level ?? null,
-    }));
+  if (workspaceIds.length === 0) {
+    return [];
   }
 
   const result = await query(
     `SELECT w.*, wm.trust_level
      FROM workspaces w
-     INNER JOIN workspace_members wm ON wm.workspace_id = w.id
-     WHERE wm.user_id = $1
+     LEFT JOIN workspace_members wm
+       ON wm.workspace_id = w.id
+      AND wm.user_id = $1
+     WHERE w.id = ANY($2)
      ORDER BY w.created_at DESC`,
-    [userId]
+    [userId, workspaceIds],
   );
   return result.rows.map((row) => ({
     ...mapWorkspaceRow(row),
-    trustLevel: row.trust_level,
+    trustLevel: row.trust_level ?? null,
   }));
 }
 
 export async function getWorkspaceById(workspaceId: string) {
-  const result = await query('SELECT * FROM workspaces WHERE id = $1', [
+  const result = await query("SELECT * FROM workspaces WHERE id = $1", [
     workspaceId,
   ]);
   return result.rows.length > 0 ? mapWorkspaceRow(result.rows[0]) : null;
@@ -234,7 +259,7 @@ export async function getWorkspaceById(workspaceId: string) {
 
 export async function updateWorkspace(
   workspaceId: string,
-  updates: { name?: string; description?: string }
+  updates: { name?: string; description?: string },
 ) {
   const fields: string[] = [];
   const values: any[] = [];
@@ -255,16 +280,16 @@ export async function updateWorkspace(
 
   values.push(workspaceId);
   const result = await query(
-    `UPDATE workspaces SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`,
-    values
+    `UPDATE workspaces SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
+    values,
   );
   return result.rows.length > 0 ? mapWorkspaceRow(result.rows[0]) : null;
 }
 
 export async function checkMembership(workspaceId: string, userId: string) {
   const result = await query(
-    'SELECT trust_level FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
-    [workspaceId, userId]
+    "SELECT trust_level FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+    [workspaceId, userId],
   );
   return result.rows.length > 0 ? (result.rows[0].trust_level as string) : null;
 }
@@ -276,7 +301,7 @@ export async function addMember(input: AddMemberInput) {
        VALUES ($1, $2, $3)
        ON CONFLICT (workspace_id, user_id) DO NOTHING
        RETURNING *`,
-      [input.workspaceId, input.userId, input.trustLevel]
+      [input.workspaceId, input.userId, input.trustLevel],
     );
 
     if (memberResult.rows.length === 0) {
@@ -287,15 +312,15 @@ export async function addMember(input: AddMemberInput) {
       client,
       [
         touchRelation(
-          'workspace',
+          "workspace",
           input.workspaceId,
           workspaceRelationFromTrustLevel(input.trustLevel),
-          'user',
+          "user",
           input.userId,
         ),
       ],
       {
-        source: 'workspace.add_member',
+        source: "workspace.add_member",
         workspaceId: input.workspaceId,
         userId: input.userId,
         trustLevel: input.trustLevel,
@@ -312,7 +337,7 @@ export async function addMember(input: AddMemberInput) {
     return null;
   }
 
-  await flushQueuedAuthzEntries(result.authzEntryIds, 'workspace.add_member');
+  await flushQueuedAuthzEntries(result.authzEntryIds, "workspace.add_member");
   return result.member;
 }
 
@@ -323,57 +348,57 @@ export async function listMembers(workspaceId: string) {
         u.name AS user_name,
         u.email AS user_email,
         u.avatar_url,
-        COALESCE(role_map.roles, '{}'::text[]) AS roles
+        COALESCE(access_map.access_keys, '{}'::text[]) AS access_keys
      FROM workspace_members wm
      INNER JOIN users u ON u.id = wm.user_id
      LEFT JOIN (
-       SELECT workspace_id, user_id, ARRAY_AGG(role ORDER BY role) AS roles
-       FROM workspace_member_roles
+       SELECT workspace_id, user_id, ARRAY_AGG(access_key ORDER BY access_key) AS access_keys
+       FROM workspace_access_bindings
        GROUP BY workspace_id, user_id
-     ) role_map
-       ON role_map.workspace_id = wm.workspace_id
-      AND role_map.user_id = wm.user_id
+     ) access_map
+       ON access_map.workspace_id = wm.workspace_id
+      AND access_map.user_id = wm.user_id
      WHERE wm.workspace_id = $1
      ORDER BY wm.joined_at ASC`,
-    [workspaceId]
+    [workspaceId],
   );
   return result.rows.map((row) => ({
     ...mapMemberRow(row),
     userName: row.user_name,
     userEmail: row.user_email,
     avatarUrl: row.avatar_url ?? null,
-    roles: Array.isArray(row.roles) ? row.roles : [],
+    accessKeys: Array.isArray(row.access_keys) ? row.access_keys : [],
   }));
 }
 
-export async function listWorkspaceRoleAssignments(workspaceId: string) {
+export async function listWorkspaceAccessBindings(workspaceId: string) {
   const result = await query(
     `SELECT
-        wmr.workspace_id,
-        wmr.user_id,
-        wmr.role,
-        wmr.assigned_by,
-        wmr.metadata,
-        wmr.created_at,
-        wmr.updated_at,
+        wab.workspace_id,
+        wab.user_id,
+        wab.access_key,
+        wab.assigned_by,
+        wab.metadata,
+        wab.created_at,
+        wab.updated_at,
         u.name AS user_name,
         u.email AS user_email,
         u.avatar_url,
         wm.trust_level
-     FROM workspace_member_roles wmr
-     JOIN users u ON u.id = wmr.user_id
+     FROM workspace_access_bindings wab
+     JOIN users u ON u.id = wab.user_id
      JOIN workspace_members wm
-       ON wm.workspace_id = wmr.workspace_id
-      AND wm.user_id = wmr.user_id
-     WHERE wmr.workspace_id = $1
-     ORDER BY wmr.role ASC, wmr.created_at ASC`,
+       ON wm.workspace_id = wab.workspace_id
+      AND wm.user_id = wab.user_id
+     WHERE wab.workspace_id = $1
+     ORDER BY wab.access_key ASC, wab.created_at ASC`,
     [workspaceId],
   );
 
   return result.rows.map((row) => ({
     workspaceId: row.workspace_id,
     userId: row.user_id,
-    role: row.role as WorkspaceSupplementalRole,
+    accessKey: row.access_key as WorkspaceAccessKey,
     assignedBy: row.assigned_by ?? null,
     metadata: row.metadata ?? {},
     createdAt: row.created_at,
@@ -385,10 +410,10 @@ export async function listWorkspaceRoleAssignments(workspaceId: string) {
   }));
 }
 
-export async function assignWorkspaceRole(input: {
+export async function grantWorkspaceAccess(input: {
   workspaceId: string;
   userId: string;
-  role: WorkspaceSupplementalRole;
+  accessKey: WorkspaceAccessKey;
   assignedBy: string;
   metadata?: Record<string, unknown>;
 }) {
@@ -402,44 +427,44 @@ export async function assignWorkspaceRole(input: {
   );
 
   if (membership.rows.length === 0) {
-    throw new Error('User is not a member of this workspace');
+    throw new Error("User is not a member of this workspace");
   }
 
   const result = await query(
-    `INSERT INTO workspace_member_roles (workspace_id, user_id, role, assigned_by, metadata)
+    `INSERT INTO workspace_access_bindings (workspace_id, user_id, access_key, assigned_by, metadata)
      VALUES ($1, $2, $3, $4, $5::jsonb)
-     ON CONFLICT (workspace_id, user_id, role) DO NOTHING
+     ON CONFLICT (workspace_id, user_id, access_key) DO NOTHING
      RETURNING *`,
     [
       input.workspaceId,
       input.userId,
-      input.role,
+      input.accessKey,
       input.assignedBy,
       JSON.stringify(input.metadata || {}),
     ],
   );
 
   if (result.rows.length === 0) {
-    throw new Error('Role already assigned');
+    throw new Error("Access already granted");
   }
 
-  const authzEntryIds = await queueRoleRelation({
-    operation: 'touch',
+  const authzEntryIds = await queueAccessBindingRelation({
+    operation: "touch",
     workspaceId: input.workspaceId,
     userId: input.userId,
-    role: input.role,
-    source: 'workspace.role.assign',
+    accessKey: input.accessKey,
+    source: "workspace.access.grant",
     metadata: {
       assignedBy: input.assignedBy,
       ...input.metadata,
     },
   });
-  await flushQueuedAuthzEntries(authzEntryIds, 'workspace.role.assign');
+  await flushQueuedAuthzEntries(authzEntryIds, "workspace.access.grant");
 
   return {
     workspaceId: result.rows[0].workspace_id,
     userId: result.rows[0].user_id,
-    role: result.rows[0].role as WorkspaceSupplementalRole,
+    accessKey: result.rows[0].access_key as WorkspaceAccessKey,
     assignedBy: result.rows[0].assigned_by ?? null,
     metadata: result.rows[0].metadata ?? {},
     createdAt: result.rows[0].created_at,
@@ -447,28 +472,32 @@ export async function assignWorkspaceRole(input: {
   };
 }
 
-export async function revokeWorkspaceRole(workspaceId: string, userId: string, role: WorkspaceSupplementalRole) {
+export async function revokeWorkspaceAccess(
+  workspaceId: string,
+  userId: string,
+  accessKey: WorkspaceAccessKey,
+) {
   const result = await query(
-    `DELETE FROM workspace_member_roles
+    `DELETE FROM workspace_access_bindings
      WHERE workspace_id = $1
        AND user_id = $2
-       AND role = $3
-     RETURNING workspace_id, user_id, role`,
-    [workspaceId, userId, role],
+       AND access_key = $3
+     RETURNING workspace_id, user_id, access_key`,
+    [workspaceId, userId, accessKey],
   );
 
   if (result.rows.length === 0) {
-    throw new Error('Role not found');
+    throw new Error("Access grant not found");
   }
 
-  const authzEntryIds = await queueRoleRelation({
-    operation: 'delete',
+  const authzEntryIds = await queueAccessBindingRelation({
+    operation: "delete",
     workspaceId,
     userId,
-    role,
-    source: 'workspace.role.revoke',
+    accessKey,
+    source: "workspace.access.revoke",
   });
-  await flushQueuedAuthzEntries(authzEntryIds, 'workspace.role.revoke');
+  await flushQueuedAuthzEntries(authzEntryIds, "workspace.access.revoke");
 }
 
 // ── Row mappers ──
@@ -487,7 +516,7 @@ function mapWorkspaceRow(row: any) {
 
 function mapActorRow(row: any) {
   const docs = normalizeActorDocs(
-    typeof row.docs === 'string' ? JSON.parse(row.docs) : (row.docs || []),
+    typeof row.docs === "string" ? JSON.parse(row.docs) : row.docs || [],
   );
   return {
     id: row.id,
@@ -501,7 +530,11 @@ function mapActorRow(row: any) {
       canRepresentUser: Boolean(row.can_represent_user),
       docs,
       capabilities: Array.isArray(row.capabilities) ? row.capabilities : [],
-      config: row.config ? (typeof row.config === 'string' ? JSON.parse(row.config) : row.config) : {},
+      config: row.config
+        ? typeof row.config === "string"
+          ? JSON.parse(row.config)
+          : row.config
+        : {},
     },
     currentVersion: Number(row.current_version || 1),
     isActive: row.is_active,
@@ -516,32 +549,46 @@ function mapMemberRow(row: any) {
     workspaceId: row.workspace_id,
     userId: row.user_id,
     trustLevel: row.trust_level,
-    roles: Array.isArray(row.roles) ? row.roles : [],
+    accessKeys: Array.isArray(row.access_keys) ? row.access_keys : [],
     joinedAt: row.joined_at,
   };
 }
 
-async function queueRoleRelation(input: {
-  operation: 'touch' | 'delete';
+async function queueAccessBindingRelation(input: {
+  operation: "touch" | "delete";
   workspaceId: string;
   userId: string;
-  role: WorkspaceSupplementalRole;
+  accessKey: WorkspaceAccessKey;
   source: string;
   metadata?: Record<string, unknown>;
 }) {
-  return transaction(async (client: pg.PoolClient) => queueAuthzRelationships(
-    client,
-    [
-      input.operation === 'touch'
-        ? touchRelation('workspace', input.workspaceId, input.role, 'user', input.userId)
-        : deleteRelation('workspace', input.workspaceId, input.role, 'user', input.userId),
-    ],
-    {
-      source: input.source,
-      workspaceId: input.workspaceId,
-      userId: input.userId,
-      role: input.role,
-      ...(input.metadata || {}),
-    },
-  ));
+  return transaction(async (client: pg.PoolClient) =>
+    queueAuthzRelationships(
+      client,
+      [
+        input.operation === "touch"
+          ? touchRelation(
+              "workspace",
+              input.workspaceId,
+              input.accessKey,
+              "user",
+              input.userId,
+            )
+          : deleteRelation(
+              "workspace",
+              input.workspaceId,
+              input.accessKey,
+              "user",
+              input.userId,
+            ),
+      ],
+      {
+        source: input.source,
+        workspaceId: input.workspaceId,
+        userId: input.userId,
+        accessKey: input.accessKey,
+        ...(input.metadata || {}),
+      },
+    ),
+  );
 }

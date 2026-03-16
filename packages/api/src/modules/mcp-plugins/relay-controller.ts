@@ -12,7 +12,6 @@ import type {
   RelayToolView,
 } from '@synapse/shared';
 import { RELAY_PAIRING_TTL_MS, RELAY_PROTOCOL_VERSION } from '@synapse/shared';
-import { authzEnabled, checkPermission } from '../../infrastructure/authz/index.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import { query, transaction } from '../../infrastructure/database/index.js';
@@ -20,6 +19,7 @@ import { emitEvent } from '../../infrastructure/events/index.js';
 import { disconnectRelay } from './relay-manager.js';
 import { incrementMcpVersion } from './instance-manager.js';
 import { logEvent } from './audit.js';
+import { requireRequestAction } from '../access/guards.js';
 
 const createPairingSchema = z.object({
   displayName: z.string().trim().min(1).max(255).optional(),
@@ -222,60 +222,14 @@ function parseCount(value: string | number | null | undefined) {
   return 0;
 }
 
-function hasLegacyWorkspacePermission(trustLevel: string | null, permission: string) {
-  switch (permission) {
-    case 'view':
-      return Boolean(trustLevel);
-    case 'manage_relays':
-      return trustLevel === 'owner' || trustLevel === 'admin';
-    default:
-      return false;
-  }
-}
-
-async function getWorkspaceTrustLevel(workspaceId: string, userId: string) {
-  const result = await query(
-    `SELECT trust_level
-     FROM workspace_members
-     WHERE workspace_id = $1 AND user_id = $2
-     LIMIT 1`,
-    [workspaceId, userId],
-  );
-  return (result.rows[0]?.trust_level as string | undefined) || null;
-}
-
 async function requireWorkspacePermission(
   request: FastifyRequest<{ Params: WorkspaceParams }>,
   reply: FastifyReply,
-  permission: 'view' | 'manage_relays',
+  action: 'workspace.view' | 'workspace.manage_relays',
   errorMessage: string,
 ) {
   const { workspaceId } = request.params;
-  const userId = (request as any).user.userId as string;
-
-  if (!authzEnabled()) {
-    const trustLevel = await getWorkspaceTrustLevel(workspaceId, userId);
-    const allowed = hasLegacyWorkspacePermission(trustLevel, permission);
-    if (!allowed) {
-      reply.status(403).send({ error: errorMessage });
-      return false;
-    }
-    return true;
-  }
-
-  const allowed = await checkPermission({
-    resourceType: 'workspace',
-    resourceId: workspaceId,
-    permission,
-    subject: { type: 'user', id: userId },
-  });
-
-  if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
-    return false;
-  }
-
-  return true;
+  return requireRequestAction(request, reply, action, workspaceId, errorMessage);
 }
 
 function mapRelayDeviceSummary(row: RelayDeviceSummaryRow): RelayDeviceSummaryView {
@@ -1092,7 +1046,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
-        'view',
+        'workspace.view',
         'Not allowed to access relays in this workspace',
       );
       if (!allowed) return;
@@ -1115,7 +1069,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
-        'manage_relays',
+        'workspace.manage_relays',
         'Not allowed to manage relays in this workspace',
       );
       if (!allowed) return;
@@ -1152,7 +1106,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
-        'view',
+        'workspace.view',
         'Not allowed to access relays in this workspace',
       );
       if (!allowed) return;
@@ -1171,7 +1125,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
-        'manage_relays',
+        'workspace.manage_relays',
         'Not allowed to manage relays in this workspace',
       );
       if (!allowed) return;
@@ -1231,7 +1185,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
-        'view',
+        'workspace.view',
         'Not allowed to access relays in this workspace',
       );
       if (!allowed) return;
@@ -1249,7 +1203,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
-        'manage_relays',
+        'workspace.manage_relays',
         'Not allowed to manage relays in this workspace',
       );
       if (!allowed) return;
@@ -1293,7 +1247,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
-        'manage_relays',
+        'workspace.manage_relays',
         'Not allowed to manage relays in this workspace',
       );
       if (!allowed) return;
@@ -1320,7 +1274,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
-        'manage_relays',
+        'workspace.manage_relays',
         'Not allowed to manage relays in this workspace',
       );
       if (!allowed) return;
@@ -1441,7 +1395,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
-        'manage_relays',
+        'workspace.manage_relays',
         'Not allowed to manage relays in this workspace',
       );
       if (!allowed) return;

@@ -111,7 +111,7 @@ function buildMetadataFromItem(item: any) {
 }
 
 async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (!authzEnabled() || entryIds.length === 0) return;
+  if (entryIds.length === 0) return;
 
   try {
     await flushAuthzOutboxEntries(entryIds);

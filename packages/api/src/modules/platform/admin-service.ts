@@ -1,17 +1,21 @@
-import { config } from '../../config/index.js';
+import { config } from "../../config/index.js";
 import {
   AUTHZ_PLATFORM_ID,
-  authzEnabled,
   deleteRelation,
   diffAuthzRelationships,
   enqueueAuthzRelationships,
   flushAuthzOutboxEntries,
   touchRelation,
   type AuthzRelationMutation,
-} from '../../infrastructure/authz/index.js';
-import { query, transaction } from '../../infrastructure/database/index.js';
+} from "../../infrastructure/authz/index.js";
+import { query, transaction } from "../../infrastructure/database/index.js";
 
-export type PlatformRole = 'super_admin' | 'workspace_admin' | 'model_admin' | 'support' | 'auditor';
+export type PlatformAccessKey =
+  | "super_admin"
+  | "workspace_admin"
+  | "model_admin"
+  | "support"
+  | "auditor";
 
 type UserIdentity = {
   id: string;
@@ -22,31 +26,45 @@ function configuredPlatformAdminEmails() {
   return Array.from(new Set(config.authz.platformAdminEmails));
 }
 
-function buildPlatformRoleRelations(rows: Array<{ userId: string; role: PlatformRole }>): AuthzRelationMutation[] {
+function buildPlatformAccessRelations(
+  rows: Array<{ userId: string; accessKey: PlatformAccessKey }>,
+): AuthzRelationMutation[] {
   return rows.map((row) =>
-    touchRelation('platform', AUTHZ_PLATFORM_ID, row.role, 'user', row.userId),
+    touchRelation(
+      "platform",
+      AUTHZ_PLATFORM_ID,
+      row.accessKey,
+      "user",
+      row.userId,
+    ),
   );
 }
 
 async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (!authzEnabled() || entryIds.length === 0) return;
+  if (entryIds.length === 0) return;
 
   try {
     await flushAuthzOutboxEntries(entryIds);
   } catch (error) {
-    console.error(`[authz] Failed to flush ${source} relationship updates:`, error);
+    console.error(
+      `[authz] Failed to flush ${source} relationship updates:`,
+      error,
+    );
   }
 }
 
-async function listPlatformRoles() {
-  const result = await query<{ user_id: string; role: PlatformRole }>(
-    `SELECT user_id, role
-     FROM platform_user_roles`,
+async function listPlatformAccessRows() {
+  const result = await query<{
+    user_id: string;
+    access_key: PlatformAccessKey;
+  }>(
+    `SELECT user_id, access_key
+     FROM platform_access_bindings`,
     [],
   );
   return result.rows.map((row) => ({
     userId: row.user_id,
-    role: row.role,
+    accessKey: row.access_key,
   }));
 }
 
@@ -59,7 +77,7 @@ async function ensureUserExists(userId: string) {
     [userId],
   );
   if (result.rows.length === 0) {
-    throw new Error('User not found');
+    throw new Error("User not found");
   }
 }
 
@@ -68,44 +86,51 @@ export function isConfiguredPlatformAdminEmail(email: string) {
   return configuredPlatformAdminEmails().includes(normalized);
 }
 
-export async function hasPlatformRole(userId: string, roles: PlatformRole[]) {
+export async function hasPlatformAccess(
+  userId: string,
+  accessKeys: PlatformAccessKey[],
+) {
   const result = await query(
     `SELECT 1
-     FROM platform_user_roles
+     FROM platform_access_bindings
      WHERE user_id = $1
-       AND role = ANY($2::text[])
+       AND access_key = ANY($2::text[])
      LIMIT 1`,
-    [userId, roles],
+    [userId, accessKeys],
   );
   return result.rows.length > 0;
 }
 
 export async function isPlatformAdmin(userId: string) {
-  return hasPlatformRole(userId, ['super_admin', 'workspace_admin', 'model_admin']);
+  return hasPlatformAccess(userId, [
+    "super_admin",
+    "workspace_admin",
+    "model_admin",
+  ]);
 }
 
-export async function listPlatformRoleAssignments() {
+export async function listPlatformAccessBindings() {
   const result = await query(
     `SELECT
-        pur.user_id,
-        pur.role,
-        pur.source,
-        pur.assigned_by,
-        pur.metadata,
-        pur.created_at,
-        pur.updated_at,
+        pab.user_id,
+        pab.access_key,
+        pab.source,
+        pab.assigned_by,
+        pab.metadata,
+        pab.created_at,
+        pab.updated_at,
         u.name AS user_name,
         u.email AS user_email,
         u.avatar_url
-     FROM platform_user_roles pur
-     JOIN users u ON u.id = pur.user_id
-     ORDER BY pur.role ASC, pur.created_at ASC`,
+     FROM platform_access_bindings pab
+     JOIN users u ON u.id = pab.user_id
+     ORDER BY pab.access_key ASC, pab.created_at ASC`,
     [],
   );
 
   return result.rows.map((row) => ({
     userId: row.user_id,
-    role: row.role as PlatformRole,
+    accessKey: row.access_key as PlatformAccessKey,
     source: row.source,
     assignedBy: row.assigned_by ?? null,
     metadata: row.metadata ?? {},
@@ -117,40 +142,53 @@ export async function listPlatformRoleAssignments() {
   }));
 }
 
-export async function assignPlatformRole(input: {
+export async function grantPlatformAccess(input: {
   userId: string;
-  role: PlatformRole;
+  accessKey: PlatformAccessKey;
   assignedBy: string;
   metadata?: Record<string, unknown>;
 }) {
   await ensureUserExists(input.userId);
 
   const result = await query(
-    `INSERT INTO platform_user_roles (user_id, role, source, assigned_by, metadata)
+    `INSERT INTO platform_access_bindings (user_id, access_key, source, assigned_by, metadata)
      VALUES ($1, $2, 'manual', $3, $4::jsonb)
-     ON CONFLICT (user_id, role) DO NOTHING
+     ON CONFLICT (user_id, access_key) DO NOTHING
      RETURNING *`,
-    [input.userId, input.role, input.assignedBy, JSON.stringify(input.metadata || {})],
+    [
+      input.userId,
+      input.accessKey,
+      input.assignedBy,
+      JSON.stringify(input.metadata || {}),
+    ],
   );
 
   if (result.rows.length === 0) {
-    throw new Error('Role already assigned');
+    throw new Error("Access already granted");
   }
 
   const authzEntryIds = await enqueueAuthzRelationships(
-    [touchRelation('platform', AUTHZ_PLATFORM_ID, input.role, 'user', input.userId)],
+    [
+      touchRelation(
+        "platform",
+        AUTHZ_PLATFORM_ID,
+        input.accessKey,
+        "user",
+        input.userId,
+      ),
+    ],
     {
-      source: 'platform_role.assign',
+      source: "platform.access.grant",
       userId: input.userId,
-      role: input.role,
+      accessKey: input.accessKey,
       assignedBy: input.assignedBy,
     },
   );
-  await flushQueuedAuthzEntries(authzEntryIds, 'platform_role.assign');
+  await flushQueuedAuthzEntries(authzEntryIds, "platform.access.grant");
 
   return {
     userId: result.rows[0].user_id,
-    role: result.rows[0].role as PlatformRole,
+    accessKey: result.rows[0].access_key as PlatformAccessKey,
     source: result.rows[0].source,
     assignedBy: result.rows[0].assigned_by ?? null,
     metadata: result.rows[0].metadata ?? {},
@@ -160,61 +198,70 @@ export async function assignPlatformRole(input: {
 }
 
 export async function ensureSeedPlatformAdminForUser(user: UserIdentity) {
+  const source = isConfiguredPlatformAdminEmail(user.email)
+    ? "config"
+    : "manual";
+
   await query(
-    `INSERT INTO platform_user_roles (user_id, role, source, assigned_by, metadata)
-     VALUES ($1, 'super_admin', 'manual', NULL, $2::jsonb)
-     ON CONFLICT (user_id, role) DO NOTHING`,
-    [user.id, JSON.stringify({ source: 'db.seed', email: user.email })],
+    `INSERT INTO platform_access_bindings (user_id, access_key, source, assigned_by, metadata)
+     VALUES ($1, 'super_admin', $2, NULL, $3::jsonb)
+     ON CONFLICT (user_id, access_key) DO NOTHING`,
+    [user.id, source, JSON.stringify({ source: "db.seed", email: user.email })],
   );
 
   const authzEntryIds = await enqueueAuthzRelationships(
-    buildPlatformRoleRelations([{ userId: user.id, role: 'super_admin' }]),
+    buildPlatformAccessRelations([
+      { userId: user.id, accessKey: "super_admin" },
+    ]),
     {
-      source: 'platform_admin.seed',
+      source: "platform_admin.seed",
       userId: user.id,
       email: user.email,
-      role: 'super_admin',
+      accessKey: "super_admin",
     },
   );
-  await flushQueuedAuthzEntries(authzEntryIds, 'platform_admin.seed');
+  await flushQueuedAuthzEntries(authzEntryIds, "platform_admin.seed");
 
   return true;
 }
 
-export async function revokePlatformRole(userId: string, role: PlatformRole) {
+export async function revokePlatformAccess(
+  userId: string,
+  accessKey: PlatformAccessKey,
+) {
   const existing = await query(
     `SELECT source
-     FROM platform_user_roles
+     FROM platform_access_bindings
      WHERE user_id = $1
-       AND role = $2
+       AND access_key = $2
      LIMIT 1`,
-    [userId, role],
+    [userId, accessKey],
   );
 
   if (existing.rows.length === 0) {
-    throw new Error('Role not found');
+    throw new Error("Access grant not found");
   }
 
-  if (existing.rows[0].source === 'config') {
-    throw new Error('Config-managed role cannot be revoked manually');
+  if (existing.rows[0].source === "config") {
+    throw new Error("Config-managed access cannot be revoked manually");
   }
 
   await query(
-    `DELETE FROM platform_user_roles
+    `DELETE FROM platform_access_bindings
      WHERE user_id = $1
-       AND role = $2`,
-    [userId, role],
+       AND access_key = $2`,
+    [userId, accessKey],
   );
 
   const authzEntryIds = await enqueueAuthzRelationships(
-    [deleteRelation('platform', AUTHZ_PLATFORM_ID, role, 'user', userId)],
+    [deleteRelation("platform", AUTHZ_PLATFORM_ID, accessKey, "user", userId)],
     {
-      source: 'platform_role.revoke',
+      source: "platform.access.revoke",
       userId,
-      role,
+      accessKey,
     },
   );
-  await flushQueuedAuthzEntries(authzEntryIds, 'platform_role.revoke');
+  await flushQueuedAuthzEntries(authzEntryIds, "platform.access.revoke");
 }
 
 export async function ensureConfiguredPlatformAdminForUser(user: UserIdentity) {
@@ -223,85 +270,90 @@ export async function ensureConfiguredPlatformAdminForUser(user: UserIdentity) {
   }
 
   await query(
-    `INSERT INTO platform_user_roles (user_id, role, source, assigned_by, metadata)
+    `INSERT INTO platform_access_bindings (user_id, access_key, source, assigned_by, metadata)
      VALUES ($1, 'super_admin', 'config', NULL, '{}'::jsonb)
-     ON CONFLICT (user_id, role) DO NOTHING`,
+     ON CONFLICT (user_id, access_key) DO NOTHING`,
     [user.id],
   );
 
   const authzEntryIds = await enqueueAuthzRelationships(
-    buildPlatformRoleRelations([{ userId: user.id, role: 'super_admin' }]),
+    buildPlatformAccessRelations([
+      { userId: user.id, accessKey: "super_admin" },
+    ]),
     {
-      source: 'platform_admin.ensure',
+      source: "platform_admin.ensure",
       userId: user.id,
       email: user.email,
-      role: 'super_admin',
+      accessKey: "super_admin",
     },
   );
-  await flushQueuedAuthzEntries(authzEntryIds, 'platform_admin.ensure');
+  await flushQueuedAuthzEntries(authzEntryIds, "platform_admin.ensure");
 
   return true;
 }
 
 export async function syncConfiguredPlatformAdmins() {
   const emails = configuredPlatformAdminEmails();
-  const previousRoles = await listPlatformRoles();
+  const previousAccessRows = await listPlatformAccessRows();
 
-  const matchedUsersResult = emails.length > 0
-    ? await query<{ id: string }>(
-        `SELECT id
+  const matchedUsersResult =
+    emails.length > 0
+      ? await query<{ id: string }>(
+          `SELECT id
          FROM users
          WHERE lower(email) = ANY($1)`,
-        [emails],
-      )
-    : { rows: [] as Array<{ id: string }> };
+          [emails],
+        )
+      : { rows: [] as Array<{ id: string }> };
 
   const matchedUserIds = matchedUsersResult.rows.map((row) => row.id);
 
   await transaction(async (client) => {
     if (matchedUserIds.length === 0) {
       await client.query(
-        `DELETE FROM platform_user_roles
+        `DELETE FROM platform_access_bindings
          WHERE source = 'config'
-           AND role = 'super_admin'`,
+           AND access_key = 'super_admin'`,
         [],
       );
       return;
     }
 
     await client.query(
-      `DELETE FROM platform_user_roles
+      `DELETE FROM platform_access_bindings
        WHERE source = 'config'
-         AND role = 'super_admin'
+         AND access_key = 'super_admin'
          AND user_id <> ALL($1::uuid[])`,
       [matchedUserIds],
     );
     await client.query(
-      `INSERT INTO platform_user_roles (user_id, role, source, assigned_by, metadata)
+      `INSERT INTO platform_access_bindings (user_id, access_key, source, assigned_by, metadata)
        SELECT UNNEST($1::uuid[]), 'super_admin', 'config', NULL, '{}'::jsonb
-       ON CONFLICT (user_id, role) DO NOTHING`,
+       ON CONFLICT (user_id, access_key) DO NOTHING`,
       [matchedUserIds],
     );
   });
 
-  const nextRoles = await listPlatformRoles();
+  const nextAccessRows = await listPlatformAccessRows();
 
   const authzEntryIds = await enqueueAuthzRelationships(
     diffAuthzRelationships(
-      buildPlatformRoleRelations(previousRoles),
-      buildPlatformRoleRelations(nextRoles),
+      buildPlatformAccessRelations(previousAccessRows),
+      buildPlatformAccessRelations(nextAccessRows),
     ),
     {
-      source: 'platform_admin.sync',
+      source: "platform_admin.sync",
       configuredEmailCount: emails.length,
       matchedUserCount: matchedUserIds.length,
     },
   );
-  await flushQueuedAuthzEntries(authzEntryIds, 'platform_admin.sync');
+  await flushQueuedAuthzEntries(authzEntryIds, "platform_admin.sync");
 
   return {
     configuredEmailCount: emails.length,
     matchedUserCount: matchedUserIds.length,
-    platformAdminCount: nextRoles.filter((row) => row.role === 'super_admin').length,
+    platformAdminCount: nextAccessRows.filter(
+      (row) => row.accessKey === "super_admin",
+    ).length,
   };
 }

@@ -5,9 +5,6 @@ import {
   type CanonicalContentBlock,
   type Memory as SharedMemory,
   type MemoryCategory,
-  type MemoryGrant,
-  type MemoryGrantScope,
-  type MemoryPermission,
   type MemoryScope,
   type MemoryStability,
   type MemoryStatus,
@@ -52,6 +49,8 @@ export type MemoryFolderNode = {
   }
 }
 
+export type MemoryFolderPreset = NonNullable<MemoryFolderNode["createPreset"]>
+
 export type EditorState = {
   id?: string
   mode: "create" | "edit"
@@ -66,7 +65,6 @@ export type EditorState = {
   confidence: number
   tags: string
   textDigest: string
-  grantsJson: string
   contentBlocks: CanonicalContentBlock[]
 }
 
@@ -106,55 +104,6 @@ export function summarizeMemory(memory: Memory) {
   return "Untitled memory"
 }
 
-export function serializeGrants(grants: MemoryGrant[]) {
-  return JSON.stringify(
-    grants.map((grant) => ({
-      permission: grant.permission,
-      grantScope: grant.grantScope,
-      actorId: grant.actorId,
-      conversationId: grant.conversationId,
-      userId: grant.userId,
-      reason: grant.reason,
-      metadata: grant.metadata,
-    })),
-    null,
-    2,
-  )
-}
-
-export function parseGrantJson(raw: string): Array<{
-  permission?: MemoryPermission
-  grantScope: MemoryGrantScope
-  actorId?: string
-  conversationId?: string
-  userId?: string
-  reason?: string
-  metadata?: Record<string, unknown>
-}> {
-  const trimmed = raw.trim()
-  if (!trimmed) return []
-  const parsed = JSON.parse(trimmed)
-  if (!Array.isArray(parsed)) {
-    throw new Error("Grants must be a JSON array.")
-  }
-
-  return parsed.map((item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      throw new Error("Each grant must be a JSON object.")
-    }
-
-    return item as {
-      permission?: MemoryPermission
-      grantScope: MemoryGrantScope
-      actorId?: string
-      conversationId?: string
-      userId?: string
-      reason?: string
-      metadata?: Record<string, unknown>
-    }
-  })
-}
-
 export function cloneBlocks(blocks: CanonicalContentBlock[]) {
   return structuredClone(blocks)
 }
@@ -164,7 +113,7 @@ export function hasMeaningfulBlocks(blocks: CanonicalContentBlock[]) {
 }
 
 export function createDraftState(
-  preset: NonNullable<MemoryFolderNode["createPreset"]>,
+  preset: MemoryFolderPreset,
   currentUserId: string,
 ): EditorState {
   return {
@@ -180,7 +129,6 @@ export function createDraftState(
     confidence: 0.8,
     tags: "",
     textDigest: "",
-    grantsJson: "[]",
     contentBlocks: [createEmptyTextContentBlock("")],
   }
 }
@@ -200,7 +148,6 @@ export function createEditorStateFromMemory(memory: Memory): EditorState {
     confidence: memory.confidence,
     tags: memory.tags.join(", "),
     textDigest: memory.textDigest,
-    grantsJson: serializeGrants(memory.grants || []),
     contentBlocks: cloneBlocks(memory.contentBlocks.length > 0 ? memory.contentBlocks : [createEmptyTextContentBlock("")]),
   }
 }
@@ -226,7 +173,6 @@ export function buildMemoryPayload(editor: EditorState) {
     ownerUserId: editor.ownerScope === "user"
       ? editor.ownerUserId || undefined
       : undefined,
-    grants: parseGrantJson(editor.grantsJson),
     category: editor.category,
     status: editor.status,
     stability: editor.stability,
@@ -242,6 +188,52 @@ function sortByName<T extends { label: string }>(items: T[]) {
   return [...items].sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }))
 }
 
+export function describeFolderVisibility(folder: Pick<MemoryFolderNode, "createPreset" | "description">) {
+  if (!folder.createPreset) {
+    return folder.description || "Move a memory into a concrete path to define who can read it."
+  }
+
+  switch (folder.createPreset.ownerScope) {
+    case "workspace":
+      return "Visible across the workspace."
+    case "user":
+      return "Visible only in your personal memory path."
+    case "conversation":
+      return "Visible to participants in the selected conversation."
+    case "actor_global":
+      return "Available to the selected actor across conversations."
+    case "actor_conversation":
+      return "Available only to the selected actor inside the selected conversation."
+    default:
+      return folder.description || "Visibility follows the selected path."
+  }
+}
+
+export function buildMemoryFolderPathLabel(folderId: string, folders: Map<string, MemoryFolderNode>) {
+  return getFolderSegments(folderId, folders)
+    .filter((segment) => segment.id !== "root")
+    .map((segment) => segment.label)
+    .join(" / ")
+}
+
+export function buildMemoryOwnerStateFromPreset(preset: MemoryFolderPreset, currentUserId: string) {
+  return {
+    ownerScope: preset.ownerScope,
+    ownerActorId: preset.ownerActorId || "",
+    ownerConversationId: preset.ownerConversationId || "",
+    ownerUserId: preset.ownerScope === "user" ? preset.ownerUserId || currentUserId : "",
+  }
+}
+
+export function buildMemoryOwnerPayloadFromPreset(preset: MemoryFolderPreset, currentUserId: string) {
+  return {
+    ownerScope: preset.ownerScope,
+    ownerActorId: preset.ownerActorId || undefined,
+    ownerConversationId: preset.ownerConversationId || undefined,
+    ownerUserId: preset.ownerScope === "user" ? preset.ownerUserId || currentUserId : undefined,
+  }
+}
+
 export function getFolderIdForOwner(input: {
   workspaceId: string
   currentUserId: string
@@ -254,9 +246,7 @@ export function getFolderIdForOwner(input: {
     case "workspace":
       return `folder:workspace:${input.workspaceId}`
     case "user":
-      return input.ownerUserId === input.currentUserId
-        ? `folder:user:${input.currentUserId}`
-        : `folder:user:${input.currentUserId}`
+      return `folder:user:${input.ownerUserId || input.currentUserId}`
     case "conversation":
       return input.ownerConversationId
         ? `folder:workspace:${input.workspaceId}:conversation:${input.ownerConversationId}`
@@ -289,7 +279,7 @@ export function buildMemoryFolders(params: {
     {
       id: "root",
       label: "Memories",
-      description: "Memory root",
+      description: "Choose a path to define visibility.",
       icon: Building2,
       directMemoryIds: [],
     },
@@ -297,7 +287,7 @@ export function buildMemoryFolders(params: {
       id: `folder:user:${currentUserId}`,
       parentId: "root",
       label: currentUserLabel,
-      description: "Personal memories",
+      description: "Visible only in your personal memory path.",
       icon: UserRound,
       directMemoryIds: memories
         .filter((memory) => memory.ownerScope === "user" && memory.ownerUserId === currentUserId)
@@ -311,7 +301,7 @@ export function buildMemoryFolders(params: {
       id: `folder:workspace:${workspaceId}`,
       parentId: "root",
       label: workspaceName,
-      description: "Workspace memories",
+      description: "Visible across the workspace.",
       icon: Building2,
       directMemoryIds: memories
         .filter((memory) => memory.ownerScope === "workspace")
@@ -331,7 +321,7 @@ export function buildMemoryFolders(params: {
       id: conversationFolderId,
       parentId: `folder:workspace:${workspaceId}`,
       label: group.title,
-      description: `${group.actorIds.length} actors in this conversation`,
+      description: "Visible to participants in this conversation.",
       icon: MessagesSquare,
       directMemoryIds: memories
         .filter((memory) => memory.ownerScope === "conversation" && memory.ownerConversationId === group.id)
@@ -359,7 +349,7 @@ export function buildMemoryFolders(params: {
         id: `${conversationFolderId}:actor:${actorId}`,
         parentId: conversationFolderId,
         label: actor?.name || "Unknown actor",
-        description: actor?.title || "Conversation-bound actor memory",
+        description: "Available only to this actor inside this conversation.",
         icon: Bot,
         directMemoryIds: memories
           .filter(
@@ -383,7 +373,7 @@ export function buildMemoryFolders(params: {
       id: `folder:workspace:${workspaceId}:actor:${actor.id}`,
       parentId: `folder:workspace:${workspaceId}`,
       label: actor.name,
-      description: actor.title || "Actor-global memories",
+      description: "Available to this actor across conversations.",
       icon: Bot,
       directMemoryIds: memories
         .filter((memory) => memory.ownerScope === "actor_global" && memory.ownerActorId === actor.id)
@@ -396,12 +386,29 @@ export function buildMemoryFolders(params: {
   }
 
   for (const memory of memories) {
+    if (memory.ownerScope === "user" && memory.ownerUserId && memory.ownerUserId !== currentUserId) {
+      folders.push({
+        id: `folder:user:${memory.ownerUserId}`,
+        parentId: "root",
+        label: memory.userName || "Unknown user",
+        description: "Visible only in this personal memory path.",
+        icon: UserRound,
+        directMemoryIds: memories
+          .filter((item) => item.ownerScope === "user" && item.ownerUserId === memory.ownerUserId)
+          .map((item) => item.id),
+        createPreset: {
+          ownerScope: "user",
+          ownerUserId: memory.ownerUserId,
+        },
+      })
+    }
+
     if (memory.ownerScope === "conversation" && memory.ownerConversationId && !groupMap.has(memory.ownerConversationId)) {
       folders.push({
         id: `folder:workspace:${workspaceId}:conversation:${memory.ownerConversationId}`,
         parentId: `folder:workspace:${workspaceId}`,
         label: memory.conversationTitle || "Unknown conversation",
-        description: "Conversation memories",
+        description: "Visible to participants in this conversation.",
         icon: MessagesSquare,
         directMemoryIds: memories
           .filter((item) => item.ownerScope === "conversation" && item.ownerConversationId === memory.ownerConversationId)

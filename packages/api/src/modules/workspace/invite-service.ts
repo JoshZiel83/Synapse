@@ -141,7 +141,7 @@ export async function redeemInvite(token: string, userId: string) {
     };
   });
 
-  if (authzEnabled() && result.authzEntryIds.length > 0) {
+  if (result.authzEntryIds.length > 0) {
     try {
       await flushAuthzOutboxEntries(result.authzEntryIds);
     } catch (error) {

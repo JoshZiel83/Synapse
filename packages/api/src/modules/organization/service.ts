@@ -2,16 +2,13 @@ import type pg from 'pg';
 import { getFileUrl } from '../../infrastructure/storage/index.js';
 import { query, transaction } from '../../infrastructure/database/index.js';
 import {
-  authzEnabled,
   buildWorkspaceUserContextId,
   diffAuthzRelationships,
   flushAuthzOutboxEntries,
-  lookupResources,
   queueAuthzRelationships,
   touchRelation,
   touchWorkspaceUserContext,
   type AuthzRelationMutation,
-  type AuthzSubject,
 } from '../../infrastructure/authz/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { createConversationEvent, getConversationFeedItemById } from '../conversation/service.js';
@@ -57,6 +54,7 @@ import type {
   CapabilityRequirement,
   UUID,
 } from '@synapse/shared';
+import { listAuthorizedResourceIds, type AccessSubject } from '../access/service.js';
 
 const ACTOR_ROLES: ActorRole[] = ['secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant'];
 
@@ -66,7 +64,6 @@ type ActorGrantPermission =
   | 'receive_message'
   | 'memory_read'
   | 'memory_edit'
-  | 'memory_grant'
   | 'memory_retarget'
   | 'memory_delete';
 type ActorGrantScope = 'workspace' | 'user' | 'workspace_user' | 'conversation' | 'actor';
@@ -174,7 +171,7 @@ function sanitizeCapabilities(capabilities?: string[]): string[] {
 }
 
 async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (!authzEnabled() || entryIds.length === 0) return;
+  if (entryIds.length === 0) return;
 
   try {
     await flushAuthzOutboxEntries(entryIds);
@@ -256,8 +253,6 @@ function actorWorkspaceRelation(permission: ActorGrantPermission) {
       return 'memory_reader_workspace';
     case 'memory_edit':
       return 'memory_editor_workspace';
-    case 'memory_grant':
-      return 'memory_granter_workspace';
     case 'memory_retarget':
       return 'memory_retargeter_workspace';
     case 'memory_delete':
@@ -279,8 +274,6 @@ function actorWorkspaceUserRelation(permission: ActorGrantPermission) {
       return 'memory_reader_workspace_user';
     case 'memory_edit':
       return 'memory_editor_workspace_user';
-    case 'memory_grant':
-      return 'memory_granter_workspace_user';
     case 'memory_retarget':
       return 'memory_retargeter_workspace_user';
     case 'memory_delete':
@@ -302,8 +295,6 @@ function actorPrincipalRelation(permission: ActorGrantPermission) {
       return 'memory_reader_principal';
     case 'memory_edit':
       return 'memory_editor_principal';
-    case 'memory_grant':
-      return 'memory_granter_principal';
     case 'memory_retarget':
       return 'memory_retargeter_principal';
     case 'memory_delete':
@@ -325,8 +316,6 @@ function actorConversationRelation(permission: ActorGrantPermission) {
       return 'memory_reader_conversation';
     case 'memory_edit':
       return 'memory_editor_conversation';
-    case 'memory_grant':
-      return 'memory_granter_conversation';
     case 'memory_retarget':
       return 'memory_retargeter_conversation';
     case 'memory_delete':
@@ -1078,12 +1067,11 @@ export async function createActor(params: {
   return actor;
 }
 
-export async function listActors(workspaceId: UUID, subject?: AuthzSubject): Promise<Actor[]> {
-  if (authzEnabled() && subject) {
-    const actorIds = await lookupResources({
-      resourceType: 'actor',
-      permission: 'discover',
+export async function listActors(workspaceId: UUID, subject?: AccessSubject): Promise<Actor[]> {
+  if (subject) {
+    const actorIds = await listAuthorizedResourceIds({
       subject,
+      action: 'actor.discover',
     });
 
     if (actorIds.length === 0) {

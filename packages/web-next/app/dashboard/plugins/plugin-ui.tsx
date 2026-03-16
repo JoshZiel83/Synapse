@@ -40,6 +40,62 @@ export const transportLabels: Record<string, string> = {
   stdio: 'Local',
 };
 
+type PluginInstallationSummaryShape = {
+  attachment_type?: string | null;
+  lifecycle_scope?: string | null;
+  is_enabled?: boolean | null;
+};
+
+const ownershipSummaryByAttachmentType: Record<string, string> = {
+  workspace: 'Owned by this workspace',
+  conversation: 'Owned by one conversation',
+  actor_global: 'Owned by one actor',
+  actor_conversation: 'Owned by one actor in one conversation',
+  user: 'Owned by you',
+  platform: 'Owned by the platform',
+};
+
+const lifecycleSummaryByScope: Record<string, string> = {
+  turn: 'fresh for every run',
+  user: 'reused per user',
+  workspace: 'reused across the workspace',
+  conversation: 'reused per conversation',
+  actor_global: 'reused per actor',
+  actor_conversation: 'reused per actor in each conversation',
+  platform: 'reused platform-wide',
+};
+
+export function getPluginInstallationTitle(installation: PluginInstallationSummaryShape) {
+  const attachmentType = installation.attachment_type;
+  if (attachmentType === 'workspace') {
+    return 'Workspace configuration';
+  }
+  if (attachmentType === 'conversation') {
+    return 'Conversation configuration';
+  }
+  if (attachmentType === 'actor_global') {
+    return 'Actor configuration';
+  }
+  if (attachmentType === 'actor_conversation') {
+    return 'Actor + conversation configuration';
+  }
+  if (attachmentType === 'user') {
+    return 'Personal configuration';
+  }
+  return `${attachmentTypeLabels[attachmentType || ''] || attachmentType || 'Plugin'} configuration`;
+}
+
+export function getPluginInstallationDetails(installation: PluginInstallationSummaryShape) {
+  const ownershipSummary =
+    ownershipSummaryByAttachmentType[installation.attachment_type || ''] ||
+    `Owned by ${attachmentTypeLabels[installation.attachment_type || ''] || installation.attachment_type || 'this scope'}`;
+  const lifecycleSummary =
+    lifecycleSummaryByScope[installation.lifecycle_scope || ''] ||
+    `reuse: ${installation.lifecycle_scope || 'turn'}`;
+  const statusSummary = installation.is_enabled ? 'enabled' : 'disabled';
+  return `${ownershipSummary}, ${lifecycleSummary}, ${statusSummary}.`;
+}
+
 export function PluginIcon({
   iconUrl,
   title,

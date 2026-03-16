@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { authzEnabled, checkPermission } from '../../infrastructure/authz/index.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
-import { query } from '../../infrastructure/database/index.js';
+import { requireRequestAction } from '../access/guards.js';
 import {
   listOrganizations, getOrganization,
   listPlugins, getPlugin,
@@ -68,48 +67,14 @@ function handleError(reply: FastifyReply, error: unknown) {
   return reply.status(500).send({ error: 'Internal server error' });
 }
 
-async function hasWorkspaceMembership(workspaceId: string, userId: string) {
-  const result = await query(
-    `SELECT 1
-     FROM workspace_members
-     WHERE workspace_id = $1 AND user_id = $2
-     LIMIT 1`,
-    [workspaceId, userId],
-  );
-  return result.rows.length > 0;
-}
-
 async function requireWorkspacePermission(
   request: any,
   reply: FastifyReply,
-  permission: string,
+  action: 'workspace.view' | 'workspace.manage_capabilities',
   errorMessage: string,
 ) {
   const { workspaceId } = request.params as { workspaceId: string };
-  const userId = (request as any).user.userId;
-
-  if (!authzEnabled()) {
-    const allowed = await hasWorkspaceMembership(workspaceId, userId);
-    if (!allowed) {
-      reply.status(403).send({ error: errorMessage });
-      return false;
-    }
-    return true;
-  }
-
-  const allowed = await checkPermission({
-    resourceType: 'workspace',
-    resourceId: workspaceId,
-    permission,
-    subject: { type: 'user', id: userId },
-  });
-
-  if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
-    return false;
-  }
-
-  return true;
+  return requireRequestAction(request, reply, action, workspaceId, errorMessage);
 }
 
 // ============ Route registration ============
@@ -159,7 +124,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'manage_capabilities',
+        'workspace.manage_capabilities',
         'Not allowed to manage plugin installations in this workspace',
       );
       if (!allowed) return;
@@ -185,7 +150,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'manage_capabilities',
+        'workspace.manage_capabilities',
         'Not allowed to manage plugin installations in this workspace',
       );
       if (!allowed) return;
@@ -209,7 +174,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'manage_capabilities',
+        'workspace.manage_capabilities',
         'Not allowed to manage plugin installations in this workspace',
       );
       if (!allowed) return;
@@ -273,7 +238,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'manage_capabilities',
+        'workspace.manage_capabilities',
         'Not allowed to view plugin installations in this workspace',
       );
       if (!allowed) return;
@@ -294,7 +259,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'manage_capabilities',
+        'workspace.manage_capabilities',
         'Not allowed to view plugin installations in this workspace',
       );
       if (!allowed) return;
@@ -312,7 +277,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'manage_capabilities',
+        'workspace.manage_capabilities',
         'Not allowed to manage plugin installations in this workspace',
       );
       if (!allowed) return;
@@ -356,7 +321,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'manage_capabilities',
+        'workspace.manage_capabilities',
         'Not allowed to manage plugin installations in this workspace',
       );
       if (!allowed) return;
@@ -396,7 +361,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'manage_capabilities',
+        'workspace.manage_capabilities',
         'Not allowed to manage plugin installations in this workspace',
       );
       if (!allowed) return;
@@ -416,7 +381,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'manage_capabilities',
+        'workspace.manage_capabilities',
         'Not allowed to view plugin audit logs in this workspace',
       );
       if (!allowed) return;
@@ -441,7 +406,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'manage_capabilities',
+        'workspace.manage_capabilities',
         'Not allowed to view plugin audit logs in this workspace',
       );
       if (!allowed) return;

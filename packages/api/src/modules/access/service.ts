@@ -1,0 +1,91 @@
+import type { FastifyRequest } from 'fastify';
+import {
+  checkPermission,
+  lookupResources,
+  type AuthzObjectType,
+  type AuthzSubject,
+} from '../../infrastructure/authz/index.js';
+import {
+  getAccessActionSpec,
+  type AccessAction,
+} from './actions.js';
+
+export type AccessSubject = AuthzSubject & {
+  type: 'user' | 'actor';
+};
+
+export function userSubject(userId: string): AccessSubject {
+  return { type: 'user', id: userId };
+}
+
+export function actorSubject(actorId: string): AccessSubject {
+  return { type: 'actor', id: actorId };
+}
+
+export function getRequestUserId(request: FastifyRequest): string {
+  const userId = (request as any).user?.userId as string | undefined;
+  if (!userId) {
+    throw new Error('Authenticated user is missing from request');
+  }
+  return userId;
+}
+
+export function getRequestUserSubject(request: FastifyRequest): AccessSubject {
+  return userSubject(getRequestUserId(request));
+}
+
+export async function authorizeAction(params: {
+  subject: AccessSubject;
+  action: AccessAction;
+  resourceId: string;
+}) {
+  const spec = getAccessActionSpec(params.action);
+  return checkPermission({
+    resourceType: spec.resourceType,
+    resourceId: params.resourceId,
+    permission: spec.permission,
+    subject: params.subject,
+  });
+}
+
+export async function authorizePermission(params: {
+  subject: AccessSubject;
+  resourceType: AuthzObjectType;
+  resourceId: string;
+  permission: string;
+}) {
+  return checkPermission({
+    resourceType: params.resourceType,
+    resourceId: params.resourceId,
+    permission: params.permission,
+    subject: params.subject,
+  });
+}
+
+export async function listAuthorizedResourceIds(params: {
+  subject: AccessSubject;
+  action: AccessAction;
+  limit?: number;
+}) {
+  const spec = getAccessActionSpec(params.action);
+  return lookupResources({
+    resourceType: spec.resourceType,
+    permission: spec.permission,
+    subject: params.subject,
+    limit: params.limit,
+  });
+}
+
+export async function listAuthorizedPermissionResourceIds(params: {
+  subject: AccessSubject;
+  resourceType: AuthzObjectType;
+  permission: string;
+  limit?: number;
+}) {
+  return lookupResources({
+    resourceType: params.resourceType,
+    permission: params.permission,
+    subject: params.subject,
+    limit: params.limit,
+  });
+}

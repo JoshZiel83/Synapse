@@ -34,12 +34,12 @@ import {
   enqueueAuthzRelationships,
   flushAuthzOutboxEntries,
   touchActorConversationContext,
-  lookupResources,
   touchRelation,
   type AuthzObjectType,
   type AuthzRelationMutation,
 } from '../../infrastructure/authz/index.js';
 import { query } from '../../infrastructure/database/index.js';
+import { actorSubject, listAuthorizedPermissionResourceIds, userSubject } from '../access/service.js';
 
 export class CapabilityError extends Error {
   constructor(public statusCode: number, message: string) {
@@ -50,7 +50,7 @@ export class CapabilityError extends Error {
 type JsonMap = Record<string, unknown>;
 
 async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (!authzEnabled() || entryIds.length === 0) return;
+  if (entryIds.length === 0) return;
 
   try {
     await flushAuthzOutboxEntries(entryIds);
@@ -2154,23 +2154,23 @@ export async function listAuthorizedCapabilityInstances(input: {
   let candidateInstances = instances;
 
   const authzObjectType = capabilityInstanceAuthzObjectType(input.kind);
-  if (authzEnabled() && authzObjectType && (input.actorId || input.userId)) {
+  if (authzObjectType && (input.actorId || input.userId)) {
     const authorizedIds = new Set<string>();
 
     if (input.actorId) {
-      const actorIds = await lookupResources({
+      const actorIds = await listAuthorizedPermissionResourceIds({
+        subject: actorSubject(input.actorId),
         resourceType: authzObjectType,
         permission: 'use',
-        subject: { type: 'actor', id: input.actorId },
       });
       for (const id of actorIds) authorizedIds.add(id);
     }
 
     if (!input.actorId && input.userId) {
-      const userIds = await lookupResources({
+      const userIds = await listAuthorizedPermissionResourceIds({
+        subject: userSubject(input.userId),
         resourceType: authzObjectType,
         permission: 'use',
-        subject: { type: 'user', id: input.userId },
       });
       for (const id of userIds) authorizedIds.add(id);
     }

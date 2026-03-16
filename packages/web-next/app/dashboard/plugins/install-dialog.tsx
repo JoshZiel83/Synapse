@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ExclamationCircleIcon } from '@heroicons/react/16/solid';
 import type {
   CapabilityAttachmentType,
@@ -13,14 +13,6 @@ import type {
 } from '@synapse/shared';
 import { AppCard } from '@/components/app-card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -28,7 +20,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
-import { ExternalLink, HelpCircle, Loader2 } from 'lucide-react';
+import { Check, ExternalLink, HelpCircle, Loader2 } from 'lucide-react';
 import { usePluginStore } from '@/stores/plugin-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
@@ -57,7 +49,13 @@ interface Props {
   onSuccess?: (installation: any) => void | Promise<void>;
   onInstallationSaved?: (installation: any) => void | Promise<void>;
   showPluginHeader?: boolean;
-  pageChrome?: 'card' | 'plain';
+  pageChrome?: 'card' | 'plain' | 'tab';
+  includePlacementSteps?: boolean;
+  includeAccessStep?: boolean;
+  defaultAttachmentType?: PluginAttachmentType;
+  defaultLifecycleScope?: PluginReuseScope;
+  createDefaultWorkspaceAccess?: boolean;
+  closeLabel?: string;
 }
 
 type PluginAttachmentType = Exclude<CapabilityAttachmentType, 'platform'>;
@@ -147,7 +145,12 @@ function deriveConfigFields(plugin: any): CapabilityConfigFieldDefinition[] {
   }));
 }
 
-function deriveInstallFlow(plugin: any, configFields: CapabilityConfigFieldDefinition[], locale: string): CapabilityInstallStep[] {
+function deriveInstallFlow(
+  plugin: any,
+  configFields: CapabilityConfigFieldDefinition[],
+  locale: string,
+  options?: { includePlacementSteps?: boolean },
+): CapabilityInstallStep[] {
   const baseSteps = Array.isArray(plugin.install_flow?.steps) && plugin.install_flow.steps.length > 0
     ? plugin.install_flow.steps.filter((step: CapabilityInstallStep) => step.kind !== 'confirm')
     : [{
@@ -158,6 +161,10 @@ function deriveInstallFlow(plugin: any, configFields: CapabilityConfigFieldDefin
         scope: 'plugin',
         fields: configFields.map((field) => field.key),
       }];
+
+  if (options?.includePlacementSteps === false) {
+    return baseSteps;
+  }
 
   return [
     ...baseSteps,
@@ -256,6 +263,12 @@ export default function InstallDialog({
   onInstallationSaved,
   showPluginHeader = true,
   pageChrome = 'card',
+  includePlacementSteps = true,
+  includeAccessStep,
+  defaultAttachmentType,
+  defaultLifecycleScope,
+  createDefaultWorkspaceAccess = false,
+  closeLabel = 'Cancel',
 }: Props) {
   const { workspaceId } = useWorkspace();
   const { installPlugin, updateInstallation } = usePluginStore();
@@ -264,7 +277,10 @@ export default function InstallDialog({
 
   const locale = useMemo(() => getLocale(plugin.default_locale), [plugin.default_locale]);
   const configFields = useMemo(() => deriveConfigFields(plugin), [plugin]);
-  const setupSteps = useMemo(() => deriveInstallFlow(plugin, configFields, locale), [plugin, configFields, locale]);
+  const setupSteps = useMemo(
+    () => deriveInstallFlow(plugin, configFields, locale, { includePlacementSteps }),
+    [configFields, includePlacementSteps, locale, plugin],
+  );
   const authProviders = useMemo<CapabilityAuthProviderDefinition[]>(() => plugin.auth_providers || [], [plugin.auth_providers]);
   const authProviderMap = useMemo(() => new Map(authProviders.map((provider) => [provider.key, provider])), [authProviders]);
   const allowedAttachmentTypes = useMemo<PluginAttachmentType[]>(
@@ -277,10 +293,11 @@ export default function InstallDialog({
 
   const [selectedAttachmentType, setSelectedAttachmentType] = useState<PluginAttachmentType>(
     initialAttachmentType ||
-    ((defaultActorId ? 'actor_global' : (plugin.default_instance_scope || 'workspace')) as PluginAttachmentType),
+    (defaultAttachmentType || (defaultActorId ? 'actor_global' : (plugin.default_instance_scope || 'workspace')) as PluginAttachmentType),
   );
   const [lifecycleScope, setLifecycleScope] = useState<PluginReuseScope>(
     ((initialInstallation?.lifecycle_scope as PluginReuseScope | undefined) ||
+      defaultLifecycleScope ||
       plugin.lifecycle_scope ||
       plugin.default_reuse_scope ||
       'conversation') as PluginReuseScope,
@@ -301,8 +318,9 @@ export default function InstallDialog({
   const authPollers = useRef<Record<string, number>>({});
 
   const validationRules: ValidationRule[] = plugin.validation_rules || [];
+  const resolvedIncludeAccessStep = includeAccessStep ?? presentation === 'page';
   const installSteps = useMemo<InstallFlowStep[]>(() => {
-    if (presentation !== 'page') {
+    if (!resolvedIncludeAccessStep) {
       return setupSteps;
     }
 
@@ -317,7 +335,7 @@ export default function InstallDialog({
         fields: [],
       },
     ];
-  }, [locale, presentation, setupSteps]);
+  }, [locale, resolvedIncludeAccessStep, setupSteps]);
   const currentStep = installSteps[currentStepIndex];
   const accessStepIndex = useMemo(
     () => installSteps.findIndex((step) => step.kind === 'access'),
@@ -523,6 +541,12 @@ export default function InstallDialog({
           configData,
           authSessionIds: Object.keys(authSessionIds).length > 0 ? authSessionIds : undefined,
         });
+        if (createDefaultWorkspaceAccess) {
+          await api.issueCapabilityInstanceGrant(workspaceId, installation.id, {
+            grantScope: 'workspace',
+            permissions: installation.revision?.authorization?.requiredPermissions || ['use'],
+          });
+        }
       }
       setCurrentInstallation(installation);
       await onInstallationSaved?.(installation);
@@ -550,43 +574,55 @@ export default function InstallDialog({
     onClose();
   };
 
-  const renderStepBreadcrumbs = () => (
-    <Breadcrumb>
-      <BreadcrumbList className="gap-2">
+  const renderStepNavigator = () => (
+    <div className="space-y-3">
+      <div className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+        Step {currentStepIndex + 1} of {installSteps.length}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
         {installSteps.map((step, index) => {
           const label = translate(step.titleI18n, locale, plugin.default_locale || 'en') || step.id;
           const isCurrent = index === currentStepIndex;
           const isComplete = index < currentStepIndex;
+          const isLocked = step.kind === 'access' && !currentInstallation;
 
           return (
-            <Fragment key={step.id}>
-              <BreadcrumbItem>
-                {isCurrent ? (
-                  <BreadcrumbPage className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium">
-                    {label}
-                  </BreadcrumbPage>
-                ) : (
-                  <BreadcrumbLink asChild>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (step.kind === 'access' && !currentInstallation) return;
-                        setCurrentStepIndex(index);
-                      }}
-                      disabled={step.kind === 'access' && !currentInstallation}
-                      className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium"
-                    >
-                      <span>{label}</span>
-                    </button>
-                  </BreadcrumbLink>
-                )}
-              </BreadcrumbItem>
-              {index < installSteps.length - 1 ? <BreadcrumbSeparator /> : null}
-            </Fragment>
+            <button
+              key={step.id}
+              type="button"
+              onClick={() => {
+                if (isLocked) return;
+                setCurrentStepIndex(index);
+              }}
+              disabled={isLocked}
+              className={
+                isCurrent
+                  ? 'inline-flex items-center gap-2 rounded-2xl border border-foreground/15 bg-accent px-3 py-2 text-sm font-medium text-foreground shadow-sm'
+                  : isComplete
+                    ? 'inline-flex items-center gap-2 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:text-emerald-300'
+                    : isLocked
+                      ? 'inline-flex items-center gap-2 rounded-2xl border border-border/70 bg-muted/20 px-3 py-2 text-sm font-medium text-muted-foreground opacity-55'
+                      : 'inline-flex items-center gap-2 rounded-2xl border border-border/70 bg-background px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/30 hover:text-foreground'
+              }
+            >
+              <span
+                className={
+                  isCurrent
+                    ? 'flex size-6 items-center justify-center rounded-full bg-foreground text-[11px] font-semibold text-background'
+                    : isComplete
+                      ? 'flex size-6 items-center justify-center rounded-full bg-emerald-500 text-white'
+                      : 'flex size-6 items-center justify-center rounded-full border border-border bg-background text-[11px] font-semibold text-muted-foreground'
+                }
+              >
+                {isComplete ? <Check className="size-3.5" /> : index + 1}
+              </span>
+              <span>{label}</span>
+            </button>
           );
         })}
-      </BreadcrumbList>
-    </Breadcrumb>
+      </div>
+    </div>
   );
 
   const renderStepAction = () => {
@@ -872,7 +908,7 @@ export default function InstallDialog({
   const renderStepFooter = () => (
     <div className="flex items-center justify-between gap-2">
       <Button variant="outline" onClick={onClose}>
-        {currentStep?.kind === 'access' ? 'Close' : 'Cancel'}
+        {currentStep?.kind === 'access' ? 'Close' : closeLabel}
       </Button>
       <div className="flex items-center gap-2">
         <Button variant="outline" onClick={previousStep} disabled={currentStepIndex === 0 || saving}>
@@ -925,18 +961,36 @@ export default function InstallDialog({
         </div>
       ) : null}
 
-      <div className={pageChrome === 'card' ? 'flex min-h-0 flex-1 flex-col' : 'flex min-h-0 flex-1 flex-col'}>
-        <div className="sticky top-0 z-10 border-b border-gray-200 bg-card px-6 py-4 dark:border-white/10">
-          {renderStepBreadcrumbs()}
-        </div>
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="px-6 py-6">
-            {renderStepBody()}
-          </div>
-        </ScrollArea>
-        <div className="border-t border-gray-200 px-6 py-4 dark:border-white/10">
-          {renderStepFooter()}
-        </div>
+      <div className="flex min-h-0 flex-1 flex-col">
+        {pageChrome === 'tab' ? (
+          <>
+            <div className="px-0 pb-4">
+              {renderStepNavigator()}
+            </div>
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="px-0 py-0">
+                {renderStepBody()}
+              </div>
+            </ScrollArea>
+            <div className="pt-5">
+              {renderStepFooter()}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="sticky top-0 z-10 border-b border-gray-200 bg-card px-6 py-4 dark:border-white/10">
+              {renderStepNavigator()}
+            </div>
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="px-6 py-6">
+                {renderStepBody()}
+              </div>
+            </ScrollArea>
+            <div className="border-t border-gray-200 px-6 py-4 dark:border-white/10">
+              {renderStepFooter()}
+            </div>
+          </>
+        )}
       </div>
     </>
   );

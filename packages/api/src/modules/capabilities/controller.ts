@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
+import { requireRequestAction } from '../access/guards.js';
 import {
   CapabilityError,
   getCapabilityInstanceAuthorizationSummary,
@@ -51,6 +52,9 @@ export function registerCapabilityRoutes(app: FastifyInstance) {
   app.get(`${prefix}/instances/:instanceId/grants`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId, instanceId } = request.params as { workspaceId: string; instanceId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage capability grants in this workspace');
+      if (!allowed) return;
+
       const summary = await getCapabilityInstanceAuthorizationSummary({ workspaceId, instanceId });
       return reply.status(200).send({
         grants: await listCapabilityInstanceGrants(instanceId),
@@ -66,6 +70,9 @@ export function registerCapabilityRoutes(app: FastifyInstance) {
   app.get(`${prefix}/instances/:instanceId/authorization`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId, instanceId } = request.params as { workspaceId: string; instanceId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage capability grants in this workspace');
+      if (!allowed) return;
+
       const query = authorizationQuerySchema.parse(request.query ?? {});
       const summary = await getCapabilityInstanceAuthorizationSummary({
         workspaceId,
@@ -83,6 +90,9 @@ export function registerCapabilityRoutes(app: FastifyInstance) {
   app.post(`${prefix}/instances/:instanceId/grants`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId, instanceId } = request.params as { workspaceId: string; instanceId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage capability grants in this workspace');
+      if (!allowed) return;
+
       const user = (request as any).user;
       const body = issueGrantSchema.parse(request.body);
       const grant = await issueCapabilityInstanceGrant({
@@ -106,6 +116,9 @@ export function registerCapabilityRoutes(app: FastifyInstance) {
   app.delete(`${prefix}/grants/:grantId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId, grantId } = request.params as { workspaceId: string; grantId: string };
+      const allowed = await requireRequestAction(request, reply, 'workspace.manage_capabilities', workspaceId, 'Not allowed to manage capability grants in this workspace');
+      if (!allowed) return;
+
       const grant = await revokeCapabilityGrant(grantId, workspaceId);
       return reply.status(200).send({ grant });
     } catch (error) {

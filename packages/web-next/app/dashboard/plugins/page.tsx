@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import QRCode from 'qrcode';
 import type {
   RelayDashboardView,
@@ -12,6 +11,7 @@ import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Copy,
+  ChevronDown,
   Link2,
   Monitor,
   MonitorUp,
@@ -42,6 +42,12 @@ import { buildRelayDesktopDeepLink, probeLocalRelayDesktop, sendPairingToLocalRe
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   Dialog,
   DialogContent,
@@ -543,11 +549,11 @@ export default function PluginsPage() {
               plugin.description;
             const pluginInstallations = pluginInstallationsByPluginId.get(plugin.id) || [];
             const primaryInstallation = pluginInstallations[0];
-            const actionHref = pluginInstallations.length > 1
+            const configHref = pluginInstallations.length > 1
               ? `/dashboard/plugins/${plugin.id}`
               : primaryInstallation
                 ? `/dashboard/plugins/installations/${primaryInstallation.id}`
-                : `/dashboard/plugins/${plugin.id}/install`;
+                : `/dashboard/plugins/${plugin.id}`;
 
             return (
               <AppCard
@@ -563,7 +569,6 @@ export default function PluginsPage() {
                         iconUrl={plugin.icon_url}
                         title={title}
                         transport={plugin.transport}
-                        verified={plugin.is_builtin}
                         containerClassName="size-14 rounded-[18px]"
                         className="size-6"
                       />
@@ -577,14 +582,44 @@ export default function PluginsPage() {
                       </div>
                     </div>
 
-                    <Button
-                      asChild
-                      size="sm"
-                      className="shrink-0"
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      <Link href={actionHref}>{pluginInstallations.length > 0 ? 'Configure' : 'Install'}</Link>
-                    </Button>
+                    {pluginInstallations.length > 0 ? (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0 gap-2 rounded-full"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            Manage
+                            <ChevronDown className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-56">
+                          <DropdownMenuItem
+                            onSelect={() => router.push(configHref)}
+                          >
+                            {pluginInstallations.length > 1 ? 'Open configurations' : 'Open configuration'}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() => router.push(`/dashboard/plugins/${plugin.id}/install`)}
+                          >
+                            Install new configuration
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    ) : (
+                      <Button
+                        size="sm"
+                        className="shrink-0 rounded-full"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          router.push(`/dashboard/plugins/${plugin.id}/install`);
+                        }}
+                      >
+                        Install
+                      </Button>
+                    )}
                   </div>
                 </AppCardHeader>
 

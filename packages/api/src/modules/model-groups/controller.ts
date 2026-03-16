@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
-import { AUTHZ_PLATFORM_ID, authzEnabled, checkPermission } from '../../infrastructure/authz/index.js';
+import { AUTHZ_PLATFORM_ID } from '../../infrastructure/authz/index.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
-import { isPlatformAdmin } from '../platform/admin-service.js';
+import { requireRequestAction } from '../access/guards.js';
+import { authorizeAction, userSubject } from '../access/service.js';
 import {
   addModelItem,
   createModelGroup,
@@ -116,143 +117,72 @@ function handleError(error: unknown, reply: FastifyReply) {
   throw error;
 }
 
-function hasLegacyWorkspacePermission(trustLevel: string | null | undefined, permission: string) {
-  switch (permission) {
-    case 'view':
-      return Boolean(trustLevel);
-    case 'manage_models':
-    case 'manage_actors':
-      return trustLevel === 'owner' || trustLevel === 'admin';
-    default:
-      return false;
-  }
-}
-
 async function requireWorkspacePermission(
   request: FastifyRequest<{ Params: { workspaceId: string } }>,
   reply: FastifyReply,
-  permission: string,
+  permission: 'view' | 'manage_models',
   errorMessage: string,
 ) {
   const { workspaceId } = request.params;
-  const userId = (request as any).user!.userId;
-
-  if (!authzEnabled()) {
-    const trustLevel = (request as any).workspaceMember?.trust_level as string | undefined;
-    if (!hasLegacyWorkspacePermission(trustLevel, permission)) {
-      reply.status(403).send({ error: errorMessage });
-      return false;
-    }
-    return true;
-  }
-
-  const allowed = await checkPermission({
-    resourceType: 'workspace',
-    resourceId: workspaceId,
-    permission,
-    subject: { type: 'user', id: userId },
-  });
-
-  if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
-    return false;
-  }
-
-  return true;
+  return requireRequestAction(
+    request,
+    reply,
+    permission === 'view' ? 'workspace.view' : 'workspace.manage_models',
+    workspaceId,
+    errorMessage,
+  );
 }
 
 async function requireActorPermission(
   request: FastifyRequest<{ Params: { workspaceId: string; actorId: string } }>,
   reply: FastifyReply,
-  permission: string,
+  permission: 'view' | 'edit',
   errorMessage: string,
 ) {
   const { actorId } = request.params;
-  const userId = (request as any).user!.userId;
-
-  if (!authzEnabled()) {
-    const trustLevel = (request as any).workspaceMember?.trust_level as string | undefined;
-    const allowed = permission === 'view'
-      ? hasLegacyWorkspacePermission(trustLevel, 'view')
-      : hasLegacyWorkspacePermission(trustLevel, 'manage_actors');
-    if (!allowed) {
-      reply.status(403).send({ error: errorMessage });
-      return false;
-    }
-    return true;
-  }
-
-  const allowed = await checkPermission({
-    resourceType: 'actor',
-    resourceId: actorId,
-    permission,
-    subject: { type: 'user', id: userId },
-  });
-
-  if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
-    return false;
-  }
-
-  return true;
+  return requireRequestAction(
+    request,
+    reply,
+    permission === 'view' ? 'actor.view' : 'actor.edit',
+    actorId,
+    errorMessage,
+  );
 }
 
 async function requirePlatformPermission(
   request: FastifyRequest,
   reply: FastifyReply,
-  permission: string,
+  _permission: 'manage_models',
   errorMessage: string,
 ) {
-  const userId = (request as any).user!.userId;
-
-  if (!authzEnabled()) {
-    const allowed = await isPlatformAdmin(userId);
-    if (!allowed) {
-      reply.status(403).send({ error: errorMessage });
-      return false;
-    }
-    return true;
-  }
-
-  const allowed = await checkPermission({
-    resourceType: 'platform',
-    resourceId: AUTHZ_PLATFORM_ID,
-    permission,
-    subject: { type: 'user', id: userId },
-  });
-
-  if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
-    return false;
-  }
-
-  return true;
+  return requireRequestAction(
+    request,
+    reply,
+    'platform.manage_models',
+    AUTHZ_PLATFORM_ID,
+    errorMessage,
+  );
 }
 
 async function requireModelGroupPermission(
   userId: string,
   groupId: string,
-  permission: string,
+  permission: 'view' | 'edit' | 'grant' | 'delete',
   reply: FastifyReply,
   errorMessage: string,
 ) {
-  if (!authzEnabled()) {
-    const group = await getModelGroup(groupId);
-    const fallbackAllowed =
-      (group.owner_type === 'user' && group.owner_user_id === userId) ||
-      (group.owner_type === 'platform' && await isPlatformAdmin(userId));
-    if (!fallbackAllowed) {
-      reply.status(403).send({ error: errorMessage });
-      return false;
-    }
-    return true;
-  }
-
-  const allowed = await checkPermission({
-    resourceType: 'model_group',
+  const action =
+    permission === 'view'
+      ? 'model_group.view'
+      : permission === 'edit'
+        ? 'model_group.edit'
+        : permission === 'grant'
+          ? 'model_group.grant'
+          : 'model_group.delete';
+  const allowed = await authorizeAction({
+    subject: userSubject(userId),
+    action,
     resourceId: groupId,
-    permission,
-    subject: { type: 'user', id: userId },
   });
 
   if (!allowed) {

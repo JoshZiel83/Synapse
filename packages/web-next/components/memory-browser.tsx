@@ -2,20 +2,24 @@
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { usePathname, useRouter, useSearchParams, type ReadonlyURLSearchParams } from "next/navigation"
-import { ChevronDown, ChevronRight, FilePlus2, FileText, Folder, RefreshCw, Search, Upload } from "lucide-react"
+import { ArrowRightLeft, ChevronDown, ChevronRight, FilePlus2, FileText, Folder, RefreshCw, Search, Upload } from "lucide-react"
 import { toast } from "sonner"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { fileRecordToBlock, type UploadedFile } from "@/components/actor-editor-model"
 import {
   buildMemoryFolders,
+  buildMemoryOwnerPayloadFromPreset,
+  describeFolderVisibility,
   getFolderSegments,
+  getFolderIdForOwner,
   normalizeActorOption,
   normalizeGroupOption,
   summarizeMemory,
   type Memory,
   type MemoryFolderNode,
 } from "@/components/memory-browser-model"
+import { MemoryPathPickerDialog } from "@/components/memory-path-picker-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -107,6 +111,7 @@ export default function MemoryBrowser() {
   const [actors, setActors] = useState<any[]>([])
   const [groups, setGroups] = useState<any[]>([])
   const [pendingFileCreate, setPendingFileCreate] = useState<PendingFileCreate | null>(null)
+  const [movingMemory, setMovingMemory] = useState<Memory | null>(null)
   const [createdFromFiles, setCreatedFromFiles] = useState<{
     count: number
     latestMemoryId: string | null
@@ -237,10 +242,22 @@ export default function MemoryBrowser() {
 
   const createHref = activeFolder ? buildCreateHref(pathname, searchParams, activeFolder) : null
   const currentBrowseHref = buildBrowseHref(pathname, searchParams, { folder: activeFolder?.id || "root" })
+  const movingMemoryFolderId = useMemo(() => {
+    if (!movingMemory || !workspaceId) return ""
+
+    return getFolderIdForOwner({
+      workspaceId,
+      currentUserId,
+      ownerScope: movingMemory.ownerScope,
+      ownerActorId: movingMemory.ownerActorId || undefined,
+      ownerConversationId: movingMemory.ownerConversationId || undefined,
+      ownerUserId: movingMemory.ownerUserId || undefined,
+    })
+  }, [currentUserId, movingMemory, workspaceId])
 
   function beginFileCreate(files: File[] | FileList | null) {
     if (!activeFolder?.createPreset) {
-      toast.error("Open a concrete memory folder before creating from files.")
+      toast.error("Open a concrete memory path before creating from files.")
       return
     }
 
@@ -253,6 +270,25 @@ export default function MemoryBrowser() {
       preset: activeFolder.createPreset,
       returnTo: currentBrowseHref,
     })
+  }
+
+  async function moveMemoryToFolder(folder: MemoryFolderNode) {
+    if (!workspaceId || !movingMemory?.id || !folder.createPreset) return
+
+    try {
+      const result = await api.updateMemory(
+        workspaceId,
+        movingMemory.id,
+        buildMemoryOwnerPayloadFromPreset(folder.createPreset, currentUserId),
+      )
+      const savedMemory = (result?.memory || result) as Memory
+      setMemories((current) => current.map((memory) => (memory.id === savedMemory.id ? savedMemory : memory)))
+      toast.success("Memory path updated")
+    } catch (error) {
+      console.error("Failed to move memory:", error)
+      toast.error(error instanceof Error ? error.message : "Failed to move memory")
+      throw error
+    }
   }
 
   async function confirmCreateFromFiles() {
@@ -349,21 +385,28 @@ export default function MemoryBrowser() {
         onDrop={handleDrop}
       >
         <div className="flex flex-wrap items-center gap-3 px-2 py-3 sm:px-3">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            {folderSegments.map((segment, index) => (
-              <div key={segment.id} className="flex items-center gap-2">
-                {index > 0 ? <ChevronRight className="size-4" /> : null}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className={cn("h-auto px-0 py-0 text-sm", index === folderSegments.length - 1 ? "text-foreground" : "text-muted-foreground")}
-                  onClick={() => router.push(buildBrowseHref(pathname, searchParams, { folder: segment.id }))}
-                >
-                  {segment.label}
-                </Button>
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              {folderSegments.map((segment, index) => (
+                <div key={segment.id} className="flex items-center gap-2">
+                  {index > 0 ? <ChevronRight className="size-4" /> : null}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={cn("h-auto px-0 py-0 text-sm", index === folderSegments.length - 1 ? "text-foreground" : "text-muted-foreground")}
+                    onClick={() => router.push(buildBrowseHref(pathname, searchParams, { folder: segment.id }))}
+                  >
+                    {segment.label}
+                  </Button>
+                </div>
+              ))}
+            </div>
+            {activeFolder ? (
+              <div className="text-sm text-muted-foreground">
+                {describeFolderVisibility(activeFolder)} Move a memory to another path to change who can read it.
               </div>
-            ))}
+            ) : null}
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
@@ -403,7 +446,7 @@ export default function MemoryBrowser() {
                     { scroll: false },
                   )
                 }
-                placeholder="Search in this folder"
+                placeholder="Search in this path"
                 className="pl-10"
               />
             </div>
@@ -444,9 +487,9 @@ export default function MemoryBrowser() {
               <div className="px-5 py-10 text-sm text-muted-foreground">Loading memories...</div>
             ) : items.folderItems.length === 0 && items.memoryItems.length === 0 ? (
               <div className="px-5 py-10 text-center">
-                <div className="text-base font-medium text-foreground">This folder is empty</div>
+                <div className="text-base font-medium text-foreground">This path is empty</div>
                 <div className="mt-2 text-sm text-muted-foreground">
-                  {createHref ? "Create a memory here or navigate into another folder." : "Navigate into a concrete folder to start creating memories."}
+                  {createHref ? "Create a memory here. Its visibility will follow this path." : "Navigate into a concrete path to start creating memories."}
                 </div>
               </div>
             ) : (
@@ -475,30 +518,36 @@ export default function MemoryBrowser() {
                 })}
 
                 {items.memoryItems.map((memory) => (
-                  <button
-                    key={memory.id}
-                    type="button"
-                    className="flex w-full items-center gap-4 border-b border-border/70 px-5 py-4 text-left transition-colors hover:bg-muted/30"
-                    onClick={() =>
-                      router.push(
-                        `/dashboard/memories/${memory.id}?returnTo=${encodeURIComponent(
-                          buildBrowseHref(pathname, searchParams, { folder: activeFolder?.id || "root" }),
-                        )}`,
-                      )
-                    }
-                  >
-                    <div className="flex size-10 items-center justify-center rounded-2xl border border-border bg-background">
-                      <FileText className="size-4 text-muted-foreground" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-foreground">{summarizeMemory(memory)}</div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <Badge variant="outline">{memory.category}</Badge>
-                        <span>{new Date(memory.updatedAt).toLocaleString()}</span>
-                        <span>{memory.contentBlocks.length} blocks</span>
+                  <div key={memory.id} className="flex items-center gap-3 border-b border-border/70 px-5 py-4">
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center gap-4 text-left transition-colors hover:text-foreground"
+                      onClick={() =>
+                        router.push(
+                          `/dashboard/memories/${memory.id}?returnTo=${encodeURIComponent(
+                            buildBrowseHref(pathname, searchParams, { folder: activeFolder?.id || "root" }),
+                          )}`,
+                        )
+                      }
+                    >
+                      <div className="flex size-10 items-center justify-center rounded-2xl border border-border bg-background">
+                        <FileText className="size-4 text-muted-foreground" />
                       </div>
-                    </div>
-                  </button>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-foreground">{summarizeMemory(memory)}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <Badge variant="outline">{memory.category}</Badge>
+                          <span>{new Date(memory.updatedAt).toLocaleString()}</span>
+                          <span>{memory.contentBlocks.length} blocks</span>
+                        </div>
+                      </div>
+                    </button>
+
+                    <Button type="button" variant="outline" size="sm" onClick={() => setMovingMemory(memory)}>
+                      <ArrowRightLeft data-icon="inline-start" />
+                      Change Path
+                    </Button>
+                  </div>
                 ))}
               </>
             )}
@@ -512,7 +561,7 @@ export default function MemoryBrowser() {
             <DialogTitle>Create memory from file{pendingFileCreate?.files.length === 1 ? "" : "s"}?</DialogTitle>
             <DialogDescription>
               {pendingFileCreate
-                ? `Upload ${pendingFileCreate.files.length} file${pendingFileCreate.files.length === 1 ? "" : "s"} into ${pendingFileCreate.folderLabel} and create matching mem${pendingFileCreate.files.length === 1 ? "ory" : "ories"}.`
+                ? `Upload ${pendingFileCreate.files.length} file${pendingFileCreate.files.length === 1 ? "" : "s"} into ${pendingFileCreate.folderLabel}. Anyone who can read that path will be able to read the new mem${pendingFileCreate.files.length === 1 ? "ory" : "ories"}.`
                 : ""}
             </DialogDescription>
           </DialogHeader>
@@ -590,6 +639,18 @@ export default function MemoryBrowser() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <MemoryPathPickerDialog
+        open={movingMemory !== null}
+        onOpenChange={(open) => !open && setMovingMemory(null)}
+        folders={folders}
+        value={movingMemoryFolderId}
+        title={movingMemory ? `Change path for ${summarizeMemory(movingMemory)}` : "Change memory path"}
+        description="Browse the path tree and choose the new visibility range for this memory."
+        confirmLabel="Move to this path"
+        disallowFolderIds={movingMemoryFolderId ? [movingMemoryFolderId] : undefined}
+        onConfirm={moveMemoryToFolder}
+      />
     </div>
   )
 }

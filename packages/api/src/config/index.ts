@@ -1,5 +1,13 @@
 import 'dotenv/config';
 
+const authzEnabled = process.env.AUTHZ_ENABLED !== 'false';
+
+if (!authzEnabled) {
+  throw new Error(
+    'AUTHZ_ENABLED=false is no longer supported. Synapse now requires SpiceDB authorization to be enabled in every environment.',
+  );
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '3001'),
   host: process.env.HOST || '0.0.0.0',
@@ -44,7 +52,7 @@ export const config = {
     },
   },
   authz: {
-    enabled: process.env.AUTHZ_ENABLED !== 'false',
+    enabled: true,
     endpoint: process.env.SPICEDB_ENDPOINT || 'localhost:50051',
     token: process.env.SPICEDB_TOKEN || 'synapse-dev-token',
     insecure: process.env.SPICEDB_INSECURE !== 'false',

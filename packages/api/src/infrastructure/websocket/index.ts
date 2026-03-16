@@ -3,7 +3,6 @@ import { AUTH_SESSION_COOKIE_NAME } from '@synapse/shared';
 import type { ChatSocketEvent, ChatSocketEventPayloadMap, SystemEvent, WorkspaceFeedEventRecord } from '@synapse/shared';
 import { WS_AUTH_TIMEOUT, WS_HEARTBEAT_INTERVAL } from '@synapse/shared';
 import { onEvent } from '../events/index.js';
-import { authzEnabled, checkPermission, lookupResources } from '../authz/index.js';
 import { query } from '../database/index.js';
 import { handleRelayConnection } from '../../modules/mcp-plugins/relay-manager.js';
 import { isShuttingDown } from '../shutdown/state.js';
@@ -14,6 +13,7 @@ import {
   registerAuthenticatedSocket,
   unregisterAuthenticatedSocket,
 } from './auth-session-registry.js';
+import { authorizePermission, listAuthorizedResourceIds, userSubject } from '../../modules/access/service.js';
 
 interface WSClient {
   ws: any;
@@ -42,74 +42,38 @@ function parseCookieHeader(cookieHeader: string | string[] | undefined) {
 }
 
 async function canUserAccessWorkspace(workspaceId: string, userId: string) {
-  if (authzEnabled()) {
-    return checkPermission({
-      resourceType: 'workspace',
-      resourceId: workspaceId,
-      permission: 'view',
-      subject: { type: 'user', id: userId },
-    });
-  }
-
-  const result = await query(
-    'SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2 LIMIT 1',
-    [workspaceId, userId],
-  );
-
-  return (result.rowCount ?? 0) > 0;
+  return authorizePermission({
+    subject: userSubject(userId),
+    resourceType: 'workspace',
+    resourceId: workspaceId,
+    permission: 'view',
+  });
 }
 
 async function getVisibleConversationIdsForUser(workspaceId: string, userId: string) {
-  if (authzEnabled()) {
-    const conversationIds = await lookupResources({
-      resourceType: 'conversation',
-      permission: 'view',
-      subject: { type: 'user', id: userId },
-    });
-    if (conversationIds.length === 0) return [];
-    const result = await query(
-      `SELECT id
-       FROM conversations
-       WHERE workspace_id = $1
-         AND id = ANY($2)`,
-      [workspaceId, conversationIds],
-    );
-    return result.rows.map((row: any) => row.id as string);
-  }
+  const conversationIds = await listAuthorizedResourceIds({
+    subject: userSubject(userId),
+    action: 'conversation.view',
+  });
+  if (conversationIds.length === 0) return [];
 
   const result = await query(
-    `SELECT c.id
-     FROM conversations c
-     JOIN conversation_members cm ON cm.conversation_id = c.id
-     WHERE c.workspace_id = $1
-       AND cm.user_id = $2
-       AND cm.state = 'active'`,
-    [workspaceId, userId],
+    `SELECT id
+     FROM conversations
+     WHERE workspace_id = $1
+       AND id = ANY($2)`,
+    [workspaceId, conversationIds],
   );
   return result.rows.map((row: any) => row.id as string);
 }
 
 async function canUserAccessConversation(conversationId: string, userId: string) {
-  if (authzEnabled()) {
-    return checkPermission({
-      resourceType: 'conversation',
-      resourceId: conversationId,
-      permission: 'view',
-      subject: { type: 'user', id: userId },
-    });
-  }
-
-  const result = await query(
-    `SELECT 1
-     FROM conversation_members
-     WHERE conversation_id = $1
-       AND user_id = $2
-       AND state = 'active'
-     LIMIT 1`,
-    [conversationId, userId],
-  );
-
-  return (result.rowCount ?? 0) > 0;
+  return authorizePermission({
+    subject: userSubject(userId),
+    resourceType: 'conversation',
+    resourceId: conversationId,
+    permission: 'view',
+  });
 }
 
 function mapInternalEventToSocketEvent(event: SystemEvent): ChatSocketEvent | SystemEvent | null {

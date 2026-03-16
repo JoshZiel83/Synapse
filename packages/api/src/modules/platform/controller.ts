@@ -1,18 +1,25 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { z } from 'zod';
-import { authMiddleware } from '../../infrastructure/middleware/auth.js';
-import { AUTHZ_PLATFORM_ID, authzEnabled, checkPermission } from '../../infrastructure/authz/index.js';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
+import { authMiddleware } from "../../infrastructure/middleware/auth.js";
+import { AUTHZ_PLATFORM_ID } from "../../infrastructure/authz/index.js";
 import {
-  assignPlatformRole,
-  hasPlatformRole,
-  listPlatformRoleAssignments,
-  revokePlatformRole,
-  type PlatformRole,
-} from './admin-service.js';
+  grantPlatformAccess,
+  listPlatformAccessBindings,
+  revokePlatformAccess,
+  type PlatformAccessKey,
+} from "./admin-service.js";
+import { requireRequestAction } from "../access/guards.js";
+import { authorizeAction, userSubject } from "../access/service.js";
 
-const platformRoleSchema = z.object({
+const platformAccessSchema = z.object({
   userId: z.string().uuid(),
-  role: z.enum(['super_admin', 'workspace_admin', 'model_admin', 'support', 'auditor']),
+  accessKey: z.enum([
+    "super_admin",
+    "workspace_admin",
+    "model_admin",
+    "support",
+    "auditor",
+  ]),
   metadata: z.record(z.unknown()).optional(),
 });
 
@@ -21,88 +28,79 @@ async function requirePlatformManagePermission(
   reply: FastifyReply,
   errorMessage: string,
 ) {
-  const userId = (request as any).user!.userId;
-
-  const allowed = await canPlatformPermission(userId, 'manage');
-  if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
-    return false;
-  }
-
-  return true;
+  return requireRequestAction(
+    request,
+    reply,
+    "platform.manage",
+    AUTHZ_PLATFORM_ID,
+    errorMessage,
+  );
 }
 
-async function canPlatformPermission(
-  userId: string,
-  permission: string,
-) {
-  if (!authzEnabled()) {
-    const allowed = await hasPlatformRole(userId, ['super_admin']);
-    return allowed;
-  }
-
-  return checkPermission({
-    resourceType: 'platform',
+async function canPlatformPermission(userId: string) {
+  return authorizeAction({
+    subject: userSubject(userId),
+    action: "platform.manage",
     resourceId: AUTHZ_PLATFORM_ID,
-    permission,
-    subject: { type: 'user', id: userId },
   });
 }
 
 export function registerPlatformRoutes(app: FastifyInstance) {
   const authHook = { preHandler: [authMiddleware] };
 
-  app.get('/api/v1/platform/navigation', authHook, async (request, reply) => {
+  app.get("/api/v1/platform/navigation", authHook, async (request, reply) => {
     const userId = (request as any).user!.userId;
-    const canManagePlatform = await canPlatformPermission(userId, 'manage');
+    const canManagePlatform = await canPlatformPermission(userId);
 
     return reply.send({
       data: {
         canAccessPlatformModels: canManagePlatform,
-        canAccessPlatformRoles: canManagePlatform,
+        canAccessPlatformAccess: canManagePlatform,
       },
     });
   });
 
-  app.get('/api/v1/platform/roles', authHook, async (request, reply) => {
+  app.get("/api/v1/platform/access", authHook, async (request, reply) => {
     const allowed = await requirePlatformManagePermission(
       request,
       reply,
-      'Not allowed to manage platform roles',
+      "Not allowed to manage platform access",
     );
     if (!allowed) return;
 
-    const roles = await listPlatformRoleAssignments();
-    return reply.send({ data: roles });
+    const accessBindings = await listPlatformAccessBindings();
+    return reply.send({ data: accessBindings });
   });
 
-  app.post('/api/v1/platform/roles', authHook, async (request, reply) => {
+  app.post("/api/v1/platform/access", authHook, async (request, reply) => {
     const allowed = await requirePlatformManagePermission(
       request,
       reply,
-      'Not allowed to manage platform roles',
+      "Not allowed to manage platform access",
     );
     if (!allowed) return;
 
-    const parsed = platformRoleSchema.safeParse(request.body);
+    const parsed = platformAccessSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.status(400).send({ error: 'Validation failed', details: parsed.error.flatten() });
+      return reply
+        .status(400)
+        .send({ error: "Validation failed", details: parsed.error.flatten() });
     }
 
     try {
-      const role = await assignPlatformRole({
+      const accessBinding = await grantPlatformAccess({
         userId: parsed.data.userId,
-        role: parsed.data.role as PlatformRole,
+        accessKey: parsed.data.accessKey as PlatformAccessKey,
         assignedBy: (request as any).user!.userId,
         metadata: parsed.data.metadata as Record<string, unknown> | undefined,
       });
-      return reply.status(201).send(role);
+      return reply.status(201).send(accessBinding);
     } catch (err: any) {
-      const msg = err.message || 'Failed to assign platform role';
-      if (msg === 'User not found') {
+      const msg = err.message || "Failed to grant platform access";
+      if (msg === "User not found") {
         return reply.status(404).send({ error: msg });
       }
-      if (msg === 'Role already assigned') {
+      if (msg === "Access already granted") {
         return reply.status(409).send({ error: msg });
       }
       throw err;
@@ -110,27 +108,34 @@ export function registerPlatformRoutes(app: FastifyInstance) {
   });
 
   app.post<{
-    Params: { role: PlatformRole; userId: string };
-  }>('/api/v1/platform/roles/:role/users/:userId/revoke', authHook, async (request, reply) => {
-    const allowed = await requirePlatformManagePermission(
-      request,
-      reply,
-      'Not allowed to manage platform roles',
-    );
-    if (!allowed) return;
+    Params: { accessKey: PlatformAccessKey; userId: string };
+  }>(
+    "/api/v1/platform/access/:accessKey/users/:userId/revoke",
+    authHook,
+    async (request, reply) => {
+      const allowed = await requirePlatformManagePermission(
+        request,
+        reply,
+        "Not allowed to manage platform access",
+      );
+      if (!allowed) return;
 
-    try {
-      await revokePlatformRole(request.params.userId, request.params.role);
-      return reply.status(204).send();
-    } catch (err: any) {
-      const msg = err.message || 'Failed to revoke platform role';
-      if (msg === 'Role not found') {
-        return reply.status(404).send({ error: msg });
+      try {
+        await revokePlatformAccess(
+          request.params.userId,
+          request.params.accessKey,
+        );
+        return reply.status(204).send();
+      } catch (err: any) {
+        const msg = err.message || "Failed to revoke platform access";
+        if (msg === "Access grant not found") {
+          return reply.status(404).send({ error: msg });
+        }
+        if (msg === "Config-managed access cannot be revoked manually") {
+          return reply.status(409).send({ error: msg });
+        }
+        throw err;
       }
-      if (msg === 'Config-managed role cannot be revoked manually') {
-        return reply.status(409).send({ error: msg });
-      }
-      throw err;
-    }
-  });
+    },
+  );
 }

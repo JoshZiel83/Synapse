@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CapabilityGrantScope } from '@synapse/shared';
 import { Bot, Plus, ShieldCheck, Trash2, UserRound } from 'lucide-react';
-import { AppCard, AppCardContent, AppCardHeader, AppCardTitle } from '@/components/app-card';
 import { getConversationDisplayName } from '@/app/dashboard/capabilities/attachment-visuals';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -691,40 +691,43 @@ export default function PluginAccessStep({
 
   if (!installationId) {
     return (
-      <AppCard variant="panel">
-        <AppCardContent className="p-6 text-sm text-muted-foreground">
+      <Card className="rounded-[28px]">
+        <CardContent className="p-6 text-sm text-muted-foreground">
           Finish setup first. Once the installation exists, you can grant use access here.
-        </AppCardContent>
-      </AppCard>
+        </CardContent>
+      </Card>
     );
   }
 
   if (loading) {
     return (
-      <AppCard variant="panel">
-        <AppCardContent className="p-6 text-sm text-muted-foreground">
+      <Card className="rounded-[28px]">
+        <CardContent className="p-6 text-sm text-muted-foreground">
           Loading access settings...
-        </AppCardContent>
-      </AppCard>
+        </CardContent>
+      </Card>
     );
   }
 
   return (
     <>
-      <AppCard variant="panel">
-        <AppCardHeader className="px-6 py-6">
+      <Card className="rounded-[28px]">
+        <CardHeader>
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-muted-foreground" />
-              <AppCardTitle>Use Access</AppCardTitle>
+              <div className="space-y-1">
+                <CardTitle>Access</CardTitle>
+                <CardDescription>Choose who can use this installation. Ownership and lifecycle stay in Advanced.</CardDescription>
+              </div>
             </div>
             <Button onClick={() => setDialogOpen(true)}>
               <Plus data-icon="inline-start" />
               Add Access
             </Button>
           </div>
-        </AppCardHeader>
-        <AppCardContent className="px-0 pb-2">
+        </CardHeader>
+        <CardContent className="px-0 pb-2">
           <Table>
             <TableHeader>
               <TableRow>
@@ -771,8 +774,8 @@ export default function PluginAccessStep({
               )}
             </TableBody>
           </Table>
-        </AppCardContent>
-      </AppCard>
+        </CardContent>
+      </Card>
 
       <Dialog
         open={dialogOpen}

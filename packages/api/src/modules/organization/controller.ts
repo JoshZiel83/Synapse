@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
-import { authzEnabled, checkPermission } from '../../infrastructure/authz/index.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
+import { requireRequestAction } from '../access/guards.js';
+import { getRequestUserId, userSubject } from '../access/service.js';
+import type { AccessAction } from '../access/actions.js';
 import * as service from './service.js';
 import { ACTOR_DOC_TEMPLATES } from '@synapse/shared';
 import type { ActorDoc } from '@synapse/shared';
@@ -84,7 +86,6 @@ const actorGrantPermissionEnum = z.enum([
   'receive_message',
   'memory_read',
   'memory_edit',
-  'memory_grant',
   'memory_retarget',
   'memory_delete',
 ]);
@@ -119,71 +120,21 @@ const issueActorGrantSchema = z.object({
 async function requireWorkspacePermission(
   request: any,
   reply: any,
-  permission: string,
+  action: AccessAction,
   errorMessage: string,
 ) {
   const { workspaceId } = request.params as { workspaceId: string };
-  const userId = (request as any).user!.userId;
-
-  if (!authzEnabled()) {
-    const trustLevel = (request as any).workspaceMember?.trust_level as string | undefined;
-    const allowed = trustLevel === 'owner' || trustLevel === 'admin';
-    if (!allowed) {
-      reply.status(403).send({ error: errorMessage });
-      return false;
-    }
-    return true;
-  }
-
-  const allowed = await checkPermission({
-    resourceType: 'workspace',
-    resourceId: workspaceId,
-    permission,
-    subject: { type: 'user', id: userId },
-  });
-
-  if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
-    return false;
-  }
-
-  return true;
+  return requireRequestAction(request, reply, action, workspaceId, errorMessage);
 }
 
 async function requireActorPermission(
   request: any,
   reply: any,
   actorId: string,
-  permission: string,
+  action: AccessAction,
   errorMessage: string,
 ) {
-  const userId = (request as any).user!.userId;
-
-  if (!authzEnabled()) {
-    const trustLevel = (request as any).workspaceMember?.trust_level as string | undefined;
-    const allowed = permission === 'view'
-      ? Boolean(trustLevel)
-      : trustLevel === 'owner' || trustLevel === 'admin';
-    if (!allowed) {
-      reply.status(403).send({ error: errorMessage });
-      return false;
-    }
-    return true;
-  }
-
-  const allowed = await checkPermission({
-    resourceType: 'actor',
-    resourceId: actorId,
-    permission,
-    subject: { type: 'user', id: userId },
-  });
-
-  if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
-    return false;
-  }
-
-  return true;
+  return requireRequestAction(request, reply, action, actorId, errorMessage);
 }
 
 export async function organizationController(app: FastifyInstance) {
@@ -195,7 +146,7 @@ export async function organizationController(app: FastifyInstance) {
     const allowed = await requireWorkspacePermission(
       request,
       reply,
-      'manage_actors',
+      'workspace.manage_actors',
       'Not allowed to manage actors',
     );
     if (!allowed) return;
@@ -216,10 +167,10 @@ export async function organizationController(app: FastifyInstance) {
   // GET / - list actors
   app.get('/', async (request, reply) => {
     const { workspaceId } = request.params as { workspaceId: string };
-    const userId = (request as any).user!.userId;
+    const userId = getRequestUserId(request);
     const actors = await service.listActors(
       workspaceId,
-      authzEnabled() ? { type: 'user', id: userId } : undefined,
+      userSubject(userId),
     );
     return reply.send(actors);
   });
@@ -259,7 +210,7 @@ export async function organizationController(app: FastifyInstance) {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'manage_actors',
+        'workspace.manage_actors',
         'Not allowed to manage actors',
       );
       if (!allowed) return;
@@ -291,7 +242,7 @@ export async function organizationController(app: FastifyInstance) {
       request,
       reply,
       actorId,
-      'view',
+      'actor.view',
       'Not allowed to view this actor',
     );
     if (!allowed) return;
@@ -307,7 +258,7 @@ export async function organizationController(app: FastifyInstance) {
       request,
       reply,
       actorId,
-      'view',
+      'actor.view',
       'Not allowed to view this actor',
     );
     if (!allowed) return;
@@ -323,7 +274,7 @@ export async function organizationController(app: FastifyInstance) {
       request,
       reply,
       actorId,
-      'grant',
+      'actor.grant',
       'Not allowed to manage actor grants',
     );
     if (!allowed) return;
@@ -338,7 +289,7 @@ export async function organizationController(app: FastifyInstance) {
       request,
       reply,
       actorId,
-      'grant',
+      'actor.grant',
       'Not allowed to manage actor grants',
     );
     if (!allowed) return;
@@ -375,7 +326,7 @@ export async function organizationController(app: FastifyInstance) {
       request,
       reply,
       actorId,
-      'grant',
+      'actor.grant',
       'Not allowed to manage actor grants',
     );
     if (!allowed) return;
@@ -392,7 +343,7 @@ export async function organizationController(app: FastifyInstance) {
     const allowed = await requireWorkspacePermission(
       request,
       reply,
-      'manage_actors',
+      'workspace.manage_actors',
       'Not allowed to manage actors',
     );
     if (!allowed) return;
@@ -410,7 +361,7 @@ export async function organizationController(app: FastifyInstance) {
     const allowed = await requireWorkspacePermission(
       request,
       reply,
-      'manage_actors',
+      'workspace.manage_actors',
       'Not allowed to manage actors',
     );
     if (!allowed) return;
@@ -440,7 +391,7 @@ export async function organizationController(app: FastifyInstance) {
     const allowed = await requireWorkspacePermission(
       request,
       reply,
-      'manage_actors',
+      'workspace.manage_actors',
       'Not allowed to manage actors',
     );
     if (!allowed) return;

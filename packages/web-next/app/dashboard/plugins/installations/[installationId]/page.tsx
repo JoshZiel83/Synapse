@@ -1,14 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
-import { AppCard, AppCardContent } from '@/components/app-card';
 import { Button } from '@/components/ui/button';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
 import PluginInstallationWorkbench from '../../plugin-installation-workbench';
-import { PluginIcon, getLocale, translate } from '../../plugin-ui';
+import PluginHeroCard from '../../plugin-hero-card';
 
 export default function PluginInstallationPage() {
   const params = useParams<{ installationId: string }>();
@@ -19,7 +18,6 @@ export default function PluginInstallationPage() {
   const [installation, setInstallation] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const installationId = params.installationId;
-  const locale = useMemo(() => getLocale((plugin || installation)?.default_locale), [installation?.default_locale, plugin?.default_locale]);
 
   useEffect(() => {
     if (!workspaceId || !installationId) return;
@@ -61,9 +59,6 @@ export default function PluginInstallationPage() {
     return <div className="py-16 text-center text-sm text-muted-foreground">Installation not found.</div>;
   }
 
-  const title = translate(plugin.display_name_i18n, locale, plugin.default_locale || 'en') || plugin.display_name;
-  const description = translate(plugin.long_description_i18n || plugin.description_i18n, locale, plugin.default_locale || 'en') || plugin.long_description || plugin.description;
-
   return (
     <div className="flex flex-col gap-6 px-4 pb-6 pt-6 lg:px-6">
       <div className="flex flex-wrap items-center gap-3">
@@ -78,17 +73,7 @@ export default function PluginInstallationPage() {
         </Button>
       </div>
 
-      <AppCard variant="panel">
-        <AppCardContent className="p-6">
-          <div className="flex items-center gap-4">
-            <PluginIcon iconUrl={plugin.icon_url} title={title} transport={plugin.transport} verified={plugin.is_builtin} containerClassName="h-16 w-16 rounded-[20px]" className="h-7 w-7" />
-            <div className="min-w-0 space-y-2">
-              <h1 className="text-2xl font-semibold text-foreground">{title}</h1>
-              <p className="text-sm text-muted-foreground">{description}</p>
-            </div>
-          </div>
-        </AppCardContent>
-      </AppCard>
+      <PluginHeroCard plugin={plugin} eyebrow="Configuration" />
 
       <div>
         <PluginInstallationWorkbench

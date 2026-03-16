@@ -20,7 +20,6 @@ import {
   Puzzle,
   ShieldCheck,
   Sun,
-  UsersRound,
 } from "lucide-react"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
@@ -68,21 +67,20 @@ const modelItems = [
   { href: "/settings/models/actors", label: "Actors", icon: Bot },
 ]
 
-const roleItems = [
-  { href: "/roles/workspace", label: "Workspace", icon: UsersRound },
-  { href: "/roles/platform", label: "Platform", icon: ShieldCheck },
+const accessItems = [
+  { href: "/dashboard/access", label: "Access", icon: ShieldCheck },
 ]
 
 const emptyWorkspaceNavigation = {
   canViewWorkspace: false,
   canAccessWorkspaceModels: false,
   canAccessWorkspaceUserModels: false,
-  canAccessWorkspaceRoles: false,
+  canAccessWorkspaceAccess: false,
 }
 
 const emptyPlatformNavigation = {
   canAccessPlatformModels: false,
-  canAccessPlatformRoles: false,
+  canAccessPlatformAccess: false,
 }
 
 function SynapseLogo({ className }: { className?: string }) {
@@ -343,18 +341,13 @@ export function AppSidebar({
     return items
   }, [platformNavigation.canAccessPlatformModels, user, workspaceNavigation.canAccessWorkspaceModels, workspaceNavigation.canAccessWorkspaceUserModels])
 
-  const visibleRoleItems = React.useMemo(() => {
-    const items = []
-
-    if (workspaceNavigation.canAccessWorkspaceRoles) {
-      items.push(roleItems[0])
-    }
-    if (platformNavigation.canAccessPlatformRoles) {
-      items.push(roleItems[1])
+  const visibleAccessItems = React.useMemo(() => {
+    if (!workspaceNavigation.canAccessWorkspaceAccess && !platformNavigation.canAccessPlatformAccess) {
+      return []
     }
 
-    return items
-  }, [platformNavigation.canAccessPlatformRoles, workspaceNavigation.canAccessWorkspaceRoles])
+    return accessItems
+  }, [platformNavigation.canAccessPlatformAccess, workspaceNavigation.canAccessWorkspaceAccess])
 
   return (
     <Sidebar collapsible="offcanvas" variant="inset" {...props}>
@@ -372,7 +365,7 @@ export function AppSidebar({
         <NavSection items={mainItems} pathname={pathname} unreadCount={unreadCount} />
         <NavSection label="Workspace" items={knowledgeItems} pathname={pathname} />
         <NavSection label="Models" items={visibleModelItems} pathname={pathname} />
-        <NavSection label="Roles" items={visibleRoleItems} pathname={pathname} />
+        <NavSection label="Access" items={visibleAccessItems} pathname={pathname} />
       </SidebarContent>
 
       <SidebarFooter>

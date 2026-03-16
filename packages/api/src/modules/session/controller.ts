@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CanonicalContentBlock } from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
-import { authzEnabled, checkPermission } from '../../infrastructure/authz/index.js';
-import { query } from '../../infrastructure/database/index.js';
+import { requireRequestAction } from '../access/guards.js';
+import type { AccessAction } from '../access/actions.js';
 import {
   createSession,
   getSession,
@@ -31,55 +31,20 @@ const sendMessageSchema = z.object({
   { message: 'content or contentBlocks is required' },
 );
 
-async function hasWorkspaceMembership(workspaceId: string, userId: string) {
-  const result = await query(
-    `SELECT 1
-     FROM workspace_members
-     WHERE workspace_id = $1 AND user_id = $2
-     LIMIT 1`,
-    [workspaceId, userId],
-  );
-  return result.rows.length > 0;
-}
-
 async function requireActorPermission(
   request: any,
   reply: any,
   actorId: string,
-  permission: string,
+  action: AccessAction,
   errorMessage: string,
 ) {
-  const { workspaceId } = request.params as { workspaceId: string };
-  const userId = (request as any).user!.userId;
-
-  if (!authzEnabled()) {
-    const allowed = await hasWorkspaceMembership(workspaceId, userId);
-    if (!allowed) {
-      reply.status(403).send({ error: errorMessage });
-      return false;
-    }
-    return true;
-  }
-
-  const allowed = await checkPermission({
-    resourceType: 'actor',
-    resourceId: actorId,
-    permission,
-    subject: { type: 'user', id: userId },
-  });
-
-  if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
-    return false;
-  }
-
-  return true;
+  return requireRequestAction(request, reply, action, actorId, errorMessage);
 }
 
 async function requireSessionConversationPermission(
   request: any,
   reply: any,
-  permission: string,
+  action: AccessAction,
   errorMessage: string,
 ) {
   const { workspaceId, sessionId } = request.params as { workspaceId: string; sessionId: string };
@@ -89,25 +54,14 @@ async function requireSessionConversationPermission(
     return null;
   }
 
-  const userId = (request as any).user!.userId;
-  if (!authzEnabled()) {
-    const allowed = await hasWorkspaceMembership(workspaceId, userId);
-    if (!allowed) {
-      reply.status(403).send({ error: errorMessage });
-      return null;
-    }
-    return session;
-  }
-
-  const allowed = await checkPermission({
-    resourceType: 'conversation',
-    resourceId: session.conversation_id,
-    permission,
-    subject: { type: 'user', id: userId },
-  });
-
+  const allowed = await requireRequestAction(
+    request,
+    reply,
+    action,
+    session.conversation_id,
+    errorMessage,
+  );
   if (!allowed) {
-    reply.status(403).send({ error: errorMessage });
     return null;
   }
 
@@ -134,7 +88,7 @@ export async function sessionController(app: FastifyInstance) {
       request,
       reply,
       actorId,
-      'invoke',
+      'actor.invoke',
       'Not allowed to invoke this actor',
     );
     if (!allowed) return;
@@ -191,7 +145,7 @@ export async function sessionController(app: FastifyInstance) {
     const session = await requireSessionConversationPermission(
       request,
       reply,
-      'send',
+      'conversation.send',
       'Not allowed to send messages in this session',
     );
     if (!session) return;
@@ -231,7 +185,7 @@ export async function sessionController(app: FastifyInstance) {
     const session = await requireSessionConversationPermission(
       request,
       reply,
-      'view',
+      'conversation.view',
       'Not allowed to view this session',
     );
     if (!session) return;
@@ -247,7 +201,7 @@ export async function sessionController(app: FastifyInstance) {
     const session = await requireSessionConversationPermission(
       request,
       reply,
-      'view',
+      'conversation.view',
       'Not allowed to view this session',
     );
     if (!session) return;
@@ -268,7 +222,7 @@ export async function sessionController(app: FastifyInstance) {
       request,
       reply,
       actorId,
-      'view',
+      'actor.view',
       'Not allowed to view this actor',
     );
     if (!allowed) return;
@@ -285,7 +239,7 @@ export async function sessionController(app: FastifyInstance) {
     const session = await requireSessionConversationPermission(
       request,
       reply,
-      'manage',
+      'conversation.manage',
       'Not allowed to manage this session',
     );
     if (!session) return;

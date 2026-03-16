@@ -2,7 +2,7 @@ import type { ModelAttemptPolicy, MultimodalConfig, ResolvedModelConfig, Resolve
 import { redis } from '../../infrastructure/redis/index.js';
 import { query } from '../../infrastructure/database/index.js';
 import { config } from '../../config/index.js';
-import { authzEnabled, lookupResources } from '../../infrastructure/authz/index.js';
+import { actorSubject, listAuthorizedResourceIds, userSubject } from '../access/service.js';
 
 type GroupRow = {
   id: string;
@@ -146,20 +146,18 @@ function ownerRank(group: GroupRow, current: ResolveContext) {
 async function listAuthorizedModelGroupIds(current: ResolveContext) {
   const authorized = new Set<string>();
 
-  const actorResults = await lookupResources({
-    resourceType: 'model_group',
-    permission: 'use',
-    subject: { type: 'actor', id: current.actorId },
+  const actorResults = await listAuthorizedResourceIds({
+    subject: actorSubject(current.actorId),
+    action: 'model_group.use',
   });
   for (const id of actorResults) {
     authorized.add(id);
   }
 
   if (current.userId) {
-    const userResults = await lookupResources({
-      resourceType: 'model_group',
-      permission: 'use',
-      subject: { type: 'user', id: current.userId },
+    const userResults = await listAuthorizedResourceIds({
+      subject: userSubject(current.userId),
+      action: 'model_group.use',
     });
     for (const id of userResults) {
       authorized.add(id);
@@ -169,36 +167,17 @@ async function listAuthorizedModelGroupIds(current: ResolveContext) {
   return authorized;
 }
 
-async function listCandidateGroups(current: ResolveContext, authorizedGroupIds: Set<string> | null) {
+async function listCandidateGroups(current: ResolveContext, authorizedGroupIds: Set<string>) {
   const [groupsResult, assignmentsResult, workspaceDefaultResult, platformDefaultResult, userDefaultResult] = await Promise.all([
-    authorizedGroupIds
-      ? authorizedGroupIds.size > 0
-        ? query<GroupRow>(
-            `SELECT *
-             FROM model_groups
-             WHERE is_enabled = TRUE
-               AND id = ANY($1)`,
-            [Array.from(authorizedGroupIds)],
-          )
-        : Promise.resolve({ rows: [] as GroupRow[] })
-      : query<GroupRow>(
-          `SELECT DISTINCT mg.*
-           FROM model_groups mg
-           LEFT JOIN model_group_grants mgg
-             ON mgg.group_id = mg.id
-            AND mgg.status = 'active'
-           WHERE mg.is_enabled = TRUE
-             AND (
-               (mg.owner_type = 'workspace' AND mg.owner_workspace_id = $1)
-               OR (mg.owner_type = 'user' AND mg.owner_user_id = $2)
-               OR (mgg.grant_scope = 'platform')
-               OR (mgg.grant_scope = 'workspace' AND mgg.workspace_id = $1)
-               OR (mgg.grant_scope = 'user' AND mgg.user_id = $2)
-               OR (mgg.grant_scope = 'workspace_user' AND mgg.workspace_id = $1 AND mgg.user_id = $2)
-               OR (mgg.grant_scope = 'actor' AND mgg.workspace_id = $1 AND mgg.actor_id = $3)
-             )`,
-          [current.workspaceId, current.userId || null, current.actorId],
-        ),
+    authorizedGroupIds.size > 0
+      ? query<GroupRow>(
+          `SELECT *
+           FROM model_groups
+           WHERE is_enabled = TRUE
+             AND id = ANY($1)`,
+          [Array.from(authorizedGroupIds)],
+        )
+      : Promise.resolve({ rows: [] as GroupRow[] }),
     query(
       `SELECT group_id, priority
        FROM actor_model_group_assignments
@@ -349,7 +328,6 @@ export async function resolveModelPlan(
     userId?: string;
   },
 ): Promise<ResolvedModelPlan | null> {
-  const authzActive = authzEnabled();
   const current: ResolveContext = {
     actorId,
     workspaceId,
@@ -357,7 +335,7 @@ export async function resolveModelPlan(
     userId: options?.userId,
   };
 
-  const authorizedGroupIds = authzActive ? await listAuthorizedModelGroupIds(current) : null;
+  const authorizedGroupIds = await listAuthorizedModelGroupIds(current);
   const groups = await listCandidateGroups(current, authorizedGroupIds);
 
   for (const group of groups) {

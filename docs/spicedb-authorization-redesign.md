@@ -323,28 +323,34 @@ This replaces both `binding_scope` and `capability_grants`.
 
 `memory` should stop encoding authorization as `owner_scope + memory_grants` matching logic.
 
+The clean model is:
+
+- `memory_space` controls visibility
+- `memory_item` stores content only
+- moving an item to another path changes who can read it
+- no per-memory exception grant exists
+
 Recommended permissions:
 
-- `read`
-- `recall`
-- `edit`
-- `grant`
-- `delete`
+- `memory_space.read`
+- `memory_space.write`
+- `memory_space.manage`
+- `memory_item.delete`
 
-Grants can target:
+Recommended spaces:
 
-- direct principal
-- conversation
-- workspace
-
-No platform grant is required unless the product later needs global memory.
+- `workspace_shared`
+- `conversation_shared`
+- `actor_private`
+- `participant_private`
+- `user_private`
 
 Important distinction:
 
-- ownership is business meaning
-- read/recall access is authorization meaning
+- path placement is the user-facing visibility model
+- SpiceDB relations are the only authorization model
 
-Those are related but not identical.
+No SQL grant table or per-memory grant row should survive this redesign.
 
 ## 5.6 MCP Relay
 

@@ -1,8 +1,6 @@
 import { query, transaction } from '../../infrastructure/database/index.js';
 import {
-  authzEnabled,
   buildActorConversationContextId,
-  checkPermission,
   diffAuthzRelationships,
   deleteRelation,
   flushAuthzOutboxEntries,
@@ -38,6 +36,7 @@ import {
   publishSessionRuntime,
   removeSessionRuntime,
 } from '../session/runtime.js';
+import { authorizePermission, type AccessSubject } from '../access/service.js';
 
 type ConversationGrantPermission =
   | 'send'
@@ -51,28 +50,6 @@ type ConversationGrantRow = {
   conversation_id?: string;
   workspace_id: string;
   permission: ConversationGrantPermission;
-  subject_type: 'user' | 'actor';
-  user_id: string | null;
-  actor_id: string | null;
-  status: 'active' | 'revoked';
-  granted_by?: string | null;
-  reason?: string | null;
-  metadata?: Record<string, unknown> | string | null;
-  created_at?: string;
-  revoked_at?: string | null;
-};
-
-type ConversationMemoryGrantPermission =
-  | 'memory_edit'
-  | 'memory_grant'
-  | 'memory_retarget'
-  | 'memory_delete';
-
-type ConversationMemoryGrantRow = {
-  id?: string;
-  conversation_id?: string;
-  workspace_id: string;
-  permission: ConversationMemoryGrantPermission;
   subject_type: 'user' | 'actor';
   user_id: string | null;
   actor_id: string | null;
@@ -226,59 +203,6 @@ function mapConversationGrant(
   };
 }
 
-function conversationMemoryGrantRelation(permission: ConversationMemoryGrantPermission) {
-  switch (permission) {
-    case 'memory_edit':
-      return 'memory_editor';
-    case 'memory_grant':
-      return 'memory_granter';
-    case 'memory_retarget':
-      return 'memory_retargeter';
-    case 'memory_delete':
-      return 'memory_deleter';
-    default:
-      return null;
-  }
-}
-
-function buildConversationMemoryGrantRelations(
-  conversationId: string,
-  grants: ConversationMemoryGrantRow[],
-) {
-  return grants
-    .filter((grant) => grant.status === 'active')
-    .flatMap((grant) => {
-      const relation = conversationMemoryGrantRelation(grant.permission);
-      if (!relation) return [];
-      if (grant.subject_type === 'user' && grant.user_id) {
-        return [touchRelation('conversation', conversationId, relation, 'user', grant.user_id)];
-      }
-      if (grant.subject_type === 'actor' && grant.actor_id) {
-        return [touchRelation('conversation', conversationId, relation, 'actor', grant.actor_id)];
-      }
-      return [];
-    });
-}
-
-function mapConversationMemoryGrant(
-  row: ConversationMemoryGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null },
-) {
-  return {
-    id: row.id,
-    conversationId: row.conversation_id,
-    workspaceId: row.workspace_id,
-    permission: row.permission,
-    subjectType: row.subject_type,
-    userId: row.user_id || undefined,
-    actorId: row.actor_id || undefined,
-    status: row.status,
-    grantedBy: row.granted_by || undefined,
-    reason: row.reason || undefined,
-    metadata: parseJson(row.metadata),
-    createdAt: row.created_at,
-    revokedAt: row.revoked_at || undefined,
-  };
-}
 
 function buildTextContentFromParts(parts: any[]) {
   const text = parts
@@ -485,7 +409,7 @@ function buildSenderSubject(params: {
   senderType: 'user' | 'actor';
   senderUserId?: string;
   senderActorId?: string;
-}) {
+}): AccessSubject | null {
   if (params.senderType === 'actor' && params.senderActorId) {
     return { type: 'actor' as const, id: params.senderActorId };
   }
@@ -501,18 +425,16 @@ async function requireConversationSendPermission(params: {
   senderUserId?: string;
   senderActorId?: string;
 }) {
-  if (!authzEnabled()) return;
-
   const subject = buildSenderSubject(params);
   if (!subject) {
     throw new Error('Unable to resolve sender subject');
   }
 
-  const allowed = await checkPermission({
+  const allowed = await authorizePermission({
+    subject,
     resourceType: 'conversation',
     resourceId: params.conversationId,
     permission: 'send',
-    subject,
   });
 
   if (!allowed) {
@@ -528,7 +450,7 @@ async function filterAllowedTargetActorIds(params: {
   targetActorIds: string[];
   explicit: boolean;
 }) {
-  if (!authzEnabled() || params.targetActorIds.length === 0) {
+  if (params.targetActorIds.length === 0) {
     return params.targetActorIds;
   }
 
@@ -540,11 +462,11 @@ async function filterAllowedTargetActorIds(params: {
   const checks = await Promise.all(
     params.targetActorIds.map(async (actorId) => ({
       actorId,
-      allowed: await checkPermission({
+      allowed: await authorizePermission({
+        subject,
         resourceType: 'actor',
         resourceId: actorId,
         permission: 'receive_message',
-        subject,
       }),
     })),
   );
@@ -568,7 +490,7 @@ function senderTypeFromItem(item: any): 'user' | 'actor' | 'system' {
 }
 
 async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (!authzEnabled() || entryIds.length === 0) return;
+  if (entryIds.length === 0) return;
 
   try {
     await flushAuthzOutboxEntries(entryIds);
@@ -1752,19 +1674,6 @@ export async function revokeConversationGrant(params: {
   return mapConversationGrant(result.grant);
 }
 
-export async function listConversationMemoryGrants(groupId: string, workspaceId: string) {
-  const result = await query<ConversationMemoryGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null }>(
-    `SELECT *
-     FROM conversation_memory_grants
-     WHERE conversation_id = $1
-       AND workspace_id = $2
-     ORDER BY created_at DESC`,
-    [groupId, workspaceId],
-  );
-
-  return result.rows.map(mapConversationMemoryGrant);
-}
-
 async function assertActiveConversationUserMember(groupId: string, userId: string) {
   const member = await getConversationMember({ conversationId: groupId, userId });
   if (!member || member.state !== 'active') {
@@ -1777,179 +1686,6 @@ async function assertActiveConversationActorMember(groupId: string, actorId: str
   if (!member || member.state !== 'active') {
     throw new Error('Actor is not an active member of this conversation');
   }
-}
-
-export async function issueConversationMemoryGrant(params: {
-  groupId: string;
-  workspaceId: string;
-  permission: ConversationMemoryGrantPermission;
-  userId?: string;
-  actorId?: string;
-  grantedBy?: string;
-  reason?: string;
-  metadata?: Record<string, unknown>;
-}) {
-  const subjectType = params.userId ? 'user' : 'actor';
-  if (!params.userId && !params.actorId) {
-    throw new Error('userId or actorId is required');
-  }
-
-  if (params.userId) {
-    await assertActiveConversationUserMember(params.groupId, params.userId);
-  }
-  if (params.actorId) {
-    await assertActiveConversationActorMember(params.groupId, params.actorId);
-  }
-
-  const result = await transaction(async (client) => {
-    const previousResult = await client.query<ConversationMemoryGrantRow>(
-      `SELECT *
-       FROM conversation_memory_grants
-       WHERE conversation_id = $1
-         AND workspace_id = $2
-         AND status = 'active'`,
-      [params.groupId, params.workspaceId],
-    );
-    const previous = previousResult.rows;
-
-    const existingResult = await client.query<ConversationMemoryGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null }>(
-      `SELECT *
-       FROM conversation_memory_grants
-       WHERE conversation_id = $1
-         AND workspace_id = $2
-         AND permission = $3
-         AND subject_type = $4
-         AND COALESCE(user_id::text, '') = COALESCE($5::text, '')
-         AND COALESCE(actor_id::text, '') = COALESCE($6::text, '')
-         AND status = 'active'
-       LIMIT 1`,
-      [
-        params.groupId,
-        params.workspaceId,
-        params.permission,
-        subjectType,
-        params.userId ?? null,
-        params.actorId ?? null,
-      ],
-    );
-
-    if (existingResult.rows[0]) {
-      return { grant: existingResult.rows[0], authzEntryIds: [] as string[] };
-    }
-
-    const insertResult = await client.query<ConversationMemoryGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null }>(
-      `INSERT INTO conversation_memory_grants (
-         conversation_id,
-         workspace_id,
-         permission,
-         subject_type,
-         user_id,
-         actor_id,
-         status,
-         granted_by,
-         reason,
-         metadata
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9::jsonb)
-       RETURNING *`,
-      [
-        params.groupId,
-        params.workspaceId,
-        params.permission,
-        subjectType,
-        params.userId ?? null,
-        params.actorId ?? null,
-        params.grantedBy ?? null,
-        params.reason ?? null,
-        JSON.stringify(params.metadata ?? {}),
-      ],
-    );
-
-    const next = [...previous, insertResult.rows[0]];
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      diffAuthzRelationships(
-        buildConversationMemoryGrantRelations(params.groupId, previous),
-        buildConversationMemoryGrantRelations(params.groupId, next),
-      ),
-      {
-        source: 'conversation.issue_memory_grant',
-        workspaceId: params.workspaceId,
-        conversationId: params.groupId,
-        permission: params.permission,
-      },
-    );
-
-    return {
-      grant: insertResult.rows[0],
-      authzEntryIds,
-    };
-  });
-
-  await flushQueuedAuthzEntries(result.authzEntryIds, 'conversation.issue_memory_grant');
-  return mapConversationMemoryGrant(result.grant);
-}
-
-export async function revokeConversationMemoryGrant(params: {
-  groupId: string;
-  workspaceId: string;
-  grantId: string;
-}) {
-  const result = await transaction(async (client) => {
-    const previousResult = await client.query<ConversationMemoryGrantRow & { id: string }>(
-      `SELECT *
-       FROM conversation_memory_grants
-       WHERE conversation_id = $1
-         AND workspace_id = $2
-         AND status = 'active'`,
-      [params.groupId, params.workspaceId],
-    );
-    const previous = previousResult.rows;
-
-    const revokeResult = await client.query<ConversationMemoryGrantRow & { id: string; conversation_id: string; created_at: string; revoked_at: string | null }>(
-      `UPDATE conversation_memory_grants
-       SET status = 'revoked',
-           revoked_at = NOW()
-       WHERE id = $1
-         AND conversation_id = $2
-         AND workspace_id = $3
-         AND status = 'active'
-       RETURNING *`,
-      [params.grantId, params.groupId, params.workspaceId],
-    );
-
-    const revoked = revokeResult.rows[0];
-    if (!revoked) {
-      return null;
-    }
-
-    const next = previous.filter((grant) => grant.id !== params.grantId);
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      diffAuthzRelationships(
-        buildConversationMemoryGrantRelations(params.groupId, previous),
-        buildConversationMemoryGrantRelations(params.groupId, next),
-      ),
-      {
-        source: 'conversation.revoke_memory_grant',
-        workspaceId: params.workspaceId,
-        conversationId: params.groupId,
-        grantId: params.grantId,
-      },
-    );
-
-    return {
-      grant: revoked,
-      authzEntryIds,
-    };
-  });
-
-  if (!result) {
-    return null;
-  }
-
-  await flushQueuedAuthzEntries(result.authzEntryIds, 'conversation.revoke_memory_grant');
-  return mapConversationMemoryGrant(result.grant);
 }
 
 // ============ Mark Read ============

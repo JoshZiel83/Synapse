@@ -2,22 +2,29 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { ArrowLeft, Save, Trash2 } from "lucide-react"
+import { ArrowLeft, FolderOpen, Save, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import {
+  buildMemoryFolders,
+  buildMemoryFolderPathLabel,
+  buildMemoryOwnerStateFromPreset,
   buildMemoryPayload,
   createDraftState,
   createEditorStateFromMemory,
+  describeFolderVisibility,
+  getFolderIdForOwner,
   hasMeaningfulBlocks,
   normalizeActorOption,
   normalizeGroupOption,
   serializeEditorState,
   type EditorState,
+  type MemoryFolderNode,
   type Memory,
   type MemoryScope,
 } from "@/components/memory-browser-model"
+import { MemoryPathPickerDialog } from "@/components/memory-path-picker-dialog"
 import { CanonicalContentEditor } from "@/components/canonical-content-editor"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -26,7 +33,6 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Textarea } from "@/components/ui/textarea"
 import { api } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 
@@ -37,7 +43,7 @@ function isMemoryScope(value: string | null): value is MemoryScope {
 export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { workspaceId } = useWorkspace()
+  const { workspaceId, workspaceName } = useWorkspace()
   const { user } = useAuthStore()
   const currentUserId = user?.id || ""
   const currentUserLabel = user?.name || user?.email || "Me"
@@ -51,7 +57,8 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
   const [actors, setActors] = useState<any[]>([])
   const [groups, setGroups] = useState<any[]>([])
   const [memory, setMemory] = useState<Memory | null>(null)
-  const [activeTab, setActiveTab] = useState<"content" | "location" | "attributes" | "grants">("content")
+  const [activeTab, setActiveTab] = useState<"content" | "location" | "attributes">("content")
+  const [pathPickerOpen, setPathPickerOpen] = useState(false)
 
   useEffect(() => {
     if (!workspaceId) return
@@ -107,8 +114,58 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
     [baselineSignature, editor],
   )
 
+  const folders = useMemo(
+    () =>
+      workspaceId && workspaceName
+        ? buildMemoryFolders({
+            workspaceId,
+            workspaceName,
+            currentUserId,
+            currentUserLabel,
+            memories: memory ? [memory] : [],
+            actors,
+            groups,
+          })
+        : [],
+    [actors, currentUserId, currentUserLabel, groups, memory, workspaceId, workspaceName],
+  )
+
+  const folderMap = useMemo(() => new Map(folders.map((folder) => [folder.id, folder])), [folders])
+
+  const selectedFolderId = useMemo(() => {
+    if (!editor || !workspaceId) return ""
+    return getFolderIdForOwner({
+      workspaceId,
+      currentUserId,
+      ownerScope: editor.ownerScope,
+      ownerActorId: editor.ownerActorId || undefined,
+      ownerConversationId: editor.ownerConversationId || undefined,
+      ownerUserId: editor.ownerUserId || undefined,
+    })
+  }, [currentUserId, editor, workspaceId])
+
+  const selectedFolder = useMemo(
+    () => folderMap.get(selectedFolderId) || null,
+    [folderMap, selectedFolderId],
+  )
+
+  const selectedFolderLabel = useMemo(
+    () => (selectedFolderId ? buildMemoryFolderPathLabel(selectedFolderId, folderMap) : ""),
+    [folderMap, selectedFolderId],
+  )
+
   function updateEditor(updater: (current: EditorState) => EditorState) {
     setEditor((current) => (current ? updater(current) : current))
+  }
+
+  function selectFolder(folder: MemoryFolderNode) {
+    const preset = folder.createPreset
+    if (!preset) return
+
+    updateEditor((current) => ({
+      ...current,
+      ...buildMemoryOwnerStateFromPreset(preset, currentUserId),
+    }))
   }
 
   function leavePage() {
@@ -174,12 +231,10 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
             <ArrowLeft data-icon="inline-start" />
             Back
           </Button>
-          {memoryId ? (
-            <div className="flex flex-col gap-1">
-              <div className="text-xl font-semibold text-foreground">Edit Memory</div>
-              <div className="text-sm text-muted-foreground">Edit one memory as ordered blocks.</div>
-            </div>
-          ) : null}
+          <div className="flex flex-col gap-1">
+            <div className="text-xl font-semibold text-foreground">{memoryId ? "Edit Memory" : "New Memory"}</div>
+            <div className="text-sm text-muted-foreground">Edit the content or move it to another path to change who can read it.</div>
+          </div>
         </div>
 
         {editor ? (
@@ -208,9 +263,8 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
           <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="flex flex-col gap-4">
             <TabsList className="w-full justify-start">
               <TabsTrigger value="content">Content</TabsTrigger>
-              <TabsTrigger value="location">Location</TabsTrigger>
+              <TabsTrigger value="location">Visibility</TabsTrigger>
               <TabsTrigger value="attributes">Attributes</TabsTrigger>
-              <TabsTrigger value="grants">Grants</TabsTrigger>
             </TabsList>
 
             <TabsContent value="content" className="mt-0">
@@ -231,94 +285,54 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
             <TabsContent value="location" className="mt-0">
               <Card className="rounded-[28px]">
                 <CardHeader>
-                  <CardTitle>Location</CardTitle>
-                  <CardDescription>Choose which folder this memory belongs to.</CardDescription>
+                  <CardTitle>Path And Visibility</CardTitle>
+                  <CardDescription>A memory inherits visibility from its path. Moving it to another path changes who can read it.</CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-6">
                   <Field>
-                    <FieldLabel>Owner scope</FieldLabel>
-                    <Select
-                      value={editor.ownerScope}
-                      onValueChange={(value) =>
-                        updateEditor((current) => ({
-                          ...current,
-                          ownerScope: value as MemoryScope,
-                          ownerActorId: value === "actor_global" || value === "actor_conversation" ? current.ownerActorId : "",
-                          ownerConversationId: value === "conversation" || value === "actor_conversation" ? current.ownerConversationId : "",
-                          ownerUserId: value === "user" ? current.ownerUserId || currentUserId : current.ownerUserId,
-                        }))
-                      }
+                    <FieldLabel>Visibility path</FieldLabel>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-auto w-full justify-between gap-4 px-4 py-4"
+                      onClick={() => setPathPickerOpen(true)}
                     >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem value="workspace">Workspace</SelectItem>
-                          <SelectItem value="user">User</SelectItem>
-                          <SelectItem value="conversation">Conversation</SelectItem>
-                          <SelectItem value="actor_global">Actor</SelectItem>
-                          <SelectItem value="actor_conversation">Actor + Conversation</SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
+                      <div className="min-w-0 text-left">
+                        <div className="truncate text-sm font-medium text-foreground">{selectedFolderLabel || "Select a path"}</div>
+                        <div className="mt-1 truncate text-sm text-muted-foreground">
+                          {selectedFolder ? describeFolderVisibility(selectedFolder) : "Select a path to define visibility."}
+                        </div>
+                      </div>
+                      <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+                    </Button>
+                    <FieldDescription>Choose the path first. The selected path is the visible range.</FieldDescription>
                   </Field>
 
-                  {(editor.ownerScope === "actor_global" || editor.ownerScope === "actor_conversation") ? (
-                    <Field>
-                      <FieldLabel>Actor</FieldLabel>
-                      <Select
-                        value={editor.ownerActorId}
-                        onValueChange={(value) => updateEditor((current) => ({ ...current, ownerActorId: value }))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select an actor" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            {actors.map((actor) => (
-                              <SelectItem key={actor.id} value={actor.id}>
-                                {actor.name}{actor.title ? ` · ${actor.title}` : ""}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                    </Field>
-                  ) : null}
+                  <Field>
+                    <FieldLabel>Selected path</FieldLabel>
+                    <Input value={selectedFolderLabel || "Select a path"} disabled />
+                  </Field>
 
-                  {(editor.ownerScope === "conversation" || editor.ownerScope === "actor_conversation") ? (
-                    <Field>
-                      <FieldLabel>Conversation</FieldLabel>
-                      <Select
-                        value={editor.ownerConversationId}
-                        onValueChange={(value) => updateEditor((current) => ({ ...current, ownerConversationId: value }))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select a conversation" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            {groups.map((group) => (
-                              <SelectItem key={group.id} value={group.id}>
-                                {group.title}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                    </Field>
-                  ) : null}
-
-                  {editor.ownerScope === "user" ? (
-                    <Field>
-                      <FieldLabel>User folder</FieldLabel>
-                      <Input value={currentUserLabel} disabled />
-                      <FieldDescription>User-scoped memories stay under your personal folder.</FieldDescription>
-                    </Field>
-                  ) : null}
+                  <Field>
+                    <FieldLabel>Who can read it</FieldLabel>
+                    <Input value={selectedFolder ? describeFolderVisibility(selectedFolder) : "Select a path to define visibility"} disabled />
+                    <FieldDescription>Managers of the destination path can edit, move, or delete memories stored there.</FieldDescription>
+                  </Field>
                 </CardContent>
               </Card>
+
+              <MemoryPathPickerDialog
+                open={pathPickerOpen}
+                onOpenChange={setPathPickerOpen}
+                folders={folders}
+                value={selectedFolderId}
+                title="Choose visibility path"
+                description="Browse the path tree. The path you choose becomes the memory's visibility range."
+                confirmLabel="Use this path"
+                onConfirm={(folder) => {
+                  selectFolder(folder)
+                }}
+              />
             </TabsContent>
 
             <TabsContent value="attributes" className="mt-0">
@@ -438,26 +452,6 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
               </Card>
             </TabsContent>
 
-            <TabsContent value="grants" className="mt-0">
-              <Card className="rounded-[28px]">
-                <CardHeader>
-                  <CardTitle>Direct Grants</CardTitle>
-                  <CardDescription>Optional exceptions on top of the folder-based owner model.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Field>
-                    <FieldLabel>Grant JSON</FieldLabel>
-                    <Textarea
-                      rows={8}
-                      value={editor.grantsJson}
-                      onChange={(event) => updateEditor((current) => ({ ...current, grantsJson: event.target.value }))}
-                      className="font-mono"
-                      placeholder='[{"permission":"read","grantScope":"conversation","conversationId":"..."}]'
-                    />
-                  </Field>
-                </CardContent>
-              </Card>
-            </TabsContent>
           </Tabs>
         )}
         </div>

@@ -83,10 +83,6 @@ definition actor {
     relation memory_editor_workspace_user: workspace_user
     relation memory_editor_principal: user | actor
     relation memory_editor_conversation: conversation
-    relation memory_granter_workspace: workspace
-    relation memory_granter_workspace_user: workspace_user
-    relation memory_granter_principal: user | actor
-    relation memory_granter_conversation: conversation
     relation memory_retargeter_workspace: workspace
     relation memory_retargeter_workspace_user: workspace_user
     relation memory_retargeter_principal: user | actor
@@ -102,7 +98,6 @@ definition actor {
     permission receive_message = owner + editor + workspace->manage_actors + receive_workspace->principal + receive_workspace_user->principal + receive_principal + receive_conversation->principal
     permission memory_read = owner + editor + workspace->manage_actors + memory_reader_workspace->principal + memory_reader_workspace_user->principal + memory_reader_principal + memory_reader_conversation->memory_read
     permission memory_edit = owner + editor + workspace->manage_actors + memory_editor_workspace->manage_memories + memory_editor_workspace_user->principal + memory_editor_principal + memory_editor_conversation->memory_edit
-    permission memory_grant = owner + editor + workspace->manage_actors + memory_granter_workspace->manage_memories + memory_granter_workspace_user->principal + memory_granter_principal + memory_granter_conversation->memory_grant
     permission memory_retarget = owner + editor + workspace->manage_actors + memory_retargeter_workspace->manage_memories + memory_retargeter_workspace_user->principal + memory_retargeter_principal + memory_retargeter_conversation->memory_retarget
     permission memory_delete = owner + workspace->manage_actors + memory_deleter_workspace->manage_memories + memory_deleter_workspace_user->principal + memory_deleter_principal + memory_deleter_conversation->memory_delete
     permission edit = owner + editor + workspace->manage_actors
@@ -117,7 +112,6 @@ definition actor_conversation {
     permission principal = actor & conversation->principal
     permission memory_read = actor->memory_read & conversation->memory_read
     permission memory_edit = actor->memory_edit & conversation->memory_edit
-    permission memory_grant = actor->memory_grant & conversation->memory_grant
     permission memory_retarget = actor->memory_retarget & conversation->memory_retarget
     permission memory_delete = actor->memory_delete & conversation->memory_delete
 }
@@ -134,7 +128,6 @@ definition conversation {
     relation resource_attacher: user | actor
     relation memory_reader: user | actor
     relation memory_editor: user | actor
-    relation memory_granter: user | actor
     relation memory_retargeter: user | actor
     relation memory_deleter: user | actor
 
@@ -147,7 +140,6 @@ definition conversation {
     permission attach_resources = (moderator + admin + resource_attacher + workspace->manage_conversations) & view
     permission memory_read = view
     permission memory_edit = (moderator + admin + workspace->manage_conversations + memory_editor) & view
-    permission memory_grant = (admin + workspace->manage_conversations + memory_granter) & view
     permission memory_retarget = (admin + workspace->manage_conversations + memory_retargeter) & view
     permission memory_delete = (admin + workspace->manage_conversations + memory_deleter) & view
 }
@@ -193,38 +185,12 @@ definition memory {
     relation owner_conversation: conversation
     relation owner_actor: actor
     relation owner_actor_conversation: actor_conversation
-    relation reader_principal: user | actor
-    relation reader_workspace_user: workspace_user
-    relation reader_actor_conversation: actor_conversation
-    relation reader_conversation: conversation
-    relation reader_workspace: workspace
-    relation editor_principal: user | actor
-    relation editor_workspace_user: workspace_user
-    relation editor_actor_conversation: actor_conversation
-    relation editor_conversation: conversation
-    relation editor_workspace: workspace
-    relation granter_principal: user | actor
-    relation granter_workspace_user: workspace_user
-    relation granter_actor_conversation: actor_conversation
-    relation granter_conversation: conversation
-    relation granter_workspace: workspace
-    relation retargeter_principal: user | actor
-    relation retargeter_workspace_user: workspace_user
-    relation retargeter_actor_conversation: actor_conversation
-    relation retargeter_conversation: conversation
-    relation retargeter_workspace: workspace
-    relation deleter_principal: user | actor
-    relation deleter_workspace_user: workspace_user
-    relation deleter_actor_conversation: actor_conversation
-    relation deleter_conversation: conversation
-    relation deleter_workspace: workspace
 
-    permission read = owner_user + owner_workspace->view + owner_conversation->memory_read + owner_actor->memory_read + owner_actor_conversation->memory_read + workspace->manage_memories + reader_principal + reader_workspace_user->principal + reader_actor_conversation->memory_read + reader_conversation->memory_read + reader_workspace->view
+    permission read = owner_user + owner_workspace->view + owner_conversation->memory_read + owner_actor->memory_read + owner_actor_conversation->memory_read + workspace->manage_memories
     permission recall = read
-    permission edit = owner_user + owner_workspace->manage_memories + owner_conversation->memory_edit + owner_actor->memory_edit + owner_actor_conversation->memory_edit + workspace->manage_memories + editor_principal + editor_workspace_user->principal + editor_actor_conversation->memory_edit + editor_conversation->memory_edit + editor_workspace->manage_memories
-    permission grant = owner_user + owner_workspace->manage_memories + owner_conversation->memory_grant + owner_actor->memory_grant + owner_actor_conversation->memory_grant + workspace->manage_memories + granter_principal + granter_workspace_user->principal + granter_actor_conversation->memory_grant + granter_conversation->memory_grant + granter_workspace->manage_memories
-    permission retarget = owner_user + owner_workspace->manage_memories + owner_conversation->memory_retarget + owner_actor->memory_retarget + owner_actor_conversation->memory_retarget + workspace->manage_memories + retargeter_principal + retargeter_workspace_user->principal + retargeter_actor_conversation->memory_retarget + retargeter_conversation->memory_retarget + retargeter_workspace->manage_memories
-    permission delete = owner_user + owner_workspace->manage_memories + owner_conversation->memory_delete + owner_actor->memory_delete + owner_actor_conversation->memory_delete + workspace->manage_memories + deleter_principal + deleter_workspace_user->principal + deleter_actor_conversation->memory_delete + deleter_conversation->memory_delete + deleter_workspace->manage_memories
+    permission edit = owner_user + owner_workspace->manage_memories + owner_conversation->memory_edit + owner_actor->memory_edit + owner_actor_conversation->memory_edit + workspace->manage_memories
+    permission retarget = owner_user + owner_workspace->manage_memories + owner_conversation->memory_retarget + owner_actor->memory_retarget + owner_actor_conversation->memory_retarget + workspace->manage_memories
+    permission delete = owner_user + owner_workspace->manage_memories + owner_conversation->memory_delete + owner_actor->memory_delete + owner_actor_conversation->memory_delete + workspace->manage_memories
 }
 
 definition mcp_relay {
