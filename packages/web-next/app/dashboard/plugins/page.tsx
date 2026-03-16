@@ -7,21 +7,20 @@ import type {
   RelayLocalDesktopStatusView,
   RelayPairingSessionView,
 } from '@synapse/shared';
-import { useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import Image from 'next/image';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Copy,
   ChevronDown,
+  Copy,
   Link2,
   Monitor,
   MonitorUp,
   Plus,
   Radio,
-  RefreshCw,
   Search,
   Send,
   Settings,
-  Store,
   Wifi,
   WifiOff,
   XCircle,
@@ -35,19 +34,8 @@ import {
   AppCardHeader,
   AppCardTitle,
 } from '@/components/app-card';
-import { PluginIcon, getLocale, translate } from './plugin-ui';
-import { usePluginStore } from '@/stores/plugin-store';
-import { api } from '@/lib/api';
-import { buildRelayDesktopDeepLink, probeLocalRelayDesktop, sendPairingToLocalRelayDesktop } from '@/lib/relay-local';
-import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import {
   Dialog,
   DialogContent,
@@ -57,14 +45,21 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-} from '@/components/ui/field';
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { api } from '@/lib/api';
+import {
+  buildRelayDesktopDeepLink,
+  probeLocalRelayDesktop,
+  sendPairingToLocalRelayDesktop,
+} from '@/lib/relay-local';
+import { usePluginStore } from '@/stores/plugin-store';
+import { toast } from 'sonner';
+import { PluginIcon, getLocale, translate } from './plugin-ui';
 
 function formatDateTime(value?: string) {
   if (!value) return 'Never';
@@ -96,18 +91,40 @@ function relayTrustVariant(trustStatus: RelayDeviceSummaryView['trustStatus']) {
   }
 }
 
+function isOpenPairingStatus(status?: RelayPairingSessionView['status']) {
+  return status === 'pending' || status === 'confirmed';
+}
+
 type RelayDashboardPayload = Partial<RelayDashboardView> & {
   pairings?: RelayPairingSessionView[];
 };
 
-function deriveRelaySocketUrl(serverBaseUrl: string) {
-  const url = new URL(serverBaseUrl);
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  url.pathname = '/ws/relay';
-  url.search = '';
-  url.hash = '';
-  return url.toString();
-}
+type PluginInstallationEntry = {
+  id: string;
+  plugin_id?: string | null;
+};
+
+type PluginMarketplaceCategory = {
+  slug: string;
+  displayName?: string;
+  displayNameI18n?: Record<string, string>;
+  defaultLocale?: string;
+};
+
+type PluginMarketplaceEntry = {
+  id: string;
+  display_name?: string;
+  display_name_i18n?: Record<string, string>;
+  default_locale?: string;
+  summary_i18n?: Record<string, string>;
+  description_i18n?: Record<string, string>;
+  description?: string;
+  org_display_name?: string;
+  tags?: string[];
+  categories?: PluginMarketplaceCategory[];
+  icon_url?: string;
+  transport?: string;
+};
 
 function normalizeRelayDashboard(dashboard?: RelayDashboardPayload | null): RelayDashboardView {
   return {
@@ -138,15 +155,17 @@ function PairingQrCode({ value }: { value: string }) {
         dark: '#0f172a',
         light: '#ffffff',
       },
-    }).then((nextImageUrl: string) => {
-      if (!cancelled) {
-        setImageUrl(nextImageUrl);
-      }
-    }).catch(() => {
-      if (!cancelled) {
-        setImageUrl(null);
-      }
-    });
+    })
+      .then((nextImageUrl: string) => {
+        if (!cancelled) {
+          setImageUrl(nextImageUrl);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setImageUrl(null);
+        }
+      });
 
     return () => {
       cancelled = true;
@@ -156,9 +175,12 @@ function PairingQrCode({ value }: { value: string }) {
   return (
     <div className="flex min-h-60 items-center justify-center rounded-[28px] border border-border/70 bg-white p-4 shadow-sm">
       {imageUrl ? (
-        <img
+        <Image
           src={imageUrl}
           alt="Relay pairing QR code"
+          width={220}
+          height={220}
+          unoptimized
           className="size-[220px] rounded-[20px]"
         />
       ) : (
@@ -170,34 +192,66 @@ function PairingQrCode({ value }: { value: string }) {
 
 export default function PluginsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { workspaceId } = useWorkspace();
-  const { marketplace, installations, loadingMarketplace, loadMarketplace, loadInstallations } = usePluginStore();
+  const {
+    marketplace,
+    installations,
+    loadingMarketplace,
+    loadMarketplace,
+    loadInstallations,
+  } = usePluginStore();
+
   const [relayDashboard, setRelayDashboard] = useState<RelayDashboardView>(normalizeRelayDashboard());
   const [loadingRelays, setLoadingRelays] = useState(false);
   const [search, setSearch] = useState('');
-  const [createPairingOpen, setCreatePairingOpen] = useState(false);
-  const [pairingName, setPairingName] = useState('');
   const [creatingPairing, setCreatingPairing] = useState(false);
   const [activePairing, setActivePairing] = useState<RelayPairingSessionView | null>(null);
+  const [pairingOptionsOpen, setPairingOptionsOpen] = useState(false);
   const [localRelayDesktop, setLocalRelayDesktop] = useState<RelayLocalDesktopStatusView | null>(null);
   const [probingLocalRelayDesktop, setProbingLocalRelayDesktop] = useState(true);
   const [sendingToDesktop, setSendingToDesktop] = useState(false);
+  const [sentToDesktopPairingId, setSentToDesktopPairingId] = useState<string | null>(null);
   const locale = getLocale();
   const deferredSearch = useDeferredValue(search);
+  const activePairingId = activePairing?.id || null;
+  const typedMarketplace = marketplace as PluginMarketplaceEntry[];
+  const typedInstallations = installations as PluginInstallationEntry[];
 
-  async function loadRelayDashboard() {
-    if (!workspaceId) return;
-    setLoadingRelays(true);
+  const loadRelayDashboard = useCallback(async (showLoading = true): Promise<RelayDashboardView | null> => {
+    if (!workspaceId) return null;
+    if (showLoading) setLoadingRelays(true);
+
     try {
       const data = await api.getRelayDashboard(workspaceId);
-      setRelayDashboard(normalizeRelayDashboard(data));
+      const normalized = normalizeRelayDashboard(data);
+      setRelayDashboard(normalized);
+      return normalized;
     } catch (error) {
       console.error('Failed to load relays:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to load relays');
+      return null;
     } finally {
-      setLoadingRelays(false);
+      if (showLoading) setLoadingRelays(false);
     }
-  }
+  }, [workspaceId]);
+
+  const clearRelayPairingSearchParams = useCallback(() => {
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete('relayPairing');
+    next.delete('code');
+    const query = next.toString();
+    router.replace(query ? `/dashboard/plugins?${query}` : '/dashboard/plugins', {
+      scroll: false,
+    });
+  }, [router, searchParams]);
+
+  const dismissActivePairing = useCallback(() => {
+    setActivePairing(null);
+    setPairingOptionsOpen(false);
+    setSentToDesktopPairingId(null);
+    clearRelayPairingSearchParams();
+  }, [clearRelayPairingSearchParams]);
 
   useEffect(() => {
     void loadMarketplace();
@@ -208,29 +262,76 @@ export default function PluginsPage() {
 
     void loadInstallations(workspaceId);
     void loadRelayDashboard();
-  }, [loadInstallations, workspaceId]);
+  }, [loadInstallations, loadRelayDashboard, workspaceId]);
 
   useEffect(() => {
-    if (!workspaceId || !activePairing) return;
-    if (!['pending', 'confirmed'].includes(activePairing.status)) return;
+    if (!workspaceId) return;
+
+    const pairingId = searchParams.get('relayPairing');
+    if (!pairingId || pairingId === activePairingId) return;
+
+    let cancelled = false;
+
+    void api
+      .getRelayPairingSession(workspaceId, pairingId)
+      .then(({ pairing }) => {
+        if (cancelled) return;
+        setActivePairing(pairing);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error('Failed to load relay pairing from URL:', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activePairingId, searchParams, workspaceId]);
+
+  useEffect(() => {
+    setPairingOptionsOpen(false);
+    if (sentToDesktopPairingId && sentToDesktopPairingId !== activePairingId) {
+      setSentToDesktopPairingId(null);
+    }
+  }, [activePairingId, sentToDesktopPairingId]);
+
+  useEffect(() => {
+    if (!workspaceId || !activePairing || !isOpenPairingStatus(activePairing.status)) return;
 
     let cancelled = false;
     const interval = window.setInterval(() => {
-      void api.getRelayPairingSession(workspaceId, activePairing.id)
-        .then(({ pairing }) => {
+      void api
+        .getRelayPairingSession(workspaceId, activePairing.id)
+        .then(async ({ pairing }) => {
           if (cancelled) return;
           setActivePairing(pairing);
+
+          if (pairing.status === 'consumed') {
+            const dashboard = await loadRelayDashboard(false);
+            if (cancelled) return;
+
+            const pairedDevice = dashboard?.devices.find((device) => device.id === pairing.deviceId);
+            toast.success(
+              pairedDevice?.isConnected
+                ? 'Relay paired and connected'
+                : 'Relay paired. Waiting for the desktop app to come online.',
+            );
+
+            window.setTimeout(() => {
+              if (!cancelled) dismissActivePairing();
+            }, 1200);
+            return;
+          }
+
           setRelayDashboard((current) => {
             const normalizedCurrent = normalizeRelayDashboard(current);
             return {
               ...normalizedCurrent,
-              pendingPairings: normalizedCurrent.pendingPairings.map((item) => (item.id === pairing.id ? pairing : item)),
+              pendingPairings: normalizedCurrent.pendingPairings.map((item) =>
+                item.id === pairing.id ? pairing : item,
+              ),
             };
           });
-          if (pairing.status === 'consumed') {
-            toast.success('Relay device paired');
-            void loadRelayDashboard();
-          }
         })
         .catch((error) => {
           if (!cancelled) console.error('Failed to refresh relay pairing:', error);
@@ -241,7 +342,7 @@ export default function PluginsPage() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [activePairing, workspaceId]);
+  }, [activePairing, dismissActivePairing, loadRelayDashboard, workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -265,9 +366,9 @@ export default function PluginsPage() {
   }, []);
 
   const pluginInstallationsByPluginId = useMemo(() => {
-    const next = new Map<string, any[]>();
+    const next = new Map<string, PluginInstallationEntry[]>();
 
-    for (const installation of installations) {
+    for (const installation of typedInstallations) {
       const pluginId = installation.plugin_id;
       if (!pluginId) continue;
       const current = next.get(pluginId) || [];
@@ -276,97 +377,144 @@ export default function PluginsPage() {
     }
 
     return next;
-  }, [installations]);
+  }, [typedInstallations]);
 
   const filteredPlugins = useMemo(() => {
     const normalizedSearch = deferredSearch.trim().toLowerCase();
 
-    return marketplace.filter((plugin: any) => {
+    return typedMarketplace.filter((plugin) => {
       if (!normalizedSearch) return true;
       const title =
-        translate(plugin.display_name_i18n, locale, plugin.default_locale || 'en') || plugin.display_name || '';
+        translate(plugin.display_name_i18n, locale, plugin.default_locale || 'en') ||
+        plugin.display_name ||
+        '';
       const summary =
-        translate(plugin.summary_i18n || plugin.description_i18n, locale, plugin.default_locale || 'en') ||
+        translate(
+          plugin.summary_i18n || plugin.description_i18n,
+          locale,
+          plugin.default_locale || 'en',
+        ) ||
         plugin.description ||
         '';
-      const haystack = [
-        title,
-        summary,
-        plugin.org_display_name || '',
-        ...(plugin.tags || []),
-      ]
+      const haystack = [title, summary, plugin.org_display_name || '', ...(plugin.tags || [])]
         .join(' ')
         .toLowerCase();
 
       return haystack.includes(normalizedSearch);
     });
-  }, [deferredSearch, locale, marketplace]);
+  }, [deferredSearch, locale, typedMarketplace]);
 
   const filteredRelays = useMemo(() => {
     const normalizedSearch = deferredSearch.trim().toLowerCase();
     if (!normalizedSearch) return relayDashboard.devices;
+
     return relayDashboard.devices.filter((relay) =>
-      [
-        relay.displayName,
-        relay.clientKind,
-        relay.platform || '',
-        relay.publicKeyFingerprint,
-      ].join(' ').toLowerCase().includes(normalizedSearch),
+      [relay.displayName, relay.clientKind, relay.platform || '', relay.publicKeyFingerprint]
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedSearch),
     );
   }, [deferredSearch, relayDashboard.devices]);
 
   const filteredPairings = useMemo(() => {
     const normalizedSearch = deferredSearch.trim().toLowerCase();
     if (!normalizedSearch) return relayDashboard.pendingPairings;
+
     return relayDashboard.pendingPairings.filter((pairing) =>
-      [
-        pairing.requestedDisplayName || '',
-        pairing.pairingCode,
-        pairing.status,
-      ].join(' ').toLowerCase().includes(normalizedSearch),
+      [pairing.requestedDisplayName || '', pairing.pairingCode, pairing.status]
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedSearch),
     );
   }, [deferredSearch, relayDashboard.pendingPairings]);
 
   const configuredPlugins = useMemo(
-    () => filteredPlugins.filter((plugin: any) => (pluginInstallationsByPluginId.get(plugin.id) || []).length > 0),
+    () =>
+      filteredPlugins.filter(
+        (plugin) => (pluginInstallationsByPluginId.get(plugin.id) || []).length > 0,
+      ),
     [filteredPlugins, pluginInstallationsByPluginId],
   );
 
   const unconfiguredPlugins = useMemo(
-    () => filteredPlugins.filter((plugin: any) => (pluginInstallationsByPluginId.get(plugin.id) || []).length === 0),
+    () =>
+      filteredPlugins.filter(
+        (plugin) => (pluginInstallationsByPluginId.get(plugin.id) || []).length === 0,
+      ),
     [filteredPlugins, pluginInstallationsByPluginId],
   );
 
-  async function handleCreatePairing() {
-    if (!workspaceId) return;
+  const latestPendingPairing = relayDashboard.pendingPairings[0] || null;
+  const activePairingIsPending = isOpenPairingStatus(activePairing?.status);
+  const activePairingSentToDesktop = Boolean(
+    activePairing && sentToDesktopPairingId === activePairing.id,
+  );
+
+  const pairingHero = useMemo(() => {
+    if (!activePairing) {
+      return {
+        title: '',
+        description: '',
+      };
+    }
+
+    if (activePairing.status === 'consumed') {
+      return {
+        title: 'Relay paired',
+        description:
+          'This device is now trusted. If it is not online yet, keep the desktop app open until it connects.',
+      };
+    }
+
+    if (sendingToDesktop) {
+      return {
+        title: 'Sending pairing request',
+        description:
+          'The local desktop app is being asked to confirm this relay pairing.',
+      };
+    }
+
+    if (activePairingSentToDesktop) {
+      return {
+        title: 'Confirm in the desktop app',
+        description:
+          'Accept the pairing request in the desktop app to finish binding this relay.',
+      };
+    }
+
+    if (localRelayDesktop) {
+      return {
+        title: 'Desktop relay detected',
+        description:
+          'The fastest path is to send this pairing to the local desktop app on this computer.',
+      };
+    }
+
+    return {
+      title: 'Open the desktop relay app',
+      description:
+        'If the app is on this computer, open it now. Otherwise use the QR code or copy the pairing code.',
+    };
+  }, [activePairing, activePairingSentToDesktop, localRelayDesktop, sendingToDesktop]);
+
+  const loading = loadingMarketplace || loadingRelays;
+
+  async function createPairingSession(): Promise<RelayPairingSessionView | null> {
+    if (!workspaceId) return null;
+
     setCreatingPairing(true);
     try {
-      const result = await api.createRelayPairingSession(workspaceId, {
-        displayName: pairingName.trim() || undefined,
-      });
-      setCreatePairingOpen(false);
-      setPairingName('');
+      const result = await api.createRelayPairingSession(workspaceId, {});
       setActivePairing(result.pairing);
-      await loadRelayDashboard();
-      toast.success('Relay pairing session created');
+      await loadRelayDashboard(false);
+      toast.success('Relay pairing ready');
+      return result.pairing;
     } catch (error) {
       console.error('Failed to create relay pairing:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to create relay pairing');
+      return null;
     } finally {
       setCreatingPairing(false);
-    }
-  }
-
-  async function handleCancelPairing() {
-    if (!workspaceId || !activePairing) return;
-    try {
-      const result = await api.cancelRelayPairingSession(workspaceId, activePairing.id);
-      setActivePairing(result.pairing);
-      await loadRelayDashboard();
-      toast.success('Relay pairing session cancelled');
-    } catch (error) {
-      console.error('Failed to cancel relay pairing:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to cancel relay pairing');
     }
   }
 
@@ -377,32 +525,69 @@ export default function PluginsPage() {
     setProbingLocalRelayDesktop(false);
   }
 
-  async function handleSendPairingToDesktop() {
-    if (!activePairing) return;
+  async function handleSendPairingToDesktop(pairingOverride?: RelayPairingSessionView | null) {
+    const pairing = pairingOverride || activePairing;
+    if (!pairing) return;
 
     setSendingToDesktop(true);
     try {
       const response = await sendPairingToLocalRelayDesktop({
-        serverBaseUrl: activePairing.serverBaseUrl,
-        pairingCode: activePairing.pairingCode,
-        displayName: activePairing.requestedDisplayName,
+        serverBaseUrl: pairing.serverBaseUrl,
+        pairingCode: pairing.pairingCode,
+        displayName: pairing.requestedDisplayName,
       });
-      toast.success(response.message || 'Pairing request sent to the local desktop client');
+      setSentToDesktopPairingId(pairing.id);
+      toast.success(response.message || 'Pairing request sent to the desktop app');
       await handleRefreshLocalRelayDesktop();
     } catch (error) {
       console.error('Failed to send pairing to local desktop client:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to send pairing to local desktop client');
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Failed to send pairing to the desktop app',
+      );
     } finally {
       setSendingToDesktop(false);
     }
   }
 
-  function handleOpenDesktopApp() {
-    if (!activePairing) return;
-    window.location.href = buildRelayDesktopDeepLink(activePairing);
+  function handleOpenDesktopApp(pairingOverride?: RelayPairingSessionView | null) {
+    const pairing = pairingOverride || activePairing;
+    if (!pairing) return;
+    window.location.href = buildRelayDesktopDeepLink(pairing);
   }
 
-  const loading = loadingMarketplace || loadingRelays;
+  async function handleStartPairing() {
+    let pairing: RelayPairingSessionView | null = latestPendingPairing;
+    if (!pairing) {
+      pairing = await createPairingSession();
+    } else {
+      setActivePairing(pairing);
+    }
+
+    if (!pairing) return;
+
+    if (localRelayDesktop) {
+      await handleSendPairingToDesktop(pairing);
+      return;
+    }
+
+    handleOpenDesktopApp(pairing);
+  }
+
+  async function handleCancelPairing() {
+    if (!workspaceId || !activePairing) return;
+
+    try {
+      await api.cancelRelayPairingSession(workspaceId, activePairing.id);
+      await loadRelayDashboard(false);
+      toast.success('Relay pairing cancelled');
+      dismissActivePairing();
+    } catch (error) {
+      console.error('Failed to cancel relay pairing:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to cancel relay pairing');
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6 pt-3 sm:pt-4">
@@ -417,19 +602,27 @@ export default function PluginsPage() {
           />
         </div>
 
-        <Button type="button" onClick={() => setCreatePairingOpen(true)}>
+        <Button type="button" onClick={() => void handleStartPairing()} disabled={creatingPairing}>
           <Plus data-icon="inline-start" />
-          Bind Relay
+          {creatingPairing
+            ? 'Preparing...'
+            : latestPendingPairing
+              ? 'Resume Relay Setup'
+              : 'Connect Relay'}
         </Button>
       </div>
 
       {loading ? (
         <div className="py-16 text-center text-sm text-muted-foreground">Loading plugins...</div>
-      ) : filteredPlugins.length === 0 && filteredRelays.length === 0 && filteredPairings.length === 0 ? (
+      ) : filteredPlugins.length === 0 &&
+        filteredRelays.length === 0 &&
+        filteredPairings.length === 0 ? (
         <div className="rounded-[28px] border border-dashed border-border px-6 py-14 text-center">
-          <div className="text-base font-medium text-foreground">No plugins or relay devices found</div>
+          <div className="text-base font-medium text-foreground">
+            No plugins or relay devices found
+          </div>
           <div className="mt-2 text-sm text-muted-foreground">
-            Try a different search or create a relay pairing for a local MCP client.
+            Try a different search or connect a desktop relay.
           </div>
         </div>
       ) : (
@@ -466,7 +659,7 @@ export default function PluginsPage() {
 
               <AppCardContent className="flex flex-col gap-3">
                 <div className="text-xs leading-5 text-muted-foreground">
-                  Expires {formatDateTime(pairing.expiresAt)}. Open to copy the code or verification link.
+                  Expires {formatDateTime(pairing.expiresAt)}. Open to continue the setup.
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="secondary">One-time code</Badge>
@@ -491,7 +684,9 @@ export default function PluginsPage() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <AppCardTitle className="truncate text-sm">{relay.displayName}</AppCardTitle>
+                        <AppCardTitle className="truncate text-sm">
+                          {relay.displayName}
+                        </AppCardTitle>
                         <Badge variant="outline">Relay</Badge>
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -528,7 +723,9 @@ export default function PluginsPage() {
               <AppCardContent className="flex flex-col gap-3">
                 <div className="text-xs leading-5 text-muted-foreground">
                   {relay.clientKind}
-                  {relay.platform ? ` on ${relay.platform}` : ''}. {relay.exposureCount} MCP exposure{relay.exposureCount === 1 ? '' : 's'} and {relay.toolCount} tool{relay.toolCount === 1 ? '' : 's'}.
+                  {relay.platform ? ` on ${relay.platform}` : ''}. {relay.exposureCount} MCP exposure
+                  {relay.exposureCount === 1 ? '' : 's'} and {relay.toolCount} tool
+                  {relay.toolCount === 1 ? '' : 's'}.
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant={relayTrustVariant(relay.trustStatus)}>{relay.trustStatus}</Badge>
@@ -541,19 +738,25 @@ export default function PluginsPage() {
             </AppCard>
           ))}
 
-          {[...configuredPlugins, ...unconfiguredPlugins].map((plugin: any) => {
+          {[...configuredPlugins, ...unconfiguredPlugins].map((plugin) => {
             const title =
-              translate(plugin.display_name_i18n, locale, plugin.default_locale || 'en') || plugin.display_name;
+              translate(plugin.display_name_i18n, locale, plugin.default_locale || 'en') ||
+              plugin.display_name ||
+              'Untitled plugin';
             const summary =
-              translate(plugin.summary_i18n || plugin.description_i18n, locale, plugin.default_locale || 'en') ||
-              plugin.description;
+              translate(
+                plugin.summary_i18n || plugin.description_i18n,
+                locale,
+                plugin.default_locale || 'en',
+              ) || plugin.description || '';
             const pluginInstallations = pluginInstallationsByPluginId.get(plugin.id) || [];
             const primaryInstallation = pluginInstallations[0];
-            const configHref = pluginInstallations.length > 1
-              ? `/dashboard/plugins/${plugin.id}`
-              : primaryInstallation
-                ? `/dashboard/plugins/installations/${primaryInstallation.id}`
-                : `/dashboard/plugins/${plugin.id}`;
+            const configHref =
+              pluginInstallations.length > 1
+                ? `/dashboard/plugins/${plugin.id}`
+                : primaryInstallation
+                  ? `/dashboard/plugins/installations/${primaryInstallation.id}`
+                  : `/dashboard/plugins/${plugin.id}`;
 
             return (
               <AppCard
@@ -596,10 +799,10 @@ export default function PluginsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-56">
-                          <DropdownMenuItem
-                            onSelect={() => router.push(configHref)}
-                          >
-                            {pluginInstallations.length > 1 ? 'Open configurations' : 'Open configuration'}
+                          <DropdownMenuItem onSelect={() => router.push(configHref)}>
+                            {pluginInstallations.length > 1
+                              ? 'Open configurations'
+                              : 'Open configuration'}
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onSelect={() => router.push(`/dashboard/plugins/${plugin.id}/install`)}
@@ -625,15 +828,22 @@ export default function PluginsPage() {
 
                 <AppCardContent className="flex flex-col gap-3">
                   <div className="flex flex-wrap gap-2">
-                    {plugin.org_display_name ? <Badge variant="secondary">{plugin.org_display_name}</Badge> : null}
-                    {(plugin.categories || []).slice(0, 2).map((category: any) => (
+                    {plugin.org_display_name ? (
+                      <Badge variant="secondary">{plugin.org_display_name}</Badge>
+                    ) : null}
+                    {(plugin.categories || []).slice(0, 2).map((category) => (
                       <Badge key={category.slug} variant="secondary">
-                        {translate(category.displayNameI18n, locale, category.defaultLocale || 'en') || category.displayName}
+                        {translate(
+                          category.displayNameI18n,
+                          locale,
+                          category.defaultLocale || 'en',
+                        ) || category.displayName}
                       </Badge>
                     ))}
                     {pluginInstallations.length > 0 ? (
                       <Badge variant="outline">
-                        {pluginInstallations.length} installation{pluginInstallations.length > 1 ? 's' : ''}
+                        {pluginInstallations.length} installation
+                        {pluginInstallations.length > 1 ? 's' : ''}
                       </Badge>
                     ) : null}
                   </div>
@@ -645,7 +855,7 @@ export default function PluginsPage() {
           <AppCard
             variant="interactive-dashed"
             size="sm"
-            onClick={() => setCreatePairingOpen(true)}
+            onClick={() => void handleStartPairing()}
           >
             <AppCardHeader className="gap-3">
               <div className="flex items-start gap-3">
@@ -653,9 +863,9 @@ export default function PluginsPage() {
                   <Plus className="size-6 text-foreground" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <AppCardTitle className="truncate text-sm">Bind Relay</AppCardTitle>
+                  <AppCardTitle className="truncate text-sm">Connect Relay</AppCardTitle>
                   <div className="mt-1 text-xs leading-5 text-muted-foreground">
-                    Create a one-time pairing code for a desktop relay client.
+                    Start the fastest relay setup path for a desktop app.
                   </div>
                 </div>
               </div>
@@ -663,266 +873,250 @@ export default function PluginsPage() {
 
             <AppCardContent className="flex flex-col gap-3">
               <div className="flex flex-wrap gap-2">
-                <Badge variant="secondary">Pairing</Badge>
-                <Badge variant="outline">No long-lived token</Badge>
+                <Badge variant="secondary">Smart pairing</Badge>
+                <Badge variant="outline">Falls back to QR or code</Badge>
               </div>
             </AppCardContent>
           </AppCard>
         </div>
       )}
 
-      <Dialog open={createPairingOpen} onOpenChange={setCreatePairingOpen}>
-        <DialogContent>
+      <Dialog open={activePairing !== null} onOpenChange={(open) => !open && dismissActivePairing()}>
+        <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Create Relay Pairing</DialogTitle>
+            <DialogTitle>Connect Relay</DialogTitle>
             <DialogDescription>
-              Generate a one-time code for a relay device. The client will claim the code and bind a device key instead of storing a long-lived token.
-            </DialogDescription>
-          </DialogHeader>
-
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="relay-pairing-name">Display name</FieldLabel>
-              <FieldContent>
-                <Input
-                  id="relay-pairing-name"
-                  value={pairingName}
-                  onChange={(event) => setPairingName(event.target.value)}
-                  placeholder="My desktop relay"
-                />
-                <FieldDescription>Optional. The client can still override this name when it claims the pairing.</FieldDescription>
-              </FieldContent>
-            </Field>
-          </FieldGroup>
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setCreatePairingOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="button" onClick={() => void handleCreatePairing()} disabled={creatingPairing}>
-              {creatingPairing ? 'Creating...' : 'Create Pairing'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={activePairing !== null} onOpenChange={(open) => !open && setActivePairing(null)}>
-        <DialogContent className="sm:max-w-4xl">
-          <DialogHeader>
-            <DialogTitle>Relay Pairing</DialogTitle>
-            <DialogDescription>
-              Use this pairing code in the relay client. The client will exchange it for a trusted device binding.
+              The web app will prefer the local desktop route first, then fall back to QR and
+              manual pairing only when needed.
             </DialogDescription>
           </DialogHeader>
 
           {activePairing ? (
             <div className="flex flex-col gap-4">
-              <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-sm font-medium text-foreground">
-                    {activePairing.requestedDisplayName || 'Unnamed relay pairing'}
+              <div className="rounded-[28px] border border-border/70 bg-muted/20 px-5 py-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-lg font-semibold text-foreground">{pairingHero.title}</div>
+                    <div className="mt-2 text-sm leading-6 text-muted-foreground">
+                      {pairingHero.description}
+                    </div>
                   </div>
-                  <Badge variant={pairingStatusVariant(activePairing.status)}>{activePairing.status}</Badge>
+                  <Badge variant={pairingStatusVariant(activePairing.status)}>
+                    {activePairing.status}
+                  </Badge>
                 </div>
-                <div className="mt-3 text-xs text-muted-foreground">Pairing code</div>
-                <div className="mt-1 break-all font-mono text-lg text-foreground">{activePairing.pairingCode}</div>
-                <div className="mt-3 text-xs text-muted-foreground">Verification URL</div>
-                <div className="mt-1 break-all text-sm text-foreground">{activePairing.verificationUriComplete || activePairing.verificationUri}</div>
-                <div className="mt-3 text-xs text-muted-foreground">Relay websocket endpoint</div>
-                <div className="mt-1 break-all text-sm text-foreground">{deriveRelaySocketUrl(activePairing.serverBaseUrl)}</div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Badge variant="outline">
+                    Expires {formatDateTime(activePairing.expiresAt)}
+                  </Badge>
+                  <Badge variant={localRelayDesktop ? 'secondary' : 'outline'}>
+                    {localRelayDesktop
+                      ? 'Desktop app detected'
+                      : probingLocalRelayDesktop
+                        ? 'Checking this computer'
+                        : 'No local app detected'}
+                  </Badge>
+                  {activePairingSentToDesktop ? (
+                    <Badge variant="secondary">Sent to desktop</Badge>
+                  ) : null}
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-2">
+                  {activePairing.status === 'consumed' ? (
+                    activePairing.deviceId ? (
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          const deviceId = activePairing.deviceId;
+                          dismissActivePairing();
+                          router.push(`/dashboard/plugins/relays/${deviceId}`);
+                        }}
+                      >
+                        <Settings data-icon="inline-start" />
+                        View Relay
+                      </Button>
+                    ) : null
+                  ) : localRelayDesktop ? (
+                    <>
+                      <Button
+                        type="button"
+                        onClick={() => void handleSendPairingToDesktop()}
+                        disabled={sendingToDesktop}
+                      >
+                        <Send data-icon="inline-start" />
+                        {sendingToDesktop
+                          ? 'Sending...'
+                          : activePairingSentToDesktop
+                            ? 'Waiting For Confirmation'
+                            : 'Send To Desktop'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => setPairingOptionsOpen(true)}
+                      >
+                        <Link2 data-icon="inline-start" />
+                        Other Ways
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button type="button" onClick={() => handleOpenDesktopApp()}>
+                        <MonitorUp data-icon="inline-start" />
+                        Open Desktop App
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => setPairingOptionsOpen(true)}
+                      >
+                        <Link2 data-icon="inline-start" />
+                        Other Ways
+                      </Button>
+                    </>
+                  )}
+                </div>
               </div>
 
-              <div className="rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-sm font-medium text-foreground">Local desktop client</div>
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant={localRelayDesktop ? 'secondary' : 'outline'}>
-                      {localRelayDesktop ? 'detected' : probingLocalRelayDesktop ? 'probing' : 'not detected'}
-                    </Badge>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void handleRefreshLocalRelayDesktop()}
-                      disabled={probingLocalRelayDesktop}
-                    >
-                      <RefreshCw data-icon="inline-start" />
-                      Refresh
-                    </Button>
-                  </div>
+              <div className="rounded-2xl border border-border/70 bg-background/80 px-4 py-4">
+                <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Local Desktop App
+                </div>
+
+                <div className="mt-3 text-sm font-medium text-foreground">
+                  {localRelayDesktop
+                    ? localRelayDesktop.displayName || 'Desktop relay detected'
+                    : probingLocalRelayDesktop
+                      ? 'Looking for a local relay app'
+                      : 'No local relay app detected'}
+                </div>
+                <div className="mt-2 text-sm leading-6 text-muted-foreground">
+                  {localRelayDesktop
+                    ? `Version ${localRelayDesktop.version}. Relay state: ${localRelayDesktop.relay || 'unknown'}.`
+                    : 'The browser checks 127.0.0.1:21519 for the local desktop relay bridge.'}
                 </div>
 
                 {localRelayDesktop ? (
-                  <div className="mt-3 flex flex-col gap-3 text-sm text-muted-foreground">
-                    <div>
-                      {localRelayDesktop.displayName || 'Unnamed desktop relay'} · version {localRelayDesktop.version}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Badge variant={localRelayDesktop.paired ? 'secondary' : 'outline'}>
-                        {localRelayDesktop.paired ? 'paired' : 'unpaired'}
-                      </Badge>
-                      <Badge variant="outline">relay {localRelayDesktop.relay || 'unknown'}</Badge>
-                      <Badge variant={localRelayDesktop.serverIdentityPinned ? 'secondary' : 'outline'}>
-                        {localRelayDesktop.serverIdentityPinned ? 'server pinned' : 'server pin missing'}
-                      </Badge>
-                    </div>
-                    {localRelayDesktop.serverBaseUrl ? (
-                      <div className="break-all text-xs">
-                        Current server: {localRelayDesktop.serverBaseUrl}
-                      </div>
-                    ) : null}
-                    {localRelayDesktop.serverTlsPublicKeyPin ? (
-                      <div className="break-all font-mono text-[11px] text-muted-foreground">
-                        TLS pin: {localRelayDesktop.serverTlsPublicKeyPin}
-                      </div>
-                    ) : null}
-                    {localRelayDesktop.authFailureMessage ? (
-                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                        Relay auth failed{localRelayDesktop.authFailurePermanent ? ' permanently' : ''}: {localRelayDesktop.authFailureMessage}
-                      </div>
-                    ) : null}
-                    {localRelayDesktop.serverBaseUrl && localRelayDesktop.serverBaseUrl !== activePairing.serverBaseUrl ? (
-                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                        This client is currently configured for a different Synapse server. Sending the pairing request will still require user confirmation on the desktop app.
-                      </div>
-                    ) : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Badge variant={localRelayDesktop.paired ? 'secondary' : 'outline'}>
+                      {localRelayDesktop.paired ? 'paired' : 'unpaired'}
+                    </Badge>
+                    <Badge variant={localRelayDesktop.serverIdentityPinned ? 'secondary' : 'outline'}>
+                      {localRelayDesktop.serverIdentityPinned
+                        ? 'server pinned'
+                        : 'server pin missing'}
+                    </Badge>
                   </div>
-                ) : (
-                  <div className="mt-3 text-sm text-muted-foreground">
-                    No desktop client responded on <code className="rounded bg-muted px-1 py-0.5 text-xs">127.0.0.1:21519</code>. You can still copy the code, use the verification link, or launch the desktop app via deep link.
+                ) : null}
+
+                {localRelayDesktop?.serverBaseUrl &&
+                localRelayDesktop.serverBaseUrl !== activePairing.serverBaseUrl ? (
+                  <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
+                    This desktop app is currently pointed at a different Synapse server. The app
+                    can still confirm this pairing, but the user will be asked to review the
+                    server switch.
                   </div>
-                )}
+                ) : null}
+
+                {localRelayDesktop?.authFailureMessage ? (
+                  <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
+                    Relay auth failed
+                    {localRelayDesktop.authFailurePermanent ? ' permanently' : ''}:{' '}
+                    {localRelayDesktop.authFailureMessage}
+                  </div>
+                ) : null}
               </div>
 
-              <Tabs defaultValue={localRelayDesktop ? 'desktop' : 'scan'}>
-                <TabsList variant="line">
-                  <TabsTrigger value="desktop">
-                    <MonitorUp data-icon="inline-start" />
-                    This Computer
-                  </TabsTrigger>
-                  <TabsTrigger value="scan">
-                    <Link2 data-icon="inline-start" />
-                    Scan
-                  </TabsTrigger>
-                  <TabsTrigger value="manual">
-                    <Copy data-icon="inline-start" />
-                    Manual
-                  </TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="desktop">
-                  <div className="grid gap-4 rounded-2xl border border-border/70 bg-muted/10 p-4 lg:grid-cols-[1.25fr_0.75fr]">
-                    <div className="flex flex-col gap-3">
-                      <div className="text-sm font-medium text-foreground">Bind on this machine</div>
-                      <div className="text-sm text-muted-foreground">
-                        Best path when the browser and the desktop relay client are on the same computer.
-                      </div>
-                      <ol className="flex list-decimal flex-col gap-2 ps-5 text-sm text-muted-foreground">
-                        <li>If a desktop client is detected, use <span className="font-medium text-foreground">Send To Desktop</span>.</li>
-                        <li>If the app is installed but not detected, use <span className="font-medium text-foreground">Open Desktop App</span>.</li>
-                        <li>The desktop app will still ask the user to confirm the pairing.</li>
-                      </ol>
-                    </div>
-                    <div className="rounded-2xl border border-border/60 bg-background/80 p-4">
-                      <div className="text-xs uppercase tracking-wide text-muted-foreground">Local status</div>
-                      <div className="mt-2 text-sm font-medium text-foreground">
-                        {localRelayDesktop ? (localRelayDesktop.displayName || 'Desktop relay detected') : 'No desktop relay detected'}
-                      </div>
-                      <div className="mt-2 text-sm text-muted-foreground">
-                        {localRelayDesktop
-                          ? `Relay state: ${localRelayDesktop.relay || 'unknown'}`
-                          : 'Start the desktop client to expose localhost pairing.'}
-                      </div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => handleOpenDesktopApp()}
-                        >
-                          <MonitorUp data-icon="inline-start" />
-                          Open Desktop App
-                        </Button>
-                        <Button
-                          type="button"
-                          onClick={() => void handleSendPairingToDesktop()}
-                          disabled={!localRelayDesktop || sendingToDesktop}
-                        >
-                          <Send data-icon="inline-start" />
-                          {sendingToDesktop ? 'Sending...' : 'Send To Desktop'}
-                        </Button>
-                      </div>
+              <div className="rounded-2xl border border-border/70 bg-muted/10 px-4 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium text-foreground">Other Ways</div>
+                    <div className="mt-1 text-sm text-muted-foreground">
+                      QR, link, or code for another device.
                     </div>
                   </div>
-                </TabsContent>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setPairingOptionsOpen((current) => !current)}
+                  >
+                    {pairingOptionsOpen ? 'Hide' : 'Show'}
+                    <ChevronDown
+                      className={`size-4 transition-transform ${
+                        pairingOptionsOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </Button>
+                </div>
 
-                <TabsContent value="scan">
-                  <div className="grid gap-4 rounded-2xl border border-border/70 bg-muted/10 p-4 lg:grid-cols-[0.8fr_1.2fr]">
-                    <PairingQrCode value={activePairing.verificationUriComplete || activePairing.verificationUri} />
+                {pairingOptionsOpen ? (
+                  <div className="mt-4 grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
+                    <PairingQrCode
+                      value={
+                        activePairing.verificationUriComplete || activePairing.verificationUri
+                      }
+                    />
                     <div className="flex flex-col gap-3">
-                      <div className="text-sm font-medium text-foreground">Scan from another device</div>
-                      <div className="text-sm text-muted-foreground">
-                        Use this when the user is browsing the Web console on one device and pairing the relay client on another.
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant="outline">Another device</Badge>
+                        <Badge variant="outline">Manual code</Badge>
                       </div>
-                      <ol className="flex list-decimal flex-col gap-2 ps-5 text-sm text-muted-foreground">
-                        <li>Open the relay verification page by scanning the QR code.</li>
-                        <li>The QR includes the pairing code, so the user does not need to type it manually.</li>
-                        <li>After confirmation, the desktop client claims the pairing and stores only its local device key.</li>
-                      </ol>
+                      <div className="rounded-2xl border border-border/60 bg-background/80 px-4 py-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                            Code
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void copyText(activePairing.pairingCode, 'Pairing code')}
+                          >
+                            <Copy data-icon="inline-start" />
+                            Copy
+                          </Button>
+                        </div>
+                        <div className="mt-3 break-all font-mono text-3xl tracking-[0.08em] text-foreground">
+                          {activePairing.pairingCode}
+                        </div>
+                      </div>
                       <div className="rounded-2xl border border-border/60 bg-background/80 px-4 py-3 text-sm text-muted-foreground">
-                        <div className="text-xs uppercase tracking-wide">Encoded URL</div>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-xs uppercase tracking-wide">Link</div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              void copyText(
+                                activePairing.verificationUriComplete || activePairing.verificationUri,
+                                'Verification link',
+                              )
+                            }
+                          >
+                            <Link2 data-icon="inline-start" />
+                            Copy
+                          </Button>
+                        </div>
                         <div className="mt-2 break-all text-foreground">
                           {activePairing.verificationUriComplete || activePairing.verificationUri}
                         </div>
                       </div>
-                    </div>
-                  </div>
-                </TabsContent>
-
-                <TabsContent value="manual">
-                  <div className="grid gap-4 rounded-2xl border border-border/70 bg-muted/10 p-4 lg:grid-cols-[1fr_1fr]">
-                    <div className="rounded-2xl border border-border/60 bg-background/80 px-4 py-4">
-                      <div className="text-xs uppercase tracking-wide text-muted-foreground">Pairing code</div>
-                      <div className="mt-2 break-all font-mono text-2xl text-foreground">{activePairing.pairingCode}</div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <Button type="button" variant="outline" onClick={() => void copyText(activePairing.pairingCode, 'Pairing code')}>
-                          <Copy data-icon="inline-start" />
-                          Copy Code
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => void copyText(activePairing.verificationUriComplete || activePairing.verificationUri, 'Verification link')}
-                        >
-                          <Link2 data-icon="inline-start" />
-                          Copy Link
-                        </Button>
+                      <div className="text-xs text-muted-foreground">
+                        Manual: server address + code.
                       </div>
                     </div>
-                    <div className="flex flex-col gap-3">
-                      <div className="text-sm font-medium text-foreground">Manual binding fallback</div>
-                      <div className="text-sm text-muted-foreground">
-                        Use this when auto-detection is unavailable or the relay client is running on a separate machine without QR scanning.
-                      </div>
-                      <ol className="flex list-decimal flex-col gap-2 ps-5 text-sm text-muted-foreground">
-                        <li>Enter the server address in the relay client.</li>
-                        <li>Paste or type the pairing code.</li>
-                        <li>Approve the pairing on the desktop client if prompted.</li>
-                      </ol>
-                    </div>
                   </div>
-                </TabsContent>
-              </Tabs>
-
-              <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
-                <Badge variant="outline">Expires {formatDateTime(activePairing.expiresAt)}</Badge>
-                {activePairing.consumedAt ? <Badge variant="secondary">Consumed {formatDateTime(activePairing.consumedAt)}</Badge> : null}
+                ) : null}
               </div>
             </div>
           ) : null}
 
           <DialogFooter className="justify-between gap-2">
             <div className="flex flex-wrap gap-2">
-              {activePairing && ['pending', 'confirmed'].includes(activePairing.status) ? (
+              {activePairing && activePairingIsPending ? (
                 <Button type="button" variant="outline" onClick={() => void handleCancelPairing()}>
                   <XCircle data-icon="inline-start" />
                   Cancel Pairing
@@ -930,40 +1124,13 @@ export default function PluginsPage() {
               ) : null}
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" onClick={() => setActivePairing(null)}>
-                Close
+              <Button type="button" variant="outline" onClick={() => dismissActivePairing()}>
+                {activePairing?.status === 'consumed' ? 'Close' : 'Done'}
               </Button>
-              {activePairing ? (
-                <>
-                  {['pending', 'confirmed'].includes(activePairing.status) ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => void handleSendPairingToDesktop()}
-                      disabled={!localRelayDesktop || sendingToDesktop}
-                    >
-                      <Send data-icon="inline-start" />
-                      {sendingToDesktop ? 'Sending...' : 'Send To Desktop'}
-                    </Button>
-                  ) : null}
-                  <Button type="button" variant="outline" onClick={() => void copyText(activePairing.pairingCode, 'Pairing code')}>
-                    <Copy data-icon="inline-start" />
-                    Copy Code
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => void copyText(activePairing.verificationUriComplete || activePairing.verificationUri, 'Verification link')}
-                  >
-                    <Link2 data-icon="inline-start" />
-                    Copy Link
-                  </Button>
-                </>
-              ) : null}
             </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
     </div>
   );
 }
