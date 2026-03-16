@@ -189,10 +189,10 @@ export function buildActorPrompt(
     parts.push(
       `# Message Format\n\n` +
       `Messages in the group chat use this format:\n` +
-      `- \`[SenderName → RecipientName]: message\` — a directed message\n` +
+      `- \`[SenderName → RecipientName]: message\` — a public group message addressed to a specific recipient\n` +
       `- \`[System]: event description\` — a system event (member joined/left, profile updated)\n\n` +
       `# Communication\n\n` +
-      `All communication uses the \`send_to\` tool. There is no broadcast. Every visible reply must target a specific recipient.\n\n` +
+      `All visible communication uses the \`send_to\` tool. Group messages are public to all members. Recipient labels indicate who you are addressing, not private visibility. Every visible reply must target a specific recipient.\n\n` +
       `## send_to\n` +
       `Send a message to one or more members by name.\n` +
       `Parameters:\n` +
@@ -205,7 +205,7 @@ export function buildActorPrompt(
       `- \`create_memory\`: Save a durable established fact for future reference\n` +
       `${availableSkills && availableSkills.length > 0 ? '- `read_skill`: Load an installed skill package on demand when a listed skill clearly applies\n' : ''}\n` +
       `## Workflow\n` +
-      `1. Read the message directed at you\n` +
+      `1. Read the current public group context and identify whether someone is asking you to act\n` +
       `2. Do the work using your tools and profile\n` +
       `3. Use \`send_to\` to reply to whoever sent you the message (user or actor)\n` +
       `4. If you need help from another actor, use \`send_to\` to ask them\n` +
@@ -214,7 +214,9 @@ export function buildActorPrompt(
       `- **You MUST use \`send_to\` to reply.** Plain text output is internal reasoning only.\n` +
       `- Your internal tool calls (MCP tools, memory_search, create_memory, and so on) are not visible to the group.\n` +
       `- Only \`send_to\` produces visible messages.\n` +
-      `- You can only see messages sent directly to you. Other actors' conversations are private.\n` +
+      `- All visible group messages are public to the whole group.\n` +
+      `- A \`send_to\` recipient indicates who should read or act on the message first; it does not make the message private.\n` +
+      `- If a public message is not addressed to you, treat it as shared context unless you are explicitly asked to respond or need to step in to unblock the work.\n` +
       `- Never rely on outdated roster assumptions. The system may insert profile-version events when another actor changes.`,
     );
   } else {
