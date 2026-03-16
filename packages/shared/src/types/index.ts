@@ -1,4 +1,4 @@
-export * from './relay.js';
+export * from "./relay.js";
 
 // ============ Common ============
 export type UUID = string;
@@ -21,9 +21,15 @@ export interface User {
   updatedAt: Timestamp;
 }
 
-export type AuthClientType = 'web' | 'android' | 'windows' | 'ios' | 'cli' | 'api';
+export type AuthClientType =
+  | "web"
+  | "android"
+  | "windows"
+  | "ios"
+  | "cli"
+  | "api";
 
-export type AuthTransport = 'cookie' | 'token';
+export type AuthTransport = "cookie" | "token";
 
 export interface AuthSessionSummary {
   id: UUID;
@@ -45,7 +51,7 @@ export interface AuthResponse {
 }
 
 // ============ Workspace ============
-export type TrustLevel = 'owner' | 'admin' | 'member' | 'guest';
+export type TrustLevel = "owner" | "admin" | "member" | "guest";
 
 export interface Workspace {
   id: UUID;
@@ -66,7 +72,7 @@ export interface WorkspaceMember {
 }
 
 // ============ Workspace Invites ============
-export type InviteTrustLevel = 'admin' | 'member' | 'guest';
+export type InviteTrustLevel = "admin" | "member" | "guest";
 
 export interface WorkspaceInvite {
   id: UUID;
@@ -85,29 +91,40 @@ export interface WorkspaceInvite {
 }
 
 // ============ Actor (Digital Employee) ============
-export type ActorRole = 'secretary' | 'manager' | 'specialist' | 'reviewer' | 'archivist' | 'receptionist' | 'assistant';
+export type ActorRole =
+  | "secretary"
+  | "manager"
+  | "specialist"
+  | "reviewer"
+  | "archivist"
+  | "receptionist"
+  | "assistant";
 
-export type ActorDocVisibility = 'always' | 'solo_only' | 'group_only' | 'internal_only';
+export type ActorDocVisibility =
+  | "always"
+  | "solo_only"
+  | "group_only"
+  | "internal_only";
 
 export type CoreActorDocKey =
-  | 'identity_card'
-  | 'public_persona'
-  | 'soul'
-  | 'self_narrative'
-  | 'origin_story'
-  | 'relationship_with_user'
-  | 'relationship_with_team'
-  | 'representation_guidelines'
-  | 'social_protocol'
-  | 'role_charter'
-  | 'mission'
-  | 'work_doctrine'
-  | 'limitations_and_escalation'
-  | 'quirks_and_signatures'
-  | 'routines'
-  | 'conversation_examples';
+  | "identity_card"
+  | "public_persona"
+  | "soul"
+  | "self_narrative"
+  | "origin_story"
+  | "relationship_with_user"
+  | "relationship_with_team"
+  | "representation_guidelines"
+  | "social_protocol"
+  | "role_charter"
+  | "mission"
+  | "work_doctrine"
+  | "limitations_and_escalation"
+  | "quirks_and_signatures"
+  | "routines"
+  | "conversation_examples";
 
-export type ActorDocKey = CoreActorDocKey | 'custom';
+export type ActorDocKey = CoreActorDocKey | "custom";
 
 export interface ActorDoc {
   id: UUID;
@@ -118,7 +135,7 @@ export interface ActorDoc {
   priority: number;
 }
 
-export type ActorDocInput = Omit<ActorDoc, 'id' | 'content'> & {
+export type ActorDocInput = Omit<ActorDoc, "id" | "content"> & {
   id?: UUID;
   content: CanonicalContentBlockInput[];
 };
@@ -136,20 +153,20 @@ export interface ActorDefinition {
 }
 
 export type ActorVersionChangedField =
-  | 'name'
-  | 'role'
-  | 'title'
-  | 'avatarFileId'
-  | 'parentId'
-  | 'canRepresentUser'
-  | 'capabilities'
-  | 'config';
+  | "name"
+  | "role"
+  | "title"
+  | "avatarFileId"
+  | "parentId"
+  | "canRepresentUser"
+  | "capabilities"
+  | "config";
 
 export interface ActorVersionDocChange {
   docId: UUID;
   key: ActorDocKey;
   title: string;
-  changeType: 'added' | 'updated' | 'removed';
+  changeType: "added" | "updated" | "removed";
   visibility: ActorDocVisibility;
   priority: number;
   before?: ActorDoc;
@@ -197,21 +214,26 @@ export interface ActorCollaboration {
 
 // ============ WorkItem ============
 export type WorkItemStatus =
-  | 'created'
-  | 'assigned'
-  | 'accepted'
-  | 'in_progress'
-  | 'review'
-  | 'completed'
-  | 'escalated'
-  | 'blocked'
-  | 'rework'
-  | 'cancelled'
-  | 'failed';
+  | "created"
+  | "assigned"
+  | "accepted"
+  | "in_progress"
+  | "review"
+  | "completed"
+  | "escalated"
+  | "blocked"
+  | "rework"
+  | "cancelled"
+  | "failed";
 
-export type WorkItemPriority = 'low' | 'medium' | 'high' | 'urgent';
+export type WorkItemPriority = "low" | "medium" | "high" | "urgent";
 
-export type ParticipantRole = 'owner' | 'accountable' | 'executor' | 'reviewer' | 'watcher';
+export type ParticipantRole =
+  | "owner"
+  | "accountable"
+  | "executor"
+  | "reviewer"
+  | "watcher";
 
 export interface WorkItem {
   id: UUID;
@@ -224,7 +246,12 @@ export interface WorkItem {
   createdBy: UUID; // Actor or user who created it
   assignedTo?: UUID; // Current owner actor
   accountableId?: UUID; // Ultimate accountability
-  sourceType: 'user_message' | 'delegation' | 'standing_order' | 'escalation' | 'collaboration';
+  sourceType:
+    | "user_message"
+    | "delegation"
+    | "standing_order"
+    | "escalation"
+    | "collaboration";
   sourceId?: UUID;
   dueAt?: Timestamp;
   startedAt?: Timestamp;
@@ -245,36 +272,36 @@ export interface WorkItemParticipant {
 
 // Valid state transitions
 export const WORK_ITEM_TRANSITIONS: Record<WorkItemStatus, WorkItemStatus[]> = {
-  created: ['assigned', 'cancelled'],
-  assigned: ['accepted', 'cancelled'],
-  accepted: ['in_progress', 'cancelled'],
-  in_progress: ['review', 'escalated', 'blocked', 'cancelled', 'failed'],
-  review: ['completed', 'rework', 'cancelled'],
+  created: ["assigned", "cancelled"],
+  assigned: ["accepted", "cancelled"],
+  accepted: ["in_progress", "cancelled"],
+  in_progress: ["review", "escalated", "blocked", "cancelled", "failed"],
+  review: ["completed", "rework", "cancelled"],
   completed: [],
-  escalated: ['assigned', 'cancelled'],
-  blocked: ['in_progress', 'cancelled'],
-  rework: ['in_progress', 'cancelled'],
+  escalated: ["assigned", "cancelled"],
+  blocked: ["in_progress", "cancelled"],
+  rework: ["in_progress", "cancelled"],
   cancelled: [],
   failed: [],
 };
 
 // ============ Communication Protocol ============
 export type MessageType =
-  | 'assign'
-  | 'accept'
-  | 'reject'
-  | 'info_request'
-  | 'info_response'
-  | 'progress'
-  | 'escalate'
-  | 'assist_request'
-  | 'assist_response'
-  | 'transfer'
-  | 'complete'
-  | 'feedback'
-  | 'rework'
-  | 'user_message'
-  | 'secretary_response';
+  | "assign"
+  | "accept"
+  | "reject"
+  | "info_request"
+  | "info_response"
+  | "progress"
+  | "escalate"
+  | "assist_request"
+  | "assist_response"
+  | "transfer"
+  | "complete"
+  | "feedback"
+  | "rework"
+  | "user_message"
+  | "secretary_response";
 
 export interface Message {
   id: UUID;
@@ -291,11 +318,27 @@ export interface Message {
 }
 
 // ============ Memory ============
-export type MemoryScope = 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-export type MemoryCategory = 'fact' | 'preference' | 'decision' | 'relationship' | 'procedure' | 'artifact' | 'summary';
-export type MemoryStatus = 'candidate' | 'established' | 'superseded' | 'retracted';
-export type MemoryStability = 'ephemeral' | 'durable';
-export type MemoryRecallType = 'bootstrap' | 'turn_recall' | 'manual_search';
+export type MemoryScope =
+  | "workspace"
+  | "conversation"
+  | "actor_global"
+  | "actor_conversation"
+  | "user";
+export type MemoryCategory =
+  | "fact"
+  | "preference"
+  | "decision"
+  | "relationship"
+  | "procedure"
+  | "artifact"
+  | "summary";
+export type MemoryStatus =
+  | "candidate"
+  | "established"
+  | "superseded"
+  | "retracted";
+export type MemoryStability = "ephemeral" | "durable";
+export type MemoryRecallType = "bootstrap" | "turn_recall" | "manual_search";
 
 export interface MemoryEntry {
   id: UUID;
@@ -356,7 +399,7 @@ export interface MemoryRecallRun {
 }
 
 // ============ Standing Orders ============
-export type StandingOrderTrigger = 'cron' | 'event' | 'condition';
+export type StandingOrderTrigger = "cron" | "event" | "condition";
 
 export interface StandingOrder {
   id: UUID;
@@ -375,14 +418,25 @@ export interface StandingOrder {
 
 // ============ Audit ============
 export type AuditAction =
-  | 'user.register' | 'user.login'
-  | 'workspace.create' | 'workspace.update' | 'workspace.delete'
-  | 'actor.create' | 'actor.update' | 'actor.delete'
-  | 'work_item.create' | 'work_item.transition' | 'work_item.assign'
-  | 'message.create'
-  | 'memory.create' | 'memory.update' | 'memory.delete'
-  | 'ai.think' | 'ai.action'
-  | 'standing_order.create' | 'standing_order.trigger';
+  | "user.register"
+  | "user.login"
+  | "workspace.create"
+  | "workspace.update"
+  | "workspace.delete"
+  | "actor.create"
+  | "actor.update"
+  | "actor.delete"
+  | "work_item.create"
+  | "work_item.transition"
+  | "work_item.assign"
+  | "message.create"
+  | "memory.create"
+  | "memory.update"
+  | "memory.delete"
+  | "ai.think"
+  | "ai.action"
+  | "standing_order.create"
+  | "standing_order.trigger";
 
 export interface AuditLog {
   id: UUID;
@@ -399,18 +453,32 @@ export interface AuditLog {
 
 // ============ Events ============
 export type EventType =
-  | 'work_item.created' | 'work_item.updated' | 'work_item.transitioned'
-  | 'message.created'
-  | 'actor.created' | 'actor.updated'
-  | 'memory.created'
-  | 'user.message' // User sent message to secretary
-  | 'secretary.response'
-  | 'actor.thinking' | 'actor.action'
-  | 'session.message.new' | 'session.status.changed' | 'session.thinking' | 'group.actor.runtime.updated' | 'group.updated'
-  | 'group.member_joined' | 'group.member_kicked' | 'actor.version_changed'
-  | 'chat.feed.item.created' | 'chat.runtime.updated' | 'chat.conversation.updated'
-  | 'mcp.config.changed'
-  | 'relay.connected' | 'relay.disconnected' | 'relay.servers_updated';
+  | "work_item.created"
+  | "work_item.updated"
+  | "work_item.transitioned"
+  | "message.created"
+  | "actor.created"
+  | "actor.updated"
+  | "memory.created"
+  | "user.message" // User sent message to secretary
+  | "secretary.response"
+  | "actor.thinking"
+  | "actor.action"
+  | "session.message.new"
+  | "session.status.changed"
+  | "session.thinking"
+  | "group.actor.runtime.updated"
+  | "group.updated"
+  | "group.member_joined"
+  | "group.member_kicked"
+  | "actor.version_changed"
+  | "chat.feed.item.created"
+  | "chat.runtime.updated"
+  | "chat.conversation.updated"
+  | "mcp.config.changed"
+  | "relay.connected"
+  | "relay.disconnected"
+  | "relay.servers_updated";
 
 export interface SystemEvent {
   type: EventType;
@@ -420,30 +488,49 @@ export interface SystemEvent {
 }
 
 // ============ AI ============
-export type SessionStatus = 'idle' | 'queued' | 'running' | 'blocked' | 'closed';
-export type ChannelType = 'web' | 'api';
+export type SessionStatus =
+  | "idle"
+  | "queued"
+  | "running"
+  | "blocked"
+  | "closed";
+export type ChannelType = "web" | "api";
 export type SessionTrigger =
-  | 'user_message'
-  | 'group_message'
-  | 'actor_message'
-  | 'broadcast'
-  | 'api_call'
-  | 'actor_invite'
-  | 'system_interrupt'
-  | 'retry';
-export type SessionMessageRole = 'user' | 'assistant' | 'system' | 'tool_result';
-export type SessionInterruptType = 'progress_check' | 'priority_override';
+  | "user_message"
+  | "group_message"
+  | "actor_message"
+  | "broadcast"
+  | "api_call"
+  | "actor_invite"
+  | "system_interrupt"
+  | "retry";
+export type SessionMessageRole =
+  | "user"
+  | "assistant"
+  | "system"
+  | "tool_result";
+export type SessionInterruptType = "progress_check" | "priority_override";
 export type SessionWakeupSourceType =
-  | 'user_message'
-  | 'actor_message'
-  | 'broadcast'
-  | 'invite'
-  | 'api_call'
-  | 'system_interrupt'
-  | 'retry';
-export type SessionWakeupStatus = 'pending' | 'attached' | 'processed' | 'dropped';
-export type ActorRuntimeHealth = 'ok' | 'error';
-export type ActorRuntimePhase = 'idle' | 'thinking' | 'tool' | 'responding' | 'blocked' | 'error';
+  | "user_message"
+  | "actor_message"
+  | "broadcast"
+  | "invite"
+  | "api_call"
+  | "system_interrupt"
+  | "retry";
+export type SessionWakeupStatus =
+  | "pending"
+  | "attached"
+  | "processed"
+  | "dropped";
+export type ActorRuntimeHealth = "ok" | "error";
+export type ActorRuntimePhase =
+  | "idle"
+  | "thinking"
+  | "tool"
+  | "responding"
+  | "blocked"
+  | "error";
 
 export interface Session {
   id: UUID;
@@ -467,7 +554,7 @@ export interface SessionWakeup {
   sourceType: SessionWakeupSourceType;
   sourceItemId?: UUID;
   sourceSessionId?: UUID;
-  sourceMemberType?: 'user' | 'actor' | 'system';
+  sourceMemberType?: "user" | "actor" | "system";
   sourceMemberId?: UUID;
   sourceName?: string;
   summary: string;
@@ -485,7 +572,7 @@ export interface ActorRuntimeWakeup {
   sourceType: SessionWakeupSourceType;
   sourceItemId?: UUID;
   sourceSessionId?: UUID;
-  sourceMemberType?: 'user' | 'actor' | 'system';
+  sourceMemberType?: "user" | "actor" | "system";
   sourceMemberId?: UUID;
   sourceName?: string;
   summary: string;
@@ -540,7 +627,7 @@ export interface SessionInterrupt {
 }
 
 export interface ActorAction {
-  type: 'respond' | 'create_memory' | 'rename_self' | 'change_avatar';
+  type: "respond" | "create_memory" | "rename_self" | "change_avatar";
   content: string;
   contentBlocks?: CanonicalContentBlock[];
   targetActorId?: UUID;
@@ -561,9 +648,9 @@ export interface ThinkingResult {
 // ============ Server Tool Calls (Anthropic/OpenAI cloud-side tools) ============
 
 export interface ServerToolCall {
-  type: 'web_search' | 'web_fetch';
-  query?: string;   // web_search query
-  url?: string;     // web_fetch URL
+  type: "web_search" | "web_fetch";
+  query?: string; // web_search query
+  url?: string; // web_fetch URL
   results?: ServerToolSearchResult[];
 }
 
@@ -574,14 +661,17 @@ export interface ServerToolSearchResult {
 }
 
 // ============ Model Groups ============
-export type RoutingStrategy = 'weighted_random' | 'round_robin' | 'priority_failover';
-export type ProviderType = 'anthropic' | 'openai';
-export type AIRequestType = 'actor_think' | 'ai_complete';
-export type AIRequestStatus = 'success' | 'error' | 'timeout';
+export type RoutingStrategy =
+  | "weighted_random"
+  | "round_robin"
+  | "priority_failover";
+export type ProviderType = "anthropic" | "openai";
+export type AIRequestType = "actor_think" | "ai_complete";
+export type AIRequestStatus = "success" | "error" | "timeout";
 
 export interface ModelGroup {
   id: UUID;
-  ownerType?: 'platform' | 'workspace' | 'user';
+  ownerType?: "platform" | "workspace" | "user";
   ownerWorkspaceId?: UUID | null;
   ownerUserId?: UUID | null;
   workspaceId?: UUID;
@@ -634,11 +724,11 @@ export interface ActorModelGroup {
 export interface ModelGroupGrant {
   id: UUID;
   groupId: UUID;
-  grantScope: 'platform' | 'workspace' | 'user' | 'workspace_user' | 'actor';
+  grantScope: "platform" | "workspace" | "user" | "workspace_user" | "actor";
   workspaceId?: UUID | null;
   userId?: UUID | null;
   actorId?: UUID | null;
-  status: 'active' | 'revoked';
+  status: "active" | "revoked";
   grantedBy?: UUID | null;
   reason?: string | null;
   metadata?: Record<string, unknown>;
@@ -663,9 +753,9 @@ export interface AIRequestLog {
   createdAt: Timestamp;
 }
 
-export type AnthropicBuiltinTool = 'web_search' | 'web_fetch';
+export type AnthropicBuiltinTool = "web_search" | "web_fetch";
 
-export type MultimodalType = 'image' | 'audio' | 'video' | 'document';
+export type MultimodalType = "image" | "audio" | "video" | "document";
 
 export interface MultimodalConfig {
   supported: boolean;
@@ -702,27 +792,27 @@ export interface ModelAttemptPolicy {
 export interface ResolvedModelPlan {
   groupId: UUID;
   groupName: string;
-  routingStrategy: 'weighted_random' | 'round_robin' | 'priority_failover';
+  routingStrategy: "weighted_random" | "round_robin" | "priority_failover";
   attemptPolicy: ModelAttemptPolicy;
   candidates: ResolvedModelConfig[];
 }
 
 // ============ Canonical Content Block ============
 // Unified representation: text stored directly, media via file_ref pointing to platform file storage
-export type CanonicalFileCategory = 'image' | 'audio' | 'video' | 'document';
+export type CanonicalFileCategory = "image" | "audio" | "video" | "document";
 
 export interface CanonicalTextBlock {
   id: UUID;
-  type: 'text';
+  type: "text";
   text: string;
 }
 
 export interface CanonicalFileRefBlock {
   id: UUID;
-  type: 'file_ref';
-  fileId: string;        // files table UUID
-  storedName: string;    // disk relative path (resolved via readAsBuffer)
-  url: string;           // /files/... (frontend display)
+  type: "file_ref";
+  fileId: string; // files table UUID
+  storedName: string; // disk relative path (resolved via readAsBuffer)
+  url: string; // /files/... (frontend display)
   mimeType: string;
   originalName: string;
   sizeBytes: number;
@@ -731,9 +821,15 @@ export interface CanonicalFileRefBlock {
 
 export type CanonicalContentBlock = CanonicalTextBlock | CanonicalFileRefBlock;
 
-export type CanonicalTextBlockInput = Omit<CanonicalTextBlock, 'id'> & { id?: UUID };
-export type CanonicalFileRefBlockInput = Omit<CanonicalFileRefBlock, 'id'> & { id?: UUID };
-export type CanonicalContentBlockInput = CanonicalTextBlockInput | CanonicalFileRefBlockInput;
+export type CanonicalTextBlockInput = Omit<CanonicalTextBlock, "id"> & {
+  id?: UUID;
+};
+export type CanonicalFileRefBlockInput = Omit<CanonicalFileRefBlock, "id"> & {
+  id?: UUID;
+};
+export type CanonicalContentBlockInput =
+  | CanonicalTextBlockInput
+  | CanonicalFileRefBlockInput;
 
 export interface ActorDocTemplate {
   key: CoreActorDocKey;
@@ -745,122 +841,124 @@ export interface ActorDocTemplate {
 
 export const ACTOR_DOC_TEMPLATES: ActorDocTemplate[] = [
   {
-    key: 'identity_card',
-    title: 'Identity Card',
-    description: 'How this actor introduces themselves in public.',
-    defaultVisibility: 'always',
+    key: "identity_card",
+    title: "Identity Card",
+    description: "How this actor introduces themselves in public.",
+    defaultVisibility: "always",
     defaultPriority: 120,
   },
   {
-    key: 'public_persona',
-    title: 'Public Persona',
-    description: 'Voice, tone, and how this actor appears to others.',
-    defaultVisibility: 'always',
+    key: "public_persona",
+    title: "Public Persona",
+    description: "Voice, tone, and how this actor appears to others.",
+    defaultVisibility: "always",
     defaultPriority: 115,
   },
   {
-    key: 'soul',
-    title: 'Soul',
-    description: 'Values, principles, taboos, and emotional core.',
-    defaultVisibility: 'always',
+    key: "soul",
+    title: "Soul",
+    description: "Values, principles, taboos, and emotional core.",
+    defaultVisibility: "always",
     defaultPriority: 110,
   },
   {
-    key: 'self_narrative',
-    title: 'Self Narrative',
-    description: 'How this actor understands themselves.',
-    defaultVisibility: 'always',
+    key: "self_narrative",
+    title: "Self Narrative",
+    description: "How this actor understands themselves.",
+    defaultVisibility: "always",
     defaultPriority: 105,
   },
   {
-    key: 'origin_story',
-    title: 'Origin Story',
-    description: 'Where this actor comes from and what shaped them.',
-    defaultVisibility: 'internal_only',
+    key: "origin_story",
+    title: "Origin Story",
+    description: "Where this actor comes from and what shaped them.",
+    defaultVisibility: "internal_only",
     defaultPriority: 100,
   },
   {
-    key: 'relationship_with_user',
-    title: 'Relationship With User',
-    description: 'How this actor relates to the human user.',
-    defaultVisibility: 'always',
+    key: "relationship_with_user",
+    title: "Relationship With User",
+    description: "How this actor relates to the human user.",
+    defaultVisibility: "always",
     defaultPriority: 98,
   },
   {
-    key: 'relationship_with_team',
-    title: 'Relationship With Team',
-    description: 'How this actor views and works with other actors.',
-    defaultVisibility: 'group_only',
+    key: "relationship_with_team",
+    title: "Relationship With Team",
+    description: "How this actor views and works with other actors.",
+    defaultVisibility: "group_only",
     defaultPriority: 96,
   },
   {
-    key: 'representation_guidelines',
-    title: 'Representation Guidelines',
-    description: 'How to speak or act when representing the user.',
-    defaultVisibility: 'internal_only',
+    key: "representation_guidelines",
+    title: "Representation Guidelines",
+    description: "How to speak or act when representing the user.",
+    defaultVisibility: "internal_only",
     defaultPriority: 94,
   },
   {
-    key: 'social_protocol',
-    title: 'Social Protocol',
-    description: 'When to speak, when to stay quiet, and what not to share.',
-    defaultVisibility: 'group_only',
+    key: "social_protocol",
+    title: "Social Protocol",
+    description: "When to speak, when to stay quiet, and what not to share.",
+    defaultVisibility: "group_only",
     defaultPriority: 92,
   },
   {
-    key: 'role_charter',
-    title: 'Role Charter',
-    description: 'Organizational responsibilities and scope.',
-    defaultVisibility: 'always',
+    key: "role_charter",
+    title: "Role Charter",
+    description: "Organizational responsibilities and scope.",
+    defaultVisibility: "always",
     defaultPriority: 90,
   },
   {
-    key: 'mission',
-    title: 'Mission',
-    description: 'Long-term aim, current mission, and success criteria.',
-    defaultVisibility: 'always',
+    key: "mission",
+    title: "Mission",
+    description: "Long-term aim, current mission, and success criteria.",
+    defaultVisibility: "always",
     defaultPriority: 88,
   },
   {
-    key: 'work_doctrine',
-    title: 'Work Doctrine',
-    description: 'How this actor approaches work, evidence, and communication.',
-    defaultVisibility: 'always',
+    key: "work_doctrine",
+    title: "Work Doctrine",
+    description: "How this actor approaches work, evidence, and communication.",
+    defaultVisibility: "always",
     defaultPriority: 86,
   },
   {
-    key: 'limitations_and_escalation',
-    title: 'Limitations And Escalation',
-    description: 'Blind spots, refusal zones, and when to ask for help.',
-    defaultVisibility: 'always',
+    key: "limitations_and_escalation",
+    title: "Limitations And Escalation",
+    description: "Blind spots, refusal zones, and when to ask for help.",
+    defaultVisibility: "always",
     defaultPriority: 84,
   },
   {
-    key: 'quirks_and_signatures',
-    title: 'Quirks And Signatures',
-    description: 'Habits, running jokes, signatures, and expressive details.',
-    defaultVisibility: 'always',
+    key: "quirks_and_signatures",
+    title: "Quirks And Signatures",
+    description: "Habits, running jokes, signatures, and expressive details.",
+    defaultVisibility: "always",
     defaultPriority: 82,
   },
   {
-    key: 'routines',
-    title: 'Routines',
-    description: 'Recurring habits, checks, and proactive rhythms.',
-    defaultVisibility: 'internal_only',
+    key: "routines",
+    title: "Routines",
+    description: "Recurring habits, checks, and proactive rhythms.",
+    defaultVisibility: "internal_only",
     defaultPriority: 80,
   },
   {
-    key: 'conversation_examples',
-    title: 'Conversation Examples',
-    description: 'Examples of how this actor speaks, declines, or collaborates.',
-    defaultVisibility: 'internal_only',
+    key: "conversation_examples",
+    title: "Conversation Examples",
+    description:
+      "Examples of how this actor speaks, declines, or collaborates.",
+    defaultVisibility: "internal_only",
     defaultPriority: 78,
   },
 ];
 
-export const ACTOR_DOC_TEMPLATE_MAP: Record<CoreActorDocKey, ActorDocTemplate> = Object.fromEntries(
-  ACTOR_DOC_TEMPLATES.map((template) => [template.key, template]),
-) as Record<CoreActorDocKey, ActorDocTemplate>;
+export const ACTOR_DOC_TEMPLATE_MAP: Record<CoreActorDocKey, ActorDocTemplate> =
+  Object.fromEntries(
+    ACTOR_DOC_TEMPLATES.map((template) => [template.key, template]),
+  ) as Record<CoreActorDocKey, ActorDocTemplate>;
 
 // ============ Canonical Tool History ============
 export interface CanonicalToolCall {
@@ -890,21 +988,26 @@ export interface AssistantToolHistory {
   rounds: ToolRound[];
 }
 
-export type CanonicalContextScope = 'shared' | 'private';
-export type CanonicalContextSurface = 'visible' | 'internal';
-export type CanonicalContextRole = 'user' | 'assistant' | 'system' | 'tool';
-export type CanonicalContextMemberType = 'actor' | 'user' | 'remote_agent' | 'system' | 'unknown';
+export type CanonicalContextScope = "shared" | "private";
+export type CanonicalContextSurface = "visible" | "internal";
+export type CanonicalContextRole = "user" | "assistant" | "system" | "tool";
+export type CanonicalContextMemberType =
+  | "actor"
+  | "user"
+  | "remote_agent"
+  | "system"
+  | "unknown";
 export type ConversationEventTimelinePolicy =
-  | 'none'
-  | 'all_members'
-  | 'users_only'
-  | 'actors_only'
-  | 'targeted_members';
+  | "none"
+  | "all_members"
+  | "users_only"
+  | "actors_only"
+  | "targeted_members";
 export type ConversationEventContextPolicy =
-  | 'none'
-  | 'shared'
-  | 'actor_private'
-  | 'targeted_members';
+  | "none"
+  | "shared"
+  | "actor_private"
+  | "targeted_members";
 
 export interface CanonicalContextAuthor {
   memberId?: string;
@@ -918,7 +1021,7 @@ export interface CanonicalContextAuthor {
 
 export interface CanonicalContextTarget {
   memberId?: string;
-  memberType: Exclude<CanonicalContextMemberType, 'unknown'>;
+  memberType: Exclude<CanonicalContextMemberType, "unknown">;
   actorId?: string;
   userId?: string;
   name?: string;
@@ -936,13 +1039,17 @@ interface CanonicalContextItemBase {
 }
 
 export interface CanonicalSystemNoticeItem extends CanonicalContextItemBase {
-  kind: 'system_notice';
-  noticeType: 'interrupt' | 'task_instruction' | 'legacy_tool_result' | 'generic';
+  kind: "system_notice";
+  noticeType:
+    | "interrupt"
+    | "task_instruction"
+    | "legacy_tool_result"
+    | "generic";
   parts: CanonicalContentBlock[];
 }
 
 export interface CanonicalEventContextItem extends CanonicalContextItemBase {
-  kind: 'event';
+  kind: "event";
   eventType: string;
   eventPayload?: Record<string, unknown>;
   timelinePolicy?: ConversationEventTimelinePolicy;
@@ -953,7 +1060,7 @@ export interface CanonicalEventContextItem extends CanonicalContextItemBase {
 }
 
 export interface CanonicalMessageContextItem extends CanonicalContextItemBase {
-  kind: 'message';
+  kind: "message";
   messageType: string;
   role: CanonicalContextRole;
   author?: CanonicalContextAuthor;
@@ -962,8 +1069,8 @@ export interface CanonicalMessageContextItem extends CanonicalContextItemBase {
 }
 
 export interface CanonicalToolCallBatchContextItem extends CanonicalContextItemBase {
-  kind: 'tool_call_batch';
-  role: 'assistant';
+  kind: "tool_call_batch";
+  role: "assistant";
   bundleId?: string;
   author?: CanonicalContextAuthor;
   content?: CanonicalContentBlock[];
@@ -971,21 +1078,21 @@ export interface CanonicalToolCallBatchContextItem extends CanonicalContextItemB
 }
 
 export interface CanonicalToolResultBatchContextItem extends CanonicalContextItemBase {
-  kind: 'tool_result_batch';
+  kind: "tool_result_batch";
   bundleId?: string;
   toolResults: CanonicalToolResult[];
 }
 
 export interface CanonicalSummaryContextItem extends CanonicalContextItemBase {
-  kind: 'summary';
+  kind: "summary";
   summaryType: string;
   sourceItemIds?: string[];
   parts: CanonicalContentBlock[];
 }
 
 export interface CanonicalMemoryRecallContextItem extends CanonicalContextItemBase {
-  kind: 'memory_recall';
-  recallType: Exclude<MemoryRecallType, 'manual_search'>;
+  kind: "memory_recall";
+  recallType: Exclude<MemoryRecallType, "manual_search">;
   memories: MemoryRecallResult[];
   metadata?: Record<string, unknown>;
 }
@@ -999,8 +1106,12 @@ export type CanonicalContextItem =
   | CanonicalSummaryContextItem
   | CanonicalMemoryRecallContextItem;
 
-export type CanonicalArchiveFrameRole = 'system' | 'user' | 'assistant' | 'tool';
-export type CanonicalArchiveChainScope = 'shared' | 'private';
+export type CanonicalArchiveFrameRole =
+  | "system"
+  | "user"
+  | "assistant"
+  | "tool";
+export type CanonicalArchiveChainScope = "shared" | "private";
 
 export interface CanonicalArchiveFrame {
   frameId?: string;
@@ -1035,9 +1146,13 @@ export interface ProviderContextWindow {
 
 // ============ Conversation Message ============
 export type ConversationMessage =
-  | { role: 'user'; content: CanonicalContentBlock[] }
-  | { role: 'assistant'; content: CanonicalContentBlock[]; toolCalls?: CanonicalToolCall[] }
-  | { role: 'tool_result'; results: CanonicalToolResult[] };
+  | { role: "user"; content: CanonicalContentBlock[] }
+  | {
+      role: "assistant";
+      content: CanonicalContentBlock[];
+      toolCalls?: CanonicalToolCall[];
+    }
+  | { role: "tool_result"; results: CanonicalToolResult[] };
 
 // ============ AI Provider ============
 export interface ToolParameterProperty {
@@ -1051,7 +1166,7 @@ export interface ToolDefinition {
   name: string;
   description: string;
   parameters: {
-    type: 'object';
+    type: "object";
     properties: Record<string, ToolParameterProperty>;
     required: string[];
   };
@@ -1066,7 +1181,7 @@ export interface ToolCall {
 }
 
 export interface AIMessage {
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
 }
 
@@ -1074,7 +1189,7 @@ export interface ToolResult {
   toolCallId: string;
   providerCallId?: string;
   toolName: string;
-  content: string | unknown[];  // string for text-only, array for multimodal (MCP content blocks)
+  content: string | unknown[]; // string for text-only, array for multimodal (MCP content blocks)
   isError?: boolean;
   metadata?: Record<string, unknown>;
 }
@@ -1090,7 +1205,7 @@ export interface NormalizedMcpToolResult {
 // ============ Tool Plugin System ============
 
 export interface GroupMemberEntry {
-  type: 'actor' | 'user';
+  type: "actor" | "user";
   id: string;
   name: string;
   title?: string;
@@ -1108,63 +1223,120 @@ export interface ToolResolveContext {
 
 export interface ToolPlugin {
   name: string;
-  kind: 'action' | 'callable';
+  kind: "action" | "callable";
   definition: ToolDefinition;
-  resolve?: (ctx: ToolResolveContext) => { active: boolean; definition: ToolDefinition };
+  resolve?: (ctx: ToolResolveContext) => {
+    active: boolean;
+    definition: ToolDefinition;
+  };
   execute?: (input: Record<string, unknown>) => Promise<string>;
 }
 
 export interface AIResponse {
-  context: ConversationMessage[];    // [{ role: 'assistant', content, toolCalls? }]
+  context: ConversationMessage[]; // [{ role: 'assistant', content, toolCalls? }]
   tokensUsed: { input: number; output: number };
-  stopReason: string;                // e.g. 'end_turn', 'tool_use' (Anthropic) or 'stop', 'tool_calls' (OpenAI)
-  rawAssistantMessage?: unknown;     // Provider-specific raw assistant message for server tool extraction
-  mediaBlocks?: unknown[];           // Provider raw media content blocks (images, audio from model response)
+  stopReason: string; // e.g. 'end_turn', 'tool_use' (Anthropic) or 'stop', 'tool_calls' (OpenAI)
+  rawAssistantMessage?: unknown; // Provider-specific raw assistant message for server tool extraction
+  mediaBlocks?: unknown[]; // Provider raw media content blocks (images, audio from model response)
 }
 
 // ============================================================
 // MCP Plugin Marketplace Types
 // ============================================================
 
-export type CapabilityPackageKind = 'plugin' | 'skill' | 'actor_template' | 'model';
-export type CapabilityTransport = 'builtin' | 'stdio' | 'http' | 'relay' | 'filesystem';
-export type CapabilityAttachmentType = 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-export type CapabilityReuseScope = 'turn' | 'platform' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+export type CapabilityPackageKind =
+  | "plugin"
+  | "skill"
+  | "actor_template"
+  | "model";
+export type CapabilityTransport =
+  | "builtin"
+  | "stdio"
+  | "http"
+  | "relay"
+  | "filesystem";
+export type CapabilityAttachmentType =
+  | "platform"
+  | "workspace"
+  | "conversation"
+  | "actor_global"
+  | "actor_conversation"
+  | "user";
+export type CapabilityReuseScope =
+  | "turn"
+  | "platform"
+  | "workspace"
+  | "conversation"
+  | "actor_global"
+  | "actor_conversation"
+  | "user";
 export type CapabilityGrantScope = CapabilityAttachmentType;
-export type CapabilitySourceType = 'builtin' | 'official' | 'workspace_upload' | 'user_upload' | 'relay_derived';
-export type CapabilityRequirementKind = 'required' | 'recommended' | 'optional' | 'conflicts_with';
-export type CapabilityRequirementTargetKind = 'package' | 'tag';
+export type CapabilitySourceType =
+  | "builtin"
+  | "official"
+  | "workspace_upload"
+  | "user_upload"
+  | "relay_derived";
+export type CapabilityRequirementKind =
+  | "required"
+  | "recommended"
+  | "optional"
+  | "conflicts_with";
+export type CapabilityRequirementTargetKind = "package" | "tag";
 export type CapabilityInstanceInstallMode =
-  | 'manual'
-  | 'seeded'
-  | 'relay_derived'
-  | 'template_required'
-  | 'template_recommended';
-export type CapabilityRevisionStatus = 'draft' | 'active' | 'deprecated' | 'archived';
-export type CapabilityGrantStatus = 'active' | 'revoked';
-export type CapabilityRequirementStatus = 'satisfied' | 'missing_required' | 'missing_recommended' | 'scope_mismatch' | 'config_incomplete';
-export type CapabilityAssetKind = 'skill_markdown' | 'reference_markdown' | 'script' | 'json' | 'text' | 'binary';
+  | "manual"
+  | "seeded"
+  | "relay_derived"
+  | "template_required"
+  | "template_recommended";
+export type CapabilityRevisionStatus =
+  | "draft"
+  | "active"
+  | "deprecated"
+  | "archived";
+export type CapabilityGrantStatus = "active" | "revoked";
+export type CapabilityRequirementStatus =
+  | "satisfied"
+  | "missing_required"
+  | "missing_recommended"
+  | "scope_mismatch"
+  | "config_incomplete";
+export type CapabilityAssetKind =
+  | "skill_markdown"
+  | "reference_markdown"
+  | "script"
+  | "json"
+  | "text"
+  | "binary";
 export type LocalizedText = Record<string, string>;
 export type CapabilityConfigFieldType =
-  | 'text'
-  | 'textarea'
-  | 'number'
-  | 'boolean'
-  | 'select'
-  | 'secret'
-  | 'oauth_connection'
-  | 'file';
+  | "text"
+  | "textarea"
+  | "number"
+  | "boolean"
+  | "select"
+  | "secret"
+  | "oauth_connection"
+  | "file";
 export type CapabilityInstallStepKind =
-  | 'form'
-  | 'oauth'
-  | 'check'
-  | 'confirm'
-  | 'attachment_scope'
-  | 'reuse_scope';
-export type CapabilityInstallActionKind = 'oauth_authorize' | 'external_link' | 'noop';
-export type CapabilityAuthProviderKind = 'oauth2_authorization_code_pkce';
-export type CapabilityAuthSessionStatus = 'pending' | 'completed' | 'failed' | 'expired' | 'consumed';
-export type CapabilityAuthConnectionStatus = 'active' | 'expired' | 'revoked';
+  | "form"
+  | "oauth"
+  | "check"
+  | "confirm"
+  | "attachment_scope"
+  | "reuse_scope";
+export type CapabilityInstallActionKind =
+  | "oauth_authorize"
+  | "external_link"
+  | "noop";
+export type CapabilityAuthProviderKind = "oauth2_authorization_code_pkce";
+export type CapabilityAuthSessionStatus =
+  | "pending"
+  | "completed"
+  | "failed"
+  | "expired"
+  | "consumed";
+export type CapabilityAuthConnectionStatus = "active" | "expired" | "revoked";
 
 export interface CapabilityConfigFieldOption {
   value: string;
@@ -1201,7 +1373,7 @@ export interface CapabilityInstallStep {
   kind: CapabilityInstallStepKind;
   titleI18n: LocalizedText;
   descriptionI18n?: LocalizedText;
-  scope: 'workspace' | 'plugin';
+  scope: "workspace" | "plugin";
   fields: string[];
   optional?: boolean;
   helpUrl?: string;
@@ -1489,15 +1661,21 @@ export interface CapabilityInstallPlan {
   };
 }
 
-export type ActorTemplateDependencyKind = Extract<CapabilityRequirementKind, 'required' | 'recommended'>;
-export type ActorTemplateTargetKind = Extract<CapabilityPackageKind, 'plugin' | 'skill'>;
-export type ActorTemplateSyncMode = 'notify' | 'manual_merge';
+export type ActorTemplateDependencyKind = Extract<
+  CapabilityRequirementKind,
+  "required" | "recommended"
+>;
+export type ActorTemplateTargetKind = Extract<
+  CapabilityPackageKind,
+  "plugin" | "skill"
+>;
+export type ActorTemplateSyncMode = "notify" | "manual_merge";
 export type ActorTemplateLinkStatus =
-  | 'up_to_date'
-  | 'update_available'
-  | 'diverged'
-  | 'update_available_with_local_changes'
-  | 'detached';
+  | "up_to_date"
+  | "update_available"
+  | "diverged"
+  | "update_available_with_local_changes"
+  | "detached";
 
 export interface ActorTemplateDependency {
   requirementId?: string;
@@ -1567,7 +1745,7 @@ export interface CapabilityAvailableSkill {
   entryPoint?: string;
 }
 
-export type McpTransport = Exclude<CapabilityTransport, 'filesystem'>;
+export type McpTransport = Exclude<CapabilityTransport, "filesystem">;
 export type McpLifecycleScope = CapabilityReuseScope;
 export type McpAttachmentType = CapabilityAttachmentType;
 
@@ -1575,7 +1753,7 @@ export type McpOrganization = CapabilityPublisher;
 export type McpPluginTool = CapabilityPackageTool;
 
 export interface McpPlugin extends CapabilityPackage {
-  kind: 'plugin';
+  kind: "plugin";
 }
 
 export interface McpInstallation extends CapabilityInstance {
@@ -1603,7 +1781,7 @@ export interface McpRelayServer {
   id: string;
   relayId: string;
   name: string;
-  transport: 'builtin' | 'stdio' | 'http';
+  transport: "builtin" | "stdio" | "http";
   command?: string;
   endpoint?: string;
   envVars: Record<string, unknown>;
@@ -1645,7 +1823,14 @@ export interface McpEventLog {
 
 export interface McpValidationRule {
   field: string;
-  rule: 'required' | 'pattern' | 'url' | 'min_length' | 'max_length' | 'prefix' | 'enum';
+  rule:
+    | "required"
+    | "pattern"
+    | "url"
+    | "min_length"
+    | "max_length"
+    | "prefix"
+    | "enum";
   value?: string | number | string[];
   message: string;
 }
@@ -1657,7 +1842,7 @@ export interface McpSetupStep {
   titleI18n?: LocalizedText;
   description?: string;
   descriptionI18n?: LocalizedText;
-  scope: 'workspace' | 'plugin';
+  scope: "workspace" | "plugin";
   fields: string[];
   optional?: boolean;
   helpUrl?: string;
@@ -1695,8 +1880,8 @@ export interface GroupMember {
 export interface GroupMessage {
   id: UUID;
   groupId: UUID;
-  sessionId: UUID | '';
-  role: 'user' | 'assistant' | 'system';
+  sessionId: UUID | "";
+  role: "user" | "assistant" | "system";
   fromUserId?: UUID;
   fromActorId?: UUID;
   actorName?: string;
@@ -1708,7 +1893,7 @@ export interface GroupMessage {
   createdAt: Timestamp;
 }
 
-export type ConversationMemberType = 'actor' | 'user' | 'system';
+export type ConversationMemberType = "actor" | "user" | "system";
 
 export interface ConversationEntityRef {
   memberId?: UUID;
@@ -1724,28 +1909,28 @@ export interface ConversationEntityRef {
 
 export type ConversationMemberRef = ConversationEntityRef & {
   memberId: UUID;
-  memberType: 'actor' | 'user';
+  memberType: "actor" | "user";
 };
 
 export interface ActorVersionDocChangeWire {
   docId: UUID;
   key: ActorDocKey;
   title: string;
-  changeType: 'added' | 'updated' | 'removed';
+  changeType: "added" | "updated" | "removed";
   visibility: ActorDocVisibility;
   priority: number;
   summaryText?: string;
 }
 
 export type ConversationFeedEventType =
-  | 'member_joined'
-  | 'member_kicked'
-  | 'member_left'
-  | 'memory_saved'
-  | 'memory_updated'
-  | 'actor_renamed'
-  | 'actor_avatar_changed'
-  | 'actor_version_changed';
+  | "member_joined"
+  | "member_kicked"
+  | "member_left"
+  | "memory_saved"
+  | "memory_updated"
+  | "actor_renamed"
+  | "actor_avatar_changed"
+  | "actor_version_changed";
 
 export interface ConversationFeedEventPayloadMap {
   member_joined: {
@@ -1812,14 +1997,14 @@ export type ConversationFeedEventPayload<
 > = ConversationFeedEventPayloadMap[T];
 
 export interface ConversationFeedMessageItem {
-  kind: 'message';
+  kind: "message";
   itemId: UUID;
   conversationId: UUID;
   sequence: number;
   workspaceSequence?: number;
   sessionId?: UUID;
   turnId?: UUID;
-  role: 'user' | 'assistant' | 'system';
+  role: "user" | "assistant" | "system";
   author?: ConversationEntityRef;
   targets: ConversationEntityRef[];
   content: string;
@@ -1832,7 +2017,7 @@ export interface ConversationFeedMessageItem {
 export interface ConversationFeedEventItem<
   T extends ConversationFeedEventType = ConversationFeedEventType,
 > {
-  kind: 'event';
+  kind: "event";
   itemId: UUID;
   conversationId: UUID;
   sequence: number;
@@ -1862,8 +2047,8 @@ export interface ConversationSummary {
   lastItem?: {
     itemId: UUID;
     sequence: number;
-    kind: ConversationFeedItem['kind'];
-    role?: 'user' | 'assistant' | 'system';
+    kind: ConversationFeedItem["kind"];
+    role?: "user" | "assistant" | "system";
     previewText: string;
     authorName?: string;
     createdAt: Timestamp;
@@ -1881,46 +2066,52 @@ export interface WorkspaceFeedEventRecord {
   item: ConversationFeedItem;
 }
 
+export interface WorkspaceFeedPage {
+  records: WorkspaceFeedEventRecord[];
+  hasMore: boolean;
+  nextAfterSequence?: number;
+}
+
 export type ChatSocketEventType =
-  | 'auth.ok'
-  | 'auth.error'
-  | 'ping'
-  | 'server.shutdown'
-  | 'feed.item.created'
-  | 'runtime.updated'
-  | 'conversation.updated'
-  | 'feed.resync.required';
+  | "auth.ok"
+  | "auth.error"
+  | "ping"
+  | "server.shutdown"
+  | "feed.item.created"
+  | "runtime.updated"
+  | "conversation.updated"
+  | "feed.resync.required";
 
 export interface ChatSocketEventPayloadMap {
-  'auth.ok': {
+  "auth.ok": {
     connectionId: UUID;
     heartbeatMs: number;
     workspaceId: UUID;
     lastWorkspaceSequence: number;
   };
-  'auth.error': {
+  "auth.error": {
     message: string;
   };
   ping: {
     at: Timestamp;
   };
-  'server.shutdown': {
+  "server.shutdown": {
     message: string;
     retryable: boolean;
   };
-  'feed.item.created': WorkspaceFeedEventRecord;
-  'runtime.updated': {
+  "feed.item.created": WorkspaceFeedEventRecord;
+  "runtime.updated": {
     conversationId: UUID;
     runtimeSeq: number;
     snapshot: ActorRuntimeState;
   };
-  'conversation.updated': {
+  "conversation.updated": {
     conversationId: UUID;
-    action: 'created' | 'profile_updated' | 'cancelled';
+    action: "created" | "profile_updated" | "cancelled";
     title?: string | null;
     avatarUrl?: string | null;
   };
-  'feed.resync.required': {
+  "feed.resync.required": {
     expectedWorkspaceSequence: number;
     actualWorkspaceSequence: number;
   };
@@ -1934,7 +2125,14 @@ export type ChatSocketEvent<
 };
 
 // ============ A2A (Agent-to-Agent) Protocol ============
-export type A2ATaskState = 'submitted' | 'working' | 'input-required' | 'completed' | 'failed' | 'canceled' | 'rejected';
+export type A2ATaskState =
+  | "submitted"
+  | "working"
+  | "input-required"
+  | "completed"
+  | "failed"
+  | "canceled"
+  | "rejected";
 
 export interface A2AApp {
   id: UUID;
@@ -1988,12 +2186,12 @@ export interface A2AAgentCard {
 }
 
 export interface A2APart {
-  type: 'text';
+  type: "text";
   text: string;
 }
 
 export interface A2AMessage {
-  role: 'user' | 'agent';
+  role: "user" | "agent";
   parts: A2APart[];
 }
 
@@ -2011,7 +2209,7 @@ export interface A2ATaskResponse {
 
 // ============ Content Helpers ============
 
-export function createCanonicalContentBlockId(prefix = 'block'): UUID {
+export function createCanonicalContentBlockId(prefix = "block"): UUID {
   const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
   if (randomUUID) {
     return randomUUID();
@@ -2021,16 +2219,24 @@ export function createCanonicalContentBlockId(prefix = 'block'): UUID {
 
 export function textBlock(text: string, id?: UUID): CanonicalTextBlock {
   return {
-    id: typeof id === 'string' && id.trim().length > 0 ? id : createCanonicalContentBlockId('text'),
-    type: 'text',
+    id:
+      typeof id === "string" && id.trim().length > 0
+        ? id
+        : createCanonicalContentBlockId("text"),
+    type: "text",
     text,
   };
 }
 
-export function fileRefBlock(input: Omit<CanonicalFileRefBlock, 'id' | 'type'> & { id?: UUID }): CanonicalFileRefBlock {
+export function fileRefBlock(
+  input: Omit<CanonicalFileRefBlock, "id" | "type"> & { id?: UUID },
+): CanonicalFileRefBlock {
   return {
-    id: typeof input.id === 'string' && input.id.trim().length > 0 ? input.id : createCanonicalContentBlockId('file'),
-    type: 'file_ref',
+    id:
+      typeof input.id === "string" && input.id.trim().length > 0
+        ? input.id
+        : createCanonicalContentBlockId("file"),
+    type: "file_ref",
     fileId: input.fileId,
     storedName: input.storedName,
     url: input.url,
@@ -2041,50 +2247,63 @@ export function fileRefBlock(input: Omit<CanonicalFileRefBlock, 'id' | 'type'> &
   };
 }
 
-export function isCanonicalContentBlock(value: unknown): value is CanonicalContentBlock {
-  if (!value || typeof value !== 'object') return false;
+export function isCanonicalContentBlock(
+  value: unknown,
+): value is CanonicalContentBlock {
+  if (!value || typeof value !== "object") return false;
 
   const block = value as Record<string, unknown>;
-  if (typeof block.id !== 'string' || block.id.trim().length === 0) return false;
+  if (typeof block.id !== "string" || block.id.trim().length === 0)
+    return false;
 
-  if (block.type === 'text') {
-    return typeof block.text === 'string';
+  if (block.type === "text") {
+    return typeof block.text === "string";
   }
 
-  if (block.type === 'file_ref') {
-    return typeof block.fileId === 'string'
-      && typeof block.storedName === 'string'
-      && typeof block.url === 'string'
-      && typeof block.mimeType === 'string'
-      && typeof block.originalName === 'string'
-      && typeof block.sizeBytes === 'number'
-      && (block.category === 'image' || block.category === 'audio' || block.category === 'video' || block.category === 'document');
+  if (block.type === "file_ref") {
+    return (
+      typeof block.fileId === "string" &&
+      typeof block.storedName === "string" &&
+      typeof block.url === "string" &&
+      typeof block.mimeType === "string" &&
+      typeof block.originalName === "string" &&
+      typeof block.sizeBytes === "number" &&
+      (block.category === "image" ||
+        block.category === "audio" ||
+        block.category === "video" ||
+        block.category === "document")
+    );
   }
 
   return false;
 }
 
-export function normalizeCanonicalContentBlocks(blocks: CanonicalContentBlockInput[]): CanonicalContentBlock[] {
+export function normalizeCanonicalContentBlocks(
+  blocks: CanonicalContentBlockInput[],
+): CanonicalContentBlock[] {
   const normalized: CanonicalContentBlock[] = [];
 
   for (const block of blocks || []) {
-    if (!block || typeof block !== 'object') continue;
+    if (!block || typeof block !== "object") continue;
 
-    if (block.type === 'text') {
-      if (typeof block.text !== 'string') continue;
+    if (block.type === "text") {
+      if (typeof block.text !== "string") continue;
       normalized.push(textBlock(block.text, block.id));
       continue;
     }
 
-    if (block.type === 'file_ref') {
+    if (block.type === "file_ref") {
       if (
-        typeof block.fileId !== 'string'
-        || typeof block.storedName !== 'string'
-        || typeof block.url !== 'string'
-        || typeof block.mimeType !== 'string'
-        || typeof block.originalName !== 'string'
-        || typeof block.sizeBytes !== 'number'
-        || (block.category !== 'image' && block.category !== 'audio' && block.category !== 'video' && block.category !== 'document')
+        typeof block.fileId !== "string" ||
+        typeof block.storedName !== "string" ||
+        typeof block.url !== "string" ||
+        typeof block.mimeType !== "string" ||
+        typeof block.originalName !== "string" ||
+        typeof block.sizeBytes !== "number" ||
+        (block.category !== "image" &&
+          block.category !== "audio" &&
+          block.category !== "video" &&
+          block.category !== "document")
       ) {
         continue;
       }
@@ -2112,62 +2331,66 @@ function createActorDocId(): UUID {
 export const SECRETARY_DEFAULT_DOCS: ActorDoc[] = normalizeActorDocs([
   {
     id: createActorDocId(),
-    key: 'identity_card',
-    title: 'Identity Card',
-    content: textBlocks('I am Secretary, the primary point of contact between the Boss (user) and the digital organization.'),
-    visibility: 'always',
+    key: "identity_card",
+    title: "Identity Card",
+    content: textBlocks(
+      "I am Secretary, the primary point of contact between the Boss (user) and the digital organization.",
+    ),
+    visibility: "always",
     priority: 120,
   },
   {
     id: createActorDocId(),
-    key: 'relationship_with_user',
-    title: 'Relationship With User',
-    content: textBlocks('Maintain the long-term relationship with the Boss. Keep them informed, clarify intent, and report what matters without burying them in noise.'),
-    visibility: 'always',
+    key: "relationship_with_user",
+    title: "Relationship With User",
+    content: textBlocks(
+      "Maintain the long-term relationship with the Boss. Keep them informed, clarify intent, and report what matters without burying them in noise.",
+    ),
+    visibility: "always",
     priority: 98,
   },
   {
     id: createActorDocId(),
-    key: 'role_charter',
-    title: 'Role Charter',
+    key: "role_charter",
+    title: "Role Charter",
     content: textBlocks(
       [
-        'Responsibilities:',
-        '1. Receive and understand the Boss\'s goals and instructions.',
-        '2. Coordinate work with other actors in the group.',
-        '3. Send messages to appropriate team members with clear instructions.',
-        '4. Collect progress and synthesize reports.',
-        '5. Report key progress, risks, and results to the Boss.',
-      ].join('\n'),
+        "Responsibilities:",
+        "1. Receive and understand the Boss's goals and instructions.",
+        "2. Coordinate work with other actors in the group.",
+        "3. Send messages to appropriate team members with clear instructions.",
+        "4. Collect progress and synthesize reports.",
+        "5. Report key progress, risks, and results to the Boss.",
+      ].join("\n"),
     ),
-    visibility: 'always',
+    visibility: "always",
     priority: 90,
   },
   {
     id: createActorDocId(),
-    key: 'work_doctrine',
-    title: 'Work Doctrine',
+    key: "work_doctrine",
+    title: "Work Doctrine",
     content: textBlocks(
       [
-        'You are not the sole executor. Coordinate the team by messaging the right actor with clear instructions.',
-        'When you receive a message from the Boss, decide whether to answer directly, delegate, ask for more information, or invite a new actor.',
-        'When reporting, be concise and focus on what matters to the Boss.',
-      ].join('\n\n'),
+        "You are not the sole executor. Coordinate the team by messaging the right actor with clear instructions.",
+        "When you receive a message from the Boss, decide whether to answer directly, delegate, ask for more information, or invite a new actor.",
+        "When reporting, be concise and focus on what matters to the Boss.",
+      ].join("\n\n"),
     ),
-    visibility: 'always',
+    visibility: "always",
     priority: 86,
   },
   {
     id: createActorDocId(),
-    key: 'routines',
-    title: 'Routines',
+    key: "routines",
+    title: "Routines",
     content: textBlocks(
       [
-        'Use memory deliberately for stable facts, preferences, decisions, relationships, procedures, or durable artifacts.',
-        'If you are unsure whether something is durable or established, do not store it as memory.',
-      ].join('\n'),
+        "Use memory deliberately for stable facts, preferences, decisions, relationships, procedures, or durable artifacts.",
+        "If you are unsure whether something is durable or established, do not store it as memory.",
+      ].join("\n"),
     ),
-    visibility: 'internal_only',
+    visibility: "internal_only",
     priority: 80,
   },
 ]);
@@ -2175,19 +2398,21 @@ export const SECRETARY_DEFAULT_DOCS: ActorDoc[] = normalizeActorDocs([
 /** Extract concatenated text from CanonicalContentBlock[] */
 export function extractText(blocks: CanonicalContentBlock[]): string {
   return blocks
-    .filter((b): b is CanonicalTextBlock => b.type === 'text')
+    .filter((b): b is CanonicalTextBlock => b.type === "text")
     .map((b) => b.text)
-    .join('\n\n');
+    .join("\n\n");
 }
 
-export function getActorDocTemplate(key: ActorDocKey): ActorDocTemplate | undefined {
-  if (key === 'custom') return undefined;
+export function getActorDocTemplate(
+  key: ActorDocKey,
+): ActorDocTemplate | undefined {
+  if (key === "custom") return undefined;
   return ACTOR_DOC_TEMPLATE_MAP[key as CoreActorDocKey];
 }
 
 function isNonEmptyActorDoc(doc: ActorDoc): boolean {
   return doc.content.some((block) => {
-    if (block.type === 'text') return block.text.trim().length > 0;
+    if (block.type === "text") return block.text.trim().length > 0;
     return true;
   });
 }
@@ -2197,43 +2422,72 @@ export function normalizeActorDocs(docs: ActorDocInput[]): ActorDoc[] {
   const customDocs = new Map<UUID, ActorDoc>();
 
   for (const doc of docs || []) {
-    if (!doc || typeof doc !== 'object' || !doc.key || !Array.isArray(doc.content)) continue;
-    if (doc.key !== 'custom' && !(doc.key in ACTOR_DOC_TEMPLATE_MAP)) continue;
+    if (
+      !doc ||
+      typeof doc !== "object" ||
+      !doc.key ||
+      !Array.isArray(doc.content)
+    )
+      continue;
+    if (doc.key !== "custom" && !(doc.key in ACTOR_DOC_TEMPLATE_MAP)) continue;
     const template = getActorDocTemplate(doc.key);
     const normalizedDoc: ActorDoc = {
-      id: typeof doc.id === 'string' && doc.id.trim().length > 0 ? doc.id : createActorDocId(),
+      id:
+        typeof doc.id === "string" && doc.id.trim().length > 0
+          ? doc.id
+          : createActorDocId(),
       key: doc.key,
-      title: doc.title?.trim() || template?.title || (doc.key === 'custom' ? 'Custom section' : doc.key),
+      title:
+        doc.title?.trim() ||
+        template?.title ||
+        (doc.key === "custom" ? "Custom section" : doc.key),
       content: normalizeCanonicalContentBlocks(doc.content),
-      visibility: doc.visibility || template?.defaultVisibility || 'always',
-      priority: Number.isFinite(doc.priority) ? doc.priority : (template?.defaultPriority || 0),
+      visibility: doc.visibility || template?.defaultVisibility || "always",
+      priority: Number.isFinite(doc.priority)
+        ? doc.priority
+        : template?.defaultPriority || 0,
     };
 
     if (!isNonEmptyActorDoc(normalizedDoc)) continue;
-    if (normalizedDoc.key === 'custom') {
+    if (normalizedDoc.key === "custom") {
       customDocs.set(normalizedDoc.id, normalizedDoc);
     } else {
       standardDocs.set(normalizedDoc.key as CoreActorDocKey, normalizedDoc);
     }
   }
 
-  return [...standardDocs.values(), ...customDocs.values()].sort((left, right) => {
-    if (right.priority !== left.priority) return right.priority - left.priority;
-    return left.title.localeCompare(right.title);
-  });
+  return [...standardDocs.values(), ...customDocs.values()].sort(
+    (left, right) => {
+      if (right.priority !== left.priority)
+        return right.priority - left.priority;
+      return left.title.localeCompare(right.title);
+    },
+  );
 }
 
 export function summarizeActorDoc(doc: ActorDoc, maxLength = 200): string {
-  const text = extractText(doc.content).replace(/\s+/g, ' ').trim();
+  const text = extractText(doc.content).replace(/\s+/g, " ").trim();
   if (text.length > 0) {
-    return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
+    return text.length > maxLength
+      ? `${text.slice(0, maxLength - 1)}...`
+      : text;
   }
 
-  const fileBlock = doc.content.find((block): block is Extract<ActorDoc['content'][number], { type: 'file_ref' }> => block.type === 'file_ref');
-  return fileBlock ? `Attached file: ${fileBlock.originalName}` : '';
+  const fileBlock = doc.content.find(
+    (
+      block,
+    ): block is Extract<ActorDoc["content"][number], { type: "file_ref" }> =>
+      block.type === "file_ref",
+  );
+  return fileBlock ? `Attached file: ${fileBlock.originalName}` : "";
 }
 
-export function pickActorDocSummary(docs: ActorDoc[], keys: ActorDocKey[], maxLength = 500, fallback = ''): string {
+export function pickActorDocSummary(
+  docs: ActorDoc[],
+  keys: ActorDocKey[],
+  maxLength = 500,
+  fallback = "",
+): string {
   const fragments = keys
     .map((key) => docs.find((doc) => doc.key === key))
     .filter((doc): doc is ActorDoc => Boolean(doc))
@@ -2241,20 +2495,35 @@ export function pickActorDocSummary(docs: ActorDoc[], keys: ActorDocKey[], maxLe
     .filter(Boolean);
 
   if (fragments.length > 0) {
-    return fragments.join('\n\n');
+    return fragments.join("\n\n");
   }
 
   return fallback;
 }
 
-export function summarizeActorForRole(docs: ActorDoc[], fallbackTitle = ''): string {
-  return pickActorDocSummary(docs, ['role_charter', 'mission', 'limitations_and_escalation'], 500, fallbackTitle || 'No role summary provided.');
+export function summarizeActorForRole(
+  docs: ActorDoc[],
+  fallbackTitle = "",
+): string {
+  return pickActorDocSummary(
+    docs,
+    ["role_charter", "mission", "limitations_and_escalation"],
+    500,
+    fallbackTitle || "No role summary provided.",
+  );
 }
 
 export function summarizeActorForPrompt(docs: ActorDoc[]): string {
   return pickActorDocSummary(
     docs,
-    ['soul', 'self_narrative', 'work_doctrine', 'social_protocol', 'representation_guidelines', 'quirks_and_signatures'],
+    [
+      "soul",
+      "self_narrative",
+      "work_doctrine",
+      "social_protocol",
+      "representation_guidelines",
+      "quirks_and_signatures",
+    ],
     700,
   );
 }

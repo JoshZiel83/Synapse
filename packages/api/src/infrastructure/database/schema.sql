@@ -690,7 +690,7 @@ CREATE INDEX idx_conversation_item_context_targets_member
 CREATE TABLE conversation_reads (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  last_read_item_id UUID REFERENCES conversation_items(id) ON DELETE SET NULL,
+  last_read_sequence BIGINT NOT NULL DEFAULT 0,
   last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, conversation_id)
 );

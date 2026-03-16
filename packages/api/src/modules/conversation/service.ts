@@ -1,5 +1,5 @@
-import { query, transaction } from '../../infrastructure/database/index.js';
-import { v4 as uuidv4 } from 'uuid';
+import { query, transaction } from "../../infrastructure/database/index.js";
+import { v4 as uuidv4 } from "uuid";
 import type {
   ConversationEntityRef,
   ConversationFeedEventItem,
@@ -9,23 +9,23 @@ import type {
   ConversationFeedMessageItem,
   ConversationEventContextPolicy,
   ConversationEventTimelinePolicy,
-} from '@synapse/shared/types';
-import { extractText } from '@synapse/shared';
-import { buildNormalizedMessageContent } from './message-content.js';
-import { itemPartsToCanonicalContentBlocks } from './message-content.js';
+} from "@synapse/shared/types";
+import { extractText } from "@synapse/shared";
+import { buildNormalizedMessageContent } from "./message-content.js";
+import { itemPartsToCanonicalContentBlocks } from "./message-content.js";
 import {
   getConversationEventSpec,
   renderConversationEventTimelineBlocks,
-} from './event-registry.js';
+} from "./event-registry.js";
 
-export type ConversationKind = 'group' | 'direct' | 'a2a_virtual';
-export type ItemScope = 'shared' | 'private';
-export type ItemSurface = 'visible' | 'internal';
-export type ItemType = 'message' | 'event' | 'summary' | 'control';
-export type ItemRole = 'user' | 'assistant' | 'system' | 'tool';
+export type ConversationKind = "group" | "direct" | "a2a_virtual";
+export type ItemScope = "shared" | "private";
+export type ItemSurface = "visible" | "internal";
+export type ItemType = "message" | "event" | "summary" | "control";
+export type ItemRole = "user" | "assistant" | "system" | "tool";
 
 export interface ItemPartInput {
-  type: 'text' | 'file_ref' | 'json';
+  type: "text" | "file_ref" | "json";
   text?: string;
   fileId?: string;
   json?: unknown;
@@ -100,32 +100,38 @@ export async function createConversation(params: {
 }
 
 export async function getConversation(conversationId: string) {
-  const result = await query(
-    `SELECT * FROM conversations WHERE id = $1`,
-    [conversationId],
-  );
+  const result = await query(`SELECT * FROM conversations WHERE id = $1`, [
+    conversationId,
+  ]);
   return result.rows[0] ?? null;
 }
 
 export async function ensureConversationMember(params: {
   conversationId: string;
-  memberType: 'actor' | 'user' | 'remote_agent' | 'system';
+  memberType: "actor" | "user" | "remote_agent" | "system";
   actorId?: string;
   userId?: string;
   displayName?: string;
   metadata?: Record<string, unknown>;
 }) {
-  const { conversationId, memberType, actorId, userId, displayName, metadata = {} } = params;
+  const {
+    conversationId,
+    memberType,
+    actorId,
+    userId,
+    displayName,
+    metadata = {},
+  } = params;
   let existing;
 
-  if (memberType === 'actor') {
+  if (memberType === "actor") {
     existing = await query(
       `SELECT * FROM conversation_members
        WHERE conversation_id = $1 AND actor_id = $2
        LIMIT 1`,
       [conversationId, actorId || null],
     );
-  } else if (memberType === 'user') {
+  } else if (memberType === "user") {
     existing = await query(
       `SELECT * FROM conversation_members
        WHERE conversation_id = $1 AND user_id = $2
@@ -144,7 +150,7 @@ export async function ensureConversationMember(params: {
   }
 
   if (existing.rows[0]) {
-    if (existing.rows[0].state !== 'active') {
+    if (existing.rows[0].state !== "active") {
       const revived = await query(
         `UPDATE conversation_members
          SET state = 'active', left_at = NULL, metadata = metadata || $2::jsonb
@@ -229,27 +235,30 @@ async function resolveEventTimelineTargets(params: {
   timelinePolicy: ConversationEventTimelinePolicy;
   explicitTargetMemberIds?: string[];
 }) {
-  if (params.timelinePolicy === 'none' || params.timelinePolicy === 'all_members') {
+  if (
+    params.timelinePolicy === "none" ||
+    params.timelinePolicy === "all_members"
+  ) {
     return [];
   }
 
   const members = await listConversationMembers(params.conversationId);
-  if (params.timelinePolicy === 'targeted_members') {
+  if (params.timelinePolicy === "targeted_members") {
     return uniqueIds(params.explicitTargetMemberIds || []);
   }
 
-  if (params.timelinePolicy === 'users_only') {
+  if (params.timelinePolicy === "users_only") {
     return uniqueIds(
       members
-        .filter((member: any) => member.state === 'active' && member.user_id)
+        .filter((member: any) => member.state === "active" && member.user_id)
         .map((member: any) => member.id),
     );
   }
 
-  if (params.timelinePolicy === 'actors_only') {
+  if (params.timelinePolicy === "actors_only") {
     return uniqueIds(
       members
-        .filter((member: any) => member.state === 'active' && member.actor_id)
+        .filter((member: any) => member.state === "active" && member.actor_id)
         .map((member: any) => member.id),
     );
   }
@@ -262,34 +271,40 @@ async function resolveEventContextTargets(params: {
   contextPolicy: ConversationEventContextPolicy;
   explicitContextTargetMemberIds?: string[];
 }) {
-  if (params.contextPolicy === 'none') {
+  if (params.contextPolicy === "none") {
     return [];
   }
 
   const members = await listConversationMembers(params.conversationId);
-  if (params.contextPolicy === 'shared') {
+  if (params.contextPolicy === "shared") {
     return uniqueIds(
       members
-        .filter((member: any) => member.state === 'active' && member.actor_id)
+        .filter((member: any) => member.state === "active" && member.actor_id)
         .map((member: any) => member.id),
     );
   }
 
-  const explicitTargets = uniqueIds(params.explicitContextTargetMemberIds || []);
+  const explicitTargets = uniqueIds(
+    params.explicitContextTargetMemberIds || [],
+  );
   if (explicitTargets.length === 0) {
     return [];
   }
 
   const activeActorTargets = new Set(
     members
-      .filter((member: any) => member.state === 'active' && member.actor_id)
+      .filter((member: any) => member.state === "active" && member.actor_id)
       .map((member: any) => member.id),
   );
 
-  return explicitTargets.filter((targetMemberId) => activeActorTargets.has(targetMemberId));
+  return explicitTargets.filter((targetMemberId) =>
+    activeActorTargets.has(targetMemberId),
+  );
 }
 
-export async function createConversationItem(params: CreateConversationItemParams) {
+export async function createConversationItem(
+  params: CreateConversationItemParams,
+) {
   return transaction(async (client) => {
     const itemId = uuidv4();
     const itemResult = await client.query(
@@ -333,9 +348,9 @@ export async function createConversationItem(params: CreateConversationItemParam
             itemId,
             ordinal++,
             part.type,
-            part.type === 'text' ? part.text || '' : null,
-            part.type === 'file_ref' ? part.fileId || null : null,
-            part.type === 'json' ? JSON.stringify(part.json ?? {}) : null,
+            part.type === "text" ? part.text || "" : null,
+            part.type === "file_ref" ? part.fileId || null : null,
+            part.type === "json" ? JSON.stringify(part.json ?? {}) : null,
             part.mimeType || null,
             part.name || null,
             JSON.stringify(part.metadata || {}),
@@ -354,7 +369,10 @@ export async function createConversationItem(params: CreateConversationItemParam
       }
     }
 
-    if (params.contextTargetMemberIds && params.contextTargetMemberIds.length > 0) {
+    if (
+      params.contextTargetMemberIds &&
+      params.contextTargetMemberIds.length > 0
+    ) {
       for (const targetMemberId of params.contextTargetMemberIds) {
         await client.query(
           `INSERT INTO conversation_item_context_targets (item_id, target_member_id)
@@ -371,7 +389,7 @@ export async function createConversationItem(params: CreateConversationItemParam
 
     const item = itemResult.rows[0];
     let workspaceSequence: number | undefined;
-    if (params.scope === 'shared' && params.surface === 'visible') {
+    if (params.scope === "shared" && params.surface === "visible") {
       const feedResult = await client.query(
         `INSERT INTO realtime_feed_events
            (id, workspace_id, conversation_id, item_id, conversation_sequence, created_at)
@@ -395,7 +413,9 @@ export async function createConversationItem(params: CreateConversationItemParam
   });
 }
 
-export async function createConversationEvent(params: CreateConversationEventParams) {
+export async function createConversationEvent(
+  params: CreateConversationEventParams,
+) {
   const spec = getConversationEventSpec(params.eventType);
   const timelinePolicy = params.timelinePolicy || spec.timelinePolicy;
   const contextPolicy = params.contextPolicy || spec.contextPolicy;
@@ -413,8 +433,11 @@ export async function createConversationEvent(params: CreateConversationEventPar
   });
 
   const normalizedTimeline = await buildNormalizedMessageContent({
-    content: '',
-    contentBlocks: renderConversationEventTimelineBlocks(params.eventType, eventPayload),
+    content: "",
+    contentBlocks: renderConversationEventTimelineBlocks(
+      params.eventType,
+      eventPayload,
+    ),
     metadata: params.metadata || {},
   });
 
@@ -423,11 +446,11 @@ export async function createConversationEvent(params: CreateConversationEventPar
     conversationId: params.conversationId,
     sessionId: params.sessionId,
     turnId: params.turnId,
-    scope: 'shared',
-    surface: timelinePolicy === 'none' ? 'internal' : 'visible',
-    itemType: 'event',
+    scope: "shared",
+    surface: timelinePolicy === "none" ? "internal" : "visible",
+    itemType: "event",
     subtype: params.eventType,
-    role: 'system',
+    role: "system",
     authorMemberId: params.authorMemberId,
     eventPayload,
     eventTimelinePolicy: timelinePolicy,
@@ -451,13 +474,19 @@ export async function createConversationEvent(params: CreateConversationEventPar
   };
 }
 
-export async function markConversationRead(userId: string, conversationId: string, lastReadItemId?: string) {
+export async function markConversationRead(
+  userId: string,
+  conversationId: string,
+  lastReadSequence?: number,
+) {
   await query(
-    `INSERT INTO conversation_reads (user_id, conversation_id, last_read_item_id, last_read_at)
+    `INSERT INTO conversation_reads (user_id, conversation_id, last_read_sequence, last_read_at)
      VALUES ($1, $2, $3, NOW())
      ON CONFLICT (user_id, conversation_id)
-     DO UPDATE SET last_read_item_id = EXCLUDED.last_read_item_id, last_read_at = NOW()`,
-    [userId, conversationId, lastReadItemId || null],
+     DO UPDATE SET
+       last_read_sequence = GREATEST(conversation_reads.last_read_sequence, EXCLUDED.last_read_sequence),
+       last_read_at = NOW()`,
+    [userId, conversationId, Math.max(0, Number(lastReadSequence || 0))],
   );
 }
 
@@ -531,7 +560,8 @@ async function loadItemsWithRelations(itemRows: any[]) {
 
   const contextTargetsByItem = new Map<string, any[]>();
   for (const row of contextTargetsResult.rows) {
-    if (!contextTargetsByItem.has(row.item_id)) contextTargetsByItem.set(row.item_id, []);
+    if (!contextTargetsByItem.has(row.item_id))
+      contextTargetsByItem.set(row.item_id, []);
     contextTargetsByItem.get(row.item_id)!.push(row);
   }
 
@@ -551,15 +581,17 @@ async function loadItemsWithRelations(itemRows: any[]) {
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
   if (!value) return {};
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     try {
       const parsed = JSON.parse(value);
-      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+      return parsed && typeof parsed === "object"
+        ? (parsed as Record<string, unknown>)
+        : {};
     } catch {
       return {};
     }
   }
-  return typeof value === 'object' ? value as Record<string, unknown> : {};
+  return typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
 function mapEntityRef(row: any): ConversationEntityRef | undefined {
@@ -601,26 +633,30 @@ export function conversationItemRowToFeedItem(row: any): ConversationFeedItem {
     itemId: row.id,
     conversationId: row.conversation_id,
     sequence: Number(row.sequence),
-    workspaceSequence: row.workspace_sequence ? Number(row.workspace_sequence) : undefined,
+    workspaceSequence: row.workspace_sequence
+      ? Number(row.workspace_sequence)
+      : undefined,
     sessionId: row.session_id || undefined,
     turnId: row.turn_id || undefined,
     author,
     createdAt: row.created_at,
   };
 
-  if (row.item_type === 'event') {
+  if (row.item_type === "event") {
     return {
-      kind: 'event',
+      kind: "event",
       ...base,
       causedByItemId: row.caused_by_item_id || undefined,
       eventType: row.subtype,
-      payload: parseJsonObject(row.event_payload) as ConversationFeedEventItem['payload'],
+      payload: parseJsonObject(
+        row.event_payload,
+      ) as ConversationFeedEventItem["payload"],
       fallbackText: buildTextContentFromParts(row.parts || []),
     };
   }
 
   return {
-    kind: 'message',
+    kind: "message",
     ...base,
     role: row.role,
     targets: mapTargets(row.targets || []),
@@ -657,7 +693,10 @@ export async function listWorkspaceFeedEventsAfter(params: {
   limit?: number;
 }) {
   if (params.conversationIds.length === 0) {
-    return [] as Array<{ workspaceSequence: number; item: ConversationFeedItem }>;
+    return [] as Array<{
+      workspaceSequence: number;
+      item: ConversationFeedItem;
+    }>;
   }
 
   const result = await query(
@@ -692,6 +731,32 @@ export async function listWorkspaceFeedEventsAfter(params: {
   }));
 }
 
+export async function listWorkspaceFeedEventsPage(params: {
+  workspaceId: string;
+  conversationIds: string[];
+  afterSequence: number;
+  limit?: number;
+}) {
+  const pageSize = Math.max(1, Math.min(params.limit || 200, 500));
+  const records = await listWorkspaceFeedEventsAfter({
+    workspaceId: params.workspaceId,
+    conversationIds: params.conversationIds,
+    afterSequence: params.afterSequence,
+    limit: pageSize + 1,
+  });
+  const hasMore = records.length > pageSize;
+  const pageRecords = hasMore ? records.slice(0, pageSize) : records;
+
+  return {
+    records: pageRecords,
+    hasMore,
+    nextAfterSequence:
+      pageRecords.length > 0
+        ? pageRecords[pageRecords.length - 1]!.workspaceSequence
+        : undefined,
+  };
+}
+
 export async function getVisibleConversationItemsForMember(params: {
   conversationId: string;
   memberId: string;
@@ -700,7 +765,7 @@ export async function getVisibleConversationItemsForMember(params: {
 }) {
   const { conversationId, memberId, beforeSequence, limit = 200 } = params;
   const values: any[] = [conversationId, memberId];
-  let extra = '';
+  let extra = "";
   if (beforeSequence !== undefined) {
     values.push(beforeSequence);
     extra += ` AND ci.sequence < $${values.length}`;
@@ -749,7 +814,7 @@ export async function getContextConversationItemsForMember(params: {
 }) {
   const { conversationId, memberId, beforeSequence, limit = 200 } = params;
   const values: any[] = [conversationId, memberId];
-  let extra = '';
+  let extra = "";
   if (beforeSequence !== undefined) {
     values.push(beforeSequence);
     extra += ` AND ci.sequence < $${values.length}`;
@@ -841,10 +906,14 @@ export async function getLastVisibleConversationItem(conversationId: string) {
   return item || null;
 }
 
-export async function listUserGroupConversations(workspaceId: string, userId: string) {
+export async function listUserGroupConversations(
+  workspaceId: string,
+  userId: string,
+) {
   const result = await query(
     `SELECT c.*,
             cr.last_read_at,
+            COALESCE(cr.last_read_sequence, 0) AS last_read_sequence,
             (
               SELECT COUNT(*)::int
               FROM conversation_items ci
@@ -852,7 +921,7 @@ export async function listUserGroupConversations(workspaceId: string, userId: st
               WHERE ci.conversation_id = c.id
                 AND ci.scope = 'shared'
                 AND ci.surface = 'visible'
-                AND ci.created_at > COALESCE(cr.last_read_at, '1970-01-01'::timestamptz)
+                AND ci.sequence > COALESCE(cr.last_read_sequence, 0)
             ) AS unread_count
      FROM conversations c
      JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $2 AND cm.state = 'active'

@@ -1,74 +1,106 @@
-import type { FastifyInstance } from 'fastify';
-import { z } from 'zod';
-import type { CanonicalContentBlock } from '@synapse/shared';
-import { authMiddleware } from '../../infrastructure/middleware/auth.js';
-import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import type { CanonicalContentBlock } from "@synapse/shared";
+import { authMiddleware } from "../../infrastructure/middleware/auth.js";
+import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
 import {
-  createGroup, getGroup, getGroupsByWorkspace, getGroupMessages,
-  sendGroupMessage, markGroupRead, cancelGroup, getGroupMembers,
+  createGroup,
+  getGroup,
+  getGroupsByWorkspace,
+  getGroupMessages,
+  sendGroupMessage,
+  markGroupRead,
+  cancelGroup,
+  getGroupMembers,
   addMembersToGroup,
   issueConversationGrant,
   listConversationGrants,
   removeActorFromGroup,
   updateGroupProfile,
   revokeConversationGrant,
-} from './service.js';
-import { getGroupRuntimeMap } from '../session/runtime.js';
-import { requireRequestAction } from '../access/guards.js';
-import { authorizeAction, listAuthorizedResourceIds, userSubject } from '../access/service.js';
+} from "./service.js";
+import { getGroupRuntimeMap } from "../session/runtime.js";
+import { requireRequestAction } from "../access/guards.js";
+import {
+  authorizeAction,
+  listAuthorizedResourceIds,
+  userSubject,
+} from "../access/service.js";
+import { listWorkspaceFeedEventsPage } from "../conversation/service.js";
 
-const sendGroupMessageSchema = z.object({
-  content: z.string().max(10000).optional().default(''),
-  contentBlocks: z.array(z.any()).optional(),
-  clientMessageId: z.string().min(1).max(128).optional(),
-  targetActorIds: z.array(z.string().uuid()).optional(),
-  targetUserIds: z.array(z.string().uuid()).optional(),
-}).refine(
-  (body) => body.content.trim().length > 0 || (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
-  { message: 'content or contentBlocks is required' },
-);
+const sendGroupMessageSchema = z
+  .object({
+    content: z.string().max(10000).optional().default(""),
+    contentBlocks: z.array(z.any()).optional(),
+    clientMessageId: z.string().min(1).max(128),
+    targetActorIds: z.array(z.string().uuid()).optional(),
+    targetUserIds: z.array(z.string().uuid()).optional(),
+  })
+  .refine(
+    (body) =>
+      body.content.trim().length > 0 ||
+      (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
+    { message: "content or contentBlocks is required" },
+  );
 
-const updateGroupSchema = z.object({
-  title: z.string().trim().min(1).max(255).optional(),
-  avatarFileId: z.string().uuid().nullable().optional(),
-}).refine((body) => body.title !== undefined || body.avatarFileId !== undefined, {
-  message: 'At least one of title or avatarFileId is required',
-});
+const updateGroupSchema = z
+  .object({
+    title: z.string().trim().min(1).max(255).optional(),
+    avatarFileId: z.string().uuid().nullable().optional(),
+  })
+  .refine(
+    (body) => body.title !== undefined || body.avatarFileId !== undefined,
+    {
+      message: "At least one of title or avatarFileId is required",
+    },
+  );
 
-const addGroupMembersSchema = z.object({
-  actorIds: z.array(z.string().uuid()).optional().default([]),
-  userIds: z.array(z.string().uuid()).optional().default([]),
-}).refine((body) => body.actorIds.length > 0 || body.userIds.length > 0, {
-  message: 'At least one actor or user is required',
-});
+const addGroupMembersSchema = z
+  .object({
+    actorIds: z.array(z.string().uuid()).optional().default([]),
+    userIds: z.array(z.string().uuid()).optional().default([]),
+  })
+  .refine((body) => body.actorIds.length > 0 || body.userIds.length > 0, {
+    message: "At least one actor or user is required",
+  });
 
 const conversationGrantPermissionEnum = z.enum([
-  'send',
-  'moderate',
-  'manage',
-  'manage_members',
-  'attach_resources',
+  "send",
+  "moderate",
+  "manage",
+  "manage_members",
+  "attach_resources",
 ]);
 
-const issueConversationGrantSchema = z.object({
-  permission: conversationGrantPermissionEnum,
-  userId: z.string().uuid().optional(),
-  actorId: z.string().uuid().optional(),
-  reason: z.string().max(1000).optional(),
-  metadata: z.record(z.unknown()).optional(),
-}).superRefine((value, ctx) => {
-  const invalid = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message });
-  if ((value.userId && value.actorId) || (!value.userId && !value.actorId)) {
-    invalid('Exactly one of userId or actorId is required');
-  }
-});
+const issueConversationGrantSchema = z
+  .object({
+    permission: conversationGrantPermissionEnum,
+    userId: z.string().uuid().optional(),
+    actorId: z.string().uuid().optional(),
+    reason: z.string().max(1000).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .superRefine((value, ctx) => {
+    const invalid = (message: string) =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+    if ((value.userId && value.actorId) || (!value.userId && !value.actorId)) {
+      invalid("Exactly one of userId or actorId is required");
+    }
+  });
 
-async function requireWorkspacePermission(request: any, reply: any, permission: string, errorMessage: string) {
+async function requireWorkspacePermission(
+  request: any,
+  reply: any,
+  permission: string,
+  errorMessage: string,
+) {
   const { workspaceId } = request.params as { workspaceId: string };
   return requireRequestAction(
     request,
     reply,
-    permission === 'create_conversation' ? 'workspace.create_conversation' : 'workspace.view',
+    permission === "create_conversation"
+      ? "workspace.create_conversation"
+      : "workspace.view",
     workspaceId,
     errorMessage,
   );
@@ -77,25 +109,28 @@ async function requireWorkspacePermission(request: any, reply: any, permission: 
 async function requireGroupPermission(
   request: any,
   reply: any,
-  permission: 'view' | 'send' | 'manage' | 'manage_members',
+  permission: "view" | "send" | "manage" | "manage_members",
   errorMessage: string,
 ) {
-  const { workspaceId, groupId } = request.params as { workspaceId: string; groupId: string };
+  const { workspaceId, groupId } = request.params as {
+    workspaceId: string;
+    groupId: string;
+  };
   const group = await getGroup(groupId);
 
   if (!group || group.workspace_id !== workspaceId) {
-    reply.status(404).send({ error: 'Group not found' });
+    reply.status(404).send({ error: "Group not found" });
     return null;
   }
 
   const action =
-    permission === 'view'
-      ? 'conversation.view'
-      : permission === 'send'
-        ? 'conversation.send'
-        : permission === 'manage'
-          ? 'conversation.manage'
-          : 'conversation.manage_members';
+    permission === "view"
+      ? "conversation.view"
+      : permission === "send"
+        ? "conversation.send"
+        : permission === "manage"
+          ? "conversation.manage"
+          : "conversation.manage_members";
   const allowed = await requireRequestAction(
     request,
     reply,
@@ -111,29 +146,33 @@ async function requireGroupPermission(
 }
 
 function parseMetadata(value: unknown): Record<string, unknown> {
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     try {
       const parsed = JSON.parse(value);
-      return parsed && typeof parsed === 'object' ? parsed : {};
+      return parsed && typeof parsed === "object" ? parsed : {};
     } catch {
       return {};
     }
   }
-  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function mapMember(row: any) {
   if (row.actor_id) {
     return {
       memberId: row.id,
-      type: 'actor',
+      type: "actor",
       actorId: row.actor_id,
       id: row.actor_id,
-      name: row.actor_name || 'Unknown',
+      name: row.actor_name || "Unknown",
       title: row.actor_title || undefined,
-      role: row.actor_role || 'specialist',
+      role: row.actor_role || "specialist",
       emoji: row.actor_avatar_emoji || undefined,
-      avatarUrl: row.actor_avatar_stored_name ? `/files/${row.actor_avatar_stored_name}` : undefined,
+      avatarUrl: row.actor_avatar_stored_name
+        ? `/files/${row.actor_avatar_stored_name}`
+        : undefined,
       sessionStatus: row.session_status || undefined,
       state: row.state,
     };
@@ -141,102 +180,158 @@ function mapMember(row: any) {
 
   return {
     memberId: row.id,
-    type: 'user',
+    type: "user",
     userId: row.user_id,
     id: row.user_id,
-    name: row.user_name || 'User',
+    name: row.user_name || "User",
     avatarUrl: row.user_avatar_url || undefined,
     state: row.state,
   };
 }
 
 export default async function groupController(app: FastifyInstance) {
-  app.addHook('onRequest', authMiddleware);
-  app.addHook('onRequest', workspaceMiddleware);
+  app.addHook("onRequest", authMiddleware);
+  app.addHook("onRequest", workspaceMiddleware);
 
   // List groups for current user
   app.get<{ Params: { workspaceId: string } }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups',
+    "/api/v1/workspaces/:workspaceId/chat/groups",
     async (request, reply) => {
       const userId = (request as any).user!.userId;
       const { workspaceId } = request.params;
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'view',
-        'Not allowed to access this workspace',
+        "view",
+        "Not allowed to access this workspace",
       );
       if (!allowed) return;
 
       const groupIds = await listAuthorizedResourceIds({
         subject: userSubject(userId),
-        action: 'conversation.view',
+        action: "conversation.view",
       });
-      const rawGroups = await getGroupsByWorkspace(workspaceId, userId, groupIds);
+      const rawGroups = await getGroupsByWorkspace(
+        workspaceId,
+        userId,
+        groupIds,
+      );
 
       // Transform to frontend format
-      const groups = await Promise.all(rawGroups.map(async (row: any) => {
-        const members = (await getGroupMembers(row.id))
-          .filter((member: any) => member.state === 'active');
-        const mappedMembers = members.map(mapMember);
-        const participants = mappedMembers.filter((member: any) => member.type === 'actor');
+      const groups = await Promise.all(
+        rawGroups.map(async (row: any) => {
+          const members = (await getGroupMembers(row.id)).filter(
+            (member: any) => member.state === "active",
+          );
+          const mappedMembers = members.map(mapMember);
+          const participants = mappedMembers.filter(
+            (member: any) => member.type === "actor",
+          );
 
-        const hasOpenLane = members.some((m: any) => m.actor_id && m.session_status !== 'closed');
-        const metadata = parseMetadata(row.metadata);
-        const derivedName = row.title
-          || mappedMembers.map((member: any) => member.name).filter(Boolean).join(', ')
-          || row.last_message?.substring(0, 100)
-          || 'Untitled conversation';
-        const [canManage, canManageMembers] = await Promise.all([
-          authorizeAction({
-            subject: userSubject(userId),
-            action: 'conversation.manage',
-            resourceId: row.id,
-          }),
-          authorizeAction({
-            subject: userSubject(userId),
-            action: 'conversation.manage_members',
-            resourceId: row.id,
-          }),
-        ]);
+          const hasOpenLane = members.some(
+            (m: any) => m.actor_id && m.session_status !== "closed",
+          );
+          const metadata = parseMetadata(row.metadata);
+          const derivedName =
+            row.title ||
+            mappedMembers
+              .map((member: any) => member.name)
+              .filter(Boolean)
+              .join(", ") ||
+            row.last_message?.substring(0, 100) ||
+            "Untitled conversation";
+          const [canManage, canManageMembers] = await Promise.all([
+            authorizeAction({
+              subject: userSubject(userId),
+              action: "conversation.manage",
+              resourceId: row.id,
+            }),
+            authorizeAction({
+              subject: userSubject(userId),
+              action: "conversation.manage_members",
+              resourceId: row.id,
+            }),
+          ]);
 
-        return {
-          id: row.id,
-          status: hasOpenLane ? 'active' : 'completed',
-          participants,
-          members: mappedMembers,
-          lastMessage: row.last_message ? {
-            content: row.last_message,
-            role: row.last_message_sender_type === 'user' ? 'user' : 'assistant',
-            actorName: row.last_message_sender_name,
-            createdAt: row.last_message_at,
-          } : undefined,
-          unreadCount: row.unread_count || 0,
-          createdAt: row.created_at,
-          title: derivedName,
-          name: derivedName,
-          avatarUrl: typeof metadata.avatarUrl === 'string' ? metadata.avatarUrl : undefined,
-          permissions: {
-            canManage,
-            canManageMembers,
-          },
-        };
-      }));
+          return {
+            id: row.id,
+            status: hasOpenLane ? "active" : "completed",
+            participants,
+            members: mappedMembers,
+            lastMessage: row.last_message
+              ? {
+                  content: row.last_message,
+                  role:
+                    row.last_message_sender_type === "user"
+                      ? "user"
+                      : "assistant",
+                  actorName: row.last_message_sender_name,
+                  createdAt: row.last_message_at,
+                }
+              : undefined,
+            unreadCount: row.unread_count || 0,
+            createdAt: row.created_at,
+            title: derivedName,
+            name: derivedName,
+            avatarUrl:
+              typeof metadata.avatarUrl === "string"
+                ? metadata.avatarUrl
+                : undefined,
+            permissions: {
+              canManage,
+              canManageMembers,
+            },
+          };
+        }),
+      );
 
-      const runtimeMap = await getGroupRuntimeMap(groups.map((group: any) => group.id));
+      const runtimeMap = await getGroupRuntimeMap(
+        groups.map((group: any) => group.id),
+      );
       return reply.send({ groups, runtimeMap });
-    }
+    },
   );
+
+  app.get<{
+    Params: { workspaceId: string };
+    Querystring: { after?: string; limit?: string };
+  }>("/api/v1/workspaces/:workspaceId/chat/feed", async (request, reply) => {
+    const userId = (request as any).user!.userId;
+    const { workspaceId } = request.params;
+    const allowed = await requireWorkspacePermission(
+      request,
+      reply,
+      "view",
+      "Not allowed to access this workspace",
+    );
+    if (!allowed) return;
+
+    const authorizedConversationIds = await listAuthorizedResourceIds({
+      subject: userSubject(userId),
+      action: "conversation.view",
+    });
+    const afterSequence = Number.parseInt(request.query.after || "0", 10);
+    const limit = Number.parseInt(request.query.limit || "200", 10);
+    const page = await listWorkspaceFeedEventsPage({
+      workspaceId,
+      conversationIds: authorizedConversationIds,
+      afterSequence: Number.isFinite(afterSequence)
+        ? Math.max(0, afterSequence)
+        : 0,
+      limit: Number.isFinite(limit) ? limit : 200,
+    });
+    return reply.send(page);
+  });
 
   // Create group — accepts { actorId } or { actorIds }, content is optional
   app.post<{ Params: { workspaceId: string }; Body: any }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups',
+    "/api/v1/workspaces/:workspaceId/chat/groups",
     async (request, reply) => {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
-        'create_conversation',
-        'Not allowed to create conversations in this workspace',
+        "create_conversation",
+        "Not allowed to create conversations in this workspace",
       );
       if (!allowed) return;
 
@@ -255,10 +350,15 @@ export default async function groupController(app: FastifyInstance) {
         actorIds = [body.actorId];
         targetActorId = body.actorId;
       } else {
-        return reply.status(400).send({ error: 'actorId or actorIds required' });
+        return reply
+          .status(400)
+          .send({ error: "actorId or actorIds required" });
       }
 
-      const content = body.content && typeof body.content === 'string' ? body.content : undefined;
+      const content =
+        body.content && typeof body.content === "string"
+          ? body.content
+          : undefined;
 
       const result = await createGroup({
         workspaceId,
@@ -275,47 +375,50 @@ export default async function groupController(app: FastifyInstance) {
         sessionId: result.group.id,
         group: result.group,
         members,
-        status: 'active',
+        status: "active",
       });
-    }
+    },
   );
 
   // Get group messages — transformed to frontend format
-  app.get<{ Params: { workspaceId: string; groupId: string }; Querystring: { limit?: string; before?: string } }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/messages',
+  app.get<{
+    Params: { workspaceId: string; groupId: string };
+    Querystring: { limit?: string; before?: string };
+  }>(
+    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/messages",
     async (request, reply) => {
       const group = await requireGroupPermission(
         request,
         reply,
-        'view',
-        'Not allowed to view this conversation',
+        "view",
+        "Not allowed to view this conversation",
       );
       if (!group) return;
 
       const userId = (request as any).user!.userId;
-      const limit = parseInt(request.query.limit || '100', 10);
+      const limit = parseInt(request.query.limit || "100", 10);
       const before = request.query.before;
       const page = await getGroupMessages(group.id, { userId }, limit, before);
       return reply.send(page);
-    }
+    },
   );
 
   // Send message to group — explicit targets are optional.
   app.post<{ Params: { workspaceId: string; groupId: string }; Body: any }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/messages',
+    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/messages",
     async (request, reply) => {
       const group = await requireGroupPermission(
         request,
         reply,
-        'send',
-        'Not allowed to send messages to this conversation',
+        "send",
+        "Not allowed to send messages to this conversation",
       );
       if (!group) return;
 
       const body = sendGroupMessageSchema.parse(request.body) as {
         content: string;
         contentBlocks?: CanonicalContentBlock[];
-        clientMessageId?: string;
+        clientMessageId: string;
         targetActorIds?: string[];
         targetUserIds?: string[];
       };
@@ -323,7 +426,7 @@ export default async function groupController(app: FastifyInstance) {
 
       const msg = await sendGroupMessage({
         groupId: group.id,
-        senderType: 'user',
+        senderType: "user",
         senderUserId: userId,
         clientMessageId: body.clientMessageId,
         targetActorIds: body.targetActorIds,
@@ -333,52 +436,52 @@ export default async function groupController(app: FastifyInstance) {
       });
 
       return reply.status(201).send(msg);
-    }
+    },
   );
 
   // Mark group as read
   app.post<{ Params: { workspaceId: string; groupId: string } }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/read',
+    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/read",
     async (request, reply) => {
       const group = await requireGroupPermission(
         request,
         reply,
-        'view',
-        'Not allowed to view this conversation',
+        "view",
+        "Not allowed to view this conversation",
       );
       if (!group) return;
 
       const userId = (request as any).user!.userId;
       await markGroupRead(userId, group.id);
       return reply.status(204).send();
-    }
+    },
   );
 
   // Cancel group (stop all actors)
   app.delete<{ Params: { workspaceId: string; groupId: string } }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId',
+    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId",
     async (request, reply) => {
       const group = await requireGroupPermission(
         request,
         reply,
-        'manage',
-        'Not allowed to manage this conversation',
+        "manage",
+        "Not allowed to manage this conversation",
       );
       if (!group) return;
 
       await cancelGroup(group.id);
       return reply.status(204).send();
-    }
+    },
   );
 
   app.put<{ Params: { workspaceId: string; groupId: string }; Body: unknown }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId',
+    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId",
     async (request, reply) => {
       const group = await requireGroupPermission(
         request,
         reply,
-        'manage',
-        'Not allowed to manage this conversation',
+        "manage",
+        "Not allowed to manage this conversation",
       );
       if (!group) return;
 
@@ -395,45 +498,50 @@ export default async function groupController(app: FastifyInstance) {
       } catch (error) {
         if (error instanceof z.ZodError) {
           return reply.status(400).send({
-            error: 'Validation failed',
+            error: "Validation failed",
             details: error.errors.map((item) => ({
-              field: item.path.join('.'),
+              field: item.path.join("."),
               message: item.message,
             })),
           });
         }
-        return reply.status(400).send({ error: error instanceof Error ? error.message : 'Failed to update group' });
+        return reply
+          .status(400)
+          .send({
+            error:
+              error instanceof Error ? error.message : "Failed to update group",
+          });
       }
     },
   );
 
   // Get group members
   app.get<{ Params: { workspaceId: string; groupId: string } }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/members',
+    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/members",
     async (request, reply) => {
       const group = await requireGroupPermission(
         request,
         reply,
-        'view',
-        'Not allowed to view this conversation',
+        "view",
+        "Not allowed to view this conversation",
       );
       if (!group) return;
 
       const members = (await getGroupMembers(group.id))
-        .filter((member: any) => member.state === 'active')
+        .filter((member: any) => member.state === "active")
         .map(mapMember);
       return reply.send({ members });
-    }
+    },
   );
 
   app.post<{ Params: { workspaceId: string; groupId: string }; Body: unknown }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/members',
+    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/members",
     async (request, reply) => {
       const group = await requireGroupPermission(
         request,
         reply,
-        'manage_members',
-        'Not allowed to manage conversation members',
+        "manage_members",
+        "Not allowed to manage conversation members",
       );
       if (!group) return;
 
@@ -449,44 +557,51 @@ export default async function groupController(app: FastifyInstance) {
       } catch (error) {
         if (error instanceof z.ZodError) {
           return reply.status(400).send({
-            error: 'Validation failed',
+            error: "Validation failed",
             details: error.errors.map((item) => ({
-              field: item.path.join('.'),
+              field: item.path.join("."),
               message: item.message,
             })),
           });
         }
-        return reply.status(400).send({ error: error instanceof Error ? error.message : 'Failed to add members' });
+        return reply
+          .status(400)
+          .send({
+            error:
+              error instanceof Error ? error.message : "Failed to add members",
+          });
       }
     },
   );
 
   // Remove actor from group (kick)
-  app.delete<{ Params: { workspaceId: string; groupId: string; actorId: string } }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/members/:actorId',
+  app.delete<{
+    Params: { workspaceId: string; groupId: string; actorId: string };
+  }>(
+    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/members/:actorId",
     async (request, reply) => {
       const group = await requireGroupPermission(
         request,
         reply,
-        'manage_members',
-        'Not allowed to manage conversation members',
+        "manage_members",
+        "Not allowed to manage conversation members",
       );
       if (!group) return;
 
       const { groupId, actorId } = request.params;
       await removeActorFromGroup(group.id, actorId);
       return reply.status(204).send();
-    }
+    },
   );
 
   app.get<{ Params: { workspaceId: string; groupId: string } }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/grants',
+    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/grants",
     async (request, reply) => {
       const group = await requireGroupPermission(
         request,
         reply,
-        'manage',
-        'Not allowed to manage conversation permissions',
+        "manage",
+        "Not allowed to manage conversation permissions",
       );
       if (!group) return;
 
@@ -497,13 +612,13 @@ export default async function groupController(app: FastifyInstance) {
   );
 
   app.post<{ Params: { workspaceId: string; groupId: string }; Body: unknown }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/grants',
+    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/grants",
     async (request, reply) => {
       const group = await requireGroupPermission(
         request,
         reply,
-        'manage',
-        'Not allowed to manage conversation permissions',
+        "manage",
+        "Not allowed to manage conversation permissions",
       );
       if (!group) return;
 
@@ -523,26 +638,35 @@ export default async function groupController(app: FastifyInstance) {
       } catch (error) {
         if (error instanceof z.ZodError) {
           return reply.status(400).send({
-            error: 'Validation failed',
+            error: "Validation failed",
             details: error.errors.map((item) => ({
-              field: item.path.join('.'),
+              field: item.path.join("."),
               message: item.message,
             })),
           });
         }
-        return reply.status(400).send({ error: error instanceof Error ? error.message : 'Failed to issue conversation grant' });
+        return reply
+          .status(400)
+          .send({
+            error:
+              error instanceof Error
+                ? error.message
+                : "Failed to issue conversation grant",
+          });
       }
     },
   );
 
-  app.post<{ Params: { workspaceId: string; groupId: string; grantId: string } }>(
-    '/api/v1/workspaces/:workspaceId/chat/groups/:groupId/grants/:grantId/revoke',
+  app.post<{
+    Params: { workspaceId: string; groupId: string; grantId: string };
+  }>(
+    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/grants/:grantId/revoke",
     async (request, reply) => {
       const group = await requireGroupPermission(
         request,
         reply,
-        'manage',
-        'Not allowed to manage conversation permissions',
+        "manage",
+        "Not allowed to manage conversation permissions",
       );
       if (!group) return;
 
@@ -553,7 +677,9 @@ export default async function groupController(app: FastifyInstance) {
         grantId,
       });
       if (!revoked) {
-        return reply.status(404).send({ error: 'Conversation grant not found' });
+        return reply
+          .status(404)
+          .send({ error: "Conversation grant not found" });
       }
       return reply.send({ grant: revoked });
     },

@@ -6,6 +6,7 @@ import type {
   CanonicalContentBlock,
   ConversationFeedItem,
   ConversationFeedPage,
+  WorkspaceFeedPage,
   RelayDashboardView,
   RelayDeviceDetailView,
   RelayDeviceSummaryView,
@@ -636,6 +637,21 @@ class ApiClient {
       `/workspaces/${wsId}/chat/groups/${groupId}/messages${qs ? "?" + qs : ""}`
     )
   }
+  getWorkspaceFeed(
+    wsId: string,
+    after?: number,
+    limit?: number
+  ): Promise<WorkspaceFeedPage> {
+    const params = new URLSearchParams()
+    if (typeof after === "number" && Number.isFinite(after) && after > 0) {
+      params.set("after", String(after))
+    }
+    if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
+      params.set("limit", String(limit))
+    }
+    const qs = params.toString()
+    return this.fetch(`/workspaces/${wsId}/chat/feed${qs ? "?" + qs : ""}`)
+  }
   getGroupMembers(wsId: string, groupId: string) {
     return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/members`)
   }
@@ -653,16 +669,16 @@ class ApiClient {
     wsId: string,
     groupId: string,
     contentBlocks: CanonicalContentBlock[],
+    clientMessageId: string,
     targetActorIds?: string[],
-    targetUserIds?: string[],
-    clientMessageId?: string
+    targetUserIds?: string[]
   ): Promise<{ item: ConversationFeedItem }> {
     const body: any = { contentBlocks }
     if (targetActorIds && targetActorIds.length > 0)
       body.targetActorIds = targetActorIds
     if (targetUserIds && targetUserIds.length > 0)
       body.targetUserIds = targetUserIds
-    if (clientMessageId) body.clientMessageId = clientMessageId
+    body.clientMessageId = clientMessageId
     return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
