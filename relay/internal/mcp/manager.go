@@ -3,8 +3,12 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/PekingSpades/Synapse/relay/internal/config"
@@ -254,6 +258,12 @@ func (m *Manager) RefreshToolCatalogs() (bool, []ServerInfo, error) {
 	for index, current := range servers {
 		tools, err := current.server.ListTools()
 		if err != nil {
+			if isPermanentToolCatalogRefreshError(err) {
+				current.server.Shutdown()
+				if m.removeServerByStableKey(current.stableKey) {
+					changed = true
+				}
+			}
 			m.emit("server_failed", fmt.Sprintf("Server %s tools/list refresh failed: %v", current.name, err), map[string]interface{}{
 				"server":    current.name,
 				"stableKey": current.stableKey,
@@ -319,6 +329,35 @@ func (m *Manager) notifyCatalogHint(serverName, stableKey string) {
 	case m.hints <- struct{}{}:
 	default:
 	}
+}
+
+func (m *Manager) removeServerByStableKey(stableKey string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for index := range m.servers {
+		if m.servers[index].stableKey != stableKey {
+			continue
+		}
+		m.servers = append(m.servers[:index], m.servers[index+1:]...)
+		return true
+	}
+
+	return false
+}
+
+func isPermanentToolCatalogRefreshError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, os.ErrClosed) {
+		return true
+	}
+
+	message := err.Error()
+	return strings.Contains(message, "child process exited (stdout closed)") ||
+		strings.Contains(message, "file already closed") ||
+		strings.Contains(message, "broken pipe")
 }
 
 func toolCatalogEqual(left, right []Tool) bool {

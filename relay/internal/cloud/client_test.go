@@ -105,3 +105,20 @@ func TestNormalizeOperationErrorPreservesUnavailableExposure(t *testing.T) {
 		t.Fatalf("expected mcp_unavailable, got %s", opErr.Code)
 	}
 }
+
+func TestRelayFailureReasonUnwrapsDisconnectError(t *testing.T) {
+	err := &disconnectError{err: errors.New("read: websocket: close 1006")}
+
+	if got := relayFailureReason(err); got != "read: websocket: close 1006" {
+		t.Fatalf("expected wrapped disconnect reason, got %q", got)
+	}
+}
+
+func TestRelayFailurePhaseClassifiesCatalogSyncFailures(t *testing.T) {
+	if got := relayFailurePhase("catalog sync rejected: exposure invalid"); got != "catalog_sync_rejected" {
+		t.Fatalf("expected catalog_sync_rejected, got %q", got)
+	}
+	if got := relayFailurePhase("read catalog sync response: websocket: close 1006"); got != "catalog_sync_response" {
+		t.Fatalf("expected catalog_sync_response, got %q", got)
+	}
+}

@@ -1,6 +1,10 @@
 package mcp
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+)
 
 func TestManagerNotifyCatalogHintEmitsEventAndSignal(t *testing.T) {
 	manager := NewManager(nil)
@@ -39,5 +43,68 @@ func TestManagerNotifyCatalogHintEmitsEventAndSignal(t *testing.T) {
 		}
 	default:
 		t.Fatalf("expected catalog_hint event to be emitted")
+	}
+}
+
+type failingServer struct {
+	listToolsErr error
+	shutdowns    int
+}
+
+func (s *failingServer) Start(context.Context) error {
+	return nil
+}
+
+func (s *failingServer) Initialize() error {
+	return nil
+}
+
+func (s *failingServer) ListTools() ([]Tool, error) {
+	return nil, s.listToolsErr
+}
+
+func (s *failingServer) CallTool(context.Context, string, map[string]interface{}) (interface{}, error) {
+	return nil, nil
+}
+
+func (s *failingServer) Shutdown() {
+	s.shutdowns++
+}
+
+func TestRefreshToolCatalogsRemovesPermanentlyClosedServer(t *testing.T) {
+	dead := &failingServer{listToolsErr: errors.New("send tools/list: write |1: file already closed")}
+	live := &failingServer{}
+	manager := NewManager(nil)
+	manager.servers = []serverEntry{
+		{
+			stableKey: "dead",
+			name:      "chrome-browser",
+			server:    dead,
+			tools: []Tool{
+				{Name: "open_tab"},
+			},
+		},
+		{
+			stableKey: "live",
+			name:      "filesystem",
+			server:    live,
+			tools: []Tool{
+				{Name: "read_file"},
+			},
+		},
+	}
+
+	changed, servers, err := manager.RefreshToolCatalogs()
+	if err != nil {
+		t.Fatalf("expected refresh to succeed, got %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected dead server removal to mark catalog as changed")
+	}
+	if dead.shutdowns != 1 {
+		t.Fatalf("expected dead server to be shut down once, got %d", dead.shutdowns)
+	}
+	if len(servers) != 1 || servers[0].StableKey != "live" {
+		t.Fatalf("expected only live server to remain, got %+v", servers)
 	}
 }

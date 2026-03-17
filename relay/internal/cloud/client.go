@@ -152,8 +152,21 @@ func (c *Client) Run(ctx context.Context) error {
 
 		attempt++
 		delay := c.backoffDelay(attempt)
+		reason := relayFailureReason(err)
+		phase := relayFailurePhase(reason)
 		log.Printf("Relay disconnected (attempt %d): %v. Reconnecting in %v...", attempt, err, delay)
-		c.emit("disconnected", fmt.Sprintf("Relay disconnected, reconnecting in %v", delay), nil)
+		c.emit("log", fmt.Sprintf("Relay reconnect reason: %s", reason), map[string]interface{}{
+			"attempt": attempt,
+			"phase":   phase,
+			"reason":  reason,
+			"retryIn": delay.String(),
+		})
+		c.emit("disconnected", fmt.Sprintf("Relay disconnected, reconnecting in %v", delay), map[string]interface{}{
+			"attempt": attempt,
+			"phase":   phase,
+			"reason":  reason,
+			"retryIn": delay.String(),
+		})
 
 		select {
 		case <-ctx.Done():
@@ -199,7 +212,7 @@ func (c *Client) connectAndServe(ctx context.Context) error {
 		return err
 	}
 
-	c.emit("connected", fmt.Sprintf("Authenticated relay device %s", authOK.DeviceID), map[string]interface{}{
+	c.emit("log", fmt.Sprintf("Authenticated relay device %s; syncing relay catalog...", authOK.DeviceID), map[string]interface{}{
 		"deviceId":  authOK.DeviceID,
 		"sessionId": authOK.SessionID,
 	})
@@ -228,13 +241,67 @@ func (c *Client) connectAndServe(ctx context.Context) error {
 		return fmt.Errorf("unexpected catalog sync response type: %s", syncAck.Type)
 	}
 
+	var synced CatalogSyncedMessage
+	if err := json.Unmarshal(raw, &synced); err != nil {
+		return fmt.Errorf("parse catalog synced response: %w", err)
+	}
+
 	c.setConnection(conn)
 	defer c.clearConnection(conn)
+	c.emit("connected", fmt.Sprintf("Relay connected as device %s", authOK.DeviceID), map[string]interface{}{
+		"deviceId":      authOK.DeviceID,
+		"exposureCount": synced.ExposureCount,
+		"sessionId":     authOK.SessionID,
+	})
 
 	if err := c.readLoop(ctx, conn); err != nil {
 		return &disconnectError{err: err}
 	}
 	return &disconnectError{err: fmt.Errorf("relay connection closed")}
+}
+
+func relayFailureReason(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	var de *disconnectError
+	if errors.As(err, &de) && de.err != nil {
+		return de.err.Error()
+	}
+
+	return err.Error()
+}
+
+func relayFailurePhase(reason string) string {
+	switch {
+	case strings.HasPrefix(reason, "dial:"):
+		return "dial"
+	case strings.HasPrefix(reason, "send auth.begin:"), strings.HasPrefix(reason, "send auth.finish:"):
+		return "auth_write"
+	case strings.HasPrefix(reason, "read auth challenge:"):
+		return "auth_challenge"
+	case strings.HasPrefix(reason, "read auth result:"):
+		return "auth_result"
+	case strings.HasPrefix(reason, "send catalog sync:"):
+		return "catalog_sync_send"
+	case strings.HasPrefix(reason, "read catalog sync response:"):
+		return "catalog_sync_response"
+	case strings.HasPrefix(reason, "parse catalog sync response:"):
+		return "catalog_sync_response"
+	case strings.HasPrefix(reason, "parse catalog synced response:"):
+		return "catalog_sync_response"
+	case strings.HasPrefix(reason, "catalog sync rejected:"):
+		return "catalog_sync_rejected"
+	case strings.HasPrefix(reason, "unexpected catalog sync response type:"):
+		return "catalog_sync_response"
+	case strings.HasPrefix(reason, "server shutdown"):
+		return "server_shutdown"
+	case strings.HasPrefix(reason, "read:"), reason == "relay connection closed":
+		return "connected_session"
+	default:
+		return "unknown"
+	}
 }
 
 func (c *Client) authenticate(conn *websocket.Conn) (*AuthOKMessage, error) {
