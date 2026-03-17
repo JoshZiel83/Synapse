@@ -1073,6 +1073,9 @@ async function syncRelaySyncSources(deviceId: string, syncSources: RelaySyncSour
   const bySourceKey = new Map<string, string>();
 
   for (const source of syncSources) {
+    const lastSyncedAt = typeof source.lastSyncedAt === 'string' && source.lastSyncedAt.trim().length > 0
+      ? source.lastSyncedAt.trim()
+      : null;
     const result = await query(
       `INSERT INTO relay_sync_sources (
          device_id, source_kind, source_key, config_path, sync_mode, status,
@@ -1080,7 +1083,7 @@ async function syncRelaySyncSources(deviceId: string, syncSources: RelaySyncSour
        )
        VALUES (
          $1, $2, $3, $4, $5, $6,
-         COALESCE(CASE WHEN $7 IS NULL OR $7 = '' THEN NULL ELSE $7::timestamptz END, NOW()),
+         COALESCE($7::timestamptz, NOW()),
          $8,
          $9
        )
@@ -1101,7 +1104,7 @@ async function syncRelaySyncSources(deviceId: string, syncSources: RelaySyncSour
         source.configPath,
         source.syncMode,
         source.status,
-        source.lastSyncedAt,
+        lastSyncedAt,
         source.lastError,
         JSON.stringify(source.metadata),
       ],
