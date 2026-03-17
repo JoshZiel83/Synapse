@@ -101,9 +101,17 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            mv relay/cmd/synapse-relay-gui/build/bin/synapse-relay-gui.exe synapse-relay-gui-${{ matrix.suffix }}.exe
+            main_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui.exe' -o -name 'synapse-relay-gui-windows-*.exe' \) ! -name '*-setup.exe' | head -n 1)"
+            setup_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f -name 'synapse-relay-gui*-setup.exe' | head -n 1)"
+            test -n "$main_exe"
+            test -n "$setup_exe"
+            mv "$main_exe" synapse-relay-gui-${{ matrix.suffix }}.exe
+            mv "$setup_exe" synapse-relay-gui-${{ matrix.suffix }}-setup.exe
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
-            cd relay/cmd/synapse-relay-gui/build/bin && zip -r ../../../../../synapse-relay-gui-${{ matrix.suffix }}.zip "Synapse Relay.app" 2>/dev/null || mv synapse-relay-gui ../../../../../synapse-relay-gui-${{ matrix.suffix }}
+            app_path="relay/cmd/synapse-relay-gui/build/bin/Synapse Relay.app"
+            test -d "$app_path"
+            ditto -c -k --sequesterRsrc --keepParent "$app_path" "synapse-relay-gui-${{ matrix.suffix }}.zip"
+            hdiutil create -volname "Synapse Relay" -srcfolder "$app_path" -ov -format UDZO "synapse-relay-gui-${{ matrix.suffix }}.dmg"
           else
             mv relay/cmd/synapse-relay-gui/build/bin/synapse-relay-gui synapse-relay-gui-${{ matrix.suffix }}
           fi
