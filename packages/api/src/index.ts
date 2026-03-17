@@ -53,7 +53,7 @@ import platformModule from "./modules/platform/index.js";
 import { syncConfiguredPlatformAdmins } from "./modules/platform/admin-service.js";
 import { seedPlatformDefaultGroup } from "./modules/model-groups/service.js";
 import { seedBuiltinMcpPlugins } from "./modules/mcp-plugins/service.js";
-import { seedBuiltinActorTemplates } from "./modules/organization/service.js";
+import { seedBuiltinActorPackages } from "./modules/organization/service.js";
 import { initBuiltinRegistry } from "./modules/mcp-plugins/builtin/index.js";
 import {
   initInstanceManagerListeners,
@@ -167,7 +167,7 @@ async function main() {
   // Seed MCP builtin plugins and init registry
   try {
     await seedBuiltinMcpPlugins();
-    await seedBuiltinActorTemplates();
+    await seedBuiltinActorPackages();
     await initBuiltinRegistry();
     initInstanceManagerListeners();
     await initRelayManager();
@@ -178,7 +178,7 @@ async function main() {
         recovered,
       );
     }
-    console.log("MCP plugins and actor templates seeded; registry initialized");
+    console.log("MCP plugins and actor packages seeded; registry initialized");
   } catch (err) {
     console.error("Failed to seed builtin marketplace packages:", err);
   }

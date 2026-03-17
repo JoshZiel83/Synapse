@@ -18,12 +18,12 @@ export function registerCallableToolPlugins(): void {
     kind: 'callable',
     definition: {
       name: 'read_skill',
-      description: 'Read the contents of an installed skill package on demand. Use when a listed skill clearly matches the task and you need its detailed instructions or referenced text resources.',
+      description: 'Read the description or an attachment of an installed skill package on demand. Use when a listed skill clearly matches the task and you need its detailed instructions or referenced text resources.',
       parameters: {
         type: 'object',
         properties: {
           skillName: { type: 'string', description: 'The installed skill name/slug to read.' },
-          path: { type: 'string', description: 'Optional relative asset path inside the skill package. Defaults to SKILL.md.' },
+          path: { type: 'string', description: 'Optional relative attachment path inside the skill package. Omit it to read the skill description.' },
         },
         required: ['skillName'],
       },
@@ -52,7 +52,7 @@ export function registerCallableToolPlugins(): void {
               },
               path: {
                 type: 'string',
-                description: 'Optional relative text asset path inside the skill package, e.g. SKILL.md or references/REFERENCE.md.',
+                description: 'Optional relative attachment path inside the skill package, for example references/checklist.md. Omit it to read the skill description.',
               },
             },
             required: ['skillName'],

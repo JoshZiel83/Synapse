@@ -28,6 +28,7 @@ export type AuthzObjectType =
   | "workspace_user"
   | "user"
   | "actor"
+  | "actor_instance"
   | "actor_conversation"
   | "conversation"
   | "skill_instance"
@@ -59,6 +60,7 @@ const AUTHZ_RESOURCE_TYPES: AuthzObjectType[] = [
   "workspace_user",
   "user",
   "actor",
+  "actor_instance",
   "actor_conversation",
   "conversation",
   "skill_instance",

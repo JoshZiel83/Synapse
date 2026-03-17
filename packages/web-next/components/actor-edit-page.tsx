@@ -268,21 +268,21 @@ function BasicSection({
         </CardContent>
       </Card>
 
-      {actor.templateLink ? (
+      {actor.sourceLink ? (
         <Card>
           <CardHeader>
-            <CardTitle>Template source</CardTitle>
-            <CardDescription>This actor was cloned from an official template and can receive upgrade notices.</CardDescription>
+            <CardTitle>Package source</CardTitle>
+            <CardDescription>This actor was installed from an official package and can receive upgrade notices.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 text-sm md:grid-cols-2">
             <div className="rounded-2xl border border-border p-4">
               <div className="text-xs uppercase tracking-wide text-muted-foreground">Source</div>
-              <div className="mt-2 font-medium text-foreground">{actor.templateLink.templateDisplayName}</div>
+              <div className="mt-2 font-medium text-foreground">{actor.sourceLink.packageDisplayName}</div>
             </div>
             <div className="rounded-2xl border border-border p-4">
               <div className="text-xs uppercase tracking-wide text-muted-foreground">Sync status</div>
               <div className="mt-2">
-                <Badge variant="outline">{titleCase(actor.templateLink.status.replace(/_/g, " "))}</Badge>
+                <Badge variant="outline">{titleCase(actor.sourceLink.status.replace(/_/g, " "))}</Badge>
               </div>
             </div>
           </CardContent>

@@ -5,6 +5,7 @@ import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.j
 import { AUTHZ_PLATFORM_ID } from '../../infrastructure/authz/index.js';
 import { requireRequestAction } from '../access/guards.js';
 import {
+  createWorkspaceSkill,
   SkillError,
   getInstalledSkill,
   getMarketplaceSkill,
@@ -19,7 +20,7 @@ import {
 
 const useScopeSchema = z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']);
 
-const skillFileSchema = z.object({
+const skillAttachmentSchema = z.object({
   path: z.string().min(1),
   contentBlocks: z.array(z.any()).default([]),
 });
@@ -28,20 +29,32 @@ const publishSkillSchema = z.object({
   skillId: z.string().uuid().optional(),
   slug: z.string().min(1),
   name: z.string().min(1),
-  summary: z.string().optional(),
+  description: z.any().optional(),
   iconUrl: z.string().url().optional(),
   tags: z.array(z.string()).optional(),
   version: z.string().min(1),
-  entryPath: z.string().optional(),
   changelog: z.string().optional(),
   isActive: z.boolean().optional(),
   metadata: z.record(z.unknown()).optional(),
-  files: z.array(skillFileSchema).min(1),
+  attachmentFiles: z.array(skillAttachmentSchema).optional(),
+});
+
+const createWorkspaceSkillSchema = z.object({
+  slug: z.string().min(1),
+  name: z.string().min(1),
+  description: z.any().optional(),
+  iconUrl: z.string().url().optional(),
+  tags: z.array(z.string()).optional(),
+  attachmentFiles: z.array(skillAttachmentSchema).optional(),
+  grantScope: useScopeSchema,
+  actorId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
 });
 
 const installSkillSchema = z.object({
   marketSkillId: z.string().uuid(),
-  useScope: useScopeSchema,
+  grantScope: useScopeSchema,
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
@@ -49,16 +62,11 @@ const installSkillSchema = z.object({
 
 const updateInstalledSkillSchema = z.object({
   name: z.string().min(1).optional(),
-  summary: z.string().optional(),
+  description: z.any().optional(),
   iconUrl: z.string().url().nullable().optional(),
   tags: z.array(z.string()).optional(),
-  entryPath: z.string().optional(),
-  useScope: useScopeSchema.optional(),
-  actorId: z.string().uuid().nullable().optional(),
-  conversationId: z.string().uuid().nullable().optional(),
-  userId: z.string().uuid().nullable().optional(),
   isEnabled: z.boolean().optional(),
-  files: z.array(skillFileSchema).optional(),
+  attachmentFiles: z.array(skillAttachmentSchema).optional(),
 });
 
 function handleError(reply: FastifyReply, error: unknown) {
@@ -97,13 +105,25 @@ export function registerSkillRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/skills/marketplace', authHook, async (request, reply) => {
     try {
-      const { search, tags } = request.query as {
+      const { search, tags, workspaceId } = request.query as {
         search?: string;
         tags?: string;
+        workspaceId?: string;
       };
+      if (workspaceId) {
+        const allowed = await requireRequestAction(
+          request,
+          reply,
+          'workspace.view',
+          workspaceId,
+          'Not allowed to view skills for this workspace',
+        );
+        if (!allowed) return;
+      }
       const skills = await listMarketplaceSkills({
         search,
         tags: tags ? tags.split(',').map((tag) => tag.trim()).filter(Boolean) : undefined,
+        workspaceId,
       });
       return reply.status(200).send({ skills });
     } catch (error) {
@@ -114,7 +134,18 @@ export function registerSkillRoutes(app: FastifyInstance) {
   app.get('/api/v1/skills/marketplace/:skillId', authHook, async (request, reply) => {
     try {
       const { skillId } = request.params as { skillId: string };
-      const skill = await getMarketplaceSkill(skillId);
+      const { workspaceId } = request.query as { workspaceId?: string };
+      if (workspaceId) {
+        const allowed = await requireRequestAction(
+          request,
+          reply,
+          'workspace.view',
+          workspaceId,
+          'Not allowed to view skills for this workspace',
+        );
+        if (!allowed) return;
+      }
+      const skill = await getMarketplaceSkill(skillId, workspaceId);
       return reply.status(200).send({ skill });
     } catch (error) {
       return handleError(reply, error);
@@ -192,7 +223,41 @@ export function registerSkillRoutes(app: FastifyInstance) {
       const skill = await installMarketplaceSkill({
         workspaceId,
         marketSkillId: body.marketSkillId,
-        useScope: body.useScope,
+        useScope: body.grantScope,
+        actorId: body.actorId,
+        conversationId: body.conversationId,
+        userId: body.userId,
+        installedBy: user?.id || user?.userId,
+      });
+      return reply.status(201).send({ skill });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.post('/api/v1/workspaces/:workspaceId/skills/custom', workspaceHook, async (request, reply) => {
+    try {
+      const { workspaceId } = request.params as { workspaceId: string };
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        'workspace.manage_capabilities',
+        workspaceId,
+        'Not allowed to create skills in this workspace',
+      );
+      if (!allowed) return;
+
+      const body = createWorkspaceSkillSchema.parse(request.body);
+      const user = (request as any).user;
+      const skill = await createWorkspaceSkill({
+        workspaceId,
+        slug: body.slug,
+        name: body.name,
+        description: body.description,
+        iconUrl: body.iconUrl,
+        tags: body.tags,
+        attachmentFiles: body.attachmentFiles,
+        useScope: body.grantScope,
         actorId: body.actorId,
         conversationId: body.conversationId,
         userId: body.userId,

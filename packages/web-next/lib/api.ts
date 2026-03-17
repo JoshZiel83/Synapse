@@ -1,8 +1,8 @@
 import type {
-  ActorTemplateCloneResult,
+  ActorPackageInstallResult,
   AuthResponse,
   AuthSessionSummary,
-  ActorTemplateRecord,
+  ActorPackageRecord,
   CanonicalContentBlock,
   ConversationFeedItem,
   ConversationFeedPage,
@@ -204,30 +204,64 @@ class ApiClient {
   }
 
   // Skills Marketplace
-  getSkillMarketplace(params?: string): Promise<{ skills: SkillMarketplaceEntry[] }> {
-    return this.fetch(`/skills/marketplace${params ? "?" + params : ""}`)
+  getSkillMarketplace(options?: {
+    search?: string
+    tags?: string[]
+    workspaceId?: string
+  }): Promise<{ skills: SkillMarketplaceEntry[] }> {
+    const params = new URLSearchParams()
+    if (options?.search) params.set("search", options.search)
+    if (options?.tags?.length) params.set("tags", options.tags.join(","))
+    if (options?.workspaceId) params.set("workspaceId", options.workspaceId)
+    const qs = params.toString()
+    return this.fetch(`/skills/marketplace${qs ? "?" + qs : ""}`)
   }
-  getSkillMarketplaceItem(skillId: string): Promise<{ skill: SkillMarketplaceEntry }> {
-    return this.fetch(`/skills/marketplace/${skillId}`)
+  getSkillMarketplaceItem(skillId: string, workspaceId?: string): Promise<{ skill: SkillMarketplaceEntry }> {
+    const params = new URLSearchParams()
+    if (workspaceId) params.set("workspaceId", workspaceId)
+    const qs = params.toString()
+    return this.fetch(`/skills/marketplace/${skillId}${qs ? "?" + qs : ""}`)
   }
   publishMarketplaceSkill(data: {
     skillId?: string
     slug: string
     name: string
-    summary?: string
+    description?: CanonicalContentBlock
     iconUrl?: string
     tags?: string[]
     version: string
-    entryPath?: string
     changelog?: string
     isActive?: boolean
     metadata?: Record<string, unknown>
-    files: Array<{
+    attachmentFiles?: Array<{
       path: string
       contentBlocks: CanonicalContentBlock[]
     }>
   }): Promise<{ skill: SkillMarketplaceEntry }> {
     return this.fetch("/skills/marketplace", {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  createWorkspaceSkill(
+    wsId: string,
+    data: {
+      slug: string
+      name: string
+      description?: CanonicalContentBlock
+      iconUrl?: string
+      tags?: string[]
+      attachmentFiles?: Array<{
+        path: string
+        contentBlocks: CanonicalContentBlock[]
+      }>
+      grantScope: SkillUseScope
+      actorId?: string
+      conversationId?: string
+      userId?: string
+    }
+  ): Promise<{ skill: InstalledSkill }> {
+    return this.fetch(`/workspaces/${wsId}/skills/custom`, {
       method: "POST",
       body: JSON.stringify(data),
     })
@@ -244,7 +278,7 @@ class ApiClient {
     wsId: string,
     data: {
       marketSkillId: string
-      useScope: SkillUseScope
+      grantScope: SkillUseScope
       actorId?: string
       conversationId?: string
       userId?: string
@@ -260,16 +294,11 @@ class ApiClient {
     installedSkillId: string,
     data: {
       name?: string
-      summary?: string
+      description?: CanonicalContentBlock
       iconUrl?: string | null
       tags?: string[]
-      entryPath?: string
-      useScope?: SkillUseScope
-      actorId?: string | null
-      conversationId?: string | null
-      userId?: string | null
       isEnabled?: boolean
-      files?: Array<{
+      attachmentFiles?: Array<{
         path: string
         contentBlocks: CanonicalContentBlock[]
       }>
@@ -330,31 +359,31 @@ class ApiClient {
   getActorVersions(wsId: string, actorId: string) {
     return this.fetch(`/workspaces/${wsId}/actors/${actorId}/versions`)
   }
-  getActorTemplates(
+  getActorPackages(
     wsId: string,
     search?: string
-  ): Promise<ActorTemplateRecord[]> {
+  ): Promise<ActorPackageRecord[]> {
     const params = search ? `?search=${encodeURIComponent(search)}` : ""
-    return this.fetch(`/workspaces/${wsId}/actors/templates${params}`)
+    return this.fetch(`/workspaces/${wsId}/actors/packages${params}`)
   }
-  getActorTemplate(
+  getActorPackage(
     wsId: string,
-    templateId: string
-  ): Promise<ActorTemplateRecord> {
-    return this.fetch(`/workspaces/${wsId}/actors/templates/${templateId}`)
+    packageId: string
+  ): Promise<ActorPackageRecord> {
+    return this.fetch(`/workspaces/${wsId}/actors/packages/${packageId}`)
   }
-  cloneActorTemplate(
+  installActorPackage(
     wsId: string,
-    templateId: string,
+    packageId: string,
     data?: {
       name?: string
       title?: string
       parentId?: string | null
       syncMode?: "notify" | "manual_merge"
     }
-  ): Promise<ActorTemplateCloneResult> {
+  ): Promise<ActorPackageInstallResult> {
     return this.fetch(
-      `/workspaces/${wsId}/actors/templates/${templateId}/clone`,
+      `/workspaces/${wsId}/actors/packages/${packageId}/install`,
       {
         method: "POST",
         body: JSON.stringify(data || {}),

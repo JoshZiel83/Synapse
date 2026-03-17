@@ -73,7 +73,7 @@ const addCollaborationSchema = z.object({
   description: z.string().optional(),
 });
 
-const cloneTemplateSchema = z.object({
+const installActorPackageSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   title: z.string().max(255).optional(),
   parentId: z.string().uuid().nullable().optional(),
@@ -182,30 +182,30 @@ export async function organizationController(app: FastifyInstance) {
     return reply.send(tree);
   });
 
-  app.get('/templates', async (request, reply) => {
+  app.get('/packages', async (request, reply) => {
     try {
       const { workspaceId } = request.params as { workspaceId: string };
       const { search } = request.query as { search?: string };
-      const templates = await service.listActorTemplates({ workspaceId, search });
-      return reply.send(templates);
+      const packages = await service.listActorPackages({ workspaceId, search });
+      return reply.send(packages);
     } catch (error) {
-      console.error('[organization.templates.list]', error);
-      return reply.status(500).send({ error: 'Failed to load actor templates' });
+      console.error('[organization.packages.list]', error);
+      return reply.status(500).send({ error: 'Failed to load actor packages' });
     }
   });
 
-  app.get('/templates/:templateId', async (request, reply) => {
+  app.get('/packages/:packageId', async (request, reply) => {
     try {
-      const { workspaceId, templateId } = request.params as { workspaceId: string; templateId: string };
-      const template = await service.getActorTemplate(templateId, workspaceId);
-      return reply.send(template);
+      const { workspaceId, packageId } = request.params as { workspaceId: string; packageId: string };
+      const actorPackage = await service.getActorPackage(packageId, workspaceId);
+      return reply.send(actorPackage);
     } catch (error) {
-      console.error('[organization.templates.get]', error);
-      return reply.status(404).send({ error: 'Actor template not found' });
+      console.error('[organization.packages.get]', error);
+      return reply.status(404).send({ error: 'Actor package not found' });
     }
   });
 
-  app.post('/templates/:templateId/clone', async (request, reply) => {
+  app.post('/packages/:packageId/install', async (request, reply) => {
     try {
       const allowed = await requireWorkspacePermission(
         request,
@@ -215,12 +215,12 @@ export async function organizationController(app: FastifyInstance) {
       );
       if (!allowed) return;
 
-      const { workspaceId, templateId } = request.params as { workspaceId: string; templateId: string };
-      const body = cloneTemplateSchema.parse(request.body);
+      const { workspaceId, packageId } = request.params as { workspaceId: string; packageId: string };
+      const body = installActorPackageSchema.parse(request.body);
 
-      const result = await service.cloneActorTemplate({
+      const result = await service.installActorPackage({
         workspaceId,
-        templateId,
+        packageId,
         createdBy: (request as any).user!.userId,
         name: body.name,
         title: body.title,
@@ -230,8 +230,8 @@ export async function organizationController(app: FastifyInstance) {
 
       return reply.status(201).send(result);
     } catch (error) {
-      console.error('[organization.templates.clone]', error);
-      return reply.status(400).send({ error: error instanceof Error ? error.message : 'Failed to clone actor template' });
+      console.error('[organization.packages.install]', error);
+      return reply.status(400).send({ error: error instanceof Error ? error.message : 'Failed to install actor package' });
     }
   });
 

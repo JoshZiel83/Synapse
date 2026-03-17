@@ -1,12 +1,12 @@
 import { normalizeActorDocs, textBlocks } from '@synapse/shared';
 import type {
   ActorDefinition,
-  ActorTemplateDependency,
+  ActorPackageDependency,
   CapabilityAttachmentType,
   CapabilityReuseScope,
 } from '@synapse/shared';
 
-interface BuiltinActorTemplateSeed {
+interface BuiltinActorPackageSeed {
   slug: string;
   displayName: string;
   description: string;
@@ -16,8 +16,8 @@ interface BuiltinActorTemplateSeed {
   setupGuide?: ReturnType<typeof textBlocks>;
   releaseNotes?: ReturnType<typeof textBlocks>;
   dependencies: Array<{
-    requirementKind: ActorTemplateDependency['requirementKind'];
-    targetPackageKind: ActorTemplateDependency['targetPackageKind'];
+    requirementKind: ActorPackageDependency['requirementKind'];
+    targetPackageKind: ActorPackageDependency['targetPackageKind'];
     targetPublisherSlug?: string;
     targetPackageSlug: string;
     acceptableInstanceScopes?: CapabilityAttachmentType[];
@@ -28,7 +28,7 @@ interface BuiltinActorTemplateSeed {
   }>;
 }
 
-export const builtinActorTemplateSeeds: BuiltinActorTemplateSeed[] = [
+export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
   {
     slug: 'mira-research-scout',
     displayName: 'Mira, Research Scout',

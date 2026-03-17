@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { extractText, type Actor, type ActorDoc, type ActorTemplateRecord, type ActorVersion } from '@synapse/shared'
+import { extractText, type Actor, type ActorDoc, type ActorPackageRecord, type ActorVersion } from '@synapse/shared'
 import {
   Bot,
   Mail,
@@ -42,7 +42,7 @@ type WorkspaceMember = {
 type SelectedContact =
   | { kind: 'user'; id: string }
   | { kind: 'actor'; id: string }
-  | { kind: 'template'; id: string }
+  | { kind: 'package'; id: string }
   | null
 
 function formatDate(dateString?: string) {
@@ -85,11 +85,11 @@ function actorSummary(actor: Actor) {
   return summary || definition.title || titleCase(definition.role)
 }
 
-function templateSummary(template: ActorTemplateRecord) {
-  const actor = template.manifest.actor
+function packageSummary(actorPackage: ActorPackageRecord) {
+  const actor = actorPackage.manifest.actor
   const docs = [...(actor.docs || [])].sort((left, right) => right.priority - left.priority)
   const summary = docs.map((doc) => summarizeDoc(doc, 140)).find(Boolean)
-  return summary || template.package.description || actor.title || titleCase(actor.role)
+  return summary || actorPackage.package.description || actor.title || titleCase(actor.role)
 }
 
 function ContactListItem({
@@ -141,15 +141,15 @@ function ContactListItem({
   )
 }
 
-function TemplateListItem({
-  template,
+function PackageListItem({
+  actorPackage,
   active,
-  clonedCount,
+  installCount,
   onSelect,
 }: {
-  template: ActorTemplateRecord
+  actorPackage: ActorPackageRecord
   active: boolean
-  clonedCount: number
+  installCount: number
   onSelect: () => void
 }) {
   return (
@@ -163,17 +163,17 @@ function TemplateListItem({
     >
       <div className="flex items-start gap-3">
         <Avatar className="size-10 rounded-2xl">
-          <AvatarImage src={template.package.iconUrl || undefined} alt={template.package.displayName} />
+          <AvatarImage src={actorPackage.package.iconUrl || undefined} alt={actorPackage.package.displayName} />
           <AvatarFallback className="rounded-2xl bg-primary/10 text-primary">
             <Sparkles className="size-4" />
           </AvatarFallback>
         </Avatar>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <div className="truncate text-sm font-medium text-foreground">{template.package.displayName}</div>
-            {clonedCount > 0 ? <Badge variant="secondary">{clonedCount} cloned</Badge> : null}
+            <div className="truncate text-sm font-medium text-foreground">{actorPackage.package.displayName}</div>
+            {installCount > 0 ? <Badge variant="secondary">{installCount} installed</Badge> : null}
           </div>
-          <div className="truncate text-sm text-muted-foreground">{templateSummary(template)}</div>
+          <div className="truncate text-sm text-muted-foreground">{packageSummary(actorPackage)}</div>
         </div>
       </div>
     </button>
@@ -454,30 +454,30 @@ function ActorDetail({
               </CardContent>
             </Card>
 
-            {actor.templateLink ? (
+            {actor.sourceLink ? (
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Template source</CardTitle>
+                  <CardTitle className="text-base">Package source</CardTitle>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-3 text-sm">
                   <div className="flex items-center justify-between gap-4">
                     <span className="text-muted-foreground">Source</span>
-                    <span className="font-medium text-foreground">{actor.templateLink.templateDisplayName}</span>
+                    <span className="font-medium text-foreground">{actor.sourceLink.packageDisplayName}</span>
                   </div>
                   <Separator />
                   <div className="flex items-center justify-between gap-4">
                     <span className="text-muted-foreground">Imported revision</span>
-                    <span className="font-medium text-foreground">{actor.templateLink.importedTemplateVersion || 'Unknown'}</span>
+                    <span className="font-medium text-foreground">{actor.sourceLink.importedVersion || 'Unknown'}</span>
                   </div>
                   <Separator />
                   <div className="flex items-center justify-between gap-4">
                     <span className="text-muted-foreground">Latest official revision</span>
-                    <span className="font-medium text-foreground">{actor.templateLink.latestTemplateVersion || 'Unknown'}</span>
+                    <span className="font-medium text-foreground">{actor.sourceLink.latestVersion || 'Unknown'}</span>
                   </div>
                   <Separator />
                   <div className="flex items-center justify-between gap-4">
                     <span className="text-muted-foreground">Sync status</span>
-                    <Badge variant="outline">{titleCase(actor.templateLink.status.replace(/_/g, ' '))}</Badge>
+                    <Badge variant="outline">{titleCase(actor.sourceLink.status.replace(/_/g, ' '))}</Badge>
                   </div>
                 </CardContent>
               </Card>
@@ -522,22 +522,22 @@ function ActorDetail({
   )
 }
 
-function TemplateDetail({
-  template,
-  linkedActors,
+function PackageDetail({
+  actorPackage,
+  installedActors,
   loading,
-  cloning,
-  onClone,
+  installing,
+  onInstall,
   onOpenActor,
 }: {
-  template: ActorTemplateRecord | null
-  linkedActors: Actor[]
+  actorPackage: ActorPackageRecord | null
+  installedActors: Actor[]
   loading: boolean
-  cloning: boolean
-  onClone: () => void
+  installing: boolean
+  onInstall: () => void
   onOpenActor: (actorId: string) => void
 }) {
-  if (!template && loading) {
+  if (!actorPackage && loading) {
     return (
       <div className="flex h-full flex-col gap-6 p-6">
         <Skeleton className="h-28 rounded-3xl" />
@@ -549,13 +549,13 @@ function TemplateDetail({
     )
   }
 
-  if (!template) return null
+  if (!actorPackage) return null
 
-  const actor = template.manifest.actor
+  const actor = actorPackage.manifest.actor
   const docs = [...(actor.docs || [])]
     .filter((doc) => doc.content.length > 0)
     .sort((left, right) => right.priority - left.priority)
-  const checksById = new Map((template.requirementChecks || []).map((check) => [check.requirementId, check]))
+  const checksById = new Map((actorPackage.requirementChecks || []).map((check) => [check.requirementId, check]))
 
   return (
     <div className="flex h-full flex-col">
@@ -563,28 +563,28 @@ function TemplateDetail({
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex min-w-0 items-start gap-4">
             <Avatar className="size-16 rounded-3xl">
-              <AvatarImage src={template.package.iconUrl || undefined} alt={template.package.displayName} />
+              <AvatarImage src={actorPackage.package.iconUrl || undefined} alt={actorPackage.package.displayName} />
               <AvatarFallback className="rounded-3xl bg-primary/10 text-primary">
                 <Sparkles className="size-8" />
               </AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-xl font-semibold text-foreground">{template.package.displayName}</h2>
-                <Badge variant="secondary">Official template</Badge>
-                {template.package.publisher?.displayName ? (
-                  <Badge variant="outline">{template.package.publisher.displayName}</Badge>
+                <h2 className="text-xl font-semibold text-foreground">{actorPackage.package.displayName}</h2>
+                <Badge variant="secondary">Official package</Badge>
+                {actorPackage.package.publisher?.displayName ? (
+                  <Badge variant="outline">{actorPackage.package.publisher.displayName}</Badge>
                 ) : null}
-                {linkedActors.length > 0 ? <Badge variant="outline">{linkedActors.length} local copies</Badge> : null}
+                {installedActors.length > 0 ? <Badge variant="outline">{installedActors.length} local installs</Badge> : null}
               </div>
-              <p className="mt-1 text-sm text-muted-foreground">{actor.title || template.package.description}</p>
-              <p className="mt-3 max-w-3xl text-sm text-muted-foreground">{templateSummary(template)}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{actor.title || actorPackage.package.description}</p>
+              <p className="mt-3 max-w-3xl text-sm text-muted-foreground">{packageSummary(actorPackage)}</p>
             </div>
           </div>
 
-          <Button onClick={onClone} disabled={cloning}>
+          <Button onClick={onInstall} disabled={installing}>
             <Plus data-icon="inline-start" />
-            {cloning ? 'Cloning...' : 'Clone to workspace'}
+            {installing ? 'Installing...' : 'Install to workspace'}
           </Button>
         </div>
       </div>
@@ -597,29 +597,29 @@ function TemplateDetail({
             ) : (
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Template docs</CardTitle>
-                  <CardDescription>No actor docs were bundled with this template.</CardDescription>
+                  <CardTitle className="text-base">Package docs</CardTitle>
+                  <CardDescription>No actor docs were bundled with this package.</CardDescription>
                 </CardHeader>
               </Card>
             )}
 
-            {template.manifest.setupGuide.length > 0 ? (
-              <ContentBlocksCard title="Setup Guide" blocks={template.manifest.setupGuide} badge="template" />
+            {actorPackage.manifest.setupGuide.length > 0 ? (
+              <ContentBlocksCard title="Setup Guide" blocks={actorPackage.manifest.setupGuide} badge="package" />
             ) : null}
-            {template.manifest.releaseNotes.length > 0 ? (
-              <ContentBlocksCard title="Release Notes" blocks={template.manifest.releaseNotes} badge="template" />
+            {actorPackage.manifest.releaseNotes.length > 0 ? (
+              <ContentBlocksCard title="Release Notes" blocks={actorPackage.manifest.releaseNotes} badge="package" />
             ) : null}
           </div>
 
           <div className="flex flex-col gap-4">
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Template package</CardTitle>
+                <CardTitle className="text-base">Actor package</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-3 text-sm">
                 <div className="flex items-center justify-between gap-4">
                   <span className="text-muted-foreground">Version</span>
-                  <span className="font-medium text-foreground">{template.package.latestRevision?.version || 'Unversioned'}</span>
+                  <span className="font-medium text-foreground">{actorPackage.package.latestRevision?.version || 'Unversioned'}</span>
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between gap-4">
@@ -629,12 +629,12 @@ function TemplateDetail({
                 <Separator />
                 <div className="flex items-center justify-between gap-4">
                   <span className="text-muted-foreground">Representation</span>
-                  <span className="font-medium text-foreground">{actor.canRepresentUser ? 'Allowed by template' : 'Disabled by template'}</span>
+                  <span className="font-medium text-foreground">{actor.canRepresentUser ? 'Allowed by package' : 'Disabled by package'}</span>
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between gap-4">
                   <span className="text-muted-foreground">Published</span>
-                  <span className="font-medium text-foreground">{formatDate(template.package.updatedAt)}</span>
+                  <span className="font-medium text-foreground">{formatDate(actorPackage.package.updatedAt)}</span>
                 </div>
               </CardContent>
             </Card>
@@ -642,12 +642,12 @@ function TemplateDetail({
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Dependencies</CardTitle>
-                <CardDescription>Template requirements are evaluated against the current workspace before and after cloning.</CardDescription>
+                <CardDescription>Package requirements are evaluated against the current workspace before and after installation.</CardDescription>
               </CardHeader>
               <CardContent>
-                {template.dependencies.length > 0 ? (
+                {actorPackage.dependencies.length > 0 ? (
                   <div className="flex flex-col gap-3">
-                    {template.dependencies.map((dependency) => {
+                    {actorPackage.dependencies.map((dependency) => {
                       const check = dependency.requirementId ? checksById.get(dependency.requirementId) : undefined
                       return (
                         <div key={`${dependency.targetPackageKind}:${dependency.targetPublisherSlug || 'any'}:${dependency.targetPackageSlug}`} className="rounded-2xl border border-border p-4">
@@ -674,19 +674,19 @@ function TemplateDetail({
                     })}
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">This template does not declare plugin or skill dependencies.</p>
+                  <p className="text-sm text-muted-foreground">This actor package does not declare plugin or skill dependencies.</p>
                 )}
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Local copies</CardTitle>
+                <CardTitle className="text-base">Installed actors</CardTitle>
               </CardHeader>
               <CardContent>
-                {linkedActors.length > 0 ? (
+                {installedActors.length > 0 ? (
                   <div className="flex flex-col gap-2">
-                    {linkedActors.map((actorInstance) => (
+                    {installedActors.map((actorInstance) => (
                       <button
                         key={actorInstance.id}
                         onClick={() => onOpenActor(actorInstance.id)}
@@ -696,7 +696,7 @@ function TemplateDetail({
                           <div className="font-medium text-foreground">{actorInstance.definition.name}</div>
                           <div className="text-sm text-muted-foreground">
                             v{actorInstance.currentVersion}
-                            {actorInstance.templateLink ? ` · ${titleCase(actorInstance.templateLink.status.replace(/_/g, ' '))}` : ''}
+                            {actorInstance.sourceLink ? ` · ${titleCase(actorInstance.sourceLink.status.replace(/_/g, ' '))}` : ''}
                           </div>
                         </div>
                         <Badge variant="outline">{actorInstance.definition.title || titleCase(actorInstance.definition.role)}</Badge>
@@ -704,7 +704,7 @@ function TemplateDetail({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">No local copies yet. Clone this template to create a workspace actor.</p>
+                  <p className="text-sm text-muted-foreground">No local installs yet. Install this package to create a workspace actor.</p>
                 )}
               </CardContent>
             </Card>
@@ -720,34 +720,34 @@ export default function ContactsPage() {
   const { workspaceId } = useWorkspace()
   const [members, setMembers] = useState<WorkspaceMember[]>([])
   const [actors, setActors] = useState<Actor[]>([])
-  const [templates, setTemplates] = useState<ActorTemplateRecord[]>([])
+  const [actorPackages, setActorPackages] = useState<ActorPackageRecord[]>([])
   const [selected, setSelected] = useState<SelectedContact>(null)
-  const [viewMode, setViewMode] = useState<'directory' | 'templates'>('directory')
+  const [viewMode, setViewMode] = useState<'directory' | 'packages'>('directory')
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [selectedActorDetail, setSelectedActorDetail] = useState<Actor | null>(null)
   const [selectedActorVersions, setSelectedActorVersions] = useState<ActorVersion[]>([])
-  const [selectedTemplateDetail, setSelectedTemplateDetail] = useState<ActorTemplateRecord | null>(null)
-  const [templateActionPending, setTemplateActionPending] = useState(false)
+  const [selectedPackageDetail, setSelectedPackageDetail] = useState<ActorPackageRecord | null>(null)
+  const [packageActionPending, setPackageActionPending] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingActor, setEditingActor] = useState<Actor | null>(null)
 
   async function loadWorkspaceData(currentWorkspaceId: string) {
-    const [memberResponse, actorResponse, templateResponse] = await Promise.all([
+    const [memberResponse, actorResponse, packageResponse] = await Promise.all([
       api.getWorkspaceMembers(currentWorkspaceId),
       api.getActors(currentWorkspaceId),
-      api.getActorTemplates(currentWorkspaceId),
+      api.getActorPackages(currentWorkspaceId),
     ])
 
     const nextMembers = Array.isArray(memberResponse) ? memberResponse : (memberResponse?.data || [])
     const nextActors = Array.isArray(actorResponse) ? actorResponse : (actorResponse?.actors || [])
-    const nextTemplates = Array.isArray(templateResponse) ? templateResponse : []
+    const nextPackages = Array.isArray(packageResponse) ? packageResponse : []
 
     setMembers(nextMembers)
     setActors(nextActors)
-    setTemplates(nextTemplates)
+    setActorPackages(nextPackages)
     setSelected((current) => current ?? (nextActors[0]?.id ? { kind: 'actor', id: nextActors[0].id } : nextMembers[0]?.userId ? { kind: 'user', id: nextMembers[0].userId } : null))
   }
 
@@ -811,30 +811,30 @@ export default function ContactsPage() {
   }, [selected, workspaceId])
 
   useEffect(() => {
-    if (!workspaceId || selected?.kind !== 'template') {
-      setSelectedTemplateDetail(null)
+    if (!workspaceId || selected?.kind !== 'package') {
+      setSelectedPackageDetail(null)
       setDetailLoading(false)
       return
     }
 
     const currentWorkspaceId = workspaceId
-    const templateId = selected.id
+    const packageId = selected.id
     let cancelled = false
 
-    async function loadTemplateDetails() {
+    async function loadPackageDetails() {
       setDetailLoading(true)
       try {
-        const template = await api.getActorTemplate(currentWorkspaceId, templateId)
+        const actorPackage = await api.getActorPackage(currentWorkspaceId, packageId)
         if (cancelled) return
-        setSelectedTemplateDetail(template)
+        setSelectedPackageDetail(actorPackage)
       } catch (error) {
-        console.error('Failed to load actor template:', error)
+        console.error('Failed to load actor package:', error)
       } finally {
         if (!cancelled) setDetailLoading(false)
       }
     }
 
-    void loadTemplateDetails()
+    void loadPackageDetails()
 
     return () => {
       cancelled = true
@@ -860,15 +860,15 @@ export default function ContactsPage() {
     })
   }, [actors, deferredSearch])
 
-  const filteredTemplates = useMemo(() => {
+  const filteredPackages = useMemo(() => {
     const needle = deferredSearch.trim().toLowerCase()
-    if (!needle) return templates
-    return templates.filter((template) => {
-      const actor = template.manifest.actor
-      const haystack = `${template.package.displayName} ${template.package.description} ${actor.name} ${actor.title} ${actor.role} ${templateSummary(template)}`.toLowerCase()
+    if (!needle) return actorPackages
+    return actorPackages.filter((actorPackage) => {
+      const actor = actorPackage.manifest.actor
+      const haystack = `${actorPackage.package.displayName} ${actorPackage.package.description} ${actor.name} ${actor.title} ${actor.role} ${packageSummary(actorPackage)}`.toLowerCase()
       return haystack.includes(needle)
     })
-  }, [deferredSearch, templates])
+  }, [actorPackages, deferredSearch])
 
   const selectedUser = selected?.kind === 'user'
     ? members.find((member) => member.userId === selected.id) || null
@@ -876,8 +876,8 @@ export default function ContactsPage() {
   const selectedActor = selected?.kind === 'actor'
     ? selectedActorDetail || actors.find((actor) => actor.id === selected.id) || null
     : null
-  const selectedTemplate = selected?.kind === 'template'
-    ? selectedTemplateDetail || templates.find((template) => template.package.id === selected.id) || null
+  const selectedPackage = selected?.kind === 'package'
+    ? selectedPackageDetail || actorPackages.find((actorPackage) => actorPackage.package.id === selected.id) || null
     : null
 
   return (
@@ -890,7 +890,7 @@ export default function ContactsPage() {
               value={viewMode}
               onValueChange={(value) => {
                 if (!value) return
-                const nextMode = value as 'directory' | 'templates'
+                const nextMode = value as 'directory' | 'packages'
                 setViewMode(nextMode)
                 if (nextMode === 'directory') {
                   setSelected((current) => (
@@ -904,10 +904,10 @@ export default function ContactsPage() {
                   ))
                 } else {
                   setSelected((current) => (
-                    current?.kind === 'template'
+                    current?.kind === 'package'
                       ? current
-                      : templates[0]?.package.id
-                        ? { kind: 'template', id: templates[0].package.id }
+                      : actorPackages[0]?.package.id
+                        ? { kind: 'package', id: actorPackages[0].package.id }
                         : current
                   ))
                 }
@@ -917,8 +917,8 @@ export default function ContactsPage() {
               <ToggleGroupItem value="directory" className="flex-1">
                 Directory
               </ToggleGroupItem>
-              <ToggleGroupItem value="templates" className="flex-1">
-                Templates
+              <ToggleGroupItem value="packages" className="flex-1">
+                Packages
               </ToggleGroupItem>
             </ToggleGroup>
             <div className="relative">
@@ -926,7 +926,7 @@ export default function ContactsPage() {
               <Input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder={viewMode === 'templates' ? 'Search official templates...' : 'Search users and actors...'}
+                placeholder={viewMode === 'packages' ? 'Search actor packages...' : 'Search users and actors...'}
                 className="pl-9"
               />
             </div>
@@ -941,23 +941,23 @@ export default function ContactsPage() {
                 <Skeleton className="h-44 rounded-3xl" />
               </div>
             ) : (
-              viewMode === 'templates' ? (
+              viewMode === 'packages' ? (
                 <div className="flex flex-col gap-2">
                   <div className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Official templates
+                    Official actor packages
                   </div>
-                  {filteredTemplates.length > 0 ? (
-                    filteredTemplates.map((template) => (
-                      <TemplateListItem
-                        key={template.package.id}
-                        template={template}
-                        active={selected?.kind === 'template' && selected.id === template.package.id}
-                        clonedCount={actors.filter((actor) => actor.templateLink?.templatePackageId === template.package.id).length}
-                        onSelect={() => setSelected({ kind: 'template', id: template.package.id })}
+                  {filteredPackages.length > 0 ? (
+                    filteredPackages.map((actorPackage) => (
+                      <PackageListItem
+                        key={actorPackage.package.id}
+                        actorPackage={actorPackage}
+                        active={selected?.kind === 'package' && selected.id === actorPackage.package.id}
+                        installCount={actors.filter((actor) => actor.sourceLink?.packageId === actorPackage.package.id).length}
+                        onSelect={() => setSelected({ kind: 'package', id: actorPackage.package.id })}
                       />
                     ))
                   ) : (
-                    <p className="px-1 text-sm text-muted-foreground">No templates found.</p>
+                    <p className="px-1 text-sm text-muted-foreground">No actor packages found.</p>
                   )}
                 </div>
               ) : (
@@ -1029,17 +1029,17 @@ export default function ContactsPage() {
               }}
               onOpenHistory={() => router.push(`/dashboard/actors/${selectedActor.id}/history`)}
             />
-          ) : selectedTemplate && viewMode === 'templates' ? (
-            <TemplateDetail
-              template={selectedTemplate}
-              linkedActors={actors.filter((actor) => actor.templateLink?.templatePackageId === selectedTemplate.package.id)}
+          ) : selectedPackage && viewMode === 'packages' ? (
+            <PackageDetail
+              actorPackage={selectedPackage}
+              installedActors={actors.filter((actor) => actor.sourceLink?.packageId === selectedPackage.package.id)}
               loading={detailLoading}
-              cloning={templateActionPending}
-              onClone={async () => {
+              installing={packageActionPending}
+              onInstall={async () => {
                 if (!workspaceId) return
-                setTemplateActionPending(true)
+                setPackageActionPending(true)
                 try {
-                  const result = await api.cloneActorTemplate(workspaceId, selectedTemplate.package.id, {})
+                  const result = await api.installActorPackage(workspaceId, selectedPackage.package.id, {})
                   await loadWorkspaceData(workspaceId)
                   setViewMode('directory')
                   setSelected({ kind: 'actor', id: result.actor.id })
@@ -1048,12 +1048,12 @@ export default function ContactsPage() {
                     const versions = await api.getActorVersions(workspaceId, result.actor.id)
                     setSelectedActorVersions(Array.isArray(versions) ? (versions as ActorVersion[]) : [])
                   } catch (error) {
-                    console.error('Failed to refresh cloned actor versions:', error)
+                    console.error('Failed to refresh installed actor versions:', error)
                   }
                 } catch (error) {
-                  console.error('Failed to clone actor template:', error)
+                  console.error('Failed to install actor package:', error)
                 } finally {
-                  setTemplateActionPending(false)
+                  setPackageActionPending(false)
                 }
               }}
               onOpenActor={(actorId) => {
@@ -1065,14 +1065,14 @@ export default function ContactsPage() {
             <div className="flex h-full items-center justify-center px-6 text-center">
               <div className="max-w-sm">
                 <div className="mx-auto mb-4 flex size-16 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                  {viewMode === 'templates' ? <Sparkles className="size-7" /> : <Users className="size-7" />}
+                  {viewMode === 'packages' ? <Sparkles className="size-7" /> : <Users className="size-7" />}
                 </div>
                 <h2 className="text-lg font-semibold text-foreground">
-                  {viewMode === 'templates' ? 'No template selected' : 'No contact selected'}
+                  {viewMode === 'packages' ? 'No package selected' : 'No contact selected'}
                 </h2>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  {viewMode === 'templates'
-                    ? 'Choose an official template to inspect its actor definition and clone it into this workspace.'
+                  {viewMode === 'packages'
+                    ? 'Choose an actor package to inspect its actor definition and install it into this workspace.'
                     : 'Choose a workspace user or actor from the list to inspect their profile.'}
                 </p>
               </div>

@@ -1,8 +1,8 @@
 import type {
+  CapabilityAccessPolicy,
   CapabilityAvailableSkill,
   CapabilityAttachmentType,
   CapabilityAuthProviderDefinition,
-  CapabilityAuthorizationManifest,
   CapabilityAsset,
   CapabilityCategory,
   CapabilityConfigFieldDefinition,
@@ -14,7 +14,10 @@ import type {
   CapabilityInstallStep,
   CapabilityPackage,
   CapabilityPackageKind,
+  CapabilityPackageLineage,
+  CapabilityPackageLineageKind,
   CapabilityPackageRevision,
+  CapabilityPackageSyncMode,
   CapabilityRequirement,
   CapabilityRequirementCheck,
   CapabilityRequirementKind,
@@ -105,17 +108,19 @@ function asGrantScope(value: unknown): CapabilityGrantScope | undefined {
   return undefined;
 }
 
-function extractAuthorizationManifest(manifestValue: unknown): CapabilityAuthorizationManifest | undefined {
+function extractAccessPolicy(manifestValue: unknown): CapabilityAccessPolicy | undefined {
   const manifest = asObject(manifestValue);
-  const authorization = asObject(manifest.authorization);
-  const requiredPermissions = asStringArray(authorization.requiredPermissions);
+  const access = asObject(manifest.access);
+  const legacyAuthorization = asObject(manifest.authorization);
+  const config = Object.keys(access).length > 0 ? access : legacyAuthorization;
+  const requiredPermissions = asStringArray(config.requiredPermissions);
   if (requiredPermissions.length === 0) return undefined;
 
   return {
     requiredPermissions,
-    defaultGrantScope: asGrantScope(authorization.defaultGrantScope),
-    reason: typeof authorization.reason === 'string' && authorization.reason.trim().length > 0
-      ? authorization.reason.trim()
+    defaultGrantScope: asGrantScope(config.defaultGrantScope),
+    reason: typeof config.reason === 'string' && config.reason.trim().length > 0
+      ? config.reason.trim()
       : undefined,
   };
 }
@@ -277,7 +282,7 @@ function grantCoversRuntimeTarget(grant: CapabilityGrant, target: {
 }
 
 function inferDefaultGrantScope(instance: CapabilityInstance): CapabilityGrantScope {
-  const requested = instance.revision?.authorization?.defaultGrantScope;
+  const requested = instance.revision?.access?.defaultGrantScope || instance.revision?.authorization?.defaultGrantScope;
   if (requested && validateGrantHierarchy(instance.attachmentType, requested)) {
     if (requested === 'workspace') return requested;
     if (requested === 'platform') return requested;
@@ -320,6 +325,19 @@ function mapPublisher(row: any): CapabilityPublisher {
   };
 }
 
+function mapLineage(row: any): CapabilityPackageLineage {
+  return {
+    downstreamPackageId: row.downstream_package_id,
+    upstreamPackageId: row.upstream_package_id,
+    upstreamRevisionId: row.upstream_revision_id || undefined,
+    lineageKind: row.lineage_kind,
+    syncMode: row.sync_mode,
+    metadata: asObject(row.metadata),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function mapCategory(row: any): CapabilityCategory {
   const metadata = asObject(row.metadata);
   return {
@@ -350,7 +368,8 @@ function mapRevision(row: any): CapabilityPackageRevision {
     version: row.version,
     status: row.status,
     manifest,
-    authorization: extractAuthorizationManifest(manifest),
+    access: extractAccessPolicy(manifest),
+    authorization: extractAccessPolicy(manifest),
     configSchema: asObject(row.config_schema),
     configFields,
     defaultConfig: asObject(row.default_config),
@@ -368,6 +387,27 @@ function mapRevision(row: any): CapabilityPackageRevision {
 }
 
 function mapPackage(row: any): CapabilityPackage {
+  const packageId = row.package_id ?? row.id;
+  const packageWorkspaceId = row.package_workspace_id ?? row.workspace_id;
+  const packageDisplayName = row.package_display_name ?? row.display_name;
+  const packageDescription = row.package_description ?? row.description;
+  const packageLongDescription = row.package_long_description ?? row.long_description;
+  const packageIconUrl = row.package_icon_url ?? row.icon_url;
+  const packageSourceType = row.package_source_type ?? row.source_type;
+  const packageTags = row.package_tags ?? row.tags;
+  const packageIsActive = row.package_is_active ?? row.is_active;
+  const packageIsBuiltin = row.package_is_builtin ?? row.is_builtin;
+  const packageDownloadCount = row.package_download_count ?? row.download_count;
+  const packageLatestRevisionId = row.package_latest_revision_id ?? row.latest_revision_id;
+  const packageDefaultInstanceScope = row.package_default_instance_scope ?? row.default_instance_scope;
+  const packageDefaultReuseScope = row.package_default_reuse_scope ?? row.default_reuse_scope;
+  const packageDefaultIdleTtlMs = row.package_default_idle_ttl_ms ?? row.default_idle_ttl_ms;
+  const packageDefaultMaxAgeMs = row.package_default_max_age_ms ?? row.default_max_age_ms;
+  const packageRequiresHandshake = row.package_requires_handshake ?? row.requires_handshake;
+  const packageMetadata = asObject(row.package_metadata ?? row.metadata);
+  const packageCreatedAt = row.package_created_at ?? row.created_at;
+  const packageUpdatedAt = row.package_updated_at ?? row.updated_at;
+
   const publisher = row.publisher_id || row.publisher_slug
     ? {
         id: row.publisher_id,
@@ -383,10 +423,10 @@ function mapPackage(row: any): CapabilityPackage {
       } satisfies CapabilityPublisher
     : undefined;
 
-  const latestRevision = row.revision_id
+  const latestRevision = row.revision_id && row.revision_version
     ? mapRevision({
         revision_id: row.revision_id,
-        package_id: row.id,
+        package_id: packageId,
         version: row.revision_version,
         status: row.revision_status,
         manifest: row.revision_manifest,
@@ -404,34 +444,34 @@ function mapPackage(row: any): CapabilityPackage {
     : undefined;
 
   return {
-    id: row.id,
+    id: packageId,
     publisherId: row.publisher_id,
-    workspaceId: row.package_workspace_id || row.workspace_id || undefined,
+    workspaceId: packageWorkspaceId || undefined,
     kind: row.kind,
     slug: row.slug,
-    displayName: row.display_name,
-    displayNameI18n: asLocalizedText(asObject(row.metadata).displayNameI18n, row.display_name),
-    description: row.description || '',
-    descriptionI18n: asLocalizedText(asObject(row.metadata).descriptionI18n, row.description || ''),
-    longDescription: row.long_description || '',
-    longDescriptionI18n: asLocalizedText(asObject(row.metadata).longDescriptionI18n, row.long_description || ''),
-    summaryI18n: asLocalizedText(asObject(row.metadata).summaryI18n),
-    defaultLocale: typeof asObject(row.metadata).defaultLocale === 'string' ? String(asObject(row.metadata).defaultLocale) : undefined,
-    iconUrl: row.icon_url || undefined,
-    sourceType: row.source_type,
-    tags: asArray<string>(row.tags),
-    isActive: Boolean(row.is_active),
-    isBuiltin: Boolean(row.is_builtin),
-    downloadCount: Number(row.download_count || 0),
-    latestRevisionId: row.latest_revision_id || undefined,
-    defaultInstanceScope: row.default_instance_scope,
-    defaultReuseScope: row.default_reuse_scope,
-    defaultIdleTtlMs: row.default_idle_ttl_ms ?? undefined,
-    defaultMaxAgeMs: row.default_max_age_ms ?? undefined,
-    requiresHandshake: Boolean(row.requires_handshake),
-    metadata: asObject(row.metadata),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    displayName: packageDisplayName,
+    displayNameI18n: asLocalizedText(packageMetadata.displayNameI18n, packageDisplayName),
+    description: packageDescription || '',
+    descriptionI18n: asLocalizedText(packageMetadata.descriptionI18n, packageDescription || ''),
+    longDescription: packageLongDescription || '',
+    longDescriptionI18n: asLocalizedText(packageMetadata.longDescriptionI18n, packageLongDescription || ''),
+    summaryI18n: asLocalizedText(packageMetadata.summaryI18n),
+    defaultLocale: typeof packageMetadata.defaultLocale === 'string' ? String(packageMetadata.defaultLocale) : undefined,
+    iconUrl: packageIconUrl || undefined,
+    sourceType: packageSourceType,
+    tags: asArray<string>(packageTags),
+    isActive: Boolean(packageIsActive),
+    isBuiltin: Boolean(packageIsBuiltin),
+    downloadCount: Number(packageDownloadCount || 0),
+    latestRevisionId: packageLatestRevisionId || undefined,
+    defaultInstanceScope: packageDefaultInstanceScope,
+    defaultReuseScope: packageDefaultReuseScope,
+    defaultIdleTtlMs: packageDefaultIdleTtlMs ?? undefined,
+    defaultMaxAgeMs: packageDefaultMaxAgeMs ?? undefined,
+    requiresHandshake: Boolean(packageRequiresHandshake),
+    metadata: packageMetadata,
+    createdAt: packageCreatedAt,
+    updatedAt: packageUpdatedAt,
     categories: [],
     publisher,
     latestRevision,
@@ -473,13 +513,43 @@ async function hydratePackageCategories<T extends CapabilityPackage>(packages: T
   }));
 }
 
+async function loadCapabilityLineagesForPackages(packageIds: string[]) {
+  if (packageIds.length === 0) {
+    return new Map<string, CapabilityPackageLineage>();
+  }
+
+  const result = await query(
+    `SELECT *
+     FROM capability_package_lineages
+     WHERE downstream_package_id = ANY($1::uuid[])`,
+    [packageIds],
+  );
+
+  return new Map(result.rows.map((row) => [row.downstream_package_id, mapLineage(row)]));
+}
+
+async function hydratePackageLineages<T extends CapabilityPackage>(packages: T[]): Promise<T[]> {
+  if (packages.length === 0) return packages;
+  const packageIds = [...new Set(packages.map((pkg) => pkg.id))];
+  const lineagesByPackageId = await loadCapabilityLineagesForPackages(packageIds);
+  return packages.map((pkg) => ({
+    ...pkg,
+    sourceLink: lineagesByPackageId.get(pkg.id),
+  }));
+}
+
+async function hydratePackages<T extends CapabilityPackage>(packages: T[]): Promise<T[]> {
+  const withCategories = await hydratePackageCategories(packages);
+  return hydratePackageLineages(withCategories);
+}
+
 async function hydrateInstancePackageCategories<T extends CapabilityInstance>(instances: T[]): Promise<T[]> {
   const packages = instances
     .map((instance) => instance.package)
     .filter((pkg): pkg is CapabilityPackage => Boolean(pkg));
   if (packages.length === 0) return instances;
 
-  const hydratedPackages = await hydratePackageCategories(packages);
+  const hydratedPackages = await hydratePackages(packages);
   const packageMap = new Map(hydratedPackages.map((pkg) => [pkg.id, pkg]));
   return instances.map((instance) => (
     instance.package
@@ -586,14 +656,15 @@ function mapInstance(row: any): CapabilityInstance {
   };
 }
 
-function capabilityInstanceAuthzObjectType(kind?: CapabilityPackageKind): Extract<AuthzObjectType, 'plugin_instance' | 'skill_instance'> | null {
+function capabilityInstanceAuthzObjectType(kind?: CapabilityPackageKind): Extract<AuthzObjectType, 'actor_instance' | 'plugin_instance' | 'skill_instance'> | null {
+  if (kind === 'actor') return 'actor_instance';
   if (kind === 'plugin') return 'plugin_instance';
   if (kind === 'skill') return 'skill_instance';
   return null;
 }
 
 function buildCapabilityScopeRelations(params: {
-  objectType: Extract<AuthzObjectType, 'plugin_instance' | 'skill_instance'>;
+  objectType: Extract<AuthzObjectType, 'actor_instance' | 'plugin_instance' | 'skill_instance'>;
   instanceId: string;
   scope: CapabilityAttachmentType | CapabilityGrantScope;
   workspaceId: string;
@@ -899,7 +970,7 @@ export async function createCapabilityPackage(input: {
   displayName: string;
   description?: string;
   longDescription?: string;
-  iconUrl?: string;
+  iconUrl?: string | null;
   sourceType?: CapabilitySourceType;
   tags?: string[];
   isBuiltin?: boolean;
@@ -995,6 +1066,75 @@ export async function createCapabilityPackage(input: {
       input.defaultMaxAgeMs ?? null,
       input.requiresHandshake || false,
       JSON.stringify(input.metadata || {}),
+    ],
+  );
+  return mapPackage(result.rows[0]);
+}
+
+export async function updateCapabilityPackage(packageId: string, input: {
+  publisherId?: string;
+  workspaceId?: string | null;
+  kind?: CapabilityPackageKind;
+  slug?: string;
+  displayName?: string;
+  description?: string;
+  longDescription?: string;
+  iconUrl?: string | null;
+  sourceType?: CapabilitySourceType;
+  tags?: string[];
+  isBuiltin?: boolean;
+  isActive?: boolean;
+  defaultInstanceScope?: CapabilityAttachmentType;
+  defaultReuseScope?: CapabilityReuseScope;
+  defaultIdleTtlMs?: number | null;
+  defaultMaxAgeMs?: number | null;
+  requiresHandshake?: boolean;
+  metadata?: JsonMap;
+}) {
+  const existing = await getCapabilityPackage(packageId);
+  const result = await query(
+    `UPDATE capability_packages
+     SET publisher_id = $1,
+         workspace_id = $2,
+         kind = $3,
+         slug = $4,
+         display_name = $5,
+         description = $6,
+         long_description = $7,
+         icon_url = $8,
+         source_type = $9,
+         tags = $10,
+         is_builtin = $11,
+         is_active = $12,
+         default_instance_scope = $13,
+         default_reuse_scope = $14,
+         default_idle_ttl_ms = $15,
+         default_max_age_ms = $16,
+         requires_handshake = $17,
+         metadata = $18,
+         updated_at = NOW()
+     WHERE id = $19
+     RETURNING *`,
+    [
+      input.publisherId || existing.publisherId,
+      input.workspaceId === undefined ? existing.workspaceId || null : input.workspaceId,
+      input.kind || existing.kind,
+      input.slug || existing.slug,
+      input.displayName || existing.displayName,
+      input.description ?? existing.description,
+      input.longDescription ?? existing.longDescription,
+      input.iconUrl === undefined ? existing.iconUrl || null : input.iconUrl,
+      input.sourceType || existing.sourceType,
+      input.tags ?? existing.tags,
+      input.isBuiltin ?? existing.isBuiltin,
+      input.isActive ?? existing.isActive,
+      input.defaultInstanceScope || existing.defaultInstanceScope || 'workspace',
+      input.defaultReuseScope || existing.defaultReuseScope || 'conversation',
+      input.defaultIdleTtlMs === undefined ? existing.defaultIdleTtlMs ?? null : input.defaultIdleTtlMs,
+      input.defaultMaxAgeMs === undefined ? existing.defaultMaxAgeMs ?? null : input.defaultMaxAgeMs,
+      input.requiresHandshake ?? existing.requiresHandshake,
+      JSON.stringify(input.metadata ?? existing.metadata ?? {}),
+      packageId,
     ],
   );
   return mapPackage(result.rows[0]);
@@ -1174,7 +1314,7 @@ export async function listCapabilityPackages(filters?: {
      ORDER BY p.is_builtin DESC, p.download_count DESC, p.display_name`,
     values,
   );
-  return hydratePackageCategories(result.rows.map(mapPackage));
+  return hydratePackages(result.rows.map(mapPackage));
 }
 
 export async function getCapabilityPackage(id: string) {
@@ -1212,7 +1352,7 @@ export async function getCapabilityPackage(id: string) {
     [id],
   );
   if (result.rows.length === 0) throw new CapabilityError(404, 'Capability package not found');
-  const [pkg] = await hydratePackageCategories([mapPackage(result.rows[0])]);
+  const [pkg] = await hydratePackages([mapPackage(result.rows[0])]);
   return pkg;
 }
 
@@ -1274,8 +1414,66 @@ export async function getCapabilityPackageBySlug(input: {
   );
 
   if (result.rows.length === 0) throw new CapabilityError(404, 'Capability package not found');
-  const [pkg] = await hydratePackageCategories([mapPackage(result.rows[0])]);
+  const [pkg] = await hydratePackages([mapPackage(result.rows[0])]);
   return pkg;
+}
+
+export async function getCapabilityPackageLineage(downstreamPackageId: string) {
+  const result = await query(
+    `SELECT *
+     FROM capability_package_lineages
+     WHERE downstream_package_id = $1
+     LIMIT 1`,
+    [downstreamPackageId],
+  );
+  if (result.rows.length === 0) return null;
+  return mapLineage(result.rows[0]);
+}
+
+export async function upsertCapabilityPackageLineage(input: {
+  downstreamPackageId: string;
+  upstreamPackageId: string;
+  upstreamRevisionId?: string;
+  lineageKind?: CapabilityPackageLineageKind;
+  syncMode?: CapabilityPackageSyncMode;
+  metadata?: JsonMap;
+}) {
+  const result = await query(
+    `INSERT INTO capability_package_lineages (
+       downstream_package_id,
+       upstream_package_id,
+       upstream_revision_id,
+       lineage_kind,
+       sync_mode,
+       metadata
+     )
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+     ON CONFLICT (downstream_package_id) DO UPDATE SET
+       upstream_package_id = EXCLUDED.upstream_package_id,
+       upstream_revision_id = EXCLUDED.upstream_revision_id,
+       lineage_kind = EXCLUDED.lineage_kind,
+       sync_mode = EXCLUDED.sync_mode,
+       metadata = EXCLUDED.metadata,
+       updated_at = NOW()
+     RETURNING *`,
+    [
+      input.downstreamPackageId,
+      input.upstreamPackageId,
+      input.upstreamRevisionId || null,
+      input.lineageKind || 'installed_copy',
+      input.syncMode || 'notify',
+      JSON.stringify(input.metadata || {}),
+    ],
+  );
+  return mapLineage(result.rows[0]);
+}
+
+export async function deleteCapabilityPackageLineage(downstreamPackageId: string) {
+  await query(
+    `DELETE FROM capability_package_lineages
+     WHERE downstream_package_id = $1`,
+    [downstreamPackageId],
+  );
 }
 
 export async function getCapabilityRevision(revisionId: string) {
@@ -1565,6 +1763,7 @@ export async function createCapabilityInstance(input: {
 }
 
 export async function updateCapabilityInstance(instanceId: string, data: {
+  revisionId?: string;
   isEnabled?: boolean;
   configData?: JsonMap;
   attachmentType?: CapabilityAttachmentType;
@@ -1586,6 +1785,10 @@ export async function updateCapabilityInstance(instanceId: string, data: {
   if (data.isEnabled !== undefined) {
     sets.push(`is_enabled = $${idx++}`);
     values.push(data.isEnabled);
+  }
+  if (data.revisionId !== undefined) {
+    sets.push(`revision_id = $${idx++}`);
+    values.push(data.revisionId);
   }
   if (data.attachmentType !== undefined) {
     sets.push(`attachment_type = $${idx++}`);
@@ -1860,7 +2063,7 @@ export async function issueCapabilityInstanceGrant(input: {
     throw new CapabilityError(404, 'Capability instance not found');
   }
 
-  const requiredPermissions = instance.revision?.authorization?.requiredPermissions || [];
+  const requiredPermissions = instance.revision?.access?.requiredPermissions || instance.revision?.authorization?.requiredPermissions || [];
   const permissions = (input.permissions && input.permissions.length > 0)
     ? Array.from(new Set(input.permissions))
     : requiredPermissions;
@@ -1941,7 +2144,7 @@ export async function issueCapabilityInstanceGrant(input: {
       userId || null,
       permissions,
       input.grantedBy || null,
-      input.reason || instance.revision?.authorization?.reason || null,
+      input.reason || instance.revision?.access?.reason || instance.revision?.authorization?.reason || null,
       JSON.stringify(input.metadata || {}),
     ],
   );
@@ -2035,7 +2238,7 @@ export async function getCapabilityInstanceAuthorizationSummary(input: {
 
   const grants = await listCapabilityGrants(instance.id);
   const activeGrants = grants.filter((grant) => grant.status === 'active');
-  const requiredPermissions = instance.revision?.authorization?.requiredPermissions || [];
+  const requiredPermissions = instance.revision?.access?.requiredPermissions || instance.revision?.authorization?.requiredPermissions || [];
   const hasConcreteRuntimeTarget = Boolean(
     input.actorId ||
     input.conversationId ||
@@ -2059,7 +2262,7 @@ export async function getCapabilityInstanceAuthorizationSummary(input: {
     instance,
     requiredPermissions,
     suggestedGrantScope: requiredPermissions.length > 0 ? inferDefaultGrantScope(instance) : undefined,
-    reason: instance.revision?.authorization?.reason,
+    reason: instance.revision?.access?.reason || instance.revision?.authorization?.reason,
     grants,
     effectivePermissions,
     isVisible: matchingGrants.length > 0,
@@ -2084,9 +2287,9 @@ export async function ensureDefaultCapabilityInstanceGrant(input: {
     instanceId: input.instanceId,
     workspaceId: input.workspaceId,
     grantScope: inferDefaultGrantScope(instance),
-    permissions: instance.revision?.authorization?.requiredPermissions || [],
+    permissions: instance.revision?.access?.requiredPermissions || instance.revision?.authorization?.requiredPermissions || [],
     grantedBy: input.grantedBy,
-    reason: instance.revision?.authorization?.reason,
+    reason: instance.revision?.access?.reason || instance.revision?.authorization?.reason,
   });
 }
 
@@ -2097,8 +2300,8 @@ export function buildCapabilityGrantPlan(input: {
   conversationId?: string;
   userId?: string;
 }) {
-  const authorization = input.revision?.authorization;
-  const requiredPermissions = authorization?.requiredPermissions || [];
+  const access = input.revision?.access || input.revision?.authorization;
+  const requiredPermissions = access?.requiredPermissions || [];
   if (requiredPermissions.length === 0) {
     return {
       requiresGrant: false,
@@ -2106,7 +2309,7 @@ export function buildCapabilityGrantPlan(input: {
     };
   }
 
-  let suggestedGrantScope = authorization?.defaultGrantScope;
+  let suggestedGrantScope = access?.defaultGrantScope;
   if (!suggestedGrantScope || !validateGrantHierarchy(input.attachmentType, suggestedGrantScope)) {
     suggestedGrantScope = input.attachmentType;
   }
@@ -2116,7 +2319,7 @@ export function buildCapabilityGrantPlan(input: {
       requiresGrant: true,
       requiredPermissions,
       suggestedGrantScope,
-      reason: authorization?.reason,
+      reason: access?.reason,
     };
   }
 
@@ -2137,7 +2340,7 @@ export function buildCapabilityGrantPlan(input: {
     requiresGrant: true,
     requiredPermissions,
     suggestedGrantScope,
-    reason: authorization?.reason,
+    reason: access?.reason,
   };
 }
 
@@ -2185,7 +2388,7 @@ export async function listAuthorizedCapabilityInstances(input: {
   const candidates: Array<{ instance: CapabilityInstance; grantScore: number; attachmentScore: number; sortTime: number }> = [];
 
   for (const instance of candidateInstances) {
-    const requiredPermissions = instance.revision?.authorization?.requiredPermissions || [];
+    const requiredPermissions = instance.revision?.access?.requiredPermissions || instance.revision?.authorization?.requiredPermissions || [];
     const grants = await listCapabilityGrants(instance.id);
     const runtimeTarget = input.actorId
       ? {
@@ -2274,18 +2477,32 @@ export function dedupeVisibleInstances<T extends CapabilityInstance>(
 
 export function instanceToAvailableSkill(instance: CapabilityInstance): CapabilityAvailableSkill | null {
   if (!instance.package || !instance.revision || instance.package.kind !== 'skill') return null;
+  const definition = asObject(asObject(instance.revision.manifest).definition);
   const frontmatter = asObject(asObject(instance.revision.manifest).frontmatter);
-  const name = typeof frontmatter.name === 'string' && frontmatter.name.trim().length > 0
-    ? frontmatter.name.trim()
-    : instance.package.slug;
+  const packageMetadata = asObject(instance.package.metadata);
+  const descriptionBlock = asObject(definition.description);
+  const canonicalSlug = typeof definition.slug === 'string' && definition.slug.trim().length > 0
+    ? definition.slug.trim()
+    : typeof frontmatter.slug === 'string' && frontmatter.slug.trim().length > 0
+      ? frontmatter.slug.trim()
+      : typeof packageMetadata.canonicalSlug === 'string' && packageMetadata.canonicalSlug.trim().length > 0
+        ? packageMetadata.canonicalSlug.trim()
+        : instance.package.slug;
+  const name = typeof definition.name === 'string' && definition.name.trim().length > 0
+    ? definition.name.trim()
+    : typeof frontmatter.name === 'string' && frontmatter.name.trim().length > 0
+      ? frontmatter.name.trim()
+      : instance.package.displayName || canonicalSlug;
   const description = typeof frontmatter.description === 'string' && frontmatter.description.trim().length > 0
     ? frontmatter.description.trim()
-    : instance.package.description;
+    : typeof descriptionBlock.text === 'string' && descriptionBlock.text.trim().length > 0
+      ? descriptionBlock.text.trim()
+      : instance.package.description;
   return {
     instanceId: instance.id,
     packageId: instance.packageId,
     revisionId: instance.revisionId,
-    slug: instance.package.slug,
+    slug: canonicalSlug,
     name,
     description,
     version: instance.revision.version,

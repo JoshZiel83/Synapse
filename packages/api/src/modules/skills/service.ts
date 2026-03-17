@@ -1,31 +1,78 @@
+import crypto from 'node:crypto';
 import {
   normalizeCanonicalContentBlocks,
   type CanonicalContentBlock,
   type CanonicalContentBlockInput,
   type CapabilityAvailableSkill,
+  type CapabilityAttachmentType,
+  type CapabilityAsset,
+  type CapabilityInstance,
+  type CapabilityPackage,
   type InstalledSkill,
-  type SkillAssetFile,
+  type SkillAttachmentFile,
   type SkillMarketplaceEntry,
+  type SkillMarketplaceWorkspaceInstallation,
   type SkillMarketplaceVersion,
   type SkillUseScope,
 } from '@synapse/shared';
-import { query, transaction } from '../../infrastructure/database/index.js';
+import { query } from '../../infrastructure/database/index.js';
+import {
+  CapabilityError,
+  createCapabilityInstance,
+  createCapabilityPackage,
+  createCapabilityPublisher,
+  createCapabilityRevision,
+  deleteCapabilityInstance,
+  getCapabilityInstance,
+  getCapabilityPackage,
+  instanceToAvailableSkill,
+  issueCapabilityInstanceGrant,
+  listCapabilityAssets,
+  listCapabilityInstances,
+  listCapabilityPackages,
+  listVisibleCapabilityInstances,
+  updateCapabilityInstance,
+  updateCapabilityPackage,
+  upsertCapabilityPackageLineage,
+} from '../capabilities/service.js';
 
 type JsonMap = Record<string, unknown>;
 
-type DbClient = {
-  query: <T = any>(text: string, params?: unknown[]) => Promise<{ rows: T[] }>;
-};
+const SKILL_DESCRIPTION_ASSET_PATH = '(description)';
 
-type SkillFileInput = {
+type SkillAttachmentInput = {
   path: string;
   contentBlocks: CanonicalContentBlockInput[];
+};
+
+type SkillDefinition = {
+  canonicalSlug: string;
+  name: string;
+  description: CanonicalContentBlock;
+};
+
+type SkillSourceLink = {
+  sourcePackageId?: string;
+  sourceRevisionId?: string;
+  sourceVersion?: string;
+  sourcePublisherId?: string;
+  sourcePublisherSlug?: string;
+  sourceDisplayName?: string;
+  sourceSlug?: string;
+  syncMode?: 'manual_merge' | 'follow_upstream' | 'notify' | 'detached';
 };
 
 export class SkillError extends Error {
   constructor(public statusCode: number, message: string) {
     super(message);
   }
+}
+
+function wrapCapabilityError(error: unknown): never {
+  if (error instanceof CapabilityError) {
+    throw new SkillError(error.statusCode, error.message);
+  }
+  throw error;
 }
 
 function sanitizeSlug(value: string) {
@@ -50,9 +97,29 @@ function normalizePath(assetPath: string) {
   return segments.join('/');
 }
 
-function normalizeSkillFiles(files: SkillFileInput[], entryPath: string) {
+function normalizeSkillDescription(description?: CanonicalContentBlockInput) {
+  const normalized = normalizeCanonicalContentBlocks(
+    description
+      ? [description]
+      : [
+          {
+            type: 'text',
+            text: '',
+          },
+        ],
+  );
+
+  const [first] = normalized;
+  if (!first) {
+    throw new SkillError(400, 'Skill description is required');
+  }
+
+  return first;
+}
+
+function normalizeSkillAttachments(files?: SkillAttachmentInput[]) {
   if (!Array.isArray(files) || files.length === 0) {
-    throw new SkillError(400, 'Skill files are required');
+    return [] as Array<{ path: string; contentBlocks: CanonicalContentBlock[] }>;
   }
 
   const normalized = files.map((file) => ({
@@ -66,10 +133,6 @@ function normalizeSkillFiles(files: SkillFileInput[], entryPath: string) {
       throw new SkillError(400, `Duplicate skill file path: ${file.path}`);
     }
     seen.add(file.path);
-  }
-
-  if (!seen.has(entryPath)) {
-    throw new SkillError(400, `Entry file "${entryPath}" is required`);
   }
 
   return normalized;
@@ -129,124 +192,6 @@ function normalizeScopeTarget(input: {
   }
 }
 
-function mapSkillFile(row: any): SkillAssetFile {
-  return {
-    id: row.id,
-    path: row.path,
-    contentBlocks: normalizeCanonicalContentBlocks(Array.isArray(row.content_blocks) ? row.content_blocks : []),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function buildMarketplaceVersion(row: any): SkillMarketplaceVersion | undefined {
-  if (!row.latest_version_id) return undefined;
-  return {
-    id: row.latest_version_id,
-    skillId: row.id,
-    version: row.latest_version,
-    changelog: row.latest_changelog || '',
-    entryPath: row.latest_entry_path || 'SKILL.md',
-    createdBy: row.latest_created_by || undefined,
-    createdByName: row.latest_created_by_name || undefined,
-    createdAt: row.latest_created_at,
-    files: undefined,
-  };
-}
-
-function mapMarketplaceEntry(row: any): SkillMarketplaceEntry {
-  return {
-    id: row.id,
-    slug: row.slug,
-    name: row.name,
-    summary: row.summary || '',
-    iconUrl: row.icon_url || undefined,
-    tags: Array.isArray(row.tags) ? row.tags : [],
-    authorUserId: row.author_user_id || undefined,
-    authorName: row.author_name || undefined,
-    isActive: Boolean(row.is_active),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    latestVersionId: row.latest_version_id || undefined,
-    latestVersion: buildMarketplaceVersion(row),
-  };
-}
-
-function mapInstalledSkill(row: any): InstalledSkill {
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    slug: row.slug,
-    name: row.name,
-    summary: row.summary || '',
-    iconUrl: row.icon_url || undefined,
-    tags: Array.isArray(row.tags) ? row.tags : [],
-    entryPath: row.entry_path || 'SKILL.md',
-    useScope: row.use_scope,
-    actorId: row.actor_id || undefined,
-    conversationId: row.conversation_id || undefined,
-    userId: row.user_id || undefined,
-    isEnabled: Boolean(row.is_enabled),
-    isCustomized: Boolean(row.is_customized),
-    installedBy: row.installed_by || undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    sourceSkillId: row.source_skill_id || undefined,
-    sourceVersionId: row.source_version_id || undefined,
-    sourceVersion: row.source_version || undefined,
-    upgradeAvailable:
-      Boolean(row.source_skill_id) &&
-      Boolean(row.source_latest_version_id) &&
-      row.source_latest_version_id !== row.source_version_id,
-    latestSourceVersion: row.latest_source_version || undefined,
-    files: undefined,
-  };
-}
-
-async function listMarketplaceFiles(versionId: string): Promise<SkillAssetFile[]> {
-  const result = await query(
-    `SELECT id, path, content_blocks, created_at, updated_at
-     FROM skill_market_files
-     WHERE version_id = $1
-     ORDER BY path ASC`,
-    [versionId],
-  );
-  return result.rows.map(mapSkillFile);
-}
-
-async function listInstalledSkillFiles(installedSkillId: string): Promise<SkillAssetFile[]> {
-  const result = await query(
-    `SELECT id, path, content_blocks, created_at, updated_at
-     FROM installed_skill_files
-     WHERE installed_skill_id = $1
-     ORDER BY path ASC`,
-    [installedSkillId],
-  );
-  return result.rows.map(mapSkillFile);
-}
-
-async function saveMarketplaceFiles(client: DbClient, versionId: string, files: ReturnType<typeof normalizeSkillFiles>) {
-  await client.query(`DELETE FROM skill_market_files WHERE version_id = $1`, [versionId]);
-  for (const file of files) {
-    await client.query(
-      `INSERT INTO skill_market_files (version_id, path, content_blocks)
-       VALUES ($1, $2, $3::jsonb)`,
-      [versionId, file.path, JSON.stringify(file.contentBlocks)],
-    );
-  }
-}
-
-async function saveInstalledFiles(client: DbClient, installedSkillId: string, files: SkillAssetFile[] | ReturnType<typeof normalizeSkillFiles>) {
-  await client.query(`DELETE FROM installed_skill_files WHERE installed_skill_id = $1`, [installedSkillId]);
-  for (const file of files) {
-    await client.query(
-      `INSERT INTO installed_skill_files (installed_skill_id, path, content_blocks)
-       VALUES ($1, $2, $3::jsonb)`,
-      [installedSkillId, file.path, JSON.stringify(file.contentBlocks)],
-    );
-  }
-}
-
 function renderSkillBlocksToText(blocks: CanonicalContentBlock[]) {
   return blocks
     .map((block) =>
@@ -258,241 +203,607 @@ function renderSkillBlocksToText(blocks: CanonicalContentBlock[]) {
     .join('\n');
 }
 
-async function getMarketplaceSkillRow(skillId: string) {
-  const result = await query(
-    `SELECT
-        s.*,
-        author.name AS author_name,
-        latest.id AS latest_version_id,
-        latest.version AS latest_version,
-        latest.entry_path AS latest_entry_path,
-        latest.changelog AS latest_changelog,
-        latest.created_by AS latest_created_by,
-        latest.created_at AS latest_created_at,
-        creator.name AS latest_created_by_name
-     FROM skill_market_skills s
-     LEFT JOIN users author ON author.id = s.author_user_id
-     LEFT JOIN skill_market_versions latest ON latest.id = s.latest_version_id
-     LEFT JOIN users creator ON creator.id = latest.created_by
-     WHERE s.id = $1
-     LIMIT 1`,
-    [skillId],
-  );
-  if (result.rows.length === 0) {
-    throw new SkillError(404, 'Skill not found');
-  }
-  return result.rows[0];
+function renderSkillDescriptionToText(description: CanonicalContentBlock) {
+  return renderSkillBlocksToText([description]);
 }
 
-async function getInstalledSkillRow(workspaceId: string, installedSkillId: string) {
-  const result = await query(
-    `SELECT
-        i.*,
-        src.latest_version_id AS source_latest_version_id,
-        latest.version AS latest_source_version
-     FROM installed_skills i
-     LEFT JOIN skill_market_skills src ON src.id = i.source_skill_id
-     LEFT JOIN skill_market_versions latest ON latest.id = src.latest_version_id
-     WHERE i.workspace_id = $1
-       AND i.id = $2
-     LIMIT 1`,
-    [workspaceId, installedSkillId],
+function hashValue(value: unknown) {
+  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function deriveSkillAssetKind(assetPath: string): CapabilityAsset['assetKind'] {
+  const lower = assetPath.toLowerCase();
+  if (lower.endsWith('.md')) return 'reference_markdown';
+  return 'text';
+}
+
+function toAttachmentType(useScope: SkillUseScope): CapabilityAttachmentType {
+  return useScope;
+}
+
+function asObject(value: unknown): JsonMap {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as JsonMap;
+}
+
+function requiredPermissionsForRevision(revision?: {
+  access?: { requiredPermissions?: string[] };
+  authorization?: { requiredPermissions?: string[] };
+}) {
+  return revision?.access?.requiredPermissions || revision?.authorization?.requiredPermissions || [];
+}
+
+function grantReasonForRevision(revision?: {
+  access?: { reason?: string };
+  authorization?: { reason?: string };
+}) {
+  return revision?.access?.reason || revision?.authorization?.reason || undefined;
+}
+
+function buildSkillManifest(input: {
+  canonicalSlug: string;
+  name: string;
+  description: CanonicalContentBlock;
+}) {
+  const descriptionText = renderSkillBlocksToText([input.description]);
+  return {
+    kind: 'skill',
+    definition: {
+      slug: input.canonicalSlug,
+      name: input.name,
+      description: input.description,
+    },
+    frontmatter: {
+      slug: input.canonicalSlug,
+      name: input.name,
+      description: descriptionText,
+    },
+  } satisfies JsonMap;
+}
+
+function buildSkillAssets(files: ReturnType<typeof normalizeSkillAttachments>) {
+  return files.map((file) => ({
+    path: file.path,
+    assetKind: deriveSkillAssetKind(file.path),
+    mediaType: 'text/markdown',
+    textContent: renderSkillBlocksToText(file.contentBlocks),
+    sha256: hashValue({
+      path: file.path,
+      contentBlocks: file.contentBlocks,
+    }),
+    metadata: {
+      contentBlocks: file.contentBlocks,
+    },
+  })) satisfies Array<{
+    path: string;
+    assetKind: CapabilityAsset['assetKind'];
+    mediaType?: string;
+    textContent?: string;
+    sha256: string;
+    metadata?: JsonMap;
+  }>;
+}
+
+function mapAssetToSkillAttachment(asset: CapabilityAsset): SkillAttachmentFile {
+  const metadata = asObject(asset.metadata);
+  const contentBlocks = normalizeCanonicalContentBlocks(
+    Array.isArray(metadata.contentBlocks)
+      ? metadata.contentBlocks
+      : asset.textContent
+        ? [{ type: 'text', text: asset.textContent }]
+        : [],
   );
-  if (result.rows.length === 0) {
+
+  return {
+    id: asset.id,
+    path: asset.path,
+    contentBlocks,
+    createdAt: asset.createdAt,
+    updatedAt: asset.createdAt,
+  };
+}
+
+async function listRevisionAttachments(revisionId: string): Promise<SkillAttachmentFile[]> {
+  const assets = await listCapabilityAssets(revisionId);
+  return assets.map(mapAssetToSkillAttachment);
+}
+
+function fallbackSkillDescription(text?: string) {
+  return normalizeSkillDescription({
+    type: 'text',
+    text: text || '',
+  });
+}
+
+function readSkillDefinition(input: {
+  pkg?: CapabilityPackage;
+  revision?: CapabilityPackage['latestRevision'] | CapabilityInstance['revision'];
+}) : SkillDefinition {
+  const revision = input.revision;
+  const manifest = asObject(revision?.manifest);
+  const definition = asObject(manifest.definition);
+  const frontmatter = asObject(manifest.frontmatter);
+  const packageMetadata = asObject(input.pkg?.metadata);
+  const canonicalSlug = typeof definition.slug === 'string' && definition.slug.trim().length > 0
+    ? definition.slug.trim()
+    : typeof frontmatter.slug === 'string' && frontmatter.slug.trim().length > 0
+      ? frontmatter.slug.trim()
+      : typeof packageMetadata.canonicalSlug === 'string' && packageMetadata.canonicalSlug.trim().length > 0
+        ? packageMetadata.canonicalSlug.trim()
+        : input.pkg?.slug || '';
+  const name = typeof definition.name === 'string' && definition.name.trim().length > 0
+    ? definition.name.trim()
+    : typeof frontmatter.name === 'string' && frontmatter.name.trim().length > 0
+      ? frontmatter.name.trim()
+      : input.pkg?.displayName || canonicalSlug;
+  const descriptionValue = definition.description;
+  const description =
+    descriptionValue && typeof descriptionValue === 'object' && !Array.isArray(descriptionValue)
+      ? normalizeSkillDescription(descriptionValue as CanonicalContentBlockInput)
+      : fallbackSkillDescription(
+          typeof frontmatter.description === 'string'
+            ? frontmatter.description
+            : input.pkg?.description,
+        );
+
+  return {
+    canonicalSlug,
+    name,
+    description,
+  };
+}
+
+function extractSkillSourceLink(pkg: CapabilityPackage): SkillSourceLink {
+  const metadata = asObject(pkg.metadata);
+  return {
+    sourcePackageId: pkg.sourceLink?.upstreamPackageId || (typeof metadata.sourcePackageId === 'string' ? metadata.sourcePackageId : undefined),
+    sourceRevisionId: pkg.sourceLink?.upstreamRevisionId || (typeof metadata.sourceRevisionId === 'string' ? metadata.sourceRevisionId : undefined),
+    sourceVersion: typeof metadata.sourceVersion === 'string' ? metadata.sourceVersion : undefined,
+    sourcePublisherId: typeof metadata.sourcePublisherId === 'string' ? metadata.sourcePublisherId : undefined,
+    sourcePublisherSlug: typeof metadata.sourcePublisherSlug === 'string' ? metadata.sourcePublisherSlug : undefined,
+    sourceDisplayName: typeof metadata.sourceDisplayName === 'string' ? metadata.sourceDisplayName : undefined,
+    sourceSlug: typeof metadata.sourceSlug === 'string' ? metadata.sourceSlug : undefined,
+    syncMode: pkg.sourceLink?.syncMode || (typeof metadata.syncMode === 'string' ? metadata.syncMode as SkillSourceLink['syncMode'] : undefined),
+  };
+}
+
+function resolveCanonicalSkillSlug(pkg: CapabilityPackage): string {
+  return readSkillDefinition({
+    pkg,
+    revision: pkg.latestRevision,
+  }).canonicalSlug || pkg.slug;
+}
+
+async function ensureMarketplacePublisher(userId?: string) {
+  const slug = userId ? `user-${userId}` : 'synapse-skill-market';
+  const displayName = userId ? `User ${userId.slice(0, 8)}` : 'Synapse Skill Market';
+  return createCapabilityPublisher({
+    slug,
+    displayName,
+    description: userId
+      ? `User-owned package publisher for ${userId}.`
+      : 'Default publisher for skill marketplace packages.',
+    ownerUserId: userId,
+    isBuiltin: !userId,
+    isVerified: !userId,
+  });
+}
+
+async function ensureWorkspaceLocalPublisher(workspaceId: string, ownerUserId?: string) {
+  return createCapabilityPublisher({
+    slug: `workspace-${workspaceId}`,
+    displayName: `Workspace ${workspaceId.slice(0, 8)}`,
+    description: `Workspace-local package publisher for ${workspaceId}.`,
+    ownerUserId,
+    isBuiltin: false,
+    isVerified: false,
+  });
+}
+
+function buildLocalSkillPackageSlug(sourceSlug: string) {
+  const parts = [sourceSlug, 'copy'];
+  parts.push(crypto.randomUUID().slice(0, 8));
+  return sanitizeSlug(parts.join('-'));
+}
+
+async function getSkillPackage(skillId: string) {
+  const pkg = await getCapabilityPackage(skillId);
+  if (pkg.kind !== 'skill') {
+    throw new SkillError(404, 'Skill not found');
+  }
+  return pkg;
+}
+
+function buildMarketplaceVersion(pkg: CapabilityPackage): SkillMarketplaceVersion | undefined {
+  if (!pkg.latestRevision) return undefined;
+  const definition = readSkillDefinition({
+    pkg,
+    revision: pkg.latestRevision,
+  });
+  return {
+    id: pkg.latestRevision.id,
+    skillId: pkg.id,
+    version: pkg.latestRevision.version,
+    changelog: typeof pkg.latestRevision.metadata.changelog === 'string' ? pkg.latestRevision.metadata.changelog : '',
+    description: definition.description,
+    createdBy: pkg.latestRevision.createdBy,
+    createdByName: pkg.publisher?.displayName,
+    createdAt: pkg.latestRevision.createdAt,
+    attachmentFiles: undefined,
+  };
+}
+
+function resolveInstalledSkillSource(instance: CapabilityInstance) {
+  if (!instance.package || !instance.revision || instance.package.kind !== 'skill') {
     throw new SkillError(404, 'Installed skill not found');
   }
-  return result.rows[0];
+
+  const pkg = instance.package;
+  const sourceLink = extractSkillSourceLink(pkg);
+  const sourcePackageId = sourceLink.sourcePackageId || (!pkg.workspaceId ? pkg.id : undefined);
+  const sourceRevisionId = sourceLink.sourceRevisionId || (!pkg.workspaceId ? instance.revisionId : undefined);
+  const sourceVersion = sourceLink.sourceVersion || (!pkg.workspaceId ? instance.revision.version : undefined);
+  const isCustomized = Boolean(sourceLink.sourcePackageId && sourceRevisionId && instance.revisionId !== sourceRevisionId);
+
+  return {
+    pkg,
+    revision: instance.revision,
+    sourceLink,
+    sourcePackageId,
+    sourceRevisionId,
+    sourceVersion,
+    isCustomized,
+  };
+}
+
+async function buildMarketplaceInstallationMap(workspaceId: string) {
+  const instances = await listCapabilityInstances(workspaceId, {
+    kind: 'skill',
+  });
+
+  const map = new Map<string, SkillMarketplaceWorkspaceInstallation & { _updatedAt: string }>();
+  for (const instance of instances) {
+    if (!instance.package || instance.package.kind !== 'skill') continue;
+    const source = resolveInstalledSkillSource(instance);
+    if (!source.sourcePackageId) continue;
+
+    const current = map.get(source.sourcePackageId);
+    const nextCount = (current?.installedCount || 0) + 1;
+    const shouldReplacePrimary =
+      !current || new Date(instance.updatedAt).getTime() > new Date(current._updatedAt).getTime();
+
+    map.set(source.sourcePackageId, {
+      installed: true,
+      installedSkillId: shouldReplacePrimary ? instance.id : current?.installedSkillId,
+      installedCount: nextCount,
+      _updatedAt: shouldReplacePrimary ? instance.updatedAt : current!._updatedAt,
+    });
+  }
+
+  return map;
+}
+
+function mapMarketplaceEntry(
+  pkg: CapabilityPackage,
+  workspaceInstallation?: SkillMarketplaceWorkspaceInstallation,
+): SkillMarketplaceEntry {
+  const definition = readSkillDefinition({
+    pkg,
+    revision: pkg.latestRevision,
+  });
+  return {
+    id: pkg.id,
+    slug: definition.canonicalSlug,
+    name: definition.name,
+    description: definition.description,
+    iconUrl: pkg.iconUrl || undefined,
+    tags: pkg.tags || [],
+    authorUserId: pkg.publisher?.ownerUserId,
+    authorName: pkg.publisher?.displayName,
+    isActive: pkg.isActive,
+    createdAt: pkg.createdAt,
+    updatedAt: pkg.updatedAt,
+    latestVersionId: pkg.latestRevisionId,
+    latestVersion: buildMarketplaceVersion(pkg),
+    workspaceInstallation,
+  };
+}
+
+async function mapInstalledSkill(instance: CapabilityInstance, includeFiles = false): Promise<InstalledSkill> {
+  const { pkg, revision, sourceLink, sourcePackageId, sourceRevisionId, sourceVersion, isCustomized } =
+    resolveInstalledSkillSource(instance);
+
+  let latestSourceVersion: string | undefined;
+  let upgradeAvailable = false;
+  if (sourceLink.sourcePackageId) {
+    try {
+      const sourcePkg = await getSkillPackage(sourceLink.sourcePackageId);
+      latestSourceVersion = sourcePkg.latestRevision?.version;
+      upgradeAvailable = Boolean(sourceRevisionId && sourcePkg.latestRevisionId && sourcePkg.latestRevisionId !== sourceRevisionId);
+    } catch {
+      latestSourceVersion = undefined;
+    }
+  } else if (!pkg.workspaceId) {
+    latestSourceVersion = revision.version;
+  }
+
+  const definition = readSkillDefinition({
+    pkg,
+    revision,
+  });
+  const attachmentFiles = includeFiles ? await listRevisionAttachments(instance.revisionId) : undefined;
+
+  return {
+    id: instance.id,
+    workspaceId: instance.workspaceId,
+    slug: definition.canonicalSlug,
+    name: definition.name,
+    description: definition.description,
+    iconUrl: pkg.iconUrl || undefined,
+    tags: pkg.tags || [],
+    useScope: instance.attachmentType as SkillUseScope,
+    actorId: instance.actorId,
+    conversationId: instance.conversationId,
+    userId: instance.userId,
+    isEnabled: instance.isEnabled,
+    isCustomized,
+    installedBy: instance.installedBy,
+    createdAt: instance.createdAt,
+    updatedAt: instance.updatedAt,
+    sourceSkillId: sourcePackageId,
+    sourceVersionId: sourceRevisionId,
+    sourceVersion,
+    upgradeAvailable,
+    latestSourceVersion,
+    attachmentFiles,
+  };
 }
 
 export async function listMarketplaceSkills(filters?: {
   search?: string;
   tags?: string[];
+  workspaceId?: string;
 }) {
-  const where: string[] = ['s.is_active = TRUE'];
-  const values: unknown[] = [];
-  let idx = 1;
-
-  if (filters?.search?.trim()) {
-    where.push(`(
-      s.name ILIKE $${idx}
-      OR s.slug ILIKE $${idx}
-      OR s.summary ILIKE $${idx}
-    )`);
-    values.push(`%${filters.search.trim()}%`);
-    idx += 1;
+  try {
+    const packages = await listCapabilityPackages({
+      kind: 'skill',
+      search: filters?.search?.trim() || undefined,
+      tags: filters?.tags,
+    });
+    const installationMap = filters?.workspaceId
+      ? await buildMarketplaceInstallationMap(filters.workspaceId)
+      : null;
+    return packages
+      .filter((pkg) => !pkg.workspaceId)
+      .map((pkg) =>
+        mapMarketplaceEntry(
+          pkg,
+          installationMap?.get(pkg.id) || (filters?.workspaceId ? { installed: false, installedCount: 0 } : undefined),
+        ),
+      );
+  } catch (error) {
+    wrapCapabilityError(error);
   }
-
-  if (filters?.tags && filters.tags.length > 0) {
-    where.push(`s.tags && $${idx++}::text[]`);
-    values.push(filters.tags);
-  }
-
-  const result = await query(
-    `SELECT
-        s.*,
-        author.name AS author_name,
-        latest.id AS latest_version_id,
-        latest.version AS latest_version,
-        latest.entry_path AS latest_entry_path,
-        latest.changelog AS latest_changelog,
-        latest.created_by AS latest_created_by,
-        latest.created_at AS latest_created_at,
-        creator.name AS latest_created_by_name
-     FROM skill_market_skills s
-     LEFT JOIN users author ON author.id = s.author_user_id
-     LEFT JOIN skill_market_versions latest ON latest.id = s.latest_version_id
-     LEFT JOIN users creator ON creator.id = latest.created_by
-     WHERE ${where.join(' AND ')}
-     ORDER BY s.updated_at DESC, s.name ASC`,
-    values,
-  );
-
-  return result.rows.map(mapMarketplaceEntry);
 }
 
-export async function getMarketplaceSkill(skillId: string) {
-  const row = await getMarketplaceSkillRow(skillId);
-  const skill = mapMarketplaceEntry(row);
-  if (skill.latestVersionId) {
-    skill.latestVersion = {
-      ...skill.latestVersion!,
-      files: await listMarketplaceFiles(skill.latestVersionId),
-    };
+export async function getMarketplaceSkill(skillId: string, workspaceId?: string) {
+  try {
+    const pkg = await getSkillPackage(skillId);
+    if (pkg.workspaceId) {
+      throw new SkillError(404, 'Skill not found');
+    }
+    const installationMap = workspaceId ? await buildMarketplaceInstallationMap(workspaceId) : null;
+    const skill = mapMarketplaceEntry(
+      pkg,
+      installationMap?.get(pkg.id) || (workspaceId ? { installed: false, installedCount: 0 } : undefined),
+    );
+    if (skill.latestVersionId) {
+      skill.latestVersion = {
+        ...skill.latestVersion!,
+        attachmentFiles: await listRevisionAttachments(skill.latestVersionId),
+      };
+    }
+    return skill;
+  } catch (error) {
+    wrapCapabilityError(error);
   }
-  return skill;
 }
 
 export async function publishMarketplaceSkill(input: {
   skillId?: string;
   slug: string;
   name: string;
-  summary?: string;
+  description?: CanonicalContentBlockInput;
   iconUrl?: string;
   tags?: string[];
   version: string;
-  entryPath?: string;
   changelog?: string;
-  files: SkillFileInput[];
+  attachmentFiles?: SkillAttachmentInput[];
   authorUserId?: string;
   isActive?: boolean;
   metadata?: JsonMap;
 }) {
-  const slug = sanitizeSlug(input.slug || input.name);
-  if (!slug) {
+  const canonicalSlug = sanitizeSlug(input.slug || input.name);
+  if (!canonicalSlug) {
     throw new SkillError(400, 'Skill slug is required');
   }
+
   const name = input.name.trim();
   if (!name) {
     throw new SkillError(400, 'Skill name is required');
   }
+
   const version = input.version.trim();
   if (!version) {
     throw new SkillError(400, 'Skill version is required');
   }
 
-  const entryPath = normalizePath(input.entryPath || 'SKILL.md');
-  const files = normalizeSkillFiles(input.files, entryPath);
+  const description = normalizeSkillDescription(input.description);
+  const descriptionText = renderSkillDescriptionToText(description);
+  const attachmentFiles = normalizeSkillAttachments(input.attachmentFiles);
 
-  const skillId = await transaction(async (client) => {
-    const existing = input.skillId
-      ? await client.query<{ id: string }>(
-          `SELECT id
-           FROM skill_market_skills
-           WHERE id = $1
-           LIMIT 1`,
-          [input.skillId],
-        )
-      : await client.query<{ id: string }>(
-          `SELECT id
-           FROM skill_market_skills
-           WHERE slug = $1
-           LIMIT 1`,
-          [slug],
-        );
+  try {
+    const existing = input.skillId ? await getSkillPackage(input.skillId) : null;
+    const publisher = existing?.publisherId
+      ? { id: existing.publisherId }
+      : await ensureMarketplacePublisher(input.authorUserId);
 
-    let nextSkillId: string;
-    if (existing.rows.length > 0) {
-      nextSkillId = existing.rows[0]!.id;
-      await client.query(
-        `UPDATE skill_market_skills
-         SET slug = $1,
-             name = $2,
-             summary = $3,
-             icon_url = $4,
-             tags = $5,
-             author_user_id = COALESCE($6, author_user_id),
-             is_active = $7,
-             metadata = $8::jsonb,
-             updated_at = NOW()
-         WHERE id = $9`,
-        [
-          slug,
-          name,
-          input.summary || '',
-          input.iconUrl || null,
-          input.tags || [],
-          input.authorUserId || null,
-          input.isActive ?? true,
-          JSON.stringify(input.metadata || {}),
-          nextSkillId,
-        ],
-      );
-    } else {
-      const inserted = await client.query<{ id: string }>(
-        `INSERT INTO skill_market_skills (
-           slug, name, summary, icon_url, tags, author_user_id, is_active, metadata
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-         RETURNING id`,
-        [
-          slug,
-          name,
-          input.summary || '',
-          input.iconUrl || null,
-          input.tags || [],
-          input.authorUserId || null,
-          input.isActive ?? true,
-          JSON.stringify(input.metadata || {}),
-        ],
-      );
-      nextSkillId = inserted.rows[0]!.id;
-    }
+    const pkg = existing
+      ? await updateCapabilityPackage(existing.id, {
+          slug: canonicalSlug,
+          displayName: name,
+          description: descriptionText,
+          longDescription: descriptionText,
+          iconUrl: input.iconUrl || null,
+          tags: input.tags || [],
+          isActive: input.isActive ?? true,
+          metadata: {
+            ...(existing.metadata || {}),
+            canonicalSlug,
+            ...(input.metadata || {}),
+          },
+        })
+      : await createCapabilityPackage({
+          publisherId: publisher.id,
+          kind: 'skill',
+          slug: canonicalSlug,
+          displayName: name,
+          description: descriptionText,
+          longDescription: descriptionText,
+          iconUrl: input.iconUrl || null,
+          sourceType: 'official',
+          tags: input.tags || [],
+          isActive: input.isActive ?? true,
+          defaultInstanceScope: 'workspace',
+          defaultReuseScope: 'workspace',
+          metadata: {
+            canonicalSlug,
+            ...(input.metadata || {}),
+          },
+        });
 
-    const versionResult = await client.query<{ id: string }>(
-      `INSERT INTO skill_market_versions (
-         skill_id, version, entry_path, changelog, metadata, created_by
-       )
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6)
-       ON CONFLICT (skill_id, version) DO UPDATE SET
-         entry_path = EXCLUDED.entry_path,
-         changelog = EXCLUDED.changelog,
-         metadata = EXCLUDED.metadata,
-         updated_at = NOW()
-       RETURNING id`,
-      [
-        nextSkillId,
-        version,
-        entryPath,
-        input.changelog || '',
-        JSON.stringify(input.metadata || {}),
-        input.authorUserId || null,
-      ],
-    );
-    const versionId = versionResult.rows[0]!.id;
+    await createCapabilityRevision({
+      packageId: pkg.id,
+      version,
+      status: 'active',
+      manifest: buildSkillManifest({
+        canonicalSlug,
+        name,
+        description,
+      }),
+      metadata: {
+        changelog: input.changelog || '',
+        ...(input.metadata || {}),
+      },
+      createdBy: input.authorUserId,
+      assets: buildSkillAssets(attachmentFiles),
+      setLatest: true,
+    });
 
-    await saveMarketplaceFiles(client, versionId, files);
-    await client.query(
-      `UPDATE skill_market_skills
-       SET latest_version_id = $1,
-           updated_at = NOW()
-       WHERE id = $2`,
-      [versionId, nextSkillId],
-    );
+    return getMarketplaceSkill(pkg.id);
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
+}
 
-    return nextSkillId;
+export async function createWorkspaceSkill(input: {
+  workspaceId: string;
+  slug: string;
+  name: string;
+  description?: CanonicalContentBlockInput;
+  iconUrl?: string;
+  tags?: string[];
+  attachmentFiles?: SkillAttachmentInput[];
+  useScope: SkillUseScope;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+  installedBy?: string;
+}) {
+  const canonicalSlug = sanitizeSlug(input.slug || input.name);
+  if (!canonicalSlug) {
+    throw new SkillError(400, 'Skill slug is required');
+  }
+
+  const name = input.name.trim();
+  if (!name) {
+    throw new SkillError(400, 'Skill name is required');
+  }
+
+  const description = normalizeSkillDescription(input.description);
+  const descriptionText = renderSkillDescriptionToText(description);
+  const attachmentFiles = normalizeSkillAttachments(input.attachmentFiles);
+  const target = normalizeScopeTarget({
+    useScope: input.useScope,
+    actorId: input.actorId,
+    conversationId: input.conversationId,
+    userId: input.userId,
   });
 
-  return getMarketplaceSkill(skillId);
+  try {
+    const localPublisher = await ensureWorkspaceLocalPublisher(input.workspaceId, input.installedBy);
+    const pkg = await createCapabilityPackage({
+      publisherId: localPublisher.id,
+      workspaceId: input.workspaceId,
+      kind: 'skill',
+      slug: canonicalSlug,
+      displayName: name,
+      description: descriptionText,
+      longDescription: descriptionText,
+      iconUrl: input.iconUrl || null,
+      sourceType: 'workspace_upload',
+      tags: input.tags || [],
+      isActive: true,
+      defaultInstanceScope: 'workspace',
+      defaultReuseScope: 'workspace',
+      metadata: {
+        canonicalSlug,
+      },
+    });
+
+    const revision = await createCapabilityRevision({
+      packageId: pkg.id,
+      version: 'workspace-initial',
+      status: 'active',
+      manifest: buildSkillManifest({
+        canonicalSlug,
+        name,
+        description,
+      }),
+      metadata: {
+        createdAs: 'workspace_skill',
+      },
+      createdBy: input.installedBy,
+      assets: buildSkillAssets(attachmentFiles),
+      setLatest: true,
+    });
+
+    const instance = await createCapabilityInstance({
+      workspaceId: input.workspaceId,
+      packageId: pkg.id,
+      revisionId: revision.id,
+      attachmentType: 'workspace',
+      reuseScope: 'workspace',
+      installMode: 'manual',
+      installedBy: input.installedBy,
+    });
+
+    await issueCapabilityInstanceGrant({
+      instanceId: instance.id,
+      workspaceId: input.workspaceId,
+      grantScope: input.useScope,
+      actorId: target.actorId || undefined,
+      conversationId: target.conversationId || undefined,
+      userId: target.userId || undefined,
+      permissions: requiredPermissionsForRevision(revision),
+      grantedBy: input.installedBy,
+      reason: grantReasonForRevision(revision),
+    });
+
+    return getInstalledSkill(input.workspaceId, instance.id);
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
 }
 
 export async function listInstalledSkills(workspaceId: string, filters?: {
@@ -502,52 +813,49 @@ export async function listInstalledSkills(workspaceId: string, filters?: {
   userId?: string;
   sourceSkillId?: string;
 }) {
-  const where: string[] = ['i.workspace_id = $1'];
-  const values: unknown[] = [workspaceId];
-  let idx = 2;
+  try {
+    const instances = await listCapabilityInstances(workspaceId, {
+      kind: 'skill',
+      attachmentType: filters?.useScope ? toAttachmentType(filters.useScope) : undefined,
+      actorId: filters?.actorId,
+      conversationId: filters?.conversationId,
+      userId: filters?.userId,
+    });
 
-  if (filters?.useScope) {
-    where.push(`i.use_scope = $${idx++}`);
-    values.push(filters.useScope);
+    const mapped = await Promise.all(instances.map((instance) => mapInstalledSkill(instance)));
+    if (!filters?.sourceSkillId) return mapped;
+    return mapped.filter((skill) => skill.sourceSkillId === filters.sourceSkillId);
+  } catch (error) {
+    wrapCapabilityError(error);
   }
-  if (filters?.actorId) {
-    where.push(`i.actor_id = $${idx++}`);
-    values.push(filters.actorId);
-  }
-  if (filters?.conversationId) {
-    where.push(`i.conversation_id = $${idx++}`);
-    values.push(filters.conversationId);
-  }
-  if (filters?.userId) {
-    where.push(`i.user_id = $${idx++}`);
-    values.push(filters.userId);
-  }
-  if (filters?.sourceSkillId) {
-    where.push(`i.source_skill_id = $${idx++}`);
-    values.push(filters.sourceSkillId);
-  }
-
-  const result = await query(
-    `SELECT
-        i.*,
-        src.latest_version_id AS source_latest_version_id,
-        latest.version AS latest_source_version
-     FROM installed_skills i
-     LEFT JOIN skill_market_skills src ON src.id = i.source_skill_id
-     LEFT JOIN skill_market_versions latest ON latest.id = src.latest_version_id
-     WHERE ${where.join(' AND ')}
-     ORDER BY i.updated_at DESC, i.name ASC`,
-    values,
-  );
-
-  return result.rows.map(mapInstalledSkill);
 }
 
 export async function getInstalledSkill(workspaceId: string, installedSkillId: string) {
-  const row = await getInstalledSkillRow(workspaceId, installedSkillId);
-  const skill = mapInstalledSkill(row);
-  skill.files = await listInstalledSkillFiles(installedSkillId);
-  return skill;
+  try {
+    const instance = await getCapabilityInstance(installedSkillId);
+    if (instance.workspaceId !== workspaceId || instance.package?.kind !== 'skill') {
+      throw new SkillError(404, 'Installed skill not found');
+    }
+    return mapInstalledSkill(instance, true);
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
+}
+
+async function findExistingInstalledSkillInstance(input: {
+  workspaceId: string;
+  sourceSkillId: string;
+}) {
+  const instances = await listCapabilityInstances(input.workspaceId, {
+    kind: 'skill',
+  });
+
+  return instances.find((instance) => {
+    if (!instance.package || instance.package.kind !== 'skill') return false;
+    const sourceLink = extractSkillSourceLink(instance.package);
+    const effectiveSourceId = sourceLink.sourcePackageId || (!instance.package.workspaceId ? instance.package.id : undefined);
+    return effectiveSourceId === input.sourceSkillId;
+  }) || null;
 }
 
 export async function installMarketplaceSkill(input: {
@@ -559,13 +867,6 @@ export async function installMarketplaceSkill(input: {
   userId?: string;
   installedBy?: string;
 }) {
-  const source = await getMarketplaceSkill(input.marketSkillId);
-  if (!source.latestVersion || !source.latestVersion.files) {
-    throw new SkillError(400, 'Marketplace skill has no published version');
-  }
-  const latestVersion = source.latestVersion;
-  const latestFiles = latestVersion.files!;
-
   const target = normalizeScopeTarget({
     useScope: input.useScope,
     actorId: input.actorId,
@@ -573,233 +874,340 @@ export async function installMarketplaceSkill(input: {
     userId: input.userId,
   });
 
-  const existing = await query<{ id: string }>(
-    `SELECT id
-     FROM installed_skills
-     WHERE workspace_id = $1
-       AND source_skill_id = $2
-       AND use_scope = $3
-       AND COALESCE(actor_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE($4::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
-       AND COALESCE(conversation_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE($5::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
-       AND COALESCE(user_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE($6::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
-     LIMIT 1`,
-    [
-      input.workspaceId,
-      input.marketSkillId,
-      input.useScope,
-      target.actorId,
-      target.conversationId,
-      target.userId,
-    ],
-  );
+  try {
+    const source = await getSkillPackage(input.marketSkillId);
+    if (source.workspaceId) {
+      throw new SkillError(400, 'Marketplace skill must be a global package');
+    }
+    if (!source.latestRevision) {
+      throw new SkillError(400, 'Marketplace skill has no published version');
+    }
 
-  if (existing.rows.length > 0) {
-    return getInstalledSkill(input.workspaceId, existing.rows[0]!.id);
-  }
+    const existing = await findExistingInstalledSkillInstance({
+      workspaceId: input.workspaceId,
+      sourceSkillId: source.id,
+    });
+    if (existing) {
+      await issueCapabilityInstanceGrant({
+        instanceId: existing.id,
+        workspaceId: input.workspaceId,
+        grantScope: input.useScope,
+        actorId: target.actorId || undefined,
+        conversationId: target.conversationId || undefined,
+        userId: target.userId || undefined,
+        permissions: requiredPermissionsForRevision(existing.revision),
+        grantedBy: input.installedBy,
+        reason: grantReasonForRevision(existing.revision),
+      });
+      return getInstalledSkill(input.workspaceId, existing.id);
+    }
 
-  const installedSkillId = await transaction(async (client) => {
-    const inserted = await client.query<{ id: string }>(
-      `INSERT INTO installed_skills (
-         workspace_id, source_skill_id, source_version_id, source_version,
-         slug, name, summary, icon_url, tags, entry_path,
-         use_scope, conversation_id, actor_id, user_id,
-         is_enabled, is_customized, installed_by, metadata
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, TRUE, FALSE, $15, '{}'::jsonb)
-       RETURNING id`,
-      [
-        input.workspaceId,
-        source.id,
-        latestVersion.id,
-        latestVersion.version,
-        source.slug,
-        source.name,
-        source.summary,
-        source.iconUrl || null,
-        source.tags,
-        latestVersion.entryPath,
-        input.useScope,
-        target.conversationId,
-        target.actorId,
-        target.userId,
-        input.installedBy || null,
-      ],
+    const localPublisher = await ensureWorkspaceLocalPublisher(input.workspaceId, input.installedBy);
+    const localSlug = buildLocalSkillPackageSlug(resolveCanonicalSkillSlug(source));
+    const localPackage = await createCapabilityPackage({
+      publisherId: localPublisher.id,
+      workspaceId: input.workspaceId,
+      kind: 'skill',
+      slug: localSlug,
+      displayName: source.displayName,
+      description: source.description,
+      longDescription: source.longDescription,
+      iconUrl: source.iconUrl,
+      sourceType: 'workspace_upload',
+      tags: source.tags,
+      isActive: true,
+      defaultInstanceScope: 'workspace',
+      defaultReuseScope: 'workspace',
+      metadata: {
+        ...(source.metadata || {}),
+        canonicalSlug: resolveCanonicalSkillSlug(source),
+        sourceVersion: source.latestRevision.version,
+        sourcePublisherId: source.publisherId,
+        sourcePublisherSlug: source.publisher?.slug,
+        sourceDisplayName: source.displayName,
+        sourceSlug: resolveCanonicalSkillSlug(source),
+      },
+    });
+
+    const assets = await listCapabilityAssets(source.latestRevision.id);
+    const localRevision = await createCapabilityRevision({
+      packageId: localPackage.id,
+      version: source.latestRevision.version,
+      status: 'active',
+      manifest: source.latestRevision.manifest,
+      configSchema: source.latestRevision.configSchema,
+      defaultConfig: source.latestRevision.defaultConfig,
+      metadata: {
+        ...(source.latestRevision.metadata || {}),
+        importedFromPackageId: source.id,
+        importedFromRevisionId: source.latestRevision.id,
+      },
+      createdBy: input.installedBy,
+      assets: assets.map((asset) => ({
+        path: asset.path,
+        assetKind: asset.assetKind,
+        mediaType: asset.mediaType,
+        textContent: asset.textContent,
+        sha256: asset.sha256,
+        metadata: asset.metadata,
+      })),
+      setLatest: true,
+    });
+
+    await upsertCapabilityPackageLineage({
+      downstreamPackageId: localPackage.id,
+      upstreamPackageId: source.id,
+      upstreamRevisionId: source.latestRevision.id,
+      lineageKind: 'installed_copy',
+      syncMode: 'manual_merge',
+      metadata: {
+        installedFrom: 'marketplace',
+      },
+    });
+
+    const instance = await createCapabilityInstance({
+      workspaceId: input.workspaceId,
+      packageId: localPackage.id,
+      revisionId: localRevision.id,
+      attachmentType: 'workspace',
+      reuseScope: 'workspace',
+      installMode: 'manual',
+      installedBy: input.installedBy,
+    });
+
+    await issueCapabilityInstanceGrant({
+      instanceId: instance.id,
+      workspaceId: input.workspaceId,
+      grantScope: input.useScope,
+      actorId: target.actorId || undefined,
+      conversationId: target.conversationId || undefined,
+      userId: target.userId || undefined,
+      permissions: requiredPermissionsForRevision(localRevision),
+      grantedBy: input.installedBy,
+      reason: grantReasonForRevision(localRevision),
+    });
+
+    await query(
+      `UPDATE capability_packages
+       SET download_count = download_count + 1,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [source.id],
     );
-    const nextInstalledSkillId = inserted.rows[0]!.id;
-    await saveInstalledFiles(client, nextInstalledSkillId, latestFiles);
-    return nextInstalledSkillId;
-  });
 
-  return getInstalledSkill(input.workspaceId, installedSkillId);
+    return getInstalledSkill(input.workspaceId, instance.id);
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
 }
 
 export async function updateInstalledSkill(input: {
   workspaceId: string;
   installedSkillId: string;
   name?: string;
-  summary?: string;
+  description?: CanonicalContentBlockInput;
   iconUrl?: string | null;
   tags?: string[];
-  entryPath?: string;
-  useScope?: SkillUseScope;
-  actorId?: string | null;
-  conversationId?: string | null;
-  userId?: string | null;
   isEnabled?: boolean;
-  files?: SkillFileInput[];
+  attachmentFiles?: SkillAttachmentInput[];
 }) {
-  const current = await getInstalledSkill(input.workspaceId, input.installedSkillId);
-  const nextUseScope = input.useScope || current.useScope;
-  const target = normalizeScopeTarget({
-    useScope: nextUseScope,
-    actorId: input.actorId ?? current.actorId ?? null,
-    conversationId: input.conversationId ?? current.conversationId ?? null,
-    userId: input.userId ?? current.userId ?? null,
-  });
-
-  const nextEntryPath = normalizePath(input.entryPath || current.entryPath);
-  const normalizedFiles = input.files ? normalizeSkillFiles(input.files, nextEntryPath) : null;
-  const touchesContent =
-    input.name !== undefined ||
-    input.summary !== undefined ||
-    input.iconUrl !== undefined ||
-    input.tags !== undefined ||
-    input.entryPath !== undefined ||
-    input.files !== undefined;
-
-  await transaction(async (client) => {
-    await client.query(
-      `UPDATE installed_skills
-       SET name = $1,
-           summary = $2,
-           icon_url = $3,
-           tags = $4,
-           entry_path = $5,
-           use_scope = $6,
-           conversation_id = $7,
-           actor_id = $8,
-           user_id = $9,
-           is_enabled = COALESCE($10, is_enabled),
-           is_customized = CASE WHEN $11 THEN TRUE ELSE is_customized END,
-           updated_at = NOW()
-       WHERE workspace_id = $12
-         AND id = $13`,
-      [
-        input.name?.trim() || current.name,
-        input.summary ?? current.summary,
-        input.iconUrl === undefined ? current.iconUrl || null : input.iconUrl,
-        input.tags ?? current.tags,
-        nextEntryPath,
-        nextUseScope,
-        target.conversationId,
-        target.actorId,
-        target.userId,
-        input.isEnabled,
-        touchesContent,
-        input.workspaceId,
-        input.installedSkillId,
-      ],
-    );
-
-    if (normalizedFiles) {
-      await saveInstalledFiles(client, input.installedSkillId, normalizedFiles);
+  try {
+    const instance = await getCapabilityInstance(input.installedSkillId);
+    if (instance.workspaceId !== input.workspaceId || instance.package?.kind !== 'skill' || !instance.package || !instance.revision) {
+      throw new SkillError(404, 'Installed skill not found');
     }
-  });
 
-  return getInstalledSkill(input.workspaceId, input.installedSkillId);
+    const currentAttachments = await listRevisionAttachments(instance.revisionId);
+    const currentDefinition = readSkillDefinition({
+      pkg: instance.package,
+      revision: instance.revision,
+    });
+    const nextDescription = input.description
+      ? normalizeSkillDescription(input.description)
+      : currentDefinition.description;
+    const normalizedAttachments = input.attachmentFiles
+      ? normalizeSkillAttachments(input.attachmentFiles)
+      : currentAttachments.map((file) => ({
+          path: normalizePath(file.path),
+          contentBlocks: normalizeCanonicalContentBlocks(file.contentBlocks),
+        }));
+
+    const touchesContent =
+      input.name !== undefined ||
+      input.description !== undefined ||
+      input.iconUrl !== undefined ||
+      input.tags !== undefined ||
+      input.attachmentFiles !== undefined;
+
+    let nextRevisionId = instance.revisionId;
+    if (touchesContent) {
+      if (!instance.package.workspaceId) {
+        throw new SkillError(400, 'Linked marketplace skills must be copied locally before editing');
+      }
+
+      const canonicalSlug = resolveCanonicalSkillSlug(instance.package);
+      const nextName = input.name?.trim() || currentDefinition.name;
+      const nextDescriptionText = renderSkillDescriptionToText(nextDescription);
+
+      await updateCapabilityPackage(instance.package.id, {
+        displayName: nextName,
+        description: nextDescriptionText,
+        longDescription: nextDescriptionText,
+        iconUrl: input.iconUrl === undefined ? instance.package.iconUrl || null : input.iconUrl,
+        tags: input.tags ?? instance.package.tags,
+        metadata: {
+          ...(instance.package.metadata || {}),
+          canonicalSlug,
+        },
+      });
+
+      const nextRevision = await createCapabilityRevision({
+        packageId: instance.package.id,
+        version: `local-${Date.now()}`,
+        status: 'active',
+        manifest: buildSkillManifest({
+          canonicalSlug,
+          name: nextName,
+          description: nextDescription,
+        }),
+        metadata: {
+          ...(instance.revision.metadata || {}),
+          lastEditedAt: new Date().toISOString(),
+        },
+        createdBy: instance.installedBy,
+        assets: buildSkillAssets(normalizedAttachments),
+        setLatest: true,
+      });
+      nextRevisionId = nextRevision.id;
+    }
+
+    await updateCapabilityInstance(input.installedSkillId, {
+      revisionId: nextRevisionId !== instance.revisionId ? nextRevisionId : undefined,
+      isEnabled: input.isEnabled,
+    });
+
+    return getInstalledSkill(input.workspaceId, input.installedSkillId);
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
 }
 
 export async function upgradeInstalledSkill(input: {
   workspaceId: string;
   installedSkillId: string;
 }) {
-  const current = await getInstalledSkill(input.workspaceId, input.installedSkillId);
-  if (!current.sourceSkillId) {
-    throw new SkillError(400, 'Installed skill has no marketplace source');
+  try {
+    const instance = await getCapabilityInstance(input.installedSkillId);
+    if (instance.workspaceId !== input.workspaceId || instance.package?.kind !== 'skill' || !instance.package || !instance.revision) {
+      throw new SkillError(404, 'Installed skill not found');
+    }
+
+    const sourceLink = extractSkillSourceLink(instance.package);
+    if (!sourceLink.sourcePackageId) {
+      throw new SkillError(400, 'Installed skill has no marketplace source');
+    }
+
+    const source = await getSkillPackage(sourceLink.sourcePackageId);
+    if (!source.latestRevision) {
+      throw new SkillError(400, 'Marketplace source has no latest version');
+    }
+
+    const assets = await listCapabilityAssets(source.latestRevision.id);
+    const canonicalSlug = resolveCanonicalSkillSlug(source);
+    await updateCapabilityPackage(instance.package.id, {
+      displayName: source.displayName,
+      description: source.description,
+      longDescription: source.longDescription,
+      iconUrl: source.iconUrl || null,
+      tags: source.tags,
+      metadata: {
+        ...(instance.package.metadata || {}),
+        canonicalSlug,
+        sourceVersion: source.latestRevision.version,
+        sourcePublisherId: source.publisherId,
+        sourcePublisherSlug: source.publisher?.slug,
+        sourceDisplayName: source.displayName,
+        sourceSlug: canonicalSlug,
+      },
+    });
+
+    const revision = await createCapabilityRevision({
+      packageId: instance.package.id,
+      version: source.latestRevision.version,
+      status: 'active',
+      manifest: source.latestRevision.manifest,
+      configSchema: source.latestRevision.configSchema,
+      defaultConfig: source.latestRevision.defaultConfig,
+      metadata: {
+        ...(source.latestRevision.metadata || {}),
+        importedFromPackageId: source.id,
+        importedFromRevisionId: source.latestRevision.id,
+        upgradedAt: new Date().toISOString(),
+      },
+      createdBy: instance.installedBy,
+      assets: assets.map((asset) => ({
+        path: asset.path,
+        assetKind: asset.assetKind,
+        mediaType: asset.mediaType,
+        textContent: asset.textContent,
+        sha256: asset.sha256,
+        metadata: asset.metadata,
+      })),
+      setLatest: true,
+    });
+
+    await upsertCapabilityPackageLineage({
+      downstreamPackageId: instance.package.id,
+      upstreamPackageId: source.id,
+      upstreamRevisionId: source.latestRevision.id,
+      lineageKind: 'installed_copy',
+      syncMode: 'manual_merge',
+      metadata: {
+        upgradedAt: new Date().toISOString(),
+      },
+    });
+
+    await updateCapabilityInstance(instance.id, {
+      revisionId: revision.id,
+    });
+
+    return getInstalledSkill(input.workspaceId, input.installedSkillId);
+  } catch (error) {
+    wrapCapabilityError(error);
   }
-
-  const source = await getMarketplaceSkill(current.sourceSkillId);
-  if (!source.latestVersion || !source.latestVersion.files) {
-    throw new SkillError(400, 'Marketplace source has no latest version');
-  }
-  const latestVersion = source.latestVersion;
-  const latestFiles = latestVersion.files!;
-
-  await transaction(async (client) => {
-    await client.query(
-      `UPDATE installed_skills
-       SET slug = $1,
-           name = $2,
-           summary = $3,
-           icon_url = $4,
-           tags = $5,
-           entry_path = $6,
-           source_version_id = $7,
-           source_version = $8,
-           is_customized = FALSE,
-           updated_at = NOW()
-       WHERE workspace_id = $9
-         AND id = $10`,
-      [
-        source.slug,
-        source.name,
-        source.summary,
-        source.iconUrl || null,
-        source.tags,
-        latestVersion.entryPath,
-        latestVersion.id,
-        latestVersion.version,
-        input.workspaceId,
-        input.installedSkillId,
-      ],
-    );
-    await saveInstalledFiles(client, input.installedSkillId, latestFiles);
-  });
-
-  return getInstalledSkill(input.workspaceId, input.installedSkillId);
 }
 
 export async function uninstallInstalledSkill(workspaceId: string, installedSkillId: string) {
-  const result = await query<{ id: string }>(
-    `DELETE FROM installed_skills
-     WHERE workspace_id = $1
-       AND id = $2
-     RETURNING id`,
-    [workspaceId, installedSkillId],
-  );
-  if (result.rows.length === 0) {
-    throw new SkillError(404, 'Installed skill not found');
-  }
-  return true;
-}
+  try {
+    const instance = await getCapabilityInstance(installedSkillId);
+    if (instance.workspaceId !== workspaceId || instance.package?.kind !== 'skill' || !instance.package) {
+      throw new SkillError(404, 'Installed skill not found');
+    }
 
-function runtimeScopeMatches(skill: InstalledSkill, input: {
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
-}) {
-  if (!skill.isEnabled) return false;
+    await deleteCapabilityInstance(installedSkillId);
 
-  switch (skill.useScope) {
-    case 'workspace':
-      return true;
-    case 'conversation':
-      return Boolean(skill.conversationId && input.conversationId && skill.conversationId === input.conversationId);
-    case 'actor_global':
-      return Boolean(skill.actorId && input.actorId && skill.actorId === input.actorId);
-    case 'actor_conversation':
-      return Boolean(
-        skill.actorId &&
-        skill.conversationId &&
-        input.actorId &&
-        input.conversationId &&
-        skill.actorId === input.actorId &&
-        skill.conversationId === input.conversationId,
+    if (instance.package.workspaceId) {
+      const remaining = await query(
+        `SELECT 1
+         FROM capability_instances
+         WHERE package_id = $1
+         LIMIT 1`,
+        [instance.package.id],
       );
-    case 'user':
-      return Boolean(skill.userId && input.userId && skill.userId === input.userId);
-    default:
-      return false;
+
+      if (remaining.rows.length === 0) {
+        await query(
+          `DELETE FROM capability_packages
+           WHERE id = $1
+             AND workspace_id = $2`,
+          [instance.package.id, workspaceId],
+        );
+      }
+    }
+
+    return true;
+  } catch (error) {
+    wrapCapabilityError(error);
   }
 }
 
@@ -809,30 +1217,28 @@ export async function listVisibleSkills(input: {
   conversationId?: string;
   userId?: string;
 }) {
-  const installed = await listInstalledSkills(input.workspaceId);
-  const visible = installed.filter((skill) => runtimeScopeMatches(skill, input));
-  const deduped = new Map<string, InstalledSkill>();
+  try {
+    const instances = await listVisibleCapabilityInstances({
+      workspaceId: input.workspaceId,
+      kind: 'skill',
+      actorId: input.actorId,
+      conversationId: input.conversationId,
+      userId: input.userId,
+    });
 
-  for (const skill of visible) {
-    if (!deduped.has(skill.slug)) {
-      deduped.set(skill.slug, skill);
+    const deduped = new Map<string, CapabilityAvailableSkill>();
+    for (const instance of instances) {
+      const available = instanceToAvailableSkill(instance);
+      if (!available) continue;
+      if (!deduped.has(available.slug)) {
+        deduped.set(available.slug, available);
+      }
     }
-  }
 
-  return Array.from(deduped.values()).map((skill): CapabilityAvailableSkill => ({
-    instanceId: skill.id,
-    packageId: skill.sourceSkillId || skill.id,
-    revisionId: skill.sourceVersionId || skill.id,
-    slug: skill.slug,
-    name: skill.name,
-    description: skill.summary,
-    version: skill.sourceVersion || 'workspace-copy',
-    attachmentType: skill.useScope,
-    actorId: skill.actorId,
-    conversationId: skill.conversationId,
-    userId: skill.userId,
-    entryPoint: skill.entryPath,
-  }));
+    return Array.from(deduped.values());
+  } catch (error) {
+    wrapCapabilityError(error);
+  }
 }
 
 export async function readVisibleSkill(input: {
@@ -843,35 +1249,60 @@ export async function readVisibleSkill(input: {
   skillName: string;
   assetPath?: string;
 }) {
-  const visibleSkills = await listVisibleSkills({
-    workspaceId: input.workspaceId,
-    actorId: input.actorId,
-    conversationId: input.conversationId,
-    userId: input.userId,
-  });
+  try {
+    const visibleSkills = await listVisibleSkills({
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      conversationId: input.conversationId,
+      userId: input.userId,
+    });
 
-  const normalizedName = input.skillName.trim().toLowerCase();
-  const match = visibleSkills.find((skill) =>
-    skill.slug.toLowerCase() === normalizedName ||
-    skill.name.toLowerCase() === normalizedName,
-  );
-  if (!match) {
-    throw new SkillError(404, `Visible skill "${input.skillName}" not found`);
+    const normalizedName = input.skillName.trim().toLowerCase();
+    const match = visibleSkills.find((skill) =>
+      skill.slug.toLowerCase() === normalizedName ||
+      skill.name.toLowerCase() === normalizedName,
+    );
+    if (!match) {
+      throw new SkillError(404, `Visible skill "${input.skillName}" not found`);
+    }
+
+    const instance = await getCapabilityInstance(match.instanceId);
+    if (instance.workspaceId !== input.workspaceId || instance.package?.kind !== 'skill') {
+      throw new SkillError(404, `Visible skill "${input.skillName}" not found`);
+    }
+
+    const definition = readSkillDefinition({
+      pkg: instance.package,
+      revision: instance.revision,
+    });
+
+    if (!input.assetPath) {
+      return {
+        skill: match,
+        asset: {
+          path: SKILL_DESCRIPTION_ASSET_PATH,
+          textContent: renderSkillDescriptionToText(definition.description),
+          contentBlocks: [definition.description],
+        },
+      };
+    }
+
+    const targetPath = normalizePath(input.assetPath);
+    const assets = await listRevisionAttachments(instance.revisionId);
+    const asset = assets.find((file) => file.path === targetPath);
+    if (!asset) {
+      throw new SkillError(404, `Skill attachment "${targetPath}" not found`);
+    }
+
+    return {
+      skill: match,
+      asset: {
+        path: asset.path,
+        textContent: renderSkillBlocksToText(asset.contentBlocks),
+        contentBlocks: asset.contentBlocks,
+      },
+    };
+  } catch (error) {
+    wrapCapabilityError(error);
   }
-
-  const skill = await getInstalledSkill(input.workspaceId, match.instanceId);
-  const targetPath = normalizePath(input.assetPath || skill.entryPath);
-  const asset = (skill.files || []).find((file) => file.path === targetPath);
-  if (!asset) {
-    throw new SkillError(404, `Skill file "${targetPath}" not found`);
-  }
-
-  return {
-    skill: match,
-    asset: {
-      path: asset.path,
-      textContent: renderSkillBlocksToText(asset.contentBlocks),
-      contentBlocks: asset.contentBlocks,
-    },
-  };
 }

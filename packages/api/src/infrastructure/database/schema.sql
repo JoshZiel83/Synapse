@@ -136,6 +136,8 @@ CREATE INDEX idx_workspace_invites_workspace ON workspace_invites(workspace_id);
 CREATE TABLE actors (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  package_id UUID,
+  instance_id UUID,
   name VARCHAR(255) NOT NULL,
   role VARCHAR(50) NOT NULL DEFAULT 'specialist'
     CHECK (role IN ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant')),
@@ -154,6 +156,8 @@ CREATE TABLE actors (
 );
 
 CREATE INDEX idx_actors_workspace ON actors(workspace_id);
+CREATE UNIQUE INDEX idx_actors_package ON actors(package_id) WHERE package_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_actors_instance ON actors(instance_id) WHERE instance_id IS NOT NULL;
 CREATE INDEX idx_actors_parent ON actors(parent_id);
 CREATE INDEX idx_actors_role ON actors(workspace_id, role);
 
@@ -1195,7 +1199,7 @@ CREATE TABLE capability_categories (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   slug VARCHAR(100) NOT NULL,
   target_kind VARCHAR(30) NOT NULL
-    CHECK (target_kind IN ('plugin', 'skill', 'actor_template')),
+    CHECK (target_kind IN ('plugin', 'skill', 'actor', 'model')),
   display_name VARCHAR(255) NOT NULL,
   description TEXT DEFAULT '',
   icon_url TEXT,
@@ -1215,7 +1219,7 @@ CREATE TABLE capability_packages (
   publisher_id UUID NOT NULL REFERENCES capability_publishers(id) ON DELETE CASCADE,
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   kind VARCHAR(30) NOT NULL
-    CHECK (kind IN ('plugin', 'skill', 'actor_template')),
+    CHECK (kind IN ('plugin', 'skill', 'actor', 'model')),
   slug VARCHAR(100) NOT NULL,
   display_name VARCHAR(255) NOT NULL,
   description TEXT DEFAULT '',
@@ -1289,18 +1293,22 @@ ALTER TABLE capability_packages
   ADD CONSTRAINT fk_capability_packages_latest_revision
   FOREIGN KEY (latest_revision_id) REFERENCES capability_package_revisions(id) ON DELETE SET NULL;
 
-CREATE TABLE actor_template_links (
-  actor_id UUID PRIMARY KEY REFERENCES actors(id) ON DELETE CASCADE,
-  template_package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE RESTRICT,
-  imported_revision_id UUID NOT NULL REFERENCES capability_package_revisions(id) ON DELETE RESTRICT,
-  baseline_actor_version INT NOT NULL DEFAULT 1,
+CREATE TABLE capability_package_lineages (
+  downstream_package_id UUID PRIMARY KEY REFERENCES capability_packages(id) ON DELETE CASCADE,
+  upstream_package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE RESTRICT,
+  upstream_revision_id UUID REFERENCES capability_package_revisions(id) ON DELETE SET NULL,
+  lineage_kind VARCHAR(30) NOT NULL DEFAULT 'installed_copy'
+    CHECK (lineage_kind IN ('installed_copy', 'fork', 'share', 'relay_derivation')),
   sync_mode VARCHAR(30) NOT NULL DEFAULT 'notify'
-    CHECK (sync_mode IN ('notify', 'manual_merge')),
+    CHECK (sync_mode IN ('notify', 'manual_merge', 'follow_upstream', 'detached')),
+  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (downstream_package_id <> upstream_package_id)
 );
 
-CREATE INDEX idx_actor_template_links_template ON actor_template_links(template_package_id, created_at DESC);
+CREATE INDEX idx_capability_package_lineages_upstream
+  ON capability_package_lineages(upstream_package_id, created_at DESC);
 
 -- ============ Capability Assets ============
 CREATE TABLE capability_assets (
@@ -1337,7 +1345,7 @@ CREATE TABLE capability_instances (
   attachment_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   attachment_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   install_mode VARCHAR(30) NOT NULL DEFAULT 'manual'
-    CHECK (install_mode IN ('manual', 'seeded', 'relay_derived', 'template_required', 'template_recommended')),
+    CHECK (install_mode IN ('manual', 'seeded', 'relay_derived', 'package_required', 'package_recommended')),
   is_enabled BOOLEAN DEFAULT TRUE,
   config_data JSONB DEFAULT '{}',
   reuse_scope VARCHAR(30) NOT NULL DEFAULT 'conversation'
@@ -1364,6 +1372,14 @@ CREATE INDEX idx_capability_instances_package ON capability_instances(package_id
 CREATE INDEX idx_capability_instances_conversation ON capability_instances(attachment_conversation_id, created_at DESC) WHERE attachment_conversation_id IS NOT NULL;
 CREATE INDEX idx_capability_instances_actor ON capability_instances(attachment_actor_id, created_at DESC) WHERE attachment_actor_id IS NOT NULL;
 CREATE INDEX idx_capability_instances_user ON capability_instances(attachment_user_id, created_at DESC) WHERE attachment_user_id IS NOT NULL;
+
+ALTER TABLE actors
+  ADD CONSTRAINT fk_actors_capability_package
+  FOREIGN KEY (package_id) REFERENCES capability_packages(id) ON DELETE SET NULL;
+
+ALTER TABLE actors
+  ADD CONSTRAINT fk_actors_capability_instance
+  FOREIGN KEY (instance_id) REFERENCES capability_instances(id) ON DELETE SET NULL;
 
 -- ============ Capability Instance Grants ============
 CREATE TABLE capability_instance_grants (
@@ -1399,109 +1415,6 @@ CREATE INDEX idx_capability_instance_grants_actor ON capability_instance_grants(
 CREATE INDEX idx_capability_instance_grants_conversation ON capability_instance_grants(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
 CREATE INDEX idx_capability_instance_grants_user ON capability_instance_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
 
--- ============ Skill Marketplace ============
-CREATE TABLE skill_market_skills (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  slug VARCHAR(100) NOT NULL UNIQUE,
-  name VARCHAR(255) NOT NULL,
-  summary TEXT DEFAULT '',
-  icon_url TEXT,
-  tags TEXT[] DEFAULT '{}',
-  author_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  latest_version_id UUID,
-  is_active BOOLEAN DEFAULT TRUE,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_skill_market_skills_active ON skill_market_skills(is_active, updated_at DESC);
-CREATE INDEX idx_skill_market_skills_tags ON skill_market_skills USING GIN(tags);
-
-CREATE TABLE skill_market_versions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  skill_id UUID NOT NULL REFERENCES skill_market_skills(id) ON DELETE CASCADE,
-  version VARCHAR(50) NOT NULL,
-  entry_path TEXT NOT NULL DEFAULT 'SKILL.md',
-  changelog TEXT DEFAULT '',
-  metadata JSONB DEFAULT '{}',
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(skill_id, version)
-);
-
-CREATE INDEX idx_skill_market_versions_skill ON skill_market_versions(skill_id, created_at DESC);
-
-ALTER TABLE skill_market_skills
-  ADD CONSTRAINT fk_skill_market_skills_latest_version
-  FOREIGN KEY (latest_version_id) REFERENCES skill_market_versions(id) ON DELETE SET NULL;
-
-CREATE TABLE skill_market_files (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  version_id UUID NOT NULL REFERENCES skill_market_versions(id) ON DELETE CASCADE,
-  path TEXT NOT NULL,
-  content_blocks JSONB NOT NULL DEFAULT '[]',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(version_id, path),
-  CHECK (jsonb_typeof(content_blocks) = 'array')
-);
-
-CREATE INDEX idx_skill_market_files_version ON skill_market_files(version_id, path);
-
--- ============ Installed Skills ============
-CREATE TABLE installed_skills (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  source_skill_id UUID REFERENCES skill_market_skills(id) ON DELETE SET NULL,
-  source_version_id UUID REFERENCES skill_market_versions(id) ON DELETE SET NULL,
-  source_version VARCHAR(50),
-  slug VARCHAR(100) NOT NULL,
-  name VARCHAR(255) NOT NULL,
-  summary TEXT DEFAULT '',
-  icon_url TEXT,
-  tags TEXT[] DEFAULT '{}',
-  entry_path TEXT NOT NULL DEFAULT 'SKILL.md',
-  use_scope VARCHAR(30) NOT NULL
-    CHECK (use_scope IN ('workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
-  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  is_enabled BOOLEAN DEFAULT TRUE,
-  is_customized BOOLEAN DEFAULT FALSE,
-  installed_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CONSTRAINT chk_installed_skill_scope_target CHECK (
-    (use_scope = 'workspace' AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (use_scope = 'conversation' AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (use_scope = 'actor_global' AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
-    (use_scope = 'actor_conversation' AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
-    (use_scope = 'user' AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
-  )
-);
-
-CREATE INDEX idx_installed_skills_workspace ON installed_skills(workspace_id, updated_at DESC);
-CREATE INDEX idx_installed_skills_source ON installed_skills(source_skill_id, source_version_id);
-CREATE INDEX idx_installed_skills_actor ON installed_skills(actor_id, updated_at DESC) WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_installed_skills_conversation ON installed_skills(conversation_id, updated_at DESC) WHERE conversation_id IS NOT NULL;
-CREATE INDEX idx_installed_skills_user ON installed_skills(user_id, updated_at DESC) WHERE user_id IS NOT NULL;
-
-CREATE TABLE installed_skill_files (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  installed_skill_id UUID NOT NULL REFERENCES installed_skills(id) ON DELETE CASCADE,
-  path TEXT NOT NULL,
-  content_blocks JSONB NOT NULL DEFAULT '[]',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(installed_skill_id, path),
-  CHECK (jsonb_typeof(content_blocks) = 'array')
-);
-
-CREATE INDEX idx_installed_skill_files_skill ON installed_skill_files(installed_skill_id, path);
-
 -- ============ Capability Requirements ============
 CREATE TABLE capability_requirements (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1511,7 +1424,7 @@ CREATE TABLE capability_requirements (
   target_kind VARCHAR(20) NOT NULL
     CHECK (target_kind IN ('package', 'tag')),
   target_package_kind VARCHAR(30)
-    CHECK (target_package_kind IS NULL OR target_package_kind IN ('plugin', 'skill', 'actor_template')),
+    CHECK (target_package_kind IS NULL OR target_package_kind IN ('plugin', 'skill', 'actor', 'model')),
   target_publisher_slug VARCHAR(100),
   target_package_slug VARCHAR(100),
   target_tag VARCHAR(100),

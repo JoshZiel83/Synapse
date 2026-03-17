@@ -10,6 +10,11 @@ import {
 } from "../authz/index.js";
 import { ensureSeedPlatformAdminForUser } from "../../modules/platform/admin-service.js";
 import { seedPlatformDefaultGroup } from "../../modules/model-groups/service.js";
+import { createActor } from "../../modules/organization/service.js";
+import {
+  installMarketplaceSkill,
+  publishMarketplaceSkill,
+} from "../../modules/skills/service.js";
 const { hash } = bcryptjs;
 import {
   normalizeActorDocs,
@@ -47,28 +52,6 @@ function buildSeedDocs(
       priority: 86,
     },
   ]);
-}
-
-async function insertDefaultActorGrants(
-  actorId: string,
-  workspaceId: string,
-  grantedBy?: string | null,
-) {
-  await query(
-    `INSERT INTO actor_grants (
-       actor_id,
-       permission,
-       grant_scope,
-       workspace_id,
-       status,
-       granted_by,
-       metadata
-     )
-     VALUES
-       ($1, 'discover', 'workspace', $2, 'active', $3, '{}'::jsonb),
-       ($1, 'invoke', 'workspace', $2, 'active', $3, '{}'::jsonb)`,
-    [actorId, workspaceId, grantedBy ?? null],
-  );
 }
 
 export async function seedDatabase() {
@@ -131,337 +114,66 @@ export async function seedDatabase() {
 
   // Create secretary
   const secretaryDocs = SECRETARY_DEFAULT_DOCS;
-  const secResult = await query(
-    `INSERT INTO actors (workspace_id, name, role, title, docs, capabilities)
-     VALUES ($1, 'Secretary', 'secretary', 'Personal Secretary', $2, $3)
-     ON CONFLICT DO NOTHING
-     RETURNING id`,
-    [
-      workspaceId,
-      JSON.stringify(secretaryDocs),
-      ["delegation", "reporting", "organization"],
-    ],
-  );
+  const secretary = await createActor({
+    workspaceId,
+    createdBy: userId,
+    name: "Secretary",
+    role: "secretary",
+    title: "Personal Secretary",
+    docs: secretaryDocs,
+    capabilities: ["delegation", "reporting", "organization"],
+  });
+  console.log("Created secretary:", secretary.id);
 
-  if (secResult.rows.length > 0) {
-    const secretaryId = secResult.rows[0].id;
-    console.log("Created secretary:", secretaryId);
-    await insertDefaultActorGrants(secretaryId, workspaceId, userId);
-    authzEntries.push(
-      touchRelation("workspace", workspaceId, "actor", "actor", secretaryId),
-      touchRelation(
-        "actor",
-        secretaryId,
-        "workspace",
-        "workspace",
-        workspaceId,
-      ),
-      touchRelation(
-        "actor",
-        secretaryId,
-        "discover_workspace",
-        "workspace",
-        workspaceId,
-      ),
-      touchRelation(
-        "actor",
-        secretaryId,
-        "invoke_workspace",
-        "workspace",
-        workspaceId,
-      ),
-    );
+  const developerDocs = buildSeedDocs(
+    "Software Developer",
+    "Responsible for coding tasks, code review, and technical implementation.",
+    "Write clean, well-structured code. Report progress and results clearly.",
+  );
+  const developer = await createActor({
+    workspaceId,
+    createdBy: userId,
+    name: "Developer",
+    role: "specialist",
+    title: "Software Developer",
+    docs: developerDocs,
+    parentId: secretary.id,
+    capabilities: ["code.write", "code.review", "code.debug"],
+  });
+  console.log("Created developer:", developer.id);
 
-    await query(
-      `INSERT INTO actor_versions (
-         actor_id, version, name, role, title, avatar_file_id, parent_id, can_represent_user, docs, config, capabilities
-       )
-       VALUES ($1, 1, 'Secretary', 'secretary', 'Personal Secretary', NULL, NULL, false, $2, '{}', $3)`,
-      [
-        secretaryId,
-        JSON.stringify(secretaryDocs),
-        ["delegation", "reporting", "organization"],
-      ],
-    );
+  const researcherDocs = buildSeedDocs(
+    "Research Analyst",
+    "Responsible for research tasks, information gathering, and analysis.",
+    "Gather relevant information, analyze it, and present findings clearly.",
+  );
+  const researcher = await createActor({
+    workspaceId,
+    createdBy: userId,
+    name: "Researcher",
+    role: "specialist",
+    title: "Research Analyst",
+    docs: researcherDocs,
+    parentId: secretary.id,
+    capabilities: ["research", "analysis", "summarization"],
+  });
+  console.log("Created researcher:", researcher.id);
 
-    // Create a specialist subordinate
-    const developerDocs = buildSeedDocs(
-      "Software Developer",
-      "Responsible for coding tasks, code review, and technical implementation.",
-      "Write clean, well-structured code. Report progress and results clearly.",
-    );
-    const devResult = await query(
-      `INSERT INTO actors (workspace_id, name, role, title, docs, parent_id, capabilities)
-       VALUES ($1, 'Developer', 'specialist', 'Software Developer', $2, $3, $4)
-       RETURNING id`,
-      [
-        workspaceId,
-        JSON.stringify(developerDocs),
-        secretaryId,
-        ["code.write", "code.review", "code.debug"],
-      ],
-    );
-    console.log("Created developer:", devResult.rows[0].id);
-    await insertDefaultActorGrants(devResult.rows[0].id, workspaceId, userId);
-    authzEntries.push(
-      touchRelation(
-        "workspace",
-        workspaceId,
-        "actor",
-        "actor",
-        devResult.rows[0].id,
-      ),
-      touchRelation(
-        "actor",
-        devResult.rows[0].id,
-        "workspace",
-        "workspace",
-        workspaceId,
-      ),
-      touchRelation(
-        "actor",
-        devResult.rows[0].id,
-        "discover_workspace",
-        "workspace",
-        workspaceId,
-      ),
-      touchRelation(
-        "actor",
-        devResult.rows[0].id,
-        "invoke_workspace",
-        "workspace",
-        workspaceId,
-      ),
-    );
-    await query(
-      `INSERT INTO actor_versions (
-         actor_id, version, name, role, title, avatar_file_id, parent_id, can_represent_user, docs, config, capabilities
-       )
-       VALUES ($1, 1, 'Developer', 'specialist', 'Software Developer', NULL, $2, false, $3, '{}', $4)`,
-      [
-        devResult.rows[0].id,
-        secretaryId,
-        JSON.stringify(developerDocs),
-        ["code.write", "code.review", "code.debug"],
-      ],
-    );
-
-    // Create a researcher subordinate
-    const researcherDocs = buildSeedDocs(
-      "Research Analyst",
-      "Responsible for research tasks, information gathering, and analysis.",
-      "Gather relevant information, analyze it, and present findings clearly.",
-    );
-    const resResult = await query(
-      `INSERT INTO actors (workspace_id, name, role, title, docs, parent_id, capabilities)
-       VALUES ($1, 'Researcher', 'specialist', 'Research Analyst', $2, $3, $4)
-       RETURNING id`,
-      [
-        workspaceId,
-        JSON.stringify(researcherDocs),
-        secretaryId,
-        ["research", "analysis", "summarization"],
-      ],
-    );
-    console.log("Created researcher:", resResult.rows[0].id);
-    await insertDefaultActorGrants(resResult.rows[0].id, workspaceId, userId);
-    authzEntries.push(
-      touchRelation(
-        "workspace",
-        workspaceId,
-        "actor",
-        "actor",
-        resResult.rows[0].id,
-      ),
-      touchRelation(
-        "actor",
-        resResult.rows[0].id,
-        "workspace",
-        "workspace",
-        workspaceId,
-      ),
-      touchRelation(
-        "actor",
-        resResult.rows[0].id,
-        "discover_workspace",
-        "workspace",
-        workspaceId,
-      ),
-      touchRelation(
-        "actor",
-        resResult.rows[0].id,
-        "invoke_workspace",
-        "workspace",
-        workspaceId,
-      ),
-    );
-    await query(
-      `INSERT INTO actor_versions (
-         actor_id, version, name, role, title, avatar_file_id, parent_id, can_represent_user, docs, config, capabilities
-       )
-       VALUES ($1, 1, 'Researcher', 'specialist', 'Research Analyst', NULL, $2, false, $3, '{}', $4)`,
-      [
-        resResult.rows[0].id,
-        secretaryId,
-        JSON.stringify(researcherDocs),
-        ["research", "analysis", "summarization"],
-      ],
-    );
-  }
-
-  await query<{ id: string }>(
-    `INSERT INTO skill_market_skills (slug, name, summary, tags, author_user_id, is_active, metadata)
-     VALUES
-       ('meeting-brief', 'Meeting Brief', 'Turn messy meeting notes into a tight action-oriented brief.', ARRAY['meetings', 'summary'], $1, TRUE, '{}'::jsonb),
-       ('spec-review', 'Spec Review', 'Review a product or engineering spec for ambiguity, risk, and missing decisions.', ARRAY['product', 'review'], $1, TRUE, '{}'::jsonb)
-     ON CONFLICT (slug) DO UPDATE SET
-       name = EXCLUDED.name,
-       summary = EXCLUDED.summary,
-       tags = EXCLUDED.tags,
-       author_user_id = EXCLUDED.author_user_id,
-       is_active = EXCLUDED.is_active,
-       updated_at = NOW()
-     RETURNING id`,
-    [userId],
-  );
-
-  const allSkills = await query<{ id: string; slug: string }>(
-    `SELECT id, slug FROM skill_market_skills WHERE slug = ANY($1::text[])`,
-    [["meeting-brief", "spec-review"]],
-  );
-  const skillIdsBySlug = new Map(allSkills.rows.map((row) => [row.slug, row.id]));
-
-  const meetingBriefVersion = await query<{ id: string }>(
-    `INSERT INTO skill_market_versions (skill_id, version, entry_path, changelog, metadata, created_by)
-     VALUES ($1, '1.0.0', 'SKILL.md', 'Initial release', '{}'::jsonb, $2)
-     ON CONFLICT (skill_id, version) DO UPDATE SET
-       entry_path = EXCLUDED.entry_path,
-       changelog = EXCLUDED.changelog,
-       updated_at = NOW()
-     RETURNING id`,
-    [skillIdsBySlug.get("meeting-brief"), userId],
-  );
-  await query(
-    `DELETE FROM skill_market_files WHERE version_id = $1`,
-    [meetingBriefVersion.rows[0].id],
-  );
-  await query(
-    `INSERT INTO skill_market_files (version_id, path, content_blocks)
-     VALUES
-       ($1, 'SKILL.md', $2::jsonb),
-       ($1, 'references/checklist.md', $3::jsonb)`,
-    [
-      meetingBriefVersion.rows[0].id,
-      JSON.stringify(textBlocks(
-        [
-          "# Meeting Brief",
-          "",
-          "You turn raw meeting notes into a concise brief with decisions, action items, owners, blockers, and follow-ups.",
-          "",
-          "Use a direct tone. Collapse repetition. Preserve concrete commitments and deadlines.",
-        ].join("\n"),
-      )),
-      JSON.stringify(textBlocks(
-        [
-          "# Checklist",
-          "",
-          "- Capture decisions",
-          "- Extract owners",
-          "- Flag missing owners",
-          "- Separate facts from open questions",
-        ].join("\n"),
-      )),
-    ],
-  );
-  await query(
-    `UPDATE skill_market_skills SET latest_version_id = $1 WHERE id = $2`,
-    [meetingBriefVersion.rows[0].id, skillIdsBySlug.get("meeting-brief")],
-  );
-
-  const specReviewVersion = await query<{ id: string }>(
-    `INSERT INTO skill_market_versions (skill_id, version, entry_path, changelog, metadata, created_by)
-     VALUES ($1, '1.0.0', 'SKILL.md', 'Initial release', '{}'::jsonb, $2)
-     ON CONFLICT (skill_id, version) DO UPDATE SET
-       entry_path = EXCLUDED.entry_path,
-       changelog = EXCLUDED.changelog,
-       updated_at = NOW()
-     RETURNING id`,
-    [skillIdsBySlug.get("spec-review"), userId],
-  );
-  await query(
-    `DELETE FROM skill_market_files WHERE version_id = $1`,
-    [specReviewVersion.rows[0].id],
-  );
-  await query(
-    `INSERT INTO skill_market_files (version_id, path, content_blocks)
-     VALUES
-       ($1, 'SKILL.md', $2::jsonb),
-       ($1, 'references/risk-lenses.md', $3::jsonb)`,
-    [
-      specReviewVersion.rows[0].id,
-      JSON.stringify(textBlocks(
-        [
-          "# Spec Review",
-          "",
-          "Review the spec for ambiguity, hidden scope, missing constraints, ownership gaps, rollout risk, and metrics blind spots.",
-          "",
-          "Return: strengths, risks, unclear areas, and decisions the team still needs to make.",
-        ].join("\n"),
-      )),
-      JSON.stringify(textBlocks(
-        [
-          "# Risk Lenses",
-          "",
-          "- Product ambiguity",
-          "- Operational risk",
-          "- Data and analytics gaps",
-          "- Rollback and failure handling",
-        ].join("\n"),
-      )),
-    ],
-  );
-  await query(
-    `UPDATE skill_market_skills SET latest_version_id = $1 WHERE id = $2`,
-    [specReviewVersion.rows[0].id, skillIdsBySlug.get("spec-review")],
-  );
-
-  await query(
-    `INSERT INTO installed_skills (
-       workspace_id, source_skill_id, source_version_id, source_version,
-       slug, name, summary, tags, entry_path, use_scope, installed_by
-     )
-     VALUES ($1, $2, $3, '1.0.0', 'meeting-brief', 'Meeting Brief', 'Turn messy meeting notes into a tight action-oriented brief.', ARRAY['meetings', 'summary'], 'SKILL.md', 'workspace', $4)
-     ON CONFLICT DO NOTHING`,
-    [
-      workspaceId,
-      skillIdsBySlug.get("meeting-brief"),
-      meetingBriefVersion.rows[0].id,
-      userId,
-    ],
-  );
-
-  const installedMeetingBrief = await query<{ id: string }>(
-    `SELECT id
-     FROM installed_skills
-     WHERE workspace_id = $1
-       AND slug = 'meeting-brief'
-     ORDER BY created_at ASC
-     LIMIT 1`,
-    [workspaceId],
-  );
-  if (installedMeetingBrief.rows.length > 0) {
-    await query(
-      `DELETE FROM installed_skill_files WHERE installed_skill_id = $1`,
-      [installedMeetingBrief.rows[0].id],
-    );
-    await query(
-      `INSERT INTO installed_skill_files (installed_skill_id, path, content_blocks)
-       VALUES
-         ($1, 'SKILL.md', $2::jsonb),
-         ($1, 'references/checklist.md', $3::jsonb)`,
-      [
-        installedMeetingBrief.rows[0].id,
-        JSON.stringify(textBlocks(
+  const meetingBrief = await publishMarketplaceSkill({
+    slug: "meeting-brief",
+    name: "Meeting Brief",
+    description: {
+      type: "text",
+      text: "Turn messy meeting notes into a tight action-oriented brief.",
+    },
+    tags: ["meetings", "summary"],
+    version: "1.0.0",
+    changelog: "Initial release",
+    authorUserId: userId,
+    attachmentFiles: [
+      {
+        path: "references/brief-format.md",
+        contentBlocks: textBlocks(
           [
             "# Meeting Brief",
             "",
@@ -469,8 +181,11 @@ export async function seedDatabase() {
             "",
             "Use a direct tone. Collapse repetition. Preserve concrete commitments and deadlines.",
           ].join("\n"),
-        )),
-        JSON.stringify(textBlocks(
+        ),
+      },
+      {
+        path: "references/checklist.md",
+        contentBlocks: textBlocks(
           [
             "# Checklist",
             "",
@@ -479,10 +194,57 @@ export async function seedDatabase() {
             "- Flag missing owners",
             "- Separate facts from open questions",
           ].join("\n"),
-        )),
-      ],
-    );
-  }
+        ),
+      },
+    ],
+  });
+
+  await publishMarketplaceSkill({
+    slug: "spec-review",
+    name: "Spec Review",
+    description: {
+      type: "text",
+      text: "Review a product or engineering spec for ambiguity, risk, and missing decisions.",
+    },
+    tags: ["product", "review"],
+    version: "1.0.0",
+    changelog: "Initial release",
+    authorUserId: userId,
+    attachmentFiles: [
+      {
+        path: "references/review-brief.md",
+        contentBlocks: textBlocks(
+          [
+            "# Spec Review",
+            "",
+            "Review the spec for ambiguity, hidden scope, missing constraints, ownership gaps, rollout risk, and metrics blind spots.",
+            "",
+            "Return: strengths, risks, unclear areas, and decisions the team still needs to make.",
+          ].join("\n"),
+        ),
+      },
+      {
+        path: "references/risk-lenses.md",
+        contentBlocks: textBlocks(
+          [
+            "# Risk Lenses",
+            "",
+            "- Product ambiguity",
+            "- Operational risk",
+            "- Data and analytics gaps",
+            "- Rollback and failure handling",
+          ].join("\n"),
+        ),
+      },
+    ],
+  });
+
+  await installMarketplaceSkill({
+    workspaceId,
+    marketSkillId: meetingBrief.id,
+    useScope: "workspace",
+    installedBy: userId,
+  });
 
   const authzEntryIds = await enqueueAuthzRelationships(authzEntries, {
     source: "db.seed",

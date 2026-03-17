@@ -144,6 +144,23 @@ definition conversation {
     permission memory_delete = (admin + workspace->manage_conversations + memory_deleter) & view
 }
 
+definition actor_instance {
+    relation workspace: workspace
+    relation owner: user | actor
+    relation editor: user | actor
+    relation use_principal: user | actor
+    relation use_actor_conversation: actor_conversation
+    relation use_conversation: conversation
+    relation use_workspace: workspace
+    relation use_platform: platform
+
+    permission use = owner + editor + workspace->manage_capabilities + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal + use_platform->principal
+    permission view = use + workspace->manage_capabilities
+    permission edit = owner + editor + workspace->manage_capabilities
+    permission grant = edit
+    permission delete = owner + workspace->manage_capabilities
+}
+
 definition skill_instance {
     relation workspace: workspace
     relation owner: user | actor

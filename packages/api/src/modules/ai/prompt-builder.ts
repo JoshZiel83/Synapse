@@ -162,7 +162,7 @@ export function buildActorPrompt(
     parts.push(
       `# Installed Skills\n` +
       `These skills are installed and available on demand. Do not assume their detailed contents are already loaded.\n` +
-      `If one skill clearly matches the task, call \`read_skill\` to read its \`SKILL.md\` or a referenced text asset before using it.\n` +
+      `If one skill clearly matches the task, call \`read_skill\` to read its description or a referenced attachment before using it.\n` +
       availableSkills.map((skill) => `- \`${skill.slug}\`: ${skill.description}`).join('\n'),
     );
   }

@@ -284,8 +284,22 @@ function AccessPreviewCard({
 
 export default function PluginAccessStep({
   installation,
+  title = 'Access',
+  description = 'Choose who can use this installation. Ownership and lifecycle stay in Advanced.',
+  addAccessLabel = 'Add Access',
+  emptyMessage = 'Finish setup first. Once the installation exists, you can grant use access here.',
+  dialogTitle = 'Add use access',
+  dialogDescription = 'Choose who can use this installation. Ownership stays where it is.',
+  noAccessMessage = 'No use access has been granted yet.',
 }: {
   installation: any | null;
+  title?: string;
+  description?: string;
+  addAccessLabel?: string;
+  emptyMessage?: string;
+  dialogTitle?: string;
+  dialogDescription?: string;
+  noAccessMessage?: string;
 }) {
   const { workspaceId } = useWorkspace();
   const { user } = useAuthStore();
@@ -693,7 +707,7 @@ export default function PluginAccessStep({
     return (
       <Card className="rounded-[28px]">
         <CardContent className="p-6 text-sm text-muted-foreground">
-          Finish setup first. Once the installation exists, you can grant use access here.
+          {emptyMessage}
         </CardContent>
       </Card>
     );
@@ -717,13 +731,13 @@ export default function PluginAccessStep({
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-muted-foreground" />
               <div className="space-y-1">
-                <CardTitle>Access</CardTitle>
-                <CardDescription>Choose who can use this installation. Ownership and lifecycle stay in Advanced.</CardDescription>
+                <CardTitle>{title}</CardTitle>
+                <CardDescription>{description}</CardDescription>
               </div>
             </div>
             <Button onClick={() => setDialogOpen(true)}>
               <Plus data-icon="inline-start" />
-              Add Access
+              {addAccessLabel}
             </Button>
           </div>
         </CardHeader>
@@ -741,7 +755,7 @@ export default function PluginAccessStep({
               {grants.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={4} className="px-6 py-8 text-sm text-muted-foreground">
-                    No use access has been granted yet.
+                    {noAccessMessage}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -788,10 +802,8 @@ export default function PluginAccessStep({
       >
         <DialogContent className="sm:max-w-5xl">
           <DialogHeader>
-            <DialogTitle>Add use access</DialogTitle>
-            <DialogDescription>
-              Choose who can use this installation. Ownership stays where it is.
-            </DialogDescription>
+            <DialogTitle>{dialogTitle}</DialogTitle>
+            <DialogDescription>{dialogDescription}</DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-6 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">

@@ -194,10 +194,12 @@ export interface ActorVersion {
 export interface Actor {
   id: UUID;
   workspaceId: UUID;
+  packageId?: UUID;
+  packageInstanceId?: UUID;
   definition: ActorDefinition;
   avatarUrl?: string;
   currentVersion: number;
-  templateLink?: ActorTemplateLink;
+  sourceLink?: ActorPackageSourceLink;
   isActive: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
@@ -1247,7 +1249,7 @@ export interface AIResponse {
 export type CapabilityPackageKind =
   | "plugin"
   | "skill"
-  | "actor_template"
+  | "actor"
   | "model";
 export type CapabilityTransport =
   | "builtin"
@@ -1277,6 +1279,16 @@ export type CapabilitySourceType =
   | "workspace_upload"
   | "user_upload"
   | "relay_derived";
+export type CapabilityPackageLineageKind =
+  | "installed_copy"
+  | "fork"
+  | "share"
+  | "relay_derivation";
+export type CapabilityPackageSyncMode =
+  | "notify"
+  | "manual_merge"
+  | "follow_upstream"
+  | "detached";
 export type CapabilityRequirementKind =
   | "required"
   | "recommended"
@@ -1287,8 +1299,8 @@ export type CapabilityInstanceInstallMode =
   | "manual"
   | "seeded"
   | "relay_derived"
-  | "template_required"
-  | "template_recommended";
+  | "package_required"
+  | "package_recommended";
 export type CapabilityRevisionStatus =
   | "draft"
   | "active"
@@ -1419,11 +1431,14 @@ export interface CapabilityConfigFieldState {
   updatedAt?: string;
 }
 
-export interface CapabilityAuthorizationManifest {
+export interface CapabilityAccessPolicy {
   requiredPermissions: string[];
   defaultGrantScope?: CapabilityGrantScope;
   reason?: string;
 }
+
+// Transitional alias while callers migrate away from the overloaded name.
+export type CapabilityAuthorizationManifest = CapabilityAccessPolicy;
 
 export interface CapabilityPublisher {
   id: string;
@@ -1434,6 +1449,17 @@ export interface CapabilityPublisher {
   isBuiltin: boolean;
   isVerified: boolean;
   ownerUserId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CapabilityPackageLineage {
+  downstreamPackageId: string;
+  upstreamPackageId: string;
+  upstreamRevisionId?: string;
+  lineageKind: CapabilityPackageLineageKind;
+  syncMode: CapabilityPackageSyncMode;
+  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -1480,7 +1506,8 @@ export interface CapabilityPackageRevision {
   version: string;
   status: CapabilityRevisionStatus;
   manifest: Record<string, unknown>;
-  authorization?: CapabilityAuthorizationManifest;
+  access?: CapabilityAccessPolicy;
+  authorization?: CapabilityAccessPolicy;
   configSchema: Record<string, unknown>;
   configFields: CapabilityConfigFieldDefinition[];
   defaultConfig: Record<string, unknown>;
@@ -1527,6 +1554,7 @@ export interface CapabilityPackage {
   createdAt: string;
   updatedAt: string;
   categories?: CapabilityCategory[];
+  sourceLink?: CapabilityPackageLineage;
   publisher?: CapabilityPublisher;
   latestRevision?: CapabilityPackageRevision;
 }
@@ -1661,26 +1689,26 @@ export interface CapabilityInstallPlan {
   };
 }
 
-export type ActorTemplateDependencyKind = Extract<
+export type ActorPackageDependencyKind = Extract<
   CapabilityRequirementKind,
   "required" | "recommended"
 >;
-export type ActorTemplateTargetKind = Extract<
+export type ActorPackageTargetKind = Extract<
   CapabilityPackageKind,
   "plugin" | "skill"
 >;
-export type ActorTemplateSyncMode = "notify" | "manual_merge";
-export type ActorTemplateLinkStatus =
+export type ActorPackageSyncMode = "notify" | "manual_merge";
+export type ActorPackageLinkStatus =
   | "up_to_date"
   | "update_available"
   | "diverged"
   | "update_available_with_local_changes"
   | "detached";
 
-export interface ActorTemplateDependency {
+export interface ActorPackageDependency {
   requirementId?: string;
-  requirementKind: ActorTemplateDependencyKind;
-  targetPackageKind: ActorTemplateTargetKind;
+  requirementKind: ActorPackageDependencyKind;
+  targetPackageKind: ActorPackageTargetKind;
   targetPublisherSlug?: string;
   targetPackageSlug: string;
   acceptableInstanceScopes: CapabilityAttachmentType[];
@@ -1690,43 +1718,43 @@ export interface ActorTemplateDependency {
   metadata: Record<string, unknown>;
 }
 
-export interface ActorTemplateManifest {
+export interface ActorPackageManifest {
   actor: ActorDefinition;
   setupGuide: CanonicalContentBlock[];
   releaseNotes: CanonicalContentBlock[];
 }
 
-export interface ActorTemplateLink {
+export interface ActorPackageSourceLink {
   actorId: UUID;
-  templatePackageId: UUID;
+  packageId: UUID;
   importedRevisionId: UUID;
-  templateSlug: string;
-  templateDisplayName: string;
-  templatePublisherSlug?: string;
-  templatePublisherDisplayName?: string;
-  importedTemplateVersion?: string;
+  packageSlug: string;
+  packageDisplayName: string;
+  packagePublisherSlug?: string;
+  packagePublisherDisplayName?: string;
+  importedVersion?: string;
   latestRevisionId?: UUID;
-  latestTemplateVersion?: string;
+  latestVersion?: string;
   baselineActorVersion: number;
-  syncMode: ActorTemplateSyncMode;
+  syncMode: ActorPackageSyncMode;
   hasLocalChanges: boolean;
   hasUpstreamUpdate: boolean;
-  status: ActorTemplateLinkStatus;
+  status: ActorPackageLinkStatus;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
 
-export interface ActorTemplateRecord {
+export interface ActorPackageRecord {
   package: CapabilityPackage;
-  manifest: ActorTemplateManifest;
-  dependencies: ActorTemplateDependency[];
+  manifest: ActorPackageManifest;
+  dependencies: ActorPackageDependency[];
   requirementChecks?: CapabilityRequirementCheck[];
 }
 
-export interface ActorTemplateCloneResult {
+export interface ActorPackageInstallResult {
   actor: Actor;
-  template: ActorTemplateRecord;
-  templateLink: ActorTemplateLink;
+  sourcePackage: ActorPackageRecord;
+  sourceLink: ActorPackageSourceLink;
   requirementChecks: CapabilityRequirementCheck[];
 }
 
@@ -1752,7 +1780,7 @@ export type SkillUseScope =
   | 'actor_conversation'
   | 'user';
 
-export interface SkillAssetFile {
+export interface SkillAttachmentFile {
   id: string;
   path: string;
   contentBlocks: CanonicalContentBlock[];
@@ -1765,18 +1793,24 @@ export interface SkillMarketplaceVersion {
   skillId: string;
   version: string;
   changelog: string;
-  entryPath: string;
+  description: CanonicalContentBlock;
   createdBy?: string;
   createdByName?: string;
   createdAt: string;
-  files?: SkillAssetFile[];
+  attachmentFiles?: SkillAttachmentFile[];
+}
+
+export interface SkillMarketplaceWorkspaceInstallation {
+  installed: boolean;
+  installedSkillId?: string;
+  installedCount: number;
 }
 
 export interface SkillMarketplaceEntry {
   id: string;
   slug: string;
   name: string;
-  summary: string;
+  description: CanonicalContentBlock;
   iconUrl?: string;
   tags: string[];
   authorUserId?: string;
@@ -1786,6 +1820,7 @@ export interface SkillMarketplaceEntry {
   updatedAt: string;
   latestVersionId?: string;
   latestVersion?: SkillMarketplaceVersion;
+  workspaceInstallation?: SkillMarketplaceWorkspaceInstallation;
 }
 
 export interface InstalledSkill {
@@ -1793,10 +1828,9 @@ export interface InstalledSkill {
   workspaceId: string;
   slug: string;
   name: string;
-  summary: string;
+  description: CanonicalContentBlock;
   iconUrl?: string;
   tags: string[];
-  entryPath: string;
   useScope: SkillUseScope;
   actorId?: string;
   conversationId?: string;
@@ -1811,7 +1845,7 @@ export interface InstalledSkill {
   sourceVersion?: string;
   upgradeAvailable: boolean;
   latestSourceVersion?: string;
-  files?: SkillAssetFile[];
+  attachmentFiles?: SkillAttachmentFile[];
 }
 
 export type McpTransport = Exclude<CapabilityTransport, "filesystem">;

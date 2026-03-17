@@ -22,7 +22,7 @@ import {
   listRevisionRequirements,
   replaceRevisionRequirements,
 } from '../capabilities/service.js';
-import { builtinActorTemplateSeeds } from './builtin-actor-templates.js';
+import { builtinActorPackageSeeds } from './builtin-actor-packages.js';
 import {
   extractText,
   generateId,
@@ -40,13 +40,13 @@ import type {
   ActorDefinition,
   ActorDoc,
   ActorDocInput,
+  ActorPackageDependency,
+  ActorPackageInstallResult,
+  ActorPackageRecord,
+  ActorPackageSourceLink,
+  ActorPackageSyncMode,
+  ActorPackageLinkStatus,
   ActorRole,
-  ActorTemplateCloneResult,
-  ActorTemplateDependency,
-  ActorTemplateLink,
-  ActorTemplateLinkStatus,
-  ActorTemplateRecord,
-  ActorTemplateSyncMode,
   ActorVersion,
   ActorVersionChangedField,
   ActorVersionDelta,
@@ -87,29 +87,29 @@ type ActorGrantRow = {
 const ACTOR_SELECT = `
   a.*,
   avatar_file.stored_name AS avatar_stored_name,
-  atl.template_package_id,
-  atl.imported_revision_id AS template_imported_revision_id,
-  atl.baseline_actor_version AS template_baseline_actor_version,
-  atl.sync_mode AS template_sync_mode,
-  atl.created_at AS template_link_created_at,
-  atl.updated_at AS template_link_updated_at,
-  template_pkg.slug AS template_slug,
-  template_pkg.display_name AS template_display_name,
-  template_pkg.latest_revision_id AS template_latest_revision_id,
-  template_publisher.slug AS template_publisher_slug,
-  template_publisher.display_name AS template_publisher_display_name,
-  imported_template_revision.version AS template_imported_revision_version,
-  latest_template_revision.version AS template_latest_revision_version
+  cpl.upstream_package_id AS source_package_id,
+  cpl.upstream_revision_id AS source_imported_revision_id,
+  COALESCE((cpl.metadata->>'baselineActorVersion')::int, 1) AS source_baseline_actor_version,
+  cpl.sync_mode AS source_sync_mode,
+  cpl.created_at AS source_link_created_at,
+  cpl.updated_at AS source_link_updated_at,
+  source_pkg.slug AS source_slug,
+  source_pkg.display_name AS source_display_name,
+  source_pkg.latest_revision_id AS source_latest_revision_id,
+  source_publisher.slug AS source_publisher_slug,
+  source_publisher.display_name AS source_publisher_display_name,
+  imported_source_revision.version AS source_imported_revision_version,
+  latest_source_revision.version AS source_latest_revision_version
 `;
 
 const ACTOR_JOINS = `
   FROM actors a
   LEFT JOIN files avatar_file ON avatar_file.id = a.avatar_file_id
-  LEFT JOIN actor_template_links atl ON atl.actor_id = a.id
-  LEFT JOIN capability_packages template_pkg ON template_pkg.id = atl.template_package_id
-  LEFT JOIN capability_publishers template_publisher ON template_publisher.id = template_pkg.publisher_id
-  LEFT JOIN capability_package_revisions imported_template_revision ON imported_template_revision.id = atl.imported_revision_id
-  LEFT JOIN capability_package_revisions latest_template_revision ON latest_template_revision.id = template_pkg.latest_revision_id
+  LEFT JOIN capability_package_lineages cpl ON cpl.downstream_package_id = a.package_id
+  LEFT JOIN capability_packages source_pkg ON source_pkg.id = cpl.upstream_package_id
+  LEFT JOIN capability_publishers source_publisher ON source_publisher.id = source_pkg.publisher_id
+  LEFT JOIN capability_package_revisions imported_source_revision ON imported_source_revision.id = cpl.upstream_revision_id
+  LEFT JOIN capability_package_revisions latest_source_revision ON latest_source_revision.id = source_pkg.latest_revision_id
 `;
 
 type ActorUpdateInput = Partial<{
@@ -124,14 +124,14 @@ type ActorUpdateInput = Partial<{
   config: Record<string, unknown>;
 }>;
 
-type ActorTemplateCloneInput = {
+type ActorPackageInstallInput = {
   workspaceId: UUID;
-  templateId: UUID;
+  packageId: UUID;
   createdBy?: UUID;
   name?: string;
   title?: string;
   parentId?: UUID | null;
-  syncMode?: ActorTemplateSyncMode;
+  syncMode?: ActorPackageSyncMode;
 };
 
 function isActorRole(value: unknown): value is ActorRole {
@@ -168,6 +168,350 @@ function normalizeContentBlocks(value: unknown) {
 
 function sanitizeCapabilities(capabilities?: string[]): string[] {
   return Array.from(new Set((capabilities || []).map((item) => item.trim()).filter(Boolean)));
+}
+
+function sanitizePackageSlug(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
+
+async function ensureWorkspacePackagePublisher(workspaceId: UUID, ownerUserId?: UUID) {
+  return createCapabilityPublisher({
+    slug: `workspace-${workspaceId}`,
+    displayName: `Workspace ${workspaceId.slice(0, 8)}`,
+    description: `Workspace-local package publisher for ${workspaceId}.`,
+    ownerUserId,
+    isBuiltin: false,
+    isVerified: false,
+  });
+}
+
+function buildActorPackageManifest(input: {
+  definition: ActorDefinition;
+  setupGuide?: unknown[];
+  releaseNotes?: unknown[];
+}) {
+  return {
+    kind: 'actor',
+    actorPackage: {
+      actor: input.definition,
+      setupGuide: input.setupGuide || [],
+      releaseNotes: input.releaseNotes || [],
+    },
+  } satisfies Record<string, unknown>;
+}
+
+function buildActorPackageDescription(definition: ActorDefinition): string {
+  const summary = summarizeActorForRole(definition.docs, definition.title || definition.name).trim();
+  if (summary) return summary;
+  if (definition.title.trim().length > 0) return definition.title.trim();
+  return `${definition.name} actor`;
+}
+
+function buildActorPackageLongDescription(definition: ActorDefinition): string {
+  const summary = summarizeActorForPrompt(definition.docs).trim();
+  if (summary) return summary;
+  return buildActorPackageDescription(definition);
+}
+
+function buildActorPackageSlug(name: string, actorId: UUID, seedSlug?: string): string {
+  const base = sanitizePackageSlug(seedSlug || name) || 'actor';
+  return sanitizePackageSlug(`${base}-${actorId.slice(0, 8)}`);
+}
+
+function buildActorRevisionVersion(params: {
+  actorVersion: number;
+  sourceVersion?: string;
+  importedFromUpstream?: boolean;
+}) {
+  if (params.importedFromUpstream && params.sourceVersion) {
+    return params.sourceVersion;
+  }
+  return `local-v${params.actorVersion}`;
+}
+
+async function createActorPackageSnapshot(
+  queryable: Pick<pg.PoolClient, 'query'>,
+  params: {
+    packageId?: UUID;
+    publisherId: UUID;
+    workspaceId: UUID;
+    actorId: UUID;
+    definition: ActorDefinition;
+    slug?: string;
+    sourceType?: 'official' | 'workspace_upload' | 'user_upload';
+    sourcePackageId?: UUID;
+    sourceRevisionId?: UUID;
+    sourceVersion?: string;
+    syncMode?: ActorPackageSyncMode;
+    baselineActorVersion?: number;
+    createdBy?: UUID;
+    createdAt: string;
+    actorVersion: number;
+  },
+) {
+  const packageId = params.packageId || generateId();
+  const slug = params.slug || buildActorPackageSlug(params.definition.name, params.actorId);
+  const displayName = params.definition.name.trim() || 'Actor';
+  const description = buildActorPackageDescription(params.definition);
+  const longDescription = buildActorPackageLongDescription(params.definition);
+  const metadata = {
+    canonicalSlug: slug,
+    actorRole: params.definition.role,
+    actorTitle: params.definition.title,
+  };
+
+  if (params.packageId) {
+    await queryable.query(
+      `UPDATE capability_packages
+       SET display_name = $1,
+           description = $2,
+           long_description = $3,
+           tags = $4,
+           metadata = $5::jsonb,
+           updated_at = $6
+       WHERE id = $7`,
+      [
+        displayName,
+        description,
+        longDescription,
+        [params.definition.role, 'actor'],
+        JSON.stringify(metadata),
+        params.createdAt,
+        packageId,
+      ],
+    );
+  } else {
+    await queryable.query(
+      `INSERT INTO capability_packages (
+         id, publisher_id, workspace_id, kind, slug, display_name, description, long_description,
+         source_type, tags, is_builtin, is_active, default_instance_scope, default_reuse_scope,
+         requires_handshake, metadata, created_at, updated_at
+       )
+       VALUES ($1, $2, $3, 'actor', $4, $5, $6, $7, $8, $9, FALSE, TRUE, 'workspace', 'workspace', FALSE, $10::jsonb, $11, $11)`,
+      [
+        packageId,
+        params.publisherId,
+        params.workspaceId,
+        slug,
+        displayName,
+        description,
+        longDescription,
+        params.sourceType || 'workspace_upload',
+        [params.definition.role, 'actor'],
+        JSON.stringify(metadata),
+        params.createdAt,
+      ],
+    );
+  }
+
+  const revisionId = generateId();
+  const revisionVersion = buildActorRevisionVersion({
+    actorVersion: params.actorVersion,
+    sourceVersion: params.sourceVersion,
+    importedFromUpstream: Boolean(params.sourceRevisionId),
+  });
+
+  await queryable.query(
+    `INSERT INTO capability_package_revisions (
+       id, package_id, version, status, manifest, metadata, created_by, created_at
+     )
+     VALUES ($1, $2, $3, 'active', $4::jsonb, $5::jsonb, $6, $7)`,
+    [
+      revisionId,
+      packageId,
+      revisionVersion,
+      JSON.stringify(buildActorPackageManifest({
+        definition: params.definition,
+      })),
+      JSON.stringify({
+        actorVersion: params.actorVersion,
+        importedFromPackageId: params.sourcePackageId,
+        importedFromRevisionId: params.sourceRevisionId,
+      }),
+      params.createdBy || null,
+      params.createdAt,
+    ],
+  );
+
+  await queryable.query(
+    `UPDATE capability_packages
+     SET latest_revision_id = $1,
+         updated_at = $2
+     WHERE id = $3`,
+    [revisionId, params.createdAt, packageId],
+  );
+
+  if (params.sourcePackageId) {
+    await queryable.query(
+      `INSERT INTO capability_package_lineages (
+         downstream_package_id,
+         upstream_package_id,
+         upstream_revision_id,
+         lineage_kind,
+         sync_mode,
+         metadata,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, $2, $3, 'installed_copy', $4, $5::jsonb, $6, $6)
+       ON CONFLICT (downstream_package_id) DO UPDATE SET
+         upstream_package_id = EXCLUDED.upstream_package_id,
+         upstream_revision_id = EXCLUDED.upstream_revision_id,
+         lineage_kind = EXCLUDED.lineage_kind,
+         sync_mode = EXCLUDED.sync_mode,
+         metadata = EXCLUDED.metadata,
+         updated_at = EXCLUDED.updated_at`,
+      [
+        packageId,
+        params.sourcePackageId,
+        params.sourceRevisionId || null,
+        params.syncMode || 'notify',
+        JSON.stringify({
+          baselineActorVersion: params.baselineActorVersion || params.actorVersion,
+        }),
+        params.createdAt,
+      ],
+    );
+  }
+
+  return {
+    packageId,
+    revisionId,
+    revisionVersion,
+  };
+}
+
+async function upsertActorPackageInstance(
+  queryable: Pick<pg.PoolClient, 'query'>,
+  params: {
+    instanceId?: UUID;
+    actorId: UUID;
+    workspaceId: UUID;
+    packageId: UUID;
+    revisionId: UUID;
+    installedBy?: UUID;
+    createdAt: string;
+    installMode?: 'manual' | 'seeded' | 'package_required' | 'package_recommended';
+  },
+) {
+  const instanceId = params.instanceId || generateId();
+  const created = !params.instanceId;
+  if (params.instanceId) {
+    await queryable.query(
+      `UPDATE capability_instances
+       SET package_id = $1,
+           revision_id = $2,
+           attachment_type = 'workspace',
+           attachment_conversation_id = NULL,
+           attachment_actor_id = NULL,
+           attachment_user_id = NULL,
+           install_mode = $3,
+           reuse_scope = 'workspace',
+           is_enabled = TRUE,
+           metadata = $4::jsonb,
+           updated_at = $5
+       WHERE id = $6`,
+      [
+        params.packageId,
+        params.revisionId,
+        params.installMode || 'manual',
+        JSON.stringify({
+          actorId: params.actorId,
+          managedBy: 'organization.service',
+        }),
+        params.createdAt,
+        instanceId,
+      ],
+    );
+  } else {
+    await queryable.query(
+      `INSERT INTO capability_instances (
+         id,
+         workspace_id,
+         package_id,
+         revision_id,
+         attachment_type,
+         install_mode,
+         is_enabled,
+         config_data,
+         reuse_scope,
+         installed_by,
+         metadata,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, $2, $3, $4, 'workspace', $5, TRUE, '{}'::jsonb, 'workspace', $6, $7::jsonb, $8, $8)`,
+      [
+        instanceId,
+        params.workspaceId,
+        params.packageId,
+        params.revisionId,
+        params.installMode || 'manual',
+        params.installedBy || null,
+        JSON.stringify({
+          actorId: params.actorId,
+          managedBy: 'organization.service',
+        }),
+        params.createdAt,
+      ],
+    );
+  }
+
+  return {
+    instanceId,
+    created,
+  };
+}
+
+async function insertActorPackageInstanceDefaultGrant(
+  queryable: Pick<pg.PoolClient, 'query'>,
+  params: {
+    instanceId: UUID;
+    workspaceId: UUID;
+    grantedBy?: UUID;
+  },
+) {
+  await queryable.query(
+    `INSERT INTO capability_instance_grants (
+       instance_id,
+       workspace_id,
+       grant_scope,
+       permissions,
+       status,
+       granted_by,
+       metadata
+     )
+     VALUES ($1, $2, 'workspace', '{}'::text[], 'active', $3, $4::jsonb)`,
+    [
+      params.instanceId,
+      params.workspaceId,
+      params.grantedBy || null,
+      JSON.stringify({
+        managedBy: 'organization.service',
+        actorDefaultGrant: true,
+      }),
+    ],
+  );
+}
+
+function buildActorPackageInstanceAuthzRelations(params: {
+  instanceId: UUID;
+  workspaceId: UUID;
+  ownerUserId?: UUID;
+}) {
+  return [
+    touchRelation('actor_instance', params.instanceId, 'workspace', 'workspace', params.workspaceId),
+    touchRelation('actor_instance', params.instanceId, 'use_workspace', 'workspace', params.workspaceId),
+    ...(params.ownerUserId
+      ? [touchRelation('actor_instance', params.instanceId, 'owner', 'user', params.ownerUserId)]
+      : []),
+  ] satisfies AuthzRelationMutation[];
 }
 
 async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
@@ -678,46 +1022,46 @@ function computeVersionDelta(
   };
 }
 
-function deriveTemplateLinkStatus(hasLocalChanges: boolean, hasUpstreamUpdate: boolean): ActorTemplateLinkStatus {
+function derivePackageSourceLinkStatus(hasLocalChanges: boolean, hasUpstreamUpdate: boolean): ActorPackageLinkStatus {
   if (hasLocalChanges && hasUpstreamUpdate) return 'update_available_with_local_changes';
   if (hasUpstreamUpdate) return 'update_available';
   if (hasLocalChanges) return 'diverged';
   return 'up_to_date';
 }
 
-function mapTemplateLink(row: any): ActorTemplateLink | undefined {
-  if (!row.template_package_id) return undefined;
+function mapPackageSourceLink(row: any): ActorPackageSourceLink | undefined {
+  if (!row.source_package_id) return undefined;
 
-  const baselineActorVersion = Number(row.template_baseline_actor_version || 1);
+  const baselineActorVersion = Number(row.source_baseline_actor_version || 1);
   const currentVersion = Number(row.current_version || 1);
-  const importedRevisionId = row.template_imported_revision_id;
-  const latestRevisionId = row.template_latest_revision_id || undefined;
+  const importedRevisionId = row.source_imported_revision_id;
+  const latestRevisionId = row.source_latest_revision_id || undefined;
   const hasLocalChanges = currentVersion > baselineActorVersion;
   const hasUpstreamUpdate = Boolean(latestRevisionId && importedRevisionId && latestRevisionId !== importedRevisionId);
 
   return {
     actorId: row.id,
-    templatePackageId: row.template_package_id,
+    packageId: row.source_package_id,
     importedRevisionId,
-    templateSlug: row.template_slug,
-    templateDisplayName: row.template_display_name,
-    templatePublisherSlug: row.template_publisher_slug || undefined,
-    templatePublisherDisplayName: row.template_publisher_display_name || undefined,
-    importedTemplateVersion: row.template_imported_revision_version || undefined,
+    packageSlug: row.source_slug,
+    packageDisplayName: row.source_display_name,
+    packagePublisherSlug: row.source_publisher_slug || undefined,
+    packagePublisherDisplayName: row.source_publisher_display_name || undefined,
+    importedVersion: row.source_imported_revision_version || undefined,
     latestRevisionId,
-    latestTemplateVersion: row.template_latest_revision_version || undefined,
+    latestVersion: row.source_latest_revision_version || undefined,
     baselineActorVersion,
-    syncMode: (row.template_sync_mode || 'notify') as ActorTemplateSyncMode,
+    syncMode: (row.source_sync_mode || 'notify') as ActorPackageSyncMode,
     hasLocalChanges,
     hasUpstreamUpdate,
-    status: deriveTemplateLinkStatus(hasLocalChanges, hasUpstreamUpdate),
-    createdAt: row.template_link_created_at || row.created_at,
-    updatedAt: row.template_link_updated_at || row.updated_at,
+    status: derivePackageSourceLinkStatus(hasLocalChanges, hasUpstreamUpdate),
+    createdAt: row.source_link_created_at || row.created_at,
+    updatedAt: row.source_link_updated_at || row.updated_at,
   };
 }
 
-function parseActorTemplateManifest(manifestValue: Record<string, unknown>): ActorTemplateRecord['manifest'] {
-  const container = parseJsonObject(manifestValue.actorTemplate ?? manifestValue);
+function parseActorPackageManifest(manifestValue: Record<string, unknown>): ActorPackageRecord['manifest'] {
+  const container = parseJsonObject(manifestValue.actorPackage ?? manifestValue.actorTemplate ?? manifestValue);
   const actorRaw = parseJsonObject(container.actor);
   const docs = normalizeActorDocs(parseJsonArray<ActorDoc>(actorRaw.docs));
   const role = isActorRole(actorRaw.role) ? actorRaw.role : 'specialist';
@@ -743,7 +1087,7 @@ function parseActorTemplateManifest(manifestValue: Record<string, unknown>): Act
   };
 }
 
-function mapRequirementToTemplateDependency(requirement: CapabilityRequirement): ActorTemplateDependency | undefined {
+function mapRequirementToActorPackageDependency(requirement: CapabilityRequirement): ActorPackageDependency | undefined {
   if (requirement.targetKind !== 'package') return undefined;
   if (requirement.requirementKind !== 'required' && requirement.requirementKind !== 'recommended') return undefined;
   if (requirement.targetPackageKind !== 'plugin' && requirement.targetPackageKind !== 'skill') return undefined;
@@ -769,16 +1113,16 @@ function mapRequirementToTemplateDependency(requirement: CapabilityRequirement):
   };
 }
 
-async function loadActorTemplateRecord(templateId: UUID, workspaceId: UUID): Promise<ActorTemplateRecord> {
-  const pkg = await getCapabilityPackage(templateId);
-  if (pkg.kind !== 'actor_template') {
-    throw new Error('Actor template not found');
+async function loadActorPackageRecord(packageId: UUID, workspaceId: UUID): Promise<ActorPackageRecord> {
+  const pkg = await getCapabilityPackage(packageId);
+  if (pkg.kind !== 'actor') {
+    throw new Error('Actor package not found');
   }
   if (pkg.workspaceId && pkg.workspaceId !== workspaceId) {
-    throw new Error('Actor template not visible in this workspace');
+    throw new Error('Actor package not visible in this workspace');
   }
   if (!pkg.latestRevisionId || !pkg.latestRevision) {
-    throw new Error('Actor template has no active revision');
+    throw new Error('Actor package has no active revision');
   }
 
   const [requirements, requirementChecks] = await Promise.all([
@@ -791,10 +1135,10 @@ async function loadActorTemplateRecord(templateId: UUID, workspaceId: UUID): Pro
 
   return {
     package: pkg,
-    manifest: parseActorTemplateManifest(pkg.latestRevision.manifest),
+    manifest: parseActorPackageManifest(pkg.latestRevision.manifest),
     dependencies: requirements
-      .map(mapRequirementToTemplateDependency)
-      .filter((dependency): dependency is ActorTemplateDependency => Boolean(dependency)),
+      .map(mapRequirementToActorPackageDependency)
+      .filter((dependency): dependency is ActorPackageDependency => Boolean(dependency)),
     requirementChecks,
   };
 }
@@ -802,21 +1146,25 @@ async function loadActorTemplateRecord(templateId: UUID, workspaceId: UUID): Pro
 async function insertActorSnapshot(client: { query: (sql: string, values?: unknown[]) => Promise<unknown> }, params: {
   actorId: UUID;
   workspaceId: UUID;
+  packageId?: UUID;
+  instanceId?: UUID;
   definition: ActorDefinition;
   createdAt: string;
   currentVersion: number;
   delta?: ActorVersionDelta;
 }) {
   await client.query(
-    `INSERT INTO actors (
-       id, workspace_id, name, role, title, avatar_file_id, can_represent_user, docs,
+     `INSERT INTO actors (
+       id, workspace_id, package_id, instance_id, name, role, title, avatar_file_id, can_represent_user, docs,
        parent_id, capabilities, config,
        is_active, current_version, created_at, updated_at
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true, $12, $13, $13)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true, $14, $15, $15)`,
     [
       params.actorId,
       params.workspaceId,
+      params.packageId ?? null,
+      params.instanceId ?? null,
       params.definition.name,
       params.definition.role,
       params.definition.title,
@@ -861,10 +1209,12 @@ function mapRow(row: any): Actor {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
+    packageId: row.package_id || undefined,
+    packageInstanceId: row.instance_id || undefined,
     definition,
     avatarUrl: row.avatar_stored_name ? getFileUrl(row.avatar_stored_name) : undefined,
     currentVersion: Number(row.current_version || 1),
-    templateLink: mapTemplateLink(row),
+    sourceLink: mapPackageSourceLink(row),
     isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1031,11 +1381,38 @@ export async function createActor(params: {
       config: params.config,
     },
   });
+  const publisher = await ensureWorkspacePackagePublisher(params.workspaceId, params.createdBy);
 
   const authzEntryIds = await transaction(async (client) => {
+    const packageSnapshot = await createActorPackageSnapshot(client as any, {
+      publisherId: publisher.id,
+      workspaceId: params.workspaceId,
+      actorId: id,
+      definition,
+      createdBy: params.createdBy,
+      createdAt: now,
+      actorVersion: 1,
+    });
+    const packageInstance = await upsertActorPackageInstance(client as any, {
+      actorId: id,
+      workspaceId: params.workspaceId,
+      packageId: packageSnapshot.packageId,
+      revisionId: packageSnapshot.revisionId,
+      installedBy: params.createdBy,
+      createdAt: now,
+      installMode: 'manual',
+    });
+    await insertActorPackageInstanceDefaultGrant(client as any, {
+      instanceId: packageInstance.instanceId,
+      workspaceId: params.workspaceId,
+      grantedBy: params.createdBy,
+    });
+
     await insertActorSnapshot(client as any, {
       actorId: id,
       workspaceId: params.workspaceId,
+      packageId: packageSnapshot.packageId,
+      instanceId: packageInstance.instanceId,
       definition,
       createdAt: now,
       currentVersion: 1,
@@ -1049,7 +1426,14 @@ export async function createActor(params: {
 
     return queueAuthzRelationships(
       client,
-      buildActorAuthzRelations(id, params.workspaceId, grants),
+      [
+        ...buildActorAuthzRelations(id, params.workspaceId, grants),
+        ...buildActorPackageInstanceAuthzRelations({
+          instanceId: packageInstance.instanceId,
+          workspaceId: params.workspaceId,
+          ownerUserId: params.createdBy,
+        }),
+      ],
       {
         source: 'actor.create',
         workspaceId: params.workspaceId,
@@ -1320,6 +1704,7 @@ export async function updateActor(
   updates: ActorUpdateInput,
 ): Promise<Actor | null> {
   const now = nowISO();
+  const publisher = await ensureWorkspacePackagePublisher(workspaceId);
 
   const outcome = await transaction(async (client) => {
     const existingResult = await client.query(
@@ -1358,21 +1743,50 @@ export async function updateActor(
       nextVersion,
     );
 
+    const packageSnapshot = await createActorPackageSnapshot(client as any, {
+      packageId: existingRow.package_id ?? undefined,
+      publisherId: publisher.id,
+      workspaceId,
+      actorId,
+      definition: nextDefinition,
+      createdAt: now,
+      actorVersion: nextVersion,
+    });
+    const packageInstance = await upsertActorPackageInstance(client as any, {
+      instanceId: existingRow.instance_id ?? undefined,
+      actorId,
+      workspaceId,
+      packageId: packageSnapshot.packageId,
+      revisionId: packageSnapshot.revisionId,
+      createdAt: now,
+      installMode: 'manual',
+    });
+    if (packageInstance.created) {
+      await insertActorPackageInstanceDefaultGrant(client as any, {
+        instanceId: packageInstance.instanceId,
+        workspaceId,
+      });
+    }
+
     await client.query(
       `UPDATE actors
-       SET name = $1,
-           role = $2,
-           title = $3,
-           avatar_file_id = $4,
-           can_represent_user = $5,
-           docs = $6,
-           parent_id = $7,
-           capabilities = $8,
-           config = $9,
-           current_version = $10,
-           updated_at = $11
-       WHERE id = $12 AND workspace_id = $13`,
+       SET package_id = $1,
+           instance_id = $2,
+           name = $3,
+           role = $4,
+           title = $5,
+           avatar_file_id = $6,
+           can_represent_user = $7,
+           docs = $8,
+           parent_id = $9,
+           capabilities = $10,
+           config = $11,
+           current_version = $12,
+           updated_at = $13
+       WHERE id = $14 AND workspace_id = $15`,
       [
+        packageSnapshot.packageId,
+        packageInstance.instanceId,
         nextDefinition.name,
         nextDefinition.role,
         nextDefinition.title,
@@ -1417,6 +1831,21 @@ export async function updateActor(
       actorName: nextDefinition.name,
       nextVersion,
       delta,
+      authzEntryIds: packageInstance.created
+        ? await queueAuthzRelationships(
+            client,
+            buildActorPackageInstanceAuthzRelations({
+              instanceId: packageInstance.instanceId,
+              workspaceId,
+            }),
+            {
+              source: 'actor.instance.bootstrap',
+              workspaceId,
+              actorId,
+              instanceId: packageInstance.instanceId,
+            },
+          )
+        : [],
       avatarFileId: nextDefinition.avatarFileId,
       avatarEmoji: typeof nextDefinition.config.avatar_emoji === 'string'
         ? nextDefinition.config.avatar_emoji
@@ -1425,6 +1854,8 @@ export async function updateActor(
   });
 
   if (!outcome) return null;
+
+  await flushQueuedAuthzEntries(outcome.authzEntryIds || [], 'actor.instance.bootstrap');
 
   if (outcome.delta) {
     let avatarUrl: string | undefined;
@@ -1491,9 +1922,24 @@ export async function deleteActor(actorId: UUID, workspaceId: UUID): Promise<boo
          AND (workspace_id = $2 OR workspace_id IS NULL)`,
       [actorId, workspaceId],
     );
+    const actorSnapshot = await client.query<{ instance_id: string | null; instance_owner_id: string | null }>(
+      `SELECT
+         a.instance_id,
+         ci.installed_by AS instance_owner_id
+       FROM actors a
+       LEFT JOIN capability_instances ci ON ci.id = a.instance_id
+       WHERE a.id = $1 AND a.workspace_id = $2
+       LIMIT 1`,
+      [actorId, workspaceId],
+    );
 
     const actorResult = await client.query(
-      `UPDATE actors SET is_active = false, updated_at = $1 WHERE id = $2 AND workspace_id = $3 RETURNING id`,
+      `UPDATE actors
+       SET is_active = false,
+           instance_id = NULL,
+           updated_at = $1
+       WHERE id = $2 AND workspace_id = $3
+       RETURNING id`,
       [nowISO(), actorId, workspaceId],
     );
 
@@ -1501,10 +1947,33 @@ export async function deleteActor(actorId: UUID, workspaceId: UUID): Promise<boo
       return null;
     }
 
+    const instanceId = actorSnapshot.rows[0]?.instance_id;
+    if (instanceId) {
+      await client.query(
+        `DELETE FROM capability_instance_grants
+         WHERE instance_id = $1`,
+        [instanceId],
+      );
+      await client.query(
+        `DELETE FROM capability_instances
+         WHERE id = $1`,
+        [instanceId],
+      );
+    }
+
     const authzEntryIds = await queueAuthzRelationships(
       client,
       diffAuthzRelationships(
-        buildActorAuthzRelations(actorId, workspaceId, grantResult.rows),
+        [
+          ...buildActorAuthzRelations(actorId, workspaceId, grantResult.rows),
+          ...(instanceId
+            ? buildActorPackageInstanceAuthzRelations({
+                instanceId,
+                workspaceId,
+                ownerUserId: actorSnapshot.rows[0]?.instance_owner_id || undefined,
+              })
+            : []),
+        ],
         [],
       ),
       {
@@ -1551,26 +2020,26 @@ export async function getSubtree(actorId: UUID): Promise<(Actor & { depth: numbe
      SELECT
        tree.*,
        avatar_file.stored_name AS avatar_stored_name,
-       atl.template_package_id,
-       atl.imported_revision_id AS template_imported_revision_id,
-       atl.baseline_actor_version AS template_baseline_actor_version,
-       atl.sync_mode AS template_sync_mode,
-       atl.created_at AS template_link_created_at,
-       atl.updated_at AS template_link_updated_at,
-       template_pkg.slug AS template_slug,
-       template_pkg.display_name AS template_display_name,
-       template_pkg.latest_revision_id AS template_latest_revision_id,
-       template_publisher.slug AS template_publisher_slug,
-       template_publisher.display_name AS template_publisher_display_name,
-       imported_template_revision.version AS template_imported_revision_version,
-       latest_template_revision.version AS template_latest_revision_version
+       cpl.upstream_package_id AS source_package_id,
+       cpl.upstream_revision_id AS source_imported_revision_id,
+       COALESCE((cpl.metadata->>'baselineActorVersion')::int, 1) AS source_baseline_actor_version,
+       cpl.sync_mode AS source_sync_mode,
+       cpl.created_at AS source_link_created_at,
+       cpl.updated_at AS source_link_updated_at,
+       source_pkg.slug AS source_slug,
+       source_pkg.display_name AS source_display_name,
+       source_pkg.latest_revision_id AS source_latest_revision_id,
+       source_publisher.slug AS source_publisher_slug,
+       source_publisher.display_name AS source_publisher_display_name,
+       imported_source_revision.version AS source_imported_revision_version,
+       latest_source_revision.version AS source_latest_revision_version
      FROM tree
      LEFT JOIN files avatar_file ON avatar_file.id = tree.avatar_file_id
-     LEFT JOIN actor_template_links atl ON atl.actor_id = tree.id
-     LEFT JOIN capability_packages template_pkg ON template_pkg.id = atl.template_package_id
-     LEFT JOIN capability_publishers template_publisher ON template_publisher.id = template_pkg.publisher_id
-     LEFT JOIN capability_package_revisions imported_template_revision ON imported_template_revision.id = atl.imported_revision_id
-     LEFT JOIN capability_package_revisions latest_template_revision ON latest_template_revision.id = template_pkg.latest_revision_id
+     LEFT JOIN capability_package_lineages cpl ON cpl.downstream_package_id = tree.package_id
+     LEFT JOIN capability_packages source_pkg ON source_pkg.id = cpl.upstream_package_id
+     LEFT JOIN capability_publishers source_publisher ON source_publisher.id = source_pkg.publisher_id
+     LEFT JOIN capability_package_revisions imported_source_revision ON imported_source_revision.id = cpl.upstream_revision_id
+     LEFT JOIN capability_package_revisions latest_source_revision ON latest_source_revision.id = source_pkg.latest_revision_id
      WHERE tree.is_active = true
      ORDER BY tree.depth, tree.name`,
     [actorId],
@@ -1588,26 +2057,26 @@ export async function getFullOrgTree(workspaceId: UUID): Promise<(Actor & { dept
      SELECT
        tree.*,
        avatar_file.stored_name AS avatar_stored_name,
-       atl.template_package_id,
-       atl.imported_revision_id AS template_imported_revision_id,
-       atl.baseline_actor_version AS template_baseline_actor_version,
-       atl.sync_mode AS template_sync_mode,
-       atl.created_at AS template_link_created_at,
-       atl.updated_at AS template_link_updated_at,
-       template_pkg.slug AS template_slug,
-       template_pkg.display_name AS template_display_name,
-       template_pkg.latest_revision_id AS template_latest_revision_id,
-       template_publisher.slug AS template_publisher_slug,
-       template_publisher.display_name AS template_publisher_display_name,
-       imported_template_revision.version AS template_imported_revision_version,
-       latest_template_revision.version AS template_latest_revision_version
+       cpl.upstream_package_id AS source_package_id,
+       cpl.upstream_revision_id AS source_imported_revision_id,
+       COALESCE((cpl.metadata->>'baselineActorVersion')::int, 1) AS source_baseline_actor_version,
+       cpl.sync_mode AS source_sync_mode,
+       cpl.created_at AS source_link_created_at,
+       cpl.updated_at AS source_link_updated_at,
+       source_pkg.slug AS source_slug,
+       source_pkg.display_name AS source_display_name,
+       source_pkg.latest_revision_id AS source_latest_revision_id,
+       source_publisher.slug AS source_publisher_slug,
+       source_publisher.display_name AS source_publisher_display_name,
+       imported_source_revision.version AS source_imported_revision_version,
+       latest_source_revision.version AS source_latest_revision_version
      FROM tree
      LEFT JOIN files avatar_file ON avatar_file.id = tree.avatar_file_id
-     LEFT JOIN actor_template_links atl ON atl.actor_id = tree.id
-     LEFT JOIN capability_packages template_pkg ON template_pkg.id = atl.template_package_id
-     LEFT JOIN capability_publishers template_publisher ON template_publisher.id = template_pkg.publisher_id
-     LEFT JOIN capability_package_revisions imported_template_revision ON imported_template_revision.id = atl.imported_revision_id
-     LEFT JOIN capability_package_revisions latest_template_revision ON latest_template_revision.id = template_pkg.latest_revision_id
+     LEFT JOIN capability_package_lineages cpl ON cpl.downstream_package_id = tree.package_id
+     LEFT JOIN capability_packages source_pkg ON source_pkg.id = cpl.upstream_package_id
+     LEFT JOIN capability_publishers source_publisher ON source_publisher.id = source_pkg.publisher_id
+     LEFT JOIN capability_package_revisions imported_source_revision ON imported_source_revision.id = cpl.upstream_revision_id
+     LEFT JOIN capability_package_revisions latest_source_revision ON latest_source_revision.id = source_pkg.latest_revision_id
      WHERE tree.is_active = true
      ORDER BY tree.depth, tree.name`,
     [workspaceId],
@@ -1615,80 +2084,100 @@ export async function getFullOrgTree(workspaceId: UUID): Promise<(Actor & { dept
   return result.rows.map((row) => ({ ...mapRow(row), depth: Number(row.depth) }));
 }
 
-// ─── Actor Templates ───
+// ─── Actor Packages ───
 
-export async function listActorTemplates(params: {
+export async function listActorPackages(params: {
   workspaceId: UUID;
   search?: string;
-}): Promise<ActorTemplateRecord[]> {
+}): Promise<ActorPackageRecord[]> {
   const packages = await listCapabilityPackages({
     workspaceId: params.workspaceId,
     includeGlobal: true,
-    kind: 'actor_template',
+    kind: 'actor',
     search: params.search?.trim() || undefined,
   });
 
   return Promise.all(packages.map(async (pkg) => {
     if (!pkg.latestRevisionId) {
-      throw new Error(`Actor template ${pkg.id} has no active revision`);
+      throw new Error(`Actor package ${pkg.id} has no active revision`);
     }
-    return loadActorTemplateRecord(pkg.id, params.workspaceId);
+    return loadActorPackageRecord(pkg.id, params.workspaceId);
   }));
 }
 
-export async function getActorTemplate(templateId: UUID, workspaceId: UUID): Promise<ActorTemplateRecord> {
-  return loadActorTemplateRecord(templateId, workspaceId);
+export async function getActorPackage(packageId: UUID, workspaceId: UUID): Promise<ActorPackageRecord> {
+  return loadActorPackageRecord(packageId, workspaceId);
 }
 
-export async function cloneActorTemplate(input: ActorTemplateCloneInput): Promise<ActorTemplateCloneResult> {
+export async function installActorPackage(input: ActorPackageInstallInput): Promise<ActorPackageInstallResult> {
   const now = nowISO();
   const actorId = generateId();
-  const template = await loadActorTemplateRecord(input.templateId, input.workspaceId);
-  const actorFromTemplate = template.manifest.actor;
+  const sourcePackage = await loadActorPackageRecord(input.packageId, input.workspaceId);
+  const actorFromPackage = sourcePackage.manifest.actor;
+  const publisher = await ensureWorkspacePackagePublisher(input.workspaceId, input.createdBy);
 
   const definition = makeDefinitionForWrite({
     updates: {
-      name: input.name ?? actorFromTemplate.name,
-      role: actorFromTemplate.role,
-      title: input.title ?? actorFromTemplate.title,
-      avatarFileId: actorFromTemplate.avatarFileId,
-      canRepresentUser: actorFromTemplate.canRepresentUser,
-      docs: actorFromTemplate.docs,
+      name: input.name ?? actorFromPackage.name,
+      role: actorFromPackage.role,
+      title: input.title ?? actorFromPackage.title,
+      avatarFileId: actorFromPackage.avatarFileId,
+      canRepresentUser: actorFromPackage.canRepresentUser,
+      docs: actorFromPackage.docs,
       parentId: input.parentId ?? undefined,
-      capabilities: actorFromTemplate.capabilities,
-      config: actorFromTemplate.config,
+      capabilities: actorFromPackage.capabilities,
+      config: actorFromPackage.config,
     },
   });
 
   const authzEntryIds = await transaction(async (client) => {
+    const packageSnapshot = await createActorPackageSnapshot(client as any, {
+      publisherId: publisher.id,
+      workspaceId: input.workspaceId,
+      actorId,
+      definition,
+      slug: buildActorPackageSlug(definition.name, actorId, sourcePackage.package.slug),
+      sourceType: 'workspace_upload',
+      sourcePackageId: sourcePackage.package.id,
+      sourceRevisionId: sourcePackage.package.latestRevisionId,
+      sourceVersion: sourcePackage.package.latestRevision?.version,
+      syncMode: input.syncMode || 'notify',
+      baselineActorVersion: 1,
+      createdBy: input.createdBy,
+      createdAt: now,
+      actorVersion: 1,
+    });
+    const packageInstance = await upsertActorPackageInstance(client as any, {
+      actorId,
+      workspaceId: input.workspaceId,
+      packageId: packageSnapshot.packageId,
+      revisionId: packageSnapshot.revisionId,
+      installedBy: input.createdBy,
+      createdAt: now,
+      installMode: 'manual',
+    });
+    await insertActorPackageInstanceDefaultGrant(client as any, {
+      instanceId: packageInstance.instanceId,
+      workspaceId: input.workspaceId,
+      grantedBy: input.createdBy,
+    });
+
     await insertActorSnapshot(client as any, {
       actorId,
       workspaceId: input.workspaceId,
+      packageId: packageSnapshot.packageId,
+      instanceId: packageInstance.instanceId,
       definition,
       createdAt: now,
       currentVersion: 1,
     });
 
     await client.query(
-      `INSERT INTO actor_template_links (
-         actor_id, template_package_id, imported_revision_id, baseline_actor_version, sync_mode, created_at, updated_at
-       )
-       VALUES ($1, $2, $3, 1, $4, $5, $5)`,
-      [
-        actorId,
-        template.package.id,
-        template.package.latestRevisionId,
-        input.syncMode || 'notify',
-        now,
-      ],
-    );
-
-    await client.query(
       `UPDATE capability_packages
        SET download_count = download_count + 1,
            updated_at = NOW()
        WHERE id = $1`,
-      [template.package.id],
+      [sourcePackage.package.id],
     );
 
     const grants = defaultActorGrantRows(input.workspaceId).map((grant) => ({
@@ -1699,44 +2188,51 @@ export async function cloneActorTemplate(input: ActorTemplateCloneInput): Promis
 
     return queueAuthzRelationships(
       client,
-      buildActorAuthzRelations(actorId, input.workspaceId, grants),
+      [
+        ...buildActorAuthzRelations(actorId, input.workspaceId, grants),
+        ...buildActorPackageInstanceAuthzRelations({
+          instanceId: packageInstance.instanceId,
+          workspaceId: input.workspaceId,
+          ownerUserId: input.createdBy,
+        }),
+      ],
       {
-        source: 'actor.clone_template',
+        source: 'actor.install_package',
         workspaceId: input.workspaceId,
         actorId,
-        templateId: input.templateId,
+        packageId: input.packageId,
       },
     );
   });
 
-  await flushQueuedAuthzEntries(authzEntryIds, 'actor.clone_template');
+  await flushQueuedAuthzEntries(authzEntryIds, 'actor.install_package');
 
   const actor = await getActor(actorId, input.workspaceId);
-  if (!actor || !actor.templateLink) {
-    throw new Error('Template clone succeeded but actor link could not be loaded');
+  if (!actor || !actor.sourceLink) {
+    throw new Error('Actor package install succeeded but source link could not be loaded');
   }
 
   return {
     actor,
-    template,
-    templateLink: actor.templateLink,
-    requirementChecks: template.requirementChecks || [],
+    sourcePackage,
+    sourceLink: actor.sourceLink,
+    requirementChecks: sourcePackage.requirementChecks || [],
   };
 }
 
-export async function seedBuiltinActorTemplates() {
+export async function seedBuiltinActorPackages() {
   const publisher = await createCapabilityPublisher({
     slug: 'synapse-official',
     displayName: 'Synapse Official',
-    description: 'Official Synapse marketplace templates and packages.',
+    description: 'Official Synapse marketplace actor packages.',
     isBuiltin: true,
     isVerified: true,
   });
 
-  for (const seed of builtinActorTemplateSeeds) {
+  for (const seed of builtinActorPackageSeeds) {
     const pkg = await createCapabilityPackage({
       publisherId: publisher.id,
-      kind: 'actor_template',
+      kind: 'actor',
       slug: seed.slug,
       displayName: seed.displayName,
       description: seed.description,
@@ -1748,7 +2244,7 @@ export async function seedBuiltinActorTemplates() {
       defaultInstanceScope: 'workspace',
       defaultReuseScope: 'workspace',
       metadata: {
-        seededBy: 'builtin_actor_templates',
+        seededBy: 'builtin_actor_packages',
       },
     });
 
@@ -1757,16 +2253,16 @@ export async function seedBuiltinActorTemplates() {
       version: '1.0.0',
       status: 'active',
       manifest: {
-        kind: 'actor_template',
-        actorTemplate: {
+        kind: 'actor',
+        actorPackage: {
           actor: seed.actor,
           setupGuide: seed.setupGuide || [],
           releaseNotes: seed.releaseNotes || [],
         },
       },
       metadata: {
-        kind: 'actor_template',
-        seededBy: 'builtin_actor_templates',
+        kind: 'actor',
+        seededBy: 'builtin_actor_packages',
       },
       setLatest: true,
     });
