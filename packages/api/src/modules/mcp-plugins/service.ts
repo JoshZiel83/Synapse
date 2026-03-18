@@ -1799,6 +1799,7 @@ export async function installPluginUnified(data: {
       authProviders: plugin.auth_providers || [],
       configData: resolvedConfigBase,
       authSessionIds: data.authSessionIds,
+      run: client.query.bind(client) as QueryRunner,
     });
     const encryptedConfig = encryptSensitiveFields(
       resolvedConfig,
@@ -2104,6 +2105,7 @@ export async function updateInstallation(
             authProviders: plugin.auth_providers || [],
             configData: mergedConfig,
             authSessionIds: data.authSessionIds,
+            run,
           })
         : mergedConfig;
 

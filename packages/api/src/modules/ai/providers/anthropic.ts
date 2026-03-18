@@ -1,6 +1,6 @@
 import type { AIResponse, ToolDefinition, ToolCall, AnthropicBuiltinTool, ConversationMessage, MultimodalConfig, CanonicalContentBlock, ProviderContextWindow } from '@synapse/shared';
 import { extractText, textBlock } from '@synapse/shared';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import type { AIProvider, AIProviderConfig, FileRefSegment } from './types.js';
 import { readAsBuffer, getFullUrl } from '../../../infrastructure/storage/index.js';
 import { compileContextWindowToConversationMessages, compressContextWindow } from '../context-compiler.js';
@@ -25,6 +25,50 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function buildAnthropicToolAlias(rawName: string, usedAliases: Set<string>): string {
+  const normalized = rawName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'tool';
+  const hash = createHash('sha256').update(rawName).digest('hex').slice(0, 8);
+  let candidate = normalized;
+
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(candidate)) {
+    candidate = normalized.slice(0, 119) + '_' + hash;
+  }
+
+  if (candidate.length > 128) {
+    candidate = candidate.slice(0, 128);
+  }
+
+  if (candidate !== rawName || usedAliases.has(candidate)) {
+    const suffix = '_' + hash;
+    const base = normalized.slice(0, Math.max(1, 128 - suffix.length));
+    candidate = `${base}${suffix}`;
+  }
+
+  while (usedAliases.has(candidate)) {
+    const retryHash = createHash('sha256').update(`${rawName}:${candidate}`).digest('hex').slice(0, 8);
+    const suffix = '_' + retryHash;
+    const base = normalized.slice(0, Math.max(1, 128 - suffix.length));
+    candidate = `${base}${suffix}`;
+  }
+
+  usedAliases.add(candidate);
+  return candidate;
+}
+
+function buildToolNameMaps(tools: ToolDefinition[]) {
+  const aliasToCanonical = new Map<string, string>();
+  const canonicalToAlias = new Map<string, string>();
+  const usedAliases = new Set<string>();
+
+  for (const tool of tools) {
+    const alias = buildAnthropicToolAlias(tool.name, usedAliases);
+    aliasToCanonical.set(alias, tool.name);
+    canonicalToAlias.set(tool.name, alias);
+  }
+
+  return { aliasToCanonical, canonicalToAlias };
 }
 
 async function ensureSupportedFormat(
@@ -60,10 +104,15 @@ export class AnthropicProvider implements AIProvider {
     multimodal?: MultimodalConfig;
   }): Promise<AIResponse> {
     const base = this.config.baseUrl.replace(/\/+$/, '');
+    const toolNameMaps = buildToolNameMaps(params.tools || []);
 
     const preparedWindow = await this.compressContextWindow(params.contextWindow);
     const conversationMessages = await this.compileContextWindow(preparedWindow);
-    const allMessages = await this.convertMessages(conversationMessages, params.multimodal);
+    const allMessages = await this.convertMessages(
+      conversationMessages,
+      params.multimodal,
+      toolNameMaps.canonicalToAlias,
+    );
 
     const body: Record<string, unknown> = {
       model: this.config.model,
@@ -78,7 +127,7 @@ export class AnthropicProvider implements AIProvider {
     if (params.tools && params.tools.length > 0) {
       for (const t of params.tools) {
         allTools.push({
-          name: t.name,
+          name: toolNameMaps.canonicalToAlias.get(t.name) || t.name,
           description: t.description,
           input_schema: t.parameters,
         });
@@ -151,7 +200,7 @@ export class AnthropicProvider implements AIProvider {
         toolCalls.push({
           callId: randomUUID(),
           providerCallId: block.id || undefined,
-          toolName: block.name,
+          toolName: toolNameMaps.aliasToCanonical.get(block.name) || block.name,
           input: block.input,
         });
       } else if (block.type === 'text' && block.text) {
@@ -203,6 +252,7 @@ export class AnthropicProvider implements AIProvider {
   private async convertMessages(
     messages: ConversationMessage[],
     multimodal?: MultimodalConfig,
+    canonicalToAlias?: Map<string, string>,
   ): Promise<Record<string, unknown>[]> {
     const result: Record<string, unknown>[] = [];
 
@@ -225,7 +275,7 @@ export class AnthropicProvider implements AIProvider {
               contentBlocks.push({
                 type: 'tool_use',
                 id: tc.providerCallId || tc.callId,
-                name: tc.toolName,
+                name: canonicalToAlias?.get(tc.toolName) || buildAnthropicToolAlias(tc.toolName, new Set()),
                 input: tc.input,
               });
             }

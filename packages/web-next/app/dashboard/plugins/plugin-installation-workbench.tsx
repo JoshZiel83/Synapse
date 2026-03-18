@@ -1,10 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Plus } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Loader2, Plus, Trash2 } from 'lucide-react';
 import { AppCard, AppCardContent, AppCardHeader, AppCardTitle } from '@/components/app-card';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Switch } from '@/components/ui/switch';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -34,6 +36,7 @@ export default function PluginInstallationWorkbench({
   onCreateInstallation,
   onInstallationsChanged,
 }: Props) {
+  const router = useRouter();
   const { workspaceId } = useWorkspace();
   const activeInstallationId = useMemo(() => {
     if (!installations.length) return null;
@@ -48,6 +51,8 @@ export default function PluginInstallationWorkbench({
   );
   const [loadingInstallation, setLoadingInstallation] = useState(false);
   const [editorVersion, setEditorVersion] = useState(0);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [removingInstallation, setRemovingInstallation] = useState(false);
 
   useEffect(() => {
     if (initialInstallation?.id === activeInstallationId) {
@@ -94,6 +99,44 @@ export default function PluginInstallationWorkbench({
     setEditorVersion((value) => value + 1);
   };
 
+  const handleToggleInstallation = async (enabled: boolean) => {
+    if (!workspaceId || !selectedInstallation || savingSettings) return;
+    try {
+      setSavingSettings(true);
+      const installation = await api.updateInstallation(workspaceId, selectedInstallation.id, {
+        isEnabled: enabled,
+      });
+      setSelectedInstallation(installation);
+      await onInstallationsChanged?.(installation);
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const handleUninstallInstallation = async () => {
+    if (!workspaceId || !selectedInstallation || removingInstallation) return;
+    if (!confirm('Are you sure you want to uninstall this configuration?')) return;
+
+    try {
+      setRemovingInstallation(true);
+      const removedId = selectedInstallation.id as string;
+      await api.uninstallPlugin(workspaceId, removedId);
+      const remainingInstallations = await api.getInstallations(
+        workspaceId,
+        new URLSearchParams({ pluginId: plugin.id }).toString(),
+      );
+
+      if (remainingInstallations.length > 0) {
+        onSelectInstallation(remainingInstallations[0].id);
+        return;
+      }
+
+      router.push(`/dashboard/plugins/${plugin.id}`);
+    } finally {
+      setRemovingInstallation(false);
+    }
+  };
+
   return (
     <AppCard variant="panel" className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <AppCardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 px-6 py-6">
@@ -103,10 +146,34 @@ export default function PluginInstallationWorkbench({
             Each installation is one configuration. Select one on the left, then manage setup, access, and advanced settings on the right.
           </div>
         </div>
-        <Button size="sm" onClick={onCreateInstallation}>
-          <Plus data-icon="inline-start" />
-          New Configuration
-        </Button>
+        <div className="flex items-center gap-3">
+          {selectedInstallation ? (
+            <>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <span>{selectedInstallation.is_enabled ? 'Enabled' : 'Disabled'}</span>
+                <Switch
+                  checked={Boolean(selectedInstallation.is_enabled)}
+                  onCheckedChange={(checked) => void handleToggleInstallation(checked)}
+                  disabled={savingSettings || removingInstallation}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void handleUninstallInstallation()}
+                disabled={savingSettings || removingInstallation}
+              >
+                <Trash2 data-icon="inline-start" />
+                Remove
+              </Button>
+            </>
+          ) : null}
+          <Button size="sm" onClick={onCreateInstallation}>
+            <Plus data-icon="inline-start" />
+            New Configuration
+          </Button>
+        </div>
       </AppCardHeader>
 
       <AppCardContent className="min-h-0 flex-1 px-6 pb-6 pt-0">

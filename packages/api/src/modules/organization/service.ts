@@ -1308,14 +1308,14 @@ export async function updateActor(
          created_by,
          source_type,
          source_user_id,
-         source_actor_id,
-         source_session_id,
-         source_turn_id,
-         source_conversation_id,
-         source_reason
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, $14, $15, $16, $17, $18, $19)
-       RETURNING id`,
+	         source_actor_id,
+	         source_session_id,
+	         source_turn_id,
+	         source_conversation_id,
+	         source_reason
+	       )
+	       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, $14, $15, $16, $17, $18, $19, $20)
+	       RETURNING id`,
       [
         actorId,
         nextVersion,

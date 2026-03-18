@@ -38,7 +38,7 @@ type ToolCallRequest struct {
 	Method  string `json:"method"`
 	Params  struct {
 		Name      string                 `json:"name"`
-		Arguments map[string]interface{} `json:"arguments,omitempty"`
+		Arguments map[string]interface{} `json:"arguments"`
 	} `json:"params"`
 }
 

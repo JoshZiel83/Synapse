@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "crypto";
+import type pg from "pg";
 import type {
   PluginAuthConnection,
   PluginAuthProviderDefinition,
@@ -10,6 +11,10 @@ import { decrypt, encrypt } from "../../infrastructure/crypto/index.js";
 import { query } from "../../infrastructure/database/index.js";
 
 type JsonObject = Record<string, unknown>;
+type QueryRunner = <T extends pg.QueryResultRow = any>(
+  text: string,
+  params?: any[],
+) => Promise<{ rows: T[] }>;
 
 type PluginAuthSessionRow = {
   id: string;
@@ -37,6 +42,7 @@ type PluginConnectionRow = {
   workspace_id: string;
   installation_id: string;
   catalog_item_id: string;
+  catalog_version_id?: string | null;
   provider_key: string;
   owner_user_id: string;
   external_account_id: string | null;
@@ -106,6 +112,34 @@ function getProviderClientSecret(provider: PluginAuthProviderDefinition) {
   return provider.clientSecret || (provider.clientSecretEnv ? process.env[provider.clientSecretEnv] : "") || "";
 }
 
+function getProviderMetadata(provider: PluginAuthProviderDefinition) {
+  return asObject(provider.metadata);
+}
+
+function getProviderCallbackUrl(provider?: PluginAuthProviderDefinition) {
+  const metadata = provider ? getProviderMetadata(provider) : {};
+  const callbackUrlEnv =
+    typeof metadata.callbackUrlEnv === "string"
+      ? metadata.callbackUrlEnv
+      : "";
+  const callbackUrl = callbackUrlEnv
+    ? (process.env[callbackUrlEnv] || "").trim()
+    : "";
+
+  if (callbackUrl) {
+    return callbackUrl;
+  }
+
+  return `${config.app.baseUrl.replace(/\/$/, "")}/api/v1/mcp/auth/callback`;
+}
+
+function getProviderTokenRequestContentType(provider: PluginAuthProviderDefinition) {
+  const metadata = getProviderMetadata(provider);
+  return metadata.tokenRequestContentType === "application/json"
+    ? "application/json"
+    : "application/x-www-form-urlencoded";
+}
+
 function getByPath(source: unknown, path?: string): unknown {
   if (!path) return undefined;
   let current: unknown = source;
@@ -163,10 +197,6 @@ function mapSessionRow(row: PluginAuthSessionRow): PluginAuthSession {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-function buildCallbackUrl() {
-  return `${config.app.baseUrl.replace(/\/$/, "")}/api/v1/mcp/auth/callback`;
 }
 
 async function getPluginAuthSpec(pluginId: string, catalogVersionId?: string | null) {
@@ -231,48 +261,54 @@ async function exchangeAuthorizationCode(
     );
   }
 
-  const params = new URLSearchParams({
+  const params: Record<string, string> = {
     grant_type: "authorization_code",
     code: input.code,
     redirect_uri: input.redirectUri,
     client_id: clientId,
     code_verifier: input.codeVerifier,
-  });
+  };
 
   if (provider.audience) {
-    params.set("audience", provider.audience);
+    params.audience = provider.audience;
   }
   for (const [key, value] of Object.entries(provider.extraTokenParams || {})) {
-    params.set(key, value);
+    params[key] = value;
   }
 
   const clientSecret = getProviderClientSecret(provider);
   if (clientSecret) {
-    params.set("client_secret", clientSecret);
+    params.client_secret = clientSecret;
   }
+
+  const contentType = getProviderTokenRequestContentType(provider);
+  const requestBody =
+    contentType === "application/json"
+      ? JSON.stringify(params)
+      : new URLSearchParams(params).toString();
 
   const response = await fetch(provider.tokenUrl, {
     method: "POST",
     headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type": contentType,
       Accept: "application/json",
     },
-    body: params.toString(),
+    body: requestBody,
   });
 
-  const body = asObject(await response.json().catch(() => ({})));
+  const responseBody = asObject(await response.json().catch(() => ({})));
   if (!response.ok) {
     throw new PluginAuthError(
       response.status || 400,
-      typeof body.error_description === "string"
-        ? body.error_description
-        : typeof body.error === "string"
-          ? body.error
+      typeof responseBody.error_description === "string"
+        ? responseBody.error_description
+        : typeof responseBody.error === "string"
+          ? responseBody.error
           : "Token exchange failed",
     );
   }
 
-  return body;
+  return responseBody;
 }
 
 async function fetchProfile(
@@ -318,7 +354,8 @@ async function getConnectionRow(
   const result = await query<PluginConnectionRow>(
     `SELECT
        connection.*,
-       installation.catalog_item_id
+       installation.catalog_item_id,
+       installation.catalog_version_id
      FROM plugin_connections connection
      JOIN plugin_installations installation
        ON installation.id = connection.installation_id
@@ -332,6 +369,166 @@ async function getConnectionRow(
     throw new PluginAuthError(404, "Auth connection not found");
   }
   return result.rows[0]!;
+}
+
+async function getConnectionRowById(connectionId: string) {
+  const result = await query<PluginConnectionRow>(
+    `SELECT
+       connection.*,
+       installation.catalog_item_id,
+       installation.catalog_version_id
+     FROM plugin_connections connection
+     JOIN plugin_installations installation
+       ON installation.id = connection.installation_id
+     WHERE connection.id = $1
+     LIMIT 1`,
+    [connectionId],
+  );
+
+  if (result.rows.length === 0) {
+    throw new PluginAuthError(404, "Auth connection not found");
+  }
+
+  return result.rows[0]!;
+}
+
+function isConnectionExpired(expiresAt: string | null | undefined) {
+  if (!expiresAt) return false;
+  return new Date(expiresAt).getTime() <= Date.now() + 60_000;
+}
+
+async function refreshPluginConnection(row: PluginConnectionRow) {
+  if (!row.catalog_item_id) {
+    throw new PluginAuthError(400, "Auth connection is missing its plugin binding");
+  }
+  if (!row.refresh_token) {
+    throw new PluginAuthError(400, "Auth connection has no refresh token");
+  }
+
+  const spec = await getPluginAuthSpec(row.catalog_item_id, row.catalog_version_id || null);
+  const provider = getProvider(spec.authProviders, row.provider_key);
+  const clientId = getProviderClientId(provider);
+  if (!clientId) {
+    throw new PluginAuthError(400, `Auth provider '${provider.key}' is not configured`);
+  }
+
+  const params: Record<string, string> = {
+    grant_type: "refresh_token",
+    client_id: clientId,
+    refresh_token: decrypt(row.refresh_token),
+  };
+
+  if (provider.audience) {
+    params.audience = provider.audience;
+  }
+  for (const [key, value] of Object.entries(provider.extraTokenParams || {})) {
+    params[key] = value;
+  }
+
+  const clientSecret = getProviderClientSecret(provider);
+  if (clientSecret) {
+    params.client_secret = clientSecret;
+  }
+
+  const contentType = getProviderTokenRequestContentType(provider);
+  const body =
+    contentType === "application/json"
+      ? JSON.stringify(params)
+      : new URLSearchParams(params).toString();
+
+  const response = await fetch(provider.tokenUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": contentType,
+      Accept: "application/json",
+    },
+    body,
+  });
+
+  const tokenResponse = asObject(await response.json().catch(() => ({})));
+  if (!response.ok) {
+    throw new PluginAuthError(
+      response.status || 400,
+      typeof tokenResponse.error_description === "string"
+        ? tokenResponse.error_description
+        : typeof tokenResponse.error === "string"
+          ? tokenResponse.error
+          : "Token refresh failed",
+    );
+  }
+
+  const accessToken =
+    typeof tokenResponse.access_token === "string" ? tokenResponse.access_token : "";
+  if (!accessToken) {
+    throw new PluginAuthError(400, "Provider did not return an access token");
+  }
+
+  const nextRefreshToken =
+    typeof tokenResponse.refresh_token === "string"
+      ? encrypt(tokenResponse.refresh_token)
+      : row.refresh_token;
+  const expiresAt =
+    typeof tokenResponse.expires_in === "number"
+      ? new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+      : row.expires_at;
+
+  await query(
+    `UPDATE plugin_connections
+     SET access_token = $2,
+         refresh_token = $3,
+         token_type = $4,
+         status = 'active',
+         expires_at = $5,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [
+      row.id,
+      encrypt(accessToken),
+      nextRefreshToken,
+      typeof tokenResponse.token_type === "string"
+        ? tokenResponse.token_type
+        : row.token_type,
+      expiresAt,
+    ],
+  );
+
+  return getConnectionRowById(row.id);
+}
+
+async function ensureFreshPluginConnection(row: PluginConnectionRow) {
+  if (row.status !== "active" || !isConnectionExpired(row.expires_at)) {
+    return row;
+  }
+
+  if (!row.refresh_token) {
+    await query(
+      `UPDATE plugin_connections
+       SET status = 'expired',
+           updated_at = NOW()
+       WHERE id = $1`,
+      [row.id],
+    );
+    return {
+      ...row,
+      status: "expired",
+    };
+  }
+
+  try {
+    return await refreshPluginConnection(row);
+  } catch {
+    await query(
+      `UPDATE plugin_connections
+       SET status = 'expired',
+           updated_at = NOW()
+       WHERE id = $1`,
+      [row.id],
+    );
+    return {
+      ...row,
+      status: "expired",
+    };
+  }
 }
 
 export async function startPluginAuthSession(input: {
@@ -354,7 +551,7 @@ export async function startPluginAuthSession(input: {
 
   const { verifier, challenge } = createPkcePair();
   const state = base64Url(randomBytes(24));
-  const redirectUri = buildCallbackUrl();
+  const redirectUri = getProviderCallbackUrl(provider);
   const authorizeUrl = new URL(provider.authorizeUrl);
   authorizeUrl.searchParams.set("response_type", "code");
   authorizeUrl.searchParams.set("client_id", clientId);
@@ -561,7 +758,9 @@ export async function attachAuthConnectionsToConfig(input: {
   authProviders: PluginAuthProviderDefinition[];
   configData?: Record<string, unknown>;
   authSessionIds?: Record<string, string>;
+  run?: QueryRunner;
 }) {
+  const run = input.run || (query as QueryRunner);
   const result: Record<string, unknown> = { ...(input.configData || {}) };
   const authSessionIds = input.authSessionIds || {};
   const providerMap = new Map(input.authProviders.map((provider) => [provider.key, provider]));
@@ -610,7 +809,7 @@ export async function attachAuthConnectionsToConfig(input: {
         );
       }
 
-      const existing = await query<PluginConnectionRow>(
+      const existing = await run<PluginConnectionRow>(
         `SELECT
            connection.*,
            installation.catalog_item_id
@@ -637,7 +836,7 @@ export async function attachAuthConnectionsToConfig(input: {
 
       let connectionRow: PluginConnectionRow;
       if (existing.rows.length > 0) {
-        const updated = await query<PluginConnectionRow>(
+        const updated = await run<PluginConnectionRow>(
           `UPDATE plugin_connections
            SET display_name = $2,
                avatar_url = $3,
@@ -676,7 +875,7 @@ export async function attachAuthConnectionsToConfig(input: {
         );
         connectionRow = updated.rows[0]!;
       } else {
-        const inserted = await query<PluginConnectionRow>(
+        const inserted = await run<PluginConnectionRow>(
           `INSERT INTO plugin_connections (
              installation_id,
              workspace_id,
@@ -731,7 +930,7 @@ export async function attachAuthConnectionsToConfig(input: {
 
       connection = mapConnectionRow(connectionRow);
 
-      await query(
+      await run(
         `UPDATE plugin_auth_sessions
          SET status = 'consumed',
              metadata = $2::jsonb,
@@ -769,20 +968,9 @@ export async function resolveAuthConnectionRefs(config: Record<string, unknown>)
       continue;
     }
 
-    const result = await query<PluginConnectionRow>(
-      `SELECT
-         connection.*,
-         installation.catalog_item_id
-       FROM plugin_connections connection
-       JOIN plugin_installations installation
-         ON installation.id = connection.installation_id
-       WHERE connection.id = $1
-       LIMIT 1`,
-      [ref.connectionId],
+    const row = await ensureFreshPluginConnection(
+      await getConnectionRowById(ref.connectionId),
     );
-    if (result.rows.length === 0) continue;
-
-    const row = result.rows[0]!;
     resolved[key] = {
       type: "oauth_connection",
       connectionId: row.id,
@@ -791,7 +979,10 @@ export async function resolveAuthConnectionRefs(config: Record<string, unknown>)
       displayName: row.display_name || undefined,
       avatarUrl: row.avatar_url || undefined,
       scopes: asStringArray(row.scopes),
-      accessToken: row.access_token ? decrypt(row.access_token) : undefined,
+      accessToken:
+        row.status === "active" && row.access_token
+          ? decrypt(row.access_token)
+          : undefined,
       refreshToken: row.refresh_token ? decrypt(row.refresh_token) : undefined,
       tokenType: row.token_type || undefined,
       expiresAt: row.expires_at || undefined,

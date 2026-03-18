@@ -9,11 +9,13 @@ const MCP_INSTANCE_TTL_ACTOR_CONV = 1 * 60 * 60 * 1000; // 1 hour
 const MCP_INSTANCE_TTL_CONV = 1 * 60 * 60 * 1000; // 1 hour
 const MCP_INSTANCE_TTL_WORKSPACE = 24 * 60 * 60 * 1000; // 24 hours
 import { McpHttpClient } from './mcp-client.js';
+import { McpStdioClient } from './mcp-stdio-client.js';
 import { getBuiltinHandler } from './builtin/index.js';
 import { logEvent } from './audit.js';
 
 export interface McpInstance {
   pluginId: string;
+  installationId: string;
   pluginSlug: string;
   orgSlug: string;
   transport: string;
@@ -30,17 +32,36 @@ export interface McpInstance {
   maxAgeMs?: number;
 }
 
-// In-memory cache: key = pluginId:reuseScope:ownerKey:configHash
+// In-memory cache: key = installationId:configHash:reuseScope:ownerKey
 const instanceCache = new Map<string, McpInstance>();
 const ttlTimers = new Map<string, NodeJS.Timeout>();
 
+function stableSerialize(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+  if (value === undefined) {
+    return "undefined";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item)).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nestedValue]) => `${JSON.stringify(key)}:${stableSerialize(nestedValue)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function computeConfigHash(config: Record<string, unknown>): string {
-  const json = JSON.stringify(config, Object.keys(config).sort());
+  const json = stableSerialize(config);
   return createHash('sha256').update(json).digest('hex').slice(0, 16);
 }
 
-function buildInstanceKey(pluginId: string, scope: string, scopeId: string, configHash: string): string {
-  return `${pluginId}:${scope}:${scopeId}:${configHash}`;
+function buildInstanceKey(installationId: string, configHash: string, scope: string, scopeId: string): string {
+  return `${installationId}:${configHash}:${scope}:${scopeId}`;
 }
 
 /**
@@ -48,6 +69,7 @@ function buildInstanceKey(pluginId: string, scope: string, scopeId: string, conf
  */
 export async function getOrCreateInstance(params: {
   pluginId: string;
+  installationId: string;
   pluginSlug: string;
   orgSlug: string;
   transport: string;
@@ -60,7 +82,7 @@ export async function getOrCreateInstance(params: {
   maxAgeMs?: number;
 }): Promise<McpInstance> {
   const configHash = computeConfigHash(params.config);
-  const key = buildInstanceKey(params.pluginId, params.scope, params.scopeId, configHash);
+  const key = buildInstanceKey(params.installationId, configHash, params.scope, params.scopeId);
 
   // Return cached instance if exists
   const cached = instanceCache.get(key);
@@ -81,6 +103,8 @@ export async function getOrCreateInstance(params: {
 
   if (params.transport === 'builtin') {
     instance = await createBuiltinInstance(params, key, configHash);
+  } else if (params.transport === 'stdio') {
+    instance = await createStdioInstance(params, key, configHash);
   } else if (params.transport === 'http') {
     instance = await createHttpInstance(params, key, configHash);
   } else {
@@ -103,6 +127,7 @@ export async function getOrCreateInstance(params: {
 
 async function createBuiltinInstance(params: {
   pluginId: string;
+  installationId: string;
   pluginSlug: string;
   orgSlug: string;
   transport: string;
@@ -125,6 +150,7 @@ async function createBuiltinInstance(params: {
 
   return {
     pluginId: params.pluginId,
+    installationId: params.installationId,
     pluginSlug: params.pluginSlug,
     orgSlug: params.orgSlug,
     transport: 'builtin',
@@ -150,6 +176,7 @@ async function createBuiltinInstance(params: {
 
 async function createHttpInstance(params: {
   pluginId: string;
+  installationId: string;
   pluginSlug: string;
   orgSlug: string;
   transport: string;
@@ -200,9 +227,76 @@ async function createHttpInstance(params: {
 
   return {
     pluginId: params.pluginId,
+    installationId: params.installationId,
     pluginSlug: params.pluginSlug,
     orgSlug: params.orgSlug,
     transport: 'http',
+    scope: params.scope,
+    scopeId: params.scopeId,
+    workspaceId: params.workspaceId,
+    configHash,
+    tools,
+    execute: async (toolName, input) => client.callTool(toolName, input),
+    shutdown: async () => {
+      await client.shutdown();
+      instanceCache.delete(key);
+      clearTTLTimer(key);
+    },
+    lastUsed: Date.now(),
+    createdAt: Date.now(),
+    idleTtlMs: params.idleTtlMs ?? getTTLForScope(params.scope),
+    maxAgeMs: params.maxAgeMs,
+  };
+}
+
+async function createStdioInstance(params: {
+  pluginId: string;
+  installationId: string;
+  pluginSlug: string;
+  orgSlug: string;
+  transport: string;
+  entryPoint: string;
+  scope: string;
+  scopeId: string;
+  config: Record<string, unknown>;
+  workspaceId?: string;
+  idleTtlMs?: number;
+  maxAgeMs?: number;
+}, key: string, configHash: string): Promise<McpInstance> {
+  const client = new McpStdioClient(params.entryPoint, params.config, key);
+
+  try {
+    const initResult = await client.initialize();
+
+    logEvent({
+      workspaceId: params.workspaceId,
+      pluginId: params.pluginId,
+      eventType: 'connection.init',
+      eventData: { endpoint: params.entryPoint, success: true, serverInfo: initResult.serverInfo, transport: 'stdio' },
+    });
+  } catch (error: any) {
+    logEvent({
+      workspaceId: params.workspaceId,
+      pluginId: params.pluginId,
+      eventType: 'connection.error',
+      eventData: { endpoint: params.entryPoint, error: error.message, transport: 'stdio' },
+    });
+    throw error;
+  }
+
+  let tools: ToolDefinition[];
+  try {
+    tools = await client.listTools();
+  } catch {
+    tools = [];
+  }
+
+  return {
+    pluginId: params.pluginId,
+    installationId: params.installationId,
+    pluginSlug: params.pluginSlug,
+    orgSlug: params.orgSlug,
+    transport: 'stdio',
     scope: params.scope,
     scopeId: params.scopeId,
     workspaceId: params.workspaceId,

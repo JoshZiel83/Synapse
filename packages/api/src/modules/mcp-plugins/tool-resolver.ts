@@ -160,6 +160,24 @@ function sanitizeNamespaceSegment(value: string, fallback: string) {
   return normalized || fallback;
 }
 
+function buildPluginNamespace(
+  plugin: Pick<VisiblePluginRow, "installation_id" | "publisher_slug" | "item_slug">,
+  duplicateBaseNamespaces: Set<string>,
+) {
+  const publisher = plugin.publisher_slug || "plugin";
+  const basePluginSlug = plugin.item_slug || "plugin";
+  const baseNamespace = `${publisher}${MCP_TOOL_NAMESPACE_SEPARATOR}${basePluginSlug}`;
+  if (!duplicateBaseNamespaces.has(baseNamespace)) {
+    return baseNamespace;
+  }
+
+  const installationSuffix = sanitizeNamespaceSegment(
+    plugin.installation_id.slice(0, 8),
+    "install",
+  );
+  return `${publisher}${MCP_TOOL_NAMESPACE_SEPARATOR}${basePluginSlug}_${installationSuffix}`;
+}
+
 async function loadVisiblePlugins(params: ResolveParams) {
   const subjects = buildVisibilitySubjects(params);
   const visibleInstallationIds = new Set<string>();
@@ -265,13 +283,24 @@ async function resolveTools(
     loadVisibleRelayExposures(params),
   ]);
   const tools: ToolDefinition[] = [];
+  const duplicateBaseNamespaces = new Set<string>();
+  const namespaceCounts = new Map<string, number>();
+
+  for (const plugin of visiblePlugins) {
+    const baseNamespace = `${plugin.publisher_slug || "plugin"}${MCP_TOOL_NAMESPACE_SEPARATOR}${plugin.item_slug || "plugin"}`;
+    const nextCount = (namespaceCounts.get(baseNamespace) || 0) + 1;
+    namespaceCounts.set(baseNamespace, nextCount);
+    if (nextCount > 1) {
+      duplicateBaseNamespaces.add(baseNamespace);
+    }
+  }
 
   for (const plugin of visiblePlugins) {
     if (!plugin.reuse_scope) {
       continue;
     }
 
-    const namespace = `${plugin.publisher_slug || "plugin"}${MCP_TOOL_NAMESPACE_SEPARATOR}${plugin.item_slug}`;
+    const namespace = buildPluginNamespace(plugin, duplicateBaseNamespaces);
 
     try {
       if (plugin.transport === "relay") {
@@ -304,6 +333,7 @@ async function resolveTools(
         const reuseScope = publicReuseScope(plugin.reuse_scope);
         const relayInstance: McpInstance = {
           pluginId: plugin.catalog_item_id,
+          installationId: plugin.installation_id,
           pluginSlug: plugin.item_slug,
           orgSlug: plugin.publisher_slug || "plugin",
           transport: "relay",
@@ -348,6 +378,7 @@ async function resolveTools(
       const reuseScope = publicReuseScope(plugin.reuse_scope);
       const runtimeInstance = await getOrCreateInstance({
         pluginId: plugin.catalog_item_id,
+        installationId: resolved.installationId,
         pluginSlug: plugin.item_slug,
         orgSlug: plugin.publisher_slug || "plugin",
         transport: plugin.transport,
@@ -404,6 +435,7 @@ async function resolveTools(
 
     const relayInstance: McpInstance = {
       pluginId: exposure.exposure_id,
+      installationId: exposure.exposure_id,
       pluginSlug: exposureSlug,
       orgSlug: "relay",
       transport: "relay",
