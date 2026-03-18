@@ -68,7 +68,16 @@ jobs:
             wails_extra_args: -nsis
             setup: |
               choco install nsis -y
-              "${env:ProgramFiles(x86)}\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              $nsisCandidates = @(
+                (Join-Path ${env:ProgramFiles(x86)} 'NSIS'),
+                (Join-Path $env:ChocolateyInstall 'bin')
+              )
+              $nsisDir = $nsisCandidates | Where-Object { Test-Path (Join-Path $_ 'makensis.exe') } | Select-Object -First 1
+              if (-not $nsisDir) {
+                throw 'makensis.exe not found after installing NSIS'
+              }
+              $nsisDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              & (Join-Path $nsisDir 'makensis.exe') /VERSION
 
     runs-on: ${{ matrix.runner }}
     steps:
@@ -114,10 +123,14 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.goos }}" = "windows" ]; then
+            find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f -print
             main_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui.exe' -o -name 'synapse-relay-gui-windows-*.exe' \) ! -name '*-setup.exe' | head -n 1)"
-            setup_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f -name 'synapse-relay-gui*-setup.exe' | head -n 1)"
+            setup_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui*-setup.exe' -o -name 'synapse-relay-gui*-installer.exe' -o -name 'Synapse Relay*-installer.exe' \) | head -n 1)"
             test -n "$main_exe"
-            test -n "$setup_exe"
+            if [ -z "$setup_exe" ]; then
+              echo "Expected Windows installer was not generated in build/bin" >&2
+              exit 1
+            fi
             mv "$main_exe" synapse-relay-gui-${{ matrix.suffix }}.exe
             mv "$setup_exe" synapse-relay-gui-${{ matrix.suffix }}-setup.exe
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
