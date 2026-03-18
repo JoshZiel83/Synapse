@@ -21,6 +21,16 @@ export const config = {
   redis: {
     url: process.env.REDIS_URL || 'redis://localhost:6379',
   },
+  relay: {
+    updateCosBaseUrl:
+      process.env.RELAY_UPDATE_COS_BASE_URL ||
+      process.env.RELAY_COS_BASE_URL ||
+      '',
+    updateLatestCommit:
+      process.env.RELAY_UPDATE_LATEST_COMMIT ||
+      process.env.RELAY_LATEST_COMMIT ||
+      '',
+  },
   ai: {
     provider: process.env.AI_PROVIDER || 'anthropic',
     apiKey: process.env.AI_API_KEY || process.env.ANTHROPIC_API_KEY || '',

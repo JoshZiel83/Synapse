@@ -11,6 +11,7 @@ import type {
   RelayToolView,
 } from '@synapse/shared';
 import { RELAY_PAIRING_TTL_MS, RELAY_PROTOCOL_VERSION } from '@synapse/shared';
+import { config } from '../../config/index.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import { query, transaction } from '../../infrastructure/database/index.js';
@@ -74,6 +75,26 @@ const claimPairingSchema = z.object({
   publicKeyFingerprint: z.string().trim().min(8).max(128),
   metadata: z.record(z.unknown()).optional(),
 });
+
+const relayDesktopReleaseSchema = z.object({
+  channel: z.string().trim().min(1).max(40),
+  platform: z.string().trim().min(1).max(40),
+  arch: z.string().trim().min(1).max(40),
+  version: z.string().trim().min(1).max(64),
+  downloadUrl: z.string().trim().min(1),
+  sha256: z.string().trim().min(1).max(128).optional(),
+  notes: z.string().trim().max(2000).optional(),
+  publishedAt: z.string().trim().min(1).max(128).optional(),
+});
+
+const relayDesktopCommitPattern = /^[0-9a-f]{7,64}$/i;
+
+const relayDesktopArtifactFilenames: Record<string, string> = {
+  'windows/amd64': 'synapse-relay-gui-windows-amd64-setup.exe',
+  'darwin/amd64': 'synapse-relay-gui-darwin-amd64.dmg',
+  'darwin/arm64': 'synapse-relay-gui-darwin-arm64.dmg',
+  'linux/amd64': 'synapse-relay-gui-linux-amd64',
+};
 
 type WorkspaceParams = { workspaceId: string };
 type RelayParams = WorkspaceParams & { id: string };
@@ -465,21 +486,60 @@ function compareReleaseVersions(left: string, right: string) {
   return leftVersion.prerelease.localeCompare(rightVersion.prerelease);
 }
 
+function normalizeRelayDesktopCommit(value: string) {
+  const trimmed = value.trim();
+  if (!relayDesktopCommitPattern.test(trimmed)) {
+    return '';
+  }
+  return trimmed.toLowerCase();
+}
+
+function ensureTrailingSlash(value: string) {
+  return value.endsWith('/') ? value : `${value}/`;
+}
+
+function resolveRelayDesktopUpdateFromCos(channel: string, platform: string, arch: string): RelayDesktopReleaseView | null {
+  const baseUrl = config.relay.updateCosBaseUrl.trim();
+  const latestCommit = normalizeRelayDesktopCommit(config.relay.updateLatestCommit);
+  if (!baseUrl || !latestCommit) {
+    return null;
+  }
+
+  const artifactName = relayDesktopArtifactFilenames[`${platform.toLowerCase()}/${arch.toLowerCase()}`];
+  if (!artifactName) {
+    return null;
+  }
+
+  try {
+    const downloadUrl = new URL(
+      `${latestCommit}/${artifactName}`,
+      ensureTrailingSlash(baseUrl),
+    ).toString();
+
+    return {
+      channel,
+      platform: platform.toLowerCase(),
+      arch: arch.toLowerCase(),
+      version: `dev-${latestCommit.slice(0, 8)}`,
+      downloadUrl,
+    };
+  } catch (error) {
+    console.error('[Relay Controller] Invalid relay COS update configuration', error);
+    return null;
+  }
+}
+
 function resolveRelayDesktopUpdate(serverBaseUrl: string, channel: string, platform: string, arch: string): RelayDesktopReleaseView | null {
+  const cosRelease = resolveRelayDesktopUpdateFromCos(channel, platform, arch);
+  if (cosRelease) {
+    return cosRelease;
+  }
+
   const releasesJson = process.env.RELAY_DESKTOP_RELEASES_JSON;
   if (!releasesJson) return null;
 
   try {
-    const parsed = z.array(z.object({
-      channel: z.string().trim().min(1).max(40),
-      platform: z.string().trim().min(1).max(40),
-      arch: z.string().trim().min(1).max(40),
-      version: z.string().trim().min(1).max(64),
-      downloadUrl: z.string().trim().min(1),
-      sha256: z.string().trim().min(1).max(128).optional(),
-      notes: z.string().trim().max(2000).optional(),
-      publishedAt: z.string().trim().min(1).max(128).optional(),
-    })).parse(JSON.parse(releasesJson));
+    const parsed = z.array(relayDesktopReleaseSchema).parse(JSON.parse(releasesJson));
 
     const match = parsed
       .filter((release) =>
