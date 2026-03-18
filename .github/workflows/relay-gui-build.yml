@@ -118,7 +118,6 @@ jobs:
           fi
 
       - name: Upload artifacts to Tencent COS
-        if: ${{ secrets.COS_SECRET_ID != '' && secrets.COS_SECRET_KEY != '' && secrets.COS_BUCKET != '' }}
         continue-on-error: true
         env:
           ARTIFACT_GLOB: synapse-relay-gui-${{ matrix.suffix }}*
@@ -129,6 +128,10 @@ jobs:
           COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
         shell: bash
         run: |
+          if [ -z "$COS_SECRET_ID" ] || [ -z "$COS_SECRET_KEY" ] || [ -z "$COS_BUCKET" ]; then
+            echo "COS secrets are not configured; skipping backup upload."
+            exit 0
+          fi
           python3 - <<'PY'
           from datetime import UTC, datetime
           from email.utils import format_datetime
@@ -216,10 +219,6 @@ jobs:
                   print(f"Failed {object_key}: {error}", file=sys.stderr)
               sys.exit(1)
           PY
-
-      - name: Skip COS upload
-        if: ${{ secrets.COS_SECRET_ID == '' || secrets.COS_SECRET_KEY == '' || secrets.COS_BUCKET == '' }}
-        run: echo "COS secrets are not configured; skipping backup upload."
 
       - name: Upload artifact
         continue-on-error: true
