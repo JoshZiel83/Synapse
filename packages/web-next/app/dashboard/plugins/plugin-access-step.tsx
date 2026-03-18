@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { CapabilityGrantScope } from '@synapse/shared';
+import type { AccessGrantScope } from '@synapse/shared/types';
 import { Bot, Plus, ShieldCheck, Trash2, UserRound } from 'lucide-react';
-import { getConversationDisplayName } from '@/app/dashboard/capabilities/attachment-visuals';
+import { getConversationDisplayName } from '@/app/dashboard/access/attachment-visuals';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
@@ -42,7 +42,9 @@ import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
 
-const allowedGrantScopes: CapabilityGrantScope[] = [
+type PluginGrantScope = Exclude<AccessGrantScope, 'platform'>;
+
+const allowedGrantScopes: PluginGrantScope[] = [
   'workspace',
   'conversation',
   'actor_global',
@@ -50,37 +52,39 @@ const allowedGrantScopes: CapabilityGrantScope[] = [
   'user',
 ];
 
-const grantScopeOptions: Array<{
-  value: CapabilityGrantScope;
+function buildGrantScopeOptions(resourceLabel: string): Array<{
+  value: PluginGrantScope;
   label: string;
   description: string;
-}> = [
-  {
-    value: 'workspace',
-    label: 'Workspace',
-    description: 'Anyone in this workspace can use this installation.',
-  },
-  {
-    value: 'conversation',
-    label: 'Conversation',
-    description: 'Only one conversation can use this installation.',
-  },
-  {
-    value: 'actor_global',
-    label: 'Actor',
-    description: 'Only one actor can use this installation anywhere it appears.',
-  },
-  {
-    value: 'actor_conversation',
-    label: 'Actor in Conversation',
-    description: 'Only one actor can use this installation inside one conversation.',
-  },
-  {
-    value: 'user',
-    label: 'User',
-    description: 'Only one user can use this installation personally.',
-  },
-];
+}> {
+  return [
+    {
+      value: 'workspace',
+      label: 'Workspace',
+      description: `Anyone in this workspace can use this ${resourceLabel}.`,
+    },
+    {
+      value: 'conversation',
+      label: 'Conversation',
+      description: `Only one conversation can use this ${resourceLabel}.`,
+    },
+    {
+      value: 'actor_global',
+      label: 'Actor',
+      description: `Only one actor can use this ${resourceLabel} anywhere it appears.`,
+    },
+    {
+      value: 'actor_conversation',
+      label: 'Actor in Conversation',
+      description: `Only one actor can use this ${resourceLabel} inside one conversation.`,
+    },
+    {
+      value: 'user',
+      label: 'User',
+      description: `Only one user can use this ${resourceLabel} personally.`,
+    },
+  ];
+}
 
 const PREVIEW_PRIMARY_USER = 'Maya';
 const PREVIEW_SECONDARY_USER = 'Iris';
@@ -118,6 +122,35 @@ type AccessPreviewScenario = {
   footer: string;
 };
 
+type AccessAdapter = {
+  loadAccess: (workspaceId: string, resourceId: string) => Promise<any>;
+  grantAccess: (
+    workspaceId: string,
+    resourceId: string,
+    payload: {
+      grantScope?: PluginGrantScope;
+      actorId?: string;
+      conversationId?: string;
+      userId?: string;
+      permissions?: string[];
+    },
+  ) => Promise<unknown>;
+  revokeAccess: (
+    workspaceId: string,
+    resourceId: string,
+    grantId: string,
+  ) => Promise<unknown>;
+};
+
+const pluginInstallationAccessAdapter: AccessAdapter = {
+  loadAccess: (workspaceId, resourceId) =>
+    api.getPluginInstallationAccess(workspaceId, resourceId),
+  grantAccess: (workspaceId, resourceId, payload) =>
+    api.grantPluginInstallationAccess(workspaceId, resourceId, payload),
+  revokeAccess: (workspaceId, resourceId, grantId) =>
+    api.revokePluginInstallationAccess(workspaceId, resourceId, grantId),
+};
+
 function normalizeActorOption(actor: any): ActorOption {
   const definition = actor?.definition || actor;
   return {
@@ -142,8 +175,21 @@ function normalizeMemberOption(member: any): MemberOption {
   };
 }
 
-function getScopeLabel(scope: CapabilityGrantScope) {
-  return grantScopeOptions.find((option) => option.value === scope)?.label || scope;
+function getScopeLabel(scope: PluginGrantScope) {
+  switch (scope) {
+    case 'workspace':
+      return 'Workspace';
+    case 'conversation':
+      return 'Conversation';
+    case 'actor_global':
+      return 'Actor';
+    case 'actor_conversation':
+      return 'Actor in Conversation';
+    case 'user':
+      return 'User';
+    default:
+      return scope;
+  }
 }
 
 function formatGrantTarget(
@@ -284,15 +330,21 @@ function AccessPreviewCard({
 
 export default function PluginAccessStep({
   installation,
+  resourceId,
+  accessAdapter = pluginInstallationAccessAdapter,
+  resourceLabel = 'installation',
   title = 'Access',
-  description = 'Choose who can use this installation. Ownership and lifecycle stay in Advanced.',
+  description,
   addAccessLabel = 'Add Access',
-  emptyMessage = 'Finish setup first. Once the installation exists, you can grant use access here.',
+  emptyMessage,
   dialogTitle = 'Add use access',
-  dialogDescription = 'Choose who can use this installation. Ownership stays where it is.',
+  dialogDescription,
   noAccessMessage = 'No use access has been granted yet.',
 }: {
   installation: any | null;
+  resourceId?: string | null;
+  accessAdapter?: AccessAdapter;
+  resourceLabel?: string;
   title?: string;
   description?: string;
   addAccessLabel?: string;
@@ -311,15 +363,26 @@ export default function PluginAccessStep({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [grantScope, setGrantScope] = useState<CapabilityGrantScope>('workspace');
+  const [grantScope, setGrantScope] = useState<PluginGrantScope>('workspace');
   const [conversationId, setConversationId] = useState('');
   const [actorId, setActorId] = useState('');
   const [userId, setUserId] = useState('');
 
-  const installationId = installation?.id || null;
+  const resolvedResourceId = resourceId || installation?.id || null;
+  const resourceLabelLower = resourceLabel.toLowerCase();
+  const resolvedDescription =
+    description || `Choose who can use this ${resourceLabelLower}. Ownership and lifecycle stay in Advanced.`;
+  const resolvedEmptyMessage =
+    emptyMessage || `Finish setup first. Once the ${resourceLabelLower} exists, you can grant use access here.`;
+  const resolvedDialogDescription =
+    dialogDescription || `Choose who can use this ${resourceLabelLower}. Ownership stays where it is.`;
   const currentUserId = user?.id || '';
   const currentUserLabel = user?.name || user?.email || 'You';
 
+  const grantScopeOptions = useMemo(
+    () => buildGrantScopeOptions(resourceLabelLower),
+    [resourceLabelLower],
+  );
   const actorOptions = useMemo(() => actors.map(normalizeActorOption), [actors]);
   const conversationOptions = useMemo(() => conversations.map(normalizeConversationOption), [conversations]);
   const memberOptions = useMemo(() => members.map(normalizeMemberOption), [members]);
@@ -390,12 +453,12 @@ export default function PluginAccessStep({
           userMessage: `${PREVIEW_PRIMARY_USER}: Can someone pull the latest roadmap notes for this workspace?`,
           actorName: PREVIEW_PRIMARY_ACTOR,
           actorMessage:
-            'Yes. This installation is shared with the workspace, so actors can use it from any workspace conversation.',
+            `Yes. This ${resourceLabelLower} is shared with the workspace, so actors can use it from any workspace conversation.`,
           secondaryActorName: PREVIEW_SECONDARY_ACTOR,
           secondaryActorMessage:
-            'I can use it too, because workspace access does not limit this installation to one room or one actor.',
+            `I can use it too, because workspace access does not limit this ${resourceLabelLower} to one room or one actor.`,
           secondaryActorActive: true,
-          footer: 'Best when this install should feel like shared workspace infrastructure.',
+          footer: `Best when this ${resourceLabelLower} should feel like shared workspace infrastructure.`,
         };
       case 'conversation':
         return {
@@ -407,15 +470,15 @@ export default function PluginAccessStep({
             { label: PREVIEW_PRIMARY_ACTOR, kind: 'actor', active: true },
             { label: PREVIEW_SECONDARY_ACTOR, kind: 'actor', active: true },
           ],
-          userMessage: `${PREVIEW_PRIMARY_USER}: Use this installation for the notes in this room only.`,
+          userMessage: `${PREVIEW_PRIMARY_USER}: Use this ${resourceLabelLower} for the notes in this room only.`,
           actorName: PREVIEW_PRIMARY_ACTOR,
           actorMessage:
-            'I can use it here because access is tied to this conversation. Other conversations still will not see it.',
+            `I can use it here because access is tied to this conversation. Other conversations still will not see this ${resourceLabelLower}.`,
           secondaryActorName: PREVIEW_SECONDARY_ACTOR,
           secondaryActorMessage:
-            'I can use it too, but only inside this same conversation with these participants.',
+            `I can use it too, but only inside this same conversation with this ${resourceLabelLower}.`,
           secondaryActorActive: true,
-          footer: 'Useful when one shared room needs the plugin but the rest of the workspace should not.',
+          footer: `Useful when one shared room needs this ${resourceLabelLower} but the rest of the workspace should not.`,
         };
       case 'actor_global':
         return {
@@ -430,12 +493,12 @@ export default function PluginAccessStep({
           userMessage: `${PREVIEW_PRIMARY_USER}: @${PREVIEW_PRIMARY_ACTOR} check the vendor workspace with this install.`,
           actorName: PREVIEW_PRIMARY_ACTOR,
           actorMessage:
-            'I can use this installation anywhere I appear, but other actors in the same conversation still cannot.',
+            `I can use this ${resourceLabelLower} anywhere I appear, but other actors in the same conversation still cannot.`,
           secondaryActorName: PREVIEW_SECONDARY_ACTOR,
           secondaryActorMessage:
-            'I am in the same room, but I still cannot use it because access belongs only to the selected actor.',
+            `I am in the same room, but I still cannot use this ${resourceLabelLower} because access belongs only to the selected actor.`,
           secondaryActorActive: false,
-          footer: 'Good when one actor owns the tool across every conversation it joins.',
+          footer: `Good when one actor owns this ${resourceLabelLower} across every conversation it joins.`,
         };
       case 'actor_conversation':
         return {
@@ -450,10 +513,10 @@ export default function PluginAccessStep({
           userMessage: `${PREVIEW_PRIMARY_USER}: @${PREVIEW_PRIMARY_ACTOR} use this install for this room's follow-up.`,
           actorName: PREVIEW_PRIMARY_ACTOR,
           actorMessage:
-            'I can use this installation here, but not in other conversations and not for other actors in this room.',
+            `I can use this ${resourceLabelLower} here, but not in other conversations and not for other actors in this room.`,
           secondaryActorName: PREVIEW_SECONDARY_ACTOR,
           secondaryActorMessage:
-            'I cannot use it here, because this grant is restricted to one actor and one conversation together.',
+            `I cannot use this ${resourceLabelLower} here, because this grant is restricted to one actor and one conversation together.`,
           secondaryActorActive: false,
           footer: 'This is the narrowest option when both the actor and the room matter.',
         };
@@ -470,12 +533,12 @@ export default function PluginAccessStep({
           userMessage: `${PREVIEW_PRIMARY_USER}: Use my personal account connection for this lookup.`,
           actorName: PREVIEW_PRIMARY_ACTOR,
           actorMessage:
-            `I can use this installation only when I'm working on behalf of ${PREVIEW_PRIMARY_USER}.`,
+            `I can use this ${resourceLabelLower} only when I'm working on behalf of ${PREVIEW_PRIMARY_USER}.`,
           secondaryActorName: PREVIEW_SECONDARY_ACTOR,
           secondaryActorMessage:
-            `${PREVIEW_SECONDARY_USER} cannot use this installation, even if the same actors are available elsewhere.`,
+            `${PREVIEW_SECONDARY_USER} cannot use this ${resourceLabelLower}, even if the same actors are available elsewhere.`,
           secondaryActorActive: true,
-          footer: 'Best for personal accounts, private data, or user-specific credentials.',
+          footer: `Best for personal accounts, private data, or user-specific ${resourceLabelLower} credentials.`,
         };
       default:
         return {
@@ -487,9 +550,9 @@ export default function PluginAccessStep({
             { label: PREVIEW_PRIMARY_ACTOR, kind: 'actor', active: true },
             { label: PREVIEW_SECONDARY_ACTOR, kind: 'actor', active: false },
           ],
-          userMessage: `${PREVIEW_PRIMARY_USER}: Use this installation here.`,
+          userMessage: `${PREVIEW_PRIMARY_USER}: Use this ${resourceLabelLower} here.`,
           actorName: PREVIEW_PRIMARY_ACTOR,
-          actorMessage: `${previewTarget} will be able to use this installation.`,
+          actorMessage: `${previewTarget} will be able to use this ${resourceLabelLower}.`,
           secondaryActorName: PREVIEW_SECONDARY_ACTOR,
           secondaryActorMessage: 'This second actor is outside the selected grant target.',
           secondaryActorActive: false,
@@ -499,6 +562,7 @@ export default function PluginAccessStep({
   }, [
     grantScope,
     previewTarget,
+    resourceLabelLower,
     selectedScopeOption.description,
   ]);
 
@@ -511,28 +575,27 @@ export default function PluginAccessStep({
   }, [actorId, conversationId, currentUserId, grantScope, userId]);
 
   const loadAccessState = async () => {
-    if (!workspaceId || !installationId) return;
-    const [grantData, authData, actorData, groupData, memberData] = await Promise.all([
-      api.getCapabilityInstanceGrants(workspaceId, installationId),
-      api.getCapabilityInstanceAuthorization(workspaceId, installationId),
+    if (!workspaceId || !resolvedResourceId) return;
+    const [accessData, actorData, groupData, memberData] = await Promise.all([
+      accessAdapter.loadAccess(workspaceId, resolvedResourceId),
       api.getActors(workspaceId),
       api.getGroups(workspaceId),
       api.getWorkspaceMembers(workspaceId),
     ]);
 
-    setGrants(grantData.grants || []);
-    setSummary(authData.summary || null);
-    const suggestedGrantScope = authData.summary?.suggestedGrantScope as CapabilityGrantScope | undefined;
+    setGrants(accessData.grants || []);
+    setSummary(accessData.summary || null);
+    const suggestedGrantScope = accessData.summary?.suggestedGrantScope as PluginGrantScope | undefined;
     if (suggestedGrantScope && allowedGrantScopes.includes(suggestedGrantScope)) {
       setGrantScope(suggestedGrantScope);
     }
-    setActors(Array.isArray(actorData) ? actorData : []);
+    setActors(Array.isArray(actorData) ? actorData : actorData?.actors || []);
     setConversations(groupData.groups || []);
     setMembers(memberData.data || []);
   };
 
   useEffect(() => {
-    if (!workspaceId || !installationId) {
+    if (!workspaceId || !resolvedResourceId) {
       setSummary(null);
       setGrants([]);
       return;
@@ -555,7 +618,7 @@ export default function PluginAccessStep({
     return () => {
       cancelled = true;
     };
-  }, [installationId, workspaceId]);
+  }, [accessAdapter, resolvedResourceId, workspaceId]);
 
   const resetDialogState = () => {
     setConversationId('');
@@ -564,10 +627,10 @@ export default function PluginAccessStep({
   };
 
   const createGrant = async () => {
-    if (!workspaceId || !installationId || !canCreateGrant) return;
+    if (!workspaceId || !resolvedResourceId || !canCreateGrant) return;
     setSaving(true);
     try {
-      await api.issueCapabilityInstanceGrant(workspaceId, installationId, {
+      await accessAdapter.grantAccess(workspaceId, resolvedResourceId, {
         grantScope,
         actorId: grantScope === 'actor_global' || grantScope === 'actor_conversation' ? actorId : undefined,
         conversationId:
@@ -584,8 +647,8 @@ export default function PluginAccessStep({
   };
 
   const revokeGrant = async (grantId: string) => {
-    if (!workspaceId || !installationId) return;
-    await api.revokeCapabilityGrant(workspaceId, grantId);
+    if (!workspaceId || !resolvedResourceId) return;
+    await accessAdapter.revokeAccess(workspaceId, resolvedResourceId, grantId);
     await loadAccessState();
   };
 
@@ -703,11 +766,11 @@ export default function PluginAccessStep({
     return null;
   };
 
-  if (!installationId) {
+  if (!resolvedResourceId) {
     return (
       <Card className="rounded-[28px]">
-        <CardContent className="p-6 text-sm text-muted-foreground">
-          {emptyMessage}
+          <CardContent className="p-6 text-sm text-muted-foreground">
+          {resolvedEmptyMessage}
         </CardContent>
       </Card>
     );
@@ -732,7 +795,7 @@ export default function PluginAccessStep({
               <ShieldCheck className="h-5 w-5 text-muted-foreground" />
               <div className="space-y-1">
                 <CardTitle>{title}</CardTitle>
-                <CardDescription>{description}</CardDescription>
+                <CardDescription>{resolvedDescription}</CardDescription>
               </div>
             </div>
             <Button onClick={() => setDialogOpen(true)}>
@@ -777,10 +840,13 @@ export default function PluginAccessStep({
                         variant="ghost"
                         size="sm"
                         className="text-muted-foreground hover:text-destructive"
+                        disabled={grant.metadata?.isPrimary === true}
                         onClick={() => revokeGrant(grant.id)}
                       >
                         <Trash2 />
-                        <span className="sr-only">Remove access</span>
+                        <span className="sr-only">
+                          {grant.metadata?.isPrimary === true ? 'Primary access cannot be removed here' : 'Remove access'}
+                        </span>
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -803,14 +869,14 @@ export default function PluginAccessStep({
         <DialogContent className="sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle>{dialogTitle}</DialogTitle>
-            <DialogDescription>{dialogDescription}</DialogDescription>
+            <DialogDescription>{resolvedDialogDescription}</DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-6 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
             <div className="flex flex-col gap-5">
               <RadioGroup
                 value={grantScope}
-                onValueChange={(value) => setGrantScope(value as CapabilityGrantScope)}
+                onValueChange={(value) => setGrantScope(value as PluginGrantScope)}
                 className="w-full"
               >
                 {grantScopeOptions.map((option) => (

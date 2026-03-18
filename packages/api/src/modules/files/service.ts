@@ -44,9 +44,16 @@ export async function getFileRecord(fileId: string): Promise<FileRecord | null> 
  */
 export async function getFileAccessInfo(
   fileId: string,
-): Promise<{ storedName: string; mimeType: string; originalName: string } | null> {
+): Promise<{
+  storedName: string;
+  mimeType: string;
+  originalName: string;
+  workspaceId: string | null;
+} | null> {
   const result = await query(
-    `SELECT stored_name, mime_type, original_name FROM files WHERE id = $1`,
+    `SELECT stored_name, mime_type, original_name, workspace_id
+     FROM files
+     WHERE id = $1`,
     [fileId],
   );
   if (result.rows.length === 0) return null;
@@ -54,5 +61,50 @@ export async function getFileAccessInfo(
     storedName: result.rows[0].stored_name,
     mimeType: result.rows[0].mime_type,
     originalName: result.rows[0].original_name,
+    workspaceId: result.rows[0].workspace_id,
   };
+}
+
+export async function getStoredFileAccessInfo(
+  storedName: string,
+): Promise<{
+  storedName: string;
+  mimeType: string;
+  originalName: string;
+  workspaceId: string | null;
+} | null> {
+  const result = await query(
+    `SELECT stored_name, mime_type, original_name, workspace_id
+     FROM files
+     WHERE stored_name = $1`,
+    [storedName],
+  );
+  if (result.rows.length === 0) return null;
+  return {
+    storedName: result.rows[0].stored_name,
+    mimeType: result.rows[0].mime_type,
+    originalName: result.rows[0].original_name,
+    workspaceId: result.rows[0].workspace_id,
+  };
+}
+
+export async function canUserAccessFileWorkspace(
+  workspaceId: string | null,
+  userId: string,
+): Promise<boolean> {
+  if (!workspaceId) return true;
+
+  const result = await query(
+    `SELECT 1
+     FROM workspaces w
+     LEFT JOIN workspace_members wm
+       ON wm.workspace_id = w.id
+      AND wm.user_id = $2
+     WHERE w.id = $1
+       AND (w.owner_id = $2 OR wm.user_id IS NOT NULL)
+     LIMIT 1`,
+    [workspaceId, userId],
+  );
+
+  return result.rows.length > 0;
 }

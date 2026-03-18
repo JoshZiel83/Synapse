@@ -1,12 +1,18 @@
-import { query } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import type { ActorAction, ConversationFeedEventPayloadMap, UUID } from '@synapse/shared';
 import { createMemory } from '../memory/service.js';
-import { getActor, updateActor } from '../organization/service.js';
+import { getActor, updateActor, type ActorUpdateSourceInput } from '../organization/service.js';
 import { getSession } from '../session/service.js';
 import { createConversationEvent, getConversationFeedItemById, listConversationMembers } from '../conversation/service.js';
 
 const ACTOR_MEMORY_SCOPES = new Set(['actor_conversation', 'conversation', 'actor_global']);
+
+type ActorActionExecutionContext = {
+  sessionId?: UUID;
+  turnId?: UUID;
+  userId?: UUID;
+  conversationId?: UUID;
+};
 
 async function emitChatFeedItem(workspaceId: UUID, itemId: UUID) {
   const item = await getConversationFeedItemById(itemId);
@@ -60,21 +66,26 @@ export async function executeActorActions(
   workspaceId: UUID,
   actorId: UUID,
   actions: ActorAction[],
-  sessionId?: UUID,
+  context?: UUID | ActorActionExecutionContext,
 ): Promise<void> {
+  const executionContext =
+    typeof context === 'string'
+      ? { sessionId: context }
+      : (context || {});
+
   for (const action of actions) {
     switch (action.type) {
       case 'respond':
-        await handleRespond(workspaceId, actorId, action, sessionId);
+        await handleRespond(workspaceId, actorId, action, executionContext.sessionId);
         break;
       case 'create_memory':
-        await handleCreateMemory(workspaceId, actorId, action, sessionId);
+        await handleCreateMemory(workspaceId, actorId, action, executionContext);
         break;
       case 'rename_self':
-        await handleRenameSelf(workspaceId, actorId, action, sessionId);
+        await handleRenameSelf(workspaceId, actorId, action, executionContext);
         break;
       case 'change_avatar':
-        await handleChangeAvatar(workspaceId, actorId, action, sessionId);
+        await handleChangeAvatar(workspaceId, actorId, action, executionContext);
         break;
     }
   }
@@ -98,10 +109,10 @@ async function handleCreateMemory(
   workspaceId: UUID,
   actorId: UUID,
   action: ActorAction,
-  sessionId?: UUID,
+  context: ActorActionExecutionContext,
 ): Promise<void> {
   const metadata = action.metadata ?? {};
-  const session = sessionId ? await getSession(sessionId) : null;
+  const session = context.sessionId ? await getSession(context.sessionId) : null;
   const requestedScope = typeof metadata.scope === 'string' ? metadata.scope : 'actor_conversation';
   const normalizedRequestedScope = ACTOR_MEMORY_SCOPES.has(requestedScope) ? requestedScope : 'actor_conversation';
   const effectiveScope =
@@ -128,7 +139,10 @@ async function handleCreateMemory(
     contentBlocks: action.contentBlocks,
     textDigest: typeof metadata.textDigest === 'string' ? metadata.textDigest : undefined,
     sourceItemId: typeof metadata.sourceItemId === 'string' ? metadata.sourceItemId : undefined,
-    sourceTurnId: typeof metadata.sourceTurnId === 'string' ? metadata.sourceTurnId : undefined,
+    sourceTurnId:
+      typeof metadata.sourceTurnId === 'string'
+        ? metadata.sourceTurnId
+        : context.turnId,
     supersedesMemoryId: typeof metadata.supersedesMemoryId === 'string' ? metadata.supersedesMemoryId : undefined,
     metadata: typeof metadata === 'object' ? metadata : {},
   });
@@ -136,7 +150,7 @@ async function handleCreateMemory(
   await emitUserVisibleSystemNotice({
     workspaceId,
     actorId,
-    sessionId,
+    sessionId: context.sessionId,
     eventType: action.metadata?.supersedesMemoryId ? 'memory_updated' : 'memory_saved',
     eventPayload: {
       actor: {
@@ -166,63 +180,44 @@ async function handleRenameSelf(
   workspaceId: UUID,
   actorId: UUID,
   action: ActorAction,
-  sessionId?: UUID,
+  context: ActorActionExecutionContext,
 ): Promise<void> {
   const newName = action.content?.trim();
   if (!newName) return;
-  await updateActor(actorId, workspaceId, { name: newName });
-  await emitUserVisibleSystemNotice({
-    workspaceId,
+  const source: ActorUpdateSourceInput = {
+    type: 'actor',
     actorId,
-    sessionId,
-    eventType: 'actor_renamed',
-    eventPayload: {
-      actor: {
-        memberType: 'actor',
-        actorId,
-        name: newName,
-      },
-      newName,
-    },
-    metadata: {
-      noticeType: 'actor_renamed',
-      actorId,
-      newName,
-    },
-  });
+    userId: context.userId,
+    sessionId: context.sessionId,
+    turnId: context.turnId,
+    conversationId: context.conversationId,
+    reason: 'rename_self',
+  };
+  await updateActor(actorId, workspaceId, { name: newName }, source);
 }
 
 async function handleChangeAvatar(
   workspaceId: UUID,
   actorId: UUID,
   action: ActorAction,
-  sessionId?: UUID,
+  context: ActorActionExecutionContext,
 ): Promise<void> {
   const emoji = action.content?.trim();
   if (!emoji) return;
   const actor = await getActor(actorId, workspaceId);
+  const source: ActorUpdateSourceInput = {
+    type: 'actor',
+    actorId,
+    userId: context.userId,
+    sessionId: context.sessionId,
+    turnId: context.turnId,
+    conversationId: context.conversationId,
+    reason: 'change_avatar',
+  };
   await updateActor(actorId, workspaceId, {
     config: {
       ...(actor?.definition.config || {}),
       avatar_emoji: emoji,
     },
-  });
-  await emitUserVisibleSystemNotice({
-    workspaceId,
-    actorId,
-    sessionId,
-    eventType: 'actor_avatar_changed',
-    eventPayload: {
-      actor: {
-        memberType: 'actor',
-        actorId,
-      },
-      newAvatarEmoji: emoji,
-    },
-    metadata: {
-      noticeType: 'actor_avatar_changed',
-      actorId,
-      avatarEmoji: emoji,
-    },
-  });
+  }, source);
 }

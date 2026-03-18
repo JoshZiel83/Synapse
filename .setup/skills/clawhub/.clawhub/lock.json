@@ -1,0 +1,157 @@
+{
+  "version": 1,
+  "skills": {
+    "newsletter-digest": {
+      "version": "1.0.0",
+      "installedAt": 1773802068546
+    },
+    "market-news-analyst": {
+      "version": "0.1.0",
+      "installedAt": 1773802074183
+    },
+    "rss-digest": {
+      "version": "0.2.1",
+      "installedAt": 1773802078780
+    },
+    "market-research": {
+      "version": "1.0.1",
+      "installedAt": 1773802083992
+    },
+    "seo-content-writer": {
+      "version": "3.0.0",
+      "installedAt": 1773802087668
+    },
+    "blog-writer": {
+      "version": "0.1.0",
+      "installedAt": 1773802092827
+    },
+    "content-strategy": {
+      "version": "0.1.0",
+      "installedAt": 1773802097133
+    },
+    "ffmpeg-video-editor": {
+      "version": "1.0.0",
+      "installedAt": 1773802100954
+    },
+    "remotion-video-toolkit": {
+      "version": "1.4.0",
+      "installedAt": 1773802110036
+    },
+    "social-media-scheduler": {
+      "version": "1.0.0",
+      "installedAt": 1773802115707
+    },
+    "backtest-expert": {
+      "version": "0.1.0",
+      "installedAt": 1773802119116
+    },
+    "a-stock-analysis": {
+      "version": "1.0.0",
+      "installedAt": 1773802123123
+    },
+    "test-runner": {
+      "version": "1.0.0",
+      "installedAt": 1773802131319
+    },
+    "opencode-controller": {
+      "version": "1.0.0",
+      "installedAt": 1773802180775
+    },
+    "git-essentials": {
+      "version": "1.0.0",
+      "installedAt": 1773802184063
+    },
+    "security-auditor": {
+      "version": "1.0.0",
+      "installedAt": 1773802188389
+    },
+    "debug-pro": {
+      "version": "1.0.0",
+      "installedAt": 1773802192921
+    },
+    "architecture-designer": {
+      "version": "0.1.0",
+      "installedAt": 1773802197420
+    },
+    "research-paper-writer": {
+      "version": "0.1.0",
+      "installedAt": 1773802203294
+    },
+    "interview-designer": {
+      "version": "1.0.0",
+      "installedAt": 1773802207601
+    },
+    "skill-vetter": {
+      "version": "1.0.0",
+      "installedAt": 1773802211450
+    },
+    "1password": {
+      "version": "1.0.1",
+      "installedAt": 1773802215363
+    },
+    "self-improving-agent": {
+      "version": "3.0.5",
+      "installedAt": 1773802220396
+    },
+    "automation-workflows": {
+      "version": "0.1.0",
+      "installedAt": 1773802228265
+    },
+    "tmux": {
+      "version": "1.0.0",
+      "installedAt": 1773802234123
+    },
+    "session-logs": {
+      "version": "1.0.0",
+      "installedAt": 1773802238560
+    },
+    "model-usage": {
+      "version": "1.0.0",
+      "installedAt": 1773802243175
+    },
+    "feishu-drive": {
+      "version": "1.0.0",
+      "installedAt": 1773802251070
+    },
+    "frontend-slides": {
+      "version": "2.0.2",
+      "installedAt": 1773802258616
+    },
+    "copywriting": {
+      "version": "0.1.0",
+      "installedAt": 1773802263257
+    },
+    "writing-plans": {
+      "version": "0.1.0",
+      "installedAt": 1773802276282
+    },
+    "executing-plans": {
+      "version": "0.1.0",
+      "installedAt": 1773802283941
+    },
+    "self-reflection": {
+      "version": "1.1.1",
+      "installedAt": 1773802288003
+    },
+    "ui-ux-pro-max": {
+      "version": "0.1.0",
+      "installedAt": 1773802295861
+    },
+    "openai-whisper": {
+      "version": "1.0.0",
+      "installedAt": 1773802301509
+    },
+    "video-frames": {
+      "version": "1.0.0",
+      "installedAt": 1773802305665
+    },
+    "seo": {
+      "version": "1.0.3",
+      "installedAt": 1773802310347
+    },
+    "scan-skill": {
+      "version": "1.0.0",
+      "installedAt": 1773802314390
+    }
+  }
+}

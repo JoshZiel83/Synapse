@@ -1,15 +1,50 @@
 import type { ToolCall, ActorAction } from '@synapse/shared';
 import { registerToolPlugin } from './tool-plugins.js';
+import { executeActorActions } from '../orchestrator/service.js';
+import { getToolExecutionContext } from './session-tools.js';
+
+function buildCreateMemoryAction(input: Record<string, any>): ActorAction {
+  const tags = input.tags
+    ? String(input.tags).split(',').map((t: string) => t.trim()).filter(Boolean)
+    : [];
+  return {
+    type: 'create_memory' as const,
+    content: input.content,
+    metadata: {
+      category: input.category || 'fact',
+      scope: input.scope || 'actor_conversation',
+      importance: parseFloat(input.importance) || 0.5,
+      confidence: parseFloat(input.confidence) || 0.8,
+      stability: input.stability || 'durable',
+      textDigest: input.textDigest || undefined,
+      tags,
+    },
+  };
+}
+
+function buildRenameSelfAction(input: Record<string, any>): ActorAction {
+  return {
+    type: 'rename_self' as const,
+    content: input.newName,
+  };
+}
+
+function buildChangeAvatarAction(input: Record<string, any>): ActorAction {
+  return {
+    type: 'change_avatar' as const,
+    content: input.emoji,
+  };
+}
 
 /**
  * Register action tool plugins.
- * Action tools are terminal — their results are dispatched by the orchestrator,
- * not returned to the model for further reasoning.
+ * These state-mutating built-in tools are callable so the model receives the
+ * result and can continue reasoning before it explicitly sleeps.
  */
 export function registerActionToolPlugins(): void {
   registerToolPlugin({
     name: 'create_memory',
-    kind: 'action',
+    kind: 'callable',
     definition: {
       name: 'create_memory',
       description: 'Store a stable, established fact for future recall. Use only for durable facts, preferences, decisions, relationships, procedures, or artifacts that should persist beyond the current turn.',
@@ -55,11 +90,37 @@ export function registerActionToolPlugins(): void {
         required: ['content', 'category'],
       },
     },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const action = buildCreateMemoryAction(input as Record<string, any>);
+      await executeActorActions(
+        context.workspaceId,
+        context.actorId,
+        [action],
+        {
+          sessionId: context.sessionId,
+          turnId: context.turnId,
+          userId: context.userId,
+          conversationId: context.conversationId,
+        },
+      );
+
+      return JSON.stringify({
+        success: true,
+        message: 'Memory saved.',
+        scope: action.metadata?.scope,
+        category: action.metadata?.category,
+      });
+    },
   });
 
   registerToolPlugin({
     name: 'rename_self',
-    kind: 'action',
+    kind: 'callable',
     definition: {
       name: 'rename_self',
       description: 'Change your own display name. Use when the Boss asks you to change your name or gives you a new name.',
@@ -71,11 +132,36 @@ export function registerActionToolPlugins(): void {
         required: ['newName'],
       },
     },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const action = buildRenameSelfAction(input as Record<string, any>);
+      await executeActorActions(
+        context.workspaceId,
+        context.actorId,
+        [action],
+        {
+          sessionId: context.sessionId,
+          turnId: context.turnId,
+          userId: context.userId,
+          conversationId: context.conversationId,
+        },
+      );
+
+      return JSON.stringify({
+        success: true,
+        newName: action.content,
+        message: `Your display name is now ${action.content}.`,
+      });
+    },
   });
 
   registerToolPlugin({
     name: 'change_avatar',
-    kind: 'action',
+    kind: 'callable',
     definition: {
       name: 'change_avatar',
       description: 'Change your own avatar. Use when the Boss asks you to change your avatar or profile picture. Provide an emoji that represents your new look.',
@@ -87,6 +173,31 @@ export function registerActionToolPlugins(): void {
         required: ['emoji'],
       },
     },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const action = buildChangeAvatarAction(input as Record<string, any>);
+      await executeActorActions(
+        context.workspaceId,
+        context.actorId,
+        [action],
+        {
+          sessionId: context.sessionId,
+          turnId: context.turnId,
+          userId: context.userId,
+          conversationId: context.conversationId,
+        },
+      );
+
+      return JSON.stringify({
+        success: true,
+        emoji: action.content,
+        message: `Your avatar emoji is now ${action.content}.`,
+      });
+    },
   });
 }
 
@@ -95,36 +206,14 @@ export function toolCallsToActions(toolCalls: ToolCall[]): ActorAction[] {
     const input = tc.input as Record<string, any>;
 
     switch (tc.toolName) {
-      case 'create_memory': {
-        const tags = input.tags
-          ? String(input.tags).split(',').map((t: string) => t.trim()).filter(Boolean)
-          : [];
-        return {
-          type: 'create_memory' as const,
-          content: input.content,
-          metadata: {
-            category: input.category || 'fact',
-            scope: input.scope || 'actor_conversation',
-            importance: parseFloat(input.importance) || 0.5,
-            confidence: parseFloat(input.confidence) || 0.8,
-            stability: input.stability || 'durable',
-            textDigest: input.textDigest || undefined,
-            tags,
-          },
-        };
-      }
+      case 'create_memory':
+        return buildCreateMemoryAction(input);
 
       case 'rename_self':
-        return {
-          type: 'rename_self' as const,
-          content: input.newName,
-        };
+        return buildRenameSelfAction(input);
 
       case 'change_avatar':
-        return {
-          type: 'change_avatar' as const,
-          content: input.emoji,
-        };
+        return buildChangeAvatarAction(input);
 
       default:
         return { type: 'respond' as const, content: `Unknown tool: ${tc.toolName}` };

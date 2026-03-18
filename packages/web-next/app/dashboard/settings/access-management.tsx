@@ -29,7 +29,8 @@ import {
 type WorkspaceAccessKey =
   | "model_admin"
   | "actor_admin"
-  | "capability_admin"
+  | "skill_admin"
+  | "plugin_admin"
   | "memory_admin"
   | "relay_admin"
   | "conversation_admin"
@@ -88,9 +89,14 @@ const workspaceAccessOptions: Array<{
     description: "Can manage actors and actor-to-model assignments.",
   },
   {
-    value: "capability_admin",
-    label: "Skills & Plugins",
-    description: "Can manage skills, plugins, and capability sharing.",
+    value: "skill_admin",
+    label: "Skills",
+    description: "Can manage installed skills, bindings, and skill package rollout.",
+  },
+  {
+    value: "plugin_admin",
+    label: "Plugins",
+    description: "Can manage plugin installations, mounts, and runtime approvals.",
   },
   {
     value: "memory_admin",

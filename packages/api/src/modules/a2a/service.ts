@@ -154,10 +154,35 @@ export async function setAppActors(appId: UUID, actorIds: UUID[]): Promise<void>
 
 export async function getAppActors(appId: UUID): Promise<any[]> {
   const result = await query(
-    `SELECT a.id, a.name, a.title, a.docs, a.role, a.capabilities
+    `SELECT
+        a.id,
+        a.name,
+        a.title,
+        a.role,
+        a.specialties,
+        COALESCE(
+          jsonb_agg(
+            jsonb_build_object(
+              'id', doc.id,
+              'key', doc.doc_key,
+              'title', doc.title,
+              'content', doc.content_blocks,
+              'visibility', doc.visibility,
+              'priority', doc.priority
+            )
+            ORDER BY doc.priority DESC, doc.created_at ASC
+          ) FILTER (WHERE doc.id IS NOT NULL),
+          '[]'::jsonb
+        ) AS docs
      FROM actors a
      JOIN a2a_app_actors aaa ON aaa.actor_id = a.id
+     JOIN actor_versions current_version
+       ON current_version.actor_id = a.id
+      AND current_version.version = a.current_version
+     LEFT JOIN actor_version_docs doc
+       ON doc.actor_version_id = current_version.id
      WHERE aaa.app_id = $1 AND a.is_active = true
+     GROUP BY a.id, a.name, a.title, a.role, a.specialties
      ORDER BY a.name`,
     [appId]
   );
@@ -170,7 +195,7 @@ export async function getAppActors(appId: UUID): Promise<any[]> {
       r.title,
     ),
     role: r.role,
-    capabilities: r.capabilities,
+    specialties: r.specialties,
   }));
 }
 

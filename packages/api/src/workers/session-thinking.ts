@@ -25,6 +25,7 @@ import { resolveModelPlan } from '../modules/model-groups/resolver.js';
 import { resolveMcpToolsForActor } from '../modules/mcp-plugins/tool-resolver.js';
 import { shutdownSessionInstances } from '../modules/mcp-plugins/instance-manager.js';
 import type { ResolvedMcpTools } from '../modules/mcp-plugins/tool-resolver.js';
+import { getActor } from '../modules/organization/service.js';
 import {
   getSession,
   getSessionMessages,
@@ -205,14 +206,14 @@ export function startSessionThinkingWorker() {
         thinkingActorName = session.actor_name || 'Unknown';
         await emitThinkingStatus('Analyzing message...');
 
-        const actorResult = await query('SELECT * FROM actors WHERE id = $1', [actorId]);
-        if (actorResult.rows.length === 0) throw new Error(`Actor ${actorId} not found`);
-        const actor = actorResult.rows[0];
+        const actor = await getActor(actorId, workspaceId);
+        if (!actor) throw new Error(`Actor ${actorId} not found`);
 
         const sessionMessages = await getSessionMessages(sessionId);
         const interrupts = await consumeInterrupts(sessionId);
 
         let groupMembers: any[] | undefined;
+        let promptGroupMembers: any[] | undefined;
         let memberEntries: GroupMemberEntry[] = [];
         let groupUserId: string | undefined;
         let actorMemberId: string | undefined;
@@ -222,6 +223,7 @@ export function startSessionThinkingWorker() {
 
         if (groupId) {
           groupMembers = await getGroupMembers(groupId);
+          promptGroupMembers = await getGroupMembers(groupId, { useProfileSnapshot: true });
           actorMemberId = groupMembers.find((member: any) => member.actor_id === actorId && member.state === 'active')?.id;
           if (!actorMemberId) {
             throw new Error(`Actor ${actorId} is not an active member of group ${groupId}`);
@@ -269,7 +271,7 @@ export function startSessionThinkingWorker() {
 
         const recallType = session.metadata?.memoryBootstrapCompleted ? 'turn_recall' : 'bootstrap';
         const recallQuery = buildMemoryRecallQuery({
-          actorName: actor.name,
+          actorName: actor.definition.name,
           conversationTitle: session.conversation_title,
           contextItems,
         });
@@ -372,12 +374,42 @@ export function startSessionThinkingWorker() {
           conversationId: session.conversation_id,
         });
 
+        const actorPromptSource = (() => {
+          if (!promptGroupMembers) return actor;
+          const selfMember = promptGroupMembers.find(
+            (member: any) => member.actor_id === actorId && member.state === 'active',
+          );
+          if (!selfMember) return actor;
+          return {
+            ...actor,
+            currentVersion: selfMember.actor_current_version || actor.currentVersion,
+            definition: {
+              ...actor.definition,
+              name: selfMember.actor_name || actor.definition.name,
+              title: selfMember.actor_title || actor.definition.title,
+              role: selfMember.actor_role || actor.definition.role,
+              docs: selfMember.actor_docs || actor.definition.docs,
+              canRepresentUser:
+                typeof selfMember.actor_can_represent_user === 'boolean'
+                  ? selfMember.actor_can_represent_user
+                  : actor.definition.canRepresentUser,
+              specialties: Array.isArray(selfMember.actor_specialties)
+                ? selfMember.actor_specialties
+                : actor.definition.specialties,
+              config:
+                selfMember.actor_config && typeof selfMember.actor_config === 'object'
+                  ? selfMember.actor_config
+                  : actor.definition.config,
+            },
+          };
+        })();
+
         const { system } = buildActorPrompt(
-          actor,
+          actorPromptSource,
           undefined,
           undefined,
           mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
-          groupMembers,
+          promptGroupMembers || groupMembers,
           availableSkills,
         );
 
@@ -469,7 +501,12 @@ export function startSessionThinkingWorker() {
           clearInterval(lockRefreshInterval);
         }
 
-        await executeActorActions(workspaceId, actorId, result.actions, sessionId);
+        await executeActorActions(workspaceId, actorId, result.actions, {
+          sessionId,
+          turnId: turn.id,
+          userId: groupUserId || userId,
+          conversationId: session.conversation_id,
+        });
 
         const respondActions = result.actions.filter((action: ActorAction) => action.type === 'respond');
         const msgMetadata: Record<string, unknown> = {};
@@ -638,8 +675,14 @@ export function startSessionThinkingWorker() {
 
 async function getActorMaxSessions(actorId: string): Promise<number> {
   const result = await query(
-    'SELECT max_concurrent_sessions FROM actors WHERE id = $1',
-    [actorId],
+    `SELECT CASE
+         WHEN COALESCE(config->>'maxConcurrentSessions', '') ~ '^[0-9]+$'
+           THEN GREATEST((config->>'maxConcurrentSessions')::int, 1)
+         ELSE $2
+       END AS max_concurrent_sessions
+     FROM actors
+     WHERE id = $1`,
+    [actorId, DEFAULT_MAX_CONCURRENT_SESSIONS],
   );
   return result.rows[0]?.max_concurrent_sessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS;
 }

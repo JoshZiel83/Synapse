@@ -73,15 +73,27 @@ function actorVersionSummary(payload: Record<string, unknown>) {
   const actorName = typeof actor?.name === 'string' ? actor.name.trim() : 'An actor';
   const fromVersion = typeof payload.fromVersion === 'number' ? payload.fromVersion : null;
   const toVersion = typeof payload.toVersion === 'number' ? payload.toVersion : null;
-  const changedFields = Array.isArray(payload.changedFields)
-    ? payload.changedFields.filter((field): field is string => typeof field === 'string')
+  const changes = Array.isArray(payload.changes)
+    ? payload.changes
+        .filter((change): change is { kind?: string; summaryText?: string; title?: string; changeType?: string; field?: string } => !!change && typeof change === 'object')
+        .map((change) => {
+          const summaryText = typeof change.summaryText === 'string' ? change.summaryText.trim() : '';
+          if (summaryText) return summaryText;
+          if (change.kind === 'field' && typeof change.field === 'string') {
+            return `${change.field} changed.`;
+          }
+          if (change.kind === 'doc') {
+            const title = typeof change.title === 'string' ? change.title.trim() : 'a doc';
+            const changeType = typeof change.changeType === 'string' ? change.changeType.trim() : 'updated';
+            return `Doc ${changeType}: ${title}.`;
+          }
+          return '';
+        })
+        .filter((value): value is string => Boolean(value))
     : [];
-  const changedDocs = Array.isArray(payload.changedDocs)
-    ? payload.changedDocs
-        .filter((doc): doc is { title?: string; summaryText?: string } => !!doc && typeof doc === 'object')
-        .map((doc) => doc.title?.trim())
-        .filter((title): title is string => !!title)
-    : [];
+  const source = payload.source && typeof payload.source === 'object'
+    ? payload.source as { type?: string; actorId?: string; userId?: string }
+    : undefined;
 
   const fragments: string[] = [];
   if (fromVersion !== null && toVersion !== null) {
@@ -89,11 +101,15 @@ function actorVersionSummary(payload: Record<string, unknown>) {
   } else {
     fragments.push(`${actorName} updated their profile.`);
   }
-  if (changedFields.length > 0) {
-    fragments.push(`Fields: ${changedFields.join(', ')}.`);
+  if (changes.length > 0) {
+    fragments.push(...changes);
+  } else {
+    fragments.push('Profile details changed.');
   }
-  if (changedDocs.length > 0) {
-    fragments.push(`Docs: ${changedDocs.join(', ')}.`);
+  if (source?.type === 'user') {
+    fragments.push('Updated by a user.');
+  } else if (source?.type === 'actor') {
+    fragments.push('Updated by the actor.');
   }
   return fragments.join(' ');
 }

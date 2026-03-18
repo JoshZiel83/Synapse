@@ -88,7 +88,7 @@ export type ActorFormState = {
   avatarFileId?: string
   avatarUrl?: string
   canRepresentUser: boolean
-  capabilities: string
+  specialties: string
   docs: EditableDoc[]
 }
 
@@ -240,7 +240,7 @@ export function buildInitialState(actor?: Actor | null): ActorFormState {
     avatarFileId: definition?.avatarFileId,
     avatarUrl: actor?.avatarUrl,
     canRepresentUser: definition?.canRepresentUser || false,
-    capabilities: (definition?.capabilities || []).join(", "),
+    specialties: (definition?.specialties || []).join(", "),
     docs: buildInitialDocs(actor),
   }
 }

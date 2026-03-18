@@ -28,11 +28,12 @@ export type AuthzObjectType =
   | "workspace_user"
   | "user"
   | "actor"
-  | "actor_instance"
+  | "installed_skill"
+  | "plugin_installation"
+  | "relay_device"
+  | "relay_exposure"
   | "actor_conversation"
   | "conversation"
-  | "skill_instance"
-  | "plugin_instance"
   | "memory"
   | "mcp_relay"
   | "model_group"
@@ -60,11 +61,12 @@ const AUTHZ_RESOURCE_TYPES: AuthzObjectType[] = [
   "workspace_user",
   "user",
   "actor",
-  "actor_instance",
+  "installed_skill",
+  "plugin_installation",
+  "relay_device",
+  "relay_exposure",
   "actor_conversation",
   "conversation",
-  "skill_instance",
-  "plugin_instance",
   "memory",
   "mcp_relay",
   "model_group",
@@ -162,6 +164,26 @@ function relationshipUpdate(entry: AuthzOutboxRow) {
       }),
     }),
   });
+}
+
+function uniqueOutboxEntries(entries: AuthzOutboxRow[]) {
+  const deduped = new Map<string, AuthzOutboxRow>();
+
+  for (const entry of entries) {
+    deduped.set(
+      relationMutationKey({
+        resourceType: entry.resource_type,
+        resourceId: entry.resource_id,
+        relation: entry.relation,
+        subjectType: entry.subject_type,
+        subjectId: entry.subject_id,
+        subjectRelation: entry.subject_relation || undefined,
+      }),
+      entry,
+    );
+  }
+
+  return Array.from(deduped.values());
 }
 
 function normalizeSchemaText(text: string) {
@@ -513,9 +535,44 @@ export async function resetAuthzRelationships() {
   }
 
   await waitForAuthzReady();
-  const schemaResult = await syncAuthzSchema();
 
   let relationshipsDeleted = 0;
+
+  const legacyResourceTypes = [
+    "skill_binding",
+    "plugin_mount",
+  ] as const;
+
+  for (const resourceType of legacyResourceTypes) {
+    try {
+      const response = await getAuthzClient().promises.deleteRelationships(
+        v1.DeleteRelationshipsRequest.create({
+          relationshipFilter: v1.RelationshipFilter.create({
+            resourceType,
+          }),
+          optionalTransactionMetadata: v1.createStructFromObject({
+            source: "synapse-authz-reset-legacy",
+            resourceType,
+          }),
+        }),
+      );
+
+      relationshipsDeleted += Number.parseInt(
+        response.relationshipsDeletedCount || "0",
+        10,
+      );
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? (error as { code?: unknown }).code
+          : null;
+      if (code !== 3 && code !== 5 && code !== 9) {
+        throw error;
+      }
+    }
+  }
+
+  const schemaResult = await syncAuthzSchema();
 
   for (const resourceType of AUTHZ_RESOURCE_TYPES) {
     const response = await getAuthzClient().promises.deleteRelationships(
@@ -659,12 +716,14 @@ export async function flushAuthzOutboxEntries(entryIds: string[]) {
   }
 
   try {
+    const updates = uniqueOutboxEntries(entries);
     const response = await getAuthzClient().promises.writeRelationships(
       v1.WriteRelationshipsRequest.create({
-        updates: entries.map(relationshipUpdate),
+        updates: updates.map(relationshipUpdate),
         optionalTransactionMetadata: v1.createStructFromObject({
           source: "synapse-authz-outbox",
           entryCount: entries.length,
+          dedupedEntryCount: updates.length,
         }),
       }),
     );
@@ -699,12 +758,14 @@ export async function drainAuthzOutbox(
     }
 
     try {
+      const updates = uniqueOutboxEntries(entries);
       const response = await getAuthzClient().promises.writeRelationships(
         v1.WriteRelationshipsRequest.create({
-          updates: entries.map(relationshipUpdate),
+          updates: updates.map(relationshipUpdate),
           optionalTransactionMetadata: v1.createStructFromObject({
             source: "synapse-authz-outbox-drain",
             entryCount: entries.length,
+            dedupedEntryCount: updates.length,
           }),
         }),
       );

@@ -25,7 +25,7 @@ export const config = {
     provider: process.env.AI_PROVIDER || 'anthropic',
     apiKey: process.env.AI_API_KEY || process.env.ANTHROPIC_API_KEY || '',
     baseUrl: process.env.AI_BASE_URL || process.env.ANTHROPIC_BASE_URL || '',
-    model: process.env.AI_MODEL || '',
+    model: process.env.AI_MODEL || process.env.MODEL_NAME || 'claude-opus-4-6',
     maxTokens: parseInt(process.env.AI_MAX_TOKENS || '4096'),
   },
   audioFallback: {

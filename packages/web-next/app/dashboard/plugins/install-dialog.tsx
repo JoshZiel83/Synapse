@@ -3,12 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ExclamationCircleIcon } from '@heroicons/react/16/solid';
 import type {
-  CapabilityAttachmentType,
-  CapabilityAuthProviderDefinition,
-  CapabilityAuthSession,
-  CapabilityConfigFieldDefinition,
-  CapabilityInstallStep,
-  CapabilityReuseScope,
+  AttachmentScope,
+  PluginAuthProviderDefinition,
+  PluginAuthSession,
+  PluginConfigFieldDefinition,
+  PluginInstallStep,
+  ReuseScope,
   LocalizedText,
 } from '@synapse/shared';
 import { AppCard } from '@/components/app-card';
@@ -28,10 +28,10 @@ import { api } from '@/lib/api';
 import PluginAccessStep from './plugin-access-step';
 import { PluginIcon } from './plugin-ui';
 import {
-  CapabilityAttachmentTypeStep,
-  CapabilityReuseScopeStep,
+  AccessAttachmentTypeStep,
+  AccessReuseScopeStep,
   getConversationDisplayName,
-} from '@/app/dashboard/capabilities/attachment-visuals';
+} from '@/app/dashboard/access/attachment-visuals';
 
 interface ValidationRule {
   field: string;
@@ -58,8 +58,8 @@ interface Props {
   closeLabel?: string;
 }
 
-type PluginAttachmentType = Exclude<CapabilityAttachmentType, 'platform'>;
-type PluginReuseScope = Exclude<CapabilityReuseScope, 'platform'>;
+type PluginAttachmentType = Exclude<AttachmentScope, 'platform'>;
+type PluginReuseScope = Exclude<ReuseScope, 'platform'>;
 type AccessStep = {
   id: 'access';
   kind: 'access';
@@ -73,12 +73,12 @@ type AccessStep = {
   action?: undefined;
   metadata?: Record<string, unknown>;
 };
-type InstallFlowStep = CapabilityInstallStep | AccessStep;
+type InstallFlowStep = PluginInstallStep | AccessStep;
 
 type AuthFieldState = {
   sessionId: string;
   providerKey: string;
-  status: CapabilityAuthSession['status'];
+  status: PluginAuthSession['status'];
   accountDisplayName?: string;
   errorMessage?: string;
   authConnectionId?: string;
@@ -127,7 +127,7 @@ function translate(text: LocalizedText | undefined, locale: string, fallback?: s
   );
 }
 
-function deriveConfigFields(plugin: any): CapabilityConfigFieldDefinition[] {
+function deriveConfigFields(plugin: any): PluginConfigFieldDefinition[] {
   if (Array.isArray(plugin.config_fields) && plugin.config_fields.length > 0) {
     return plugin.config_fields;
   }
@@ -147,12 +147,12 @@ function deriveConfigFields(plugin: any): CapabilityConfigFieldDefinition[] {
 
 function deriveInstallFlow(
   plugin: any,
-  configFields: CapabilityConfigFieldDefinition[],
+  configFields: PluginConfigFieldDefinition[],
   locale: string,
   options?: { includePlacementSteps?: boolean },
-): CapabilityInstallStep[] {
+): PluginInstallStep[] {
   const baseSteps = Array.isArray(plugin.install_flow?.steps) && plugin.install_flow.steps.length > 0
-    ? plugin.install_flow.steps.filter((step: CapabilityInstallStep) => step.kind !== 'confirm')
+    ? plugin.install_flow.steps.filter((step: PluginInstallStep) => step.kind !== 'confirm')
     : [{
         id: 'configure',
         kind: 'form' as const,
@@ -187,7 +187,7 @@ function deriveInstallFlow(
   ];
 }
 
-function buildInitialConfig(plugin: any, configFields: CapabilityConfigFieldDefinition[]) {
+function buildInitialConfig(plugin: any, configFields: PluginConfigFieldDefinition[]) {
   const initial = { ...(plugin.default_config || {}) } as Record<string, unknown>;
   for (const field of configFields) {
     if (initial[field.key] !== undefined) continue;
@@ -206,7 +206,7 @@ function runClientValidation(
   config: Record<string, unknown>,
   authFields: Record<string, AuthFieldState>,
   rules: ValidationRule[],
-  configFields: CapabilityConfigFieldDefinition[],
+  configFields: PluginConfigFieldDefinition[],
   fieldKeys?: string[],
 ) {
   const errors: Record<string, string> = {};
@@ -281,7 +281,7 @@ export default function InstallDialog({
     () => deriveInstallFlow(plugin, configFields, locale, { includePlacementSteps }),
     [configFields, includePlacementSteps, locale, plugin],
   );
-  const authProviders = useMemo<CapabilityAuthProviderDefinition[]>(() => plugin.auth_providers || [], [plugin.auth_providers]);
+  const authProviders = useMemo<PluginAuthProviderDefinition[]>(() => plugin.auth_providers || [], [plugin.auth_providers]);
   const authProviderMap = useMemo(() => new Map(authProviders.map((provider) => [provider.key, provider])), [authProviders]);
   const allowedAttachmentTypes = useMemo<PluginAttachmentType[]>(
     () => ['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user'],
@@ -399,7 +399,7 @@ export default function InstallDialog({
     if (!workspaceId) return;
     try {
       const data = await api.getPluginAuthSession(workspaceId, sessionId);
-      const session: CapabilityAuthSession = data.session;
+      const session: PluginAuthSession = data.session;
       setAuthFields((previous) => ({
         ...previous,
         [fieldKey]: {
@@ -433,7 +433,7 @@ export default function InstallDialog({
     }
   };
 
-  const beginAuth = async (field: CapabilityConfigFieldDefinition, providerKey?: string) => {
+  const beginAuth = async (field: PluginConfigFieldDefinition, providerKey?: string) => {
     if (!workspaceId) return;
     const resolvedProviderKey = providerKey || field.authProviderKey;
     if (!resolvedProviderKey) {
@@ -442,7 +442,7 @@ export default function InstallDialog({
     }
 
     const result = await api.startPluginAuth(workspaceId, plugin.id, resolvedProviderKey);
-    const session: CapabilityAuthSession = result.session;
+    const session: PluginAuthSession = result.session;
     setAuthFields((previous) => ({
       ...previous,
       [field.key]: {
@@ -542,9 +542,9 @@ export default function InstallDialog({
           authSessionIds: Object.keys(authSessionIds).length > 0 ? authSessionIds : undefined,
         });
         if (createDefaultWorkspaceAccess) {
-          await api.issueCapabilityInstanceGrant(workspaceId, installation.id, {
+          await api.grantPluginInstallationAccess(workspaceId, installation.id, {
             grantScope: 'workspace',
-            permissions: installation.revision?.authorization?.requiredPermissions || ['use'],
+            permissions: installation.authorization?.requiredPermissions || installation.revision?.authorization?.requiredPermissions || ['use'],
           });
         }
       }
@@ -657,7 +657,7 @@ export default function InstallDialog({
     return null;
   };
 
-  const renderField = (field: CapabilityConfigFieldDefinition) => {
+  const renderField = (field: PluginConfigFieldDefinition) => {
     const value = configData[field.key];
     const error = fieldErrors[field.key];
     const provider = field.authProviderKey ? authProviderMap.get(field.authProviderKey) : undefined;
@@ -861,7 +861,7 @@ export default function InstallDialog({
 
         {currentStep?.kind === 'attachment_scope' && (
           <div className="space-y-4">
-            <CapabilityAttachmentTypeStep
+            <AccessAttachmentTypeStep
               value={selectedAttachmentType}
               onChange={(value) => setSelectedAttachmentType(value as PluginAttachmentType)}
               allowedScopes={allowedAttachmentTypes}
@@ -877,7 +877,7 @@ export default function InstallDialog({
         )}
 
         {currentStep?.kind === 'reuse_scope' && (
-          <CapabilityReuseScopeStep
+          <AccessReuseScopeStep
             attachmentType={selectedAttachmentType}
             value={lifecycleScope}
             onChange={(value) => setLifecycleScope(value as PluginReuseScope)}

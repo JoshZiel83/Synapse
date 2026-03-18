@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { registerToolPlugin } from './tool-plugins.js';
 import { query } from '../../infrastructure/database/index.js';
 import { getSession } from '../session/service.js';
-import { sendGroupMessage, addActorToGroup, getGroupMembers, sleepActor } from '../group/service.js';
+import { sendGroupMessage, addActorToGroup, getGroupMembers } from '../group/service.js';
 import { runMemorySearch } from '../memory/service.js';
 import { readVisibleSkill } from '../skills/service.js';
 
@@ -426,7 +426,7 @@ export function registerCallableToolPlugins(): void {
         },
       },
     }),
-    execute: async (_input) => {
+    execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
         return JSON.stringify({ error: 'No session context available' });
@@ -437,11 +437,14 @@ export function registerCallableToolPlugins(): void {
         return JSON.stringify({ error: 'Session not found' });
       }
 
-      await sleepActor(context.sessionId);
+      const summary = typeof (input as any).summary === 'string'
+        ? String((input as any).summary).trim()
+        : '';
 
       return JSON.stringify({
         success: true,
-        message: 'Entering sleep mode. You will be woken up when someone messages you.',
+        summary,
+        message: 'Sleep requested. The session will return to idle after this turn completes.',
       });
     },
   });
@@ -473,6 +476,8 @@ interface ToolExecutionContext {
   actorId: string;
   workspaceId: string;
   userId?: string;
+  turnId?: string;
+  conversationId?: string;
 }
 
 const contextStorage = new AsyncLocalStorage<ToolExecutionContext>();

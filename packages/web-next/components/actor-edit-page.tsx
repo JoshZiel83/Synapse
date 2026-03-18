@@ -215,9 +215,9 @@ function BasicSection({
 
       <Card>
         <CardHeader>
-          <CardTitle>Avatar and capability metadata</CardTitle>
+          <CardTitle>Avatar and structured specialties</CardTitle>
           <CardDescription>
-            Structured metadata stays machine-readable. Installable skills still belong to the capability system.
+            Structured specialties stay machine-readable. Installable skills are managed separately.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
@@ -255,12 +255,12 @@ function BasicSection({
           </div>
 
           <Field>
-            <FieldLabel htmlFor="actor-capabilities">Capabilities</FieldLabel>
+            <FieldLabel htmlFor="actor-specialties">Specialties</FieldLabel>
             <Textarea
-              id="actor-capabilities"
+              id="actor-specialties"
               rows={3}
-              value={form.capabilities}
-              onChange={(event) => updateForm((current) => ({ ...current, capabilities: event.target.value }))}
+              value={form.specialties}
+              onChange={(event) => updateForm((current) => ({ ...current, specialties: event.target.value }))}
               placeholder="code.review, research, incident.response"
             />
             <FieldDescription>Comma or newline separated.</FieldDescription>
@@ -463,7 +463,7 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
       {
         key: BASIC_SECTION_KEY,
         title: "Basic information",
-        subtitle: `${form.title || titleCase(form.role)} · ${splitList(form.capabilities).length} capabilities`,
+        subtitle: `${form.title || titleCase(form.role)} · ${splitList(form.specialties).length} specialties`,
         badge: "core",
       },
       ...form.docs.map((doc) => ({
@@ -545,7 +545,7 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
       parentId: form.parentId || undefined,
       canRepresentUser: form.canRepresentUser,
       docs,
-      capabilities: splitList(form.capabilities),
+      specialties: splitList(form.specialties),
     }
 
     setSaving(true)

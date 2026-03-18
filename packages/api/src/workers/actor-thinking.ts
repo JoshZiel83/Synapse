@@ -7,6 +7,7 @@ import { textBlocks } from '@synapse/shared';
 import { actorThink } from '../modules/ai/index.js';
 import { buildActorPrompt } from '../modules/ai/prompt-builder.js';
 import { executeActorActions } from '../modules/orchestrator/service.js';
+import { getActor } from '../modules/organization/service.js';
 import { resolveModelPlan } from '../modules/model-groups/resolver.js';
 import { buildAdHocContextItems } from '../modules/ai/context-builder.js';
 import { buildAdHocProviderContextWindow } from '../modules/context/service.js';
@@ -36,9 +37,8 @@ export function startActorThinkingWorker() {
         });
 
         // Load actor
-        const actorResult = await query('SELECT * FROM actors WHERE id = $1', [actorId]);
-        if (actorResult.rows.length === 0) throw new Error(`Actor ${actorId} not found`);
-        const actor = actorResult.rows[0];
+        const actor = await getActor(actorId, workspaceId);
+        if (!actor) throw new Error(`Actor ${actorId} not found`);
 
         // Resolve model config for this actor
         const resolvedModelPlan = await resolveModelPlan(actorId, workspaceId);

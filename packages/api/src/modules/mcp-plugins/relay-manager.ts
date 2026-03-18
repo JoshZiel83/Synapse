@@ -18,7 +18,7 @@ import { query } from '../../infrastructure/database/index.js';
 import { incrementMcpVersion } from './instance-manager.js';
 import { logEvent } from './audit.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
-import { createOrganization, createPlugin } from './service.js';
+import { touchRelayExposureAuthzState } from './relay-access.js';
 
 interface RelayToolRegistration {
   stableKey: string;
@@ -973,9 +973,7 @@ async function syncDeviceCatalog(
     }
   }
 
-  const relayOrg = await findOrCreateRelayOrg(connected);
   const activeExposureIds = new Set<string>();
-  const activePluginSlugs: string[] = [];
   const syncSourceIds = await syncRelaySyncSources(connected.deviceId, syncSources);
 
   for (const registration of exposures) {
@@ -986,18 +984,17 @@ async function syncDeviceCatalog(
     );
     activeExposureIds.add(exposureRow.id);
 
-    const catalog = await syncExposureCatalog(exposureRow.id, connected.deviceId, registration);
+    await syncExposureCatalog(exposureRow.id, connected.deviceId, registration);
+    await touchRelayExposureAuthzState({
+      workspaceId: connected.workspaceId,
+      deviceId: connected.deviceId,
+      exposureId: exposureRow.id,
+    });
     const runtimeCatalog = await loadExposureCatalog(exposureRow.id);
     if (runtimeCatalog && isRuntimeAvailable(registration.runtimeStatus)) {
       connected.exposures.set(exposureRow.id, runtimeCatalog);
     } else {
       connected.exposures.delete(exposureRow.id);
-    }
-
-    if (runtimeCatalog && isRuntimeAvailable(registration.runtimeStatus)) {
-      const pluginSlug = exposurePluginSlug(runtimeCatalog.exposureId, runtimeCatalog.stableKey);
-      activePluginSlugs.push(pluginSlug);
-      await syncExposurePlugin(connected, relayOrg.id, runtimeCatalog, catalog.revisionSeq, pluginSlug);
     }
   }
 
@@ -1007,8 +1004,6 @@ async function syncDeviceCatalog(
       connected.exposures.delete(exposureId);
     }
   }
-
-  await deactivateStaleRelayPlugins(relayOrg.id, activePluginSlugs);
   await incrementMcpVersion(connected.workspaceId);
 
   emitEvent({
@@ -1347,51 +1342,6 @@ async function markMissingExposuresOffline(deviceId: string, activeExposureIds: 
   );
 }
 
-async function syncExposurePlugin(
-  connected: ConnectedRelay,
-  orgId: string,
-  exposure: ConnectedRelayExposure,
-  revisionSeq: number,
-  pluginSlug: string,
-) {
-  const toolsManifest = exposure.tools.map((tool) => ({
-    name: tool.visible.name,
-    description: tool.visible.description,
-    inputSchema: tool.visible.inputSchema,
-  }));
-
-  const plugin = await createPlugin({
-    orgId,
-    workspaceId: connected.workspaceId,
-    slug: pluginSlug,
-    displayName: `${connected.displayName} / ${exposure.displayName}`,
-    description: `Relay exposure: ${exposure.displayName}`,
-    transport: 'relay',
-    entryPoint: JSON.stringify({
-      deviceId: connected.deviceId,
-      exposureId: exposure.exposureId,
-      exposureStableKey: exposure.stableKey,
-    }),
-    lifecycleScope: 'conversation',
-    defaultInstanceScope: 'workspace',
-    requiresHandshake: true,
-    toolsManifest,
-    version: `catalog-${revisionSeq}`,
-    tags: ['relay', exposure.transport],
-    authorization: {
-      requiredPermissions: ['relay:use'],
-      defaultGrantScope: 'workspace',
-      reason: 'Relay-derived tools require explicit workspace authorization.',
-    },
-  });
-
-  await query(
-    `UPDATE capability_packages SET is_active = TRUE WHERE id = $1`,
-    [plugin.id],
-  );
-  await ensureDefaultInstallation(connected.workspaceId, plugin.id);
-}
-
 async function resolveOperationResult(connected: ConnectedRelay, msg: Record<string, unknown>) {
   const operationId = msg.operationId as string;
   const pending = pendingRelayOperations.get(operationId);
@@ -1616,19 +1566,6 @@ function cleanupRelay(deviceId: string) {
     [deviceId],
   ).catch(() => {});
 
-  void findRelayOrg(deviceId)
-    .then((org) => {
-      if (!org) return;
-      return query(
-        `UPDATE capability_packages
-         SET is_active = FALSE
-         WHERE publisher_id = $1
-           AND kind = 'plugin'`,
-        [org.id],
-      );
-    })
-    .catch(() => {});
-
   void incrementMcpVersion(connected.workspaceId).catch(() => {});
 
   emitEvent({
@@ -1644,85 +1581,6 @@ function cleanupRelay(deviceId: string) {
     eventType: 'relay.disconnected',
     eventData: { deviceId },
   });
-}
-
-async function findOrCreateRelayOrg(connected: ConnectedRelay) {
-  const slug = `relay_device_${connected.deviceId.slice(0, 8)}`;
-  return createOrganization({
-    slug,
-    displayName: `Relay Device: ${connected.displayName}`,
-    description: `Auto-created publisher for relay device ${connected.displayName}`,
-    isBuiltin: false,
-    isVerified: false,
-    ownerUserId: connected.ownerUserId || undefined,
-  });
-}
-
-async function findRelayOrg(deviceId: string) {
-  const slug = `relay_device_${deviceId.slice(0, 8)}`;
-  const result = await query(
-    `SELECT * FROM capability_publishers WHERE slug = $1 LIMIT 1`,
-    [slug],
-  );
-  return result.rows[0] || null;
-}
-
-async function ensureDefaultInstallation(workspaceId: string, pluginId: string) {
-  const existing = await query(
-    `SELECT id
-     FROM capability_instances
-     WHERE package_id = $1
-       AND workspace_id = $2
-       AND attachment_type = 'workspace'
-     LIMIT 1`,
-    [pluginId, workspaceId],
-  );
-  if (existing.rows.length > 0) return;
-
-  await query(
-    `INSERT INTO capability_instances (
-       workspace_id, package_id, revision_id, attachment_type, install_mode, is_enabled, config_data,
-       reuse_scope, requires_handshake, metadata
-     )
-     SELECT $1, p.id, p.latest_revision_id, 'workspace', 'relay_derived', TRUE, '{}'::jsonb,
-            COALESCE(p.default_reuse_scope, 'conversation'), p.requires_handshake, '{}'::jsonb
-     FROM capability_packages p
-     WHERE p.id = $2
-     ON CONFLICT DO NOTHING`,
-    [workspaceId, pluginId],
-  );
-}
-
-async function deactivateStaleRelayPlugins(orgId: string, activeSlugs: string[]) {
-  if (activeSlugs.length === 0) {
-    await query(
-      `UPDATE capability_packages
-       SET is_active = FALSE
-       WHERE publisher_id = $1
-         AND kind = 'plugin'`,
-      [orgId],
-    );
-    return;
-  }
-
-  await query(
-    `UPDATE capability_packages
-     SET is_active = FALSE
-     WHERE publisher_id = $1
-       AND kind = 'plugin'
-       AND slug != ALL($2)`,
-    [orgId, activeSlugs],
-  );
-}
-
-function exposurePluginSlug(exposureId: string, stableKey: string) {
-  const sanitized = stableKey
-    .replace(/[^a-zA-Z0-9_-]/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .toLowerCase()
-    .slice(0, 36) || 'exposure';
-  return `${sanitized}_${exposureId.slice(0, 8)}`;
 }
 
 function normalizeOperationError(raw: unknown): RelayOperationError {

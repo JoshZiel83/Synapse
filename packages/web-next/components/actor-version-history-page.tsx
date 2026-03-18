@@ -110,6 +110,16 @@ export function ActorVersionHistoryPage({ actorId }: { actorId: string }) {
     return versions.find((version) => version.version === requested) || versions[0]
   }, [searchParams, versions])
 
+  const selectedFieldChanges = useMemo(
+    () => selectedVersion?.delta?.changes?.filter((change) => change.kind === "field") || [],
+    [selectedVersion],
+  )
+
+  const selectedDocChanges = useMemo(
+    () => selectedVersion?.delta?.changes?.filter((change) => change.kind === "doc") || [],
+    [selectedVersion],
+  )
+
   useEffect(() => {
     if (!selectedVersion || searchParams.get("version")) return
     router.replace(buildHistoryHref(actorId, selectedVersion.version))
@@ -242,10 +252,10 @@ export function ActorVersionHistoryPage({ actorId }: { actorId: string }) {
                         <div className="rounded-[28px] border border-border bg-muted/20 p-5">
                           <div className="text-sm font-medium text-foreground">Changed fields</div>
                           <div className="mt-3 flex flex-wrap gap-2">
-                            {selectedVersion.delta?.changedFields?.length ? (
-                              selectedVersion.delta.changedFields.map((field) => (
-                                <Badge key={field} variant="outline">
-                                  {field}
+                            {selectedFieldChanges.length ? (
+                              selectedFieldChanges.map((change) => (
+                                <Badge key={change.field} variant="outline">
+                                  {change.field}
                                 </Badge>
                               ))
                             ) : (
@@ -257,8 +267,8 @@ export function ActorVersionHistoryPage({ actorId }: { actorId: string }) {
                         <div className="rounded-[28px] border border-border bg-muted/20 p-5">
                           <div className="text-sm font-medium text-foreground">Changed docs</div>
                           <div className="mt-3 flex flex-wrap gap-2">
-                            {selectedVersion.delta?.changedDocs?.length ? (
-                              selectedVersion.delta.changedDocs.map((doc) => (
+                            {selectedDocChanges.length ? (
+                              selectedDocChanges.map((doc) => (
                                 <Badge key={`${selectedVersion.id}:${doc.docId}`} variant="outline">
                                   {doc.title} · {doc.changeType}
                                 </Badge>
@@ -272,14 +282,14 @@ export function ActorVersionHistoryPage({ actorId }: { actorId: string }) {
                     </CardContent>
                   </Card>
 
-                  {selectedVersion.delta?.changedDocs?.length ? (
+                  {selectedDocChanges.length ? (
                     <Card>
                       <CardHeader>
                         <CardTitle>Doc-level edits</CardTitle>
-                        <CardDescription>Each changed doc keeps a compact summary alongside the snapshot.</CardDescription>
+                        <CardDescription>Each changed doc keeps a compact summary and field-level diff.</CardDescription>
                       </CardHeader>
                       <CardContent className="flex flex-col gap-4">
-                        {selectedVersion.delta.changedDocs.map((doc) => (
+                        {selectedDocChanges.map((doc) => (
                           <div key={`${selectedVersion.id}:${doc.docId}`} className="rounded-[28px] border border-border p-5">
                             <div className="flex flex-wrap items-center gap-2">
                               <div className="font-medium text-foreground">{doc.title}</div>
@@ -289,26 +299,32 @@ export function ActorVersionHistoryPage({ actorId }: { actorId: string }) {
                             <div className="mt-4">
                               <CanonicalContentRenderer blocks={doc.summary} emptyText="No summary for this doc change." />
                             </div>
-                            {doc.before || doc.after ? (
-                              <div className="mt-5 grid gap-4 xl:grid-cols-2">
-                                <div className="rounded-3xl border border-border bg-muted/20 p-4">
-                                  <div className="mb-3 text-sm font-medium text-foreground">Before</div>
-                                  {doc.before ? (
-                                    <CanonicalContentRenderer blocks={doc.before.content} emptyText="No content in previous version." />
-                                  ) : (
-                                    <p className="text-sm text-muted-foreground">This doc did not exist before this version.</p>
-                                  )}
+                            <div className="mt-5 rounded-3xl border border-border bg-muted/20 p-4">
+                              <div className="mb-3 text-sm font-medium text-foreground">Field changes</div>
+                              {doc.fieldChanges?.length ? (
+                                <div className="flex flex-col gap-3">
+                                  {doc.fieldChanges.map((change, index) => (
+                                    <div key={`${doc.docId}:${change.field}:${index}`} className="rounded-2xl border border-border/60 bg-background/80 p-3">
+                                      <div className="text-sm font-medium text-foreground">{change.field}</div>
+                                      {typeof change.before !== "undefined" || typeof change.after !== "undefined" ? (
+                                        <div className="mt-1 text-sm text-muted-foreground">
+                                          {`${String(change.before ?? "empty")} -> ${String(change.after ?? "empty")}`}
+                                        </div>
+                                      ) : null}
+                                      {change.beforeSummaryText || change.afterSummaryText ? (
+                                        <div className="mt-2 text-sm text-muted-foreground">
+                                          {[change.beforeSummaryText ? `Before: ${change.beforeSummaryText}` : null, change.afterSummaryText ? `After: ${change.afterSummaryText}` : null]
+                                            .filter(Boolean)
+                                            .join(" ")}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ))}
                                 </div>
-                                <div className="rounded-3xl border border-border bg-muted/20 p-4">
-                                  <div className="mb-3 text-sm font-medium text-foreground">After</div>
-                                  {doc.after ? (
-                                    <CanonicalContentRenderer blocks={doc.after.content} emptyText="No content in new version." />
-                                  ) : (
-                                    <p className="text-sm text-muted-foreground">This doc was removed in this version.</p>
-                                  )}
-                                </div>
-                              </div>
-                            ) : null}
+                              ) : (
+                                <p className="text-sm text-muted-foreground">No field-level detail recorded for this doc change.</p>
+                              )}
+                            </div>
                           </div>
                         ))}
                       </CardContent>
@@ -339,9 +355,9 @@ export function ActorVersionHistoryPage({ actorId }: { actorId: string }) {
                             </div>
                             <Separator />
                             <div className="flex items-center justify-between gap-4">
-                              <span className="text-muted-foreground">Capabilities</span>
+                              <span className="text-muted-foreground">Specialties</span>
                               <span className="font-medium text-foreground">
-                                {selectedVersion.snapshot.capabilities.length || "No structured capabilities"}
+                                {selectedVersion.snapshot.specialties.length || "No structured specialties"}
                               </span>
                             </div>
                           </div>

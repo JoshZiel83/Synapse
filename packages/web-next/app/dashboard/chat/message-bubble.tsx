@@ -99,67 +99,88 @@ function getRuntimeDetail(runtime?: ActorRuntimeState) {
   return undefined
 }
 
-/**
- * Process <cite index="X-Y">text</cite> tags from Anthropic responses.
- * Returns processed content (cite tags replaced with text + superscript markers)
- * and a list of unique sources referenced.
- */
-function processCitations(
-  content: string,
+function buildRenderedMessageBlocks(
+  contentBlocks: CanonicalContentBlock[],
   citationSources?: Record<string, { url: string; title: string }>
 ): {
-  processedContent: string
+  blocks: RenderedMessageBlock[]
   sources: { num: number; url: string; title: string }[]
 } {
   if (!citationSources || Object.keys(citationSources).length === 0) {
-    return { processedContent: content, sources: [] }
+    return {
+      blocks: contentBlocks.map((block) =>
+        block.type === "text"
+          ? {
+              id: block.id,
+              type: "text" as const,
+              text: block.text.replace(/<br\s*\/?>/gi, "\n"),
+            }
+          : {
+              id: block.id,
+              type: "file_ref" as const,
+              block,
+            }
+      ),
+      sources: [],
+    }
   }
 
   const usedSources: { num: number; url: string; title: string }[] = []
   const urlToNum = new Map<string, number>()
 
-  const processedContent = content.replace(
-    /<cite\s+index="([^"]+)">([\s\S]*?)<\/cite>/g,
-    (_match, indices: string, text: string) => {
-      const indexList = indices.split(",").map((s: string) => s.trim())
-      const refNums: number[] = []
-
-      for (const idx of indexList) {
-        // Look up source by exact key or cit- prefixed key
-        const source = citationSources[idx] || citationSources[`cit-${idx}`]
-        if (!source) continue
-
-        if (!urlToNum.has(source.url)) {
-          const num = usedSources.length + 1
-          urlToNum.set(source.url, num)
-          usedSources.push({ num, url: source.url, title: source.title })
-        }
-        refNums.push(urlToNum.get(source.url)!)
-      }
-
-      if (refNums.length === 0) return text
-
-      // Deduplicate and format as superscript notation
-      const unique = Array.from(new Set(refNums))
-      const sup = unique.map((n) => `^[${n}]`).join("")
-      return `${text}${sup}`
-    }
-  )
-
-  // Also check if there are citation sources not referenced by <cite> tags
-  // (structured citations from Anthropic text blocks or OpenAI url_citations)
-  for (const [key, source] of Object.entries(citationSources)) {
-    if (
-      (key.startsWith("cit-") || key.startsWith("oai-")) &&
-      !urlToNum.has(source.url)
-    ) {
+  function registerSource(source: { url: string; title: string }) {
+    if (!urlToNum.has(source.url)) {
       const num = usedSources.length + 1
       urlToNum.set(source.url, num)
       usedSources.push({ num, url: source.url, title: source.title })
     }
+    return urlToNum.get(source.url)!
   }
 
-  return { processedContent, sources: usedSources }
+  const blocks = contentBlocks.map((block) => {
+    if (block.type === "file_ref") {
+      return {
+        id: block.id,
+        type: "file_ref" as const,
+        block,
+      }
+    }
+
+    const sanitized = block.text.replace(/<br\s*\/?>/gi, "\n")
+    const processedText = sanitized.replace(
+      /<cite\s+index="([^"]+)">([\s\S]*?)<\/cite>/g,
+      (_match, indices: string, text: string) => {
+        const indexList = indices.split(",").map((s: string) => s.trim())
+        const refNums: number[] = []
+
+        for (const idx of indexList) {
+          const source = citationSources[idx] || citationSources[`cit-${idx}`]
+          if (!source) continue
+          refNums.push(registerSource(source))
+        }
+
+        if (refNums.length === 0) return text
+
+        const unique = Array.from(new Set(refNums))
+        const sup = unique.map((n) => `^[${n}]`).join("")
+        return `${text}${sup}`
+      }
+    )
+
+    return {
+      id: block.id,
+      type: "text" as const,
+      text: processedText,
+    }
+  })
+
+  for (const [key, source] of Object.entries(citationSources)) {
+    if ((key.startsWith("cit-") || key.startsWith("oai-")) && !urlToNum.has(source.url)) {
+      registerSource(source)
+    }
+  }
+
+  return { blocks, sources: usedSources }
 }
 
 function CitationFooter({
@@ -207,6 +228,18 @@ type MessageRecipient = Pick<
 >
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
+type RenderedMessageBlock =
+  | {
+      id: string
+      type: "text"
+      text: string
+    }
+  | {
+      id: string
+      type: "file_ref"
+      block: FileRefBlock
+    }
+
 const AUDIO_EXTENSIONS = [
   ".wav",
   ".mp3",
@@ -329,7 +362,7 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
 
   return (
     <>
-      <div className="mb-2 space-y-2">
+      <div className="space-y-2">
         {blocks.map((block) => {
           const cat = block.category
           const resolvedUrl = resolveFileUrl(block.url) || block.url
@@ -417,6 +450,83 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
         </div>
       )}
     </>
+  )
+}
+
+function MarkdownTextBlock({ text }: { text: string }) {
+  if (!text) return null
+
+  return (
+    <div className="prose prose-sm prose-p:my-1.5 prose-headings:text-foreground prose-code:rounded prose-code:bg-primary/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-xs prose-code:text-primary prose-code:before:content-none prose-code:after:content-none prose-pre:rounded-2xl prose-pre:border prose-pre:border-border prose-pre:bg-muted prose-strong:text-foreground dark:prose-invert max-w-none">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          img: ({ src, alt, ...props }) => (
+            <ExpandableImage src={src} alt={alt} {...props} />
+          ),
+          a: ({ href, children, ...props }) => {
+            const isAudio =
+              href &&
+              AUDIO_EXTENSIONS.some((ext) => href.toLowerCase().endsWith(ext))
+
+            if (isAudio) {
+              return (
+                <span className="my-2 block">
+                  <audio controls className="h-8 w-full" preload="metadata">
+                    <source src={href} />
+                  </audio>
+                  <span className="mt-0.5 block text-[10px] text-muted-foreground/50">
+                    {String(children) || href}
+                  </span>
+                </span>
+              )
+            }
+
+            return (
+              <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+                {...props}
+              >
+                {children}
+              </a>
+            )
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+function MessageContentBlocks({
+  blocks,
+  isUser,
+}: {
+  blocks: RenderedMessageBlock[]
+  isUser: boolean
+}) {
+  if (blocks.length === 0) return null
+
+  return (
+    <div className="space-y-2">
+      {blocks.map((block) =>
+        block.type === "file_ref" ? (
+          <FileBlockPreview key={block.id} blocks={[block.block]} />
+        ) : isUser ? (
+          block.text ? (
+            <p key={block.id} className="whitespace-pre-wrap">
+              {block.text}
+            </p>
+          ) : null
+        ) : (
+          <MarkdownTextBlock key={block.id} text={block.text} />
+        )
+      )}
+    </div>
   )
 }
 
@@ -590,13 +700,6 @@ export default function MessageBubble({
   const isSystem = role === "system"
   const isError = role === "error"
   const textContent = useMemo(() => extractText(contentBlocks), [contentBlocks])
-  const fileBlocks = useMemo(
-    () =>
-      contentBlocks.filter(
-        (block): block is FileRefBlock => block.type === "file_ref"
-      ),
-    [contentBlocks]
-  )
   const recipients = useMemo(
     () => resolveRecipients(groupMembers, targetActorIds, targetUserIds),
     [groupMembers, targetActorIds, targetUserIds]
@@ -604,12 +707,10 @@ export default function MessageBubble({
   const hasExplicitTargets =
     (targetActorIds?.length || 0) + (targetUserIds?.length || 0) > 0
 
-  // Process citations and sanitize raw HTML tags
-  const { processedContent, sources } = useMemo(() => {
-    // Replace <br>, <br/>, <br /> with newlines so ReactMarkdown renders them
-    const sanitized = textContent.replace(/<br\s*\/?>/gi, "\n")
-    return processCitations(sanitized, citationSources)
-  }, [citationSources, textContent])
+  const { blocks: renderedBlocks, sources } = useMemo(
+    () => buildRenderedMessageBlocks(contentBlocks, citationSources),
+    [citationSources, contentBlocks]
+  )
 
   if (isError) {
     return (
@@ -649,7 +750,6 @@ export default function MessageBubble({
   const hasServerToolCalls = serverToolCalls && serverToolCalls.length > 0
   const hasToolsUsed = toolsUsed && toolsUsed.length > 0
   const hasCitations = sources.length > 0
-  const hasFileBlocks = fileBlocks.length > 0
   const isRetrying = isUser && status === "retrying"
 
   // Coordination messages (send_to between actors) — render in a compact style
@@ -664,11 +764,8 @@ export default function MessageBubble({
                 {actorName}
               </span>
             </div>
-            {hasFileBlocks && <FileBlockPreview blocks={fileBlocks} />}
             <div className="text-xs leading-relaxed text-muted-foreground/70">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {processedContent}
-              </ReactMarkdown>
+              <MessageContentBlocks blocks={renderedBlocks} isUser={false} />
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[9px] text-muted-foreground/30">
               {timestamp ? (
@@ -744,60 +841,7 @@ export default function MessageBubble({
                   : "rounded-tl-sm border-border bg-background text-foreground"
             } `}
           >
-            {hasFileBlocks && <FileBlockPreview blocks={fileBlocks} />}
-
-            {!isUser ? (
-              textContent ? (
-                <div className="prose prose-sm prose-p:my-1.5 prose-headings:text-foreground prose-code:rounded prose-code:bg-primary/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-xs prose-code:text-primary prose-code:before:content-none prose-code:after:content-none prose-pre:rounded-2xl prose-pre:border prose-pre:border-border prose-pre:bg-muted prose-strong:text-foreground dark:prose-invert max-w-none">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      img: ({ src, alt, ...props }) => (
-                        <ExpandableImage src={src} alt={alt} {...props} />
-                      ),
-                      a: ({ href, children, ...props }) => {
-                        const isAudio =
-                          href &&
-                          AUDIO_EXTENSIONS.some((ext) =>
-                            href.toLowerCase().endsWith(ext)
-                          )
-                        if (isAudio) {
-                          return (
-                            <span className="my-2 block">
-                              <audio
-                                controls
-                                className="h-8 w-full"
-                                preload="metadata"
-                              >
-                                <source src={href} />
-                              </audio>
-                              <span className="mt-0.5 block text-[10px] text-muted-foreground/50">
-                                {String(children) || href}
-                              </span>
-                            </span>
-                          )
-                        }
-                        return (
-                          <a
-                            href={href}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary hover:underline"
-                            {...props}
-                          >
-                            {children}
-                          </a>
-                        )
-                      },
-                    }}
-                  >
-                    {processedContent}
-                  </ReactMarkdown>
-                </div>
-              ) : null
-            ) : textContent ? (
-              <p className="whitespace-pre-wrap">{textContent}</p>
-            ) : null}
+            <MessageContentBlocks blocks={renderedBlocks} isUser={isUser} />
 
             {/* Citation sources footer */}
             {hasCitations && <CitationFooter sources={sources} />}

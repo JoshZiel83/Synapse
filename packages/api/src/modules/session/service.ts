@@ -46,6 +46,20 @@ async function emitChatFeedItem(workspaceId: string, itemId: string) {
   });
 }
 
+async function getActorJoinVersionId(actorId: UUID) {
+  const result = await query(
+    `SELECT current_version.id AS actor_version_id
+     FROM actors a
+     JOIN actor_versions current_version
+       ON current_version.actor_id = a.id
+      AND current_version.version = a.current_version
+     WHERE a.id = $1
+     LIMIT 1`,
+    [actorId],
+  );
+  return (result.rows[0]?.actor_version_id as string | undefined) || undefined;
+}
+
 async function loadSession(sessionId: UUID): Promise<any | null> {
   const result = await query(
     `SELECT s.*,
@@ -67,10 +81,12 @@ async function resolveSessionMessageAuthor(params: {
   fromUserId?: UUID;
 }) {
   if (params.fromActorId) {
+    const actorJoinVersionId = await getActorJoinVersionId(params.fromActorId);
     return ensureConversationMember({
       conversationId: params.conversationId,
       memberType: 'actor',
       actorId: params.fromActorId,
+      actorJoinVersionId,
     });
   }
 
@@ -166,6 +182,7 @@ export async function createSession(params: {
     conversationId: finalConversationId,
     memberType: 'actor',
     actorId,
+    actorJoinVersionId: await getActorJoinVersionId(actorId),
   });
 
   if (directConversationCreated && resolvedUserId) {
@@ -458,7 +475,13 @@ export async function getActiveSessionCount(actorId: UUID): Promise<number> {
 
 export async function getMaxConcurrentSessions(actorId: UUID): Promise<number> {
   const result = await query(
-    'SELECT max_concurrent_sessions FROM actors WHERE id = $1',
+    `SELECT CASE
+         WHEN COALESCE(config->>'maxConcurrentSessions', '') ~ '^[0-9]+$'
+           THEN GREATEST((config->>'maxConcurrentSessions')::int, 1)
+         ELSE 3
+       END AS max_concurrent_sessions
+     FROM actors
+     WHERE id = $1`,
     [actorId],
   );
   return result.rows[0]?.max_concurrent_sessions ?? 3;

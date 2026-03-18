@@ -8,7 +8,7 @@ import {
   queueAuthzRelationships,
   touchRelation,
 } from "../../infrastructure/authz/index.js";
-import { normalizeActorDocs, SECRETARY_DEFAULT_DOCS } from "@synapse/shared";
+import { SECRETARY_DEFAULT_DOCS } from "@synapse/shared";
 import { listAuthorizedResourceIds, userSubject } from "../access/service.js";
 
 export interface CreateWorkspaceInput {
@@ -26,7 +26,8 @@ export interface AddMemberInput {
 export type WorkspaceAccessKey =
   | "model_admin"
   | "actor_admin"
-  | "capability_admin"
+  | "skill_admin"
+  | "plugin_admin"
   | "memory_admin"
   | "relay_admin"
   | "conversation_admin";
@@ -62,31 +63,10 @@ function generateSlug(name: string): string {
   return `${base}-${suffix}`;
 }
 
-async function insertDefaultActorGrants(
-  queryable: Pick<pg.PoolClient, "query">,
-  actorId: string,
-  workspaceId: string,
-  grantedBy?: string | null,
-) {
-  await queryable.query(
-    `INSERT INTO actor_grants (
-       actor_id,
-       permission,
-       grant_scope,
-       workspace_id,
-       status,
-       granted_by,
-       metadata
-     )
-     VALUES
-       ($1, 'discover', 'workspace', $2, 'active', $3, '{}'::jsonb),
-       ($1, 'invoke', 'workspace', $2, 'active', $3, '{}'::jsonb)`,
-    [actorId, workspaceId, grantedBy ?? null],
-  );
-}
-
 export async function createWorkspace(input: CreateWorkspaceInput) {
   const slug = generateSlug(input.name);
+  const secretaryDocs = SECRETARY_DEFAULT_DOCS;
+  const secretarySpecialties = ["delegation", "reporting", "organization"];
 
   const result = await transaction(async (client: pg.PoolClient) => {
     // 1. Create workspace
@@ -106,48 +86,81 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     );
 
     // 3. Auto-create secretary actor
-    const secretaryDocs = SECRETARY_DEFAULT_DOCS;
     const secretaryResult = await client.query(
       `INSERT INTO actors (
-         workspace_id, name, role, title, can_represent_user, docs, parent_id, capabilities, current_version
+         workspace_id,
+         name,
+         role,
+         title,
+         parent_id,
+         can_represent_user,
+         specialties,
+         config,
+         current_version,
+         created_by
        )
-       VALUES ($1, $2, $3, $4, false, $5, $6, $7, 1)
+       VALUES ($1, $2, $3, $4, NULL, FALSE, $5, '{}'::jsonb, 1, $6)
        RETURNING *`,
       [
         workspace.id,
         "Secretary",
         "secretary",
         "Personal Secretary",
-        JSON.stringify(secretaryDocs),
-        null,
-        ["delegation", "reporting", "organization"],
+        secretarySpecialties,
+        input.userId,
       ],
     );
     const secretary = secretaryResult.rows[0];
 
     // 4. Create initial actor_versions record for secretary
-    await client.query(
+    const actorVersionResult = await client.query<{ id: string }>(
       `INSERT INTO actor_versions (
-         actor_id, version, name, role, title, avatar_file_id, parent_id, can_represent_user, docs,
-         config, capabilities
+         actor_id,
+         version,
+         name,
+         role,
+         title,
+         avatar_blob_id,
+         parent_id,
+         can_represent_user,
+         specialties,
+         config,
+         created_by
        )
-       VALUES ($1, 1, $2, $3, $4, NULL, NULL, false, $5, '{}', $6)`,
+       VALUES ($1, 1, $2, $3, $4, NULL, NULL, FALSE, $5, '{}'::jsonb, $6)
+       RETURNING id`,
       [
         secretary.id,
         secretary.name,
         secretary.role,
         secretary.title,
-        JSON.stringify(secretaryDocs),
-        secretary.capabilities,
+        secretarySpecialties,
+        input.userId,
       ],
     );
+    const actorVersionId = actorVersionResult.rows[0]!.id;
 
-    await insertDefaultActorGrants(
-      client,
-      secretary.id,
-      workspace.id,
-      input.userId,
-    );
+    for (const doc of secretaryDocs) {
+      await client.query(
+        `INSERT INTO actor_version_docs (
+           actor_version_id,
+           doc_key,
+           title,
+           visibility,
+           priority,
+           content_blocks
+         )
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+        [
+          actorVersionId,
+          doc.key,
+          doc.title,
+          doc.visibility,
+          doc.priority,
+          JSON.stringify(doc.content),
+        ],
+      );
+    }
 
     const authzEntryIds = await queueAuthzRelationships(
       client,
@@ -187,6 +200,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
           "workspace",
           workspace.id,
         ),
+        touchRelation("actor", secretary.id, "owner", "user", input.userId),
         touchRelation(
           "actor",
           secretary.id,
@@ -201,6 +215,13 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
           "workspace",
           workspace.id,
         ),
+        touchRelation(
+          "actor",
+          secretary.id,
+          "receive_workspace",
+          "workspace",
+          workspace.id,
+        ),
       ],
       {
         source: "workspace.create",
@@ -211,7 +232,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
 
     return {
       workspace: mapWorkspaceRow(workspace),
-      secretary: mapActorRow(secretary),
+      secretary: mapActorRow(secretary, secretaryDocs),
       authzEntryIds,
     };
   });
@@ -514,10 +535,7 @@ function mapWorkspaceRow(row: any) {
   };
 }
 
-function mapActorRow(row: any) {
-  const docs = normalizeActorDocs(
-    typeof row.docs === "string" ? JSON.parse(row.docs) : row.docs || [],
-  );
+function mapActorRow(row: any, docs: typeof SECRETARY_DEFAULT_DOCS) {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -525,11 +543,11 @@ function mapActorRow(row: any) {
       name: row.name,
       role: row.role,
       title: row.title,
-      avatarFileId: row.avatar_file_id ?? undefined,
+      avatarFileId: row.avatar_blob_id ?? undefined,
       parentId: row.parent_id ?? undefined,
       canRepresentUser: Boolean(row.can_represent_user),
       docs,
-      capabilities: Array.isArray(row.capabilities) ? row.capabilities : [],
+      specialties: Array.isArray(row.specialties) ? row.specialties : [],
       config: row.config
         ? typeof row.config === "string"
           ? JSON.parse(row.config)

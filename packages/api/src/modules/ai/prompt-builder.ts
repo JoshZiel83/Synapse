@@ -1,10 +1,10 @@
 import {
+  AvailableSkillSummary,
   extractText,
   normalizeActorDocs,
 } from '@synapse/shared';
 import type {
   ActorDoc,
-  CapabilityAvailableSkill,
   ToolDefinition,
 } from '@synapse/shared';
 
@@ -117,7 +117,7 @@ export function buildActorPrompt(
   _sessionContext?: any,
   extraTools?: ToolDefinition[],
   groupMembers?: GroupMemberInfo[],
-  availableSkills?: CapabilityAvailableSkill[],
+  availableSkills?: AvailableSkillSummary[],
 ): { system: string } {
   const parts: string[] = [];
   const mode: 'solo' | 'group' = groupMembers && groupMembers.length > 0 ? 'group' : 'solo';
@@ -137,11 +137,13 @@ export function buildActorPrompt(
     renderDocSections(actor, mode),
   );
 
-  const capabilities = Array.isArray(source.capabilities) ? source.capabilities : parseJsonArray<string>(source.capabilities ?? actor.capabilities);
-  if (capabilities.length > 0) {
+  const specialties = Array.isArray(source.specialties)
+    ? source.specialties
+    : parseJsonArray<string>(source.specialties ?? actor.specialties);
+  if (specialties.length > 0) {
     parts.push(
-      `## Your Structured Capabilities\n` +
-      capabilities.map((capability: string) => `- \`${capability}\``).join('\n'),
+      `## Your Structured Specialties\n` +
+      specialties.map((specialty: string) => `- \`${specialty}\``).join('\n'),
     );
   }
 
@@ -214,6 +216,10 @@ export function buildActorPrompt(
       `- **You MUST use \`send_to\` to reply.** Plain text output is internal reasoning only.\n` +
       `- Your internal tool calls (MCP tools, memory_search, create_memory, and so on) are not visible to the group.\n` +
       `- Only \`send_to\` produces visible messages.\n` +
+      `- Do not call \`sleep\` until you have decided whether the group needs a visible message from you.\n` +
+      `- If this wakeup leads to a result, handoff, clarification, or explicit "no action needed" decision that others should know, use \`send_to\` first and only then call \`sleep\`.\n` +
+      `- In a two-member conversation, you must use \`send_to\` before \`sleep\`.\n` +
+      `- In larger groups, you may sleep without \`send_to\` only when the wakeup is truly unrelated to you and the intended assignee already received the message, so your own visible reply would add no value.\n` +
       `- All visible group messages are public to the whole group.\n` +
       `- A \`send_to\` recipient indicates who should read or act on the message first; it does not make the message private.\n` +
       `- If a public message is not addressed to you, treat it as shared context unless you are explicitly asked to respond or need to step in to unblock the work.\n` +

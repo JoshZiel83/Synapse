@@ -1,8 +1,8 @@
-import type { CapabilityPackageKind, LocalizedText } from '@synapse/shared';
+import type { MarketplaceItemKind, LocalizedText } from '@synapse/shared';
 
 export interface BuiltinCapabilityCategorySeed {
   slug: string;
-  targetKind: CapabilityPackageKind;
+  targetKind: MarketplaceItemKind;
   displayName: string;
   displayNameI18n?: LocalizedText;
   description?: string;

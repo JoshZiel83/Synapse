@@ -2,9 +2,16 @@ import { createHash } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../../infrastructure/database/index.js';
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function stableStringify(value: unknown): string {
   if (typeof value === 'string') return value;
   return JSON.stringify(value, Object.keys(value as Record<string, unknown>).sort());
+}
+
+function asNullableUuid(value: unknown) {
+  return typeof value === 'string' && UUID_PATTERN.test(value) ? value : null;
 }
 
 async function storePayloadBlobInternal(contentType: 'json' | 'text', payload: unknown, retentionClass = 'audit') {
@@ -149,9 +156,9 @@ export async function logProviderStep(params: {
       params.stepIndex,
       params.providerType,
       params.requestType,
-      params.modelGroupId || null,
-      params.modelProfileId || null,
-      params.modelProfileRevisionId || null,
+      asNullableUuid(params.modelGroupId),
+      asNullableUuid(params.modelProfileId),
+      asNullableUuid(params.modelProfileRevisionId),
       params.modelName,
       JSON.stringify(params.capabilitiesSnapshot || {}),
       requestPayloadBlobId,

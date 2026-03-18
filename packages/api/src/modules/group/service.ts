@@ -91,6 +91,33 @@ function parseConversationMetadata(value: unknown): Record<string, unknown> {
     : {};
 }
 
+async function loadActorJoinVersionRefs(
+  workspaceId: string,
+  actorIds: string[],
+) {
+  const refs = new Map<string, string>();
+  if (actorIds.length === 0) {
+    return refs;
+  }
+
+  const result = await query(
+    `SELECT a.id, current_version.id AS actor_version_id
+     FROM actors a
+     JOIN actor_versions current_version
+       ON current_version.actor_id = a.id
+      AND current_version.version = a.current_version
+     WHERE a.workspace_id = $1
+       AND a.id = ANY($2::uuid[])`,
+    [workspaceId, actorIds],
+  );
+
+  for (const row of result.rows) {
+    refs.set(row.id as string, row.actor_version_id as string);
+  }
+
+  return refs;
+}
+
 function stripUndefined<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).filter(([, entry]) => entry !== undefined),
@@ -584,6 +611,7 @@ export async function createGroup(params: {
   } = params;
   const groupId = uuidv4();
   const batchId = uuidv4();
+  const actorJoinVersionRefs = await loadActorJoinVersionRefs(workspaceId, actorIds);
 
   const result = await transaction(async (client) => {
     const actorRows =
@@ -659,9 +687,14 @@ export async function createGroup(params: {
       const memberId = uuidv4();
       await client.query(
         `INSERT INTO conversation_members
-           (id, conversation_id, member_type, actor_id, state, metadata, joined_at)
-         VALUES ($1, $2, 'actor', $3, 'active', '{}'::jsonb, NOW())`,
-        [memberId, groupId, actorId],
+           (id, conversation_id, member_type, actor_id, actor_join_version_id, state, metadata, joined_at)
+         VALUES ($1, $2, 'actor', $3, $4, 'active', '{}'::jsonb, NOW())`,
+        [
+          memberId,
+          groupId,
+          actorId,
+          actorJoinVersionRefs.get(actorId) || null,
+        ],
       );
       members.push({ id: memberId, actorId, sessionId });
 
@@ -980,6 +1013,7 @@ export async function addActorToGroup(
 ): Promise<{ member: any; session: any }> {
   const group = await getGroup(groupId);
   if (!group) throw new Error("Group not found");
+  const actorJoinVersionId = (await loadActorJoinVersionRefs(group.workspace_id, [actorId])).get(actorId);
 
   const existing = await getConversationMember({
     conversationId: groupId,
@@ -999,6 +1033,7 @@ export async function addActorToGroup(
       conversationId: groupId,
       memberType: "actor",
       actorId,
+      actorJoinVersionId,
     });
     const session = await createSession({
       workspaceId: group.workspace_id,
@@ -1127,6 +1162,7 @@ export async function addMembersToGroup(params: {
   const actorMap = new Map(
     actorResult.rows.map((row) => [row.id as string, row]),
   );
+  const actorJoinVersionRefs = await loadActorJoinVersionRefs(params.workspaceId, actorIds);
   const userMap = new Map(
     userResult.rows.map((row) => [row.id as string, row]),
   );
@@ -1155,6 +1191,7 @@ export async function addMembersToGroup(params: {
         conversationId: params.groupId,
         memberType: "actor",
         actorId,
+        actorJoinVersionId: actorJoinVersionRefs.get(actorId),
       });
       const session = await createSession({
         workspaceId: params.workspaceId,
@@ -1406,15 +1443,61 @@ export async function removeActorFromGroup(
   });
 }
 
-export async function getGroupMembers(groupId: string): Promise<any[]> {
+export async function getGroupMembers(
+  groupId: string,
+  options?: { useProfileSnapshot?: boolean },
+): Promise<any[]> {
+  const actorNameExpr = options?.useProfileSnapshot
+    ? "COALESCE(joined_version.name, a.name)"
+    : "a.name";
+  const actorTitleExpr = options?.useProfileSnapshot
+    ? "COALESCE(joined_version.title, a.title)"
+    : "a.title";
+  const actorRoleExpr = options?.useProfileSnapshot
+    ? "COALESCE(joined_version.role, a.role)"
+    : "a.role";
+  const actorCanRepresentExpr = options?.useProfileSnapshot
+    ? "COALESCE(joined_version.can_represent_user, a.can_represent_user)"
+    : "a.can_represent_user";
+  const actorSpecialtiesExpr = options?.useProfileSnapshot
+    ? "COALESCE(joined_version.specialties, a.specialties)"
+    : "a.specialties";
+  const actorConfigExpr = options?.useProfileSnapshot
+    ? "COALESCE(joined_version.config, a.config)"
+    : "a.config";
+  const actorCurrentVersionExpr = options?.useProfileSnapshot
+    ? "COALESCE(joined_version.version, a.current_version)"
+    : "a.current_version";
+  const actorDocVersionExpr = options?.useProfileSnapshot
+    ? "COALESCE(cm.actor_join_version_id, current_version.id)"
+    : "current_version.id";
+
   const result = await query(
     `SELECT cm.*,
-            a.name AS actor_name,
-            a.title AS actor_title,
-            a.role AS actor_role,
-            a.docs AS actor_docs,
-            a.can_represent_user AS actor_can_represent_user,
-            a.current_version AS actor_current_version,
+            ${actorNameExpr} AS actor_name,
+            ${actorTitleExpr} AS actor_title,
+            ${actorRoleExpr} AS actor_role,
+            COALESCE(
+              (
+                SELECT jsonb_agg(
+                  jsonb_build_object(
+                    'key', avd.doc_key,
+                    'title', avd.title,
+                    'visibility', avd.visibility,
+                    'priority', avd.priority,
+                    'content', avd.content_blocks
+                  )
+                  ORDER BY avd.priority DESC, avd.created_at ASC
+                )
+                FROM actor_version_docs avd
+                WHERE avd.actor_version_id = ${actorDocVersionExpr}
+              ),
+              '[]'::jsonb
+            ) AS actor_docs,
+            ${actorCanRepresentExpr} AS actor_can_represent_user,
+            ${actorSpecialtiesExpr} AS actor_specialties,
+            ${actorConfigExpr} AS actor_config,
+            ${actorCurrentVersionExpr} AS actor_current_version,
             a.config->>'avatar_emoji' AS actor_avatar_emoji,
             actor_avatar_file.stored_name AS actor_avatar_stored_name,
             u.name AS user_name,
@@ -1423,6 +1506,11 @@ export async function getGroupMembers(groupId: string): Promise<any[]> {
             ls.status AS session_status
      FROM conversation_members cm
      LEFT JOIN actors a ON a.id = cm.actor_id
+     LEFT JOIN actor_versions current_version
+       ON current_version.actor_id = a.id
+      AND current_version.version = a.current_version
+     LEFT JOIN actor_versions joined_version
+       ON joined_version.id = cm.actor_join_version_id
      LEFT JOIN files actor_avatar_file ON actor_avatar_file.id = a.avatar_file_id
      LEFT JOIN users u ON u.id = cm.user_id
      LEFT JOIN LATERAL (
@@ -1499,6 +1587,9 @@ export async function sendGroupMessage(params: {
           conversationId: groupId,
           memberType: "actor",
           actorId: senderActorId,
+          actorJoinVersionId: senderActorId
+            ? (await loadActorJoinVersionRefs(group.workspace_id, [senderActorId])).get(senderActorId)
+            : undefined,
         })
       : await ensureConversationMember({
           conversationId: groupId,

@@ -32,21 +32,23 @@ definition workspace {
     relation guest: user
     relation model_admin: user
     relation actor_admin: user
-    relation capability_admin: user
+    relation skill_admin: user
+    relation plugin_admin: user
     relation memory_admin: user
     relation relay_admin: user
     relation conversation_admin: user
     relation actor: actor
 
-    permission principal = owner + admin + member + model_admin + actor_admin + capability_admin + memory_admin + relay_admin + conversation_admin + actor
+    permission principal = owner + admin + member + model_admin + actor_admin + skill_admin + plugin_admin + memory_admin + relay_admin + conversation_admin + actor
     permission view = principal + guest
     permission manage = owner + admin + platform->manage_workspaces
     permission manage_members = owner + admin + platform->manage_workspaces
     permission manage_actors = owner + admin + actor_admin + platform->manage_workspaces
-    permission use_actors = owner + admin + member + model_admin + actor_admin + capability_admin + memory_admin + relay_admin + conversation_admin
+    permission use_actors = owner + admin + member + model_admin + actor_admin + skill_admin + plugin_admin + memory_admin + relay_admin + conversation_admin
     permission manage_conversations = owner + admin + conversation_admin + platform->manage_workspaces
-    permission create_conversation = owner + admin + member + model_admin + actor_admin + capability_admin + memory_admin + relay_admin + conversation_admin
-    permission manage_capabilities = owner + admin + capability_admin + platform->manage_workspaces
+    permission create_conversation = owner + admin + member + model_admin + actor_admin + skill_admin + plugin_admin + memory_admin + relay_admin + conversation_admin
+    permission manage_skills = owner + admin + skill_admin + platform->manage_workspaces
+    permission manage_plugins = owner + admin + plugin_admin + platform->manage_workspaces
     permission manage_memories = owner + admin + memory_admin + platform->manage_workspaces
     permission manage_relays = owner + admin + relay_admin + platform->manage_workspaces
     permission manage_models = owner + admin + model_admin + platform->manage_models
@@ -144,57 +146,6 @@ definition conversation {
     permission memory_delete = (admin + workspace->manage_conversations + memory_deleter) & view
 }
 
-definition actor_instance {
-    relation workspace: workspace
-    relation owner: user | actor
-    relation editor: user | actor
-    relation use_principal: user | actor
-    relation use_actor_conversation: actor_conversation
-    relation use_conversation: conversation
-    relation use_workspace: workspace
-    relation use_platform: platform
-
-    permission use = owner + editor + workspace->manage_capabilities + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal + use_platform->principal
-    permission view = use + workspace->manage_capabilities
-    permission edit = owner + editor + workspace->manage_capabilities
-    permission grant = edit
-    permission delete = owner + workspace->manage_capabilities
-}
-
-definition skill_instance {
-    relation workspace: workspace
-    relation owner: user | actor
-    relation editor: user | actor
-    relation use_principal: user | actor
-    relation use_actor_conversation: actor_conversation
-    relation use_conversation: conversation
-    relation use_workspace: workspace
-    relation use_platform: platform
-
-    permission use = owner + editor + workspace->manage_capabilities + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal + use_platform->principal
-    permission view = use + workspace->manage_capabilities
-    permission edit = owner + editor + workspace->manage_capabilities
-    permission grant = edit
-    permission delete = owner + workspace->manage_capabilities
-}
-
-definition plugin_instance {
-    relation workspace: workspace
-    relation owner: user | actor
-    relation editor: user | actor
-    relation use_principal: user | actor
-    relation use_actor_conversation: actor_conversation
-    relation use_conversation: conversation
-    relation use_workspace: workspace
-    relation use_platform: platform
-
-    permission use = owner + editor + workspace->manage_capabilities + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal + use_platform->principal
-    permission view = use + workspace->manage_capabilities
-    permission edit = owner + editor + workspace->manage_capabilities
-    permission grant = edit
-    permission delete = owner + workspace->manage_capabilities
-}
-
 definition memory {
     relation workspace: workspace
     relation owner_user: user
@@ -271,3 +222,64 @@ definition model_group {
 // model_group:group_01#owner_workspace@workspace:ws_01
 // model_group:group_01#use_workspace@workspace:ws_01
 // model_profile:profile_01#group@model_group:group_01
+
+definition installed_skill {
+    relation workspace: workspace
+    relation owner: user | actor
+    relation editor: user | actor
+    relation use_principal: user | actor
+    relation use_actor_conversation: actor_conversation
+    relation use_conversation: conversation
+    relation use_workspace: workspace
+
+    permission use = owner + editor + workspace->manage_skills + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal
+    permission view = use
+    permission edit = owner + editor + workspace->manage_skills
+    permission grant = edit
+    permission delete = owner + workspace->manage_skills
+}
+
+definition plugin_installation {
+    relation workspace: workspace
+    relation owner: user | actor
+    relation editor: user | actor
+    relation use_principal: user | actor
+    relation use_actor_conversation: actor_conversation
+    relation use_conversation: conversation
+    relation use_workspace: workspace
+
+    permission use = owner + editor + workspace->manage_plugins + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal
+    permission view = use
+    permission edit = owner + editor + workspace->manage_plugins
+    permission grant = edit
+    permission delete = owner + workspace->manage_plugins
+}
+
+definition relay_device {
+    relation workspace: workspace
+    relation owner: user | actor
+    relation operator: user | actor
+
+    permission view = owner + operator + workspace->manage_relays
+    permission manage = owner + operator + workspace->manage_relays
+    permission invoke = view
+    permission grant = manage
+    permission delete = owner + workspace->manage_relays
+}
+
+definition relay_exposure {
+    relation workspace: workspace
+    relation device: relay_device
+    relation owner: user | actor
+    relation operator: user | actor
+    relation use_principal: user | actor
+    relation use_actor_conversation: actor_conversation
+    relation use_conversation: conversation
+    relation use_workspace: workspace
+
+    permission view = device->view + owner + operator + workspace->manage_relays
+    permission invoke = device->invoke + owner + operator + workspace->manage_relays + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal
+    permission edit = owner + operator + workspace->manage_relays
+    permission grant = edit
+    permission delete = owner + workspace->manage_relays
+}

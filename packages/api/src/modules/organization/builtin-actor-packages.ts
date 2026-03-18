@@ -1,9 +1,9 @@
 import { normalizeActorDocs, textBlocks } from '@synapse/shared';
 import type {
+  AttachmentScope,
   ActorDefinition,
   ActorPackageDependency,
-  CapabilityAttachmentType,
-  CapabilityReuseScope,
+  ReuseScope,
 } from '@synapse/shared';
 
 interface BuiltinActorPackageSeed {
@@ -20,8 +20,8 @@ interface BuiltinActorPackageSeed {
     targetPackageKind: ActorPackageDependency['targetPackageKind'];
     targetPublisherSlug?: string;
     targetPackageSlug: string;
-    acceptableInstanceScopes?: CapabilityAttachmentType[];
-    acceptableReuseScopes?: CapabilityReuseScope[];
+    acceptableInstanceScopes?: AttachmentScope[];
+    acceptableReuseScopes?: ReuseScope[];
     description: string;
     notes?: ReturnType<typeof textBlocks>;
     metadata?: Record<string, unknown>;
@@ -100,7 +100,7 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
           priority: 78,
         },
       ]),
-      capabilities: [],
+      specialties: [],
       config: {},
     },
     setupGuide: textBlocks('Install the ZhipuAI Toolkit if you want Mira to perform live web research, document reading, OCR, and source collection.'),
@@ -196,7 +196,7 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
           priority: 80,
         },
       ]),
-      capabilities: [],
+      specialties: [],
       config: {},
     },
     setupGuide: textBlocks('Orian works without external tools, but document-reading and OCR plugins help when the team coordinates from uploaded files or screenshots.'),

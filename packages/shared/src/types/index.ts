@@ -148,8 +148,20 @@ export interface ActorDefinition {
   parentId?: UUID;
   canRepresentUser: boolean;
   docs: ActorDoc[];
-  capabilities: string[];
+  specialties: string[];
   config: Record<string, unknown>;
+}
+
+export type ActorUpdateSourceType = "user" | "actor" | "system" | "sync";
+
+export interface ActorVersionSource {
+  type: ActorUpdateSourceType;
+  userId?: UUID;
+  actorId?: UUID;
+  sessionId?: UUID;
+  turnId?: UUID;
+  conversationId?: UUID;
+  reason?: string;
 }
 
 export type ActorVersionChangedField =
@@ -159,26 +171,50 @@ export type ActorVersionChangedField =
   | "avatarFileId"
   | "parentId"
   | "canRepresentUser"
-  | "capabilities"
+  | "specialties"
   | "config";
 
+export type ActorDocChangedField =
+  | "title"
+  | "visibility"
+  | "priority"
+  | "content";
+
+export interface ActorDocFieldChange {
+  field: ActorDocChangedField;
+  before?: unknown;
+  after?: unknown;
+  beforeSummaryText?: string;
+  afterSummaryText?: string;
+}
+
+export interface ActorFieldChange {
+  kind: "field";
+  field: ActorVersionChangedField;
+  before?: unknown;
+  after?: unknown;
+  summary: CanonicalContentBlock[];
+}
+
 export interface ActorVersionDocChange {
+  kind: "doc";
   docId: UUID;
   key: ActorDocKey;
   title: string;
   changeType: "added" | "updated" | "removed";
   visibility: ActorDocVisibility;
   priority: number;
-  before?: ActorDoc;
-  after?: ActorDoc;
+  fieldChanges: ActorDocFieldChange[];
   summary: CanonicalContentBlock[];
 }
+
+export type ActorVersionChange = ActorFieldChange | ActorVersionDocChange;
 
 export interface ActorVersionDelta {
   fromVersion: number;
   toVersion: number;
-  changedFields: ActorVersionChangedField[];
-  changedDocs: ActorVersionDocChange[];
+  source?: ActorVersionSource;
+  changes: ActorVersionChange[];
   summary: CanonicalContentBlock[];
 }
 
@@ -186,8 +222,11 @@ export interface ActorVersion {
   id: UUID;
   actorId: UUID;
   version: number;
+  previousVersionId?: UUID;
   snapshot: ActorDefinition;
   delta?: ActorVersionDelta;
+  createdBy?: UUID;
+  source?: ActorVersionSource;
   createdAt: Timestamp;
 }
 
@@ -1220,7 +1259,7 @@ export interface ToolResolveContext {
   groupId?: string;
   groupMembers?: GroupMemberEntry[];
   userId?: string;
-  availableSkills?: CapabilityAvailableSkill[];
+  availableSkills?: AvailableSkillSummary[];
 }
 
 export interface ToolPlugin {
@@ -1246,25 +1285,25 @@ export interface AIResponse {
 // MCP Plugin Marketplace Types
 // ============================================================
 
-export type CapabilityPackageKind =
+export type MarketplaceItemKind =
   | "plugin"
   | "skill"
   | "actor"
   | "model";
-export type CapabilityTransport =
+export type PluginTransport =
   | "builtin"
   | "stdio"
   | "http"
   | "relay"
   | "filesystem";
-export type CapabilityAttachmentType =
+export type AttachmentScope =
   | "platform"
   | "workspace"
   | "conversation"
   | "actor_global"
   | "actor_conversation"
   | "user";
-export type CapabilityReuseScope =
+export type ReuseScope =
   | "turn"
   | "platform"
   | "workspace"
@@ -1272,48 +1311,48 @@ export type CapabilityReuseScope =
   | "actor_global"
   | "actor_conversation"
   | "user";
-export type CapabilityGrantScope = CapabilityAttachmentType;
-export type CapabilitySourceType =
+export type AccessGrantScope = AttachmentScope;
+export type MarketplaceSourceType =
   | "builtin"
   | "official"
   | "workspace_upload"
   | "user_upload"
   | "relay_derived";
-export type CapabilityPackageLineageKind =
+export type MarketplaceLineageKind =
   | "installed_copy"
   | "fork"
   | "share"
   | "relay_derivation";
-export type CapabilityPackageSyncMode =
+export type MarketplaceSyncMode =
   | "notify"
   | "manual_merge"
   | "follow_upstream"
   | "detached";
-export type CapabilityRequirementKind =
+export type MarketplaceRequirementKind =
   | "required"
   | "recommended"
   | "optional"
   | "conflicts_with";
-export type CapabilityRequirementTargetKind = "package" | "tag";
-export type CapabilityInstanceInstallMode =
+export type MarketplaceRequirementTargetKind = "package" | "tag";
+export type PluginInstallationMode =
   | "manual"
   | "seeded"
   | "relay_derived"
   | "package_required"
   | "package_recommended";
-export type CapabilityRevisionStatus =
+export type MarketplaceVersionStatus =
   | "draft"
   | "active"
   | "deprecated"
   | "archived";
-export type CapabilityGrantStatus = "active" | "revoked";
-export type CapabilityRequirementStatus =
+export type AccessGrantStatus = "active" | "revoked";
+export type MarketplaceRequirementStatus =
   | "satisfied"
   | "missing_required"
   | "missing_recommended"
   | "scope_mismatch"
   | "config_incomplete";
-export type CapabilityAssetKind =
+export type MarketplaceAssetKind =
   | "skill_markdown"
   | "reference_markdown"
   | "script"
@@ -1321,7 +1360,7 @@ export type CapabilityAssetKind =
   | "text"
   | "binary";
 export type LocalizedText = Record<string, string>;
-export type CapabilityConfigFieldType =
+export type PluginConfigFieldType =
   | "text"
   | "textarea"
   | "number"
@@ -1330,41 +1369,41 @@ export type CapabilityConfigFieldType =
   | "secret"
   | "oauth_connection"
   | "file";
-export type CapabilityInstallStepKind =
+export type PluginInstallStepKind =
   | "form"
   | "oauth"
   | "check"
   | "confirm"
   | "attachment_scope"
   | "reuse_scope";
-export type CapabilityInstallActionKind =
+export type PluginInstallActionKind =
   | "oauth_authorize"
   | "external_link"
   | "noop";
-export type CapabilityAuthProviderKind = "oauth2_authorization_code_pkce";
-export type CapabilityAuthSessionStatus =
+export type PluginAuthProviderKind = "oauth2_authorization_code_pkce";
+export type PluginAuthSessionStatus =
   | "pending"
   | "completed"
   | "failed"
   | "expired"
   | "consumed";
-export type CapabilityAuthConnectionStatus = "active" | "expired" | "revoked";
+export type PluginAuthConnectionStatus = "active" | "expired" | "revoked";
 
-export interface CapabilityConfigFieldOption {
+export interface PluginConfigFieldOption {
   value: string;
   labelI18n: LocalizedText;
   descriptionI18n?: LocalizedText;
 }
 
-export interface CapabilityConfigFieldDefinition {
+export interface PluginConfigFieldDefinition {
   key: string;
-  type: CapabilityConfigFieldType;
+  type: PluginConfigFieldType;
   titleI18n: LocalizedText;
   descriptionI18n?: LocalizedText;
   placeholderI18n?: LocalizedText;
   required?: boolean;
   defaultValue?: unknown;
-  options?: CapabilityConfigFieldOption[];
+  options?: PluginConfigFieldOption[];
   secret?: boolean;
   serverManaged?: boolean;
   authProviderKey?: string;
@@ -1372,17 +1411,17 @@ export interface CapabilityConfigFieldDefinition {
   metadata?: Record<string, unknown>;
 }
 
-export interface CapabilityInstallAction {
-  kind: CapabilityInstallActionKind;
+export interface PluginInstallAction {
+  kind: PluginInstallActionKind;
   providerKey?: string;
   url?: string;
   buttonLabelI18n?: LocalizedText;
   metadata?: Record<string, unknown>;
 }
 
-export interface CapabilityInstallStep {
+export interface PluginInstallStep {
   id: string;
-  kind: CapabilityInstallStepKind;
+  kind: PluginInstallStepKind;
   titleI18n: LocalizedText;
   descriptionI18n?: LocalizedText;
   scope: "workspace" | "plugin";
@@ -1390,17 +1429,17 @@ export interface CapabilityInstallStep {
   optional?: boolean;
   helpUrl?: string;
   helpTextI18n?: LocalizedText;
-  action?: CapabilityInstallAction;
+  action?: PluginInstallAction;
   metadata?: Record<string, unknown>;
 }
 
-export interface CapabilityInstallFlow {
-  steps: CapabilityInstallStep[];
+export interface PluginInstallFlow {
+  steps: PluginInstallStep[];
 }
 
-export interface CapabilityAuthProviderDefinition {
+export interface PluginAuthProviderDefinition {
   key: string;
-  kind: CapabilityAuthProviderKind;
+  kind: PluginAuthProviderKind;
   displayNameI18n: LocalizedText;
   descriptionI18n?: LocalizedText;
   authorizeUrl: string;
@@ -1422,7 +1461,7 @@ export interface CapabilityAuthProviderDefinition {
   metadata?: Record<string, unknown>;
 }
 
-export interface CapabilityConfigFieldState {
+export interface PluginConfigFieldState {
   key: string;
   isConfigured: boolean;
   maskedValue?: string;
@@ -1431,16 +1470,13 @@ export interface CapabilityConfigFieldState {
   updatedAt?: string;
 }
 
-export interface CapabilityAccessPolicy {
+export interface AccessPolicy {
   requiredPermissions: string[];
-  defaultGrantScope?: CapabilityGrantScope;
+  defaultGrantScope?: AccessGrantScope;
   reason?: string;
 }
 
-// Transitional alias while callers migrate away from the overloaded name.
-export type CapabilityAuthorizationManifest = CapabilityAccessPolicy;
-
-export interface CapabilityPublisher {
+export interface MarketplacePublisher {
   id: string;
   slug: string;
   displayName: string;
@@ -1453,21 +1489,21 @@ export interface CapabilityPublisher {
   updatedAt: string;
 }
 
-export interface CapabilityPackageLineage {
+export interface MarketplaceLineage {
   downstreamPackageId: string;
   upstreamPackageId: string;
   upstreamRevisionId?: string;
-  lineageKind: CapabilityPackageLineageKind;
-  syncMode: CapabilityPackageSyncMode;
+  lineageKind: MarketplaceLineageKind;
+  syncMode: MarketplaceSyncMode;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface CapabilityCategory {
+export interface MarketplaceCategory {
   id: string;
   slug: string;
-  targetKind: CapabilityPackageKind;
+  targetKind: MarketplaceItemKind;
   displayName: string;
   displayNameI18n?: LocalizedText;
   description?: string;
@@ -1481,17 +1517,17 @@ export interface CapabilityCategory {
   updatedAt: string;
 }
 
-export interface CapabilityPackageTool {
+export interface MarketplaceTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
 }
 
-export interface CapabilityAsset {
+export interface MarketplaceAsset {
   id: string;
   revisionId: string;
   path: string;
-  assetKind: CapabilityAssetKind;
+  assetKind: MarketplaceAssetKind;
   mediaType?: string;
   sizeBytes: number;
   sha256: string;
@@ -1500,35 +1536,35 @@ export interface CapabilityAsset {
   createdAt: string;
 }
 
-export interface CapabilityPackageRevision {
+export interface MarketplaceVersion {
   id: string;
   packageId: string;
   version: string;
-  status: CapabilityRevisionStatus;
+  status: MarketplaceVersionStatus;
   manifest: Record<string, unknown>;
-  access?: CapabilityAccessPolicy;
-  authorization?: CapabilityAccessPolicy;
+  access?: AccessPolicy;
+  authorization?: AccessPolicy;
   configSchema: Record<string, unknown>;
-  configFields: CapabilityConfigFieldDefinition[];
+  configFields: PluginConfigFieldDefinition[];
   defaultConfig: Record<string, unknown>;
-  transport?: CapabilityTransport;
+  transport?: PluginTransport;
   entryPoint?: string;
-  toolsManifest: CapabilityPackageTool[];
+  toolsManifest: MarketplaceTool[];
   validationRules: McpValidationRule[];
-  setupSteps: CapabilityInstallStep[];
-  installFlow?: CapabilityInstallFlow;
-  authProviders: CapabilityAuthProviderDefinition[];
+  setupSteps: PluginInstallStep[];
+  installFlow?: PluginInstallFlow;
+  authProviders: PluginAuthProviderDefinition[];
   metadata: Record<string, unknown>;
   createdBy?: string;
   createdAt: string;
-  assets?: CapabilityAsset[];
+  assets?: MarketplaceAsset[];
 }
 
-export interface CapabilityPackage {
+export interface MarketplaceItem {
   id: string;
   publisherId: string;
   workspaceId?: string;
-  kind: CapabilityPackageKind;
+  kind: MarketplaceItemKind;
   slug: string;
   displayName: string;
   displayNameI18n?: LocalizedText;
@@ -1539,32 +1575,32 @@ export interface CapabilityPackage {
   summaryI18n?: LocalizedText;
   defaultLocale?: string;
   iconUrl?: string;
-  sourceType: CapabilitySourceType;
+  sourceType: MarketplaceSourceType;
   tags: string[];
   isActive: boolean;
   isBuiltin: boolean;
   downloadCount: number;
   latestRevisionId?: string;
-  defaultInstanceScope?: CapabilityAttachmentType;
-  defaultReuseScope?: CapabilityReuseScope;
+  defaultInstanceScope?: AttachmentScope;
+  defaultReuseScope?: ReuseScope;
   defaultIdleTtlMs?: number;
   defaultMaxAgeMs?: number;
   requiresHandshake: boolean;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
-  categories?: CapabilityCategory[];
-  sourceLink?: CapabilityPackageLineage;
-  publisher?: CapabilityPublisher;
-  latestRevision?: CapabilityPackageRevision;
+  categories?: MarketplaceCategory[];
+  sourceLink?: MarketplaceLineage;
+  publisher?: MarketplacePublisher;
+  latestRevision?: MarketplaceVersion;
 }
 
-export interface CapabilityInstance {
+export interface PluginInstallationView {
   id: string;
   workspaceId: string;
   packageId: string;
   revisionId: string;
-  attachmentType: CapabilityAttachmentType;
+  attachmentType: AttachmentScope;
   attachmentId?: string;
   attachmentConversationId?: string;
   attachmentActorId?: string;
@@ -1572,32 +1608,32 @@ export interface CapabilityInstance {
   conversationId?: string;
   actorId?: string;
   userId?: string;
-  installMode: CapabilityInstanceInstallMode;
-  reuseScope: CapabilityReuseScope;
+  installMode: PluginInstallationMode;
+  reuseScope: ReuseScope;
   idleTtlMs?: number;
   maxAgeMs?: number;
   requiresHandshake: boolean;
   isEnabled: boolean;
   configData: Record<string, unknown>;
-  configState: CapabilityConfigFieldState[];
+  configState: PluginConfigFieldState[];
   installedBy?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
-  package?: CapabilityPackage;
-  revision?: CapabilityPackageRevision;
+  package?: MarketplaceItem;
+  revision?: MarketplaceVersion;
 }
 
-export interface CapabilityGrant {
+export interface AccessGrant {
   id: string;
-  instanceId: string;
+  resourceId: string;
   workspaceId: string;
-  grantScope: CapabilityGrantScope;
+  grantScope: AccessGrantScope;
   conversationId?: string;
   actorId?: string;
   userId?: string;
   permissions: string[];
-  status: CapabilityGrantStatus;
+  status: AccessGrantStatus;
   grantedBy?: string;
   reason?: string;
   metadata: Record<string, unknown>;
@@ -1605,14 +1641,14 @@ export interface CapabilityGrant {
   revokedAt?: string;
 }
 
-export interface CapabilityAuthSession {
+export interface PluginAuthSession {
   id: string;
   workspaceId: string;
   packageId: string;
   revisionId?: string;
   providerKey: string;
   userId: string;
-  status: CapabilityAuthSessionStatus;
+  status: PluginAuthSessionStatus;
   state: string;
   codeVerifier?: string;
   redirectUri: string;
@@ -1627,7 +1663,7 @@ export interface CapabilityAuthSession {
   updatedAt: string;
 }
 
-export interface CapabilityAuthConnection {
+export interface PluginAuthConnection {
   id: string;
   workspaceId: string;
   packageId: string;
@@ -1637,34 +1673,34 @@ export interface CapabilityAuthConnection {
   displayName?: string;
   avatarUrl?: string;
   scopes: string[];
-  status: CapabilityAuthConnectionStatus;
+  status: PluginAuthConnectionStatus;
   expiresAt?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface CapabilityRequirement {
+export interface MarketplaceRequirement {
   id: string;
   revisionId: string;
-  requirementKind: CapabilityRequirementKind;
-  targetKind: CapabilityRequirementTargetKind;
-  targetPackageKind?: CapabilityPackageKind;
+  requirementKind: MarketplaceRequirementKind;
+  targetKind: MarketplaceRequirementTargetKind;
+  targetPackageKind?: MarketplaceItemKind;
   targetPublisherSlug?: string;
   targetPackageSlug?: string;
   targetTag?: string;
-  acceptableInstanceScopes: CapabilityAttachmentType[];
-  acceptableReuseScopes: CapabilityReuseScope[];
+  acceptableInstanceScopes: AttachmentScope[];
+  acceptableReuseScopes: ReuseScope[];
   description: string;
   configPredicate: Record<string, unknown>;
   metadata: Record<string, unknown>;
   createdAt: string;
 }
 
-export interface CapabilityRequirementCheck {
+export interface MarketplaceRequirementCheck {
   requirementId: string;
-  requirementKind: CapabilityRequirementKind;
-  status: CapabilityRequirementStatus;
+  requirementKind: MarketplaceRequirementKind;
+  status: MarketplaceRequirementStatus;
   message: string;
   matchedInstanceIds: string[];
   missingPublisherSlug?: string;
@@ -1672,29 +1708,29 @@ export interface CapabilityRequirementCheck {
   missingTag?: string;
 }
 
-export interface CapabilityInstallPlan {
+export interface PluginInstallPlan {
   packageId: string;
   revisionId: string;
   workspaceId: string;
-  attachmentType: CapabilityAttachmentType;
+  attachmentType: AttachmentScope;
   conversationId?: string;
   actorId?: string;
   userId?: string;
-  checks: CapabilityRequirementCheck[];
+  checks: MarketplaceRequirementCheck[];
   grantPlan?: {
     requiresGrant: boolean;
     requiredPermissions: string[];
-    suggestedGrantScope?: CapabilityGrantScope;
+    suggestedGrantScope?: AccessGrantScope;
     reason?: string;
   };
 }
 
 export type ActorPackageDependencyKind = Extract<
-  CapabilityRequirementKind,
+  MarketplaceRequirementKind,
   "required" | "recommended"
 >;
 export type ActorPackageTargetKind = Extract<
-  CapabilityPackageKind,
+  MarketplaceItemKind,
   "plugin" | "skill"
 >;
 export type ActorPackageSyncMode = "notify" | "manual_merge";
@@ -1711,8 +1747,8 @@ export interface ActorPackageDependency {
   targetPackageKind: ActorPackageTargetKind;
   targetPublisherSlug?: string;
   targetPackageSlug: string;
-  acceptableInstanceScopes: CapabilityAttachmentType[];
-  acceptableReuseScopes: CapabilityReuseScope[];
+  acceptableInstanceScopes: AttachmentScope[];
+  acceptableReuseScopes: ReuseScope[];
   description: string;
   notes: CanonicalContentBlock[];
   metadata: Record<string, unknown>;
@@ -1745,20 +1781,20 @@ export interface ActorPackageSourceLink {
 }
 
 export interface ActorPackageRecord {
-  package: CapabilityPackage;
+  package: MarketplaceItem;
   manifest: ActorPackageManifest;
   dependencies: ActorPackageDependency[];
-  requirementChecks?: CapabilityRequirementCheck[];
+  requirementChecks?: MarketplaceRequirementCheck[];
 }
 
 export interface ActorPackageInstallResult {
   actor: Actor;
   sourcePackage: ActorPackageRecord;
   sourceLink: ActorPackageSourceLink;
-  requirementChecks: CapabilityRequirementCheck[];
+  requirementChecks: MarketplaceRequirementCheck[];
 }
 
-export interface CapabilityAvailableSkill {
+export interface AvailableSkillSummary {
   instanceId: string;
   packageId: string;
   revisionId: string;
@@ -1766,7 +1802,7 @@ export interface CapabilityAvailableSkill {
   name: string;
   description: string;
   version: string;
-  attachmentType: CapabilityAttachmentType;
+  attachmentType: AttachmentScope;
   actorId?: string;
   conversationId?: string;
   userId?: string;
@@ -1848,18 +1884,18 @@ export interface InstalledSkill {
   attachmentFiles?: SkillAttachmentFile[];
 }
 
-export type McpTransport = Exclude<CapabilityTransport, "filesystem">;
-export type McpLifecycleScope = CapabilityReuseScope;
-export type McpAttachmentType = CapabilityAttachmentType;
+export type McpTransport = Exclude<PluginTransport, "filesystem">;
+export type McpLifecycleScope = ReuseScope;
+export type McpAttachmentType = AttachmentScope;
 
-export type McpOrganization = CapabilityPublisher;
-export type McpPluginTool = CapabilityPackageTool;
+export type McpOrganization = MarketplacePublisher;
+export type McpPluginTool = MarketplaceTool;
 
-export interface McpPlugin extends CapabilityPackage {
+export interface McpPlugin extends MarketplaceItem {
   kind: "plugin";
 }
 
-export interface McpInstallation extends CapabilityInstance {
+export interface McpInstallation extends PluginInstallationView {
   pluginId: string;
   attachmentType: McpAttachmentType;
   attachmentId: string;
@@ -1940,7 +1976,7 @@ export interface McpValidationRule {
 
 export interface McpSetupStep {
   id: string;
-  kind?: CapabilityInstallStepKind;
+  kind?: PluginInstallStepKind;
   title?: string;
   titleI18n?: LocalizedText;
   description?: string;
@@ -1951,7 +1987,7 @@ export interface McpSetupStep {
   helpUrl?: string;
   helpText?: string;
   helpTextI18n?: LocalizedText;
-  action?: CapabilityInstallAction;
+  action?: PluginInstallAction;
   metadata?: Record<string, unknown>;
 }
 
@@ -2022,8 +2058,20 @@ export interface ActorVersionDocChangeWire {
   changeType: "added" | "updated" | "removed";
   visibility: ActorDocVisibility;
   priority: number;
+  fieldChanges?: ActorDocFieldChange[];
   summaryText?: string;
 }
+
+export interface ActorVersionFieldChangeWire {
+  field: ActorVersionChangedField;
+  before?: unknown;
+  after?: unknown;
+  summaryText?: string;
+}
+
+export type ActorVersionChangeWire =
+  | ({ kind: "field" } & ActorVersionFieldChangeWire)
+  | ({ kind: "doc" } & ActorVersionDocChangeWire);
 
 export type ConversationFeedEventType =
   | "member_joined"
@@ -2090,8 +2138,8 @@ export interface ConversationFeedEventPayloadMap {
     actor: ConversationEntityRef;
     fromVersion: number;
     toVersion: number;
-    changedFields: ActorVersionChangedField[];
-    changedDocs: ActorVersionDocChangeWire[];
+    changes: ActorVersionChangeWire[];
+    source?: ActorVersionSource;
   };
 }
 
@@ -2350,6 +2398,19 @@ export function fileRefBlock(
   };
 }
 
+function normalizeContentBlockSizeBytes(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
 export function isCanonicalContentBlock(
   value: unknown,
 ): value is CanonicalContentBlock {
@@ -2364,13 +2425,14 @@ export function isCanonicalContentBlock(
   }
 
   if (block.type === "file_ref") {
+    const sizeBytes = normalizeContentBlockSizeBytes(block.sizeBytes);
     return (
       typeof block.fileId === "string" &&
       typeof block.storedName === "string" &&
       typeof block.url === "string" &&
       typeof block.mimeType === "string" &&
       typeof block.originalName === "string" &&
-      typeof block.sizeBytes === "number" &&
+      sizeBytes !== null &&
       (block.category === "image" ||
         block.category === "audio" ||
         block.category === "video" ||
@@ -2396,13 +2458,14 @@ export function normalizeCanonicalContentBlocks(
     }
 
     if (block.type === "file_ref") {
+      const sizeBytes = normalizeContentBlockSizeBytes(block.sizeBytes);
       if (
         typeof block.fileId !== "string" ||
         typeof block.storedName !== "string" ||
         typeof block.url !== "string" ||
         typeof block.mimeType !== "string" ||
         typeof block.originalName !== "string" ||
-        typeof block.sizeBytes !== "number" ||
+        sizeBytes === null ||
         (block.category !== "image" &&
           block.category !== "audio" &&
           block.category !== "video" &&
@@ -2411,7 +2474,12 @@ export function normalizeCanonicalContentBlocks(
         continue;
       }
 
-      normalized.push(fileRefBlock(block));
+      normalized.push(
+        fileRefBlock({
+          ...block,
+          sizeBytes,
+        }),
+      );
     }
   }
 
@@ -2629,4 +2697,315 @@ export function summarizeActorForPrompt(docs: ActorDoc[]): string {
     ],
     700,
   );
+}
+
+// ============================================================
+// Domain Model V2
+// ============================================================
+
+export type CatalogItemKind =
+  | "actor_template"
+  | "skill_package"
+  | "plugin_package";
+export type CatalogSourceKind =
+  | "builtin"
+  | "official"
+  | "workspace"
+  | "user"
+  | "relay";
+export type CatalogVisibility = "public" | "workspace" | "private";
+export type CatalogVersionStatus =
+  | "draft"
+  | "active"
+  | "deprecated"
+  | "archived";
+export type CatalogLineageKind =
+  | "installed_copy"
+  | "fork"
+  | "share"
+  | "relay_projection";
+export type CatalogSyncMode =
+  | "notify"
+  | "manual_merge"
+  | "follow_upstream"
+  | "detached";
+export type CatalogFileRole =
+  | "document"
+  | "reference"
+  | "script"
+  | "image"
+  | "json"
+  | "binary";
+export type RuntimeBindingScope =
+  | "workspace"
+  | "conversation"
+  | "actor"
+  | "actor_conversation"
+  | "user";
+export type PluginReuseScopeV2 =
+  | "turn"
+  | "workspace"
+  | "conversation"
+  | "actor"
+  | "actor_conversation"
+  | "user";
+export type AccessBindingStatus = "active" | "revoked";
+export type AccessResourceType =
+  | "workspace"
+  | "conversation"
+  | "actor"
+  | "installed_skill"
+  | "plugin_installation"
+  | "relay_device"
+  | "relay_exposure";
+export type AccessSubjectType =
+  | "platform"
+  | "workspace"
+  | "conversation"
+  | "user"
+  | "actor"
+  | "workspace_user"
+  | "actor_conversation";
+
+export interface CatalogPublisherRecord {
+  id: string;
+  slug: string;
+  displayName: string;
+  description: string;
+  logoBlobId?: string;
+  ownerUserId?: string;
+  workspaceId?: string;
+  isBuiltin: boolean;
+  isVerified: boolean;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CatalogItemRecord {
+  id: string;
+  publisherId: string;
+  workspaceId?: string;
+  itemKind: CatalogItemKind;
+  slug: string;
+  displayName: string;
+  summary: string;
+  longDescription: string;
+  iconBlobId?: string;
+  sourceKind: CatalogSourceKind;
+  visibility: CatalogVisibility;
+  tags: string[];
+  latestVersionId?: string;
+  isActive: boolean;
+  downloadCount: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CatalogVersionRecord {
+  id: string;
+  catalogItemId: string;
+  version: string;
+  status: CatalogVersionStatus;
+  changelog: string;
+  metadata: Record<string, unknown>;
+  createdBy?: string;
+  createdAt: string;
+}
+
+export interface CatalogVersionFileRecord {
+  id: string;
+  catalogVersionId: string;
+  path: string;
+  fileRole: CatalogFileRole;
+  mediaType?: string;
+  blobId?: string;
+  textContent?: string;
+  contentBlocks: CanonicalContentBlock[];
+  sha256: string;
+  sizeBytes: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ActorTemplateVersionSpecRecord {
+  catalogVersionId: string;
+  role: ActorRole;
+  title: string;
+  canRepresentUser: boolean;
+  docs: ActorDoc[];
+  specialties: string[];
+  config: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface SkillPackageVersionSpecRecord {
+  catalogVersionId: string;
+  canonicalSlug: string;
+  name: string;
+  descriptionBlocks: CanonicalContentBlock[];
+  summaryText: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface PluginRuntimePermissionRecord {
+  id: string;
+  catalogVersionId: string;
+  permissionKey: string;
+  isRequired: boolean;
+  rationale: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface PluginPackageVersionSpecRecord {
+  catalogVersionId: string;
+  transport: "builtin" | "stdio" | "http" | "relay";
+  entryPoint?: string;
+  toolManifest: MarketplaceTool[];
+  configSchema: Record<string, unknown>;
+  defaultConfig: Record<string, unknown>;
+  installFlow: Record<string, unknown>;
+  authProviders: PluginAuthProviderDefinition[];
+  defaultMountScope: RuntimeBindingScope;
+  defaultReuseScope: PluginReuseScopeV2;
+  requiresHandshake: boolean;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AccessBindingRecord {
+  id: string;
+  workspaceId?: string;
+  resourceType: AccessResourceType;
+  resourceId: string;
+  relation: string;
+  subjectType: AccessSubjectType;
+  subjectId: string;
+  subjectRelation?: string;
+  status: AccessBindingStatus;
+  createdBy?: string;
+  reason?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  revokedAt?: string;
+}
+
+export interface InstalledSkillRecord {
+  id: string;
+  workspaceId: string;
+  slug: string;
+  name: string;
+  iconBlobId?: string;
+  tags: string[];
+  currentVersion: number;
+  isActive: boolean;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillVersionRecord {
+  id: string;
+  skillId: string;
+  version: number;
+  name: string;
+  descriptionBlocks: CanonicalContentBlock[];
+  summaryText: string;
+  metadata: Record<string, unknown>;
+  createdBy?: string;
+  createdAt: string;
+}
+
+export interface SkillFileRecord {
+  id: string;
+  skillVersionId: string;
+  path: string;
+  mediaType?: string;
+  blobId?: string;
+  textContent?: string;
+  contentBlocks: CanonicalContentBlock[];
+  sha256: string;
+  sizeBytes: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillBindingRecord {
+  id: string;
+  skillId: string;
+  workspaceId: string;
+  bindScope: RuntimeBindingScope;
+  conversationId?: string;
+  actorId?: string;
+  userId?: string;
+  status: "active" | "disabled" | "revoked";
+  metadata: Record<string, unknown>;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PluginInstallationRecord {
+  id: string;
+  workspaceId: string;
+  catalogItemId: string;
+  catalogVersionId: string;
+  displayName: string;
+  configData: Record<string, unknown>;
+  approvedRuntimePermissions: string[];
+  status: "active" | "disabled" | "error" | "archived";
+  installedBy?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PluginMountRecord {
+  id: string;
+  installationId: string;
+  workspaceId: string;
+  mountScope: RuntimeBindingScope;
+  conversationId?: string;
+  actorId?: string;
+  userId?: string;
+  reuseScope: PluginReuseScopeV2;
+  status: "active" | "disabled" | "revoked";
+  metadata: Record<string, unknown>;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RelayDeviceRecord {
+  id: string;
+  workspaceId: string;
+  ownerUserId?: string;
+  displayName: string;
+  clientKind: string;
+  platform?: string;
+  publicKeyFingerprint: string;
+  trustStatus: "pending" | "active" | "revoked" | "blocked";
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RelayExposureRecord {
+  id: string;
+  deviceId: string;
+  syncSourceId?: string;
+  stableKey: string;
+  displayName: string;
+  transport: "builtin" | "stdio" | "http" | "sse" | "custom";
+  runtimeStatus: "discovered" | "starting" | "healthy" | "degraded" | "failed" | "quarantined" | "offline";
+  managementMode: "manual" | "imported" | "mirrored" | "managed" | "builtin";
+  projectedCatalogItemId?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }

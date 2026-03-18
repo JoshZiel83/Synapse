@@ -40,7 +40,6 @@ CREATE TABLE auth_sessions (
 );
 
 CREATE INDEX idx_auth_sessions_user ON auth_sessions(user_id, created_at DESC);
-CREATE INDEX idx_auth_sessions_active ON auth_sessions(user_id, revoked_at, expires_at DESC);
 CREATE INDEX idx_auth_sessions_expires ON auth_sessions(expires_at);
 
 -- ============ Workspaces ============
@@ -58,7 +57,6 @@ CREATE TABLE workspaces (
 CREATE INDEX idx_workspaces_owner ON workspaces(owner_id);
 CREATE INDEX idx_workspaces_slug ON workspaces(slug);
 
--- ============ Platform Settings ============
 CREATE TABLE platform_settings (
   id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id = TRUE),
   default_model_group_id UUID,
@@ -80,10 +78,6 @@ CREATE TABLE platform_access_bindings (
   PRIMARY KEY (user_id, access_key)
 );
 
-CREATE INDEX idx_platform_access_bindings_access_key ON platform_access_bindings(access_key, created_at DESC);
-CREATE INDEX idx_platform_access_bindings_source ON platform_access_bindings(source, created_at DESC);
-
--- ============ Workspace Members ============
 CREATE TABLE workspace_members (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -101,7 +95,7 @@ CREATE TABLE workspace_access_bindings (
   workspace_id UUID NOT NULL,
   user_id UUID NOT NULL,
   access_key VARCHAR(30) NOT NULL
-    CHECK (access_key IN ('model_admin', 'actor_admin', 'capability_admin', 'memory_admin', 'relay_admin', 'conversation_admin')),
+    CHECK (access_key IN ('model_admin', 'actor_admin', 'skill_admin', 'plugin_admin', 'memory_admin', 'relay_admin', 'conversation_admin')),
   assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -110,10 +104,6 @@ CREATE TABLE workspace_access_bindings (
   FOREIGN KEY (workspace_id, user_id) REFERENCES workspace_members(workspace_id, user_id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_workspace_access_bindings_workspace ON workspace_access_bindings(workspace_id, access_key, created_at DESC);
-CREATE INDEX idx_workspace_access_bindings_user ON workspace_access_bindings(user_id, access_key, created_at DESC);
-
--- ============ Workspace Invites ============
 CREATE TABLE workspace_invites (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -129,200 +119,60 @@ CREATE TABLE workspace_invites (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_workspace_invites_token ON workspace_invites(token);
-CREATE INDEX idx_workspace_invites_workspace ON workspace_invites(workspace_id);
-
--- ============ Actors ============
-CREATE TABLE actors (
+-- ============ Conversations ============
+CREATE TABLE conversations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  package_id UUID,
-  instance_id UUID,
-  name VARCHAR(255) NOT NULL,
-  role VARCHAR(50) NOT NULL DEFAULT 'specialist'
-    CHECK (role IN ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant')),
-  title VARCHAR(255) NOT NULL,
-  avatar_file_id UUID,
-  can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
-  docs JSONB NOT NULL DEFAULT '[]',
-  parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
-  capabilities TEXT[] DEFAULT '{}',
-  config JSONB DEFAULT '{}',
-  is_active BOOLEAN DEFAULT TRUE,
-  current_version INT NOT NULL DEFAULT 1,
-  max_concurrent_sessions INT DEFAULT 3,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_actors_workspace ON actors(workspace_id);
-CREATE UNIQUE INDEX idx_actors_package ON actors(package_id) WHERE package_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_actors_instance ON actors(instance_id) WHERE instance_id IS NOT NULL;
-CREATE INDEX idx_actors_parent ON actors(parent_id);
-CREATE INDEX idx_actors_role ON actors(workspace_id, role);
-
--- ============ Actor Versions ============
-CREATE TABLE actor_versions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
-  version INT NOT NULL,
-  name VARCHAR(255) NOT NULL,
-  role VARCHAR(50) NOT NULL,
-  title VARCHAR(255) NOT NULL,
-  avatar_file_id UUID,
-  parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
-  can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
-  docs JSONB NOT NULL DEFAULT '[]',
-  config JSONB DEFAULT '{}',
-  capabilities TEXT[] DEFAULT '{}',
-  version_delta JSONB,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(actor_id, version)
-);
-
-CREATE INDEX idx_actor_versions_actor_time ON actor_versions(actor_id, created_at);
-
-
--- ============ Actor Collaborations ============
-CREATE TABLE actor_collaborations (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
-  collaborator_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
-  relationship VARCHAR(50) NOT NULL DEFAULT 'peer',
-  description TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(actor_id, collaborator_id)
-);
-
-CREATE INDEX idx_actor_collabs_actor ON actor_collaborations(actor_id);
-
--- ============ Work Items ============
-CREATE TABLE work_items (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  title VARCHAR(500) NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  status VARCHAR(20) NOT NULL DEFAULT 'created'
-    CHECK (status IN ('created', 'assigned', 'accepted', 'in_progress', 'review', 'completed', 'escalated', 'blocked', 'rework', 'cancelled', 'failed')),
-  priority VARCHAR(10) NOT NULL DEFAULT 'medium'
-    CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
-  parent_id UUID REFERENCES work_items(id) ON DELETE SET NULL,
-  created_by UUID NOT NULL,
-  assigned_to UUID REFERENCES actors(id) ON DELETE SET NULL,
-  accountable_id UUID REFERENCES actors(id) ON DELETE SET NULL,
-  source_type VARCHAR(30) NOT NULL DEFAULT 'user_message'
-    CHECK (source_type IN ('user_message', 'delegation', 'standing_order', 'escalation', 'collaboration')),
-  source_id UUID,
-  due_at TIMESTAMPTZ,
-  started_at TIMESTAMPTZ,
-  completed_at TIMESTAMPTZ,
-  result TEXT,
+  kind VARCHAR(30) NOT NULL
+    CHECK (kind IN ('group', 'direct', 'a2a_virtual')),
+  title VARCHAR(500),
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_work_items_workspace ON work_items(workspace_id);
-CREATE INDEX idx_work_items_status ON work_items(workspace_id, status);
-CREATE INDEX idx_work_items_assigned ON work_items(assigned_to);
-CREATE INDEX idx_work_items_parent ON work_items(parent_id);
+CREATE INDEX idx_conversations_workspace ON conversations(workspace_id, created_at DESC);
+CREATE INDEX idx_conversations_workspace_kind ON conversations(workspace_id, kind);
 
--- ============ Work Item Participants ============
-CREATE TABLE work_item_participants (
+-- ============ Blob Storage ============
+CREATE TABLE blobs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  work_item_id UUID NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
-  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
-  role VARCHAR(20) NOT NULL DEFAULT 'executor'
-    CHECK (role IN ('owner', 'accountable', 'executor', 'reviewer', 'watcher')),
-  added_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(work_item_id, actor_id, role)
-);
-
-CREATE INDEX idx_work_item_participants_item ON work_item_participants(work_item_id);
-CREATE INDEX idx_work_item_participants_actor ON work_item_participants(actor_id);
-
--- ============ Legacy Work Messages ============
-CREATE TABLE messages (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  work_item_id UUID REFERENCES work_items(id) ON DELETE SET NULL,
-  type VARCHAR(30) NOT NULL
-    CHECK (type IN ('assign', 'accept', 'reject', 'info_request', 'info_response', 'progress', 'escalate', 'assist_request', 'assist_response', 'transfer', 'complete', 'feedback', 'rework', 'user_message', 'secretary_response')),
-  from_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
-  to_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
-  from_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  to_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  content TEXT NOT NULL,
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  sha256 VARCHAR(64) NOT NULL,
+  media_type VARCHAR(255),
+  size_bytes INT NOT NULL DEFAULT 0,
+  storage_backend VARCHAR(30) NOT NULL DEFAULT 'database'
+    CHECK (storage_backend IN ('database', 'object_storage', 'filesystem')),
+  storage_key TEXT,
+  text_content TEXT,
+  binary_content BYTEA,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_messages_workspace ON messages(workspace_id);
-CREATE INDEX idx_messages_work_item ON messages(work_item_id);
-CREATE INDEX idx_messages_created ON messages(workspace_id, created_at DESC);
-
--- ============ Standing Orders ============
-CREATE TABLE standing_orders (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
-  name VARCHAR(255) NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  trigger_type VARCHAR(20) NOT NULL DEFAULT 'cron'
-    CHECK (trigger_type IN ('cron', 'event', 'condition')),
-  trigger_config JSONB NOT NULL DEFAULT '{}',
-  instruction TEXT NOT NULL,
-  is_active BOOLEAN DEFAULT TRUE,
-  last_triggered_at TIMESTAMPTZ,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  CHECK (text_content IS NOT NULL OR binary_content IS NOT NULL OR storage_key IS NOT NULL)
 );
 
-CREATE INDEX idx_standing_orders_workspace ON standing_orders(workspace_id);
-CREATE INDEX idx_standing_orders_actor ON standing_orders(actor_id);
+CREATE INDEX idx_blobs_workspace ON blobs(workspace_id, created_at DESC);
+CREATE INDEX idx_blobs_sha256 ON blobs(sha256);
 
 -- ============ Audit Logs ============
 CREATE TABLE audit_logs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
-  action VARCHAR(50) NOT NULL,
-  resource_type VARCHAR(50) NOT NULL,
+  actor_id UUID,
+  action VARCHAR(120) NOT NULL,
+  resource_type VARCHAR(120) NOT NULL,
   resource_id UUID,
   details JSONB DEFAULT '{}',
-  ip_address INET,
+  ip_address VARCHAR(120),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_audit_logs_workspace ON audit_logs(workspace_id, created_at DESC);
 CREATE INDEX idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
-
--- ============ Authz Outbox ============
-CREATE TABLE authz_outbox (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  operation VARCHAR(16) NOT NULL
-    CHECK (operation IN ('touch', 'delete')),
-  resource_type VARCHAR(64) NOT NULL,
-  resource_id TEXT NOT NULL,
-  relation VARCHAR(64) NOT NULL,
-  subject_type VARCHAR(64) NOT NULL,
-  subject_id TEXT NOT NULL,
-  subject_relation VARCHAR(64),
-  status VARCHAR(16) NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'processing', 'applied', 'failed')),
-  attempts INT NOT NULL DEFAULT 0,
-  last_error TEXT,
-  zed_token TEXT,
-  metadata JSONB NOT NULL DEFAULT '{}',
-  applied_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_authz_outbox_status_created ON authz_outbox(status, created_at);
-CREATE INDEX idx_authz_outbox_resource ON authz_outbox(resource_type, resource_id, relation);
 
 -- ============ Files ============
 CREATE TABLE files (
@@ -339,14 +189,320 @@ CREATE TABLE files (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_files_workspace ON files(workspace_id);
+CREATE INDEX idx_files_workspace ON files(workspace_id, created_at DESC);
+CREATE INDEX idx_files_uploader ON files(uploader_user_id, created_at DESC);
 
-ALTER TABLE actors ADD CONSTRAINT fk_actors_avatar_file
-  FOREIGN KEY (avatar_file_id) REFERENCES files(id) ON DELETE SET NULL;
-ALTER TABLE actor_versions ADD CONSTRAINT fk_actor_versions_avatar_file
-  FOREIGN KEY (avatar_file_id) REFERENCES files(id) ON DELETE SET NULL;
+-- ============ Access Core ============
+CREATE TABLE access_bindings (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  resource_type VARCHAR(60) NOT NULL,
+  resource_id TEXT NOT NULL,
+  relation VARCHAR(60) NOT NULL,
+  subject_type VARCHAR(60) NOT NULL,
+  subject_id TEXT NOT NULL,
+  subject_relation VARCHAR(60),
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'revoked')),
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  reason TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ
+);
 
--- ============ Model Groups ============
+CREATE UNIQUE INDEX uq_access_bindings_active
+  ON access_bindings(resource_type, resource_id, relation, subject_type, subject_id, COALESCE(subject_relation, ''))
+  WHERE status = 'active';
+CREATE INDEX idx_access_bindings_workspace ON access_bindings(workspace_id, created_at DESC);
+CREATE INDEX idx_access_bindings_resource ON access_bindings(resource_type, resource_id, created_at DESC);
+CREATE INDEX idx_access_bindings_subject ON access_bindings(subject_type, subject_id, created_at DESC);
+CREATE INDEX idx_access_bindings_primary_resource
+  ON access_bindings(resource_type, resource_id, created_at DESC)
+  WHERE status = 'active'
+    AND COALESCE((metadata->>'isPrimary')::boolean, FALSE) = TRUE;
+
+CREATE TABLE authz_outbox (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  operation VARCHAR(10) NOT NULL CHECK (operation IN ('touch', 'delete')),
+  resource_type VARCHAR(60) NOT NULL,
+  resource_id TEXT NOT NULL,
+  relation VARCHAR(60) NOT NULL,
+  subject_type VARCHAR(60) NOT NULL,
+  subject_id TEXT NOT NULL,
+  subject_relation VARCHAR(60),
+  metadata JSONB DEFAULT '{}',
+  status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'processing', 'applied', 'failed')),
+  attempts INT NOT NULL DEFAULT 0,
+  last_error TEXT,
+  zed_token TEXT,
+  applied_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_authz_outbox_status ON authz_outbox(status, created_at);
+CREATE INDEX idx_authz_outbox_resource ON authz_outbox(resource_type, resource_id, created_at DESC);
+
+-- ============ Catalog Core ============
+CREATE TABLE publishers (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  slug VARCHAR(100) UNIQUE NOT NULL,
+  display_name VARCHAR(255) NOT NULL,
+  description TEXT DEFAULT '',
+  logo_blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  owner_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  is_builtin BOOLEAN DEFAULT FALSE,
+  is_verified BOOLEAN DEFAULT FALSE,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE catalog_categories (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  slug VARCHAR(100) NOT NULL,
+  item_kind VARCHAR(30) NOT NULL
+    CHECK (item_kind IN ('actor_template', 'skill_package', 'plugin_package')),
+  display_name VARCHAR(255) NOT NULL,
+  description TEXT DEFAULT '',
+  icon_blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(item_kind, slug)
+);
+
+CREATE TABLE catalog_items (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  publisher_id UUID NOT NULL REFERENCES publishers(id) ON DELETE CASCADE,
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  item_kind VARCHAR(30) NOT NULL
+    CHECK (item_kind IN ('actor_template', 'skill_package', 'plugin_package')),
+  slug VARCHAR(120) NOT NULL,
+  display_name VARCHAR(255) NOT NULL,
+  summary TEXT DEFAULT '',
+  long_description TEXT DEFAULT '',
+  icon_blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  source_kind VARCHAR(30) NOT NULL DEFAULT 'official'
+    CHECK (source_kind IN ('builtin', 'official', 'workspace', 'user', 'relay')),
+  visibility VARCHAR(20) NOT NULL DEFAULT 'public'
+    CHECK (visibility IN ('public', 'workspace', 'private')),
+  tags TEXT[] DEFAULT '{}',
+  latest_version_id UUID,
+  is_active BOOLEAN DEFAULT TRUE,
+  download_count INT NOT NULL DEFAULT 0,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_catalog_items_global_slug
+  ON catalog_items(publisher_id, item_kind, slug)
+  WHERE workspace_id IS NULL;
+CREATE UNIQUE INDEX uq_catalog_items_workspace_slug
+  ON catalog_items(publisher_id, workspace_id, item_kind, slug)
+  WHERE workspace_id IS NOT NULL;
+CREATE INDEX idx_catalog_items_kind ON catalog_items(item_kind, created_at DESC);
+CREATE INDEX idx_catalog_items_workspace ON catalog_items(workspace_id, item_kind, created_at DESC);
+CREATE INDEX idx_catalog_items_tags ON catalog_items USING GIN(tags);
+
+CREATE TABLE catalog_item_categories (
+  catalog_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE CASCADE,
+  category_id UUID NOT NULL REFERENCES catalog_categories(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (catalog_item_id, category_id)
+);
+
+CREATE TABLE catalog_versions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  catalog_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE CASCADE,
+  version VARCHAR(80) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('draft', 'active', 'deprecated', 'archived')),
+  changelog TEXT DEFAULT '',
+  metadata JSONB DEFAULT '{}',
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(catalog_item_id, version)
+);
+
+CREATE INDEX idx_catalog_versions_item ON catalog_versions(catalog_item_id, created_at DESC);
+
+ALTER TABLE catalog_items
+  ADD CONSTRAINT fk_catalog_items_latest_version
+  FOREIGN KEY (latest_version_id) REFERENCES catalog_versions(id) ON DELETE SET NULL;
+
+CREATE TABLE catalog_lineages (
+  downstream_item_id UUID PRIMARY KEY REFERENCES catalog_items(id) ON DELETE CASCADE,
+  upstream_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE RESTRICT,
+  upstream_version_id UUID REFERENCES catalog_versions(id) ON DELETE SET NULL,
+  lineage_kind VARCHAR(30) NOT NULL DEFAULT 'installed_copy'
+    CHECK (lineage_kind IN ('installed_copy', 'fork', 'share', 'relay_projection')),
+  sync_mode VARCHAR(30) NOT NULL DEFAULT 'manual_merge'
+    CHECK (sync_mode IN ('notify', 'manual_merge', 'follow_upstream', 'detached')),
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (downstream_item_id <> upstream_item_id)
+);
+
+CREATE TABLE catalog_version_files (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  catalog_version_id UUID NOT NULL REFERENCES catalog_versions(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  file_role VARCHAR(20) NOT NULL
+    CHECK (file_role IN ('document', 'reference', 'script', 'image', 'json', 'binary')),
+  media_type VARCHAR(255),
+  blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  text_content TEXT,
+  content_blocks JSONB DEFAULT '[]',
+  sha256 VARCHAR(64) NOT NULL,
+  size_bytes INT NOT NULL DEFAULT 0,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(catalog_version_id, path),
+  CHECK (blob_id IS NOT NULL OR text_content IS NOT NULL)
+);
+
+CREATE INDEX idx_catalog_version_files_version ON catalog_version_files(catalog_version_id, path);
+
+-- ============ Catalog Specs ============
+CREATE TABLE actor_template_version_specs (
+  catalog_version_id UUID PRIMARY KEY REFERENCES catalog_versions(id) ON DELETE CASCADE,
+  role VARCHAR(50) NOT NULL
+    CHECK (role IN ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant')),
+  title VARCHAR(255) NOT NULL,
+  can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
+  docs JSONB NOT NULL DEFAULT '[]',
+  specialties TEXT[] DEFAULT '{}',
+  config JSONB DEFAULT '{}',
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE skill_package_version_specs (
+  catalog_version_id UUID PRIMARY KEY REFERENCES catalog_versions(id) ON DELETE CASCADE,
+  canonical_slug VARCHAR(120) NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  description_blocks JSONB NOT NULL DEFAULT '[]',
+  summary_text TEXT DEFAULT '',
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE plugin_package_version_specs (
+  catalog_version_id UUID PRIMARY KEY REFERENCES catalog_versions(id) ON DELETE CASCADE,
+  transport VARCHAR(20) NOT NULL
+    CHECK (transport IN ('builtin', 'stdio', 'http', 'relay')),
+  entry_point TEXT,
+  tool_manifest JSONB NOT NULL DEFAULT '[]',
+  config_schema JSONB NOT NULL DEFAULT '{}',
+  default_config JSONB NOT NULL DEFAULT '{}',
+  install_flow JSONB NOT NULL DEFAULT '{}',
+  auth_providers JSONB NOT NULL DEFAULT '[]',
+  default_mount_scope VARCHAR(20) NOT NULL DEFAULT 'workspace'
+    CHECK (default_mount_scope IN ('workspace', 'conversation', 'actor', 'actor_conversation', 'user')),
+  default_reuse_scope VARCHAR(20) NOT NULL DEFAULT 'conversation'
+    CHECK (default_reuse_scope IN ('turn', 'workspace', 'conversation', 'actor', 'actor_conversation', 'user')),
+  requires_handshake BOOLEAN NOT NULL DEFAULT FALSE,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE plugin_version_runtime_permissions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  catalog_version_id UUID NOT NULL REFERENCES catalog_versions(id) ON DELETE CASCADE,
+  permission_key VARCHAR(120) NOT NULL,
+  is_required BOOLEAN NOT NULL DEFAULT TRUE,
+  rationale TEXT DEFAULT '',
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(catalog_version_id, permission_key)
+);
+
+-- ============ Actor Runtime ============
+CREATE TABLE actors (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  role VARCHAR(50) NOT NULL
+    CHECK (role IN ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant')),
+  title VARCHAR(255) NOT NULL,
+  avatar_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  avatar_blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
+  specialties TEXT[] DEFAULT '{}',
+  config JSONB DEFAULT '{}',
+  current_version INT NOT NULL DEFAULT 1,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_actors_workspace ON actors(workspace_id, created_at DESC);
+CREATE INDEX idx_actors_parent ON actors(parent_id);
+
+CREATE TABLE actor_versions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+  version INT NOT NULL,
+  previous_version_id UUID REFERENCES actor_versions(id) ON DELETE SET NULL,
+  name VARCHAR(255) NOT NULL,
+  role VARCHAR(50) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  avatar_blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
+  specialties TEXT[] DEFAULT '{}',
+  config JSONB DEFAULT '{}',
+  version_delta JSONB,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  source_type VARCHAR(20) NOT NULL DEFAULT 'system'
+    CHECK (source_type IN ('user', 'actor', 'system', 'sync')),
+  source_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  source_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  source_session_id UUID,
+  source_turn_id UUID,
+  source_conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  source_reason TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(actor_id, version)
+);
+
+CREATE TABLE actor_version_docs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  actor_version_id UUID NOT NULL REFERENCES actor_versions(id) ON DELETE CASCADE,
+  doc_key VARCHAR(40) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  visibility VARCHAR(20) NOT NULL DEFAULT 'always'
+    CHECK (visibility IN ('always', 'solo_only', 'group_only', 'internal_only')),
+  priority INT NOT NULL DEFAULT 0,
+  content_blocks JSONB NOT NULL DEFAULT '[]',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_actor_version_docs_version ON actor_version_docs(actor_version_id, priority DESC, created_at);
+
+CREATE TABLE actor_source_refs (
+  actor_id UUID PRIMARY KEY REFERENCES actors(id) ON DELETE CASCADE,
+  source_catalog_item_id UUID REFERENCES catalog_items(id) ON DELETE SET NULL,
+  source_catalog_version_id UUID REFERENCES catalog_versions(id) ON DELETE SET NULL,
+  sync_mode VARCHAR(30) NOT NULL DEFAULT 'notify'
+    CHECK (sync_mode IN ('notify', 'manual_merge', 'follow_upstream', 'detached')),
+  baseline_actor_version INT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============ Model Routing ============
 CREATE TABLE model_groups (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   owner_type VARCHAR(20) NOT NULL
@@ -385,7 +541,6 @@ ALTER TABLE workspaces ADD CONSTRAINT fk_workspaces_default_model_group
 ALTER TABLE platform_settings ADD CONSTRAINT fk_platform_settings_default_model_group
   FOREIGN KEY (default_model_group_id) REFERENCES model_groups(id) ON DELETE SET NULL;
 
--- ============ Model Profiles ============
 CREATE TABLE model_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -400,7 +555,6 @@ CREATE TABLE model_profiles (
 
 CREATE INDEX idx_model_profiles_workspace ON model_profiles(workspace_id, created_at DESC);
 
--- ============ Model Profile Revisions ============
 CREATE TABLE model_profile_revisions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   profile_id UUID NOT NULL REFERENCES model_profiles(id) ON DELETE CASCADE,
@@ -424,7 +578,6 @@ CREATE INDEX idx_model_profile_revisions_profile ON model_profile_revisions(prof
 ALTER TABLE model_profiles ADD CONSTRAINT fk_model_profiles_current_revision
   FOREIGN KEY (current_revision_id) REFERENCES model_profile_revisions(id) ON DELETE SET NULL;
 
--- ============ Model Group Grants ============
 CREATE TABLE model_group_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   group_id UUID NOT NULL REFERENCES model_groups(id) ON DELETE CASCADE,
@@ -454,7 +607,6 @@ CREATE INDEX idx_model_group_grants_workspace ON model_group_grants(workspace_id
 CREATE INDEX idx_model_group_grants_actor ON model_group_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
 CREATE INDEX idx_model_group_grants_user ON model_group_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
 
--- ============ Model Group Profiles ============
 CREATE TABLE model_group_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   group_id UUID NOT NULL REFERENCES model_groups(id) ON DELETE CASCADE,
@@ -470,7 +622,6 @@ CREATE TABLE model_group_profiles (
 
 CREATE INDEX idx_model_group_profiles_group ON model_group_profiles(group_id, priority, created_at DESC);
 
--- ============ Actor Model Group Assignments ============
 CREATE TABLE actor_model_group_assignments (
   actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
   group_id UUID NOT NULL REFERENCES model_groups(id) ON DELETE CASCADE,
@@ -481,27 +632,14 @@ CREATE TABLE actor_model_group_assignments (
 
 CREATE INDEX idx_actor_model_group_assignments_actor ON actor_model_group_assignments(actor_id);
 
--- ============ Conversations ============
-CREATE TABLE conversations (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  kind VARCHAR(30) NOT NULL CHECK (kind IN ('group', 'direct', 'a2a_virtual')),
-  title VARCHAR(500),
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_conversations_workspace_kind ON conversations(workspace_id, kind);
-
--- ============ Sessions ============
+-- ============ Chat Runtime ============
 CREATE TABLE sessions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  channel_type VARCHAR(30) NOT NULL DEFAULT 'web' CHECK (channel_type IN ('web', 'api', 'bridge')),
+  channel_type VARCHAR(30) NOT NULL DEFAULT 'web'
+    CHECK (channel_type IN ('web', 'api', 'bridge')),
   trigger VARCHAR(50) NOT NULL DEFAULT 'user_message',
   status VARCHAR(20) NOT NULL DEFAULT 'idle'
     CHECK (status IN ('idle', 'queued', 'running', 'blocked', 'closed')),
@@ -517,13 +655,14 @@ CREATE INDEX idx_sessions_actor ON sessions(actor_id);
 CREATE INDEX idx_sessions_actor_status ON sessions(actor_id, status);
 CREATE INDEX idx_sessions_conversation ON sessions(conversation_id);
 
--- ============ Conversation Members ============
 CREATE TABLE conversation_members (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  member_type VARCHAR(20) NOT NULL CHECK (member_type IN ('actor', 'user', 'remote_agent', 'system')),
+  member_type VARCHAR(20) NOT NULL
+    CHECK (member_type IN ('actor', 'user', 'remote_agent', 'system')),
   actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  actor_join_version_id UUID REFERENCES actor_versions(id) ON DELETE SET NULL,
   display_name VARCHAR(255),
   state VARCHAR(20) NOT NULL DEFAULT 'active'
     CHECK (state IN ('active', 'left', 'kicked')),
@@ -573,47 +712,12 @@ CREATE INDEX idx_conversation_grants_workspace ON conversation_grants(workspace_
 CREATE INDEX idx_conversation_grants_user ON conversation_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
 CREATE INDEX idx_conversation_grants_actor ON conversation_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
 
--- ============ Actor Grants ============
-CREATE TABLE actor_grants (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
-  permission VARCHAR(30) NOT NULL
-    CHECK (permission IN ('discover', 'invoke', 'receive_message', 'memory_read', 'memory_edit', 'memory_retarget', 'memory_delete')),
-  grant_scope VARCHAR(30) NOT NULL
-    CHECK (grant_scope IN ('workspace', 'user', 'workspace_user', 'conversation', 'actor')),
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  actor_subject_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'revoked')),
-  granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  reason TEXT,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ,
-  CONSTRAINT chk_actor_grants_target CHECK (
-    (grant_scope = 'workspace' AND workspace_id IS NOT NULL AND user_id IS NULL AND conversation_id IS NULL AND actor_subject_id IS NULL) OR
-    (grant_scope = 'user' AND workspace_id IS NULL AND user_id IS NOT NULL AND conversation_id IS NULL AND actor_subject_id IS NULL) OR
-    (grant_scope = 'workspace_user' AND workspace_id IS NOT NULL AND user_id IS NOT NULL AND conversation_id IS NULL AND actor_subject_id IS NULL) OR
-    (grant_scope = 'conversation' AND workspace_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL AND actor_subject_id IS NULL) OR
-    (grant_scope = 'actor' AND workspace_id IS NOT NULL AND actor_subject_id IS NOT NULL AND user_id IS NULL AND conversation_id IS NULL)
-  )
-);
-
-CREATE INDEX idx_actor_grants_actor ON actor_grants(actor_id, created_at DESC);
-CREATE INDEX idx_actor_grants_workspace ON actor_grants(workspace_id, created_at DESC) WHERE workspace_id IS NOT NULL;
-CREATE INDEX idx_actor_grants_user ON actor_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
-CREATE INDEX idx_actor_grants_conversation ON actor_grants(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
-CREATE INDEX idx_actor_grants_actor_subject ON actor_grants(actor_subject_id, created_at DESC) WHERE actor_subject_id IS NOT NULL;
-
--- ============ Conversation Items ============
 CREATE TABLE conversation_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   turn_id UUID,
-  client_message_id VARCHAR(128),
+  client_message_id UUID,
   scope VARCHAR(20) NOT NULL CHECK (scope IN ('shared', 'private')),
   surface VARCHAR(20) NOT NULL CHECK (surface IN ('visible', 'internal')),
   item_type VARCHAR(30) NOT NULL
@@ -644,11 +748,7 @@ CREATE INDEX idx_conversation_items_turn
   ON conversation_items(turn_id) WHERE turn_id IS NOT NULL;
 CREATE INDEX idx_conversation_items_bundle
   ON conversation_items(bundle_id) WHERE bundle_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_conversation_items_client_message_unique
-  ON conversation_items(conversation_id, author_member_id, client_message_id)
-  WHERE client_message_id IS NOT NULL;
 
--- ============ Conversation Item Parts ============
 CREATE TABLE conversation_item_parts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   item_id UUID NOT NULL REFERENCES conversation_items(id) ON DELETE CASCADE,
@@ -670,7 +770,6 @@ CREATE TABLE conversation_item_parts (
 
 CREATE INDEX idx_conversation_item_parts_item ON conversation_item_parts(item_id, ordinal);
 
--- ============ Conversation Item Targets ============
 CREATE TABLE conversation_item_targets (
   item_id UUID NOT NULL REFERENCES conversation_items(id) ON DELETE CASCADE,
   target_member_id UUID NOT NULL REFERENCES conversation_members(id) ON DELETE CASCADE,
@@ -690,7 +789,6 @@ CREATE TABLE conversation_item_context_targets (
 CREATE INDEX idx_conversation_item_context_targets_member
   ON conversation_item_context_targets(target_member_id, item_id);
 
--- ============ Conversation Reads ============
 CREATE TABLE conversation_reads (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -738,35 +836,6 @@ CREATE INDEX idx_turns_conversation_started ON turns(conversation_id, started_at
 
 ALTER TABLE conversation_items ADD CONSTRAINT fk_conversation_items_turn
   FOREIGN KEY (turn_id) REFERENCES turns(id) ON DELETE SET NULL;
-
--- ============ Session Wakeups ============
-CREATE TABLE session_wakeups (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  turn_id UUID REFERENCES turns(id) ON DELETE SET NULL,
-  source_type VARCHAR(50) NOT NULL
-    CHECK (source_type IN ('user_message', 'actor_message', 'broadcast', 'invite', 'api_call', 'system_interrupt', 'retry')),
-  source_item_id UUID REFERENCES conversation_items(id) ON DELETE SET NULL,
-  source_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
-  source_member_type VARCHAR(20)
-    CHECK (source_member_type IN ('user', 'actor', 'system')),
-  source_member_id UUID,
-  source_name VARCHAR(255),
-  summary TEXT NOT NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'attached', 'processed', 'dropped')),
-  metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  attached_at TIMESTAMPTZ,
-  processed_at TIMESTAMPTZ
-);
-
-CREATE INDEX idx_session_wakeups_session_created
-  ON session_wakeups(session_id, created_at DESC);
-CREATE INDEX idx_session_wakeups_session_status
-  ON session_wakeups(session_id, status, created_at DESC);
-CREATE INDEX idx_session_wakeups_turn
-  ON session_wakeups(turn_id, created_at DESC) WHERE turn_id IS NOT NULL;
 
 -- ============ Payload Blobs ============
 CREATE TABLE payload_blobs (
@@ -902,7 +971,35 @@ CREATE TABLE tool_result_parts (
 
 CREATE INDEX idx_tool_result_parts_result ON tool_result_parts(tool_result_id, ordinal);
 
--- ============ Memory Entries ============
+CREATE TABLE session_wakeups (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  turn_id UUID,
+  source_type VARCHAR(50) NOT NULL
+    CHECK (source_type IN ('user_message', 'actor_message', 'broadcast', 'invite', 'api_call', 'system_interrupt', 'retry')),
+  source_item_id UUID REFERENCES conversation_items(id) ON DELETE SET NULL,
+  source_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  source_member_type VARCHAR(20)
+    CHECK (source_member_type IN ('user', 'actor', 'system')),
+  source_member_id UUID,
+  source_name VARCHAR(255),
+  summary TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'attached', 'processed', 'dropped')),
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  attached_at TIMESTAMPTZ,
+  processed_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_session_wakeups_session_created
+  ON session_wakeups(session_id, created_at DESC);
+CREATE INDEX idx_session_wakeups_session_status
+  ON session_wakeups(session_id, status, created_at DESC);
+CREATE INDEX idx_session_wakeups_turn
+  ON session_wakeups(turn_id, created_at DESC) WHERE turn_id IS NOT NULL;
+
+-- ============ Memory Runtime ============
 CREATE TABLE memory_entries (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -922,9 +1019,9 @@ CREATE TABLE memory_entries (
   tags TEXT[] DEFAULT '{}',
   text_digest TEXT NOT NULL DEFAULT '',
   search_text TEXT NOT NULL DEFAULT '',
-  source_item_id UUID REFERENCES conversation_items(id) ON DELETE SET NULL,
-  source_tool_call_id UUID REFERENCES tool_calls(id) ON DELETE SET NULL,
-  source_turn_id UUID REFERENCES turns(id) ON DELETE SET NULL,
+  source_item_id UUID,
+  source_tool_call_id UUID,
+  source_turn_id UUID,
   supersedes_memory_id UUID REFERENCES memory_entries(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -945,7 +1042,6 @@ CREATE INDEX idx_memory_entries_owner_user ON memory_entries(owner_user_id, crea
 CREATE INDEX idx_memory_entries_scope_status ON memory_entries(workspace_id, owner_scope, status, stability, created_at DESC);
 CREATE INDEX idx_memory_entries_tags ON memory_entries USING GIN(tags);
 
--- ============ Memory Entry Parts ============
 CREATE TABLE memory_entry_parts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   memory_entry_id UUID NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
@@ -967,7 +1063,6 @@ CREATE TABLE memory_entry_parts (
 
 CREATE INDEX idx_memory_entry_parts_entry ON memory_entry_parts(memory_entry_id, ordinal);
 
--- ============ Memory Index Chunks ============
 CREATE TABLE memory_index_chunks (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   memory_entry_id UUID NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
@@ -1002,7 +1097,6 @@ CREATE INDEX idx_memory_index_chunks_user ON memory_index_chunks(owner_user_id, 
 CREATE INDEX idx_memory_index_chunks_fts ON memory_index_chunks USING GIN(to_tsvector('simple', search_text));
 CREATE INDEX idx_memory_index_chunks_trgm ON memory_index_chunks USING GIN(search_text gin_trgm_ops);
 
--- ============ Memory Recall Runs ============
 CREATE TABLE memory_recall_runs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -1022,7 +1116,6 @@ CREATE INDEX idx_memory_recall_runs_actor ON memory_recall_runs(actor_id, create
 CREATE INDEX idx_memory_recall_runs_conversation ON memory_recall_runs(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
 CREATE INDEX idx_memory_recall_runs_user ON memory_recall_runs(user_id, created_at DESC) WHERE user_id IS NOT NULL;
 
--- ============ Memory Recall Run Results ============
 CREATE TABLE memory_recall_run_results (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   run_id UUID NOT NULL REFERENCES memory_recall_runs(id) ON DELETE CASCADE,
@@ -1042,7 +1135,7 @@ CREATE TABLE memory_recall_run_results (
 CREATE INDEX idx_memory_recall_run_results_run ON memory_recall_run_results(run_id, rank);
 CREATE INDEX idx_memory_recall_run_results_memory ON memory_recall_run_results(memory_entry_id, created_at DESC);
 
--- ============ Context Archive Points ============
+-- ============ Context Runtime ============
 CREATE TABLE context_archive_points (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -1064,7 +1157,6 @@ CREATE INDEX idx_context_archive_points_conversation
 CREATE INDEX idx_context_archive_points_session
   ON context_archive_points(session_id, covers_until_sequence DESC) WHERE session_id IS NOT NULL;
 
--- ============ Context Archive Frames ============
 CREATE TABLE context_archive_frames (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   archive_point_id UUID NOT NULL REFERENCES context_archive_points(id) ON DELETE CASCADE,
@@ -1081,7 +1173,6 @@ CREATE TABLE context_archive_frames (
 CREATE INDEX idx_context_archive_frames_point
   ON context_archive_frames(archive_point_id, ordinal);
 
--- ============ Context Archive Frame Parts ============
 CREATE TABLE context_archive_frame_parts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   archive_frame_id UUID NOT NULL REFERENCES context_archive_frames(id) ON DELETE CASCADE,
@@ -1104,7 +1195,6 @@ CREATE TABLE context_archive_frame_parts (
 CREATE INDEX idx_context_archive_frame_parts_frame
   ON context_archive_frame_parts(archive_frame_id, ordinal);
 
--- ============ Context Compaction Runs ============
 CREATE TABLE context_compaction_runs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -1131,7 +1221,6 @@ CREATE INDEX idx_context_compaction_runs_conversation
 CREATE INDEX idx_context_compaction_runs_session
   ON context_compaction_runs(session_id, started_at DESC) WHERE session_id IS NOT NULL;
 
--- ============ Context Compaction Run Inputs ============
 CREATE TABLE context_compaction_run_inputs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   run_id UUID NOT NULL REFERENCES context_compaction_runs(id) ON DELETE CASCADE,
@@ -1152,21 +1241,18 @@ CREATE TABLE context_compaction_run_inputs (
 CREATE INDEX idx_context_compaction_run_inputs_run
   ON context_compaction_run_inputs(run_id);
 
--- ============ Conversation Context State ============
 CREATE TABLE conversation_context_states (
   conversation_id UUID PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
   active_shared_archive_point_id UUID REFERENCES context_archive_points(id) ON DELETE SET NULL,
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ============ Session Context State ============
 CREATE TABLE session_context_states (
   session_id UUID PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
   active_private_archive_point_id UUID REFERENCES context_archive_points(id) ON DELETE SET NULL,
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ============ Session Interrupts ============
 CREATE TABLE session_interrupts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   target_session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -1179,591 +1265,6 @@ CREATE TABLE session_interrupts (
 
 CREATE INDEX idx_session_interrupts_target
   ON session_interrupts(target_session_id) WHERE is_consumed = FALSE;
-
--- ============ Capability Publishers ============
-CREATE TABLE capability_publishers (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  slug VARCHAR(100) UNIQUE NOT NULL,
-  display_name VARCHAR(255) NOT NULL,
-  description TEXT DEFAULT '',
-  logo_url TEXT,
-  is_builtin BOOLEAN DEFAULT FALSE,
-  is_verified BOOLEAN DEFAULT FALSE,
-  owner_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- ============ Capability Categories ============
-CREATE TABLE capability_categories (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  slug VARCHAR(100) NOT NULL,
-  target_kind VARCHAR(30) NOT NULL
-    CHECK (target_kind IN ('plugin', 'skill', 'actor', 'model')),
-  display_name VARCHAR(255) NOT NULL,
-  description TEXT DEFAULT '',
-  icon_url TEXT,
-  sort_order INT NOT NULL DEFAULT 0,
-  is_builtin BOOLEAN DEFAULT FALSE,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(target_kind, slug)
-);
-
-CREATE INDEX idx_capability_categories_kind_order ON capability_categories(target_kind, sort_order, display_name);
-
--- ============ Capability Packages ============
-CREATE TABLE capability_packages (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  publisher_id UUID NOT NULL REFERENCES capability_publishers(id) ON DELETE CASCADE,
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  kind VARCHAR(30) NOT NULL
-    CHECK (kind IN ('plugin', 'skill', 'actor', 'model')),
-  slug VARCHAR(100) NOT NULL,
-  display_name VARCHAR(255) NOT NULL,
-  description TEXT DEFAULT '',
-  long_description TEXT DEFAULT '',
-  icon_url TEXT,
-  source_type VARCHAR(30) NOT NULL DEFAULT 'official'
-    CHECK (source_type IN ('builtin', 'official', 'workspace_upload', 'user_upload', 'relay_derived')),
-  tags TEXT[] DEFAULT '{}',
-  is_active BOOLEAN DEFAULT TRUE,
-  is_builtin BOOLEAN DEFAULT FALSE,
-  download_count INT DEFAULT 0,
-  latest_revision_id UUID,
-  default_instance_scope VARCHAR(30) NOT NULL DEFAULT 'workspace'
-    CHECK (default_instance_scope IN ('platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
-  default_reuse_scope VARCHAR(30) NOT NULL DEFAULT 'conversation'
-    CHECK (default_reuse_scope IN ('turn', 'platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
-  default_idle_ttl_ms INT,
-  default_max_age_ms INT,
-  requires_handshake BOOLEAN DEFAULT FALSE,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_capability_packages_publisher ON capability_packages(publisher_id);
-CREATE INDEX idx_capability_packages_workspace ON capability_packages(workspace_id, kind, created_at DESC);
-CREATE INDEX idx_capability_packages_kind ON capability_packages(kind, created_at DESC);
-CREATE INDEX idx_capability_packages_tags ON capability_packages USING GIN(tags);
-CREATE UNIQUE INDEX uq_capability_packages_global_slug
-  ON capability_packages(publisher_id, kind, slug)
-  WHERE workspace_id IS NULL;
-CREATE UNIQUE INDEX uq_capability_packages_workspace_slug
-  ON capability_packages(publisher_id, workspace_id, kind, slug)
-  WHERE workspace_id IS NOT NULL;
-
-CREATE TABLE capability_package_categories (
-  package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE CASCADE,
-  category_id UUID NOT NULL REFERENCES capability_categories(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  PRIMARY KEY (package_id, category_id)
-);
-
-CREATE INDEX idx_capability_package_categories_category ON capability_package_categories(category_id, package_id);
-
--- ============ Capability Revisions ============
-CREATE TABLE capability_package_revisions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE CASCADE,
-  version VARCHAR(50) NOT NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('draft', 'active', 'deprecated', 'archived')),
-  manifest JSONB DEFAULT '{}',
-  config_schema JSONB DEFAULT '{}',
-  default_config JSONB DEFAULT '{}',
-  transport VARCHAR(20)
-    CHECK (transport IN ('builtin', 'stdio', 'http', 'relay', 'filesystem')),
-  entry_point TEXT,
-  tools_manifest JSONB DEFAULT '[]',
-  validation_rules JSONB DEFAULT '[]',
-  setup_steps JSONB DEFAULT '[]',
-  metadata JSONB DEFAULT '{}',
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(package_id, version)
-);
-
-CREATE INDEX idx_capability_package_revisions_package
-  ON capability_package_revisions(package_id, created_at DESC);
-
-ALTER TABLE capability_packages
-  ADD CONSTRAINT fk_capability_packages_latest_revision
-  FOREIGN KEY (latest_revision_id) REFERENCES capability_package_revisions(id) ON DELETE SET NULL;
-
-CREATE TABLE capability_package_lineages (
-  downstream_package_id UUID PRIMARY KEY REFERENCES capability_packages(id) ON DELETE CASCADE,
-  upstream_package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE RESTRICT,
-  upstream_revision_id UUID REFERENCES capability_package_revisions(id) ON DELETE SET NULL,
-  lineage_kind VARCHAR(30) NOT NULL DEFAULT 'installed_copy'
-    CHECK (lineage_kind IN ('installed_copy', 'fork', 'share', 'relay_derivation')),
-  sync_mode VARCHAR(30) NOT NULL DEFAULT 'notify'
-    CHECK (sync_mode IN ('notify', 'manual_merge', 'follow_upstream', 'detached')),
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (downstream_package_id <> upstream_package_id)
-);
-
-CREATE INDEX idx_capability_package_lineages_upstream
-  ON capability_package_lineages(upstream_package_id, created_at DESC);
-
--- ============ Capability Assets ============
-CREATE TABLE capability_assets (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  revision_id UUID NOT NULL REFERENCES capability_package_revisions(id) ON DELETE CASCADE,
-  path TEXT NOT NULL,
-  asset_kind VARCHAR(30) NOT NULL
-    CHECK (asset_kind IN ('skill_markdown', 'reference_markdown', 'script', 'json', 'text', 'binary')),
-  media_type VARCHAR(255),
-  size_bytes INT NOT NULL DEFAULT 0,
-  sha256 VARCHAR(64) NOT NULL,
-  text_content TEXT,
-  binary_content BYTEA,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(revision_id, path),
-  CHECK (
-    (asset_kind IN ('skill_markdown', 'reference_markdown', 'script', 'json', 'text') AND text_content IS NOT NULL) OR
-    (asset_kind = 'binary' AND binary_content IS NOT NULL)
-  )
-);
-
-CREATE INDEX idx_capability_assets_revision ON capability_assets(revision_id, path);
-
--- ============ Capability Instances ============
-CREATE TABLE capability_instances (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE CASCADE,
-  revision_id UUID NOT NULL REFERENCES capability_package_revisions(id) ON DELETE CASCADE,
-  attachment_type VARCHAR(30) NOT NULL
-    CHECK (attachment_type IN ('platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
-  attachment_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  attachment_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  attachment_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  install_mode VARCHAR(30) NOT NULL DEFAULT 'manual'
-    CHECK (install_mode IN ('manual', 'seeded', 'relay_derived', 'package_required', 'package_recommended')),
-  is_enabled BOOLEAN DEFAULT TRUE,
-  config_data JSONB DEFAULT '{}',
-  reuse_scope VARCHAR(30) NOT NULL DEFAULT 'conversation'
-    CHECK (reuse_scope IN ('turn', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
-  idle_ttl_ms INT,
-  max_age_ms INT,
-  requires_handshake BOOLEAN DEFAULT FALSE,
-  installed_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CONSTRAINT chk_capability_instance_attachment CHECK (
-    (attachment_type = 'platform' AND workspace_id IS NULL AND attachment_conversation_id IS NULL AND attachment_actor_id IS NULL AND attachment_user_id IS NULL) OR
-    (attachment_type = 'workspace' AND attachment_conversation_id IS NULL AND attachment_actor_id IS NULL AND attachment_user_id IS NULL) OR
-    (attachment_type = 'conversation' AND attachment_conversation_id IS NOT NULL AND attachment_actor_id IS NULL AND attachment_user_id IS NULL) OR
-    (attachment_type = 'actor_global' AND attachment_actor_id IS NOT NULL AND attachment_conversation_id IS NULL AND attachment_user_id IS NULL) OR
-    (attachment_type = 'actor_conversation' AND attachment_actor_id IS NOT NULL AND attachment_conversation_id IS NOT NULL AND attachment_user_id IS NULL) OR
-    (attachment_type = 'user' AND attachment_user_id IS NOT NULL AND attachment_actor_id IS NULL AND attachment_conversation_id IS NULL)
-  )
-);
-
-CREATE INDEX idx_capability_instances_workspace ON capability_instances(workspace_id, created_at DESC);
-CREATE INDEX idx_capability_instances_package ON capability_instances(package_id, created_at DESC);
-CREATE INDEX idx_capability_instances_conversation ON capability_instances(attachment_conversation_id, created_at DESC) WHERE attachment_conversation_id IS NOT NULL;
-CREATE INDEX idx_capability_instances_actor ON capability_instances(attachment_actor_id, created_at DESC) WHERE attachment_actor_id IS NOT NULL;
-CREATE INDEX idx_capability_instances_user ON capability_instances(attachment_user_id, created_at DESC) WHERE attachment_user_id IS NOT NULL;
-
-ALTER TABLE actors
-  ADD CONSTRAINT fk_actors_capability_package
-  FOREIGN KEY (package_id) REFERENCES capability_packages(id) ON DELETE SET NULL;
-
-ALTER TABLE actors
-  ADD CONSTRAINT fk_actors_capability_instance
-  FOREIGN KEY (instance_id) REFERENCES capability_instances(id) ON DELETE SET NULL;
-
--- ============ Capability Instance Grants ============
-CREATE TABLE capability_instance_grants (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  instance_id UUID NOT NULL REFERENCES capability_instances(id) ON DELETE CASCADE,
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  grant_scope VARCHAR(30) NOT NULL
-    CHECK (grant_scope IN ('platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
-  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  permissions TEXT[] DEFAULT '{}',
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'revoked')),
-  granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  reason TEXT,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ,
-  CONSTRAINT chk_capability_instance_grant_target CHECK (
-    (grant_scope = 'platform' AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'workspace' AND conversation_id IS NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'conversation' AND conversation_id IS NOT NULL AND actor_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'actor_global' AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
-    (grant_scope = 'actor_conversation' AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
-    (grant_scope = 'user' AND user_id IS NOT NULL AND actor_id IS NULL AND conversation_id IS NULL)
-  )
-);
-
-CREATE INDEX idx_capability_instance_grants_instance ON capability_instance_grants(instance_id, created_at DESC);
-CREATE INDEX idx_capability_instance_grants_workspace ON capability_instance_grants(workspace_id, created_at DESC);
-CREATE INDEX idx_capability_instance_grants_actor ON capability_instance_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_capability_instance_grants_conversation ON capability_instance_grants(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
-CREATE INDEX idx_capability_instance_grants_user ON capability_instance_grants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
-
--- ============ Capability Requirements ============
-CREATE TABLE capability_requirements (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  revision_id UUID NOT NULL REFERENCES capability_package_revisions(id) ON DELETE CASCADE,
-  requirement_kind VARCHAR(20) NOT NULL
-    CHECK (requirement_kind IN ('required', 'recommended', 'optional', 'conflicts_with')),
-  target_kind VARCHAR(20) NOT NULL
-    CHECK (target_kind IN ('package', 'tag')),
-  target_package_kind VARCHAR(30)
-    CHECK (target_package_kind IS NULL OR target_package_kind IN ('plugin', 'skill', 'actor', 'model')),
-  target_publisher_slug VARCHAR(100),
-  target_package_slug VARCHAR(100),
-  target_tag VARCHAR(100),
-  acceptable_instance_scopes TEXT[] DEFAULT '{}',
-  acceptable_reuse_scopes TEXT[] DEFAULT '{}',
-  description TEXT DEFAULT '',
-  config_predicate JSONB DEFAULT '{}',
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (
-    (target_kind = 'package' AND target_package_kind IS NOT NULL AND target_package_slug IS NOT NULL AND target_tag IS NULL) OR
-    (target_kind = 'tag' AND target_tag IS NOT NULL AND target_package_kind IS NULL AND target_package_slug IS NULL)
-  )
-);
-
-CREATE INDEX idx_capability_requirements_revision ON capability_requirements(revision_id, created_at);
-
--- ============ Capability Instance Leases ============
-CREATE TABLE capability_instance_leases (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  instance_id UUID NOT NULL REFERENCES capability_instances(id) ON DELETE CASCADE,
-  package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE CASCADE,
-  revision_id UUID NOT NULL REFERENCES capability_package_revisions(id) ON DELETE CASCADE,
-  reuse_scope VARCHAR(30) NOT NULL
-    CHECK (reuse_scope IN ('turn', 'platform', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'user')),
-  owner_key VARCHAR(255) NOT NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'closing', 'closed', 'error')),
-  handshake_state VARCHAR(20) NOT NULL DEFAULT 'not_required'
-    CHECK (handshake_state IN ('pending', 'ready', 'error', 'not_required')),
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  last_used_at TIMESTAMPTZ DEFAULT NOW(),
-  expires_at TIMESTAMPTZ,
-  closed_at TIMESTAMPTZ
-);
-
-CREATE INDEX idx_capability_instance_leases_instance ON capability_instance_leases(instance_id, created_at DESC);
-CREATE INDEX idx_capability_instance_leases_owner ON capability_instance_leases(owner_key, created_at DESC);
-
--- ============ Capability Auth Connections ============
-CREATE TABLE capability_auth_connections (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE CASCADE,
-  provider_key VARCHAR(100) NOT NULL,
-  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  external_account_id VARCHAR(255),
-  display_name VARCHAR(255),
-  avatar_url TEXT,
-  scopes TEXT[] DEFAULT '{}',
-  access_token TEXT,
-  refresh_token TEXT,
-  token_type VARCHAR(100),
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'expired', 'revoked')),
-  expires_at TIMESTAMPTZ,
-  profile JSONB DEFAULT '{}',
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_capability_auth_connections_workspace ON capability_auth_connections(workspace_id, created_at DESC);
-CREATE INDEX idx_capability_auth_connections_package_provider ON capability_auth_connections(package_id, provider_key, created_at DESC);
-CREATE INDEX idx_capability_auth_connections_owner ON capability_auth_connections(owner_user_id, created_at DESC);
-
--- ============ Capability Auth Sessions ============
-CREATE TABLE capability_auth_sessions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  package_id UUID NOT NULL REFERENCES capability_packages(id) ON DELETE CASCADE,
-  revision_id UUID REFERENCES capability_package_revisions(id) ON DELETE SET NULL,
-  provider_key VARCHAR(100) NOT NULL,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  status VARCHAR(20) NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'completed', 'failed', 'expired', 'consumed')),
-  state VARCHAR(255) NOT NULL UNIQUE,
-  code_verifier TEXT,
-  redirect_uri TEXT NOT NULL,
-  authorize_url TEXT,
-  error_code VARCHAR(100),
-  error_message TEXT,
-  result_preview JSONB DEFAULT '{}',
-  auth_connection_id UUID REFERENCES capability_auth_connections(id) ON DELETE SET NULL,
-  metadata JSONB DEFAULT '{}',
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_capability_auth_sessions_workspace ON capability_auth_sessions(workspace_id, created_at DESC);
-CREATE INDEX idx_capability_auth_sessions_user ON capability_auth_sessions(user_id, created_at DESC);
-CREATE INDEX idx_capability_auth_sessions_package_provider ON capability_auth_sessions(package_id, provider_key, created_at DESC);
-
--- ============ MCP Relay V2 ============
-CREATE TABLE relay_devices (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  owner_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  display_name VARCHAR(255) NOT NULL,
-  client_kind VARCHAR(40) NOT NULL DEFAULT 'desktop',
-  platform VARCHAR(40),
-  public_key TEXT NOT NULL,
-  public_key_fingerprint VARCHAR(128) NOT NULL UNIQUE,
-  trust_status VARCHAR(20) NOT NULL DEFAULT 'pending'
-    CHECK (trust_status IN ('pending', 'active', 'revoked', 'blocked')),
-  last_seen_at TIMESTAMPTZ,
-  last_connected_at TIMESTAMPTZ,
-  last_catalog_changed_at TIMESTAMPTZ,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_relay_devices_workspace ON relay_devices(workspace_id, created_at DESC);
-CREATE INDEX idx_relay_devices_owner ON relay_devices(owner_user_id, created_at DESC);
-CREATE INDEX idx_relay_devices_trust ON relay_devices(trust_status, updated_at DESC);
-
-CREATE TABLE relay_pairing_sessions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  requested_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  device_id UUID REFERENCES relay_devices(id) ON DELETE SET NULL,
-  server_base_url TEXT NOT NULL,
-  requested_display_name VARCHAR(255),
-  pairing_code VARCHAR(32) NOT NULL UNIQUE,
-  verification_uri TEXT NOT NULL,
-  verification_uri_complete TEXT,
-  expires_at TIMESTAMPTZ NOT NULL,
-  confirmed_at TIMESTAMPTZ,
-  consumed_at TIMESTAMPTZ,
-  status VARCHAR(20) NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'confirmed', 'consumed', 'expired', 'cancelled', 'rejected')),
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_relay_pairing_sessions_workspace ON relay_pairing_sessions(workspace_id, created_at DESC);
-CREATE INDEX idx_relay_pairing_sessions_device ON relay_pairing_sessions(device_id, created_at DESC);
-CREATE INDEX idx_relay_pairing_sessions_status ON relay_pairing_sessions(status, expires_at DESC);
-
-CREATE TABLE relay_device_sessions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
-  protocol_version INT NOT NULL DEFAULT 2,
-  client_version VARCHAR(64),
-  status VARCHAR(20) NOT NULL DEFAULT 'connecting'
-    CHECK (status IN ('connecting', 'active', 'closing', 'closed', 'rejected')),
-  transport VARCHAR(20) NOT NULL DEFAULT 'websocket'
-    CHECK (transport IN ('websocket')),
-  remote_addr TEXT,
-  last_sequence BIGINT NOT NULL DEFAULT 0,
-  last_heartbeat_at TIMESTAMPTZ,
-  close_reason TEXT,
-  started_at TIMESTAMPTZ DEFAULT NOW(),
-  ended_at TIMESTAMPTZ,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_relay_device_sessions_device ON relay_device_sessions(device_id, created_at DESC);
-CREATE INDEX idx_relay_device_sessions_status ON relay_device_sessions(status, updated_at DESC);
-
-CREATE TABLE relay_sync_sources (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
-  source_kind VARCHAR(30) NOT NULL
-    CHECK (source_kind IN ('manual', 'claude_code', 'claude_desktop', 'codex', 'gemini', 'opencode', 'custom')),
-  source_key VARCHAR(255) NOT NULL,
-  config_path TEXT,
-  sync_mode VARCHAR(20) NOT NULL DEFAULT 'observe'
-    CHECK (sync_mode IN ('import_only', 'observe', 'mirror', 'managed', 'detached')),
-  status VARCHAR(20) NOT NULL DEFAULT 'unknown'
-    CHECK (status IN ('unknown', 'idle', 'syncing', 'error', 'disabled')),
-  last_synced_at TIMESTAMPTZ,
-  last_error TEXT,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(device_id, source_key)
-);
-
-CREATE INDEX idx_relay_sync_sources_device ON relay_sync_sources(device_id, created_at DESC);
-CREATE INDEX idx_relay_sync_sources_status ON relay_sync_sources(status, updated_at DESC);
-
-CREATE TABLE relay_exposures (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
-  sync_source_id UUID REFERENCES relay_sync_sources(id) ON DELETE SET NULL,
-  stable_key VARCHAR(255) NOT NULL,
-  display_name VARCHAR(255) NOT NULL,
-  transport VARCHAR(20) NOT NULL
-    CHECK (transport IN ('builtin', 'stdio', 'http', 'sse', 'custom')),
-  runtime_status VARCHAR(20) NOT NULL DEFAULT 'discovered'
-    CHECK (runtime_status IN ('discovered', 'starting', 'healthy', 'degraded', 'failed', 'quarantined', 'offline')),
-  management_mode VARCHAR(20) NOT NULL DEFAULT 'manual'
-    CHECK (management_mode IN ('manual', 'imported', 'mirrored', 'managed', 'builtin')),
-  last_seen_at TIMESTAMPTZ,
-  last_healthy_at TIMESTAMPTZ,
-  last_error TEXT,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(device_id, stable_key)
-);
-
-CREATE INDEX idx_relay_exposures_device ON relay_exposures(device_id, created_at DESC);
-CREATE INDEX idx_relay_exposures_status ON relay_exposures(runtime_status, updated_at DESC);
-CREATE INDEX idx_relay_exposures_source ON relay_exposures(sync_source_id, created_at DESC);
-
-CREATE TABLE relay_catalog_revisions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
-  revision_seq BIGINT NOT NULL,
-  schema_hash VARCHAR(128) NOT NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'superseded')),
-  activated_at TIMESTAMPTZ DEFAULT NOW(),
-  invalidated_at TIMESTAMPTZ,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(exposure_id, revision_seq)
-);
-
-CREATE INDEX idx_relay_catalog_revisions_exposure ON relay_catalog_revisions(exposure_id, revision_seq DESC);
-CREATE INDEX idx_relay_catalog_revisions_status ON relay_catalog_revisions(status, updated_at DESC);
-
-CREATE TABLE relay_tools (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
-  stable_key VARCHAR(255) NOT NULL,
-  latest_revision_id UUID,
-  current_name VARCHAR(255) NOT NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'removed')),
-  first_seen_at TIMESTAMPTZ DEFAULT NOW(),
-  last_seen_at TIMESTAMPTZ DEFAULT NOW(),
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(exposure_id, stable_key)
-);
-
-CREATE INDEX idx_relay_tools_exposure ON relay_tools(exposure_id, current_name);
-CREATE INDEX idx_relay_tools_status ON relay_tools(status, updated_at DESC);
-
-CREATE TABLE relay_tool_revisions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  tool_id UUID NOT NULL REFERENCES relay_tools(id) ON DELETE CASCADE,
-  catalog_revision_id UUID NOT NULL REFERENCES relay_catalog_revisions(id) ON DELETE CASCADE,
-  tool_name VARCHAR(255) NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  input_schema JSONB NOT NULL DEFAULT '{}',
-  annotations JSONB NOT NULL DEFAULT '{}',
-  definition_hash VARCHAR(128) NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(tool_id, catalog_revision_id)
-);
-
-CREATE INDEX idx_relay_tool_revisions_tool ON relay_tool_revisions(tool_id, created_at DESC);
-CREATE INDEX idx_relay_tool_revisions_catalog ON relay_tool_revisions(catalog_revision_id, created_at DESC);
-
-ALTER TABLE relay_tools
-  ADD CONSTRAINT fk_relay_tools_latest_revision
-  FOREIGN KEY (latest_revision_id) REFERENCES relay_tool_revisions(id) ON DELETE SET NULL;
-
-CREATE TABLE relay_operations (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
-  session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
-  requested_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  requested_by_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
-  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
-  exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
-  catalog_revision_id UUID NOT NULL REFERENCES relay_catalog_revisions(id) ON DELETE CASCADE,
-  tool_id UUID NOT NULL REFERENCES relay_tools(id) ON DELETE CASCADE,
-  tool_revision_id UUID NOT NULL REFERENCES relay_tool_revisions(id) ON DELETE CASCADE,
-  visible_tool_name VARCHAR(255) NOT NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'created'
-    CHECK (status IN ('created', 'dispatched', 'received', 'started', 'completed', 'failed', 'aborted', 'expired')),
-  input_payload JSONB NOT NULL DEFAULT '{}',
-  input_hash VARCHAR(128) NOT NULL,
-  result_hash VARCHAR(128),
-  error_code VARCHAR(100),
-  error_message TEXT,
-  requires_replan BOOLEAN NOT NULL DEFAULT FALSE,
-  completed_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_relay_operations_workspace ON relay_operations(workspace_id, created_at DESC);
-CREATE INDEX idx_relay_operations_session ON relay_operations(session_id, created_at DESC);
-CREATE INDEX idx_relay_operations_device ON relay_operations(device_id, created_at DESC);
-CREATE INDEX idx_relay_operations_tool ON relay_operations(tool_id, created_at DESC);
-CREATE INDEX idx_relay_operations_status ON relay_operations(status, updated_at DESC);
-
-CREATE TABLE relay_operation_deliveries (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  operation_id UUID NOT NULL REFERENCES relay_operations(id) ON DELETE CASCADE,
-  relay_session_id UUID REFERENCES relay_device_sessions(id) ON DELETE SET NULL,
-  delivery_seq BIGINT NOT NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'queued'
-    CHECK (status IN ('queued', 'sent', 'acked', 'nacked', 'timed_out', 'cancelled')),
-  sent_at TIMESTAMPTZ,
-  acknowledged_at TIMESTAMPTZ,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(operation_id, delivery_seq)
-);
-
-CREATE INDEX idx_relay_operation_deliveries_operation ON relay_operation_deliveries(operation_id, delivery_seq DESC);
-CREATE INDEX idx_relay_operation_deliveries_session ON relay_operation_deliveries(relay_session_id, created_at DESC);
-CREATE INDEX idx_relay_operation_deliveries_status ON relay_operation_deliveries(status, updated_at DESC);
-
-CREATE TABLE relay_operation_results (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  operation_id UUID NOT NULL UNIQUE REFERENCES relay_operations(id) ON DELETE CASCADE,
-  output_payload JSONB NOT NULL DEFAULT '{}',
-  output_preview TEXT,
-  result_hash VARCHAR(128),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-ALTER TABLE tool_calls ADD CONSTRAINT fk_tool_calls_plugin
-  FOREIGN KEY (plugin_id) REFERENCES capability_packages(id) ON DELETE SET NULL;
-ALTER TABLE tool_calls ADD CONSTRAINT fk_tool_calls_relay
-  FOREIGN KEY (relay_id) REFERENCES relay_devices(id) ON DELETE SET NULL;
-ALTER TABLE tool_execution_attempts ADD CONSTRAINT fk_tool_execution_attempts_plugin
-  FOREIGN KEY (plugin_id) REFERENCES capability_packages(id) ON DELETE SET NULL;
-ALTER TABLE tool_execution_attempts ADD CONSTRAINT fk_tool_execution_attempts_relay
-  FOREIGN KEY (relay_id) REFERENCES relay_devices(id) ON DELETE SET NULL;
 
 -- ============ Runtime Events ============
 CREATE TABLE runtime_events (
@@ -1788,119 +1289,366 @@ CREATE INDEX idx_runtime_events_workspace_time ON runtime_events(workspace_id, c
 CREATE INDEX idx_runtime_events_turn_time ON runtime_events(turn_id, created_at DESC) WHERE turn_id IS NOT NULL;
 CREATE INDEX idx_runtime_events_tool_call_time ON runtime_events(tool_call_id, created_at DESC) WHERE tool_call_id IS NOT NULL;
 
--- ============ A2A Apps ============
-CREATE TABLE a2a_apps (
+-- ============ Skill Runtime ============
+CREATE TABLE installed_skills (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  slug VARCHAR(120) NOT NULL,
   name VARCHAR(255) NOT NULL,
-  description TEXT DEFAULT '',
-  api_key_hash VARCHAR(255) NOT NULL,
-  api_key_prefix VARCHAR(16) NOT NULL,
-  rate_limit_rpm INT DEFAULT 60,
-  is_active BOOLEAN DEFAULT TRUE,
+  icon_blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  tags TEXT[] DEFAULT '{}',
+  current_version INT NOT NULL DEFAULT 1,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(workspace_id, slug)
+);
+
+CREATE INDEX idx_installed_skills_workspace ON installed_skills(workspace_id, created_at DESC);
+
+CREATE TABLE skill_versions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  skill_id UUID NOT NULL REFERENCES installed_skills(id) ON DELETE CASCADE,
+  version INT NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  description_blocks JSONB NOT NULL DEFAULT '[]',
+  summary_text TEXT DEFAULT '',
+  metadata JSONB DEFAULT '{}',
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(skill_id, version)
+);
+
+CREATE TABLE skill_files (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  skill_version_id UUID NOT NULL REFERENCES skill_versions(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  media_type VARCHAR(255),
+  blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  text_content TEXT,
+  content_blocks JSONB NOT NULL DEFAULT '[]',
+  sha256 VARCHAR(64) NOT NULL,
+  size_bytes INT NOT NULL DEFAULT 0,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(skill_version_id, path),
+  CHECK (blob_id IS NOT NULL OR text_content IS NOT NULL)
+);
+
+CREATE TABLE skill_source_refs (
+  skill_id UUID PRIMARY KEY REFERENCES installed_skills(id) ON DELETE CASCADE,
+  source_catalog_item_id UUID REFERENCES catalog_items(id) ON DELETE SET NULL,
+  source_catalog_version_id UUID REFERENCES catalog_versions(id) ON DELETE SET NULL,
+  sync_mode VARCHAR(30) NOT NULL DEFAULT 'manual_merge'
+    CHECK (sync_mode IN ('notify', 'manual_merge', 'follow_upstream', 'detached')),
+  is_customized BOOLEAN NOT NULL DEFAULT FALSE,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_a2a_apps_workspace ON a2a_apps(workspace_id);
-CREATE INDEX idx_a2a_apps_prefix ON a2a_apps(api_key_prefix);
-
-CREATE TABLE a2a_app_actors (
+-- ============ Plugin Runtime ============
+CREATE TABLE plugin_installations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  app_id UUID NOT NULL REFERENCES a2a_apps(id) ON DELETE CASCADE,
-  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(app_id, actor_id)
-);
-
-CREATE INDEX idx_a2a_app_actors_app ON a2a_app_actors(app_id);
-
-CREATE TABLE a2a_tasks (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  app_id UUID NOT NULL REFERENCES a2a_apps(id) ON DELETE CASCADE,
-  context_id VARCHAR(255),
-  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(app_id, session_id)
-);
-
-CREATE INDEX idx_a2a_tasks_app ON a2a_tasks(app_id);
-CREATE INDEX idx_a2a_tasks_session ON a2a_tasks(session_id);
-
--- ============ Agent Endpoints ============
-CREATE TABLE agent_endpoints (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  kind VARCHAR(30) NOT NULL CHECK (kind IN ('local_a2a_app', 'remote_a2a_server')),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  catalog_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE RESTRICT,
+  catalog_version_id UUID NOT NULL REFERENCES catalog_versions(id) ON DELETE RESTRICT,
   display_name VARCHAR(255) NOT NULL,
-  base_url TEXT,
-  auth_config JSONB DEFAULT '{}',
+  config_data JSONB NOT NULL DEFAULT '{}',
+  approved_runtime_permissions TEXT[] DEFAULT '{}',
+  reuse_scope VARCHAR(20) NOT NULL DEFAULT 'conversation'
+    CHECK (reuse_scope IN ('turn', 'workspace', 'conversation', 'actor', 'actor_conversation', 'user')),
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'disabled', 'error', 'archived')),
+  installed_by UUID REFERENCES users(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
-  is_active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_agent_endpoints_workspace ON agent_endpoints(workspace_id);
+CREATE INDEX idx_plugin_installations_workspace ON plugin_installations(workspace_id, created_at DESC);
+CREATE INDEX idx_plugin_installations_item ON plugin_installations(catalog_item_id, created_at DESC);
 
-CREATE TABLE endpoint_agents (
+CREATE TABLE plugin_auth_sessions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  endpoint_id UUID NOT NULL REFERENCES agent_endpoints(id) ON DELETE CASCADE,
-  local_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
-  external_agent_id VARCHAR(255),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  catalog_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE CASCADE,
+  catalog_version_id UUID REFERENCES catalog_versions(id) ON DELETE SET NULL,
+  provider_key VARCHAR(100) NOT NULL,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'completed', 'failed', 'expired', 'consumed')),
+  state VARCHAR(255) NOT NULL UNIQUE,
+  code_verifier TEXT,
+  redirect_uri TEXT NOT NULL,
+  authorize_url TEXT,
+  error_code VARCHAR(120),
+  error_message TEXT,
+  result_preview JSONB DEFAULT '{}',
+  metadata JSONB DEFAULT '{}',
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_plugin_auth_sessions_workspace ON plugin_auth_sessions(workspace_id, created_at DESC);
+CREATE INDEX idx_plugin_auth_sessions_item ON plugin_auth_sessions(catalog_item_id, created_at DESC);
+CREATE INDEX idx_plugin_auth_sessions_user ON plugin_auth_sessions(user_id, created_at DESC);
+
+CREATE TABLE plugin_connections (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  installation_id UUID NOT NULL REFERENCES plugin_installations(id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider_key VARCHAR(100) NOT NULL,
+  external_account_id VARCHAR(255),
+  display_name VARCHAR(255),
+  avatar_url TEXT,
+  scopes TEXT[] DEFAULT '{}',
+  access_token TEXT,
+  refresh_token TEXT,
+  token_type VARCHAR(100),
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'expired', 'revoked')),
+  expires_at TIMESTAMPTZ,
+  profile JSONB DEFAULT '{}',
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_plugin_connections_installation ON plugin_connections(installation_id, created_at DESC);
+
+CREATE TABLE plugin_runtime_leases (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  installation_id UUID NOT NULL REFERENCES plugin_installations(id) ON DELETE CASCADE,
+  access_binding_id UUID REFERENCES access_bindings(id) ON DELETE SET NULL,
+  reuse_scope VARCHAR(20) NOT NULL
+    CHECK (reuse_scope IN ('turn', 'workspace', 'conversation', 'actor', 'actor_conversation', 'user')),
+  owner_key VARCHAR(255) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'closing', 'closed', 'error')),
+  handshake_state VARCHAR(20) NOT NULL DEFAULT 'not_required'
+    CHECK (handshake_state IN ('pending', 'ready', 'error', 'not_required')),
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  last_used_at TIMESTAMPTZ DEFAULT NOW(),
+  expires_at TIMESTAMPTZ,
+  closed_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_plugin_runtime_leases_installation ON plugin_runtime_leases(installation_id, created_at DESC);
+CREATE INDEX idx_plugin_runtime_leases_owner ON plugin_runtime_leases(owner_key, created_at DESC);
+
+CREATE TABLE plugin_source_refs (
+  installation_id UUID PRIMARY KEY REFERENCES plugin_installations(id) ON DELETE CASCADE,
+  source_catalog_item_id UUID REFERENCES catalog_items(id) ON DELETE SET NULL,
+  source_catalog_version_id UUID REFERENCES catalog_versions(id) ON DELETE SET NULL,
+  sync_mode VARCHAR(30) NOT NULL DEFAULT 'manual_merge'
+    CHECK (sync_mode IN ('notify', 'manual_merge', 'follow_upstream', 'detached')),
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============ Relay Runtime ============
+CREATE TABLE relay_devices (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  owner_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   display_name VARCHAR(255) NOT NULL,
-  agent_card JSONB DEFAULT '{}',
+  client_kind VARCHAR(40) NOT NULL DEFAULT 'desktop',
+  platform VARCHAR(40),
+  public_key TEXT NOT NULL,
+  public_key_fingerprint VARCHAR(128) NOT NULL UNIQUE,
+  trust_status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (trust_status IN ('pending', 'active', 'revoked', 'blocked')),
+  last_seen_at TIMESTAMPTZ,
+  last_connected_at TIMESTAMPTZ,
+  last_catalog_changed_at TIMESTAMPTZ,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_endpoint_agents_endpoint ON endpoint_agents(endpoint_id);
+CREATE INDEX idx_relay_devices_workspace ON relay_devices(workspace_id, created_at DESC);
 
-CREATE TABLE conversation_bridges (
+CREATE TABLE relay_pairing_sessions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  endpoint_id UUID NOT NULL REFERENCES agent_endpoints(id) ON DELETE CASCADE,
-  endpoint_agent_id UUID REFERENCES endpoint_agents(id) ON DELETE SET NULL,
-  remote_task_id VARCHAR(255),
-  remote_context_id VARCHAR(255),
-  state VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (state IN ('active', 'completed', 'failed', 'cancelled')),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  requested_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  device_id UUID REFERENCES relay_devices(id) ON DELETE SET NULL,
+  server_base_url TEXT NOT NULL,
+  requested_display_name VARCHAR(255),
+  pairing_code VARCHAR(32) NOT NULL UNIQUE,
+  verification_uri TEXT NOT NULL,
+  verification_uri_complete TEXT,
+  expires_at TIMESTAMPTZ NOT NULL,
+  confirmed_at TIMESTAMPTZ,
+  consumed_at TIMESTAMPTZ,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'confirmed', 'consumed', 'expired', 'cancelled', 'rejected')),
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_conversation_bridges_conversation ON conversation_bridges(conversation_id);
-CREATE INDEX idx_conversation_bridges_endpoint ON conversation_bridges(endpoint_id);
+CREATE TABLE relay_device_sessions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
+  protocol_version INT NOT NULL DEFAULT 2,
+  client_version VARCHAR(64),
+  status VARCHAR(20) NOT NULL DEFAULT 'connecting'
+    CHECK (status IN ('connecting', 'active', 'closing', 'closed', 'rejected')),
+  transport VARCHAR(20) NOT NULL DEFAULT 'websocket'
+    CHECK (transport IN ('websocket')),
+  remote_addr TEXT,
+  last_sequence BIGINT NOT NULL DEFAULT 0,
+  last_heartbeat_at TIMESTAMPTZ,
+  close_reason TEXT,
+  started_at TIMESTAMPTZ DEFAULT NOW(),
+  ended_at TIMESTAMPTZ,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
 
--- ============ Updated at trigger ============
-CREATE OR REPLACE FUNCTION update_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+CREATE TABLE relay_sync_sources (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
+  source_kind VARCHAR(30) NOT NULL
+    CHECK (source_kind IN ('manual', 'claude_code', 'claude_desktop', 'codex', 'gemini', 'opencode', 'custom')),
+  source_key VARCHAR(255) NOT NULL,
+  config_path TEXT,
+  sync_mode VARCHAR(20) NOT NULL DEFAULT 'observe'
+    CHECK (sync_mode IN ('import_only', 'observe', 'mirror', 'managed', 'detached')),
+  status VARCHAR(20) NOT NULL DEFAULT 'unknown'
+    CHECK (status IN ('unknown', 'idle', 'syncing', 'error', 'disabled')),
+  last_synced_at TIMESTAMPTZ,
+  last_error TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(device_id, source_key)
+);
 
-DO $$
-DECLARE
-  tbl TEXT;
-BEGIN
-  FOR tbl IN SELECT unnest(ARRAY[
-    'users', 'workspaces', 'workspace_invites', 'actors', 'work_items',
-    'standing_orders', 'platform_settings', 'model_groups', 'model_profiles', 'model_group_profiles', 'conversations', 'sessions',
-    'memory_entries', 'memory_index_chunks',
-    'capability_publishers', 'capability_packages', 'capability_instances',
-    'relay_devices', 'relay_pairing_sessions', 'relay_device_sessions', 'relay_sync_sources',
-    'relay_exposures', 'relay_catalog_revisions', 'relay_tools', 'relay_operations',
-    'relay_operation_deliveries', 'relay_operation_results',
-    'a2a_apps', 'agent_endpoints', 'endpoint_agents', 'conversation_bridges'
-  ])
-  LOOP
-    EXECUTE format('DROP TRIGGER IF EXISTS set_updated_at ON %I', tbl);
-    EXECUTE format('CREATE TRIGGER set_updated_at BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION update_updated_at()', tbl);
-  END LOOP;
-END;
-$$;
+CREATE TABLE relay_exposures (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
+  sync_source_id UUID REFERENCES relay_sync_sources(id) ON DELETE SET NULL,
+  stable_key VARCHAR(255) NOT NULL,
+  display_name VARCHAR(255) NOT NULL,
+  transport VARCHAR(20) NOT NULL
+    CHECK (transport IN ('builtin', 'stdio', 'http', 'sse', 'custom')),
+  runtime_status VARCHAR(20) NOT NULL DEFAULT 'discovered'
+    CHECK (runtime_status IN ('discovered', 'starting', 'healthy', 'degraded', 'failed', 'quarantined', 'offline')),
+  management_mode VARCHAR(20) NOT NULL DEFAULT 'manual'
+    CHECK (management_mode IN ('manual', 'imported', 'mirrored', 'managed', 'builtin')),
+  projected_catalog_item_id UUID REFERENCES catalog_items(id) ON DELETE SET NULL,
+  last_seen_at TIMESTAMPTZ,
+  last_healthy_at TIMESTAMPTZ,
+  last_error TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(device_id, stable_key)
+);
+
+CREATE TABLE relay_catalog_revisions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
+  revision_seq BIGINT NOT NULL,
+  schema_hash VARCHAR(128) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'superseded')),
+  activated_at TIMESTAMPTZ DEFAULT NOW(),
+  invalidated_at TIMESTAMPTZ,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(exposure_id, revision_seq)
+);
+
+CREATE TABLE relay_tools (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
+  stable_key VARCHAR(255) NOT NULL,
+  latest_revision_id UUID,
+  current_name VARCHAR(255) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'removed')),
+  first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ DEFAULT NOW(),
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(exposure_id, stable_key)
+);
+
+CREATE TABLE relay_tool_revisions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tool_id UUID NOT NULL REFERENCES relay_tools(id) ON DELETE CASCADE,
+  catalog_revision_id UUID NOT NULL REFERENCES relay_catalog_revisions(id) ON DELETE CASCADE,
+  tool_name VARCHAR(255) NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  input_schema JSONB NOT NULL DEFAULT '{}',
+  annotations JSONB NOT NULL DEFAULT '{}',
+  definition_hash VARCHAR(128) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(tool_id, catalog_revision_id)
+);
+
+ALTER TABLE relay_tools
+  ADD CONSTRAINT fk_relay_tools_latest_revision
+  FOREIGN KEY (latest_revision_id) REFERENCES relay_tool_revisions(id) ON DELETE SET NULL;
+
+CREATE TABLE relay_operations (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  requested_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  requested_by_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
+  exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
+  catalog_revision_id UUID NOT NULL REFERENCES relay_catalog_revisions(id) ON DELETE CASCADE,
+  tool_id UUID NOT NULL REFERENCES relay_tools(id) ON DELETE CASCADE,
+  tool_revision_id UUID NOT NULL REFERENCES relay_tool_revisions(id) ON DELETE CASCADE,
+  visible_tool_name VARCHAR(255) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'created'
+    CHECK (status IN ('created', 'dispatched', 'received', 'started', 'completed', 'failed', 'aborted', 'expired')),
+  input_payload JSONB NOT NULL DEFAULT '{}',
+  input_hash VARCHAR(128) NOT NULL,
+  result_hash VARCHAR(128),
+  error_code VARCHAR(100),
+  error_message TEXT,
+  requires_replan BOOLEAN NOT NULL DEFAULT FALSE,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE relay_operation_deliveries (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  operation_id UUID NOT NULL REFERENCES relay_operations(id) ON DELETE CASCADE,
+  relay_session_id UUID REFERENCES relay_device_sessions(id) ON DELETE SET NULL,
+  delivery_seq BIGINT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'sent', 'acked', 'nacked', 'timed_out', 'cancelled')),
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  acknowledged_at TIMESTAMPTZ,
+  UNIQUE(operation_id, delivery_seq)
+);
+
+CREATE TABLE relay_operation_results (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  operation_id UUID NOT NULL UNIQUE REFERENCES relay_operations(id) ON DELETE CASCADE,
+  output_payload JSONB NOT NULL DEFAULT '{}',
+  output_preview TEXT,
+  result_hash VARCHAR(128),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);

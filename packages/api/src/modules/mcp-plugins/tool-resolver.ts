@@ -1,16 +1,23 @@
-import { randomUUID } from 'crypto';
-import type { ToolDefinition } from '@synapse/shared';
-import type { NormalizedMcpToolResult } from '@synapse/shared/types';
-import type { CapabilityInstance, CapabilityPackageTool } from '@synapse/shared';
+import { randomUUID } from "crypto";
+import type { ToolDefinition } from "@synapse/shared";
+import type { NormalizedMcpToolResult } from "@synapse/shared/types";
+import {
+  buildActorConversationContextId,
+  lookupResources,
+  type AuthzSubject,
+} from "../../infrastructure/authz/index.js";
+import { query } from "../../infrastructure/database/index.js";
+import { resolveInstallationConfig } from "./config-resolver.js";
+import {
+  getMcpVersion,
+  getOrCreateInstance,
+  type McpInstance,
+} from "./instance-manager.js";
+import { logToolCall } from "./audit.js";
+import { callRelayTool, getRelayExposureCatalog } from "./relay-manager.js";
+import { normalizeMcpToolResult } from "./result-normalizer.js";
 
-import { listAuthorizedCapabilityInstances } from '../capabilities/service.js';
-import { resolveInstallationConfig } from './config-resolver.js';
-import { getOrCreateInstance, getMcpVersion, type McpInstance } from './instance-manager.js';
-import { logToolCall } from './audit.js';
-import { callRelayTool, getRelayExposureCatalog } from './relay-manager.js';
-import { normalizeMcpToolResult } from './result-normalizer.js';
-
-const MCP_TOOL_NAMESPACE_SEPARATOR = '__';
+const MCP_TOOL_NAMESPACE_SEPARATOR = "__";
 
 export interface ResolvedMcpTools {
   tools: ToolDefinition[];
@@ -28,103 +35,261 @@ interface ResolveParams {
   userId?: string;
 }
 
-function dedupeInstances(instances: CapabilityInstance[]) {
-  const seenPackages = new Set<string>();
-  const deduped: CapabilityInstance[] = [];
-  for (const instance of instances) {
-    if (seenPackages.has(instance.packageId)) continue;
-    seenPackages.add(instance.packageId);
-    deduped.push(instance);
-  }
-  return deduped;
+type VisiblePluginRow = {
+  installation_id: string;
+  installation_status: "active" | "disabled" | "error" | "archived";
+  catalog_item_id: string;
+  item_slug: string;
+  publisher_slug: string;
+  transport: "builtin" | "stdio" | "http" | "relay";
+  entry_point: string | null;
+  tool_manifest: unknown;
+  reuse_scope: "turn" | "workspace" | "conversation" | "actor" | "actor_conversation" | "user" | null;
+};
+
+type VisibleRelayExposureRow = {
+  exposure_id: string;
+  exposure_stable_key: string;
+  exposure_display_name: string;
+  exposure_updated_at: string;
+  device_id: string;
+  device_display_name: string;
+};
+
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
 }
 
-function resolveReuseOwnerKey(instance: CapabilityInstance, params: ResolveParams, turnOwnerKey: string) {
-  switch (instance.reuseScope) {
-    case 'workspace':
+function buildVisibilitySubjects(params: ResolveParams) {
+  const subjects: AuthzSubject[] = [
+    {
+      type: "actor",
+      id: params.actorId,
+    },
+  ];
+
+  if (params.userId) {
+    subjects.push({
+      type: "user",
+      id: params.userId,
+    });
+  }
+
+  if (params.actorId && params.conversationId) {
+    subjects.push({
+      type: "actor_conversation",
+      id: buildActorConversationContextId(params.actorId, params.conversationId),
+    });
+  }
+
+  return subjects;
+}
+
+function publicReuseScope(scope: VisiblePluginRow["reuse_scope"]) {
+  switch (scope) {
+    case "actor":
+      return "actor_global";
+    case "turn":
+    case "workspace":
+    case "conversation":
+    case "actor_conversation":
+    case "user":
+      return scope;
+    default:
+      return "conversation";
+  }
+}
+
+function resolveReuseOwnerKey(
+  scope: ReturnType<typeof publicReuseScope>,
+  params: ResolveParams,
+  turnOwnerKey: string,
+) {
+  switch (scope) {
+    case "workspace":
       return params.workspaceId;
-    case 'conversation':
+    case "conversation":
       return params.conversationId;
-    case 'actor_global':
+    case "actor_global":
       return params.actorId;
-    case 'actor_conversation':
+    case "actor_conversation":
       return `${params.actorId}:${params.conversationId}`;
-    case 'user':
+    case "user":
       return params.userId
         ? `workspace:${params.workspaceId}:user:${params.userId}`
         : params.conversationId;
-    case 'turn':
+    case "turn":
       return turnOwnerKey;
     default:
       return params.conversationId;
   }
 }
 
-function manifestToolToDefinition(tool: CapabilityPackageTool): ToolDefinition {
+function manifestToolToDefinition(tool: {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}): ToolDefinition {
   const inputSchema = tool.inputSchema as Record<string, unknown> | undefined;
   const properties =
-    inputSchema && typeof inputSchema === 'object' && !Array.isArray(inputSchema)
+    inputSchema && typeof inputSchema === "object" && !Array.isArray(inputSchema)
       ? ((inputSchema.properties as Record<string, unknown> | undefined) || {})
       : {};
   const required =
-    inputSchema && typeof inputSchema === 'object' && !Array.isArray(inputSchema)
+    inputSchema && typeof inputSchema === "object" && !Array.isArray(inputSchema)
       ? ((inputSchema.required as string[] | undefined) || [])
       : [];
 
   return {
     name: tool.name,
-    description: tool.description,
+    description: tool.description || "",
     parameters: {
-      type: 'object',
-      properties: properties as ToolDefinition['parameters']['properties'],
+      type: "object",
+      properties: properties as ToolDefinition["parameters"]["properties"],
       required,
     },
   };
 }
 
+function sanitizeNamespaceSegment(value: string, fallback: string) {
+  const normalized = value
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+  return normalized || fallback;
+}
+
+async function loadVisiblePlugins(params: ResolveParams) {
+  const subjects = buildVisibilitySubjects(params);
+  const visibleInstallationIds = new Set<string>();
+
+  const lookups = await Promise.all(
+    subjects.map((subject) =>
+      lookupResources({
+        resourceType: "plugin_installation",
+        permission: "use",
+        subject,
+      }),
+    ),
+  );
+
+  for (const ids of lookups) {
+    for (const id of ids) {
+      visibleInstallationIds.add(id);
+    }
+  }
+
+  if (visibleInstallationIds.size === 0) {
+    return [] as VisiblePluginRow[];
+  }
+
+  const result = await query<VisiblePluginRow>(
+    `SELECT
+       installation.id AS installation_id,
+       installation.status AS installation_status,
+       installation.catalog_item_id,
+       item.slug AS item_slug,
+       publisher.slug AS publisher_slug,
+       spec.transport,
+       spec.entry_point,
+       spec.tool_manifest,
+       installation.reuse_scope
+     FROM plugin_installations installation
+     JOIN catalog_items item
+       ON item.id = installation.catalog_item_id
+     JOIN publishers publisher
+       ON publisher.id = item.publisher_id
+     JOIN plugin_package_version_specs spec
+       ON spec.catalog_version_id = installation.catalog_version_id
+     WHERE installation.id = ANY($1::uuid[])
+       AND installation.workspace_id = $2
+       AND installation.status = 'active'
+     ORDER BY installation.updated_at DESC`,
+    [Array.from(visibleInstallationIds), params.workspaceId],
+  );
+  return result.rows;
+}
+
+async function loadVisibleRelayExposures(params: ResolveParams) {
+  const subjects = buildVisibilitySubjects(params);
+  const visibleExposureIds = new Set<string>();
+
+  const lookups = await Promise.all(
+    subjects.map((subject) =>
+      lookupResources({
+        resourceType: "relay_exposure",
+        permission: "invoke",
+        subject,
+      }),
+    ),
+  );
+
+  for (const ids of lookups) {
+    for (const id of ids) {
+      visibleExposureIds.add(id);
+    }
+  }
+
+  if (visibleExposureIds.size === 0) {
+    return [] as VisibleRelayExposureRow[];
+  }
+
+  const result = await query<VisibleRelayExposureRow>(
+    `SELECT
+       exposure.id AS exposure_id,
+       exposure.stable_key AS exposure_stable_key,
+       exposure.display_name AS exposure_display_name,
+       exposure.updated_at AS exposure_updated_at,
+       device.id AS device_id,
+       device.display_name AS device_display_name
+     FROM relay_exposures exposure
+     INNER JOIN relay_devices device
+       ON device.id = exposure.device_id
+     WHERE exposure.id = ANY($1::uuid[])
+       AND device.workspace_id = $2
+     ORDER BY exposure.updated_at DESC`,
+    [Array.from(visibleExposureIds), params.workspaceId],
+  );
+
+  return result.rows;
+}
+
 async function resolveTools(
   params: ResolveParams,
   instances: Map<string, McpInstance>,
-  relayBindings: Map<string, Map<string, { binding: any; visibleToolName: string }>>,
   turnOwnerKey: string,
-): Promise<ToolDefinition[]> {
-  const instancesToUse = dedupeInstances(
-    await listAuthorizedCapabilityInstances({
-      workspaceId: params.workspaceId,
-      kind: 'plugin',
-      actorId: params.actorId,
-      conversationId: params.conversationId,
-    }),
-  );
+) {
+  const [visiblePlugins, visibleRelayExposures] = await Promise.all([
+    loadVisiblePlugins(params),
+    loadVisibleRelayExposures(params),
+  ]);
+  const tools: ToolDefinition[] = [];
 
-  const allTools: ToolDefinition[] = [];
-
-  for (const instance of instancesToUse) {
-    const pkg = instance.package;
-    const revision = instance.revision;
-    if (!pkg || !revision || !revision.transport) {
+  for (const plugin of visiblePlugins) {
+    if (!plugin.reuse_scope) {
       continue;
     }
 
-    try {
-      const namespace = `${pkg.publisher?.slug || 'plugin'}${MCP_TOOL_NAMESPACE_SEPARATOR}${pkg.slug}`;
+    const namespace = `${plugin.publisher_slug || "plugin"}${MCP_TOOL_NAMESPACE_SEPARATOR}${plugin.item_slug}`;
 
-      if (revision.transport === 'relay') {
-        const { deviceId, exposureId } = JSON.parse(revision.entryPoint || '{}') as {
+    try {
+      if (plugin.transport === "relay") {
+        const entry = JSON.parse(plugin.entry_point || "{}") as {
           deviceId?: string;
           exposureId?: string;
         };
-        if (!deviceId || !exposureId) {
+        if (!entry.deviceId || !entry.exposureId) {
           throw new Error(`Relay plugin ${namespace} is missing relay entry point metadata`);
         }
 
-        const relayCatalog = getRelayExposureCatalog(deviceId, exposureId);
+        const relayCatalog = getRelayExposureCatalog(entry.deviceId, entry.exposureId);
         if (!relayCatalog) {
-          throw new Error(`Relay exposure ${exposureId} is not currently connected`);
+          throw new Error(`Relay exposure ${entry.exposureId} is not currently connected`);
         }
 
         const bindingMap = new Map<string, { binding: any; visibleToolName: string }>();
-        const tools = relayCatalog.tools.map((tool) => {
+        const relayTools = relayCatalog.tools.map((tool) => {
           bindingMap.set(tool.visible.name, {
             binding: tool.binding,
             visibleToolName: tool.visible.name,
@@ -135,16 +300,18 @@ async function resolveTools(
             inputSchema: tool.visible.inputSchema,
           });
         });
+
+        const reuseScope = publicReuseScope(plugin.reuse_scope);
         const relayInstance: McpInstance = {
-          pluginId: instance.packageId,
-          pluginSlug: pkg.slug,
-          orgSlug: pkg.publisher?.slug || 'plugin',
-          transport: 'relay',
-          scope: instance.reuseScope,
-          scopeId: resolveReuseOwnerKey(instance, params, turnOwnerKey),
+          pluginId: plugin.catalog_item_id,
+          pluginSlug: plugin.item_slug,
+          orgSlug: plugin.publisher_slug || "plugin",
+          transport: "relay",
+          scope: reuseScope,
+          scopeId: resolveReuseOwnerKey(reuseScope, params, turnOwnerKey),
           workspaceId: params.workspaceId,
-          configHash: `relay:${deviceId}:${exposureId}`,
-          tools,
+          configHash: `relay:${entry.deviceId}:${entry.exposureId}`,
+          tools: relayTools,
           execute: async (toolName: string, input: Record<string, unknown>) => {
             const toolBinding = bindingMap.get(toolName);
             if (!toolBinding) {
@@ -152,75 +319,146 @@ async function resolveTools(
             }
 
             return callRelayTool({
-              deviceId,
-              exposureId,
+              deviceId: entry.deviceId!,
+              exposureId: entry.exposureId!,
               visibleToolName: toolBinding.visibleToolName,
               binding: toolBinding.binding,
               args: input,
             });
           },
-          shutdown: async () => {
-            // Relay connection lifecycle is managed independently from per-turn tool resolution.
-          },
+          shutdown: async () => {},
           lastUsed: Date.now(),
           createdAt: Date.now(),
-          idleTtlMs: instance.idleTtlMs ?? 0,
-          maxAgeMs: instance.maxAgeMs ?? undefined,
+          idleTtlMs: 0,
+          maxAgeMs: undefined,
         };
 
-        const namespacedTools = tools.map((tool: ToolDefinition) => ({
+        const namespacedTools = relayTools.map((tool) => ({
           ...tool,
           name: `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.name}`,
-          description: `[${pkg.publisher?.slug || 'plugin'}/${pkg.slug}] ${tool.description}`,
+          description: `[${plugin.publisher_slug || "plugin"}/${plugin.item_slug}] ${tool.description}`,
         }));
 
-        allTools.push(...namespacedTools);
+        tools.push(...namespacedTools);
         instances.set(namespace, relayInstance);
-        relayBindings.set(namespace, bindingMap);
         continue;
       }
 
-      const resolved = await resolveInstallationConfig(instance.id);
+      const resolved = await resolveInstallationConfig(plugin.installation_id);
+      const reuseScope = publicReuseScope(plugin.reuse_scope);
       const runtimeInstance = await getOrCreateInstance({
-        pluginId: instance.packageId,
-        pluginSlug: pkg.slug,
-        orgSlug: pkg.publisher?.slug || 'plugin',
-        transport: revision.transport,
-        entryPoint: revision.entryPoint || '',
-        scope: instance.reuseScope,
-        scopeId: resolveReuseOwnerKey(instance, params, turnOwnerKey),
+        pluginId: plugin.catalog_item_id,
+        pluginSlug: plugin.item_slug,
+        orgSlug: plugin.publisher_slug || "plugin",
+        transport: plugin.transport,
+        entryPoint: plugin.entry_point || "",
+        scope: reuseScope,
+        scopeId: resolveReuseOwnerKey(reuseScope, params, turnOwnerKey),
         config: resolved.config,
         workspaceId: params.workspaceId,
-        idleTtlMs: instance.idleTtlMs ?? undefined,
-        maxAgeMs: instance.maxAgeMs ?? undefined,
       });
 
-      const namespacedTools = runtimeInstance.tools.map((tool: ToolDefinition) => ({
+      const manifest = asArray<{
+        name: string;
+        description?: string;
+        inputSchema?: Record<string, unknown>;
+      }>(plugin.tool_manifest);
+      const namespacedTools = (
+        runtimeInstance.tools.length > 0
+          ? runtimeInstance.tools
+          : manifest.map(manifestToolToDefinition)
+      ).map((tool) => ({
         ...tool,
         name: `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.name}`,
-        description: `[${pkg.publisher?.slug || 'plugin'}/${pkg.slug}] ${tool.description}`,
+        description: `[${plugin.publisher_slug || "plugin"}/${plugin.item_slug}] ${tool.description}`,
       }));
 
-      allTools.push(...namespacedTools);
+      tools.push(...namespacedTools);
       instances.set(namespace, runtimeInstance);
     } catch (error: any) {
       console.error(
-        `[MCP ToolResolver] Failed to initialize plugin ${instance.package?.publisher?.slug || 'plugin'}/${instance.package?.slug}:`,
+        `[MCP ToolResolver] Failed to initialize plugin ${plugin.publisher_slug || "plugin"}/${plugin.item_slug}:`,
         error.message,
       );
     }
   }
 
-  return allTools;
+  for (const exposure of visibleRelayExposures) {
+    const relayCatalog = getRelayExposureCatalog(exposure.device_id, exposure.exposure_id);
+    if (!relayCatalog) {
+      continue;
+    }
+
+    const exposureSlug = sanitizeNamespaceSegment(
+      exposure.exposure_stable_key,
+      `exposure_${exposure.exposure_id.slice(0, 8)}`,
+    );
+    const namespace = `relay${MCP_TOOL_NAMESPACE_SEPARATOR}${exposureSlug}_${exposure.exposure_id.slice(0, 8)}`;
+    const relayTools = relayCatalog.tools.map((tool) =>
+      manifestToolToDefinition({
+        name: tool.visible.name,
+        description: tool.visible.description,
+        inputSchema: tool.visible.inputSchema,
+      }),
+    );
+
+    const relayInstance: McpInstance = {
+      pluginId: exposure.exposure_id,
+      pluginSlug: exposureSlug,
+      orgSlug: "relay",
+      transport: "relay",
+      scope: "conversation",
+      scopeId: params.conversationId,
+      workspaceId: params.workspaceId,
+      configHash: `relay:${exposure.device_id}:${exposure.exposure_id}`,
+      tools: relayTools,
+      execute: async (toolName: string, input: Record<string, unknown>) => {
+        const toolBinding = relayCatalog.tools.find(
+          (tool) => tool.visible.name === toolName,
+        );
+        if (!toolBinding) {
+          throw new Error(`Relay binding missing for tool ${toolName}`);
+        }
+
+        return callRelayTool({
+          deviceId: exposure.device_id,
+          exposureId: exposure.exposure_id,
+          visibleToolName: toolBinding.visible.name,
+          binding: toolBinding.binding,
+          args: input,
+        });
+      },
+      shutdown: async () => {},
+      lastUsed: Date.now(),
+      createdAt: Date.now(),
+      idleTtlMs: 0,
+      maxAgeMs: undefined,
+    };
+
+    const namespacedTools = relayTools.map((tool) => ({
+      ...tool,
+      name: `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.name}`,
+      description: `[relay/${exposure.device_display_name}/${exposure.exposure_display_name}] ${tool.description}`,
+    }));
+
+    tools.push(...namespacedTools);
+    instances.set(namespace, relayInstance);
+  }
+
+  return tools;
 }
 
-export async function resolveMcpToolsForActor(params: ResolveParams): Promise<ResolvedMcpTools> {
-  const { actorId, workspaceId, sessionId, userId } = params;
-  const mcpVersion = await getMcpVersion(workspaceId);
-  const turnOwnerKey = `session:${sessionId}:turn:${randomUUID()}`;
+export async function resolveMcpToolsForActor(
+  params: ResolveParams,
+): Promise<ResolvedMcpTools> {
+  const mcpVersion = await getMcpVersion(params.workspaceId);
+  const turnOwnerKey = `session:${params.sessionId}:turn:${randomUUID()}`;
   const instances = new Map<string, McpInstance>();
-  const relayBindings = new Map<string, Map<string, { binding: any; visibleToolName: string }>>();
-  const allTools = await resolveTools(params, instances, relayBindings, turnOwnerKey);
+  const allTools = await resolveTools(
+    params,
+    instances,
+    turnOwnerKey,
+  );
 
   let currentTurnId: string | undefined;
   let currentRound: number | undefined;
@@ -238,8 +476,8 @@ export async function resolveMcpToolsForActor(params: ResolveParams): Promise<Re
       throw new Error(`Invalid namespaced tool name: ${namespacedToolName}`);
     }
 
-    const orgSlug = parts[0];
-    const pluginSlug = parts[1];
+    const orgSlug = parts[0]!;
+    const pluginSlug = parts[1]!;
     const toolName = parts.slice(2).join(MCP_TOOL_NAMESPACE_SEPARATOR);
     const namespace = `${orgSlug}${MCP_TOOL_NAMESPACE_SEPARATOR}${pluginSlug}`;
 
@@ -255,53 +493,61 @@ export async function resolveMcpToolsForActor(params: ResolveParams): Promise<Re
 
     try {
       rawOutput = await instance.execute(toolName, input);
-      return await normalizeMcpToolResult(rawOutput, workspaceId);
+      return await normalizeMcpToolResult(rawOutput, params.workspaceId);
     } catch (error: any) {
       isError = true;
       errorMessage = error.message;
       throw error;
     } finally {
-      const isRelay = instance.transport === 'relay';
-      let relayId: string | undefined;
-      if (isRelay && instance.configHash.startsWith('relay:')) {
-        const relayParts = instance.configHash.split(':');
-        if (relayParts.length >= 2) relayId = relayParts[1];
-      }
+      const durationMs = Date.now() - startTime;
+      const output =
+        rawOutput === undefined
+          ? undefined
+          : typeof rawOutput === "string"
+            ? rawOutput
+            : JSON.stringify(rawOutput);
 
-      logToolCall({
-        workspaceId,
-        sessionId,
+      await logToolCall({
+        workspaceId: params.workspaceId,
+        sessionId: params.sessionId,
         turnId: currentTurnId,
         round: currentRound,
-        actorId,
-        userId,
+        actorId: params.actorId,
+        userId: params.userId,
         pluginId: instance.pluginId,
-        relayId,
         toolName: namespacedToolName,
-        toolType: isRelay ? 'relay' : 'mcp_plugin',
+        toolType: instance.transport === "relay" ? "relay" : "mcp_plugin",
         input,
-        output:
-          typeof rawOutput === 'string'
-            ? rawOutput
-            : rawOutput
-              ? JSON.stringify(rawOutput)
-              : undefined,
+        output,
         isError,
         errorMessage,
-        durationMs: Date.now() - startTime,
+        durationMs,
         transport: instance.transport,
-        instanceKey: `${instance.pluginId}:${instance.scope}:${instance.scopeId}`,
+        instanceKey: namespace,
+      }).catch((logError) => {
+        console.error("[MCP ToolResolver] Failed to log tool call:", logError);
       });
     }
   };
 
-  const refresh = async (): Promise<{ tools: ToolDefinition[]; mcpVersion: number }> => {
-    const newVersion = await getMcpVersion(workspaceId);
-    instances.clear();
-    relayBindings.clear();
-    const newTools = await resolveTools(params, instances, relayBindings, turnOwnerKey);
-    return { tools: newTools, mcpVersion: newVersion };
+  const refresh = async () => {
+    const nextVersion = await getMcpVersion(params.workspaceId);
+    const refreshedTools = await resolveTools(
+      params,
+      instances,
+      turnOwnerKey,
+    );
+    return {
+      tools: refreshedTools,
+      mcpVersion: nextVersion,
+    };
   };
 
-  return { tools: allTools, executor, mcpVersion, refresh, setTurnId };
+  return {
+    tools: allTools,
+    executor,
+    mcpVersion,
+    refresh,
+    setTurnId,
+  };
 }

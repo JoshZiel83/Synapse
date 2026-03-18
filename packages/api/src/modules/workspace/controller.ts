@@ -55,7 +55,8 @@ const workspaceAccessSchema = z.object({
   accessKey: z.enum([
     "model_admin",
     "actor_admin",
-    "capability_admin",
+    "skill_admin",
+    "plugin_admin",
     "memory_admin",
     "relay_admin",
     "conversation_admin",

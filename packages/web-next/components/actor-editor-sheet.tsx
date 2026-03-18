@@ -124,7 +124,7 @@ export function ActorEditorSheet({
       parentId: form.parentId || undefined,
       canRepresentUser: form.canRepresentUser,
       docs,
-      capabilities: splitList(form.capabilities),
+      specialties: splitList(form.specialties),
     }
 
     setIsSaving(true)
@@ -289,18 +289,18 @@ export function ActorEditorSheet({
 
             <Card>
               <CardHeader>
-                <CardTitle>Capabilities</CardTitle>
+                <CardTitle>Specialties</CardTitle>
                 <CardDescription>
-                  Structured capability metadata remains machine-readable. Installable skills are managed separately through the capability system.
+                  Structured specialties stay machine-readable. Installable skills are managed separately.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <Field>
-                  <FieldLabel htmlFor="actor-capabilities">Capabilities</FieldLabel>
+                  <FieldLabel htmlFor="actor-specialties">Specialties</FieldLabel>
                   <Textarea
-                    id="actor-capabilities"
-                    value={form.capabilities}
-                    onChange={(event) => setForm((current) => ({ ...current, capabilities: event.target.value }))}
+                    id="actor-specialties"
+                    value={form.specialties}
+                    onChange={(event) => setForm((current) => ({ ...current, specialties: event.target.value }))}
                     placeholder="code.review, research, incident.response"
                     rows={3}
                   />

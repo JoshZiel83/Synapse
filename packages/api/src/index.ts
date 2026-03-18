@@ -18,10 +18,6 @@ import {
   initEventBus,
   shutdownEventBus,
 } from "./infrastructure/events/index.js";
-import {
-  setupWebSocket,
-  shutdownWebSockets,
-} from "./infrastructure/websocket/index.js";
 import { auditMiddleware } from "./infrastructure/middleware/audit.js";
 import { beginShutdown } from "./infrastructure/shutdown/state.js";
 import { ensureStorageDir } from "./infrastructure/storage/index.js";
@@ -30,48 +26,34 @@ import {
   initializeAuthz,
   testAuthzConnection,
 } from "./infrastructure/authz/index.js";
+import {
+  setupWebSocket,
+  shutdownWebSockets,
+} from "./infrastructure/websocket/index.js";
 
 // Module imports
 import authModule from "./modules/auth/index.js";
 import workspaceModule from "./modules/workspace/index.js";
 import organizationModule from "./modules/organization/index.js";
-import workEngineModule from "./modules/work-engine/index.js";
-import communicationModule from "./modules/communication/index.js";
-import memoryModule from "./modules/memory/index.js";
-import capabilitiesModule from "./modules/capabilities/index.js";
 import skillsModule from "./modules/skills/index.js";
-import secretaryModule from "./modules/secretary/index.js";
-import sessionModule from "./modules/session/index.js";
-import auditQueryModule from "./modules/audit/index.js";
-import standingOrdersModule from "./modules/standing-orders/index.js";
-import modelGroupsModule from "./modules/model-groups/index.js";
 import groupModule from "./modules/group/index.js";
-import mcpPluginsModule from "./modules/mcp-plugins/index.js";
 import filesModule from "./modules/files/index.js";
-import a2aModule from "./modules/a2a/index.js";
+import memoryModule from "./modules/memory/index.js";
+import mcpPluginsModule from "./modules/mcp-plugins/index.js";
+import modelGroupsModule from "./modules/model-groups/index.js";
 import platformModule from "./modules/platform/index.js";
+import auditModule from "./modules/audit/index.js";
 import { syncConfiguredPlatformAdmins } from "./modules/platform/admin-service.js";
-import { seedPlatformDefaultGroup } from "./modules/model-groups/service.js";
-import { seedBuiltinMcpPlugins } from "./modules/mcp-plugins/service.js";
-import { seedBuiltinActorPackages } from "./modules/organization/service.js";
 import { initBuiltinRegistry } from "./modules/mcp-plugins/builtin/index.js";
-import {
-  initInstanceManagerListeners,
-  shutdownAllInstances,
-} from "./modules/mcp-plugins/instance-manager.js";
 import {
   initRelayManager,
   shutdownAllRelays,
 } from "./modules/mcp-plugins/relay-manager.js";
-import { recoverInterruptedExecutions } from "./modules/execution/service.js";
+import { shutdownAllInstances } from "./modules/mcp-plugins/instance-manager.js";
 import { registerActionToolPlugins } from "./modules/ai/tools.js";
 import { registerCallableToolPlugins } from "./modules/ai/session-tools.js";
-
-// Workers
-import { startActorThinkingWorker } from "./workers/actor-thinking.js";
 import { startSessionThinkingWorker } from "./workers/session-thinking.js";
 import { startSessionTimeoutWorker } from "./workers/session-timeout.js";
-import { startStandingOrdersWorker } from "./workers/standing-orders.js";
 import { shutdownAllWorkers } from "./workers/registry.js";
 import { shutdownQueues } from "./workers/queues.js";
 
@@ -97,10 +79,10 @@ async function main() {
   // Audit middleware
   auditMiddleware(app);
 
-  // WebSocket
+  // WebSocket routes and auth/session registry
   setupWebSocket(app);
 
-  // Initialize event bus
+  // Event bus backs websocket fanout and runtime notifications.
   await initEventBus();
 
   try {
@@ -140,48 +122,27 @@ async function main() {
   await app.register(authModule);
   await app.register(workspaceModule);
   await app.register(organizationModule);
-  await app.register(workEngineModule);
-  await app.register(communicationModule);
-  await app.register(memoryModule);
-  await app.register(capabilitiesModule);
   await app.register(skillsModule);
-  await app.register(secretaryModule);
-  await app.register(sessionModule);
-  await app.register(auditQueryModule);
-  await app.register(standingOrdersModule);
-  await app.register(modelGroupsModule);
   await app.register(groupModule);
-  await app.register(mcpPluginsModule);
   await app.register(filesModule);
-  await app.register(a2aModule);
+  await app.register(memoryModule);
+  await app.register(mcpPluginsModule);
+  await app.register(modelGroupsModule);
   await app.register(platformModule);
+  await app.register(auditModule);
 
-  // Seed platform default model group
   try {
-    await seedPlatformDefaultGroup();
-    console.log("Platform default model group seeded");
-  } catch (err) {
-    console.error("Failed to seed platform default model group:", err);
-  }
-
-  // Seed MCP builtin plugins and init registry
-  try {
-    await seedBuiltinMcpPlugins();
-    await seedBuiltinActorPackages();
     await initBuiltinRegistry();
-    initInstanceManagerListeners();
     await initRelayManager();
-    const recovered = await recoverInterruptedExecutions();
-    if (recovered.recoveredToolCalls > 0 || recovered.recoveredTurns > 0) {
-      console.warn(
-        "[startup-recovery] Recovered interrupted execution state",
-        recovered,
-      );
-    }
-    console.log("MCP plugins and actor packages seeded; registry initialized");
   } catch (err) {
-    console.error("Failed to seed builtin marketplace packages:", err);
+    console.error("Failed to initialize MCP runtime:", err);
+    process.exit(1);
   }
+
+  registerActionToolPlugins();
+  registerCallableToolPlugins();
+  startSessionThinkingWorker();
+  startSessionTimeoutWorker();
 
   // Health check
   app.get("/api/v1/health", async () => {
@@ -198,19 +159,6 @@ async function main() {
       timestamp: new Date().toISOString(),
     };
   });
-
-  // Register builtin tool plugins (action + callable)
-  registerActionToolPlugins();
-  registerCallableToolPlugins();
-
-  // Start workers
-  startActorThinkingWorker();
-  startSessionThinkingWorker();
-  startSessionTimeoutWorker();
-  startStandingOrdersWorker();
-  console.log(
-    "Workers started (including session-thinking and session-timeout)",
-  );
 
   // Start server
   try {
@@ -258,42 +206,49 @@ async function main() {
     forceExitTimer.unref();
 
     try {
-      await shutdownAllRelays().catch((err) =>
-        app.log.error({ err }, "Failed to shutdown relay connections"),
-      );
-      await shutdownWebSockets().catch((err) =>
-        app.log.error({ err }, "Failed to shutdown websocket clients"),
-      );
-      await waitWithTimeout(
-        "instance shutdown",
-        shutdownAllInstances(),
-        5000,
-      ).catch((err) => {
-        app.log.error({ err }, "MCP instance shutdown timed out");
-      });
       app.server.closeIdleConnections?.();
-      await waitWithTimeout("fastify close", app.close(), 5000).catch((err) => {
-        app.log.error({ err }, "Fastify close timed out");
-        app.server.closeAllConnections?.();
+      await waitWithTimeout(
+        "websocket shutdown",
+        shutdownWebSockets(),
+        3000,
+      ).catch((err) => {
+        app.log.error({ err }, "WebSocket shutdown timed out");
       });
       await waitWithTimeout(
         "worker shutdown",
         shutdownAllWorkers(),
-        5000,
+        3000,
       ).catch((err) => {
         app.log.error({ err }, "Worker shutdown timed out");
       });
-      await waitWithTimeout("queue shutdown", shutdownQueues(), 5000).catch(
-        (err) => {
-          app.log.error({ err }, "Queue shutdown timed out");
-        },
-      );
+      await waitWithTimeout(
+        "queue shutdown",
+        shutdownQueues(),
+        3000,
+      ).catch((err) => {
+        app.log.error({ err }, "Queue shutdown timed out");
+      });
       await waitWithTimeout(
         "event bus shutdown",
         shutdownEventBus(),
         3000,
       ).catch((err) => {
         app.log.error({ err }, "Event bus shutdown timed out");
+      });
+      await waitWithTimeout(
+        "plugin instance shutdown",
+        shutdownAllInstances(),
+        3000,
+      ).catch((err) => {
+        app.log.error({ err }, "Plugin instance shutdown timed out");
+      });
+      await waitWithTimeout("relay runtime shutdown", shutdownAllRelays(), 3000)
+        .catch((err) => {
+          app.log.error({ err }, "Relay runtime shutdown timed out");
+        });
+      await waitWithTimeout("fastify close", app.close(), 5000).catch((err) => {
+        app.log.error({ err }, "Fastify close timed out");
+        app.server.closeAllConnections?.();
       });
       await waitWithTimeout("authz shutdown", closeAuthzClient(), 3000).catch(
         (err) => {

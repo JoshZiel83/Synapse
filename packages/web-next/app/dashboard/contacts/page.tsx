@@ -322,6 +322,7 @@ function ActorVersionHistory({ versions }: { versions: ActorVersion[] }) {
     <div className="flex flex-col gap-3">
       {versions.map((version) => {
         const summary = version.delta ? extractText(version.delta.summary).trim() : 'Initial actor definition.'
+        const docChanges = version.delta?.changes?.filter((change) => change.kind === "doc") || []
         return (
           <div key={version.id} className="rounded-2xl border border-border p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -332,9 +333,9 @@ function ActorVersionHistory({ versions }: { versions: ActorVersion[] }) {
               <span className="text-xs text-muted-foreground">{version.snapshot.title || version.snapshot.role}</span>
             </div>
             <p className="mt-3 text-sm text-muted-foreground">{summary}</p>
-            {version.delta?.changedDocs?.length ? (
+            {docChanges.length ? (
               <div className="mt-3 flex flex-wrap gap-2">
-                {version.delta.changedDocs.map((doc) => (
+                {docChanges.map((doc) => (
                   <Badge key={`${version.id}:${doc.docId}`} variant="outline">
                     {doc.title}
                   </Badge>
@@ -485,19 +486,19 @@ function ActorDetail({
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Capabilities</CardTitle>
+                <CardTitle className="text-base">Specialties</CardTitle>
               </CardHeader>
               <CardContent>
-                {definition.capabilities.length > 0 ? (
+                {definition.specialties.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
-                    {definition.capabilities.map((capability) => (
-                      <Badge key={capability} variant="outline">
-                        {capability}
+                    {definition.specialties.map((specialty) => (
+                      <Badge key={specialty} variant="outline">
+                        {specialty}
                       </Badge>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">No structured capabilities configured.</p>
+                  <p className="text-sm text-muted-foreground">No structured specialties configured.</p>
                 )}
               </CardContent>
             </Card>

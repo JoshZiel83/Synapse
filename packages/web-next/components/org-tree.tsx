@@ -13,7 +13,7 @@ interface Actor {
   role: string;
   title?: string;
   type?: string;
-  capabilities?: string[];
+  specialties?: string[];
   status?: string;
   children?: Actor[];
 }
@@ -101,11 +101,11 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
               {actor.title && (
                 <p className="text-xs text-muted-foreground mt-0.5">{actor.title}</p>
               )}
-              {actor.capabilities && actor.capabilities.length > 0 && (
+              {actor.specialties && actor.specialties.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-2">
-                  {actor.capabilities.map((cap, i) => (
+                  {actor.specialties.map((specialty, i) => (
                     <Badge key={i} variant="outline" className="text-[10px] px-1.5 py-0 bg-background/30 text-muted-foreground border-gray-200 dark:border-gray-700">
-                      {cap}
+                      {specialty}
                     </Badge>
                   ))}
                 </div>

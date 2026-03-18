@@ -1,9 +1,11 @@
 import type {
-  CapabilityAuthProviderDefinition,
-  CapabilityConfigFieldDefinition,
-  CapabilityGrantScope,
-  CapabilityInstallFlow,
-  CapabilityReuseScope,
+  AccessGrantScope,
+} from '@synapse/shared/types';
+import type {
+  PluginAuthProviderDefinition,
+  PluginConfigFieldDefinition,
+  PluginInstallFlow,
+  ReuseScope,
   LocalizedText,
   McpSetupStep,
   McpValidationRule,
@@ -22,22 +24,22 @@ export interface BuiltinPluginSeed {
   transport: string;
   entryPoint: string;
   defaultInstanceScope: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-  defaultReuseScope: CapabilityReuseScope;
+  defaultReuseScope: ReuseScope;
   requiresHandshake?: boolean;
   tags: string[];
   categorySlugs?: string[];
   iconAssetPath?: string;
   toolsManifest: unknown[];
   configSchema?: Record<string, unknown>;
-  configFields?: CapabilityConfigFieldDefinition[];
+  configFields?: PluginConfigFieldDefinition[];
   defaultConfig?: Record<string, unknown>;
   validationRules?: McpValidationRule[];
   setupSteps?: McpSetupStep[];
-  installFlow?: CapabilityInstallFlow;
-  authProviders?: CapabilityAuthProviderDefinition[];
+  installFlow?: PluginInstallFlow;
+  authProviders?: PluginAuthProviderDefinition[];
   authorization?: {
     requiredPermissions?: string[];
-    defaultGrantScope?: CapabilityGrantScope;
+    defaultGrantScope?: AccessGrantScope;
     reason?: string;
   };
 }

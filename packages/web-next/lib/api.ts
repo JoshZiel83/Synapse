@@ -137,7 +137,8 @@ class ApiClient {
       accessKey:
         | "model_admin"
         | "actor_admin"
-        | "capability_admin"
+        | "skill_admin"
+        | "plugin_admin"
         | "memory_admin"
         | "relay_admin"
         | "conversation_admin"
@@ -155,7 +156,8 @@ class ApiClient {
     accessKey:
       | "model_admin"
       | "actor_admin"
-      | "capability_admin"
+      | "skill_admin"
+      | "plugin_admin"
       | "memory_admin"
       | "relay_admin"
       | "conversation_admin"
@@ -317,6 +319,37 @@ class ApiClient {
   }
   uninstallInstalledSkill(wsId: string, installedSkillId: string) {
     return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`, {
+      method: "DELETE",
+    })
+  }
+  getInstalledSkillAccess(wsId: string, installedSkillId: string) {
+    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/access`)
+  }
+  grantInstalledSkillAccess(
+    wsId: string,
+    installedSkillId: string,
+    data: {
+      grantScope?:
+        | "workspace"
+        | "conversation"
+        | "actor_global"
+        | "actor_conversation"
+        | "user"
+      conversationId?: string
+      actorId?: string
+      userId?: string
+      permissions?: string[]
+      reason?: string
+      metadata?: Record<string, unknown>
+    }
+  ) {
+    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/access`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  revokeInstalledSkillAccess(wsId: string, installedSkillId: string, grantId: string) {
+    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/access/${grantId}`, {
       method: "DELETE",
     })
   }
@@ -892,26 +925,14 @@ class ApiClient {
   getPluginAuthSession(wsId: string, sessionId: string) {
     return this.fetch(`/workspaces/${wsId}/mcp/auth/sessions/${sessionId}`)
   }
-  getCapabilityInstanceGrants(wsId: string, instanceId: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/capabilities/instances/${instanceId}/grants`
-    )
+  getPluginInstallationAccess(wsId: string, installId: string) {
+    return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}/access`)
   }
-  getCapabilityInstanceAuthorization(
+  grantPluginInstallationAccess(
     wsId: string,
-    instanceId: string,
-    params?: string
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/capabilities/instances/${instanceId}/authorization${params ? `?${params}` : ""}`
-    )
-  }
-  issueCapabilityInstanceGrant(
-    wsId: string,
-    instanceId: string,
+    installId: string,
     data: {
       grantScope?:
-        | "platform"
         | "workspace"
         | "conversation"
         | "actor_global"
@@ -925,13 +946,13 @@ class ApiClient {
       metadata?: Record<string, unknown>
     }
   ) {
-    return this.fetch(
-      `/workspaces/${wsId}/capabilities/instances/${instanceId}/grants`,
-      { method: "POST", body: JSON.stringify(data) }
-    )
+    return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}/access`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
   }
-  revokeCapabilityGrant(wsId: string, grantId: string) {
-    return this.fetch(`/workspaces/${wsId}/capabilities/grants/${grantId}`, {
+  revokePluginInstallationAccess(wsId: string, installId: string, grantId: string) {
+    return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}/access/${grantId}`, {
       method: "DELETE",
     })
   }
@@ -997,6 +1018,46 @@ class ApiClient {
     relayId: string
   ): Promise<RelayDeviceDetailView> {
     return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`)
+  }
+  getRelayExposureAccess(wsId: string, relayId: string, exposureId: string) {
+    return this.fetch(
+      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access`
+    )
+  }
+  grantRelayExposureAccess(
+    wsId: string,
+    relayId: string,
+    exposureId: string,
+    data: {
+      grantScope?: "workspace" | "conversation" | "actor_global" | "actor_conversation" | "user"
+      actorId?: string
+      conversationId?: string
+      userId?: string
+      permissions?: string[]
+      reason?: string
+      metadata?: Record<string, unknown>
+    }
+  ) {
+    return this.fetch(
+      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+  }
+  revokeRelayExposureAccess(
+    wsId: string,
+    relayId: string,
+    exposureId: string,
+    bindingId: string
+  ) {
+    return this.fetch(
+      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access/${bindingId}`,
+      {
+        method: "DELETE",
+      }
+    )
   }
   updateRelayDevice(
     wsId: string,

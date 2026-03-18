@@ -112,6 +112,24 @@ type ScopeDraft = {
   userId: string | null;
 };
 
+const skillAccessAdapter = {
+  loadAccess: (workspaceId: string, resourceId: string) =>
+    api.getInstalledSkillAccess(workspaceId, resourceId),
+  grantAccess: (
+    workspaceId: string,
+    resourceId: string,
+    payload: {
+      grantScope?: SkillUseScope;
+      actorId?: string;
+      conversationId?: string;
+      userId?: string;
+      permissions?: string[];
+    },
+  ) => api.grantInstalledSkillAccess(workspaceId, resourceId, payload),
+  revokeAccess: (workspaceId: string, resourceId: string, grantId: string) =>
+    api.revokeInstalledSkillAccess(workspaceId, resourceId, grantId),
+};
+
 type EditorDraft = {
   skillId?: string;
   slug: string;
@@ -1477,6 +1495,8 @@ export function InstalledSkillConfigurationPage({ skillId }: { skillId: string }
               <TabsContent value="access" className="mt-0">
                 <PluginAccessStep
                   installation={skill}
+                  accessAdapter={skillAccessAdapter}
+                  resourceLabel="skill"
                   description="Choose who can use this skill. The workspace keeps ownership of the installed skill content."
                   addAccessLabel="Add Access"
                   emptyMessage="Install the skill first. Once it is installed, you can grant use access here."

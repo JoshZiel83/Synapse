@@ -1,4 +1,4 @@
-import type { Actor, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ResolvedModelPlan, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow, CapabilityAvailableSkill, ModelAttemptPolicy } from '@synapse/shared';
+import type { Actor, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ResolvedModelPlan, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow, AvailableSkillSummary, ModelAttemptPolicy } from '@synapse/shared';
 import type { CanonicalContextItem, NormalizedMcpToolResult } from '@synapse/shared/types';
 import { normalizeCanonicalContentBlocks, textBlock, textBlocks, extractText } from '@synapse/shared';
 import { randomUUID } from 'crypto';
@@ -25,7 +25,7 @@ import {
 
 export { buildActorPrompt } from './prompt-builder.js';
 
-const MAX_TOOL_ROUNDS = 10;
+const MAX_TOOL_ROUNDS = 100;
 const DEFAULT_ATTEMPT_POLICY: ModelAttemptPolicy = {
   maxAttemptsTotal: 4,
   maxAttemptsPerBinding: 2,
@@ -197,6 +197,42 @@ function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
   });
 }
 
+function buildSleepWithoutSendToReminder(params: {
+  participantCount: number;
+  otherMembers: GroupMemberEntry[];
+  allowConfirmSleepWithoutReply: boolean;
+}): CanonicalContextItem {
+  const otherMemberName = params.otherMembers[0]?.name || 'the other member';
+
+  if (params.participantCount === 2) {
+    return {
+      kind: 'system_notice',
+      noticeType: 'task_instruction',
+      scope: 'private',
+      surface: 'internal',
+      parts: textBlocks(
+        `You called \`sleep\` before using \`send_to\` in this wakeup. Your reasoning and tool calls are invisible to everyone else. ` +
+        `This conversation currently has only you and ${otherMemberName}, so you must call \`send_to\` to ${otherMemberName} before sleeping. ` +
+        `Send a visible result, handoff, clarification, or explicit "no action needed" message, then call \`sleep\` again.`,
+      ),
+    };
+  }
+
+  return {
+    kind: 'system_notice',
+    noticeType: 'task_instruction',
+    scope: 'private',
+    surface: 'internal',
+    parts: textBlocks(
+      params.allowConfirmSleepWithoutReply
+        ? `You called \`sleep\` before using \`send_to\` in this wakeup. Your reasoning and tool calls are invisible to the group unless you use \`send_to\`. ` +
+          `Before sleeping, either send a visible update, result, handoff, clarification, or explicit "no action needed" message to the relevant member(s), or if the wakeup is truly unrelated to you and the message already reached the correct assignee, call \`sleep\` again now to confirm that no visible reply from you is needed.`
+        : `You called \`sleep\` again without using \`send_to\`. Your reasoning and tool calls are still invisible to the group. ` +
+          `If no visible reply from you is genuinely needed because the wakeup is entirely unrelated to you and the correct assignee already received it, you may remain asleep. Otherwise, use \`send_to\` now before sleeping.`,
+    ),
+  };
+}
+
 function inferToolKind(toolName: string, mcpToolNames: Set<string>) {
   if (mcpToolNames.has(toolName)) return 'mcp_plugin' as const;
   if (isActionTool(toolName)) return 'action' as const;
@@ -252,7 +288,7 @@ export async function actorThink(
     groupId?: string;
     groupMembers?: GroupMemberEntry[];
     userId?: string;
-    availableSkills?: CapabilityAvailableSkill[];
+    availableSkills?: AvailableSkillSummary[];
     onStatus?: (status: string) => Promise<void>;
     mcpTools?: import('@synapse/shared').ToolDefinition[];
     mcpExecutor?: (toolName: string, input: Record<string, unknown>) => Promise<NormalizedMcpToolResult>;
@@ -348,6 +384,12 @@ export async function actorThink(
   const toolRounds: ToolRound[] = [];
   // Accumulate media attachments from MCP/model responses
   const allSupplementalBlocks: CanonicalContentBlock[] = [];
+  let finalDraftText = '';
+  let finalDraftProvider: AIProvider | null = null;
+  let sendToCalledThisTurn = false;
+  let sleepWithoutSendToReminderCount = 0;
+  const participantCount = options?.groupId ? (options.groupMembers?.length || 0) + 1 : 0;
+  const enforceVisibleReplyBeforeSleep = !!options?.sessionId && !!options?.groupId && participantCount > 1;
 
   // Common fields for logAIRequest
   const logCommon = {
@@ -368,6 +410,8 @@ export async function actorThink(
         actorId: actor.id,
         workspaceId: workspaceId || '',
         userId: options.userId,
+        turnId,
+        conversationId: options.conversationId,
       },
       () => _actorThinkInner(),
     );
@@ -597,12 +641,20 @@ export async function actorThink(
       if (citations && !Array.isArray(response.rawAssistantMessage)) {
         finalTextContent = injectOpenAICitationMarkers(textContent, response.rawAssistantMessage, citations);
       }
+      if (finalTextContent.trim().length > 0 || roundMediaBlocks.length > 0) {
+        finalDraftText = finalTextContent;
+        finalDraftProvider = provider;
+      }
 
       // Dispatch: three-bucket separation
       const actionCalls   = toolCalls.filter((tc: any) => isActionTool(tc.toolName));
       const callableCalls = toolCalls.filter((tc: any) => isCallableTool(tc.toolName));
       const mcpCalls      = toolCalls.filter((tc: any) => mcpToolNames.has(tc.toolName));
       const allContinuableCalls = [...callableCalls, ...mcpCalls];
+
+      if (callableCalls.some((tc: any) => tc.toolName === 'send_to')) {
+        sendToCalledThisTurn = true;
+      }
 
       if (allContinuableCalls.length > 0) {
         // Track tool names and emit status
@@ -924,10 +976,12 @@ export async function actorThink(
           }
 
           const toolHistory: AssistantToolHistory | undefined = toolRounds.length > 0 ? { rounds: toolRounds } : undefined;
-          const contentBlocks = await buildResponseContentBlocks(provider, finalTextContent, allSupplementalBlocks);
+          const responseText = finalDraftProvider ? finalDraftText : finalTextContent;
+          const responseProvider = finalDraftProvider || provider;
+          const contentBlocks = await buildResponseContentBlocks(responseProvider, responseText, allSupplementalBlocks);
           return {
             actions,
-            reasoning: finalTextContent,
+            reasoning: responseText,
             tokensUsed: totalTokens,
             toolsUsed: allToolsUsed,
             serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
@@ -940,12 +994,45 @@ export async function actorThink(
         // If 'sleep' callable tool was called, the session is now sleeping — stop the loop
         const sleepCalled = callableCalls.some((tc: any) => tc.toolName === 'sleep');
         if (!mcpReplanRequired && sleepCalled) {
+          const allowSleepWithoutVisibleReply =
+            !enforceVisibleReplyBeforeSleep ||
+            sendToCalledThisTurn ||
+            participantCount <= 1 ||
+            (participantCount > 2 && sleepWithoutSendToReminderCount > 0);
+
+          if (!allowSleepWithoutVisibleReply) {
+            sleepWithoutSendToReminderCount += 1;
+            appendPrivateTailItems([
+              buildSleepWithoutSendToReminder({
+                participantCount,
+                otherMembers: options?.groupMembers || [],
+                allowConfirmSleepWithoutReply: participantCount > 2,
+              }),
+            ]);
+
+            if (options?.checkNewMessages) {
+              try {
+                const newMsgs = await options.checkNewMessages();
+                if (newMsgs && newMsgs.length > 0) {
+                  appendSharedTailItems(newMsgs);
+                  console.log(`[actorThink] Injected ${newMsgs.length} new message(s) between rounds`);
+                }
+              } catch (err: any) {
+                console.error('[actorThink] checkNewMessages failed:', err.message);
+              }
+            }
+
+            continue;
+          }
+
           const actions: ActorAction[] = [];
           const toolHistory: AssistantToolHistory | undefined = toolRounds.length > 0 ? { rounds: toolRounds } : undefined;
-          const contentBlocks = await buildResponseContentBlocks(provider, finalTextContent, allSupplementalBlocks);
+          const responseText = finalDraftProvider ? finalDraftText : finalTextContent;
+          const responseProvider = finalDraftProvider || provider;
+          const contentBlocks = await buildResponseContentBlocks(responseProvider, responseText, allSupplementalBlocks);
           return {
             actions,
-            reasoning: finalTextContent,
+            reasoning: responseText,
             tokensUsed: totalTokens,
             toolsUsed: allToolsUsed.length > 0 ? allToolsUsed : undefined,
             serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
@@ -1002,7 +1089,7 @@ export async function actorThink(
         continue;
       }
 
-      // No callable calls — process action calls (terminal) and finish
+      // No callable calls — keep looping until the model explicitly sleeps or round limit is reached.
       let actions: ActorAction[];
       if (actionCalls.length > 0) {
         actions = toolCallsToActions(actionCalls).map((action) => (
@@ -1034,38 +1121,59 @@ export async function actorThink(
             await updateToolCallStatus(actionRow.id, 'completed');
           }
         }
-      } else if (finalTextContent) {
-        // Pure text with no tool calls = reasoning only. No visible group message.
-        // send_to handles all visible messaging; text here is saved as session_message for audit.
-        actions = [];
-      } else if (allToolsUsed.length > 0) {
-        // Actor used callable tools (e.g. send_to) in earlier rounds but has nothing to say now.
-        // Don't generate a fallback — the actor communicated via tools. Worker will auto-sleep.
         actions = [];
       } else {
-        actions = [{
-          type: 'respond',
-          content: 'I could not process this request.',
-          contentBlocks: textBlocks('I could not process this request.'),
-        }];
+        actions = [];
       }
 
-      const toolHistory: AssistantToolHistory | undefined = toolRounds.length > 0 ? { rounds: toolRounds } : undefined;
-      const contentBlocks = await buildResponseContentBlocks(provider, finalTextContent, allSupplementalBlocks);
-      return {
-        actions,
-        reasoning: finalTextContent,
-        tokensUsed: totalTokens,
-        toolsUsed: allToolsUsed.length > 0 ? allToolsUsed : undefined,
-        serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
-        citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
-        toolHistory,
-        contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
-      };
+      if (finalTextContent.trim().length > 0 || roundMediaBlocks.length > 0) {
+        const draftBlocks = await buildResponseContentBlocks(provider, finalTextContent, roundMediaBlocks);
+        if (draftBlocks.length > 0) {
+          appendSharedTailItems(buildAdHocContextItems([
+            {
+              role: 'assistant',
+              content: draftBlocks,
+            },
+          ]));
+        }
+      }
+
+      if (options?.checkNewMessages) {
+        try {
+          const newMsgs = await options.checkNewMessages();
+          if (newMsgs && newMsgs.length > 0) {
+            appendSharedTailItems(newMsgs);
+            console.log(`[actorThink] Injected ${newMsgs.length} new message(s) between rounds`);
+          }
+        } catch (err: any) {
+          console.error('[actorThink] checkNewMessages failed:', err.message);
+        }
+      }
+
+      continue;
     }
 
     // Exceeded MAX_TOOL_ROUNDS — fallback respond
     console.warn(`[actorThink] actor=${actor.id} exceeded max tool rounds (${MAX_TOOL_ROUNDS})`);
+
+    if (finalDraftProvider || allSupplementalBlocks.length > 0) {
+      const responseProvider = finalDraftProvider || getProvider(effectiveModelPlan.candidates[0]);
+      const contentBlocks = await buildResponseContentBlocks(
+        responseProvider,
+        finalDraftText,
+        allSupplementalBlocks,
+      );
+      return {
+        actions: [],
+        reasoning: finalDraftText || 'Exceeded maximum tool rounds',
+        tokensUsed: totalTokens,
+        toolsUsed: allToolsUsed.length > 0 ? allToolsUsed : undefined,
+        serverToolCalls: allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
+        citationSources: Object.keys(allCitationSources).length > 0 ? allCitationSources : undefined,
+        toolHistory: toolRounds.length > 0 ? { rounds: toolRounds } : undefined,
+        contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
+      };
+    }
 
     return {
       actions: [{

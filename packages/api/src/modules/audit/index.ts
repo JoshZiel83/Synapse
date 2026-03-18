@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { query } from '../../infrastructure/database/index.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
+import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
+import { requireRequestAction } from '../access/guards.js';
 import { z } from 'zod';
 
 const querySchema = z.object({
@@ -15,9 +17,18 @@ const querySchema = z.object({
 export default async function auditModule(app: FastifyInstance) {
   // List audit logs for a workspace
   app.get('/api/v1/workspaces/:workspaceId/audit-logs', {
-    preHandler: [authMiddleware],
+    preHandler: [authMiddleware, workspaceMiddleware],
   }, async (request, reply) => {
     const { workspaceId } = request.params as { workspaceId: string };
+    const allowed = await requireRequestAction(
+      request,
+      reply,
+      'workspace.view',
+      workspaceId,
+      'Not allowed to view audit logs in this workspace',
+    );
+    if (!allowed) return;
+
     const qs = querySchema.parse(request.query);
 
     const conditions = ['workspace_id = $1'];

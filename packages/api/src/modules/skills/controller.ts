@@ -7,12 +7,15 @@ import { requireRequestAction } from '../access/guards.js';
 import {
   createWorkspaceSkill,
   SkillError,
+  getInstalledSkillAccessState,
   getInstalledSkill,
   getMarketplaceSkill,
+  grantInstalledSkillAccess,
   installMarketplaceSkill,
   listInstalledSkills,
   listMarketplaceSkills,
   publishMarketplaceSkill,
+  revokeInstalledSkillAccess,
   uninstallInstalledSkill,
   updateInstalledSkill,
   upgradeInstalledSkill,
@@ -67,6 +70,16 @@ const updateInstalledSkillSchema = z.object({
   tags: z.array(z.string()).optional(),
   isEnabled: z.boolean().optional(),
   attachmentFiles: z.array(skillAttachmentSchema).optional(),
+});
+
+const skillAccessGrantSchema = z.object({
+  grantScope: useScopeSchema.optional(),
+  actorId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
+  permissions: z.array(z.string()).optional(),
+  reason: z.string().trim().min(1).optional(),
+  metadata: z.record(z.unknown()).optional(),
 });
 
 function handleError(reply: FastifyReply, error: unknown) {
@@ -212,7 +225,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request,
         reply,
-        'workspace.manage_capabilities',
+        'workspace.manage_skills',
         workspaceId,
         'Not allowed to install skills in this workspace',
       );
@@ -241,7 +254,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request,
         reply,
-        'workspace.manage_capabilities',
+        'workspace.manage_skills',
         workspaceId,
         'Not allowed to create skills in this workspace',
       );
@@ -294,7 +307,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request,
         reply,
-        'workspace.manage_capabilities',
+        'workspace.manage_skills',
         workspaceId,
         'Not allowed to edit installed skills in this workspace',
       );
@@ -318,7 +331,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request,
         reply,
-        'workspace.manage_capabilities',
+        'workspace.manage_skills',
         workspaceId,
         'Not allowed to upgrade installed skills in this workspace',
       );
@@ -340,7 +353,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request,
         reply,
-        'workspace.manage_capabilities',
+        'workspace.manage_skills',
         workspaceId,
         'Not allowed to uninstall skills in this workspace',
       );
@@ -348,6 +361,84 @@ export function registerSkillRoutes(app: FastifyInstance) {
 
       await uninstallInstalledSkill(workspaceId, installedSkillId);
       return reply.status(204).send();
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/workspaces/:workspaceId/skills/:installedSkillId/access', workspaceHook, async (request, reply) => {
+    try {
+      const { workspaceId, installedSkillId } = request.params as { workspaceId: string; installedSkillId: string };
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        'workspace.manage_skills',
+        workspaceId,
+        'Not allowed to manage skill access in this workspace',
+      );
+      if (!allowed) return;
+
+      const state = await getInstalledSkillAccessState(workspaceId, installedSkillId);
+      return reply.status(200).send(state);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.post('/api/v1/workspaces/:workspaceId/skills/:installedSkillId/access', workspaceHook, async (request, reply) => {
+    try {
+      const { workspaceId, installedSkillId } = request.params as { workspaceId: string; installedSkillId: string };
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        'workspace.manage_skills',
+        workspaceId,
+        'Not allowed to manage skill access in this workspace',
+      );
+      if (!allowed) return;
+
+      const body = skillAccessGrantSchema.parse(request.body);
+      const user = (request as any).user;
+      const grant = await grantInstalledSkillAccess({
+        workspaceId,
+        installedSkillId,
+        grantScope: body.grantScope,
+        actorId: body.actorId,
+        conversationId: body.conversationId,
+        userId: body.userId,
+        permissions: body.permissions,
+        reason: body.reason,
+        metadata: body.metadata,
+        grantedBy: user?.id || user?.userId,
+      });
+      return reply.status(201).send({ grant });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.delete('/api/v1/workspaces/:workspaceId/skills/:installedSkillId/access/:grantId', workspaceHook, async (request, reply) => {
+    try {
+      const { workspaceId, installedSkillId, grantId } = request.params as {
+        workspaceId: string;
+        installedSkillId: string;
+        grantId: string;
+      };
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        'workspace.manage_skills',
+        workspaceId,
+        'Not allowed to manage skill access in this workspace',
+      );
+      if (!allowed) return;
+
+      await revokeInstalledSkillAccess({
+        workspaceId,
+        installedSkillId,
+        grantId,
+      });
+      return reply.status(200).send({ success: true });
     } catch (error) {
       return handleError(reply, error);
     }

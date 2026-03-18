@@ -30,6 +30,19 @@ function parseMetadata(metadata: unknown): Record<string, unknown> {
   return (metadata || {}) as Record<string, unknown>;
 }
 
+function parseSizeBytes(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return 0;
+}
+
 export function itemPartsToCanonicalBlocks(parts: any[]): CanonicalContentBlock[] {
   const blocks: CanonicalContentBlock[] = [];
 
@@ -47,7 +60,7 @@ export function itemPartsToCanonicalBlocks(parts: any[]): CanonicalContentBlock[
         url: part.file_id ? `/api/v1/files/${part.file_id}` : '',
         mimeType: part.file_mime_type || part.mime_type || 'application/octet-stream',
         originalName: part.original_name || part.name || 'file',
-        sizeBytes: part.size_bytes || Number(metadata.sizeBytes || 0),
+        sizeBytes: parseSizeBytes(part.size_bytes ?? metadata.sizeBytes),
         category: (metadata.category as 'image' | 'audio' | 'video' | 'document') || 'document',
       }));
     }

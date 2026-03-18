@@ -194,13 +194,6 @@ export interface RelayToolView {
   updatedAt: string;
 }
 
-export interface RelayDerivedInstallationView {
-  installationId: string;
-  pluginId: string;
-  pluginSlug: string;
-  pluginDisplayName: string;
-}
-
 export interface RelayExposureView {
   id: string;
   stableKey: string;
@@ -213,7 +206,6 @@ export interface RelayExposureView {
   lastError?: string;
   metadata: Record<string, unknown>;
   syncSource?: RelaySyncSourceView;
-  derivedInstallation?: RelayDerivedInstallationView;
   tools: RelayToolView[];
   createdAt: string;
   updatedAt: string;

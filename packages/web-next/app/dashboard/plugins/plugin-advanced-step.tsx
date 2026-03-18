@@ -1,24 +1,24 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { CapabilityAttachmentType, CapabilityReuseScope } from '@synapse/shared';
+import type { AttachmentScope, ReuseScope } from '@synapse/shared';
 import { Layers3, Save } from 'lucide-react';
 
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import {
-  CapabilityAttachmentTypeStep,
-  CapabilityReuseScopeStep,
+  AccessAttachmentTypeStep,
+  AccessReuseScopeStep,
   getAllowedReuseScopes,
   getConversationDisplayName,
-} from '@/app/dashboard/capabilities/attachment-visuals';
+} from '@/app/dashboard/access/attachment-visuals';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
 
-type PluginAttachmentType = Exclude<CapabilityAttachmentType, 'platform'>;
-type PluginReuseScope = Exclude<CapabilityReuseScope, 'platform'>;
+type PluginAttachmentType = Exclude<AttachmentScope, 'platform'>;
+type PluginReuseScope = Exclude<ReuseScope, 'platform'>;
 
 const allowedAttachmentTypes: PluginAttachmentType[] = [
   'workspace',
@@ -175,7 +175,7 @@ export default function PluginAdvancedStep({
       </CardHeader>
 
       <CardContent className="flex flex-col gap-6 pb-6">
-        <CapabilityAttachmentTypeStep
+        <AccessAttachmentTypeStep
           value={selectedAttachmentType}
           onChange={(value) => setSelectedAttachmentType(value as PluginAttachmentType)}
           allowedScopes={allowedAttachmentTypes}
@@ -188,7 +188,7 @@ export default function PluginAdvancedStep({
           error={scopeError || undefined}
         />
 
-        <CapabilityReuseScopeStep
+        <AccessReuseScopeStep
           attachmentType={selectedAttachmentType}
           value={lifecycleScope}
           onChange={(value) => setLifecycleScope(value as PluginReuseScope)}

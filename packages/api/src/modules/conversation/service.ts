@@ -112,6 +112,7 @@ export async function ensureConversationMember(params: {
   actorId?: string;
   userId?: string;
   displayName?: string;
+  actorJoinVersionId?: string;
   metadata?: Record<string, unknown>;
 }) {
   const {
@@ -120,6 +121,7 @@ export async function ensureConversationMember(params: {
     actorId,
     userId,
     displayName,
+    actorJoinVersionId,
     metadata = {},
   } = params;
   let existing;
@@ -153,10 +155,17 @@ export async function ensureConversationMember(params: {
     if (existing.rows[0].state !== "active") {
       const revived = await query(
         `UPDATE conversation_members
-         SET state = 'active', left_at = NULL, metadata = metadata || $2::jsonb
+         SET state = 'active',
+             left_at = NULL,
+             actor_join_version_id = COALESCE($3, actor_join_version_id),
+             metadata = metadata || $2::jsonb
          WHERE id = $1
          RETURNING *`,
-        [existing.rows[0].id, JSON.stringify(metadata)],
+        [
+          existing.rows[0].id,
+          JSON.stringify(metadata),
+          actorJoinVersionId || null,
+        ],
       );
       return revived.rows[0];
     }
@@ -165,8 +174,8 @@ export async function ensureConversationMember(params: {
 
   const result = await query(
     `INSERT INTO conversation_members
-       (id, conversation_id, member_type, actor_id, user_id, display_name, state, metadata, joined_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, NOW())
+       (id, conversation_id, member_type, actor_id, user_id, actor_join_version_id, display_name, state, metadata, joined_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, NOW())
      RETURNING *`,
     [
       uuidv4(),
@@ -174,6 +183,7 @@ export async function ensureConversationMember(params: {
       memberType,
       actorId || null,
       userId || null,
+      actorJoinVersionId || null,
       displayName || null,
       JSON.stringify(metadata),
     ],

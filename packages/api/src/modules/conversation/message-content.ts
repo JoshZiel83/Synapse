@@ -36,6 +36,19 @@ function parseJson(value: unknown): Record<string, unknown> {
   return (value || {}) as Record<string, unknown>;
 }
 
+function parseSizeBytes(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return 0;
+}
+
 function blocksToDraftParts(blocks: CanonicalContentBlock[]): DraftConversationPart[] {
   const parts: DraftConversationPart[] = [];
 
@@ -91,7 +104,7 @@ export function draftPartsToCanonicalContentBlocks(parts: DraftConversationPart[
         originalName: typeof metadata.originalName === 'string'
           ? metadata.originalName
           : part.name || 'file',
-        sizeBytes: typeof metadata.sizeBytes === 'number' ? metadata.sizeBytes : 0,
+        sizeBytes: parseSizeBytes(metadata.sizeBytes),
         category: (metadata.category as 'image' | 'audio' | 'video' | 'document' | undefined) || getCategoryFromMimeType(mimeType),
       }));
     }
@@ -120,7 +133,7 @@ export function itemPartsToCanonicalContentBlocks(parts: any[]): CanonicalConten
         url: typeof metadata.url === 'string' ? metadata.url : `/api/v1/files/${part.file_id}`,
         mimeType,
         originalName: part.original_name || part.name || 'file',
-        sizeBytes: part.size_bytes || Number(metadata.sizeBytes || 0),
+        sizeBytes: parseSizeBytes(part.size_bytes ?? metadata.sizeBytes),
         category: (metadata.category as 'image' | 'audio' | 'video' | 'document' | undefined) || getCategoryFromMimeType(mimeType),
       }));
     }

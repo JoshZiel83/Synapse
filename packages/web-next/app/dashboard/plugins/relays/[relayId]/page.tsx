@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import type {
@@ -11,9 +10,7 @@ import type {
 import {
   ArrowLeft,
   CheckCircle2,
-  Link2,
   Radio,
-  ShieldCheck,
   Unplug,
   Wifi,
   WifiOff,
@@ -100,6 +97,29 @@ export default function RelayDevicePage() {
   const [draftName, setDraftName] = useState('');
 
   const exposureId = searchParams.get('exposureId');
+  const relayAccessAdapter = useMemo(
+    () => ({
+      loadAccess: (targetWorkspaceId: string, targetExposureId: string) =>
+        api.getRelayExposureAccess(targetWorkspaceId, relayId, targetExposureId),
+      grantAccess: (
+        targetWorkspaceId: string,
+        targetExposureId: string,
+        payload: {
+          grantScope?: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+          actorId?: string;
+          conversationId?: string;
+          userId?: string;
+          permissions?: string[];
+        },
+      ) => api.grantRelayExposureAccess(targetWorkspaceId, relayId, targetExposureId, payload),
+      revokeAccess: (
+        targetWorkspaceId: string,
+        targetExposureId: string,
+        bindingId: string,
+      ) => api.revokeRelayExposureAccess(targetWorkspaceId, relayId, targetExposureId, bindingId),
+    }),
+    [relayId],
+  );
 
   const activeExposure = useMemo(() => {
     if (!relayDetail?.exposures.length) return null;
@@ -325,7 +345,7 @@ export default function RelayDevicePage() {
           <AppCardHeader>
             <AppCardTitle>MCP Exposures</AppCardTitle>
             <AppCardDescription>
-              Each exposure maps to one relay-derived plugin installation and its own grants.
+              Each exposure is authorized directly through relay exposure access, without a mirrored plugin layer.
             </AppCardDescription>
           </AppCardHeader>
           <AppCardContent className="min-h-0 p-0">
@@ -361,11 +381,7 @@ export default function RelayDevicePage() {
                         </div>
                         <div className="flex flex-wrap gap-2">
                           <Badge variant="outline">{exposure.tools.length} tools</Badge>
-                          {exposure.derivedInstallation ? (
-                            <Badge variant="secondary">Authorization ready</Badge>
-                          ) : (
-                            <Badge variant="outline">Waiting for install</Badge>
-                          )}
+                          <Badge variant="secondary">Direct authorization</Badge>
                         </div>
                       </button>
                     );
@@ -393,14 +409,6 @@ export default function RelayDevicePage() {
                         {activeExposure.transport} transport · {activeExposure.managementMode} management
                       </AppCardDescription>
                     </div>
-                    {activeExposure.derivedInstallation ? (
-                      <Button asChild type="button" variant="outline" size="sm">
-                        <Link href={`/dashboard/plugins/installations/${activeExposure.derivedInstallation.installationId}`}>
-                          <Link2 data-icon="inline-start" />
-                          Open Installation
-                        </Link>
-                      </Button>
-                    ) : null}
                   </div>
                 </AppCardHeader>
                 <AppCardContent className="flex flex-col gap-4">
@@ -414,9 +422,7 @@ export default function RelayDevicePage() {
                         <Badge variant="outline">{activeExposure.syncSource.syncMode}</Badge>
                       </>
                     ) : null}
-                    {activeExposure.derivedInstallation ? (
-                      <Badge variant="outline">{activeExposure.derivedInstallation.pluginDisplayName}</Badge>
-                    ) : null}
+                    <Badge variant="outline">Exposure ID {activeExposure.id.slice(0, 8)}</Badge>
                   </div>
 
                   {activeExposure.lastError ? (
@@ -444,26 +450,19 @@ export default function RelayDevicePage() {
 
               <Separator />
 
-              {activeExposure.derivedInstallation ? (
-                <PluginAccessStep
-                  installation={{ id: activeExposure.derivedInstallation.installationId }}
-                />
-              ) : (
-                <AppCard variant="panel">
-                  <AppCardHeader>
-                    <div className="flex items-center gap-2">
-                      <ShieldCheck className="size-5 text-muted-foreground" />
-                      <AppCardTitle>Authorization</AppCardTitle>
-                    </div>
-                    <AppCardDescription>
-                      This MCP exposure has not finished creating its relay-derived installation yet.
-                    </AppCardDescription>
-                  </AppCardHeader>
-                  <AppCardContent className="text-sm text-muted-foreground">
-                    Once the relay sync completes, this page will expose the same grant workflow used by normal plugins, including multiple scoped grants.
-                  </AppCardContent>
-                </AppCard>
-              )}
+              <PluginAccessStep
+                installation={null}
+                resourceId={activeExposure.id}
+                accessAdapter={relayAccessAdapter}
+                resourceLabel="relay exposure"
+                title="Authorization"
+                description="Choose who can invoke this relay exposure. Device ownership and trust stay on the relay."
+                addAccessLabel="Add Authorization"
+                emptyMessage="This relay exposure is not available yet."
+                dialogTitle="Add relay exposure access"
+                dialogDescription="Choose who can invoke this relay exposure."
+                noAccessMessage="No one can invoke this relay exposure yet."
+              />
             </>
           ) : (
             <AppCard variant="panel">

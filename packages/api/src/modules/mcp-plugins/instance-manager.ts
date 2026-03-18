@@ -225,6 +225,7 @@ function getTTLForScope(scope: string): number {
   switch (scope) {
     case 'workspace': return MCP_INSTANCE_TTL_WORKSPACE;
     case 'conversation': return MCP_INSTANCE_TTL_CONV;
+    case 'actor': return MCP_INSTANCE_TTL_ACTOR;
     case 'actor_global': return MCP_INSTANCE_TTL_ACTOR;
     case 'actor_conversation': return MCP_INSTANCE_TTL_ACTOR_CONV;
     case 'turn': return MCP_INSTANCE_TTL_TURN;
