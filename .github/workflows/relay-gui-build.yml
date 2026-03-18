@@ -25,6 +25,7 @@ permissions:
 env:
   BUNDLED_NODE_VERSION: '20.19.5'
   CHROME_DEVTOOLS_MCP_VERSION: '0.20.0'
+  COS_REGION: 'ap-guangzhou'
 
 jobs:
   build:
@@ -116,7 +117,112 @@ jobs:
             mv relay/cmd/synapse-relay-gui/build/bin/synapse-relay-gui synapse-relay-gui-${{ matrix.suffix }}
           fi
 
+      - name: Upload artifacts to Tencent COS
+        if: ${{ secrets.COS_SECRET_ID != '' && secrets.COS_SECRET_KEY != '' && secrets.COS_BUCKET != '' }}
+        continue-on-error: true
+        env:
+          ARTIFACT_GLOB: synapse-relay-gui-${{ matrix.suffix }}*
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_PREFIX: ${{ github.sha }}
+          COS_REGION: ${{ env.COS_REGION }}
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from datetime import UTC, datetime
+          from email.utils import format_datetime
+          from pathlib import Path
+          import glob
+          import hashlib
+          import hmac
+          import mimetypes
+          import os
+          import sys
+          import urllib.parse
+          import urllib.request
+
+          bucket = os.environ["COS_BUCKET"].strip()
+          prefix = os.environ["COS_PREFIX"].strip().strip("/")
+          region = os.environ["COS_REGION"].strip()
+          secret_id = os.environ["COS_SECRET_ID"].strip()
+          secret_key = os.environ["COS_SECRET_KEY"].strip()
+          artifact_glob = os.environ["ARTIFACT_GLOB"].strip()
+          host = f"{bucket}.cos.{region}.myqcloud.com"
+
+          def hmac_sha1(key: bytes, msg: str) -> str:
+              return hmac.new(key, msg.encode("utf-8"), hashlib.sha1).hexdigest()
+
+          def urlencode(value: str) -> str:
+              return urllib.parse.quote(value, safe="-_.~")
+
+          def make_auth(method: str, uri_path: str, date_value: str) -> str:
+              start = int(datetime.now(UTC).timestamp()) - 60
+              end = start + 3600
+              key_time = f"{start};{end}"
+              sign_key = hmac_sha1(secret_key.encode("utf-8"), key_time)
+              headers = {"Host": host, "Date": date_value}
+              header_items = sorted((urlencode(k.lower()), urlencode(v.strip())) for k, v in headers.items())
+              header_list = ";".join(k for k, _ in header_items)
+              http_headers = "&".join(f"{k}={v}" for k, v in header_items)
+              http_string = "\n".join([method.lower(), uri_path, "", http_headers, ""])
+              string_to_sign = "\n".join([
+                  "sha1",
+                  key_time,
+                  hashlib.sha1(http_string.encode()).hexdigest(),
+                  "",
+              ])
+              signature = hmac_sha1(sign_key.encode("utf-8"), string_to_sign)
+              return "&".join([
+                  "q-sign-algorithm=sha1",
+                  f"q-ak={secret_id}",
+                  f"q-sign-time={key_time}",
+                  f"q-key-time={key_time}",
+                  f"q-header-list={header_list}",
+                  "q-url-param-list=",
+                  f"q-signature={signature}",
+              ])
+
+          files = sorted(Path(path) for path in glob.glob(artifact_glob) if Path(path).is_file())
+          if not files:
+              print(f"No artifact files matched {artifact_glob}; skipping COS upload.")
+              sys.exit(0)
+
+          failures = []
+          for path in files:
+              object_key = f"{prefix}/{path.name}" if prefix else path.name
+              uri_path = "/" + "/".join(urlencode(part) for part in object_key.split("/"))
+              date_value = format_datetime(datetime.now(UTC), usegmt=True)
+              content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+              request = urllib.request.Request(
+                  f"https://{host}{uri_path}",
+                  data=path.read_bytes(),
+                  method="PUT",
+                  headers={
+                      "Authorization": make_auth("PUT", uri_path, date_value),
+                      "Content-Type": content_type,
+                      "Date": date_value,
+                      "Host": host,
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=300) as response:
+                      print(f"Uploaded {object_key} -> {response.status}")
+              except Exception as exc:
+                  failures.append((object_key, str(exc)))
+
+          if failures:
+              for object_key, error in failures:
+                  print(f"Failed {object_key}: {error}", file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Skip COS upload
+        if: ${{ secrets.COS_SECRET_ID == '' || secrets.COS_SECRET_KEY == '' || secrets.COS_BUCKET == '' }}
+        run: echo "COS secrets are not configured; skipping backup upload."
+
       - name: Upload artifact
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: synapse-relay-gui-${{ matrix.suffix }}
@@ -128,12 +234,30 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download all artifacts
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      - name: Check release artifacts
+        id: release_artifacts
+        shell: bash
+        run: |
+          shopt -s nullglob globstar
+          files=(artifacts/**/*)
+          if [ "${#files[@]}" -gt 0 ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create release
+        if: steps.release_artifacts.outputs.found == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
           generate_release_notes: true
+
+      - name: Skip release asset upload
+        if: steps.release_artifacts.outputs.found != 'true'
+        run: echo "No Actions artifacts available; skipping GitHub release asset upload."
