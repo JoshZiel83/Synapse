@@ -37,6 +37,7 @@ jobs:
             goarch: amd64
             suffix: linux-amd64
             wails_tags: desktop_cua,webkit2_41
+            cgo_ldflags_allow: ''
             setup: |
               sudo apt-get update -qq
               sudo apt-get install -y -qq libgtk-3-dev libwebkit2gtk-4.1-dev
@@ -45,12 +46,14 @@ jobs:
             goarch: arm64
             suffix: darwin-arm64
             wails_tags: desktop_cua
+            cgo_ldflags_allow: ^-weak_framework$
             setup: ''
           - runner: macos-15-intel
             goos: darwin
             goarch: amd64
             suffix: darwin-amd64
             wails_tags: desktop_cua
+            cgo_ldflags_allow: ^-weak_framework$
             setup: ''
           - runner: windows-latest
             goos: windows
@@ -58,6 +61,7 @@ jobs:
             suffix: windows-amd64
             ext: .exe
             wails_tags: desktop_cua
+            cgo_ldflags_allow: ''
             setup: ''
 
     runs-on: ${{ matrix.runner }}
@@ -96,6 +100,8 @@ jobs:
 
       - name: Build GUI
         working-directory: relay/cmd/synapse-relay-gui
+        env:
+          CGO_LDFLAGS_ALLOW: ${{ matrix.cgo_ldflags_allow }}
         run: wails build -tags "${{ matrix.wails_tags }}" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
 
       - name: Rename artifact
