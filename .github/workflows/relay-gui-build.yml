@@ -46,14 +46,14 @@ jobs:
             goarch: arm64
             suffix: darwin-arm64
             wails_tags: desktop_cua
-            cgo_ldflags_allow: ^-weak_framework$
+            cgo_ldflags_allow: ^(-weak_framework|ScreenCaptureKit)$
             setup: ''
           - runner: macos-15-intel
             goos: darwin
             goarch: amd64
             suffix: darwin-amd64
             wails_tags: desktop_cua
-            cgo_ldflags_allow: ^-weak_framework$
+            cgo_ldflags_allow: ^(-weak_framework|ScreenCaptureKit)$
             setup: ''
           - runner: windows-latest
             goos: windows
