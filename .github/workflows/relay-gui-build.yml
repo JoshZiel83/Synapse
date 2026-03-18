@@ -38,6 +38,7 @@ jobs:
             suffix: linux-amd64
             wails_tags: desktop_cua,webkit2_41
             cgo_ldflags_allow: ''
+            wails_extra_args: ''
             setup: |
               sudo apt-get update -qq
               sudo apt-get install -y -qq libgtk-3-dev libwebkit2gtk-4.1-dev
@@ -47,6 +48,7 @@ jobs:
             suffix: darwin-arm64
             wails_tags: desktop_cua
             cgo_ldflags_allow: ^(-weak_framework|ScreenCaptureKit)$
+            wails_extra_args: ''
             setup: ''
           - runner: macos-15-intel
             goos: darwin
@@ -54,6 +56,7 @@ jobs:
             suffix: darwin-amd64
             wails_tags: desktop_cua
             cgo_ldflags_allow: ^(-weak_framework|ScreenCaptureKit)$
+            wails_extra_args: ''
             setup: ''
           - runner: windows-latest
             goos: windows
@@ -62,7 +65,10 @@ jobs:
             ext: .exe
             wails_tags: desktop_cua
             cgo_ldflags_allow: ''
-            setup: ''
+            wails_extra_args: -nsis
+            setup: |
+              choco install nsis -y
+              "${env:ProgramFiles(x86)}\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
     runs-on: ${{ matrix.runner }}
     steps:
@@ -102,7 +108,7 @@ jobs:
         working-directory: relay/cmd/synapse-relay-gui
         env:
           CGO_LDFLAGS_ALLOW: ${{ matrix.cgo_ldflags_allow }}
-        run: wails build -tags "${{ matrix.wails_tags }}" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
+        run: wails build ${{ matrix.wails_extra_args }} -tags "${{ matrix.wails_tags }}" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
 
       - name: Rename artifact
         shell: bash
