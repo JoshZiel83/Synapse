@@ -1,15 +1,10 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
-import {
-  extractText,
-  type CanonicalContentBlock,
-  type ChatSocketEvent,
-} from "@synapse/shared"
+import { useEffect, useState } from "react"
+import { type CanonicalContentBlock } from "@synapse/shared"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useWorkspace } from "../workspace-provider"
-import { useWebSocket } from "@/hooks/use-websocket"
-import { useNotifications } from "@/hooks/use-notifications"
+import { useChatRealtimeSync } from "@/hooks/use-chat-realtime-sync"
 import { useChatStore } from "@/stores/chat-store"
 import GroupList from "./group-list"
 import GroupChat from "./group-chat"
@@ -28,130 +23,23 @@ export default function ChatPage() {
     groups,
     selectedGroupId,
     messages,
-    loadingGroups,
     loadingMessages,
     runtimeMap,
     loadGroups,
     selectGroup,
     loadMessages,
     sendMessage,
-    hydrateOutbox,
-    flushOutbox,
     createGroup,
     markRead,
-    handleFeedItemCreated,
-    handleRuntimeUpdated,
-    handleConversationUpdated,
   } = useChatStore()
 
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [preselectedActorId, setPreselectedActorId] = useState<
-    string | undefined
-  >()
-  const [mobileView, setMobileView] = useState<"list" | "chat">("list")
-  const { notify } = useNotifications()
-
-  const onEvent = useCallback(
-    (event: ChatSocketEvent | Record<string, unknown>) => {
-      if (
-        !event ||
-        typeof event !== "object" ||
-        typeof event.type !== "string"
-      ) {
-        return
-      }
-
-      switch (event.type) {
-        case "feed.item.created": {
-          const payload = (event as ChatSocketEvent<"feed.item.created">)
-            .payload
-          handleFeedItemCreated(payload)
-          if (
-            payload.item.kind === "message" &&
-            payload.item.role === "assistant"
-          ) {
-            const name = payload.item.author?.name || "Synapse"
-            const content = extractText(payload.item.contentBlocks || [])
-            notify(name, content, payload.item.conversationId)
-          }
-          break
-        }
-        case "runtime.updated":
-          handleRuntimeUpdated(
-            (event as ChatSocketEvent<"runtime.updated">).payload
-          )
-          break
-        case "conversation.updated":
-          handleConversationUpdated(
-            (event as ChatSocketEvent<"conversation.updated">).payload
-          )
-          if (
-            workspaceId &&
-            (event as ChatSocketEvent<"conversation.updated">).payload
-              .action === "created"
-          ) {
-            loadGroups(workspaceId)
-          }
-          break
-        case "feed.resync.required":
-          if (workspaceId) {
-            loadGroups(workspaceId)
-            if (selectedGroupId) {
-              loadMessages(workspaceId, selectedGroupId)
-            }
-          }
-          break
-        case "actor.action":
-        case "secretary.response":
-          if (workspaceId) loadGroups(workspaceId)
-          break
-        default:
-          break
-      }
-    },
-    [
-      handleConversationUpdated,
-      handleFeedItemCreated,
-      handleRuntimeUpdated,
-      loadGroups,
-      loadMessages,
-      notify,
-      selectedGroupId,
-      workspaceId,
-    ]
-  )
-
-  const handleSocketConnected = useCallback(
-    (payload: { workspaceId: string; lastWorkspaceSequence: number }) => {
-      loadGroups(payload.workspaceId)
-      flushOutbox(payload.workspaceId)
-    },
-    [flushOutbox, loadGroups]
-  )
-
-  useWebSocket({ workspaceId, onEvent, onConnected: handleSocketConnected })
-
-  // Load groups on mount
-  useEffect(() => {
-    if (workspaceId) {
-      hydrateOutbox(workspaceId)
-      loadGroups(workspaceId)
-    }
-  }, [workspaceId, hydrateOutbox, loadGroups])
-
-  // Handle ?actor= query param (from org tree)
-  useEffect(() => {
-    if (actorParam && workspaceId) {
-      setPreselectedActorId(actorParam)
-      setDialogOpen(true)
-    }
-  }, [actorParam, workspaceId])
+  useChatRealtimeSync({ workspaceId, selectedGroupId })
 
   useEffect(() => {
     if (!groupParam) return
     if (!groups.some((group) => group.id === groupParam)) return
     selectGroup(groupParam)
-    setMobileView("chat")
   }, [groupParam, groups, selectGroup])
 
   // Load messages when selecting a group
@@ -173,7 +61,6 @@ export default function ChatPage() {
 
   function handleSelectGroup(id: string) {
     updateGroupRoute(id)
-    setMobileView("chat")
   }
 
   async function handleSend(
@@ -198,16 +85,37 @@ export default function ChatPage() {
     try {
       const groupId = await createGroup(workspaceId, actorIds)
       updateGroupRoute(groupId)
-      setMobileView("chat")
     } catch (err) {
       console.error("Failed to create group:", err)
     }
   }
 
   function handleNewConversation() {
-    setPreselectedActorId(undefined)
     setDialogOpen(true)
   }
+
+  function handleDialogOpenChange(open: boolean) {
+    setDialogOpen(open)
+    if (open || !actorParam) return
+
+    const nextParams = new URLSearchParams(searchParams.toString())
+    nextParams.delete("actor")
+    const nextQuery = nextParams.toString()
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, {
+      scroll: false,
+    })
+  }
+
+  function handleBackToList() {
+    const nextParams = new URLSearchParams(searchParams.toString())
+    nextParams.delete("group")
+    const nextQuery = nextParams.toString()
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, {
+      scroll: false,
+    })
+  }
+
+  const mobileView = groupParam ? "chat" : "list"
 
   if (!workspaceId) {
     return (
@@ -247,7 +155,7 @@ export default function ChatPage() {
               selectedGroupId ? runtimeMap[selectedGroupId] : undefined
             }
             onSend={handleSend}
-            onBack={() => setMobileView("list")}
+            onBack={handleBackToList}
             workspaceId={workspaceId}
             onRefreshGroup={() => loadGroups(workspaceId)}
           />
@@ -271,11 +179,11 @@ export default function ChatPage() {
 
       {/* New Group Dialog */}
       <NewGroupDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
+        open={dialogOpen || Boolean(actorParam && workspaceId)}
+        onOpenChange={handleDialogOpenChange}
         workspaceId={workspaceId}
         onCreateGroup={handleCreateGroup}
-        preselectedActorId={preselectedActorId}
+        preselectedActorId={actorParam || undefined}
       />
     </div>
   )

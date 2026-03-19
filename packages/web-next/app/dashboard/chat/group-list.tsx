@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { ActorRuntimeState } from '@synapse/shared';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import { Plus, Search } from 'lucide-react';
 import ChatAvatar from './chat-avatar';
 import type { Group, GroupRuntimeMap } from '@/stores/chat-store';
@@ -26,6 +27,7 @@ interface GroupListProps {
   runtimeMap: GroupRuntimeMap;
   onSelect: (id: string) => void;
   onNewConversation: () => void;
+  className?: string;
 }
 
 function getRuntimePriority(runtime: ActorRuntimeState) {
@@ -64,7 +66,7 @@ function summarizeRuntimePreview(runtimeByActor?: Record<string, ActorRuntimeSta
   return `${lead}${suffix} · working`;
 }
 
-export default function GroupList({ groups, selectedId, runtimeMap, onSelect, onNewConversation }: GroupListProps) {
+export default function GroupList({ groups, selectedId, runtimeMap, onSelect, onNewConversation, className }: GroupListProps) {
   const [search, setSearch] = useState('');
 
   const filtered = search
@@ -79,7 +81,7 @@ export default function GroupList({ groups, selectedId, runtimeMap, onSelect, on
     : groups;
 
   return (
-    <div className="flex h-full min-h-0 flex-col border-r border-border bg-muted/20">
+    <div className={cn("flex h-full min-h-0 flex-col border-r border-border bg-muted/20", className)}>
       {/* Header */}
       <div className="border-b border-border px-4 py-4">
         <div className="mb-4 flex items-center justify-between">

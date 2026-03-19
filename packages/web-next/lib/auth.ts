@@ -15,3 +15,10 @@ export function buildLoginRedirect(target?: string | null) {
   const normalized = normalizeRedirectTarget(target);
   return normalized ? `/login?redirect=${encodeURIComponent(normalized)}` : '/login';
 }
+
+export function buildMobileLoginRedirect(target?: string | null) {
+  const normalized = normalizeRedirectTarget(target);
+  return normalized
+    ? `/m/login?redirect=${encodeURIComponent(normalized)}`
+    : '/m/login';
+}

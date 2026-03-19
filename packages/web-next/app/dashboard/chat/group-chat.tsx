@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { fileRefBlock, textBlock, type CanonicalContentBlock } from '@synapse/shared';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import { Send, ArrowDown, Paperclip, X, Pencil, Check } from 'lucide-react';
 import MessageBubble from './message-bubble';
 import type { FeedMessage, Group } from '@/stores/chat-store';
@@ -24,6 +25,7 @@ interface GroupChatProps {
   onBack?: () => void;
   workspaceId?: string;
   onRefreshGroup?: () => Promise<void> | void;
+  viewportLocked?: boolean;
 }
 
 function summarizeMemberCounts(group: Group) {
@@ -58,6 +60,7 @@ export default function GroupChat({
   onBack,
   workspaceId,
   onRefreshGroup,
+  viewportLocked = false,
 }: GroupChatProps) {
   const { user } = useAuthStore();
   const currentUserId = user?.id || '';
@@ -275,9 +278,14 @@ export default function GroupChat({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div
+      className={cn(
+        "grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden bg-background",
+        viewportLocked ? "h-[100dvh]" : "h-full"
+      )}
+    >
       {/* Header */}
-      <div className="flex shrink-0 items-center justify-between border-b border-border bg-background px-6 py-4">
+      <div className="sticky top-0 z-20 flex items-center justify-between border-b border-border bg-background px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))] lg:px-6 lg:py-4">
         <div className="flex min-w-0 items-center gap-3">
           {onBack && (
             <Button variant="ghost" size="icon" className="lg:hidden h-8 w-8" onClick={onBack}>
@@ -376,76 +384,78 @@ export default function GroupChat({
       </div>
 
       {/* Messages */}
-      <div
-        ref={scrollRef}
-        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-muted/20 px-4 py-5 lg:px-6"
-        onScroll={handleScroll}
-      >
-        {loading ? (
-          <div className="flex h-full items-center justify-center">
-            <div className="size-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-4 rounded-[28px] border border-dashed border-border bg-background px-6 py-10 text-center shadow-sm">
-            <ChatAvatar
-              name={title}
-              avatarUrl={group.avatarUrl}
-              entityType="group"
-              size="lg"
-              className="size-20 rounded-3xl"
-            />
-            <div>
-              <h3 className="mb-2 text-lg font-semibold text-foreground">
-                Chat in {title}
-              </h3>
-              <p className="max-w-md text-sm text-muted-foreground">
-                Messages from all participants will appear here.
-              </p>
-            </div>
-          </div>
-        ) : (
-          messages.map((msg) => (
-            <MessageBubble
-              key={msg.id}
-              role={msg.role}
-              contentBlocks={msg.contentBlocks}
-              actorName={msg.actorName}
-              actorAvatarUrl={msg.fromActorId ? actorMemberMap[msg.fromActorId]?.avatarUrl : undefined}
-              actorEmoji={msg.actorEmoji}
-              actorRole={msg.actorRole}
-              actorRuntime={msg.fromActorId ? actorRuntimes?.[msg.fromActorId] : undefined}
-              timestamp={msg.createdAt}
-              isUser={msg.role === 'user'}
-              status={msg.deliveryStatus}
-              toolsUsed={msg.toolsUsed}
-              serverToolCalls={msg.serverToolCalls}
-              citationSources={msg.citationSources}
-              coordination={msg.coordination}
-              groupMembers={group.members}
-              targetActorIds={msg.targetActorIds}
-              targetUserIds={msg.targetUserIds}
-            />
-          ))
-        )}
+      <div className="relative min-h-0 bg-muted/20">
+        <div
+          ref={scrollRef}
+          className="h-full overflow-y-auto overscroll-contain px-4 py-5 lg:px-6"
+          onScroll={handleScroll}
+        >
+          <div className="flex min-h-full flex-col gap-4">
+            {loading ? (
+              <div className="flex h-full min-h-[12rem] items-center justify-center">
+                <div className="size-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              </div>
+            ) : messages.length === 0 ? (
+              <div className="flex h-full min-h-[12rem] flex-1 flex-col items-center justify-center gap-4 rounded-[28px] border border-dashed border-border bg-background px-6 py-10 text-center shadow-sm">
+                <ChatAvatar
+                  name={title}
+                  avatarUrl={group.avatarUrl}
+                  entityType="group"
+                  size="lg"
+                  className="size-20 rounded-3xl"
+                />
+                <div>
+                  <h3 className="mb-2 text-lg font-semibold text-foreground">
+                    Chat in {title}
+                  </h3>
+                  <p className="max-w-md text-sm text-muted-foreground">
+                    Messages from all participants will appear here.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              messages.map((msg) => (
+                <MessageBubble
+                  key={msg.id}
+                  role={msg.role}
+                  contentBlocks={msg.contentBlocks}
+                  actorName={msg.actorName}
+                  actorAvatarUrl={msg.fromActorId ? actorMemberMap[msg.fromActorId]?.avatarUrl : undefined}
+                  actorEmoji={msg.actorEmoji}
+                  actorRole={msg.actorRole}
+                  actorRuntime={msg.fromActorId ? actorRuntimes?.[msg.fromActorId] : undefined}
+                  timestamp={msg.createdAt}
+                  isUser={msg.role === 'user'}
+                  status={msg.deliveryStatus}
+                  toolsUsed={msg.toolsUsed}
+                  serverToolCalls={msg.serverToolCalls}
+                  citationSources={msg.citationSources}
+                  coordination={msg.coordination}
+                  groupMembers={group.members}
+                  targetActorIds={msg.targetActorIds}
+                  targetUserIds={msg.targetUserIds}
+                />
+              ))
+            )}
 
-        <div ref={bottomRef} />
+            <div ref={bottomRef} />
+          </div>
+        </div>
+        {showJumpButton && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
+            <button
+              onClick={scrollToBottom}
+              className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-indigo-600 px-3 py-1.5 text-xs text-white shadow-lg transition-all hover:bg-indigo-500"
+            >
+              <ArrowDown className="w-3 h-3" />
+              New messages
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Jump to bottom button */}
-      {showJumpButton && (
-        <div className="relative">
-          <button
-            onClick={scrollToBottom}
-            className="absolute -top-12 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-600 text-white text-xs shadow-lg hover:bg-indigo-500 transition-all"
-          >
-            <ArrowDown className="w-3 h-3" />
-            New messages
-          </button>
-        </div>
-      )}
-
       {/* Input area — textarea with toolbar */}
-      <div className="shrink-0 border-t border-border bg-muted/20 p-4">
+      <div className="sticky bottom-0 z-20 border-t border-border bg-muted/20 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4">
         {/* Responding hint */}
         {workingHint && (
           <div className="flex items-center gap-2 mb-2 px-1">

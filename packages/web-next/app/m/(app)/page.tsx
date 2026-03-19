@@ -1,0 +1,351 @@
+"use client"
+
+import Link from "next/link"
+import { startTransition, useEffect, useState } from "react"
+import { APP_NAME, type WorkspaceChiefActorPreference } from "@synapse/shared"
+import { Bot, ChevronRight, MessageSquareText, Send } from "lucide-react"
+import { useRouter } from "next/navigation"
+
+import ChatAvatar from "@/app/dashboard/chat/chat-avatar"
+import ChiefActorPickerDialog from "@/app/dashboard/chief-actor-picker-dialog"
+import { useWorkspace } from "@/app/dashboard/workspace-provider"
+import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
+import { api, ApiError } from "@/lib/api"
+import { useChatStore } from "@/stores/chat-store"
+
+type LaunchActor = {
+  id: string
+  name: string
+  role: string
+  title: string
+  avatarUrl?: string
+  emoji?: string
+}
+
+function emptyPreference(workspaceId: string): WorkspaceChiefActorPreference {
+  return {
+    workspaceId,
+    userId: "",
+  }
+}
+
+function toLaunchActor(
+  actor?: WorkspaceChiefActorPreference["chiefActor"] | null
+): LaunchActor | null {
+  if (!actor) return null
+
+  return {
+    id: actor.id,
+    name: actor.name,
+    role: actor.role,
+    title: actor.title,
+    avatarUrl: actor.avatarUrl,
+  }
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Something went wrong."
+}
+
+export default function MobileHomePage() {
+  const router = useRouter()
+  const { workspaceId, workspaceName } = useWorkspace()
+  const groups = useChatStore((state) => state.groups)
+  const createGroup = useChatStore((state) => state.createGroup)
+  const selectGroup = useChatStore((state) => state.selectGroup)
+
+  const [draft, setDraft] = useState("")
+  const [pendingPrompt, setPendingPrompt] = useState("")
+  const [preference, setPreference] =
+    useState<WorkspaceChiefActorPreference | null>(null)
+  const [launchActor, setLaunchActor] = useState<LaunchActor | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [loadingPreference, setLoadingPreference] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!workspaceId) {
+      setPreference(null)
+      setLaunchActor(null)
+      return
+    }
+
+    let cancelled = false
+    setLoadingPreference(true)
+    setErrorMessage(null)
+
+    void api
+      .getWorkspaceChiefActorPreference(workspaceId)
+      .then((result) => {
+        if (cancelled) return
+        setPreference(result)
+        setLaunchActor(toLaunchActor(result.chiefActor))
+      })
+      .catch((error) => {
+        if (cancelled) return
+        console.error("Failed to load chief actor preference:", error)
+        const fallback = emptyPreference(workspaceId)
+        setPreference(fallback)
+        setLaunchActor(null)
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingPreference(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceId])
+
+  async function handleLaunch(actor: LaunchActor, saveAsDefault: boolean) {
+    if (!workspaceId) return
+
+    const message = (pendingPrompt || draft).trim()
+    if (!message) {
+      setErrorMessage("Enter a first message to start a conversation.")
+      return
+    }
+
+    setSubmitting(true)
+    setErrorMessage(null)
+
+    try {
+      const groupId = await createGroup(workspaceId, [actor.id], message, actor.id)
+
+      if (saveAsDefault) {
+        try {
+          const nextPreference = await api.updateWorkspaceChiefActorPreference(
+            workspaceId,
+            { chiefActorId: actor.id }
+          )
+          setPreference(nextPreference)
+          setLaunchActor(toLaunchActor(nextPreference.chiefActor) || actor)
+        } catch (error) {
+          console.error("Failed to update chief actor preference:", error)
+        }
+      } else {
+        setLaunchActor(actor)
+      }
+
+      selectGroup(groupId)
+      setDraft("")
+      setPendingPrompt("")
+      setPickerOpen(false)
+
+      startTransition(() => {
+        router.push(`/m/chat/${groupId}`)
+      })
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  function launchFromDraft() {
+    const message = draft.trim()
+    if (!message) {
+      setErrorMessage("Enter a first message to start a conversation.")
+      return
+    }
+
+    setErrorMessage(null)
+    setPendingPrompt(message)
+
+    if (launchActor) {
+      void handleLaunch(launchActor, false)
+      return
+    }
+
+    setPickerOpen(true)
+  }
+
+  if (!workspaceId) {
+    return (
+      <div className="flex min-h-svh items-center justify-center px-6">
+        <p className="max-w-xs text-center text-sm text-muted-foreground">
+          Select a workspace to start a conversation on mobile.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <div className="flex flex-1 flex-col overflow-y-auto px-4 pb-6 pt-[calc(env(safe-area-inset-top)+1rem)]">
+        <div className="space-y-6">
+          <div className="space-y-1">
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+              {APP_NAME}
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              {workspaceName || "Workspace"}
+            </p>
+          </div>
+
+          <section className="-mx-4 border-y border-border/70 bg-background/80 px-4 py-4">
+            <button
+              type="button"
+              onClick={() => {
+                setErrorMessage(null)
+                setPendingPrompt(draft.trim())
+                setPickerOpen(true)
+              }}
+              className="flex w-full items-center gap-3 rounded-[22px] border border-border/70 bg-muted/35 px-3 py-3 text-left transition-colors hover:bg-muted/55"
+              disabled={loadingPreference || submitting}
+            >
+              {launchActor ? (
+                <ChatAvatar
+                  name={launchActor.name}
+                  avatarUrl={launchActor.avatarUrl}
+                  emoji={launchActor.emoji}
+                  entityType="actor"
+                  size="lg"
+                />
+              ) : (
+                <div className="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                  <Bot className="size-5" />
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                  To
+                </div>
+                <div className="truncate text-sm font-medium text-foreground">
+                  {launchActor ? launchActor.name : "Select actor"}
+                </div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {launchActor ? launchActor.title || launchActor.role : "Choose who should take this conversation"}
+                </div>
+              </div>
+              <ChevronRight className="size-4 text-muted-foreground" />
+            </button>
+
+            <div className="mt-4 space-y-3">
+              <Textarea
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="Ask anything..."
+                className="min-h-32 resize-none rounded-[24px] border-border bg-background px-4 py-4 text-base shadow-none"
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    (event.metaKey || event.ctrlKey)
+                  ) {
+                    event.preventDefault()
+                    launchFromDraft()
+                  }
+                }}
+              />
+              {errorMessage ? (
+                <p className="text-sm text-destructive">{errorMessage}</p>
+              ) : null}
+              <Button
+                type="button"
+                className="h-12 w-full rounded-full text-sm font-medium"
+                onClick={launchFromDraft}
+                disabled={!draft.trim() || submitting}
+              >
+                <Send className="mr-2 size-4" />
+                {submitting ? "Starting..." : "Start chat"}
+              </Button>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-semibold text-foreground">
+                  Recent chats
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  Jump back into an active thread.
+                </p>
+              </div>
+              <Button variant="ghost" size="sm" asChild>
+                <Link href="/m/chat">See all</Link>
+              </Button>
+            </div>
+
+            {groups.length > 0 ? (
+              <div className="-mx-4 border-y border-border/70 bg-background/80">
+                {groups.slice(0, 4).map((group) => {
+                  const name =
+                    group.title || group.participants.map((p) => p.name).join(", ")
+                  const preview = group.lastMessage?.content || "No messages yet"
+                  const previewLabel =
+                    preview.length > 70 ? `${preview.slice(0, 70)}...` : preview
+
+                  return (
+                    <button
+                      key={group.id}
+                      type="button"
+                      onClick={() => {
+                        selectGroup(group.id)
+                        startTransition(() => {
+                          router.push(`/m/chat/${group.id}`)
+                        })
+                      }}
+                      className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-muted/35"
+                    >
+                      <ChatAvatar
+                        name={name}
+                        avatarUrl={group.avatarUrl}
+                        entityType="group"
+                        size="lg"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-foreground">
+                          {name}
+                        </div>
+                        <div className="mt-1 truncate text-sm text-muted-foreground">
+                          {previewLabel}
+                        </div>
+                      </div>
+                      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="-mx-4 border-y border-dashed border-border bg-background/75 px-4 py-8 text-center">
+                <div className="mx-auto mb-3 flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                  <MessageSquareText className="size-5" />
+                </div>
+                <p className="text-sm font-medium text-foreground">
+                  No chats yet
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Start your first mobile conversation above.
+                </p>
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+
+      <ChiefActorPickerDialog
+        open={pickerOpen}
+        onOpenChange={(open) => {
+          setPickerOpen(open)
+          if (!open && !submitting) {
+            setPendingPrompt("")
+          }
+        }}
+        workspaceId={workspaceId}
+        mode="launch"
+        initialActorId={launchActor?.id || preference?.chiefActorId}
+        busy={submitting}
+        onConfirm={async (payload) => {
+          await handleLaunch(payload.actor, payload.saveAsDefault)
+        }}
+      />
+    </>
+  )
+}
