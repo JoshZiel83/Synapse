@@ -4,6 +4,27 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Synapse Relay</title>
+    <script>
+      (() => {
+        const root = document.documentElement
+        const css = window.CSS
+        const supports = (property, value) => {
+          try {
+            return !!css && typeof css.supports === 'function' && css.supports(property, value)
+          } catch {
+            return false
+          }
+        }
+
+        const hasModernCss =
+          supports('color', 'oklch(62% 0.17 258)') &&
+          supports('color', 'color-mix(in oklab, white, black)')
+
+        if (!hasModernCss) {
+          root.classList.add('legacy-webview')
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>
