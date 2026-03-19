@@ -14,6 +14,7 @@ import { ingestResponseMedia } from './content-ingest.js';
 import { resolveFileRefSegments } from './fileref-resolver.js';
 import { buildAdHocContextItems } from './context-builder.js';
 import { buildAdHocProviderContextWindow } from '../context/service.js';
+import { DEFAULT_MODEL_ATTEMPT_POLICY } from '../model-groups/defaults.js';
 import {
   createToolCall,
   createToolExecutionAttempt,
@@ -26,14 +27,7 @@ import {
 export { buildActorPrompt } from './prompt-builder.js';
 
 const MAX_TOOL_ROUNDS = 100;
-const DEFAULT_ATTEMPT_POLICY: ModelAttemptPolicy = {
-  maxAttemptsTotal: 4,
-  maxAttemptsPerBinding: 2,
-  timeoutMsPerAttempt: 30000,
-  continueOn: ['timeout', '5xx', 'network', 'rate_limit'],
-  stopOn: ['auth_error', 'bad_request', 'policy_block'],
-  retryBackoffMs: [0, 1000, 3000],
-};
+const DEFAULT_ATTEMPT_POLICY: ModelAttemptPolicy = DEFAULT_MODEL_ATTEMPT_POLICY;
 
 // Cache providers by config fingerprint to avoid recreating
 const providerCache = new Map<string, AIProvider>();

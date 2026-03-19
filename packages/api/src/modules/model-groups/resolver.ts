@@ -3,6 +3,7 @@ import { redis } from '../../infrastructure/redis/index.js';
 import { query } from '../../infrastructure/database/index.js';
 import { config } from '../../config/index.js';
 import { actorSubject, listAuthorizedResourceIds, userSubject } from '../access/service.js';
+import { DEFAULT_MODEL_ATTEMPT_POLICY } from './defaults.js';
 
 type GroupRow = {
   id: string;
@@ -48,14 +49,7 @@ type ResolveContext = {
   userId?: string;
 };
 
-const DEFAULT_ATTEMPT_POLICY: ModelAttemptPolicy = {
-  maxAttemptsTotal: 4,
-  maxAttemptsPerBinding: 2,
-  timeoutMsPerAttempt: 30000,
-  continueOn: ['timeout', '5xx', 'network', 'rate_limit'],
-  stopOn: ['auth_error', 'bad_request', 'policy_block'],
-  retryBackoffMs: [0, 1000, 3000],
-};
+const DEFAULT_ATTEMPT_POLICY: ModelAttemptPolicy = DEFAULT_MODEL_ATTEMPT_POLICY;
 
 function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};

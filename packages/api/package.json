@@ -10,6 +10,7 @@
     "start": "node dist/index.js",
     "db:migrate": "tsx src/infrastructure/database/migrate.ts",
     "db:seed": "tsx src/infrastructure/database/seed.ts",
+    "db:seed:builtin-mcp": "tsx src/infrastructure/database/seed-builtin-mcp-plugins.ts",
     "db:reset": "tsx src/infrastructure/database/reset.ts"
   },
   "dependencies": {

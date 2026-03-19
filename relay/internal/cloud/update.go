@@ -154,12 +154,14 @@ func fetchDesktopUpdateManifest(ctx context.Context, relayCfg config.RelayConfig
 
 func newPinnedHTTPClient(relayCfg config.RelayConfig, rawURL string) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	tlsConfig, err := buildPinnedTLSConfig(rawURL, relayCfg.ServerTLSPublicKeyPin, nil)
-	if err != nil {
-		return nil, err
-	}
-	if tlsConfig != nil {
-		transport.TLSClientConfig = tlsConfig
+	if shouldPinUpdateDownload(relayCfg.ServerBaseURL, rawURL) {
+		tlsConfig, err := buildPinnedTLSConfig(rawURL, relayCfg.ServerTLSPublicKeyPin, nil)
+		if err != nil {
+			return nil, err
+		}
+		if tlsConfig != nil {
+			transport.TLSClientConfig = tlsConfig
+		}
 	}
 	return &http.Client{
 		Timeout:   60 * time.Second,
@@ -255,10 +257,35 @@ func validateManifestDownloadURL(serverBaseURL, rawDownloadURL string) error {
 	if err != nil {
 		return fmt.Errorf("invalid update download URL: %w", err)
 	}
-	if !strings.EqualFold(serverURL.Scheme, downloadURL.Scheme) || !strings.EqualFold(serverURL.Host, downloadURL.Host) {
-		return fmt.Errorf("update download URL must use the paired relay server origin")
+	if downloadURL.Scheme == "" || downloadURL.Host == "" {
+		return fmt.Errorf("update download URL must include scheme and host")
+	}
+	if sameOriginURL(serverURL, downloadURL) {
+		return nil
+	}
+	if !strings.EqualFold(downloadURL.Scheme, "https") {
+		return fmt.Errorf("update download URL must use https when served from a different origin")
 	}
 	return nil
+}
+
+func shouldPinUpdateDownload(serverBaseURL, rawDownloadURL string) bool {
+	serverURL, err := url.Parse(strings.TrimSpace(serverBaseURL))
+	if err != nil {
+		return false
+	}
+	downloadURL, err := url.Parse(strings.TrimSpace(rawDownloadURL))
+	if err != nil {
+		return false
+	}
+	return sameOriginURL(serverURL, downloadURL)
+}
+
+func sameOriginURL(left, right *url.URL) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
 }
 
 func updateFilename(rawDownloadURL string) string {
@@ -280,7 +307,48 @@ func normalizeSHA256(value string) string {
 
 func versionIsNewer(currentVersion, nextVersion string) bool {
 	comparison, ok := compareSemanticVersions(currentVersion, nextVersion)
-	return ok && comparison < 0
+	if ok {
+		return comparison < 0
+	}
+
+	currentDevHash, currentDev := parseDevBuildVersion(currentVersion)
+	nextDevHash, nextDev := parseDevBuildVersion(nextVersion)
+	if currentDev && nextDev {
+		return !sameDevBuildVersion(currentDevHash, nextDevHash)
+	}
+	return false
+}
+
+func parseDevBuildVersion(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(strings.ToLower(raw))
+	if !strings.HasPrefix(trimmed, "dev-") {
+		return "", false
+	}
+
+	hash := strings.TrimPrefix(trimmed, "dev-")
+	if len(hash) < 7 || len(hash) > 64 {
+		return "", false
+	}
+	for _, ch := range hash {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+			return "", false
+		}
+	}
+	return hash, true
+}
+
+func sameDevBuildVersion(left, right string) bool {
+	if left == "" || right == "" {
+		return false
+	}
+	maxShared := len(left)
+	if len(right) < maxShared {
+		maxShared = len(right)
+	}
+	if maxShared < 7 {
+		return false
+	}
+	return strings.EqualFold(left[:maxShared], right[:maxShared])
 }
 
 func compareSemanticVersions(left, right string) (int, bool) {

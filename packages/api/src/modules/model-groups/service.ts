@@ -1,6 +1,10 @@
 import { config } from '../../config/index.js';
 import { query } from '../../infrastructure/database/index.js';
 import {
+  DEFAULT_MODEL_ATTEMPT_POLICY,
+  DEFAULT_MODEL_ATTEMPT_TIMEOUT_MS,
+} from './defaults.js';
+import {
   AUTHZ_PLATFORM_ID,
   authzEnabled,
   buildWorkspaceUserContextId,
@@ -1647,14 +1651,7 @@ export async function seedPlatformDefaultGroup() {
       name: 'Platform Default',
       description: 'Auto-created from environment variables',
       routingStrategy: 'priority_failover',
-      attemptPolicy: {
-        maxAttemptsTotal: 4,
-        maxAttemptsPerBinding: 2,
-        timeoutMsPerAttempt: 30000,
-        continueOn: ['timeout', '5xx', 'network', 'rate_limit'],
-        stopOn: ['auth_error', 'bad_request', 'policy_block'],
-        retryBackoffMs: [0, 1000, 3000],
-      },
+      attemptPolicy: { ...DEFAULT_MODEL_ATTEMPT_POLICY },
       isDefault: true,
     });
     groupId = group.id;
@@ -1680,7 +1677,7 @@ export async function seedPlatformDefaultGroup() {
         baseUrl: config.ai.baseUrl,
         modelName: config.ai.model,
         maxTokens: config.ai.maxTokens,
-        requestTimeoutMs: 30000,
+        requestTimeoutMs: DEFAULT_MODEL_ATTEMPT_TIMEOUT_MS,
         maxRetries: 1,
       });
     }
