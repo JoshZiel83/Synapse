@@ -30,3 +30,6 @@ relay/cmd/synapse-relay-gui/frontend/src/lib/wailsjs/
 relay/cmd/synapse-relay-gui/frontend/wailsjs/
 relay/cmd/synapse-relay-gui/frontend/package.json.md5
 relay/cmd/synapse-relay-gui/build/
+
+# Local reference checkouts
+.refer/
