@@ -204,6 +204,20 @@ function createEmptySkillFile(path = 'attachments/new-note.md', text = ''): Skil
   };
 }
 
+const REQUIRED_SKILL_PATH = 'Skill.md';
+
+function ensureRequiredSkillPath(files: SkillFileDraft[]) {
+  const hasRequired = files.some((file) => normalizeFilePath(file.path) === REQUIRED_SKILL_PATH);
+  if (hasRequired) {
+    return files;
+  }
+  return [createEmptySkillFile(REQUIRED_SKILL_PATH), ...files];
+}
+
+function isRequiredSkillPath(path: string) {
+  return normalizeFilePath(path) === REQUIRED_SKILL_PATH;
+}
+
 function createEmptyDescriptionBlocks(text = '') {
   return [
     {
@@ -250,6 +264,23 @@ function formatDate(value?: string) {
     month: 'short',
     day: 'numeric',
   });
+}
+
+function skillVersionText(skill?: InstalledSkill | null) {
+  if (!skill) return '';
+  if (!skill.sourceVersion) {
+    return 'Workspace skill';
+  }
+  if (skill.latestSourceVersion && skill.latestSourceVersion !== skill.sourceVersion) {
+    return `Version ${skill.sourceVersion} · latest ${skill.latestSourceVersion}`;
+  }
+  return `Version ${skill.sourceVersion}`;
+}
+
+function skillFileName(path?: string) {
+  if (!path) return 'Preview';
+  const segments = path.split('/').filter(Boolean);
+  return segments[segments.length - 1] || path;
 }
 
 function objectValue(value: unknown) {
@@ -388,6 +419,13 @@ function createMarketplaceDraft(skill?: SkillMarketplaceEntry | null): EditorDra
 }
 
 function createInstalledDraft(skill?: InstalledSkill | null): EditorDraft {
+  const attachmentFiles = ensureRequiredSkillPath(
+    skill?.attachmentFiles?.map((file) => ({
+      path: file.path,
+      contentBlocks: file.contentBlocks,
+    })) || [],
+  );
+
   return {
     slug: skill?.slug || '',
     name: skill?.name || '',
@@ -396,11 +434,7 @@ function createInstalledDraft(skill?: InstalledSkill | null): EditorDraft {
     tagsText: skill?.tags.join(', ') || '',
     version: skill?.sourceVersion || '',
     changelog: '',
-    attachmentFiles:
-      skill?.attachmentFiles?.map((file) => ({
-        path: file.path,
-        contentBlocks: file.contentBlocks,
-      })) || [createEmptySkillFile()],
+    attachmentFiles,
   };
 }
 
@@ -413,7 +447,7 @@ function createWorkspaceDraft(): EditorDraft {
     tagsText: '',
     version: '',
     changelog: '',
-    attachmentFiles: [],
+    attachmentFiles: [createEmptySkillFile(REQUIRED_SKILL_PATH)],
   };
 }
 
@@ -451,6 +485,14 @@ function rowStatusLabel(row: SkillListRow) {
 
 function rowStatusVariant(row: SkillListRow): 'outline' | 'secondary' {
   return row.kind === 'official-available' ? 'outline' : 'secondary';
+}
+
+function rowStatusBadgeClassName(row: SkillListRow) {
+  if (row.kind !== 'official-installed') {
+    return undefined;
+  }
+
+  return 'border-emerald-200 bg-emerald-100 text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/60 dark:text-emerald-200';
 }
 
 function ScopeFields({
@@ -702,7 +744,7 @@ function SkillEditorDialog({
       toast.error('Skill name is required');
       return;
     }
-    if ((mode === 'marketplace' || mode === 'workspace') && !draft.slug.trim()) {
+    if (mode === 'marketplace' && !draft.slug.trim()) {
       toast.error('Skill slug is required');
       return;
     }
@@ -733,7 +775,6 @@ function SkillEditorDialog({
 
       if (mode === 'workspace') {
         const result = await api.createWorkspaceSkill(workspaceId, {
-          slug: draft.slug.trim(),
           name: draft.name.trim(),
           description,
           iconUrl: draft.iconUrl.trim() || undefined,
@@ -875,7 +916,7 @@ function SkillEditorDialog({
                 </CardHeader>
                 <CardContent>
                   <FieldGroup>
-                    {mode === 'marketplace' || mode === 'workspace' ? (
+                    {mode === 'marketplace' ? (
                       <Field>
                         <FieldLabel>Slug</FieldLabel>
                         <Input
@@ -1180,7 +1221,6 @@ export function InstalledSkillConfigurationPage({ skillId }: { skillId: string }
   const { workspaceId } = useWorkspace();
   const [skill, setSkill] = useState<InstalledSkill | null>(null);
   const [loading, setLoading] = useState(true);
-  const [installedEditorOpen, setInstalledEditorOpen] = useState(false);
   const [installedDetailTab, setInstalledDetailTab] = useState<'content' | 'access'>('content');
   const [enabledDraft, setEnabledDraft] = useState(true);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -1289,24 +1329,27 @@ export function InstalledSkillConfigurationPage({ skillId }: { skillId: string }
       </div>
 
       <Card className="overflow-hidden">
-        <CardHeader className="border-b border-border bg-muted/20">
+        <CardHeader className="border-b border-border bg-muted/20 pb-0">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <CardTitle>{skill?.name || 'Skill configuration'}</CardTitle>
-              <CardDescription>
-                {skill?.sourceSkillId
-                  ? 'Configure the installed official skill, edit its description, attachments, and workspace access.'
-                  : 'Configure this workspace skill, edit its description, attachments, and workspace access.'}
-              </CardDescription>
+              <div className="mt-2 space-y-1">
+                <CardDescription>
+                  {skillDescriptionText(skill?.description) || 'No description provided.'}
+                </CardDescription>
+                {skill ? (
+                  <div className="text-sm text-muted-foreground">
+                    {skillVersionText(skill)}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             {skill ? (
               <div className="flex flex-wrap gap-2">
                 <Button
                   variant="outline"
-                  onClick={() => {
-                    setInstalledEditorOpen(true);
-                  }}
+                  onClick={() => router.push(`/dashboard/skills/installed/${skill.id}/edit`)}
                 >
                   <FileText data-icon="inline-start" />
                   Edit
@@ -1333,7 +1376,7 @@ export function InstalledSkillConfigurationPage({ skillId }: { skillId: string }
             ) : null}
           </div>
         </CardHeader>
-        <CardContent className="p-6">
+        <CardContent className="px-6 pb-6 pt-0">
           {loading ? (
             <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
               <Loader2 className="mr-2 animate-spin" />
@@ -1347,7 +1390,7 @@ export function InstalledSkillConfigurationPage({ skillId }: { skillId: string }
             <Tabs
               value={installedDetailTab}
               onValueChange={(nextValue) => setInstalledDetailTab(nextValue as 'content' | 'access')}
-              className="flex flex-col gap-6"
+              className="flex flex-col"
             >
               <TabsList>
                 <TabsTrigger value="content">Content</TabsTrigger>
@@ -1355,91 +1398,15 @@ export function InstalledSkillConfigurationPage({ skillId }: { skillId: string }
               </TabsList>
 
               <TabsContent value="content" className="mt-0 flex flex-col gap-6">
-                <div className="grid gap-4 xl:grid-cols-[0.92fr_1.08fr]">
-                  <div className="flex flex-col gap-4">
-                    <Card>
-                      <CardHeader>
-                        <CardTitle className="text-base">Overview</CardTitle>
-                        <CardDescription>Source tracking, version state, and attachment inventory.</CardDescription>
-                      </CardHeader>
-                      <CardContent className="flex flex-col gap-4">
-                        <div className="flex flex-wrap gap-2">
-                          <Badge variant="outline">{skill.sourceSkillId ? 'Official' : 'Workspace'}</Badge>
-                          {skill.isCustomized ? <Badge variant="secondary">Customized</Badge> : null}
-                          {skill.upgradeAvailable ? <Badge variant="secondary">Update available</Badge> : null}
-                          <Badge variant={skill.isEnabled ? 'secondary' : 'outline'}>
-                            {skill.isEnabled ? 'Enabled' : 'Disabled'}
-                          </Badge>
-                        </div>
-                        <div className="text-sm text-muted-foreground">
-                          {skillDescriptionText(skill.description) || 'No description provided.'}
-                        </div>
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <div className="rounded-2xl border border-border bg-muted/10 p-4">
-                            <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Source</div>
-                            <div className="mt-2 text-sm font-medium text-foreground">
-                              {skill.sourceSkillId ? 'Official marketplace' : 'Workspace skill'}
-                            </div>
-                            <div className="mt-1 text-sm text-muted-foreground">
-                              Current version {skill.sourceVersion || 'workspace version'}
-                              {skill.latestSourceVersion ? ` · latest ${skill.latestSourceVersion}` : ''}
-                            </div>
-                          </div>
-                          <div className="rounded-2xl border border-border bg-muted/10 p-4">
-                            <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Attachments</div>
-                            <div className="mt-2 text-sm font-medium text-foreground">
-                              {skill.attachmentFiles?.length || 0} path{skill.attachmentFiles?.length === 1 ? '' : 's'}
-                            </div>
-                            <div className="mt-1 text-sm text-muted-foreground">Updated {formatDate(skill.updatedAt)}</div>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-
-                    <Card>
-                      <CardHeader>
-                        <CardTitle className="text-base">Installation state</CardTitle>
-                        <CardDescription>Enable or disable runtime resolution without changing access grants.</CardDescription>
-                      </CardHeader>
-                      <CardContent className="flex flex-col gap-5">
-                        <FieldGroup>
-                          <Field>
-                            <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-muted/10 px-4 py-3">
-                              <div>
-                                <FieldLabel>Enabled</FieldLabel>
-                                <FieldDescription>Disabled skills stay installed but are hidden from runtime resolution.</FieldDescription>
-                              </div>
-                              <Switch checked={enabledDraft} onCheckedChange={setEnabledDraft} />
-                            </div>
-                          </Field>
-                        </FieldGroup>
-
-                        <Button onClick={() => void handleSettingsSave()} disabled={savingSettings}>
-                          {savingSettings ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <ShieldCheck data-icon="inline-start" />}
-                          Save settings
-                        </Button>
-                      </CardContent>
-                    </Card>
-                  </div>
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-base">Description</CardTitle>
-                      <CardDescription>The fixed skill body used when the runtime reads this skill.</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <CanonicalContentRenderer blocks={[skill.description]} />
-                    </CardContent>
-                  </Card>
-                </div>
-
                 <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-base">Attachments</CardTitle>
-                      <CardDescription>Paths are shown as a derived folder tree, similar to memories.</CardDescription>
-                    </CardHeader>
-                    <CardContent>
+                  <div className="rounded-[24px] border border-border bg-muted/10 p-4">
+                    <div className="mb-4">
+                      <div className="text-base font-medium text-foreground">Files</div>
+                      <div className="mt-1 text-sm text-muted-foreground">
+                        {skill.attachmentFiles?.length || 0} path{skill.attachmentFiles?.length === 1 ? '' : 's'}
+                      </div>
+                    </div>
+                    <div>
                       {installedAttachmentTree.length === 0 ? (
                         <div className="rounded-[24px] border border-dashed border-border bg-muted/10 px-5 py-10 text-sm text-muted-foreground">
                           No attachments in this skill.
@@ -1475,24 +1442,49 @@ export function InstalledSkillConfigurationPage({ skillId }: { skillId: string }
                           )}
                         </div>
                       )}
-                    </CardContent>
-                  </Card>
+                    </div>
+                  </div>
 
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-base">Attachment preview</CardTitle>
-                      <CardDescription>{selectedAttachment?.path || 'Select an attachment to preview it.'}</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <CanonicalContentRenderer
-                        blocks={selectedAttachment?.contentBlocks || textBlocks('No attachment selected.')}
-                      />
-                    </CardContent>
-                  </Card>
+                  <div className="rounded-[24px] border border-border bg-background p-5">
+                    {selectedAttachment ? (
+                      <div className="flex flex-col gap-5">
+                        <div>
+                          <div className="text-lg font-semibold text-foreground">
+                            {skillFileName(selectedAttachment.path)}
+                          </div>
+                          <div className="mt-1 text-sm text-muted-foreground">Preview</div>
+                        </div>
+                        <CanonicalContentRenderer blocks={selectedAttachment.contentBlocks} />
+                      </div>
+                    ) : (
+                      <div className="rounded-[24px] border border-dashed border-border bg-muted/10 px-5 py-14 text-sm text-muted-foreground">
+                        No attachment selected.
+                      </div>
+                    )}
+                  </div>
                 </div>
               </TabsContent>
 
-              <TabsContent value="access" className="mt-0">
+              <TabsContent value="access" className="mt-0 flex flex-col gap-6">
+                <div className="rounded-[24px] border border-border bg-muted/10 p-5">
+                  <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="max-w-2xl">
+                      <div className="text-sm font-medium text-foreground">Enabled</div>
+                      <div className="mt-1 text-sm text-muted-foreground">
+                        Disabled skills stay installed but are hidden from runtime resolution.
+                      </div>
+                    </div>
+                    <Switch checked={enabledDraft} onCheckedChange={setEnabledDraft} />
+                  </div>
+
+                  <div className="mt-5">
+                    <Button onClick={() => void handleSettingsSave()} disabled={savingSettings}>
+                      {savingSettings ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <ShieldCheck data-icon="inline-start" />}
+                      Save settings
+                    </Button>
+                  </div>
+                </div>
+
                 <PluginAccessStep
                   installation={skill}
                   accessAdapter={skillAccessAdapter}
@@ -1509,18 +1501,969 @@ export function InstalledSkillConfigurationPage({ skillId }: { skillId: string }
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
 
-      <SkillEditorDialog
-        open={installedEditorOpen}
-        mode="installed"
-        workspaceId={workspaceId}
-        initialSkill={skill}
-        actors={[]}
-        conversations={[]}
-        members={[]}
-        onOpenChange={setInstalledEditorOpen}
-        onSaved={() => refreshSkill()}
-      />
+export function InstalledSkillEditorPage({ skillId }: { skillId: string }) {
+  const router = useRouter();
+  const { workspaceId } = useWorkspace();
+  const [skill, setSkill] = useState<InstalledSkill | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [editorTab, setEditorTab] = useState<'metadata' | 'content'>('metadata');
+  const [draft, setDraft] = useState<EditorDraft>(() => ({
+    ...createInstalledDraft(null),
+    attachmentFiles: [],
+  }));
+  const [selectedPath, setSelectedPath] = useState('');
+  const [selectedPathDraft, setSelectedPathDraft] = useState('');
+  const [newPath, setNewPath] = useState('content/new-note.md');
+
+  const refreshSkill = useCallback(async () => {
+    if (!workspaceId || !skillId) {
+      setSkill(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await api.getInstalledSkill(workspaceId, skillId);
+      const nextSkill = response.skill;
+      const attachmentFiles = ensureRequiredSkillPath(
+        nextSkill.attachmentFiles?.map((file) => ({
+          path: file.path,
+          contentBlocks: file.contentBlocks,
+        })) || [],
+      );
+      setSkill(nextSkill);
+      setDraft({
+        slug: nextSkill.slug || '',
+        name: nextSkill.name || '',
+        descriptionBlocks: nextSkill.description ? [nextSkill.description] : createEmptyDescriptionBlocks(),
+        iconUrl: nextSkill.iconUrl || '',
+        tagsText: nextSkill.tags.join(', ') || '',
+        version: nextSkill.sourceVersion || '',
+        changelog: '',
+        attachmentFiles,
+      });
+      const firstPath =
+        attachmentFiles.find((file) => isRequiredSkillPath(file.path))?.path ||
+        attachmentFiles[0]?.path ||
+        '';
+      setSelectedPath(firstPath);
+      setSelectedPathDraft(firstPath);
+    } catch (error) {
+      setSkill(null);
+      toast.error(error instanceof Error ? error.message : 'Failed to load installed skill');
+    } finally {
+      setLoading(false);
+    }
+  }, [skillId, workspaceId]);
+
+  useEffect(() => {
+    void refreshSkill();
+  }, [refreshSkill]);
+
+  useEffect(() => {
+    setEditorTab('metadata');
+  }, [skillId]);
+
+  const selectedFile =
+    findSkillFile(draft.attachmentFiles, selectedPath) ||
+    draft.attachmentFiles[0] ||
+    null;
+
+  const treeEntries = useMemo(
+    () => buildFileTreeEntries(draft.attachmentFiles),
+    [draft.attachmentFiles],
+  );
+
+  useEffect(() => {
+    setSelectedPathDraft(selectedFile?.path || '');
+  }, [selectedFile?.path]);
+
+  const commitFile = useCallback(
+    (filePath: string, updater: (file: SkillFileDraft) => SkillFileDraft) => {
+      setDraft((current) => ({
+        ...current,
+        attachmentFiles: current.attachmentFiles.map((file) =>
+          file.path === filePath ? updater(file) : file,
+        ),
+      }));
+    },
+    [],
+  );
+
+  function addPath() {
+    const nextPath = normalizeFilePath(newPath);
+    if (!nextPath) {
+      toast.error('Enter a path first');
+      return;
+    }
+    if (draft.attachmentFiles.some((file) => file.path === nextPath)) {
+      toast.error('That path already exists');
+      return;
+    }
+
+    setDraft((current) => ({
+      ...current,
+      attachmentFiles: [...current.attachmentFiles, createEmptySkillFile(nextPath)],
+    }));
+    setSelectedPath(nextPath);
+    setSelectedPathDraft(nextPath);
+    setNewPath('content/new-note.md');
+    setEditorTab('content');
+  }
+
+  function applySelectedPathRename(nextPathInput: string) {
+    if (!selectedFile) return;
+    if (isRequiredSkillPath(selectedFile.path)) {
+      setSelectedPathDraft(selectedFile.path);
+      return;
+    }
+    const nextPath = normalizeFilePath(nextPathInput);
+    if (!nextPath) {
+      setSelectedPathDraft(selectedFile.path);
+      return;
+    }
+    if (nextPath !== selectedFile.path && draft.attachmentFiles.some((file) => file.path === nextPath)) {
+      toast.error('That path is already in use');
+      setSelectedPathDraft(selectedFile.path);
+      return;
+    }
+
+    setDraft((current) => ({
+      ...current,
+      attachmentFiles: current.attachmentFiles.map((file) =>
+        file.path === selectedFile.path ? { ...file, path: nextPath } : file,
+      ),
+    }));
+    setSelectedPath(nextPath);
+    setSelectedPathDraft(nextPath);
+  }
+
+  function removeSelectedPath() {
+    if (!selectedFile) return;
+    if (isRequiredSkillPath(selectedFile.path)) {
+      toast.error(`${REQUIRED_SKILL_PATH} is required and cannot be removed`);
+      return;
+    }
+    const remaining = draft.attachmentFiles.filter((file) => file.path !== selectedFile.path);
+    setDraft((current) => ({
+      ...current,
+      attachmentFiles: remaining,
+    }));
+    const nextSelectedPath = remaining[0]?.path || '';
+    setSelectedPath(nextSelectedPath);
+    setSelectedPathDraft(nextSelectedPath);
+  }
+
+  async function handleSave() {
+    if (!workspaceId || !skill) return;
+
+    let description: CanonicalContentBlock;
+    try {
+      description = ensureSingleDescriptionBlock(draft.descriptionBlocks);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Skill description is invalid');
+      return;
+    }
+
+    const attachmentFiles = draft.attachmentFiles.map((file) => ({
+      path: normalizeFilePath(file.path),
+      contentBlocks: file.contentBlocks,
+    }));
+
+    if (!draft.name.trim()) {
+      toast.error('Skill name is required');
+      return;
+    }
+    if (attachmentFiles.some((file) => !file.path)) {
+      toast.error('Every path needs a valid value');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await api.updateInstalledSkill(workspaceId, skill.id, {
+        name: draft.name.trim(),
+        description,
+        iconUrl: draft.iconUrl.trim() || null,
+        tags: parseTags(draft.tagsText),
+        attachmentFiles,
+      });
+      await refreshSkill();
+      toast.success('Skill updated');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-6 p-4 md:p-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => router.push(`/dashboard/skills/installed/${skillId}`)}
+        >
+          <ArrowLeft data-icon="inline-start" />
+          Back
+        </Button>
+      </div>
+
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="max-w-3xl">
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+            {loading ? 'Edit skill' : skill?.name || 'Edit skill'}
+          </h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {loading
+              ? 'Loading skill metadata...'
+              : skillDescriptionText(skill?.description) || 'No description provided.'}
+          </p>
+          {!loading && skill ? (
+            <div className="mt-2 text-sm text-muted-foreground">{skillVersionText(skill)}</div>
+          ) : null}
+        </div>
+
+        {!loading && skill ? (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => router.push(`/dashboard/skills/installed/${skill.id}`)}
+            >
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => void handleSave()} disabled={saving}>
+              {saving ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
+              Save
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+      {loading ? (
+        <div className="rounded-[28px] border border-border bg-card px-6 py-16 text-sm text-muted-foreground">
+          <div className="flex items-center justify-center">
+            <Loader2 className="mr-2 animate-spin" />
+            Loading skill...
+          </div>
+        </div>
+      ) : !skill ? (
+        <div className="rounded-[28px] border border-dashed border-border bg-card px-6 py-16 text-sm text-muted-foreground">
+          Skill not found.
+        </div>
+      ) : (
+        <Tabs
+          value={editorTab}
+          onValueChange={(nextValue) => setEditorTab(nextValue as 'metadata' | 'content')}
+          className="flex flex-col"
+        >
+          <TabsList>
+            <TabsTrigger value="metadata">Metadata</TabsTrigger>
+            <TabsTrigger value="content">Content</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="metadata" className="mt-6">
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+              <div className="rounded-[28px] border border-border bg-card p-6">
+                <div className="mb-5">
+                  <div className="text-base font-medium text-foreground">Metadata</div>
+                  <div className="mt-1 text-sm text-muted-foreground">
+                    Update the name, tags, and icon shown across skill pages.
+                  </div>
+                </div>
+
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel>Name</FieldLabel>
+                    <Input
+                      value={draft.name}
+                      onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+                      placeholder="Meeting Brief"
+                    />
+                  </Field>
+
+                  <Field>
+                    <FieldLabel>Tags</FieldLabel>
+                    <Input
+                      value={draft.tagsText}
+                      onChange={(event) => setDraft((current) => ({ ...current, tagsText: event.target.value }))}
+                      placeholder="meetings, summary, writing"
+                    />
+                  </Field>
+
+                  <Field>
+                    <FieldLabel>Icon URL</FieldLabel>
+                    <Input
+                      value={draft.iconUrl}
+                      onChange={(event) => setDraft((current) => ({ ...current, iconUrl: event.target.value }))}
+                      placeholder="https://..."
+                    />
+                  </Field>
+                </FieldGroup>
+              </div>
+
+              <div className="rounded-[28px] border border-border bg-card p-6">
+                <div className="mb-5">
+                  <div className="text-base font-medium text-foreground">Description</div>
+                  <div className="mt-1 text-sm text-muted-foreground">
+                    Keep exactly one canonical content block for the skill summary.
+                  </div>
+                </div>
+
+                <CanonicalContentEditor
+                  workspaceId={workspaceId}
+                  value={draft.descriptionBlocks}
+                  onChange={(nextBlocks) => setDraft((current) => ({ ...current, descriptionBlocks: nextBlocks }))}
+                  label="Skill description"
+                  description="This summary is shown in the skill header and list views."
+                  showCount
+                />
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="content" className="mt-6">
+            <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+              <div className="rounded-[28px] border border-border bg-card p-5">
+                <div className="mb-5">
+                  <div className="text-base font-medium text-foreground">Paths</div>
+                  <div className="mt-1 text-sm text-muted-foreground">
+                    {draft.attachmentFiles.length} path{draft.attachmentFiles.length === 1 ? '' : 's'} in this skill
+                  </div>
+                </div>
+
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel>New path</FieldLabel>
+                    <Input
+                      value={newPath}
+                      onChange={(event) => setNewPath(event.target.value)}
+                      placeholder="content/new-note.md"
+                    />
+                  </Field>
+                  <Button type="button" variant="outline" onClick={addPath}>
+                    <FilePlus2 data-icon="inline-start" />
+                    Add path
+                  </Button>
+                </FieldGroup>
+
+                <div className="mt-5">
+                  {treeEntries.length === 0 ? (
+                    <div className="rounded-[24px] border border-dashed border-border bg-muted/10 px-4 py-8 text-sm text-muted-foreground">
+                      No paths yet.
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      {treeEntries.map((entry) =>
+                        entry.kind === 'folder' ? (
+                          <div
+                            key={`editor-folder-${entry.path}`}
+                            className="flex items-center gap-2 rounded-2xl px-3 py-2 text-sm text-muted-foreground"
+                            style={{ paddingLeft: `${entry.depth * 16 + 12}px` }}
+                          >
+                            <FolderClosed className="size-4" />
+                            <span>{entry.label}</span>
+                          </div>
+                        ) : (
+                          <button
+                            key={entry.path}
+                            type="button"
+                            onClick={() => setSelectedPath(entry.path)}
+                            className={`flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm transition-colors ${
+                              selectedFile?.path === entry.path
+                                ? 'bg-muted text-foreground'
+                                : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                            }`}
+                            style={{ paddingLeft: `${entry.depth * 16 + 12}px` }}
+                          >
+                            <FileText className="size-4" />
+                            <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+                          </button>
+                        ),
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-[28px] border border-border bg-card p-6">
+                {selectedFile ? (
+                  <div className="flex flex-col gap-6">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                      <div className="min-w-0 flex-1">
+                        <Field>
+                          <FieldLabel>Path</FieldLabel>
+                          <Input
+                            value={selectedPathDraft}
+                            onChange={(event) => setSelectedPathDraft(event.target.value)}
+                            onBlur={(event) => applySelectedPathRename(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                applySelectedPathRename(selectedPathDraft);
+                              }
+                            }}
+                            disabled={isRequiredSkillPath(selectedFile.path)}
+                          />
+                          <FieldDescription>
+                            {isRequiredSkillPath(selectedFile.path)
+                              ? `${REQUIRED_SKILL_PATH} is required and its path is fixed.`
+                              : 'Rename this path with nested values like `references/checklist.md`.'}
+                          </FieldDescription>
+                        </Field>
+                      </div>
+
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        onClick={removeSelectedPath}
+                        disabled={isRequiredSkillPath(selectedFile.path)}
+                      >
+                        <Trash2 data-icon="inline-start" />
+                        Remove path
+                      </Button>
+                    </div>
+
+                    <CanonicalContentEditor
+                      workspaceId={workspaceId}
+                      value={selectedFile.contentBlocks}
+                      onChange={(nextBlocks) =>
+                        commitFile(selectedFile.path, (file) => ({ ...file, contentBlocks: nextBlocks }))
+                      }
+                      label={skillFileName(selectedFile.path)}
+                      description="Edit the blocks stored at this path."
+                      showCount
+                    />
+                  </div>
+                ) : (
+                  <div className="rounded-[24px] border border-dashed border-border bg-muted/10 px-5 py-14 text-sm text-muted-foreground">
+                    Create a path on the left to start editing content.
+                  </div>
+                )}
+              </div>
+            </div>
+          </TabsContent>
+        </Tabs>
+      )}
+    </div>
+  );
+}
+
+export function WorkspaceSkillCreationPage() {
+  const router = useRouter();
+  const { workspaceId } = useWorkspace();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [step, setStep] = useState<'metadata' | 'content'>('metadata');
+  const [actors, setActors] = useState<ActorOption[]>([]);
+  const [conversations, setConversations] = useState<ConversationOption[]>([]);
+  const [members, setMembers] = useState<MemberOption[]>([]);
+  const [draft, setDraft] = useState<EditorDraft>(() => createWorkspaceDraft());
+  const [scopeDraft, setScopeDraft] = useState<ScopeDraft>(createScopeDraft());
+  const [selectedPath, setSelectedPath] = useState(REQUIRED_SKILL_PATH);
+  const [selectedPathDraft, setSelectedPathDraft] = useState(REQUIRED_SKILL_PATH);
+  const [newPath, setNewPath] = useState('content/new-note.md');
+
+  const selectedFile =
+    findSkillFile(draft.attachmentFiles, selectedPath) ||
+    draft.attachmentFiles[0] ||
+    null;
+
+  const treeEntries = useMemo(
+    () => buildFileTreeEntries(draft.attachmentFiles),
+    [draft.attachmentFiles],
+  );
+
+  useEffect(() => {
+    if (!workspaceId) {
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+
+    Promise.all([
+      api.getActors(workspaceId),
+      api.getGroups(workspaceId),
+      api.getWorkspaceMembers(workspaceId),
+    ])
+      .then(([actorsResponse, groupsResponse, membersResponse]) => {
+        if (cancelled) return;
+        setActors(Array.isArray(actorsResponse) ? actorsResponse.map(normalizeActorOption) : []);
+        setConversations(
+          Array.isArray(groupsResponse?.groups)
+            ? groupsResponse.groups.map(normalizeConversationOption)
+            : [],
+        );
+        setMembers(
+          Array.isArray(membersResponse?.data)
+            ? membersResponse.data.map(normalizeMemberOption)
+            : [],
+        );
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        toast.error(error instanceof Error ? error.message : 'Failed to load skill editor');
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
+
+  useEffect(() => {
+    setSelectedPathDraft(selectedFile?.path || '');
+  }, [selectedFile?.path]);
+
+  const commitFile = useCallback(
+    (filePath: string, updater: (file: SkillFileDraft) => SkillFileDraft) => {
+      setDraft((current) => ({
+        ...current,
+        attachmentFiles: current.attachmentFiles.map((file) =>
+          file.path === filePath ? updater(file) : file,
+        ),
+      }));
+    },
+    [],
+  );
+
+  function addPath() {
+    const nextPath = normalizeFilePath(newPath);
+    if (!nextPath) {
+      toast.error('Enter a path first');
+      return;
+    }
+    if (draft.attachmentFiles.some((file) => file.path === nextPath)) {
+      toast.error('That path already exists');
+      return;
+    }
+
+    setDraft((current) => ({
+      ...current,
+      attachmentFiles: [...current.attachmentFiles, createEmptySkillFile(nextPath)],
+    }));
+    setSelectedPath(nextPath);
+    setSelectedPathDraft(nextPath);
+  }
+
+  function applySelectedPathRename(nextPathInput: string) {
+    if (!selectedFile) return;
+    if (isRequiredSkillPath(selectedFile.path)) {
+      setSelectedPathDraft(selectedFile.path);
+      return;
+    }
+    const nextPath = normalizeFilePath(nextPathInput);
+    if (!nextPath) {
+      setSelectedPathDraft(selectedFile.path);
+      return;
+    }
+    if (nextPath !== selectedFile.path && draft.attachmentFiles.some((file) => file.path === nextPath)) {
+      toast.error('That path is already in use');
+      setSelectedPathDraft(selectedFile.path);
+      return;
+    }
+
+    setDraft((current) => ({
+      ...current,
+      attachmentFiles: current.attachmentFiles.map((file) =>
+        file.path === selectedFile.path ? { ...file, path: nextPath } : file,
+      ),
+    }));
+    setSelectedPath(nextPath);
+    setSelectedPathDraft(nextPath);
+  }
+
+  function removeSelectedPath() {
+    if (!selectedFile) return;
+    if (isRequiredSkillPath(selectedFile.path)) {
+      toast.error(`${REQUIRED_SKILL_PATH} is required and cannot be removed`);
+      return;
+    }
+    const remaining = draft.attachmentFiles.filter((file) => file.path !== selectedFile.path);
+    setDraft((current) => ({
+      ...current,
+      attachmentFiles: remaining,
+    }));
+    const nextSelectedPath =
+      remaining.find((file) => isRequiredSkillPath(file.path))?.path ||
+      remaining[0]?.path ||
+      '';
+    setSelectedPath(nextSelectedPath);
+    setSelectedPathDraft(nextSelectedPath);
+  }
+
+  async function handleCreate() {
+    if (!workspaceId) return;
+
+    let description: CanonicalContentBlock;
+    try {
+      description = ensureSingleDescriptionBlock(draft.descriptionBlocks);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Skill description is invalid');
+      return;
+    }
+
+    const attachmentFiles = draft.attachmentFiles.map((file) => ({
+      path: normalizeFilePath(file.path),
+      contentBlocks: file.contentBlocks,
+    }));
+
+    if (!draft.name.trim()) {
+      toast.error('Skill name is required');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const result = await api.createWorkspaceSkill(workspaceId, {
+        name: draft.name.trim(),
+        description,
+        iconUrl: draft.iconUrl.trim() || undefined,
+        tags: parseTags(draft.tagsText),
+        attachmentFiles,
+        grantScope: scopeDraft.useScope,
+        actorId:
+          scopeDraft.useScope === 'actor_global' || scopeDraft.useScope === 'actor_conversation'
+            ? scopeDraft.actorId || undefined
+            : undefined,
+        conversationId:
+          scopeDraft.useScope === 'conversation' || scopeDraft.useScope === 'actor_conversation'
+            ? scopeDraft.conversationId || undefined
+            : undefined,
+        userId: scopeDraft.useScope === 'user' ? scopeDraft.userId || undefined : undefined,
+      });
+      toast.success('Workspace skill created');
+      router.push(`/dashboard/skills/installed/${result.skill.id}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to create skill');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const steps = [
+    {
+      key: 'metadata' as const,
+      number: 1,
+      title: 'Basic info',
+      description: 'Name, summary, and initial access',
+    },
+    {
+      key: 'content' as const,
+      number: 2,
+      title: 'Content',
+      description: 'Edit Skill.md and any extra paths',
+    },
+  ];
+
+  return (
+    <div className="flex flex-col gap-6 p-4 md:p-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" variant="outline" size="sm" onClick={() => router.push('/dashboard/skills')}>
+          <ArrowLeft data-icon="inline-start" />
+          Back
+        </Button>
+      </div>
+
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="max-w-3xl">
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">New skill</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Create a workspace skill in two steps. {REQUIRED_SKILL_PATH} is always included and must be edited as the primary content file.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={() => router.push('/dashboard/skills')}>
+            Cancel
+          </Button>
+          {step === 'content' ? (
+            <Button type="button" onClick={() => void handleCreate()} disabled={saving || loading}>
+              {saving ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
+              Create skill
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="rounded-[28px] border border-border bg-card p-4">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center">
+          {steps.map((item, index) => {
+            const isActive = step === item.key;
+            const isDone = item.number < (step === 'content' ? 2 : 1);
+            return (
+              <div key={item.key} className="flex min-w-0 flex-1 items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => setStep(item.key)}
+                  className={`flex min-w-0 flex-1 items-center gap-3 rounded-[22px] border px-4 py-3 text-left transition-colors ${
+                    isActive
+                      ? 'border-foreground/15 bg-muted text-foreground'
+                      : isDone
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-100'
+                        : 'border-border bg-background text-muted-foreground'
+                  }`}
+                >
+                  <div
+                    className={`flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${
+                      isActive
+                        ? 'bg-foreground text-background'
+                        : isDone
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-muted text-muted-foreground'
+                    }`}
+                  >
+                    {item.number}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-medium">{item.title}</div>
+                    <div className="text-xs text-muted-foreground">{item.description}</div>
+                  </div>
+                </button>
+                {index < steps.length - 1 ? <div className="hidden h-px flex-1 bg-border md:block" /> : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="rounded-[28px] border border-border bg-card px-6 py-16 text-sm text-muted-foreground">
+          <div className="flex items-center justify-center">
+            <Loader2 className="mr-2 animate-spin" />
+            Loading skill setup...
+          </div>
+        </div>
+      ) : step === 'metadata' ? (
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+          <div className="rounded-[28px] border border-border bg-card p-6">
+            <div className="mb-5">
+              <div className="text-base font-medium text-foreground">Basic info</div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                Set the skill title and list metadata. Workspace skills do not expose a custom slug.
+              </div>
+            </div>
+
+            <FieldGroup>
+              <Field>
+                <FieldLabel>Name</FieldLabel>
+                <Input
+                  value={draft.name}
+                  onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Meeting Brief"
+                />
+              </Field>
+
+              <Field>
+                <FieldLabel>Tags</FieldLabel>
+                <Input
+                  value={draft.tagsText}
+                  onChange={(event) => setDraft((current) => ({ ...current, tagsText: event.target.value }))}
+                  placeholder="meetings, summary, writing"
+                />
+              </Field>
+
+              <Field>
+                <FieldLabel>Icon URL</FieldLabel>
+                <Input
+                  value={draft.iconUrl}
+                  onChange={(event) => setDraft((current) => ({ ...current, iconUrl: event.target.value }))}
+                  placeholder="https://..."
+                />
+              </Field>
+            </FieldGroup>
+          </div>
+
+          <div className="rounded-[28px] border border-border bg-card p-6">
+            <div className="mb-5">
+              <div className="text-base font-medium text-foreground">Description</div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                This summary appears in the skill header and skills list.
+              </div>
+            </div>
+
+            <CanonicalContentEditor
+              workspaceId={workspaceId}
+              value={draft.descriptionBlocks}
+              onChange={(nextBlocks) => setDraft((current) => ({ ...current, descriptionBlocks: nextBlocks }))}
+              label="Skill description"
+              description="Keep exactly one canonical content block here."
+              showCount
+            />
+
+            <div className="mt-6 border-t border-border pt-6">
+              <div className="mb-5">
+                <div className="text-base font-medium text-foreground">Initial access</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Choose who can use this skill right after creation.
+                </div>
+              </div>
+
+              <ScopeFields
+                value={scopeDraft}
+                onChange={setScopeDraft}
+                actors={actors}
+                conversations={conversations}
+                members={members}
+              />
+
+              <div className="mt-5 rounded-2xl border border-border bg-muted/10 px-4 py-3 text-sm text-muted-foreground">
+                <div className="font-medium text-foreground">Initial access target</div>
+                <div className="mt-1">{resolveScopeTarget(scopeDraft, actors, conversations, members)}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="xl:col-span-2 flex justify-end">
+            <Button type="button" onClick={() => setStep('content')}>
+              Continue to content
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+          <div className="rounded-[28px] border border-border bg-card p-5">
+            <div className="mb-5">
+              <div className="text-base font-medium text-foreground">Paths</div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                {draft.attachmentFiles.length} path{draft.attachmentFiles.length === 1 ? '' : 's'} in this skill
+              </div>
+            </div>
+
+            <FieldGroup>
+              <Field>
+                <FieldLabel>New path</FieldLabel>
+                <Input
+                  value={newPath}
+                  onChange={(event) => setNewPath(event.target.value)}
+                  placeholder="content/new-note.md"
+                />
+              </Field>
+              <Button type="button" variant="outline" onClick={addPath}>
+                <FilePlus2 data-icon="inline-start" />
+                Add path
+              </Button>
+            </FieldGroup>
+
+            <div className="mt-5">
+              <div className="mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-100">
+                {REQUIRED_SKILL_PATH} is required and cannot be removed.
+              </div>
+
+              <div className="flex flex-col gap-1">
+                {treeEntries.map((entry) =>
+                  entry.kind === 'folder' ? (
+                    <div
+                      key={`new-skill-folder-${entry.path}`}
+                      className="flex items-center gap-2 rounded-2xl px-3 py-2 text-sm text-muted-foreground"
+                      style={{ paddingLeft: `${entry.depth * 16 + 12}px` }}
+                    >
+                      <FolderClosed className="size-4" />
+                      <span>{entry.label}</span>
+                    </div>
+                  ) : (
+                    <button
+                      key={entry.path}
+                      type="button"
+                      onClick={() => setSelectedPath(entry.path)}
+                      className={`flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm transition-colors ${
+                        selectedFile?.path === entry.path
+                          ? 'bg-muted text-foreground'
+                          : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                      }`}
+                      style={{ paddingLeft: `${entry.depth * 16 + 12}px` }}
+                    >
+                      <FileText className="size-4" />
+                      <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+                    </button>
+                  ),
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-[28px] border border-border bg-card p-6">
+            {selectedFile ? (
+              <div className="flex flex-col gap-6">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <Field>
+                      <FieldLabel>Path</FieldLabel>
+                      <Input
+                        value={selectedPathDraft}
+                        onChange={(event) => setSelectedPathDraft(event.target.value)}
+                        onBlur={(event) => applySelectedPathRename(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            applySelectedPathRename(selectedPathDraft);
+                          }
+                        }}
+                        disabled={isRequiredSkillPath(selectedFile.path)}
+                      />
+                      <FieldDescription>
+                        {isRequiredSkillPath(selectedFile.path)
+                          ? `${REQUIRED_SKILL_PATH} is required and its path is fixed.`
+                          : 'Rename this path with nested values like `references/checklist.md`.'}
+                      </FieldDescription>
+                    </Field>
+                  </div>
+
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    onClick={removeSelectedPath}
+                    disabled={isRequiredSkillPath(selectedFile.path)}
+                  >
+                    <Trash2 data-icon="inline-start" />
+                    Remove path
+                  </Button>
+                </div>
+
+                <CanonicalContentEditor
+                  workspaceId={workspaceId}
+                  value={selectedFile.contentBlocks}
+                  onChange={(nextBlocks) =>
+                    commitFile(selectedFile.path, (file) => ({ ...file, contentBlocks: nextBlocks }))
+                  }
+                  label={skillFileName(selectedFile.path)}
+                  description="Edit the blocks stored at this path."
+                  showCount
+                />
+
+                <div className="flex justify-between">
+                  <Button type="button" variant="outline" onClick={() => setStep('metadata')}>
+                    Back to basic info
+                  </Button>
+                  <Button type="button" onClick={() => void handleCreate()} disabled={saving}>
+                    {saving ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
+                    Create skill
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-[24px] border border-dashed border-border bg-muted/10 px-5 py-14 text-sm text-muted-foreground">
+                Create a path on the left to start editing content.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1532,9 +2475,7 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
   const [actors, setActors] = useState<ActorOption[]>([]);
   const [conversations, setConversations] = useState<ConversationOption[]>([]);
   const [members, setMembers] = useState<MemberOption[]>([]);
-  const [canPublishMarketplaceSkills, setCanPublishMarketplaceSkills] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [marketplaceEditorOpen, setMarketplaceEditorOpen] = useState(false);
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
   const [selectedAttachmentPath, setSelectedAttachmentPath] = useState('');
 
@@ -1546,13 +2487,12 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
     }
     setLoading(true);
     try {
-      const [skillResponse, actorsResponse, groupsResponse, membersResponse, platformNavigationResponse] =
+      const [skillResponse, actorsResponse, groupsResponse, membersResponse] =
         await Promise.all([
           api.getSkillMarketplaceItem(skillId, workspaceId),
           api.getActors(workspaceId),
           api.getGroups(workspaceId),
           api.getWorkspaceMembers(workspaceId),
-          api.getPlatformNavigation(),
         ]);
 
       const nextActors = Array.isArray(actorsResponse) ? actorsResponse.map(normalizeActorOption) : [];
@@ -1562,13 +2502,10 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
       const nextMembers = Array.isArray(membersResponse?.data)
         ? membersResponse.data.map(normalizeMemberOption)
         : [];
-      const platformNavigation = platformNavigationResponse?.data || platformNavigationResponse || {};
-
       setSkill(skillResponse.skill);
       setActors(nextActors);
       setConversations(nextConversations);
       setMembers(nextMembers);
-      setCanPublishMarketplaceSkills(Boolean(platformNavigation.canAccessPlatformSkills));
     } catch (error) {
       setSkill(null);
       toast.error(error instanceof Error ? error.message : 'Failed to load marketplace skill');
@@ -1600,15 +2537,6 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
 
   async function handleInstalled(installedSkillId: string) {
     router.push(`/dashboard/skills/installed/${installedSkillId}`);
-  }
-
-  async function handleMarketplaceEditorSaved(savedSkillId?: string) {
-    const nextSkillId = savedSkillId || skillId;
-    if (nextSkillId !== skillId) {
-      router.replace(`/dashboard/skills/marketplace/${nextSkillId}`);
-      return;
-    }
-    await refreshSkill();
   }
 
   return (
@@ -1645,17 +2573,6 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
                     Install
                   </Button>
                 )}
-                {canPublishMarketplaceSkills ? (
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setMarketplaceEditorOpen(true);
-                    }}
-                  >
-                    <Sparkles data-icon="inline-start" />
-                    Publish update
-                  </Button>
-                ) : null}
               </div>
             ) : null}
           </div>
@@ -1784,19 +2701,6 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
           )}
         </CardContent>
       </Card>
-
-      <SkillEditorDialog
-        open={marketplaceEditorOpen}
-        mode="marketplace"
-        workspaceId={workspaceId}
-        initialSkill={skill}
-        actors={actors}
-        conversations={conversations}
-        members={members}
-        onOpenChange={setMarketplaceEditorOpen}
-        onSaved={handleMarketplaceEditorSaved}
-      />
-
       <InstallSkillDialog
         open={installDialogOpen && !skill?.workspaceInstallation?.installed}
         skill={skill}
@@ -1818,13 +2722,7 @@ export default function SkillsPage() {
   const deferredSearch = useDeferredValue(search);
   const [marketplace, setMarketplace] = useState<SkillMarketplaceEntry[]>([]);
   const [installed, setInstalled] = useState<InstalledSkill[]>([]);
-  const [actors, setActors] = useState<ActorOption[]>([]);
-  const [conversations, setConversations] = useState<ConversationOption[]>([]);
-  const [members, setMembers] = useState<MemberOption[]>([]);
-  const [canPublishMarketplaceSkills, setCanPublishMarketplaceSkills] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
-  const [marketplaceEditorOpen, setMarketplaceEditorOpen] = useState(false);
-  const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
 
   const skillRows = useMemo(() => {
     const marketplaceIds = new Set(marketplace.map((skill) => skill.id));
@@ -1901,32 +2799,16 @@ export default function SkillsPage() {
     if (!workspaceId) return;
     setLoadingPage(true);
     try {
-      const [marketplaceResponse, installedResponse, actorsResponse, groupsResponse, membersResponse, platformNavigationResponse] = await Promise.all([
+      const [marketplaceResponse, installedResponse] = await Promise.all([
         api.getSkillMarketplace({ workspaceId }),
         api.getInstalledSkills(workspaceId),
-        api.getActors(workspaceId),
-        api.getGroups(workspaceId),
-        api.getWorkspaceMembers(workspaceId),
-        api.getPlatformNavigation(),
       ]);
 
       const nextMarketplace = Array.isArray(marketplaceResponse?.skills) ? marketplaceResponse.skills : [];
       const nextInstalled = Array.isArray(installedResponse?.skills) ? installedResponse.skills : [];
-      const nextActors = Array.isArray(actorsResponse) ? actorsResponse.map(normalizeActorOption) : [];
-      const nextConversations = Array.isArray(groupsResponse?.groups)
-        ? groupsResponse.groups.map(normalizeConversationOption)
-        : [];
-      const nextMembers = Array.isArray(membersResponse?.data)
-        ? membersResponse.data.map(normalizeMemberOption)
-        : [];
-      const platformNavigation = platformNavigationResponse?.data || platformNavigationResponse || {};
 
       setMarketplace(nextMarketplace);
       setInstalled(nextInstalled);
-      setActors(nextActors);
-      setConversations(nextConversations);
-      setMembers(nextMembers);
-      setCanPublishMarketplaceSkills(Boolean(platformNavigation.canAccessPlatformSkills));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to load skills');
     } finally {
@@ -1945,20 +2827,6 @@ export default function SkillsPage() {
     }
     if (row.marketplaceSkillId) {
       router.push(`/dashboard/skills/marketplace/${row.marketplaceSkillId}`);
-    }
-  }
-
-  async function handleMarketplaceEditorSaved(skillId?: string) {
-    await refreshIndex();
-    if (skillId) {
-      router.push(`/dashboard/skills/marketplace/${skillId}`);
-    }
-  }
-
-  async function handleWorkspaceSkillSaved(skillId?: string) {
-    await refreshIndex();
-    if (skillId) {
-      router.push(`/dashboard/skills/installed/${skillId}`);
     }
   }
 
@@ -1984,16 +2852,10 @@ export default function SkillsPage() {
             />
           </div>
 
-          <Button onClick={() => setWorkspaceEditorOpen(true)}>
+          <Button onClick={() => router.push('/dashboard/skills/new')}>
             <Plus data-icon="inline-start" />
             New skill
           </Button>
-          {canPublishMarketplaceSkills ? (
-            <Button onClick={() => setMarketplaceEditorOpen(true)}>
-              <Sparkles data-icon="inline-start" />
-              Publish skill
-            </Button>
-          ) : null}
           <Button variant="outline" onClick={() => void refreshIndex()} disabled={loadingPage}>
             {loadingPage ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <ArrowUpRight data-icon="inline-start" />}
             Refresh
@@ -2011,20 +2873,19 @@ export default function SkillsPage() {
           ) : skillRows.length === 0 ? (
             <div className="px-6 py-12 text-sm text-muted-foreground">No skills matched this view.</div>
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
+              <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[56%]">Skill</TableHead>
-                    <TableHead>Source</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Updated</TableHead>
+                    <TableHead className="w-[52%] whitespace-normal">Skill</TableHead>
+                    <TableHead className="w-[18%] whitespace-normal">Source</TableHead>
+                    <TableHead className="w-[14%] whitespace-normal">Status</TableHead>
+                    <TableHead className="w-[16%] whitespace-normal">Updated</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {skillRows.map((row) => (
                     <TableRow key={row.id} className="cursor-pointer" onClick={() => openSkillRow(row)}>
-                      <TableCell className="align-top">
+                      <TableCell className="align-top whitespace-normal">
                         <div className="flex items-start gap-3">
                           <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
                             {row.kind === 'custom' ? <ScrollText /> : <Sparkles />}
@@ -2041,43 +2902,24 @@ export default function SkillsPage() {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{rowSourceLabel(row)}</TableCell>
+                      <TableCell className="break-words whitespace-normal text-muted-foreground">{rowSourceLabel(row)}</TableCell>
                       <TableCell>
-                        <Badge variant={rowStatusVariant(row)}>{rowStatusLabel(row)}</Badge>
+                        <Badge
+                          variant={rowStatusVariant(row)}
+                          className={rowStatusBadgeClassName(row)}
+                        >
+                          {rowStatusLabel(row)}
+                        </Badge>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{formatDate(row.updatedAt)}</TableCell>
+                      <TableCell className="whitespace-normal text-muted-foreground">{formatDate(row.updatedAt)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
-            </div>
           )}
         </div>
       </div>
 
-      <SkillEditorDialog
-        open={marketplaceEditorOpen}
-        mode="marketplace"
-        workspaceId={workspaceId}
-        initialSkill={null}
-        actors={actors}
-        conversations={conversations}
-        members={members}
-        onOpenChange={setMarketplaceEditorOpen}
-        onSaved={handleMarketplaceEditorSaved}
-      />
-
-      <SkillEditorDialog
-        open={workspaceEditorOpen}
-        mode="workspace"
-        workspaceId={workspaceId}
-        initialSkill={null}
-        actors={actors}
-        conversations={conversations}
-        members={members}
-        onOpenChange={setWorkspaceEditorOpen}
-        onSaved={handleWorkspaceSkillSaved}
-      />
     </div>
   );
 }

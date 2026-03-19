@@ -43,7 +43,6 @@ const publishSkillSchema = z.object({
 });
 
 const createWorkspaceSkillSchema = z.object({
-  slug: z.string().min(1),
   name: z.string().min(1),
   description: z.any().optional(),
   iconUrl: z.string().url().optional(),
@@ -264,7 +263,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
       const user = (request as any).user;
       const skill = await createWorkspaceSkill({
         workspaceId,
-        slug: body.slug,
         name: body.name,
         description: body.description,
         iconUrl: body.iconUrl,

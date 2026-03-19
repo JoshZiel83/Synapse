@@ -248,7 +248,6 @@ class ApiClient {
   createWorkspaceSkill(
     wsId: string,
     data: {
-      slug: string
       name: string
       description?: CanonicalContentBlock
       iconUrl?: string

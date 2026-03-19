@@ -41,6 +41,7 @@ type QueryRunner = <T extends QueryRow>(
 ) => Promise<QueryResultLike<T>>;
 
 type JsonObject = Record<string, unknown>;
+const REQUIRED_SKILL_FILE_PATH = "Skill.md";
 
 type SkillAttachmentInput = {
   path: string;
@@ -307,6 +308,17 @@ function normalizeSkillAttachments(files?: SkillAttachmentInput[]) {
   }
 
   return normalized;
+}
+
+function assertRequiredSkillFile(
+  files: Array<{ path: string; contentBlocks: CanonicalContentBlock[] }>,
+) {
+  if (!files.some((file) => file.path === REQUIRED_SKILL_FILE_PATH)) {
+    throw new SkillError(
+      400,
+      `Skill must include required path: ${REQUIRED_SKILL_FILE_PATH}`,
+    );
+  }
 }
 
 function normalizeScopeTarget(input: {
@@ -1588,7 +1600,6 @@ export async function publishMarketplaceSkill(input: {
 
 export async function createWorkspaceSkill(input: {
   workspaceId: string;
-  slug: string;
   name: string;
   description?: CanonicalContentBlockInput;
   iconUrl?: string;
@@ -1600,11 +1611,6 @@ export async function createWorkspaceSkill(input: {
   userId?: string;
   installedBy?: string;
 }) {
-  const canonicalSlug = sanitizeSlug(input.slug || input.name);
-  if (!canonicalSlug) {
-    throw new SkillError(400, "Skill slug is required");
-  }
-
   const name = input.name.trim();
   if (!name) {
     throw new SkillError(400, "Skill name is required");
@@ -1613,6 +1619,7 @@ export async function createWorkspaceSkill(input: {
   const description = normalizeSkillDescription(input.description);
   const descriptionBlocks = [description];
   const attachmentFiles = normalizeSkillAttachments(input.attachmentFiles);
+  assertRequiredSkillFile(attachmentFiles);
   const target = normalizeScopeTarget({
     useScope: input.useScope,
     actorId: input.actorId,
@@ -1621,14 +1628,11 @@ export async function createWorkspaceSkill(input: {
   });
 
   const result = await transaction(async (client) => {
-    await assertWorkspaceSkillSlugAvailable(
-      client.query.bind(client),
-      input.workspaceId,
-      canonicalSlug,
-    );
+    const skillId = crypto.randomUUID();
 
-    const insertedSkill = await client.query<{ id: string }>(
+    await client.query(
       `INSERT INTO installed_skills (
+         id,
          workspace_id,
          slug,
          name,
@@ -1637,17 +1641,16 @@ export async function createWorkspaceSkill(input: {
          is_active,
          created_by
        )
-       VALUES ($1, $2, $3, $4, 1, TRUE, $5)
-       RETURNING id`,
+       VALUES ($1, $2, $3, $4, $5, 1, TRUE, $6)`,
       [
+        skillId,
         input.workspaceId,
-        canonicalSlug,
+        skillId,
         name,
         input.tags || [],
         input.installedBy || null,
       ],
     );
-    const skillId = insertedSkill.rows[0]!.id;
 
     const insertedVersion = await client.query<{ id: string }>(
       `INSERT INTO skill_versions (
@@ -2189,6 +2192,7 @@ export async function updateInstalledSkill(input: {
             path: file.path,
             contentBlocks: normalizeStoredBlocks(file.contentBlocks),
           }));
+      assertRequiredSkillFile(attachmentFiles);
 
       const versionInsert = await client.query<{ id: string }>(
         `INSERT INTO skill_versions (
