@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { startTransition, useEffect, useState } from "react"
 import { APP_NAME, type WorkspaceChiefActorPreference } from "@synapse/shared"
-import { Bot, ChevronRight, MessageSquareText, Send } from "lucide-react"
+import { Bot, ChevronRight, MessageSquareText, ScanLine, Send } from "lucide-react"
 import { useRouter } from "next/navigation"
 
 import ChatAvatar from "@/app/dashboard/chat/chat-avatar"
@@ -180,13 +180,26 @@ export default function MobileHomePage() {
     <>
       <div className="flex flex-1 flex-col overflow-y-auto px-4 pb-6 pt-[calc(env(safe-area-inset-top)+1rem)]">
         <div className="space-y-6">
-          <div className="space-y-1">
-            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-              {APP_NAME}
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              {workspaceName || "Workspace"}
-            </p>
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+                {APP_NAME}
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                {workspaceName || "Workspace"}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="size-11 shrink-0 rounded-full border-border/70 bg-background/90"
+              asChild
+            >
+              <Link href="/m/scan-login" aria-label="Scan QR code to log in on Web">
+                <ScanLine className="size-5" />
+              </Link>
+            </Button>
           </div>
 
           <section className="-mx-4 border-y border-border/70 bg-background/80 px-4 py-4">

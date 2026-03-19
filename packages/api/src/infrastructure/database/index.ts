@@ -52,6 +52,19 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "workspace access bindings",
   },
   {
+    table: "auth_qr_login_requests",
+    requiredColumns: [
+      "id",
+      "scan_token_hash",
+      "browser_token_hash",
+      "status",
+      "browser_label",
+      "approved_session_persistence",
+      "expires_at",
+    ],
+    reason: "web QR login requests",
+  },
+  {
     table: "authz_outbox",
     requiredColumns: [
       "resource_type",
@@ -239,7 +252,7 @@ export async function assertRequiredSchema() {
     .join("; ");
 
   throw new Error(
-    `Database schema is not on the current access model. ${details}. Run \`npm run db:reset\` to rebuild the database.`,
+    `Database schema is not on the current access model. ${details}. Run the required upgrade script or \`npm run db:reset\` to rebuild the database.`,
   );
 }
 

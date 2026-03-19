@@ -3,12 +3,14 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   AUTH_SESSION_COOKIE_NAME,
   AUTH_SESSION_MAX_AGE_SECONDS,
+  type AuthSessionPersistence,
 } from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { AuthError, createAuthService } from './service.js';
 
 const authClientTypeSchema = z.enum(['web', 'android', 'windows', 'ios', 'cli', 'api']);
 const authTransportSchema = z.enum(['cookie', 'token']);
+const authSessionPersistenceSchema = z.enum(['persistent', 'temporary']);
 
 const registerSchema = z.object({
   email: z.string().email('Invalid email address'),
@@ -16,6 +18,7 @@ const registerSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100),
   clientType: authClientTypeSchema.optional(),
   transport: authTransportSchema.optional(),
+  sessionPersistence: authSessionPersistenceSchema.optional(),
   deviceName: z.string().trim().min(1).max(255).optional(),
   platform: z.string().trim().min(1).max(120).optional(),
 });
@@ -25,6 +28,7 @@ const loginSchema = z.object({
   password: z.string().min(1, 'Password is required'),
   clientType: authClientTypeSchema.optional(),
   transport: authTransportSchema.optional(),
+  sessionPersistence: authSessionPersistenceSchema.optional(),
   deviceName: z.string().trim().min(1).max(255).optional(),
   platform: z.string().trim().min(1).max(120).optional(),
 });
@@ -40,18 +44,48 @@ const sessionParamsSchema = z.object({
   sessionId: z.string().uuid(),
 });
 
-function getCookieOptions() {
+const qrLoginRequestParamsSchema = z.object({
+  requestId: z.string().uuid(),
+});
+
+const qrLoginTokenSchema = z.object({
+  token: z.string().trim().min(16).max(255),
+});
+
+const qrLoginApproveSchema = qrLoginTokenSchema.extend({
+  sessionPersistence: authSessionPersistenceSchema.optional(),
+});
+
+const qrLoginFinalizeSchema = z.object({
+  browserToken: z.string().trim().min(16).max(255),
+});
+
+const qrLoginStatusHeadersSchema = z.object({
+  'x-browser-token': z.string().trim().min(16).max(255),
+});
+
+function getCookieOptions(sessionPersistence: AuthSessionPersistence = 'persistent') {
   return {
     path: '/',
     httpOnly: true,
     sameSite: 'lax' as const,
     secure: process.env.NODE_ENV === 'production',
-    maxAge: AUTH_SESSION_MAX_AGE_SECONDS,
+    ...(sessionPersistence === 'persistent'
+      ? { maxAge: AUTH_SESSION_MAX_AGE_SECONDS }
+      : {}),
   };
 }
 
-function setSessionCookie(reply: FastifyReply, sessionToken: string) {
-  reply.setCookie(AUTH_SESSION_COOKIE_NAME, sessionToken, getCookieOptions());
+function setSessionCookie(
+  reply: FastifyReply,
+  sessionToken: string,
+  sessionPersistence?: AuthSessionPersistence,
+) {
+  reply.setCookie(
+    AUTH_SESSION_COOKIE_NAME,
+    sessionToken,
+    getCookieOptions(sessionPersistence),
+  );
 }
 
 function clearSessionCookie(reply: FastifyReply) {
@@ -80,6 +114,7 @@ function buildSessionContext(request: FastifyRequest, input: z.infer<typeof logi
     request,
     clientType: input.clientType,
     transport: input.transport,
+    sessionPersistence: input.sessionPersistence,
     deviceName: input.deviceName,
     platform: input.platform,
   };
@@ -94,7 +129,7 @@ export function registerAuthRoutes(app: FastifyInstance) {
       const result = await authService.register(body.email, body.password, body.name, buildSessionContext(request, body));
 
       if (result.session.transport === 'cookie' && result.sessionToken) {
-        setSessionCookie(reply, result.sessionToken);
+        setSessionCookie(reply, result.sessionToken, result.sessionPersistence);
       }
 
       return reply.status(201).send({
@@ -113,7 +148,96 @@ export function registerAuthRoutes(app: FastifyInstance) {
       const result = await authService.login(body.email, body.password, buildSessionContext(request, body));
 
       if (result.session.transport === 'cookie' && result.sessionToken) {
-        setSessionCookie(reply, result.sessionToken);
+        setSessionCookie(reply, result.sessionToken, result.sessionPersistence);
+      }
+
+      return reply.status(200).send({
+        user: result.user,
+        session: result.session,
+        ...(result.session.transport === 'token' ? { sessionToken: result.sessionToken } : {}),
+      });
+    } catch (error) {
+      return handleAuthError(error, reply);
+    }
+  });
+
+  app.post('/api/v1/auth/qr-login/requests', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      return reply.status(201).send(await authService.createQrLoginRequest(request));
+    } catch (error) {
+      return handleAuthError(error, reply);
+    }
+  });
+
+  app.get('/api/v1/auth/qr-login/requests/:requestId/status', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const params = qrLoginRequestParamsSchema.parse(request.params);
+      const headers = qrLoginStatusHeadersSchema.parse(request.headers);
+      return reply.status(200).send(
+        await authService.getQrLoginRequestStatus(params.requestId, headers['x-browser-token']),
+      );
+    } catch (error) {
+      return handleAuthError(error, reply);
+    }
+  });
+
+  app.post(
+    '/api/v1/auth/qr-login/resolve',
+    { preHandler: [authMiddleware] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const body = qrLoginTokenSchema.parse(request.body);
+        return reply.status(200).send(
+          await authService.resolveQrLoginRequest(body.token, (request as any).user.userId),
+        );
+      } catch (error) {
+        return handleAuthError(error, reply);
+      }
+    },
+  );
+
+  app.post(
+    '/api/v1/auth/qr-login/approve',
+    { preHandler: [authMiddleware] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const body = qrLoginApproveSchema.parse(request.body);
+        return reply.status(200).send(
+          await authService.approveQrLoginRequest(
+            body.token,
+            (request as any).user.userId,
+            body.sessionPersistence ?? 'persistent',
+          ),
+        );
+      } catch (error) {
+        return handleAuthError(error, reply);
+      }
+    },
+  );
+
+  app.post(
+    '/api/v1/auth/qr-login/reject',
+    { preHandler: [authMiddleware] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const body = qrLoginTokenSchema.parse(request.body);
+        return reply.status(200).send(
+          await authService.rejectQrLoginRequest(body.token, (request as any).user.userId),
+        );
+      } catch (error) {
+        return handleAuthError(error, reply);
+      }
+    },
+  );
+
+  app.post('/api/v1/auth/qr-login/requests/:requestId/finalize', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const params = qrLoginRequestParamsSchema.parse(request.params);
+      const body = qrLoginFinalizeSchema.parse(request.body);
+      const result = await authService.finalizeQrLoginRequest(params.requestId, body.browserToken, request);
+
+      if (result.session.transport === 'cookie' && result.sessionToken) {
+        setSessionCookie(reply, result.sessionToken, result.sessionPersistence);
       }
 
       return reply.status(200).send({

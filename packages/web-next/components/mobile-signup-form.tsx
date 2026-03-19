@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 
 import { normalizeRedirectTarget } from "@/lib/auth"
+import { getMobileWebAuthOptions } from "@/lib/client-device"
 import { useAuthStore } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -38,7 +39,7 @@ export function MobileSignupForm() {
     setIsSubmitting(true)
 
     try {
-      await register(email, password, name)
+      await register(email, password, name, getMobileWebAuthOptions())
       router.push(redirect ?? "/m/welcome")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed")

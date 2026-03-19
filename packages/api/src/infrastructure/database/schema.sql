@@ -42,6 +42,33 @@ CREATE TABLE auth_sessions (
 CREATE INDEX idx_auth_sessions_user ON auth_sessions(user_id, created_at DESC);
 CREATE INDEX idx_auth_sessions_expires ON auth_sessions(expires_at);
 
+CREATE TABLE auth_qr_login_requests (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  scan_token_hash VARCHAR(128) UNIQUE NOT NULL,
+  browser_token_hash VARCHAR(128) UNIQUE NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending_scan'
+    CHECK (status IN ('pending_scan', 'pending_confirm', 'approved', 'rejected', 'expired', 'consumed')),
+  browser_ip_address VARCHAR(120),
+  browser_user_agent TEXT,
+  browser_label VARCHAR(160) NOT NULL,
+  approved_session_persistence VARCHAR(20)
+    CHECK (approved_session_persistence IN ('persistent', 'temporary')),
+  resolver_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  approved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  scanned_at TIMESTAMPTZ,
+  approved_at TIMESTAMPTZ,
+  rejected_at TIMESTAMPTZ,
+  consumed_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_auth_qr_login_requests_expires
+  ON auth_qr_login_requests(expires_at);
+CREATE INDEX idx_auth_qr_login_requests_resolver
+  ON auth_qr_login_requests(resolver_user_id, created_at DESC);
+
 -- ============ Workspaces ============
 CREATE TABLE workspaces (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

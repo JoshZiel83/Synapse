@@ -10,7 +10,7 @@ import {
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import { useStore } from 'zustand';
 import type { User } from '@synapse/shared';
-import { api } from '@/lib/api';
+import { api, type AuthMutationOptions } from '@/lib/api';
 
 function normalizeAuthUser(payload: unknown): User | null {
   if (!payload || typeof payload !== 'object') return null;
@@ -23,8 +23,17 @@ function normalizeAuthUser(payload: unknown): User | null {
 interface AuthState {
   user: User | null;
   setUser: (user: User | null) => void;
-  login: (email: string, password: string) => Promise<User | null>;
-  register: (email: string, password: string, name: string) => Promise<User | null>;
+  login: (
+    email: string,
+    password: string,
+    options?: AuthMutationOptions,
+  ) => Promise<User | null>;
+  register: (
+    email: string,
+    password: string,
+    name: string,
+    options?: AuthMutationOptions,
+  ) => Promise<User | null>;
   logout: () => Promise<void>;
 }
 
@@ -34,14 +43,14 @@ function createAuthStore(initialUser: User | null): AuthStore {
   return createStore<AuthState>((set) => ({
     user: normalizeAuthUser(initialUser),
     setUser: (user) => set({ user: normalizeAuthUser(user) }),
-    login: async (email, password) => {
-      const res = await api.login(email, password);
+    login: async (email, password, options) => {
+      const res = await api.login(email, password, options);
       const user = normalizeAuthUser(res.user);
       set({ user });
       return user;
     },
-    register: async (email, password, name) => {
-      const res = await api.register(email, password, name);
+    register: async (email, password, name, options) => {
+      const res = await api.register(email, password, name, options);
       const user = normalizeAuthUser(res.user);
       set({ user });
       return user;

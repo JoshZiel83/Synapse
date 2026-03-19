@@ -1,7 +1,13 @@
 import type {
   ActorPackageInstallResult,
+  AuthClientType,
+  AuthQrLoginCreateResponse,
+  AuthQrLoginResolveResponse,
+  AuthQrLoginStatusResponse,
   AuthResponse,
+  AuthSessionPersistence,
   AuthSessionSummary,
+  AuthTransport,
   ActorPackageRecord,
   CanonicalContentBlock,
   ConversationFeedItem,
@@ -29,6 +35,14 @@ export class ApiError extends Error {
     super(message)
     this.name = "ApiError"
   }
+}
+
+export interface AuthMutationOptions {
+  clientType?: AuthClientType
+  transport?: AuthTransport
+  sessionPersistence?: AuthSessionPersistence
+  deviceName?: string
+  platform?: string
 }
 
 class ApiClient {
@@ -66,7 +80,8 @@ class ApiClient {
   register(
     email: string,
     password: string,
-    name: string
+    name: string,
+    options: AuthMutationOptions = {}
   ): Promise<AuthResponse> {
     return this.fetch("/auth/register", {
       method: "POST",
@@ -74,20 +89,73 @@ class ApiClient {
         email,
         password,
         name,
-        clientType: "web",
-        transport: "cookie",
+        clientType: options.clientType ?? "web",
+        transport: options.transport ?? "cookie",
+        sessionPersistence: options.sessionPersistence,
+        deviceName: options.deviceName,
+        platform: options.platform,
       }),
     })
   }
-  login(email: string, password: string): Promise<AuthResponse> {
+  login(
+    email: string,
+    password: string,
+    options: AuthMutationOptions = {}
+  ): Promise<AuthResponse> {
     return this.fetch("/auth/login", {
       method: "POST",
       body: JSON.stringify({
         email,
         password,
-        clientType: "web",
-        transport: "cookie",
+        clientType: options.clientType ?? "web",
+        transport: options.transport ?? "cookie",
+        sessionPersistence: options.sessionPersistence,
+        deviceName: options.deviceName,
+        platform: options.platform,
       }),
+    })
+  }
+  createQrLoginRequest(): Promise<AuthQrLoginCreateResponse> {
+    return this.fetch("/auth/qr-login/requests", { method: "POST", body: "{}" })
+  }
+  getQrLoginRequestStatus(
+    requestId: string,
+    browserToken: string
+  ): Promise<AuthQrLoginStatusResponse> {
+    return this.fetch(`/auth/qr-login/requests/${requestId}/status`, {
+      headers: {
+        "x-browser-token": browserToken,
+      },
+    })
+  }
+  resolveQrLogin(token: string): Promise<AuthQrLoginResolveResponse> {
+    return this.fetch("/auth/qr-login/resolve", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    })
+  }
+  approveQrLogin(
+    token: string,
+    sessionPersistence: AuthSessionPersistence
+  ): Promise<AuthQrLoginStatusResponse> {
+    return this.fetch("/auth/qr-login/approve", {
+      method: "POST",
+      body: JSON.stringify({ token, sessionPersistence }),
+    })
+  }
+  rejectQrLogin(token: string): Promise<AuthQrLoginStatusResponse> {
+    return this.fetch("/auth/qr-login/reject", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    })
+  }
+  finalizeQrLogin(
+    requestId: string,
+    browserToken: string
+  ): Promise<AuthResponse> {
+    return this.fetch(`/auth/qr-login/requests/${requestId}/finalize`, {
+      method: "POST",
+      body: JSON.stringify({ browserToken }),
     })
   }
   logout() {

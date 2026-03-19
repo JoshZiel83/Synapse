@@ -30,6 +30,7 @@ export type AuthClientType =
   | "api";
 
 export type AuthTransport = "cookie" | "token";
+export type AuthSessionPersistence = "persistent" | "temporary";
 
 export interface AuthSessionSummary {
   id: UUID;
@@ -48,6 +49,46 @@ export interface AuthResponse {
   user: User;
   session: AuthSessionSummary;
   sessionToken?: string;
+}
+
+export type AuthQrLoginStatus =
+  | "pending_scan"
+  | "pending_confirm"
+  | "approved"
+  | "rejected"
+  | "expired"
+  | "consumed";
+
+export interface AuthQrLoginRequestSummary {
+  id: UUID;
+  status: AuthQrLoginStatus;
+  browserLabel: string;
+  approvedSessionPersistence?: AuthSessionPersistence;
+  createdAt: Timestamp;
+  expiresAt: Timestamp;
+  scannedAt?: Timestamp;
+  approvedAt?: Timestamp;
+  rejectedAt?: Timestamp;
+  consumedAt?: Timestamp;
+}
+
+export interface AuthQrLoginCreateResponse {
+  request: AuthQrLoginRequestSummary;
+  scanToken: string;
+  browserToken: string;
+}
+
+export interface AuthQrLoginStatusResponse {
+  request: AuthQrLoginRequestSummary;
+}
+
+export interface AuthQrLoginResolveResponse {
+  request: AuthQrLoginRequestSummary;
+  confirmation: {
+    browserLabel: string;
+    requestedAt: Timestamp;
+    expiresAt: Timestamp;
+  };
 }
 
 // ============ Workspace ============

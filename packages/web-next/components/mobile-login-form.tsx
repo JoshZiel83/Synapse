@@ -5,8 +5,10 @@ import { useRouter, useSearchParams } from "next/navigation"
 
 import { api } from "@/lib/api"
 import { normalizeRedirectTarget } from "@/lib/auth"
+import { getMobileWebAuthOptions } from "@/lib/client-device"
 import { useAuthStore } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 
 export function MobileLoginForm() {
@@ -17,6 +19,7 @@ export function MobileLoginForm() {
 
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [temporaryLogin, setTemporaryLogin] = useState(false)
   const [error, setError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -26,7 +29,10 @@ export function MobileLoginForm() {
     setIsSubmitting(true)
 
     try {
-      await login(email, password)
+      await login(email, password, {
+        ...getMobileWebAuthOptions(),
+        sessionPersistence: temporaryLogin ? "temporary" : "persistent",
+      })
 
       if (redirect) {
         router.push(redirect)
@@ -75,6 +81,16 @@ export function MobileLoginForm() {
           className="h-12 rounded-2xl bg-background"
         />
       </div>
+
+      <label className="flex items-center gap-3">
+        <Checkbox
+          checked={temporaryLogin}
+          onCheckedChange={(checked) => setTemporaryLogin(checked === true)}
+        />
+        <span className="text-sm font-medium text-foreground">
+          Temporary login
+        </span>
+      </label>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 

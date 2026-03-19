@@ -5,6 +5,7 @@ export const API_PREFIX = `/api/${API_VERSION}`;
 export const AUTH_SESSION_COOKIE_NAME = 'synapse_session';
 export const AUTH_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 export const AUTH_SESSION_TOUCH_INTERVAL_SECONDS = 60;
+export const AUTH_QR_LOGIN_REQUEST_TTL_SECONDS = 3 * 60;
 
 export const DEFAULT_PAGE_SIZE = 20;
 export const MAX_PAGE_SIZE = 100;
