@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation';
+import DashboardHomePage from "./dashboard-home-page"
 
 export default function DashboardPage() {
-  redirect('/dashboard/chat');
+  return <DashboardHomePage />
 }

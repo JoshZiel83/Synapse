@@ -113,7 +113,6 @@ export default function App() {
         didInitializeView.current = true
         return next
       }
-      if (current === 'status' && !config.relay?.deviceId) return 'pairing'
       return current || next
     })
   }, [config.relay?.deviceId, config.servers, ready])
@@ -236,6 +235,8 @@ export default function App() {
                 config={config}
                 status={status}
                 busy={busy}
+                onOpenPairing={() => handleNavigate('pairing')}
+                onOpenServers={() => handleNavigate('servers')}
                 onStart={() => void handleStart()}
                 onStop={() => void handleStop()}
                 onRestart={() => void handleRestart()}

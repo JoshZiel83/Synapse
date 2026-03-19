@@ -71,6 +71,23 @@ export interface WorkspaceMember {
   joinedAt: Timestamp;
 }
 
+export interface WorkspaceChiefActorSummary {
+  id: UUID;
+  name: string;
+  role: ActorRole;
+  title: string;
+  avatarUrl?: string;
+}
+
+export interface WorkspaceChiefActorPreference {
+  workspaceId: UUID;
+  userId: UUID;
+  chiefActorId?: UUID;
+  chiefActor?: WorkspaceChiefActorSummary;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
 // ============ Workspace Invites ============
 export type InviteTrustLevel = "admin" | "member" | "guest";
 
@@ -1266,10 +1283,17 @@ export interface ToolPlugin {
   name: string;
   kind: "action" | "callable";
   definition: ToolDefinition;
-  resolve?: (ctx: ToolResolveContext) => {
-    active: boolean;
-    definition: ToolDefinition;
-  };
+  resolve?: (
+    ctx: ToolResolveContext,
+  ) =>
+    | {
+        active: boolean;
+        definition: ToolDefinition;
+      }
+    | Promise<{
+        active: boolean;
+        definition: ToolDefinition;
+      }>;
   execute?: (input: Record<string, unknown>) => Promise<string>;
 }
 
@@ -2179,8 +2203,204 @@ export interface ConversationFeedEventItem<
   causedByItemId?: UUID;
   eventType: T;
   payload: ConversationFeedEventPayloadMap[T];
-  fallbackText?: string;
   createdAt: Timestamp;
+}
+
+function formatConversationEntityName(
+  entity: Partial<ConversationEntityRef> | undefined,
+  fallback: string,
+) {
+  const name =
+    typeof entity?.name === "string" ? entity.name.trim() : "";
+  return name || fallback;
+}
+
+function formatConversationEntityList(
+  entities: Array<Partial<ConversationEntityRef> | undefined>,
+  fallback = "Unknown",
+) {
+  const names = entities
+    .map((entity) => formatConversationEntityName(entity, fallback))
+    .filter(Boolean);
+  if (names.length === 0) return fallback;
+  if (names.length === 1) return names[0]!;
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+function summarizeMembershipEvent(
+  eventType: Extract<
+    ConversationFeedEventType,
+    "member_joined" | "member_kicked" | "member_left"
+  >,
+  payload:
+    | ConversationFeedEventPayloadMap["member_joined"]
+    | ConversationFeedEventPayloadMap["member_kicked"]
+    | ConversationFeedEventPayloadMap["member_left"],
+) {
+  const initiator = payload.initiator;
+  const members = Array.isArray(payload.members) ? payload.members : [];
+  const initiatorName = formatConversationEntityName(initiator, "");
+  const initiatorMemberId = initiator?.memberId;
+  const memberList = formatConversationEntityList(members);
+  const nonInitiatorMembers = initiatorMemberId
+    ? members.filter((member) => member.memberId !== initiatorMemberId)
+    : members;
+
+  if (eventType === "member_joined") {
+    if (initiatorName) {
+      if (
+        initiatorMemberId &&
+        members.some((member) => member.memberId === initiatorMemberId)
+      ) {
+        if (nonInitiatorMembers.length === 0) {
+          return `${initiatorName} joined the group`;
+        }
+        return `${initiatorName} started the group with ${formatConversationEntityList(nonInitiatorMembers)}`;
+      }
+      return `${initiatorName} invited ${memberList} to the group`;
+    }
+    return `${memberList} joined the group`;
+  }
+
+  if (eventType === "member_kicked") {
+    if (initiatorName) {
+      return `${initiatorName} removed ${memberList} from the group`;
+    }
+    return `${memberList} was removed from the group`;
+  }
+
+  if (initiatorName && initiatorMemberId && members.length === 1) {
+    const leftMember = members[0];
+    if (leftMember && leftMember.memberId === initiatorMemberId) {
+      return `${initiatorName} left the group`;
+    }
+  }
+  return `${memberList} left the group`;
+}
+
+export function summarizeConversationEvent(
+  eventType: ConversationFeedEventType | string,
+  payload: Record<string, unknown>,
+) {
+  if (eventType === "member_joined") {
+    return summarizeMembershipEvent(
+      "member_joined",
+      payload as ConversationFeedEventPayloadMap["member_joined"],
+    );
+  }
+
+  if (eventType === "member_kicked") {
+    return summarizeMembershipEvent(
+      "member_kicked",
+      payload as ConversationFeedEventPayloadMap["member_kicked"],
+    );
+  }
+
+  if (eventType === "member_left") {
+    return summarizeMembershipEvent(
+      "member_left",
+      payload as ConversationFeedEventPayloadMap["member_left"],
+    );
+  }
+
+  if (eventType === "memory_saved" || eventType === "memory_updated") {
+    const textDigest =
+      typeof payload.textDigest === "string" ? payload.textDigest.trim() : "";
+    const scope =
+      typeof payload.memoryScope === "string" ? payload.memoryScope : "memory";
+    const actionLabel = eventType === "memory_updated" ? "updated" : "saved";
+    const summary = textDigest || "durable memory saved";
+    return `Memory ${actionLabel}: ${summary} (${scope})`;
+  }
+
+  if (eventType === "actor_renamed") {
+    const newName =
+      typeof payload.newName === "string" ? payload.newName.trim() : "Unknown";
+    return `Actor renamed: will now be called ${newName}.`;
+  }
+
+  if (eventType === "actor_avatar_changed") {
+    const avatarEmoji =
+      typeof payload.newAvatarEmoji === "string"
+        ? payload.newAvatarEmoji.trim()
+        : "🙂";
+    return `Actor avatar updated to ${avatarEmoji}.`;
+  }
+
+  if (eventType === "actor_version_changed") {
+    const actor =
+      payload.actor && typeof payload.actor === "object"
+        ? (payload.actor as { name?: string })
+        : undefined;
+    const actorName =
+      typeof actor?.name === "string" ? actor.name.trim() : "An actor";
+    const fromVersion =
+      typeof payload.fromVersion === "number" ? payload.fromVersion : null;
+    const toVersion =
+      typeof payload.toVersion === "number" ? payload.toVersion : null;
+    const changes = Array.isArray(payload.changes)
+      ? payload.changes
+          .filter(
+            (
+              change,
+            ): change is {
+              kind?: string;
+              summaryText?: string;
+              title?: string;
+              changeType?: string;
+              field?: string;
+            } => !!change && typeof change === "object",
+          )
+          .map((change) => {
+            const summaryText =
+              typeof change.summaryText === "string"
+                ? change.summaryText.trim()
+                : "";
+            if (summaryText) return summaryText;
+            if (change.kind === "field" && typeof change.field === "string") {
+              return `${change.field} changed.`;
+            }
+            if (change.kind === "doc") {
+              const title =
+                typeof change.title === "string"
+                  ? change.title.trim()
+                  : "a doc";
+              const changeType =
+                typeof change.changeType === "string"
+                  ? change.changeType.trim()
+                  : "updated";
+              return `Doc ${changeType}: ${title}.`;
+            }
+            return "";
+          })
+          .filter((value): value is string => Boolean(value))
+      : [];
+    const source =
+      payload.source && typeof payload.source === "object"
+        ? (payload.source as { type?: string })
+        : undefined;
+
+    const fragments: string[] = [];
+    if (fromVersion !== null && toVersion !== null) {
+      fragments.push(`${actorName} updated from v${fromVersion} to v${toVersion}.`);
+    } else {
+      fragments.push(`${actorName} updated their profile.`);
+    }
+    if (changes.length > 0) {
+      fragments.push(...changes);
+    } else {
+      fragments.push("Profile details changed.");
+    }
+    if (source?.type === "user") {
+      fragments.push("Updated by a user.");
+    } else if (source?.type === "actor") {
+      fragments.push("Updated by the actor.");
+    }
+    return fragments.join(" ");
+  }
+
+  return `[Event: ${eventType}]`;
 }
 
 export type ConversationFeedItem =

@@ -14,6 +14,8 @@ import {
   updateWorkspace,
   addMember,
   listMembers,
+  getWorkspaceChiefActorPreference,
+  updateWorkspaceChiefActorPreference,
   listWorkspaceAccessBindings,
   grantWorkspaceAccess,
   revokeWorkspaceAccess,
@@ -62,6 +64,10 @@ const workspaceAccessSchema = z.object({
     "conversation_admin",
   ]),
   metadata: z.record(z.unknown()).optional(),
+});
+
+const chiefActorPreferenceSchema = z.object({
+  chiefActorId: z.string().uuid().nullable(),
 });
 
 // ── Helpers ──
@@ -241,6 +247,61 @@ export async function handleListWorkspaceAccess(
     request.params.workspaceId,
   );
   return reply.send({ data: accessBindings });
+}
+
+export async function handleGetWorkspaceChiefActorPreference(
+  request: FastifyRequest<{ Params: WorkspaceParams }>,
+  reply: FastifyReply,
+) {
+  const allowed = await requireWorkspacePermission(
+    request,
+    reply,
+    "workspace.view",
+    "Not allowed to view this workspace",
+  );
+  if (!allowed) return;
+
+  const userId = (request as any).user!.userId;
+  const preference = await getWorkspaceChiefActorPreference(
+    request.params.workspaceId,
+    userId,
+  );
+  return reply.send(preference);
+}
+
+export async function handleUpdateWorkspaceChiefActorPreference(
+  request: FastifyRequest<{ Params: WorkspaceParams }>,
+  reply: FastifyReply,
+) {
+  const allowed = await requireWorkspacePermission(
+    request,
+    reply,
+    "workspace.view",
+    "Not allowed to update preferences for this workspace",
+  );
+  if (!allowed) return;
+
+  const parsed = chiefActorPreferenceSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply
+      .status(400)
+      .send({ error: "Validation failed", details: parsed.error.flatten() });
+  }
+
+  try {
+    const preference = await updateWorkspaceChiefActorPreference(
+      request.params.workspaceId,
+      (request as any).user!.userId,
+      parsed.data.chiefActorId,
+    );
+    return reply.send(preference);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to update chief actor preference";
+    return reply.status(400).send({ error: message });
+  }
 }
 
 export async function handleGetWorkspaceNavigation(
@@ -487,6 +548,16 @@ export async function registerWorkspaceRoutes(fastify: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId/navigation",
     authHook,
     handleGetWorkspaceNavigation,
+  );
+  fastify.get<{ Params: WorkspaceParams }>(
+    "/api/v1/workspaces/:workspaceId/preferences/chief-actor",
+    workspaceAuthHook,
+    handleGetWorkspaceChiefActorPreference,
+  );
+  fastify.put<{ Params: WorkspaceParams }>(
+    "/api/v1/workspaces/:workspaceId/preferences/chief-actor",
+    workspaceAuthHook,
+    handleUpdateWorkspaceChiefActorPreference,
   );
   fastify.get<{ Params: WorkspaceParams }>(
     "/api/v1/workspaces/:workspaceId/access",

@@ -37,6 +37,11 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "base workspace access",
   },
   {
+    table: "workspace_user_preferences",
+    requiredColumns: ["workspace_id", "user_id", "chief_actor_id"],
+    reason: "workspace-level chief actor preferences",
+  },
+  {
     table: "platform_access_bindings",
     requiredColumns: ["user_id", "access_key", "source"],
     reason: "platform access bindings",

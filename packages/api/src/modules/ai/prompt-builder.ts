@@ -201,7 +201,7 @@ export function buildActorPrompt(
       `- \`recipients\`: array of member names (for example ["${groupMembers.find((member) => member.user_id)?.user_name || 'User'}"] or ["Actor1", "Actor2"])\n` +
       `- \`message\`: your message content\n\n` +
       `## Other tools\n` +
-      `- \`invite_actor\`: Invite a new actor to join this group when you need a skill no current member has\n` +
+      `- \`invite_actor\`: Invite one or more currently listed candidate actors into this group when the current roster lacks a needed skill\n` +
       `- \`sleep\`: When you have finished your work, call sleep. You will be automatically woken when someone sends you a message\n` +
       `- \`memory_search\`: Search durable memories when recalled context is insufficient\n` +
       `- \`create_memory\`: Save a durable established fact for future reference\n` +
@@ -210,7 +210,7 @@ export function buildActorPrompt(
       `1. Read the current public group context and identify whether someone is asking you to act\n` +
       `2. Do the work using your tools and profile\n` +
       `3. Use \`send_to\` to reply to whoever sent you the message (user or actor)\n` +
-      `4. If you need help from another actor, use \`send_to\` to ask them\n` +
+      `4. If you need help from another actor, use \`send_to\` for current members or \`invite_actor\` for listed non-members\n` +
       `5. When done, call \`sleep\` so you can be woken only when needed\n\n` +
       `## Important\n` +
       `- **You MUST use \`send_to\` to reply.** Plain text output is internal reasoning only.\n` +

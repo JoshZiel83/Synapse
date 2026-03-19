@@ -1,0 +1,18 @@
+[Unit]
+Description=Synapse Web Frontend
+After=network.target synapse-api.service
+Wants=synapse-api.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/project/synapse/packages/web-next
+Environment=NODE_ENV=production
+EnvironmentFile=/home/ubuntu/project/synapse/packages/web-next/.env.local
+ExecStartPre=/usr/bin/npm run build
+ExecStart=/usr/bin/npm run start -- --port 3000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

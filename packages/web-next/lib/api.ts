@@ -8,6 +8,7 @@ import type {
   ConversationFeedPage,
   InstalledSkill,
   WorkspaceFeedPage,
+  WorkspaceChiefActorPreference,
   RelayDashboardView,
   RelayDeviceDetailView,
   RelayDeviceSummaryView,
@@ -126,6 +127,20 @@ class ApiClient {
   }
   getWorkspaceNavigation(wsId: string) {
     return this.fetch(`/workspaces/${wsId}/navigation`)
+  }
+  getWorkspaceChiefActorPreference(
+    wsId: string
+  ): Promise<WorkspaceChiefActorPreference> {
+    return this.fetch(`/workspaces/${wsId}/preferences/chief-actor`)
+  }
+  updateWorkspaceChiefActorPreference(
+    wsId: string,
+    data: { chiefActorId: string | null }
+  ): Promise<WorkspaceChiefActorPreference> {
+    return this.fetch(`/workspaces/${wsId}/preferences/chief-actor`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
   }
   getWorkspaceAccess(wsId: string) {
     return this.fetch(`/workspaces/${wsId}/access`)

@@ -14,6 +14,7 @@ import type {
 import {
   extractText,
   normalizeCanonicalContentBlocks,
+  summarizeConversationEvent,
   textBlocks,
 } from "@synapse/shared"
 
@@ -356,7 +357,7 @@ function upsertFeedMessage(messages: FeedMessage[], item: FeedMessage) {
 
 function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
   if (item.kind === "event") {
-    const content = item.fallbackText || ""
+    const content = summarizeConversationEvent(item.eventType, item.payload)
     return {
       id: item.itemId,
       kind: "event",

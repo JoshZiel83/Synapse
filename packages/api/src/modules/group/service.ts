@@ -366,11 +366,65 @@ async function ensureActorSession(params: {
   });
 }
 
+async function hydrateMembershipInitiator(params: {
+  conversationId: string;
+  initiator?: {
+    memberType: "actor" | "user";
+    memberId?: string;
+    actorId?: string;
+    userId?: string;
+    name?: string;
+  };
+}) {
+  if (!params.initiator) return undefined;
+
+  let memberId = params.initiator.memberId;
+  let name = params.initiator.name;
+
+  if (!memberId) {
+    const member = await getConversationMember({
+      conversationId: params.conversationId,
+      actorId: params.initiator.actorId,
+      userId: params.initiator.userId,
+    });
+    memberId = member?.id;
+  }
+
+  if (!name) {
+    if (params.initiator.actorId) {
+      const actorResult = await query(
+        `SELECT name
+         FROM actors
+         WHERE id = $1
+         LIMIT 1`,
+        [params.initiator.actorId],
+      );
+      name = (actorResult.rows[0]?.name as string | undefined) || undefined;
+    } else if (params.initiator.userId) {
+      const userResult = await query(
+        `SELECT name
+         FROM users
+         WHERE id = $1
+         LIMIT 1`,
+        [params.initiator.userId],
+      );
+      name = (userResult.rows[0]?.name as string | undefined) || undefined;
+    }
+  }
+
+  return {
+    ...params.initiator,
+    memberId,
+    name,
+  };
+}
+
 async function recordMembershipEvent(params: {
   workspaceId: string;
   conversationId: string;
   subtype: "member_joined" | "member_kicked" | "member_left";
   batchId: string;
+  authorMemberId?: string;
   initiator?: {
     memberType: "actor" | "user";
     memberId?: string;
@@ -387,24 +441,29 @@ async function recordMembershipEvent(params: {
     title?: string;
   }>;
 }) {
+  const initiator = await hydrateMembershipInitiator({
+    conversationId: params.conversationId,
+    initiator: params.initiator,
+  });
   const created = await createConversationEvent({
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
     eventType: params.subtype,
     timelinePolicy: "all_members",
     contextPolicy: "shared",
+    authorMemberId: params.authorMemberId || initiator?.memberId,
     metadata: {
       batchId: params.batchId,
     },
     eventPayload: {
       batchId: params.batchId,
-      initiator: params.initiator
+      initiator: initiator
         ? {
-            memberId: params.initiator.memberId,
-            memberType: params.initiator.memberType,
-            actorId: params.initiator.actorId,
-            userId: params.initiator.userId,
-            name: params.initiator.name,
+            memberId: initiator.memberId,
+            memberType: initiator.memberType,
+            actorId: initiator.actorId,
+            userId: initiator.userId,
+            name: initiator.name,
           }
         : undefined,
       members: params.members.map((member) => ({
@@ -761,6 +820,7 @@ export async function createGroup(params: {
     conversationId: groupId,
     subtype: "member_joined",
     batchId,
+    authorMemberId: result.joinedMembers[0]?.memberId,
     initiator: {
       memberType: "user",
       memberId: result.joinedMembers[0]?.memberId,
@@ -1117,6 +1177,13 @@ export async function addMembersToGroup(params: {
   workspaceId: string;
   actorIds?: string[];
   userIds?: string[];
+  initiator?: {
+    memberType: "actor" | "user";
+    memberId?: string;
+    actorId?: string;
+    userId?: string;
+    name?: string;
+  };
 }) {
   const actorIds = [...new Set((params.actorIds || []).filter(Boolean))];
   const userIds = [...new Set((params.userIds || []).filter(Boolean))];
@@ -1132,7 +1199,7 @@ export async function addMembersToGroup(params: {
   const actorResult =
     actorIds.length > 0
       ? await query(
-          `SELECT id, name, title, role, config, avatar_file.stored_name AS avatar_stored_name
+          `SELECT a.id, a.name, a.title, a.role, a.config, avatar_file.stored_name AS avatar_stored_name
          FROM actors a
          LEFT JOIN files avatar_file ON avatar_file.id = a.avatar_file_id
          WHERE a.workspace_id = $1
@@ -1301,11 +1368,17 @@ export async function addMembersToGroup(params: {
   );
 
   if (result.joinedMembers.length > 0) {
+    const initiator = await hydrateMembershipInitiator({
+      conversationId: params.groupId,
+      initiator: params.initiator,
+    });
     await recordMembershipEvent({
       workspaceId: params.workspaceId,
       conversationId: params.groupId,
       subtype: "member_joined",
       batchId,
+      authorMemberId: initiator?.memberId,
+      initiator,
       members: result.joinedMembers,
     });
 
@@ -1315,6 +1388,7 @@ export async function addMembersToGroup(params: {
       payload: {
         groupId: params.groupId,
         batchId,
+        initiator,
         members: result.addedMembers,
       },
       timestamp: nowISO(),

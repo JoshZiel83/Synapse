@@ -661,7 +661,6 @@ export function conversationItemRowToFeedItem(row: any): ConversationFeedItem {
       payload: parseJsonObject(
         row.event_payload,
       ) as ConversationFeedEventItem["payload"],
-      fallbackText: buildTextContentFromParts(row.parts || []),
     };
   }
 

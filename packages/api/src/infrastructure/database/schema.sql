@@ -448,6 +448,18 @@ CREATE TABLE actors (
 CREATE INDEX idx_actors_workspace ON actors(workspace_id, created_at DESC);
 CREATE INDEX idx_actors_parent ON actors(parent_id);
 
+CREATE TABLE workspace_user_preferences (
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  chief_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (workspace_id, user_id),
+  FOREIGN KEY (workspace_id, user_id) REFERENCES workspace_members(workspace_id, user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_workspace_user_preferences_actor ON workspace_user_preferences(chief_actor_id);
+
 CREATE TABLE actor_versions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,

@@ -15,6 +15,7 @@ import { resolveFileRefSegments } from './fileref-resolver.js';
 import { buildAdHocContextItems } from './context-builder.js';
 import { buildAdHocProviderContextWindow } from '../context/service.js';
 import { DEFAULT_MODEL_ATTEMPT_POLICY } from '../model-groups/defaults.js';
+import { getGroupMembers as getLiveGroupMembers } from '../group/service.js';
 import {
   createToolCall,
   createToolExecutionAttempt,
@@ -169,6 +170,42 @@ interface Subordinate {
   name: string;
   title: string;
   summary: string;
+}
+
+async function loadToolResolveGroupMembers(params: {
+  groupId?: string;
+  actorId: string;
+  fallback?: GroupMemberEntry[];
+}): Promise<GroupMemberEntry[] | undefined> {
+  if (!params.groupId) {
+    return params.fallback;
+  }
+
+  const members = await getLiveGroupMembers(params.groupId);
+  const entries: GroupMemberEntry[] = [];
+
+  for (const member of members) {
+    if (member.state !== 'active') continue;
+    if (member.actor_id) {
+      if (member.actor_id === params.actorId) continue;
+      entries.push({
+        type: 'actor',
+        id: member.actor_id,
+        name: member.actor_name || 'Unknown actor',
+        title: member.actor_title || member.actor_role || 'Actor',
+      });
+      continue;
+    }
+    if (member.user_id) {
+      entries.push({
+        type: 'user',
+        id: member.user_id,
+        name: member.user_name || 'User',
+      });
+    }
+  }
+
+  return entries;
 }
 
 function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
@@ -341,27 +378,31 @@ export async function actorThink(
     multimodal: resolved?.multimodal || null,
   });
 
-  // Build ToolResolveContext for builtin tool resolution
-  const resolveCtx: ToolResolveContext = {
+  // MCP tools (already resolved and authorized by tool-resolver.ts)
+  let mcpToolDefs = options?.mcpTools || [];
+  let mcpToolNames = new Set(mcpToolDefs.map(t => t.name));
+  let currentToolGroupMembers = options?.groupMembers;
+  const buildResolveCtx = (): ToolResolveContext => ({
     sessionId: options?.sessionId || '',
     actorId: actor.id,
     workspaceId: workspaceId || '',
     groupId: options?.groupId,
-    groupMembers: options?.groupMembers,
+    groupMembers: currentToolGroupMembers,
     userId: options?.userId,
     availableSkills: options?.availableSkills,
+  });
+  const refreshBuiltinTools = async (): Promise<import('@synapse/shared').ToolDefinition[]> => {
+    currentToolGroupMembers = await loadToolResolveGroupMembers({
+      groupId: options?.groupId,
+      actorId: actor.id,
+      fallback: currentToolGroupMembers,
+    });
+    const resolvedBuiltin = await resolveBuiltinTools(buildResolveCtx());
+    const filteredBuiltin = resolvedBuiltin.filter((tool) => !mcpToolNames.has(tool.name));
+    allTools = [...filteredBuiltin, ...mcpToolDefs];
+    return resolvedBuiltin;
   };
-
-  // Resolve builtin tools (action + callable)
-  const builtinTools = resolveBuiltinTools(resolveCtx);
-
-  // MCP tools (already resolved and authorized by tool-resolver.ts)
-  let mcpToolDefs = options?.mcpTools || [];
-  let mcpToolNames = new Set(mcpToolDefs.map(t => t.name));
-
-  // Merge: MCP names override builtin (defensive)
-  const filteredBuiltin = builtinTools.filter(t => !mcpToolNames.has(t.name));
-  allTools = [...filteredBuiltin, ...mcpToolDefs];
+  let builtinTools = await refreshBuiltinTools();
   let currentMcpVersion = options?.mcpVersion ?? 0;
 
   const turnId = options?.turnId || randomUUID();
@@ -1016,6 +1057,7 @@ export async function actorThink(
               }
             }
 
+            builtinTools = await refreshBuiltinTools();
             continue;
           }
 
@@ -1054,8 +1096,6 @@ export async function actorThink(
               const refreshed = await options.mcpRefresh();
               mcpToolDefs = refreshed.tools;
               mcpToolNames = new Set(mcpToolDefs.map(t => t.name));
-              const refreshedBuiltin = builtinTools.filter(t => !mcpToolNames.has(t.name));
-              allTools = [...refreshedBuiltin, ...mcpToolDefs];
               currentMcpVersion = refreshed.mcpVersion;
               console.log(`[actorThink] MCP tools refreshed: ${mcpToolDefs.length} tools, version=${currentMcpVersion}`);
             } catch (err: any) {
@@ -1066,6 +1106,8 @@ export async function actorThink(
             }
           }
         }
+
+        builtinTools = await refreshBuiltinTools();
 
         // Inter-round message injection: check for new messages between rounds
         if (options?.checkNewMessages) {
@@ -1144,6 +1186,7 @@ export async function actorThink(
         }
       }
 
+      builtinTools = await refreshBuiltinTools();
       continue;
     }
 

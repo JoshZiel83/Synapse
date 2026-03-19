@@ -119,6 +119,22 @@ function formatEmbeddingVector(values: number[]) {
   return `[${values.map((value) => Number.isFinite(value) ? value.toFixed(8) : '0').join(',')}]`;
 }
 
+const MEMORY_RECALL_MAX_CONTEXT_SNIPPETS = 8;
+const MEMORY_RECALL_SNIPPET_MAX_CHARS = 240;
+const MEMORY_RECALL_QUERY_MAX_CHARS = 1_200;
+const MEMORY_LEXICAL_TOKEN_LIMIT = 24;
+const MEMORY_LEXICAL_TOKEN_MAX_CHARS = 64;
+const MEMORY_LEXICAL_QUERY_MAX_CHARS = 512;
+
+function normalizeWhitespace(value: string) {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function truncateText(value: string, maxChars: number) {
+  if (value.length <= maxChars) return value;
+  return value.slice(0, Math.max(0, maxChars - 3)).trimEnd() + '...';
+}
+
 function tokenizeQuery(queryText: string) {
   return Array.from(
     new Set(
@@ -128,6 +144,32 @@ function tokenizeQuery(queryText: string) {
         .map((token) => token.trim())
         .filter((token) => token.length >= 2),
     ),
+  );
+}
+
+function buildLexicalSearchQuery(queryText: string) {
+  const normalized = normalizeWhitespace(queryText);
+  if (!normalized) return '';
+
+  const tokens = tokenizeQuery(normalized)
+    .map((token) => token.slice(0, MEMORY_LEXICAL_TOKEN_MAX_CHARS))
+    .filter(Boolean)
+    .slice(0, MEMORY_LEXICAL_TOKEN_LIMIT);
+
+  if (tokens.length > 0) {
+    return truncateText(tokens.join(' '), MEMORY_LEXICAL_QUERY_MAX_CHARS);
+  }
+
+  return truncateText(normalized, MEMORY_LEXICAL_QUERY_MAX_CHARS);
+}
+
+function isTsqueryStackOverflow(error: unknown) {
+  return Boolean(
+    error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof (error as { message?: unknown }).message === 'string' &&
+    /tsquery stack too small/i.test((error as { message: string }).message),
   );
 }
 
@@ -782,7 +824,8 @@ async function generateSearchEmbedding(queryText: string) {
 
 async function searchLexicalCandidates(workspaceId: string, input: SearchMemoriesInput, candidateLimit: number) {
   const { whereClause, params, nextIndex } = buildSearchFilters(workspaceId, input);
-  const queryText = input.queryText.trim();
+  const queryText = buildLexicalSearchQuery(input.queryText);
+  if (!queryText) return [];
   const result = await query<SearchCandidateRow>(
     `SELECT me.*,
             a.name AS actor_name,
@@ -1271,7 +1314,20 @@ export async function listMemories(workspaceId: UUID, input: ListMemoriesInput) 
 export async function searchMemories(workspaceId: UUID, input: SearchMemoriesInput): Promise<MemoryRecallResult[]> {
   const candidateLimit = Math.max(input.limit ?? config.memory.recallLimit, config.memory.searchCandidateLimit);
   const queryText = input.queryText.trim();
-  const lexicalRows = queryText ? await searchLexicalCandidates(workspaceId, input, candidateLimit) : [];
+  let lexicalRows: SearchCandidateRow[] = [];
+  if (queryText) {
+    try {
+      lexicalRows = await searchLexicalCandidates(workspaceId, input, candidateLimit);
+    } catch (error) {
+      if (!isTsqueryStackOverflow(error)) throw error;
+      console.warn('[memory] lexical search degraded due to tsquery stack overflow', {
+        workspaceId,
+        actorId: input.actorId,
+        conversationId: input.conversationId,
+        queryLength: queryText.length,
+      });
+    }
+  }
   const embedding = queryText ? await generateSearchEmbedding(queryText) : null;
   const vectorRows = embedding
     ? await searchVectorCandidates(workspaceId, input, embedding, candidateLimit)
@@ -1334,19 +1390,21 @@ export function buildMemoryRecallQuery(params: {
 }) {
   const snippets: string[] = [];
   if (params.conversationTitle) {
-    snippets.push(`conversation:${params.conversationTitle}`);
+    snippets.push(truncateText(normalizeWhitespace(`conversation:${params.conversationTitle}`), MEMORY_RECALL_SNIPPET_MAX_CHARS));
   }
   if (params.actorName) {
-    snippets.push(`actor:${params.actorName}`);
+    snippets.push(truncateText(normalizeWhitespace(`actor:${params.actorName}`), MEMORY_RECALL_SNIPPET_MAX_CHARS));
   }
 
-  for (const item of params.contextItems.slice(-12)) {
+  for (const item of params.contextItems.slice(-MEMORY_RECALL_MAX_CONTEXT_SNIPPETS)) {
     const parts = 'parts' in item ? item.parts : undefined;
-    const text = extractText(parts || []).trim();
-    if (text) snippets.push(text);
+    const text = normalizeWhitespace(extractText(parts || []).trim());
+    if (text) {
+      snippets.push(truncateText(text, MEMORY_RECALL_SNIPPET_MAX_CHARS));
+    }
   }
 
-  return snippets.join('\n').trim();
+  return truncateText(snippets.join('\n').trim(), MEMORY_RECALL_QUERY_MAX_CHARS);
 }
 
 export class MemoryError extends Error {

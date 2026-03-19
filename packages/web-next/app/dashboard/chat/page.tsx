@@ -6,7 +6,7 @@ import {
   type CanonicalContentBlock,
   type ChatSocketEvent,
 } from "@synapse/shared"
-import { useSearchParams } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useWorkspace } from "../workspace-provider"
 import { useWebSocket } from "@/hooks/use-websocket"
 import { useNotifications } from "@/hooks/use-notifications"
@@ -18,8 +18,11 @@ import { MessageSquare } from "lucide-react"
 
 export default function ChatPage() {
   const { workspaceId } = useWorkspace()
+  const router = useRouter()
+  const pathname = usePathname()
   const searchParams = useSearchParams()
   const actorParam = searchParams.get("actor")
+  const groupParam = searchParams.get("group")
 
   const {
     groups,
@@ -144,6 +147,13 @@ export default function ChatPage() {
     }
   }, [actorParam, workspaceId])
 
+  useEffect(() => {
+    if (!groupParam) return
+    if (!groups.some((group) => group.id === groupParam)) return
+    selectGroup(groupParam)
+    setMobileView("chat")
+  }, [groupParam, groups, selectGroup])
+
   // Load messages when selecting a group
   useEffect(() => {
     if (workspaceId && selectedGroupId) {
@@ -154,8 +164,15 @@ export default function ChatPage() {
 
   const selectedGroup = groups.find((g) => g.id === selectedGroupId)
 
+  function updateGroupRoute(groupId: string) {
+    const nextParams = new URLSearchParams(searchParams.toString())
+    nextParams.set("group", groupId)
+    nextParams.delete("actor")
+    router.replace(`${pathname}?${nextParams.toString()}`, { scroll: false })
+  }
+
   function handleSelectGroup(id: string) {
-    selectGroup(id)
+    updateGroupRoute(id)
     setMobileView("chat")
   }
 
@@ -180,7 +197,7 @@ export default function ChatPage() {
     if (!workspaceId) return
     try {
       const groupId = await createGroup(workspaceId, actorIds)
-      selectGroup(groupId)
+      updateGroupRoute(groupId)
       setMobileView("chat")
     } catch (err) {
       console.error("Failed to create group:", err)

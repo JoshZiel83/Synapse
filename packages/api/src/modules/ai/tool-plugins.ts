@@ -20,11 +20,13 @@ export function registerToolPlugin(plugin: ToolPlugin): void {
  * Resolve active built-in tools for the given context.
  * Calls each plugin's resolve() if present; plugins without resolve are always active.
  */
-export function resolveBuiltinTools(ctx: ToolResolveContext): ToolDefinition[] {
+export async function resolveBuiltinTools(
+  ctx: ToolResolveContext,
+): Promise<ToolDefinition[]> {
   const tools: ToolDefinition[] = [];
   for (const plugin of registry.values()) {
     if (plugin.resolve) {
-      const result = plugin.resolve(ctx);
+      const result = await plugin.resolve(ctx);
       if (result.active) {
         tools.push(result.definition);
       }

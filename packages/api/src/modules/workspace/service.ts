@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type pg from "pg";
 import { query, transaction } from "../../infrastructure/database/index.js";
+import { getFileUrl } from "../../infrastructure/storage/index.js";
 import {
   AUTHZ_PLATFORM_ID,
   deleteRelation,
@@ -8,7 +9,10 @@ import {
   queueAuthzRelationships,
   touchRelation,
 } from "../../infrastructure/authz/index.js";
-import { SECRETARY_DEFAULT_DOCS } from "@synapse/shared";
+import {
+  SECRETARY_DEFAULT_DOCS,
+  type WorkspaceChiefActorPreference,
+} from "@synapse/shared";
 import { listAuthorizedResourceIds, userSubject } from "../access/service.js";
 
 export interface CreateWorkspaceInput {
@@ -276,6 +280,92 @@ export async function getWorkspaceById(workspaceId: string) {
     workspaceId,
   ]);
   return result.rows.length > 0 ? mapWorkspaceRow(result.rows[0]) : null;
+}
+
+export async function getWorkspaceChiefActorPreference(
+  workspaceId: string,
+  userId: string,
+): Promise<WorkspaceChiefActorPreference> {
+  const result = await query(
+    `SELECT
+        pref.workspace_id,
+        pref.user_id,
+        pref.chief_actor_id,
+        pref.created_at,
+        pref.updated_at,
+        a.name AS chief_actor_name,
+        a.role AS chief_actor_role,
+        a.title AS chief_actor_title,
+        avatar_file.stored_name AS chief_actor_avatar_stored_name
+     FROM workspace_user_preferences pref
+     LEFT JOIN actors a
+       ON a.id = pref.chief_actor_id
+      AND a.workspace_id = pref.workspace_id
+      AND a.is_active = TRUE
+     LEFT JOIN files avatar_file
+       ON avatar_file.id = a.avatar_file_id
+     WHERE pref.workspace_id = $1
+       AND pref.user_id = $2
+     LIMIT 1`,
+    [workspaceId, userId],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return {
+      workspaceId,
+      userId,
+    };
+  }
+
+  return mapWorkspaceChiefActorPreferenceRow(row);
+}
+
+export async function updateWorkspaceChiefActorPreference(
+  workspaceId: string,
+  userId: string,
+  chiefActorId?: string | null,
+): Promise<WorkspaceChiefActorPreference> {
+  if (!chiefActorId) {
+    await query(
+      `DELETE FROM workspace_user_preferences
+       WHERE workspace_id = $1
+         AND user_id = $2`,
+      [workspaceId, userId],
+    );
+
+    return {
+      workspaceId,
+      userId,
+    };
+  }
+
+  const actorResult = await query(
+    `SELECT id
+     FROM actors
+     WHERE id = $1
+       AND workspace_id = $2
+       AND is_active = TRUE
+     LIMIT 1`,
+    [chiefActorId, workspaceId],
+  );
+
+  if (actorResult.rows.length === 0) {
+    throw new Error("Chief actor is not available in this workspace");
+  }
+
+  await query(
+    `INSERT INTO workspace_user_preferences
+       (workspace_id, user_id, chief_actor_id, created_at, updated_at)
+     VALUES ($1, $2, $3, NOW(), NOW())
+     ON CONFLICT (workspace_id, user_id)
+     DO UPDATE SET
+       chief_actor_id = EXCLUDED.chief_actor_id,
+       updated_at = NOW()`,
+    [workspaceId, userId, chiefActorId],
+  );
+
+  return getWorkspaceChiefActorPreference(workspaceId, userId);
 }
 
 export async function updateWorkspace(
@@ -569,6 +659,33 @@ function mapMemberRow(row: any) {
     trustLevel: row.trust_level,
     accessKeys: Array.isArray(row.access_keys) ? row.access_keys : [],
     joinedAt: row.joined_at,
+  };
+}
+
+function mapWorkspaceChiefActorPreferenceRow(
+  row: any,
+): WorkspaceChiefActorPreference {
+  const chiefActorId =
+    row.chief_actor_id && row.chief_actor_name ? row.chief_actor_id : undefined;
+
+  return {
+    workspaceId: row.workspace_id,
+    userId: row.user_id,
+    chiefActorId,
+    chiefActor:
+      chiefActorId && row.chief_actor_name
+        ? {
+            id: chiefActorId,
+            name: row.chief_actor_name,
+            role: row.chief_actor_role,
+            title: row.chief_actor_title || row.chief_actor_role || "Actor",
+            avatarUrl: row.chief_actor_avatar_stored_name
+              ? getFileUrl(row.chief_actor_avatar_stored_name)
+              : undefined,
+          }
+        : undefined,
+    createdAt: row.created_at || undefined,
+    updatedAt: row.updated_at || undefined,
   };
 }
 

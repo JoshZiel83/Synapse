@@ -3,7 +3,7 @@ import type {
   ConversationEventContextPolicy,
   ConversationEventTimelinePolicy,
 } from '@synapse/shared/types';
-import { textBlocks } from '@synapse/shared';
+import { summarizeConversationEvent, textBlocks } from '@synapse/shared';
 
 export interface ConversationEventRenderContext {
   eventType: string;
@@ -15,103 +15,6 @@ export interface ConversationEventSpec {
   contextPolicy: ConversationEventContextPolicy;
   renderTimeline(context: ConversationEventRenderContext): CanonicalContentBlock[];
   renderContext?(context: ConversationEventRenderContext): CanonicalContentBlock[] | null;
-}
-
-type MembershipEntry = {
-  name?: string;
-  title?: string;
-};
-
-function parseMembershipEntries(payload: Record<string, unknown>): MembershipEntry[] {
-  return Array.isArray(payload.members)
-    ? payload.members.filter((member): member is MembershipEntry => !!member && typeof member === 'object')
-    : [];
-}
-
-function membershipSummary(eventType: string, payload: Record<string, unknown>) {
-  const members = parseMembershipEntries(payload);
-  const names = members.map((member) => member.name || 'Unknown').join(', ') || 'Unknown';
-
-  if (eventType === 'member_joined') {
-    const title = members.length === 1 && members[0]?.title ? ` (${members[0].title})` : '';
-    return `${names} joined the group${title}`;
-  }
-
-  if (eventType === 'member_kicked') {
-    return `${names} was removed from the group`;
-  }
-
-  if (eventType === 'member_left') {
-    return `${names} left the group`;
-  }
-
-  return names;
-}
-
-function memorySummary(eventType: string, payload: Record<string, unknown>) {
-  const textDigest = typeof payload.textDigest === 'string' ? payload.textDigest.trim() : '';
-  const scope = typeof payload.memoryScope === 'string' ? payload.memoryScope : 'memory';
-  const actionLabel = eventType === 'memory_updated' ? 'updated' : 'saved';
-  const summary = textDigest || 'durable memory saved';
-  return `Memory ${actionLabel}: ${summary} (${scope})`;
-}
-
-function actorRenameSummary(payload: Record<string, unknown>) {
-  const newName = typeof payload.newName === 'string' ? payload.newName.trim() : 'Unknown';
-  return `Actor renamed: will now be called ${newName}.`;
-}
-
-function actorAvatarSummary(payload: Record<string, unknown>) {
-  const avatarEmoji = typeof payload.newAvatarEmoji === 'string' ? payload.newAvatarEmoji.trim() : '🙂';
-  return `Actor avatar updated to ${avatarEmoji}.`;
-}
-
-function actorVersionSummary(payload: Record<string, unknown>) {
-  const actor = payload.actor && typeof payload.actor === 'object'
-    ? payload.actor as { name?: string }
-    : undefined;
-  const actorName = typeof actor?.name === 'string' ? actor.name.trim() : 'An actor';
-  const fromVersion = typeof payload.fromVersion === 'number' ? payload.fromVersion : null;
-  const toVersion = typeof payload.toVersion === 'number' ? payload.toVersion : null;
-  const changes = Array.isArray(payload.changes)
-    ? payload.changes
-        .filter((change): change is { kind?: string; summaryText?: string; title?: string; changeType?: string; field?: string } => !!change && typeof change === 'object')
-        .map((change) => {
-          const summaryText = typeof change.summaryText === 'string' ? change.summaryText.trim() : '';
-          if (summaryText) return summaryText;
-          if (change.kind === 'field' && typeof change.field === 'string') {
-            return `${change.field} changed.`;
-          }
-          if (change.kind === 'doc') {
-            const title = typeof change.title === 'string' ? change.title.trim() : 'a doc';
-            const changeType = typeof change.changeType === 'string' ? change.changeType.trim() : 'updated';
-            return `Doc ${changeType}: ${title}.`;
-          }
-          return '';
-        })
-        .filter((value): value is string => Boolean(value))
-    : [];
-  const source = payload.source && typeof payload.source === 'object'
-    ? payload.source as { type?: string; actorId?: string; userId?: string }
-    : undefined;
-
-  const fragments: string[] = [];
-  if (fromVersion !== null && toVersion !== null) {
-    fragments.push(`${actorName} updated from v${fromVersion} to v${toVersion}.`);
-  } else {
-    fragments.push(`${actorName} updated their profile.`);
-  }
-  if (changes.length > 0) {
-    fragments.push(...changes);
-  } else {
-    fragments.push('Profile details changed.');
-  }
-  if (source?.type === 'user') {
-    fragments.push('Updated by a user.');
-  } else if (source?.type === 'actor') {
-    fragments.push('Updated by the actor.');
-  }
-  return fragments.join(' ');
 }
 
 function genericSummary(eventType: string) {
@@ -126,50 +29,50 @@ const EVENT_SPECS: Record<string, ConversationEventSpec> = {
   member_joined: {
     timelinePolicy: 'all_members',
     contextPolicy: 'shared',
-    renderTimeline: ({ eventType, payload }) => textBlocks(membershipSummary(eventType, payload)),
-    renderContext: ({ eventType, payload }) => textBlocks(membershipSummary(eventType, payload)),
+    renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
+    renderContext: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
   },
   member_kicked: {
     timelinePolicy: 'all_members',
     contextPolicy: 'shared',
-    renderTimeline: ({ eventType, payload }) => textBlocks(membershipSummary(eventType, payload)),
-    renderContext: ({ eventType, payload }) => textBlocks(membershipSummary(eventType, payload)),
+    renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
+    renderContext: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
   },
   member_left: {
     timelinePolicy: 'all_members',
     contextPolicy: 'shared',
-    renderTimeline: ({ eventType, payload }) => textBlocks(membershipSummary(eventType, payload)),
-    renderContext: ({ eventType, payload }) => textBlocks(membershipSummary(eventType, payload)),
+    renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
+    renderContext: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
   },
   memory_saved: {
     timelinePolicy: 'users_only',
     contextPolicy: 'none',
-    renderTimeline: ({ eventType, payload }) => textBlocks(memorySummary(eventType, payload)),
+    renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
     renderContext: noContext,
   },
   memory_updated: {
     timelinePolicy: 'users_only',
     contextPolicy: 'none',
-    renderTimeline: ({ eventType, payload }) => textBlocks(memorySummary(eventType, payload)),
+    renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
     renderContext: noContext,
   },
   actor_renamed: {
     timelinePolicy: 'users_only',
     contextPolicy: 'none',
-    renderTimeline: ({ payload }) => textBlocks(actorRenameSummary(payload)),
+    renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
     renderContext: noContext,
   },
   actor_avatar_changed: {
     timelinePolicy: 'users_only',
     contextPolicy: 'none',
-    renderTimeline: ({ payload }) => textBlocks(actorAvatarSummary(payload)),
+    renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
     renderContext: noContext,
   },
   actor_version_changed: {
     timelinePolicy: 'all_members',
     contextPolicy: 'shared',
-    renderTimeline: ({ payload }) => textBlocks(actorVersionSummary(payload)),
-    renderContext: ({ payload }) => textBlocks(actorVersionSummary(payload)),
+    renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
+    renderContext: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
   },
 };
 

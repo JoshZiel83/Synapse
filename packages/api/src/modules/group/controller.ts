@@ -552,6 +552,10 @@ export default async function groupController(app: FastifyInstance) {
           workspaceId: group.workspace_id,
           actorIds: body.actorIds,
           userIds: body.userIds,
+          initiator: {
+            memberType: "user",
+            userId: (request as any).user!.userId,
+          },
         });
         return reply.status(201).send(result);
       } catch (error) {

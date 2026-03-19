@@ -191,6 +191,71 @@
   .animate-float-slow {
     animation: float-slow 10s ease-in-out infinite;
   }
+
+  .home-send-button {
+    position: relative;
+    overflow: visible;
+    transition:
+      background-color 150ms ease,
+      border-color 150ms ease,
+      color 150ms ease,
+      padding 300ms ease;
+  }
+
+  .home-send-button__label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 150ms ease;
+  }
+
+  .home-send-button__plane {
+    position: absolute;
+    top: 50%;
+    right: 1rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: currentColor;
+    transform: translate3d(0, -50%, 0) rotate(0deg);
+    transform-origin: center;
+    transition: transform 150ms ease, color 150ms ease;
+    will-change: transform, opacity, right, top;
+  }
+
+  .home-send-button:hover .home-send-button__plane {
+    transform: translate3d(0, -50%, 0) rotate(10deg);
+  }
+
+  .home-send-button[data-flight="true"] {
+    padding-inline-start: 1.15rem;
+    padding-inline-end: 0.95rem;
+    animation: home-send-button-bounce-in 360ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+
+  .home-send-button[data-flight="true"] .home-send-button__label {
+    transform: translate3d(-4px, 0, 0);
+  }
+
+  .home-send-button[data-flight="true"] .home-send-button__plane {
+    color: var(--color-primary);
+    filter: drop-shadow(
+      0 10px 24px color-mix(in oklab, var(--color-primary) 22%, transparent)
+    );
+    animation: home-send-button-flyaway 1280ms linear forwards;
+  }
+
+  .home-send-button[data-flight="true"]:disabled {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .home-send-button,
+    .home-send-button__label,
+    .home-send-button__plane {
+      animation: none;
+    }
+  }
 }
 
 @keyframes fade-up {
@@ -213,5 +278,64 @@
 
   50% {
     transform: translate3d(0, -10px, 0);
+  }
+}
+
+@keyframes home-send-button-flyaway {
+  0% {
+    opacity: 1;
+    top: 50%;
+    right: 1rem;
+    transform: translate3d(0, -50%, 0) rotate(10deg) scale(1);
+  }
+
+  6% {
+    opacity: 1;
+    top: 50%;
+    right: 0.15rem;
+    transform: translate3d(0, -50%, 0) rotate(10deg) scale(1);
+  }
+
+  20% {
+    opacity: 1;
+    top: 50%;
+    right: -8rem;
+    transform: translate3d(0, -50%, 0) rotate(-18deg) scale(1.4);
+  }
+
+  42% {
+    opacity: 1;
+    top: calc(50% - 3rem);
+    right: -16rem;
+    transform: translate3d(0, -50%, 0) rotate(8deg) scale(1.1);
+  }
+
+  100% {
+    opacity: 0;
+    top: calc(50% - 11rem);
+    right: -58rem;
+    transform: translate3d(0, -50%, 0) rotate(56deg) scale(0.2);
+  }
+}
+
+@keyframes home-send-button-bounce-in {
+  0% {
+    padding-inline-start: 1rem;
+    padding-inline-end: 2.75rem;
+  }
+
+  40% {
+    padding-inline-start: 1rem;
+    padding-inline-end: 0.95rem;
+  }
+
+  56% {
+    padding-inline-start: 1.85rem;
+    padding-inline-end: 0.95rem;
+  }
+
+  100% {
+    padding-inline-start: 1.15rem;
+    padding-inline-end: 0.95rem;
   }
 }

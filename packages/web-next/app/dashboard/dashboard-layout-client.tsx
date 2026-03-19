@@ -13,6 +13,7 @@ import {
   MessageSquare,
   Brain,
   FileText,
+  House,
   ShieldCheck,
   Puzzle,
   Cpu,
@@ -24,6 +25,7 @@ import {
 } from '@/components/ui/sidebar';
 
 const navItems = [
+  { href: '/dashboard', label: 'Home', icon: House },
   { href: '/dashboard/chat', label: 'Chat', icon: MessageSquare },
   { href: '/dashboard/contacts', label: 'Contacts', icon: ContactRound },
   { href: '/dashboard/memories', label: 'Memories', icon: Brain },
@@ -81,7 +83,7 @@ function DashboardInner({ children }: { children: ReactNode }) {
     .sort((left, right) => right.href.length - left.href.length)[0];
   const pageTitle = pathname.startsWith('/dashboard/actors')
     ? 'Actors'
-    : matchedNavItem?.label || 'Chat';
+    : matchedNavItem?.label || 'Home';
 
   const handleLogout = () => {
     void logout().finally(() => {

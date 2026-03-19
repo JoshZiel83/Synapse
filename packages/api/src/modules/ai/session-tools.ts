@@ -1,10 +1,146 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import {
+  normalizeActorDocs,
+  summarizeActorForRole,
+  type ActorDoc,
+} from '@synapse/shared';
 import { registerToolPlugin } from './tool-plugins.js';
 import { query } from '../../infrastructure/database/index.js';
 import { getSession } from '../session/service.js';
-import { sendGroupMessage, addActorToGroup, getGroupMembers } from '../group/service.js';
+import { sendGroupMessage, addMembersToGroup, getGroupMembers } from '../group/service.js';
 import { runMemorySearch } from '../memory/service.js';
 import { readVisibleSkill } from '../skills/service.js';
+
+type InviteableActor = {
+  id: string;
+  name: string;
+  title?: string;
+  role?: string;
+  summary?: string;
+};
+
+function parseActorDocs(value: unknown): ActorDoc[] {
+  if (!value) return [];
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? normalizeActorDocs(parsed as ActorDoc[]) : [];
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(value) ? normalizeActorDocs(value as ActorDoc[]) : [];
+}
+
+function isGroupVisibleDoc(doc: ActorDoc): boolean {
+  return doc.visibility === 'always' || doc.visibility === 'group_only';
+}
+
+function summarizeInviteableActor(row: {
+  title?: string | null;
+  role?: string | null;
+  actor_docs?: unknown;
+}): string | undefined {
+  const docs = parseActorDocs(row.actor_docs).filter(isGroupVisibleDoc);
+  const summary = summarizeActorForRole(
+    docs,
+    row.title || row.role || 'Actor',
+  )
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return summary || undefined;
+}
+
+function formatInviteableActor(actor: InviteableActor): string {
+  const title = actor.title || actor.role || 'Actor';
+  return `${actor.name} (${title}) [${actor.id}]${actor.summary ? ` - ${actor.summary}` : ''}`;
+}
+
+async function listInviteableActors(params: {
+  workspaceId: string;
+  groupId: string;
+  actorId: string;
+}): Promise<InviteableActor[]> {
+  const result = await query(
+    `SELECT a.id,
+            a.name,
+            a.title,
+            a.role,
+            COALESCE(
+              (
+                SELECT jsonb_agg(
+                  jsonb_build_object(
+                    'key', avd.doc_key,
+                    'title', avd.title,
+                    'visibility', avd.visibility,
+                    'priority', avd.priority,
+                    'content', avd.content_blocks
+                  )
+                  ORDER BY avd.priority DESC, avd.created_at ASC
+                )
+                FROM actor_version_docs avd
+                WHERE avd.actor_version_id = current_version.id
+              ),
+              '[]'::jsonb
+            ) AS actor_docs
+     FROM actors a
+     LEFT JOIN actor_versions current_version
+       ON current_version.actor_id = a.id
+      AND current_version.version = a.current_version
+     WHERE a.workspace_id = $1
+       AND a.is_active = true
+       AND a.id <> $3
+       AND NOT EXISTS (
+         SELECT 1
+         FROM conversation_members cm
+         WHERE cm.conversation_id = $2
+           AND cm.actor_id = a.id
+           AND cm.state = 'active'
+       )
+     ORDER BY a.name ASC, a.id ASC`,
+    [params.workspaceId, params.groupId, params.actorId],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id as string,
+    name: row.name as string,
+    title: (row.title as string | null) || undefined,
+    role: (row.role as string | null) || undefined,
+    summary: summarizeInviteableActor(row),
+  }));
+}
+
+function buildInviteActorDefinition(candidates: InviteableActor[]) {
+  const candidateDirectory = candidates
+    .map((candidate) => `\`${candidate.id}\`: ${formatInviteableActor(candidate)}`)
+    .join('; ');
+
+  return {
+    name: 'invite_actor',
+    description:
+      'Invite one or more new actors to join the current group. ' +
+      'Only the listed actors can be invited right now. ' +
+      `Available invite candidates: ${candidateDirectory}`,
+    parameters: {
+      type: 'object',
+      properties: {
+        actorIds: {
+          type: 'array',
+          description: 'One or more actor IDs from the available invite candidate list.',
+          items: { type: 'string', enum: candidates.map((candidate) => candidate.id) },
+          minItems: 1,
+          uniqueItems: true,
+        },
+        reason: {
+          type: 'string',
+          description: 'Shared reason and initial instruction sent to every invited actor.',
+        },
+      },
+      required: ['actorIds', 'reason'],
+    },
+  };
+}
 
 /**
  * Register callable tool plugins.
@@ -262,33 +398,43 @@ export function registerCallableToolPlugins(): void {
     kind: 'callable',
     definition: {
       name: 'invite_actor',
-      description: 'Invite a new actor to join the current group. The actor will be added as a member and can be messaged via send_to.',
+      description: 'Invite one or more new actors to join the current group.',
       parameters: {
         type: 'object',
         properties: {
-          actorName: { type: 'string', description: 'Name of the actor to invite' },
-          reason: { type: 'string', description: 'Reason for inviting / initial instruction for the actor' },
+          actorIds: {
+            type: 'array',
+            description: 'Actor IDs to invite.',
+            items: { type: 'string' },
+          },
+          reason: { type: 'string', description: 'Reason for inviting / initial instruction for the actor(s)' },
         },
-        required: ['actorName', 'reason'],
+        required: ['actorIds', 'reason'],
       },
     },
-    resolve: (ctx) => ({
-      active: !!ctx.groupId,
-      definition: {
-        name: 'invite_actor',
-        description: 'Invite a new actor to join the current group. The actor will be added as a member and can be messaged via send_to.',
-        parameters: {
-          type: 'object',
-          properties: {
-            actorName: { type: 'string', description: 'Name of the actor to invite' },
-            reason: { type: 'string', description: 'Reason for inviting / initial instruction for the actor' },
-          },
-          required: ['actorName', 'reason'],
-        },
-      },
-    }),
+    resolve: async (
+      ctx,
+    ): Promise<{ active: boolean; definition: any }> => {
+      if (!ctx.groupId) {
+        return { active: false, definition: null as any };
+      }
+
+      const candidates = await listInviteableActors({
+        workspaceId: ctx.workspaceId,
+        groupId: ctx.groupId,
+        actorId: ctx.actorId,
+      });
+
+      if (candidates.length === 0) {
+        return { active: false, definition: null as any };
+      }
+
+      return {
+        active: true,
+        definition: buildInviteActorDefinition(candidates),
+      };
+    },
     execute: async (input) => {
-      const { actorName, reason } = input as { actorName: string; reason: string };
       const context = getToolExecutionContext();
       if (!context) {
         return JSON.stringify({ error: 'No session context available' });
@@ -299,40 +445,157 @@ export function registerCallableToolPlugins(): void {
         return JSON.stringify({ error: 'Current session is not in a group' });
       }
 
-      const actorResult = await query(
-        'SELECT id, name, title FROM actors WHERE workspace_id = $1 AND name ILIKE $2 AND is_active = true',
-        [session.workspace_id, actorName]
-      );
-
-      if (actorResult.rows.length === 0) {
-        return JSON.stringify({ error: `Actor "${actorName}" not found in workspace` });
+      const reason = typeof (input as any).reason === 'string'
+        ? String((input as any).reason).trim()
+        : '';
+      if (!reason) {
+        return JSON.stringify({ error: 'reason is required' });
       }
 
-      const targetActor = actorResult.rows[0];
+      const candidates = await listInviteableActors({
+        workspaceId: session.workspace_id,
+        groupId: session.group_id,
+        actorId: context.actorId,
+      });
+      const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+      const candidatesByName = new Map<string, InviteableActor[]>();
+      for (const candidate of candidates) {
+        const key = candidate.name.trim().toLowerCase();
+        const matches = candidatesByName.get(key) || [];
+        matches.push(candidate);
+        candidatesByName.set(key, matches);
+      }
+
+      const requestedActorIds = Array.isArray((input as any).actorIds)
+        ? (input as any).actorIds
+          .map((value: unknown) => String(value || '').trim())
+          .filter(Boolean)
+        : [];
+      const fallbackNames = [
+        typeof (input as any).actorName === 'string' ? String((input as any).actorName).trim() : '',
+        ...(Array.isArray((input as any).actorNames)
+          ? (input as any).actorNames.map((value: unknown) => String(value || '').trim())
+          : []),
+      ].filter(Boolean);
+
+      const resolvedActors: InviteableActor[] = [];
+      const resolutionErrors: string[] = [];
+
+      for (const actorId of requestedActorIds) {
+        const candidate = candidateById.get(actorId);
+        if (!candidate) {
+          resolutionErrors.push(`Actor ID "${actorId}" is not currently inviteable.`);
+          continue;
+        }
+        resolvedActors.push(candidate);
+      }
+
+      for (const actorName of fallbackNames) {
+        const matches = candidatesByName.get(actorName.toLowerCase()) || [];
+        if (matches.length === 0) {
+          resolutionErrors.push(`Actor "${actorName}" is not currently inviteable.`);
+          continue;
+        }
+        if (matches.length > 1) {
+          resolutionErrors.push(
+            `Actor name "${actorName}" is ambiguous. Use actorIds instead: ${matches.map((candidate) => candidate.id).join(', ')}`,
+          );
+          continue;
+        }
+        resolvedActors.push(matches[0]!);
+      }
+
+      if (resolvedActors.length === 0) {
+        return JSON.stringify({
+          error: 'No inviteable actors were resolved.',
+          details: resolutionErrors,
+          availableCandidates: candidates.map((candidate) => ({
+            id: candidate.id,
+            name: candidate.name,
+            title: candidate.title || candidate.role || 'Actor',
+            summary: candidate.summary,
+          })),
+        });
+      }
+
+      if (resolutionErrors.length > 0) {
+        return JSON.stringify({
+          error: 'Some requested actors are invalid or ambiguous.',
+          details: resolutionErrors,
+          availableCandidates: candidates.map((candidate) => ({
+            id: candidate.id,
+            name: candidate.name,
+            title: candidate.title || candidate.role || 'Actor',
+            summary: candidate.summary,
+          })),
+        });
+      }
+
+      const uniqueActors = Array.from(
+        new Map(resolvedActors.map((candidate) => [candidate.id, candidate])).values(),
+      );
 
       try {
-        const inviterResult = await query('SELECT name FROM actors WHERE id = $1', [context.actorId]);
-        const inviterName = inviterResult.rows[0]?.name || 'Unknown';
+        const inviterMember = (await getGroupMembers(session.group_id))
+          .find((member: any) => member.actor_id === context.actorId && member.state === 'active');
+        const inviterName = inviterMember?.actor_name || 'Unknown';
+        const addResult = await addMembersToGroup({
+          groupId: session.group_id,
+          workspaceId: session.workspace_id,
+          actorIds: uniqueActors.map((candidate) => candidate.id),
+          initiator: {
+            memberType: 'actor',
+            memberId: inviterMember?.id,
+            actorId: context.actorId,
+            name: inviterName,
+          },
+        });
+        const invitedActorIds = new Set(
+          (addResult.members || [])
+            .filter((member: any) => member.type === 'actor' && member.actorId)
+            .map((member: any) => member.actorId as string),
+        );
+        const invitedActors = uniqueActors.filter((candidate) => invitedActorIds.has(candidate.id));
+        const skippedActors = uniqueActors
+          .filter((candidate) => !invitedActorIds.has(candidate.id))
+          .map((candidate) => ({
+            id: candidate.id,
+            name: candidate.name,
+            reason: 'Actor already in group',
+          }));
 
-        await addActorToGroup(session.group_id, targetActor.id, inviterName);
+        if (invitedActors.length === 0) {
+          return JSON.stringify({
+            error: 'No new actors were invited.',
+            skippedActors,
+          });
+        }
 
         await sendGroupMessage({
           groupId: session.group_id,
           senderType: 'actor',
           senderActorId: context.actorId,
           senderSessionId: context.sessionId,
-          targetActorIds: [targetActor.id],
+          targetActorIds: invitedActors.map((candidate) => candidate.id),
           content: reason,
         });
 
         return JSON.stringify({
           success: true,
-          actorName: targetActor.name,
-          actorTitle: targetActor.title,
-          message: `${targetActor.name} has been invited to the group and notified.`,
+          invitedActors: invitedActors.map((candidate) => ({
+            id: candidate.id,
+            name: candidate.name,
+            title: candidate.title || candidate.role || 'Actor',
+            summary: candidate.summary,
+          })),
+          skippedActors,
+          message:
+            invitedActors.length === 1
+              ? `${invitedActors[0]!.name} has been invited to the group and notified.`
+              : `${invitedActors.map((candidate) => candidate.name).join(', ')} have been invited to the group and notified.`,
         });
       } catch (err: any) {
-        return JSON.stringify({ error: `Failed to invite: ${err.message}` });
+        throw new Error(`Failed to invite actor(s): ${err.message}`);
       }
     },
   });

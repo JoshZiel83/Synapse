@@ -12,6 +12,7 @@ import {
   ContactRound,
   Cpu,
   FileText,
+  House,
   ImagePlus,
   Loader2,
   LogOut,
@@ -53,6 +54,7 @@ import {
 import { TeamSwitcher } from "@/components/team-switcher"
 
 const mainItems = [
+  { href: "/dashboard", label: "Home", icon: House },
   { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
   { href: "/dashboard/contacts", label: "Contacts", icon: ContactRound },
 ]
