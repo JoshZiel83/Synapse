@@ -1,212 +1,247 @@
-'use client';
+"use client"
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import Image from 'next/image';
-import { useAuthStore } from '@/stores/auth-store';
-import { api } from '@/lib/api';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Building2, UserPlus } from 'lucide-react';
+import { useState } from "react"
+import { useRouter } from "next/navigation"
+
+import { AuthConversationPreview } from "@/components/auth-conversation-preview"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLegend,
+  FieldLabel,
+  FieldSet,
+  FieldTitle,
+} from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { api } from "@/lib/api"
+import { useAuthStore } from "@/stores/auth-store"
+
+const WORKSPACE_MODE_OPTIONS = [
+  {
+    value: "create",
+    title: "Create workspace",
+    description: "Start a fresh space for your team.",
+    detailDescription: "Name your workspace.",
+    fieldLabel: "Workspace name",
+    placeholder: "My Team",
+    submitLabel: "Create workspace",
+    submittingLabel: "Creating workspace...",
+  },
+  {
+    value: "join",
+    title: "Join workspace",
+    description: "Use an invite code from an existing team.",
+    detailDescription: "Enter your invite code.",
+    fieldLabel: "Invite code",
+    placeholder: "e.g. Ab3xK9mZ",
+    submitLabel: "Join workspace",
+    submittingLabel: "Joining workspace...",
+  },
+] as const
+
+type WorkspaceMode = (typeof WORKSPACE_MODE_OPTIONS)[number]["value"]
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback
+}
 
 export default function WelcomeClient() {
-  const router = useRouter();
-  const user = useAuthStore((state) => state.user);
-  const [mode, setMode] = useState<'choose' | 'create' | 'join'>('choose');
-  const [wsName, setWsName] = useState('');
-  const [inviteCode, setInviteCode] = useState('');
-  const [error, setError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const router = useRouter()
+  const user = useAuthStore((state) => state.user)
+  const [mode, setMode] = useState<WorkspaceMode>("create")
+  const [workspaceName, setWorkspaceName] = useState("")
+  const [inviteCode, setInviteCode] = useState("")
+  const [error, setError] = useState("")
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   if (!user) {
-    return null;
+    return null
   }
 
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    if (!wsName.trim()) {
-      setError('Please enter a workspace name');
-      return;
+  const selectedOption = WORKSPACE_MODE_OPTIONS.find(
+    (option) => option.value === mode
+  )
+
+  function openWorkspace(workspaceId: string) {
+    localStorage.setItem("workspaceId", workspaceId)
+    router.push("/dashboard")
+  }
+
+  async function handleCreate() {
+    const nextWorkspaceName = workspaceName.trim()
+
+    if (!nextWorkspaceName) {
+      setError("Please enter a workspace name")
+      return
     }
 
-    setSubmitting(true);
+    setIsSubmitting(true)
+
     try {
-      const ws = await api.createWorkspace(wsName.trim());
-      if (ws?.id) {
-        localStorage.setItem('workspaceId', ws.id);
-        router.push('/dashboard');
+      const workspace = await api.createWorkspace(nextWorkspaceName)
+      if (workspace?.id) {
+        openWorkspace(workspace.id)
+        return
       }
-    } catch (err: any) {
-      setError(err.message || 'Failed to create workspace');
+
+      setError("Workspace created, but no workspace ID was returned")
+    } catch (error) {
+      setError(getErrorMessage(error, "Failed to create workspace"))
     } finally {
-      setSubmitting(false);
+      setIsSubmitting(false)
     }
-  };
+  }
 
-  const handleJoin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    if (!inviteCode.trim()) {
-      setError('Please enter an invite code');
-      return;
+  async function handleJoin() {
+    const nextInviteCode = inviteCode.trim()
+
+    if (!nextInviteCode) {
+      setError("Please enter an invite code")
+      return
     }
 
-    setSubmitting(true);
+    setIsSubmitting(true)
+
     try {
-      const result = await api.redeemInvite(inviteCode.trim());
+      const result = await api.redeemInvite(nextInviteCode)
       if (result?.workspaceId) {
-        localStorage.setItem('workspaceId', result.workspaceId);
-        router.push('/dashboard');
+        openWorkspace(result.workspaceId)
+        return
       }
-    } catch (err: any) {
-      setError(err.message || 'Failed to join workspace');
+
+      setError("Invite accepted, but no workspace ID was returned")
+    } catch (error) {
+      setError(getErrorMessage(error, "Failed to join workspace"))
     } finally {
-      setSubmitting(false);
+      setIsSubmitting(false)
     }
-  };
+  }
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError("")
+
+    if (!mode) {
+      return
+    }
+
+    if (mode === "create") {
+      await handleCreate()
+      return
+    }
+
+    await handleJoin()
+  }
 
   return (
-    <div className="flex min-h-screen">
-      <div className="flex flex-1 flex-col justify-center px-4 py-12 sm:px-6 lg:flex-none lg:px-20 xl:px-24">
-        <div className="mx-auto w-full max-w-md">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600 p-1.5">
-              <Image src="/synapse.svg" alt="Synapse" width={28} height={28} className="invert" />
-            </div>
-            <span className="text-xl font-semibold text-gray-900 dark:text-white">Synapse</span>
+    <div className="flex flex-col gap-6">
+      <Card className="overflow-hidden p-0">
+        <CardContent className="grid p-0 md:grid-cols-2">
+          <form className="p-6 md:p-8" method="post" onSubmit={handleSubmit}>
+            <FieldGroup>
+              <div className="flex flex-col items-center text-center">
+                <h1 className="text-2xl font-bold">Set up your workspace</h1>
+              </div>
+              <FieldSet>
+                <FieldLegend>How would you like to start?</FieldLegend>
+                <RadioGroup
+                  value={mode ?? undefined}
+                  onValueChange={(value) => {
+                    if (value !== "create" && value !== "join") {
+                      return
+                    }
+
+                    setMode(value)
+                    setError("")
+                  }}
+                  className="w-full"
+                >
+                  {WORKSPACE_MODE_OPTIONS.map((option) => {
+                    const fieldId = `workspace-mode-${option.value}`
+
+                    return (
+                      <FieldLabel key={option.value} htmlFor={fieldId}>
+                        <Field orientation="horizontal">
+                          <FieldContent>
+                            <FieldTitle>{option.title}</FieldTitle>
+                            <FieldDescription>
+                              {option.description}
+                            </FieldDescription>
+                          </FieldContent>
+                          <RadioGroupItem value={option.value} id={fieldId} />
+                        </Field>
+                      </FieldLabel>
+                    )
+                  })}
+                </RadioGroup>
+              </FieldSet>
+              {selectedOption && mode === "create" ? (
+                <Field data-invalid={Boolean(error) || undefined}>
+                  <FieldLabel htmlFor="workspace-name">
+                    {selectedOption.fieldLabel}
+                  </FieldLabel>
+                  <Input
+                    id="workspace-name"
+                    name="workspace-name"
+                    value={workspaceName}
+                    onChange={(event) => {
+                      setWorkspaceName(event.target.value)
+                      setError("")
+                    }}
+                    placeholder={selectedOption.placeholder}
+                    autoFocus
+                    aria-invalid={Boolean(error) || undefined}
+                    required
+                  />
+                  <FieldError>{error}</FieldError>
+                </Field>
+              ) : selectedOption ? (
+                <Field data-invalid={Boolean(error) || undefined}>
+                  <FieldLabel htmlFor="invite-code">
+                    {selectedOption.fieldLabel}
+                  </FieldLabel>
+                  <Input
+                    id="invite-code"
+                    name="invite-code"
+                    value={inviteCode}
+                    onChange={(event) => {
+                      setInviteCode(event.target.value)
+                      setError("")
+                    }}
+                    placeholder={selectedOption.placeholder}
+                    autoFocus
+                    aria-invalid={Boolean(error) || undefined}
+                    required
+                  />
+                  <FieldError>{error}</FieldError>
+                </Field>
+              ) : null}
+              {selectedOption ? (
+                <Field>
+                  <Button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="w-full"
+                  >
+                    {isSubmitting
+                      ? selectedOption.submittingLabel
+                      : selectedOption.submitLabel}
+                  </Button>
+                </Field>
+              ) : null}
+            </FieldGroup>
+          </form>
+          <div className="relative hidden bg-muted md:block">
+            <AuthConversationPreview />
           </div>
-
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            Welcome, {user.name}!
-          </h1>
-          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            Get started by creating a new workspace or joining an existing one.
-          </p>
-
-          {error ? (
-            <div className="mt-4 rounded-md bg-red-50 dark:bg-red-500/10 p-3 border border-red-200 dark:border-red-500/20">
-              <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
-            </div>
-          ) : null}
-
-          {mode === 'choose' ? (
-            <div className="mt-8 grid gap-4">
-              <Card
-                className="cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-700 transition-colors"
-                onClick={() => setMode('create')}
-              >
-                <CardHeader className="pb-3">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 dark:bg-indigo-500/10">
-                      <Building2 className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
-                    </div>
-                    <div>
-                      <CardTitle className="text-base">Create Workspace</CardTitle>
-                      <CardDescription>Start fresh with a new workspace</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-              </Card>
-
-              <Card
-                className="cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-700 transition-colors"
-                onClick={() => setMode('join')}
-              >
-                <CardHeader className="pb-3">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 dark:bg-emerald-500/10">
-                      <UserPlus className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-                    </div>
-                    <div>
-                      <CardTitle className="text-base">Join Workspace</CardTitle>
-                      <CardDescription>Use an invite code to join a team</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-              </Card>
-            </div>
-          ) : null}
-
-          {mode === 'create' ? (
-            <form onSubmit={handleCreate} className="mt-8 space-y-4">
-              <div>
-                <Label htmlFor="wsName">Workspace name</Label>
-                <Input
-                  id="wsName"
-                  value={wsName}
-                  onChange={(e) => setWsName(e.target.value)}
-                  placeholder="My Team"
-                  className="mt-1.5"
-                  autoFocus
-                />
-              </div>
-              <div className="flex gap-3">
-                <Button type="button" variant="outline" onClick={() => { setMode('choose'); setError(''); }}>
-                  Back
-                </Button>
-                <Button type="submit" disabled={submitting} className="flex-1">
-                  {submitting ? 'Creating...' : 'Create Workspace'}
-                </Button>
-              </div>
-            </form>
-          ) : null}
-
-          {mode === 'join' ? (
-            <form onSubmit={handleJoin} className="mt-8 space-y-4">
-              <div>
-                <Label htmlFor="inviteCode">Invite code</Label>
-                <Input
-                  id="inviteCode"
-                  value={inviteCode}
-                  onChange={(e) => setInviteCode(e.target.value)}
-                  placeholder="e.g. Ab3xK9mZ"
-                  className="mt-1.5"
-                  autoFocus
-                />
-              </div>
-              <div className="flex gap-3">
-                <Button type="button" variant="outline" onClick={() => { setMode('choose'); setError(''); }}>
-                  Back
-                </Button>
-                <Button type="submit" disabled={submitting} className="flex-1">
-                  {submitting ? 'Joining...' : 'Join Workspace'}
-                </Button>
-              </div>
-            </form>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="relative hidden w-0 flex-1 lg:block">
-        <div className="absolute inset-0 bg-gradient-to-br from-indigo-600 via-indigo-700 to-purple-800">
-          <svg className="absolute inset-0 h-full w-full opacity-[0.15]" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <pattern id="welcome-grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                <path d="M 40 0 L 0 0 0 40" fill="none" stroke="white" strokeWidth="1" />
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill="url(#welcome-grid)" />
-          </svg>
-          <div className="absolute top-1/4 left-1/4 h-64 w-64 rounded-full bg-white/10 blur-3xl" />
-          <div className="absolute bottom-1/4 right-1/4 h-80 w-80 rounded-full bg-purple-400/10 blur-3xl" />
-          <div className="relative flex h-full flex-col items-center justify-center px-12 text-center">
-            <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-white/10 backdrop-blur-sm p-3 mb-8 ring-1 ring-white/20">
-              <Image src="/synapse.svg" alt="Synapse" width={52} height={52} className="invert" />
-            </div>
-            <h2 className="text-3xl font-bold text-white">
-              Set Up Your
-              <br />
-              Digital Workforce.
-            </h2>
-            <p className="mt-4 max-w-md text-lg text-indigo-100/80">
-              Create or join a workspace to start orchestrating AI-powered digital employees.
-            </p>
-          </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
-  );
+  )
 }
