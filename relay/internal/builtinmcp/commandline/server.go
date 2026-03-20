@@ -183,6 +183,7 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, binaryPath, args...)
+	applyPlatformProcessAttrs(cmd)
 	cmd.Dir = cwd
 	cmd.Env = s.environment(extraEnv)
 
