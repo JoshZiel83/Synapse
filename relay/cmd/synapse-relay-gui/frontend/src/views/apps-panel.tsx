@@ -1165,7 +1165,7 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
               <Separator />
               <SettingToggle
                 label="Relative Coordinate Mode"
-                description="When on, CUA compatibility coordinates use the relative size instead of image size."
+                description="When on, default CUA coordinates use the relative size, while screenshots still use the image size."
                 checked={Boolean(cua.relativeCoordinate)}
                 onChange={(checked) =>
                   updateCUADraft((current) =>

@@ -47,21 +47,35 @@ type DisplayInfo struct {
 	Scale         float64 `json:"scale"`
 }
 
-type PointerState struct {
-	AbsoluteX    int          `json:"absolute_x"`
-	AbsoluteY    int          `json:"absolute_y"`
-	Display      *DisplayInfo `json:"display,omitempty"`
-	DisplayX     int          `json:"display_x,omitempty"`
-	DisplayY     int          `json:"display_y,omitempty"`
-	WithinTarget bool         `json:"within_target"`
-}
-
 type Coordinate struct {
 	X          float64 `json:"x"`
 	Y          float64 `json:"y"`
 	Space      string  `json:"space,omitempty"`
 	BaseWidth  int     `json:"base_width,omitempty"`
 	BaseHeight int     `json:"base_height,omitempty"`
+}
+
+type CoordinateBase struct {
+	Space  string `json:"space"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
+type ImageInfo struct {
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	MimeType string `json:"mime_type"`
+}
+
+type CaptureDisplayResult struct {
+	Display        DisplayInfo    `json:"display"`
+	Image          ImageInfo      `json:"image"`
+	CoordinateBase CoordinateBase `json:"coordinate_base"`
+}
+
+type CaptureOverviewResult struct {
+	Displays []DisplayInfo `json:"displays"`
+	Image    ImageInfo     `json:"image"`
 }
 
 type WindowInfo struct {
@@ -78,6 +92,30 @@ type WindowDisplayRegion struct {
 	DisplayIndex int  `json:"display_index"`
 	DisplayID    int  `json:"display_id"`
 	Rect         Rect `json:"rect"`
+}
+
+type ScrollUnit string
+
+const (
+	ScrollUnitLine  ScrollUnit = "line"
+	ScrollUnitPixel ScrollUnit = "pixel"
+)
+
+type ApplicationInfo struct {
+	Name string `json:"name"`
+	Path string `json:"path,omitempty"`
+}
+
+type ApplicationGroup struct {
+	Source string            `json:"source"`
+	Apps   []ApplicationInfo `json:"apps"`
+}
+
+type ListAppsResult struct {
+	Source string             `json:"source"`
+	Search string             `json:"search,omitempty"`
+	Groups []ApplicationGroup `json:"groups"`
+	Total  int                `json:"total"`
 }
 
 type KeyboardToggleState struct {
@@ -99,15 +137,18 @@ type KeyboardState struct {
 type Desktop interface {
 	Start(context.Context) error
 	ListDisplays() ([]DisplayInfo, error)
-	CurrentPointer() (PointerState, error)
+	SupportedKeyNames() []string
+	ModifierNames() []string
 	CaptureDisplay(DisplayInfo) (*image.RGBA, error)
 	MovePointer(DisplayInfo, int, int, bool) error
 	Click(string, int) error
 	Drag(DisplayInfo, int, int, int, int, string) error
-	ScrollLines(int, int) error
+	Scroll(int, int, ScrollUnit) error
 	TypeText(string) error
 	PressKeys([]string) error
 	KeyboardState() (KeyboardState, error)
 	ListWindows() ([]WindowInfo, error)
+	ListDesktopApps() ([]ApplicationInfo, error)
+	ListInstalledApps() ([]ApplicationInfo, error)
 	Close() error
 }

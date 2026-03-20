@@ -1,19 +1,19 @@
 package cua
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"math"
 	"strings"
 	"time"
 
+	deskact "github.com/PekingSpades/DeskAct"
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 )
 
 type captureArgs struct {
 	Display *DisplaySelector `json:"display,omitempty"`
-	Width   int              `json:"width,omitempty"`
-	Height  int              `json:"height,omitempty"`
 }
 
 type movePointerArgs struct {
@@ -41,6 +41,7 @@ type scrollArgs struct {
 	Coordinate Coordinate       `json:"coordinate"`
 	Direction  string           `json:"direction"`
 	Amount     float64          `json:"amount,omitempty"`
+	Unit       string           `json:"unit,omitempty"`
 }
 
 type typeArgs struct {
@@ -52,6 +53,11 @@ type typeArgs struct {
 type pressKeysArgs struct {
 	Keys     []string   `json:"keys,omitempty"`
 	Sequence [][]string `json:"sequence,omitempty"`
+}
+
+type listAppsArgs struct {
+	Source string `json:"source,omitempty"`
+	Search string `json:"search,omitempty"`
 }
 
 type waitArgs struct {
@@ -73,6 +79,9 @@ func (s *Server) captureDisplay(raw map[string]interface{}) (core.CallResult, er
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
 	}
+	if result, blocked := s.guardStableDisplays(); blocked {
+		return result, nil
+	}
 
 	display, err := s.resolveDisplay(args.Display)
 	if err != nil {
@@ -83,17 +92,30 @@ func (s *Server) captureDisplay(raw map[string]interface{}) (core.CallResult, er
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to capture display %d: %v", display.Index, err)), nil
 	}
+	base := s.defaultCoordinateBase()
+	imageInfo := s.captureImageInfo()
+	img = resizeImageToSize(img, imageInfo.Width, imageInfo.Height)
 
-	encoded, err := encodePNGBase64(img, args.Width, args.Height)
+	encoded, err := encodePNGBase64(img)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to encode screenshot: %v", err)), nil
 	}
 
 	return textAndImageResult(
-		fmt.Sprintf("Captured display %d (%dx%d).", display.Index, display.Size.W, display.Size.H),
+		fmt.Sprintf(
+			"Captured display %d. Output image is %dx%d. Default %s coordinate base is %dx%d.",
+			display.Index,
+			imageInfo.Width,
+			imageInfo.Height,
+			base.Space,
+			base.Width,
+			base.Height,
+		),
 		encoded,
-		map[string]interface{}{
-			"display": display,
+		CaptureDisplayResult{
+			Display:        display,
+			Image:          imageInfo,
+			CoordinateBase: base,
 		},
 	), nil
 }
@@ -102,6 +124,9 @@ func (s *Server) captureOverview(raw map[string]interface{}) (core.CallResult, e
 	var args captureArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
+	}
+	if result, blocked := s.guardStableDisplays(); blocked {
+		return result, nil
 	}
 
 	displays, err := s.desktop.ListDisplays()
@@ -117,40 +142,35 @@ func (s *Server) captureOverview(raw map[string]interface{}) (core.CallResult, e
 		captures[display.Index] = img
 	}
 
-	overview, err := renderOverview(captures, displays, args.Width, args.Height)
+	overview, err := renderOverview(captures, displays)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to render overview: %v", err)), nil
 	}
+	imageInfo := s.captureImageInfo()
+	overview = resizeImageToSize(overview, imageInfo.Width, imageInfo.Height)
 
-	encoded, err := encodePNGBase64(overview, 0, 0)
+	encoded, err := encodePNGBase64(overview)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to encode overview: %v", err)), nil
 	}
 
 	return textAndImageResult(
-		fmt.Sprintf("Captured overview for %d display(s).", len(displays)),
+		fmt.Sprintf("Captured overview for %d display(s). Output image is %dx%d.", len(displays), imageInfo.Width, imageInfo.Height),
 		encoded,
-		map[string]interface{}{
-			"displays": displays,
+		CaptureOverviewResult{
+			Displays: displays,
+			Image:    imageInfo,
 		},
 	), nil
-}
-
-func (s *Server) getPointer() core.CallResult {
-	state, err := s.desktop.CurrentPointer()
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to read pointer state: %v", err))
-	}
-	return textResult(
-		fmt.Sprintf("Pointer is at absolute (%d, %d).", state.AbsoluteX, state.AbsoluteY),
-		state,
-	)
 }
 
 func (s *Server) movePointer(raw map[string]interface{}) (core.CallResult, error) {
 	var args movePointerArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
+	}
+	if result, blocked := s.guardStableDisplays(); blocked {
+		return result, nil
 	}
 
 	display, err := s.resolveDisplay(args.Display)
@@ -180,6 +200,9 @@ func (s *Server) click(raw map[string]interface{}) (core.CallResult, error) {
 	var args clickArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
+	}
+	if result, blocked := s.guardStableDisplays(); blocked {
+		return result, nil
 	}
 
 	display, err := s.resolveDisplay(args.Display)
@@ -223,6 +246,9 @@ func (s *Server) drag(raw map[string]interface{}) (core.CallResult, error) {
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
 	}
+	if result, blocked := s.guardStableDisplays(); blocked {
+		return result, nil
+	}
 
 	display, err := s.resolveDisplay(args.Display)
 	if err != nil {
@@ -261,6 +287,9 @@ func (s *Server) scroll(raw map[string]interface{}) (core.CallResult, error) {
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
 	}
+	if result, blocked := s.guardStableDisplays(); blocked {
+		return result, nil
+	}
 
 	display, err := s.resolveDisplay(args.Display)
 	if err != nil {
@@ -278,39 +307,67 @@ func (s *Server) scroll(raw map[string]interface{}) (core.CallResult, error) {
 	if amount <= 0 {
 		amount = 3
 	}
-	lines := int(math.Round(amount * s.cfg.ScrollMultiplier))
-	if lines < 1 {
-		lines = 1
+	value := int(math.Round(amount * s.cfg.ScrollMultiplier))
+	if value < 1 {
+		value = 1
 	}
+	unit := normalizeScrollUnit(args.Unit)
 
 	deltaX, deltaY := 0, 0
 	switch strings.TrimSpace(args.Direction) {
 	case "up":
-		deltaY = lines
+		deltaY = value
 	case "down":
-		deltaY = -lines
+		deltaY = -value
 	case "left":
-		deltaX = lines
+		deltaX = value
 	case "right":
-		deltaX = -lines
+		deltaX = -value
 	default:
 		return errorResult(fmt.Sprintf("unsupported scroll direction %q", args.Direction)), nil
 	}
 
-	if err := s.desktop.ScrollLines(deltaX, deltaY); err != nil {
+	if err := validateScrollUnit(unit); err != nil {
+		return errorResult(err.Error()), nil
+	}
+	if err := s.desktop.Scroll(deltaX, deltaY, unit); err != nil {
+		if errors.Is(err, deskact.ErrMouseUnsupportedScrollUnit) || errors.Is(err, deskact.ErrMouseInvalidScrollUnit) {
+			return errorResult(fmt.Sprintf("scroll unit %q is not supported: %v", unit, err)), nil
+		}
 		return errorResult(fmt.Sprintf("failed to scroll: %v", err)), nil
 	}
 
 	return textResult(
-		fmt.Sprintf("Scrolled %s by %d line(s) on display %d at (%d, %d).", args.Direction, lines, display.Index, x, y),
+		fmt.Sprintf("Scrolled %s by %d %s(s) on display %d at (%d, %d).", args.Direction, value, unit, display.Index, x, y),
 		map[string]interface{}{
 			"display":   display,
 			"direction": args.Direction,
-			"lines":     lines,
+			"amount":    value,
+			"unit":      unit,
 			"x":         x,
 			"y":         y,
 		},
 	), nil
+}
+
+func normalizeScrollUnit(unit string) ScrollUnit {
+	switch strings.TrimSpace(strings.ToLower(unit)) {
+	case "", "line", "lines":
+		return ScrollUnitLine
+	case "pixel", "pixels":
+		return ScrollUnitPixel
+	default:
+		return ScrollUnit(strings.TrimSpace(strings.ToLower(unit)))
+	}
+}
+
+func validateScrollUnit(unit ScrollUnit) error {
+	switch unit {
+	case ScrollUnitLine, ScrollUnitPixel:
+		return nil
+	default:
+		return fmt.Errorf("unsupported scroll unit %q", unit)
+	}
 }
 
 func (s *Server) typeText(raw map[string]interface{}) (core.CallResult, error) {
@@ -324,6 +381,9 @@ func (s *Server) typeText(raw map[string]interface{}) (core.CallResult, error) {
 
 	var display *DisplayInfo
 	if args.Coordinate != nil {
+		if result, blocked := s.guardStableDisplays(); blocked {
+			return result, nil
+		}
 		resolvedDisplay, err := s.resolveDisplay(args.Display)
 		if err != nil {
 			return errorResult(err.Error()), nil
@@ -402,6 +462,103 @@ func (s *Server) listWindows() core.CallResult {
 			"windows": windows,
 		},
 	)
+}
+
+func (s *Server) listApps(raw map[string]interface{}) (core.CallResult, error) {
+	var args listAppsArgs
+	if err := decodeArgs(raw, &args); err != nil {
+		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
+	}
+
+	source := strings.TrimSpace(strings.ToLower(args.Source))
+	if source == "" {
+		source = "all"
+	}
+
+	requestedSources := []string{}
+	switch source {
+	case "desktop":
+		requestedSources = []string{"desktop"}
+	case "installed":
+		requestedSources = []string{"installed"}
+	case "all":
+		requestedSources = []string{"desktop", "installed"}
+	default:
+		return errorResult(fmt.Sprintf("unsupported app source %q", args.Source)), nil
+	}
+
+	search := strings.TrimSpace(args.Search)
+	groups := make([]ApplicationGroup, 0, len(requestedSources))
+	total := 0
+	for _, requestedSource := range requestedSources {
+		apps, err := s.listAppsBySource(requestedSource)
+		if err != nil {
+			return errorResult(fmt.Sprintf("failed to list %s apps: %v", requestedSource, err)), nil
+		}
+		apps = filterApplications(apps, search)
+		total += len(apps)
+		groups = append(groups, ApplicationGroup{
+			Source: requestedSource,
+			Apps:   apps,
+		})
+	}
+
+	return textResult(
+		describeAppListing(groups, search),
+		ListAppsResult{
+			Source: source,
+			Search: search,
+			Groups: groups,
+			Total:  total,
+		},
+	), nil
+}
+
+func (s *Server) listAppsBySource(source string) ([]ApplicationInfo, error) {
+	switch source {
+	case "desktop":
+		return s.desktop.ListDesktopApps()
+	case "installed":
+		return s.desktop.ListInstalledApps()
+	default:
+		return nil, fmt.Errorf("unsupported app source %q", source)
+	}
+}
+
+func filterApplications(apps []ApplicationInfo, search string) []ApplicationInfo {
+	if len(apps) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(search) == "" {
+		filtered := make([]ApplicationInfo, len(apps))
+		copy(filtered, apps)
+		return filtered
+	}
+
+	needle := strings.ToLower(search)
+	filtered := make([]ApplicationInfo, 0, len(apps))
+	for _, app := range apps {
+		if strings.Contains(strings.ToLower(app.Name), needle) || strings.Contains(strings.ToLower(app.Path), needle) {
+			filtered = append(filtered, app)
+		}
+	}
+	return filtered
+}
+
+func describeAppListing(groups []ApplicationGroup, search string) string {
+	if len(groups) == 0 {
+		return "Listed 0 apps."
+	}
+
+	parts := make([]string, 0, len(groups))
+	for _, group := range groups {
+		parts = append(parts, fmt.Sprintf("%d %s app(s)", len(group.Apps), group.Source))
+	}
+
+	if strings.TrimSpace(search) == "" {
+		return fmt.Sprintf("Listed %s.", strings.Join(parts, " and "))
+	}
+	return fmt.Sprintf("Matched %s for search %q.", strings.Join(parts, " and "), search)
 }
 
 func (s *Server) wait(raw map[string]interface{}) (core.CallResult, error) {

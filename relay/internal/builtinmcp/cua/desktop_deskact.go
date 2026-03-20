@@ -5,11 +5,11 @@ package cua
 import (
 	"context"
 	"fmt"
-	"image"
 	"runtime"
 	"strings"
 
 	deskact "github.com/PekingSpades/DeskAct"
+	"image"
 )
 
 type deskactDesktop struct {
@@ -69,27 +69,20 @@ func (d *deskactDesktop) ListDisplays() ([]DisplayInfo, error) {
 	return displays, nil
 }
 
-func (d *deskactDesktop) CurrentPointer() (PointerState, error) {
-	displays, err := d.ListDisplays()
-	if err != nil {
-		return PointerState{}, err
-	}
+func (d *deskactDesktop) SupportedKeyNames() []string {
+	return deskact.SupportedKeyNames()
+}
 
-	absoluteX, absoluteY := deskact.Location()
-	state := PointerState{
-		AbsoluteX: absoluteX,
-		AbsoluteY: absoluteY,
-	}
-	resolved, display, err := d.findDisplay(displays, DisplaySelector{Mode: "mouse"})
-	if err == nil && resolved != nil {
-		if relX, relY, ok := display.MouseLocation(); ok {
-			state.Display = resolved
-			state.DisplayX = relX
-			state.DisplayY = relY
-			state.WithinTarget = true
+func (d *deskactDesktop) ModifierNames() []string {
+	modifiers := deskact.ModifierNames()
+	result := make([]string, 0, len(modifiers))
+	for _, modifier := range modifiers {
+		if modifier == "" {
+			continue
 		}
+		result = append(result, string(modifier))
 	}
-	return state, nil
+	return result
 }
 
 func (d *deskactDesktop) CaptureDisplay(target DisplayInfo) (*image.RGBA, error) {
@@ -134,8 +127,15 @@ func (d *deskactDesktop) Drag(target DisplayInfo, startX, startY, endX, endY int
 	return display.Drag(startX, startY, endX, endY, mouseButton, d.mouseSettings)
 }
 
-func (d *deskactDesktop) ScrollLines(deltaX, deltaY int) error {
-	return deskact.ScrollLines(deltaX, deltaY, d.mouseSettings)
+func (d *deskactDesktop) Scroll(deltaX, deltaY int, unit ScrollUnit) error {
+	switch unit {
+	case "", ScrollUnitLine:
+		return deskact.ScrollLines(deltaX, deltaY, d.mouseSettings)
+	case ScrollUnitPixel:
+		return deskact.ScrollPixels(deltaX, deltaY, d.mouseSettings)
+	default:
+		return fmt.Errorf("unsupported scroll unit %q", unit)
+	}
 }
 
 func (d *deskactDesktop) TypeText(text string) error {
@@ -211,6 +211,36 @@ func (d *deskactDesktop) ListWindows() ([]WindowInfo, error) {
 			})
 		}
 		result = append(result, entry)
+	}
+	return result, nil
+}
+
+func (d *deskactDesktop) ListDesktopApps() ([]ApplicationInfo, error) {
+	apps, err := deskact.DesktopApps()
+	result := make([]ApplicationInfo, 0, len(apps))
+	for _, app := range apps {
+		result = append(result, ApplicationInfo{
+			Name: app.Name,
+			Path: app.Path,
+		})
+	}
+	if err != nil && len(result) == 0 {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (d *deskactDesktop) ListInstalledApps() ([]ApplicationInfo, error) {
+	apps, err := deskact.InstalledApps()
+	result := make([]ApplicationInfo, 0, len(apps))
+	for _, app := range apps {
+		result = append(result, ApplicationInfo{
+			Name: app.Name,
+			Path: app.Path,
+		})
+	}
+	if err != nil && len(result) == 0 {
+		return nil, err
 	}
 	return result, nil
 }

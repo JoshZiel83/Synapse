@@ -4,14 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 )
 
 type Server struct {
-	cfg     Config
-	desktop Desktop
-	tools   []core.Tool
+	cfg             Config
+	desktop         Desktop
+	tools           []core.Tool
+	system          string
+	mu              sync.Mutex
+	sessionDisplays []displaySnapshot
+	sessionReady    bool
 }
 
 func New(cfg Config) (*Server, error) {
@@ -27,6 +32,7 @@ func NewWithDesktop(cfg Config, desktop Desktop) *Server {
 	server := &Server{
 		cfg:     cfg,
 		desktop: desktop,
+		system:  detectSystemDescription(),
 	}
 	server.tools = server.buildTools()
 	return server
@@ -43,8 +49,7 @@ func (s *Server) Initialize() error {
 	if s.desktop == nil {
 		return fmt.Errorf("desktop integration is not available in this build")
 	}
-	_, err := s.desktop.ListDisplays()
-	return err
+	return s.initializeSessionDisplays()
 }
 
 func (s *Server) ListTools() ([]core.Tool, error) {
@@ -74,8 +79,6 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 		return s.captureDisplay(args)
 	case "desktop_capture_overview":
 		return s.captureOverview(args)
-	case "desktop_get_pointer":
-		return s.getPointer(), nil
 	case "desktop_move_pointer":
 		return s.movePointer(args)
 	case "desktop_click":
@@ -92,10 +95,10 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 		return s.keyboardState(), nil
 	case "desktop_list_windows":
 		return s.listWindows(), nil
+	case "desktop_list_apps":
+		return s.listApps(args)
 	case "desktop_wait":
 		return s.wait(args)
-	case "computer":
-		return s.computer(args)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", toolName)), nil
 	}
@@ -154,6 +157,19 @@ func errorResult(text string) core.CallResult {
 	}
 }
 
+func displayChangedResult(displays []DisplayInfo) core.CallResult {
+	return core.CallResult{
+		Content: []interface{}{core.Text("Detected a display configuration change during this CUA session. Take a fresh screenshot and retry the action.")},
+		StructuredContent: map[string]interface{}{
+			"code":                      "display_changed",
+			"requires_retry":            true,
+			"requires_fresh_screenshot": true,
+			"displays":                  cloneDisplays(displays),
+		},
+		IsError: true,
+	}
+}
+
 func readOnlyResult(toolName, operation string) core.CallResult {
 	message := "This built-in CUA server is currently in read-only mode. Observation tools remain available, but this action requires manual approval in the Synapse Relay client. Ask the user to disable read-only mode there, then retry."
 	if operation != "" {
@@ -181,13 +197,18 @@ func (s *Server) readOnlyBlock(toolName string, args map[string]interface{}) (bo
 	switch toolName {
 	case "desktop_move_pointer", "desktop_click", "desktop_drag", "desktop_scroll", "desktop_type_text", "desktop_press_keys":
 		return true, toolName
-	case "computer":
-		action, _ := args["action"].(string)
-		switch action {
-		case "left_click", "right_click", "middle_click", "double_click", "triple_click", "mouse_move", "type", "scroll", "key", "left_click_drag":
-			return true, action
-		}
 	}
 
 	return false, ""
+}
+
+func (s *Server) guardStableDisplays() (core.CallResult, bool) {
+	displays, changed, err := s.ensureStableDisplays()
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to read displays: %v", err)), true
+	}
+	if changed {
+		return displayChangedResult(displays), true
+	}
+	return core.CallResult{}, false
 }

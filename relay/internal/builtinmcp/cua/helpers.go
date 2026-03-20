@@ -80,32 +80,37 @@ func (s *Server) resolveDisplay(selector *DisplaySelector) (DisplayInfo, error) 
 func (s *Server) convertCoordinate(display DisplayInfo, input Coordinate) (int, int, error) {
 	space := strings.TrimSpace(input.Space)
 	if space == "" {
-		if s.cfg.RelativeCoordinate {
-			space = "relative"
-		} else {
-			space = "image"
-		}
+		space = s.defaultCoordinateBase().Space
 	}
 
 	switch space {
 	case "display_pixels":
 		return int(math.Round(input.X)), int(math.Round(input.Y)), nil
 	case "image":
-		baseWidth, baseHeight := input.BaseWidth, input.BaseHeight
-		if baseWidth <= 0 || baseHeight <= 0 {
-			baseWidth = s.cfg.ImageSize[0]
-			baseHeight = s.cfg.ImageSize[1]
+		baseWidth, baseHeight, err := resolveCoordinateBaseSize(input.BaseWidth, input.BaseHeight, s.cfg.ImageSize[0], s.cfg.ImageSize[1])
+		if err != nil {
+			return 0, 0, err
 		}
 		return scaleCoordinate(input.X, input.Y, baseWidth, baseHeight, display.Size.W, display.Size.H)
 	case "relative":
-		baseWidth, baseHeight := input.BaseWidth, input.BaseHeight
-		if baseWidth <= 0 || baseHeight <= 0 {
-			baseWidth = s.cfg.RelativeSize[0]
-			baseHeight = s.cfg.RelativeSize[1]
+		baseWidth, baseHeight, err := resolveCoordinateBaseSize(input.BaseWidth, input.BaseHeight, s.cfg.RelativeSize[0], s.cfg.RelativeSize[1])
+		if err != nil {
+			return 0, 0, err
 		}
 		return scaleCoordinate(input.X, input.Y, baseWidth, baseHeight, display.Size.W, display.Size.H)
 	default:
 		return 0, 0, fmt.Errorf("unsupported coordinate space %q", space)
+	}
+}
+
+func resolveCoordinateBaseSize(baseWidth, baseHeight, defaultWidth, defaultHeight int) (int, int, error) {
+	switch {
+	case baseWidth <= 0 && baseHeight <= 0:
+		return defaultWidth, defaultHeight, nil
+	case baseWidth > 0 && baseHeight > 0:
+		return baseWidth, baseHeight, nil
+	default:
+		return 0, 0, fmt.Errorf("base_width and base_height must be provided together")
 	}
 }
 
@@ -119,19 +124,59 @@ func scaleCoordinate(x, y float64, baseWidth, baseHeight, displayWidth, displayH
 
 	scaledX := x * float64(displayWidth) / float64(baseWidth)
 	scaledY := y * float64(displayHeight) / float64(baseHeight)
-	return int(math.Round(scaledX)), int(math.Round(scaledY)), nil
+	return clampCoordinate(scaledX, displayWidth), clampCoordinate(scaledY, displayHeight), nil
 }
 
-func encodePNGBase64(img image.Image, width, height int) (string, error) {
-	if width > 0 && height > 0 {
-		img = resizeImage(img, width, height)
+func clampCoordinate(value float64, size int) int {
+	rounded := int(math.Round(value))
+	if rounded < 0 {
+		return 0
 	}
+	if rounded >= size {
+		return size - 1
+	}
+	return rounded
+}
 
+func (s *Server) defaultCoordinateBase() CoordinateBase {
+	if s.cfg.RelativeCoordinate {
+		return CoordinateBase{
+			Space:  "relative",
+			Width:  s.cfg.RelativeSize[0],
+			Height: s.cfg.RelativeSize[1],
+		}
+	}
+	return CoordinateBase{
+		Space:  "image",
+		Width:  s.cfg.ImageSize[0],
+		Height: s.cfg.ImageSize[1],
+	}
+}
+
+func (s *Server) captureImageInfo() ImageInfo {
+	return ImageInfo{
+		Width:    s.cfg.ImageSize[0],
+		Height:   s.cfg.ImageSize[1],
+		MimeType: "image/png",
+	}
+}
+
+func encodePNGBase64(img image.Image) (string, error) {
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+}
+
+func resizeImageToSize(img image.Image, width, height int) *image.RGBA {
+	if width <= 0 || height <= 0 {
+		return resizeImage(img, img.Bounds().Dx(), img.Bounds().Dy())
+	}
+	if rgba, ok := img.(*image.RGBA); ok && img.Bounds().Dx() == width && img.Bounds().Dy() == height {
+		return rgba
+	}
+	return resizeImage(img, width, height)
 }
 
 func resizeImage(img image.Image, width, height int) *image.RGBA {
@@ -140,7 +185,7 @@ func resizeImage(img image.Image, width, height int) *image.RGBA {
 	return dst
 }
 
-func renderOverview(captures map[int]*image.RGBA, displays []DisplayInfo, width, height int) (*image.RGBA, error) {
+func renderOverview(captures map[int]*image.RGBA, displays []DisplayInfo) (*image.RGBA, error) {
 	if len(displays) == 0 {
 		return nil, fmt.Errorf("no displays detected")
 	}
@@ -183,10 +228,6 @@ func renderOverview(captures map[int]*image.RGBA, displays []DisplayInfo, width,
 		if display.IsMain {
 			drawLabelBox(canvas, posX+8, posY+58, "main")
 		}
-	}
-
-	if width > 0 && height > 0 {
-		canvas = resizeImage(canvas, width, height)
 	}
 	return canvas, nil
 }

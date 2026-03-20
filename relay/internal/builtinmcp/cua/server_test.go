@@ -1,8 +1,11 @@
 package cua
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"image"
+	"image/png"
 	"strings"
 	"testing"
 
@@ -10,9 +13,16 @@ import (
 )
 
 type fakeDesktop struct {
-	displays []DisplayInfo
-	pointer  PointerState
-	windows  []WindowInfo
+	displays       []DisplayInfo
+	windows        []WindowInfo
+	desktopApps    []ApplicationInfo
+	installedApps  []ApplicationInfo
+	lastMoveX      int
+	lastMoveY      int
+	lastMoveSmooth bool
+	lastScrollX    int
+	lastScrollY    int
+	lastScrollUnit ScrollUnit
 }
 
 func (f *fakeDesktop) Start(context.Context) error { return nil }
@@ -24,28 +34,52 @@ func (f *fakeDesktop) ListDisplays() ([]DisplayInfo, error) {
 	return out, nil
 }
 
-func (f *fakeDesktop) CurrentPointer() (PointerState, error) {
-	return f.pointer, nil
+func (f *fakeDesktop) SupportedKeyNames() []string {
+	return []string{"a", "enter", "tab", "esc", "space", "ctrl", "alt", "shift", "cmd", "lctrl", "rctrl"}
+}
+
+func (f *fakeDesktop) ModifierNames() []string {
+	return []string{"alt", "ctrl", "shift", "cmd"}
 }
 
 func (f *fakeDesktop) CaptureDisplay(display DisplayInfo) (*image.RGBA, error) {
 	return image.NewRGBA(image.Rect(0, 0, max(display.Size.W, 1), max(display.Size.H, 1))), nil
 }
 
-func (f *fakeDesktop) MovePointer(DisplayInfo, int, int, bool) error { return nil }
-func (f *fakeDesktop) Click(string, int) error                       { return nil }
+func (f *fakeDesktop) MovePointer(_ DisplayInfo, x, y int, smooth bool) error {
+	f.lastMoveX = x
+	f.lastMoveY = y
+	f.lastMoveSmooth = smooth
+	return nil
+}
+func (f *fakeDesktop) Click(string, int) error { return nil }
 func (f *fakeDesktop) Drag(DisplayInfo, int, int, int, int, string) error {
 	return nil
 }
-func (f *fakeDesktop) ScrollLines(int, int) error { return nil }
-func (f *fakeDesktop) TypeText(string) error      { return nil }
-func (f *fakeDesktop) PressKeys([]string) error   { return nil }
+func (f *fakeDesktop) Scroll(x, y int, unit ScrollUnit) error {
+	f.lastScrollX = x
+	f.lastScrollY = y
+	f.lastScrollUnit = unit
+	return nil
+}
+func (f *fakeDesktop) TypeText(string) error    { return nil }
+func (f *fakeDesktop) PressKeys([]string) error { return nil }
 func (f *fakeDesktop) KeyboardState() (KeyboardState, error) {
 	return KeyboardState{}, nil
 }
 func (f *fakeDesktop) ListWindows() ([]WindowInfo, error) {
 	out := make([]WindowInfo, len(f.windows))
 	copy(out, f.windows)
+	return out, nil
+}
+func (f *fakeDesktop) ListDesktopApps() ([]ApplicationInfo, error) {
+	out := make([]ApplicationInfo, len(f.desktopApps))
+	copy(out, f.desktopApps)
+	return out, nil
+}
+func (f *fakeDesktop) ListInstalledApps() ([]ApplicationInfo, error) {
+	out := make([]ApplicationInfo, len(f.installedApps))
+	copy(out, f.installedApps)
 	return out, nil
 }
 
@@ -66,6 +100,98 @@ func TestListToolsHonorsOverviewFlag(t *testing.T) {
 		if tool.Name == "desktop_capture_overview" {
 			t.Fatalf("expected overview tool to be omitted when disabled")
 		}
+		if tool.Name == "computer" {
+			t.Fatalf("expected compatibility computer tool to be removed")
+		}
+		if tool.Name == "desktop_get_pointer" {
+			t.Fatalf("expected pointer tool to be removed")
+		}
+		if tool.Name == "desktop_capture_display" {
+			schema, ok := tool.InputSchema.(map[string]interface{})
+			if !ok {
+				t.Fatalf("expected capture display schema map, got %T", tool.InputSchema)
+			}
+			properties, ok := schema["properties"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("expected schema properties map, got %T", schema["properties"])
+			}
+			if _, exists := properties["width"]; exists {
+				t.Fatalf("expected capture display schema to omit width")
+			}
+			if _, exists := properties["height"]; exists {
+				t.Fatalf("expected capture display schema to omit height")
+			}
+		}
+		if tool.Name == "desktop_press_keys" {
+			schema, ok := tool.InputSchema.(map[string]interface{})
+			if !ok {
+				t.Fatalf("expected press keys schema map, got %T", tool.InputSchema)
+			}
+			properties, ok := schema["properties"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("expected schema properties map, got %T", schema["properties"])
+			}
+			keys, ok := properties["keys"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("expected keys schema map, got %T", properties["keys"])
+			}
+			items, ok := keys["items"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("expected key item schema map, got %T", keys["items"])
+			}
+			enumValues, ok := items["enum"].([]string)
+			if !ok {
+				t.Fatalf("expected key enum slice, got %T", items["enum"])
+			}
+			if !containsString(enumValues, "enter") || !containsString(enumValues, "control") || !containsString(enumValues, "win") {
+				t.Fatalf("expected key enum to include DeskAct keys and accepted aliases, got %+v", enumValues)
+			}
+			sequence, ok := properties["sequence"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("expected sequence schema map, got %T", properties["sequence"])
+			}
+			sequenceItems, ok := sequence["items"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("expected sequence item schema map, got %T", sequence["items"])
+			}
+			sequenceKeyItems, ok := sequenceItems["items"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("expected nested sequence key item schema map, got %T", sequenceItems["items"])
+			}
+			sequenceEnumValues, ok := sequenceKeyItems["enum"].([]string)
+			if !ok {
+				t.Fatalf("expected sequence key enum slice, got %T", sequenceKeyItems["enum"])
+			}
+			if !containsString(sequenceEnumValues, "enter") || !containsString(sequenceEnumValues, "control") || !containsString(sequenceEnumValues, "win") {
+				t.Fatalf("expected sequence key enum to include DeskAct keys and accepted aliases, got %+v", sequenceEnumValues)
+			}
+		}
+		if !strings.Contains(tool.Description, "Current system:") {
+			t.Fatalf("expected tool description to include current system context, got %q", tool.Description)
+		}
+	}
+}
+
+func TestRemovedPointerToolReturnsUnknownTool(t *testing.T) {
+	server := NewWithDesktop(Config{
+		ImageSize:       [2]int{1280, 800},
+		RelativeSize:    [2]int{1000, 1000},
+		DisplaySelector: DisplaySelector{Mode: "main"},
+	}, &fakeDesktop{})
+
+	result, err := server.CallTool(context.Background(), "desktop_get_pointer", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected removed tool to return an error")
+	}
+	content, ok := result.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if !strings.Contains(content.Text, "unknown tool") {
+		t.Fatalf("expected unknown tool error, got %q", content.Text)
 	}
 }
 
@@ -112,7 +238,7 @@ func TestListDisplaysReturnsStructuredContent(t *testing.T) {
 	}
 }
 
-func TestComputerCompatibilityListDisplays(t *testing.T) {
+func TestRemovedComputerToolReturnsUnknownTool(t *testing.T) {
 	server := NewWithDesktop(Config{
 		ImageSize:            [2]int{1280, 800},
 		RelativeSize:         [2]int{1000, 1000},
@@ -133,14 +259,19 @@ func TestComputerCompatibilityListDisplays(t *testing.T) {
 		},
 	})
 
-	result, err := server.CallTool(context.Background(), "computer", map[string]interface{}{
-		"action": "list_displays",
-	})
+	result, err := server.CallTool(context.Background(), "computer", map[string]interface{}{})
 	if err != nil {
-		t.Fatalf("call compatibility tool: %v", err)
+		t.Fatalf("call tool: %v", err)
 	}
-	if result.IsError {
-		t.Fatalf("expected successful result")
+	if !result.IsError {
+		t.Fatalf("expected removed tool to return an error")
+	}
+	content, ok := result.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if !strings.Contains(content.Text, "unknown tool") {
+		t.Fatalf("expected unknown tool error, got %q", content.Text)
 	}
 }
 
@@ -167,26 +298,6 @@ func TestReadOnlyBlocksDesktopWriteTool(t *testing.T) {
 	}
 	if !strings.Contains(content.Text, "read-only mode") {
 		t.Fatalf("expected friendly read-only error, got %q", content.Text)
-	}
-}
-
-func TestReadOnlyBlocksCompatibilityWriteAction(t *testing.T) {
-	server := NewWithDesktop(Config{
-		ReadOnly:            true,
-		ImageSize:           [2]int{1280, 800},
-		RelativeSize:        [2]int{1000, 1000},
-		IncludeOverviewTool: true,
-		DisplaySelector:     DisplaySelector{Mode: "main"},
-	}, &fakeDesktop{})
-
-	result, err := server.CallTool(context.Background(), "computer", map[string]interface{}{
-		"action": "left_click",
-	})
-	if err != nil {
-		t.Fatalf("call tool: %v", err)
-	}
-	if !result.IsError {
-		t.Fatalf("expected read-only mode to block compatibility left_click")
 	}
 }
 
@@ -221,9 +332,432 @@ func TestReadOnlyStillAllowsObservationTools(t *testing.T) {
 	}
 }
 
+func TestCaptureDisplayUsesConfiguredImageSize(t *testing.T) {
+	desktop := &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	}
+	server := NewWithDesktop(Config{
+		ImageSize:            [2]int{1280, 800},
+		RelativeSize:         [2]int{1000, 1000},
+		AllowDisplayOverride: true,
+		IncludeOverviewTool:  true,
+		DisplaySelector:      DisplaySelector{Mode: "main"},
+	}, desktop)
+	if err := server.Initialize(); err != nil {
+		t.Fatalf("initialize server: %v", err)
+	}
+
+	result, err := server.CallTool(context.Background(), "desktop_capture_display", nil)
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected successful result")
+	}
+
+	width, height := imageDimensionsFromResult(t, result)
+	if width != 1280 || height != 800 {
+		t.Fatalf("unexpected screenshot size: got %dx%d", width, height)
+	}
+
+	structured, ok := result.StructuredContent.(CaptureDisplayResult)
+	if !ok {
+		t.Fatalf("expected capture display result, got %T", result.StructuredContent)
+	}
+	if structured.Image.Width != 1280 || structured.Image.Height != 800 {
+		t.Fatalf("unexpected image metadata: %+v", structured.Image)
+	}
+	if structured.CoordinateBase.Space != "image" || structured.CoordinateBase.Width != 1280 || structured.CoordinateBase.Height != 800 {
+		t.Fatalf("unexpected coordinate base: %+v", structured.CoordinateBase)
+	}
+}
+
+func TestCaptureDisplayUsesRelativeBaseWhenEnabled(t *testing.T) {
+	desktop := &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	}
+	server := NewWithDesktop(Config{
+		RelativeCoordinate:   true,
+		ImageSize:            [2]int{1280, 800},
+		RelativeSize:         [2]int{1000, 1000},
+		AllowDisplayOverride: true,
+		IncludeOverviewTool:  true,
+		DisplaySelector:      DisplaySelector{Mode: "main"},
+	}, desktop)
+	if err := server.Initialize(); err != nil {
+		t.Fatalf("initialize server: %v", err)
+	}
+
+	result, err := server.CallTool(context.Background(), "desktop_capture_display", nil)
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected successful result")
+	}
+
+	width, height := imageDimensionsFromResult(t, result)
+	if width != 1280 || height != 800 {
+		t.Fatalf("unexpected screenshot size: got %dx%d", width, height)
+	}
+
+	structured, ok := result.StructuredContent.(CaptureDisplayResult)
+	if !ok {
+		t.Fatalf("expected capture display result, got %T", result.StructuredContent)
+	}
+	if structured.Image.Width != 1280 || structured.Image.Height != 800 {
+		t.Fatalf("unexpected image metadata: %+v", structured.Image)
+	}
+	if structured.CoordinateBase.Space != "relative" || structured.CoordinateBase.Width != 1000 || structured.CoordinateBase.Height != 1000 {
+		t.Fatalf("unexpected coordinate base: %+v", structured.CoordinateBase)
+	}
+}
+
+func TestCaptureDisplayRejectsAfterDisplayConfigurationChanges(t *testing.T) {
+	desktop := &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	}
+	server := NewWithDesktop(Config{
+		ImageSize:            [2]int{1280, 800},
+		RelativeSize:         [2]int{1000, 1000},
+		AllowDisplayOverride: true,
+		IncludeOverviewTool:  true,
+		DisplaySelector:      DisplaySelector{Mode: "main"},
+	}, desktop)
+	if err := server.Initialize(); err != nil {
+		t.Fatalf("initialize server: %v", err)
+	}
+
+	initial, err := server.CallTool(context.Background(), "desktop_capture_display", nil)
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if initial.IsError {
+		t.Fatalf("expected initial capture to succeed")
+	}
+
+	desktop.displays[0].Origin = Rect{X: 0, Y: 0, W: 2560, H: 1440}
+	desktop.displays[0].Size = Size{W: 2560, H: 1440}
+
+	result, err := server.CallTool(context.Background(), "desktop_capture_display", nil)
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected capture to be rejected after display change")
+	}
+	content, ok := result.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if !strings.Contains(content.Text, "display configuration change") {
+		t.Fatalf("expected display change error, got %q", content.Text)
+	}
+
+	retry, err := server.CallTool(context.Background(), "desktop_capture_display", nil)
+	if err != nil {
+		t.Fatalf("retry tool: %v", err)
+	}
+	if retry.IsError {
+		t.Fatalf("expected retry to succeed after session refresh")
+	}
+	structured, ok := retry.StructuredContent.(CaptureDisplayResult)
+	if !ok {
+		t.Fatalf("expected capture display result, got %T", retry.StructuredContent)
+	}
+	if structured.Display.Size.W != 2560 || structured.Display.Size.H != 1440 {
+		t.Fatalf("expected refreshed display metadata, got %+v", structured.Display.Size)
+	}
+}
+
+func TestListAppsSupportsSourceAndSearch(t *testing.T) {
+	server := NewWithDesktop(Config{
+		ImageSize:       [2]int{1280, 800},
+		RelativeSize:    [2]int{1000, 1000},
+		DisplaySelector: DisplaySelector{Mode: "main"},
+	}, &fakeDesktop{
+		desktopApps: []ApplicationInfo{
+			{Name: "Chrome", Path: "/home/ubuntu/Desktop/chrome.desktop"},
+			{Name: "Terminal", Path: "/home/ubuntu/Desktop/terminal.desktop"},
+		},
+		installedApps: []ApplicationInfo{
+			{Name: "Google Chrome", Path: "/usr/bin/google-chrome"},
+			{Name: "Firefox", Path: "/usr/bin/firefox"},
+		},
+	})
+
+	result, err := server.CallTool(context.Background(), "desktop_list_apps", map[string]interface{}{
+		"source": "all",
+		"search": "chrome",
+	})
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected successful app listing")
+	}
+
+	structured, ok := result.StructuredContent.(ListAppsResult)
+	if !ok {
+		t.Fatalf("expected list apps result, got %T", result.StructuredContent)
+	}
+	if structured.Source != "all" || structured.Search != "chrome" {
+		t.Fatalf("unexpected result metadata: %+v", structured)
+	}
+	if structured.Total != 2 {
+		t.Fatalf("expected total 2, got %d", structured.Total)
+	}
+	if len(structured.Groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(structured.Groups))
+	}
+	if len(structured.Groups[0].Apps) != 1 || structured.Groups[0].Apps[0].Name != "Chrome" {
+		t.Fatalf("unexpected desktop apps: %+v", structured.Groups[0].Apps)
+	}
+	if len(structured.Groups[1].Apps) != 1 || structured.Groups[1].Apps[0].Name != "Google Chrome" {
+		t.Fatalf("unexpected installed apps: %+v", structured.Groups[1].Apps)
+	}
+}
+
+func TestMovePointerClampsScaledCoordinates(t *testing.T) {
+	desktop := &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	}
+	server := NewWithDesktop(Config{
+		ImageSize:       [2]int{1280, 800},
+		RelativeSize:    [2]int{1000, 1000},
+		DisplaySelector: DisplaySelector{Mode: "main"},
+	}, desktop)
+	if err := server.Initialize(); err != nil {
+		t.Fatalf("initialize server: %v", err)
+	}
+
+	result, err := server.CallTool(context.Background(), "desktop_move_pointer", map[string]interface{}{
+		"coordinate": map[string]interface{}{
+			"x": 1280,
+			"y": 800,
+		},
+	})
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected move to succeed")
+	}
+	if desktop.lastMoveX != 1919 || desktop.lastMoveY != 1079 {
+		t.Fatalf("expected clamped physical coordinates, got (%d, %d)", desktop.lastMoveX, desktop.lastMoveY)
+	}
+}
+
+func TestMovePointerRejectsPartialCoordinateBaseOverride(t *testing.T) {
+	desktop := &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	}
+	server := NewWithDesktop(Config{
+		ImageSize:       [2]int{1280, 800},
+		RelativeSize:    [2]int{1000, 1000},
+		DisplaySelector: DisplaySelector{Mode: "main"},
+	}, desktop)
+	if err := server.Initialize(); err != nil {
+		t.Fatalf("initialize server: %v", err)
+	}
+
+	result, err := server.CallTool(context.Background(), "desktop_move_pointer", map[string]interface{}{
+		"coordinate": map[string]interface{}{
+			"x":          640,
+			"y":          400,
+			"space":      "image",
+			"base_width": 2000,
+		},
+	})
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected partial base override to fail")
+	}
+	content, ok := result.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if !strings.Contains(content.Text, "base_width and base_height") {
+		t.Fatalf("expected coordinate base validation error, got %q", content.Text)
+	}
+}
+
+func TestScrollSupportsPixelUnit(t *testing.T) {
+	desktop := &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	}
+	server := NewWithDesktop(Config{
+		ImageSize:       [2]int{1280, 800},
+		RelativeSize:    [2]int{1000, 1000},
+		DisplaySelector: DisplaySelector{Mode: "main"},
+	}, desktop)
+	if err := server.Initialize(); err != nil {
+		t.Fatalf("initialize server: %v", err)
+	}
+
+	result, err := server.CallTool(context.Background(), "desktop_scroll", map[string]interface{}{
+		"coordinate": map[string]interface{}{
+			"x": 640,
+			"y": 400,
+		},
+		"direction": "down",
+		"amount":    24,
+		"unit":      "pixel",
+	})
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected scroll to succeed")
+	}
+	if desktop.lastScrollX != 0 || desktop.lastScrollY != -24 || desktop.lastScrollUnit != ScrollUnitPixel {
+		t.Fatalf("unexpected scroll call: x=%d y=%d unit=%q", desktop.lastScrollX, desktop.lastScrollY, desktop.lastScrollUnit)
+	}
+}
+
+func TestScrollRejectsUnsupportedUnit(t *testing.T) {
+	desktop := &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	}
+	server := NewWithDesktop(Config{
+		ImageSize:       [2]int{1280, 800},
+		RelativeSize:    [2]int{1000, 1000},
+		DisplaySelector: DisplaySelector{Mode: "main"},
+	}, desktop)
+	if err := server.Initialize(); err != nil {
+		t.Fatalf("initialize server: %v", err)
+	}
+
+	result, err := server.CallTool(context.Background(), "desktop_scroll", map[string]interface{}{
+		"coordinate": map[string]interface{}{
+			"x": 640,
+			"y": 400,
+		},
+		"direction": "down",
+		"unit":      "page",
+	})
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected unsupported unit to fail")
+	}
+	content, ok := result.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if !strings.Contains(content.Text, "unsupported scroll unit") {
+		t.Fatalf("expected unsupported unit error, got %q", content.Text)
+	}
+}
+
+func imageDimensionsFromResult(t *testing.T, result core.CallResult) (int, int) {
+	t.Helper()
+
+	for _, item := range result.Content {
+		imageContent, ok := item.(core.ImageContent)
+		if !ok {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(imageContent.Data)
+		if err != nil {
+			t.Fatalf("decode base64 image: %v", err)
+		}
+		cfg, err := png.DecodeConfig(bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("decode png config: %v", err)
+		}
+		return cfg.Width, cfg.Height
+	}
+
+	t.Fatalf("expected image content in result")
+	return 0, 0
+}
+
 func max(value, fallback int) int {
 	if value > fallback {
 		return value
 	}
 	return fallback
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

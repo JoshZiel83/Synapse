@@ -1,34 +1,32 @@
 package cua
 
-import "github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
+)
 
 func (s *Server) buildTools() []core.Tool {
 	tools := []core.Tool{
 		{
 			Name:        "desktop_list_displays",
-			Description: "List available displays with stable identifiers, size, origin, scale, and which display currently contains the pointer.",
+			Description: s.toolDescription("List available displays with stable identifiers, size, origin, scale, and which display currently contains the pointer."),
 			InputSchema: objectSchema(nil, nil),
 		},
 		{
 			Name:        "desktop_capture_display",
-			Description: "Capture a screenshot of one display. Supports selecting a display and optional output resize.",
+			Description: s.toolDescription(s.captureDisplayDescription()),
 			InputSchema: objectSchema(map[string]interface{}{
 				"display": selectorSchema(),
-				"width":   intSchema("Optional output width in pixels.", 1, 8192),
-				"height":  intSchema("Optional output height in pixels.", 1, 8192),
 			}, nil),
-		},
-		{
-			Name:        "desktop_get_pointer",
-			Description: "Get the current pointer location in absolute desktop coordinates and, when possible, the containing display and display-relative coordinates.",
-			InputSchema: objectSchema(nil, nil),
 		},
 		{
 			Name:        "desktop_move_pointer",
 			Description: s.writeToolDescription("Move the pointer to a coordinate on the selected display."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"display":    selectorSchema(),
-				"coordinate": coordinateSchema("Target pointer coordinate on the selected display."),
+				"coordinate": s.coordinateSchema("Target pointer coordinate on the selected display."),
 				"smooth":     boolSchema("Whether to move using smooth mouse motion."),
 			}, []string{"coordinate"}),
 		},
@@ -37,7 +35,7 @@ func (s *Server) buildTools() []core.Tool {
 			Description: s.writeToolDescription("Move to a coordinate on the selected display and click. Supports left, right, middle, double, and triple click behavior."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"display":    selectorSchema(),
-				"coordinate": coordinateSchema("Target click coordinate on the selected display."),
+				"coordinate": s.coordinateSchema("Target click coordinate on the selected display."),
 				"button": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"left", "right", "middle"},
@@ -51,8 +49,8 @@ func (s *Server) buildTools() []core.Tool {
 			Description: s.writeToolDescription("Drag from one coordinate to another on the selected display."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"display":          selectorSchema(),
-				"start_coordinate": coordinateSchema("Drag start coordinate on the selected display."),
-				"end_coordinate":   coordinateSchema("Drag end coordinate on the selected display."),
+				"start_coordinate": s.coordinateSchema("Drag start coordinate on the selected display."),
+				"end_coordinate":   s.coordinateSchema("Drag end coordinate on the selected display."),
 				"button": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"left", "right", "middle"},
@@ -62,16 +60,21 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "desktop_scroll",
-			Description: s.writeToolDescription("Move to a coordinate on the selected display and scroll by line units."),
+			Description: s.writeToolDescription("Move to a coordinate on the selected display and scroll using line or pixel units."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"display":    selectorSchema(),
-				"coordinate": coordinateSchema("Pointer anchor coordinate on the selected display."),
+				"coordinate": s.coordinateSchema("Pointer anchor coordinate on the selected display."),
 				"direction": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"up", "down", "left", "right"},
 					"description": "Scroll direction.",
 				},
-				"amount": numberSchema("Scroll amount before the server multiplier is applied. Defaults to 3.", 1, 1000),
+				"amount": numberSchema("Scroll amount in the selected unit before the server multiplier is applied. Defaults to 3.", 1, 1000),
+				"unit": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"line", "pixel"},
+					"description": "Scroll unit. Defaults to line.",
+				},
 			}, []string{"coordinate", "direction"}),
 		},
 		{
@@ -79,7 +82,7 @@ func (s *Server) buildTools() []core.Tool {
 			Description: s.writeToolDescription("Type UTF-8 text into the active application. Optionally click a coordinate first."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"display":    selectorSchema(),
-				"coordinate": coordinateSchema("Optional focus coordinate on the selected display before typing."),
+				"coordinate": s.coordinateSchema("Optional focus coordinate on the selected display before typing."),
 				"text": map[string]interface{}{
 					"type":        "string",
 					"description": "Text to type.",
@@ -88,62 +91,74 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "desktop_press_keys",
-			Description: s.writeToolDescription("Press a key chord or a sequence of key chords. Keys must use DeskAct-supported key names."),
+			Description: s.writeToolDescription(s.pressKeysDescription()),
 			InputSchema: objectSchema(map[string]interface{}{
-				"keys": keyArraySchema("One key chord. Use multiple keys for modifiers plus the final key."),
+				"keys": s.keyArraySchema("One key chord. Use multiple keys for modifiers plus the final key."),
 				"sequence": map[string]interface{}{
 					"type":        "array",
 					"description": "Optional sequence of key chords. Each item is a keys array like [\"ctrl\", \"l\"].",
-					"items": map[string]interface{}{
-						"type":  "array",
-						"items": map[string]interface{}{"type": "string"},
-					},
+					"items":       s.keyArraySchema("A key chord in the sequence."),
 				},
 			}, nil),
 		},
 		{
 			Name:        "desktop_get_keyboard_state",
-			Description: "Get modifier and lock-key state from the local desktop.",
+			Description: s.toolDescription("Get modifier and lock-key state from the local desktop."),
 			InputSchema: objectSchema(nil, nil),
 		},
 		{
 			Name:        "desktop_wait",
-			Description: "Sleep inside the server for a short duration, useful when automations need UI time to settle.",
+			Description: s.toolDescription("Sleep inside the server for a short duration, useful when automations need UI time to settle."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"duration": numberSchema("Duration in seconds.", 0, 30),
 			}, []string{"duration"}),
 		},
 		{
 			Name:        "desktop_list_windows",
-			Description: "List visible desktop windows when the current OS supports window enumeration.",
+			Description: s.toolDescription("List visible desktop windows when the current OS supports window enumeration."),
 			InputSchema: objectSchema(nil, nil),
 		},
 		{
-			Name:        "computer",
-			Description: s.writeToolDescription("Compatibility tool modeled after CUA MCP. Supports display selection while preserving the familiar action-based interface."),
-			InputSchema: computerSchema(),
+			Name:        "desktop_list_apps",
+			Description: s.toolDescription("List desktop apps and installed apps. Use source to choose desktop, installed, or all, and use search for case-insensitive filtering by app name or path."),
+			InputSchema: objectSchema(map[string]interface{}{
+				"source": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"desktop", "installed", "all"},
+					"description": "Which app source to query. Defaults to all.",
+				},
+				"search": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional case-insensitive keyword filter applied to app name and path.",
+				},
+			}, nil),
 		},
 	}
 
 	if s.cfg.IncludeOverviewTool {
 		tools = append(tools, core.Tool{
 			Name:        "desktop_capture_overview",
-			Description: "Capture an annotated overview image containing all detected displays. Useful for choosing a display before taking targeted actions.",
-			InputSchema: objectSchema(map[string]interface{}{
-				"width":  intSchema("Optional output width in pixels.", 1, 8192),
-				"height": intSchema("Optional output height in pixels.", 1, 8192),
-			}, nil),
+			Description: s.toolDescription(s.captureOverviewDescription()),
+			InputSchema: objectSchema(nil, nil),
 		})
 	}
 
 	return tools
 }
 
-func (s *Server) writeToolDescription(base string) string {
-	if !s.cfg.ReadOnly {
+func (s *Server) toolDescription(base string) string {
+	if strings.TrimSpace(s.system) == "" {
 		return base
 	}
-	return base + " Read-only mode is enabled right now, so mutating calls return a user-approval error until the user disables read-only mode in the Synapse Relay client."
+	return fmt.Sprintf("Current system: %s. %s", s.system, base)
+}
+
+func (s *Server) writeToolDescription(base string) string {
+	description := s.toolDescription(base)
+	if !s.cfg.ReadOnly {
+		return description
+	}
+	return description + " Read-only mode is enabled right now, so mutating calls return a user-approval error until the user disables read-only mode in the Synapse Relay client."
 }
 
 func objectSchema(properties map[string]interface{}, required []string) map[string]interface{} {
@@ -176,10 +191,56 @@ func selectorSchema() map[string]interface{} {
 	}
 }
 
-func coordinateSchema(description string) map[string]interface{} {
+func (s *Server) captureDisplayDescription() string {
+	base := s.defaultCoordinateBase()
+	image := s.captureImageInfo()
+	return fmt.Sprintf(
+		"Capture a screenshot of one display. The PNG is always resized to the configured image size %dx%d. The default coordinate base for follow-up actions is %s %dx%d.",
+		image.Width,
+		image.Height,
+		base.Space,
+		base.Width,
+		base.Height,
+	)
+}
+
+func (s *Server) captureOverviewDescription() string {
+	image := s.captureImageInfo()
+	return fmt.Sprintf(
+		"Capture an annotated overview image containing all detected displays. The PNG is resized to the configured capture size %dx%d and is best used to choose a display before taking a targeted per-display screenshot.",
+		image.Width,
+		image.Height,
+	)
+}
+
+func (s *Server) pressKeysDescription() string {
+	keyCount := len(s.keyEnumValues())
+	if keyCount == 0 {
+		return "Press a key chord or a sequence of key chords. Use keys for one chord like [\"ctrl\", \"l\"], or sequence for multiple chords. Accepted aliases include control->ctrl and command/meta/win/super->cmd."
+	}
+	return fmt.Sprintf(
+		"Press a key chord or a sequence of key chords. Use keys for one chord like [\"ctrl\", \"l\"], or sequence for multiple chords. The item enum is populated from %d currently supported DeskAct key names plus accepted aliases such as control->ctrl and command/meta/win/super->cmd.",
+		keyCount,
+	)
+}
+
+func (s *Server) coordinateSchema(description string) map[string]interface{} {
+	base := s.defaultCoordinateBase()
+	image := s.captureImageInfo()
+	schemaDescription := fmt.Sprintf(
+		"%s Defaults to %q coordinates with base size %dx%d.",
+		description,
+		base.Space,
+		base.Width,
+		base.Height,
+	)
+	if s.cfg.RelativeCoordinate {
+		schemaDescription += fmt.Sprintf(" Screenshots remain %dx%d from image_size even when the default coordinate base uses relative_size.", image.Width, image.Height)
+	}
+	schemaDescription += " Use base_width and base_height together when your screenshot size differs, or use space=display_pixels for raw display pixels."
 	return map[string]interface{}{
 		"type":        "object",
-		"description": description,
+		"description": schemaDescription,
 		"properties": map[string]interface{}{
 			"x": map[string]interface{}{
 				"type": "number",
@@ -190,7 +251,7 @@ func coordinateSchema(description string) map[string]interface{} {
 			"space": map[string]interface{}{
 				"type":        "string",
 				"enum":        []string{"display_pixels", "image", "relative"},
-				"description": "Coordinate space. Defaults to the server's configured mode.",
+				"description": fmt.Sprintf("Coordinate space. Defaults to %q for this server.", base.Space),
 			},
 			"base_width": map[string]interface{}{
 				"type":        "integer",
@@ -230,65 +291,48 @@ func boolSchema(description string) map[string]interface{} {
 	}
 }
 
-func keyArraySchema(description string) map[string]interface{} {
+func (s *Server) keyArraySchema(description string) map[string]interface{} {
+	itemSchema := map[string]interface{}{
+		"type":        "string",
+		"description": "DeskAct key name or accepted alias.",
+	}
+	if enumValues := s.keyEnumValues(); len(enumValues) > 0 {
+		itemSchema["enum"] = enumValues
+	}
 	return map[string]interface{}{
 		"type":        "array",
 		"description": description,
-		"items": map[string]interface{}{
-			"type": "string",
-		},
+		"items":       itemSchema,
 	}
 }
 
-func computerSchema() map[string]interface{} {
-	return objectSchema(map[string]interface{}{
-		"action": map[string]interface{}{
-			"type": "string",
-			"enum": []string{
-				"left_click",
-				"right_click",
-				"middle_click",
-				"double_click",
-				"triple_click",
-				"mouse_move",
-				"type",
-				"screenshot",
-				"wait",
-				"scroll",
-				"key",
-				"keyboard_state",
-				"left_click_drag",
-				"list_displays",
-				"display_overview",
-			},
-			"description": "Compatibility action. Prefer the dedicated desktop_* tools for new integrations.",
-		},
-		"display": selectorSchema(),
-		"coordinate": map[string]interface{}{
-			"type":        "array",
-			"description": "Two-element CUA coordinate array.",
-			"items":       map[string]interface{}{"type": "number"},
-			"minItems":    2,
-			"maxItems":    2,
-		},
-		"start_coordinate": map[string]interface{}{
-			"type":        "array",
-			"description": "Two-element drag start coordinate array.",
-			"items":       map[string]interface{}{"type": "number"},
-			"minItems":    2,
-			"maxItems":    2,
-		},
-		"text": map[string]interface{}{
-			"type": "string",
-		},
-		"keys":     keyArraySchema("Key chord for action=key."),
-		"duration": numberSchema("Wait duration in seconds for action=wait.", 0, 30),
-		"scroll_direction": map[string]interface{}{
-			"type":        "string",
-			"enum":        []string{"up", "down", "left", "right"},
-			"description": "Scroll direction for action=scroll.",
-		},
-		"scroll_amount":     numberSchema("Scroll amount for action=scroll.", 1, 1000),
-		"return_screenshot": boolSchema("Append a display screenshot after executing the action."),
-	}, []string{"action"})
+func (s *Server) keyEnumValues() []string {
+	seen := make(map[string]struct{})
+	values := make([]string, 0, 128)
+
+	add := func(value string) {
+		if value == "" {
+			return
+		}
+		if _, exists := seen[value]; exists {
+			return
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+
+	if s.desktop != nil {
+		for _, key := range s.desktop.SupportedKeyNames() {
+			add(key)
+		}
+		for _, modifier := range s.desktop.ModifierNames() {
+			add(modifier)
+		}
+	}
+
+	for _, alias := range []string{"control", "command", "meta", "win", "super"} {
+		add(alias)
+	}
+
+	return values
 }
