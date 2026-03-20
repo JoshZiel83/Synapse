@@ -493,6 +493,7 @@ async function main() {
     await ensureExists(sourcePythonBinary)
     await copyDirectory(pythonRuntimeRoot, join(assetsDir, 'python'))
     await copyDirectory(pythonPackageDir, join(assetsDir, 'python-site-packages'))
+    await rm(join(assetsDir, 'python', 'share', 'terminfo'), { recursive: true, force: true })
 
     const ffmpegBinary = options.targetPlatform.startsWith('windows-') ? 'ffmpeg/ffmpeg.exe' : 'ffmpeg/ffmpeg'
     const ffprobeBinary = options.targetPlatform.startsWith('windows-') ? 'ffmpeg/ffprobe.exe' : 'ffmpeg/ffprobe'
