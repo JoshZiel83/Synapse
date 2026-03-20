@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import type { ActorRuntimeState } from '@synapse/shared';
+import { APP_NAME, type ActorRuntimeState } from '@synapse/shared';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { Plus, Search } from 'lucide-react';
 import ChatAvatar from './chat-avatar';
@@ -28,6 +29,9 @@ interface GroupListProps {
   onSelect: (id: string) => void;
   onNewConversation: () => void;
   className?: string;
+  headerVariant?: 'default' | 'mobile';
+  title?: string;
+  loading?: boolean;
 }
 
 function getRuntimePriority(runtime: ActorRuntimeState) {
@@ -66,8 +70,49 @@ function summarizeRuntimePreview(runtimeByActor?: Record<string, ActorRuntimeSta
   return `${lead}${suffix} · working`;
 }
 
-export default function GroupList({ groups, selectedId, runtimeMap, onSelect, onNewConversation, className }: GroupListProps) {
+function GroupListSkeletonRows({ isMobileHeader }: { isMobileHeader: boolean }) {
+  return (
+    <div className="divide-y divide-border/70">
+      {Array.from({ length: isMobileHeader ? 6 : 8 }, (_, index) => (
+        <div key={index} className="flex items-center gap-3 px-4 py-3">
+          <Skeleton className="size-11 shrink-0 rounded-2xl" />
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <Skeleton
+                className={cn(
+                  'h-4 rounded-full',
+                  index % 3 === 0 ? 'w-28' : index % 3 === 1 ? 'w-36' : 'w-24',
+                )}
+              />
+              <Skeleton className="h-3 w-10 shrink-0 rounded-full" />
+            </div>
+            <Skeleton
+              className={cn(
+                'h-3.5 rounded-full',
+                index % 2 === 0 ? 'w-full max-w-[15rem]' : 'w-[72%]',
+              )}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function GroupList({
+  groups,
+  selectedId,
+  runtimeMap,
+  onSelect,
+  onNewConversation,
+  className,
+  headerVariant = 'default',
+  title,
+  loading = false,
+}: GroupListProps) {
   const [search, setSearch] = useState('');
+  const headerTitle = title || (headerVariant === 'mobile' ? APP_NAME : 'Messages');
+  const isMobileHeader = headerVariant === 'mobile';
 
   const filtered = search
     ? groups.filter((g) => {
@@ -83,17 +128,34 @@ export default function GroupList({ groups, selectedId, runtimeMap, onSelect, on
   return (
     <div className={cn("flex h-full min-h-0 flex-col border-r border-border bg-muted/20", className)}>
       {/* Header */}
-      <div className="border-b border-border px-4 py-4">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold tracking-tight text-foreground">Messages</h2>
+      <div
+        className={cn(
+          'border-b border-border px-4',
+          isMobileHeader
+            ? 'pb-4 pt-[calc(env(safe-area-inset-top)+1rem)]'
+            : 'py-4',
+        )}
+      >
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2
+            className={cn(
+              'tracking-tight text-foreground',
+              isMobileHeader ? 'text-2xl font-semibold' : 'text-lg font-semibold',
+            )}
+          >
+            {headerTitle}
+          </h2>
           <Button
             variant="ghost"
             size="icon"
-            className="size-8 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            className={cn(
+              'shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              isMobileHeader ? 'size-8' : 'size-8',
+            )}
             onClick={onNewConversation}
             title="New Conversation"
           >
-            <Plus className="w-5 h-5" />
+            <Plus className={cn(isMobileHeader ? 'size-6' : 'size-5')} />
           </Button>
         </div>
         <div className="relative">
@@ -109,8 +171,15 @@ export default function GroupList({ groups, selectedId, runtimeMap, onSelect, on
       </div>
 
       {/* Group List */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {filtered.map((group) => {
+      <div
+        className={cn(
+          'min-h-0 flex-1 overflow-y-auto',
+          isMobileHeader && 'pb-[calc(var(--mobile-tab-bar-clearance,0px)+1rem)]',
+        )}
+      >
+        {loading ? (
+          <GroupListSkeletonRows isMobileHeader={isMobileHeader} />
+        ) : filtered.map((group) => {
           const isSelected = group.id === selectedId;
           const runtimePreview = summarizeRuntimePreview(runtimeMap[group.id]);
           const name = group.title || group.participants.map((p) => p.name).join(', ');
@@ -173,7 +242,7 @@ export default function GroupList({ groups, selectedId, runtimeMap, onSelect, on
           );
         })}
 
-        {filtered.length === 0 && (
+        {!loading && filtered.length === 0 && (
           <div className="py-8 text-center">
             <p className="text-xs text-muted-foreground">
               {search ? 'No conversations match your search' : 'No conversations yet'}

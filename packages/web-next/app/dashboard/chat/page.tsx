@@ -7,7 +7,7 @@ import { useWorkspace } from "../workspace-provider"
 import { useChatRealtimeSync } from "@/hooks/use-chat-realtime-sync"
 import { useChatStore } from "@/stores/chat-store"
 import GroupList from "./group-list"
-import GroupChat from "./group-chat"
+import GroupChat, { GroupChatSkeleton } from "./group-chat"
 import NewGroupDialog from "./new-group-dialog"
 import { MessageSquare } from "lucide-react"
 
@@ -23,6 +23,7 @@ export default function ChatPage() {
     groups,
     selectedGroupId,
     messages,
+    loadingGroups,
     loadingMessages,
     runtimeMap,
     loadGroups,
@@ -126,15 +127,16 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden">
+    <div className="flex h-full min-h-0 w-full min-w-0 max-w-full overflow-hidden">
       {/* Desktop: side-by-side. Mobile: toggle */}
 
       {/* Group List */}
       <div
-        className={`w-[22rem] shrink-0 ${mobileView === "list" ? "flex" : "hidden"} min-h-0 flex-col lg:flex`}
+        className={`w-[22rem] shrink-0 ${mobileView === "list" ? "flex" : "hidden"} min-h-0 min-w-0 flex-col lg:flex`}
       >
         <GroupList
           groups={groups}
+          loading={loadingGroups}
           selectedId={selectedGroupId}
           runtimeMap={runtimeMap}
           onSelect={handleSelectGroup}
@@ -159,6 +161,8 @@ export default function ChatPage() {
             workspaceId={workspaceId}
             onRefreshGroup={() => loadGroups(workspaceId)}
           />
+        ) : loadingGroups && (groupParam || selectedGroupId) ? (
+          <GroupChatSkeleton />
         ) : (
           <div className="flex h-full flex-col items-center justify-center space-y-4 p-8 text-center">
             <div className="flex h-24 w-24 items-center justify-center rounded-3xl bg-gray-100 dark:bg-white/5">

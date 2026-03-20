@@ -49,15 +49,12 @@ export default function MobileSettingsPage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col overflow-y-auto px-4 pb-6 pt-[calc(env(safe-area-inset-top)+1rem)]">
+    <div className="flex flex-1 flex-col overflow-y-auto px-4 pb-[calc(var(--mobile-tab-bar-clearance,0px)+1.5rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="space-y-4">
-        <div className="space-y-1">
+        <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">
             Settings
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Manage your account and mobile preferences.
-          </p>
         </div>
 
         <section className="-mx-4 border-y border-border/70 bg-background/80 px-4 py-4">

@@ -7,21 +7,22 @@ import { Bot, ChevronRight, MessageSquareText, ScanLine, Send } from "lucide-rea
 import { useRouter } from "next/navigation"
 
 import ChatAvatar from "@/app/dashboard/chat/chat-avatar"
-import ChiefActorPickerDialog from "@/app/dashboard/chief-actor-picker-dialog"
+import type { ChiefActorOption } from "@/app/dashboard/chief-actor-picker-shared"
+import {
+  clearStoredMobileLaunchActor,
+  type MobileLaunchActor,
+  readStoredMobileLaunchActor,
+  writeStoredMobileLaunchActor,
+} from "@/app/m/mobile-launcher-state"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
+import { MobileActorPickerDialog } from "@/components/mobile-actor-picker-dialog"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { api, ApiError } from "@/lib/api"
 import { useChatStore } from "@/stores/chat-store"
 
-type LaunchActor = {
-  id: string
-  name: string
-  role: string
-  title: string
-  avatarUrl?: string
-  emoji?: string
-}
+type PickerIntent = "submit" | "target"
 
 function emptyPreference(workspaceId: string): WorkspaceChiefActorPreference {
   return {
@@ -32,7 +33,7 @@ function emptyPreference(workspaceId: string): WorkspaceChiefActorPreference {
 
 function toLaunchActor(
   actor?: WorkspaceChiefActorPreference["chiefActor"] | null
-): LaunchActor | null {
+): MobileLaunchActor | null {
   if (!actor) return null
 
   return {
@@ -52,17 +53,18 @@ function getErrorMessage(error: unknown) {
 
 export default function MobileHomePage() {
   const router = useRouter()
-  const { workspaceId, workspaceName } = useWorkspace()
+  const { workspaceId } = useWorkspace()
   const groups = useChatStore((state) => state.groups)
+  const loadingGroups = useChatStore((state) => state.loadingGroups)
   const createGroup = useChatStore((state) => state.createGroup)
   const selectGroup = useChatStore((state) => state.selectGroup)
 
   const [draft, setDraft] = useState("")
-  const [pendingPrompt, setPendingPrompt] = useState("")
   const [preference, setPreference] =
     useState<WorkspaceChiefActorPreference | null>(null)
-  const [launchActor, setLaunchActor] = useState<LaunchActor | null>(null)
+  const [launchActor, setLaunchActor] = useState<MobileLaunchActor | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerIntent, setPickerIntent] = useState<PickerIntent>("target")
   const [submitting, setSubmitting] = useState(false)
   const [loadingPreference, setLoadingPreference] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -71,6 +73,7 @@ export default function MobileHomePage() {
     if (!workspaceId) {
       setPreference(null)
       setLaunchActor(null)
+      clearStoredMobileLaunchActor()
       return
     }
 
@@ -83,14 +86,12 @@ export default function MobileHomePage() {
       .then((result) => {
         if (cancelled) return
         setPreference(result)
-        setLaunchActor(toLaunchActor(result.chiefActor))
       })
       .catch((error) => {
         if (cancelled) return
         console.error("Failed to load chief actor preference:", error)
         const fallback = emptyPreference(workspaceId)
         setPreference(fallback)
-        setLaunchActor(null)
       })
       .finally(() => {
         if (!cancelled) {
@@ -103,10 +104,49 @@ export default function MobileHomePage() {
     }
   }, [workspaceId])
 
-  async function handleLaunch(actor: LaunchActor, saveAsDefault: boolean) {
+  useEffect(() => {
+    if (!workspaceId) {
+      setLaunchActor(null)
+      return
+    }
+
+    const storedActor = readStoredMobileLaunchActor(workspaceId)
+    setLaunchActor(storedActor || toLaunchActor(preference?.chiefActor))
+  }, [preference, workspaceId])
+
+  function openActorPicker(intent: PickerIntent) {
+    if (!workspaceId) return
+    setErrorMessage(null)
+    setPickerIntent(intent)
+    setPickerOpen(true)
+  }
+
+  async function persistDefaultActor(
+    actorId: string,
+    saveAsDefault: boolean,
+    fallbackActor?: MobileLaunchActor
+  ) {
+    if (!workspaceId || !saveAsDefault) return
+
+    try {
+      const nextPreference = await api.updateWorkspaceChiefActorPreference(
+        workspaceId,
+        { chiefActorId: actorId }
+      )
+      setPreference(nextPreference)
+      setLaunchActor(toLaunchActor(nextPreference.chiefActor) || fallbackActor || null)
+    } catch (error) {
+      console.error("Failed to update chief actor preference:", error)
+    }
+  }
+
+  async function handleLaunch(
+    actor: MobileLaunchActor,
+    saveAsDefault: boolean
+  ) {
     if (!workspaceId) return
 
-    const message = (pendingPrompt || draft).trim()
+    const message = draft.trim()
     if (!message) {
       setErrorMessage("Enter a first message to start a conversation.")
       return
@@ -117,26 +157,16 @@ export default function MobileHomePage() {
 
     try {
       const groupId = await createGroup(workspaceId, [actor.id], message, actor.id)
+      writeStoredMobileLaunchActor(workspaceId, actor)
 
       if (saveAsDefault) {
-        try {
-          const nextPreference = await api.updateWorkspaceChiefActorPreference(
-            workspaceId,
-            { chiefActorId: actor.id }
-          )
-          setPreference(nextPreference)
-          setLaunchActor(toLaunchActor(nextPreference.chiefActor) || actor)
-        } catch (error) {
-          console.error("Failed to update chief actor preference:", error)
-        }
+        await persistDefaultActor(actor.id, true, actor)
       } else {
         setLaunchActor(actor)
       }
 
       selectGroup(groupId)
       setDraft("")
-      setPendingPrompt("")
-      setPickerOpen(false)
 
       startTransition(() => {
         router.push(`/m/chat/${groupId}`)
@@ -155,15 +185,43 @@ export default function MobileHomePage() {
       return
     }
 
-    setErrorMessage(null)
-    setPendingPrompt(message)
-
     if (launchActor) {
       void handleLaunch(launchActor, false)
       return
     }
 
-    setPickerOpen(true)
+    openActorPicker("submit")
+  }
+
+  async function handleActorPickerConfirm({
+    selectedActors,
+    saveAsDefault,
+  }: {
+    selectedActors: ChiefActorOption[]
+    saveAsDefault: boolean
+  }) {
+    if (!workspaceId || selectedActors.length === 0) return
+
+    const actor = selectedActors[0]!
+    const nextLaunchActor: MobileLaunchActor = {
+      id: actor.id,
+      name: actor.name,
+      role: actor.role,
+      title: actor.title,
+      avatarUrl: actor.avatarUrl,
+      emoji: actor.emoji,
+    }
+
+    if (pickerIntent === "target") {
+      writeStoredMobileLaunchActor(workspaceId, nextLaunchActor)
+      setLaunchActor(nextLaunchActor)
+      await persistDefaultActor(nextLaunchActor.id, saveAsDefault, nextLaunchActor)
+      setPickerOpen(false)
+      return
+    }
+
+    setPickerOpen(false)
+    await handleLaunch(nextLaunchActor, saveAsDefault)
   }
 
   if (!workspaceId) {
@@ -176,28 +234,25 @@ export default function MobileHomePage() {
     )
   }
 
+  const initialPickerActorIds = launchActor?.id
+    ? [launchActor.id]
+    : preference?.chiefActorId
+      ? [preference.chiefActorId]
+      : []
+
   return (
     <>
-      <div className="flex flex-1 flex-col overflow-y-auto px-4 pb-6 pt-[calc(env(safe-area-inset-top)+1rem)]">
-        <div className="space-y-6">
-          <div className="flex items-start justify-between gap-3">
-            <div className="space-y-1">
+      <div className="flex flex-1 flex-col overflow-y-auto px-4 pb-[calc(var(--mobile-tab-bar-clearance,0px)+1.5rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
               <h1 className="text-2xl font-semibold tracking-tight text-foreground">
                 {APP_NAME}
               </h1>
-              <p className="text-sm text-muted-foreground">
-                {workspaceName || "Workspace"}
-              </p>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="size-11 shrink-0 rounded-full border-border/70 bg-background/90"
-              asChild
-            >
+            <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-full" asChild>
               <Link href="/m/scan-login" aria-label="Scan QR code to log in on Web">
-                <ScanLine className="size-5" />
+                <ScanLine className="size-6" />
               </Link>
             </Button>
           </div>
@@ -205,11 +260,7 @@ export default function MobileHomePage() {
           <section className="-mx-4 border-y border-border/70 bg-background/80 px-4 py-4">
             <button
               type="button"
-              onClick={() => {
-                setErrorMessage(null)
-                setPendingPrompt(draft.trim())
-                setPickerOpen(true)
-              }}
+              onClick={() => openActorPicker("target")}
               className="flex w-full items-center gap-3 rounded-[22px] border border-border/70 bg-muted/35 px-3 py-3 text-left transition-colors hover:bg-muted/55"
               disabled={loadingPreference || submitting}
             >
@@ -243,7 +294,12 @@ export default function MobileHomePage() {
             <div className="mt-4 space-y-3">
               <Textarea
                 value={draft}
-                onChange={(event) => setDraft(event.target.value)}
+                onChange={(event) => {
+                  setDraft(event.target.value)
+                  if (errorMessage) {
+                    setErrorMessage(null)
+                  }
+                }}
                 placeholder="Ask anything..."
                 className="min-h-32 resize-none rounded-[24px] border-border bg-background px-4 py-4 text-base shadow-none"
                 onKeyDown={(event) => {
@@ -277,16 +333,38 @@ export default function MobileHomePage() {
                 <h2 className="text-base font-semibold text-foreground">
                   Recent chats
                 </h2>
-                <p className="text-sm text-muted-foreground">
-                  Jump back into an active thread.
-                </p>
               </div>
               <Button variant="ghost" size="sm" asChild>
                 <Link href="/m/chat">See all</Link>
               </Button>
             </div>
 
-            {groups.length > 0 ? (
+            {loadingGroups ? (
+              <div className="-mx-4 border-y border-border/70 bg-background/80">
+                {Array.from({ length: 4 }, (_, index) => (
+                  <div key={index} className="flex items-center gap-3 px-4 py-4">
+                    <Skeleton className="size-11 shrink-0 rounded-2xl" />
+                    <div className="flex min-w-0 flex-1 flex-col gap-2">
+                      <Skeleton
+                        className={
+                          index % 2 === 0
+                            ? "h-4 w-32 rounded-full"
+                            : "h-4 w-40 rounded-full"
+                        }
+                      />
+                      <Skeleton
+                        className={
+                          index % 2 === 0
+                            ? "h-4 w-full max-w-[14rem] rounded-full"
+                            : "h-4 w-[72%] rounded-full"
+                        }
+                      />
+                    </div>
+                    <Skeleton className="size-4 shrink-0 rounded-full" />
+                  </div>
+                ))}
+              </div>
+            ) : groups.length > 0 ? (
               <div className="-mx-4 border-y border-border/70 bg-background/80">
                 {groups.slice(0, 4).map((group) => {
                   const name =
@@ -342,22 +420,21 @@ export default function MobileHomePage() {
           </section>
         </div>
       </div>
-
-      <ChiefActorPickerDialog
+      <MobileActorPickerDialog
         open={pickerOpen}
-        onOpenChange={(open) => {
-          setPickerOpen(open)
-          if (!open && !submitting) {
-            setPendingPrompt("")
-          }
-        }}
+        onOpenChange={setPickerOpen}
         workspaceId={workspaceId}
-        mode="launch"
-        initialActorId={launchActor?.id || preference?.chiefActorId}
-        busy={submitting}
-        onConfirm={async (payload) => {
-          await handleLaunch(payload.actor, payload.saveAsDefault)
+        title="Choose actor"
+        description="Pick who should take this conversation."
+        initialActorIds={initialPickerActorIds}
+        confirmLabel={pickerIntent === "submit" ? "Start chat" : "Use this actor"}
+        confirmPendingLabel={pickerIntent === "submit" ? "Starting..." : "Saving..."}
+        saveAsDefaultConfig={{
+          label: "Save as my chief actor",
+          description:
+            "Future chats started from the mobile home page will use this actor by default.",
         }}
+        onConfirm={handleActorPickerConfirm}
       />
     </>
   )

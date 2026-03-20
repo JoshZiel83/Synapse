@@ -1,7 +1,8 @@
 "use client"
 
+import type { ComponentPropsWithoutRef } from "react"
 import type { ActorRuntimeState } from "@synapse/shared"
-import { useState, useMemo } from "react"
+import { useMemo, useState } from "react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {
   Tooltip,
@@ -21,6 +22,7 @@ import {
   Download,
   AlertTriangle,
   AtSign,
+  Expand,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -29,8 +31,12 @@ import { extractText } from "@synapse/shared"
 import { runtimeToAvatarStatus } from "@/stores/chat-store"
 import type { ServerToolCall } from "@/stores/chat-store"
 import type { GroupMember } from "@/stores/chat-store"
-import { resolveFileUrl } from "@/lib/utils"
+import { cn, resolveFileUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
+import {
+  TablePreviewOverlay,
+  type TablePreviewContent,
+} from "./table-preview-overlay"
 
 interface MessageBubbleProps {
   role: string
@@ -50,6 +56,7 @@ interface MessageBubbleProps {
   groupMembers?: GroupMember[]
   targetActorIds?: string[]
   targetUserIds?: string[]
+  enableTablePreview?: boolean
 }
 
 function formatToolsUsed(tools: string[]): string {
@@ -453,77 +460,203 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
   )
 }
 
-function MarkdownTextBlock({ text }: { text: string }) {
+function MarkdownTextBlock({
+  text,
+  enableTablePreview,
+}: {
+  text: string
+  enableTablePreview: boolean
+}) {
+  const [expandedTable, setExpandedTable] = useState<TablePreviewContent | null>(
+    null
+  )
+
+  function openTablePreview(table: TablePreviewContent) {
+    setExpandedTable(table)
+  }
+
   if (!text) return null
 
   return (
-    <div className="prose prose-sm prose-p:my-1.5 prose-headings:text-foreground prose-code:rounded prose-code:bg-primary/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-xs prose-code:text-primary prose-code:before:content-none prose-code:after:content-none prose-pre:rounded-2xl prose-pre:border prose-pre:border-border prose-pre:bg-muted prose-strong:text-foreground dark:prose-invert max-w-none">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          img: ({ src, alt, ...props }) => (
-            <ExpandableImage src={src} alt={alt} {...props} />
-          ),
-          a: ({ href, children, ...props }) => {
-            const isAudio =
-              href &&
-              AUDIO_EXTENSIONS.some((ext) => href.toLowerCase().endsWith(ext))
+    <>
+      <div className="prose prose-sm max-w-full min-w-0 break-words prose-p:my-1.5 prose-headings:text-foreground prose-code:rounded prose-code:bg-primary/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-xs prose-code:text-primary prose-code:before:content-none prose-code:after:content-none prose-pre:rounded-2xl prose-pre:border prose-pre:border-border prose-pre:bg-muted prose-strong:text-foreground dark:prose-invert [&_a]:break-words [&_a]:[overflow-wrap:anywhere] [&_code]:break-words [&_code]:[overflow-wrap:anywhere] [&_li]:[overflow-wrap:anywhere] [&_p]:[overflow-wrap:anywhere] [&_pre]:max-w-full [&_pre]:overflow-x-auto">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            img: ({ src, alt, ...props }) => (
+              <ExpandableImage src={src} alt={alt} {...props} />
+            ),
+            a: ({ href, children, ...props }) => {
+              const isAudio =
+                href &&
+                AUDIO_EXTENSIONS.some((ext) => href.toLowerCase().endsWith(ext))
 
-            if (isAudio) {
-              return (
-                <span className="my-2 block">
-                  <audio controls className="h-8 w-full" preload="metadata">
-                    <source src={href} />
-                  </audio>
-                  <span className="mt-0.5 block text-[10px] text-muted-foreground/50">
-                    {String(children) || href}
+              if (isAudio) {
+                return (
+                  <span className="my-2 block">
+                    <audio controls className="h-8 w-full" preload="metadata">
+                      <source src={href} />
+                    </audio>
+                    <span className="mt-0.5 block text-[10px] text-muted-foreground/50">
+                      {String(children) || href}
+                    </span>
                   </span>
-                </span>
-              )
-            }
+                )
+              }
 
-            return (
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:underline"
+              return (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary hover:underline"
+                  {...props}
+                >
+                  {children}
+                </a>
+              )
+            },
+            table: ({ className, children, ...props }) => (
+              <div className="group relative my-2 w-full max-w-full">
+                <div
+                  role={enableTablePreview ? "button" : undefined}
+                  tabIndex={enableTablePreview ? 0 : undefined}
+                  className={cn(
+                    "w-full max-w-full overflow-x-auto rounded-2xl border border-border/70 bg-muted/30",
+                    enableTablePreview &&
+                      "cursor-zoom-in focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                  )}
+                  onClick={
+                    enableTablePreview
+                      ? () => openTablePreview({ className, children })
+                      : undefined
+                  }
+                  onKeyDown={
+                    enableTablePreview
+                      ? (event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault()
+                            openTablePreview({ className, children })
+                          }
+                        }
+                      : undefined
+                  }
+                >
+                  <table
+                    className={cn(
+                      "w-max min-w-full border-collapse text-sm",
+                      className
+                    )}
+                    {...props}
+                  >
+                    {children}
+                  </table>
+                </div>
+                {enableTablePreview ? (
+                  <div className="pointer-events-none absolute inset-x-3 top-3 flex justify-end lg:hidden">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-background/92 px-2 py-1 text-[10px] font-medium text-foreground shadow-sm ring-1 ring-border/70">
+                      <Expand className="size-3" />
+                      Expand
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            ),
+            thead: ({ className, ...props }) => (
+              <thead className={cn("bg-muted/40", className)} {...props} />
+            ),
+            tbody: ({ className, ...props }) => (
+              <tbody
+                className={cn("[&_tr:last-child_td]:border-b-0", className)}
+                {...props}
+              />
+            ),
+            tr: ({ className, ...props }) => (
+              <tr
+                className={cn("border-b border-border/70", className)}
+                {...props}
+              />
+            ),
+            th: ({ className, ...props }) => (
+              <th
+                className={cn(
+                  "min-w-[7rem] border-b border-border/70 px-3 py-2 text-left align-top font-medium text-foreground whitespace-nowrap",
+                  className
+                )}
+                {...props}
+              />
+            ),
+            td: ({ className, ...props }) => (
+              <td
+                className={cn(
+                  "min-w-[7rem] border-b border-border/70 px-3 py-2 align-top break-words [overflow-wrap:anywhere]",
+                  className
+                )}
+                {...props}
+              />
+            ),
+            code: ({
+              className,
+              children,
+              ...props
+            }: ComponentPropsWithoutRef<"code">) => (
+              <code
+                className={cn(
+                  className,
+                  "break-words [overflow-wrap:anywhere]"
+                )}
                 {...props}
               >
                 {children}
-              </a>
-            )
-          },
-        }}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
+              </code>
+            ),
+          }}
+        >
+          {text}
+        </ReactMarkdown>
+      </div>
+
+      {enableTablePreview && expandedTable ? (
+        <TablePreviewOverlay
+          table={expandedTable}
+          onClose={() => setExpandedTable(null)}
+        />
+      ) : null}
+    </>
   )
 }
 
 function MessageContentBlocks({
   blocks,
   isUser,
+  enableTablePreview,
 }: {
   blocks: RenderedMessageBlock[]
   isUser: boolean
+  enableTablePreview: boolean
 }) {
   if (blocks.length === 0) return null
 
   return (
-    <div className="space-y-2">
+    <div className="min-w-0 max-w-full space-y-2">
       {blocks.map((block) =>
         block.type === "file_ref" ? (
           <FileBlockPreview key={block.id} blocks={[block.block]} />
         ) : isUser ? (
           block.text ? (
-            <p key={block.id} className="whitespace-pre-wrap">
+            <p
+              key={block.id}
+              className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+            >
               {block.text}
             </p>
           ) : null
         ) : (
-          <MarkdownTextBlock key={block.id} text={block.text} />
+          <MarkdownTextBlock
+            key={block.id}
+            text={block.text}
+            enableTablePreview={enableTablePreview}
+          />
         )
       )}
     </div>
@@ -695,6 +828,7 @@ export default function MessageBubble({
   groupMembers,
   targetActorIds,
   targetUserIds,
+  enableTablePreview = false,
 }: MessageBubbleProps) {
   const isChildResult = role === "child_result"
   const isSystem = role === "system"
@@ -714,13 +848,15 @@ export default function MessageBubble({
 
   if (isError) {
     return (
-      <div className="flex gap-3">
+      <div className="flex w-full min-w-0 max-w-full gap-3">
         <div className="text-destructive-foreground mt-1 flex size-8 shrink-0 items-center justify-center rounded-2xl bg-destructive shadow-sm">
           <AlertTriangle className="h-4 w-4 text-white" />
         </div>
-        <div className="flex max-w-[75%] min-w-0 flex-col">
+        <div className="flex w-full max-w-[75%] min-w-0 flex-col items-start">
           <div className="rounded-3xl rounded-tl-sm border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm leading-relaxed text-destructive shadow-sm">
-            <p className="whitespace-pre-wrap">{textContent}</p>
+            <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+              {textContent}
+            </p>
           </div>
           {timestamp && (
             <span className="mt-1 text-[10px] text-muted-foreground/50">
@@ -737,7 +873,7 @@ export default function MessageBubble({
 
   if (isSystem) {
     return (
-      <div className="my-2 flex justify-center">
+      <div className="my-2 flex w-full min-w-0 max-w-full justify-center">
         <div className="max-w-[80%] text-center text-xs text-muted-foreground/75">
           {textContent.length > 200
             ? textContent.substring(0, 200) + "..."
@@ -755,8 +891,8 @@ export default function MessageBubble({
   // Coordination messages (send_to between actors) — render in a compact style
   if (coordination && !isUser) {
     return (
-      <div className="ml-10 flex gap-2 opacity-70">
-        <div className="flex max-w-[70%] items-start gap-2">
+      <div className="ml-10 flex w-[calc(100%-2.5rem)] min-w-0 max-w-full gap-2 opacity-70">
+        <div className="flex w-full max-w-[70%] min-w-0 items-start gap-2">
           <AtSign className="mt-1 h-3 w-3 shrink-0 text-primary/60" />
           <div>
             <div className="mb-0.5 flex items-center gap-1.5">
@@ -765,7 +901,11 @@ export default function MessageBubble({
               </span>
             </div>
             <div className="text-xs leading-relaxed text-muted-foreground/70">
-              <MessageContentBlocks blocks={renderedBlocks} isUser={false} />
+              <MessageContentBlocks
+                blocks={renderedBlocks}
+                isUser={false}
+                enableTablePreview={enableTablePreview}
+              />
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[9px] text-muted-foreground/30">
               {timestamp ? (
@@ -788,7 +928,9 @@ export default function MessageBubble({
   }
 
   return (
-    <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+    <div
+      className={`flex w-full min-w-0 max-w-full gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+    >
       {isUser ? (
         <Avatar className="mt-1 h-8 w-8 shrink-0">
           <AvatarFallback className="bg-primary text-xs text-primary-foreground">
@@ -815,15 +957,15 @@ export default function MessageBubble({
       )}
 
       <div
-        className={`max-w-[75%] min-w-0 ${isUser ? "items-end" : "items-start"} flex flex-col`}
+        className={`flex w-full max-w-[75%] min-w-0 flex-col ${isUser ? "items-end" : "items-start"}`}
       >
         {!isUser && actorName && (
-          <span className="mb-1 ml-1 text-xs text-muted-foreground/70">
+          <span className="mb-1 ml-1 self-start text-xs text-muted-foreground/70">
             {actorName}
           </span>
         )}
         <div
-          className={`flex items-end gap-2 ${isUser ? "justify-end" : "justify-start"}`}
+          className={`flex w-full min-w-0 max-w-full items-end gap-2 ${isUser ? "justify-end" : "justify-start"}`}
         >
           {isRetrying ? (
             <span className="mb-2 inline-flex size-6 items-center justify-center rounded-full border border-destructive/25 bg-destructive/10 text-destructive shadow-sm">
@@ -831,7 +973,7 @@ export default function MessageBubble({
             </span>
           ) : null}
           <div
-            className={`rounded-3xl border px-4 py-3 text-sm leading-relaxed shadow-sm ${
+            className={`max-w-full min-w-0 overflow-hidden rounded-3xl border px-4 py-3 text-sm leading-relaxed shadow-sm ${
               isUser
                 ? isRetrying
                   ? "rounded-tr-sm border-destructive/25 bg-destructive/10 text-destructive"
@@ -841,7 +983,11 @@ export default function MessageBubble({
                   : "rounded-tl-sm border-border bg-background text-foreground"
             } `}
           >
-            <MessageContentBlocks blocks={renderedBlocks} isUser={isUser} />
+            <MessageContentBlocks
+              blocks={renderedBlocks}
+              isUser={isUser}
+              enableTablePreview={enableTablePreview}
+            />
 
             {/* Citation sources footer */}
             {hasCitations && <CitationFooter sources={sources} />}
@@ -853,7 +999,7 @@ export default function MessageBubble({
           </div>
         </div>
         <div
-          className={`mt-1 flex items-center gap-2 ${isUser ? "flex-row-reverse" : ""}`}
+          className={`mt-1 inline-flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 ${isUser ? "self-end flex-row-reverse justify-start" : "self-start justify-start"}`}
         >
           {timestamp && (
             <span className="text-[10px] text-muted-foreground/50">

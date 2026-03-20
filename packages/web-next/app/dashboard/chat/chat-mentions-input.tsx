@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Mention, MentionsInput, type MentionItem, type MentionsInputStyle } from 'react-mentions';
 import ChatAvatar from './chat-avatar';
 
@@ -51,6 +51,7 @@ const mentionInputStyle: MentionsInputStyle = {
     },
   },
   suggestions: {
+    zIndex: 80,
     list: {
       width: 288,
       overflow: 'hidden',
@@ -98,11 +99,7 @@ export default function ChatMentionsInput({
   onChange,
   onSubmit,
 }: ChatMentionsInputProps) {
-  const [portalHost, setPortalHost] = useState<Element | null>(null);
-
-  useEffect(() => {
-    setPortalHost(document.body);
-  }, []);
+  const portalHost = typeof document === 'undefined' ? undefined : document.body;
 
   const suggestions = useMemo<ActorSuggestion[]>(
     () => actors.map((actor) => ({
@@ -137,7 +134,7 @@ export default function ChatMentionsInput({
           onSubmit();
         }}
         allowSuggestionsAboveCursor
-        suggestionsPortalHost={portalHost || undefined}
+        suggestionsPortalHost={portalHost}
         inputRef={inputRef}
         placeholder="Type a message..."
         disabled={disabled}

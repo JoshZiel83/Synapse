@@ -5,7 +5,7 @@ import { MessageSquare } from "lucide-react"
 import { useParams, useRouter } from "next/navigation"
 import { type CanonicalContentBlock } from "@synapse/shared"
 
-import GroupChat from "@/app/dashboard/chat/group-chat"
+import GroupChat, { GroupChatSkeleton } from "@/app/dashboard/chat/group-chat"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { Button } from "@/components/ui/button"
 import { useChatStore } from "@/stores/chat-store"
@@ -69,7 +69,7 @@ export default function MobileChatDetailPage() {
   }
 
   return (
-    <div className="flex h-[100dvh] min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="flex h-[100dvh] min-h-0 w-full min-w-0 max-w-full flex-1 flex-col overflow-hidden">
       {selectedGroup ? (
         <GroupChat
           group={selectedGroup}
@@ -81,27 +81,24 @@ export default function MobileChatDetailPage() {
           workspaceId={workspaceId}
           onRefreshGroup={() => loadGroups(workspaceId)}
           viewportLocked
+          mobileMentionPickerWorkspaceId={workspaceId}
         />
+      ) : loadingGroups ? (
+        <GroupChatSkeleton mobile />
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-          {loadingGroups ? (
-            <div className="size-10 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          ) : (
-            <>
-              <div className="mb-4 flex size-16 items-center justify-center rounded-3xl bg-muted">
-                <MessageSquare className="size-7 text-muted-foreground/50" />
-              </div>
-              <h1 className="text-lg font-semibold text-foreground">
-                Conversation unavailable
-              </h1>
-              <p className="mt-2 max-w-xs text-sm text-muted-foreground">
-                This conversation could not be found in the current workspace.
-              </p>
-              <Button className="mt-5 rounded-full" onClick={handleBack}>
-                Back to chats
-              </Button>
-            </>
-          )}
+          <div className="mb-4 flex size-16 items-center justify-center rounded-3xl bg-muted">
+            <MessageSquare className="size-7 text-muted-foreground/50" />
+          </div>
+          <h1 className="text-lg font-semibold text-foreground">
+            Conversation unavailable
+          </h1>
+          <p className="mt-2 max-w-xs text-sm text-muted-foreground">
+            This conversation could not be found in the current workspace.
+          </p>
+          <Button className="mt-5 rounded-full" onClick={handleBack}>
+            Back to chats
+          </Button>
         </div>
       )}
     </div>

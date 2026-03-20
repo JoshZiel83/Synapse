@@ -12,6 +12,7 @@ export default function MobileChatListPage() {
   const router = useRouter()
   const { workspaceId } = useWorkspace()
   const groups = useChatStore((state) => state.groups)
+  const loadingGroups = useChatStore((state) => state.loadingGroups)
   const selectedGroupId = useChatStore((state) => state.selectedGroupId)
   const runtimeMap = useChatStore((state) => state.runtimeMap)
   const createGroup = useChatStore((state) => state.createGroup)
@@ -44,9 +45,10 @@ export default function MobileChatListPage() {
 
   return (
     <>
-      <div className="flex min-h-0 flex-1 flex-col pt-[calc(env(safe-area-inset-top)+0.25rem)]">
+      <div className="flex min-h-0 flex-1 flex-col">
         <GroupList
           groups={groups}
+          loading={loadingGroups}
           selectedId={selectedGroupId}
           runtimeMap={runtimeMap}
           onSelect={(groupId) => {
@@ -57,6 +59,8 @@ export default function MobileChatListPage() {
           }}
           onNewConversation={() => setDialogOpen(true)}
           className="border-r-0 bg-background"
+          headerVariant="mobile"
+          title="Messages"
         />
       </div>
 

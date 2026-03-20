@@ -5,6 +5,7 @@ import {
   Dialog,
   DialogContent,
 } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import { Search, X, Bot } from 'lucide-react';
 
@@ -16,12 +17,26 @@ interface Actor {
   config?: { avatar_emoji?: string };
 }
 
-function normalizeActor(actor: any): Actor {
+type RawActorLike = {
+  id: string;
+  name?: string;
+  role?: string;
+  title?: string;
+  config?: { avatar_emoji?: string };
+  definition?: {
+    name?: string;
+    role?: string;
+    title?: string;
+    config?: { avatar_emoji?: string };
+  };
+};
+
+function normalizeActor(actor: RawActorLike): Actor {
   const definition = actor?.definition || actor;
   return {
     id: actor.id,
-    name: definition.name,
-    role: definition.role,
+    name: definition.name || 'Unknown actor',
+    role: definition.role || 'other',
     title: definition.title,
     config: definition.config || {},
   };
@@ -273,19 +288,22 @@ export default function NewGroupDialog({ open, onOpenChange, workspaceId, onCrea
 
             {/* Footer buttons */}
             <div className="px-6 py-4 border-t border-gray-100 dark:border-white/5 flex justify-end gap-3 bg-gray-50 dark:bg-gray-900">
-              <button
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => onOpenChange(false)}
-                className="rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-xs ring-1 ring-inset ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:ring-white/5 dark:hover:bg-white/20"
+                className="rounded-md"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                type="button"
                 onClick={handleCreate}
                 disabled={selectedIds.size === 0 || loading}
-                className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed dark:bg-indigo-500 dark:hover:bg-indigo-400"
+                className="rounded-md"
               >
                 Create
-              </button>
+              </Button>
             </div>
           </div>
 
