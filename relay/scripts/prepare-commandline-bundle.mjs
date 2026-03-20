@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createWriteStream } from 'node:fs'
-import { copyFile, cp, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -15,14 +15,6 @@ const DEFAULT_PYTHON_STANDALONE_RELEASE = '20251010'
 const DEFAULT_WINDOWS_GIT_VERSION = '2.49.0.windows.1'
 const DEFAULT_FFMPEG_RELEASE_TAG = 'n7.1-2'
 const DEFAULT_PACKAGE_PROFILE = 'default-data-v5'
-
-const NODE_DISTRIBUTIONS = {
-  'linux-amd64': { archiveType: 'tar', distName: 'linux-x64', extension: 'tar.xz' },
-  'linux-arm64': { archiveType: 'tar', distName: 'linux-arm64', extension: 'tar.xz' },
-  'darwin-amd64': { archiveType: 'tar', distName: 'darwin-x64', extension: 'tar.gz' },
-  'darwin-arm64': { archiveType: 'tar', distName: 'darwin-arm64', extension: 'tar.gz' },
-  'windows-amd64': { archiveType: 'zip', distName: 'win-x64', extension: 'zip' },
-}
 
 const PYTHON_DISTRIBUTIONS = {
   'linux-amd64': {
@@ -109,7 +101,7 @@ const PYTHON_REQUIREMENTS = [
   'beautifulsoup4==4.12.3',
   'httpx==0.28.1',
   'imageio==2.36.0',
-  'imageio-ffmpeg==0.5.1',
+  'imageio-ffmpeg==0.6.0',
   'lxml==5.3.0',
   'mutagen==1.47.0',
   'openpyxl==3.1.5',
@@ -179,19 +171,26 @@ function parseArgs(argv) {
   return options
 }
 
-function getNodeSpec(targetPlatform, nodeVersion) {
-  const target = NODE_DISTRIBUTIONS[targetPlatform]
-  if (!target) {
-    throw new Error(`unsupported target platform ${targetPlatform}`)
+function getSharedNodeAssetVersion(targetPlatform, nodeVersion) {
+  return `node-${nodeVersion}-${targetPlatform}`
+}
+
+async function loadSharedNodeManifest(relayRoot, targetPlatform, nodeVersion) {
+  const manifestPath = join(relayRoot, 'internal', 'nodebundle', 'assets', 'manifest.json')
+  const expectedAssetVersion = getSharedNodeAssetVersion(targetPlatform, nodeVersion)
+  let manifest
+
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  } catch (error) {
+    throw new Error(`shared Node bundle is missing; run prepare-node-bundle first (${error instanceof Error ? error.message : String(error)})`)
   }
 
-  const baseName = `node-v${nodeVersion}-${target.distName}`
-  return {
-    archiveType: target.archiveType,
-    archiveFileName: `${baseName}.${target.extension}`,
-    rootDirName: baseName,
-    url: `https://nodejs.org/dist/v${nodeVersion}/${baseName}.${target.extension}`,
+  if (!manifest?.prepared || manifest.platform !== targetPlatform || manifest.assetVersion !== expectedAssetVersion || !manifest.nodeBinary) {
+    throw new Error(`shared Node bundle is not ready for ${targetPlatform} (${expectedAssetVersion}); run prepare-node-bundle first`)
   }
+
+  return manifest
 }
 
 function getPythonSpec(targetPlatform, pythonVersion, releaseTag) {
@@ -439,12 +438,10 @@ async function main() {
   const workDir = await mkdtemp(join(tmpdir(), 'commandlinebundle-'))
 
   try {
-    const nodeSpec = getNodeSpec(options.targetPlatform, options.nodeVersion)
     const pythonSpec = getPythonSpec(options.targetPlatform, options.pythonVersion, options.pythonStandaloneRelease)
     const ffmpegSpec = getFFmpegSpec(options.targetPlatform, options.ffmpegReleaseTag)
+    const sharedNodeManifest = await loadSharedNodeManifest(relayRoot, options.targetPlatform, options.nodeVersion)
 
-    const nodeArchivePath = join(workDir, nodeSpec.archiveFileName)
-    const nodeExtractDir = join(workDir, 'node-extract')
     const nodePackageDir = join(workDir, 'node-packages')
     const pythonArchivePath = join(workDir, pythonSpec.archiveFileName)
     const pythonExtractDir = join(workDir, 'python-extract')
@@ -452,16 +449,11 @@ async function main() {
     const gitExtractDir = join(workDir, 'git-extract')
     const ffmpegDownloadDir = join(workDir, 'ffmpeg-downloads')
 
-    await mkdir(nodeExtractDir, { recursive: true })
     await mkdir(nodePackageDir, { recursive: true })
     await mkdir(pythonExtractDir, { recursive: true })
     await mkdir(pythonPackageDir, { recursive: true })
     await mkdir(gitExtractDir, { recursive: true })
     await mkdir(ffmpegDownloadDir, { recursive: true })
-
-    console.log(`Downloading Node ${options.nodeVersion} for ${options.targetPlatform}`)
-    await downloadFile(nodeSpec.url, nodeArchivePath)
-    await extractArchive(nodeArchivePath, nodeExtractDir, nodeSpec.archiveType)
 
     console.log(`Preparing bundled Node packages (${options.packageProfile})`)
     await writeNodePackage(nodePackageDir)
@@ -485,21 +477,6 @@ async function main() {
 
     await rm(assetsDir, { recursive: true, force: true })
     await mkdir(assetsDir, { recursive: true })
-
-    const nodeSourceDir = join(nodeExtractDir, nodeSpec.rootDirName)
-    const nodeBinary = options.targetPlatform.startsWith('windows-') ? 'node/node.exe' : 'node/bin/node'
-    const sourceNodeBinary = options.targetPlatform.startsWith('windows-')
-      ? join(nodeSourceDir, 'node.exe')
-      : join(nodeSourceDir, 'bin', 'node')
-
-    await ensureExists(sourceNodeBinary)
-    await mkdir(join(assetsDir, 'node', options.targetPlatform.startsWith('windows-') ? '' : 'bin'), { recursive: true })
-    await copyFile(sourceNodeBinary, join(assetsDir, nodeBinary))
-    try {
-      await copyFile(join(nodeSourceDir, 'LICENSE'), join(assetsDir, 'node', 'LICENSE'))
-    } catch {
-      // Some Node distributions do not include a standalone LICENSE file.
-    }
 
     await copyDirectory(join(nodePackageDir, 'node_modules'), join(assetsDir, 'node-modules'))
     await copyFile(join(nodePackageDir, 'package.json'), join(assetsDir, 'node-modules', 'package.json'))
@@ -550,9 +527,8 @@ async function main() {
       bashBinary = 'git/bin/bash.exe'
     }
 
-    const nodeBinaryRelative = nodeBinary
     const pythonBinaryRelative = normalizeRelativePath(assetsDir, pythonBinaryTarget)
-    const executables = [nodeBinaryRelative, pythonBinaryRelative, ffmpegBinary, ffprobeBinary]
+    const executables = [pythonBinaryRelative, ffmpegBinary, ffprobeBinary]
     if (gitBinary) {
       executables.push(gitBinary)
     }
@@ -563,7 +539,7 @@ async function main() {
     const manifest = {
       prepared: true,
       platform: options.targetPlatform,
-      nodeBinary: nodeBinaryRelative,
+      nodeAssetVersion: sharedNodeManifest.assetVersion,
       nodeModulesDir: 'node-modules',
       pythonHomeDir: 'python',
       pythonBinary: pythonBinaryRelative,
@@ -574,7 +550,7 @@ async function main() {
       bashBinary,
       packageProfile: options.packageProfile,
       ffmpegReleaseTag: options.ffmpegReleaseTag,
-      assetVersion: `commandline-${options.packageProfile}-node-${options.nodeVersion}-python-${options.pythonVersion}-${options.pythonStandaloneRelease}-ffmpeg-${options.ffmpegReleaseTag}-${options.targetPlatform}`,
+      assetVersion: `commandline-${options.packageProfile}-python-${options.pythonVersion}-${options.pythonStandaloneRelease}-ffmpeg-${options.ffmpegReleaseTag}-${options.targetPlatform}`,
       executables,
     }
 

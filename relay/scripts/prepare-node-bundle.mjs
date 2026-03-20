@@ -1,19 +1,28 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, mkdtemp, readFile, stat, rm, writeFile } from 'node:fs/promises'
+import { createWriteStream } from 'node:fs'
+import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
 
 const DEFAULT_NODE_VERSION = '20.19.5'
-const DEFAULT_PACKAGE_VERSION = '0.20.0'
+
+const NODE_DISTRIBUTIONS = {
+  'linux-amd64': { archiveType: 'tar', distName: 'linux-x64', extension: 'tar.xz' },
+  'linux-arm64': { archiveType: 'tar', distName: 'linux-arm64', extension: 'tar.xz' },
+  'darwin-amd64': { archiveType: 'tar', distName: 'darwin-x64', extension: 'tar.gz' },
+  'darwin-arm64': { archiveType: 'tar', distName: 'darwin-arm64', extension: 'tar.gz' },
+  'windows-amd64': { archiveType: 'zip', distName: 'win-x64', extension: 'zip' },
+}
 
 function parseArgs(argv) {
   const options = {
     targetPlatform: '',
     nodeVersion: DEFAULT_NODE_VERSION,
-    packageVersion: DEFAULT_PACKAGE_VERSION,
   }
 
   for (const arg of argv) {
@@ -25,10 +34,6 @@ function parseArgs(argv) {
       options.nodeVersion = arg.slice('--node-version='.length)
       continue
     }
-    if (arg.startsWith('--package-version=')) {
-      options.packageVersion = arg.slice('--package-version='.length)
-      continue
-    }
   }
 
   if (!options.targetPlatform) {
@@ -38,8 +43,32 @@ function parseArgs(argv) {
   return options
 }
 
+function getNodeSpec(targetPlatform, nodeVersion) {
+  const target = NODE_DISTRIBUTIONS[targetPlatform]
+  if (!target) {
+    throw new Error(`unsupported target platform ${targetPlatform}`)
+  }
+
+  const baseName = `node-v${nodeVersion}-${target.distName}`
+  return {
+    archiveType: target.archiveType,
+    archiveFileName: `${baseName}.${target.extension}`,
+    rootDirName: baseName,
+    url: `https://nodejs.org/dist/v${nodeVersion}/${baseName}.${target.extension}`,
+  }
+}
+
 function getSharedNodeAssetVersion(targetPlatform, nodeVersion) {
   return `node-${nodeVersion}-${targetPlatform}`
+}
+
+async function downloadFile(url, destinationPath) {
+  const response = await fetch(url)
+  if (!response.ok || !response.body) {
+    throw new Error(`download failed for ${url}: ${response.status} ${response.statusText}`)
+  }
+
+  await pipeline(Readable.fromWeb(response.body), createWriteStream(destinationPath))
 }
 
 function runCommand(command, args, options = {}) {
@@ -102,24 +131,6 @@ async function extractArchive(archivePath, destinationPath, archiveType) {
   await runCommand('unzip', ['-q', archivePath, '-d', destinationPath])
 }
 
-async function npmPack(packageVersion, workingDirectory) {
-  const { stdout } = await runCommand(
-    'npm',
-    ['pack', `chrome-devtools-mcp@${packageVersion}`, '--silent'],
-    {
-      cwd: workingDirectory,
-      shell: process.platform === 'win32',
-    },
-  )
-
-  const archiveFileName = stdout.trim().split(/\r?\n/).filter(Boolean).at(-1)
-  if (!archiveFileName) {
-    throw new Error('npm pack did not return an archive file name')
-  }
-
-  return join(workingDirectory, archiveFileName)
-}
-
 async function ensureExists(path) {
   try {
     await stat(path)
@@ -128,62 +139,51 @@ async function ensureExists(path) {
   }
 }
 
-async function loadSharedNodeManifest(relayRoot, targetPlatform, nodeVersion) {
-  const manifestPath = join(relayRoot, 'internal', 'nodebundle', 'assets', 'manifest.json')
-  const expectedAssetVersion = getSharedNodeAssetVersion(targetPlatform, nodeVersion)
-  let manifest
-
-  try {
-    manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
-  } catch (error) {
-    throw new Error(`shared Node bundle is missing; run prepare-node-bundle first (${error instanceof Error ? error.message : String(error)})`)
-  }
-
-  if (!manifest?.prepared || manifest.platform !== targetPlatform || manifest.assetVersion !== expectedAssetVersion || !manifest.nodeBinary) {
-    throw new Error(`shared Node bundle is not ready for ${targetPlatform} (${expectedAssetVersion}); run prepare-node-bundle first`)
-  }
-
-  return manifest
-}
-
 async function main() {
   const options = parseArgs(process.argv.slice(2))
   const scriptDir = dirname(fileURLToPath(import.meta.url))
   const relayRoot = resolve(scriptDir, '..')
-  const assetsDir = join(relayRoot, 'internal', 'chromemcpbundle', 'assets')
-  const workDir = await mkdtemp(join(tmpdir(), 'chromemcpbundle-'))
+  const assetsDir = join(relayRoot, 'internal', 'nodebundle', 'assets')
+  const workDir = await mkdtemp(join(tmpdir(), 'nodebundle-'))
 
   try {
-    const packageExtractDir = join(workDir, 'package-extract')
-    await mkdir(packageExtractDir, { recursive: true })
+    const nodeSpec = getNodeSpec(options.targetPlatform, options.nodeVersion)
+    const nodeArchivePath = join(workDir, nodeSpec.archiveFileName)
+    const nodeExtractDir = join(workDir, 'node-extract')
 
-    const sharedNodeManifest = await loadSharedNodeManifest(relayRoot, options.targetPlatform, options.nodeVersion)
+    await mkdir(nodeExtractDir, { recursive: true })
 
-    console.log(`Packing chrome-devtools-mcp@${options.packageVersion}`)
-    const packageArchivePath = await npmPack(options.packageVersion, workDir)
-    await extractArchive(packageArchivePath, packageExtractDir, 'tar')
+    console.log(`Downloading shared Node ${options.nodeVersion} for ${options.targetPlatform}`)
+    await downloadFile(nodeSpec.url, nodeArchivePath)
+    await extractArchive(nodeArchivePath, nodeExtractDir, nodeSpec.archiveType)
 
-    const packageSourceDir = join(packageExtractDir, 'package')
-    const entryScript = 'package/build/src/bin/chrome-devtools-mcp.js'
+    const nodeSourceDir = join(nodeExtractDir, nodeSpec.rootDirName)
+    const nodeBinary = options.targetPlatform.startsWith('windows-') ? 'node/node.exe' : 'node/bin/node'
+    const sourceNodeBinary = options.targetPlatform.startsWith('windows-')
+      ? join(nodeSourceDir, 'node.exe')
+      : join(nodeSourceDir, 'bin', 'node')
 
-    await ensureExists(join(packageSourceDir, 'build', 'src', 'bin', 'chrome-devtools-mcp.js'))
+    await ensureExists(sourceNodeBinary)
 
     await rm(assetsDir, { recursive: true, force: true })
     await mkdir(assetsDir, { recursive: true })
-    await cp(packageSourceDir, join(assetsDir, 'package'), { recursive: true })
+    await mkdir(join(assetsDir, 'node', options.targetPlatform.startsWith('windows-') ? '' : 'bin'), { recursive: true })
+    await copyFile(sourceNodeBinary, join(assetsDir, nodeBinary))
+    try {
+      await copyFile(join(nodeSourceDir, 'LICENSE'), join(assetsDir, 'node', 'LICENSE'))
+    } catch {
+      // Some Node distributions do not include a standalone LICENSE file.
+    }
 
     const manifest = {
       prepared: true,
-      assetVersion: `chrome-devtools-mcp-${options.packageVersion}-${options.targetPlatform}`,
+      assetVersion: getSharedNodeAssetVersion(options.targetPlatform, options.nodeVersion),
       platform: options.targetPlatform,
-      nodeAssetVersion: sharedNodeManifest.assetVersion,
-      packageDir: 'package',
-      entryScript,
-      packageVersion: options.packageVersion,
+      nodeBinary,
     }
 
     await writeFile(join(assetsDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
-    console.log(`Prepared bundled Chrome DevTools runtime in ${assetsDir}`)
+    console.log(`Prepared shared Node runtime in ${assetsDir}`)
   } finally {
     await rm(workDir, { recursive: true, force: true })
   }

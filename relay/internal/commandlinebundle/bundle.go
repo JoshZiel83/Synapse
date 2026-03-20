@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/PekingSpades/Synapse/relay/internal/config"
+	"github.com/PekingSpades/Synapse/relay/internal/nodebundle"
 )
 
 //go:embed all:assets
@@ -20,7 +21,7 @@ type Manifest struct {
 	Prepared              bool     `json:"prepared"`
 	AssetVersion          string   `json:"assetVersion"`
 	Platform              string   `json:"platform"`
-	NodeBinary            string   `json:"nodeBinary"`
+	NodeAssetVersion      string   `json:"nodeAssetVersion"`
 	NodeModulesDir        string   `json:"nodeModulesDir"`
 	PythonHomeDir         string   `json:"pythonHomeDir"`
 	PythonBinary          string   `json:"pythonBinary"`
@@ -81,10 +82,17 @@ func EnsureInstalled() (*Installation, error) {
 	if err := ensureExtracted(rootDir, manifest); err != nil {
 		return nil, err
 	}
+	nodeInstallation, err := nodebundle.EnsureInstalled()
+	if err != nil {
+		return nil, err
+	}
+	if manifest.NodeAssetVersion != "" && nodeInstallation.AssetVersion != manifest.NodeAssetVersion {
+		return nil, fmt.Errorf("shared node runtime version mismatch: commandline bundle expects %s, got %s", manifest.NodeAssetVersion, nodeInstallation.AssetVersion)
+	}
 
 	return &Installation{
 		RootDir:               rootDir,
-		NodeBinaryPath:        joinIfNotEmpty(rootDir, manifest.NodeBinary),
+		NodeBinaryPath:        nodeInstallation.NodeBinaryPath,
 		NodeModulesDir:        joinIfNotEmpty(rootDir, manifest.NodeModulesDir),
 		PythonHomeDir:         joinIfNotEmpty(rootDir, manifest.PythonHomeDir),
 		PythonBinaryPath:      joinIfNotEmpty(rootDir, manifest.PythonBinary),
@@ -102,10 +110,14 @@ func EnsureInstalled() (*Installation, error) {
 func ensureExtracted(rootDir string, manifest Manifest) error {
 	readyMarker := filepath.Join(rootDir, ".ready")
 	if data, err := os.ReadFile(readyMarker); err == nil && strings.TrimSpace(string(data)) == manifest.AssetVersion {
-		markerTarget := joinIfNotEmpty(rootDir, manifest.NodeBinary)
-		if markerTarget == "" {
-			markerTarget = joinIfNotEmpty(rootDir, manifest.PythonBinary)
-		}
+		markerTarget := firstNonEmpty(
+			joinIfNotEmpty(rootDir, manifest.PythonBinary),
+			joinIfNotEmpty(rootDir, manifest.FFmpegBinary),
+			joinIfNotEmpty(rootDir, manifest.FFprobeBinary),
+			joinIfNotEmpty(rootDir, manifest.NodeModulesDir),
+			joinIfNotEmpty(rootDir, manifest.GitBinary),
+			joinIfNotEmpty(rootDir, manifest.BashBinary),
+		)
 		if markerTarget == "" || statExists(markerTarget) {
 			return nil
 		}
@@ -169,6 +181,15 @@ func joinIfNotEmpty(root, relative string) string {
 		return ""
 	}
 	return filepath.Join(root, filepath.FromSlash(relative))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func statExists(path string) bool {

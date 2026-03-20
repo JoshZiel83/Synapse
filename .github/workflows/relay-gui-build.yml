@@ -119,6 +119,9 @@ jobs:
             echo "version=dev-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Prepare shared Node runtime
+        run: node relay/scripts/prepare-node-bundle.mjs --target-platform=${{ matrix.goos }}-${{ matrix.goarch }} --node-version=${{ env.BUNDLED_NODE_VERSION }}
+
       - name: Prepare bundled Chrome DevTools runtime
         run: node relay/scripts/prepare-chrome-devtools-bundle.mjs --target-platform=${{ matrix.goos }}-${{ matrix.goarch }} --node-version=${{ env.BUNDLED_NODE_VERSION }} --package-version=${{ env.CHROME_DEVTOOLS_MCP_VERSION }}
 
