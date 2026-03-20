@@ -4,6 +4,7 @@ package cua
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"strings"
@@ -132,7 +133,11 @@ func (d *deskactDesktop) Scroll(deltaX, deltaY int, unit ScrollUnit) error {
 	case "", ScrollUnitLine:
 		return deskact.ScrollLines(deltaX, deltaY, d.mouseSettings)
 	case ScrollUnitPixel:
-		return deskact.ScrollPixels(deltaX, deltaY, d.mouseSettings)
+		err := deskact.ScrollPixels(deltaX, deltaY, d.mouseSettings)
+		if errors.Is(err, deskact.ErrMouseUnsupportedScrollUnit) || errors.Is(err, deskact.ErrMouseInvalidScrollUnit) {
+			return fmt.Errorf("scroll unit %q is not supported: %w", unit, err)
+		}
+		return err
 	default:
 		return fmt.Errorf("unsupported scroll unit %q", unit)
 	}

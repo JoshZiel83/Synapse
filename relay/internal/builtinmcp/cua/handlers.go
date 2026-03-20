@@ -1,14 +1,12 @@
 package cua
 
 import (
-	"errors"
 	"fmt"
 	"image"
 	"math"
 	"strings"
 	"time"
 
-	deskact "github.com/PekingSpades/DeskAct"
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 )
 
@@ -331,9 +329,6 @@ func (s *Server) scroll(raw map[string]interface{}) (core.CallResult, error) {
 		return errorResult(err.Error()), nil
 	}
 	if err := s.desktop.Scroll(deltaX, deltaY, unit); err != nil {
-		if errors.Is(err, deskact.ErrMouseUnsupportedScrollUnit) || errors.Is(err, deskact.ErrMouseInvalidScrollUnit) {
-			return errorResult(fmt.Sprintf("scroll unit %q is not supported: %v", unit, err)), nil
-		}
 		return errorResult(fmt.Sprintf("failed to scroll: %v", err)), nil
 	}
 
