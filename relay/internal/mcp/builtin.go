@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/chrome"
+	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/commandline"
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/cua"
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/filesystem"
@@ -104,6 +105,20 @@ func newBuiltinServer(cfg config.ServerConfig) (Server, error) {
 				ParsePDF:         cfg.Builtin.Filesystem.Index.ParsePDF == nil || *cfg.Builtin.Filesystem.Index.ParsePDF,
 				ParseOffice:      cfg.Builtin.Filesystem.Index.ParseOffice == nil || *cfg.Builtin.Filesystem.Index.ParseOffice,
 			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &builtinAdapter{inner: server}, nil
+	case "commandline":
+		if cfg.Builtin.Commandline == nil {
+			return nil, fmt.Errorf("builtin.commandline config is required")
+		}
+
+		server, err := commandline.New(commandline.Config{
+			Name:       cfg.Name,
+			InstanceID: cfg.Builtin.InstanceID,
+			DefaultCWD: cfg.Builtin.Commandline.DefaultCWD,
 		})
 		if err != nil {
 			return nil, err

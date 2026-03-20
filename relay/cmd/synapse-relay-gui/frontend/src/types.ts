@@ -85,12 +85,17 @@ export interface BuiltinChromeConfig {
   performanceCrux?: boolean
 }
 
+export interface BuiltinCommandlineConfig {
+  defaultCwd?: string
+}
+
 export interface BuiltinServerConfig {
-  kind: 'chrome' | 'cua' | 'filesystem'
+  kind: 'chrome' | 'cua' | 'filesystem' | 'commandline'
   instanceId?: string
   chrome?: BuiltinChromeConfig
   cua?: BuiltinCUAConfig
   filesystem?: BuiltinFilesystemConfig
+  commandline?: BuiltinCommandlineConfig
 }
 
 export interface ServerConfig {

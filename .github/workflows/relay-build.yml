@@ -25,6 +25,11 @@ permissions:
 env:
   BUNDLED_NODE_VERSION: '20.19.5'
   CHROME_DEVTOOLS_MCP_VERSION: '0.20.0'
+  BUNDLED_PYTHON_VERSION: '3.12.12'
+  BUNDLED_PYTHON_STANDALONE_RELEASE: '20251010'
+  BUNDLED_WINDOWS_GIT_VERSION: '2.49.0.windows.1'
+  BUNDLED_FFMPEG_RELEASE_TAG: 'n7.1-2'
+  COMMANDLINE_PACKAGE_PROFILE: 'default-data-v5'
 
 jobs:
   build:
@@ -60,6 +65,15 @@ jobs:
         with:
           node-version: ${{ env.BUNDLED_NODE_VERSION }}
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install bundle prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq p7zip-full
+
       - name: Determine version
         id: version
         run: |
@@ -73,6 +87,9 @@ jobs:
 
       - name: Prepare bundled Chrome DevTools runtime
         run: node relay/scripts/prepare-chrome-devtools-bundle.mjs --target-platform=${{ matrix.goos }}-${{ matrix.goarch }} --node-version=${{ env.BUNDLED_NODE_VERSION }} --package-version=${{ env.CHROME_DEVTOOLS_MCP_VERSION }}
+
+      - name: Prepare bundled command line runtime
+        run: node relay/scripts/prepare-commandline-bundle.mjs --target-platform=${{ matrix.goos }}-${{ matrix.goarch }} --node-version=${{ env.BUNDLED_NODE_VERSION }} --python-version=${{ env.BUNDLED_PYTHON_VERSION }} --python-standalone-release=${{ env.BUNDLED_PYTHON_STANDALONE_RELEASE }} --windows-git-version=${{ env.BUNDLED_WINDOWS_GIT_VERSION }} --ffmpeg-release-tag=${{ env.BUNDLED_FFMPEG_RELEASE_TAG }} --package-profile=${{ env.COMMANDLINE_PACKAGE_PROFILE }}
 
       - name: Build
         working-directory: relay

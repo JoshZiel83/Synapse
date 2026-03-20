@@ -1,0 +1,17 @@
+{
+  "prepared": false,
+  "assetVersion": "unprepared",
+  "platform": "",
+  "nodeBinary": "",
+  "nodeModulesDir": "",
+  "pythonHomeDir": "",
+  "pythonBinary": "",
+  "pythonSitePackagesDir": "",
+  "ffmpegBinary": "",
+  "ffprobeBinary": "",
+  "gitBinary": "",
+  "bashBinary": "",
+  "packageProfile": "",
+  "ffmpegReleaseTag": "",
+  "executables": []
+}

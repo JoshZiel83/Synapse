@@ -111,12 +111,17 @@ type BuiltinChromeConfig struct {
 	PerformanceCrux         *bool             `yaml:"performance_crux,omitempty" json:"performanceCrux,omitempty"`
 }
 
+type BuiltinCommandlineConfig struct {
+	DefaultCWD string `yaml:"default_cwd,omitempty" json:"defaultCwd,omitempty"`
+}
+
 type BuiltinServerConfig struct {
-	Kind       string                   `yaml:"kind" json:"kind"`
-	InstanceID string                   `yaml:"instance_id,omitempty" json:"instanceId,omitempty"`
-	CUA        *BuiltinCUAConfig        `yaml:"cua,omitempty" json:"cua,omitempty"`
-	Filesystem *BuiltinFilesystemConfig `yaml:"filesystem,omitempty" json:"filesystem,omitempty"`
-	Chrome     *BuiltinChromeConfig     `yaml:"chrome,omitempty" json:"chrome,omitempty"`
+	Kind        string                    `yaml:"kind" json:"kind"`
+	InstanceID  string                    `yaml:"instance_id,omitempty" json:"instanceId,omitempty"`
+	CUA         *BuiltinCUAConfig         `yaml:"cua,omitempty" json:"cua,omitempty"`
+	Filesystem  *BuiltinFilesystemConfig  `yaml:"filesystem,omitempty" json:"filesystem,omitempty"`
+	Chrome      *BuiltinChromeConfig      `yaml:"chrome,omitempty" json:"chrome,omitempty"`
+	Commandline *BuiltinCommandlineConfig `yaml:"commandline,omitempty" json:"commandline,omitempty"`
 }
 
 type Config struct {
@@ -536,6 +541,11 @@ func cloneBuiltin(input *BuiltinServerConfig) *BuiltinServerConfig {
 			PerformanceCrux:         cloneBoolPtr(input.Chrome.PerformanceCrux),
 		}
 	}
+	if input.Commandline != nil {
+		clone.Commandline = &BuiltinCommandlineConfig{
+			DefaultCWD: input.Commandline.DefaultCWD,
+		}
+	}
 	return clone
 }
 
@@ -562,8 +572,15 @@ func applyBuiltinDefaults(server *ServerConfig) {
 	if server.Builtin == nil {
 		server.Builtin = &BuiltinServerConfig{}
 	}
-	if server.Builtin.Kind == "" && server.Builtin.Filesystem != nil {
-		server.Builtin.Kind = "filesystem"
+	if server.Builtin.Kind == "" {
+		switch {
+		case server.Builtin.Chrome != nil:
+			server.Builtin.Kind = "chrome"
+		case server.Builtin.Filesystem != nil:
+			server.Builtin.Kind = "filesystem"
+		case server.Builtin.Commandline != nil:
+			server.Builtin.Kind = "commandline"
+		}
 	}
 	switch server.Builtin.Kind {
 	case "", "cua":
@@ -667,6 +684,13 @@ func applyBuiltinDefaults(server *ServerConfig) {
 		}
 		if strings.TrimSpace(server.Builtin.Chrome.UserDataDir) == "" && server.Builtin.Chrome.ConnectionMode == "managed" && (server.Builtin.Chrome.Isolated == nil || !*server.Builtin.Chrome.Isolated) {
 			server.Builtin.Chrome.UserDataDir = filepath.Join(DefaultDir(), "browsers", "chrome", server.Builtin.InstanceID, "profile")
+		}
+	case "commandline":
+		if server.Builtin.InstanceID == "" {
+			server.Builtin.InstanceID = "commandline_default"
+		}
+		if server.Builtin.Commandline == nil {
+			server.Builtin.Commandline = &BuiltinCommandlineConfig{}
 		}
 	}
 }
@@ -780,6 +804,10 @@ func validateServerConfig(server ServerConfig) error {
 				if strings.TrimSpace(server.Builtin.Chrome.BrowserURL) == "" && strings.TrimSpace(server.Builtin.Chrome.WSEndpoint) == "" {
 					return fmt.Errorf("builtin.chrome.browser_url or builtin.chrome.ws_endpoint is required when connection_mode is attach_url")
 				}
+			}
+		case "commandline":
+			if server.Builtin.Commandline == nil {
+				return fmt.Errorf("builtin.commandline is required for builtin kind %q", server.Builtin.Kind)
 			}
 		default:
 			return fmt.Errorf("builtin kind %q is unsupported", server.Builtin.Kind)

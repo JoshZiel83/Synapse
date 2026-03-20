@@ -55,6 +55,17 @@ servers:
   #         parse_pdf: true
   #         parse_office: true
 
+  # Example: built-in command line runtime
+  # - name: "command-line"
+  #   enabled: true
+  #   transport: "builtin"
+  #   management_mode: "builtin"
+  #   builtin:
+  #     kind: "commandline"
+  #     instance_id: "commandline_default"
+  #     commandline:
+  #       default_cwd: "/workspace"
+
   # Example: filesystem server via stdio
   - name: "filesystem-stdio"
     transport: "stdio"

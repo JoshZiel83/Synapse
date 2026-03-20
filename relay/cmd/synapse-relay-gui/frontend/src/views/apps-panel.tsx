@@ -1,4 +1,4 @@
-import { Cable, ChevronDown, FolderTree, Globe, Plus, Search, Shield, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { Cable, ChevronDown, FolderTree, Globe, Plus, Search, Shield, SlidersHorizontal, Terminal, Trash2 } from 'lucide-react'
 import { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
 
 import { Badge } from '../components/ui/badge'
@@ -14,6 +14,7 @@ import { Input } from '../components/ui/input'
 import { Separator } from '../components/ui/separator'
 import type {
   BuiltinChromeConfig,
+  BuiltinCommandlineConfig,
   BuiltinCUAConfig,
   BuiltinFilesystemConfig,
   BuiltinFilesystemRootConfig,
@@ -146,6 +147,25 @@ function defaultFilesystemServer(): ServerConfig {
   }
 }
 
+function defaultCommandlineServer(): ServerConfig {
+  return {
+    name: 'command-line',
+    enabled: false,
+    transport: 'builtin',
+    managementMode: 'builtin',
+    builtin: {
+      kind: 'commandline',
+      instanceId: 'commandline_default',
+      commandline: {
+        defaultCwd: '',
+      },
+    },
+    metadata: {
+      category: 'commandline',
+    },
+  }
+}
+
 function chromeServerFromConfig(config: RelayConfig): ServerConfig | undefined {
   return (config.servers || []).find((server) => server.transport === 'builtin' && server.builtin?.kind === 'chrome')
 }
@@ -156,6 +176,10 @@ function cuaServerFromConfig(config: RelayConfig): ServerConfig | undefined {
 
 function filesystemServerFromConfig(config: RelayConfig): ServerConfig | undefined {
   return (config.servers || []).find((server) => server.transport === 'builtin' && server.builtin?.kind === 'filesystem')
+}
+
+function commandlineServerFromConfig(config: RelayConfig): ServerConfig | undefined {
+  return (config.servers || []).find((server) => server.transport === 'builtin' && server.builtin?.kind === 'commandline')
 }
 
 function normalizeChromeServer(input?: ServerConfig): ServerConfig {
@@ -186,6 +210,33 @@ function normalizeChromeServer(input?: ServerConfig): ServerConfig {
         },
         chromeArgs: [...(currentChrome.chromeArgs || defaultChrome.chromeArgs || [])],
         ignoreDefaultChromeArgs: [...(currentChrome.ignoreDefaultChromeArgs || defaultChrome.ignoreDefaultChromeArgs || [])],
+      },
+    },
+  }
+}
+
+function normalizeCommandlineServer(input?: ServerConfig): ServerConfig {
+  const defaults = defaultCommandlineServer()
+  const current = input || defaults
+  const defaultCommandline = defaults.builtin?.commandline || {}
+  const currentCommandline = current.builtin?.commandline || {}
+
+  return {
+    ...defaults,
+    ...current,
+    transport: 'builtin',
+    managementMode: 'builtin',
+    enabled: current.enabled !== false,
+    metadata: {
+      ...(defaults.metadata || {}),
+      ...(current.metadata || {}),
+    },
+    builtin: {
+      kind: 'commandline',
+      instanceId: current.builtin?.instanceId || defaults.builtin?.instanceId || 'commandline_default',
+      commandline: {
+        ...defaultCommandline,
+        ...currentCommandline,
       },
     },
   }
@@ -351,6 +402,20 @@ function withFilesystemConfig(server: ServerConfig, update: (current: BuiltinFil
   }
 }
 
+function withCommandlineConfig(server: ServerConfig, update: (current: BuiltinCommandlineConfig) => BuiltinCommandlineConfig): ServerConfig {
+  const next = normalizeCommandlineServer(server)
+  return {
+    ...next,
+    builtin: {
+      kind: 'commandline',
+      instanceId: next.builtin?.instanceId || 'commandline_default',
+      commandline: update({
+        ...(next.builtin?.commandline || {}),
+      }),
+    },
+  }
+}
+
 function SettingToggle({
   label,
   description,
@@ -398,18 +463,22 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
   const chromeServer = chromeServerFromConfig(config)
   const cuaServer = cuaServerFromConfig(config)
   const filesystemServer = filesystemServerFromConfig(config)
+  const commandlineServer = commandlineServerFromConfig(config)
   const chromeServerSignature = JSON.stringify(chromeServer || null)
   const cuaServerSignature = JSON.stringify(cuaServer || null)
   const filesystemServerSignature = JSON.stringify(filesystemServer || null)
+  const commandlineServerSignature = JSON.stringify(commandlineServer || null)
 
   const [chromeDraft, setChromeDraft] = useState<ServerConfig>(() => normalizeChromeServer(chromeServerFromConfig(config)))
   const [cuaDraft, setCuaDraft] = useState<ServerConfig>(() => normalizeCUAServer(cuaServerFromConfig(config)))
   const [filesystemDraft, setFilesystemDraft] = useState<ServerConfig>(() => normalizeFilesystemServer(filesystemServerFromConfig(config)))
-  const [expanded, setExpanded] = useState<{ chrome: boolean; cua: boolean; filesystem: boolean }>({ chrome: false, cua: false, filesystem: false })
-  const [dirty, setDirty] = useState<{ chrome: boolean; cua: boolean; filesystem: boolean }>({
+  const [commandlineDraft, setCommandlineDraft] = useState<ServerConfig>(() => normalizeCommandlineServer(commandlineServerFromConfig(config)))
+  const [expanded, setExpanded] = useState<{ chrome: boolean; cua: boolean; filesystem: boolean; commandline: boolean }>({ chrome: false, cua: false, filesystem: false, commandline: false })
+  const [dirty, setDirty] = useState<{ chrome: boolean; cua: boolean; filesystem: boolean; commandline: boolean }>({
     chrome: false,
     cua: false,
     filesystem: false,
+    commandline: false,
   })
   const [saving, setSaving] = useState(false)
   const [filesystemBootstrapping, setFilesystemBootstrapping] = useState(false)
@@ -419,7 +488,8 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
   const cua = cuaDraft.builtin?.cua || defaultCUAServer().builtin?.cua || {}
   const filesystem = filesystemDraft.builtin?.filesystem || defaultFilesystemServer().builtin?.filesystem || {}
   const filesystemIndex = filesystem.index || defaultFilesystemServer().builtin?.filesystem?.index || {}
-  const hasUnsavedChanges = dirty.chrome || dirty.cua || dirty.filesystem
+  const commandline = commandlineDraft.builtin?.commandline || defaultCommandlineServer().builtin?.commandline || {}
+  const hasUnsavedChanges = dirty.chrome || dirty.cua || dirty.filesystem || dirty.commandline
 
   useEffect(() => {
     if (dirty.chrome) {
@@ -443,12 +513,20 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
   }, [filesystemServer, filesystemServerSignature, dirty.filesystem])
 
   useEffect(() => {
+    if (dirty.commandline) {
+      return
+    }
+    setCommandlineDraft(normalizeCommandlineServer(commandlineServer))
+  }, [commandlineServer, commandlineServerSignature, dirty.commandline])
+
+  useEffect(() => {
     setExpanded((current) => ({
       chrome: chromeDraft.enabled !== false ? current.chrome : false,
       cua: cuaDraft.enabled !== false ? current.cua : false,
       filesystem: filesystemDraft.enabled !== false ? current.filesystem : false,
+      commandline: commandlineDraft.enabled !== false ? current.commandline : false,
     }))
-  }, [chromeDraft.enabled, cuaDraft.enabled, filesystemDraft.enabled])
+  }, [chromeDraft.enabled, cuaDraft.enabled, filesystemDraft.enabled, commandlineDraft.enabled])
 
   function updateChromeDraft(update: (current: ServerConfig) => ServerConfig) {
     setDirty((current) => ({ ...current, chrome: true }))
@@ -463,6 +541,11 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
   function updateFilesystemDraft(update: (current: ServerConfig) => ServerConfig) {
     setDirty((current) => ({ ...current, filesystem: true }))
     setFilesystemDraft((current) => normalizeFilesystemServer(update(current)))
+  }
+
+  function updateCommandlineDraft(update: (current: ServerConfig) => ServerConfig) {
+    setDirty((current) => ({ ...current, commandline: true }))
+    setCommandlineDraft((current) => normalizeCommandlineServer(update(current)))
   }
 
   async function handleFilesystemEnabledChange(checked: boolean) {
@@ -525,10 +608,11 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
   }
 
   async function handleSave() {
-    const nextServers = (config.servers || []).filter((server) => !(server.transport === 'builtin' && (server.builtin?.kind === 'chrome' || server.builtin?.kind === 'cua' || server.builtin?.kind === 'filesystem')))
+    const nextServers = (config.servers || []).filter((server) => !(server.transport === 'builtin' && (server.builtin?.kind === 'chrome' || server.builtin?.kind === 'cua' || server.builtin?.kind === 'filesystem' || server.builtin?.kind === 'commandline')))
     const nextChrome = normalizeChromeServer(chromeDraft)
     const nextCUA = normalizeCUAServer(cuaDraft)
     const nextFilesystem = normalizeFilesystemServer(filesystemDraft)
+    const nextCommandline = normalizeCommandlineServer(commandlineDraft)
 
     nextServers.push(nextChrome)
     nextServers.push(nextCUA)
@@ -545,6 +629,11 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
       nextServers.push(nextFilesystem)
     }
 
+    const shouldPersistCommandline = Boolean(commandlineServer) || nextCommandline.enabled !== false
+    if (shouldPersistCommandline) {
+      nextServers.push(nextCommandline)
+    }
+
     setSaving(true)
     setError('')
     try {
@@ -556,6 +645,7 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
         chrome: false,
         cua: false,
         filesystem: false,
+        commandline: false,
       })
       return true
     } catch (cause) {
@@ -1701,6 +1791,127 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
           <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
             <SlidersHorizontal className="size-4" />
             Expand to edit scope, roots, read-only mode, parsers, and content indexing.
+          </div>
+        ) : null}
+      </section>
+
+      <section className="rounded-[28px] border border-border/70 bg-background/55 p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="font-medium">Command Line</div>
+              <Badge variant="secondary">builtin</Badge>
+              <Badge variant={commandlineDraft.enabled !== false ? 'success' : 'secondary'}>{commandlineDraft.enabled !== false ? 'enabled' : 'disabled'}</Badge>
+              <Badge variant="secondary">bash</Badge>
+              <Badge variant="secondary">git</Badge>
+              <Badge variant="secondary">node</Badge>
+              <Badge variant="secondary">python</Badge>
+            </div>
+            <div className="mt-2 text-sm text-muted-foreground">
+              Exposes one built-in command line app that enables `bash_exec`, `git_exec`, `node_exec`, and `python_exec` together. Node and Python use the bundled runtime prepared at build time.
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2">
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>Enable</span>
+              <input
+                type="checkbox"
+                className="size-4 accent-[color:var(--primary)]"
+                checked={commandlineDraft.enabled !== false}
+                onChange={(event) =>
+                  updateCommandlineDraft((current) => ({
+                    ...current,
+                    enabled: event.target.checked,
+                  }))
+                }
+              />
+            </label>
+
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={commandlineDraft.enabled === false}
+              onClick={() => setExpanded((current) => ({ ...current, commandline: !current.commandline }))}
+            >
+              <ChevronDown className={cn('transition-transform', expanded.commandline && 'rotate-180')} />
+              Options
+            </Button>
+          </div>
+        </div>
+
+        {commandlineDraft.enabled !== false && expanded.commandline ? (
+          <div className="mt-5 border-t border-border/70 pt-5">
+            <div className="grid gap-5 md:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="builtin-commandline-name">Server Name</FieldLabel>
+                <FieldContent>
+                  <Input
+                    id="builtin-commandline-name"
+                    value={commandlineDraft.name}
+                    onChange={(event) => updateCommandlineDraft((current) => ({ ...current, name: event.target.value }))}
+                  />
+                  <FieldDescription>Shown in the relay exposure list and cloud tool catalog.</FieldDescription>
+                </FieldContent>
+              </Field>
+
+              <Field>
+                <FieldLabel htmlFor="builtin-commandline-instance-id">Instance ID</FieldLabel>
+                <FieldContent>
+                  <Input
+                    id="builtin-commandline-instance-id"
+                    value={commandlineDraft.builtin?.instanceId || ''}
+                    onChange={(event) =>
+                      updateCommandlineDraft((current) => ({
+                        ...current,
+                        builtin: {
+                          kind: 'commandline',
+                          instanceId: event.target.value,
+                          commandline: current.builtin?.commandline || defaultCommandlineServer().builtin?.commandline,
+                        },
+                      }))
+                    }
+                  />
+                  <FieldDescription>Used for a stable built-in identity across restarts.</FieldDescription>
+                </FieldContent>
+              </Field>
+
+              <Field className="md:col-span-2">
+                <FieldLabel htmlFor="builtin-commandline-default-cwd">Default Working Directory</FieldLabel>
+                <FieldContent>
+                  <Input
+                    id="builtin-commandline-default-cwd"
+                    value={commandline.defaultCwd || ''}
+                    onChange={(event) =>
+                      updateCommandlineDraft((current) =>
+                        withCommandlineConfig(current, (currentCommandline) => ({
+                          ...currentCommandline,
+                          defaultCwd: event.target.value,
+                        })),
+                      )
+                    }
+                    placeholder="/workspace or C:\\Users\\name\\project"
+                  />
+                  <FieldDescription>Used when a tool call omits `cwd`. Leave blank to use Relay&apos;s current working directory.</FieldDescription>
+                </FieldContent>
+              </Field>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-border/70 bg-background/35 px-4 py-3 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2 font-medium text-foreground">
+                <Terminal className="size-4" />
+                Runtime surface
+              </div>
+              <div className="mt-2">
+                This app always turns on the four command runtimes together. `bash_exec` runs shell commands, `git_exec` runs argv-style Git commands, and `node_exec` plus `python_exec` use the bundled data-processing runtime prepared in CI.
+              </div>
+            </div>
+          </div>
+        ) : commandlineDraft.enabled !== false ? (
+          <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+            <SlidersHorizontal className="size-4" />
+            Expand to rename the exposure or set a default working directory for command calls.
           </div>
         ) : null}
       </section>
