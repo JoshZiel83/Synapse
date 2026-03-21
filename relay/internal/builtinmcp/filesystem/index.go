@@ -33,6 +33,9 @@ type fileRecord struct {
 	MtimeNS        int64
 	Parser         string
 	IndexedContent bool
+	ContentMtimeNS int64
+	ContentSize    int64
+	ExtractorKey   string
 }
 
 func (s *Server) openIndex() error {
@@ -74,6 +77,9 @@ func (s *Server) openIndex() error {
 			mtime_ns INTEGER NOT NULL,
 			parser TEXT NOT NULL DEFAULT '',
 			indexed_content INTEGER NOT NULL DEFAULT 0,
+			content_mtime_ns INTEGER NOT NULL DEFAULT 0,
+			content_size_bytes INTEGER NOT NULL DEFAULT 0,
+			extractor_key TEXT NOT NULL DEFAULT '',
 			updated_at_ns INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_files_root_path ON files(root_id, abs_path)`,
@@ -93,9 +99,49 @@ func (s *Server) openIndex() error {
 			return fmt.Errorf("sqlite schema init failed: %w", err)
 		}
 	}
+	if err := ensureSQLiteColumn(db, "files", "content_mtime_ns", `ALTER TABLE files ADD COLUMN content_mtime_ns INTEGER NOT NULL DEFAULT 0`); err != nil {
+		db.Close()
+		return fmt.Errorf("sqlite schema migration failed: %w", err)
+	}
+	if err := ensureSQLiteColumn(db, "files", "content_size_bytes", `ALTER TABLE files ADD COLUMN content_size_bytes INTEGER NOT NULL DEFAULT 0`); err != nil {
+		db.Close()
+		return fmt.Errorf("sqlite schema migration failed: %w", err)
+	}
+	if err := ensureSQLiteColumn(db, "files", "extractor_key", `ALTER TABLE files ADD COLUMN extractor_key TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return fmt.Errorf("sqlite schema migration failed: %w", err)
+	}
 
 	s.db = db
 	return nil
+}
+
+func ensureSQLiteColumn(db *sql.DB, table, column, stmt string) error {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var dataType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if strings.EqualFold(name, column) {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(stmt)
+	return err
 }
 
 func (s *Server) startBackgroundSync(ctx context.Context) error {
@@ -385,9 +431,24 @@ func (s *Server) upsertFileRecord(tx *sql.Tx, path string, info os.FileInfo) err
 	var existing fileRecord
 	var existingIsDir int
 	var existingIndexedContent int
-	row := tx.QueryRow(`SELECT id, root_id, access_mode, rel_path, basename, ext, is_dir, size_bytes, mtime_ns, parser, indexed_content
+	row := tx.QueryRow(`SELECT id, root_id, access_mode, rel_path, basename, ext, is_dir, size_bytes, mtime_ns, parser, indexed_content, content_mtime_ns, content_size_bytes, extractor_key
 		FROM files WHERE abs_path = ?`, path)
-	switch err := row.Scan(&existing.ID, &existing.RootID, &existing.AccessMode, &existing.RelPath, &existing.Basename, &existing.Ext, &existingIsDir, &existing.SizeBytes, &existing.MtimeNS, &existing.Parser, &existingIndexedContent); err {
+	switch err := row.Scan(
+		&existing.ID,
+		&existing.RootID,
+		&existing.AccessMode,
+		&existing.RelPath,
+		&existing.Basename,
+		&existing.Ext,
+		&existingIsDir,
+		&existing.SizeBytes,
+		&existing.MtimeNS,
+		&existing.Parser,
+		&existingIndexedContent,
+		&existing.ContentMtimeNS,
+		&existing.ContentSize,
+		&existing.ExtractorKey,
+	); err {
 	case nil:
 		existing.IsDir = existingIsDir != 0
 		existing.IndexedContent = existingIndexedContent != 0
@@ -402,6 +463,14 @@ func (s *Server) upsertFileRecord(tx *sql.Tx, path string, info os.FileInfo) err
 		record.SizeBytes <= s.cfg.Index.MaxFileSizeBytes &&
 		matchesConfiguredFileType(record.Basename, record.Ext, s.cfg.Index.FileTypes)
 
+	extractorKey := ""
+	if shouldIndexContent {
+		extractorKey = s.contentExtractorKey(path, info)
+		record.ContentMtimeNS = record.MtimeNS
+		record.ContentSize = record.SizeBytes
+		record.ExtractorKey = extractorKey
+	}
+
 	unchanged := existing.ID != 0 &&
 		existing.RootID == record.RootID &&
 		existing.AccessMode == record.AccessMode &&
@@ -411,11 +480,17 @@ func (s *Server) upsertFileRecord(tx *sql.Tx, path string, info os.FileInfo) err
 		existing.IsDir == record.IsDir &&
 		existing.SizeBytes == record.SizeBytes &&
 		existing.MtimeNS == record.MtimeNS &&
-		existing.IndexedContent == shouldIndexContent
+		existing.ContentMtimeNS == record.ContentMtimeNS &&
+		existing.ContentSize == record.ContentSize &&
+		existing.ExtractorKey == record.ExtractorKey
+
+	if unchanged {
+		return nil
+	}
 
 	var content string
 	var parser string
-	if !unchanged && shouldIndexContent {
+	if shouldIndexContent {
 		content, parser, err = s.extractTextContent(path, info)
 		if err != nil {
 			log.Printf("filesystem content extraction failed for %s: %v", path, err)
@@ -426,10 +501,11 @@ func (s *Server) upsertFileRecord(tx *sql.Tx, path string, info os.FileInfo) err
 	nowNS := time.Now().UnixNano()
 	if existing.ID == 0 {
 		res, err := tx.Exec(`INSERT INTO files (
-			root_id, access_mode, abs_path, rel_path, basename, ext, is_dir, size_bytes, mtime_ns, parser, indexed_content, updated_at_ns
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			root_id, access_mode, abs_path, rel_path, basename, ext, is_dir, size_bytes, mtime_ns, parser, indexed_content, content_mtime_ns, content_size_bytes, extractor_key, updated_at_ns
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			record.RootID, record.AccessMode, record.AbsPath, record.RelPath, record.Basename, record.Ext,
-			boolToInt(record.IsDir), record.SizeBytes, record.MtimeNS, record.Parser, boolToInt(content != ""), nowNS,
+			boolToInt(record.IsDir), record.SizeBytes, record.MtimeNS, record.Parser, boolToInt(strings.TrimSpace(content) != ""),
+			record.ContentMtimeNS, record.ContentSize, record.ExtractorKey, nowNS,
 		)
 		if err != nil {
 			return err
@@ -440,43 +516,38 @@ func (s *Server) upsertFileRecord(tx *sql.Tx, path string, info os.FileInfo) err
 		}
 	} else {
 		record.ID = existing.ID
-		if !unchanged {
-			if _, err := tx.Exec(`UPDATE files SET
-				root_id = ?, access_mode = ?, rel_path = ?, basename = ?, ext = ?, is_dir = ?, size_bytes = ?, mtime_ns = ?, parser = ?, indexed_content = ?, updated_at_ns = ?
-				WHERE id = ?`,
-				record.RootID, record.AccessMode, record.RelPath, record.Basename, record.Ext, boolToInt(record.IsDir),
-				record.SizeBytes, record.MtimeNS, record.Parser, boolToInt(content != ""), nowNS, record.ID,
-			); err != nil {
-				return err
-			}
-		} else if _, err := tx.Exec(`UPDATE files SET updated_at_ns = ? WHERE id = ?`, nowNS, record.ID); err != nil {
+		if _, err := tx.Exec(`UPDATE files SET
+			root_id = ?, access_mode = ?, rel_path = ?, basename = ?, ext = ?, is_dir = ?, size_bytes = ?, mtime_ns = ?, parser = ?, indexed_content = ?, content_mtime_ns = ?, content_size_bytes = ?, extractor_key = ?, updated_at_ns = ?
+			WHERE id = ?`,
+			record.RootID, record.AccessMode, record.RelPath, record.Basename, record.Ext, boolToInt(record.IsDir),
+			record.SizeBytes, record.MtimeNS, record.Parser, boolToInt(strings.TrimSpace(content) != ""),
+			record.ContentMtimeNS, record.ContentSize, record.ExtractorKey, nowNS, record.ID,
+		); err != nil {
 			return err
 		}
 	}
 
-	if !unchanged {
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO path_fts(rowid, abs_path, rel_path, basename) VALUES (?, ?, ?, ?)`,
-			record.ID, record.AbsPath, record.RelPath, record.Basename,
-		); err != nil {
-			return err
-		}
-		if err := s.deleteContentForFile(tx, record.ID); err != nil {
-			return err
-		}
-		if !record.IsDir && strings.TrimSpace(content) != "" {
-			chunks := splitContentIntoChunks(content)
-			for index, chunk := range chunks {
-				res, err := tx.Exec(`INSERT INTO content_chunks(file_id, chunk_no, text) VALUES (?, ?, ?)`, record.ID, index, chunk)
-				if err != nil {
-					return err
-				}
-				chunkID, err := res.LastInsertId()
-				if err != nil {
-					return err
-				}
-				if _, err := tx.Exec(`INSERT INTO content_fts(rowid, text) VALUES (?, ?)`, chunkID, chunk); err != nil {
-					return err
-				}
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO path_fts(rowid, abs_path, rel_path, basename) VALUES (?, ?, ?, ?)`,
+		record.ID, record.AbsPath, record.RelPath, record.Basename,
+	); err != nil {
+		return err
+	}
+	if err := s.deleteContentForFile(tx, record.ID); err != nil {
+		return err
+	}
+	if !record.IsDir && strings.TrimSpace(content) != "" {
+		chunks := splitContentIntoChunks(content)
+		for index, chunk := range chunks {
+			res, err := tx.Exec(`INSERT INTO content_chunks(file_id, chunk_no, text) VALUES (?, ?, ?)`, record.ID, index, chunk)
+			if err != nil {
+				return err
+			}
+			chunkID, err := res.LastInsertId()
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`INSERT INTO content_fts(rowid, text) VALUES (?, ?)`, chunkID, chunk); err != nil {
+				return err
 			}
 		}
 	}

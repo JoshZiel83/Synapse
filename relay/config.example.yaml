@@ -50,10 +50,11 @@ servers:
   #           access: "ro"
   #       index:
   #         content_enabled: true
-  #         file_types: [".go", ".md", ".pdf", ".xlsx", ".xls", ".doc", ".ppt", ".docx", "Dockerfile"]
+  #         file_types: [".go", ".md", ".pdf", ".xlsx", ".xls", ".doc", ".ppt", ".docx", ".png", ".jpg", "Dockerfile"]
   #         max_file_size_bytes: 8388608
   #         parse_pdf: true
   #         parse_office: true
+  #         parse_images: true
 
   # Example: built-in command line runtime
   # - name: "command-line"

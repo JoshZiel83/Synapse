@@ -23,6 +23,7 @@ type IndexConfig struct {
 	MaxFileSizeBytes int64
 	ParsePDF         bool
 	ParseOffice      bool
+	ParseImages      bool
 }
 
 type SearchQuery struct {

@@ -1,6 +1,7 @@
 package filesystem
 
 import (
+	"archive/zip"
 	"context"
 	"os"
 	"path/filepath"
@@ -22,6 +23,20 @@ func newTestServer(t *testing.T, cfg Config) *Server {
 		t.Fatalf("start filesystem server: %v", err)
 	}
 	t.Cleanup(server.Shutdown)
+	return server
+}
+
+func newIndexOnlyTestServer(t *testing.T, cfg Config) *Server {
+	t.Helper()
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new filesystem server: %v", err)
+	}
+	if err := server.openIndex(); err != nil {
+		t.Fatalf("open filesystem index: %v", err)
+	}
+	t.Cleanup(server.closeIndex)
 	return server
 }
 
@@ -110,7 +125,7 @@ func TestSystemPathsRemainBlockedInGlobalMode(t *testing.T) {
 		t.Skip("no blocked system paths configured for this OS")
 	}
 
-	server := newTestServer(t, Config{
+	server, err := New(Config{
 		StableKey:    "test-global",
 		Name:         "filesystem",
 		Scope:        "global",
@@ -124,6 +139,9 @@ func TestSystemPathsRemainBlockedInGlobalMode(t *testing.T) {
 			ParseOffice:      true,
 		},
 	})
+	if err != nil {
+		t.Fatalf("new filesystem server: %v", err)
+	}
 
 	result, err := server.CallTool(context.Background(), "read_text_file", map[string]interface{}{
 		"path": blocked[0],
@@ -403,5 +421,161 @@ func TestSearchSupportsFiltersSortingAndPaging(t *testing.T) {
 	}
 	if contentResults[0].MatchMode != "content" {
 		t.Fatalf("expected content match mode, got %q", contentResults[0].MatchMode)
+	}
+}
+
+func TestContentIndexUsesMtimeAndSizeFingerprintWithoutRepeatedOCR(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based OCR helper test is only configured for Unix-like CI")
+	}
+
+	root := t.TempDir()
+	target := filepath.Join(root, "diagram.png")
+	if err := os.WriteFile(target, []byte("fake image bytes"), 0o644); err != nil {
+		t.Fatalf("write image fixture: %v", err)
+	}
+
+	counterPath := filepath.Join(t.TempDir(), "ocr-count.txt")
+	scriptPath := filepath.Join(t.TempDir(), "fake-tesseract")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+input="${1:-}"
+output="${2:-}"
+counter="${SYNAPSE_TEST_TESSERACT_COUNTER:?}"
+count=0
+if [ -f "$counter" ]; then
+  count="$(cat "$counter")"
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$counter"
+printf 'ocr content from %s\n' "$(basename "$input")" > "${output}.txt"
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake tesseract: %v", err)
+	}
+	t.Setenv("SYNAPSE_RELAY_TESSERACT", scriptPath)
+	t.Setenv("SYNAPSE_TEST_TESSERACT_COUNTER", counterPath)
+
+	server := newIndexOnlyTestServer(t, Config{
+		StableKey: "test-image-fingerprint",
+		Name:      "filesystem",
+		Scope:     "roots",
+		Roots: []Root{
+			{ID: "root_0", Path: root, Access: "ro"},
+		},
+		Index: IndexConfig{
+			Dir:              filepath.Join(t.TempDir(), "index"),
+			ContentEnabled:   true,
+			FileTypes:        []string{".png"},
+			MaxFileSizeBytes: 1024 * 1024,
+			ParsePDF:         true,
+			ParseOffice:      true,
+			ParseImages:      true,
+		},
+	})
+
+	if err := server.syncDirectoryTree(root); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	if err := server.syncDirectoryTree(root); err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+
+	countData, err := os.ReadFile(counterPath)
+	if err != nil {
+		t.Fatalf("read OCR counter: %v", err)
+	}
+	if strings.TrimSpace(string(countData)) != "1" {
+		t.Fatalf("expected OCR helper to run once for unchanged file, got %q", strings.TrimSpace(string(countData)))
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat indexed file: %v", err)
+	}
+
+	var contentMtimeNS int64
+	var contentSize int64
+	var extractorKey string
+	row := server.db.QueryRow(`SELECT content_mtime_ns, content_size_bytes, extractor_key FROM files WHERE abs_path = ?`, target)
+	if err := row.Scan(&contentMtimeNS, &contentSize, &extractorKey); err != nil {
+		t.Fatalf("scan indexed metadata: %v", err)
+	}
+	if contentMtimeNS != info.ModTime().UnixNano() {
+		t.Fatalf("expected content_mtime_ns %d, got %d", info.ModTime().UnixNano(), contentMtimeNS)
+	}
+	if contentSize != info.Size() {
+		t.Fatalf("expected content_size_bytes %d, got %d", info.Size(), contentSize)
+	}
+	if !strings.Contains(extractorKey, "image_ocr") {
+		t.Fatalf("expected image OCR extractor key, got %q", extractorKey)
+	}
+}
+
+func TestReadTextFileExtractsPPTXSlidesAndNotes(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "deck.pptx")
+
+	handle, err := os.Create(target)
+	if err != nil {
+		t.Fatalf("create pptx fixture: %v", err)
+	}
+	archive := zip.NewWriter(handle)
+	files := map[string]string{
+		"ppt/slides/slide1.xml":           `<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Quarterly review</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`,
+		"ppt/notesSlides/notesSlide1.xml": `<p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Speaker note reminder</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>`,
+	}
+	for name, contents := range files {
+		entry, err := archive.Create(name)
+		if err != nil {
+			t.Fatalf("create zip member %s: %v", name, err)
+		}
+		if _, err := entry.Write([]byte(contents)); err != nil {
+			t.Fatalf("write zip member %s: %v", name, err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatalf("close pptx archive: %v", err)
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatalf("close pptx file: %v", err)
+	}
+
+	server := newTestServer(t, Config{
+		StableKey: "test-pptx-read",
+		Name:      "filesystem",
+		Scope:     "roots",
+		Roots: []Root{
+			{ID: "root_0", Path: root, Access: "ro"},
+		},
+		Index: IndexConfig{
+			Dir:              filepath.Join(t.TempDir(), "index"),
+			ContentEnabled:   true,
+			FileTypes:        []string{".pptx"},
+			MaxFileSizeBytes: 1024 * 1024,
+			ParsePDF:         true,
+			ParseOffice:      true,
+		},
+	})
+
+	result, err := server.CallTool(context.Background(), "read_text_file", map[string]interface{}{
+		"path": target,
+	})
+	if err != nil {
+		t.Fatalf("call read_text_file: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected pptx read to succeed")
+	}
+
+	content, ok := result.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if !strings.Contains(content.Text, "Quarterly review") {
+		t.Fatalf("expected slide text, got %q", content.Text)
+	}
+	if !strings.Contains(content.Text, "Speaker note reminder") {
+		t.Fatalf("expected notes text, got %q", content.Text)
 	}
 }

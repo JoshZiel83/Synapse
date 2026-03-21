@@ -104,6 +104,7 @@ func newBuiltinServer(cfg config.ServerConfig) (Server, error) {
 				MaxFileSizeBytes: cfg.Builtin.Filesystem.Index.MaxFileSizeBytes,
 				ParsePDF:         cfg.Builtin.Filesystem.Index.ParsePDF == nil || *cfg.Builtin.Filesystem.Index.ParsePDF,
 				ParseOffice:      cfg.Builtin.Filesystem.Index.ParseOffice == nil || *cfg.Builtin.Filesystem.Index.ParseOffice,
+				ParseImages:      cfg.Builtin.Filesystem.Index.ParseImages == nil || *cfg.Builtin.Filesystem.Index.ParseImages,
 			},
 		})
 		if err != nil {

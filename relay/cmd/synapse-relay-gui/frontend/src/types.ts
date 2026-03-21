@@ -56,6 +56,7 @@ export interface BuiltinFilesystemIndexConfig {
   maxFileSizeBytes?: number
   parsePdf?: boolean
   parseOffice?: boolean
+  parseImages?: boolean
 }
 
 export interface BuiltinFilesystemConfig {

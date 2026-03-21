@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -27,6 +28,8 @@ import (
 	"golang.org/x/net/html"
 )
 
+const contentExtractorVersion = "v3"
+
 func (s *Server) extractTextContent(path string, info os.FileInfo) (string, string, error) {
 	if info.IsDir() {
 		return "", "", fmt.Errorf("directories do not have text content")
@@ -36,61 +39,149 @@ func (s *Server) extractTextContent(path string, info os.FileInfo) (string, stri
 	switch ext {
 	case ".pdf":
 		if s.cfg.Index.ParsePDF {
-			return extractPDFText(path)
+			return s.extractPDFContent(path)
 		}
 	case ".xlsx", ".xlsm", ".xltx", ".xltm":
 		if s.cfg.Index.ParseOffice {
 			return extractSpreadsheetText(path)
 		}
-	case ".xls":
+	case ".xls", ".xlt", ".xla":
 		if s.cfg.Index.ParseOffice {
 			return extractLegacySpreadsheetText(path)
 		}
-	case ".docx":
+	case ".docx", ".docm", ".dotx", ".dotm":
 		if s.cfg.Index.ParseOffice {
-			return extractOfficeXMLText(path, []string{"word/document.xml"})
+			return s.extractArchiveDocumentText(path, []string{
+				"word/document.xml",
+				"word/header",
+				"word/footer",
+				"word/footnotes.xml",
+				"word/endnotes.xml",
+				"word/comments",
+			}, []string{"word/media/"}, "office_xml")
 		}
-	case ".pptx":
+	case ".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm":
 		if s.cfg.Index.ParseOffice {
-			return extractOfficeXMLText(path, []string{"ppt/slides/"})
+			return s.extractArchiveDocumentText(path, []string{
+				"ppt/slides/",
+				"ppt/notesSlides/",
+				"ppt/comments/",
+				"docProps/core.xml",
+				"docProps/app.xml",
+			}, []string{"ppt/media/"}, "office_xml")
 		}
-	case ".odt", ".ods", ".odp":
+	case ".odt", ".ods", ".odp", ".odg":
 		if s.cfg.Index.ParseOffice {
-			return extractOfficeXMLText(path, []string{"content.xml"})
+			return s.extractArchiveDocumentText(path, []string{
+				"content.xml",
+				"styles.xml",
+				"meta.xml",
+			}, []string{"Pictures/"}, "odf")
 		}
-	case ".doc", ".ppt":
+	case ".fodt", ".fods", ".fodp":
+		if s.cfg.Index.ParseOffice {
+			return extractXMLFileText(path, "flat_odf")
+		}
+	case ".doc", ".ppt", ".pps", ".pot":
 		if s.cfg.Index.ParseOffice {
 			return extractLegacyOfficeText(path, ext)
 		}
 	case ".html", ".htm", ".xhtml":
 		return extractHTMLText(path)
+	case ".svg":
+		return extractXMLFileText(path, "svg")
+	case ".epub":
+		return s.extractEPUBText(path)
+	case ".rtf":
+		return extractRTFText(path)
+	case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff":
+		if s.cfg.Index.ParseImages {
+			return s.extractImageOCRText(path)
+		}
 	}
 
 	return extractPlainText(path)
 }
 
-func extractPDFText(path string) (string, string, error) {
-	file, reader, err := pdf.Open(path)
+func (s *Server) contentExtractorKey(path string, info os.FileInfo) string {
+	if info.IsDir() {
+		return ""
+	}
+
+	ext := strings.ToLower(filepath.Ext(filepath.Base(path)))
+	switch ext {
+	case ".pdf":
+		if !s.cfg.Index.ParsePDF {
+			return ""
+		}
+		key := []string{"pdf", contentExtractorVersion}
+		if s.cfg.Index.ParseImages {
+			key = append(key, "ocr="+binarySignature(findPDFToPPMBinary()))
+			key = append(key, "tesseract="+binarySignature(findTesseractBinary()))
+		}
+		return strings.Join(key, "|")
+	case ".xlsx", ".xlsm", ".xltx", ".xltm":
+		if s.cfg.Index.ParseOffice {
+			return "spreadsheet|" + contentExtractorVersion
+		}
+	case ".xls", ".xlt", ".xla":
+		if s.cfg.Index.ParseOffice {
+			return "spreadsheet_legacy|" + contentExtractorVersion + "|soffice=" + binarySignature(findLibreOfficeBinary())
+		}
+	case ".docx", ".docm", ".dotx", ".dotm":
+		if s.cfg.Index.ParseOffice {
+			return "office_xml_doc|" + contentExtractorVersion + "|tesseract=" + binarySignature(findTesseractBinaryIfEnabled(s.cfg.Index.ParseImages))
+		}
+	case ".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm":
+		if s.cfg.Index.ParseOffice {
+			return "office_xml_ppt|" + contentExtractorVersion + "|tesseract=" + binarySignature(findTesseractBinaryIfEnabled(s.cfg.Index.ParseImages))
+		}
+	case ".odt", ".ods", ".odp", ".odg":
+		if s.cfg.Index.ParseOffice {
+			return "odf_package|" + contentExtractorVersion + "|tesseract=" + binarySignature(findTesseractBinaryIfEnabled(s.cfg.Index.ParseImages))
+		}
+	case ".fodt", ".fods", ".fodp":
+		if s.cfg.Index.ParseOffice {
+			return "odf_flat|" + contentExtractorVersion
+		}
+	case ".doc", ".ppt", ".pps", ".pot":
+		if s.cfg.Index.ParseOffice {
+			return "office_legacy|" + contentExtractorVersion + "|soffice=" + binarySignature(findLibreOfficeBinary())
+		}
+	case ".html", ".htm", ".xhtml":
+		return "html|" + contentExtractorVersion
+	case ".svg":
+		return "svg|" + contentExtractorVersion
+	case ".epub":
+		return "epub|" + contentExtractorVersion + "|tesseract=" + binarySignature(findTesseractBinaryIfEnabled(s.cfg.Index.ParseImages))
+	case ".rtf":
+		return "rtf|" + contentExtractorVersion
+	case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff":
+		if s.cfg.Index.ParseImages {
+			return "image_ocr|" + contentExtractorVersion + "|tesseract=" + binarySignature(findTesseractBinary())
+		}
+	}
+
+	return plainTextParser(path) + "|" + contentExtractorVersion
+}
+
+func (s *Server) extractPDFContent(path string) (string, string, error) {
+	text, _, err := extractPDFText(path)
 	if err != nil {
 		return "", "", err
 	}
-	defer file.Close()
-
-	var builder strings.Builder
-	total := reader.NumPage()
-	for pageIndex := 1; pageIndex <= total; pageIndex++ {
-		page := reader.Page(pageIndex)
-		if page.V.IsNull() {
-			continue
-		}
-		text, err := page.GetPlainText(nil)
-		if err != nil {
-			return "", "", err
-		}
-		builder.WriteString(text)
-		builder.WriteString("\n")
+	if text != "" || !s.cfg.Index.ParseImages {
+		return text, "pdf", nil
 	}
-	return normalizeText(builder.String()), "pdf", nil
+
+	ocrText, err := s.extractPDFOCRText(path)
+	if err != nil {
+		return "", "", err
+	}
+	if ocrText == "" {
+		return "", "pdf", nil
+	}
+	return ocrText, "pdf_ocr", nil
 }
 
 func extractSpreadsheetText(path string) (string, string, error) {
@@ -166,34 +257,373 @@ func extractLegacySpreadsheetText(path string) (string, string, error) {
 	return extractLegacyOfficeText(path, ".xls")
 }
 
-func extractOfficeXMLText(path string, members []string) (string, string, error) {
+func (s *Server) extractArchiveDocumentText(path string, textMembers []string, mediaMembers []string, parser string) (string, string, error) {
 	reader, err := zip.OpenReader(path)
 	if err != nil {
 		return "", "", err
 	}
 	defer reader.Close()
 
+	var sections []string
+	files := append([]*zip.File(nil), reader.File...)
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+	for _, file := range files {
+		if matchesArchiveMember(file.Name, textMembers) {
+			text, err := extractArchiveTextMember(file)
+			if err != nil {
+				return "", "", err
+			}
+			if strings.TrimSpace(text) != "" {
+				sections = append(sections, text)
+			}
+			continue
+		}
+		if s.cfg.Index.ParseImages && matchesArchiveDirectoryPrefix(file.Name, mediaMembers) && isImageExtension(filepath.Ext(file.Name)) {
+			text, err := s.extractArchiveImageText(file)
+			if err != nil {
+				return "", "", err
+			}
+			if strings.TrimSpace(text) != "" {
+				sections = append(sections, text)
+			}
+		}
+	}
+	return joinExtractedSections(sections...), parser, nil
+}
+
+func extractPDFText(path string) (string, string, error) {
+	file, reader, err := pdf.Open(path)
+	if err != nil {
+		return "", "", err
+	}
+	defer file.Close()
+
 	var builder strings.Builder
-	for _, file := range reader.File {
-		if !matchesArchiveMember(file.Name, members) {
+	total := reader.NumPage()
+	for pageIndex := 1; pageIndex <= total; pageIndex++ {
+		page := reader.Page(pageIndex)
+		if page.V.IsNull() {
 			continue
 		}
-		handle, err := file.Open()
+		text, err := page.GetPlainText(nil)
 		if err != nil {
 			return "", "", err
-		}
-		text, err := extractXMLText(handle)
-		handle.Close()
-		if err != nil {
-			return "", "", err
-		}
-		if strings.TrimSpace(text) == "" {
-			continue
 		}
 		builder.WriteString(text)
 		builder.WriteString("\n")
 	}
-	return normalizeText(builder.String()), "office_xml", nil
+	return normalizeText(builder.String()), "pdf", nil
+}
+
+func extractArchiveTextMember(file *zip.File) (string, error) {
+	handle, err := file.Open()
+	if err != nil {
+		return "", err
+	}
+	defer handle.Close()
+
+	switch strings.ToLower(filepath.Ext(file.Name)) {
+	case ".html", ".htm", ".xhtml":
+		return extractHTMLTextFromReader(handle)
+	default:
+		return extractXMLText(handle)
+	}
+}
+
+func extractXMLFileText(path, parser string) (string, string, error) {
+	handle, err := os.Open(path)
+	if err != nil {
+		return "", "", err
+	}
+	defer handle.Close()
+
+	text, err := extractXMLText(handle)
+	if err != nil {
+		return "", "", err
+	}
+	return text, parser, nil
+}
+
+func (s *Server) extractEPUBText(path string) (string, string, error) {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return "", "", err
+	}
+	defer reader.Close()
+
+	var sections []string
+	files := append([]*zip.File(nil), reader.File...)
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+	for _, file := range files {
+		ext := strings.ToLower(filepath.Ext(file.Name))
+		switch ext {
+		case ".xhtml", ".html", ".htm", ".opf", ".ncx":
+			text, err := extractArchiveTextMember(file)
+			if err != nil {
+				return "", "", err
+			}
+			if strings.TrimSpace(text) != "" {
+				sections = append(sections, text)
+			}
+		default:
+			if s.cfg.Index.ParseImages && isImageExtension(ext) {
+				text, err := s.extractArchiveImageText(file)
+				if err != nil {
+					return "", "", err
+				}
+				if strings.TrimSpace(text) != "" {
+					sections = append(sections, text)
+				}
+			}
+		}
+	}
+	return joinExtractedSections(sections...), "epub", nil
+}
+
+func extractRTFText(path string) (string, string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", err
+	}
+
+	var builder strings.Builder
+	ignorable := false
+	groupStack := []bool{false}
+	skipFallback := 0
+
+	for index := 0; index < len(data); index++ {
+		ch := data[index]
+		switch ch {
+		case '{':
+			groupStack = append(groupStack, ignorable)
+		case '}':
+			if len(groupStack) > 1 {
+				groupStack = groupStack[:len(groupStack)-1]
+				ignorable = groupStack[len(groupStack)-1]
+			}
+		case '\\':
+			if index+1 >= len(data) {
+				continue
+			}
+			next := data[index+1]
+			switch next {
+			case '\\', '{', '}':
+				if !ignorable {
+					builder.WriteByte(next)
+				}
+				index++
+			case '~':
+				if !ignorable {
+					builder.WriteByte(' ')
+				}
+				index++
+			case '-', '_':
+				if !ignorable {
+					builder.WriteByte('-')
+				}
+				index++
+			case '*':
+				ignorable = true
+				groupStack[len(groupStack)-1] = true
+				index++
+			case '\'':
+				if index+3 >= len(data) {
+					index = len(data)
+					break
+				}
+				decoded, parseErr := strconv.ParseUint(string(data[index+2:index+4]), 16, 8)
+				if parseErr == nil && !ignorable {
+					builder.WriteByte(byte(decoded))
+				}
+				index += 3
+			default:
+				if !isRTFAlpha(next) {
+					continue
+				}
+				wordStart := index + 1
+				wordEnd := wordStart
+				for wordEnd < len(data) && isRTFAlpha(data[wordEnd]) {
+					wordEnd++
+				}
+				word := string(data[wordStart:wordEnd])
+
+				valueEnd := wordEnd
+				if valueEnd < len(data) && (data[valueEnd] == '-' || (data[valueEnd] >= '0' && data[valueEnd] <= '9')) {
+					valueEnd++
+					for valueEnd < len(data) && data[valueEnd] >= '0' && data[valueEnd] <= '9' {
+						valueEnd++
+					}
+				}
+
+				arg := strings.TrimSpace(string(data[wordEnd:valueEnd]))
+				if !ignorable {
+					switch word {
+					case "par", "line":
+						builder.WriteString("\n")
+					case "tab":
+						builder.WriteString("\t")
+					case "emdash", "endash":
+						builder.WriteString("-")
+					case "u":
+						value, parseErr := strconv.Atoi(arg)
+						if parseErr == nil {
+							builder.WriteRune(rune(value))
+							skipFallback = 1
+						}
+					}
+				}
+
+				index = valueEnd - 1
+				if index+1 < len(data) && data[index+1] == ' ' {
+					index++
+				}
+			}
+		case '\r', '\n':
+		default:
+			if skipFallback > 0 {
+				skipFallback--
+				continue
+			}
+			if !ignorable {
+				builder.WriteByte(ch)
+			}
+		}
+	}
+
+	text := normalizeText(string(bytes.ToValidUTF8([]byte(builder.String()), []byte(" "))))
+	return text, "rtf", nil
+}
+
+func isRTFAlpha(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+}
+
+func (s *Server) extractArchiveImageText(file *zip.File) (string, error) {
+	handle, err := file.Open()
+	if err != nil {
+		return "", err
+	}
+	defer handle.Close()
+
+	data, err := io.ReadAll(handle)
+	if err != nil {
+		return "", err
+	}
+	if len(data) == 0 {
+		return "", nil
+	}
+
+	tempDir, err := os.MkdirTemp("", "synapse-archive-image-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tempDir)
+
+	imagePath := filepath.Join(tempDir, "embedded"+strings.ToLower(filepath.Ext(file.Name)))
+	if err := os.WriteFile(imagePath, data, 0o600); err != nil {
+		return "", err
+	}
+	text, _, err := s.extractImageOCRText(imagePath)
+	return text, err
+}
+
+func (s *Server) extractImageOCRText(path string) (string, string, error) {
+	binaryPath, err := findTesseractBinary()
+	if err != nil {
+		return "", "", err
+	}
+
+	tempDir, err := os.MkdirTemp("", "synapse-image-ocr-*")
+	if err != nil {
+		return "", "", err
+	}
+	defer os.RemoveAll(tempDir)
+
+	outputBase := filepath.Join(tempDir, "ocr-output")
+	args := []string{path, outputBase}
+	if lang := strings.TrimSpace(os.Getenv("SYNAPSE_RELAY_TESSERACT_LANG")); lang != "" {
+		args = append(args, "-l", lang)
+	}
+	args = append(args, "txt")
+
+	ctx, cancel := contextWithTimeout(60 * time.Second)
+	cmd := exec.CommandContext(ctx, binaryPath, args...)
+	output, runErr := cmd.CombinedOutput()
+	cancel()
+	if runErr != nil {
+		return "", "", fmt.Errorf("tesseract OCR failed: %w %s", runErr, strings.TrimSpace(string(output)))
+	}
+
+	data, err := os.ReadFile(outputBase + ".txt")
+	if err != nil {
+		return "", "", err
+	}
+	text := normalizeText(string(bytes.ToValidUTF8(data, []byte(" "))))
+	return text, "image_ocr", nil
+}
+
+func (s *Server) extractPDFOCRText(path string) (string, error) {
+	if _, err := findTesseractBinary(); err != nil {
+		return "", err
+	}
+	binaryPath, err := findPDFToPPMBinary()
+	if err != nil {
+		return "", err
+	}
+
+	tempDir, err := os.MkdirTemp("", "synapse-pdf-ocr-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tempDir)
+
+	outputPrefix := filepath.Join(tempDir, "page")
+	ctx, cancel := contextWithTimeout(120 * time.Second)
+	cmd := exec.CommandContext(ctx, binaryPath, "-png", path, outputPrefix)
+	output, runErr := cmd.CombinedOutput()
+	cancel()
+	if runErr != nil {
+		return "", fmt.Errorf("pdftoppm failed: %w %s", runErr, strings.TrimSpace(string(output)))
+	}
+
+	images, err := filepath.Glob(outputPrefix + "-*.png")
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(images)
+
+	var sections []string
+	for _, imagePath := range images {
+		text, _, err := s.extractImageOCRText(imagePath)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(text) != "" {
+			sections = append(sections, text)
+		}
+	}
+	return joinExtractedSections(sections...), nil
+}
+
+func joinExtractedSections(sections ...string) string {
+	filtered := make([]string, 0, len(sections))
+	for _, section := range sections {
+		section = strings.TrimSpace(normalizeText(section))
+		if section == "" {
+			continue
+		}
+		filtered = append(filtered, section)
+	}
+	return strings.TrimSpace(strings.Join(filtered, "\n\n"))
+}
+
+func isImageExtension(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff":
+		return true
+	default:
+		return false
+	}
 }
 
 func extractLegacyOfficeText(path, ext string) (string, string, error) {
@@ -292,20 +722,59 @@ func extractLegacyOfficeViaLibreOffice(path string) (string, string, error) {
 }
 
 func findLibreOfficeBinary() (string, error) {
-	candidates := []string{}
-	if override := strings.TrimSpace(os.Getenv("SYNAPSE_RELAY_SOFFICE")); override != "" {
-		candidates = append(candidates, override)
+	binaryPath, err := findExternalBinary("SYNAPSE_RELAY_SOFFICE", "soffice", "libreoffice")
+	if err != nil {
+		return "", fmt.Errorf("LibreOffice was not found in PATH; set SYNAPSE_RELAY_SOFFICE to enable legacy .doc/.xls/.ppt conversion")
 	}
-	candidates = append(candidates, "soffice", "libreoffice")
+	return binaryPath, nil
+}
+
+func findTesseractBinary() (string, error) {
+	binaryPath, err := findExternalBinary("SYNAPSE_RELAY_TESSERACT", "tesseract")
+	if err != nil {
+		return "", fmt.Errorf("Tesseract was not found in PATH; set SYNAPSE_RELAY_TESSERACT to enable image OCR")
+	}
+	return binaryPath, nil
+}
+
+func findTesseractBinaryIfEnabled(enabled bool) (string, error) {
+	if !enabled {
+		return "", nil
+	}
+	return findTesseractBinary()
+}
+
+func findPDFToPPMBinary() (string, error) {
+	binaryPath, err := findExternalBinary("SYNAPSE_RELAY_PDFTOPPM", "pdftoppm")
+	if err != nil {
+		return "", fmt.Errorf("pdftoppm was not found in PATH; set SYNAPSE_RELAY_PDFTOPPM to enable scanned PDF OCR")
+	}
+	return binaryPath, nil
+}
+
+func binarySignature(path string, err error) string {
+	if err != nil {
+		return "unavailable"
+	}
+	if strings.TrimSpace(path) == "" {
+		return "disabled"
+	}
+	return filepath.Clean(path)
+}
+
+func findExternalBinary(envVar string, candidates ...string) (string, error) {
+	if override := strings.TrimSpace(os.Getenv(envVar)); override != "" {
+		if filepath.IsAbs(override) {
+			if _, err := os.Stat(override); err == nil {
+				return override, nil
+			}
+		} else if resolved, err := exec.LookPath(override); err == nil {
+			return resolved, nil
+		}
+	}
 
 	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if filepath.IsAbs(candidate) {
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate, nil
-			}
+		if strings.TrimSpace(candidate) == "" {
 			continue
 		}
 		resolved, err := exec.LookPath(candidate)
@@ -313,8 +782,7 @@ func findLibreOfficeBinary() (string, error) {
 			return resolved, nil
 		}
 	}
-
-	return "", fmt.Errorf("LibreOffice was not found in PATH; set SYNAPSE_RELAY_SOFFICE to enable legacy .doc/.xls/.ppt conversion")
+	return "", fmt.Errorf("binary not found")
 }
 
 func locateConvertedArtifact(dir, baseName, extension string) (string, error) {
@@ -527,29 +995,61 @@ func extractHTMLText(path string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	doc, err := html.Parse(bytes.NewReader(data))
+	text, err := extractHTMLTextFromReader(bytes.NewReader(data))
 	if err != nil {
 		return "", "", err
 	}
+	return text, "html", nil
+}
 
+func extractHTMLTextFromReader(reader io.Reader) (string, error) {
+	doc, err := html.Parse(reader)
+	if err != nil {
+		return "", err
+	}
 	var builder strings.Builder
 	var walk func(*html.Node)
 	walk = func(node *html.Node) {
+		if node.Type == html.ElementNode && isIgnoredHTMLTag(node.Data) {
+			return
+		}
+		if node.Type == html.ElementNode && isBlockHTMLTag(node.Data) {
+			builder.WriteString("\n")
+		}
 		if node.Type == html.TextNode {
-			text := normalizeText(node.Data)
-			if text != "" {
-				if builder.Len() > 0 {
-					builder.WriteString(" ")
-				}
-				builder.WriteString(text)
-			}
+			builder.WriteString(node.Data)
+			builder.WriteString(" ")
 		}
 		for child := node.FirstChild; child != nil; child = child.NextSibling {
 			walk(child)
 		}
+		if node.Type == html.ElementNode && isBlockHTMLTag(node.Data) {
+			builder.WriteString("\n")
+		}
 	}
 	walk(doc)
-	return normalizeText(builder.String()), "html", nil
+	return normalizeText(builder.String()), nil
+}
+
+func isIgnoredHTMLTag(tag string) bool {
+	switch strings.ToLower(tag) {
+	case "script", "style", "noscript", "head":
+		return true
+	default:
+		return false
+	}
+}
+
+func isBlockHTMLTag(tag string) bool {
+	switch strings.ToLower(tag) {
+	case "address", "article", "aside", "blockquote", "br", "div", "dl", "dt", "dd",
+		"fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6",
+		"header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table", "tbody",
+		"td", "th", "thead", "tr", "ul":
+		return true
+	default:
+		return false
+	}
 }
 
 func extractPlainText(path string) (string, string, error) {
@@ -560,11 +1060,11 @@ func extractPlainText(path string) (string, string, error) {
 	if len(data) == 0 {
 		return "", "text", nil
 	}
-	if !looksLikeText(path, data) {
+	text, ok := decodeExtractableText(path, data)
+	if !ok {
 		return "", "", nil
 	}
-	data = bytes.ToValidUTF8(data, []byte(" "))
-	return normalizeText(string(data)), plainTextParser(path), nil
+	return normalizeText(text), plainTextParser(path), nil
 }
 
 func extractXMLText(reader io.Reader) (string, error) {
@@ -620,6 +1120,24 @@ func matchesArchiveMember(name string, prefixes []string) bool {
 			}
 			continue
 		}
+		if filepath.Ext(prefix) == "" && strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".xml") {
+			return true
+		}
+		if name == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesArchiveDirectoryPrefix(name string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasSuffix(prefix, "/") {
+			if strings.HasPrefix(name, prefix) {
+				return true
+			}
+			continue
+		}
 		if name == prefix {
 			return true
 		}
@@ -669,6 +1187,63 @@ func looksLikeText(path string, data []byte) bool {
 	return false
 }
 
+func decodeExtractableText(path string, data []byte) (string, bool) {
+	if len(data) == 0 {
+		return "", true
+	}
+	if decoded, ok := decodeUTF16Text(data); ok {
+		return decoded, true
+	}
+	if looksLikeText(path, data) {
+		return string(bytes.ToValidUTF8(data, []byte(" "))), true
+	}
+	return "", false
+}
+
+func decodeUTF16Text(data []byte) (string, bool) {
+	if len(data) < 2 || len(data)%2 != 0 {
+		return "", false
+	}
+
+	var byteOrder binary.ByteOrder = binary.LittleEndian
+	switch {
+	case len(data) >= 2 && data[0] == 0xFF && data[1] == 0xFE:
+		data = data[2:]
+	case len(data) >= 2 && data[0] == 0xFE && data[1] == 0xFF:
+		data = data[2:]
+		byteOrder = binary.BigEndian
+	default:
+		zerosAtOdd := 0
+		zerosAtEven := 0
+		samples := 0
+		for index := 0; index+1 < len(data) && samples < 64; index += 2 {
+			if data[index] == 0 {
+				zerosAtEven++
+			}
+			if data[index+1] == 0 {
+				zerosAtOdd++
+			}
+			samples++
+		}
+		if samples == 0 {
+			return "", false
+		}
+		if zerosAtOdd*2 >= samples {
+			byteOrder = binary.LittleEndian
+		} else if zerosAtEven*2 >= samples {
+			byteOrder = binary.BigEndian
+		} else {
+			return "", false
+		}
+	}
+
+	words := make([]uint16, 0, len(data)/2)
+	for index := 0; index+1 < len(data); index += 2 {
+		words = append(words, byteOrder.Uint16(data[index:index+2]))
+	}
+	return string(utf16.Decode(words)), true
+}
+
 func plainTextParser(path string) string {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".html", ".htm", ".xhtml":
@@ -681,8 +1256,32 @@ func plainTextParser(path string) string {
 }
 
 func normalizeText(input string) string {
-	fields := strings.Fields(strings.ReplaceAll(input, "\u0000", " "))
-	return strings.TrimSpace(strings.Join(fields, " "))
+	input = strings.ReplaceAll(input, "\u0000", " ")
+	input = strings.ReplaceAll(input, "\r\n", "\n")
+	input = strings.ReplaceAll(input, "\r", "\n")
+
+	lines := strings.Split(input, "\n")
+	normalized := make([]string, 0, len(lines))
+	pendingBlank := false
+	for _, line := range lines {
+		line = strings.Join(strings.Fields(line), " ")
+		if line == "" {
+			if len(normalized) > 0 {
+				pendingBlank = true
+			}
+			continue
+		}
+		if pendingBlank {
+			normalized = append(normalized, "")
+			pendingBlank = false
+		}
+		normalized = append(normalized, line)
+	}
+
+	for len(normalized) > 0 && normalized[len(normalized)-1] == "" {
+		normalized = normalized[:len(normalized)-1]
+	}
+	return strings.TrimSpace(strings.Join(normalized, "\n"))
 }
 
 func trimTrailingEmpty(values []string) []string {

@@ -111,7 +111,7 @@ func (s *Server) buildTools() []core.Tool {
 					"enum":        []string{"all", "ro", "rw"},
 					"description": "Filter by effective access mode. Defaults to all.",
 				},
-				"parsers": stringArraySchema("Optional parser filters such as text, html, pdf, spreadsheet, xls, office_xml, office_legacy_libreoffice, or office_legacy_ole."),
+				"parsers": stringArraySchema("Optional parser filters such as text, html, pdf, pdf_ocr, spreadsheet, xls, office_xml, odf, flat_odf, epub, rtf, image_ocr, office_legacy_libreoffice, or office_legacy_ole."),
 				"content_indexed": map[string]interface{}{
 					"type":        "boolean",
 					"description": "Optional filter for whether a file currently has indexed extracted content.",

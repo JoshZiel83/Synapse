@@ -82,6 +82,7 @@ type BuiltinFilesystemIndexConfig struct {
 	MaxFileSizeBytes int64    `yaml:"max_file_size_bytes,omitempty" json:"maxFileSizeBytes,omitempty"`
 	ParsePDF         *bool    `yaml:"parse_pdf,omitempty" json:"parsePdf,omitempty"`
 	ParseOffice      *bool    `yaml:"parse_office,omitempty" json:"parseOffice,omitempty"`
+	ParseImages      *bool    `yaml:"parse_images,omitempty" json:"parseImages,omitempty"`
 }
 
 type BuiltinFilesystemConfig struct {
@@ -507,6 +508,7 @@ func cloneBuiltin(input *BuiltinServerConfig) *BuiltinServerConfig {
 				MaxFileSizeBytes: input.Filesystem.Index.MaxFileSizeBytes,
 				ParsePDF:         cloneBoolPtr(input.Filesystem.Index.ParsePDF),
 				ParseOffice:      cloneBoolPtr(input.Filesystem.Index.ParseOffice),
+				ParseImages:      cloneBoolPtr(input.Filesystem.Index.ParseImages),
 			},
 		}
 	}
@@ -638,8 +640,12 @@ func applyBuiltinDefaults(server *ServerConfig) {
 				".tsx", ".py", ".java", ".c", ".cc", ".cpp", ".h", ".hpp", ".rs", ".sh",
 				".sql", ".css", ".scss", ".less", ".vue", ".svelte", ".php", ".rb",
 				".swift", ".kt", ".kts", ".scala", ".dart", ".lua", ".r", ".pl", ".proto",
-				"Dockerfile", "Makefile", ".pdf", ".xlsx", ".xlsm", ".xltx", ".xltm",
-				".xls", ".doc", ".ppt", ".docx", ".pptx", ".odt", ".ods", ".odp",
+				"Dockerfile", "Makefile", ".pdf", ".rtf", ".epub",
+				".xlsx", ".xlsm", ".xltx", ".xltm", ".xls", ".xlt", ".xla",
+				".doc", ".docx", ".docm", ".dotx", ".dotm",
+				".ppt", ".pps", ".pot", ".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm",
+				".odt", ".ods", ".odp", ".odg", ".fodt", ".fods", ".fodp",
+				".svg", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff",
 			}
 		}
 		if server.Builtin.Filesystem.Index.MaxFileSizeBytes <= 0 {
@@ -650,6 +656,9 @@ func applyBuiltinDefaults(server *ServerConfig) {
 		}
 		if server.Builtin.Filesystem.Index.ParseOffice == nil {
 			server.Builtin.Filesystem.Index.ParseOffice = boolPtr(true)
+		}
+		if server.Builtin.Filesystem.Index.ParseImages == nil {
+			server.Builtin.Filesystem.Index.ParseImages = boolPtr(true)
 		}
 	case "chrome":
 		if server.Builtin.InstanceID == "" {

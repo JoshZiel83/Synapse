@@ -40,8 +40,12 @@ const defaultFilesystemFileTypes = [
   '.tsx', '.py', '.java', '.c', '.cc', '.cpp', '.h', '.hpp', '.rs', '.sh',
   '.sql', '.css', '.scss', '.less', '.vue', '.svelte', '.php', '.rb',
   '.swift', '.kt', '.kts', '.scala', '.dart', '.lua', '.r', '.pl', '.proto',
-  'Dockerfile', 'Makefile', '.pdf', '.xlsx', '.xlsm', '.xltx', '.xltm',
-  '.xls', '.doc', '.ppt', '.docx', '.pptx', '.odt', '.ods', '.odp',
+  'Dockerfile', 'Makefile', '.pdf', '.rtf', '.epub',
+  '.xlsx', '.xlsm', '.xltx', '.xltm', '.xls', '.xlt', '.xla',
+  '.doc', '.docx', '.docm', '.dotx', '.dotm',
+  '.ppt', '.pps', '.pot', '.pptx', '.pptm', '.ppsx', '.ppsm', '.potx', '.potm',
+  '.odt', '.ods', '.odp', '.odg', '.fodt', '.fods', '.fodp',
+  '.svg', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.tif', '.tiff',
 ]
 
 function parseCommaSeparatedList(input: string): string[] {
@@ -138,6 +142,7 @@ function defaultFilesystemServer(): ServerConfig {
           maxFileSizeBytes: 8 * 1024 * 1024,
           parsePdf: true,
           parseOffice: true,
+          parseImages: true,
         },
       },
     },
@@ -1574,6 +1579,23 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
                       index: {
                         ...(currentFilesystem.index || {}),
                         parseOffice: checked,
+                      },
+                    })),
+                  )
+                }
+              />
+              <Separator />
+              <SettingToggle
+                label="Image OCR"
+                description="Use local Tesseract OCR for image files and embedded document images. When pdftoppm is also available, scanned PDFs can fall back to OCR after regular PDF text extraction."
+                checked={filesystemIndex.parseImages !== false}
+                onChange={(checked) =>
+                  updateFilesystemDraft((current) =>
+                    withFilesystemConfig(current, (currentFilesystem) => ({
+                      ...currentFilesystem,
+                      index: {
+                        ...(currentFilesystem.index || {}),
+                        parseImages: checked,
                       },
                     })),
                   )
