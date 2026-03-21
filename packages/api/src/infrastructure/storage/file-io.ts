@@ -6,6 +6,8 @@ import {
   readAsBuffer,
   readAsBase64,
   downloadAndSave,
+  normalizeOriginalNameForMimeType,
+  resolveBufferMimeType,
 } from './index.js';
 
 export interface FileRecord {
@@ -74,8 +76,21 @@ export async function saveFromUrl(
   category: string = 'general',
   metadata: Record<string, unknown> = {},
 ): Promise<FileRecord> {
-  const { storedName, mimeType, sizeBytes } = await downloadAndSave(url, originalName);
-  return insertFileRow(workspaceId, uploaderUserId, originalName || 'download', storedName, mimeType, sizeBytes, category, metadata);
+  const downloaded = await downloadAndSave(url, originalName);
+  const normalizedOriginalName = normalizeOriginalNameForMimeType(
+    downloaded.originalName,
+    downloaded.mimeType,
+  );
+  return insertFileRow(
+    workspaceId,
+    uploaderUserId,
+    normalizedOriginalName,
+    downloaded.storedName,
+    downloaded.mimeType,
+    downloaded.sizeBytes,
+    category,
+    metadata,
+  );
 }
 
 /** Decode base64, save to disk, insert DB row, return FileRecord */
@@ -89,8 +104,22 @@ export async function saveFromBase64(
   metadata: Record<string, unknown> = {},
 ): Promise<FileRecord> {
   const buffer = Buffer.from(base64, 'base64');
-  const { storedName, sizeBytes } = await saveBuffer(buffer, originalName, mimeType);
-  return insertFileRow(workspaceId, uploaderUserId, originalName, storedName, mimeType, sizeBytes, category, metadata);
+  const resolvedMimeType = await resolveBufferMimeType(buffer, mimeType);
+  const normalizedOriginalName = normalizeOriginalNameForMimeType(
+    originalName,
+    resolvedMimeType,
+  );
+  const { storedName, sizeBytes } = await saveBuffer(buffer, originalName, resolvedMimeType);
+  return insertFileRow(
+    workspaceId,
+    uploaderUserId,
+    normalizedOriginalName,
+    storedName,
+    resolvedMimeType,
+    sizeBytes,
+    category,
+    metadata,
+  );
 }
 
 /** Save a buffer to disk, insert DB row, return FileRecord */
@@ -103,6 +132,20 @@ export async function saveFromBuffer(
   category: string = 'general',
   metadata: Record<string, unknown> = {},
 ): Promise<FileRecord> {
-  const { storedName, sizeBytes } = await saveBuffer(buffer, originalName, mimeType);
-  return insertFileRow(workspaceId, uploaderUserId, originalName, storedName, mimeType, sizeBytes, category, metadata);
+  const resolvedMimeType = await resolveBufferMimeType(buffer, mimeType);
+  const normalizedOriginalName = normalizeOriginalNameForMimeType(
+    originalName,
+    resolvedMimeType,
+  );
+  const { storedName, sizeBytes } = await saveBuffer(buffer, originalName, resolvedMimeType);
+  return insertFileRow(
+    workspaceId,
+    uploaderUserId,
+    normalizedOriginalName,
+    storedName,
+    resolvedMimeType,
+    sizeBytes,
+    category,
+    metadata,
+  );
 }
