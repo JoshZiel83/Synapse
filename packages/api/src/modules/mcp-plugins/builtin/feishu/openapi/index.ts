@@ -1,14 +1,21 @@
 import { Client } from "@larksuiteoapi/node-sdk";
 import type { BuiltinPluginHandler } from "../../index.js";
 import * as larkMcpUtils from "@larksuiteoapi/lark-mcp/dist/mcp-tool/utils/handler.js";
-import { config } from "../../../../../config/index.js";
 import {
   buildFeishuToolRequest,
   buildFeishuToolRuntime,
 } from "./runtime.js";
 
-type OAuthConnectionConfig = {
-  accessToken?: string;
+type FeishuConnectionConfig = {
+  secretPayload?: {
+    accessToken?: string;
+  };
+};
+
+type FeishuClientConfig = {
+  appId?: string;
+  appSecret?: string;
+  domain?: string;
 };
 
 const { larkOapiHandler } = larkMcpUtils as unknown as {
@@ -22,25 +29,37 @@ const { larkOapiHandler } = larkMcpUtils as unknown as {
   ) => Promise<unknown>;
 };
 
-function getOAuthConnection(configData: Record<string, unknown>) {
+function getConnectionConfig(configData: Record<string, unknown>) {
   const raw = configData.feishuAccount;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return undefined;
   }
-  return raw as OAuthConnectionConfig;
+  return raw as FeishuConnectionConfig;
 }
 
-function createClient() {
-  if (!config.feishu.appId || !config.feishu.appSecret) {
+function getClientConfig(configData: Record<string, unknown>) {
+  return {
+    appId: typeof configData.appId === "string" ? configData.appId : "",
+    appSecret: typeof configData.appSecret === "string" ? configData.appSecret : "",
+    domain:
+      typeof configData.domain === "string" && configData.domain.trim().length > 0
+        ? configData.domain
+        : "https://open.feishu.cn",
+  } satisfies FeishuClientConfig;
+}
+
+function createClient(configData: Record<string, unknown>) {
+  const clientConfig = getClientConfig(configData);
+  if (!clientConfig.appId || !clientConfig.appSecret) {
     throw new Error(
-      "Feishu MCP is not configured. Set FEISHU_MCP_APP_ID and FEISHU_MCP_APP_SECRET in the API environment.",
+      "Feishu MCP is not configured. Set the App ID and App Secret in the plugin setup.",
     );
   }
 
   return new Client({
-    appId: config.feishu.appId,
-    appSecret: config.feishu.appSecret,
-    domain: config.feishu.domain,
+    appId: clientConfig.appId,
+    appSecret: clientConfig.appSecret,
+    domain: clientConfig.domain,
   });
 }
 
@@ -60,9 +79,10 @@ export const feishuOpenapiHandler: BuiltinPluginHandler = {
       throw new Error(`Unknown Feishu tool: ${toolName}`);
     }
 
-    const client = createClient();
-    const connection = getOAuthConnection(configData);
-    const accessToken = connection?.accessToken;
+    const client = createClient(configData);
+    const connection = getConnectionConfig(configData);
+    const accessToken =
+      connection?.secretPayload?.accessToken;
     const accessTokens = Array.isArray(toolMeta.officialTool.accessTokens)
       ? toolMeta.officialTool.accessTokens
       : [];

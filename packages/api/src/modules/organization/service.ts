@@ -390,7 +390,7 @@ function buildActorPackageRevision(
     toolsManifest: [],
     validationRules: [],
     setupSteps: [],
-    authProviders: [],
+    authBindings: [],
     metadata: versionMetadata,
     createdBy: row.version_created_by || undefined,
     createdAt: row.version_created_at,

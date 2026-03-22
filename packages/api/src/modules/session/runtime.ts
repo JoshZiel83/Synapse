@@ -43,6 +43,7 @@ function mapWakeupRow(row: any): ActorRuntimeWakeup {
     sourceMemberId: row.source_member_id || undefined,
     sourceName: row.source_name || undefined,
     summary: row.summary,
+    reasonText: row.reason_text || undefined,
     status: row.status,
     activationKind: typeof metadata.activationKind === 'string' ? metadata.activationKind : undefined,
     delivery: typeof metadata.delivery === 'string' ? metadata.delivery : undefined,
@@ -260,6 +261,9 @@ export async function enqueueSessionWakeup(params: {
   sourceMemberId?: string;
   sourceName?: string;
   summary: string;
+  reasonText?: string;
+  automationExecutionId?: string;
+  automationOccurrenceId?: string;
   metadata?: Record<string, unknown>;
   trigger?: string;
 }) {
@@ -274,8 +278,8 @@ export async function enqueueSessionWakeup(params: {
   const result = await query(
     `INSERT INTO session_wakeups
        (id, session_id, source_type, source_item_id, source_session_id, source_member_type, source_member_id,
-        source_name, summary, status, metadata, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, NOW())
+        source_name, summary, reason_text, automation_execution_id, automation_occurrence_id, status, metadata, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', $13, NOW())
      RETURNING *`,
     [
       crypto.randomUUID(),
@@ -287,6 +291,9 @@ export async function enqueueSessionWakeup(params: {
       params.sourceMemberId || null,
       params.sourceName || null,
       params.summary,
+      params.reasonText || null,
+      params.automationExecutionId || null,
+      params.automationOccurrenceId || null,
       JSON.stringify(params.metadata || {}),
     ],
   );

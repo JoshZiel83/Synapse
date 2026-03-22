@@ -10,7 +10,11 @@ import type {
   RelaySyncSourceView,
   RelayToolView,
 } from '@synapse/shared';
-import { RELAY_PAIRING_TTL_MS, RELAY_PROTOCOL_VERSION } from '@synapse/shared';
+import {
+  RELAY_PAIRING_TTL_MS,
+  RELAY_PROTOCOL_VERSION,
+  relayLifecycleEventDefinitions,
+} from '@synapse/shared';
 import { config } from '../../config/index.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
@@ -961,6 +965,82 @@ async function createRelayPairingSession(params: {
   throw new Error('Unable to allocate a unique relay pairing code');
 }
 
+async function ensureRelayLifecycleAutomationSourcesForDeviceTx(
+  runQuery: (text: string, params?: any[]) => Promise<{ rows: any[] }>,
+  params: { workspaceId: string; deviceId: string; displayName: string },
+) {
+  for (const definition of relayLifecycleEventDefinitions) {
+    const source = definition.buildSource({
+      providerRef: params.deviceId,
+      providerLabel: params.displayName,
+    });
+    const existing = (await runQuery(
+      `SELECT id
+       FROM automation_event_sources
+       WHERE workspace_id = $1
+         AND provider_kind = 'relay'
+         AND provider_ref = $2
+         AND source_key = $3
+       LIMIT 1`,
+      [params.workspaceId, params.deviceId, source.sourceKey],
+    )) as { rows: Array<{ id: string }> };
+
+    if (existing.rows[0]) {
+      await runQuery(
+        `UPDATE automation_event_sources
+         SET name = $2,
+             description = $3,
+             recommended_usage = $4,
+             payload_schema = $5,
+             example_payload = $6,
+             status = 'active',
+             metadata = COALESCE(metadata, '{}'::jsonb) || $7::jsonb,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [
+          existing.rows[0].id,
+          source.name,
+          source.description,
+          source.recommendedUsage || '',
+          JSON.stringify(source.payloadSchema),
+          JSON.stringify(source.examplePayload),
+          JSON.stringify(source.metadata || {}),
+        ],
+      );
+      continue;
+    }
+
+    await runQuery(
+      `INSERT INTO automation_event_sources (
+         workspace_id,
+         provider_kind,
+         provider_ref,
+         source_key,
+         name,
+         description,
+         recommended_usage,
+         payload_schema,
+         example_payload,
+         status,
+         created_by_kind,
+         metadata
+       )
+       VALUES ($1, 'relay', $2, $3, $4, $5, $6, $7, $8, 'active', 'system', $9)`,
+      [
+        params.workspaceId,
+        params.deviceId,
+        source.sourceKey,
+        source.name,
+        source.description,
+        source.recommendedUsage || '',
+        JSON.stringify(source.payloadSchema),
+        JSON.stringify(source.examplePayload),
+        JSON.stringify(source.metadata || {}),
+      ],
+    );
+  }
+}
+
 async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema>) {
   return transaction(async (client) => {
     await client.query(
@@ -1067,6 +1147,12 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
        WHERE id = $1`,
       [pairing.id, device.id],
     );
+
+    await ensureRelayLifecycleAutomationSourcesForDeviceTx(client.query.bind(client), {
+      workspaceId: device.workspace_id as string,
+      deviceId: device.id as string,
+      displayName: device.display_name as string,
+    });
 
     return {
       deviceId: device.id as string,
@@ -1374,6 +1460,15 @@ export function registerRelayRoutes(app: FastifyInstance) {
       if (result.rows.length === 0) {
         throw createNotFoundError('RELAY_DEVICE_NOT_FOUND', 'Relay device not found');
       }
+
+      await ensureRelayLifecycleAutomationSourcesForDeviceTx(
+        query,
+        {
+          workspaceId,
+          deviceId: id,
+          displayName: body.displayName,
+        },
+      );
 
       logEvent({
         workspaceId,

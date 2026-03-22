@@ -2,7 +2,7 @@ import type {
   AccessGrantScope,
 } from '@synapse/shared/types';
 import type {
-  PluginAuthProviderDefinition,
+  PluginAuthBindingDefinition,
   PluginConfigFieldDefinition,
   PluginInstallFlow,
   ReuseScope,
@@ -36,7 +36,7 @@ export interface BuiltinPluginSeed {
   validationRules?: McpValidationRule[];
   setupSteps?: McpSetupStep[];
   installFlow?: PluginInstallFlow;
-  authProviders?: PluginAuthProviderDefinition[];
+  authBindings?: PluginAuthBindingDefinition[];
   authorization?: {
     requiredPermissions?: string[];
     defaultGrantScope?: AccessGrantScope;

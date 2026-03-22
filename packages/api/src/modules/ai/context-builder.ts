@@ -1,4 +1,5 @@
 import type {
+  ActorRuntimeWakeup,
   AssistantToolHistory,
   CanonicalContentBlock,
   CanonicalToolCall,
@@ -187,6 +188,25 @@ function buildInterruptNotice(interrupt: { type: string; content: string }): Can
   };
 }
 
+function buildWakeupNotice(wakeup: Pick<ActorRuntimeWakeup, 'wakeupId' | 'sourceType' | 'sourceName' | 'summary' | 'reasonText'>): CanonicalContextItem {
+  const title = wakeup.sourceName ? `${wakeup.sourceType} from ${wakeup.sourceName}` : wakeup.sourceType;
+  const reason = wakeup.reasonText?.trim() || wakeup.summary.trim();
+  return {
+    kind: 'system_notice',
+    itemId: `wakeup:${wakeup.wakeupId}`,
+    scope: 'private',
+    surface: 'internal',
+    noticeType: 'task_instruction',
+    parts: textBlocks(`[Wakeup - ${title}]: ${reason}`),
+    metadata: {
+      wakeupId: wakeup.wakeupId,
+      sourceType: wakeup.sourceType,
+      summary: wakeup.summary,
+      reasonText: wakeup.reasonText,
+    },
+  };
+}
+
 function expandToolHistoryContextItems(
   items: CanonicalContextItem[],
   messageId: string,
@@ -306,9 +326,14 @@ export function buildSessionContextItems(
   options: {
     crossTurnToolHistory?: boolean;
     interrupts?: { type: string; content: string }[];
+    wakeups?: Pick<ActorRuntimeWakeup, 'wakeupId' | 'sourceType' | 'sourceName' | 'summary' | 'reasonText'>[];
   } = {},
 ): CanonicalContextItem[] {
   const items: CanonicalContextItem[] = [];
+
+  if (options.wakeups) {
+    items.push(...options.wakeups.map(buildWakeupNotice));
+  }
 
   for (const msg of sessionMessages) {
     const meta = parseMetadata(msg.metadata);
@@ -431,8 +456,13 @@ export function buildGroupContextItems(params: {
   actorId: string;
   sessionMessages: SessionMessageRow[];
   interrupts?: { type: string; content: string }[];
+  wakeups?: Pick<ActorRuntimeWakeup, 'wakeupId' | 'sourceType' | 'sourceName' | 'summary' | 'reasonText'>[];
 }) {
   const items: CanonicalContextItem[] = [];
+
+  if (params.wakeups) {
+    items.push(...params.wakeups.map(buildWakeupNotice));
+  }
 
   if (params.interrupts) {
     items.push(...params.interrupts.map(buildInterruptNotice));

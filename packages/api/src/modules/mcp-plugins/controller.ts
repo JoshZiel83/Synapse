@@ -74,6 +74,12 @@ const installPlanSchema = z.object({
   userId: z.string().uuid().optional(),
 });
 
+const startAuthSchema = z.object({
+  installationId: z.string().uuid().optional(),
+  draftConfig: z.record(z.unknown()).optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
 const accessGrantSchema = z.object({
   grantScope: attachmentScopeSchema.optional(),
   actorId: z.string().uuid().optional(),
@@ -207,7 +213,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
   );
 
   app.post(
-    "/api/v1/workspaces/:workspaceId/mcp/plugins/:pluginId/auth/:providerKey/start",
+    "/api/v1/workspaces/:workspaceId/mcp/plugins/:pluginId/auth/:bindingKey/start",
     workspaceHook,
     async (request, reply) => {
       try {
@@ -219,17 +225,21 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         );
         if (!allowed) return;
 
-        const { workspaceId, pluginId, providerKey } = request.params as {
+        const { workspaceId, pluginId, bindingKey } = request.params as {
           workspaceId: string;
           pluginId: string;
-          providerKey: string;
+          bindingKey: string;
         };
+        const body = startAuthSchema.parse(request.body || {});
         const user = (request as any).user;
         const result = await startPluginAuthSession({
           workspaceId,
           pluginId,
-          providerKey,
+          installationId: body.installationId,
+          bindingKey,
           userId: user.id || user.userId,
+          draftConfig: body.draftConfig,
+          metadata: body.metadata,
         });
         reply.send(result);
       } catch (error) {

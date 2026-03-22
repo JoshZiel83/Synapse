@@ -6,9 +6,11 @@ import Image from "next/image"
 import { usePathname, useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
 import {
+  Bell,
   Bot,
   Brain,
   ChevronsUpDown,
+  Clock3,
   ContactRound,
   Cpu,
   FileText,
@@ -66,6 +68,11 @@ const knowledgeItems = [
   { href: "/dashboard/audit", label: "Audit Log", icon: FileText },
 ]
 
+const automationItems = [
+  { href: "/dashboard/event-sources", label: "Event Sources", icon: Bell },
+  { href: "/dashboard/triggers", label: "Triggers", icon: Clock3 },
+]
+
 const modelItems = [
   { href: "/settings/models", label: "Groups", icon: Cpu },
   { href: "/settings/models/actors", label: "Actors", icon: Bot },
@@ -111,6 +118,10 @@ function isItemActive(pathname: string, href: string) {
 
   if (href === "/dashboard/plugins") {
     return pathname === href || pathname.startsWith("/dashboard/plugins/")
+  }
+
+  if (href === "/dashboard/triggers") {
+    return pathname === href || pathname.startsWith("/dashboard/triggers/")
   }
 
   if (href === "/dashboard/skills") {
@@ -358,6 +369,14 @@ export function AppSidebar({
     return accessItems
   }, [platformNavigation.canAccessPlatformAccess, workspaceNavigation.canAccessWorkspaceAccess])
 
+  const visibleAutomationItems = React.useMemo(() => {
+    if (!workspaceNavigation.canViewWorkspace) {
+      return []
+    }
+
+    return automationItems
+  }, [workspaceNavigation.canViewWorkspace])
+
   return (
     <Sidebar collapsible="offcanvas" variant="inset" {...props}>
       <SidebarHeader>
@@ -373,6 +392,7 @@ export function AppSidebar({
       <SidebarContent>
         <NavSection items={mainItems} pathname={pathname} unreadCount={unreadCount} />
         <NavSection label="Workspace" items={knowledgeItems} pathname={pathname} />
+        <NavSection label="Automation" items={visibleAutomationItems} pathname={pathname} />
         <NavSection label="Models" items={visibleModelItems} pathname={pathname} />
         <NavSection label="Access" items={visibleAccessItems} pathname={pathname} />
       </SidebarContent>

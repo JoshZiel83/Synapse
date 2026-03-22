@@ -37,6 +37,7 @@ import workspaceModule from "./modules/workspace/index.js";
 import organizationModule from "./modules/organization/index.js";
 import skillsModule from "./modules/skills/index.js";
 import groupModule from "./modules/group/index.js";
+import automationModule from "./modules/automation/index.js";
 import filesModule from "./modules/files/index.js";
 import memoryModule from "./modules/memory/index.js";
 import mcpPluginsModule from "./modules/mcp-plugins/index.js";
@@ -54,6 +55,8 @@ import { registerActionToolPlugins } from "./modules/ai/tools.js";
 import { registerCallableToolPlugins } from "./modules/ai/session-tools.js";
 import { startSessionThinkingWorker } from "./workers/session-thinking.js";
 import { startSessionTimeoutWorker } from "./workers/session-timeout.js";
+import { ensureAutomationSchedulerJob, startAutomationSchedulerWorker } from "./workers/automation-scheduler.js";
+import { startAutomationExecutionWorker } from "./workers/automation-execution.js";
 import { shutdownAllWorkers } from "./workers/registry.js";
 import { shutdownQueues } from "./workers/queues.js";
 
@@ -124,6 +127,7 @@ async function main() {
   await app.register(organizationModule);
   await app.register(skillsModule);
   await app.register(groupModule);
+  await app.register(automationModule);
   await app.register(filesModule);
   await app.register(memoryModule);
   await app.register(mcpPluginsModule);
@@ -141,6 +145,9 @@ async function main() {
 
   registerActionToolPlugins();
   registerCallableToolPlugins();
+  await ensureAutomationSchedulerJob();
+  startAutomationSchedulerWorker();
+  startAutomationExecutionWorker();
   startSessionThinkingWorker();
   startSessionTimeoutWorker();
 

@@ -1,0 +1,29 @@
+import { Worker } from 'bullmq';
+import { QUEUE_NAMES } from '@synapse/shared';
+import { redis } from '../infrastructure/redis/index.js';
+import { processAutomationExecution } from '../modules/automation/service.js';
+import { registerWorker } from './registry.js';
+
+export function startAutomationExecutionWorker() {
+  const worker = new Worker(
+    QUEUE_NAMES.AUTOMATION_EXECUTION,
+    async (job) => {
+      const { executionId } = job.data as { executionId?: string };
+      if (!executionId) {
+        return { success: false, reason: 'missing executionId' };
+      }
+      return processAutomationExecution(executionId);
+    },
+    {
+      connection: redis,
+      concurrency: 5,
+    },
+  );
+
+  worker.on('failed', (job, err) => {
+    console.error(`Automation execution job ${job?.id} failed:`, err.message);
+  });
+
+  registerWorker(worker);
+  return worker;
+}

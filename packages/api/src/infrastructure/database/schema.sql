@@ -430,7 +430,7 @@ CREATE TABLE plugin_package_version_specs (
   config_schema JSONB NOT NULL DEFAULT '{}',
   default_config JSONB NOT NULL DEFAULT '{}',
   install_flow JSONB NOT NULL DEFAULT '{}',
-  auth_providers JSONB NOT NULL DEFAULT '[]',
+  auth_bindings JSONB NOT NULL DEFAULT '[]',
   default_mount_scope VARCHAR(20) NOT NULL DEFAULT 'workspace'
     CHECK (default_mount_scope IN ('workspace', 'conversation', 'actor', 'actor_conversation', 'user')),
   default_reuse_scope VARCHAR(20) NOT NULL DEFAULT 'conversation'
@@ -1015,7 +1015,7 @@ CREATE TABLE session_wakeups (
   session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   turn_id UUID,
   source_type VARCHAR(50) NOT NULL
-    CHECK (source_type IN ('user_message', 'actor_message', 'broadcast', 'invite', 'api_call', 'system_interrupt', 'retry')),
+    CHECK (source_type IN ('user_message', 'actor_message', 'broadcast', 'invite', 'api_call', 'automation', 'system_interrupt', 'retry')),
   source_item_id UUID REFERENCES conversation_items(id) ON DELETE SET NULL,
   source_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   source_member_type VARCHAR(20)
@@ -1023,6 +1023,7 @@ CREATE TABLE session_wakeups (
   source_member_id UUID,
   source_name VARCHAR(255),
   summary TEXT NOT NULL,
+  reason_text TEXT,
   status VARCHAR(20) NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'attached', 'processed', 'dropped')),
   metadata JSONB NOT NULL DEFAULT '{}',
@@ -1037,6 +1038,283 @@ CREATE INDEX idx_session_wakeups_session_status
   ON session_wakeups(session_id, status, created_at DESC);
 CREATE INDEX idx_session_wakeups_turn
   ON session_wakeups(turn_id, created_at DESC) WHERE turn_id IS NOT NULL;
+
+-- ============ Automation Runtime ============
+CREATE TABLE automation_rules (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  category VARCHAR(30) NOT NULL
+    CHECK (category IN ('schedule', 'event_subscription')),
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'paused', 'error', 'archived', 'completed', 'expired')),
+  name VARCHAR(255) NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  created_by_kind VARCHAR(20) NOT NULL
+    CHECK (created_by_kind IN ('user', 'session', 'system')),
+  created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_by_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  created_by_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  owner_conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  owner_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  last_triggered_at TIMESTAMPTZ,
+  last_error_at TIMESTAMPTZ,
+  last_error_message TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_automation_rules_workspace
+  ON automation_rules(workspace_id, created_at DESC);
+CREATE INDEX idx_automation_rules_workspace_status
+  ON automation_rules(workspace_id, status, created_at DESC);
+CREATE INDEX idx_automation_rules_owner_session
+  ON automation_rules(owner_session_id, created_at DESC) WHERE owner_session_id IS NOT NULL;
+CREATE INDEX idx_automation_rules_owner_conversation
+  ON automation_rules(owner_conversation_id, created_at DESC) WHERE owner_conversation_id IS NOT NULL;
+
+CREATE TABLE automation_policies (
+  rule_id UUID PRIMARY KEY REFERENCES automation_rules(id) ON DELETE CASCADE,
+  active_from TIMESTAMPTZ,
+  active_until TIMESTAMPTZ,
+  max_trigger_count INT CHECK (max_trigger_count IS NULL OR max_trigger_count > 0),
+  trigger_count INT NOT NULL DEFAULT 0 CHECK (trigger_count >= 0),
+  completion_status VARCHAR(20) NOT NULL DEFAULT 'completed'
+    CHECK (completion_status IN ('completed', 'archived')),
+  completed_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (
+    active_from IS NULL OR active_until IS NULL OR active_until >= active_from
+  )
+);
+
+CREATE INDEX idx_automation_policies_active_until
+  ON automation_policies(active_until)
+  WHERE active_until IS NOT NULL;
+
+CREATE TABLE automation_event_sources (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  provider_kind VARCHAR(20) NOT NULL
+    CHECK (provider_kind IN ('relay', 'webhook', 'internal')),
+  provider_ref TEXT,
+  source_key VARCHAR(255) NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  recommended_usage TEXT NOT NULL DEFAULT '',
+  payload_schema JSONB NOT NULL DEFAULT '{}',
+  example_payload JSONB NOT NULL DEFAULT '{}',
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'deprecated', 'disabled', 'archived')),
+  created_by_kind VARCHAR(20) NOT NULL
+    CHECK (created_by_kind IN ('user', 'session', 'system')),
+  created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_by_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  created_by_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  last_triggered_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_automation_event_sources_provider_key
+  ON automation_event_sources(workspace_id, provider_kind, COALESCE(provider_ref, ''), source_key);
+CREATE INDEX idx_automation_event_sources_workspace
+  ON automation_event_sources(workspace_id, created_at DESC);
+CREATE INDEX idx_automation_event_sources_workspace_status
+  ON automation_event_sources(workspace_id, status, created_at DESC);
+CREATE INDEX idx_automation_event_sources_provider
+  ON automation_event_sources(workspace_id, provider_kind, source_key, created_at DESC);
+
+CREATE TABLE automation_triggers (
+  rule_id UUID PRIMARY KEY REFERENCES automation_rules(id) ON DELETE CASCADE,
+  trigger_kind VARCHAR(20) NOT NULL
+    CHECK (trigger_kind IN ('schedule', 'event')),
+  source_kind VARCHAR(20) NOT NULL
+    CHECK (source_kind IN ('clock', 'relay', 'webhook', 'internal')),
+  event_source_id UUID REFERENCES automation_event_sources(id) ON DELETE RESTRICT,
+  source_locator TEXT,
+  match_key VARCHAR(255),
+  matcher JSONB NOT NULL DEFAULT '{}',
+  schedule_kind VARCHAR(20)
+    CHECK (schedule_kind IN ('cron', 'at', 'interval')),
+  schedule_expr VARCHAR(255),
+  schedule_timezone VARCHAR(64),
+  interval_seconds INT,
+  starts_at TIMESTAMPTZ,
+  next_fire_at TIMESTAMPTZ,
+  last_fired_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (
+    (trigger_kind = 'schedule' AND source_kind = 'clock' AND event_source_id IS NULL) OR
+    (trigger_kind = 'event' AND source_kind IN ('relay', 'webhook', 'internal') AND event_source_id IS NOT NULL)
+  ),
+  CHECK (
+    (trigger_kind = 'schedule' AND schedule_kind IS NOT NULL) OR
+    (trigger_kind = 'event' AND schedule_kind IS NULL)
+  )
+);
+
+CREATE INDEX idx_automation_triggers_due
+  ON automation_triggers(next_fire_at)
+  WHERE trigger_kind = 'schedule';
+CREATE INDEX idx_automation_triggers_event_source
+  ON automation_triggers(event_source_id)
+  WHERE event_source_id IS NOT NULL;
+CREATE INDEX idx_automation_triggers_event_match
+  ON automation_triggers(source_kind, match_key, source_locator)
+  WHERE trigger_kind = 'event';
+
+CREATE TABLE automation_deliveries (
+  rule_id UUID PRIMARY KEY REFERENCES automation_rules(id) ON DELETE CASCADE,
+  delivery_mode VARCHAR(40) NOT NULL
+    CHECK (delivery_mode IN ('wake_session', 'conversation_notice', 'create_conversation_once', 'create_conversation_each_time')),
+  conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  reused_conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  conversation_title VARCHAR(500),
+  message_text TEXT NOT NULL DEFAULT '',
+  wake_reason_text TEXT,
+  message_blocks JSONB NOT NULL DEFAULT '[]',
+  target_policy VARCHAR(20) NOT NULL DEFAULT 'all_members'
+    CHECK (target_policy IN ('all_members', 'specified_members')),
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE automation_delivery_participants (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  rule_id UUID NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE,
+  entity_kind VARCHAR(20) NOT NULL CHECK (entity_kind IN ('actor', 'user')),
+  entity_id UUID NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(rule_id, entity_kind, entity_id)
+);
+
+CREATE INDEX idx_automation_delivery_participants_rule
+  ON automation_delivery_participants(rule_id, created_at);
+
+CREATE TABLE automation_delivery_recipients (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  rule_id UUID NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE,
+  entity_kind VARCHAR(20) NOT NULL CHECK (entity_kind IN ('actor', 'user')),
+  entity_id UUID NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(rule_id, entity_kind, entity_id)
+);
+
+CREATE INDEX idx_automation_delivery_recipients_rule
+  ON automation_delivery_recipients(rule_id, created_at);
+
+CREATE TABLE automation_webhook_endpoints (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'disabled', 'archived')),
+  path_token VARCHAR(64) UNIQUE NOT NULL,
+  secret_hash VARCHAR(128) NOT NULL,
+  secret_hint VARCHAR(16) NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  last_received_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_automation_webhook_endpoints_workspace
+  ON automation_webhook_endpoints(workspace_id, created_at DESC);
+
+CREATE TABLE automation_occurrences (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  source_kind VARCHAR(20) NOT NULL
+    CHECK (source_kind IN ('clock', 'relay', 'webhook', 'internal')),
+  event_source_id UUID REFERENCES automation_event_sources(id) ON DELETE SET NULL,
+  source_locator TEXT,
+  match_key VARCHAR(255),
+  dedupe_key VARCHAR(255),
+  source_snapshot JSONB NOT NULL DEFAULT '{}',
+  payload JSONB NOT NULL DEFAULT '{}',
+  occurred_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_automation_occurrences_event_source_dedupe
+  ON automation_occurrences(workspace_id, event_source_id, dedupe_key)
+  WHERE dedupe_key IS NOT NULL AND event_source_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_automation_occurrences_source_kind_dedupe
+  ON automation_occurrences(workspace_id, source_kind, dedupe_key)
+  WHERE dedupe_key IS NOT NULL AND event_source_id IS NULL;
+CREATE INDEX idx_automation_occurrences_workspace_created
+  ON automation_occurrences(workspace_id, created_at DESC);
+CREATE INDEX idx_automation_occurrences_event_source
+  ON automation_occurrences(event_source_id, created_at DESC)
+  WHERE event_source_id IS NOT NULL;
+CREATE INDEX idx_automation_occurrences_event_match
+  ON automation_occurrences(workspace_id, source_kind, match_key, source_locator, created_at DESC);
+
+CREATE TABLE automation_executions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  rule_id UUID NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE,
+  occurrence_id UUID NOT NULL REFERENCES automation_occurrences(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'running', 'completed', 'failed', 'skipped')),
+  attempt_count INT NOT NULL DEFAULT 0,
+  error_message TEXT,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(rule_id, occurrence_id)
+);
+
+CREATE INDEX idx_automation_executions_rule_created
+  ON automation_executions(rule_id, created_at DESC);
+CREATE INDEX idx_automation_executions_status_created
+  ON automation_executions(status, created_at);
+CREATE INDEX idx_automation_executions_occurrence
+  ON automation_executions(occurrence_id, created_at DESC);
+
+CREATE TABLE automation_execution_targets (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  execution_id UUID NOT NULL REFERENCES automation_executions(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  target_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  target_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_item_id UUID REFERENCES conversation_items(id) ON DELETE SET NULL,
+  wakeup_id UUID REFERENCES session_wakeups(id) ON DELETE SET NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'running', 'completed', 'failed', 'skipped')),
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_automation_execution_targets_execution
+  ON automation_execution_targets(execution_id, created_at);
+CREATE INDEX idx_automation_execution_targets_session
+  ON automation_execution_targets(session_id, created_at DESC) WHERE session_id IS NOT NULL;
+CREATE INDEX idx_automation_execution_targets_conversation
+  ON automation_execution_targets(conversation_id, created_at DESC) WHERE conversation_id IS NOT NULL;
+
+ALTER TABLE session_wakeups
+  ADD COLUMN automation_execution_id UUID REFERENCES automation_executions(id) ON DELETE SET NULL,
+  ADD COLUMN automation_occurrence_id UUID REFERENCES automation_occurrences(id) ON DELETE SET NULL;
+
+CREATE INDEX idx_session_wakeups_automation_execution
+  ON session_wakeups(automation_execution_id, created_at DESC)
+  WHERE automation_execution_id IS NOT NULL;
+CREATE INDEX idx_session_wakeups_automation_occurrence
+  ON session_wakeups(automation_occurrence_id, created_at DESC)
+  WHERE automation_occurrence_id IS NOT NULL;
 
 -- ============ Memory Runtime ============
 CREATE TABLE memory_entries (
@@ -1415,17 +1693,20 @@ CREATE TABLE plugin_auth_sessions (
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   catalog_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE CASCADE,
   catalog_version_id UUID REFERENCES catalog_versions(id) ON DELETE SET NULL,
-  provider_key VARCHAR(100) NOT NULL,
+  installation_id UUID REFERENCES plugin_installations(id) ON DELETE CASCADE,
+  binding_key VARCHAR(100) NOT NULL,
+  driver VARCHAR(100) NOT NULL,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   status VARCHAR(20) NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'completed', 'failed', 'expired', 'consumed')),
-  state VARCHAR(255) NOT NULL UNIQUE,
-  code_verifier TEXT,
-  redirect_uri TEXT NOT NULL,
-  authorize_url TEXT,
+  phase VARCHAR(64),
+  state VARCHAR(255) UNIQUE,
+  challenge_payload JSONB DEFAULT '{}',
+  transient_payload JSONB DEFAULT '{}',
   error_code VARCHAR(120),
   error_message TEXT,
   result_preview JSONB DEFAULT '{}',
+  result_payload JSONB DEFAULT '{}',
   metadata JSONB DEFAULT '{}',
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -1440,25 +1721,26 @@ CREATE TABLE plugin_connections (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   installation_id UUID NOT NULL REFERENCES plugin_installations(id) ON DELETE CASCADE,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  provider_key VARCHAR(100) NOT NULL,
+  owner_scope VARCHAR(20) NOT NULL DEFAULT 'installation'
+    CHECK (owner_scope IN ('installation', 'user', 'workspace')),
+  owner_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  binding_key VARCHAR(100) NOT NULL,
+  driver VARCHAR(100) NOT NULL,
   external_account_id VARCHAR(255),
   display_name VARCHAR(255),
   avatar_url TEXT,
-  scopes TEXT[] DEFAULT '{}',
-  access_token TEXT,
-  refresh_token TEXT,
-  token_type VARCHAR(100),
   status VARCHAR(20) NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'expired', 'revoked')),
   expires_at TIMESTAMPTZ,
-  profile JSONB DEFAULT '{}',
+  public_payload JSONB DEFAULT '{}',
+  secret_payload JSONB DEFAULT '{}',
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_plugin_connections_installation ON plugin_connections(installation_id, created_at DESC);
+CREATE INDEX idx_plugin_connections_binding ON plugin_connections(binding_key, created_at DESC);
 
 CREATE TABLE plugin_runtime_leases (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1507,12 +1789,19 @@ CREATE TABLE relay_devices (
   last_seen_at TIMESTAMPTZ,
   last_connected_at TIMESTAMPTZ,
   last_catalog_changed_at TIMESTAMPTZ,
+  automation_lifecycle_state VARCHAR(20)
+    CHECK (automation_lifecycle_state IN ('online', 'offline')),
+  automation_lifecycle_grace_until TIMESTAMPTZ,
+  automation_lifecycle_event_at TIMESTAMPTZ,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_relay_devices_workspace ON relay_devices(workspace_id, created_at DESC);
+CREATE INDEX idx_relay_devices_automation_lifecycle_due
+  ON relay_devices(automation_lifecycle_grace_until)
+  WHERE automation_lifecycle_grace_until IS NOT NULL;
 
 CREATE TABLE relay_pairing_sessions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

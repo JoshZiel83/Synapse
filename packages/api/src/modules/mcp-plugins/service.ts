@@ -8,7 +8,7 @@ import type {
 } from "@synapse/shared/types";
 import type {
   AttachmentScope,
-  PluginAuthProviderDefinition,
+  PluginAuthBindingDefinition,
   PluginConfigFieldDefinition,
   PluginConfigFieldState,
   PluginInstallFlow,
@@ -82,7 +82,7 @@ type PluginCatalogRow = {
   spec_config_schema: unknown;
   spec_default_config: unknown;
   spec_install_flow: unknown;
-  spec_auth_providers: unknown;
+  spec_auth_bindings: unknown;
   spec_default_mount_scope: RuntimeBindingScope | null;
   spec_default_reuse_scope: PluginReuseScopeV2 | null;
   spec_requires_handshake: boolean | null;
@@ -189,7 +189,7 @@ const PLUGIN_CATALOG_SELECT = `
     spec.config_schema AS spec_config_schema,
     spec.default_config AS spec_default_config,
     spec.install_flow AS spec_install_flow,
-    spec.auth_providers AS spec_auth_providers,
+    spec.auth_bindings AS spec_auth_bindings,
     spec.default_mount_scope AS spec_default_mount_scope,
     spec.default_reuse_scope AS spec_default_reuse_scope,
     spec.requires_handshake AS spec_requires_handshake,
@@ -509,7 +509,7 @@ function mapPluginView(row: PluginCatalogRow) {
       Object.keys(installFlow).length > 0
         ? installFlow
         : { steps: setupSteps },
-    auth_providers: asArray<PluginAuthProviderDefinition>(row.spec_auth_providers),
+    auth_bindings: asArray<PluginAuthBindingDefinition>(row.spec_auth_bindings),
     authorization,
     tags: row.item_tags || [],
     categories,
@@ -573,12 +573,12 @@ function sanitizeInstallationConfig(
   installation: { config_data: unknown; updated_at: string },
   configSchema: Record<string, unknown>,
   configFields: PluginConfigFieldDefinition[],
-  authProviders: PluginAuthProviderDefinition[],
+  authBindings: PluginAuthBindingDefinition[],
 ) {
   const rawConfig = asObject(installation.config_data);
   const schemaProperties = asObject(configSchema.properties);
   const fieldMap = new Map(configFields.map((field) => [field.key, field]));
-  const providerMap = new Map(authProviders.map((provider) => [provider.key, provider]));
+  const bindingMap = new Map(authBindings.map((binding) => [binding.key, binding]));
   const sanitizedConfig: Record<string, unknown> = {};
   const configState: PluginConfigFieldState[] = [];
 
@@ -586,7 +586,7 @@ function sanitizeInstallationConfig(
     const field = fieldMap.get(key);
 
     if (
-      field?.type === "oauth_connection" &&
+      field?.type === "auth_connection" &&
       value &&
       typeof value === "object" &&
       !Array.isArray(value)
@@ -607,10 +607,10 @@ function sanitizeInstallationConfig(
             : installation.updated_at,
       });
       sanitizedConfig[key] = {
-        providerKey:
-          typeof ref.providerKey === "string"
-            ? ref.providerKey
-            : field.authProviderKey,
+        bindingKey:
+          typeof ref.bindingKey === "string"
+            ? ref.bindingKey
+            : field.authBindingKey,
         accountDisplayName:
           typeof ref.accountDisplayName === "string"
             ? ref.accountDisplayName
@@ -655,20 +655,20 @@ function sanitizeInstallationConfig(
     if (
       configState.find((state) => state.key === field.key) ||
       (!field.secret &&
-        field.type !== "oauth_connection" &&
+        field.type !== "auth_connection" &&
         !field.serverManaged)
     ) {
       continue;
     }
 
-    const provider = field.authProviderKey
-      ? providerMap.get(field.authProviderKey)
+    const binding = field.authBindingKey
+      ? bindingMap.get(field.authBindingKey)
       : undefined;
     configState.push({
       key: field.key,
       isConfigured: false,
-      accountDisplayName: provider
-        ? Object.values(provider.displayNameI18n || {})[0]
+      accountDisplayName: binding
+        ? Object.values(binding.displayNameI18n || {})[0]
         : undefined,
     });
   }
@@ -1085,7 +1085,7 @@ function buildInstallationPayload(
     },
     plugin.config_schema || {},
     plugin.config_fields || [],
-    plugin.auth_providers || [],
+    plugin.auth_bindings || [],
   );
 
   const attachmentType = publicAttachmentScope(row.primary_attachment_scope || "workspace");
@@ -1134,7 +1134,7 @@ function buildInstallationPayload(
     config_schema: plugin.config_schema,
     config_fields: plugin.config_fields,
     install_flow: plugin.install_flow,
-    auth_providers: plugin.auth_providers,
+    auth_bindings: plugin.auth_bindings,
     is_builtin: plugin.is_builtin,
     plugin_validation_rules: plugin.validation_rules,
     plugin_setup_steps: plugin.setup_steps,
@@ -1299,7 +1299,7 @@ async function upsertPluginVersion(
     configSchema?: Record<string, unknown>;
     defaultConfig?: Record<string, unknown>;
     installFlow?: PluginInstallFlow;
-    authProviders?: PluginAuthProviderDefinition[];
+    authBindings?: PluginAuthBindingDefinition[];
     configFields?: PluginConfigFieldDefinition[];
     validationRules?: McpValidationRule[];
     setupSteps?: McpSetupStep[];
@@ -1346,7 +1346,7 @@ async function upsertPluginVersion(
        config_schema,
        default_config,
        install_flow,
-       auth_providers,
+       auth_bindings,
        default_mount_scope,
        default_reuse_scope,
        requires_handshake,
@@ -1363,7 +1363,7 @@ async function upsertPluginVersion(
            config_schema = EXCLUDED.config_schema,
            default_config = EXCLUDED.default_config,
            install_flow = EXCLUDED.install_flow,
-           auth_providers = EXCLUDED.auth_providers,
+           auth_bindings = EXCLUDED.auth_bindings,
            default_mount_scope = EXCLUDED.default_mount_scope,
            default_reuse_scope = EXCLUDED.default_reuse_scope,
            requires_handshake = EXCLUDED.requires_handshake,
@@ -1376,7 +1376,7 @@ async function upsertPluginVersion(
       JSON.stringify(input.configSchema || {}),
       JSON.stringify(input.defaultConfig || {}),
       JSON.stringify(input.installFlow || { steps: input.setupSteps || [] }),
-      JSON.stringify(input.authProviders || []),
+      JSON.stringify(input.authBindings || []),
       internalAttachmentScope(
         ((input.defaultInstanceScope || "workspace") as Exclude<
           AttachmentScope,
@@ -1571,7 +1571,7 @@ export async function createPlugin(data: {
   validationRules?: McpValidationRule[];
   setupSteps?: McpSetupStep[];
   installFlow?: PluginInstallFlow;
-  authProviders?: PluginAuthProviderDefinition[];
+  authBindings?: PluginAuthBindingDefinition[];
   displayNameI18n?: Record<string, string>;
   descriptionI18n?: Record<string, string>;
   longDescriptionI18n?: Record<string, string>;
@@ -1796,7 +1796,7 @@ export async function installPluginUnified(data: {
       workspaceId: data.workspaceId,
       userId: data.installedBy || data.userId || "",
       configFields: plugin.config_fields || [],
-      authProviders: plugin.auth_providers || [],
+      authBindings: plugin.auth_bindings || [],
       configData: resolvedConfigBase,
       authSessionIds: data.authSessionIds,
       run: client.query.bind(client) as QueryRunner,
@@ -2102,7 +2102,7 @@ export async function updateInstallation(
             workspaceId,
             userId: data.updatedBy || data.userId || "",
             configFields: plugin.config_fields || [],
-            authProviders: plugin.auth_providers || [],
+            authBindings: plugin.auth_bindings || [],
             configData: mergedConfig,
             authSessionIds: data.authSessionIds,
             run,
@@ -2594,7 +2594,7 @@ export async function seedBuiltinMcpPlugins() {
         validationRules: pluginSeed.validationRules,
         setupSteps: pluginSeed.setupSteps,
         installFlow: pluginSeed.installFlow,
-        authProviders: pluginSeed.authProviders,
+        authBindings: pluginSeed.authBindings,
         displayNameI18n: pluginSeed.displayNameI18n,
         descriptionI18n: pluginSeed.descriptionI18n,
         longDescriptionI18n: pluginSeed.longDescriptionI18n,

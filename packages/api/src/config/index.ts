@@ -15,12 +15,6 @@ export const config = {
   app: {
     baseUrl: process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3001',
   },
-  feishu: {
-    callbackUrl: process.env.FEISHU_MCP_CALLBACK_URL || '',
-    appId: process.env.FEISHU_MCP_APP_ID || '',
-    appSecret: process.env.FEISHU_MCP_APP_SECRET || '',
-    domain: process.env.FEISHU_MCP_DOMAIN || 'https://open.feishu.cn',
-  },
   database: {
     url: process.env.DATABASE_URL || 'postgresql://synapse:password@localhost:5432/synapse',
   },

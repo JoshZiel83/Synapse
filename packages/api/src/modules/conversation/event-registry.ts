@@ -25,6 +25,31 @@ function noContext(): null {
   return null;
 }
 
+function automationNoticeBlocks(payload: Record<string, unknown>): CanonicalContentBlock[] {
+  const messageBlocks = Array.isArray(payload.messageBlocks)
+    ? payload.messageBlocks.filter((block): block is CanonicalContentBlock => Boolean(block) && typeof block === 'object')
+    : [];
+  if (messageBlocks.length > 0) {
+    return messageBlocks;
+  }
+
+  const message = typeof payload.message === 'string' ? payload.message.trim() : '';
+  if (message) {
+    return textBlocks(message);
+  }
+
+  const sourceTitle = typeof payload.sourceTitle === 'string' ? payload.sourceTitle.trim() : '';
+  const sourceDescription = typeof payload.sourceDescription === 'string' ? payload.sourceDescription.trim() : '';
+  if (sourceTitle && sourceDescription) {
+    return textBlocks(`${sourceTitle}\n${sourceDescription}`);
+  }
+  if (sourceTitle) {
+    return textBlocks(sourceTitle);
+  }
+
+  return textBlocks('Automation notice');
+}
+
 const EVENT_SPECS: Record<string, ConversationEventSpec> = {
   member_joined: {
     timelinePolicy: 'all_members',
@@ -73,6 +98,12 @@ const EVENT_SPECS: Record<string, ConversationEventSpec> = {
     contextPolicy: 'shared',
     renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
     renderContext: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
+  },
+  automation_notice: {
+    timelinePolicy: 'all_members',
+    contextPolicy: 'shared',
+    renderTimeline: ({ payload }) => automationNoticeBlocks(payload),
+    renderContext: ({ payload }) => automationNoticeBlocks(payload),
   },
 };
 

@@ -1,5 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
+  describeAutomationDelivery,
+  describeAutomationPolicy,
+  describeAutomationTrigger,
   normalizeActorDocs,
   summarizeActorForRole,
   type ActorDoc,
@@ -10,6 +13,13 @@ import { getSession } from '../session/service.js';
 import { sendGroupMessage, addMembersToGroup, getGroupMembers } from '../group/service.js';
 import { runMemorySearch } from '../memory/service.js';
 import { readVisibleSkill } from '../skills/service.js';
+import {
+  listAutomationEventSources,
+  listAutomationOccurrences,
+  createAutomationRule,
+  deleteAutomationRule,
+  listAutomationRules,
+} from '../automation/service.js';
 
 type InviteableActor = {
   id: string;
@@ -656,6 +666,661 @@ export function registerCallableToolPlugins(): void {
           finalScore: Number(memory.finalScore.toFixed(4)),
           matchedTerms: memory.matchedTerms || [],
         })),
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: 'schedule_self_wakeup',
+    kind: 'callable',
+    definition: {
+      name: 'schedule_self_wakeup',
+      description: 'Create a scheduled automation that wakes this session in the future. The wakeup is delivered as a visible system notice in the current conversation and cannot impersonate a user.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Short automation name.' },
+          scheduleKind: {
+            type: 'string',
+            description: 'Schedule type.',
+            enum: ['cron', 'at', 'interval'],
+          },
+          scheduleExpr: {
+            type: 'string',
+            description: 'Cron expression when scheduleKind is cron, or an ISO timestamp when scheduleKind is at.',
+          },
+          intervalSeconds: {
+            type: 'number',
+            description: 'Interval in seconds when scheduleKind is interval.',
+          },
+          timezone: {
+            type: 'string',
+            description: 'IANA timezone for cron schedules, for example Asia/Shanghai.',
+          },
+          message: {
+            type: 'string',
+            description: 'System notice shown when the schedule fires.',
+          },
+          wakeReason: {
+            type: 'string',
+            description: 'Optional private wake reason injected into the session context when the schedule fires.',
+          },
+          activeUntil: {
+            type: 'string',
+            description: 'Optional ISO timestamp after which the schedule should stop triggering.',
+          },
+          maxTriggerCount: {
+            type: 'number',
+            description: 'Optional maximum number of times this schedule may trigger before it completes.',
+          },
+        },
+        required: ['name', 'scheduleKind', 'message'],
+      },
+    },
+    resolve: (ctx) => ({
+      active: Boolean(ctx.sessionId),
+      definition: {
+        name: 'schedule_self_wakeup',
+        description: 'Create a scheduled automation that wakes this session in the future as a visible system notice in the current conversation.',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Short automation name.' },
+            scheduleKind: {
+              type: 'string',
+              description: 'Schedule type.',
+              enum: ['cron', 'at', 'interval'],
+            },
+            scheduleExpr: {
+              type: 'string',
+              description: 'Cron expression when scheduleKind is cron, or an ISO timestamp when scheduleKind is at.',
+            },
+            intervalSeconds: {
+              type: 'number',
+              description: 'Interval in seconds when scheduleKind is interval.',
+            },
+            timezone: {
+              type: 'string',
+              description: 'IANA timezone for cron schedules, for example Asia/Shanghai.',
+            },
+            message: {
+              type: 'string',
+              description: 'System notice shown when the schedule fires.',
+            },
+            wakeReason: {
+              type: 'string',
+              description: 'Optional private wake reason injected into the session context when the schedule fires.',
+            },
+            activeUntil: {
+              type: 'string',
+              description: 'Optional ISO timestamp after which the schedule should stop triggering.',
+            },
+            maxTriggerCount: {
+              type: 'number',
+              description: 'Optional maximum number of times this schedule may trigger before it completes.',
+            },
+          },
+          required: ['name', 'scheduleKind', 'message'],
+        },
+      },
+    }),
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const session = await getSession(context.sessionId);
+      if (!session) {
+        return JSON.stringify({ error: 'Session not found' });
+      }
+
+      const name = String((input as any).name || '').trim();
+      const scheduleKind = String((input as any).scheduleKind || '').trim();
+      const scheduleExpr = typeof (input as any).scheduleExpr === 'string'
+        ? String((input as any).scheduleExpr).trim()
+        : '';
+      const intervalSeconds = typeof (input as any).intervalSeconds === 'number'
+        ? Number((input as any).intervalSeconds)
+        : undefined;
+      const timezone = typeof (input as any).timezone === 'string'
+        ? String((input as any).timezone).trim()
+        : undefined;
+      const message = String((input as any).message || '').trim();
+      const wakeReason = typeof (input as any).wakeReason === 'string'
+        ? String((input as any).wakeReason).trim()
+        : undefined;
+      const activeUntil = typeof (input as any).activeUntil === 'string'
+        ? String((input as any).activeUntil).trim()
+        : undefined;
+      const maxTriggerCount = typeof (input as any).maxTriggerCount === 'number'
+        ? Number((input as any).maxTriggerCount)
+        : undefined;
+
+      if (!name || !message) {
+        return JSON.stringify({ error: 'name and message are required' });
+      }
+
+      try {
+        const rule = await createAutomationRule(
+          context.workspaceId,
+          {
+            kind: 'session',
+            userId: context.userId,
+            actorId: context.actorId,
+            sessionId: context.sessionId,
+          },
+          {
+            name,
+            description: `Self-scheduled wakeup for session ${context.sessionId}`,
+            ownerConversationId: session.conversation_id,
+            ownerSessionId: context.sessionId,
+            trigger: {
+              triggerKind: 'schedule',
+              scheduleKind: scheduleKind as any,
+              scheduleExpr: scheduleKind === 'at' ? scheduleExpr : scheduleExpr || undefined,
+              scheduleTimezone: timezone || undefined,
+              intervalSeconds,
+              startsAt: scheduleKind === 'at' ? scheduleExpr || undefined : undefined,
+            },
+            policy: {
+              activeUntil: activeUntil || undefined,
+              maxTriggerCount:
+                Number.isInteger(maxTriggerCount) && (maxTriggerCount || 0) > 0
+                  ? maxTriggerCount
+                  : undefined,
+            },
+            delivery: {
+              deliveryMode: 'wake_session',
+              sessionId: context.sessionId,
+              message,
+              wakeReason,
+            },
+          },
+        );
+
+        return JSON.stringify({
+          success: true,
+          automationId: rule.id,
+          nextFireAt: rule.trigger.nextFireAt,
+          message: `Scheduled self wakeup created: ${rule.name}.`,
+        });
+      } catch (err: any) {
+        return JSON.stringify({ error: err.message || 'Failed to create schedule' });
+      }
+    },
+  });
+
+  registerToolPlugin({
+    name: 'list_event_sources',
+    kind: 'callable',
+    definition: {
+      name: 'list_event_sources',
+      description: 'List active automation event sources that this session can subscribe to.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+    resolve: async (ctx) => {
+      if (!ctx.sessionId) {
+        return { active: false, definition: null as any };
+      }
+      const sources = await listAutomationEventSources(ctx.workspaceId, {
+        status: 'active',
+      });
+      if (sources.length === 0) {
+        return { active: false, definition: null as any };
+      }
+      return {
+        active: true,
+        definition: {
+          name: 'list_event_sources',
+          description: `List active automation event sources. ${sources.length} source(s) available in this workspace.`,
+          parameters: {
+            type: 'object',
+            properties: {},
+            required: [],
+          },
+        },
+      };
+    },
+    execute: async () => {
+      const context = getToolExecutionContext();
+      if (!context?.sessionId) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const sources = await listAutomationEventSources(context.workspaceId, {
+        status: 'active',
+      });
+      return JSON.stringify({
+        success: true,
+        eventSources: sources.map((source) => ({
+          id: source.id,
+          sourceKey: source.sourceKey,
+          name: source.name,
+          description: source.description,
+          recommendedUsage: source.recommendedUsage,
+          providerKind: source.providerKind,
+          providerRef: source.providerRef,
+        })),
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: 'subscribe_event',
+    kind: 'callable',
+    definition: {
+      name: 'subscribe_event',
+      description: 'Subscribe this session to a registered event source. When the event matches, the current session will be woken with a visible system notice in the conversation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Short subscription name.' },
+          eventSourceId: {
+            type: 'string',
+            description: 'Registered event source ID.',
+          },
+          matcher: {
+            type: 'string',
+            description: 'Optional JSON object string used as a subset matcher against the incoming payload.',
+          },
+          message: {
+            type: 'string',
+            description: 'System notice shown when the event wakes this session.',
+          },
+          wakeReason: {
+            type: 'string',
+            description: 'Optional private wake reason injected into the session context when the event matches.',
+          },
+          once: {
+            type: 'boolean',
+            description: 'If true, automatically stop the subscription after the first matching event.',
+          },
+          activeUntil: {
+            type: 'string',
+            description: 'Optional ISO timestamp after which the subscription should expire.',
+          },
+          maxTriggerCount: {
+            type: 'number',
+            description: 'Optional maximum number of matched events before the subscription completes.',
+          },
+        },
+        required: ['name', 'eventSourceId', 'message'],
+      },
+    },
+    resolve: async (ctx) => {
+      if (!ctx.sessionId) {
+        return { active: false, definition: null as any };
+      }
+      const sources = await listAutomationEventSources(ctx.workspaceId, {
+        status: 'active',
+      });
+      if (sources.length === 0) {
+        return { active: false, definition: null as any };
+      }
+
+      const directory = sources
+        .map((source) =>
+          `\`${source.id}\`: ${source.name} (${source.providerKind}/${source.sourceKey}) - ${source.description}` +
+          `${source.recommendedUsage ? ` Suggested usage: ${source.recommendedUsage}` : ''}`,
+        )
+        .join('; ');
+
+      return {
+        active: true,
+        definition: {
+          name: 'subscribe_event',
+          description: `Subscribe this session to an event source and wake it with a visible system notice when the event matches. Available sources: ${directory}`,
+          parameters: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Short subscription name.' },
+              eventSourceId: {
+                type: 'string',
+                description: 'Registered event source ID.',
+                enum: sources.map((source) => source.id),
+              },
+              matcher: {
+                type: 'string',
+                description: 'Optional JSON object string used as a subset matcher against the incoming payload.',
+              },
+              message: {
+                type: 'string',
+                description: 'System notice shown when the event wakes this session.',
+              },
+              wakeReason: {
+                type: 'string',
+                description: 'Optional private wake reason injected into the session context when the event matches.',
+              },
+              once: {
+                type: 'boolean',
+                description: 'If true, automatically stop the subscription after the first matching event.',
+              },
+              activeUntil: {
+                type: 'string',
+                description: 'Optional ISO timestamp after which the subscription should expire.',
+              },
+              maxTriggerCount: {
+                type: 'number',
+                description: 'Optional maximum number of matched events before the subscription completes.',
+              },
+            },
+            required: ['name', 'eventSourceId', 'message'],
+          },
+        },
+      };
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const session = await getSession(context.sessionId);
+      if (!session) {
+        return JSON.stringify({ error: 'Session not found' });
+      }
+
+      const name = String((input as any).name || '').trim();
+      const eventSourceId = String((input as any).eventSourceId || '').trim();
+      const matcherInput = typeof (input as any).matcher === 'string'
+        ? String((input as any).matcher).trim()
+        : '';
+      const message = String((input as any).message || '').trim();
+      const wakeReason = typeof (input as any).wakeReason === 'string'
+        ? String((input as any).wakeReason).trim()
+        : undefined;
+      const once = Boolean((input as any).once);
+      const activeUntil = typeof (input as any).activeUntil === 'string'
+        ? String((input as any).activeUntil).trim()
+        : undefined;
+      const maxTriggerCount = typeof (input as any).maxTriggerCount === 'number'
+        ? Number((input as any).maxTriggerCount)
+        : undefined;
+
+      if (!name || !eventSourceId || !message) {
+        return JSON.stringify({ error: 'name, eventSourceId, and message are required' });
+      }
+
+      let matcher: Record<string, unknown> | undefined;
+      if (matcherInput) {
+        try {
+          const parsed = JSON.parse(matcherInput) as unknown;
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return JSON.stringify({ error: 'matcher must be a JSON object string' });
+          }
+          matcher = parsed as Record<string, unknown>;
+        } catch {
+          return JSON.stringify({ error: 'matcher must be valid JSON' });
+        }
+      }
+
+      try {
+        const rule = await createAutomationRule(
+          context.workspaceId,
+          {
+            kind: 'session',
+            userId: context.userId,
+            actorId: context.actorId,
+            sessionId: context.sessionId,
+          },
+          {
+            name,
+            description: `Self event subscription for session ${context.sessionId}`,
+            ownerConversationId: session.conversation_id,
+            ownerSessionId: context.sessionId,
+            trigger: {
+              triggerKind: 'event',
+              eventSourceId,
+              matcher,
+            },
+            policy: {
+              activeUntil: activeUntil || undefined,
+              maxTriggerCount: once
+                ? 1
+                : Number.isInteger(maxTriggerCount) && (maxTriggerCount || 0) > 0
+                  ? maxTriggerCount
+                  : undefined,
+            },
+            delivery: {
+              deliveryMode: 'wake_session',
+              sessionId: context.sessionId,
+              message,
+              wakeReason,
+            },
+          },
+        );
+
+        return JSON.stringify({
+          success: true,
+          automationId: rule.id,
+          eventSourceId: rule.trigger.eventSourceId,
+          message: `Event subscription created: ${rule.name}.`,
+        });
+      } catch (err: any) {
+        return JSON.stringify({ error: err.message || 'Failed to create event subscription' });
+      }
+    },
+  });
+
+  registerToolPlugin({
+    name: 'view_event_source_history',
+    kind: 'callable',
+    definition: {
+      name: 'view_event_source_history',
+      description: 'View recent historical occurrences for a registered event source.',
+      parameters: {
+        type: 'object',
+        properties: {
+          eventSourceId: {
+            type: 'string',
+            description: 'Registered event source ID.',
+          },
+        },
+        required: ['eventSourceId'],
+      },
+    },
+    resolve: async (ctx) => {
+      if (!ctx.sessionId) {
+        return { active: false, definition: null as any };
+      }
+      const sources = await listAutomationEventSources(ctx.workspaceId);
+      if (sources.length === 0) {
+        return { active: false, definition: null as any };
+      }
+      return {
+        active: true,
+        definition: {
+          name: 'view_event_source_history',
+          description: 'View recent historical occurrences for a registered event source.',
+          parameters: {
+            type: 'object',
+            properties: {
+              eventSourceId: {
+                type: 'string',
+                description: 'Registered event source ID.',
+                enum: sources.map((source) => source.id),
+              },
+            },
+            required: ['eventSourceId'],
+          },
+        },
+      };
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const eventSourceId = String((input as any).eventSourceId || '').trim();
+      if (!eventSourceId) {
+        return JSON.stringify({ error: 'eventSourceId is required' });
+      }
+
+      const occurrences = await listAutomationOccurrences(context.workspaceId, {
+        eventSourceId,
+        limit: 20,
+      });
+      return JSON.stringify({
+        success: true,
+        eventSourceId,
+        occurrences: occurrences.map((occurrence) => ({
+          id: occurrence.id,
+          occurredAt: occurrence.occurredAt,
+          sourceKind: occurrence.sourceKind,
+          eventSourceName: occurrence.eventSourceName,
+          title: occurrence.displayTitle,
+          summary: occurrence.displaySummary,
+          description: occurrence.displayDescription,
+          payload: occurrence.payload,
+          sourceSnapshot: occurrence.sourceSnapshot,
+        })),
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: 'list_automations',
+    kind: 'callable',
+    definition: {
+      name: 'list_automations',
+      description: 'List the automations owned by the current session.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+    resolve: (ctx) => ({
+      active: Boolean(ctx.sessionId),
+      definition: {
+        name: 'list_automations',
+        description: 'List the automations owned by the current session.',
+        parameters: {
+          type: 'object',
+          properties: {},
+          required: [],
+        },
+      },
+    }),
+    execute: async () => {
+      const context = getToolExecutionContext();
+      if (!context?.sessionId) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const rules = await listAutomationRules(context.workspaceId, {
+        ownerSessionId: context.sessionId,
+      });
+      return JSON.stringify({
+        success: true,
+        automations: rules.map((rule) => {
+          const triggerDisplay = describeAutomationTrigger(rule.trigger);
+          const policyDisplay = describeAutomationPolicy(rule.policy);
+          const deliveryDisplay = describeAutomationDelivery(rule.delivery);
+          return {
+            id: rule.id,
+            name: rule.name,
+            category: rule.category,
+            status: rule.status,
+            triggerKind: rule.trigger.triggerKind,
+            triggerTitle: triggerDisplay.title,
+            triggerSummary: triggerDisplay.summary,
+            triggerDescription: triggerDisplay.description,
+            triggerDetails: triggerDisplay.details,
+            policySummary: policyDisplay.summary,
+            policyDescription: policyDisplay.description,
+            policyDetails: policyDisplay.details,
+            deliveryTitle: deliveryDisplay.title,
+            deliverySummary: deliveryDisplay.summary,
+            deliveryDescription: deliveryDisplay.description,
+            deliveryDetails: deliveryDisplay.details,
+            eventSourceId: rule.trigger.eventSourceId,
+            eventSourceName: rule.trigger.eventSourceName,
+            sourceKind: rule.trigger.sourceKind,
+            matchKey: rule.trigger.matchKey,
+            nextFireAt: rule.trigger.nextFireAt,
+            deliveryMode: rule.delivery.deliveryMode,
+          };
+        }),
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: 'cancel_automation',
+    kind: 'callable',
+    definition: {
+      name: 'cancel_automation',
+      description: 'Delete one of the automations owned by the current session.',
+      parameters: {
+        type: 'object',
+        properties: {
+          automationId: { type: 'string', description: 'Automation ID to delete.' },
+        },
+        required: ['automationId'],
+      },
+    },
+    resolve: async (ctx) => {
+      if (!ctx.sessionId) {
+        return { active: false, definition: null as any };
+      }
+      const rules = await listAutomationRules(ctx.workspaceId, {
+        ownerSessionId: ctx.sessionId,
+      });
+      if (rules.length === 0) {
+        return { active: false, definition: null as any };
+      }
+      return {
+        active: true,
+        definition: {
+          name: 'cancel_automation',
+          description: 'Delete one of the automations owned by the current session.',
+          parameters: {
+            type: 'object',
+            properties: {
+              automationId: {
+                type: 'string',
+                enum: rules.map((rule) => rule.id),
+                description: 'Automation ID to delete.',
+              },
+            },
+            required: ['automationId'],
+          },
+        },
+      };
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context?.sessionId) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+      const automationId = String((input as any).automationId || '').trim();
+      if (!automationId) {
+        return JSON.stringify({ error: 'automationId is required' });
+      }
+
+      const rules = await listAutomationRules(context.workspaceId, {
+        ownerSessionId: context.sessionId,
+      });
+      const rule = rules.find((entry) => entry.id === automationId);
+      if (!rule) {
+        return JSON.stringify({ error: 'Automation not found in this session scope' });
+      }
+
+      await deleteAutomationRule(context.workspaceId, automationId, {
+        userId: context.userId,
+        actorId: context.actorId,
+      });
+      return JSON.stringify({
+        success: true,
+        automationId,
+        message: `Automation deleted: ${rule.name}.`,
       });
     },
   });

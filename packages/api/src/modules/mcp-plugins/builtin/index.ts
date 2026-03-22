@@ -21,12 +21,14 @@ export function hasBuiltinHandler(pluginSlug: string): boolean {
 }
 
 export async function initBuiltinRegistry(): Promise<void> {
-  const mod = await import('./z-ai/toolkit/index.js');
-  registerBuiltinHandler('z_ai/toolkit', mod.zAiToolkitHandler);
+  const mod = await import("./z-ai/toolkit/index.js");
+  registerBuiltinHandler("z_ai/toolkit", mod.zAiToolkitHandler);
   const feishuMod = await import("./feishu/openapi/index.js");
   registerBuiltinHandler("feishu/openapi", feishuMod.feishuOpenapiHandler);
   const aminerMod = await import("./aminer/openapi/index.js");
   registerBuiltinHandler("aminer/openapi", aminerMod.aminerOpenapiHandler);
   const amapMod = await import("./amap/openapi/index.js");
   registerBuiltinHandler("amap/openapi", amapMod.amapOpenapiHandler);
+  const mijiaMod = await import("./mijia/smarthome/index.js");
+  registerBuiltinHandler("mijia/smarthome", mijiaMod.mijiaSmarthomeHandler);
 }

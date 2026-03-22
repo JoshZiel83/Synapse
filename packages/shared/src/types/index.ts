@@ -348,7 +348,7 @@ export interface WorkItem {
   sourceType:
     | "user_message"
     | "delegation"
-    | "standing_order"
+    | "automation"
     | "escalation"
     | "collaboration";
   sourceId?: UUID;
@@ -497,22 +497,212 @@ export interface MemoryRecallRun {
   results: MemoryRecallResult[];
 }
 
-// ============ Standing Orders ============
-export type StandingOrderTrigger = "cron" | "event" | "condition";
+// ============ Automation ============
+export type AutomationCategory = "schedule" | "event_subscription";
+export type AutomationStatus =
+  | "active"
+  | "paused"
+  | "error"
+  | "archived"
+  | "completed"
+  | "expired";
+export type AutomationCreatorKind = "user" | "session" | "system";
+export type AutomationTriggerKind = "schedule" | "event";
+export type AutomationSourceKind = "clock" | "relay" | "webhook" | "internal";
+export type AutomationEventProviderKind = "relay" | "webhook" | "internal";
+export type AutomationScheduleKind = "cron" | "at" | "interval";
+export type AutomationCompletionStatus = "completed" | "archived";
+export type AutomationDeliveryMode =
+  | "wake_session"
+  | "conversation_notice"
+  | "create_conversation_once"
+  | "create_conversation_each_time";
+export type AutomationTargetPolicy = "all_members" | "specified_members";
+export type AutomationExecutionStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped";
+export type AutomationTargetEntityKind = "actor" | "user";
+export type AutomationWebhookStatus = "active" | "disabled" | "archived";
+export type AutomationEventSourceStatus =
+  | "active"
+  | "deprecated"
+  | "disabled"
+  | "archived";
 
-export interface StandingOrder {
+export interface AutomationEventSource {
   id: UUID;
   workspaceId: UUID;
-  actorId: UUID;
+  providerKind: AutomationEventProviderKind;
+  providerRef?: string;
+  sourceKey: string;
   name: string;
   description: string;
-  triggerType: StandingOrderTrigger;
-  triggerConfig: Record<string, unknown>; // { cron: '0 9 * * *' } or { event: 'work_item.completed' }
-  instruction: string;
-  isActive: boolean;
+  recommendedUsage?: string;
+  payloadSchema: Record<string, unknown>;
+  examplePayload: Record<string, unknown>;
+  status: AutomationEventSourceStatus;
+  createdByKind: AutomationCreatorKind;
+  createdByUserId?: UUID;
+  createdByActorId?: UUID;
+  createdBySessionId?: UUID;
   lastTriggeredAt?: Timestamp;
+  metadata: Record<string, unknown>;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+}
+
+export interface AutomationRule {
+  id: UUID;
+  workspaceId: UUID;
+  category: AutomationCategory;
+  status: AutomationStatus;
+  name: string;
+  description: string;
+  createdByKind: AutomationCreatorKind;
+  createdByUserId?: UUID;
+  createdByActorId?: UUID;
+  createdBySessionId?: UUID;
+  ownerConversationId?: UUID;
+  ownerSessionId?: UUID;
+  trigger: AutomationTrigger;
+  policy: AutomationPolicy;
+  delivery: AutomationDelivery;
+  lastTriggeredAt?: Timestamp;
+  lastErrorAt?: Timestamp;
+  lastErrorMessage?: string;
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface AutomationTrigger {
+  ruleId: UUID;
+  triggerKind: AutomationTriggerKind;
+  sourceKind: AutomationSourceKind;
+  eventSourceId?: UUID;
+  eventSourceKey?: string;
+  eventSourceName?: string;
+  eventProviderKind?: AutomationEventProviderKind;
+  eventProviderRef?: string;
+  eventSourceStatus?: AutomationEventSourceStatus;
+  sourceLocator?: string;
+  matchKey?: string;
+  matcher: Record<string, unknown>;
+  scheduleKind?: AutomationScheduleKind;
+  scheduleExpr?: string;
+  scheduleTimezone?: string;
+  intervalSeconds?: number;
+  startsAt?: Timestamp;
+  nextFireAt?: Timestamp;
+  lastFiredAt?: Timestamp;
+  metadata: Record<string, unknown>;
+}
+
+export interface AutomationPolicy {
+  ruleId: UUID;
+  activeFrom?: Timestamp;
+  activeUntil?: Timestamp;
+  maxTriggerCount?: number;
+  triggerCount: number;
+  completionStatus: AutomationCompletionStatus;
+  completedAt?: Timestamp;
+  metadata: Record<string, unknown>;
+}
+
+export interface AutomationDelivery {
+  ruleId: UUID;
+  deliveryMode: AutomationDeliveryMode;
+  conversationId?: UUID;
+  sessionId?: UUID;
+  reusedConversationId?: UUID;
+  conversationTitle?: string;
+  messageText: string;
+  wakeReasonText?: string;
+  messageBlocks: CanonicalContentBlock[];
+  targetPolicy: AutomationTargetPolicy;
+  participants: AutomationTargetEntityRef[];
+  recipients: AutomationTargetEntityRef[];
+  metadata: Record<string, unknown>;
+}
+
+export interface AutomationTargetEntityRef {
+  entityKind: AutomationTargetEntityKind;
+  entityId: UUID;
+}
+
+export interface AutomationOccurrence {
+  id: UUID;
+  workspaceId: UUID;
+  sourceKind: AutomationSourceKind;
+  eventSourceId?: UUID;
+  eventSourceKey?: string;
+  eventSourceName?: string;
+  displayTitle?: string;
+  displaySummary?: string;
+  displayDescription?: string;
+  sourceLocator?: string;
+  matchKey?: string;
+  dedupeKey?: string;
+  sourceSnapshot: Record<string, unknown>;
+  payload: Record<string, unknown>;
+  occurredAt: Timestamp;
+  createdAt: Timestamp;
+}
+
+export interface AutomationExecution {
+  id: UUID;
+  workspaceId: UUID;
+  ruleId: UUID;
+  occurrenceId: UUID;
+  occurrenceOccurredAt?: Timestamp;
+  occurrenceSourceKind?: AutomationSourceKind;
+  occurrenceEventSourceName?: string;
+  occurrenceTitle?: string;
+  occurrenceSummary?: string;
+  occurrenceDescription?: string;
+  status: AutomationExecutionStatus;
+  errorMessage?: string;
+  startedAt?: Timestamp;
+  completedAt?: Timestamp;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface AutomationExecutionTarget {
+  id: UUID;
+  executionId: UUID;
+  conversationId?: UUID;
+  sessionId?: UUID;
+  targetActorId?: UUID;
+  targetUserId?: UUID;
+  createdItemId?: UUID;
+  wakeupId?: UUID;
+  status: AutomationExecutionStatus;
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface AutomationWebhookEndpoint {
+  id: UUID;
+  workspaceId: UUID;
+  name: string;
+  status: AutomationWebhookStatus;
+  pathToken: string;
+  secretHint: string;
+  metadata: Record<string, unknown>;
+  createdBy?: UUID;
+  lastReceivedAt?: Timestamp;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface AutomationWebhookEndpointCreateResult {
+  endpoint: AutomationWebhookEndpoint;
+  secret: string;
 }
 
 // ============ Audit ============
@@ -534,8 +724,15 @@ export type AuditAction =
   | "memory.delete"
   | "ai.think"
   | "ai.action"
-  | "standing_order.create"
-  | "standing_order.trigger";
+  | "automation_rule.create"
+  | "automation_rule.update"
+  | "automation_rule.delete"
+  | "automation_rule.pause"
+  | "automation_rule.trigger"
+  | "automation_event_source.create"
+  | "automation_event_source.update"
+  | "automation_event_source.archive"
+  | "automation_event_source.trigger";
 
 export interface AuditLog {
   id: UUID;
@@ -601,6 +798,7 @@ export type SessionTrigger =
   | "broadcast"
   | "api_call"
   | "actor_invite"
+  | "automation"
   | "system_interrupt"
   | "retry";
 export type SessionMessageRole =
@@ -615,6 +813,7 @@ export type SessionWakeupSourceType =
   | "broadcast"
   | "invite"
   | "api_call"
+  | "automation"
   | "system_interrupt"
   | "retry";
 export type SessionWakeupStatus =
@@ -657,6 +856,7 @@ export interface SessionWakeup {
   sourceMemberId?: UUID;
   sourceName?: string;
   summary: string;
+  reasonText?: string;
   status: SessionWakeupStatus;
   activationKind?: string;
   delivery?: string;
@@ -675,6 +875,7 @@ export interface ActorRuntimeWakeup {
   sourceMemberId?: UUID;
   sourceName?: string;
   summary: string;
+  reasonText?: string;
   status: SessionWakeupStatus;
   activationKind?: string;
   delivery?: string;
@@ -1432,20 +1633,23 @@ export type PluginConfigFieldType =
   | "boolean"
   | "select"
   | "secret"
-  | "oauth_connection"
+  | "auth_connection"
   | "file";
 export type PluginInstallStepKind =
   | "form"
-  | "oauth"
+  | "auth"
   | "check"
   | "confirm"
   | "attachment_scope"
   | "reuse_scope";
 export type PluginInstallActionKind =
-  | "oauth_authorize"
+  | "auth_start"
   | "external_link"
   | "noop";
-export type PluginAuthProviderKind = "oauth2_authorization_code_pkce";
+export type PluginAuthBindingDriverKind =
+  | "oauth2_authorization_code_pkce"
+  | "mijia_qr_login";
+export type PluginAuthOwnerScope = "installation" | "user" | "workspace";
 export type PluginAuthSessionStatus =
   | "pending"
   | "completed"
@@ -1453,6 +1657,22 @@ export type PluginAuthSessionStatus =
   | "expired"
   | "consumed";
 export type PluginAuthConnectionStatus = "active" | "expired" | "revoked";
+export type PluginAuthSessionPhase =
+  | "awaiting_start"
+  | "awaiting_external_input"
+  | "awaiting_callback"
+  | "pending_scan"
+  | "pending_confirm"
+  | "finalizing";
+export type PluginAuthChallengeKind = "redirect" | "qr_code" | "none";
+
+export interface PluginAuthValueSource {
+  source: "config" | "env" | "literal" | "derived";
+  field?: string;
+  env?: string;
+  value?: unknown;
+  name?: "app_base_url" | "oauth_callback_url";
+}
 
 export interface PluginConfigFieldOption {
   value: string;
@@ -1471,14 +1691,14 @@ export interface PluginConfigFieldDefinition {
   options?: PluginConfigFieldOption[];
   secret?: boolean;
   serverManaged?: boolean;
-  authProviderKey?: string;
+  authBindingKey?: string;
   validation?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
 
 export interface PluginInstallAction {
   kind: PluginInstallActionKind;
-  providerKey?: string;
+  bindingKey?: string;
   url?: string;
   buttonLabelI18n?: LocalizedText;
   metadata?: Record<string, unknown>;
@@ -1502,19 +1722,27 @@ export interface PluginInstallFlow {
   steps: PluginInstallStep[];
 }
 
-export interface PluginAuthProviderDefinition {
+export interface PluginAuthChallenge {
+  kind: PluginAuthChallengeKind;
+  url?: string;
+  qrUrl?: string;
+  openMode?: "popup" | "replace";
+  expiresAt?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PluginAuthBindingDefinition {
   key: string;
-  kind: PluginAuthProviderKind;
+  driver: PluginAuthBindingDriverKind;
+  fieldKey: string;
   displayNameI18n: LocalizedText;
   descriptionI18n?: LocalizedText;
-  authorizeUrl: string;
-  tokenUrl: string;
+  prerequisiteFields?: string[];
+  ownerScope?: PluginAuthOwnerScope;
+  authorizeUrl?: string;
+  tokenUrl?: string;
   userInfoUrl?: string;
   scopes?: string[];
-  clientId?: string;
-  clientSecret?: string;
-  clientIdEnv?: string;
-  clientSecretEnv?: string;
   audience?: string;
   extraAuthorizeParams?: Record<string, string>;
   extraTokenParams?: Record<string, string>;
@@ -1522,7 +1750,7 @@ export interface PluginAuthProviderDefinition {
   profileDisplayNamePath?: string;
   profileAvatarUrlPath?: string;
   reusable?: boolean;
-  configFieldKey?: string;
+  inputs?: Record<string, PluginAuthValueSource>;
   metadata?: Record<string, unknown>;
 }
 
@@ -1618,7 +1846,7 @@ export interface MarketplaceVersion {
   validationRules: McpValidationRule[];
   setupSteps: PluginInstallStep[];
   installFlow?: PluginInstallFlow;
-  authProviders: PluginAuthProviderDefinition[];
+  authBindings: PluginAuthBindingDefinition[];
   metadata: Record<string, unknown>;
   createdBy?: string;
   createdAt: string;
@@ -1711,13 +1939,13 @@ export interface PluginAuthSession {
   workspaceId: string;
   packageId: string;
   revisionId?: string;
-  providerKey: string;
+  bindingKey: string;
+  driver: PluginAuthBindingDriverKind;
   userId: string;
   status: PluginAuthSessionStatus;
-  state: string;
-  codeVerifier?: string;
-  redirectUri: string;
-  authorizeUrl?: string;
+  phase?: PluginAuthSessionPhase;
+  state?: string;
+  challenge?: PluginAuthChallenge;
   errorCode?: string;
   errorMessage?: string;
   resultPreview: Record<string, unknown>;
@@ -1732,14 +1960,16 @@ export interface PluginAuthConnection {
   id: string;
   workspaceId: string;
   packageId: string;
-  providerKey: string;
-  ownerUserId: string;
+  bindingKey: string;
+  driver: PluginAuthBindingDriverKind;
+  ownerScope: PluginAuthOwnerScope;
+  ownerUserId?: string;
   externalAccountId?: string;
   displayName?: string;
   avatarUrl?: string;
-  scopes: string[];
   status: PluginAuthConnectionStatus;
   expiresAt?: string;
+  publicPayload: Record<string, unknown>;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -2146,7 +2376,8 @@ export type ConversationFeedEventType =
   | "memory_updated"
   | "actor_renamed"
   | "actor_avatar_changed"
-  | "actor_version_changed";
+  | "actor_version_changed"
+  | "automation_notice";
 
 export interface ConversationFeedEventPayloadMap {
   member_joined: {
@@ -2205,6 +2436,23 @@ export interface ConversationFeedEventPayloadMap {
     toVersion: number;
     changes: ActorVersionChangeWire[];
     source?: ActorVersionSource;
+  };
+  automation_notice: {
+    automationId: UUID;
+    executionId: UUID;
+    occurrenceId: UUID;
+    category: AutomationCategory;
+    sourceKind: AutomationSourceKind;
+    eventSourceId?: UUID;
+    eventSourceName?: string;
+    sourceLabel?: string;
+    sourceTitle?: string;
+    sourceSummary?: string;
+    sourceDescription?: string;
+    occurredAt?: Timestamp;
+    deliveryMode: AutomationDeliveryMode;
+    message: string;
+    messageBlocks?: CanonicalContentBlock[];
   };
 }
 
@@ -2439,6 +2687,30 @@ export function summarizeConversationEvent(
       fragments.push("Updated by the actor.");
     }
     return fragments.join(" ");
+  }
+
+  if (eventType === "automation_notice") {
+    const messageBlocks = Array.isArray(payload.messageBlocks)
+      ? (payload.messageBlocks as CanonicalContentBlock[])
+      : [];
+    const messageFromBlocks = extractText(messageBlocks).trim();
+    const message =
+      messageFromBlocks ||
+      (typeof payload.message === "string" ? payload.message.trim() : "");
+    if (message) return message;
+    const sourceTitle =
+      typeof payload.sourceTitle === "string" ? payload.sourceTitle.trim() : "";
+    const sourceSummary =
+      typeof payload.sourceSummary === "string" ? payload.sourceSummary.trim() : "";
+    if (sourceTitle && sourceSummary) {
+      return `${sourceTitle}: ${sourceSummary}`;
+    }
+    if (sourceTitle) return sourceTitle;
+    if (sourceSummary) return sourceSummary;
+    const sourceLabel =
+      typeof payload.sourceLabel === "string" ? payload.sourceLabel.trim() : "";
+    if (sourceLabel) return sourceLabel;
+    return "Automation notice";
   }
 
   return `[Event: ${eventType}]`;
@@ -3130,7 +3402,7 @@ export interface PluginPackageVersionSpecRecord {
   configSchema: Record<string, unknown>;
   defaultConfig: Record<string, unknown>;
   installFlow: Record<string, unknown>;
-  authProviders: PluginAuthProviderDefinition[];
+  authBindings: PluginAuthBindingDefinition[];
   defaultMountScope: RuntimeBindingScope;
   defaultReuseScope: PluginReuseScopeV2;
   requiresHandshake: boolean;

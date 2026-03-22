@@ -1,14 +1,24 @@
 import { createHash, randomBytes } from "crypto";
 import type pg from "pg";
 import type {
+  PluginAuthBindingDefinition,
   PluginAuthConnection,
-  PluginAuthProviderDefinition,
   PluginAuthSession,
+  PluginAuthValueSource,
   PluginConfigFieldDefinition,
 } from "@synapse/shared";
 import { config } from "../../config/index.js";
-import { decrypt, encrypt } from "../../infrastructure/crypto/index.js";
+import {
+  decrypt,
+  decryptSensitiveFields,
+  encrypt,
+} from "../../infrastructure/crypto/index.js";
 import { query } from "../../infrastructure/database/index.js";
+import {
+  normalizeMijiaLocale,
+  progressMijiaQrLoginSession,
+  startMijiaQrLoginSession,
+} from "./mijia/auth.js";
 
 type JsonObject = Record<string, unknown>;
 type QueryRunner = <T extends pg.QueryResultRow = any>(
@@ -21,16 +31,19 @@ type PluginAuthSessionRow = {
   workspace_id: string;
   catalog_item_id: string;
   catalog_version_id: string | null;
-  provider_key: string;
+  installation_id: string | null;
+  binding_key: string;
+  driver: PluginAuthSession["driver"];
   user_id: string;
   status: PluginAuthSession["status"];
-  state: string;
-  code_verifier: string | null;
-  redirect_uri: string;
-  authorize_url: string | null;
+  phase: PluginAuthSession["phase"] | null;
+  state: string | null;
+  challenge_payload: unknown;
+  transient_payload: unknown;
   error_code: string | null;
   error_message: string | null;
   result_preview: unknown;
+  result_payload: unknown;
   metadata: unknown;
   expires_at: string;
   created_at: string;
@@ -43,21 +56,49 @@ type PluginConnectionRow = {
   installation_id: string;
   catalog_item_id: string;
   catalog_version_id?: string | null;
-  provider_key: string;
-  owner_user_id: string;
+  owner_scope: PluginAuthConnection["ownerScope"];
+  owner_user_id: string | null;
+  binding_key: string;
+  driver: PluginAuthConnection["driver"];
   external_account_id: string | null;
   display_name: string | null;
   avatar_url: string | null;
-  scopes: unknown;
-  status: "active" | "expired" | "revoked";
+  status: PluginAuthConnection["status"];
   expires_at: string | null;
-  profile: unknown;
+  public_payload: unknown;
+  secret_payload: unknown;
   metadata: unknown;
-  access_token: string | null;
-  refresh_token: string | null;
-  token_type: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type PluginAuthSpec = {
+  catalogItemId: string;
+  catalogVersionId: string | null;
+  defaultConfig: Record<string, unknown>;
+  authBindings: PluginAuthBindingDefinition[];
+};
+
+type InstallationConfigRow = {
+  catalog_item_id: string;
+  catalog_version_id: string;
+  config_data: unknown;
+  default_config: unknown;
+};
+
+type OAuthTransientPayload = {
+  codeVerifier: string;
+  redirectUri: string;
+  clientId: string;
+  clientSecret?: string;
+  tokenUrl: string;
+  userInfoUrl?: string;
+  tokenRequestContentType: "application/json" | "application/x-www-form-urlencoded";
+  audience?: string;
+  extraTokenParams?: Record<string, string>;
+  profileIdPath?: string;
+  profileDisplayNamePath?: string;
+  profileAvatarUrlPath?: string;
 };
 
 export class PluginAuthError extends Error {
@@ -83,11 +124,13 @@ function asObject(value: unknown): JsonObject {
     : {};
 }
 
-function asStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(
-    (item): item is string => typeof item === "string" && item.trim().length > 0,
-  );
+function asString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function asNullableString(value: unknown): string | null {
+  const normalized = asString(value);
+  return normalized || null;
 }
 
 function base64Url(buffer: Buffer) {
@@ -104,42 +147,6 @@ function createPkcePair() {
   return { verifier, challenge };
 }
 
-function getProviderClientId(provider: PluginAuthProviderDefinition) {
-  return provider.clientId || (provider.clientIdEnv ? process.env[provider.clientIdEnv] : "") || "";
-}
-
-function getProviderClientSecret(provider: PluginAuthProviderDefinition) {
-  return provider.clientSecret || (provider.clientSecretEnv ? process.env[provider.clientSecretEnv] : "") || "";
-}
-
-function getProviderMetadata(provider: PluginAuthProviderDefinition) {
-  return asObject(provider.metadata);
-}
-
-function getProviderCallbackUrl(provider?: PluginAuthProviderDefinition) {
-  const metadata = provider ? getProviderMetadata(provider) : {};
-  const callbackUrlEnv =
-    typeof metadata.callbackUrlEnv === "string"
-      ? metadata.callbackUrlEnv
-      : "";
-  const callbackUrl = callbackUrlEnv
-    ? (process.env[callbackUrlEnv] || "").trim()
-    : "";
-
-  if (callbackUrl) {
-    return callbackUrl;
-  }
-
-  return `${config.app.baseUrl.replace(/\/$/, "")}/api/v1/mcp/auth/callback`;
-}
-
-function getProviderTokenRequestContentType(provider: PluginAuthProviderDefinition) {
-  const metadata = getProviderMetadata(provider);
-  return metadata.tokenRequestContentType === "application/json"
-    ? "application/json"
-    : "application/x-www-form-urlencoded";
-}
-
 function getByPath(source: unknown, path?: string): unknown {
   if (!path) return undefined;
   let current: unknown = source;
@@ -152,19 +159,81 @@ function getByPath(source: unknown, path?: string): unknown {
   return current;
 }
 
+function decryptDeep(value: unknown): unknown {
+  if (typeof value === "string") {
+    try {
+      return decrypt(value);
+    } catch {
+      return value;
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => decryptDeep(item));
+  }
+  if (value && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value)) {
+      result[key] = decryptDeep(nested);
+    }
+    return result;
+  }
+  return value;
+}
+
+function encryptDeep(value: unknown): unknown {
+  if (typeof value === "string") {
+    return encrypt(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => encryptDeep(item));
+  }
+  if (value && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value)) {
+      result[key] = encryptDeep(nested);
+    }
+    return result;
+  }
+  return value;
+}
+
+function getAuthChallenge(
+  row: PluginAuthSessionRow,
+): PluginAuthSession["challenge"] | undefined {
+  const challenge = asObject(row.challenge_payload);
+  const kind = asString(challenge.kind);
+  if (!kind) return undefined;
+  if (kind !== "redirect" && kind !== "qr_code" && kind !== "none") {
+    return undefined;
+  }
+  return {
+    kind: kind as NonNullable<PluginAuthSession["challenge"]>["kind"],
+    url: asString(challenge.url) || undefined,
+    qrUrl: asString(challenge.qrUrl) || undefined,
+    openMode:
+      challenge.openMode === "replace" || challenge.openMode === "popup"
+        ? challenge.openMode
+        : undefined,
+    expiresAt: asString(challenge.expiresAt) || undefined,
+    metadata: asObject(challenge.metadata),
+  };
+}
+
 function mapConnectionRow(row: PluginConnectionRow): PluginAuthConnection {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
     packageId: row.catalog_item_id,
-    providerKey: row.provider_key,
-    ownerUserId: row.owner_user_id,
+    bindingKey: row.binding_key,
+    driver: row.driver,
+    ownerScope: row.owner_scope,
+    ownerUserId: row.owner_user_id || undefined,
     externalAccountId: row.external_account_id || undefined,
     displayName: row.display_name || undefined,
     avatarUrl: row.avatar_url || undefined,
-    scopes: asStringArray(row.scopes),
     status: row.status,
     expiresAt: row.expires_at || undefined,
+    publicPayload: asObject(row.public_payload),
     metadata: asObject(row.metadata),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -178,13 +247,13 @@ function mapSessionRow(row: PluginAuthSessionRow): PluginAuthSession {
     workspaceId: row.workspace_id,
     packageId: row.catalog_item_id,
     revisionId: row.catalog_version_id || undefined,
-    providerKey: row.provider_key,
+    bindingKey: row.binding_key,
+    driver: row.driver,
     userId: row.user_id,
     status: row.status,
-    state: row.state,
-    codeVerifier: row.code_verifier || undefined,
-    redirectUri: row.redirect_uri,
-    authorizeUrl: row.authorize_url || undefined,
+    phase: row.phase || undefined,
+    state: row.state || undefined,
+    challenge: getAuthChallenge(row),
     errorCode: row.error_code || undefined,
     errorMessage: row.error_message || undefined,
     resultPreview: asObject(row.result_preview),
@@ -199,16 +268,21 @@ function mapSessionRow(row: PluginAuthSessionRow): PluginAuthSession {
   };
 }
 
-async function getPluginAuthSpec(pluginId: string, catalogVersionId?: string | null) {
+async function getPluginAuthSpec(
+  pluginId: string,
+  catalogVersionId?: string | null,
+): Promise<PluginAuthSpec> {
   const result = await query<{
     catalog_item_id: string;
     catalog_version_id: string | null;
-    auth_providers: unknown;
+    default_config: unknown;
+    auth_bindings: unknown;
   }>(
     `SELECT
        item.id AS catalog_item_id,
        version.id AS catalog_version_id,
-       spec.auth_providers
+       spec.default_config,
+       spec.auth_bindings
      FROM catalog_items item
      LEFT JOIN catalog_versions version
        ON version.id = COALESCE($2::uuid, item.latest_version_id)
@@ -228,106 +302,22 @@ async function getPluginAuthSpec(pluginId: string, catalogVersionId?: string | n
   return {
     catalogItemId: row.catalog_item_id,
     catalogVersionId: row.catalog_version_id,
-    authProviders: Array.isArray(row.auth_providers)
-      ? (row.auth_providers as PluginAuthProviderDefinition[])
+    defaultConfig: asObject(row.default_config),
+    authBindings: Array.isArray(row.auth_bindings)
+      ? (row.auth_bindings as PluginAuthBindingDefinition[])
       : [],
   };
 }
 
-function getProvider(
-  providers: PluginAuthProviderDefinition[],
-  providerKey: string,
+function getBinding(
+  bindings: PluginAuthBindingDefinition[],
+  bindingKey: string,
 ) {
-  const provider = providers.find((item) => item.key === providerKey);
-  if (!provider) {
-    throw new PluginAuthError(404, "Auth provider not found");
+  const binding = bindings.find((item) => item.key === bindingKey);
+  if (!binding) {
+    throw new PluginAuthError(404, "Auth binding not found");
   }
-  return provider;
-}
-
-async function exchangeAuthorizationCode(
-  provider: PluginAuthProviderDefinition,
-  input: {
-    code: string;
-    codeVerifier: string;
-    redirectUri: string;
-  },
-) {
-  const clientId = getProviderClientId(provider);
-  if (!clientId) {
-    throw new PluginAuthError(
-      400,
-      `Auth provider '${provider.key}' is missing a clientId/clientIdEnv`,
-    );
-  }
-
-  const params: Record<string, string> = {
-    grant_type: "authorization_code",
-    code: input.code,
-    redirect_uri: input.redirectUri,
-    client_id: clientId,
-    code_verifier: input.codeVerifier,
-  };
-
-  if (provider.audience) {
-    params.audience = provider.audience;
-  }
-  for (const [key, value] of Object.entries(provider.extraTokenParams || {})) {
-    params[key] = value;
-  }
-
-  const clientSecret = getProviderClientSecret(provider);
-  if (clientSecret) {
-    params.client_secret = clientSecret;
-  }
-
-  const contentType = getProviderTokenRequestContentType(provider);
-  const requestBody =
-    contentType === "application/json"
-      ? JSON.stringify(params)
-      : new URLSearchParams(params).toString();
-
-  const response = await fetch(provider.tokenUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": contentType,
-      Accept: "application/json",
-    },
-    body: requestBody,
-  });
-
-  const responseBody = asObject(await response.json().catch(() => ({})));
-  if (!response.ok) {
-    throw new PluginAuthError(
-      response.status || 400,
-      typeof responseBody.error_description === "string"
-        ? responseBody.error_description
-        : typeof responseBody.error === "string"
-          ? responseBody.error
-          : "Token exchange failed",
-    );
-  }
-
-  return responseBody;
-}
-
-async function fetchProfile(
-  provider: PluginAuthProviderDefinition,
-  accessToken: string,
-) {
-  if (!provider.userInfoUrl) return {};
-
-  const response = await fetch(provider.userInfoUrl, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: "application/json",
-    },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new PluginAuthError(response.status || 400, "Failed to fetch provider profile");
-  }
-  return asObject(body);
+  return binding;
 }
 
 async function getSessionRow(sessionId: string, workspaceId: string, userId: string) {
@@ -346,97 +336,425 @@ async function getSessionRow(sessionId: string, workspaceId: string, userId: str
   return result.rows[0]!;
 }
 
-async function getConnectionRow(
-  connectionId: string,
+async function getSessionRowByState(state: string) {
+  const result = await query<PluginAuthSessionRow>(
+    `SELECT *
+     FROM plugin_auth_sessions
+     WHERE state = $1
+     LIMIT 1`,
+    [state],
+  );
+  if (result.rows.length === 0) {
+    throw new PluginAuthError(404, "Auth session not found");
+  }
+  return result.rows[0]!;
+}
+
+async function getConnectionRow(connectionId: string, workspaceId?: string) {
+  const params: unknown[] = [connectionId];
+  const workspaceFilter = workspaceId ? `AND connection.workspace_id = $2` : "";
+  if (workspaceId) {
+    params.push(workspaceId);
+  }
+  const result = await query<PluginConnectionRow>(
+    `SELECT
+       connection.*,
+       installation.catalog_item_id,
+       installation.catalog_version_id
+     FROM plugin_connections connection
+     JOIN plugin_installations installation
+       ON installation.id = connection.installation_id
+     WHERE connection.id = $1
+       ${workspaceFilter}
+     LIMIT 1`,
+    params,
+  );
+  if (result.rows.length === 0) {
+    throw new PluginAuthError(404, "Auth connection not found");
+  }
+  return result.rows[0]!;
+}
+
+async function getInstallationConfigRow(
+  installationId: string,
   workspaceId: string,
-  userId: string,
+): Promise<InstallationConfigRow> {
+  const result = await query<InstallationConfigRow>(
+    `SELECT
+       installation.catalog_item_id,
+       installation.catalog_version_id,
+       installation.config_data,
+       spec.default_config
+     FROM plugin_installations installation
+     JOIN plugin_package_version_specs spec
+       ON spec.catalog_version_id = installation.catalog_version_id
+     WHERE installation.id = $1
+       AND installation.workspace_id = $2
+     LIMIT 1`,
+    [installationId, workspaceId],
+  );
+
+  if (result.rows.length === 0) {
+    throw new PluginAuthError(404, "Installation not found");
+  }
+
+  return result.rows[0]!;
+}
+
+function mergeConfigLayers(...layers: Record<string, unknown>[]) {
+  const merged: Record<string, unknown> = {};
+  for (const layer of layers) {
+    for (const [key, value] of Object.entries(layer)) {
+      if (value !== undefined) {
+        merged[key] = value;
+      }
+    }
+  }
+  return merged;
+}
+
+async function buildDraftConfig(input: {
+  workspaceId: string;
+  pluginId: string;
+  defaultConfig: Record<string, unknown>;
+  installationId?: string;
+  draftConfig?: Record<string, unknown>;
+}) {
+  if (!input.installationId) {
+    return mergeConfigLayers(
+      input.defaultConfig,
+      input.draftConfig || {},
+    );
+  }
+
+  const row = await getInstallationConfigRow(input.installationId, input.workspaceId);
+  if (row.catalog_item_id !== input.pluginId) {
+    throw new PluginAuthError(400, "Installation does not belong to this plugin");
+  }
+
+  return mergeConfigLayers(
+    input.defaultConfig,
+    decryptSensitiveFields(asObject(row.config_data)),
+    input.draftConfig || {},
+  );
+}
+
+function defaultOauthCallbackUrl() {
+  return `${config.app.baseUrl.replace(/\/$/, "")}/api/v1/mcp/auth/callback`;
+}
+
+function resolveAuthValue(
+  source: PluginAuthValueSource | undefined,
+  configData: Record<string, unknown>,
 ) {
-  const result = await query<PluginConnectionRow>(
-    `SELECT
-       connection.*,
-       installation.catalog_item_id,
-       installation.catalog_version_id
-     FROM plugin_connections connection
-     JOIN plugin_installations installation
-       ON installation.id = connection.installation_id
-     WHERE connection.id = $1
-       AND connection.workspace_id = $2
-       AND connection.owner_user_id = $3
-     LIMIT 1`,
-    [connectionId, workspaceId, userId],
+  if (!source) return undefined;
+  switch (source.source) {
+    case "config":
+      return source.field ? configData[source.field] : undefined;
+    case "env":
+      return source.env ? process.env[source.env] : undefined;
+    case "literal":
+      return source.value;
+    case "derived":
+      if (source.name === "app_base_url") {
+        return config.app.baseUrl.replace(/\/$/, "");
+      }
+      if (source.name === "oauth_callback_url") {
+        return defaultOauthCallbackUrl();
+      }
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+function getBindingStringInput(
+  binding: PluginAuthBindingDefinition,
+  inputKey: string,
+  configData: Record<string, unknown>,
+) {
+  return asString(resolveAuthValue(binding.inputs?.[inputKey], configData));
+}
+
+function validatePrerequisiteFields(
+  binding: PluginAuthBindingDefinition,
+  configData: Record<string, unknown>,
+) {
+  for (const fieldKey of binding.prerequisiteFields || []) {
+    const value = configData[fieldKey];
+    if (
+      value === undefined ||
+      value === null ||
+      (typeof value === "string" && value.trim() === "")
+    ) {
+      throw new PluginAuthError(
+        400,
+        `Field '${fieldKey}' is required before starting '${binding.key}'`,
+      );
+    }
+  }
+}
+
+function getTokenRequestContentType(binding: PluginAuthBindingDefinition) {
+  const metadata = asObject(binding.metadata);
+  return metadata.tokenRequestContentType === "application/json"
+    ? "application/json"
+    : "application/x-www-form-urlencoded";
+}
+
+function buildMijiaResultPreview(authState: object) {
+  const state = authState as JsonObject;
+  const externalAccountId =
+    asNullableString(state.cUserId) || asNullableString(state.userId);
+  const displayName =
+    asNullableString(state.userId) || externalAccountId;
+
+  return {
+    externalAccountId: externalAccountId || undefined,
+    displayName: displayName || undefined,
+    locale: normalizeMijiaLocale(state.locale),
+  };
+}
+
+function buildMijiaResultPayload(authState: object) {
+  const state = authState as JsonObject;
+  const expiresAt =
+    typeof state.expireTime === "number"
+      ? new Date(state.expireTime).toISOString()
+      : null;
+  const preview = buildMijiaResultPreview(authState);
+
+  return {
+    externalAccountId: preview.externalAccountId || null,
+    displayName: preview.displayName || null,
+    avatarUrl: null,
+    publicPayload: {
+      locale: preview.locale,
+      userId: asNullableString(state.userId),
+      cUserId: asNullableString(state.cUserId),
+    },
+    secretPayload: {
+      ...(encryptDeep(state) as JsonObject),
+      expiresAt,
+    },
+  };
+}
+
+async function expirePluginAuthSession(sessionId: string) {
+  const expired = await query<PluginAuthSessionRow>(
+    `UPDATE plugin_auth_sessions
+     SET status = 'expired',
+         phase = NULL,
+         error_code = 'AUTH_SESSION_EXPIRED',
+         error_message = 'Auth session expired',
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [sessionId],
   );
-  if (result.rows.length === 0) {
-    throw new PluginAuthError(404, "Auth connection not found");
-  }
-  return result.rows[0]!;
+  return expired.rows[0]!;
 }
 
-async function getConnectionRowById(connectionId: string) {
-  const result = await query<PluginConnectionRow>(
-    `SELECT
-       connection.*,
-       installation.catalog_item_id,
-       installation.catalog_version_id
-     FROM plugin_connections connection
-     JOIN plugin_installations installation
-       ON installation.id = connection.installation_id
-     WHERE connection.id = $1
-     LIMIT 1`,
-    [connectionId],
-  );
-
-  if (result.rows.length === 0) {
-    throw new PluginAuthError(404, "Auth connection not found");
+async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
+  if (row.driver !== "mijia_qr_login" || row.status !== "pending") {
+    return row;
   }
 
-  return result.rows[0]!;
-}
-
-function isConnectionExpired(expiresAt: string | null | undefined) {
-  if (!expiresAt) return false;
-  return new Date(expiresAt).getTime() <= Date.now() + 60_000;
-}
-
-async function refreshPluginConnection(row: PluginConnectionRow) {
-  if (!row.catalog_item_id) {
-    throw new PluginAuthError(400, "Auth connection is missing its plugin binding");
+  if (new Date(row.expires_at).getTime() <= Date.now()) {
+    return expirePluginAuthSession(row.id);
   }
-  if (!row.refresh_token) {
+
+  const transientPayload = asObject(decryptDeep(asObject(row.transient_payload)));
+  const mijiaPayload = asObject(transientPayload.mijia);
+
+  try {
+    const progress = await progressMijiaQrLoginSession({
+      transientPayload: mijiaPayload,
+      timeoutMs: 1_200,
+    });
+
+    switch (progress.status) {
+      case "pending": {
+        if (!progress.phase || progress.phase === row.phase) {
+          return row;
+        }
+
+        const updated = await query<PluginAuthSessionRow>(
+          `UPDATE plugin_auth_sessions
+           SET phase = $2,
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING *`,
+          [row.id, progress.phase],
+        );
+        return updated.rows[0]!;
+      }
+      case "completed": {
+        const resultPayload = buildMijiaResultPayload(progress.authState);
+        const updated = await query<PluginAuthSessionRow>(
+          `UPDATE plugin_auth_sessions
+           SET status = 'completed',
+               phase = NULL,
+               result_preview = $2::jsonb,
+               result_payload = $3::jsonb,
+               error_code = NULL,
+               error_message = NULL,
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING *`,
+          [
+            row.id,
+            JSON.stringify(buildMijiaResultPreview(progress.authState)),
+            JSON.stringify(resultPayload),
+          ],
+        );
+        return updated.rows[0]!;
+      }
+      case "expired": {
+        const expired = await query<PluginAuthSessionRow>(
+          `UPDATE plugin_auth_sessions
+           SET status = 'expired',
+               phase = NULL,
+               error_code = $2,
+               error_message = $3,
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING *`,
+          [row.id, progress.errorCode, progress.errorMessage],
+        );
+        return expired.rows[0]!;
+      }
+      case "failed": {
+        const failed = await query<PluginAuthSessionRow>(
+          `UPDATE plugin_auth_sessions
+           SET status = 'failed',
+               phase = NULL,
+               error_code = $2,
+               error_message = $3,
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING *`,
+          [row.id, progress.errorCode, progress.errorMessage],
+        );
+        return failed.rows[0]!;
+      }
+      default:
+        return row;
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unable to complete Mijia authorization.";
+    const failed = await query<PluginAuthSessionRow>(
+      `UPDATE plugin_auth_sessions
+       SET status = 'failed',
+           phase = NULL,
+           error_code = 'MIJIA_AUTH_ERROR',
+           error_message = $2,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [row.id, message],
+    );
+    return failed.rows[0]!;
+  }
+}
+
+async function exchangeAuthorizationCode(
+  payload: OAuthTransientPayload,
+  code: string,
+) {
+  const params: Record<string, string> = {
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: payload.redirectUri,
+    client_id: payload.clientId,
+    code_verifier: payload.codeVerifier,
+  };
+
+  if (payload.audience) {
+    params.audience = payload.audience;
+  }
+  for (const [key, value] of Object.entries(payload.extraTokenParams || {})) {
+    params[key] = value;
+  }
+  if (payload.clientSecret) {
+    params.client_secret = payload.clientSecret;
+  }
+
+  const body =
+    payload.tokenRequestContentType === "application/json"
+      ? JSON.stringify(params)
+      : new URLSearchParams(params).toString();
+
+  const response = await fetch(payload.tokenUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": payload.tokenRequestContentType,
+      Accept: "application/json",
+    },
+    body,
+  });
+
+  const responseBody = asObject(await response.json().catch(() => ({})));
+  if (!response.ok) {
+    throw new PluginAuthError(
+      response.status || 400,
+      typeof responseBody.error_description === "string"
+        ? responseBody.error_description
+        : typeof responseBody.error === "string"
+          ? responseBody.error
+          : "Token exchange failed",
+    );
+  }
+
+  return responseBody;
+}
+
+async function refreshOAuthConnection(
+  binding: PluginAuthBindingDefinition,
+  row: PluginConnectionRow,
+  configData: Record<string, unknown>,
+) {
+  const tokenUrl = asString(binding.tokenUrl);
+  if (!tokenUrl) {
+    throw new PluginAuthError(400, `Auth binding '${binding.key}' is missing tokenUrl`);
+  }
+
+  const storedSecretPayload = asObject(row.secret_payload);
+  const secretPayload = asObject(decryptDeep(storedSecretPayload));
+  const refreshToken = asString(secretPayload.refreshToken);
+  if (!refreshToken) {
     throw new PluginAuthError(400, "Auth connection has no refresh token");
   }
 
-  const spec = await getPluginAuthSpec(row.catalog_item_id, row.catalog_version_id || null);
-  const provider = getProvider(spec.authProviders, row.provider_key);
-  const clientId = getProviderClientId(provider);
+  const clientId = getBindingStringInput(binding, "clientId", configData);
   if (!clientId) {
-    throw new PluginAuthError(400, `Auth provider '${provider.key}' is not configured`);
+    throw new PluginAuthError(400, `Auth binding '${binding.key}' is missing clientId`);
   }
+  const clientSecret = getBindingStringInput(binding, "clientSecret", configData);
 
   const params: Record<string, string> = {
     grant_type: "refresh_token",
     client_id: clientId,
-    refresh_token: decrypt(row.refresh_token),
+    refresh_token: refreshToken,
   };
-
-  if (provider.audience) {
-    params.audience = provider.audience;
+  if (binding.audience) {
+    params.audience = binding.audience;
   }
-  for (const [key, value] of Object.entries(provider.extraTokenParams || {})) {
+  for (const [key, value] of Object.entries(binding.extraTokenParams || {})) {
     params[key] = value;
   }
-
-  const clientSecret = getProviderClientSecret(provider);
   if (clientSecret) {
     params.client_secret = clientSecret;
   }
 
-  const contentType = getProviderTokenRequestContentType(provider);
+  const contentType = getTokenRequestContentType(binding);
   const body =
     contentType === "application/json"
       ? JSON.stringify(params)
       : new URLSearchParams(params).toString();
 
-  const response = await fetch(provider.tokenUrl, {
+  const response = await fetch(tokenUrl, {
     method: "POST",
     headers: {
       "Content-Type": contentType,
@@ -457,65 +775,94 @@ async function refreshPluginConnection(row: PluginConnectionRow) {
     );
   }
 
-  const accessToken =
-    typeof tokenResponse.access_token === "string" ? tokenResponse.access_token : "";
+  const accessToken = asString(tokenResponse.access_token);
   if (!accessToken) {
     throw new PluginAuthError(400, "Provider did not return an access token");
   }
 
-  const nextRefreshToken =
-    typeof tokenResponse.refresh_token === "string"
-      ? encrypt(tokenResponse.refresh_token)
-      : row.refresh_token;
   const expiresAt =
     typeof tokenResponse.expires_in === "number"
       ? new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
       : row.expires_at;
 
+  const publicPayload = {
+    ...asObject(row.public_payload),
+    ...(typeof tokenResponse.scope === "string"
+      ? {
+          scopes: tokenResponse.scope.split(/\s+/).filter(Boolean),
+        }
+      : {}),
+  };
+
+  const nextSecretPayload = {
+    ...storedSecretPayload,
+    accessToken: encrypt(accessToken),
+    refreshToken:
+      typeof tokenResponse.refresh_token === "string"
+        ? encrypt(tokenResponse.refresh_token)
+        : storedSecretPayload.refreshToken,
+    tokenType:
+      typeof tokenResponse.token_type === "string"
+        ? tokenResponse.token_type
+        : secretPayload.tokenType,
+    expiresAt,
+  };
+
   await query(
     `UPDATE plugin_connections
-     SET access_token = $2,
-         refresh_token = $3,
-         token_type = $4,
+     SET public_payload = $2::jsonb,
+         secret_payload = $3::jsonb,
          status = 'active',
-         expires_at = $5,
+         expires_at = $4,
          updated_at = NOW()
      WHERE id = $1`,
     [
       row.id,
-      encrypt(accessToken),
-      nextRefreshToken,
-      typeof tokenResponse.token_type === "string"
-        ? tokenResponse.token_type
-        : row.token_type,
+      JSON.stringify(publicPayload),
+      JSON.stringify(nextSecretPayload),
       expiresAt,
     ],
   );
 
-  return getConnectionRowById(row.id);
+  return getConnectionRow(row.id);
 }
 
 async function ensureFreshPluginConnection(row: PluginConnectionRow) {
-  if (row.status !== "active" || !isConnectionExpired(row.expires_at)) {
+  if (
+    row.status !== "active" ||
+    !row.expires_at ||
+    new Date(row.expires_at).getTime() > Date.now() + 60_000
+  ) {
     return row;
   }
 
-  if (!row.refresh_token) {
-    await query(
-      `UPDATE plugin_connections
-       SET status = 'expired',
-           updated_at = NOW()
-       WHERE id = $1`,
-      [row.id],
-    );
-    return {
-      ...row,
-      status: "expired",
-    };
+  if (!row.catalog_item_id) {
+    throw new PluginAuthError(400, "Auth connection is missing its plugin binding");
   }
 
+  const installationRow = await getInstallationConfigRow(row.installation_id, row.workspace_id);
+  const configData = mergeConfigLayers(
+    asObject(installationRow.default_config),
+    decryptSensitiveFields(asObject(installationRow.config_data)),
+  );
+  const spec = await getPluginAuthSpec(
+    row.catalog_item_id,
+    row.catalog_version_id || installationRow.catalog_version_id,
+  );
+  const binding = getBinding(spec.authBindings, row.binding_key);
+
   try {
-    return await refreshPluginConnection(row);
+    switch (row.driver) {
+      case "oauth2_authorization_code_pkce":
+        return await refreshOAuthConnection(binding, row, configData);
+      case "mijia_qr_login":
+        return row;
+      default:
+        throw new PluginAuthError(
+          400,
+          `Auth driver '${row.driver}' does not support token refresh`,
+        );
+    }
   } catch {
     await query(
       `UPDATE plugin_connections
@@ -534,76 +881,193 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
 export async function startPluginAuthSession(input: {
   workspaceId: string;
   pluginId: string;
-  providerKey: string;
+  installationId?: string;
+  bindingKey: string;
   userId: string;
+  draftConfig?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }) {
-  const spec = await getPluginAuthSpec(input.pluginId);
+  let catalogVersionId: string | null | undefined;
+  if (input.installationId) {
+    const installationRow = await getInstallationConfigRow(
+      input.installationId,
+      input.workspaceId,
+    );
+    if (installationRow.catalog_item_id !== input.pluginId) {
+      throw new PluginAuthError(400, "Installation does not belong to this plugin");
+    }
+    catalogVersionId = installationRow.catalog_version_id;
+  }
+
+  const spec = await getPluginAuthSpec(input.pluginId, catalogVersionId || null);
   if (!spec.catalogVersionId) {
     throw new PluginAuthError(400, "Plugin has no active version");
   }
 
-  const provider = getProvider(spec.authProviders, input.providerKey);
-  const clientId = getProviderClientId(provider);
-  if (!clientId) {
-    throw new PluginAuthError(400, `Auth provider '${provider.key}' is not configured`);
-  }
+  const binding = getBinding(spec.authBindings, input.bindingKey);
+  const draftConfig = await buildDraftConfig({
+    workspaceId: input.workspaceId,
+    pluginId: input.pluginId,
+    defaultConfig: spec.defaultConfig,
+    installationId: input.installationId,
+    draftConfig: input.draftConfig,
+  });
+  validatePrerequisiteFields(binding, draftConfig);
 
-  const { verifier, challenge } = createPkcePair();
-  const state = base64Url(randomBytes(24));
-  const redirectUri = getProviderCallbackUrl(provider);
-  const authorizeUrl = new URL(provider.authorizeUrl);
-  authorizeUrl.searchParams.set("response_type", "code");
-  authorizeUrl.searchParams.set("client_id", clientId);
-  authorizeUrl.searchParams.set("redirect_uri", redirectUri);
-  authorizeUrl.searchParams.set("state", state);
-  authorizeUrl.searchParams.set("code_challenge", challenge);
-  authorizeUrl.searchParams.set("code_challenge_method", "S256");
-  if ((provider.scopes || []).length > 0) {
-    authorizeUrl.searchParams.set("scope", (provider.scopes || []).join(" "));
-  }
-  if (provider.audience) {
-    authorizeUrl.searchParams.set("audience", provider.audience);
-  }
-  for (const [key, value] of Object.entries(provider.extraAuthorizeParams || {})) {
-    authorizeUrl.searchParams.set(key, value);
-  }
+  switch (binding.driver) {
+    case "oauth2_authorization_code_pkce": {
+      const clientId = getBindingStringInput(binding, "clientId", draftConfig);
+      if (!clientId) {
+        throw new PluginAuthError(
+          400,
+          `Auth binding '${binding.key}' is missing clientId`,
+        );
+      }
+      const clientSecret = getBindingStringInput(binding, "clientSecret", draftConfig);
+      const authorizeUrlValue = asString(binding.authorizeUrl);
+      const tokenUrl = asString(binding.tokenUrl);
+      if (!authorizeUrlValue || !tokenUrl) {
+        throw new PluginAuthError(
+          400,
+          `Auth binding '${binding.key}' is missing authorizeUrl/tokenUrl`,
+        );
+      }
 
-  const inserted = await query<PluginAuthSessionRow>(
-    `INSERT INTO plugin_auth_sessions (
-       workspace_id,
-       catalog_item_id,
-       catalog_version_id,
-       provider_key,
-       user_id,
-       status,
-       state,
-       code_verifier,
-       redirect_uri,
-       authorize_url,
-       metadata,
-       expires_at
-     )
-     VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10::jsonb, NOW() + INTERVAL '1 hour')
-     RETURNING *`,
-    [
-      input.workspaceId,
-      spec.catalogItemId,
-      spec.catalogVersionId,
-      provider.key,
-      input.userId,
-      state,
-      verifier,
-      redirectUri,
-      authorizeUrl.toString(),
-      JSON.stringify(input.metadata || {}),
-    ],
-  );
+      const { verifier, challenge } = createPkcePair();
+      const state = base64Url(randomBytes(24));
+      const redirectUri =
+        getBindingStringInput(binding, "callbackUrl", draftConfig) ||
+        defaultOauthCallbackUrl();
+      const authorizeUrl = new URL(authorizeUrlValue);
+      authorizeUrl.searchParams.set("response_type", "code");
+      authorizeUrl.searchParams.set("client_id", clientId);
+      authorizeUrl.searchParams.set("redirect_uri", redirectUri);
+      authorizeUrl.searchParams.set("state", state);
+      authorizeUrl.searchParams.set("code_challenge", challenge);
+      authorizeUrl.searchParams.set("code_challenge_method", "S256");
+      if ((binding.scopes || []).length > 0) {
+        authorizeUrl.searchParams.set("scope", binding.scopes!.join(" "));
+      }
+      if (binding.audience) {
+        authorizeUrl.searchParams.set("audience", binding.audience);
+      }
+      for (const [key, value] of Object.entries(binding.extraAuthorizeParams || {})) {
+        authorizeUrl.searchParams.set(key, value);
+      }
 
-  return {
-    session: mapSessionRow(inserted.rows[0]!),
-    authorizeUrl: authorizeUrl.toString(),
-  };
+      const transientPayload = {
+        oauth: {
+          codeVerifier: verifier,
+          redirectUri,
+          clientId,
+          clientSecret: clientSecret ? encrypt(clientSecret) : undefined,
+          tokenUrl,
+          userInfoUrl: asString(binding.userInfoUrl) || undefined,
+          tokenRequestContentType: getTokenRequestContentType(binding),
+          audience: binding.audience,
+          extraTokenParams: binding.extraTokenParams,
+          profileIdPath: binding.profileIdPath,
+          profileDisplayNamePath: binding.profileDisplayNamePath,
+          profileAvatarUrlPath: binding.profileAvatarUrlPath,
+        },
+      };
+
+      const inserted = await query<PluginAuthSessionRow>(
+        `INSERT INTO plugin_auth_sessions (
+           workspace_id,
+           catalog_item_id,
+           catalog_version_id,
+           installation_id,
+           binding_key,
+           driver,
+           user_id,
+           status,
+           phase,
+           state,
+           challenge_payload,
+           transient_payload,
+           metadata,
+           expires_at
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, $6, $7, 'pending', 'awaiting_callback', $8,
+           $9::jsonb, $10::jsonb, $11::jsonb, NOW() + INTERVAL '1 hour'
+         )
+         RETURNING *`,
+        [
+          input.workspaceId,
+          spec.catalogItemId,
+          spec.catalogVersionId,
+          input.installationId || null,
+          binding.key,
+          binding.driver,
+          input.userId,
+          state,
+          JSON.stringify({
+            kind: "redirect",
+            url: authorizeUrl.toString(),
+            openMode: "popup",
+          }),
+          JSON.stringify(transientPayload),
+          JSON.stringify(input.metadata || {}),
+        ],
+      );
+
+      return {
+        session: mapSessionRow(inserted.rows[0]!),
+      };
+    }
+    case "mijia_qr_login": {
+      const result = await startMijiaQrLoginSession({
+        locale: draftConfig.locale,
+      });
+      const inserted = await query<PluginAuthSessionRow>(
+        `INSERT INTO plugin_auth_sessions (
+           workspace_id,
+           catalog_item_id,
+           catalog_version_id,
+           installation_id,
+           binding_key,
+           driver,
+           user_id,
+           status,
+           phase,
+           state,
+           challenge_payload,
+           transient_payload,
+           metadata,
+           expires_at
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, $6, $7, 'pending', 'pending_scan', NULL,
+           $8::jsonb, $9::jsonb, $10::jsonb, $11
+         )
+         RETURNING *`,
+        [
+          input.workspaceId,
+          spec.catalogItemId,
+          spec.catalogVersionId,
+          input.installationId || null,
+          binding.key,
+          binding.driver,
+          input.userId,
+          JSON.stringify(result.challengePayload),
+          JSON.stringify(encryptDeep(result.transientPayload)),
+          JSON.stringify(input.metadata || {}),
+          result.expiresAt,
+        ],
+      );
+
+      return {
+        session: mapSessionRow(inserted.rows[0]!),
+      };
+    }
+    default:
+      throw new PluginAuthError(
+        400,
+        `Auth driver '${binding.driver}' is not implemented yet`,
+      );
+  }
 }
 
 export async function getPluginAuthSession(
@@ -611,7 +1075,16 @@ export async function getPluginAuthSession(
   workspaceId: string,
   userId: string,
 ) {
-  return mapSessionRow(await getSessionRow(sessionId, workspaceId, userId));
+  let row = await getSessionRow(sessionId, workspaceId, userId);
+  if (row.driver === "mijia_qr_login" && row.status === "pending") {
+    row = await progressMijiaPluginAuthSession(row);
+  } else if (
+    row.status === "pending" &&
+    new Date(row.expires_at).getTime() <= Date.now()
+  ) {
+    row = await expirePluginAuthSession(row.id);
+  }
+  return mapSessionRow(row);
 }
 
 export async function handlePluginAuthCallback(input: {
@@ -621,20 +1094,10 @@ export async function handlePluginAuthCallback(input: {
   errorDescription?: string;
 }) {
   if (!input.state) {
-    throw new PluginAuthError(400, "Missing OAuth state");
+    throw new PluginAuthError(400, "Missing auth state");
   }
 
-  const sessionResult = await query<PluginAuthSessionRow>(
-    `SELECT *
-     FROM plugin_auth_sessions
-     WHERE state = $1
-     LIMIT 1`,
-    [input.state],
-  );
-  if (sessionResult.rows.length === 0) {
-    throw new PluginAuthError(404, "Auth session not found");
-  }
-  const session = sessionResult.rows[0]!;
+  const session = await getSessionRowByState(input.state);
 
   if (new Date(session.expires_at).getTime() <= Date.now()) {
     await query(
@@ -651,6 +1114,7 @@ export async function handlePluginAuthCallback(input: {
     const failed = await query<PluginAuthSessionRow>(
       `UPDATE plugin_auth_sessions
        SET status = 'failed',
+           phase = NULL,
            error_code = $2,
            error_message = $3,
            updated_at = NOW()
@@ -661,93 +1125,123 @@ export async function handlePluginAuthCallback(input: {
     return mapSessionRow(failed.rows[0]!);
   }
 
-  if (!input.code) {
-    throw new PluginAuthError(400, "Missing authorization code");
+  switch (session.driver) {
+    case "oauth2_authorization_code_pkce": {
+      if (!input.code) {
+        throw new PluginAuthError(400, "Missing authorization code");
+      }
+
+      const transientPayload = asObject(
+        decryptDeep(asObject(session.transient_payload)),
+      );
+      const oauth = asObject(transientPayload.oauth) as OAuthTransientPayload;
+      if (!oauth.tokenUrl || !oauth.clientId || !oauth.codeVerifier || !oauth.redirectUri) {
+        throw new PluginAuthError(400, "Auth session is missing OAuth state");
+      }
+
+      const tokenResponse = await exchangeAuthorizationCode(oauth, input.code);
+      const accessToken = asString(tokenResponse.access_token);
+      if (!accessToken) {
+        throw new PluginAuthError(400, "Provider did not return an access token");
+      }
+
+      let profile: Record<string, unknown> = {};
+      if (oauth.userInfoUrl) {
+        const response = await fetch(oauth.userInfoUrl, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/json",
+          },
+        });
+        if (!response.ok) {
+          throw new PluginAuthError(
+            response.status || 400,
+            "Failed to fetch provider profile",
+          );
+        }
+        profile = asObject(await response.json().catch(() => ({})));
+      }
+
+      const externalAccountId =
+        getByPath(profile, oauth.profileIdPath) ||
+        tokenResponse.sub ||
+        tokenResponse.user_id;
+      const displayName =
+        getByPath(profile, oauth.profileDisplayNamePath) ||
+        tokenResponse.name ||
+        tokenResponse.preferred_username;
+      const avatarUrl = getByPath(profile, oauth.profileAvatarUrlPath);
+      const scopes =
+        typeof tokenResponse.scope === "string"
+          ? tokenResponse.scope.split(/\s+/).filter(Boolean)
+          : [];
+      const expiresAt =
+        typeof tokenResponse.expires_in === "number"
+          ? new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+          : null;
+
+      const resultPreview = {
+        externalAccountId: externalAccountId ? String(externalAccountId) : undefined,
+        displayName: displayName ? String(displayName) : undefined,
+        avatarUrl: avatarUrl ? String(avatarUrl) : undefined,
+        scopes,
+      };
+
+      const resultPayload = {
+        externalAccountId: externalAccountId ? String(externalAccountId) : null,
+        displayName: displayName ? String(displayName) : null,
+        avatarUrl: avatarUrl ? String(avatarUrl) : null,
+        publicPayload: {
+          scopes,
+          profile,
+        },
+        secretPayload: {
+          accessToken: encrypt(accessToken),
+          refreshToken:
+            typeof tokenResponse.refresh_token === "string"
+              ? encrypt(tokenResponse.refresh_token)
+              : null,
+          tokenType:
+            typeof tokenResponse.token_type === "string"
+              ? tokenResponse.token_type
+              : null,
+          expiresAt,
+        },
+      };
+
+      const updated = await query<PluginAuthSessionRow>(
+        `UPDATE plugin_auth_sessions
+         SET status = 'completed',
+             phase = NULL,
+             result_preview = $2::jsonb,
+             result_payload = $3::jsonb,
+             error_code = NULL,
+             error_message = NULL,
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [
+          session.id,
+          JSON.stringify(resultPreview),
+          JSON.stringify(resultPayload),
+        ],
+      );
+
+      return mapSessionRow(updated.rows[0]!);
+    }
+    default:
+      throw new PluginAuthError(
+        400,
+        `Auth driver '${session.driver}' cannot handle callbacks`,
+      );
   }
-
-  const spec = await getPluginAuthSpec(session.catalog_item_id, session.catalog_version_id);
-  const provider = getProvider(spec.authProviders, session.provider_key);
-  const tokenResponse = await exchangeAuthorizationCode(provider, {
-    code: input.code,
-    codeVerifier: session.code_verifier || "",
-    redirectUri: session.redirect_uri,
-  });
-
-  const accessToken = typeof tokenResponse.access_token === "string" ? tokenResponse.access_token : "";
-  if (!accessToken) {
-    throw new PluginAuthError(400, "Provider did not return an access token");
-  }
-
-  const profile = await fetchProfile(provider, accessToken);
-  const externalAccountId =
-    getByPath(profile, provider.profileIdPath) ||
-    tokenResponse.sub ||
-    tokenResponse.user_id;
-  const displayName =
-    getByPath(profile, provider.profileDisplayNamePath) ||
-    tokenResponse.name ||
-    tokenResponse.preferred_username;
-  const avatarUrl = getByPath(profile, provider.profileAvatarUrlPath);
-  const scopes =
-    typeof tokenResponse.scope === "string"
-      ? tokenResponse.scope.split(/\s+/).filter(Boolean)
-      : provider.scopes || [];
-  const expiresAt =
-    typeof tokenResponse.expires_in === "number"
-      ? new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
-      : null;
-
-  const preview = {
-    externalAccountId: externalAccountId ? String(externalAccountId) : undefined,
-    displayName: displayName ? String(displayName) : undefined,
-    avatarUrl: avatarUrl ? String(avatarUrl) : undefined,
-    scopes,
-  };
-
-  const metadata = {
-    ...asObject(session.metadata),
-    connectionPayload: {
-      externalAccountId: externalAccountId ? String(externalAccountId) : null,
-      displayName: displayName ? String(displayName) : null,
-      avatarUrl: avatarUrl ? String(avatarUrl) : null,
-      scopes,
-      accessToken: encrypt(accessToken),
-      refreshToken:
-        typeof tokenResponse.refresh_token === "string"
-          ? encrypt(tokenResponse.refresh_token)
-          : null,
-      tokenType:
-        typeof tokenResponse.token_type === "string"
-          ? tokenResponse.token_type
-          : null,
-      expiresAt,
-      profile,
-      tokenResponse,
-    },
-  };
-
-  const updated = await query<PluginAuthSessionRow>(
-    `UPDATE plugin_auth_sessions
-     SET status = 'completed',
-         result_preview = $2::jsonb,
-         error_code = NULL,
-         error_message = NULL,
-         metadata = $3::jsonb,
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [session.id, JSON.stringify(preview), JSON.stringify(metadata)],
-  );
-
-  return mapSessionRow(updated.rows[0]!);
 }
 
 export async function getAuthConnection(
   connectionId: string,
   workspaceId: string,
-  userId: string,
 ) {
-  return mapConnectionRow(await getConnectionRow(connectionId, workspaceId, userId));
+  return mapConnectionRow(await getConnectionRow(connectionId, workspaceId));
 }
 
 export async function attachAuthConnectionsToConfig(input: {
@@ -755,7 +1249,7 @@ export async function attachAuthConnectionsToConfig(input: {
   workspaceId: string;
   userId: string;
   configFields: PluginConfigFieldDefinition[];
-  authProviders: PluginAuthProviderDefinition[];
+  authBindings: PluginAuthBindingDefinition[];
   configData?: Record<string, unknown>;
   authSessionIds?: Record<string, string>;
   run?: QueryRunner;
@@ -763,10 +1257,10 @@ export async function attachAuthConnectionsToConfig(input: {
   const run = input.run || (query as QueryRunner);
   const result: Record<string, unknown> = { ...(input.configData || {}) };
   const authSessionIds = input.authSessionIds || {};
-  const providerMap = new Map(input.authProviders.map((provider) => [provider.key, provider]));
-  const oauthFields = input.configFields.filter((field) => field.type === "oauth_connection");
+  const bindingMap = new Map(input.authBindings.map((binding) => [binding.key, binding]));
+  const authFields = input.configFields.filter((field) => field.type === "auth_connection");
 
-  for (const field of oauthFields) {
+  for (const field of authFields) {
     const sessionId = authSessionIds[field.key];
     if (!sessionId) continue;
 
@@ -779,14 +1273,11 @@ export async function attachAuthConnectionsToConfig(input: {
     }
 
     const metadata = asObject(session.metadata);
-    const providerKey =
-      (typeof metadata.providerKey === "string" ? metadata.providerKey : undefined) ||
-      session.provider_key;
-
-    if (field.authProviderKey && providerKey !== field.authProviderKey) {
+    const bindingKey = session.binding_key;
+    if (field.authBindingKey && bindingKey !== field.authBindingKey) {
       throw new PluginAuthError(
         400,
-        `Authorization provider mismatch for '${field.key}'`,
+        `Authorization binding mismatch for '${field.key}'`,
       );
     }
 
@@ -798,39 +1289,41 @@ export async function attachAuthConnectionsToConfig(input: {
       connection = await getAuthConnection(
         metadata.consumedConnectionId,
         input.workspaceId,
-        input.userId,
       );
     } else {
-      const payload = asObject(metadata.connectionPayload);
-      if (!payload.accessToken) {
+      const normalizedPayload = asObject(session.result_payload);
+      const publicPayload = asObject(normalizedPayload.publicPayload);
+      const secretPayload = asObject(normalizedPayload.secretPayload);
+      if (Object.keys(secretPayload).length === 0) {
         throw new PluginAuthError(
           400,
           `Authorization for '${field.key}' is missing connection payload`,
         );
       }
 
+      const binding = bindingMap.get(bindingKey);
+      const externalAccountId = asNullableString(normalizedPayload.externalAccountId);
+      const displayName = asNullableString(normalizedPayload.displayName);
+      const avatarUrl = asNullableString(normalizedPayload.avatarUrl);
       const existing = await run<PluginConnectionRow>(
         `SELECT
            connection.*,
-           installation.catalog_item_id
+           installation.catalog_item_id,
+           installation.catalog_version_id
          FROM plugin_connections connection
          JOIN plugin_installations installation
            ON installation.id = connection.installation_id
          WHERE connection.installation_id = $1
            AND connection.workspace_id = $2
-           AND connection.owner_user_id = $3
-           AND connection.provider_key = $4
-           AND connection.external_account_id IS NOT DISTINCT FROM $5
+           AND connection.binding_key = $3
+           AND connection.external_account_id IS NOT DISTINCT FROM $4
          ORDER BY connection.updated_at DESC
          LIMIT 1`,
         [
           input.installationId,
           input.workspaceId,
-          input.userId,
-          providerKey,
-          typeof payload.externalAccountId === "string"
-            ? payload.externalAccountId
-            : null,
+          bindingKey,
+          externalAccountId,
         ],
       );
 
@@ -838,16 +1331,15 @@ export async function attachAuthConnectionsToConfig(input: {
       if (existing.rows.length > 0) {
         const updated = await run<PluginConnectionRow>(
           `UPDATE plugin_connections
-           SET display_name = $2,
-               avatar_url = $3,
-               scopes = $4,
-               access_token = $5,
-               refresh_token = $6,
-               token_type = $7,
+           SET owner_scope = $2,
+               owner_user_id = $3,
+               display_name = $4,
+               avatar_url = $5,
                status = 'active',
-               expires_at = $8,
-               profile = $9::jsonb,
-               metadata = $10::jsonb,
+               expires_at = $6,
+               public_payload = $7::jsonb,
+               secret_payload = $8::jsonb,
+               metadata = $9::jsonb,
                updated_at = NOW()
            WHERE id = $1
            RETURNING *,
@@ -858,18 +1350,17 @@ export async function attachAuthConnectionsToConfig(input: {
              ) AS catalog_item_id`,
           [
             existing.rows[0]!.id,
-            typeof payload.displayName === "string" ? payload.displayName : null,
-            typeof payload.avatarUrl === "string" ? payload.avatarUrl : null,
-            asStringArray(payload.scopes),
-            payload.accessToken,
-            typeof payload.refreshToken === "string" ? payload.refreshToken : null,
-            typeof payload.tokenType === "string" ? payload.tokenType : null,
-            typeof payload.expiresAt === "string" ? payload.expiresAt : null,
-            JSON.stringify(asObject(payload.profile)),
+            binding?.ownerScope || "installation",
+            input.userId || null,
+            displayName,
+            avatarUrl,
+            asNullableString(secretPayload.expiresAt),
+            JSON.stringify(publicPayload),
+            JSON.stringify(secretPayload),
             JSON.stringify({
-              provider: providerMap.get(providerKey)?.key,
               sourceSessionId: session.id,
-              tokenResponse: asObject(payload.tokenResponse),
+              bindingKey,
+              driver: session.driver,
             }),
           ],
         );
@@ -879,22 +1370,21 @@ export async function attachAuthConnectionsToConfig(input: {
           `INSERT INTO plugin_connections (
              installation_id,
              workspace_id,
+             owner_scope,
              owner_user_id,
-             provider_key,
+             binding_key,
+             driver,
              external_account_id,
              display_name,
              avatar_url,
-             scopes,
-             access_token,
-             refresh_token,
-             token_type,
              status,
              expires_at,
-             profile,
+             public_payload,
+             secret_payload,
              metadata
            )
            VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13::jsonb, $14::jsonb
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10, $11::jsonb, $12::jsonb, $13::jsonb
            )
            RETURNING *,
              (
@@ -905,23 +1395,20 @@ export async function attachAuthConnectionsToConfig(input: {
           [
             input.installationId,
             input.workspaceId,
-            input.userId,
-            providerKey,
-            typeof payload.externalAccountId === "string"
-              ? payload.externalAccountId
-              : null,
-            typeof payload.displayName === "string" ? payload.displayName : null,
-            typeof payload.avatarUrl === "string" ? payload.avatarUrl : null,
-            asStringArray(payload.scopes),
-            payload.accessToken,
-            typeof payload.refreshToken === "string" ? payload.refreshToken : null,
-            typeof payload.tokenType === "string" ? payload.tokenType : null,
-            typeof payload.expiresAt === "string" ? payload.expiresAt : null,
-            JSON.stringify(asObject(payload.profile)),
+            binding?.ownerScope || "installation",
+            input.userId || null,
+            bindingKey,
+            session.driver,
+            externalAccountId,
+            displayName,
+            avatarUrl,
+            asNullableString(secretPayload.expiresAt),
+            JSON.stringify(publicPayload),
+            JSON.stringify(secretPayload),
             JSON.stringify({
-              provider: providerMap.get(providerKey)?.key,
               sourceSessionId: session.id,
-              tokenResponse: asObject(payload.tokenResponse),
+              bindingKey,
+              driver: session.driver,
             }),
           ],
         );
@@ -947,9 +1434,9 @@ export async function attachAuthConnectionsToConfig(input: {
     }
 
     result[field.key] = {
-      __kind: "oauth_connection_ref",
+      __kind: "auth_connection_ref",
       connectionId: connection.id,
-      providerKey: connection.providerKey,
+      bindingKey: connection.bindingKey,
       accountDisplayName: connection.displayName,
       externalAccountId: connection.externalAccountId,
       updatedAt: connection.updatedAt,
@@ -964,29 +1451,29 @@ export async function resolveAuthConnectionRefs(config: Record<string, unknown>)
   for (const [key, value] of Object.entries(resolved)) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const ref = value as Record<string, unknown>;
-    if (ref.__kind !== "oauth_connection_ref" || typeof ref.connectionId !== "string") {
+    if (ref.__kind !== "auth_connection_ref" || typeof ref.connectionId !== "string") {
       continue;
     }
 
     const row = await ensureFreshPluginConnection(
-      await getConnectionRowById(ref.connectionId),
+      await getConnectionRow(ref.connectionId),
     );
+    const secretPayload = asObject(decryptDeep(asObject(row.secret_payload)));
+    if (row.status !== "active") {
+      delete secretPayload.accessToken;
+    }
     resolved[key] = {
-      type: "oauth_connection",
+      type: "auth_connection",
       connectionId: row.id,
-      providerKey: row.provider_key,
+      bindingKey: row.binding_key,
+      driver: row.driver,
       externalAccountId: row.external_account_id || undefined,
       displayName: row.display_name || undefined,
       avatarUrl: row.avatar_url || undefined,
-      scopes: asStringArray(row.scopes),
-      accessToken:
-        row.status === "active" && row.access_token
-          ? decrypt(row.access_token)
-          : undefined,
-      refreshToken: row.refresh_token ? decrypt(row.refresh_token) : undefined,
-      tokenType: row.token_type || undefined,
+      status: row.status,
       expiresAt: row.expires_at || undefined,
-      profile: asObject(row.profile),
+      publicPayload: asObject(row.public_payload),
+      secretPayload,
       metadata: asObject(row.metadata),
     };
   }

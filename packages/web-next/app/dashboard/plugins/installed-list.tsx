@@ -35,7 +35,7 @@ export default function InstalledList() {
     const configData = install.config_data || {};
     const configState = new Map<string, { isConfigured?: boolean }>((install.config_state || []).map((state: any) => [state.key, state]));
     return required.some((field: any) => {
-      if (field.type === 'oauth_connection') {
+      if (field.type === 'auth_connection') {
         return !configState.get(field.key)?.isConfigured;
       }
       if (field.secret || field.type === 'secret') {

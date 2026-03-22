@@ -13,12 +13,16 @@ import {
   RELAY_OPERATION_TTL_MS,
   RELAY_PROTOCOL_VERSION,
   RELAY_TOOL_CALL_TIMEOUT,
+  relayDeviceOfflineEventDefinition,
+  relayDeviceOnlineEventDefinition,
 } from '@synapse/shared';
-import { query } from '../../infrastructure/database/index.js';
+import { query, transaction } from '../../infrastructure/database/index.js';
 import { incrementMcpVersion } from './instance-manager.js';
 import { logEvent } from './audit.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { touchRelayExposureAuthzState } from './relay-access.js';
+import { ingestAutomationProviderEvent } from '../automation/service.js';
+import { automationExecutionQueue } from '../../workers/queues.js';
 
 interface RelayToolRegistration {
   stableKey: string;
@@ -122,6 +126,10 @@ type RelayAuthRow = {
 
 const connectedRelays = new Map<string, ConnectedRelay>();
 const pendingRelayOperations = new Map<string, PendingRelayOperation>();
+let relayLifecycleSweepTimer: NodeJS.Timeout | null = null;
+const RELAY_LIFECYCLE_OFFLINE_GRACE_MS =
+  relayDeviceOfflineEventDefinition.graceWindowMs || 60_000;
+const RELAY_LIFECYCLE_SWEEP_INTERVAL_MS = 15_000;
 
 export function handleRelayConnection(socket: any, _req: any, _app: FastifyInstance) {
   let deviceId: string | null = null;
@@ -705,10 +713,36 @@ export async function initRelayManager() {
          updated_at = NOW()
      WHERE runtime_status IN ('starting', 'healthy', 'degraded')`,
   );
+  await query(
+    `UPDATE relay_devices
+     SET automation_lifecycle_grace_until = COALESCE(
+           automation_lifecycle_grace_until,
+           NOW() + (${RELAY_LIFECYCLE_OFFLINE_GRACE_MS} * INTERVAL '1 millisecond')
+         ),
+         updated_at = NOW()
+     WHERE automation_lifecycle_state = 'online'`,
+  );
+  if (relayLifecycleSweepTimer) {
+    clearInterval(relayLifecycleSweepTimer);
+  }
+  relayLifecycleSweepTimer = setInterval(() => {
+    void processDueRelayOfflineLifecycleEvents().catch((error: any) => {
+      console.error('[Relay Manager] Failed to process relay lifecycle grace windows:', error?.message || error);
+    });
+  }, RELAY_LIFECYCLE_SWEEP_INTERVAL_MS);
+  relayLifecycleSweepTimer.unref?.();
+  void processDueRelayOfflineLifecycleEvents().catch((error: any) => {
+    console.error('[Relay Manager] Failed to process relay lifecycle grace windows:', error?.message || error);
+  });
   console.log('[Relay Manager] Initialized relay v2 runtime');
 }
 
 export async function shutdownAllRelays() {
+  if (relayLifecycleSweepTimer) {
+    clearInterval(relayLifecycleSweepTimer);
+    relayLifecycleSweepTimer = null;
+  }
+
   for (const connected of connectedRelays.values()) {
     if (connected.heartbeatTimer) clearInterval(connected.heartbeatTimer);
     if (connected.pongTimer) clearTimeout(connected.pongTimer);
@@ -743,7 +777,12 @@ export async function shutdownAllRelays() {
   if (deviceIds.length > 0) {
     await query(
       `UPDATE relay_devices
-       SET last_seen_at = NOW(), updated_at = NOW()
+       SET last_seen_at = NOW(),
+           automation_lifecycle_grace_until = COALESCE(
+             automation_lifecycle_grace_until,
+             NOW() + (${RELAY_LIFECYCLE_OFFLINE_GRACE_MS} * INTERVAL '1 millisecond')
+           ),
+           updated_at = NOW()
        WHERE id = ANY($1::uuid[])`,
       [deviceIds],
     ).catch(() => {});
@@ -769,15 +808,213 @@ async function authenticateRelayDevice(deviceId: unknown): Promise<RelayAuthRow 
   return result.rows[0] || null;
 }
 
-async function onRelayAuthenticated(connected: ConnectedRelay) {
-  await query(
-    `UPDATE relay_devices
-     SET last_seen_at = NOW(),
-         last_connected_at = NOW(),
-         updated_at = NOW()
-     WHERE id = $1`,
-    [connected.deviceId],
+type RelayLifecycleRow = {
+  id: string;
+  workspace_id: string;
+  display_name: string;
+  automation_lifecycle_state: 'online' | 'offline' | null;
+  automation_lifecycle_grace_until: string | null;
+};
+
+async function markRelayLifecycleConnected(params: {
+  deviceId: string;
+  displayName: string;
+}) {
+  return transaction(async (client) => {
+    const result = await client.query<RelayLifecycleRow>(
+      `SELECT id, workspace_id, display_name, automation_lifecycle_state, automation_lifecycle_grace_until
+       FROM relay_devices
+       WHERE id = $1
+       FOR UPDATE`,
+      [params.deviceId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+
+    const shouldEmit = row.automation_lifecycle_state !== 'online';
+    await client.query(
+      `UPDATE relay_devices
+       SET last_seen_at = NOW(),
+           last_connected_at = NOW(),
+           automation_lifecycle_grace_until = NULL,
+           automation_lifecycle_state = CASE WHEN $2 THEN 'online' ELSE automation_lifecycle_state END,
+           automation_lifecycle_event_at = CASE WHEN $2 THEN NOW() ELSE automation_lifecycle_event_at END,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [params.deviceId, shouldEmit],
+    );
+
+    return {
+      shouldEmit,
+      workspaceId: row.workspace_id,
+      displayName: params.displayName || row.display_name,
+    };
+  });
+}
+
+async function markRelayLifecycleDisconnectPending(params: {
+  deviceId: string;
+}) {
+  return transaction(async (client) => {
+    const result = await client.query<RelayLifecycleRow>(
+      `SELECT id, workspace_id, display_name, automation_lifecycle_state
+       FROM relay_devices
+       WHERE id = $1
+       FOR UPDATE`,
+      [params.deviceId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+
+    await client.query(
+      `UPDATE relay_devices
+       SET last_seen_at = NOW(),
+           automation_lifecycle_grace_until = NOW() + ($2 * INTERVAL '1 millisecond'),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [params.deviceId, RELAY_LIFECYCLE_OFFLINE_GRACE_MS],
+    );
+
+    return {
+      workspaceId: row.workspace_id,
+      displayName: row.display_name,
+    };
+  });
+}
+
+async function flushRelayOfflineLifecycleEvent(deviceId: string) {
+  if (connectedRelays.has(deviceId)) {
+    await query(
+      `UPDATE relay_devices
+       SET automation_lifecycle_grace_until = NULL,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [deviceId],
+    ).catch(() => {});
+    return null;
+  }
+
+  return transaction(async (client) => {
+    const result = await client.query<RelayLifecycleRow>(
+      `SELECT id, workspace_id, display_name, automation_lifecycle_state, automation_lifecycle_grace_until
+       FROM relay_devices
+       WHERE id = $1
+       FOR UPDATE`,
+      [deviceId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    if (connectedRelays.has(deviceId)) {
+      await client.query(
+        `UPDATE relay_devices
+         SET automation_lifecycle_grace_until = NULL,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [deviceId],
+      );
+      return null;
+    }
+
+    if (!row.automation_lifecycle_grace_until) {
+      return null;
+    }
+    if (new Date(row.automation_lifecycle_grace_until).getTime() > Date.now()) {
+      return null;
+    }
+    if (row.automation_lifecycle_state === 'offline') {
+      await client.query(
+        `UPDATE relay_devices
+         SET automation_lifecycle_grace_until = NULL,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [deviceId],
+      );
+      return null;
+    }
+
+    await client.query(
+      `UPDATE relay_devices
+       SET automation_lifecycle_state = 'offline',
+           automation_lifecycle_grace_until = NULL,
+           automation_lifecycle_event_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [deviceId],
+    );
+
+    return {
+      workspaceId: row.workspace_id,
+      displayName: row.display_name,
+    };
+  });
+}
+
+async function processDueRelayOfflineLifecycleEvents() {
+  const result = await query<{ id: string }>(
+    `SELECT id
+     FROM relay_devices
+     WHERE automation_lifecycle_grace_until IS NOT NULL
+       AND automation_lifecycle_grace_until <= NOW()
+     ORDER BY automation_lifecycle_grace_until ASC
+     LIMIT 100`,
   );
+
+  for (const row of result.rows) {
+    const flushed = await flushRelayOfflineLifecycleEvent(row.id);
+    if (!flushed) continue;
+
+    void emitRelayLifecycleAutomationEvent({
+      workspaceId: flushed.workspaceId,
+      deviceId: row.id,
+      displayName: flushed.displayName,
+      sourceKey: relayDeviceOfflineEventDefinition.definitionKey,
+      payload: {
+        deviceId: row.id,
+        displayName: flushed.displayName,
+        status: 'offline',
+      },
+    });
+  }
+}
+
+async function emitRelayLifecycleAutomationEvent(params: {
+  workspaceId: string;
+  deviceId: string;
+  displayName: string;
+  sourceKey: string;
+  payload: Record<string, unknown>;
+}) {
+  try {
+    const result = await ingestAutomationProviderEvent({
+      workspaceId: params.workspaceId,
+      providerKind: 'relay',
+      providerRef: params.deviceId,
+      sourceKey: params.sourceKey,
+      payload: params.payload,
+      sourceSnapshot: {
+        relayId: params.deviceId,
+        relayDisplayName: params.displayName,
+      },
+      occurredAt: new Date().toISOString(),
+    });
+    if (!result || result.executions.length === 0) {
+      return;
+    }
+    await Promise.all(
+      result.executions.map((execution) =>
+        automationExecutionQueue.add('execute', { executionId: execution.id }),
+      ),
+    );
+  } catch (error: any) {
+    console.error('[Relay Manager] Failed to emit automation relay lifecycle event:', error?.message || error);
+  }
+}
+
+async function onRelayAuthenticated(connected: ConnectedRelay) {
+  const lifecycle = await markRelayLifecycleConnected({
+    deviceId: connected.deviceId,
+    displayName: connected.displayName,
+  });
 
   logEvent({
     workspaceId: connected.workspaceId,
@@ -792,6 +1029,20 @@ async function onRelayAuthenticated(connected: ConnectedRelay) {
     payload: { deviceId: connected.deviceId },
     timestamp: new Date().toISOString(),
   });
+
+  if (lifecycle?.shouldEmit) {
+    void emitRelayLifecycleAutomationEvent({
+      workspaceId: lifecycle.workspaceId,
+      deviceId: connected.deviceId,
+      displayName: lifecycle.displayName,
+      sourceKey: relayDeviceOnlineEventDefinition.definitionKey,
+      payload: {
+        deviceId: connected.deviceId,
+        displayName: lifecycle.displayName,
+        status: 'online',
+      },
+    });
+  }
 }
 
 function normalizeExposureRegistrations(msg: Record<string, unknown>): RelayExposureRegistration[] {
@@ -1552,12 +1803,9 @@ function cleanupRelay(deviceId: string) {
     [connected.sessionRowId],
   ).catch(() => {});
 
-  void query(
-    `UPDATE relay_devices
-     SET last_seen_at = NOW(), updated_at = NOW()
-     WHERE id = $1`,
-    [deviceId],
-  ).catch(() => {});
+  void markRelayLifecycleDisconnectPending({
+    deviceId,
+  }).catch(() => {});
 
   void query(
     `UPDATE relay_exposures
@@ -1581,6 +1829,7 @@ function cleanupRelay(deviceId: string) {
     eventType: 'relay.disconnected',
     eventData: { deviceId },
   });
+
 }
 
 function normalizeOperationError(raw: unknown): RelayOperationError {

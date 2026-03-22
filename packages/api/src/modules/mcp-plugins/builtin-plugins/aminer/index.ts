@@ -33,6 +33,7 @@ export const aminerSeed: BuiltinOrgSeed = {
       defaultInstanceScope: "workspace",
       defaultReuseScope: "workspace",
       requiresHandshake: false,
+      iconAssetPath: "assets/icons/aminer.svg",
       categorySlugs: [
         "search-and-retrieval",
         "documents-and-reading",

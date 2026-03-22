@@ -3,13 +3,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import type {
+  AutomationEventSource,
   RelayDeviceDetailView,
   RelayDeviceSummaryView,
   RelayExposureView,
 } from '@synapse/shared';
+import { relayLifecycleEventDefinitions } from '@synapse/shared';
 import {
   ArrowLeft,
   CheckCircle2,
+  Loader2,
   Radio,
   Unplug,
   Wifi,
@@ -37,6 +40,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
+import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -92,8 +96,11 @@ export default function RelayDevicePage() {
   const relayId = params.relayId;
 
   const [relayDetail, setRelayDetail] = useState<RelayDeviceDetailView | null>(null);
+  const [relayEventSources, setRelayEventSources] = useState<AutomationEventSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [loadingRelayEventSources, setLoadingRelayEventSources] = useState(true);
+  const [togglingRelaySourceKey, setTogglingRelaySourceKey] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
 
   const exposureId = searchParams.get('exposureId');
@@ -121,6 +128,18 @@ export default function RelayDevicePage() {
     [relayId],
   );
 
+  const relayLifecycleSourceDefinitions = useMemo(
+    () =>
+      relayLifecycleEventDefinitions.map((definition) => ({
+        definition,
+        source: definition.buildSource({
+          providerRef: relayDetail?.device.id || relayId,
+          providerLabel: relayDetail?.device.displayName || draftName || relayId,
+        }),
+      })),
+    [draftName, relayDetail?.device.displayName, relayDetail?.device.id, relayId],
+  );
+
   const activeExposure = useMemo(() => {
     if (!relayDetail?.exposures.length) return null;
     return relayDetail.exposures.find((exposure) => exposure.id === exposureId) || relayDetail.exposures[0];
@@ -142,8 +161,30 @@ export default function RelayDevicePage() {
     }
   }
 
+  async function loadRelayEventSources() {
+    if (!workspaceId || !relayId) return;
+
+    setLoadingRelayEventSources(true);
+    try {
+      const sources = await api.getAutomationEventSources(workspaceId, {
+        providerKind: 'relay',
+        providerRef: relayId,
+      });
+      setRelayEventSources(sources);
+    } catch (error) {
+      console.error('Failed to load relay automation event sources:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to load relay event sources');
+    } finally {
+      setLoadingRelayEventSources(false);
+    }
+  }
+
   useEffect(() => {
     void loadRelayDetail();
+  }, [relayId, workspaceId]);
+
+  useEffect(() => {
+    void loadRelayEventSources();
   }, [relayId, workspaceId]);
 
   useEffect(() => {
@@ -223,6 +264,42 @@ export default function RelayDevicePage() {
       toast.error(error instanceof Error ? error.message : 'Failed to update trust status');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleToggleRelayEventSource(sourceKey: string, enabled: boolean) {
+    if (!workspaceId || !relayDetail) return;
+
+    const entry = relayLifecycleSourceDefinitions.find((candidate) => candidate.source.sourceKey === sourceKey);
+    if (!entry) return;
+
+    const existingSource = relayEventSources.find((source) => source.sourceKey === sourceKey);
+    setTogglingRelaySourceKey(sourceKey);
+    try {
+      if (enabled) {
+        await api.createAutomationEventSource(workspaceId, {
+          providerKind: 'relay',
+          providerRef: relayDetail.device.id,
+          sourceKey: entry.source.sourceKey,
+          name: entry.source.name,
+          description: entry.source.description,
+          payloadSchema: entry.source.payloadSchema,
+          examplePayload: entry.source.examplePayload,
+          status: 'active',
+          metadata: entry.source.metadata,
+        });
+        toast.success(`${entry.source.name} enabled`);
+      } else if (existingSource) {
+        await api.archiveAutomationEventSource(workspaceId, existingSource.id);
+        toast.success(`${entry.source.name} disabled`);
+      }
+
+      await loadRelayEventSources();
+    } catch (error) {
+      console.error('Failed to update relay automation event source:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update relay event source');
+    } finally {
+      setTogglingRelaySourceKey(null);
     }
   }
 
@@ -337,6 +414,75 @@ export default function RelayDevicePage() {
             <Badge variant="outline">{relayDetail.device.exposureCount} MCPs</Badge>
             <Badge variant="outline">{relayDetail.device.toolCount} tools</Badge>
           </div>
+        </AppCardContent>
+      </AppCard>
+
+      <AppCard variant="panel">
+        <AppCardHeader className="gap-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <AppCardTitle>Relay Lifecycle Event Sources</AppCardTitle>
+              <AppCardDescription className="mt-2">
+                Register durable online/offline event sources for this relay. Re-enabling a source reuses the same
+                registration instead of creating duplicates.
+              </AppCardDescription>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void loadRelayEventSources()}
+              disabled={loadingRelayEventSources}
+            >
+              {loadingRelayEventSources ? (
+                <Loader2 className="animate-spin" data-icon="inline-start" />
+              ) : (
+                <Radio data-icon="inline-start" />
+              )}
+              Refresh Sources
+            </Button>
+          </div>
+        </AppCardHeader>
+        <AppCardContent className="grid gap-4 lg:grid-cols-2">
+          {relayLifecycleSourceDefinitions.map(({ definition, source: template }) => {
+            const source = relayEventSources.find((entry) => entry.sourceKey === template.sourceKey);
+            const enabled = source ? source.status === 'active' || source.status === 'deprecated' : false;
+            const pending = togglingRelaySourceKey === template.sourceKey;
+
+            return (
+              <div
+                key={template.sourceKey}
+                className="rounded-[22px] border border-border/70 bg-muted/20 px-4 py-4"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="text-sm font-medium text-foreground">{template.name}</div>
+                      <Badge variant={enabled ? 'secondary' : 'outline'}>
+                        {enabled ? 'enabled' : 'disabled'}
+                      </Badge>
+                      {definition.graceWindowMs ? (
+                        <Badge variant="outline">grace {Math.round(definition.graceWindowMs / 1000)}s</Badge>
+                      ) : null}
+                      {source ? <Badge variant="outline">{source.status}</Badge> : null}
+                    </div>
+                    <p className="mt-2 text-sm text-muted-foreground">{template.description}</p>
+                  </div>
+                  <Switch
+                    checked={enabled}
+                    disabled={pending}
+                    onCheckedChange={(checked) => void handleToggleRelayEventSource(template.sourceKey, checked)}
+                    aria-label={`Toggle ${template.name}`}
+                  />
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                  <span>Key {template.sourceKey}</span>
+                  <span>Last event {formatDateTime(source?.lastTriggeredAt)}</span>
+                  {source?.id ? <span>Source {source.id.slice(0, 8)}</span> : null}
+                </div>
+              </div>
+            );
+          })}
         </AppCardContent>
       </AppCard>
 

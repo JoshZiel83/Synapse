@@ -1,10 +1,11 @@
 'use client';
 
+import QRCode from 'qrcode';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ExclamationCircleIcon } from '@heroicons/react/16/solid';
 import type {
   AttachmentScope,
-  PluginAuthProviderDefinition,
+  PluginAuthBindingDefinition,
   PluginAuthSession,
   PluginConfigFieldDefinition,
   PluginInstallStep,
@@ -77,8 +78,10 @@ type InstallFlowStep = PluginInstallStep | AccessStep;
 
 type AuthFieldState = {
   sessionId: string;
-  providerKey: string;
+  bindingKey: string;
   status: PluginAuthSession['status'];
+  phase?: PluginAuthSession['phase'];
+  challenge?: PluginAuthSession['challenge'];
   accountDisplayName?: string;
   errorMessage?: string;
   authConnectionId?: string;
@@ -202,6 +205,103 @@ function buildInitialConfig(plugin: any, configFields: PluginConfigFieldDefiniti
   return initial;
 }
 
+function buildInitialAuthFields(
+  config: Record<string, unknown>,
+  configFields: PluginConfigFieldDefinition[],
+) {
+  const authState: Record<string, AuthFieldState> = {};
+  for (const field of configFields) {
+    if (field.type !== 'auth_connection') continue;
+    const value = config[field.key];
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const ref = value as Record<string, unknown>;
+    if (typeof ref.connectionId !== 'string') continue;
+    authState[field.key] = {
+      sessionId: '',
+      bindingKey:
+        typeof ref.bindingKey === 'string'
+          ? ref.bindingKey
+          : field.authBindingKey || '',
+      status: 'completed',
+      accountDisplayName:
+        typeof ref.accountDisplayName === 'string'
+          ? ref.accountDisplayName
+          : undefined,
+      authConnectionId: ref.connectionId,
+    };
+  }
+  return authState;
+}
+
+function hasStoredAuthConnection(value: unknown) {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      typeof (value as Record<string, unknown>).connectionId === 'string',
+  );
+}
+
+function getAuthPendingMessage(authState: AuthFieldState) {
+  if (authState.phase === 'pending_confirm') {
+    return 'Authorization scanned. Confirm it in the Mi Home app.';
+  }
+  if (authState.challenge?.kind === 'qr_code') {
+    return 'Scan the QR code with the Mi Home app to authorize this account.';
+  }
+  return 'Waiting for authorization...';
+}
+
+function AuthQrCodeImage({ value, label }: { value: string; label: string }) {
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void QRCode.toDataURL(value, {
+      width: 220,
+      margin: 1,
+      color: {
+        dark: '#0f172a',
+        light: '#ffffff',
+      },
+    })
+      .then((nextImageUrl: string) => {
+        if (!cancelled) {
+          setImageUrl(nextImageUrl);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setImageUrl(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [value]);
+
+  if (!imageUrl) {
+    return (
+      <div className="flex h-40 w-40 items-center justify-center rounded-md border border-gray-200 bg-white p-2 text-xs text-muted-foreground dark:border-white/10">
+        Generating QR code...
+      </div>
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={imageUrl}
+      alt={`${label} QR code`}
+      className="h-40 w-40 rounded-md border border-gray-200 bg-white object-contain p-2 dark:border-white/10"
+      loading="lazy"
+      decoding="async"
+    />
+  );
+}
+
 function runClientValidation(
   config: Record<string, unknown>,
   authFields: Record<string, AuthFieldState>,
@@ -216,8 +316,10 @@ function runClientValidation(
     if (allowed && !allowed.has(field.key)) continue;
     const value = config[field.key];
     if (field.required) {
-      if (field.type === 'oauth_connection') {
-        if (!authFields[field.key] || authFields[field.key].status !== 'completed') {
+      if (field.type === 'auth_connection') {
+        const hasSavedConnection = hasStoredAuthConnection(value);
+        const authStatus = authFields[field.key]?.status;
+        if (!hasSavedConnection && authStatus !== 'completed' && authStatus !== 'consumed') {
           errors[field.key] = 'Authorization is required.';
         }
       } else if (field.type === 'boolean') {
@@ -281,8 +383,8 @@ export default function InstallDialog({
     () => deriveInstallFlow(plugin, configFields, locale, { includePlacementSteps }),
     [configFields, includePlacementSteps, locale, plugin],
   );
-  const authProviders = useMemo<PluginAuthProviderDefinition[]>(() => plugin.auth_providers || [], [plugin.auth_providers]);
-  const authProviderMap = useMemo(() => new Map(authProviders.map((provider) => [provider.key, provider])), [authProviders]);
+  const authBindings = useMemo<PluginAuthBindingDefinition[]>(() => plugin.auth_bindings || [], [plugin.auth_bindings]);
+  const authBindingMap = useMemo(() => new Map(authBindings.map((binding) => [binding.key, binding])), [authBindings]);
   const allowedAttachmentTypes = useMemo<PluginAttachmentType[]>(
     () => ['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user'],
     [],
@@ -313,7 +415,15 @@ export default function InstallDialog({
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [authFields, setAuthFields] = useState<Record<string, AuthFieldState>>({});
+  const [authFields, setAuthFields] = useState<Record<string, AuthFieldState>>(() =>
+    buildInitialAuthFields(
+      {
+        ...buildInitialConfig(plugin, configFields),
+        ...(initialInstallation?.config_data || {}),
+      },
+      configFields,
+    ),
+  );
   const [currentInstallation, setCurrentInstallation] = useState<any>(initialInstallation || null);
   const authPollers = useRef<Record<string, number>>({});
 
@@ -341,11 +451,24 @@ export default function InstallDialog({
     () => installSteps.findIndex((step) => step.kind === 'access'),
     [installSteps],
   );
+  const currentAuthStepField = useMemo(() => {
+    if (currentStep?.kind !== 'auth') {
+      return null;
+    }
+    const authStepFields = currentStep.fields
+      .map((fieldKey) => configFields.find((field) => field.key === fieldKey))
+      .filter((field): field is PluginConfigFieldDefinition => Boolean(field))
+      .filter((field) => field.type === 'auth_connection');
+    return authStepFields.length === 1 ? authStepFields[0] : null;
+  }, [configFields, currentStep]);
   const lastSetupStepIndex = setupSteps.length - 1;
   const installLifecycleOptions = useMemo(
     () => getInstallAllowedReuseScopes(selectedAttachmentType),
     [selectedAttachmentType],
   );
+  const currentAuthStepState = currentAuthStepField ? authFields[currentAuthStepField.key] : undefined;
+  const currentAuthStepValue = currentAuthStepField ? configData[currentAuthStepField.key] : undefined;
+  const autoStartedAuthStepRef = useRef('');
 
   useEffect(() => {
     if ((selectedAttachmentType === 'actor_global' || selectedAttachmentType === 'actor_conversation') && workspaceId) {
@@ -376,6 +499,54 @@ export default function InstallDialog({
   }, [initialInstallation]);
 
   useEffect(() => {
+    setAuthFields((previous) => ({
+      ...buildInitialAuthFields(configData, configFields),
+      ...previous,
+    }));
+  }, [configData, configFields]);
+
+  useEffect(() => {
+    if (!currentAuthStepField || currentStep?.kind !== 'auth') {
+      autoStartedAuthStepRef.current = '';
+      return;
+    }
+
+    if (hasStoredAuthConnection(currentAuthStepValue)) {
+      return;
+    }
+
+    if (
+      currentAuthStepState?.status === 'pending' ||
+      currentAuthStepState?.status === 'completed' ||
+      currentAuthStepState?.status === 'consumed'
+    ) {
+      return;
+    }
+
+    const autoStartKey = [
+      currentStep.id,
+      currentAuthStepField.key,
+      currentInstallation?.id || initialInstallation?.id || 'new',
+      typeof configData.locale === 'string' ? configData.locale : '',
+    ].join(':');
+
+    if (autoStartedAuthStepRef.current === autoStartKey) {
+      return;
+    }
+
+    autoStartedAuthStepRef.current = autoStartKey;
+    void beginAuth(currentAuthStepField);
+  }, [
+    configData.locale,
+    currentAuthStepField,
+    currentAuthStepState?.status,
+    currentAuthStepValue,
+    currentInstallation?.id,
+    currentStep,
+    initialInstallation?.id,
+  ]);
+
+  useEffect(() => {
     const handler = (event: MessageEvent) => {
       if (event.data?.type !== 'synapse:mcp-auth' || typeof event.data.sessionId !== 'string') {
         return;
@@ -404,8 +575,10 @@ export default function InstallDialog({
         ...previous,
         [fieldKey]: {
           sessionId,
-          providerKey: previous[fieldKey]?.providerKey || '',
+          bindingKey: previous[fieldKey]?.bindingKey || '',
           status: session.status,
+          phase: session.phase,
+          challenge: session.challenge,
           accountDisplayName: typeof session.resultPreview?.displayName === 'string' ? session.resultPreview.displayName : undefined,
           errorMessage: session.errorMessage,
           authConnectionId: session.authConnectionId,
@@ -421,8 +594,10 @@ export default function InstallDialog({
         ...previous,
         [fieldKey]: {
           sessionId,
-          providerKey: previous[fieldKey]?.providerKey || '',
+          bindingKey: previous[fieldKey]?.bindingKey || '',
           status: 'failed',
+          phase: undefined,
+          challenge: previous[fieldKey]?.challenge,
           errorMessage: error.message,
         },
       }));
@@ -433,35 +608,62 @@ export default function InstallDialog({
     }
   };
 
-  const beginAuth = async (field: PluginConfigFieldDefinition, providerKey?: string) => {
+  const beginAuth = async (field: PluginConfigFieldDefinition, bindingKey?: string) => {
     if (!workspaceId) return;
-    const resolvedProviderKey = providerKey || field.authProviderKey;
-    if (!resolvedProviderKey) {
-      setFieldErrors((previous) => ({ ...previous, [field.key]: 'No auth provider is configured for this field.' }));
+    const resolvedBindingKey = bindingKey || field.authBindingKey;
+    if (!resolvedBindingKey) {
+      setFieldErrors((previous) => ({ ...previous, [field.key]: 'No auth binding is configured for this field.' }));
       return;
     }
 
-    const result = await api.startPluginAuth(workspaceId, plugin.id, resolvedProviderKey);
-    const session: PluginAuthSession = result.session;
-    setAuthFields((previous) => ({
-      ...previous,
-      [field.key]: {
-        sessionId: session.id,
-        providerKey: resolvedProviderKey,
-        status: session.status,
-      },
-    }));
+    setFieldErrors((previous) => {
+      const next = { ...previous };
+      delete next[field.key];
+      return next;
+    });
 
-    if (authPollers.current[field.key]) {
-      window.clearInterval(authPollers.current[field.key]);
-    }
-    authPollers.current[field.key] = window.setInterval(() => {
-      void refreshAuthField(field.key, session.id);
-    }, 2000);
+    try {
+      const result = await api.startPluginAuth(workspaceId, plugin.id, resolvedBindingKey, {
+        installationId: currentInstallation?.id || initialInstallation?.id,
+        draftConfig: configData,
+      });
+      const session: PluginAuthSession = result.session;
+      setAuthFields((previous) => ({
+        ...previous,
+        [field.key]: {
+          sessionId: session.id,
+          bindingKey: resolvedBindingKey,
+          status: session.status,
+          phase: session.phase,
+          challenge: session.challenge,
+        },
+      }));
 
-    const popup = window.open(result.authorizeUrl, `mcp-auth-${field.key}`, 'width=720,height=820,noopener,noreferrer');
-    if (!popup) {
-      setFieldErrors((previous) => ({ ...previous, [field.key]: 'Popup blocked. Please allow popups and try again.' }));
+      if (authPollers.current[field.key]) {
+        window.clearInterval(authPollers.current[field.key]);
+      }
+      authPollers.current[field.key] = window.setInterval(() => {
+        void refreshAuthField(field.key, session.id);
+      }, 2000);
+
+      if (session.challenge?.kind === 'redirect' && session.challenge.url) {
+        if (session.challenge.openMode === 'replace') {
+          window.location.assign(session.challenge.url);
+          return;
+        }
+
+        const popup = window.open(session.challenge.url, `mcp-auth-${field.key}`, 'width=720,height=820,noopener,noreferrer');
+        if (!popup) {
+          setFieldErrors((previous) => ({ ...previous, [field.key]: 'Popup blocked. Please allow popups and try again.' }));
+        }
+      } else if (session.challenge?.kind && session.challenge.kind !== 'qr_code' && session.challenge.kind !== 'none') {
+        setFieldErrors((previous) => ({ ...previous, [field.key]: 'This auth flow returned an unsupported challenge type.' }));
+      }
+    } catch (error: any) {
+      setFieldErrors((previous) => ({
+        ...previous,
+        [field.key]: error?.message || 'Unable to start the auth flow.',
+      }));
     }
   };
 
@@ -513,7 +715,7 @@ export default function InstallDialog({
     try {
       const authSessionIds = Object.fromEntries(
         Object.entries(authFields)
-          .filter(([, state]) => state.status === 'completed')
+          .filter(([, state]) => state.status === 'completed' && state.sessionId)
           .map(([fieldKey, state]) => [fieldKey, state.sessionId]),
       );
 
@@ -627,13 +829,13 @@ export default function InstallDialog({
 
   const renderStepAction = () => {
     if (!currentStep?.action) return null;
-    if (currentStep.action.kind === 'oauth_authorize') {
-      const providerKey = currentStep.action.providerKey;
-      const field = configFields.find((item) => item.authProviderKey === providerKey || item.key === providerKey);
+    if (currentStep.action.kind === 'auth_start') {
+      const bindingKey = currentStep.action.bindingKey;
+      const field = configFields.find((item) => item.authBindingKey === bindingKey || item.key === bindingKey);
       if (!field) return null;
       return (
         <div className="rounded-lg border border-gray-200 dark:border-white/10 p-3">
-          <Button type="button" variant="outline" onClick={() => beginAuth(field, providerKey)} className="w-full">
+          <Button type="button" variant="outline" onClick={() => beginAuth(field, bindingKey)} className="w-full">
             {translate(currentStep.action.buttonLabelI18n, locale, plugin.default_locale || 'en') || 'Authorize'}
           </Button>
         </div>
@@ -660,7 +862,7 @@ export default function InstallDialog({
   const renderField = (field: PluginConfigFieldDefinition) => {
     const value = configData[field.key];
     const error = fieldErrors[field.key];
-    const provider = field.authProviderKey ? authProviderMap.get(field.authProviderKey) : undefined;
+    const binding = field.authBindingKey ? authBindingMap.get(field.authBindingKey) : undefined;
     const authState = authFields[field.key];
     const label = translate(field.titleI18n, locale, plugin.default_locale || 'en') || field.key;
     const description = translate(field.descriptionI18n, locale, plugin.default_locale || 'en');
@@ -758,10 +960,15 @@ export default function InstallDialog({
       );
     }
 
-    if (field.type === 'oauth_connection') {
-      const providerLabel = provider
-        ? translate(provider.displayNameI18n, locale, plugin.default_locale || 'en') || provider.key
-        : field.authProviderKey || 'provider';
+    if (field.type === 'auth_connection') {
+      const bindingLabel = binding
+        ? translate(binding.displayNameI18n, locale, plugin.default_locale || 'en') || binding.key
+        : field.authBindingKey || 'binding';
+      const scanUrl =
+        authState?.challenge?.kind === 'qr_code' && typeof authState.challenge.metadata?.scanUrl === 'string'
+          ? authState.challenge.metadata.scanUrl
+          : undefined;
+      const challengeExpiresAt = authState?.challenge?.expiresAt;
       return (
         <div key={field.key} className="space-y-2 rounded-lg border border-gray-200 dark:border-white/10 p-3">
           <div className="flex items-center justify-between gap-3">
@@ -769,23 +976,49 @@ export default function InstallDialog({
               <div className="flex items-center gap-2">
                 <Label className="block text-sm/6 font-medium text-gray-900 dark:text-white">{label}</Label>
                 {field.required && <span className="text-xs text-red-500">*</span>}
-                <Badge variant="outline">{providerLabel}</Badge>
+                <Badge variant="outline">{bindingLabel}</Badge>
               </div>
               {description && <p className="text-sm text-gray-500 dark:text-gray-400">{description}</p>}
             </div>
             <Button type="button" variant="outline" onClick={() => beginAuth(field)} className="shrink-0">
-              {authState?.status === 'completed' ? 'Reconnect' : 'Connect'}
+              {authState?.status === 'completed' || authState?.status === 'consumed' ? 'Reconnect' : 'Connect'}
             </Button>
           </div>
           {authState && (
             <div className="text-sm text-gray-500 dark:text-gray-400">
               {authState.status === 'pending' && (
-                <span className="inline-flex items-center gap-1">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Waiting for authorization...
-                </span>
+                <div className="space-y-3">
+                  <span className="inline-flex items-center gap-1">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {getAuthPendingMessage(authState)}
+                  </span>
+                  {scanUrl && (
+                    <div className="flex flex-col gap-3 rounded-lg border border-dashed border-gray-300 bg-muted/20 p-3 dark:border-white/10">
+                      <div className="flex items-start gap-3">
+                        <AuthQrCodeImage value={scanUrl} label={label} />
+                        <div className="space-y-2">
+                          <p>Open the Mi Home app and scan this QR code.</p>
+                          <a
+                            href={scanUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-400"
+                          >
+                            Open scan page
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                          {challengeExpiresAt && (
+                            <p className="text-xs text-muted-foreground">
+                              Expires at {new Date(challengeExpiresAt).toLocaleString()}.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
-              {authState.status === 'completed' && (
+              {(authState.status === 'completed' || authState.status === 'consumed') && (
                 <span>Connected{authState.accountDisplayName ? ` as ${authState.accountDisplayName}` : ''}.</span>
               )}
               {authState.status === 'failed' && <span className="text-red-500">{authState.errorMessage || 'Authorization failed.'}</span>}
@@ -893,7 +1126,7 @@ export default function InstallDialog({
           <PluginAccessStep installation={currentInstallation} />
         )}
 
-        {(currentStep?.kind === 'form' || currentStep?.kind === 'oauth' || currentStep?.kind === 'check') && currentStep?.fields.length > 0 && (
+        {(currentStep?.kind === 'form' || currentStep?.kind === 'auth' || currentStep?.kind === 'check') && currentStep?.fields.length > 0 && (
           <div className="space-y-4 border-t border-gray-200 pt-4 dark:border-white/10">
             {currentStep.fields.map((fieldKey) => {
               const field = configFields.find((item) => item.key === fieldKey);

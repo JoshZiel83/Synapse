@@ -9,6 +9,12 @@ import type {
   AuthSessionSummary,
   AuthTransport,
   ActorPackageRecord,
+  AutomationEventSource,
+  AutomationExecution,
+  AutomationOccurrence,
+  AutomationRule,
+  AutomationRuleCreatePayload,
+  AutomationRuleUpdatePayload,
   CanonicalContentBlock,
   ConversationFeedItem,
   ConversationFeedPage,
@@ -998,10 +1004,19 @@ class ApiClient {
       method: "DELETE",
     })
   }
-  startPluginAuth(wsId: string, pluginId: string, providerKey: string) {
+  startPluginAuth(
+    wsId: string,
+    pluginId: string,
+    bindingKey: string,
+    data?: {
+      installationId?: string
+      draftConfig?: Record<string, unknown>
+      metadata?: Record<string, unknown>
+    }
+  ) {
     return this.fetch(
-      `/workspaces/${wsId}/mcp/plugins/${pluginId}/auth/${providerKey}/start`,
-      { method: "POST", body: "{}" }
+      `/workspaces/${wsId}/mcp/plugins/${pluginId}/auth/${bindingKey}/start`,
+      { method: "POST", body: JSON.stringify(data || {}) }
     )
   }
   getPluginAuthSession(wsId: string, sessionId: string) {
@@ -1174,6 +1189,125 @@ class ApiClient {
     return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`, {
       method: "DELETE",
     })
+  }
+
+  // Automation Event Sources
+  getAutomationEventSources(
+    wsId: string,
+    filters?: {
+      status?: "active" | "deprecated" | "disabled" | "archived"
+      providerKind?: "relay" | "webhook" | "internal"
+      providerRef?: string
+      sourceKey?: string
+    }
+  ): Promise<AutomationEventSource[]> {
+    const params = new URLSearchParams()
+    if (filters?.status) params.set("status", filters.status)
+    if (filters?.providerKind) params.set("providerKind", filters.providerKind)
+    if (filters?.providerRef) params.set("providerRef", filters.providerRef)
+    if (filters?.sourceKey) params.set("sourceKey", filters.sourceKey)
+    const qs = params.toString()
+    return this.fetch(`/workspaces/${wsId}/automation-event-sources${qs ? `?${qs}` : ""}`)
+  }
+  createAutomationEventSource(
+    wsId: string,
+    data: {
+      providerKind: "relay" | "webhook" | "internal"
+      providerRef?: string
+      sourceKey?: string
+      name: string
+      description: string
+      recommendedUsage?: string
+      payloadSchema?: Record<string, unknown>
+      examplePayload?: Record<string, unknown>
+      status?: "active" | "deprecated" | "disabled" | "archived"
+      metadata?: Record<string, unknown>
+    }
+  ): Promise<AutomationEventSource> {
+    return this.fetch(`/workspaces/${wsId}/automation-event-sources`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  updateAutomationEventSource(
+    wsId: string,
+    eventSourceId: string,
+    data: {
+      providerRef?: string
+      name?: string
+      description?: string
+      recommendedUsage?: string
+      payloadSchema?: Record<string, unknown>
+      examplePayload?: Record<string, unknown>
+      status?: "active" | "deprecated" | "disabled" | "archived"
+      metadata?: Record<string, unknown>
+    }
+  ): Promise<AutomationEventSource> {
+    return this.fetch(`/workspaces/${wsId}/automation-event-sources/${eventSourceId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+  archiveAutomationEventSource(wsId: string, eventSourceId: string) {
+    return this.fetch(`/workspaces/${wsId}/automation-event-sources/${eventSourceId}`, {
+      method: "DELETE",
+    })
+  }
+  getAutomationEventSourceOccurrences(
+    wsId: string,
+    eventSourceId: string
+  ): Promise<AutomationOccurrence[]> {
+    return this.fetch(`/workspaces/${wsId}/automation-event-sources/${eventSourceId}/occurrences`)
+  }
+
+  // Automation Rules / Triggers
+  getAutomations(
+    wsId: string,
+    filters?: {
+      status?: "active" | "paused" | "error" | "archived"
+      category?: "schedule" | "event_subscription"
+      ownerSessionId?: string
+    }
+  ): Promise<AutomationRule[]> {
+    const params = new URLSearchParams()
+    if (filters?.status) params.set("status", filters.status)
+    if (filters?.category) params.set("category", filters.category)
+    if (filters?.ownerSessionId) params.set("ownerSessionId", filters.ownerSessionId)
+    const qs = params.toString()
+    return this.fetch(`/workspaces/${wsId}/automations${qs ? `?${qs}` : ""}`)
+  }
+  getAutomation(wsId: string, automationId: string): Promise<AutomationRule> {
+    return this.fetch(`/workspaces/${wsId}/automations/${automationId}`)
+  }
+  createAutomation(
+    wsId: string,
+    data: AutomationRuleCreatePayload
+  ): Promise<AutomationRule> {
+    return this.fetch(`/workspaces/${wsId}/automations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  updateAutomation(
+    wsId: string,
+    automationId: string,
+    data: AutomationRuleUpdatePayload
+  ): Promise<AutomationRule> {
+    return this.fetch(`/workspaces/${wsId}/automations/${automationId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+  deleteAutomation(wsId: string, automationId: string) {
+    return this.fetch(`/workspaces/${wsId}/automations/${automationId}`, {
+      method: "DELETE",
+    })
+  }
+  getAutomationExecutions(
+    wsId: string,
+    automationId: string
+  ): Promise<AutomationExecution[]> {
+    return this.fetch(`/workspaces/${wsId}/automations/${automationId}/executions`)
   }
 
   // File Upload

@@ -18,7 +18,7 @@
 - `packages/api/src/modules/mcp-plugins/*`
 - `packages/api/src/modules/model-groups/*`
 - `packages/api/src/modules/session/*`
-- `packages/api/src/modules/standing-orders/*`
+- `packages/api/src/modules/automation/*`
 - `packages/api/src/modules/files/*`
 - `packages/api/src/modules/work-engine/*`
 - `packages/api/src/modules/a2a/*`
@@ -66,7 +66,7 @@
 | Skill / Plugin | `capability_*`, `capability_instance_grants` | capability instance grant + SpiceDB + workspace guard | 数据模型已统一，权限模型没统一 |
 | MCP Relay | `relay_devices`, `relay_exposures` | workspace manage_relays + relay 管理接口 | relay 既是基础设施，又被当成可执行能力来源，边界不清楚 |
 | Model Config | `model_groups`, `model_profiles`, `model_group_grants` | owner_type + grants + SpiceDB | 所有权、可见性、可用性混在一起 |
-| Secondary modules | `session`, `standing_orders`, `files`, `work_engine`, `a2a` | auth only / workspace only / partial authz | 有些模块几乎没有对象级授权 |
+| Secondary modules | `session`, `automation`, `files`, `work_engine`, `a2a` | auth only / workspace only / partial authz | 有些模块几乎没有对象级授权 |
 
 ### 1.3 当前最主要的结构性问题
 
@@ -165,7 +165,7 @@
 - `packages/api/src/modules/capabilities/controller.ts`
   只有 workspace 级 preHandler，没有 grant 管理权限校验
 
-- `packages/api/src/modules/standing-orders/index.ts`
+- `packages/api/src/modules/automation/controller.ts`
   基本只有 `authMiddleware`
 
 - `packages/api/src/modules/a2a/controller.ts`
@@ -294,7 +294,7 @@ Actor 在某个具体对话上下文中的运行主体。
 - `conversation`
 - `conversation_participant`
 - `session`
-- `standing_order`
+- `automation_rule`
 - `work_item`
 - `a2a_app`
 
@@ -1163,7 +1163,7 @@ const actorIds = await access.listAuthorizedResourceIds({
 
 - `session`
 - `files`
-- `standing-orders`
+- `automation`
 - `work-engine`
 - `a2a`
 

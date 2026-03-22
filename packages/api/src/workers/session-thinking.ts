@@ -211,6 +211,11 @@ export function startSessionThinkingWorker() {
 
         const sessionMessages = await getSessionMessages(sessionId);
         const interrupts = await consumeInterrupts(sessionId);
+        const pendingWakeups = await getPendingWakeups(sessionId);
+        if (pendingWakeups.length === 0) {
+          await sleepActor(sessionId);
+          return { success: true, reason: 'wakeup already handled' };
+        }
 
         let groupMembers: any[] | undefined;
         let promptGroupMembers: any[] | undefined;
@@ -259,6 +264,7 @@ export function startSessionThinkingWorker() {
             actorId,
             sessionMessages,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
+            wakeups: pendingWakeups,
           });
           contextItems = built.items;
           lastKnownGroupSequence = built.lastSequence;
@@ -266,6 +272,7 @@ export function startSessionThinkingWorker() {
           contextItems = buildSessionContextItems(sessionMessages, {
             crossTurnToolHistory: false,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
+            wakeups: pendingWakeups,
           });
         }
 
@@ -322,6 +329,7 @@ export function startSessionThinkingWorker() {
           finalContextItems = buildSessionContextItems(sessionMessages, {
             crossTurnToolHistory: true,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
+            wakeups: pendingWakeups,
           });
           if (recalledMemories.length > 0) {
             finalContextItems = [
@@ -412,12 +420,6 @@ export function startSessionThinkingWorker() {
           promptGroupMembers || groupMembers,
           availableSkills,
         );
-
-        const pendingWakeups = await getPendingWakeups(sessionId);
-        if (pendingWakeups.length === 0) {
-          await sleepActor(sessionId);
-          return { success: true, reason: 'wakeup already handled' };
-        }
 
         turn = await createTurn({
           sessionId,

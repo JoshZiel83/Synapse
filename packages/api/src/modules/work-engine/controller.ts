@@ -9,7 +9,7 @@ import type { WorkItemStatus, WorkItemPriority, ParticipantRole } from '@synapse
 
 const workItemStatuses = ['created', 'assigned', 'accepted', 'in_progress', 'review', 'completed', 'escalated', 'blocked', 'rework', 'cancelled', 'failed'] as const;
 const workItemPriorities = ['low', 'medium', 'high', 'urgent'] as const;
-const sourceTypes = ['user_message', 'delegation', 'standing_order', 'escalation', 'collaboration'] as const;
+const sourceTypes = ['user_message', 'delegation', 'automation', 'escalation', 'collaboration'] as const;
 const participantRoles = ['owner', 'accountable', 'executor', 'reviewer', 'watcher'] as const;
 
 const createWorkItemSchema = z.object({

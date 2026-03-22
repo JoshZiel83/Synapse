@@ -1,0 +1,496 @@
+import type { FastifyInstance } from 'fastify';
+import { validateAutomationRuleCreatePayload } from '@synapse/shared/automation';
+import { z } from 'zod';
+import { authMiddleware } from '../../infrastructure/middleware/auth.js';
+import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
+import { requireRequestAction } from '../access/guards.js';
+import {
+  archiveAutomationEventSource,
+  createAutomationEventSource,
+  createAutomationRule,
+  createAutomationWebhookEndpoint,
+  deleteAutomationRule,
+  getAutomationEventSource,
+  getAutomationRule,
+  ingestAutomationEvent,
+  ingestAutomationWebhookEvent,
+  listAutomationOccurrences,
+  listAutomationEventSources,
+  listAutomationExecutions,
+  listAutomationRules,
+  listAutomationWebhookEndpoints,
+  updateAutomationEventSource,
+  updateAutomationRule,
+} from './service.js';
+import { automationExecutionQueue } from '../../workers/queues.js';
+
+const contentBlocksSchema = z.array(z.any()).optional();
+
+const triggerSchema = z.object({
+  triggerKind: z.enum(['schedule', 'event']),
+  eventSourceId: z.string().uuid().optional(),
+  sourceKind: z.enum(['clock', 'relay', 'webhook', 'internal']).optional(),
+  sourceLocator: z.string().trim().min(1).max(255).optional(),
+  matchKey: z.string().trim().min(1).max(255).optional(),
+  matcher: z.record(z.unknown()).optional(),
+  scheduleKind: z.enum(['cron', 'at', 'interval']).optional(),
+  scheduleExpr: z.string().trim().min(1).max(255).optional(),
+  scheduleTimezone: z.string().trim().min(1).max(64).optional(),
+  intervalSeconds: z.number().int().positive().optional(),
+  startsAt: z.string().datetime().optional(),
+});
+
+const policySchema = z.object({
+  activeFrom: z.string().datetime().optional(),
+  activeUntil: z.string().datetime().optional(),
+  maxTriggerCount: z.number().int().positive().optional(),
+  completionStatus: z.enum(['completed', 'archived']).optional(),
+});
+
+const deliverySchema = z.object({
+  deliveryMode: z.enum([
+    'wake_session',
+    'conversation_notice',
+    'create_conversation_once',
+    'create_conversation_each_time',
+  ]),
+  conversationId: z.string().uuid().optional(),
+  sessionId: z.string().uuid().optional(),
+  conversationTitle: z.string().trim().min(1).max(500).optional(),
+  message: z.string().default(''),
+  wakeReason: z.string().optional(),
+  messageBlocks: contentBlocksSchema,
+  targetPolicy: z.enum(['all_members', 'specified_members']).optional(),
+  participantActorIds: z.array(z.string().uuid()).optional(),
+  participantUserIds: z.array(z.string().uuid()).optional(),
+  recipientActorIds: z.array(z.string().uuid()).optional(),
+  recipientUserIds: z.array(z.string().uuid()).optional(),
+});
+
+const updateDeliverySchema = z.object({
+  deliveryMode: z.enum([
+    'wake_session',
+    'conversation_notice',
+    'create_conversation_once',
+    'create_conversation_each_time',
+  ]).optional(),
+  conversationId: z.string().uuid().optional(),
+  sessionId: z.string().uuid().optional(),
+  conversationTitle: z.string().trim().min(1).max(500).optional(),
+  message: z.string().optional(),
+  wakeReason: z.string().optional(),
+  messageBlocks: contentBlocksSchema,
+  targetPolicy: z.enum(['all_members', 'specified_members']).optional(),
+  participantActorIds: z.array(z.string().uuid()).optional(),
+  participantUserIds: z.array(z.string().uuid()).optional(),
+  recipientActorIds: z.array(z.string().uuid()).optional(),
+  recipientUserIds: z.array(z.string().uuid()).optional(),
+});
+
+const createAutomationSchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  description: z.string().default(''),
+  status: z.enum(['active', 'paused', 'error', 'archived', 'completed', 'expired']).optional(),
+  ownerConversationId: z.string().uuid().optional(),
+  ownerSessionId: z.string().uuid().optional(),
+  trigger: triggerSchema,
+  policy: policySchema.optional(),
+  delivery: deliverySchema,
+  metadata: z.record(z.unknown()).optional(),
+});
+
+const updateAutomationSchema = z.object({
+  name: z.string().trim().min(1).max(255).optional(),
+  description: z.string().optional(),
+  status: z.enum(['active', 'paused', 'error', 'archived', 'completed', 'expired']).optional(),
+  ownerConversationId: z.string().uuid().optional(),
+  ownerSessionId: z.string().uuid().optional(),
+  trigger: triggerSchema.partial().optional(),
+  policy: policySchema.partial().optional(),
+  delivery: updateDeliverySchema.optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+const createWebhookEndpointSchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+const eventSourceSchema = z.object({
+  providerKind: z.enum(['relay', 'webhook', 'internal']),
+  providerRef: z.string().trim().min(1).max(255).optional(),
+  name: z.string().trim().min(1).max(255),
+  description: z.string().trim().min(1),
+  recommendedUsage: z.string().trim().min(1).optional(),
+  payloadSchema: z.record(z.unknown()).optional(),
+  examplePayload: z.record(z.unknown()).optional(),
+  status: z.enum(['active', 'deprecated', 'disabled', 'archived']).optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+const updateEventSourceSchema = z.object({
+  providerRef: z.string().trim().min(1).max(255).optional(),
+  name: z.string().trim().min(1).max(255).optional(),
+  description: z.string().trim().min(1).optional(),
+  recommendedUsage: z.string().trim().min(1).optional(),
+  payloadSchema: z.record(z.unknown()).optional(),
+  examplePayload: z.record(z.unknown()).optional(),
+  status: z.enum(['active', 'deprecated', 'disabled', 'archived']).optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+const ingestEventSchema = z.object({
+  payload: z.record(z.unknown()).optional(),
+  sourceSnapshot: z.record(z.unknown()).optional(),
+  dedupeKey: z.string().trim().min(1).max(255).optional(),
+  occurredAt: z.string().datetime().optional(),
+});
+
+const webhookIngressSchema = z.object({
+  payload: z.record(z.unknown()).optional(),
+  sourceSnapshot: z.record(z.unknown()).optional(),
+  dedupeKey: z.string().trim().min(1).max(255).optional(),
+  occurredAt: z.string().datetime().optional(),
+});
+
+function extractWebhookSecret(headers: Record<string, unknown>) {
+  const direct = typeof headers['x-synapse-automation-secret'] === 'string'
+    ? headers['x-synapse-automation-secret']
+    : typeof headers['x-synapse-webhook-secret'] === 'string'
+      ? headers['x-synapse-webhook-secret']
+      : '';
+  if (direct) return direct;
+
+  const authorization = typeof headers.authorization === 'string' ? headers.authorization.trim() : '';
+  if (authorization.toLowerCase().startsWith('bearer ')) {
+    return authorization.slice(7).trim();
+  }
+  return '';
+}
+
+async function enqueueAutomationExecutions(executionIds: string[]) {
+  await Promise.all(
+    executionIds.map((executionId) =>
+      automationExecutionQueue.add('execute', { executionId }),
+    ),
+  );
+}
+
+export default async function automationController(app: FastifyInstance) {
+  const protectedPreHandler = [authMiddleware, workspaceMiddleware];
+
+  app.get('/api/v1/workspaces/:workspaceId/automation-event-sources', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId } = request.params as { workspaceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.view',
+      workspaceId,
+      'Not allowed to view automation event sources in this workspace',
+    );
+    if (!allowed) return;
+
+    const query = request.query as {
+      status?: 'active' | 'deprecated' | 'disabled' | 'archived';
+      providerKind?: 'relay' | 'webhook' | 'internal';
+      providerRef?: string;
+      sourceKey?: string;
+    };
+    return listAutomationEventSources(workspaceId, {
+      status: query.status,
+      providerKind: query.providerKind,
+      providerRef: query.providerRef,
+      sourceKey: query.sourceKey,
+    });
+  });
+
+  app.post('/api/v1/workspaces/:workspaceId/automation-event-sources', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId } = request.params as { workspaceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_relays',
+      workspaceId,
+      'Not allowed to manage automation event sources',
+    );
+    if (!allowed) return;
+
+    const body = eventSourceSchema.parse(request.body);
+    const userId = (request as any).user!.userId as string;
+    const source = await createAutomationEventSource(workspaceId, { kind: 'user', userId }, body);
+    return reply.status(201).send(source);
+  });
+
+  app.get('/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, eventSourceId } = request.params as { workspaceId: string; eventSourceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.view',
+      workspaceId,
+      'Not allowed to view this automation event source',
+    );
+    if (!allowed) return;
+
+    const source = await getAutomationEventSource(workspaceId, eventSourceId);
+    if (!source) {
+      return reply.status(404).send({ error: 'Automation event source not found' });
+    }
+    return source;
+  });
+
+  app.get('/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/occurrences', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, eventSourceId } = request.params as { workspaceId: string; eventSourceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.view',
+      workspaceId,
+      'Not allowed to view automation event source history',
+    );
+    if (!allowed) return;
+
+    return listAutomationOccurrences(workspaceId, {
+      eventSourceId,
+    });
+  });
+
+  app.put('/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, eventSourceId } = request.params as { workspaceId: string; eventSourceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_relays',
+      workspaceId,
+      'Not allowed to update this automation event source',
+    );
+    if (!allowed) return;
+
+    const body = updateEventSourceSchema.parse(request.body);
+    const userId = (request as any).user!.userId as string;
+    return updateAutomationEventSource(workspaceId, eventSourceId, { userId }, body);
+  });
+
+  app.delete('/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, eventSourceId } = request.params as { workspaceId: string; eventSourceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_relays',
+      workspaceId,
+      'Not allowed to archive this automation event source',
+    );
+    if (!allowed) return;
+
+    const userId = (request as any).user!.userId as string;
+    await archiveAutomationEventSource(workspaceId, eventSourceId, { userId });
+    return { success: true };
+  });
+
+  app.post('/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/events', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, eventSourceId } = request.params as { workspaceId: string; eventSourceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_relays',
+      workspaceId,
+      'Not allowed to trigger this automation event source',
+    );
+    if (!allowed) return;
+
+    const body = ingestEventSchema.parse(request.body);
+    const result = await ingestAutomationEvent({
+      workspaceId,
+      eventSourceId,
+      payload: body.payload,
+      sourceSnapshot: body.sourceSnapshot,
+      dedupeKey: body.dedupeKey,
+      occurredAt: body.occurredAt,
+    });
+    await enqueueAutomationExecutions(result.executions.map((execution) => execution.id));
+    return reply.status(202).send({
+      occurrence: result.occurrence,
+      executions: result.executions,
+    });
+  });
+
+  app.get('/api/v1/workspaces/:workspaceId/automations', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId } = request.params as { workspaceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.view',
+      workspaceId,
+      'Not allowed to view automations in this workspace',
+    );
+    if (!allowed) return;
+
+    const query = request.query as {
+      status?: 'active' | 'paused' | 'error' | 'archived' | 'completed' | 'expired';
+      category?: 'schedule' | 'event_subscription';
+      ownerSessionId?: string;
+    };
+    return listAutomationRules(workspaceId, {
+      status: query.status,
+      category: query.category,
+      ownerSessionId: query.ownerSessionId,
+    });
+  });
+
+  app.post('/api/v1/workspaces/:workspaceId/automations', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId } = request.params as { workspaceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_conversations',
+      workspaceId,
+      'Not allowed to manage automations in this workspace',
+    );
+    if (!allowed) return;
+
+    const body = createAutomationSchema.parse(request.body);
+    const issues = validateAutomationRuleCreatePayload(body);
+    if (issues.length > 0) {
+      return reply.status(400).send({
+        error: issues[0]!.message,
+        issues,
+      });
+    }
+    const userId = (request as any).user!.userId as string;
+    const automation = await createAutomationRule(workspaceId, { kind: 'user', userId }, body);
+    return reply.status(201).send(automation);
+  });
+
+  app.get('/api/v1/workspaces/:workspaceId/automations/:automationId', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, automationId } = request.params as { workspaceId: string; automationId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.view',
+      workspaceId,
+      'Not allowed to view this automation',
+    );
+    if (!allowed) return;
+
+    const automation = await getAutomationRule(workspaceId, automationId);
+    if (!automation) {
+      return reply.status(404).send({ error: 'Automation not found' });
+    }
+    return automation;
+  });
+
+  app.put('/api/v1/workspaces/:workspaceId/automations/:automationId', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, automationId } = request.params as { workspaceId: string; automationId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_conversations',
+      workspaceId,
+      'Not allowed to update this automation',
+    );
+    if (!allowed) return;
+
+    const body = updateAutomationSchema.parse(request.body);
+    const userId = (request as any).user!.userId as string;
+    try {
+      const automation = await updateAutomationRule(workspaceId, automationId, { userId }, body);
+      return automation;
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error as Error & { statusCode?: number }).statusCode === 400
+      ) {
+        return reply.status(400).send({
+          error: error.message,
+          issues: (error as Error & { issues?: unknown }).issues || [],
+        });
+      }
+      throw error;
+    }
+  });
+
+  app.delete('/api/v1/workspaces/:workspaceId/automations/:automationId', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, automationId } = request.params as { workspaceId: string; automationId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_conversations',
+      workspaceId,
+      'Not allowed to delete this automation',
+    );
+    if (!allowed) return;
+
+    const userId = (request as any).user!.userId as string;
+    await deleteAutomationRule(workspaceId, automationId, { userId });
+    return { success: true };
+  });
+
+  app.get('/api/v1/workspaces/:workspaceId/automations/:automationId/executions', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, automationId } = request.params as { workspaceId: string; automationId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.view',
+      workspaceId,
+      'Not allowed to view automation executions',
+    );
+    if (!allowed) return;
+
+    return listAutomationExecutions(workspaceId, automationId);
+  });
+
+  app.get('/api/v1/workspaces/:workspaceId/automation-webhooks', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId } = request.params as { workspaceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_relays',
+      workspaceId,
+      'Not allowed to view automation webhooks',
+    );
+    if (!allowed) return;
+
+    return listAutomationWebhookEndpoints(workspaceId);
+  });
+
+  app.post('/api/v1/workspaces/:workspaceId/automation-webhooks', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId } = request.params as { workspaceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_relays',
+      workspaceId,
+      'Not allowed to manage automation webhooks',
+    );
+    if (!allowed) return;
+
+    const body = createWebhookEndpointSchema.parse(request.body);
+    const userId = (request as any).user!.userId as string;
+    const created = await createAutomationWebhookEndpoint(workspaceId, userId, body);
+    return reply.status(201).send(created);
+  });
+
+  app.post('/api/v1/automation-webhooks/:pathToken/sources/:sourceKey/events', async (request, reply) => {
+    const { pathToken, sourceKey } = request.params as { pathToken: string; sourceKey: string };
+    const body = webhookIngressSchema.parse(request.body || {});
+    const secret = extractWebhookSecret(request.headers as Record<string, unknown>);
+    if (!secret) {
+      return reply.status(401).send({ error: 'Webhook secret is required' });
+    }
+
+    const result = await ingestAutomationWebhookEvent({
+      pathToken,
+      secret,
+      sourceKey,
+      payload: body.payload,
+      sourceSnapshot: body.sourceSnapshot,
+      dedupeKey: body.dedupeKey,
+      occurredAt: body.occurredAt,
+    });
+    await enqueueAutomationExecutions(result.executions.map((execution) => execution.id));
+    return reply.status(202).send({
+      occurrence: result.occurrence,
+      executions: result.executions,
+    });
+  });
+}
