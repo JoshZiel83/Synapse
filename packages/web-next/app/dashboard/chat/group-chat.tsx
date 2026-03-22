@@ -712,6 +712,7 @@ export default function GroupChat({
                   targetActorIds={msg.targetActorIds}
                   targetUserIds={msg.targetUserIds}
                   enableTablePreview={viewportLocked}
+                  viewerUserId={currentUserId || undefined}
                 />
               ))
             )}

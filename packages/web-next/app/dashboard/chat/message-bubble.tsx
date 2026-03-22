@@ -57,6 +57,7 @@ interface MessageBubbleProps {
   targetActorIds?: string[]
   targetUserIds?: string[]
   enableTablePreview?: boolean
+  viewerUserId?: string
 }
 
 function formatToolsUsed(tools: string[]): string {
@@ -104,6 +105,16 @@ function getRuntimeDetail(runtime?: ActorRuntimeState) {
     return `${runtime.pendingWakeupCount} queued wakeup${runtime.pendingWakeupCount === 1 ? "" : "s"}`
   }
   return undefined
+}
+
+function getCompactMessagePreview(
+  text: string,
+  blocks: RenderedMessageBlock[]
+) {
+  const normalized = text.replace(/\s+/g, " ").trim()
+  if (normalized) return normalized
+  if (blocks.some((block) => block.type === "file_ref")) return "Attachment"
+  return "Message"
 }
 
 function buildRenderedMessageBlocks(
@@ -829,6 +840,7 @@ export default function MessageBubble({
   targetActorIds,
   targetUserIds,
   enableTablePreview = false,
+  viewerUserId,
 }: MessageBubbleProps) {
   const isChildResult = role === "child_result"
   const isSystem = role === "system"
@@ -844,6 +856,11 @@ export default function MessageBubble({
   const { blocks: renderedBlocks, sources } = useMemo(
     () => buildRenderedMessageBlocks(contentBlocks, citationSources),
     [citationSources, contentBlocks]
+  )
+  const [compactExpanded, setCompactExpanded] = useState(false)
+  const compactPreview = useMemo(
+    () => getCompactMessagePreview(textContent, renderedBlocks),
+    [renderedBlocks, textContent]
   )
 
   if (isError) {
@@ -887,40 +904,74 @@ export default function MessageBubble({
   const hasToolsUsed = toolsUsed && toolsUsed.length > 0
   const hasCitations = sources.length > 0
   const isRetrying = isUser && status === "retrying"
+  const isDirectToViewer = Boolean(
+    viewerUserId && targetUserIds?.includes(viewerUserId)
+  )
+  const shouldRenderCompact =
+    !isUser && (coordination || (hasExplicitTargets && !isDirectToViewer))
 
-  // Coordination messages (send_to between actors) — render in a compact style
-  if (coordination && !isUser) {
+  // Non-direct actor traffic stays compact so the main thread focuses on viewer-facing messages.
+  if (shouldRenderCompact) {
     return (
       <div className="ml-10 flex w-[calc(100%-2.5rem)] min-w-0 max-w-full gap-2 opacity-70">
         <div className="flex w-full max-w-[70%] min-w-0 items-start gap-2">
           <AtSign className="mt-1 h-3 w-3 shrink-0 text-primary/60" />
-          <div>
-            <div className="mb-0.5 flex items-center gap-1.5">
-              <span className="text-[11px] font-medium text-muted-foreground/80">
-                {actorName}
-              </span>
-            </div>
-            <div className="text-xs leading-relaxed text-muted-foreground/70">
-              <MessageContentBlocks
-                blocks={renderedBlocks}
-                isUser={false}
-                enableTablePreview={enableTablePreview}
-              />
-            </div>
-            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[9px] text-muted-foreground/30">
-              {timestamp ? (
-                <span>
-                  {new Date(timestamp).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </span>
-              ) : null}
-              <RecipientSummary
-                recipients={recipients}
-                hasExplicitTargets={hasExplicitTargets}
-              />
-            </div>
+          <div className="min-w-0 flex-1">
+            <button
+              type="button"
+              className="flex w-full min-w-0 items-start gap-1.5 text-left text-xs text-muted-foreground/70 transition-colors hover:text-foreground/80"
+              onClick={() => setCompactExpanded((current) => !current)}
+              aria-expanded={compactExpanded}
+            >
+              <div className="min-w-0 flex-1">
+                {compactExpanded ? (
+                  <div className="mb-0.5 flex items-center gap-1.5">
+                    <span className="text-[11px] font-medium text-muted-foreground/80">
+                      {actorName || "Actor"}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="truncate">
+                    <span className="font-medium text-muted-foreground/80">
+                      {actorName || "Actor"}
+                    </span>
+                    <span className="mx-1 text-muted-foreground/40">·</span>
+                    <span>{compactPreview}</span>
+                  </div>
+                )}
+              </div>
+              {compactExpanded ? (
+                <ChevronDown className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/45" />
+              ) : (
+                <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/45" />
+              )}
+            </button>
+
+            {compactExpanded ? (
+              <>
+                <div className="text-xs leading-relaxed text-muted-foreground/70">
+                  <MessageContentBlocks
+                    blocks={renderedBlocks}
+                    isUser={false}
+                    enableTablePreview={enableTablePreview}
+                  />
+                </div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[9px] text-muted-foreground/30">
+                  {timestamp ? (
+                    <span>
+                      {new Date(timestamp).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  ) : null}
+                  <RecipientSummary
+                    recipients={recipients}
+                    hasExplicitTargets={hasExplicitTargets}
+                  />
+                </div>
+              </>
+            ) : null}
           </div>
         </div>
       </div>
