@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/chrome"
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/commandline"
@@ -120,6 +121,7 @@ func newBuiltinServer(cfg config.ServerConfig) (Server, error) {
 			Name:       cfg.Name,
 			InstanceID: cfg.Builtin.InstanceID,
 			DefaultCWD: cfg.Builtin.Commandline.DefaultCWD,
+			MaxTimeout: time.Duration(cfg.Builtin.Commandline.MaxTimeoutSec) * time.Second,
 		})
 		if err != nil {
 			return nil, err

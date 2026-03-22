@@ -88,6 +88,7 @@ export interface BuiltinChromeConfig {
 
 export interface BuiltinCommandlineConfig {
   defaultCwd?: string
+  maxTimeoutSec?: number
 }
 
 export interface BuiltinServerConfig {

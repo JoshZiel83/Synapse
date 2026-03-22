@@ -24,6 +24,14 @@ type Server struct {
 	tools        []core.Tool
 }
 
+type resolvedTimeout struct {
+	Requested   time.Duration
+	Effective   time.Duration
+	Max         time.Duration
+	UsedDefault bool
+	Capped      bool
+}
+
 func New(cfg Config) (*Server, error) {
 	return &Server{cfg: cfg}, nil
 }
@@ -81,7 +89,7 @@ func (s *Server) callBash(ctx context.Context, args map[string]interface{}) core
 	if err != nil {
 		return errorResult(err.Error())
 	}
-	timeout, err := durationArg(args, "timeout_sec")
+	timeout, err := s.resolveTimeout(args)
 	if err != nil {
 		return errorResult(err.Error())
 	}
@@ -108,7 +116,7 @@ func (s *Server) callGit(ctx context.Context, args map[string]interface{}) core.
 	if err != nil {
 		return errorResult(err.Error())
 	}
-	timeout, err := durationArg(args, "timeout_sec")
+	timeout, err := s.resolveTimeout(args)
 	if err != nil {
 		return errorResult(err.Error())
 	}
@@ -135,7 +143,7 @@ func (s *Server) callNode(ctx context.Context, args map[string]interface{}) core
 	if err != nil {
 		return errorResult(err.Error())
 	}
-	timeout, err := durationArg(args, "timeout_sec")
+	timeout, err := s.resolveTimeout(args)
 	if err != nil {
 		return errorResult(err.Error())
 	}
@@ -162,7 +170,7 @@ func (s *Server) callPython(ctx context.Context, args map[string]interface{}) co
 	if err != nil {
 		return errorResult(err.Error())
 	}
-	timeout, err := durationArg(args, "timeout_sec")
+	timeout, err := s.resolveTimeout(args)
 	if err != nil {
 		return errorResult(err.Error())
 	}
@@ -174,11 +182,36 @@ func (s *Server) callPython(ctx context.Context, args map[string]interface{}) co
 	return s.runCommand(ctx, "python", binaryPath, []string{"-c", code}, cwd, env, timeout)
 }
 
-func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath string, args []string, cwd string, extraEnv map[string]string, timeout time.Duration) core.CallResult {
+func (s *Server) resolveTimeout(args map[string]interface{}) (resolvedTimeout, error) {
+	requested, err := durationArg(args, "timeout_sec")
+	if err != nil {
+		return resolvedTimeout{}, err
+	}
+
+	resolved := resolvedTimeout{
+		Requested: requested,
+		Max:       s.cfg.MaxTimeout,
+	}
+
+	switch {
+	case requested <= 0 && s.cfg.MaxTimeout > 0:
+		resolved.Effective = s.cfg.MaxTimeout
+		resolved.UsedDefault = true
+	case requested > 0 && s.cfg.MaxTimeout > 0 && requested > s.cfg.MaxTimeout:
+		resolved.Effective = s.cfg.MaxTimeout
+		resolved.Capped = true
+	default:
+		resolved.Effective = requested
+	}
+
+	return resolved, nil
+}
+
+func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath string, args []string, cwd string, extraEnv map[string]string, timeout resolvedTimeout) core.CallResult {
 	ctx := parent
 	cancel := func() {}
-	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(parent, timeout)
+	if timeout.Effective > 0 {
+		ctx, cancel = context.WithTimeout(parent, timeout.Effective)
 	}
 	defer cancel()
 
@@ -210,7 +243,7 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 
 	statusText := fmt.Sprintf("%s exited with code %d.", runtimeName, exitCode)
 	if ctx.Err() == context.DeadlineExceeded {
-		statusText = fmt.Sprintf("%s timed out after %s.", runtimeName, timeout)
+		statusText = fmt.Sprintf("%s timed out after %s.", runtimeName, timeout.Effective)
 	} else if ctx.Err() == context.Canceled {
 		statusText = fmt.Sprintf("%s was canceled.", runtimeName)
 	} else if runErr != nil && exitCode < 0 {
@@ -218,6 +251,11 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 	}
 
 	var details []string
+	if timeout.UsedDefault {
+		details = append(details, fmt.Sprintf("Using relay default timeout of %s.", timeout.Effective))
+	} else if timeout.Capped {
+		details = append(details, fmt.Sprintf("Requested timeout %s exceeded relay max %s. Using %s.", timeout.Requested, timeout.Max, timeout.Effective))
+	}
 	details = append(details, statusText)
 	if stdoutText != "" {
 		details = append(details, "stdout:\n"+stdoutText)
@@ -227,15 +265,20 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 	}
 
 	structured := map[string]interface{}{
-		"runtime":      runtimeName,
-		"command":      append([]string{binaryPath}, args...),
-		"cwd":          cwd,
-		"exitCode":     exitCode,
-		"stdout":       stdoutText,
-		"stderr":       stderrText,
-		"timedOut":     ctx.Err() == context.DeadlineExceeded,
-		"canceled":     ctx.Err() == context.Canceled,
-		"assetVersion": "",
+		"runtime":             runtimeName,
+		"command":             append([]string{binaryPath}, args...),
+		"cwd":                 cwd,
+		"exitCode":            exitCode,
+		"stdout":              stdoutText,
+		"stderr":              stderrText,
+		"timedOut":            ctx.Err() == context.DeadlineExceeded,
+		"canceled":            ctx.Err() == context.Canceled,
+		"requestedTimeoutSec": timeout.Requested.Seconds(),
+		"effectiveTimeoutSec": timeout.Effective.Seconds(),
+		"maxTimeoutSec":       timeout.Max.Seconds(),
+		"usedDefaultTimeout":  timeout.UsedDefault,
+		"timeoutCapped":       timeout.Capped,
+		"assetVersion":        "",
 	}
 	if s.installation != nil {
 		structured["assetVersion"] = s.installation.AssetVersion

@@ -66,6 +66,7 @@ servers:
   #     instance_id: "commandline_default"
   #     commandline:
   #       default_cwd: "/workspace"
+  #       max_timeout_sec: 300
 
   # Example: filesystem server via stdio
   - name: "filesystem-stdio"

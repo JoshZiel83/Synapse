@@ -277,7 +277,8 @@ func TestValidateBuiltinCommandlineServer(t *testing.T) {
 					Kind:       "commandline",
 					InstanceID: "commandline_default",
 					Commandline: &BuiltinCommandlineConfig{
-						DefaultCWD: "/tmp",
+						DefaultCWD:    "/tmp",
+						MaxTimeoutSec: 120,
 					},
 				},
 			},
@@ -286,5 +287,35 @@ func TestValidateBuiltinCommandlineServer(t *testing.T) {
 
 	if errs := Validate(cfg); len(errs) != 0 {
 		t.Fatalf("expected builtin commandline config to validate, got %v", errs)
+	}
+}
+
+func TestValidateBuiltinCommandlineServerRejectsNegativeMaxTimeout(t *testing.T) {
+	cfg := &Config{
+		Relay: RelayConfig{
+			ServerBaseURL:         "http://127.0.0.1:3001",
+			WebSocketURL:          "ws://127.0.0.1:3001/ws/relay",
+			DeviceID:              "device-123",
+			PrivateKeyPath:        "/tmp/device-key.pem",
+			ServerTLSPublicKeyPin: "",
+		},
+		Servers: []ServerConfig{
+			{
+				Name:      "command-line",
+				Transport: "builtin",
+				Builtin: &BuiltinServerConfig{
+					Kind:       "commandline",
+					InstanceID: "commandline_default",
+					Commandline: &BuiltinCommandlineConfig{
+						MaxTimeoutSec: -1,
+					},
+				},
+			},
+		},
+	}
+
+	errs := Validate(cfg)
+	if len(errs) == 0 {
+		t.Fatalf("expected validation errors for negative commandline max timeout")
 	}
 }

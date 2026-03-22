@@ -163,6 +163,7 @@ function defaultCommandlineServer(): ServerConfig {
       instanceId: 'commandline_default',
       commandline: {
         defaultCwd: '',
+        maxTimeoutSec: 300,
       },
     },
     metadata: {
@@ -1918,6 +1919,27 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
                   <FieldDescription>Used when a tool call omits `cwd`. Leave blank to use Relay&apos;s current working directory.</FieldDescription>
                 </FieldContent>
               </Field>
+
+              <Field>
+                <FieldLabel htmlFor="builtin-commandline-max-timeout">Max Timeout (seconds)</FieldLabel>
+                <FieldContent>
+                  <Input
+                    id="builtin-commandline-max-timeout"
+                    type="number"
+                    min={1}
+                    value={commandline.maxTimeoutSec ?? 300}
+                    onChange={(event) =>
+                      updateCommandlineDraft((current) =>
+                        withCommandlineConfig(current, (currentCommandline) => ({
+                          ...currentCommandline,
+                          maxTimeoutSec: Number(event.target.value || 0),
+                        })),
+                      )
+                    }
+                  />
+                  <FieldDescription>Applied when a tool call omits `timeout_sec`, and used as the ceiling when the caller asks for a longer timeout.</FieldDescription>
+                </FieldContent>
+              </Field>
             </div>
 
             <div className="mt-5 rounded-2xl border border-border/70 bg-background/35 px-4 py-3 text-sm text-muted-foreground">
@@ -1926,14 +1948,14 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
                 Runtime surface
               </div>
               <div className="mt-2">
-                This app always turns on the four command runtimes together. `bash_exec` runs shell commands, `git_exec` runs argv-style Git commands, and `node_exec` plus `python_exec` use the bundled data-processing runtime prepared in CI.
+                This app always turns on the four command runtimes together. `bash_exec` runs shell commands, `git_exec` runs argv-style Git commands, and `node_exec` plus `python_exec` use the bundled data-processing runtime prepared in CI. All four share the relay-level timeout ceiling configured above.
               </div>
             </div>
           </div>
         ) : commandlineDraft.enabled !== false ? (
           <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
             <SlidersHorizontal className="size-4" />
-            Expand to rename the exposure or set a default working directory for command calls.
+            Expand to rename the exposure, set a default working directory, or tune the timeout ceiling for command calls.
           </div>
         ) : null}
       </section>

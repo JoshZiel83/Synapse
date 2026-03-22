@@ -9,9 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+const defaultBuiltinCommandlineMaxTimeoutSec int64 = 300
 
 type RelayConfig struct {
 	ServerBaseURL         string `yaml:"server_base_url" json:"serverBaseUrl"`
@@ -113,7 +116,8 @@ type BuiltinChromeConfig struct {
 }
 
 type BuiltinCommandlineConfig struct {
-	DefaultCWD string `yaml:"default_cwd,omitempty" json:"defaultCwd,omitempty"`
+	DefaultCWD    string `yaml:"default_cwd,omitempty" json:"defaultCwd,omitempty"`
+	MaxTimeoutSec int64  `yaml:"max_timeout_sec,omitempty" json:"maxTimeoutSec,omitempty"`
 }
 
 type BuiltinServerConfig struct {
@@ -545,7 +549,8 @@ func cloneBuiltin(input *BuiltinServerConfig) *BuiltinServerConfig {
 	}
 	if input.Commandline != nil {
 		clone.Commandline = &BuiltinCommandlineConfig{
-			DefaultCWD: input.Commandline.DefaultCWD,
+			DefaultCWD:    input.Commandline.DefaultCWD,
+			MaxTimeoutSec: input.Commandline.MaxTimeoutSec,
 		}
 	}
 	return clone
@@ -701,6 +706,9 @@ func applyBuiltinDefaults(server *ServerConfig) {
 		if server.Builtin.Commandline == nil {
 			server.Builtin.Commandline = &BuiltinCommandlineConfig{}
 		}
+		if server.Builtin.Commandline.MaxTimeoutSec == 0 {
+			server.Builtin.Commandline.MaxTimeoutSec = defaultBuiltinCommandlineMaxTimeoutSec
+		}
 	}
 }
 
@@ -817,6 +825,12 @@ func validateServerConfig(server ServerConfig) error {
 		case "commandline":
 			if server.Builtin.Commandline == nil {
 				return fmt.Errorf("builtin.commandline is required for builtin kind %q", server.Builtin.Kind)
+			}
+			if server.Builtin.Commandline.MaxTimeoutSec <= 0 {
+				return fmt.Errorf("builtin.commandline.max_timeout_sec must be greater than 0")
+			}
+			if server.Builtin.Commandline.MaxTimeoutSec > int64((1<<63-1)/int64(time.Second)) {
+				return fmt.Errorf("builtin.commandline.max_timeout_sec is too large")
 			}
 		default:
 			return fmt.Errorf("builtin kind %q is unsupported", server.Builtin.Kind)
