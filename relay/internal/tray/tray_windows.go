@@ -389,7 +389,7 @@ func windowsTrayProc(hwnd uintptr, msg uint32, wParam uintptr, lParam uintptr) u
 	switch msg {
 	case trayCallbackMessage:
 		if manager != nil {
-			switch lParam {
+			switch trayCallbackEvent(lParam) {
 			case wmLButtonUp, wmLButtonDoubleClick:
 				if manager.onOpen != nil {
 					go manager.onOpen()
