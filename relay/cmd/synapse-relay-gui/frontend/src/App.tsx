@@ -21,6 +21,7 @@ import {
 } from './components/ui/dialog'
 import { useRelayDesktop } from './hooks/use-relay-desktop'
 import { useSystemTheme } from './hooks/use-system-theme'
+import { callGo } from './lib/wails'
 import { cn } from './lib/utils'
 import { LogsPanel } from './views/logs-panel'
 import { AppsPanel, type AppsPanelHandle } from './views/apps-panel'
@@ -29,6 +30,8 @@ import { ServersPanel } from './views/servers-panel'
 import { SettingsPanel } from './views/settings-panel'
 import { StatusPanel } from './views/status-panel'
 import { SyncPanel } from './views/sync-panel'
+
+declare const window: any
 
 type View = 'status' | 'logs' | 'pairing' | 'apps' | 'servers' | 'sync' | 'settings'
 
@@ -99,6 +102,9 @@ export default function App() {
   const [pendingView, setPendingView] = useState<View | null>(null)
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false)
   const [savingBeforeNavigate, setSavingBeforeNavigate] = useState(false)
+  const [showCloseConfirmDialog, setShowCloseConfirmDialog] = useState(false)
+  const [rememberCloseChoice, setRememberCloseChoice] = useState(false)
+  const [closeDialogBusy, setCloseDialogBusy] = useState(false)
   const didInitializeView = useRef(false)
   const appsPanelRef = useRef<AppsPanelHandle>(null)
 
@@ -116,6 +122,17 @@ export default function App() {
       return current || next
     })
   }, [config.relay?.deviceId, config.servers, ready])
+
+  useEffect(() => {
+    if (!window.runtime?.EventsOn) {
+      return
+    }
+
+    return window.runtime.EventsOn('window:confirm-close', () => {
+      setRememberCloseChoice(false)
+      setShowCloseConfirmDialog(true)
+    })
+  }, [])
 
   async function handleStart() {
     setBusy('starting')
@@ -191,6 +208,25 @@ export default function App() {
       setView(pendingView)
     }
     closeUnsavedDialog()
+  }
+
+  async function handleCloseDecision(action: 'tray' | 'quit' | 'cancel') {
+    if (action === 'cancel') {
+      setShowCloseConfirmDialog(false)
+      setRememberCloseChoice(false)
+      return
+    }
+
+    setCloseDialogBusy(true)
+    try {
+      await callGo('ConfirmWindowClose', action, rememberCloseChoice)
+      setShowCloseConfirmDialog(false)
+      setRememberCloseChoice(false)
+    } catch (cause) {
+      setBanner(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setCloseDialogBusy(false)
+    }
   }
 
   return (
@@ -285,7 +321,7 @@ export default function App() {
             {view === 'settings' ? (
               <SettingsPanel
                 config={config}
-                onSave={(nextConfig) => actions.saveConfig(nextConfig)}
+                onSaveDesktopSettings={(startup, notifications) => actions.saveDesktopPreferences(startup, notifications)}
               />
             ) : null}
           </section>
@@ -313,6 +349,45 @@ export default function App() {
             </Button>
             <Button onClick={() => void handleSaveAndContinue()} disabled={savingBeforeNavigate}>
               {savingBeforeNavigate ? 'Saving...' : 'Save and Continue'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showCloseConfirmDialog} onOpenChange={(open) => {
+        if (!open && !closeDialogBusy) {
+          setShowCloseConfirmDialog(false)
+          setRememberCloseChoice(false)
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Keep Synapse Relay running?</DialogTitle>
+            <DialogDescription>
+              The relay is still running. You can keep it active in the system tray or fully exit the desktop app.
+            </DialogDescription>
+          </DialogHeader>
+
+          <label className="mt-5 flex items-center gap-3 rounded-2xl border border-border/70 bg-background/35 px-4 py-3 text-sm text-foreground">
+            <input
+              type="checkbox"
+              className="size-4 accent-[color:var(--primary)]"
+              checked={rememberCloseChoice}
+              disabled={closeDialogBusy}
+              onChange={(event) => setRememberCloseChoice(event.target.checked)}
+            />
+            <span>Save this as my default close behavior</span>
+          </label>
+
+          <DialogFooter className="mt-6">
+            <Button variant="ghost" onClick={() => void handleCloseDecision('cancel')} disabled={closeDialogBusy}>
+              Cancel
+            </Button>
+            <Button variant="outline" onClick={() => void handleCloseDecision('tray')} disabled={closeDialogBusy}>
+              Minimize to Tray
+            </Button>
+            <Button variant="destructive" onClick={() => void handleCloseDecision('quit')} disabled={closeDialogBusy}>
+              Exit App
             </Button>
           </DialogFooter>
         </DialogContent>

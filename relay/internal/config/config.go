@@ -14,7 +14,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const defaultBuiltinCommandlineMaxTimeoutSec int64 = 300
+const (
+	defaultBuiltinCommandlineMaxTimeoutSec int64 = 300
+	CloseBehaviorAsk                             = "ask"
+	CloseBehaviorTray                            = "tray"
+	CloseBehaviorQuit                            = "quit"
+)
 
 type RelayConfig struct {
 	ServerBaseURL         string `yaml:"server_base_url" json:"serverBaseUrl"`
@@ -27,9 +32,10 @@ type RelayConfig struct {
 }
 
 type StartupConfig struct {
-	RunAtLogin   bool `yaml:"run_at_login" json:"runAtLogin"`
-	AutoConnect  bool `yaml:"auto_connect" json:"autoConnect"`
-	LaunchHidden bool `yaml:"launch_hidden" json:"launchHidden"`
+	RunAtLogin    bool   `yaml:"run_at_login" json:"runAtLogin"`
+	AutoConnect   bool   `yaml:"auto_connect" json:"autoConnect"`
+	LaunchHidden  bool   `yaml:"launch_hidden" json:"launchHidden"`
+	CloseBehavior string `yaml:"close_behavior,omitempty" json:"closeBehavior,omitempty"`
 }
 
 type NotificationConfig struct {
@@ -170,9 +176,10 @@ func Clone(cfg *Config) *Config {
 			PrivateKeyPath:        cfg.Relay.PrivateKeyPath,
 		},
 		Startup: StartupConfig{
-			RunAtLogin:   cfg.Startup.RunAtLogin,
-			AutoConnect:  cfg.Startup.AutoConnect,
-			LaunchHidden: cfg.Startup.LaunchHidden,
+			RunAtLogin:    cfg.Startup.RunAtLogin,
+			AutoConnect:   cfg.Startup.AutoConnect,
+			LaunchHidden:  cfg.Startup.LaunchHidden,
+			CloseBehavior: cfg.Startup.CloseBehavior,
 		},
 		Notifications: NotificationConfig{
 			BackgroundEnabled: cfg.Notifications.BackgroundEnabled,
@@ -335,6 +342,11 @@ func Validate(cfg *Config) []string {
 	if requiresRelayTLSPin(cfg.Relay.WebSocketURL) && cfg.Relay.DeviceID != "" && strings.TrimSpace(cfg.Relay.ServerTLSPublicKeyPin) == "" {
 		errs = append(errs, "relay.server_tls_public_key_pin is required for secure remote relay servers")
 	}
+	switch cfg.Startup.CloseBehavior {
+	case CloseBehaviorAsk, CloseBehaviorTray, CloseBehaviorQuit:
+	default:
+		errs = append(errs, fmt.Sprintf("startup.close_behavior %q is unsupported", cfg.Startup.CloseBehavior))
+	}
 
 	for i, s := range cfg.Servers {
 		if s.Name == "" {
@@ -396,6 +408,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Relay.WebSocketURL == "" && cfg.Relay.ServerBaseURL != "" {
 		cfg.Relay.WebSocketURL = DeriveWebSocketURL(cfg.Relay.ServerBaseURL)
+	}
+	if strings.TrimSpace(cfg.Startup.CloseBehavior) == "" {
+		cfg.Startup.CloseBehavior = CloseBehaviorAsk
 	}
 
 	for i := range cfg.SyncSources {

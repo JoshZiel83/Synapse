@@ -12,13 +12,14 @@ import type { NotificationSettings, RelayConfig, StartupSettings } from '../type
 
 interface SettingsPanelProps {
   config: RelayConfig
-  onSave: (nextConfig: RelayConfig) => Promise<void>
+  onSaveDesktopSettings: (startup: StartupSettings, notifications: NotificationSettings) => Promise<void>
 }
 
 type SettingKey =
   | 'runAtLogin'
   | 'autoConnect'
   | 'launchHidden'
+  | 'closeBehavior'
   | 'backgroundEnabled'
 
 function SettingToggle({
@@ -51,20 +52,19 @@ function SettingToggle({
   )
 }
 
-export function SettingsPanel({ config, onSave }: SettingsPanelProps) {
+export function SettingsPanel({ config, onSaveDesktopSettings }: SettingsPanelProps) {
   const [saving, setSaving] = useState<SettingKey | null>(null)
   const [error, setError] = useState('')
 
-  async function updateStartup(key: keyof StartupSettings, value: boolean) {
+  async function updateStartup(nextStartup: Partial<StartupSettings>, key: SettingKey) {
     setSaving(key)
     setError('')
     try {
-      await onSave({
-        ...config,
-        startup: {
-          ...config.startup,
-          [key]: value,
-        },
+      await onSaveDesktopSettings({
+        ...config.startup,
+        ...nextStartup,
+      }, {
+        ...config.notifications,
       })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -77,12 +77,11 @@ export function SettingsPanel({ config, onSave }: SettingsPanelProps) {
     setSaving(key)
     setError('')
     try {
-      await onSave({
-        ...config,
-        notifications: {
-          ...config.notifications,
-          [key]: value,
-        },
+      await onSaveDesktopSettings({
+        ...config.startup,
+      }, {
+        ...config.notifications,
+        [key]: value,
       })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -110,7 +109,7 @@ export function SettingsPanel({ config, onSave }: SettingsPanelProps) {
           description="Start the desktop app when your OS session starts."
           checked={Boolean(config.startup?.runAtLogin)}
           disabled={saving === 'runAtLogin'}
-          onChange={(checked) => void updateStartup('runAtLogin', checked)}
+          onChange={(checked) => void updateStartup({ runAtLogin: checked }, 'runAtLogin')}
         />
         <Separator />
         <SettingToggle
@@ -118,7 +117,7 @@ export function SettingsPanel({ config, onSave }: SettingsPanelProps) {
           description="Try to start the relay when the app launches."
           checked={Boolean(config.startup?.autoConnect)}
           disabled={saving === 'autoConnect'}
-          onChange={(checked) => void updateStartup('autoConnect', checked)}
+          onChange={(checked) => void updateStartup({ autoConnect: checked }, 'autoConnect')}
         />
         <Separator />
         <SettingToggle
@@ -126,8 +125,25 @@ export function SettingsPanel({ config, onSave }: SettingsPanelProps) {
           description="When started at login, keep the window hidden in the tray."
           checked={Boolean(config.startup?.launchHidden)}
           disabled={saving === 'launchHidden'}
-          onChange={(checked) => void updateStartup('launchHidden', checked)}
+          onChange={(checked) => void updateStartup({ launchHidden: checked }, 'launchHidden')}
         />
+        <Separator />
+        <Field orientation="horizontal">
+          <FieldContent>
+            <FieldLabel>Close window while running</FieldLabel>
+            <FieldDescription>Choose whether the close button asks every time, minimizes to the tray, or exits the app.</FieldDescription>
+          </FieldContent>
+          <select
+            className="h-11 rounded-2xl border border-border/70 bg-background px-3 text-sm"
+            value={config.startup?.closeBehavior || 'ask'}
+            disabled={saving === 'closeBehavior'}
+            onChange={(event) => void updateStartup({ closeBehavior: event.target.value as StartupSettings['closeBehavior'] }, 'closeBehavior')}
+          >
+            <option value="ask">Ask every time</option>
+            <option value="tray">Minimize to tray</option>
+            <option value="quit">Exit app</option>
+          </select>
+        </Field>
         <Separator />
         <SettingToggle
           label="Background notifications"

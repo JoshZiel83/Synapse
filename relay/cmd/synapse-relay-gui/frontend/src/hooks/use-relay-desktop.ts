@@ -13,10 +13,12 @@ import type {
   ImportServer,
   ImportSource,
   LogEntry,
+  NotificationSettings,
   RelayConfig,
   RelayEventPayload,
   ServerConfig,
   StatusInfo,
+  StartupSettings,
   SyncSourceConfig,
 } from '../types'
 
@@ -89,6 +91,11 @@ export function useRelayDesktop() {
 
   const saveConfig = useEffectEvent(async (nextConfig: RelayConfig) => {
     await callGo('SaveConfig', nextConfig)
+    await loadConfig()
+  })
+
+  const saveDesktopPreferences = useEffectEvent(async (startup: StartupSettings, notifications: NotificationSettings) => {
+    await callGo('SaveDesktopPreferences', startup, notifications)
     await loadConfig()
   })
 
@@ -282,6 +289,7 @@ export function useRelayDesktop() {
       removeServer,
       getSuggestedFilesystemRoots,
       saveConfig,
+      saveDesktopPreferences,
       importServers,
       addSyncSource,
       removeSyncSource,

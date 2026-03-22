@@ -12,6 +12,7 @@ export interface StartupSettings {
   runAtLogin?: boolean
   autoConnect?: boolean
   launchHidden?: boolean
+  closeBehavior?: 'ask' | 'tray' | 'quit'
 }
 
 export interface NotificationSettings {

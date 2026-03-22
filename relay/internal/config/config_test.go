@@ -47,6 +47,33 @@ func TestValidateAllowsLoopbackInsecureRelay(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsUnsupportedCloseBehavior(t *testing.T) {
+	cfg := &Config{
+		Relay: RelayConfig{
+			ServerBaseURL:         "http://127.0.0.1:3001",
+			WebSocketURL:          "ws://127.0.0.1:3001/ws/relay",
+			DeviceID:              "device-123",
+			PrivateKeyPath:        "/tmp/device-key.pem",
+			ServerTLSPublicKeyPin: "",
+		},
+		Startup: StartupConfig{
+			CloseBehavior: "snooze",
+		},
+	}
+
+	errs := Validate(cfg)
+	found := false
+	for _, err := range errs {
+		if err == `startup.close_behavior "snooze" is unsupported` {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected close behavior validation error, got %v", errs)
+	}
+}
+
 func TestNormalizeServerBaseURLAndDeriveWebSocketURL(t *testing.T) {
 	base := NormalizeServerBaseURL("https://relay.example.com/dashboard/plugins?relayPairing=abc#fragment")
 	if base != "https://relay.example.com" {

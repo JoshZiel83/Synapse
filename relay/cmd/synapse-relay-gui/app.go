@@ -184,10 +184,25 @@ func (a *App) beforeClose(ctx context.Context) bool {
 		return false
 	}
 
-	wailsRuntime.WindowHide(ctx)
-	a.setWindowHidden(true)
-	a.notifyTray("Synapse Relay", "Relay is still running in the background.", false)
-	return true
+	closeBehavior := config.CloseBehaviorAsk
+	if cfg := a.getConfigSnapshot(); cfg != nil {
+		closeBehavior = normalizeCloseBehavior(cfg.Startup.CloseBehavior)
+	}
+
+	switch closeBehavior {
+	case config.CloseBehaviorQuit:
+		a.setAllowQuit(true)
+		return false
+	case config.CloseBehaviorAsk:
+		if a.ctx != nil {
+			wailsRuntime.EventsEmit(a.ctx, "window:confirm-close")
+			return true
+		}
+		fallthrough
+	default:
+		a.hideWindowToTray(ctx)
+		return true
+	}
 }
 
 // handleRemotePairing is called by the local API when the web UI sends a pairing request.
@@ -288,6 +303,53 @@ func (a *App) SaveConfig(cfg config.Config) error {
 		return err
 	}
 	a.emitConfigUpdated(&cfg, message, autoApplied)
+	return nil
+}
+
+func (a *App) SaveDesktopPreferences(startupCfg config.StartupConfig, notificationCfg config.NotificationConfig) error {
+	cfg := a.getConfigSnapshot()
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+
+	cfg.Startup = startupCfg
+	cfg.Notifications = notificationCfg
+
+	if err := config.EnsureDir(); err != nil {
+		return err
+	}
+	if err := config.Save(a.cfgPath, cfg); err != nil {
+		return err
+	}
+	if err := a.syncStartupPreference(cfg); err != nil {
+		return err
+	}
+
+	a.setConfig(cfg)
+	a.setConfigHash(config.Fingerprint(cfg))
+	a.emitConfigUpdated(cfg, "Desktop settings updated.", false)
+	return nil
+}
+
+func (a *App) ConfirmWindowClose(action string, remember bool) error {
+	action = normalizeCloseAction(action)
+	if action == closeActionCancel {
+		return nil
+	}
+
+	if remember {
+		if err := a.saveCloseBehaviorPreference(action); err != nil {
+			return err
+		}
+	}
+
+	switch action {
+	case config.CloseBehaviorTray:
+		a.hideWindowToTray(a.ctx)
+	case config.CloseBehaviorQuit:
+		a.setAllowQuit(true)
+		wailsRuntime.Quit(a.ctx)
+	}
 	return nil
 }
 
@@ -907,6 +969,25 @@ func (a *App) persistConfigSilently(cfg *config.Config) error {
 	return nil
 }
 
+func (a *App) saveCloseBehaviorPreference(behavior string) error {
+	cfg := a.getConfigSnapshot()
+	if cfg == nil {
+		return nil
+	}
+
+	behavior = normalizeCloseBehavior(behavior)
+	if cfg.Startup.CloseBehavior == behavior {
+		return nil
+	}
+
+	cfg.Startup.CloseBehavior = behavior
+	if err := a.persistConfigSilently(cfg); err != nil {
+		return err
+	}
+	a.emitConfigUpdated(cfg, "Close behavior updated.", false)
+	return nil
+}
+
 func (a *App) applyConfigToRunningRelay(cfg *config.Config) (string, bool, bool) {
 	if cfg == nil || a.engine == nil {
 		return "", false, false
@@ -1117,6 +1198,15 @@ func (a *App) showWindowFromTray() {
 	}
 	wailsRuntime.WindowShow(a.ctx)
 	a.setWindowHidden(false)
+}
+
+func (a *App) hideWindowToTray(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	wailsRuntime.WindowHide(ctx)
+	a.setWindowHidden(true)
+	a.notifyTray("Synapse Relay", "Relay is still running in the background.", false)
 }
 
 func (a *App) quitFromTray() {
