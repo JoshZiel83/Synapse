@@ -54,7 +54,6 @@ import { shutdownAllInstances } from "./modules/mcp-plugins/instance-manager.js"
 import { registerActionToolPlugins } from "./modules/ai/tools.js";
 import { registerCallableToolPlugins } from "./modules/ai/session-tools.js";
 import { startSessionThinkingWorker } from "./workers/session-thinking.js";
-import { startSessionTimeoutWorker } from "./workers/session-timeout.js";
 import { ensureAutomationSchedulerJob, startAutomationSchedulerWorker } from "./workers/automation-scheduler.js";
 import { startAutomationExecutionWorker } from "./workers/automation-execution.js";
 import { shutdownAllWorkers } from "./workers/registry.js";
@@ -149,7 +148,6 @@ async function main() {
   startAutomationSchedulerWorker();
   startAutomationExecutionWorker();
   startSessionThinkingWorker();
-  startSessionTimeoutWorker();
 
   // Health check
   app.get("/api/v1/health", async () => {

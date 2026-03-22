@@ -28,9 +28,7 @@ export const REDIS_CHANNELS = {
 } as const;
 
 export const QUEUE_NAMES = {
-  ACTOR_THINKING: 'actor-thinking',
   SESSION_THINKING: 'session-thinking',
-  SESSION_TIMEOUT: 'session-timeout',
   AUTOMATION_SCHEDULER: 'automation-scheduler',
   AUTOMATION_EXECUTION: 'automation-execution',
 } as const;
