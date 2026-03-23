@@ -1,6 +1,10 @@
 import { query } from '../../infrastructure/database/index.js';
 import { saveFromBuffer, type FileRecord } from '../../infrastructure/storage/file-io.js';
-import { getFileUrl, getFullUrl } from '../../infrastructure/storage/index.js';
+import { getFileUrl, getFullUrl, readAsBuffer } from '../../infrastructure/storage/index.js';
+
+export function getFileUrlById(fileId: string): string {
+  return `/files/${fileId}`;
+}
 
 /**
  * Upload a file from a multipart buffer.
@@ -63,6 +67,32 @@ export async function getFileAccessInfo(
     originalName: result.rows[0].original_name,
     workspaceId: result.rows[0].workspace_id,
   };
+}
+
+export async function duplicateFileRecord(
+  fileId: string,
+  options: {
+    workspaceId: string | null;
+    uploaderUserId: string | null;
+    category?: string;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<FileRecord | null> {
+  const info = await getFileAccessInfo(fileId);
+  if (!info) {
+    return null;
+  }
+
+  const buffer = await readAsBuffer(info.storedName);
+  return saveFromBuffer(
+    buffer,
+    info.originalName,
+    info.mimeType,
+    options.workspaceId,
+    options.uploaderUserId,
+    options.category,
+    options.metadata,
+  );
 }
 
 export async function getStoredFileAccessInfo(

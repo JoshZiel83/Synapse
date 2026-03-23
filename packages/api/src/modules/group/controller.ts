@@ -27,6 +27,8 @@ import {
   userSubject,
 } from "../access/service.js";
 import { listWorkspaceFeedEventsPage } from "../conversation/service.js";
+import { getFileUrl } from "../../infrastructure/storage/index.js";
+import { getFileUrlById } from "../files/service.js";
 
 const sendGroupMessageSchema = z
   .object({
@@ -145,20 +147,6 @@ async function requireGroupPermission(
   return group;
 }
 
-function parseMetadata(value: unknown): Record<string, unknown> {
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-  return value && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 function mapMember(row: any) {
   if (row.actor_id) {
     return {
@@ -171,7 +159,7 @@ function mapMember(row: any) {
       role: row.actor_role || "specialist",
       emoji: row.actor_avatar_emoji || undefined,
       avatarUrl: row.actor_avatar_stored_name
-        ? `/files/${row.actor_avatar_stored_name}`
+        ? getFileUrl(row.actor_avatar_stored_name)
         : undefined,
       sessionStatus: row.session_status || undefined,
       state: row.state,
@@ -184,7 +172,9 @@ function mapMember(row: any) {
     userId: row.user_id,
     id: row.user_id,
     name: row.user_name || "User",
-    avatarUrl: row.user_avatar_url || undefined,
+    avatarUrl: row.user_avatar_file_id
+      ? getFileUrlById(row.user_avatar_file_id)
+      : undefined,
     state: row.state,
   };
 }
@@ -231,7 +221,6 @@ export default async function groupController(app: FastifyInstance) {
           const hasOpenLane = members.some(
             (m: any) => m.actor_id && m.session_status !== "closed",
           );
-          const metadata = parseMetadata(row.metadata);
           const derivedName =
             row.title ||
             mappedMembers
@@ -273,10 +262,7 @@ export default async function groupController(app: FastifyInstance) {
             createdAt: row.created_at,
             title: derivedName,
             name: derivedName,
-            avatarUrl:
-              typeof metadata.avatarUrl === "string"
-                ? metadata.avatarUrl
-                : undefined,
+            avatarUrl: row.avatar_url || undefined,
             permissions: {
               canManage,
               canManageMembers,

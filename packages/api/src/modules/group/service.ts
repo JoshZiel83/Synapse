@@ -10,6 +10,7 @@ import {
 } from "../../infrastructure/authz/index.js";
 import { emitEvent } from "../../infrastructure/events/index.js";
 import { getFileUrl } from "../../infrastructure/storage/index.js";
+import { getFileUrlById } from "../files/service.js";
 import { nowISO } from "@synapse/shared";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -70,6 +71,7 @@ function normalizeGroupRow(row: any) {
   return {
     ...row,
     group_id: row.id,
+    avatar_url: row.avatar_url || avatarUrlFromConversationMetadata(row.metadata),
   };
 }
 
@@ -89,6 +91,15 @@ function parseConversationMetadata(value: unknown): Record<string, unknown> {
   return parsed && typeof parsed === "object"
     ? (parsed as Record<string, unknown>)
     : {};
+}
+
+function avatarUrlFromConversationMetadata(value: unknown): string | undefined {
+  const metadata = parseConversationMetadata(value);
+  const avatarFileId =
+    typeof metadata.avatarFileId === "string" && metadata.avatarFileId.trim()
+      ? metadata.avatarFileId.trim()
+      : null;
+  return avatarFileId ? getFileUrlById(avatarFileId) : undefined;
 }
 
 async function loadActorJoinVersionRefs(
@@ -156,7 +167,6 @@ async function resolveWorkspaceImageFile(workspaceId: string, fileId: string) {
 
   return {
     fileId: row.id as string,
-    url: getFileUrl(row.stored_name as string),
   };
 }
 
@@ -183,7 +193,9 @@ function mapGroupMemberPayload(row: any) {
     type: "user" as const,
     userId: row.user_id as string,
     name: (row.user_name as string) || "User",
-    avatarUrl: (row.user_avatar_url as string) || undefined,
+    avatarUrl: row.user_avatar_file_id
+      ? getFileUrlById(row.user_avatar_file_id as string)
+      : undefined,
     state: row.state as string,
   });
 }
@@ -899,7 +911,7 @@ export async function updateGroupProfile(params: {
         params.avatarFileId,
       );
       nextMetadata.avatarFileId = file.fileId;
-      nextMetadata.avatarUrl = file.url;
+      delete nextMetadata.avatarUrl;
     }
   }
 
@@ -918,17 +930,13 @@ export async function updateGroupProfile(params: {
   );
 
   const updated = normalizeGroupRow(result.rows[0]);
-  const updatedMetadata = parseConversationMetadata(updated.metadata);
 
   await emitChatConversationUpdated({
     workspaceId: params.workspaceId,
     conversationId: params.groupId,
     action: "profile_updated",
     title: updated.title,
-    avatarUrl:
-      typeof updatedMetadata.avatarUrl === "string"
-        ? updatedMetadata.avatarUrl
-        : null,
+    avatarUrl: updated.avatar_url || null,
   });
 
   await emitEvent({
@@ -938,10 +946,7 @@ export async function updateGroupProfile(params: {
       groupId: params.groupId,
       action: "profile_updated",
       title: updated.title,
-      avatarUrl:
-        typeof updatedMetadata.avatarUrl === "string"
-          ? updatedMetadata.avatarUrl
-          : null,
+      avatarUrl: updated.avatar_url || null,
     },
     timestamp: nowISO(),
   });
@@ -1210,7 +1215,7 @@ export async function addMembersToGroup(params: {
   const userResult =
     userIds.length > 0
       ? await query(
-          `SELECT u.id, u.name, u.avatar_url
+          `SELECT u.id, u.name, u.avatar_file_id
          FROM workspace_members wm
          JOIN users u ON u.id = wm.user_id
          WHERE wm.workspace_id = $1
@@ -1328,7 +1333,9 @@ export async function addMembersToGroup(params: {
         type: "user" as const,
         userId,
         name: userInfo.name || "User",
-        avatarUrl: userInfo.avatar_url || undefined,
+        avatarUrl: userInfo.avatar_file_id
+          ? getFileUrlById(userInfo.avatar_file_id)
+          : undefined,
       });
       joinedMembers.push({
         memberId: member.id,
@@ -1575,7 +1582,7 @@ export async function getGroupMembers(
             a.config->>'avatar_emoji' AS actor_avatar_emoji,
             actor_avatar_file.stored_name AS actor_avatar_stored_name,
             u.name AS user_name,
-            u.avatar_url AS user_avatar_url,
+            u.avatar_file_id AS user_avatar_file_id,
             ls.id AS session_id,
             ls.status AS session_status
      FROM conversation_members cm

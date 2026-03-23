@@ -32,6 +32,12 @@ import {
   resolveAccessGrantTarget,
   type AccessBindingRow,
 } from "../access/bindings.js";
+import {
+  canUserAccessFileWorkspace,
+  duplicateFileRecord,
+  getFileAccessInfo,
+  getFileUrlById,
+} from "../files/service.js";
 
 type QueryRow = pg.QueryResultRow;
 type QueryResultLike<T extends QueryRow> = { rows: T[] };
@@ -65,6 +71,7 @@ type SkillPackageRow = {
   item_tags: string[] | null;
   item_is_active: boolean;
   item_download_count: number;
+  item_icon_file_id: string | null;
   item_metadata: unknown;
   item_created_at: string;
   item_updated_at: string;
@@ -96,6 +103,7 @@ type InstalledSkillRow = {
   workspace_id: string;
   slug: string;
   name: string;
+  icon_file_id: string | null;
   tags: string[] | null;
   current_version: number;
   is_active: boolean;
@@ -170,6 +178,7 @@ const MARKETPLACE_SKILL_SELECT = `
     item.tags AS item_tags,
     item.is_active AS item_is_active,
     item.download_count AS item_download_count,
+    item.icon_file_id AS item_icon_file_id,
     item.metadata AS item_metadata,
     item.created_at AS item_created_at,
     item.updated_at AS item_updated_at,
@@ -203,6 +212,7 @@ const INSTALLED_SKILL_SELECT = `
     skill.workspace_id,
     skill.slug,
     skill.name,
+    skill.icon_file_id,
     skill.tags,
     skill.current_version,
     skill.is_active,
@@ -450,21 +460,54 @@ function inferMediaType(path: string) {
   return "text/plain";
 }
 
-function iconUrlFromMetadata(value: unknown) {
-  const metadata = parseJsonObject(value);
-  return typeof metadata.iconUrl === "string" && metadata.iconUrl.trim()
-    ? metadata.iconUrl
-    : undefined;
+async function normalizeWorkspaceSkillIconFileId(
+  iconFileId: string,
+  workspaceId: string,
+) {
+  const fileInfo = await getFileAccessInfo(iconFileId);
+  if (!fileInfo) {
+    throw new SkillError(400, "Skill icon file not found");
+  }
+
+  if (fileInfo.workspaceId && fileInfo.workspaceId !== workspaceId) {
+    throw new SkillError(400, "Skill icon file must belong to the current workspace");
+  }
+
+  return iconFileId;
 }
 
-function metadataWithIconUrl(base: unknown, iconUrl: string | null | undefined) {
-  const metadata = parseJsonObject(base);
-  if (iconUrl && iconUrl.trim()) {
-    metadata.iconUrl = iconUrl.trim();
-  } else {
-    delete metadata.iconUrl;
+async function normalizeMarketplaceSkillIconFileId(
+  iconFileId: string,
+  authorUserId?: string,
+) {
+  const fileInfo = await getFileAccessInfo(iconFileId);
+  if (!fileInfo) {
+    throw new SkillError(400, "Skill icon file not found");
   }
-  return metadata;
+
+  if (authorUserId) {
+    const canAccess = await canUserAccessFileWorkspace(fileInfo.workspaceId, authorUserId);
+    if (!canAccess) {
+      throw new SkillError(403, "Skill icon file is not accessible");
+    }
+  } else if (fileInfo.workspaceId) {
+    throw new SkillError(400, "Marketplace skill icon file must be platform-accessible");
+  }
+
+  if (!fileInfo.workspaceId) {
+    return iconFileId;
+  }
+
+  const duplicated = await duplicateFileRecord(iconFileId, {
+    workspaceId: null,
+    uploaderUserId: authorUserId || null,
+    category: "skill_icon",
+  });
+  if (!duplicated) {
+    throw new SkillError(400, "Skill icon file not found");
+  }
+
+  return duplicated.id;
 }
 
 function buildSkillAttachmentFromCatalogFile(row: CatalogFileRow): SkillAttachmentFile {
@@ -591,7 +634,7 @@ function mapMarketplaceEntry(
     slug: row.spec_canonical_slug || row.item_slug,
     name: row.spec_name || row.item_display_name,
     description: descriptionBlockFromStored(row.spec_description_blocks),
-    iconUrl: iconUrlFromMetadata(row.item_metadata),
+    iconUrl: row.item_icon_file_id ? getFileUrlById(row.item_icon_file_id) : undefined,
     tags: row.item_tags || [],
     authorUserId: row.publisher_owner_user_id || undefined,
     authorName: row.publisher_display_name || undefined,
@@ -620,7 +663,7 @@ function buildInstalledSkillPayload(
     slug: row.slug,
     name: row.name,
     description: descriptionBlockFromStored(row.version_description_blocks),
-    iconUrl: iconUrlFromMetadata(row.version_metadata),
+    iconUrl: row.icon_file_id ? getFileUrlById(row.icon_file_id) : undefined,
     tags: row.tags || [],
     useScope,
     actorId: chosenBinding?.actor_id || undefined,
@@ -1387,7 +1430,7 @@ export async function publishMarketplaceSkill(input: {
   slug: string;
   name: string;
   description?: CanonicalContentBlockInput;
-  iconUrl?: string;
+  iconFileId?: string | null;
   tags?: string[];
   version: string;
   changelog?: string;
@@ -1432,11 +1475,11 @@ export async function publishMarketplaceSkill(input: {
       canonicalSlug,
       ...(input.metadata || {}),
     };
-    if (input.iconUrl && input.iconUrl.trim()) {
-      itemMetadata.iconUrl = input.iconUrl.trim();
-    } else {
-      delete itemMetadata.iconUrl;
-    }
+    const nextIconFileId = input.iconFileId === undefined
+      ? existing?.item_icon_file_id ?? null
+      : input.iconFileId
+        ? await normalizeMarketplaceSkillIconFileId(input.iconFileId, input.authorUserId)
+        : null;
 
     if (existing) {
       await client.query(
@@ -1447,7 +1490,8 @@ export async function publishMarketplaceSkill(input: {
              long_description = $4,
              tags = $5,
              is_active = $6,
-             metadata = $7::jsonb,
+             icon_file_id = $7,
+             metadata = $8::jsonb,
              updated_at = NOW()
          WHERE id = $1`,
         [
@@ -1457,6 +1501,7 @@ export async function publishMarketplaceSkill(input: {
           summaryText,
           input.tags || [],
           input.isActive ?? true,
+          nextIconFileId,
           JSON.stringify(itemMetadata),
         ],
       );
@@ -1475,6 +1520,7 @@ export async function publishMarketplaceSkill(input: {
            visibility,
            tags,
            is_active,
+           icon_file_id,
            metadata
          )
          VALUES (
@@ -1489,7 +1535,8 @@ export async function publishMarketplaceSkill(input: {
            'public',
            $5,
            $6,
-           $7::jsonb
+           $7,
+           $8::jsonb
          )
          RETURNING id`,
         [
@@ -1499,6 +1546,7 @@ export async function publishMarketplaceSkill(input: {
           summaryText,
           input.tags || [],
           input.isActive ?? true,
+          nextIconFileId,
           JSON.stringify(itemMetadata),
         ],
       );
@@ -1602,7 +1650,7 @@ export async function createWorkspaceSkill(input: {
   workspaceId: string;
   name: string;
   description?: CanonicalContentBlockInput;
-  iconUrl?: string;
+  iconFileId?: string;
   tags?: string[];
   attachmentFiles?: SkillAttachmentInput[];
   useScope: SkillUseScope;
@@ -1620,6 +1668,9 @@ export async function createWorkspaceSkill(input: {
   const descriptionBlocks = [description];
   const attachmentFiles = normalizeSkillAttachments(input.attachmentFiles);
   assertRequiredSkillFile(attachmentFiles);
+  const iconFileId = input.iconFileId
+    ? await normalizeWorkspaceSkillIconFileId(input.iconFileId, input.workspaceId)
+    : null;
   const target = normalizeScopeTarget({
     useScope: input.useScope,
     actorId: input.actorId,
@@ -1636,17 +1687,19 @@ export async function createWorkspaceSkill(input: {
          workspace_id,
          slug,
          name,
+         icon_file_id,
          tags,
          current_version,
          is_active,
          created_by
        )
-       VALUES ($1, $2, $3, $4, $5, 1, TRUE, $6)`,
+       VALUES ($1, $2, $3, $4, $5, $6, 1, TRUE, $7)`,
       [
         skillId,
         input.workspaceId,
         skillId,
         name,
+        iconFileId,
         input.tags || [],
         input.installedBy || null,
       ],
@@ -1669,7 +1722,7 @@ export async function createWorkspaceSkill(input: {
         name,
         JSON.stringify(descriptionBlocks),
         renderSkillBlocksToText(descriptionBlocks),
-        JSON.stringify(metadataWithIconUrl({}, input.iconUrl)),
+        JSON.stringify({}),
         input.installedBy || null,
       ],
     );
@@ -2026,17 +2079,19 @@ export async function installMarketplaceSkill(input: {
          workspace_id,
          slug,
          name,
+         icon_file_id,
          tags,
          current_version,
          is_active,
          created_by
        )
-       VALUES ($1, $2, $3, $4, 1, TRUE, $5)
+       VALUES ($1, $2, $3, $4, $5, 1, TRUE, $6)
        RETURNING id`,
       [
         input.workspaceId,
         installedSlug,
         marketplaceSkill.spec_name || marketplaceSkill.item_display_name,
+        marketplaceSkill.item_icon_file_id,
         marketplaceSkill.item_tags || [],
         input.installedBy || null,
       ],
@@ -2044,11 +2099,6 @@ export async function installMarketplaceSkill(input: {
     const skillId = insertedSkill.rows[0]!.id;
 
     const descriptionBlocks = normalizeStoredBlocks(marketplaceSkill.spec_description_blocks);
-    const versionMetadata = metadataWithIconUrl(
-      {},
-      iconUrlFromMetadata(marketplaceSkill.item_metadata),
-    );
-
     const insertedVersion = await client.query<{ id: string }>(
       `INSERT INTO skill_versions (
          skill_id,
@@ -2066,7 +2116,7 @@ export async function installMarketplaceSkill(input: {
         marketplaceSkill.spec_name || marketplaceSkill.item_display_name,
         JSON.stringify(descriptionBlocks),
         marketplaceSkill.spec_summary_text || renderSkillBlocksToText(descriptionBlocks),
-        JSON.stringify(versionMetadata),
+        JSON.stringify({}),
         input.installedBy || null,
       ],
     );
@@ -2148,7 +2198,7 @@ export async function updateInstalledSkill(input: {
   installedSkillId: string;
   name?: string;
   description?: CanonicalContentBlockInput;
-  iconUrl?: string | null;
+  iconFileId?: string | null;
   tags?: string[];
   isEnabled?: boolean;
   attachmentFiles?: SkillAttachmentInput[];
@@ -2164,7 +2214,7 @@ export async function updateInstalledSkill(input: {
   const touchesContent =
     input.name !== undefined ||
     input.description !== undefined ||
-    input.iconUrl !== undefined ||
+    input.iconFileId !== undefined ||
     input.tags !== undefined ||
     input.attachmentFiles !== undefined;
 
@@ -2182,10 +2232,11 @@ export async function updateInstalledSkill(input: {
         ? normalizeSkillDescription(input.description)
         : currentDescription;
       const descriptionBlocks = [descriptionBlock];
-      const iconUrl =
-        input.iconUrl === undefined
-          ? iconUrlFromMetadata(existing.version_metadata)
-          : input.iconUrl || undefined;
+      const nextIconFileId = input.iconFileId === undefined
+        ? existing.icon_file_id
+        : input.iconFileId
+          ? await normalizeWorkspaceSkillIconFileId(input.iconFileId, input.workspaceId)
+          : null;
       const attachmentFiles = input.attachmentFiles
         ? normalizeSkillAttachments(input.attachmentFiles)
         : currentFiles.map((file) => ({
@@ -2212,7 +2263,7 @@ export async function updateInstalledSkill(input: {
           nextName,
           JSON.stringify(descriptionBlocks),
           renderSkillBlocksToText(descriptionBlocks),
-          JSON.stringify(metadataWithIconUrl(existing.version_metadata, iconUrl)),
+          JSON.stringify(parseJsonObject(existing.version_metadata)),
           existing.created_by || null,
         ],
       );
@@ -2226,14 +2277,16 @@ export async function updateInstalledSkill(input: {
       await client.query(
         `UPDATE installed_skills
          SET name = $2,
-             tags = $3,
-             current_version = $4,
-             is_active = COALESCE($5, is_active),
+             icon_file_id = $3,
+             tags = $4,
+             current_version = $5,
+             is_active = COALESCE($6, is_active),
              updated_at = NOW()
          WHERE id = $1`,
         [
           existing.skill_id,
           nextName,
+          nextIconFileId,
           nextTags,
           nextVersion,
           input.isEnabled === undefined ? null : input.isEnabled,
@@ -2314,12 +2367,7 @@ export async function upgradeInstalledSkill(input: {
         marketplaceSkill.spec_name || marketplaceSkill.item_display_name,
         JSON.stringify(descriptionBlocks),
         marketplaceSkill.spec_summary_text || renderSkillBlocksToText(descriptionBlocks),
-        JSON.stringify(
-          metadataWithIconUrl(
-            existing.version_metadata,
-            iconUrlFromMetadata(marketplaceSkill.item_metadata),
-          ),
-        ),
+        JSON.stringify(parseJsonObject(existing.version_metadata)),
         existing.created_by || null,
       ],
     );
@@ -2336,13 +2384,15 @@ export async function upgradeInstalledSkill(input: {
     await client.query(
       `UPDATE installed_skills
        SET name = $2,
-           tags = $3,
-           current_version = $4,
+           icon_file_id = $3,
+           tags = $4,
+           current_version = $5,
            updated_at = NOW()
        WHERE id = $1`,
       [
         existing.skill_id,
         marketplaceSkill.spec_name || marketplaceSkill.item_display_name,
+        marketplaceSkill.item_icon_file_id,
         marketplaceSkill.item_tags || [],
         existing.current_version + 1,
       ],

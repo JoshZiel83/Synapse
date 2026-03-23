@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type pg from "pg";
 import { query, transaction } from "../../infrastructure/database/index.js";
 import { getFileUrl } from "../../infrastructure/storage/index.js";
+import { getFileUrlById } from "../files/service.js";
 import {
   AUTHZ_PLATFORM_ID,
   deleteRelation,
@@ -458,7 +459,7 @@ export async function listMembers(workspaceId: string) {
         wm.*,
         u.name AS user_name,
         u.email AS user_email,
-        u.avatar_url,
+        u.avatar_file_id,
         COALESCE(access_map.access_keys, '{}'::text[]) AS access_keys
      FROM workspace_members wm
      INNER JOIN users u ON u.id = wm.user_id
@@ -477,7 +478,7 @@ export async function listMembers(workspaceId: string) {
     ...mapMemberRow(row),
     userName: row.user_name,
     userEmail: row.user_email,
-    avatarUrl: row.avatar_url ?? null,
+    avatarUrl: row.avatar_file_id ? getFileUrlById(row.avatar_file_id) : null,
     accessKeys: Array.isArray(row.access_keys) ? row.access_keys : [],
   }));
 }
@@ -494,7 +495,7 @@ export async function listWorkspaceAccessBindings(workspaceId: string) {
         wab.updated_at,
         u.name AS user_name,
         u.email AS user_email,
-        u.avatar_url,
+        u.avatar_file_id,
         wm.trust_level
      FROM workspace_access_bindings wab
      JOIN users u ON u.id = wab.user_id
@@ -517,7 +518,7 @@ export async function listWorkspaceAccessBindings(workspaceId: string) {
     trustLevel: row.trust_level,
     userName: row.user_name,
     userEmail: row.user_email,
-    avatarUrl: row.avatar_url ?? null,
+    avatarUrl: row.avatar_file_id ? getFileUrlById(row.avatar_file_id) : null,
   }));
 }
 

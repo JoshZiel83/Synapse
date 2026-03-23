@@ -12,6 +12,7 @@ import type {
 } from '@synapse/shared/types';
 import { fileRefBlock, textBlock, textBlocks } from '@synapse/shared';
 import { renderConversationEventContextBlocks } from '../conversation/event-registry.js';
+import { getFileUrlById } from '../files/service.js';
 
 function mimeToCategory(mimeType: string): 'image' | 'audio' | 'video' | 'document' {
   if (mimeType.startsWith('image/')) return 'image';
@@ -58,7 +59,7 @@ export function itemPartsToCanonicalBlocks(parts: any[]): CanonicalContentBlock[
       blocks.push(fileRefBlock({
         fileId: part.file_id,
         storedName: part.stored_name || String(metadata.storedName || ''),
-        url: part.file_id ? `/api/v1/files/${part.file_id}` : '',
+        url: part.file_id ? getFileUrlById(part.file_id) : '',
         mimeType: part.file_mime_type || part.mime_type || 'application/octet-stream',
         originalName: part.original_name || part.name || 'file',
         sizeBytes: parseSizeBytes(part.size_bytes ?? metadata.sizeBytes),

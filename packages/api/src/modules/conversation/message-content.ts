@@ -6,6 +6,7 @@ import {
   type CanonicalContentBlockInput,
   type CanonicalContentBlock,
 } from '@synapse/shared';
+import { getFileUrlById } from '../files/service.js';
 import { parseFileRefSegments, resolveFileRefSegments } from '../ai/fileref-resolver.js';
 
 export type DraftConversationPart = {
@@ -99,7 +100,7 @@ export function draftPartsToCanonicalContentBlocks(parts: DraftConversationPart[
       blocks.push(fileRefBlock({
         fileId: part.fileId,
         storedName: typeof metadata.storedName === 'string' ? metadata.storedName : '',
-        url: typeof metadata.url === 'string' ? metadata.url : `/api/v1/files/${part.fileId}`,
+        url: typeof metadata.url === 'string' ? metadata.url : getFileUrlById(part.fileId),
         mimeType,
         originalName: typeof metadata.originalName === 'string'
           ? metadata.originalName
@@ -130,7 +131,7 @@ export function itemPartsToCanonicalContentBlocks(parts: any[]): CanonicalConten
       blocks.push(fileRefBlock({
         fileId: part.file_id,
         storedName: part.stored_name || String(metadata.storedName || ''),
-        url: typeof metadata.url === 'string' ? metadata.url : `/api/v1/files/${part.file_id}`,
+        url: typeof metadata.url === 'string' ? metadata.url : getFileUrlById(part.file_id),
         mimeType,
         originalName: part.original_name || part.name || 'file',
         sizeBytes: parseSizeBytes(part.size_bytes ?? metadata.sizeBytes),

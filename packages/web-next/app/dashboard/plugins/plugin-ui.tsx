@@ -2,6 +2,7 @@
 
 import { BadgeCheck, Globe, Code, Puzzle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { resolveFileUrl } from '@/lib/utils';
 
 export function getLocale(defaultLocale?: string) {
   if (typeof navigator !== 'undefined') {
@@ -112,12 +113,13 @@ export function PluginIcon({
   containerClassName?: string;
 }) {
   const Icon = transport === 'http' ? Globe : transport === 'builtin' ? Code : Puzzle;
+  const resolvedIconUrl = resolveFileUrl(iconUrl);
 
   return (
     <div className="relative flex-shrink-0">
       <div className={`flex items-center justify-center overflow-hidden border border-slate-200 bg-slate-100 text-slate-700 shadow-sm dark:border-white/10 dark:bg-white/5 dark:text-slate-200 ${containerClassName}`}>
-        {iconUrl ? (
-          <img src={iconUrl} alt={title} className="h-full w-full object-cover" />
+        {resolvedIconUrl ? (
+          <img src={resolvedIconUrl} alt={title} className="h-full w-full object-cover" />
         ) : (
           <Icon className={className} />
         )}

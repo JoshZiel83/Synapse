@@ -10,7 +10,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
-  User,
   GitBranch,
   Wrench,
   Search,
@@ -48,6 +47,7 @@ interface MessageBubbleProps {
   actorRuntime?: ActorRuntimeState
   timestamp?: string
   isUser: boolean
+  fromUserId?: string
   status?: "sending" | "retrying" | "sent"
   toolsUsed?: string[]
   serverToolCalls?: ServerToolCall[]
@@ -831,6 +831,7 @@ export default function MessageBubble({
   actorRuntime,
   timestamp,
   isUser,
+  fromUserId,
   status,
   toolsUsed,
   serverToolCalls,
@@ -852,6 +853,13 @@ export default function MessageBubble({
   )
   const hasExplicitTargets =
     (targetActorIds?.length || 0) + (targetUserIds?.length || 0) > 0
+  const userSender = useMemo(() => {
+    const senderUserId = fromUserId || viewerUserId
+    if (!senderUserId) return undefined
+    return groupMembers?.find(
+      (member) => member.type === "user" && member.id === senderUserId
+    )
+  }, [fromUserId, groupMembers, viewerUserId])
 
   const { blocks: renderedBlocks, sources } = useMemo(
     () => buildRenderedMessageBlocks(contentBlocks, citationSources),
@@ -983,11 +991,12 @@ export default function MessageBubble({
       className={`flex w-full min-w-0 max-w-full gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
     >
       {isUser ? (
-        <Avatar className="mt-1 h-8 w-8 shrink-0">
-          <AvatarFallback className="bg-primary text-xs text-primary-foreground">
-            <User className="h-4 w-4" />
-          </AvatarFallback>
-        </Avatar>
+        <ChatAvatar
+          name={userSender?.name || "You"}
+          avatarUrl={userSender?.avatarUrl}
+          entityType="user"
+          className="mt-1 shrink-0"
+        />
       ) : isChildResult ? (
         <Avatar className="mt-1 h-8 w-8 shrink-0">
           <AvatarFallback className="bg-amber-500 text-xs text-white">

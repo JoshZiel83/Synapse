@@ -29,6 +29,7 @@ import {
 import { query, transaction } from "../../infrastructure/database/index.js";
 import { emitEvent } from "../../infrastructure/events/index.js";
 import { saveFromBuffer } from "../../infrastructure/storage/file-io.js";
+import { getFileUrlById } from "../files/service.js";
 import {
   attachAuthConnectionsToConfig,
 } from "./auth-service.js";
@@ -66,6 +67,7 @@ type PluginCatalogRow = {
   item_tags: string[] | null;
   item_is_active: boolean;
   item_download_count: number;
+  item_icon_file_id: string | null;
   item_metadata: unknown;
   item_created_at: string;
   item_updated_at: string;
@@ -95,6 +97,7 @@ type PluginCatalogRow = {
   publisher_is_builtin: boolean;
   publisher_is_verified: boolean;
   publisher_owner_user_id: string | null;
+  publisher_logo_file_id: string | null;
   publisher_metadata: unknown;
   categories_json: unknown;
   runtime_permissions_json: unknown;
@@ -114,6 +117,7 @@ type PublisherRow = {
   slug: string;
   display_name: string;
   description: string;
+  logo_file_id: string | null;
   owner_user_id: string | null;
   workspace_id: string | null;
   is_builtin: boolean;
@@ -173,6 +177,7 @@ const PLUGIN_CATALOG_SELECT = `
     item.tags AS item_tags,
     item.is_active AS item_is_active,
     item.download_count AS item_download_count,
+    item.icon_file_id AS item_icon_file_id,
     item.metadata AS item_metadata,
     item.created_at AS item_created_at,
     item.updated_at AS item_updated_at,
@@ -202,6 +207,7 @@ const PLUGIN_CATALOG_SELECT = `
     publisher.is_builtin AS publisher_is_builtin,
     publisher.is_verified AS publisher_is_verified,
     publisher.owner_user_id AS publisher_owner_user_id,
+    publisher.logo_file_id AS publisher_logo_file_id,
     publisher.metadata AS publisher_metadata,
     COALESCE(categories.categories_json, '[]'::jsonb) AS categories_json,
     COALESCE(runtime_permissions.runtime_permissions_json, '[]'::jsonb) AS runtime_permissions_json
@@ -392,7 +398,7 @@ async function ensureBuiltinPluginIcon(
   const key = `${seedSlug}/${pluginSlug}`;
 
   const existing = await query(
-    `SELECT id, stored_name
+    `SELECT id
      FROM files
      WHERE workspace_id IS NULL
        AND category = 'plugin_asset'
@@ -405,7 +411,6 @@ async function ensureBuiltinPluginIcon(
   if (existing.rows.length > 0) {
     return {
       id: existing.rows[0].id,
-      iconUrl: `/files/${existing.rows[0].stored_name}`,
     };
   }
 
@@ -426,7 +431,6 @@ async function ensureBuiltinPluginIcon(
 
   return {
     id: file.id,
-    iconUrl: file.url,
   };
 }
 
@@ -491,8 +495,7 @@ function mapPluginView(row: PluginCatalogRow) {
       typeof itemMetadata.defaultLocale === "string"
         ? itemMetadata.defaultLocale
         : "en",
-    icon_url:
-      typeof itemMetadata.iconUrl === "string" ? itemMetadata.iconUrl : null,
+    icon_url: row.item_icon_file_id ? getFileUrlById(row.item_icon_file_id) : null,
     version: row.version_value || "1.0.0",
     transport: row.spec_transport || "builtin",
     entry_point: row.spec_entry_point || "",
@@ -540,8 +543,7 @@ function mapPublisherView(row: PublisherRow) {
     slug: row.slug,
     display_name: row.display_name,
     description: row.description,
-    logo_url:
-      typeof metadata.logoUrl === "string" ? metadata.logoUrl : null,
+    logo_url: row.logo_file_id ? getFileUrlById(row.logo_file_id) : null,
     is_builtin: row.is_builtin,
     is_verified: row.is_verified,
     owner_user_id: row.owner_user_id,
@@ -1181,7 +1183,7 @@ async function ensureCatalogItem(
     displayName: string;
     description?: string;
     longDescription?: string;
-    iconUrl?: string;
+    iconFileId?: string;
     tags?: string[];
     isBuiltin?: boolean;
     transport: string;
@@ -1212,7 +1214,6 @@ async function ensureCatalogItem(
       (input.longDescription ? { en: input.longDescription } : undefined),
     summaryI18n: input.summaryI18n,
     defaultLocale: input.defaultLocale || "en",
-    iconUrl: input.iconUrl || null,
   };
 
   if (existing.rows.length > 0) {
@@ -1226,7 +1227,8 @@ async function ensureCatalogItem(
            visibility = 'public',
            tags = $6,
            is_active = TRUE,
-           metadata = $7::jsonb,
+           icon_file_id = $7,
+           metadata = $8::jsonb,
            updated_at = NOW()
        WHERE id = $1`,
       [
@@ -1240,6 +1242,7 @@ async function ensureCatalogItem(
             ? "builtin"
             : "official",
         input.tags || [],
+        input.iconFileId || null,
         JSON.stringify(metadata),
       ],
     );
@@ -1255,6 +1258,7 @@ async function ensureCatalogItem(
        display_name,
        summary,
        long_description,
+       icon_file_id,
        source_kind,
        visibility,
        tags,
@@ -1262,7 +1266,7 @@ async function ensureCatalogItem(
        metadata
      )
      VALUES (
-       $1, $2, 'plugin_package', $3, $4, $5, $6, $7, 'public', $8, TRUE, $9::jsonb
+       $1, $2, 'plugin_package', $3, $4, $5, $6, $7, $8, 'public', $9, TRUE, $10::jsonb
      )
      RETURNING id`,
     [
@@ -1272,6 +1276,7 @@ async function ensureCatalogItem(
       input.displayName,
       input.description || "",
       input.longDescription || "",
+      input.iconFileId || null,
       input.transport === "relay"
         ? "relay"
         : input.isBuiltin
@@ -1460,7 +1465,7 @@ export async function createOrganization(data: {
   slug: string;
   displayName: string;
   description?: string;
-  logoUrl?: string;
+  logoFileId?: string;
   isBuiltin?: boolean;
   isVerified?: boolean;
   ownerUserId?: string;
@@ -1471,16 +1476,18 @@ export async function createOrganization(data: {
        slug,
        display_name,
        description,
+       logo_file_id,
        owner_user_id,
        workspace_id,
        is_builtin,
        is_verified,
        metadata
      )
-     VALUES ($1, $2, $3, $4, NULL, $5, $6, $7::jsonb)
+     VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8::jsonb)
      ON CONFLICT (slug) DO UPDATE
        SET display_name = EXCLUDED.display_name,
            description = EXCLUDED.description,
+           logo_file_id = EXCLUDED.logo_file_id,
            owner_user_id = COALESCE(publishers.owner_user_id, EXCLUDED.owner_user_id),
            is_builtin = EXCLUDED.is_builtin,
            is_verified = EXCLUDED.is_verified,
@@ -1491,12 +1498,11 @@ export async function createOrganization(data: {
       normalizedSlug,
       data.displayName,
       data.description || "",
+      data.logoFileId || null,
       data.ownerUserId || null,
       data.isBuiltin === true,
       data.isVerified === true,
-      JSON.stringify({
-        logoUrl: data.logoUrl || null,
-      }),
+      JSON.stringify({}),
     ],
   );
 
@@ -1556,7 +1562,7 @@ export async function createPlugin(data: {
   displayName: string;
   description?: string;
   longDescription?: string;
-  iconUrl?: string;
+  iconFileId?: string;
   version?: string;
   transport: string;
   entryPoint?: string;
@@ -2556,7 +2562,7 @@ export async function seedBuiltinMcpPlugins() {
     });
 
     for (const pluginSeed of seed.plugins) {
-      let icon: { id: string; iconUrl: string } | null = null;
+      let icon: { id: string } | null = null;
       if (pluginSeed.iconAssetPath) {
         try {
           icon = await ensureBuiltinPluginIcon(
@@ -2578,7 +2584,7 @@ export async function seedBuiltinMcpPlugins() {
         displayName: pluginSeed.displayName,
         description: pluginSeed.description,
         longDescription: pluginSeed.longDescription,
-        iconUrl: icon?.iconUrl,
+        iconFileId: icon?.id,
         transport: pluginSeed.transport,
         entryPoint: pluginSeed.entryPoint,
         lifecycleScope: pluginSeed.defaultReuseScope,

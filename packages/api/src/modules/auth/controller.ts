@@ -35,8 +35,8 @@ const loginSchema = z.object({
 
 const updateMeSchema = z.object({
   name: z.string().min(1).max(100).optional(),
-  avatarUrl: z.string().min(1).nullable().optional(),
-}).refine((body) => body.name !== undefined || body.avatarUrl !== undefined, {
+  avatarFileId: z.string().uuid().nullable().optional(),
+}).refine((body) => body.name !== undefined || body.avatarFileId !== undefined, {
   message: 'At least one field is required',
 });
 
@@ -303,7 +303,7 @@ export function registerAuthRoutes(app: FastifyInstance) {
         return reply.status(200).send({
           user: await authService.updateProfile((request as any).user.userId, {
             name: body.name,
-            avatarUrl: body.avatarUrl,
+            avatarFileId: body.avatarFileId,
           }),
           session: (request as any).authSession,
         });

@@ -9,7 +9,7 @@ CREATE TABLE users (
   email VARCHAR(255) UNIQUE NOT NULL,
   name VARCHAR(255) NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
-  avatar_url TEXT,
+  avatar_file_id UUID,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -219,6 +219,10 @@ CREATE TABLE files (
 CREATE INDEX idx_files_workspace ON files(workspace_id, created_at DESC);
 CREATE INDEX idx_files_uploader ON files(uploader_user_id, created_at DESC);
 
+ALTER TABLE users
+  ADD CONSTRAINT users_avatar_file_id_fkey
+  FOREIGN KEY (avatar_file_id) REFERENCES files(id) ON DELETE SET NULL;
+
 -- ============ Access Core ============
 CREATE TABLE access_bindings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -278,7 +282,7 @@ CREATE TABLE publishers (
   slug VARCHAR(100) UNIQUE NOT NULL,
   display_name VARCHAR(255) NOT NULL,
   description TEXT DEFAULT '',
-  logo_blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  logo_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
   owner_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   is_builtin BOOLEAN DEFAULT FALSE,
@@ -295,7 +299,7 @@ CREATE TABLE catalog_categories (
     CHECK (item_kind IN ('actor_template', 'skill_package', 'plugin_package')),
   display_name VARCHAR(255) NOT NULL,
   description TEXT DEFAULT '',
-  icon_blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  icon_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
   sort_order INT NOT NULL DEFAULT 0,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -313,7 +317,7 @@ CREATE TABLE catalog_items (
   display_name VARCHAR(255) NOT NULL,
   summary TEXT DEFAULT '',
   long_description TEXT DEFAULT '',
-  icon_blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  icon_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
   source_kind VARCHAR(30) NOT NULL DEFAULT 'official'
     CHECK (source_kind IN ('builtin', 'official', 'workspace', 'user', 'relay')),
   visibility VARCHAR(20) NOT NULL DEFAULT 'public'
@@ -1612,7 +1616,7 @@ CREATE TABLE installed_skills (
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   slug VARCHAR(120) NOT NULL,
   name VARCHAR(255) NOT NULL,
-  icon_blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  icon_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
   tags TEXT[] DEFAULT '{}',
   current_version INT NOT NULL DEFAULT 1,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,

@@ -14,6 +14,7 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { useRouter } from 'next/navigation';
@@ -83,6 +84,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { api } from '@/lib/api';
+import { resolveFileUrl } from '@/lib/utils';
 
 type ActorOption = {
   id: string;
@@ -112,6 +114,12 @@ type ScopeDraft = {
   userId: string | null;
 };
 
+type UploadedFile = {
+  id: string;
+  url?: string;
+  fullUrl?: string;
+};
+
 const skillAccessAdapter = {
   loadAccess: (workspaceId: string, resourceId: string) =>
     api.getInstalledSkillAccess(workspaceId, resourceId),
@@ -135,7 +143,8 @@ type EditorDraft = {
   slug: string;
   name: string;
   descriptionBlocks: CanonicalContentBlock[];
-  iconUrl: string;
+  iconFileId?: string | null;
+  iconPreviewUrl?: string;
   tagsText: string;
   version: string;
   changelog: string;
@@ -399,6 +408,89 @@ function createScopeDraft(): ScopeDraft {
   };
 }
 
+async function uploadSkillIcon(workspaceId: string | null, file: File) {
+  if (!workspaceId) {
+    throw new Error('Workspace is required to upload a skill icon');
+  }
+
+  const uploaded = (await api.uploadFile(workspaceId, file)) as UploadedFile;
+  return {
+    iconFileId: uploaded.id,
+    iconPreviewUrl: resolveFileUrl(uploaded.url || uploaded.fullUrl),
+  };
+}
+
+function SkillIconField({
+  previewUrl,
+  uploading,
+  onUpload,
+  onClear,
+}: {
+  previewUrl?: string;
+  uploading: boolean;
+  onUpload: (file: File) => Promise<void>;
+  onClear: () => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const resolvedPreviewUrl = resolveFileUrl(previewUrl);
+
+  return (
+    <Field>
+      <FieldLabel>Icon</FieldLabel>
+      <div className="rounded-2xl border border-border bg-muted/10 p-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+          <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-background">
+            {resolvedPreviewUrl ? (
+              <img src={resolvedPreviewUrl} alt="Skill icon preview" className="h-full w-full object-cover" />
+            ) : (
+              <Sparkles className="size-6 text-muted-foreground" />
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  void onUpload(file);
+                }
+                event.target.value = '';
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+            >
+              {uploading ? (
+                <Loader2 className="animate-spin" data-icon="inline-start" />
+              ) : (
+                <UploadCloud data-icon="inline-start" />
+              )}
+              Upload icon
+            </Button>
+            {previewUrl ? (
+              <Button type="button" variant="outline" onClick={onClear} disabled={uploading}>
+                <Trash2 data-icon="inline-start" />
+                Remove icon
+              </Button>
+            ) : null}
+          </div>
+        </div>
+
+        <FieldDescription className="mt-3">
+          Upload an image file. The editor stores its internal file id; the URL is derived by the API.
+        </FieldDescription>
+      </div>
+    </Field>
+  );
+}
+
 function createMarketplaceDraft(skill?: SkillMarketplaceEntry | null): EditorDraft {
   const latestVersion = skill?.latestVersion;
   return {
@@ -406,7 +498,8 @@ function createMarketplaceDraft(skill?: SkillMarketplaceEntry | null): EditorDra
     slug: skill?.slug || '',
     name: skill?.name || '',
     descriptionBlocks: skill?.description ? [skill.description] : createEmptyDescriptionBlocks(),
-    iconUrl: skill?.iconUrl || '',
+    iconFileId: undefined,
+    iconPreviewUrl: skill?.iconUrl || undefined,
     tagsText: skill?.tags.join(', ') || '',
     version: latestVersion?.version || '1.0.0',
     changelog: latestVersion?.changelog || '',
@@ -430,7 +523,8 @@ function createInstalledDraft(skill?: InstalledSkill | null): EditorDraft {
     slug: skill?.slug || '',
     name: skill?.name || '',
     descriptionBlocks: skill?.description ? [skill.description] : createEmptyDescriptionBlocks(),
-    iconUrl: skill?.iconUrl || '',
+    iconFileId: undefined,
+    iconPreviewUrl: skill?.iconUrl || undefined,
     tagsText: skill?.tags.join(', ') || '',
     version: skill?.sourceVersion || '',
     changelog: '',
@@ -443,7 +537,8 @@ function createWorkspaceDraft(): EditorDraft {
     slug: '',
     name: '',
     descriptionBlocks: createEmptyDescriptionBlocks(),
-    iconUrl: '',
+    iconFileId: undefined,
+    iconPreviewUrl: undefined,
     tagsText: '',
     version: '',
     changelog: '',
@@ -643,6 +738,7 @@ function SkillEditorDialog({
   const [newFilePath, setNewFilePath] = useState('attachments/new-note.md');
   const [scopeDraft, setScopeDraft] = useState<ScopeDraft>(createScopeDraft());
   const [saving, setSaving] = useState(false);
+  const [iconUploading, setIconUploading] = useState(false);
 
   useEffect(() => {
     const nextDraft =
@@ -675,6 +771,30 @@ function SkillEditorDialog({
     },
     [],
   );
+
+  async function handleIconUpload(file: File) {
+    setIconUploading(true);
+    try {
+      const nextIcon = await uploadSkillIcon(workspaceId, file);
+      setDraft((current) => ({
+        ...current,
+        ...nextIcon,
+      }));
+      toast.success('Skill icon uploaded');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Skill icon upload failed');
+    } finally {
+      setIconUploading(false);
+    }
+  }
+
+  function clearIcon() {
+    setDraft((current) => ({
+      ...current,
+      iconFileId: null,
+      iconPreviewUrl: undefined,
+    }));
+  }
 
   function addFile() {
     const nextPath = normalizeFilePath(newFilePath);
@@ -761,7 +881,7 @@ function SkillEditorDialog({
           slug: draft.slug.trim(),
           name: draft.name.trim(),
           description,
-          iconUrl: draft.iconUrl.trim() || undefined,
+          iconFileId: draft.iconFileId,
           tags: parseTags(draft.tagsText),
           version: draft.version.trim() || '1.0.0',
           changelog: draft.changelog.trim(),
@@ -777,7 +897,7 @@ function SkillEditorDialog({
         const result = await api.createWorkspaceSkill(workspaceId, {
           name: draft.name.trim(),
           description,
-          iconUrl: draft.iconUrl.trim() || undefined,
+          iconFileId: draft.iconFileId || undefined,
           tags: parseTags(draft.tagsText),
           attachmentFiles,
           grantScope: scopeDraft.useScope,
@@ -805,7 +925,7 @@ function SkillEditorDialog({
       await api.updateInstalledSkill(workspaceId, installedSkill.id, {
         name: draft.name.trim(),
         description,
-        iconUrl: draft.iconUrl.trim() || null,
+        iconFileId: draft.iconFileId,
         tags: parseTags(draft.tagsText),
         attachmentFiles,
       });
@@ -945,14 +1065,12 @@ function SkillEditorDialog({
                       />
                     </Field>
 
-                    <Field>
-                      <FieldLabel>Icon URL</FieldLabel>
-                      <Input
-                        value={draft.iconUrl}
-                        onChange={(event) => setDraft((current) => ({ ...current, iconUrl: event.target.value }))}
-                        placeholder="https://..."
-                      />
-                    </Field>
+                    <SkillIconField
+                      previewUrl={draft.iconPreviewUrl}
+                      uploading={iconUploading}
+                      onUpload={handleIconUpload}
+                      onClear={clearIcon}
+                    />
                   </FieldGroup>
                 </CardContent>
               </Card>
@@ -1516,6 +1634,7 @@ export function InstalledSkillEditorPage({ skillId }: { skillId: string }) {
     ...createInstalledDraft(null),
     attachmentFiles: [],
   }));
+  const [iconUploading, setIconUploading] = useState(false);
   const [selectedPath, setSelectedPath] = useState('');
   const [selectedPathDraft, setSelectedPathDraft] = useState('');
   const [newPath, setNewPath] = useState('content/new-note.md');
@@ -1542,7 +1661,8 @@ export function InstalledSkillEditorPage({ skillId }: { skillId: string }) {
         slug: nextSkill.slug || '',
         name: nextSkill.name || '',
         descriptionBlocks: nextSkill.description ? [nextSkill.description] : createEmptyDescriptionBlocks(),
-        iconUrl: nextSkill.iconUrl || '',
+        iconFileId: undefined,
+        iconPreviewUrl: nextSkill.iconUrl || undefined,
         tagsText: nextSkill.tags.join(', ') || '',
         version: nextSkill.sourceVersion || '',
         changelog: '',
@@ -1595,6 +1715,30 @@ export function InstalledSkillEditorPage({ skillId }: { skillId: string }) {
     },
     [],
   );
+
+  async function handleIconUpload(file: File) {
+    setIconUploading(true);
+    try {
+      const nextIcon = await uploadSkillIcon(workspaceId, file);
+      setDraft((current) => ({
+        ...current,
+        ...nextIcon,
+      }));
+      toast.success('Skill icon uploaded');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Skill icon upload failed');
+    } finally {
+      setIconUploading(false);
+    }
+  }
+
+  function clearIcon() {
+    setDraft((current) => ({
+      ...current,
+      iconFileId: null,
+      iconPreviewUrl: undefined,
+    }));
+  }
 
   function addPath() {
     const nextPath = normalizeFilePath(newPath);
@@ -1690,7 +1834,7 @@ export function InstalledSkillEditorPage({ skillId }: { skillId: string }) {
       await api.updateInstalledSkill(workspaceId, skill.id, {
         name: draft.name.trim(),
         description,
-        iconUrl: draft.iconUrl.trim() || null,
+        iconFileId: draft.iconFileId,
         tags: parseTags(draft.tagsText),
         attachmentFiles,
       });
@@ -1800,14 +1944,12 @@ export function InstalledSkillEditorPage({ skillId }: { skillId: string }) {
                     />
                   </Field>
 
-                  <Field>
-                    <FieldLabel>Icon URL</FieldLabel>
-                    <Input
-                      value={draft.iconUrl}
-                      onChange={(event) => setDraft((current) => ({ ...current, iconUrl: event.target.value }))}
-                      placeholder="https://..."
-                    />
-                  </Field>
+                  <SkillIconField
+                    previewUrl={draft.iconPreviewUrl}
+                    uploading={iconUploading}
+                    onUpload={handleIconUpload}
+                    onClear={clearIcon}
+                  />
                 </FieldGroup>
               </div>
 
@@ -1963,6 +2105,7 @@ export function WorkspaceSkillCreationPage() {
   const { workspaceId } = useWorkspace();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [iconUploading, setIconUploading] = useState(false);
   const [step, setStep] = useState<'metadata' | 'content'>('metadata');
   const [actors, setActors] = useState<ActorOption[]>([]);
   const [conversations, setConversations] = useState<ConversationOption[]>([]);
@@ -2041,6 +2184,30 @@ export function WorkspaceSkillCreationPage() {
     },
     [],
   );
+
+  async function handleIconUpload(file: File) {
+    setIconUploading(true);
+    try {
+      const nextIcon = await uploadSkillIcon(workspaceId, file);
+      setDraft((current) => ({
+        ...current,
+        ...nextIcon,
+      }));
+      toast.success('Skill icon uploaded');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Skill icon upload failed');
+    } finally {
+      setIconUploading(false);
+    }
+  }
+
+  function clearIcon() {
+    setDraft((current) => ({
+      ...current,
+      iconFileId: null,
+      iconPreviewUrl: undefined,
+    }));
+  }
 
   function addPath() {
     const nextPath = normalizeFilePath(newPath);
@@ -2133,7 +2300,7 @@ export function WorkspaceSkillCreationPage() {
       const result = await api.createWorkspaceSkill(workspaceId, {
         name: draft.name.trim(),
         description,
-        iconUrl: draft.iconUrl.trim() || undefined,
+        iconFileId: draft.iconFileId || undefined,
         tags: parseTags(draft.tagsText),
         attachmentFiles,
         grantScope: scopeDraft.useScope,
@@ -2278,14 +2445,12 @@ export function WorkspaceSkillCreationPage() {
                 />
               </Field>
 
-              <Field>
-                <FieldLabel>Icon URL</FieldLabel>
-                <Input
-                  value={draft.iconUrl}
-                  onChange={(event) => setDraft((current) => ({ ...current, iconUrl: event.target.value }))}
-                  placeholder="https://..."
-                />
-              </Field>
+              <SkillIconField
+                previewUrl={draft.iconPreviewUrl}
+                uploading={iconUploading}
+                onUpload={handleIconUpload}
+                onClear={clearIcon}
+              />
             </FieldGroup>
           </div>
 

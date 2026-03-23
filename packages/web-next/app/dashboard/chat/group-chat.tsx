@@ -703,6 +703,7 @@ export default function GroupChat({
                   actorRuntime={msg.fromActorId ? actorRuntimes?.[msg.fromActorId] : undefined}
                   timestamp={msg.createdAt}
                   isUser={msg.role === 'user'}
+                  fromUserId={msg.fromUserId}
                   status={msg.deliveryStatus}
                   toolsUsed={msg.toolsUsed}
                   serverToolCalls={msg.serverToolCalls}

@@ -179,7 +179,7 @@ class ApiClient {
   getMe() {
     return this.fetch("/auth/me")
   }
-  updateMe(data: { name?: string; avatarUrl?: string | null }) {
+  updateMe(data: { name?: string; avatarFileId?: string | null }) {
     return this.fetch("/auth/me", { method: "PUT", body: JSON.stringify(data) })
   }
 
@@ -318,7 +318,7 @@ class ApiClient {
     slug: string
     name: string
     description?: CanonicalContentBlock
-    iconUrl?: string
+    iconFileId?: string | null
     tags?: string[]
     version: string
     changelog?: string
@@ -339,7 +339,7 @@ class ApiClient {
     data: {
       name: string
       description?: CanonicalContentBlock
-      iconUrl?: string
+      iconFileId?: string
       tags?: string[]
       attachmentFiles?: Array<{
         path: string
@@ -385,7 +385,7 @@ class ApiClient {
     data: {
       name?: string
       description?: CanonicalContentBlock
-      iconUrl?: string | null
+      iconFileId?: string | null
       tags?: string[]
       isEnabled?: boolean
       attachmentFiles?: Array<{

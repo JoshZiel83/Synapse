@@ -9,6 +9,7 @@ import {
   type AuthzRelationMutation,
 } from "../../infrastructure/authz/index.js";
 import { query, transaction } from "../../infrastructure/database/index.js";
+import { getFileUrlById } from "../files/service.js";
 
 export type PlatformAccessKey =
   | "super_admin"
@@ -121,7 +122,7 @@ export async function listPlatformAccessBindings() {
         pab.updated_at,
         u.name AS user_name,
         u.email AS user_email,
-        u.avatar_url
+        u.avatar_file_id
      FROM platform_access_bindings pab
      JOIN users u ON u.id = pab.user_id
      ORDER BY pab.access_key ASC, pab.created_at ASC`,
@@ -138,7 +139,7 @@ export async function listPlatformAccessBindings() {
     updatedAt: row.updated_at,
     userName: row.user_name,
     userEmail: row.user_email,
-    avatarUrl: row.avatar_url ?? null,
+    avatarUrl: row.avatar_file_id ? getFileUrlById(row.avatar_file_id) : null,
   }));
 }
 

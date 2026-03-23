@@ -24,6 +24,11 @@ import {
   disconnectSocketsForSession,
   disconnectSocketsForUser,
 } from '../../infrastructure/websocket/auth-session-registry.js';
+import {
+  canUserAccessFileWorkspace,
+  getFileAccessInfo,
+  getFileUrlById,
+} from '../files/service.js';
 import { ensureConfiguredPlatformAdminForUser } from '../platform/admin-service.js';
 
 const SALT_ROUNDS = 10;
@@ -32,7 +37,7 @@ interface UserRow {
   id: string;
   email: string;
   name: string;
-  avatar_url: string | null;
+  avatar_file_id: string | null;
   password_hash: string;
   created_at: string;
   updated_at: string;
@@ -54,7 +59,7 @@ interface AuthenticatedSessionRow {
   id: string;
   email: string;
   name: string;
-  avatar_url: string | null;
+  avatar_file_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -103,12 +108,12 @@ interface AuthQrLoginRequestRow {
   updated_at: string;
 }
 
-function mapUserRow(row: Pick<UserRow, 'id' | 'email' | 'name' | 'avatar_url' | 'created_at' | 'updated_at'>): User {
+function mapUserRow(row: Pick<UserRow, 'id' | 'email' | 'name' | 'avatar_file_id' | 'created_at' | 'updated_at'>): User {
   return {
     id: row.id,
     email: row.email,
     name: row.name,
-    avatarUrl: row.avatar_url ?? undefined,
+    avatarUrl: row.avatar_file_id ? getFileUrlById(row.avatar_file_id) : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -375,7 +380,7 @@ async function insertSession(
 async function getUserByEmail(email: string, executor?: DatabaseExecutor): Promise<UserRow | null> {
   const db = getDatabaseExecutor(executor);
   const result = await db.query<UserRow>(
-    `SELECT id, email, name, avatar_url, password_hash, created_at, updated_at
+    `SELECT id, email, name, avatar_file_id, password_hash, created_at, updated_at
        FROM users
       WHERE email = $1`,
     [email.toLowerCase()],
@@ -387,7 +392,7 @@ async function getUserByEmail(email: string, executor?: DatabaseExecutor): Promi
 async function getUserById(userId: string, executor?: DatabaseExecutor): Promise<UserRow | null> {
   const db = getDatabaseExecutor(executor);
   const result = await db.query<UserRow>(
-    `SELECT id, email, name, avatar_url, password_hash, created_at, updated_at
+    `SELECT id, email, name, avatar_file_id, password_hash, created_at, updated_at
        FROM users
       WHERE id = $1`,
     [userId],
@@ -432,7 +437,7 @@ async function findAuthenticatedSession(token: string): Promise<AuthenticatedSes
         u.id,
         u.email,
         u.name,
-        u.avatar_url,
+        u.avatar_file_id,
         u.created_at,
         u.updated_at
        FROM auth_sessions s
@@ -609,7 +614,7 @@ export function createAuthService(_app: FastifyInstance) {
     const result = await query<UserRow>(
       `INSERT INTO users (email, password_hash, name)
        VALUES ($1, $2, $3)
-       RETURNING id, email, name, avatar_url, password_hash, created_at, updated_at`,
+       RETURNING id, email, name, avatar_file_id, password_hash, created_at, updated_at`,
       [normalizedEmail, passwordHash, name.trim()],
     );
 
@@ -992,19 +997,38 @@ export function createAuthService(_app: FastifyInstance) {
     return mapUserRow(row);
   }
 
-  async function updateProfile(userId: string, input: { name?: string; avatarUrl?: string | null }): Promise<User> {
-    const current = await getProfile(userId);
+  async function updateProfile(userId: string, input: { name?: string; avatarFileId?: string | null }): Promise<User> {
+    const current = await getUserById(userId);
+    if (!current) {
+      throw new AuthError('User not found', 404, 'USER_NOT_FOUND');
+    }
+
     const nextName = input.name === undefined ? current.name : input.name.trim();
-    const nextAvatarUrl = input.avatarUrl === undefined ? current.avatarUrl ?? null : input.avatarUrl;
+    const nextAvatarFileId =
+      input.avatarFileId === undefined
+        ? current.avatar_file_id ?? null
+        : input.avatarFileId;
+
+    if (nextAvatarFileId) {
+      const fileInfo = await getFileAccessInfo(nextAvatarFileId);
+      if (!fileInfo) {
+        throw new AuthError('Avatar file not found', 400, 'AVATAR_FILE_NOT_FOUND');
+      }
+
+      const canAccess = await canUserAccessFileWorkspace(fileInfo.workspaceId, userId);
+      if (!canAccess) {
+        throw new AuthError('Avatar file is not accessible', 403, 'AVATAR_FILE_FORBIDDEN');
+      }
+    }
 
     const result = await query<UserRow>(
       `UPDATE users
           SET name = $2,
-              avatar_url = $3,
+              avatar_file_id = $3,
               updated_at = NOW()
         WHERE id = $1
-        RETURNING id, email, name, avatar_url, password_hash, created_at, updated_at`,
-      [userId, nextName, nextAvatarUrl ?? null],
+        RETURNING id, email, name, avatar_file_id, password_hash, created_at, updated_at`,
+      [userId, nextName, nextAvatarFileId ?? null],
     );
 
     if (!result.rowCount) {

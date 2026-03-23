@@ -30,6 +30,7 @@ import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { useChatStore } from "@/stores/chat-store"
 import { useAuthStore } from "@/stores/auth-store"
 import { api } from "@/lib/api"
+import { resolveFileUrl } from "@/lib/utils"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
   DropdownMenu,
@@ -54,6 +55,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { TeamSwitcher } from "@/components/team-switcher"
+import { toast } from "sonner"
 
 const mainItems = [
   { href: "/dashboard", label: "Home", icon: House },
@@ -208,16 +210,23 @@ function NavUser({
         .toUpperCase()
         .slice(0, 2)
     : "U"
+  const avatarSrc = resolveFileUrl(user?.avatarUrl)
 
   async function handleAvatarFile(file: File | null) {
-    if (!file || !workspaceId) return
+    if (!file) return
+    if (!workspaceId) {
+      toast.error("Open a workspace before uploading an avatar")
+      return
+    }
     setAvatarUploading(true)
     try {
       const uploaded = await api.uploadFile(workspaceId, file)
-      const updated = await api.updateMe({ avatarUrl: uploaded.url || uploaded.fullUrl || null })
+      const updated = await api.updateMe({ avatarFileId: uploaded.id })
       setUser(updated?.user || updated)
+      toast.success("Avatar updated")
     } catch (error) {
       console.error("Failed to update user avatar:", error)
+      toast.error(error instanceof Error ? error.message : "Avatar upload failed")
     } finally {
       setAvatarUploading(false)
     }
@@ -226,6 +235,17 @@ function NavUser({
   return (
     <SidebarMenu>
       <SidebarMenuItem>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0] || null
+            void handleAvatarFile(file)
+            event.target.value = ""
+          }}
+        />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton
@@ -233,7 +253,7 @@ function NavUser({
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
               <Avatar className="size-8 rounded-lg">
-                <AvatarImage src={user?.avatarUrl || undefined} alt={user?.name || "User"} />
+                <AvatarImage src={avatarSrc || undefined} alt={user?.name || "User"} />
                 <AvatarFallback className="rounded-lg bg-sidebar-primary text-xs text-sidebar-primary-foreground">{initials}</AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left text-sm leading-tight">
@@ -249,21 +269,10 @@ function NavUser({
             align="end"
             sideOffset={4}
           >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(event) => {
-                const file = event.target.files?.[0] || null
-                void handleAvatarFile(file)
-                event.target.value = ""
-              }}
-            />
             <DropdownMenuLabel className="p-0 font-normal">
               <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                 <Avatar className="size-8 rounded-lg">
-                  <AvatarImage src={user?.avatarUrl || undefined} alt={user?.name || "User"} />
+                  <AvatarImage src={avatarSrc || undefined} alt={user?.name || "User"} />
                   <AvatarFallback className="rounded-lg bg-sidebar-primary text-xs text-sidebar-primary-foreground">{initials}</AvatarFallback>
                 </Avatar>
                 <div className="grid flex-1 text-left text-sm leading-tight">
@@ -278,7 +287,13 @@ function NavUser({
                 {mounted && theme === "dark" ? <Sun /> : <Moon />}
                 {mounted && theme === "dark" ? "Light mode" : "Dark mode"}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => fileInputRef.current?.click()} disabled={!workspaceId || avatarUploading}>
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault()
+                  fileInputRef.current?.click()
+                }}
+                disabled={!workspaceId || avatarUploading}
+              >
                 {avatarUploading ? <Loader2 className="animate-spin" /> : <ImagePlus />}
                 {avatarUploading ? "Uploading avatar..." : "Change avatar"}
               </DropdownMenuItem>

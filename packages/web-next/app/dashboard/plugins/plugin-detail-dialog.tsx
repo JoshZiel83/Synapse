@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Globe, Code, Puzzle, Wrench, Key } from 'lucide-react';
+import { resolveFileUrl } from '@/lib/utils';
 
 function getLocale(defaultLocale?: string) {
   if (typeof navigator !== 'undefined') {
@@ -44,6 +45,7 @@ export default function PluginDetailDialog({ plugin, installedCount, onInstall, 
   const configFields = plugin.config_fields || [];
   const hasRequiredConfig = configFields.some((field: any) => field.required);
   const locale = getLocale(plugin.default_locale);
+  const iconUrl = resolveFileUrl(plugin.icon_url);
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
@@ -51,8 +53,8 @@ export default function PluginDetailDialog({ plugin, installedCount, onInstall, 
         <DialogHeader>
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-lg bg-blue-500/10 flex items-center justify-center">
-              {plugin.icon_url ? (
-                <img src={plugin.icon_url} alt={plugin.display_name} className="w-8 h-8 rounded-md object-contain" />
+              {iconUrl ? (
+                <img src={iconUrl} alt={plugin.display_name} className="w-8 h-8 rounded-md object-contain" />
               ) : plugin.transport === 'http' ? <Globe className="w-6 h-6 text-blue-400" /> :
                 plugin.transport === 'builtin' ? <Code className="w-6 h-6 text-blue-400" /> :
                   <Puzzle className="w-6 h-6 text-blue-400" />}
