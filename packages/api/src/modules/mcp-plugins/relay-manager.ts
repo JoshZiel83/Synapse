@@ -22,7 +22,7 @@ import { logEvent } from './audit.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { touchRelayExposureAuthzState } from './relay-access.js';
 import { ingestAutomationProviderEvent } from '../automation/service.js';
-import { automationExecutionQueue } from '../../workers/queues.js';
+import { enqueueAutomationExecutionJobs } from '../../workers/queues.js';
 
 interface RelayToolRegistration {
   stableKey: string;
@@ -1000,11 +1000,7 @@ async function emitRelayLifecycleAutomationEvent(params: {
     if (!result || result.executions.length === 0) {
       return;
     }
-    await Promise.all(
-      result.executions.map((execution) =>
-        automationExecutionQueue.add('execute', { executionId: execution.id }),
-      ),
-    );
+    await enqueueAutomationExecutionJobs(result.executions.map((execution) => execution.id));
   } catch (error: any) {
     console.error('[Relay Manager] Failed to emit automation relay lifecycle event:', error?.message || error);
   }

@@ -22,7 +22,7 @@ import {
   updateAutomationEventSource,
   updateAutomationRule,
 } from './service.js';
-import { automationExecutionQueue } from '../../workers/queues.js';
+import { enqueueAutomationExecutionJobs } from '../../workers/queues.js';
 
 const contentBlocksSchema = z.array(z.any()).optional();
 
@@ -169,11 +169,7 @@ function extractWebhookSecret(headers: Record<string, unknown>) {
 }
 
 async function enqueueAutomationExecutions(executionIds: string[]) {
-  await Promise.all(
-    executionIds.map((executionId) =>
-      automationExecutionQueue.add('execute', { executionId }),
-    ),
-  );
+  await enqueueAutomationExecutionJobs(executionIds);
 }
 
 export default async function automationController(app: FastifyInstance) {

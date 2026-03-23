@@ -2,7 +2,7 @@ import { Worker } from 'bullmq';
 import { QUEUE_NAMES } from '@synapse/shared';
 import { redis } from '../infrastructure/redis/index.js';
 import { scheduleDueAutomationExecutions, getAutomationSchedulerIntervalMs } from '../modules/automation/service.js';
-import { automationExecutionQueue, automationSchedulerQueue } from './queues.js';
+import { automationSchedulerQueue, enqueueAutomationExecutionJobs } from './queues.js';
 import { registerWorker } from './registry.js';
 
 export async function ensureAutomationSchedulerJob() {
@@ -21,11 +21,7 @@ export function startAutomationSchedulerWorker() {
     QUEUE_NAMES.AUTOMATION_SCHEDULER,
     async () => {
       const scheduled = await scheduleDueAutomationExecutions();
-      await Promise.all(
-        scheduled.scheduledExecutions.map((executionId) =>
-          automationExecutionQueue.add('execute', { executionId }),
-        ),
-      );
+      await enqueueAutomationExecutionJobs(scheduled.scheduledExecutions);
       return scheduled;
     },
     {

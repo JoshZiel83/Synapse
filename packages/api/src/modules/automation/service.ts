@@ -2492,7 +2492,6 @@ export async function ingestAutomationEvent(input: AutomationEventEnvelope) {
       occurrenceId: occurrence.id,
     });
     if (!isNew) {
-      executions.push(execution);
       continue;
     }
     await applyAutomationPolicyAfterTrigger({
@@ -2658,8 +2657,8 @@ export async function scheduleDueAutomationExecutions(limit = MAX_SCHEDULER_BATC
           completionReason: 'schedule_exhausted',
           client,
         });
+        scheduledExecutions.push(execution.id);
       }
-      scheduledExecutions.push(execution.id);
     }
   });
 
@@ -2674,12 +2673,26 @@ export async function processAutomationExecution(executionId: string): Promise<P
          started_at = COALESCE(started_at, NOW()),
          updated_at = NOW()
      WHERE id = $1
+       AND status = 'pending'
      RETURNING *`,
     [executionId],
   );
   const executionRow = executionResult.rows[0];
   if (!executionRow) {
-    throw new Error(`Automation execution ${executionId} not found`);
+    const existingResult = await query<AutomationExecutionRow>(
+      `SELECT *
+       FROM automation_executions
+       WHERE id = $1
+       LIMIT 1`,
+      [executionId],
+    );
+    if (!existingResult.rows[0]) {
+      throw new Error(`Automation execution ${executionId} not found`);
+    }
+    return {
+      executionId,
+      wakeupCount: 0,
+    };
   }
 
   const execution = mapExecutionRow(executionRow);
