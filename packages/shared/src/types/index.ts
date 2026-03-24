@@ -1054,6 +1054,10 @@ export interface AIRequestLog {
 }
 
 export type AnthropicBuiltinTool = "web_search" | "web_fetch";
+export type ModelEngineKind =
+  | "anthropic.messages"
+  | "openai.chat_completions"
+  | "openai.responses";
 
 export type MultimodalType = "image" | "audio" | "video" | "document";
 
@@ -1067,6 +1071,7 @@ export interface ResolvedModelConfig {
   profileId: UUID;
   profileRevisionId: UUID;
   providerType: ProviderType;
+  engineKind: ModelEngineKind;
   apiKey: string;
   baseUrl: string;
   modelName: string;
@@ -1444,6 +1449,24 @@ export interface ProviderContextWindow {
   orderedTailItems: CanonicalContextItem[];
 }
 
+export interface EngineBranchCursor {
+  sharedSequence?: number;
+  privateSequence?: number;
+  appliedItemIds?: string[];
+}
+
+export interface EngineBranchState {
+  branchId: string;
+  sessionId: string;
+  conversationId?: string;
+  providerType: ProviderType;
+  engineKind: ModelEngineKind;
+  bindingKey: string;
+  cursor: EngineBranchCursor;
+  nativeState?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
 // ============ Conversation Message ============
 export type ConversationMessage =
   | { role: "user"; content: CanonicalContentBlock[] }
@@ -1545,6 +1568,9 @@ export interface AIResponse {
   stopReason: string; // e.g. 'end_turn', 'tool_use' (Anthropic) or 'stop', 'tool_calls' (OpenAI)
   rawAssistantMessage?: unknown; // Provider-specific raw assistant message for server tool extraction
   mediaBlocks?: unknown[]; // Provider raw media content blocks (images, audio from model response)
+  serverToolCalls?: ServerToolCall[];
+  citationSources?: Record<string, { url: string; title: string }>;
+  branchState?: EngineBranchState;
 }
 
 // ============================================================

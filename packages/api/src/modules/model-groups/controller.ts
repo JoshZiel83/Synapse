@@ -29,6 +29,7 @@ import {
 
 const routingStrategyEnum = z.enum(['weighted_random', 'round_robin', 'priority_failover']);
 const providerTypeEnum = z.enum(['anthropic', 'openai']);
+const engineKindEnum = z.enum(['anthropic.messages', 'openai.chat_completions', 'openai.responses']);
 const grantScopeEnum = z.enum(['platform', 'workspace', 'user', 'workspace_user', 'actor']);
 
 const attemptPolicySchema = z.object({
@@ -62,6 +63,7 @@ const addItemSchema = z.object({
   priority: z.number().int().optional(),
   weight: z.number().int().min(0).max(1000).optional(),
   providerType: providerTypeEnum,
+  engineKind: engineKindEnum.optional(),
   apiKey: z.string().min(1),
   baseUrl: z.string().min(1),
   modelName: z.string().min(1),
@@ -78,6 +80,7 @@ const updateItemSchema = z.object({
   weight: z.number().int().min(0).max(1000).optional(),
   isEnabled: z.boolean().optional(),
   providerType: providerTypeEnum.optional(),
+  engineKind: engineKindEnum.optional(),
   apiKey: z.string().min(1).optional(),
   baseUrl: z.string().min(1).optional(),
   modelName: z.string().min(1).optional(),

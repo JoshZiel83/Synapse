@@ -79,6 +79,14 @@ function asObject(value: unknown): JsonMap {
   return value as JsonMap;
 }
 
+function withEngineKind(extraConfig: JsonMap | undefined, engineKind?: string): JsonMap | undefined {
+  const next = { ...(extraConfig || {}) };
+  if (engineKind) {
+    next.engine_kind = engineKind;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
   if (entryIds.length === 0) return;
 
@@ -172,6 +180,13 @@ function mapGroupRow(row: ModelGroupRow) {
 }
 
 function mapGroupItem(row: any) {
+  const extraConfig = asObject(row.extra_config);
+  const engineKind = typeof extraConfig.engine_kind === 'string'
+    ? extraConfig.engine_kind
+    : row.provider_type === 'openai'
+      ? 'openai.chat_completions'
+      : 'anthropic.messages';
+
   return {
     id: row.item_id ?? row.id,
     group_id: row.group_id,
@@ -183,11 +198,12 @@ function mapGroupItem(row: any) {
     is_enabled: Boolean(row.item_enabled ?? row.is_enabled),
     version: row.version || null,
     provider_type: row.provider_type || null,
+    engine_kind: engineKind,
     base_url: row.base_url || null,
     model_name: row.model_name || null,
     max_tokens: row.max_tokens || null,
     capability_tags: row.capability_tags || [],
-    extra_config: asObject(row.extra_config),
+    extra_config: extraConfig,
     request_timeout_ms: row.request_timeout_ms ?? null,
     max_retries: row.max_retries ?? null,
     created_at: row.created_at,
@@ -941,6 +957,7 @@ export async function addModelItem(groupId: string, data: {
   priority?: number;
   weight?: number;
   providerType: string;
+  engineKind?: string;
   apiKey: string;
   baseUrl: string;
   modelName: string;
@@ -976,7 +993,7 @@ export async function addModelItem(groupId: string, data: {
     modelName: data.modelName,
     maxTokens: data.maxTokens,
     capabilityTags: data.capabilityTags,
-    extraConfig: data.extraConfig,
+    extraConfig: withEngineKind(data.extraConfig, data.engineKind),
     requestTimeoutMs: data.requestTimeoutMs,
     maxRetries: data.maxRetries,
   });
@@ -1036,6 +1053,7 @@ export async function updateModelItem(groupId: string, itemId: string, data: {
   weight?: number;
   isEnabled?: boolean;
   providerType?: string;
+  engineKind?: string;
   apiKey?: string;
   baseUrl?: string;
   modelName?: string;
@@ -1137,6 +1155,7 @@ export async function updateModelItem(groupId: string, itemId: string, data: {
 
   const hasConfigChange =
     data.providerType !== undefined ||
+    data.engineKind !== undefined ||
     data.apiKey !== undefined ||
     data.baseUrl !== undefined ||
     data.modelName !== undefined ||
@@ -1157,7 +1176,10 @@ export async function updateModelItem(groupId: string, itemId: string, data: {
       modelName: data.modelName || (item.model_name as string),
       maxTokens: data.maxTokens ?? (item.max_tokens as number | null) ?? undefined,
       capabilityTags: data.capabilityTags || (item.capability_tags as string[] | null) || [],
-      extraConfig: data.extraConfig ?? asObject(item.extra_config),
+      extraConfig: withEngineKind(
+        data.extraConfig ?? asObject(item.extra_config),
+        data.engineKind,
+      ),
       requestTimeoutMs: data.requestTimeoutMs ?? (item.request_timeout_ms as number | null) ?? undefined,
       maxRetries: data.maxRetries ?? (item.max_retries as number | null) ?? undefined,
     });
@@ -1329,6 +1351,7 @@ export async function getItemVersions(itemId: string, groupId?: string) {
         r.profile_id,
         r.version,
         r.provider_type,
+        r.extra_config->>'engine_kind' AS engine_kind,
         r.base_url,
         r.model_name,
         r.max_tokens,

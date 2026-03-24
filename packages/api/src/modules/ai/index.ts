@@ -1,4 +1,4 @@
-import type { Actor, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ResolvedModelPlan, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow, AvailableSkillSummary, ModelAttemptPolicy } from '@synapse/shared';
+import type { Actor, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ResolvedModelPlan, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow, AvailableSkillSummary, ModelAttemptPolicy, EngineBranchState } from '@synapse/shared';
 import type { CanonicalContextItem, NormalizedMcpToolResult } from '@synapse/shared/types';
 import { normalizeCanonicalContentBlocks, textBlock, textBlocks, extractText } from '@synapse/shared';
 import { randomUUID } from 'crypto';
@@ -14,6 +14,13 @@ import { ingestResponseMedia } from './content-ingest.js';
 import { resolveFileRefSegments } from './fileref-resolver.js';
 import { buildAdHocContextItems } from './context-builder.js';
 import { buildAdHocProviderContextWindow } from '../context/service.js';
+import {
+  createEngineBindingKey,
+  getEngineBranchState,
+  initializeEngineBranchState,
+  saveEngineBranchState,
+  shouldRebuildBranchState,
+} from './engine-branches.js';
 import { DEFAULT_MODEL_ATTEMPT_POLICY } from '../model-groups/defaults.js';
 import { getGroupMembers as getLiveGroupMembers } from '../group/service.js';
 import {
@@ -40,16 +47,18 @@ function getProvider(resolved?: ResolvedModelConfig | null): AIProvider {
         baseUrl: resolved.baseUrl,
         model: resolved.modelName,
         maxTokens: resolved.maxTokens,
+        engineKind: resolved.engineKind,
       }
     : {
         apiKey: config.ai.apiKey,
         baseUrl: config.ai.baseUrl,
         model: config.ai.model,
         maxTokens: config.ai.maxTokens,
+        engineKind: config.ai.provider === 'openai' ? 'openai.chat_completions' : 'anthropic.messages',
       };
 
   const providerName = resolved?.providerType || config.ai.provider;
-  const cacheKey = `${providerName}:${providerConfig.apiKey}:${providerConfig.baseUrl}:${providerConfig.model}`;
+  const cacheKey = `${providerConfig.engineKind}:${providerConfig.apiKey}:${providerConfig.baseUrl}:${providerConfig.model}`;
 
   let provider = providerCache.get(cacheKey);
   if (!provider) {
@@ -65,6 +74,7 @@ function getFallbackResolvedConfig(): ResolvedModelConfig {
     profileId: 'env-fallback',
     profileRevisionId: 'env-fallback',
     providerType: config.ai.provider === 'openai' ? 'openai' : 'anthropic',
+    engineKind: config.ai.provider === 'openai' ? 'openai.chat_completions' : 'anthropic.messages',
     apiKey: config.ai.apiKey,
     baseUrl: config.ai.baseUrl,
     modelName: config.ai.model,
@@ -365,6 +375,7 @@ export async function actorThink(
 
   const buildRequestLog = (round: number, resolved?: ResolvedModelConfig | null, attempt?: number) => ({
     provider: resolved?.providerType || config.ai.provider,
+    engineKind: resolved?.engineKind || (config.ai.provider === 'openai' ? 'openai.chat_completions' : 'anthropic.messages'),
     model: resolved?.modelName || config.ai.model,
     round,
     attempt: attempt || 1,
@@ -414,6 +425,7 @@ export async function actorThink(
   const allServerToolCalls: ServerToolCall[] = []; // track cloud-side tool calls
   let allCitationSources: Record<string, { url: string; title: string }> = {}; // cite index → source
   const onStatus = options?.onStatus;
+  const branchStateCache = new Map<string, EngineBranchState>();
 
   // Accumulate ToolRound[] for DB storage only (not passed to provider)
   const toolRounds: ToolRound[] = [];
@@ -479,6 +491,7 @@ export async function actorThink(
           modelProfileRevisionId: params.resolved.profileRevisionId,
           modelName: params.resolved.modelName || config.ai.model,
           capabilitiesSnapshot: {
+            engineKind: params.resolved.engineKind,
             builtinTools: params.resolved.builtinTools || [],
             multimodal: params.resolved.multimodal || null,
             toolNames: allTools.map((tool) => tool.name),
@@ -535,13 +548,59 @@ export async function actorThink(
           const attemptStart = Date.now();
 
           try {
+            const branchKey = options?.sessionId ? `${options.sessionId}:${createEngineBindingKey(candidate)}` : '';
+            let branchState = options?.sessionId
+              ? (
+                  branchStateCache.get(branchKey) ||
+                  await getEngineBranchState(options.sessionId, candidate) ||
+                  initializeEngineBranchState({
+                    sessionId: options.sessionId,
+                    conversationId: options.conversationId,
+                    resolved: candidate,
+                  })
+                )
+              : undefined;
+
+            if (branchState && branchKey) {
+              branchStateCache.set(branchKey, branchState);
+            }
+
+            if (
+              branchState &&
+              branchKey &&
+              shouldRebuildBranchState(allContextWindow, branchState, system)
+            ) {
+              const rebuiltBranchState = await provider.rebuildBranchState({
+                system,
+                contextWindow: allContextWindow,
+                branchState,
+                tools: allTools,
+                builtinTools: candidate.builtinTools,
+                multimodal: candidate.multimodal,
+              });
+
+              const persistedRebuiltBranch = await saveEngineBranchState(rebuiltBranchState, {
+                checkpointKind: 'compaction',
+              });
+              branchState = persistedRebuiltBranch || rebuiltBranchState;
+              branchStateCache.set(branchKey, branchState);
+            }
+
             const response = await withTimeout(provider.chat({
               system,
               contextWindow: allContextWindow,
+              branchState,
               tools: allTools,
               builtinTools: candidate.builtinTools,
               multimodal: candidate.multimodal,
             }), candidatePolicy.timeoutMsPerAttempt);
+
+            if (response.branchState) {
+              const persistedBranchState = await saveEngineBranchState(response.branchState);
+              if (persistedBranchState && branchKey) {
+                branchStateCache.set(branchKey, persistedBranchState);
+              }
+            }
 
             const assistantMsg = response.context[0];
             const textContent = assistantMsg?.role === 'assistant' ? extractText(assistantMsg.content) : '';
@@ -650,8 +709,7 @@ export async function actorThink(
         }
       }
 
-      // Extract server-side tool calls from raw response (Anthropic web_search/web_fetch, OpenAI web_search_call)
-      const serverCalls = extractServerToolCalls(response.rawAssistantMessage);
+      const serverCalls = response.serverToolCalls || [];
       if (serverCalls.length > 0) {
         allServerToolCalls.push(...serverCalls);
         if (onStatus) {
@@ -664,18 +722,12 @@ export async function actorThink(
         }
       }
 
-      // Extract citation index → source mapping from raw response
-      const citations = extractCitationSources(response.rawAssistantMessage);
+      const citations = response.citationSources;
       if (citations) {
         allCitationSources = { ...allCitationSources, ...citations };
       }
 
-      // For OpenAI: inject <cite> markers into text using url_citation annotations
-      // We need a mutable textContent for citation injection
       let finalTextContent = textContent;
-      if (citations && !Array.isArray(response.rawAssistantMessage)) {
-        finalTextContent = injectOpenAICitationMarkers(textContent, response.rawAssistantMessage, citations);
-      }
       if (finalTextContent.trim().length > 0 || roundMediaBlocks.length > 0) {
         finalDraftText = finalTextContent;
         finalDraftProvider = provider;
@@ -1303,229 +1355,4 @@ export async function aiComplete(
     content: responseText,
     tokensUsed: response.tokensUsed,
   };
-}
-
-/**
- * Extract server-side tool calls from the raw assistant message.
- * Handles both Anthropic (server_tool_use + web_search_tool_result / web_fetch_tool_result)
- * and OpenAI (web_search_call) formats.
- */
-function extractServerToolCalls(rawMessage: unknown): ServerToolCall[] {
-  const calls: ServerToolCall[] = [];
-
-  // Anthropic format: rawMessage is content block array
-  if (Array.isArray(rawMessage)) {
-    const blocks = rawMessage as any[];
-    // Build a map of tool_use_id → ServerToolCall for pairing with results
-    const pendingByUseId = new Map<string, ServerToolCall>();
-
-    for (const block of blocks) {
-      // server_tool_use: Claude decided to call a server tool
-      if (block.type === 'server_tool_use') {
-        const call: ServerToolCall = { type: block.name === 'web_fetch' ? 'web_fetch' : 'web_search' };
-        if (block.name === 'web_search' && block.input?.query) {
-          call.query = block.input.query;
-        }
-        if (block.name === 'web_fetch' && block.input?.url) {
-          call.url = block.input.url;
-        }
-        if (block.id) pendingByUseId.set(block.id, call);
-        calls.push(call);
-      }
-
-      // web_search_tool_result: search results from Anthropic
-      if (block.type === 'web_search_tool_result' && block.tool_use_id) {
-        const parent = pendingByUseId.get(block.tool_use_id);
-        if (parent && Array.isArray(block.content)) {
-          parent.results = block.content
-            .filter((r: any) => r.type === 'web_search_result' && r.url)
-            .map((r: any) => ({
-              url: r.url,
-              title: r.title || '',
-              pageAge: r.page_age,
-            }));
-        }
-      }
-
-      // web_fetch_tool_result: fetch result from Anthropic
-      if (block.type === 'web_fetch_tool_result' && block.tool_use_id) {
-        const parent = pendingByUseId.get(block.tool_use_id);
-        if (parent && block.content?.url) {
-          parent.url = block.content.url;
-        }
-      }
-    }
-  }
-
-  // OpenAI format: rawMessage is a message object with potential web_search_call in output
-  if (rawMessage && typeof rawMessage === 'object' && !Array.isArray(rawMessage)) {
-    const msg = rawMessage as any;
-    if (Array.isArray(msg.output)) {
-      for (const item of msg.output) {
-        if (item.type === 'web_search_call') {
-          calls.push({ type: 'web_search', query: item.action?.query });
-        }
-      }
-    }
-  }
-
-  return calls;
-}
-
-/**
- * Extract citation index → source mapping from rawAssistantMessage.
- *
- * Anthropic format:
- *   rawMessage is a content block array. <cite index="X-Y"> maps to content
- *   block X, search result Y (0-indexed). Also extracts structured citations
- *   from text blocks. Returns { "3-1": { url, title }, ... }
- *
- * OpenAI Responses API format:
- *   rawMessage is a message object whose content[].annotations contain
- *   url_citation objects with start_index, end_index, url, title.
- *   Returns { "oai-0": { url, title }, ... }
- */
-function extractCitationSources(rawMessage: unknown): Record<string, { url: string; title: string }> | undefined {
-  const sources: Record<string, { url: string; title: string }> = {};
-  let hasSources = false;
-
-  // ── Anthropic format: rawMessage is content block array ──
-  if (Array.isArray(rawMessage)) {
-    const blocks = rawMessage as any[];
-
-    for (let i = 0; i < blocks.length; i++) {
-      const block = blocks[i];
-
-      // Map web_search_tool_result blocks by their index
-      if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
-        const results = block.content.filter((r: any) => r.type === 'web_search_result');
-        for (let j = 0; j < results.length; j++) {
-          const r = results[j];
-          if (r.url) {
-            sources[`${i}-${j}`] = { url: r.url, title: r.title || '' };
-            hasSources = true;
-          }
-        }
-      }
-
-      // Also extract structured citations from text blocks
-      if (block.type === 'text' && Array.isArray(block.citations)) {
-        for (const cit of block.citations) {
-          if (cit.url && cit.type === 'web_search_result_location') {
-            if (!Object.values(sources).some((s) => s.url === cit.url)) {
-              const key = `cit-${cit.url}`;
-              sources[key] = { url: cit.url, title: cit.title || '' };
-              hasSources = true;
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // ── OpenAI format: rawMessage is a message object ──
-  if (rawMessage && typeof rawMessage === 'object' && !Array.isArray(rawMessage)) {
-    const msg = rawMessage as any;
-
-    // Responses API: msg.content is array of output_text blocks with annotations
-    const contentBlocks = Array.isArray(msg.content) ? msg.content : [];
-    for (const block of contentBlocks) {
-      if (block.type === 'output_text' && Array.isArray(block.annotations)) {
-        for (const ann of block.annotations) {
-          if (ann.type === 'url_citation' && ann.url) {
-            if (!Object.values(sources).some((s) => s.url === ann.url)) {
-              const key = `oai-${ann.url}`;
-              sources[key] = { url: ann.url, title: ann.title || '' };
-              hasSources = true;
-            }
-          }
-        }
-      }
-    }
-
-    // Responses API: output array contains message items
-    if (Array.isArray(msg.output)) {
-      for (const item of msg.output) {
-        if (item.type === 'message' && Array.isArray(item.content)) {
-          for (const block of item.content) {
-            if (block.type === 'output_text' && Array.isArray(block.annotations)) {
-              for (const ann of block.annotations) {
-                if (ann.type === 'url_citation' && ann.url) {
-                  if (!Object.values(sources).some((s) => s.url === ann.url)) {
-                    const key = `oai-${ann.url}`;
-                    sources[key] = { url: ann.url, title: ann.title || '' };
-                    hasSources = true;
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return hasSources ? sources : undefined;
-}
-
-/**
- * Inject citation markers into text content for OpenAI url_citation annotations.
- * Converts OpenAI's positional annotations (start_index/end_index) into
- * Anthropic-compatible <cite> tags so the frontend can render them uniformly.
- *
- * Returns the modified text, or the original text if no annotations found.
- */
-function injectOpenAICitationMarkers(
-  textContent: string,
-  rawMessage: unknown,
-  citationSources?: Record<string, { url: string; title: string }> | null,
-): string {
-  if (!rawMessage || typeof rawMessage !== 'object' || Array.isArray(rawMessage)) return textContent;
-  if (!citationSources) return textContent;
-
-  const msg = rawMessage as any;
-
-  // Collect all url_citation annotations with positions
-  interface Annotation { start: number; end: number; url: string }
-  const annotations: Annotation[] = [];
-
-  const extractAnnotations = (block: any) => {
-    if (block.type === 'output_text' && Array.isArray(block.annotations)) {
-      for (const ann of block.annotations) {
-        if (ann.type === 'url_citation' && typeof ann.start_index === 'number' && typeof ann.end_index === 'number' && ann.url) {
-          annotations.push({ start: ann.start_index, end: ann.end_index, url: ann.url });
-        }
-      }
-    }
-  };
-
-  // Check content blocks directly
-  if (Array.isArray(msg.content)) {
-    for (const block of msg.content) extractAnnotations(block);
-  }
-  // Check output array
-  if (Array.isArray(msg.output)) {
-    for (const item of msg.output) {
-      if (item.type === 'message' && Array.isArray(item.content)) {
-        for (const block of item.content) extractAnnotations(block);
-      }
-    }
-  }
-
-  if (annotations.length === 0) return textContent;
-
-  // Sort by start_index descending so we can insert from end without shifting indices
-  annotations.sort((a, b) => b.start - a.start);
-
-  // Find the citation source key for each URL
-  let result = textContent;
-  for (const ann of annotations) {
-    const key = Object.entries(citationSources).find(([, v]) => v.url === ann.url)?.[0];
-    if (!key || ann.start < 0 || ann.end > result.length) continue;
-
-    const citedText = result.substring(ann.start, ann.end);
-    result = result.substring(0, ann.start) + `<cite index="${key}">${citedText}</cite>` + result.substring(ann.end);
-  }
-
-  return result;
 }

@@ -7,6 +7,13 @@ import { compileContextWindowToConversationMessages, compressContextWindow } fro
 import { parseFileRefSegments } from '../fileref-resolver.js';
 import { buildAudioFallbackContext } from '../audio-fallback.js';
 import { buildImageFallbackContext } from '../image-fallback.js';
+import {
+  advanceEngineBranchState,
+  buildAssistantMessageAppliedKey,
+  buildToolCallBatchAppliedKey,
+  buildBranchDeltaWindow,
+  canResumeBranchFromWindow,
+} from '../engine-branches.js';
 
 // Map tool names to their latest versioned type identifiers
 const BUILTIN_TOOL_TYPES: Record<string, string> = {
@@ -88,8 +95,90 @@ async function ensureSupportedFormat(
   }
 }
 
+function extractAnthropicServerToolCalls(blocks: Array<Record<string, any>>): AIResponse['serverToolCalls'] {
+  const calls: NonNullable<AIResponse['serverToolCalls']> = [];
+  const pendingByUseId = new Map<string, NonNullable<AIResponse['serverToolCalls']>[number]>();
+
+  for (const block of blocks) {
+    if (block.type === 'server_tool_use') {
+      const call = { type: block.name === 'web_fetch' ? 'web_fetch' as const : 'web_search' as const } as NonNullable<AIResponse['serverToolCalls']>[number];
+      if (block.name === 'web_search' && block.input?.query) {
+        call.query = block.input.query;
+      }
+      if (block.name === 'web_fetch' && block.input?.url) {
+        call.url = block.input.url;
+      }
+      if (block.id) pendingByUseId.set(block.id, call);
+      calls.push(call);
+      continue;
+    }
+
+    if (block.type === 'web_search_tool_result' && block.tool_use_id) {
+      const parent = pendingByUseId.get(block.tool_use_id);
+      if (parent && Array.isArray(block.content)) {
+        parent.results = block.content
+          .filter((item: any) => item.type === 'web_search_result' && item.url)
+          .map((item: any) => ({
+            url: item.url,
+            title: item.title || '',
+            pageAge: item.page_age,
+          }));
+      }
+      continue;
+    }
+
+    if (block.type === 'web_fetch_tool_result' && block.tool_use_id) {
+      const parent = pendingByUseId.get(block.tool_use_id);
+      if (parent && block.content?.url) {
+        parent.url = block.content.url;
+      }
+    }
+  }
+
+  return calls.length > 0 ? calls : undefined;
+}
+
+function extractAnthropicCitationSources(
+  blocks: Array<Record<string, any>>,
+): Record<string, { url: string; title: string }> | undefined {
+  const sources: Record<string, { url: string; title: string }> = {};
+  let hasSources = false;
+
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i];
+    if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
+      const results = block.content.filter((item: any) => item.type === 'web_search_result');
+      for (let j = 0; j < results.length; j += 1) {
+        const result = results[j];
+        if (!result.url) continue;
+        sources[`${i}-${j}`] = {
+          url: result.url,
+          title: result.title || '',
+        };
+        hasSources = true;
+      }
+    }
+
+    if (block.type === 'text' && Array.isArray(block.citations)) {
+      for (const citation of block.citations) {
+        if (!citation.url || citation.type !== 'web_search_result_location') continue;
+        const key = `cit-${citation.url}`;
+        if (sources[key]) continue;
+        sources[key] = {
+          url: citation.url,
+          title: citation.title || '',
+        };
+        hasSources = true;
+      }
+    }
+  }
+
+  return hasSources ? sources : undefined;
+}
+
 export class AnthropicProvider implements AIProvider {
   readonly name = 'anthropic';
+  readonly kind = 'anthropic.messages' as const;
   private config: AIProviderConfig;
 
   constructor(config: AIProviderConfig) {
@@ -99,20 +188,36 @@ export class AnthropicProvider implements AIProvider {
   async chat(params: {
     system: string;
     contextWindow: ProviderContextWindow;
+    branchState?: import('@synapse/shared').EngineBranchState;
     tools?: ToolDefinition[];
     builtinTools?: AnthropicBuiltinTool[];
     multimodal?: MultimodalConfig;
   }): Promise<AIResponse> {
     const base = this.config.baseUrl.replace(/\/+$/, '');
     const toolNameMaps = buildToolNameMaps(params.tools || []);
+    const resumeState = params.branchState?.engineKind === this.kind
+      ? params.branchState
+      : undefined;
+    const resumedMessages = Array.isArray(resumeState?.nativeState?.messages)
+      ? resumeState.nativeState.messages as Record<string, unknown>[]
+      : null;
+    const canResume = (
+      !!resumedMessages &&
+      resumeState?.metadata?.systemPrompt === params.system &&
+      canResumeBranchFromWindow(params.contextWindow, resumeState)
+    );
 
-    const preparedWindow = await this.compressContextWindow(params.contextWindow);
+    const sourceWindow = canResume
+      ? buildBranchDeltaWindow(params.contextWindow, resumeState)
+      : params.contextWindow;
+    const preparedWindow = await this.compressContextWindow(sourceWindow);
     const conversationMessages = await this.compileContextWindow(preparedWindow);
-    const allMessages = await this.convertMessages(
+    const deltaMessages = await this.convertMessages(
       conversationMessages,
       params.multimodal,
       toolNameMaps.canonicalToAlias,
     );
+    const allMessages = canResume ? [...resumedMessages, ...deltaMessages] : deltaMessages;
 
     const body: Record<string, unknown> = {
       model: this.config.model,
@@ -180,7 +285,7 @@ export class AnthropicProvider implements AIProvider {
     }
 
     const data = await response.json() as {
-      content: Array<{ type: string; id?: string; text?: string; name?: string; input?: Record<string, unknown> }>;
+      content: Array<{ type: string; id?: string; text?: string; name?: string; input?: Record<string, unknown>; citations?: unknown[] }>;
       usage: { input_tokens: number; output_tokens: number };
       stop_reason?: string;
     };
@@ -223,6 +328,27 @@ export class AnthropicProvider implements AIProvider {
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     };
 
+    const rawAssistantMessage = data.content as Array<Record<string, any>>;
+    const appliedKeys = [
+      textContent
+        ? buildAssistantMessageAppliedKey(params.branchState?.sessionId, textContent)
+        : undefined,
+      buildToolCallBatchAppliedKey(toolCalls, textContent),
+    ].filter((value): value is string => !!value);
+    const branchState = params.branchState?.sessionId
+      ? advanceEngineBranchState(
+          params.branchState,
+          params.contextWindow,
+          {
+            messages: [...allMessages, { role: 'assistant', content: rawAssistantMessage }],
+          },
+          {
+            systemPrompt: params.system,
+          },
+          appliedKeys.length > 0 ? appliedKeys : undefined,
+        )
+      : undefined;
+
     return {
       context: [assistantMsg],
       tokensUsed: {
@@ -230,9 +356,37 @@ export class AnthropicProvider implements AIProvider {
         output: data.usage.output_tokens,
       },
       stopReason: data.stop_reason || 'end_turn',
-      rawAssistantMessage: data.content,
+      rawAssistantMessage,
       mediaBlocks: mediaBlocks.length > 0 ? mediaBlocks : undefined,
+      serverToolCalls: extractAnthropicServerToolCalls(rawAssistantMessage),
+      citationSources: extractAnthropicCitationSources(rawAssistantMessage),
+      branchState,
     };
+  }
+
+  async rebuildBranchState(params: {
+    system: string;
+    contextWindow: ProviderContextWindow;
+    branchState: import('@synapse/shared').EngineBranchState;
+    tools?: ToolDefinition[];
+    builtinTools?: AnthropicBuiltinTool[];
+    multimodal?: MultimodalConfig;
+  }) {
+    const toolNameMaps = buildToolNameMaps(params.tools || []);
+    const preparedWindow = await this.compressContextWindow(params.contextWindow);
+    const conversationMessages = await this.compileContextWindow(preparedWindow);
+    const messages = await this.convertMessages(
+      conversationMessages,
+      params.multimodal,
+      toolNameMaps.canonicalToAlias,
+    );
+
+    return advanceEngineBranchState(
+      params.branchState,
+      params.contextWindow,
+      { messages },
+      { systemPrompt: params.system },
+    );
   }
 
   protected async compressContextWindow(window: ProviderContextWindow) {

@@ -47,6 +47,29 @@ const MULTIMODAL_TYPES = [
   { key: 'document', label: 'Documents', description: 'Send PDF and document files to the model', icon: FileIcon },
 ];
 
+const ENGINE_KIND_OPTIONS: Record<string, Array<{ value: string; label: string }>> = {
+  anthropic: [
+    { value: 'anthropic.messages', label: 'Messages API' },
+  ],
+  openai: [
+    { value: 'openai.chat_completions', label: 'Chat Completions' },
+    { value: 'openai.responses', label: 'Responses API' },
+  ],
+};
+
+function defaultEngineKind(providerType: string) {
+  return providerType === 'openai' ? 'openai.chat_completions' : 'anthropic.messages';
+}
+
+function defaultBaseUrl(providerType: string) {
+  return providerType === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com';
+}
+
+function defaultModelName(providerType: string, engineKind?: string) {
+  if (providerType !== 'openai') return 'claude-sonnet-4-20250514';
+  return engineKind === 'openai.responses' ? 'gpt-5' : 'gpt-4.1';
+}
+
 export default function ModelItemDialog({
   open,
   onOpenChange,
@@ -58,6 +81,7 @@ export default function ModelItemDialog({
   const { workspaceId } = useWorkspace();
   const [displayName, setDisplayName] = useState('');
   const [providerType, setProviderType] = useState('anthropic');
+  const [engineKind, setEngineKind] = useState('anthropic.messages');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [modelName, setModelName] = useState('');
@@ -70,8 +94,11 @@ export default function ModelItemDialog({
 
   useEffect(() => {
     if (item) {
+      const resolvedProviderType = item.provider_type || 'anthropic';
+      const resolvedEngineKind = item.engine_kind || item.extra_config?.engine_kind || defaultEngineKind(resolvedProviderType);
       setDisplayName(item.display_name || '');
-      setProviderType(item.provider_type || 'anthropic');
+      setProviderType(resolvedProviderType);
+      setEngineKind(resolvedEngineKind);
       setApiKey(''); // Never pre-fill API key for security
       setBaseUrl(item.base_url || '');
       setModelName(item.model_name || '');
@@ -85,9 +112,10 @@ export default function ModelItemDialog({
     } else {
       setDisplayName('');
       setProviderType('anthropic');
+      setEngineKind('anthropic.messages');
       setApiKey('');
-      setBaseUrl('https://api.anthropic.com');
-      setModelName('claude-sonnet-4-20250514');
+      setBaseUrl(defaultBaseUrl('anthropic'));
+      setModelName(defaultModelName('anthropic', 'anthropic.messages'));
       setMaxTokens('4096');
       setPriority('0');
       setWeight('100');
@@ -134,6 +162,7 @@ export default function ModelItemDialog({
         if (baseUrl.trim()) updateData.baseUrl = baseUrl.trim();
         if (apiKey.trim()) updateData.apiKey = apiKey.trim();
         if (providerType) updateData.providerType = providerType;
+        updateData.engineKind = engineKind;
         updateData.maxTokens = parseInt(maxTokens);
 
         if (scope === 'platform') {
@@ -150,6 +179,7 @@ export default function ModelItemDialog({
           priority: parseInt(priority),
           weight: parseInt(weight),
           providerType,
+          engineKind,
           apiKey: apiKey.trim(),
           baseUrl: baseUrl.trim(),
           modelName: modelName.trim(),
@@ -200,8 +230,13 @@ export default function ModelItemDialog({
               <select
                 value={providerType}
                 onChange={(e) => {
-                  setProviderType(e.target.value);
-                  if (e.target.value !== 'anthropic') setBuiltinTools([]);
+                  const nextProviderType = e.target.value;
+                  const nextEngineKind = defaultEngineKind(nextProviderType);
+                  setProviderType(nextProviderType);
+                  setEngineKind(nextEngineKind);
+                  setBaseUrl(defaultBaseUrl(nextProviderType));
+                  setModelName(defaultModelName(nextProviderType, nextEngineKind));
+                  if (nextProviderType !== 'anthropic') setBuiltinTools([]);
                 }}
                 className="w-full h-10 px-3 rounded-md bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 text-sm text-foreground focus:border-blue-500/40 outline-none"
               >
@@ -209,6 +244,25 @@ export default function ModelItemDialog({
                 <option value="openai">OpenAI</option>
               </select>
             </div>
+            <div className="space-y-2">
+              <Label>Protocol</Label>
+              <select
+                value={engineKind}
+                onChange={(e) => {
+                  const nextEngineKind = e.target.value;
+                  setEngineKind(nextEngineKind);
+                  setModelName(defaultModelName(providerType, nextEngineKind));
+                }}
+                className="w-full h-10 px-3 rounded-md bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 text-sm text-foreground focus:border-blue-500/40 outline-none"
+              >
+                {(ENGINE_KIND_OPTIONS[providerType] || []).map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Model Name</Label>
               <Input value={modelName} onChange={(e) => setModelName(e.target.value)}

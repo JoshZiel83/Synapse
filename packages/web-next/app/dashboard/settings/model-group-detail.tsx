@@ -36,6 +36,7 @@ interface ModelItem {
   current_revision_id: string | null;
   version: number;
   provider_type: string;
+  engine_kind?: string;
   base_url: string;
   model_name: string;
   max_tokens: number;
@@ -301,6 +302,11 @@ export default function ModelGroupDetail({
                           {item.provider_type ? (
                             <Badge className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-xs">
                               {item.provider_type}
+                            </Badge>
+                          ) : null}
+                          {item.engine_kind ? (
+                            <Badge className="bg-slate-500/10 text-slate-300 border-slate-500/20 text-xs">
+                              {item.engine_kind}
                             </Badge>
                           ) : null}
                         </div>

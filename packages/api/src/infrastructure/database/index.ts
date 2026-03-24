@@ -76,6 +76,16 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     ],
     reason: "SpiceDB relationship outbox",
   },
+  {
+    table: "session_engine_branches",
+    requiredColumns: ["session_id", "engine_kind", "binding_key", "native_state"],
+    reason: "provider/session branch persistence",
+  },
+  {
+    table: "engine_branch_checkpoints",
+    requiredColumns: ["branch_id", "engine_kind", "binding_key", "native_state"],
+    reason: "branch checkpoints and recovery",
+  },
 ];
 
 function summarizeParams(params?: any[]) {

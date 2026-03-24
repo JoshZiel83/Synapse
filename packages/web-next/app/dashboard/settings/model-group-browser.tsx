@@ -52,6 +52,7 @@ type ModelItem = {
   current_revision_id: string | null;
   version: number;
   provider_type: string;
+  engine_kind?: string;
   base_url: string;
   model_name: string;
   max_tokens: number;
@@ -66,6 +67,7 @@ type GroupDetail = ModelGroupSummary & {
 type ModelItemFormState = {
   displayName: string;
   providerType: string;
+  engineKind: string;
   apiKey: string;
   baseUrl: string;
   modelName: string;
@@ -96,6 +98,29 @@ const MULTIMODAL_TYPES = [
   { key: 'video', label: 'Video' },
   { key: 'document', label: 'Documents' },
 ];
+
+const ENGINE_KIND_OPTIONS: Record<string, Array<{ value: string; label: string }>> = {
+  anthropic: [
+    { value: 'anthropic.messages', label: 'Messages API' },
+  ],
+  openai: [
+    { value: 'openai.chat_completions', label: 'Chat Completions' },
+    { value: 'openai.responses', label: 'Responses API' },
+  ],
+};
+
+function defaultEngineKind(providerType: string) {
+  return providerType === 'openai' ? 'openai.chat_completions' : 'anthropic.messages';
+}
+
+function defaultBaseUrl(providerType: string) {
+  return providerType === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com';
+}
+
+function defaultModelName(providerType: string, engineKind?: string) {
+  if (providerType !== 'openai') return 'claude-sonnet-4-20250514';
+  return engineKind === 'openai.responses' ? 'gpt-5' : 'gpt-4.1';
+}
 
 function resolveScope(group: ModelGroupSummary): ModelGroupScope {
   if (group.owner_type === 'platform' || (!group.owner_type && !group.workspace_id)) {
@@ -146,13 +171,16 @@ function scopeVisual(scope: ModelGroupScope) {
 function createFormState(item?: ModelItem | null): ModelItemFormState {
   const extraConfig = (item?.extra_config || {}) as Record<string, any>;
   const multimodal = extraConfig.multimodal || {};
+  const providerType = item?.provider_type || 'anthropic';
+  const engineKind = item?.engine_kind || extraConfig.engine_kind || defaultEngineKind(providerType);
 
   return {
     displayName: item?.display_name || '',
-    providerType: item?.provider_type || 'anthropic',
+    providerType,
+    engineKind,
     apiKey: '',
-    baseUrl: item?.base_url || 'https://api.anthropic.com',
-    modelName: item?.model_name || 'claude-sonnet-4-20250514',
+    baseUrl: item?.base_url || defaultBaseUrl(providerType),
+    modelName: item?.model_name || defaultModelName(providerType, engineKind),
     maxTokens: String(item?.max_tokens || 4096),
     priority: String(item?.priority ?? 0),
     weight: String(item?.weight ?? 100),
@@ -256,6 +284,7 @@ function ConfigListItem({
             <div className="truncate text-sm font-medium text-foreground">{item.display_name}</div>
             <Badge variant="secondary">v{item.version || 1}</Badge>
             {item.provider_type ? <Badge variant="outline">{item.provider_type}</Badge> : null}
+            {item.engine_kind ? <Badge variant="outline">{item.engine_kind}</Badge> : null}
             {!item.is_enabled ? <Badge variant="outline">Disabled</Badge> : null}
           </div>
           <div className="mt-1 truncate text-sm text-muted-foreground">{item.model_name || 'No model configured'}</div>
@@ -433,6 +462,7 @@ export default function ModelGroupBrowser({
           isEnabled: itemDraft.isEnabled,
           maxTokens: parseInt(itemDraft.maxTokens, 10),
           providerType: itemDraft.providerType,
+          engineKind: itemDraft.engineKind,
         };
         if (itemDraft.modelName.trim()) payload.modelName = itemDraft.modelName.trim();
         if (itemDraft.baseUrl.trim()) payload.baseUrl = itemDraft.baseUrl.trim();
@@ -453,6 +483,7 @@ export default function ModelGroupBrowser({
           priority: parseInt(itemDraft.priority, 10),
           weight: parseInt(itemDraft.weight, 10),
           providerType: itemDraft.providerType,
+          engineKind: itemDraft.engineKind,
           apiKey: itemDraft.apiKey.trim(),
           baseUrl: itemDraft.baseUrl.trim(),
           modelName: itemDraft.modelName.trim(),
@@ -679,6 +710,9 @@ export default function ModelGroupBrowser({
                           onChange={(event) => setItemDraft((current) => ({
                             ...current,
                             providerType: event.target.value,
+                            engineKind: defaultEngineKind(event.target.value),
+                            baseUrl: defaultBaseUrl(event.target.value),
+                            modelName: defaultModelName(event.target.value, defaultEngineKind(event.target.value)),
                             builtinTools: event.target.value === 'anthropic' ? current.builtinTools : [],
                           }))}
                           className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
@@ -687,6 +721,25 @@ export default function ModelGroupBrowser({
                           <option value="openai">OpenAI</option>
                         </select>
                       </div>
+                      <div className="space-y-2">
+                        <Label>Protocol</Label>
+                        <select
+                          value={itemDraft.engineKind}
+                          onChange={(event) => setItemDraft((current) => ({
+                            ...current,
+                            engineKind: event.target.value,
+                            modelName: defaultModelName(current.providerType, event.target.value),
+                          }))}
+                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
+                        >
+                          {(ENGINE_KIND_OPTIONS[itemDraft.providerType] || []).map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label>Model Name</Label>
                         <Input

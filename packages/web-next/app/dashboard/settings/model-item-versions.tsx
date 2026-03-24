@@ -13,6 +13,7 @@ interface ConfigVersion {
   item_id: string;
   version: number;
   provider_type: string;
+  engine_kind?: string;
   base_url: string;
   model_name: string;
   max_tokens: number;
@@ -91,6 +92,11 @@ export default function ModelItemVersions({
                     <Badge className="bg-violet-500/10 text-violet-400 border-violet-500/20 text-xs">
                       {v.provider_type}
                     </Badge>
+                    {v.engine_kind ? (
+                      <Badge className="bg-slate-500/10 text-slate-300 border-slate-500/20 text-xs">
+                        {v.engine_kind}
+                      </Badge>
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-1 text-xs text-muted-foreground">
                     <Clock className="w-3 h-3" />

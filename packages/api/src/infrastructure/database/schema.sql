@@ -1574,6 +1574,55 @@ CREATE TABLE session_context_states (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE session_engine_branches (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  provider_type VARCHAR(30) NOT NULL CHECK (provider_type IN ('anthropic', 'openai')),
+  engine_kind VARCHAR(50) NOT NULL
+    CHECK (engine_kind IN ('anthropic.messages', 'openai.chat_completions', 'openai.responses')),
+  binding_key VARCHAR(255) NOT NULL,
+  last_shared_sequence BIGINT NOT NULL DEFAULT 0,
+  last_private_sequence BIGINT NOT NULL DEFAULT 0,
+  applied_item_keys TEXT[] DEFAULT '{}',
+  native_state JSONB DEFAULT '{}',
+  metadata JSONB DEFAULT '{}',
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'superseded', 'archived')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(session_id, binding_key)
+);
+
+CREATE INDEX idx_session_engine_branches_session
+  ON session_engine_branches(session_id, updated_at DESC);
+CREATE INDEX idx_session_engine_branches_engine
+  ON session_engine_branches(session_id, engine_kind, updated_at DESC);
+
+CREATE TABLE engine_branch_checkpoints (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  branch_id UUID NOT NULL REFERENCES session_engine_branches(id) ON DELETE CASCADE,
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  provider_type VARCHAR(30) NOT NULL CHECK (provider_type IN ('anthropic', 'openai')),
+  engine_kind VARCHAR(50) NOT NULL
+    CHECK (engine_kind IN ('anthropic.messages', 'openai.chat_completions', 'openai.responses')),
+  binding_key VARCHAR(255) NOT NULL,
+  checkpoint_kind VARCHAR(20) NOT NULL DEFAULT 'snapshot'
+    CHECK (checkpoint_kind IN ('snapshot', 'compaction')),
+  shared_sequence BIGINT NOT NULL DEFAULT 0,
+  private_sequence BIGINT NOT NULL DEFAULT 0,
+  applied_item_keys TEXT[] DEFAULT '{}',
+  native_state JSONB DEFAULT '{}',
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_engine_branch_checkpoints_branch
+  ON engine_branch_checkpoints(branch_id, created_at DESC);
+CREATE INDEX idx_engine_branch_checkpoints_session
+  ON engine_branch_checkpoints(session_id, created_at DESC);
+
 CREATE TABLE session_interrupts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   target_session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
