@@ -5,4 +5,4 @@ REPO_ROOT="/home/ubuntu/project/synapse"
 
 cd "$REPO_ROOT"
 
-exec /usr/bin/npm run dev -w packages/web-next -- --hostname localhost --port 3000
+exec /usr/bin/npm run start -w packages/api

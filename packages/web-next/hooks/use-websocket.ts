@@ -31,6 +31,30 @@ export function useWebSocket({
   const maxReconnectAttempts = 20
   const mountedRef = useRef(true)
 
+  const resolveWebSocketUrl = useCallback((configuredUrl?: string) => {
+    const fallbackBase =
+      typeof window !== "undefined"
+        ? `${window.location.protocol}//${window.location.host}`
+        : "http://localhost:3001"
+
+    if (configuredUrl?.trim()) {
+      const parsed = new URL(configuredUrl, fallbackBase)
+      if (parsed.protocol === "http:") parsed.protocol = "ws:"
+      if (parsed.protocol === "https:") parsed.protocol = "wss:"
+      if (!parsed.pathname || parsed.pathname === "/") {
+        parsed.pathname = "/ws"
+      }
+      return parsed.toString()
+    }
+
+    if (typeof window !== "undefined") {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:"
+      return `${proto}//${window.location.host}/ws`
+    }
+
+    return "ws://localhost:3001/ws"
+  }, [])
+
   const cursorStorageKey = useCallback(
     (id: string) => `chat-ws-cursor:${id}`,
     []
@@ -150,17 +174,7 @@ export function useWebSocket({
     cleanup()
     setConnecting(true)
 
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL
-    let url: string
-    if (wsUrl) {
-      url = `${wsUrl}/ws`
-    } else if (typeof window !== "undefined") {
-      // Auto-detect: use wss:// for https, ws:// for http
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:"
-      url = `${proto}//${window.location.host}/ws`
-    } else {
-      url = "ws://localhost:3001/ws"
-    }
+    const url = resolveWebSocketUrl(process.env.NEXT_PUBLIC_WS_URL)
     const socket = new WebSocket(url)
     ws.current = socket
 
@@ -317,6 +331,7 @@ export function useWebSocket({
     saveWorkspaceSequence,
     applyFeedRecord,
     resyncWorkspaceFeed,
+    resolveWebSocketUrl,
   ])
 
   useEffect(() => {

@@ -2,6 +2,7 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: synapse-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-synapse}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required. Run ./setup.sh first.}
@@ -10,8 +11,9 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U synapse"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-synapse}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -19,7 +21,13 @@ services:
   redis:
     image: redis:7-alpine
     container_name: synapse-redis
-    command: redis-server --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required. Run ./setup.sh first.}
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD is required. Run ./setup.sh first.}
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -30,12 +38,39 @@ services:
       timeout: 5s
       retries: 5
 
+  spicedb-migrate:
+    image: authzed/spicedb:v1.51.0
+    container_name: synapse-spicedb-migrate
+    restart: "no"
+    command:
+      - datastore
+      - migrate
+      - head
+      - --datastore-engine
+      - postgres
+      - --datastore-conn-uri
+      - postgres://${POSTGRES_USER:-synapse}:${POSTGRES_PASSWORD}@postgres:5432/spicedb?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   spicedb:
-    image: quay.io/authzed/spicedb:latest
+    image: authzed/spicedb:v1.51.0
     container_name: synapse-spicedb
-    command: serve-testing
+    restart: unless-stopped
+    command:
+      - serve
+      - --grpc-preshared-key
+      - ${SPICEDB_TOKEN:?SPICEDB_TOKEN is required. Run ./setup.sh first.}
+      - --datastore-engine
+      - postgres
+      - --datastore-conn-uri
+      - postgres://${POSTGRES_USER:-synapse}:${POSTGRES_PASSWORD}@postgres:5432/spicedb?sslmode=disable
     ports:
       - "127.0.0.1:50051:50051"
+    depends_on:
+      spicedb-migrate:
+        condition: service_completed_successfully
 
   api:
     build:

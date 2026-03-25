@@ -1,14 +1,16 @@
 [Unit]
 Description=Synapse Web Frontend (Dev)
-After=network.target synapse-api.service
-Wants=synapse-api.service
+After=network-online.target synapse-api.service
+Wants=network-online.target synapse-api.service
 Conflicts=synapse-web.service
 
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/home/ubuntu/project/synapse/packages/web-next
+WorkingDirectory=/home/ubuntu/project/synapse
+Environment=NODE_ENV=development
 EnvironmentFile=/home/ubuntu/project/synapse/packages/web-next/.env.local
+ExecStartPre=/usr/bin/npm run build -w packages/shared
 ExecStart=/home/ubuntu/project/synapse/infrastructure/scripts/start-web-dev.sh
 Restart=always
 RestartSec=5

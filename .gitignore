@@ -13,6 +13,7 @@ TARGET.md
 
 .cert/*
 storage/
+infrastructure/nginx.conf
 
 # Build caches
 *.tsbuildinfo
