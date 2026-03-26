@@ -39,6 +39,7 @@ import {
 } from "../../infrastructure/authz/index.js";
 import { query, transaction } from "../../infrastructure/database/index.js";
 import { createConversationEvent } from "../conversation/service.js";
+import { getFileUrlById } from "../files/service.js";
 import { listAuthorizedResourceIds, type AccessSubject } from "../access/service.js";
 
 type QueryRow = pg.QueryResultRow;
@@ -64,7 +65,8 @@ type ActorRow = {
   name: string;
   role: ActorRole;
   title: string;
-  avatar_blob_id: string | null;
+  avatar_file_id: string | null;
+  avatar_emoji: string | null;
   parent_id: string | null;
   can_represent_user: boolean;
   specialties: string[] | null;
@@ -101,7 +103,6 @@ type ActorVersionRow = {
   name: string;
   role: ActorRole;
   title: string;
-  avatar_blob_id: string | null;
   parent_id: string | null;
   can_represent_user: boolean;
   specialties: string[] | null;
@@ -133,6 +134,7 @@ type ActorPackageRow = {
   package_workspace_id: string | null;
   package_slug: string;
   package_display_name: string;
+  package_icon_file_id: string | null;
   package_summary: string;
   package_long_description: string;
   package_source_kind: "builtin" | "official" | "workspace" | "user" | "relay";
@@ -161,6 +163,9 @@ type ActorPackageRow = {
   version_created_by: string | null;
   version_created_at: string;
   actor_role: ActorRole;
+  actor_name: string;
+  actor_avatar_file_id: string | null;
+  actor_avatar_emoji: string | null;
   actor_title: string;
   actor_can_represent_user: boolean;
   actor_docs: unknown;
@@ -180,7 +185,8 @@ const ACTOR_SELECT = `
     a.name,
     a.role,
     a.title,
-    a.avatar_blob_id,
+    a.avatar_file_id,
+    a.avatar_emoji,
     a.parent_id,
     a.can_represent_user,
     a.specialties,
@@ -225,6 +231,7 @@ const ACTOR_PACKAGE_SELECT = `
     item.workspace_id AS package_workspace_id,
     item.slug AS package_slug,
     item.display_name AS package_display_name,
+    item.icon_file_id AS package_icon_file_id,
     item.summary AS package_summary,
     item.long_description AS package_long_description,
     item.source_kind AS package_source_kind,
@@ -253,6 +260,9 @@ const ACTOR_PACKAGE_SELECT = `
     version.created_by AS version_created_by,
     version.created_at AS version_created_at,
     spec.role AS actor_role,
+    spec.name AS actor_name,
+    spec.avatar_file_id AS actor_avatar_file_id,
+    spec.avatar_emoji AS actor_avatar_emoji,
     spec.title AS actor_title,
     spec.can_represent_user AS actor_can_represent_user,
     spec.docs AS actor_docs,
@@ -317,6 +327,12 @@ function sanitizeSpecialties(specialties?: string[]) {
   );
 }
 
+function normalizeAvatarEmoji(value?: string | null) {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
 function mapCatalogSourceKind(sourceKind: ActorPackageRow["package_source_kind"]): MarketplaceSourceType {
   switch (sourceKind) {
     case "builtin":
@@ -335,9 +351,11 @@ function mapCatalogSourceKind(sourceKind: ActorPackageRow["package_source_kind"]
 function buildActorPackageDefinition(row: ActorPackageRow): ActorDefinition {
   const docs = normalizeActorDocInputs(row.actor_docs);
   return {
-    name: row.package_display_name,
+    name: row.actor_name,
     role: row.actor_role,
     title: row.actor_title,
+    avatarFileId: row.actor_avatar_file_id || undefined,
+    avatarEmoji: row.actor_avatar_emoji || undefined,
     canRepresentUser: Boolean(row.actor_can_represent_user),
     docs,
     specialties: sanitizeSpecialties(row.actor_specialties || []),
@@ -415,6 +433,9 @@ function buildActorPackageRecord(row: ActorPackageRow): ActorPackageRecord {
     kind: "actor",
     slug: row.package_slug,
     displayName: row.package_display_name,
+    iconUrl: row.package_icon_file_id
+      ? getFileUrlById(row.package_icon_file_id)
+      : undefined,
     description: packageDescription,
     longDescription,
     sourceType: mapCatalogSourceKind(row.package_source_kind),
@@ -494,7 +515,8 @@ function buildActorDefinition(row: {
   name: string;
   role: ActorRole;
   title: string;
-  avatar_blob_id: string | null;
+  avatar_file_id?: string | null;
+  avatar_emoji?: string | null;
   parent_id: string | null;
   can_represent_user: boolean;
   specialties: string[] | null;
@@ -504,7 +526,8 @@ function buildActorDefinition(row: {
     name: row.name,
     role: row.role,
     title: row.title,
-    avatarFileId: row.avatar_blob_id || undefined,
+    avatarFileId: row.avatar_file_id || undefined,
+    avatarEmoji: row.avatar_emoji || undefined,
     parentId: row.parent_id || undefined,
     canRepresentUser: Boolean(row.can_represent_user),
     docs: sortDocs(docs),
@@ -555,6 +578,9 @@ function mapActorRow(row: ActorRow, docs: ActorDoc[]): Actor {
     workspaceId: row.workspace_id,
     packageId: row.source_catalog_item_id || undefined,
     definition: buildActorDefinition(row, docs),
+    avatarUrl: row.avatar_file_id
+      ? getFileUrlById(row.avatar_file_id)
+      : undefined,
     currentVersion: row.current_version,
     sourceLink: buildActorSourceLink(row),
     isActive: Boolean(row.is_active),
@@ -704,9 +730,6 @@ function buildActorVersionDelta(
   if (before.title !== after.title) {
     changes.push(buildFieldChange("title", before.title, after.title));
   }
-  if ((before.avatarFileId || null) !== (after.avatarFileId || null)) {
-    changes.push(buildFieldChange("avatarFileId", before.avatarFileId || null, after.avatarFileId || null));
-  }
   if ((before.parentId || null) !== (after.parentId || null)) {
     changes.push(buildFieldChange("parentId", before.parentId || null, after.parentId || null));
   }
@@ -787,6 +810,8 @@ async function emitActorVersionChangedEvents(params: {
   actorId: UUID;
   actorName: string;
   actorTitle: string;
+  actorAvatarUrl?: string;
+  actorAvatarEmoji?: string;
   delta: ActorVersionDelta;
 }) {
   const memberships = await runQuery<{ conversation_id: string }>(
@@ -822,6 +847,8 @@ async function emitActorVersionChangedEvents(params: {
             actorId: params.actorId,
             name: params.actorName,
             title: params.actorTitle,
+            avatarUrl: params.actorAvatarUrl,
+            avatarEmoji: params.actorAvatarEmoji,
           },
           fromVersion: params.delta.fromVersion,
           toVersion: params.delta.toVersion,
@@ -1047,7 +1074,6 @@ export async function listActorVersions(
         name,
         role,
         title,
-        avatar_blob_id,
         parent_id,
         can_represent_user,
         specialties,
@@ -1085,12 +1111,17 @@ export async function createActor(input: {
   role: ActorRole;
   title?: string;
   avatarFileId?: UUID;
+  avatarEmoji?: string;
   canRepresentUser?: boolean;
   docs?: ActorDocInput[];
   parentId?: UUID;
   specialties?: string[];
   config?: Record<string, unknown>;
 }): Promise<Actor> {
+  if (input.avatarFileId && normalizeAvatarEmoji(input.avatarEmoji)) {
+    throw new Error("avatarFileId and avatarEmoji are mutually exclusive");
+  }
+
   const docs = sortDocs(normalizeActorDocs(input.docs || []));
   const specialties = sanitizeSpecialties(input.specialties);
 
@@ -1104,7 +1135,8 @@ export async function createActor(input: {
          name,
          role,
          title,
-         avatar_blob_id,
+         avatar_file_id,
+         avatar_emoji,
          parent_id,
          can_represent_user,
          specialties,
@@ -1112,7 +1144,7 @@ export async function createActor(input: {
          current_version,
          created_by
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, 1, $10)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, 1, $11)
        RETURNING id`,
       [
         input.workspaceId,
@@ -1120,6 +1152,7 @@ export async function createActor(input: {
         input.role,
         input.title || "",
         input.avatarFileId || null,
+        normalizeAvatarEmoji(input.avatarEmoji) || null,
         input.parentId || null,
         Boolean(input.canRepresentUser),
         specialties,
@@ -1136,7 +1169,6 @@ export async function createActor(input: {
          name,
          role,
          title,
-         avatar_blob_id,
          parent_id,
          can_represent_user,
          specialties,
@@ -1146,14 +1178,13 @@ export async function createActor(input: {
          source_user_id,
          source_reason
        )
-       VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13)
+       VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)
        RETURNING id`,
       [
         actorId,
         input.name,
         input.role,
         input.title || "",
-        input.avatarFileId || null,
         input.parentId || null,
         Boolean(input.canRepresentUser),
         specialties,
@@ -1226,6 +1257,7 @@ export async function updateActor(
     role: ActorRole;
     title: string;
     avatarFileId: UUID | null;
+    avatarEmoji: string | null;
     canRepresentUser: boolean;
     docs: ActorDocInput[];
     parentId: UUID | null;
@@ -1240,14 +1272,25 @@ export async function updateActor(
   if (!currentActor) return null;
 
   const currentDefinition = currentActor.definition;
+  const nextAvatarFileId =
+    updates.avatarFileId === undefined
+      ? currentDefinition.avatarFileId
+      : updates.avatarFileId || undefined;
+  const nextAvatarEmoji =
+    updates.avatarEmoji === undefined
+      ? currentDefinition.avatarEmoji
+      : normalizeAvatarEmoji(updates.avatarEmoji);
+
+  if (nextAvatarFileId && nextAvatarEmoji) {
+    throw new Error("avatarFileId and avatarEmoji are mutually exclusive");
+  }
+
   const nextDefinition: ActorDefinition = {
     name: updates.name ?? currentDefinition.name,
     role: updates.role ?? currentDefinition.role,
     title: updates.title ?? currentDefinition.title,
-    avatarFileId:
-      updates.avatarFileId === undefined
-        ? currentDefinition.avatarFileId
-        : updates.avatarFileId || undefined,
+    avatarFileId: nextAvatarFileId,
+    avatarEmoji: nextAvatarEmoji,
     parentId:
       updates.parentId === undefined
         ? currentDefinition.parentId
@@ -1276,7 +1319,23 @@ export async function updateActor(
     source,
   );
 
+  const avatarChanged =
+    (currentDefinition.avatarFileId || null) !== (nextAvatarFileId || null) ||
+    (currentDefinition.avatarEmoji || null) !== (nextAvatarEmoji || null);
+
   if (!delta) {
+    if (avatarChanged) {
+      await runQuery(
+        `UPDATE actors
+         SET avatar_file_id = $2,
+             avatar_emoji = $3,
+             updated_at = NOW()
+         WHERE id = $1
+           AND workspace_id = $4`,
+        [actorId, nextAvatarFileId || null, nextAvatarEmoji || null, workspaceId],
+      );
+      return getActor(actorId, workspaceId);
+    }
     return currentActor;
   }
 
@@ -1299,7 +1358,6 @@ export async function updateActor(
          name,
          role,
          title,
-         avatar_blob_id,
          parent_id,
          can_represent_user,
          specialties,
@@ -1314,7 +1372,7 @@ export async function updateActor(
 	         source_conversation_id,
 	         source_reason
 	       )
-	       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, $14, $15, $16, $17, $18, $19, $20)
+	       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19)
 	       RETURNING id`,
       [
         actorId,
@@ -1323,7 +1381,6 @@ export async function updateActor(
         nextDefinition.name,
         nextDefinition.role,
         nextDefinition.title,
-        nextDefinition.avatarFileId || null,
         nextDefinition.parentId || null,
         nextDefinition.canRepresentUser,
         sanitizeSpecialties(nextDefinition.specialties),
@@ -1365,24 +1422,26 @@ export async function updateActor(
 
     await client.query(
       `UPDATE actors
-       SET name = $2,
+      SET name = $2,
            role = $3,
            title = $4,
-           avatar_blob_id = $5,
-           parent_id = $6,
-           can_represent_user = $7,
-           specialties = $8,
-           config = $9::jsonb,
-           current_version = $10,
+           avatar_file_id = $5,
+           avatar_emoji = $6,
+           parent_id = $7,
+           can_represent_user = $8,
+           specialties = $9,
+           config = $10::jsonb,
+           current_version = $11,
            updated_at = NOW()
        WHERE id = $1
-         AND workspace_id = $11`,
+         AND workspace_id = $12`,
       [
         actorId,
         nextDefinition.name,
         nextDefinition.role,
         nextDefinition.title,
         nextDefinition.avatarFileId || null,
+        nextDefinition.avatarEmoji || null,
         nextDefinition.parentId || null,
         nextDefinition.canRepresentUser,
         sanitizeSpecialties(nextDefinition.specialties),
@@ -1402,6 +1461,8 @@ export async function updateActor(
       actorId,
       actorName: actor.definition.name,
       actorTitle: actor.definition.title,
+      actorAvatarUrl: actor.avatarUrl,
+      actorAvatarEmoji: actor.definition.avatarEmoji,
       delta,
     });
   } catch (error) {
@@ -1535,7 +1596,8 @@ export async function installActorPackage(input: {
          name,
          role,
          title,
-         avatar_blob_id,
+         avatar_file_id,
+         avatar_emoji,
          parent_id,
          can_represent_user,
          specialties,
@@ -1543,13 +1605,15 @@ export async function installActorPackage(input: {
          current_version,
          created_by
        )
-       VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8::jsonb, 1, $9)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, 1, $11)
        RETURNING id`,
       [
         input.workspaceId,
         actorName,
         packageActor.role,
         actorTitle,
+        packageActor.avatarFileId || null,
+        packageActor.avatarEmoji || null,
         input.parentId || null,
         packageActor.canRepresentUser,
         sanitizeSpecialties(packageActor.specialties),
@@ -1566,14 +1630,13 @@ export async function installActorPackage(input: {
          name,
          role,
          title,
-         avatar_blob_id,
          parent_id,
          can_represent_user,
          specialties,
          config,
          created_by
        )
-       VALUES ($1, 1, $2, $3, $4, NULL, $5, $6, $7, $8::jsonb, $9)
+       VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
        RETURNING id`,
       [
         actorId,

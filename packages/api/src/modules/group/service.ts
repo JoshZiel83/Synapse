@@ -1271,7 +1271,12 @@ export async function addMembersToGroup(params: {
   const actorResult =
     actorIds.length > 0
       ? await query(
-          `SELECT a.id, a.name, a.title, a.role, a.config, avatar_file.stored_name AS avatar_stored_name
+          `SELECT a.id,
+                  a.name,
+                  a.title,
+                  a.role,
+                  a.avatar_emoji,
+                  avatar_file.stored_name AS avatar_stored_name
          FROM actors a
          LEFT JOIN files avatar_file ON avatar_file.id = a.avatar_file_id
          WHERE a.workspace_id = $1
@@ -1360,7 +1365,7 @@ export async function addMembersToGroup(params: {
         name: actorInfo.name || "Unknown",
         title: actorInfo.title || undefined,
         role: actorInfo.role || "specialist",
-        emoji: actorInfo.config?.avatar_emoji || undefined,
+        emoji: actorInfo.avatar_emoji || undefined,
         avatarUrl: actorInfo.avatar_stored_name
           ? getFileUrl(actorInfo.avatar_stored_name)
           : undefined,
@@ -1650,7 +1655,7 @@ export async function getGroupMembers(
             ${actorSpecialtiesExpr} AS actor_specialties,
             ${actorConfigExpr} AS actor_config,
             ${actorCurrentVersionExpr} AS actor_current_version,
-            a.config->>'avatar_emoji' AS actor_avatar_emoji,
+            a.avatar_emoji AS actor_avatar_emoji,
             actor_avatar_file.stored_name AS actor_avatar_stored_name,
             u.name AS user_name,
             u.avatar_file_id AS user_avatar_file_id,

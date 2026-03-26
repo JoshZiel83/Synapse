@@ -269,11 +269,7 @@ export default function MobileContactsPage() {
                     <ChatAvatar
                       name={actor.definition.name}
                       avatarUrl={actor.avatarUrl}
-                      emoji={
-                        typeof actor.definition.config.avatar_emoji === "string"
-                          ? actor.definition.config.avatar_emoji
-                          : undefined
-                      }
+                      emoji={actor.definition.avatarEmoji}
                       entityType="actor"
                       size="lg"
                     />

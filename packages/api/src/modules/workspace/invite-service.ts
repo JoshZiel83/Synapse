@@ -7,6 +7,7 @@ import {
   queueAuthzRelationships,
   touchRelation,
 } from '../../infrastructure/authz/index.js';
+import { assignOfficialChiefActorPreference } from './service.js';
 
 // ── Token generation ──
 
@@ -112,6 +113,12 @@ export async function redeemInvite(token: string, userId: string) {
       `INSERT INTO workspace_members (workspace_id, user_id, trust_level)
        VALUES ($1, $2, $3)`,
       [invite.workspace_id, userId, invite.trust_level]
+    );
+
+    await assignOfficialChiefActorPreference(
+      client,
+      invite.workspace_id,
+      userId,
     );
 
     // Increment use count

@@ -406,13 +406,17 @@ CREATE TABLE actor_template_version_specs (
   catalog_version_id UUID PRIMARY KEY REFERENCES catalog_versions(id) ON DELETE CASCADE,
   role VARCHAR(50) NOT NULL
     CHECK (role IN ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant')),
+  name VARCHAR(255) NOT NULL,
+  avatar_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  avatar_emoji VARCHAR(32),
   title VARCHAR(255) NOT NULL,
   can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
   docs JSONB NOT NULL DEFAULT '[]',
   specialties TEXT[] DEFAULT '{}',
   config JSONB DEFAULT '{}',
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (avatar_file_id IS NULL OR avatar_emoji IS NULL)
 );
 
 CREATE TABLE skill_package_version_specs (
@@ -464,7 +468,7 @@ CREATE TABLE actors (
     CHECK (role IN ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant')),
   title VARCHAR(255) NOT NULL,
   avatar_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
-  avatar_blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
+  avatar_emoji VARCHAR(32),
   parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
   specialties TEXT[] DEFAULT '{}',
@@ -473,7 +477,8 @@ CREATE TABLE actors (
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (avatar_file_id IS NULL OR avatar_emoji IS NULL)
 );
 
 CREATE INDEX idx_actors_workspace ON actors(workspace_id, created_at DESC);
@@ -499,7 +504,6 @@ CREATE TABLE actor_versions (
   name VARCHAR(255) NOT NULL,
   role VARCHAR(50) NOT NULL,
   title VARCHAR(255) NOT NULL,
-  avatar_blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
   parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
   specialties TEXT[] DEFAULT '{}',

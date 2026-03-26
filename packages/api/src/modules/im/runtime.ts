@@ -13,7 +13,6 @@ import {
   getConversationFeedItemById,
 } from "../conversation/service.js";
 import { createGroup, getGroupMembers, wakeActor } from "../group/service.js";
-import { findSecretary } from "../secretary/service.js";
 import {
   ensureTransportAddress,
   findConversationTransportBindingByEndpoint,
@@ -418,22 +417,15 @@ async function ensureTransportConversationBinding(params: {
   }
 
   const ownerId = await getWorkspaceOwnerId(params.account.workspaceId);
-  const secretary = await findSecretary(params.account.workspaceId);
   const created = await createGroup({
     workspaceId: params.account.workspaceId,
     createdBy: ownerId,
     title:
       params.endpointDisplayName ||
       `${params.account.displayName} ${params.endpointType === "group" ? "群聊" : "私聊"}`,
-    actorIds: secretary ? [secretary.id] : [],
+    actorIds: [],
     includeCreatorMember: false,
   });
-  const members = await getGroupMembers(created.group.id);
-  const defaultTargetParticipantId = secretary
-    ? (members.find((member) => member.actor_id === secretary.id)?.id as
-        | string
-        | undefined)
-    : undefined;
 
   try {
     return await upsertConversationTransportBinding({
@@ -444,7 +436,7 @@ async function ensureTransportConversationBinding(params: {
       endpointExternalId: params.endpointExternalId,
       endpointDisplayName: params.endpointDisplayName,
       outboundEnabled: true,
-      defaultTargetParticipantId,
+      defaultTargetParticipantId: undefined,
       metadata: {
         autoCreated: true,
       },

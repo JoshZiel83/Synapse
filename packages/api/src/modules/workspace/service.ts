@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type pg from "pg";
 import { query, transaction } from "../../infrastructure/database/index.js";
+import { DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG } from "../../infrastructure/database/seeds/actors/index.js";
 import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
 import {
@@ -11,7 +12,10 @@ import {
   touchRelation,
 } from "../../infrastructure/authz/index.js";
 import {
-  SECRETARY_DEFAULT_DOCS,
+  normalizeActorDocs,
+  type ActorDoc,
+  type ActorDocInput,
+  type ActorRole,
   type WorkspaceChiefActorPreference,
 } from "@synapse/shared";
 import { listAuthorizedResourceIds, userSubject } from "../access/service.js";
@@ -68,10 +72,242 @@ function generateSlug(name: string): string {
   return `${base}-${suffix}`;
 }
 
+const OFFICIAL_ACTOR_PUBLISHER_SLUG = "synapse-official";
+const OFFICIAL_CHIEF_ACTOR_CONFIG = { is_chief_actor: true } as const;
+const OFFICIAL_CHIEF_ACTOR_CONFIG_JSON = JSON.stringify(
+  OFFICIAL_CHIEF_ACTOR_CONFIG,
+);
+
+type OfficialActorTemplateRow = {
+  package_id: string;
+  package_slug: string;
+  version_id: string;
+  actor_role: ActorRole;
+  actor_name: string;
+  actor_avatar_file_id: string | null;
+  actor_avatar_emoji: string | null;
+  actor_title: string;
+  actor_can_represent_user: boolean;
+  actor_docs: ActorDocInput[] | string | null;
+  actor_specialties: string[] | null;
+  actor_config: Record<string, unknown> | string | null;
+};
+
+type LoadedOfficialActorTemplate = {
+  packageId: string;
+  packageSlug: string;
+  versionId: string;
+  actorName: string;
+  actorRole: ActorRole;
+  actorAvatarFileId?: string;
+  actorAvatarEmoji?: string;
+  actorTitle: string;
+  canRepresentUser: boolean;
+  actorDocs: ActorDoc[];
+  actorSpecialties: string[];
+  actorConfig: Record<string, unknown>;
+  isChiefActor: boolean;
+};
+
+function parseJsonObject(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function withOfficialChiefActorConfig(
+  config: Record<string, unknown>,
+  isChiefActor: boolean,
+) {
+  return isChiefActor
+    ? {
+        ...config,
+        ...OFFICIAL_CHIEF_ACTOR_CONFIG,
+      }
+    : config;
+}
+
+async function findOfficialChiefActorId(
+  client: pg.PoolClient,
+  workspaceId: string,
+) {
+  const result = await client.query<{ id: string }>(
+    `SELECT a.id
+     FROM actors a
+     LEFT JOIN actor_source_refs source_ref
+       ON source_ref.actor_id = a.id
+     LEFT JOIN catalog_items item
+       ON item.id = source_ref.source_catalog_item_id
+     WHERE a.workspace_id = $1
+       AND a.is_active = TRUE
+       AND (
+         a.config @> $2::jsonb
+         OR (
+           item.workspace_id IS NULL
+           AND item.item_kind = 'actor_template'
+           AND item.slug = $3
+         )
+       )
+     ORDER BY
+       CASE
+         WHEN a.config @> $2::jsonb THEN 0
+         ELSE 1
+       END,
+       a.created_at ASC
+     LIMIT 1`,
+    [
+      workspaceId,
+      OFFICIAL_CHIEF_ACTOR_CONFIG_JSON,
+      DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG,
+    ],
+  );
+
+  return result.rows[0]?.id ?? null;
+}
+
+export async function assignOfficialChiefActorPreference(
+  client: pg.PoolClient,
+  workspaceId: string,
+  userId: string,
+  actorId?: string | null,
+) {
+  const chiefActorId =
+    typeof actorId === "string" && actorId.trim().length > 0
+      ? actorId
+      : await findOfficialChiefActorId(client, workspaceId);
+
+  if (!chiefActorId) {
+    return null;
+  }
+
+  await client.query(
+    `INSERT INTO workspace_user_preferences
+       (workspace_id, user_id, chief_actor_id, created_at, updated_at)
+     VALUES ($1, $2, $3, NOW(), NOW())
+     ON CONFLICT (workspace_id, user_id)
+     DO UPDATE SET
+       chief_actor_id = EXCLUDED.chief_actor_id,
+       updated_at = NOW()`,
+    [workspaceId, userId, chiefActorId],
+  );
+
+  return chiefActorId;
+}
+
+function parseStoredActorDocs(value: ActorDocInput[] | string | null) {
+  const docsValue = typeof value === "string" ? (JSON.parse(value) as unknown) : value;
+  return normalizeActorDocs(
+    Array.isArray(docsValue) ? (docsValue as ActorDocInput[]) : [],
+  );
+}
+
+function isOfficialChiefTemplate(row: Pick<OfficialActorTemplateRow, "package_slug" | "actor_config">) {
+  const config = parseJsonObject(row.actor_config);
+  return (
+    config.is_chief_actor === true ||
+    row.package_slug === DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG
+  );
+}
+
+async function loadOfficialActorTemplates(
+  client: pg.PoolClient,
+): Promise<LoadedOfficialActorTemplate[]> {
+  const result = await client.query<OfficialActorTemplateRow>(
+    `SELECT
+       item.id AS package_id,
+       item.slug AS package_slug,
+       version.id AS version_id,
+       spec.role AS actor_role,
+       spec.name AS actor_name,
+       spec.avatar_file_id AS actor_avatar_file_id,
+       spec.avatar_emoji AS actor_avatar_emoji,
+       spec.title AS actor_title,
+       spec.can_represent_user AS actor_can_represent_user,
+       spec.docs AS actor_docs,
+       spec.specialties AS actor_specialties,
+       spec.config AS actor_config
+     FROM catalog_items item
+     JOIN publishers publisher
+       ON publisher.id = item.publisher_id
+     JOIN catalog_versions version
+       ON version.id = item.latest_version_id
+     JOIN actor_template_version_specs spec
+       ON spec.catalog_version_id = version.id
+     WHERE publisher.slug = $1
+       AND item.workspace_id IS NULL
+       AND item.item_kind = 'actor_template'
+       AND item.is_active = TRUE
+     ORDER BY
+       CASE
+         WHEN spec.config @> $2::jsonb OR item.slug = $3 THEN 0
+         ELSE 1
+       END,
+       item.created_at ASC,
+       item.slug ASC`,
+    [
+      OFFICIAL_ACTOR_PUBLISHER_SLUG,
+      OFFICIAL_CHIEF_ACTOR_CONFIG_JSON,
+      DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG,
+    ],
+  );
+
+  if (result.rows.length === 0) {
+    throw new Error("Official actor templates are missing.");
+  }
+
+  return result.rows.map((row) => {
+    const isChiefActor = isOfficialChiefTemplate(row);
+    return {
+      packageId: row.package_id,
+      packageSlug: row.package_slug,
+      versionId: row.version_id,
+      actorName: row.actor_name,
+      actorRole: row.actor_role,
+      actorAvatarFileId: row.actor_avatar_file_id || undefined,
+      actorAvatarEmoji: row.actor_avatar_emoji || undefined,
+      actorTitle: row.actor_title,
+      canRepresentUser: Boolean(row.actor_can_represent_user),
+      actorDocs: parseStoredActorDocs(row.actor_docs),
+      actorSpecialties: Array.isArray(row.actor_specialties)
+        ? row.actor_specialties
+        : [],
+      actorConfig: withOfficialChiefActorConfig(
+        parseJsonObject(row.actor_config),
+        isChiefActor,
+      ),
+      isChiefActor,
+    } satisfies LoadedOfficialActorTemplate;
+  });
+}
+
+function buildWorkspaceActorAuthzRelations(
+  workspaceId: string,
+  actorId: string,
+  ownerUserId: string,
+) {
+  return [
+    touchRelation("workspace", workspaceId, "actor", "actor", actorId),
+    touchRelation("actor", actorId, "workspace", "workspace", workspaceId),
+    touchRelation("actor", actorId, "owner", "user", ownerUserId),
+    touchRelation("actor", actorId, "discover_workspace", "workspace", workspaceId),
+    touchRelation("actor", actorId, "invoke_workspace", "workspace", workspaceId),
+    touchRelation("actor", actorId, "receive_workspace", "workspace", workspaceId),
+  ];
+}
+
 export async function createWorkspace(input: CreateWorkspaceInput) {
   const slug = generateSlug(input.name);
-  const secretaryDocs = SECRETARY_DEFAULT_DOCS;
-  const secretarySpecialties = ["delegation", "reporting", "organization"];
 
   const result = await transaction(async (client: pg.PoolClient) => {
     // 1. Create workspace
@@ -90,82 +326,136 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       [workspace.id, input.userId],
     );
 
-    // 3. Auto-create secretary actor
-    const secretaryResult = await client.query(
-      `INSERT INTO actors (
-         workspace_id,
-         name,
-         role,
-         title,
-         parent_id,
-         can_represent_user,
-         specialties,
-         config,
-         current_version,
-         created_by
-       )
-       VALUES ($1, $2, $3, $4, NULL, FALSE, $5, '{}'::jsonb, 1, $6)
-       RETURNING *`,
-      [
-        workspace.id,
-        "Secretary",
-        "secretary",
-        "Personal Secretary",
-        secretarySpecialties,
-        input.userId,
-      ],
-    );
-    const secretary = secretaryResult.rows[0];
+    const officialActorTemplates = await loadOfficialActorTemplates(client);
+    const installedActors: Array<{
+      actorRow: Record<string, unknown>;
+      template: LoadedOfficialActorTemplate;
+    }> = [];
 
-    // 4. Create initial actor_versions record for secretary
-    const actorVersionResult = await client.query<{ id: string }>(
-      `INSERT INTO actor_versions (
-         actor_id,
-         version,
-         name,
-         role,
-         title,
-         avatar_blob_id,
-         parent_id,
-         can_represent_user,
-         specialties,
-         config,
-         created_by
-       )
-       VALUES ($1, 1, $2, $3, $4, NULL, NULL, FALSE, $5, '{}'::jsonb, $6)
-       RETURNING id`,
-      [
-        secretary.id,
-        secretary.name,
-        secretary.role,
-        secretary.title,
-        secretarySpecialties,
-        input.userId,
-      ],
-    );
-    const actorVersionId = actorVersionResult.rows[0]!.id;
-
-    for (const doc of secretaryDocs) {
-      await client.query(
-        `INSERT INTO actor_version_docs (
-           actor_version_id,
-           doc_key,
+    for (const template of officialActorTemplates) {
+      const actorResult = await client.query(
+        `INSERT INTO actors (
+           workspace_id,
+           name,
+           role,
            title,
-           visibility,
-           priority,
-           content_blocks
+           avatar_file_id,
+           avatar_emoji,
+           parent_id,
+           can_represent_user,
+           specialties,
+           config,
+           current_version,
+           created_by
          )
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+         VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9::jsonb, 1, $10)
+         RETURNING *`,
         [
-          actorVersionId,
-          doc.key,
-          doc.title,
-          doc.visibility,
-          doc.priority,
-          JSON.stringify(doc.content),
+          workspace.id,
+          template.actorName,
+          template.actorRole,
+          template.actorTitle,
+          template.actorAvatarFileId || null,
+          template.actorAvatarEmoji || null,
+          template.canRepresentUser,
+          template.actorSpecialties,
+          JSON.stringify(template.actorConfig),
+          input.userId,
         ],
       );
+      const actorRow = actorResult.rows[0];
+
+      const actorVersionResult = await client.query<{ id: string }>(
+        `INSERT INTO actor_versions (
+           actor_id,
+           version,
+           name,
+           role,
+           title,
+           parent_id,
+           can_represent_user,
+           specialties,
+           config,
+           created_by
+         )
+         VALUES ($1, 1, $2, $3, $4, NULL, $5, $6, $7::jsonb, $8)
+         RETURNING id`,
+        [
+          actorRow.id,
+          template.actorName,
+          template.actorRole,
+          template.actorTitle,
+          template.canRepresentUser,
+          template.actorSpecialties,
+          JSON.stringify(template.actorConfig),
+          input.userId,
+        ],
+      );
+      const actorVersionId = actorVersionResult.rows[0]!.id;
+
+      for (const doc of template.actorDocs) {
+        await client.query(
+          `INSERT INTO actor_version_docs (
+             actor_version_id,
+             doc_key,
+             title,
+             visibility,
+             priority,
+             content_blocks
+           )
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+          [
+            actorVersionId,
+            doc.key,
+            doc.title,
+            doc.visibility,
+            doc.priority,
+            JSON.stringify(doc.content),
+          ],
+        );
+      }
+
+      await client.query(
+        `INSERT INTO actor_source_refs (
+           actor_id,
+           source_catalog_item_id,
+           source_catalog_version_id,
+           sync_mode,
+           baseline_actor_version,
+           metadata
+         )
+         VALUES ($1, $2, $3, 'notify', 1, '{}'::jsonb)`,
+        [actorRow.id, template.packageId, template.versionId],
+      );
+
+      installedActors.push({
+        actorRow,
+        template,
+      });
     }
+
+    if (installedActors.length === 0) {
+      throw new Error("Failed to install official actors for workspace.");
+    }
+
+    await client.query(
+      `UPDATE catalog_items
+       SET download_count = download_count + 1,
+           updated_at = NOW()
+       WHERE id = ANY($1::uuid[])`,
+      [officialActorTemplates.map((template) => template.packageId)],
+    );
+
+    const chiefActor =
+      installedActors.find(({ template }) => template.isChiefActor) ||
+      installedActors[0]!;
+
+    await assignOfficialChiefActorPreference(
+      client,
+      workspace.id,
+      input.userId,
+      String(chiefActor.actorRow.id),
+    );
 
     const authzEntryIds = await queueAuthzRelationships(
       client,
@@ -191,41 +481,12 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
           "user",
           input.userId,
         ),
-        touchRelation(
-          "workspace",
-          workspace.id,
-          "actor",
-          "actor",
-          secretary.id,
-        ),
-        touchRelation(
-          "actor",
-          secretary.id,
-          "workspace",
-          "workspace",
-          workspace.id,
-        ),
-        touchRelation("actor", secretary.id, "owner", "user", input.userId),
-        touchRelation(
-          "actor",
-          secretary.id,
-          "discover_workspace",
-          "workspace",
-          workspace.id,
-        ),
-        touchRelation(
-          "actor",
-          secretary.id,
-          "invoke_workspace",
-          "workspace",
-          workspace.id,
-        ),
-        touchRelation(
-          "actor",
-          secretary.id,
-          "receive_workspace",
-          "workspace",
-          workspace.id,
+        ...installedActors.flatMap(({ actorRow }) =>
+          buildWorkspaceActorAuthzRelations(
+            workspace.id,
+            String(actorRow.id),
+            input.userId,
+          ),
         ),
       ],
       {
@@ -237,7 +498,10 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
 
     return {
       workspace: mapWorkspaceRow(workspace),
-      secretary: mapActorRow(secretary, secretaryDocs),
+      secretary: mapActorRow(
+        chiefActor.actorRow,
+        chiefActor.template.actorDocs,
+      ),
       authzEntryIds,
     };
   });
@@ -419,6 +683,12 @@ export async function addMember(input: AddMemberInput) {
     if (memberResult.rows.length === 0) {
       return null;
     }
+
+    await assignOfficialChiefActorPreference(
+      client,
+      input.workspaceId,
+      input.userId,
+    );
 
     const authzEntryIds = await queueAuthzRelationships(
       client,
@@ -626,7 +896,7 @@ function mapWorkspaceRow(row: any) {
   };
 }
 
-function mapActorRow(row: any, docs: typeof SECRETARY_DEFAULT_DOCS) {
+function mapActorRow(row: any, docs: ActorDoc[]) {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -634,7 +904,7 @@ function mapActorRow(row: any, docs: typeof SECRETARY_DEFAULT_DOCS) {
       name: row.name,
       role: row.role,
       title: row.title,
-      avatarFileId: row.avatar_blob_id ?? undefined,
+      avatarFileId: row.avatar_file_id ?? undefined,
       parentId: row.parent_id ?? undefined,
       canRepresentUser: Boolean(row.can_represent_user),
       docs,

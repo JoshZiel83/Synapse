@@ -18,7 +18,6 @@ const ALLOWED_MESSAGE_TYPES: MessageType[] = [
   'feedback',
   'rework',
   'user_message',
-  'secretary_response',
 ];
 
 interface MessageRow {

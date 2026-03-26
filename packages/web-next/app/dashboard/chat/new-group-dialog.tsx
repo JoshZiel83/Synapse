@@ -8,26 +8,29 @@ import {
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import { Search, X, Bot } from 'lucide-react';
+import ChatAvatar from './chat-avatar';
 
 interface Actor {
   id: string;
   name: string;
   role: string;
   title?: string;
-  config?: { avatar_emoji?: string };
+  avatarUrl?: string;
+  emoji?: string;
 }
 
 type RawActorLike = {
   id: string;
+  avatarUrl?: string;
   name?: string;
   role?: string;
   title?: string;
-  config?: { avatar_emoji?: string };
+  avatarEmoji?: string;
   definition?: {
     name?: string;
     role?: string;
     title?: string;
-    config?: { avatar_emoji?: string };
+    avatarEmoji?: string;
   };
 };
 
@@ -38,7 +41,8 @@ function normalizeActor(actor: RawActorLike): Actor {
     name: definition.name || 'Unknown actor',
     role: definition.role || 'other',
     title: definition.title,
-    config: definition.config || {},
+    avatarUrl: actor.avatarUrl,
+    emoji: definition.avatarEmoji,
   };
 }
 
@@ -146,15 +150,15 @@ export default function NewGroupDialog({ open, onOpenChange, workspaceId, onCrea
   const selectedActors = useMemo(() => actors.filter((a) => selectedIds.has(a.id)), [actors, selectedIds]);
 
   function ActorAvatar({ actor, size = 'md' }: { actor: Actor; size?: 'md' | 'sm' }) {
-    const cls = size === 'md' ? 'h-10 w-10 rounded-md text-lg' : 'h-9 w-9 rounded-md text-base';
     return (
-      <div className={`${cls} bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0 ring-1 ring-gray-900/10 dark:ring-white/10`}>
-        {actor.config?.avatar_emoji ? (
-          <span>{actor.config.avatar_emoji}</span>
-        ) : (
-          <Bot className={size === 'md' ? 'w-5 h-5 text-white' : 'w-4 h-4 text-white'} />
-        )}
-      </div>
+      <ChatAvatar
+        name={actor.name}
+        avatarUrl={actor.avatarUrl}
+        emoji={actor.emoji}
+        entityType="actor"
+        size={size === 'md' ? 'default' : 'sm'}
+        className="shrink-0"
+      />
     );
   }
 

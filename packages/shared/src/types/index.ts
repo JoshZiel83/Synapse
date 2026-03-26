@@ -203,6 +203,7 @@ export interface ActorDefinition {
   role: ActorRole;
   title: string;
   avatarFileId?: UUID;
+  avatarEmoji?: string;
   parentId?: UUID;
   canRepresentUser: boolean;
   docs: ActorDoc[];
@@ -226,7 +227,6 @@ export type ActorVersionChangedField =
   | "name"
   | "role"
   | "title"
-  | "avatarFileId"
   | "parentId"
   | "canRepresentUser"
   | "specialties"
@@ -399,8 +399,7 @@ export type MessageType =
   | "complete"
   | "feedback"
   | "rework"
-  | "user_message"
-  | "secretary_response";
+  | "user_message";
 
 export interface Message {
   id: UUID;
@@ -756,8 +755,6 @@ export type EventType =
   | "actor.created"
   | "actor.updated"
   | "memory.created"
-  | "user.message" // User sent message to secretary
-  | "secretary.response"
   | "actor.thinking"
   | "actor.action"
   | "session.message.new"
@@ -2633,7 +2630,9 @@ export interface ConversationFeedEventPayloadMap {
   actor_avatar_changed: {
     actor: ConversationEntityRef;
     oldAvatarEmoji?: string;
-    newAvatarEmoji: string;
+    newAvatarEmoji?: string;
+    oldAvatarUrl?: string;
+    newAvatarUrl?: string;
     sourceTurnId?: UUID;
   };
   actor_version_changed: {
@@ -2821,8 +2820,11 @@ export function summarizeConversationEvent(
     const avatarEmoji =
       typeof payload.newAvatarEmoji === "string"
         ? payload.newAvatarEmoji.trim()
-        : "🙂";
-    return `Actor avatar updated to ${avatarEmoji}.`;
+        : "";
+    if (avatarEmoji) {
+      return `Actor avatar updated to ${avatarEmoji}.`;
+    }
+    return "Actor avatar updated.";
   }
 
   if (eventType === "actor_version_changed") {
@@ -3240,72 +3242,29 @@ function createActorDocId(): UUID {
   return `doc_${Math.random().toString(36).slice(2)}_${Date.now()}`;
 }
 
+export const SECRETARY_DEFAULT_NAME = "Default Assistant"
+export const SECRETARY_DEFAULT_TITLE = "Assistant"
+export const SECRETARY_DEFAULT_CAN_REPRESENT_USER = false
+export const SECRETARY_DEFAULT_SPECIALTIES: string[] = []
+
 export const SECRETARY_DEFAULT_DOCS: ActorDoc[] = normalizeActorDocs([
   {
     id: createActorDocId(),
     key: "identity_card",
     title: "Identity Card",
-    content: textBlocks(
-      "I am Secretary, the primary point of contact between the Boss (user) and the digital organization.",
-    ),
+    content: textBlocks("Default workspace assistant placeholder."),
     visibility: "always",
     priority: 120,
   },
   {
     id: createActorDocId(),
-    key: "relationship_with_user",
-    title: "Relationship With User",
-    content: textBlocks(
-      "Maintain the long-term relationship with the Boss. Keep them informed, clarify intent, and report what matters without burying them in noise.",
-    ),
-    visibility: "always",
-    priority: 98,
-  },
-  {
-    id: createActorDocId(),
     key: "role_charter",
     title: "Role Charter",
-    content: textBlocks(
-      [
-        "Responsibilities:",
-        "1. Receive and understand the Boss's goals and instructions.",
-        "2. Coordinate work with other actors in the group.",
-        "3. Send messages to appropriate team members with clear instructions.",
-        "4. Collect progress and synthesize reports.",
-        "5. Report key progress, risks, and results to the Boss.",
-      ].join("\n"),
-    ),
+    content: textBlocks("Assist with workspace coordination when a custom actor seed has not been provided."),
     visibility: "always",
     priority: 90,
   },
-  {
-    id: createActorDocId(),
-    key: "work_doctrine",
-    title: "Work Doctrine",
-    content: textBlocks(
-      [
-        "You are not the sole executor. Coordinate the team by messaging the right actor with clear instructions.",
-        "When you receive a message from the Boss, decide whether to answer directly, delegate, ask for more information, or invite a new actor.",
-        "When reporting, be concise and focus on what matters to the Boss.",
-      ].join("\n\n"),
-    ),
-    visibility: "always",
-    priority: 86,
-  },
-  {
-    id: createActorDocId(),
-    key: "routines",
-    title: "Routines",
-    content: textBlocks(
-      [
-        "Use memory deliberately for stable facts, preferences, decisions, relationships, procedures, or durable artifacts.",
-        "If you are unsure whether something is durable or established, do not store it as memory.",
-      ].join("\n"),
-    ),
-    visibility: "internal_only",
-    priority: 80,
-  },
-]);
+])
 
 /** Extract concatenated text from CanonicalContentBlock[] */
 export function extractText(blocks: CanonicalContentBlock[]): string {
@@ -3573,6 +3532,9 @@ export interface CatalogVersionFileRecord {
 export interface ActorTemplateVersionSpecRecord {
   catalogVersionId: string;
   role: ActorRole;
+  name: string;
+  avatarFileId?: string;
+  avatarEmoji?: string;
   title: string;
   canRepresentUser: boolean;
   docs: ActorDoc[];

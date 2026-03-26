@@ -1,7 +1,130 @@
 import type { ToolCall, ActorAction } from '@synapse/shared';
+import { z } from 'zod';
 import { registerToolPlugin } from './tool-plugins.js';
 import { executeActorActions } from '../orchestrator/service.js';
 import { getToolExecutionContext } from './session-tools.js';
+import { getActor } from '../organization/service.js';
+
+const HEX_COLOR_PATTERN = '^[0-9a-fA-F]{6}$';
+const ACCESSORIES_PATTERN = '^variant0[1-4]$';
+const CLOTHING_PATTERN = '^variant(0[1-9]|1[0-9]|2[0-3])$';
+const EYES_PATTERN = '^variant(0[1-9]|1[0-2])$';
+const GLASSES_PATTERN = '^(dark|light)0[1-7]$';
+const BEARD_PATTERN = '^variant0[1-8]$';
+const MOUTH_PATTERN = '^(happy(0[1-9]|1[0-3])|sad(0[1-9]|10))$';
+const HAIR_PATTERN = '^(short(0[1-9]|1[0-9]|2[0-4])|long(0[1-9]|1[0-9]|2[0-1]))$';
+const HAT_PATTERN = '^variant(0[1-9]|10)$';
+const PIXEL_ART_MODE = 'pixel_art' as const;
+const EMOJI_MODE = 'emoji' as const;
+const PIXEL_ART_HINT =
+  'Use mode="pixel_art" to generate a transparent DiceBear pixel-art SVG. ' +
+  'Same seed + same parameters will generate the same avatar.';
+const PIXEL_ART_FIELD_NAMES = new Set([
+  'seed',
+  'accessories',
+  'accessoriesProbability',
+  'clothing',
+  'eyes',
+  'glasses',
+  'glassesProbability',
+  'beard',
+  'beardProbability',
+  'mouth',
+  'hair',
+  'hat',
+  'hatProbability',
+  'accessoriesColor',
+  'clothingColor',
+  'eyesColor',
+  'glassesColor',
+  'hairColor',
+  'hatColor',
+  'mouthColor',
+  'skinColor',
+]);
+
+function isLikelyEmojiAvatar(value: string) {
+  const trimmed = value.trim();
+  return (
+    trimmed.length > 0 &&
+    trimmed.length <= 16 &&
+    !/\s/.test(trimmed) &&
+    /[\p{Extended_Pictographic}\p{Emoji_Presentation}]/u.test(trimmed)
+  );
+}
+
+const emojiAvatarSchema = z.string()
+  .trim()
+  .min(1)
+  .max(16)
+  .refine(isLikelyEmojiAvatar, 'Use a single emoji or short emoji sequence.');
+
+const pixelArtAvatarOptionsSchema = z.object({
+  seed: z.string().trim().min(1).max(80).optional(),
+  accessories: z.string().trim().regex(new RegExp(ACCESSORIES_PATTERN)).optional(),
+  accessoriesProbability: z.coerce.number().int().min(0).max(100).optional(),
+  clothing: z.string().trim().regex(new RegExp(CLOTHING_PATTERN)).optional(),
+  eyes: z.string().trim().regex(new RegExp(EYES_PATTERN)).optional(),
+  glasses: z.string().trim().regex(new RegExp(GLASSES_PATTERN)).optional(),
+  glassesProbability: z.coerce.number().int().min(0).max(100).optional(),
+  beard: z.string().trim().regex(new RegExp(BEARD_PATTERN)).optional(),
+  beardProbability: z.coerce.number().int().min(0).max(100).optional(),
+  mouth: z.string().trim().regex(new RegExp(MOUTH_PATTERN)).optional(),
+  hair: z.string().trim().regex(new RegExp(HAIR_PATTERN)).optional(),
+  hat: z.string().trim().regex(new RegExp(HAT_PATTERN)).optional(),
+  hatProbability: z.coerce.number().int().min(0).max(100).optional(),
+  accessoriesColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+  clothingColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+  eyesColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+  glassesColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+  hairColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+  hatColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+  mouthColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+  skinColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+}).strict();
+
+const changeAvatarToolInputSchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal(EMOJI_MODE),
+    emoji: emojiAvatarSchema,
+  }).strict(),
+  z.object({
+    mode: z.literal(PIXEL_ART_MODE),
+    ...pixelArtAvatarOptionsSchema.shape,
+  }).strict(),
+]);
+
+type ChangeAvatarToolInput = z.infer<typeof changeAvatarToolInputSchema>;
+
+function normalizeRawChangeAvatarInput(input: Record<string, unknown>) {
+  if (input.mode === EMOJI_MODE || input.mode === PIXEL_ART_MODE) {
+    return input;
+  }
+
+  if (typeof input.emoji === 'string' && input.emoji.trim()) {
+    return {
+      ...input,
+      mode: EMOJI_MODE,
+    };
+  }
+
+  for (const fieldName of PIXEL_ART_FIELD_NAMES) {
+    if (input[fieldName] !== undefined) {
+      return {
+        ...input,
+        mode: PIXEL_ART_MODE,
+      };
+    }
+  }
+
+  return input;
+}
+
+function parseChangeAvatarToolInput(input: Record<string, unknown>) {
+  return changeAvatarToolInputSchema.safeParse(
+    normalizeRawChangeAvatarInput(input),
+  );
+}
 
 function buildCreateMemoryAction(input: Record<string, any>): ActorAction {
   const tags = input.tags
@@ -29,10 +152,26 @@ function buildRenameSelfAction(input: Record<string, any>): ActorAction {
   };
 }
 
-function buildChangeAvatarAction(input: Record<string, any>): ActorAction {
+function buildChangeAvatarAction(input: ChangeAvatarToolInput): ActorAction {
+  if (input.mode === EMOJI_MODE) {
+    return {
+      type: 'change_avatar' as const,
+      content: input.emoji,
+      metadata: {
+        avatarMode: EMOJI_MODE,
+        emoji: input.emoji,
+      },
+    };
+  }
+
+  const { mode, ...pixelArt } = input;
   return {
     type: 'change_avatar' as const,
-    content: input.emoji,
+    content: input.seed || PIXEL_ART_MODE,
+    metadata: {
+      avatarMode: mode,
+      pixelArt,
+    },
   };
 }
 
@@ -164,13 +303,112 @@ export function registerActionToolPlugins(): void {
     kind: 'callable',
     definition: {
       name: 'change_avatar',
-      description: 'Change your own avatar. Use when the Boss asks you to change your avatar or profile picture. Provide an emoji that represents your new look.',
+      description:
+        'Change your own avatar. ' +
+        'Supports emoji avatars and DiceBear pixel-art transparent SVG avatars. ' +
+        'Prefer pixel_art when the request is for a proper portrait, profile picture, or visual refresh. ' +
+        'Prefer emoji only for lightweight symbolic avatars.',
       parameters: {
         type: 'object',
         properties: {
-          emoji: { type: 'string', description: 'A single emoji character to use as avatar (e.g. 🤖, 🧠, 💼, 🦊)' },
+          mode: {
+            type: 'string',
+            enum: [EMOJI_MODE, PIXEL_ART_MODE],
+            description:
+              `Avatar mode. ${EMOJI_MODE} = switch to an emoji avatar. ` +
+              `${PIXEL_ART_MODE} = generate a transparent DiceBear pixel-art SVG avatar file. ` +
+              `Do not send both emoji and pixel-art parameters for the same request.`,
+          },
+          emoji: {
+            type: 'string',
+            description:
+              `Required when mode="${EMOJI_MODE}". Use one emoji or a short emoji sequence, for example 🤖, 🧠, 💼, 🦊.`,
+          },
+          seed: {
+            type: 'string',
+            description:
+              `Optional when mode="${PIXEL_ART_MODE}". Stable seed for deterministic generation. ` +
+              `Use when the Boss wants a repeatable look. ${PIXEL_ART_HINT}`,
+          },
+          accessories: {
+            type: 'string',
+            description: 'Optional pixel-art accessory variant. Allowed: variant01 to variant04.',
+          },
+          accessoriesProbability: {
+            type: 'integer',
+            description: 'Optional pixel-art accessory probability from 0 to 100.',
+          },
+          clothing: {
+            type: 'string',
+            description: 'Optional pixel-art clothing variant. Allowed: variant01 to variant23.',
+          },
+          clothingColor: {
+            type: 'string',
+            description: 'Optional clothing color as 6-digit hex without #, for example 428bca.',
+          },
+          eyes: {
+            type: 'string',
+            description: 'Optional eye variant. Allowed: variant01 to variant12.',
+          },
+          eyesColor: {
+            type: 'string',
+            description: 'Optional eye color as 6-digit hex without #.',
+          },
+          glasses: {
+            type: 'string',
+            description: 'Optional glasses variant. Allowed: dark01 to dark07, or light01 to light07.',
+          },
+          glassesColor: {
+            type: 'string',
+            description: 'Optional glasses color as 6-digit hex without #.',
+          },
+          glassesProbability: {
+            type: 'integer',
+            description: 'Optional glasses probability from 0 to 100.',
+          },
+          beard: {
+            type: 'string',
+            description: 'Optional beard variant. Allowed: variant01 to variant08.',
+          },
+          beardProbability: {
+            type: 'integer',
+            description: 'Optional beard probability from 0 to 100.',
+          },
+          mouth: {
+            type: 'string',
+            description: 'Optional mouth variant. Allowed: happy01 to happy13, or sad01 to sad10.',
+          },
+          mouthColor: {
+            type: 'string',
+            description: 'Optional mouth color as 6-digit hex without #.',
+          },
+          hair: {
+            type: 'string',
+            description: 'Optional hair variant. Allowed: short01 to short24, or long01 to long21.',
+          },
+          hairColor: {
+            type: 'string',
+            description: 'Optional hair color as 6-digit hex without #.',
+          },
+          hat: {
+            type: 'string',
+            description: 'Optional hat variant. Allowed: variant01 to variant10.',
+          },
+          hatColor: {
+            type: 'string',
+            description: 'Optional hat color as 6-digit hex without #.',
+          },
+          hatProbability: {
+            type: 'integer',
+            description: 'Optional hat probability from 0 to 100.',
+          },
+          skinColor: {
+            type: 'string',
+            description:
+              'Optional skin color as 6-digit hex without #. Pick natural, readable colors unless the Boss explicitly asks for something stylized.',
+          },
         },
-        required: ['emoji'],
+        required: ['mode'],
       },
     },
     execute: async (input) => {
@@ -179,7 +417,18 @@ export function registerActionToolPlugins(): void {
         return JSON.stringify({ error: 'No session context available' });
       }
 
-      const action = buildChangeAvatarAction(input as Record<string, any>);
+      const parsed = parseChangeAvatarToolInput(input as Record<string, unknown>);
+      if (!parsed.success) {
+        return JSON.stringify({
+          error: 'Invalid change_avatar input',
+          message:
+            `Use mode="${EMOJI_MODE}" with one emoji, or mode="${PIXEL_ART_MODE}" with optional DiceBear pixel-art parameters. ` +
+            `For pixel_art, only use allowed variant names, 6-digit hex colors without #, and probabilities from 0 to 100.`,
+          details: parsed.error.flatten(),
+        });
+      }
+
+      const action = buildChangeAvatarAction(parsed.data);
       await executeActorActions(
         context.workspaceId,
         context.actorId,
@@ -192,10 +441,24 @@ export function registerActionToolPlugins(): void {
         },
       );
 
+      const actor = await getActor(context.actorId, context.workspaceId);
+
+      if (parsed.data.mode === EMOJI_MODE) {
+        return JSON.stringify({
+          success: true,
+          avatarMode: EMOJI_MODE,
+          emoji: parsed.data.emoji,
+          avatarFileId: actor?.definition.avatarFileId || null,
+          message: `Your avatar now uses the emoji ${parsed.data.emoji}.`,
+        });
+      }
+
       return JSON.stringify({
         success: true,
-        emoji: action.content,
-        message: `Your avatar emoji is now ${action.content}.`,
+        avatarMode: PIXEL_ART_MODE,
+        avatarFileId: actor?.definition.avatarFileId || null,
+        avatarUrl: actor?.avatarUrl || null,
+        message: 'Your avatar now uses a generated pixel-art portrait.',
       });
     },
   });
@@ -212,8 +475,20 @@ export function toolCallsToActions(toolCalls: ToolCall[]): ActorAction[] {
       case 'rename_self':
         return buildRenameSelfAction(input);
 
-      case 'change_avatar':
-        return buildChangeAvatarAction(input);
+      case 'change_avatar': {
+        const parsed = parseChangeAvatarToolInput(input);
+        return buildChangeAvatarAction(
+          parsed.success
+            ? parsed.data
+            : {
+                mode: EMOJI_MODE,
+                emoji:
+                  typeof input.emoji === 'string' && input.emoji.trim()
+                    ? input.emoji.trim()
+                    : '🙂',
+              },
+        );
+      }
 
       default:
         return { type: 'respond' as const, content: `Unknown tool: ${tc.toolName}` };

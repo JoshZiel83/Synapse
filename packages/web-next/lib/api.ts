@@ -543,22 +543,6 @@ class ApiClient {
     return this.fetch(`/workspaces/${wsId}/work-items/${id}`)
   }
 
-  // Secretary
-  sendMessage(wsId: string, content: string) {
-    return this.fetch(`/workspaces/${wsId}/secretary/message`, {
-      method: "POST",
-      body: JSON.stringify({ content }),
-    })
-  }
-  getConversation(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/secretary/conversation`)
-  }
-  clearConversation(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/secretary/conversation`, {
-      method: "DELETE",
-    })
-  }
-
   // Messages
   getMessages(wsId: string, params?: string) {
     return this.fetch(

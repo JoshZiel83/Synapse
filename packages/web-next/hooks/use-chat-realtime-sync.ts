@@ -77,7 +77,6 @@ export function useChatRealtimeSync({
           }
           break
         case "actor.action":
-        case "secretary.response":
           if (workspaceId) {
             void loadGroups(workspaceId)
           }

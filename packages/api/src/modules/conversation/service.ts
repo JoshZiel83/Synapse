@@ -15,6 +15,7 @@ import type {
 import { extractText } from "@synapse/shared";
 import { buildNormalizedMessageContent } from "./message-content.js";
 import { itemPartsToCanonicalContentBlocks } from "./message-content.js";
+import { getFileUrlById } from "../files/service.js";
 import {
   getConversationEventSpec,
   renderConversationEventTimelineBlocks,
@@ -731,7 +732,10 @@ function buildEntitySelect(params: {
             ${params.memberAlias}.display_name
           ) AS ${prefix}name,
           ${params.actorAlias}.title AS ${prefix}title,
-          ${params.actorAlias}.role AS ${prefix}role`;
+          ${params.actorAlias}.role AS ${prefix}role,
+          ${params.actorAlias}.avatar_file_id AS ${prefix}actor_avatar_file_id,
+          ${params.actorAlias}.avatar_emoji AS ${prefix}avatar_emoji,
+          ${params.userAlias}.avatar_file_id AS ${prefix}user_avatar_file_id`;
 }
 
 function mapEntityRef(row: any): ConversationEntityRef | undefined {
@@ -751,11 +755,16 @@ function mapEntityRef(row: any): ConversationEntityRef | undefined {
       row.transport_address_id || row.author_transport_address_id || undefined,
     transportKind:
       row.transport_kind || row.author_transport_kind || undefined,
-    name: row.member_name || row.author_name || undefined,
+    name: row.member_name || row.name || row.author_name || undefined,
     title: row.title || row.actor_title || row.author_title || undefined,
     role: row.role || row.actor_role || row.author_role || undefined,
-    avatarUrl: row.avatar_url || undefined,
-    avatarEmoji: row.avatar_emoji || undefined,
+    avatarUrl: row.avatar_url
+      || (row.actor_avatar_file_id || row.author_actor_avatar_file_id
+        ? getFileUrlById(row.actor_avatar_file_id || row.author_actor_avatar_file_id)
+        : row.user_avatar_file_id || row.author_user_avatar_file_id
+          ? getFileUrlById(row.user_avatar_file_id || row.author_user_avatar_file_id)
+          : undefined),
+    avatarEmoji: row.avatar_emoji || row.author_avatar_emoji || undefined,
   };
 }
 

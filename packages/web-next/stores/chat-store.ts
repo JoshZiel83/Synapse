@@ -587,6 +587,7 @@ function applyFeedMessageToGroup(
         item.eventPayload as ConversationFeedEventPayloadMap["actor_avatar_changed"]
       if (payload.actor.actorId) {
         nextGroup = applyActorPatch(nextGroup, payload.actor.actorId, {
+          avatarUrl: payload.newAvatarUrl,
           emoji: payload.newAvatarEmoji,
         })
       }

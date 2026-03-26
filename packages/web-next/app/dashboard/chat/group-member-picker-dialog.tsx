@@ -28,7 +28,7 @@ function normalizeActorOption(actor: any): PickerOption {
     name: definition.name || 'Untitled actor',
     subtitle: definition.title || definition.role || undefined,
     avatarUrl: actor.avatarUrl,
-    emoji: definition?.config?.avatar_emoji || undefined,
+    emoji: definition?.avatarEmoji || undefined,
   };
 }
 

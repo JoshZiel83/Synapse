@@ -29,6 +29,7 @@ import {
   getFileAccessInfo,
   getFileUrlById,
 } from '../files/service.js';
+import { createGeneratedUserAvatarFile } from '../avatar/service.js';
 import { ensureConfiguredPlatformAdminForUser } from '../platform/admin-service.js';
 
 const SALT_ROUNDS = 10;
@@ -611,14 +612,34 @@ export function createAuthService(_app: FastifyInstance) {
     }
 
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-    const result = await query<UserRow>(
-      `INSERT INTO users (email, password_hash, name)
-       VALUES ($1, $2, $3)
-       RETURNING id, email, name, avatar_file_id, password_hash, created_at, updated_at`,
-      [normalizedEmail, passwordHash, name.trim()],
-    );
+    const userRow = await transaction(async (client) => {
+      const createdUser = await client.query<UserRow>(
+        `INSERT INTO users (email, password_hash, name)
+         VALUES ($1, $2, $3)
+         RETURNING id, email, name, avatar_file_id, password_hash, created_at, updated_at`,
+        [normalizedEmail, passwordHash, name.trim()],
+      );
 
-    const user = mapUserRow(result.rows[0]);
+      const row = createdUser.rows[0]!;
+      const avatarFile = await createGeneratedUserAvatarFile(client, {
+        userId: row.id,
+        name: row.name,
+        email: row.email,
+      });
+
+      const updatedUser = await client.query<UserRow>(
+        `UPDATE users
+         SET avatar_file_id = $2,
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING id, email, name, avatar_file_id, password_hash, created_at, updated_at`,
+        [row.id, avatarFile.fileId],
+      );
+
+      return updatedUser.rows[0]!;
+    });
+
+    const user = mapUserRow(userRow);
     await ensureConfiguredPlatformAdminForUser({ id: user.id, email: user.email });
     const { session, sessionToken, sessionPersistence } = await insertSession(user, sessionContext);
 

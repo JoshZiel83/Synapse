@@ -63,11 +63,15 @@ const createActorSchema = z.object({
   role: z.enum(actorRoles),
   title: z.string().max(255).default(""),
   avatarFileId: z.string().uuid().optional(),
+  avatarEmoji: z.string().min(1).max(32).optional(),
   canRepresentUser: z.boolean().default(false),
   docs: z.array(actorDocSchema).optional(),
   parentId: z.string().uuid().optional(),
   specialties: z.array(z.string()).optional(),
   config: z.record(z.unknown()).optional(),
+}).refine((body) => !(body.avatarFileId && body.avatarEmoji), {
+  message: "avatarFileId and avatarEmoji are mutually exclusive",
+  path: ["avatarEmoji"],
 });
 
 const updateActorSchema = z.object({
@@ -75,11 +79,15 @@ const updateActorSchema = z.object({
   role: z.enum(actorRoles).optional(),
   title: z.string().max(255).optional(),
   avatarFileId: z.string().uuid().nullable().optional(),
+  avatarEmoji: z.string().min(1).max(32).nullable().optional(),
   canRepresentUser: z.boolean().optional(),
   docs: z.array(actorDocSchema).optional(),
   parentId: z.string().uuid().nullable().optional(),
   specialties: z.array(z.string()).optional(),
   config: z.record(z.unknown()).optional(),
+}).refine((body) => !(body.avatarFileId && body.avatarEmoji), {
+  message: "avatarFileId and avatarEmoji are mutually exclusive",
+  path: ["avatarEmoji"],
 });
 
 const installActorPackageSchema = z.object({

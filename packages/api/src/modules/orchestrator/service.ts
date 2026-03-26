@@ -1,11 +1,36 @@
 import { emitEvent } from '../../infrastructure/events/index.js';
 import type { ActorAction, ConversationFeedEventPayloadMap, UUID } from '@synapse/shared';
+import { query } from '../../infrastructure/database/index.js';
 import { createMemory } from '../memory/service.js';
+import { createGeneratedActorPixelArtAvatarFile, type PixelArtAvatarOptionsInput } from '../avatar/service.js';
 import { getActor, updateActor, type ActorUpdateSourceInput } from '../organization/service.js';
 import { getSession } from '../session/service.js';
 import { createConversationEvent, getConversationFeedItemById, listConversationMembers } from '../conversation/service.js';
 
 const ACTOR_MEMORY_SCOPES = new Set(['actor_conversation', 'conversation', 'actor_global']);
+const PIXEL_ART_OPTION_KEYS = [
+  'seed',
+  'accessories',
+  'accessoriesProbability',
+  'clothing',
+  'eyes',
+  'glasses',
+  'glassesProbability',
+  'beard',
+  'beardProbability',
+  'mouth',
+  'hair',
+  'hat',
+  'hatProbability',
+  'accessoriesColor',
+  'clothingColor',
+  'eyesColor',
+  'glassesColor',
+  'hairColor',
+  'hatColor',
+  'mouthColor',
+  'skinColor',
+] as const;
 
 type ActorActionExecutionContext = {
   sessionId?: UUID;
@@ -13,6 +38,32 @@ type ActorActionExecutionContext = {
   userId?: UUID;
   conversationId?: UUID;
 };
+
+function parsePixelArtAvatarOptions(value: unknown): PixelArtAvatarOptionsInput {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const source = value as Record<string, unknown>;
+  const options: Record<string, unknown> = {};
+
+  for (const key of PIXEL_ART_OPTION_KEYS) {
+    const nextValue = source[key];
+    if (typeof nextValue === 'string') {
+      const trimmed = nextValue.trim();
+      if (trimmed) {
+        options[key] = trimmed;
+      }
+      continue;
+    }
+
+    if (typeof nextValue === 'number' && Number.isFinite(nextValue)) {
+      options[key] = nextValue;
+    }
+  }
+
+  return options as PixelArtAvatarOptionsInput;
+}
 
 async function emitChatFeedItem(workspaceId: UUID, itemId: UUID) {
   const item = await getConversationFeedItemById(itemId);
@@ -98,9 +149,9 @@ async function handleRespond(
   sessionId?: UUID,
 ): Promise<void> {
   await emitEvent({
-    type: 'secretary.response',
+    type: 'actor.action',
     workspaceId,
-    payload: { actorId, content: action.content },
+    payload: { actorId, sessionId, actions: [action] },
     timestamp: new Date().toISOString(),
   });
 }
@@ -202,9 +253,8 @@ async function handleChangeAvatar(
   action: ActorAction,
   context: ActorActionExecutionContext,
 ): Promise<void> {
-  const emoji = action.content?.trim();
-  if (!emoji) return;
   const actor = await getActor(actorId, workspaceId);
+  if (!actor) return;
   const source: ActorUpdateSourceInput = {
     type: 'actor',
     actorId,
@@ -214,10 +264,109 @@ async function handleChangeAvatar(
     conversationId: context.conversationId,
     reason: 'change_avatar',
   };
-  await updateActor(actorId, workspaceId, {
-    config: {
-      ...(actor?.definition.config || {}),
-      avatar_emoji: emoji,
+
+  const avatarMode =
+    action.metadata?.avatarMode === 'pixel_art' ? 'pixel_art' : 'emoji';
+
+  if (avatarMode === 'pixel_art') {
+    const pixelArtOptions = parsePixelArtAvatarOptions(action.metadata?.pixelArt);
+    const avatarFile = await createGeneratedActorPixelArtAvatarFile(
+      { query },
+      {
+        workspaceId,
+        actorId,
+        actorName: actor.definition.name,
+        actorTitle: actor.definition.title,
+        uploaderUserId: context.userId || null,
+        options: pixelArtOptions,
+      },
+    );
+
+    const updatedActor = await updateActor(
+      actorId,
+      workspaceId,
+      {
+        avatarFileId: avatarFile.fileId,
+        avatarEmoji: null,
+      },
+      source,
+    );
+
+    if (updatedActor) {
+      await emitUserVisibleSystemNotice({
+        workspaceId,
+        actorId,
+        sessionId: context.sessionId,
+        eventType: 'actor_avatar_changed',
+        eventPayload: {
+          actor: {
+            memberType: 'actor',
+            actorId,
+            name: updatedActor.definition.name,
+            title: updatedActor.definition.title,
+            role: updatedActor.definition.role,
+            avatarUrl: updatedActor.avatarUrl,
+            avatarEmoji: updatedActor.definition.avatarEmoji,
+          },
+          oldAvatarEmoji: actor.definition.avatarEmoji,
+          newAvatarEmoji: updatedActor.definition.avatarEmoji,
+          oldAvatarUrl: actor.avatarUrl,
+          newAvatarUrl: updatedActor.avatarUrl,
+          sourceTurnId: context.turnId,
+        },
+        metadata: {
+          noticeType: 'actor_avatar_changed',
+          actorId,
+          avatarMode,
+        },
+      });
+    }
+    return;
+  }
+
+  const emoji =
+    typeof action.metadata?.emoji === 'string'
+      ? action.metadata.emoji.trim()
+      : action.content?.trim();
+  if (!emoji) return;
+
+  const updatedActor = await updateActor(
+    actorId,
+    workspaceId,
+    {
+      avatarFileId: null,
+      avatarEmoji: emoji,
     },
-  }, source);
+    source,
+  );
+
+  if (!updatedActor) return;
+
+  await emitUserVisibleSystemNotice({
+    workspaceId,
+    actorId,
+    sessionId: context.sessionId,
+    eventType: 'actor_avatar_changed',
+    eventPayload: {
+      actor: {
+        memberType: 'actor',
+        actorId,
+        name: updatedActor.definition.name,
+        title: updatedActor.definition.title,
+        role: updatedActor.definition.role,
+        avatarUrl: updatedActor.avatarUrl,
+        avatarEmoji: updatedActor.definition.avatarEmoji,
+      },
+      oldAvatarEmoji: actor.definition.avatarEmoji,
+      newAvatarEmoji: updatedActor.definition.avatarEmoji,
+      oldAvatarUrl: actor.avatarUrl,
+      newAvatarUrl: updatedActor.avatarUrl,
+      sourceTurnId: context.turnId,
+    },
+    metadata: {
+      noticeType: 'actor_avatar_changed',
+      actorId,
+      avatarMode,
+    },
+  });
 }
