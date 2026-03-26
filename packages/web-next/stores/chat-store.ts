@@ -9,6 +9,9 @@ import type {
   ConversationFeedEventPayloadMap,
   ConversationFeedEventType,
   ConversationFeedItem,
+  ConversationMessageTransportContext,
+  ConversationMessageTransportDelivery,
+  TransportKind,
   WorkspaceFeedEventRecord,
 } from "@synapse/shared"
 import {
@@ -29,7 +32,8 @@ export interface GroupParticipant {
 
 export interface GroupMember {
   memberId: string
-  type: "actor" | "user"
+  participantId: string
+  type: "actor" | "user" | "external"
   id: string
   name: string
   role?: string
@@ -37,11 +41,18 @@ export interface GroupMember {
   emoji?: string
   avatarUrl?: string
   sessionStatus?: string
+  externalUserKey?: string
+  transportKind?: TransportKind
+  transportAddressId?: string
+  linkedUserId?: string
+  linkedUserName?: string
+  linkedUserAvatarUrl?: string
 }
 
 export interface Group {
   id: string
   status: "active" | "completed" | "failed"
+  transportKind?: TransportKind
   participants: GroupParticipant[]
   members: GroupMember[]
   lastMessage?: {
@@ -91,8 +102,9 @@ export interface FeedMessage {
   serverToolCalls?: ServerToolCall[]
   citationSources?: Record<string, { url: string; title: string }>
   coordination?: boolean
-  targetActorIds?: string[]
-  targetUserIds?: string[]
+  targetParticipantIds?: string[]
+  transport?: ConversationMessageTransportContext
+  transportDeliveries?: ConversationMessageTransportDelivery[]
   eventType?: ConversationFeedEventType
   eventPayload?: ConversationFeedEventPayloadMap[ConversationFeedEventType]
 }
@@ -106,8 +118,7 @@ export interface OutboxEntry {
   workspaceId: string
   conversationId: string
   contentBlocks: CanonicalContentBlock[]
-  targetActorIds: string[]
-  targetUserIds: string[]
+  targetParticipantIds: string[]
   createdAt: string
   optimisticSequence: number
   status: "sending" | "retrying"
@@ -135,7 +146,7 @@ interface ChatState {
     workspaceId: string,
     groupId: string,
     contentBlocks: CanonicalContentBlock[],
-    targetActorIds?: string[]
+    targetParticipantIds?: string[]
   ) => Promise<void>
   hydrateOutbox: (workspaceId: string) => void
   flushOutbox: (workspaceId: string) => void
@@ -271,8 +282,7 @@ function outboxEntryToMessage(entry: OutboxEntry): FeedMessage {
     createdAt: entry.createdAt,
     clientMessageId: entry.clientMessageId,
     deliveryStatus: entry.status,
-    targetActorIds: entry.targetActorIds,
-    targetUserIds: entry.targetUserIds,
+    targetParticipantIds: entry.targetParticipantIds,
   }
 }
 
@@ -381,12 +391,9 @@ function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
     }
   }
 
-  const targetActorIds = item.targets
-    .filter((target) => target.memberType === "actor" && target.actorId)
-    .map((target) => target.actorId!)
-  const targetUserIds = item.targets
-    .filter((target) => target.memberType === "user" && target.userId)
-    .map((target) => target.userId!)
+  const targetParticipantIds = item.targets
+    .map((target) => target.participantId || target.memberId)
+    .filter((targetId): targetId is string => Boolean(targetId))
   const metadata = item.metadata || {}
 
   return {
@@ -415,8 +422,9 @@ function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
       | Record<string, { url: string; title: string }>
       | undefined,
     coordination: Boolean(metadata.coordination),
-    targetActorIds,
-    targetUserIds,
+    targetParticipantIds,
+    transport: item.transport,
+    transportDeliveries: item.transportDeliveries,
   }
 }
 
@@ -428,12 +436,22 @@ function applyMemberJoined(
   const nextParticipants = [...group.participants]
 
   for (const member of payload.members) {
-    const id = member.actorId || member.userId
+    const id =
+      member.actorId ||
+      member.userId ||
+      member.participantId ||
+      member.memberId
     if (!id) continue
 
     const normalizedMember: GroupMember = {
       memberId: member.memberId,
-      type: member.memberType === "user" ? "user" : "actor",
+      participantId: member.participantId || member.memberId,
+      type:
+        member.memberType === "user"
+          ? "user"
+          : member.memberType === "external"
+            ? "external"
+            : "actor",
       id,
       name: member.name || "Unknown",
       title: member.title,
@@ -831,7 +849,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (workspaceId, groupId, contentBlocks, targetActorIds) => {
+  sendMessage: async (workspaceId, groupId, contentBlocks, targetParticipantIds) => {
     const clientMessageId = createClientMessageId()
     const createdAt = new Date().toISOString()
     const optimisticSequence = createOptimisticSequence(get().messages)
@@ -840,8 +858,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       workspaceId,
       conversationId: groupId,
       contentBlocks,
-      targetActorIds: targetActorIds || [],
-      targetUserIds: [],
+      targetParticipantIds: targetParticipantIds || [],
       createdAt,
       optimisticSequence,
       status: "sending",
@@ -1131,8 +1148,7 @@ async function processOutboxEntry(clientMessageId: string) {
       entry.conversationId,
       entry.contentBlocks,
       entry.clientMessageId,
-      entry.targetActorIds,
-      entry.targetUserIds
+      entry.targetParticipantIds
     )
 
     if (result?.item) {

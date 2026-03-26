@@ -9,12 +9,18 @@ import type {
 } from '@synapse/shared';
 
 export interface GroupMemberInfo {
+  id?: string;
+  member_type?: string;
   actor_id?: string;
   user_id?: string;
   actor_name?: string;
   actor_title?: string;
   actor_role?: string;
   user_name?: string;
+  display_name?: string;
+  transport_display_name?: string;
+  transport_external_id?: string;
+  linked_user_name?: string;
   user_id_ref?: string;
   session_status?: string;
   actor_docs?: ActorDoc[];
@@ -170,6 +176,15 @@ export function buildActorPrompt(
   }
 
   if (groupMembers && groupMembers.length > 0) {
+    const exampleRecipient =
+      groupMembers.find((member) => member.user_id)?.user_name ||
+      groupMembers.find(
+        (member) => member.member_type === 'external' || member.transport_external_id,
+      )?.transport_display_name ||
+      groupMembers.find(
+        (member) => member.member_type === 'external' || member.transport_external_id,
+      )?.display_name ||
+      'User';
     const roster = [
       '# Group Members',
       '',
@@ -181,6 +196,17 @@ export function buildActorPrompt(
         }
         if (member.actor_id && member.actor_id !== actor.id) {
           return [buildRosterEntry(member)];
+        }
+        if (member.member_type === 'external' || member.transport_external_id) {
+          const externalName =
+            member.transport_display_name ||
+            member.display_name ||
+            member.linked_user_name ||
+            'External participant';
+          const mapping = member.linked_user_name
+            ? `; linked workspace user: ${member.linked_user_name}`
+            : '';
+          return [`- [external] **${externalName}** — external participant${mapping}`];
         }
         return [];
       }),
@@ -198,7 +224,7 @@ export function buildActorPrompt(
       `## send_to\n` +
       `Send a message to one or more members by name.\n` +
       `Parameters:\n` +
-      `- \`recipients\`: array of member names (for example ["${groupMembers.find((member) => member.user_id)?.user_name || 'User'}"] or ["Actor1", "Actor2"])\n` +
+      `- \`recipients\`: array of member names (for example ["${exampleRecipient}"] or ["Actor1", "Actor2"])\n` +
       `- \`message\`: your message content\n\n` +
       `## Other tools\n` +
       `- \`invite_actor\`: Invite one or more currently listed candidate actors into this group when the current roster lacks a needed skill\n` +

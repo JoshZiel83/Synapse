@@ -4,20 +4,26 @@ import { useMemo } from 'react';
 import { Mention, MentionsInput, type MentionItem, type MentionsInputStyle } from 'react-mentions';
 import ChatAvatar from './chat-avatar';
 
-export type MentionableActor = {
+export type MentionableParticipant = {
   id: string;
   name: string;
+  type: 'actor' | 'user' | 'external';
   role?: string;
   avatarUrl?: string;
   emoji?: string;
+  description?: string;
+  searchTerms?: string[];
 };
 
-type ActorSuggestion = {
+type ParticipantSuggestion = {
   id: string;
   display: string;
+  type: 'actor' | 'user' | 'external';
   role?: string;
   avatarUrl?: string;
   emoji?: string;
+  description?: string;
+  searchTerms: string[];
 };
 
 const mentionInputStyle: MentionsInputStyle = {
@@ -81,17 +87,17 @@ function getMentionMatch(value: string, caret: number) {
 }
 
 interface ChatMentionsInputProps {
-  actors: MentionableActor[];
+  participants: MentionableParticipant[];
   value: string;
   plainTextValue: string;
   disabled?: boolean;
   inputRef?: React.Ref<HTMLTextAreaElement>;
-  onChange: (nextValue: string, nextPlainTextValue: string, mentionedActorIds: string[]) => void;
+  onChange: (nextValue: string, nextPlainTextValue: string, mentionedParticipantIds: string[]) => void;
   onSubmit: () => void;
 }
 
 export default function ChatMentionsInput({
-  actors,
+  participants,
   value,
   plainTextValue,
   disabled,
@@ -101,25 +107,28 @@ export default function ChatMentionsInput({
 }: ChatMentionsInputProps) {
   const portalHost = typeof document === 'undefined' ? undefined : document.body;
 
-  const suggestions = useMemo<ActorSuggestion[]>(
-    () => actors.map((actor) => ({
-      id: actor.id,
-      display: actor.name,
-      role: actor.role,
-      avatarUrl: actor.avatarUrl,
-      emoji: actor.emoji,
+  const suggestions = useMemo<ParticipantSuggestion[]>(
+    () => participants.map((participant) => ({
+      id: participant.id,
+      display: participant.name,
+      type: participant.type,
+      role: participant.role,
+      avatarUrl: participant.avatarUrl,
+      emoji: participant.emoji,
+      description: participant.description,
+      searchTerms: participant.searchTerms || [],
     })),
-    [actors],
+    [participants],
   );
 
   return (
     <MentionsInput
         value={value}
         onChange={(_event, nextValue, nextPlainTextValue, mentions) => {
-          const mentionedActorIds = Array.from(
+          const mentionedParticipantIds = Array.from(
             new Set(mentions.map((mention: MentionItem) => String(mention.id))),
           );
-          onChange(nextValue, nextPlainTextValue, mentionedActorIds);
+          onChange(nextValue, nextPlainTextValue, mentionedParticipantIds);
         }}
         onKeyDown={(event) => {
           if (event.nativeEvent.isComposing) return;
@@ -138,34 +147,53 @@ export default function ChatMentionsInput({
         inputRef={inputRef}
         placeholder="Type a message..."
         disabled={disabled}
-        a11ySuggestionsListLabel="Actor suggestions"
+        a11ySuggestionsListLabel="Participant suggestions"
         style={mentionInputStyle}
         className="text-sm"
       >
         <Mention
           trigger="@"
-          data={suggestions}
+          data={(search, callback) => {
+            const normalizedSearch = search.trim().toLowerCase();
+            const visibleSuggestions = suggestions.filter((participant) => {
+              if (!normalizedSearch) return true;
+              const haystack = [
+                participant.display,
+                participant.description || '',
+                ...participant.searchTerms,
+              ]
+                .join(' ')
+                .toLowerCase();
+              return haystack.includes(normalizedSearch);
+            });
+            callback(visibleSuggestions);
+          }}
           markup="@[__display__](__id__)"
           appendSpaceOnAdd
           displayTransform={(_id, display) => `@${display}`}
           renderSuggestion={(entry, _search, _highlightedDisplay, _index, focused) => {
-            const actor = entry as ActorSuggestion;
+            const participant = entry as ParticipantSuggestion;
             return (
               <div
                 className={`flex items-center gap-2 ${focused ? 'text-primary' : 'text-foreground'}`}
               >
                 <ChatAvatar
-                  name={actor.display}
-                  avatarUrl={actor.avatarUrl}
-                  emoji={actor.emoji}
-                  entityType="actor"
+                  name={participant.display}
+                  avatarUrl={participant.avatarUrl}
+                  emoji={participant.emoji}
+                  entityType={participant.type}
                   size="sm"
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{actor.display}</div>
-                  {actor.role ? (
-                    <div className="truncate text-[11px] text-muted-foreground">{actor.role}</div>
-                  ) : null}
+                  <div className="truncate text-sm font-medium">{participant.display}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">
+                    {participant.description ||
+                      (participant.type === 'actor'
+                        ? participant.role || 'Actor'
+                        : participant.type === 'external'
+                          ? 'External participant'
+                          : 'Workspace user')}
+                  </div>
                 </div>
               </div>
             );

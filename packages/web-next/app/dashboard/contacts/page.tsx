@@ -1,6 +1,6 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -718,6 +718,7 @@ function PackageDetail({
 
 export default function ContactsPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { workspaceId } = useWorkspace()
   const [members, setMembers] = useState<WorkspaceMember[]>([])
   const [actors, setActors] = useState<Actor[]>([])
@@ -880,6 +881,32 @@ export default function ContactsPage() {
   const selectedPackage = selected?.kind === 'package'
     ? selectedPackageDetail || actorPackages.find((actorPackage) => actorPackage.package.id === selected.id) || null
     : null
+
+  useEffect(() => {
+    const kind = searchParams.get('kind')
+    const id = searchParams.get('id')
+    if (!kind || !id) return
+
+    if (kind === 'user') {
+      if (!members.some((member) => member.userId === id)) return
+      setViewMode('directory')
+      setSelected({ kind: 'user', id })
+      return
+    }
+
+    if (kind === 'actor') {
+      if (!actors.some((actor) => actor.id === id)) return
+      setViewMode('directory')
+      setSelected({ kind: 'actor', id })
+      return
+    }
+
+    if (kind === 'package') {
+      if (!actorPackages.some((actorPackage) => actorPackage.package.id === id)) return
+      setViewMode('packages')
+      setSelected({ kind: 'package', id })
+    }
+  }, [actorPackages, actors, members, searchParams])
 
   return (
     <>

@@ -44,6 +44,11 @@ import mcpPluginsModule from "./modules/mcp-plugins/index.js";
 import modelGroupsModule from "./modules/model-groups/index.js";
 import platformModule from "./modules/platform/index.js";
 import auditModule from "./modules/audit/index.js";
+import imModule from "./modules/im/index.js";
+import {
+  startTransportRuntimeManager,
+  stopTransportRuntimeManager,
+} from "./modules/im/runtime.js";
 import { syncConfiguredPlatformAdmins } from "./modules/platform/admin-service.js";
 import { initBuiltinRegistry } from "./modules/mcp-plugins/builtin/index.js";
 import {
@@ -56,6 +61,7 @@ import { registerCallableToolPlugins } from "./modules/ai/session-tools.js";
 import { startSessionThinkingWorker } from "./workers/session-thinking.js";
 import { ensureAutomationSchedulerJob, startAutomationSchedulerWorker } from "./workers/automation-scheduler.js";
 import { startAutomationExecutionWorker } from "./workers/automation-execution.js";
+import { startImTransportDeliveryWorker } from "./workers/im-transport-delivery.js";
 import { shutdownAllWorkers } from "./workers/registry.js";
 import { shutdownQueues } from "./workers/queues.js";
 
@@ -133,6 +139,7 @@ async function main() {
   await app.register(modelGroupsModule);
   await app.register(platformModule);
   await app.register(auditModule);
+  await app.register(imModule);
 
   try {
     await initBuiltinRegistry();
@@ -148,6 +155,8 @@ async function main() {
   startAutomationSchedulerWorker();
   startAutomationExecutionWorker();
   startSessionThinkingWorker();
+  startImTransportDeliveryWorker();
+  await startTransportRuntimeManager();
 
   // Health check
   app.get("/api/v1/health", async () => {
@@ -218,6 +227,13 @@ async function main() {
         3000,
       ).catch((err) => {
         app.log.error({ err }, "WebSocket shutdown timed out");
+      });
+      await waitWithTimeout(
+        "transport runtime shutdown",
+        stopTransportRuntimeManager(),
+        3000,
+      ).catch((err) => {
+        app.log.error({ err }, "Transport runtime shutdown timed out");
       });
       await waitWithTimeout(
         "worker shutdown",

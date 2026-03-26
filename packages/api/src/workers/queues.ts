@@ -7,6 +7,7 @@ const connection = redis;
 export const sessionThinkingQueue = new Queue(QUEUE_NAMES.SESSION_THINKING, { connection });
 export const automationSchedulerQueue = new Queue(QUEUE_NAMES.AUTOMATION_SCHEDULER, { connection });
 export const automationExecutionQueue = new Queue(QUEUE_NAMES.AUTOMATION_EXECUTION, { connection });
+export const imTransportDeliveryQueue = new Queue(QUEUE_NAMES.IM_TRANSPORT_DELIVERY, { connection });
 
 export async function enqueueAutomationExecutionJobs(executionIds: string[]) {
   const uniqueExecutionIds = Array.from(
@@ -17,7 +18,22 @@ export async function enqueueAutomationExecutionJobs(executionIds: string[]) {
       automationExecutionQueue.add(
         'execute',
         { executionId },
-        { jobId: `automation:execution:${executionId}` },
+        { jobId: `automation-execution-${executionId}` },
+      ),
+    ),
+  );
+}
+
+export async function enqueueTransportDeliveryJobs(linkIds: string[]) {
+  const uniqueLinkIds = Array.from(
+    new Set(linkIds.map((linkId) => linkId.trim()).filter(Boolean)),
+  );
+  await Promise.all(
+    uniqueLinkIds.map((linkId) =>
+      imTransportDeliveryQueue.add(
+        'deliver',
+        { linkId },
+        { jobId: `im-transport-delivery-${linkId}` },
       ),
     ),
   );
@@ -27,6 +43,7 @@ const queues = [
   sessionThinkingQueue,
   automationSchedulerQueue,
   automationExecutionQueue,
+  imTransportDeliveryQueue,
 ];
 
 export async function shutdownQueues() {

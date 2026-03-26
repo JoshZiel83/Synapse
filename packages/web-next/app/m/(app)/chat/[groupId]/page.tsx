@@ -42,11 +42,11 @@ export default function MobileChatDetailPage() {
 
   async function handleSend(
     contentBlocks: CanonicalContentBlock[],
-    targetActorIds?: string[]
+    targetParticipantIds?: string[]
   ) {
     if (!workspaceId || !groupId) return
     try {
-      await sendMessage(workspaceId, groupId, contentBlocks, targetActorIds)
+      await sendMessage(workspaceId, groupId, contentBlocks, targetParticipantIds)
     } catch (error) {
       console.error("Failed to send:", error)
     }
@@ -82,6 +82,7 @@ export default function MobileChatDetailPage() {
           onRefreshGroup={() => loadGroups(workspaceId)}
           viewportLocked
           mobileMentionPickerWorkspaceId={workspaceId}
+          contactBasePath="/m/contacts"
         />
       ) : loadingGroups ? (
         <GroupChatSkeleton mobile />

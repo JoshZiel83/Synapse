@@ -852,7 +852,7 @@ export interface SessionWakeup {
   sourceType: SessionWakeupSourceType;
   sourceItemId?: UUID;
   sourceSessionId?: UUID;
-  sourceMemberType?: "user" | "actor" | "system";
+  sourceMemberType?: "user" | "actor" | "external" | "system";
   sourceMemberId?: UUID;
   sourceName?: string;
   summary: string;
@@ -871,7 +871,7 @@ export interface ActorRuntimeWakeup {
   sourceType: SessionWakeupSourceType;
   sourceItemId?: UUID;
   sourceSessionId?: UUID;
-  sourceMemberType?: "user" | "actor" | "system";
+  sourceMemberType?: "user" | "actor" | "external" | "system";
   sourceMemberId?: UUID;
   sourceName?: string;
   summary: string;
@@ -1299,6 +1299,7 @@ export type CanonicalContextRole = "user" | "assistant" | "system" | "tool";
 export type CanonicalContextMemberType =
   | "actor"
   | "user"
+  | "external"
   | "remote_agent"
   | "system"
   | "unknown";
@@ -1528,10 +1529,14 @@ export interface NormalizedMcpToolResult {
 // ============ Tool Plugin System ============
 
 export interface GroupMemberEntry {
-  type: "actor" | "user";
+  type: "actor" | "user" | "external";
   id: string;
   name: string;
   title?: string;
+  participantId?: string;
+  linkedUserId?: string;
+  linkedUserName?: string;
+  externalUserKey?: string;
 }
 
 export interface ToolResolveContext {
@@ -2345,21 +2350,41 @@ export interface GroupMessage {
   fromUserId?: UUID;
   fromActorId?: UUID;
   actorName?: string;
-  targetActorIds: UUID[];
-  targetUserIds: UUID[];
+  targetParticipantIds: UUID[];
   content: string;
   contentBlocks: CanonicalContentBlock[];
   metadata: Record<string, unknown>;
   createdAt: Timestamp;
 }
 
-export type ConversationMemberType = "actor" | "user" | "system";
+export type ConversationParticipantType =
+  | "actor"
+  | "user"
+  | "external"
+  | "remote_agent"
+  | "system";
+
+export type ConversationMemberType = ConversationParticipantType;
+
+export type TransportKind = "feishu" | "weixin";
+export type TransportConnectionMode = "webhook" | "long_connection";
+export type TransportEndpointType = "direct" | "group";
+export type TransportAccountStatus = "active" | "disabled" | "error";
+export type TransportDeliveryStatus =
+  | "pending"
+  | "sent"
+  | "failed"
+  | "skipped";
 
 export interface ConversationEntityRef {
   memberId?: UUID;
+  participantId?: UUID;
   memberType: ConversationMemberType;
   actorId?: UUID;
   userId?: UUID;
+  externalUserKey?: string;
+  transportAddressId?: UUID;
+  transportKind?: TransportKind;
   name?: string;
   title?: string;
   role?: string;
@@ -2369,8 +2394,163 @@ export interface ConversationEntityRef {
 
 export type ConversationMemberRef = ConversationEntityRef & {
   memberId: UUID;
-  memberType: "actor" | "user";
+  participantId: UUID;
+  memberType: "actor" | "user" | "external";
 };
+
+export interface TransportConnectorCapability {
+  transportKind: TransportKind;
+  supportedConnectionModes: TransportConnectionMode[];
+  supportedEndpointTypes: TransportEndpointType[];
+  supportsDirectMessages: boolean;
+  supportsGroupMessages: boolean;
+}
+
+export interface TransportAccountSummary {
+  id: UUID;
+  workspaceId: UUID;
+  transportKind: TransportKind;
+  accountKey: string;
+  displayName: string;
+  connectionMode: TransportConnectionMode;
+  status: TransportAccountStatus;
+  credentials?: Record<string, unknown>;
+  config: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface TransportEndpointSummary {
+  id: UUID;
+  transportAccountId: UUID;
+  transportKind: TransportKind;
+  endpointType: TransportEndpointType;
+  externalId: string;
+  parentExternalId?: string;
+  displayName?: string;
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface ConversationTransportBindingSummary {
+  id: UUID;
+  conversationId: UUID;
+  workspaceId: UUID;
+  transportKind: TransportKind;
+  outboundEnabled: boolean;
+  defaultTargetParticipantId?: UUID;
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  account: TransportAccountSummary;
+  endpoint: TransportEndpointSummary;
+}
+
+export interface TransportSessionSummary {
+  id: UUID;
+  workspaceId: UUID;
+  transportKind: TransportKind;
+  outboundEnabled: boolean;
+  defaultTargetParticipantId?: UUID;
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  conversationId?: UUID;
+  conversationTitle?: string;
+  lastInboundAt?: Timestamp;
+  lastOutboundAt?: Timestamp;
+  account: TransportAccountSummary;
+  endpoint: TransportEndpointSummary;
+}
+
+export type WeixinQrLoginStatus =
+  | "waiting"
+  | "scanned"
+  | "confirmed"
+  | "expired"
+  | "error";
+
+export interface WeixinQrLoginSessionSummary {
+  sessionId: string;
+  workspaceId: UUID;
+  status: WeixinQrLoginStatus;
+  message: string;
+  qrCodeUrl?: string;
+  baseUrl?: string;
+  botId?: string;
+  scannerUserId?: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  expiresAt: Timestamp;
+  transportAccount?: TransportAccountSummary;
+}
+
+export interface TransportExternalUserSessionRef {
+  conversationId?: UUID;
+  conversationTitle?: string;
+  endpointId?: UUID;
+  endpointType?: TransportEndpointType;
+  endpointExternalId?: string;
+  endpointDisplayName?: string;
+}
+
+export interface TransportExternalUserSummary {
+  id: UUID;
+  workspaceId: UUID;
+  transportAccountId: UUID;
+  transportKind: TransportKind;
+  accountDisplayName: string;
+  externalId: string;
+  displayName?: string;
+  linkedUserId?: UUID;
+  linkedUserName?: string;
+  metadata: Record<string, unknown>;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  lastSeenAt?: Timestamp;
+  sessions: TransportExternalUserSessionRef[];
+}
+
+export interface TransportMessageLink {
+  id: UUID;
+  conversationId: UUID;
+  itemId: UUID;
+  transportKind: TransportKind;
+  transportEndpointId: UUID;
+  direction: "inbound" | "outbound";
+  deliveryStatus: TransportDeliveryStatus;
+  externalMessageId?: string;
+  metadata: Record<string, unknown>;
+  deliveredAt?: Timestamp;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface ConversationMessageTransportContext {
+  direction: "inbound" | "outbound";
+  transportKind: TransportKind;
+  transportAccountId?: UUID;
+  endpointType?: TransportEndpointType;
+  endpointExternalId?: string;
+  externalMessageId?: string;
+  transportAddressId?: UUID;
+  senderExternalId?: string;
+}
+
+export interface ConversationMessageTransportDelivery {
+  linkId: UUID;
+  transportKind: TransportKind;
+  direction: "inbound" | "outbound";
+  deliveryStatus: TransportDeliveryStatus;
+  endpointType?: TransportEndpointType;
+  endpointExternalId?: string;
+  endpointDisplayName?: string;
+  externalMessageId?: string;
+  deliveredAt?: Timestamp;
+  metadata: Record<string, unknown>;
+}
 
 export interface ActorVersionDocChangeWire {
   docId: UUID;
@@ -2500,6 +2680,8 @@ export interface ConversationFeedMessageItem {
   content: string;
   contentBlocks: CanonicalContentBlock[];
   metadata: Record<string, unknown>;
+  transport?: ConversationMessageTransportContext;
+  transportDeliveries?: ConversationMessageTransportDelivery[];
   createdAt: Timestamp;
   clientMessageId?: string;
 }

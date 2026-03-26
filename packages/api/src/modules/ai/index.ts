@@ -207,10 +207,42 @@ async function loadToolResolveGroupMembers(params: {
       continue;
     }
     if (member.user_id) {
+      const transportKind =
+        member.transport_kind === 'feishu' || member.transport_kind === 'weixin'
+          ? member.transport_kind
+          : undefined;
       entries.push({
         type: 'user',
         id: member.user_id,
+        participantId: member.id,
         name: member.user_name || 'User',
+        title: transportKind
+          ? `Workspace user · reachable via ${transportKind === 'feishu' ? 'Feishu' : 'WeChat'}`
+          : 'Workspace user',
+      });
+      continue;
+    }
+    if (member.member_type === 'external') {
+      const linkedUserName = (member.linked_user_name as string | null) || undefined;
+      entries.push({
+        type: 'external',
+        id:
+          (member.linked_user_id as string | null) ||
+          (member.transport_external_id as string | null) ||
+          (member.id as string),
+        participantId: member.id as string,
+        name:
+          (member.transport_display_name as string | null) ||
+          (member.display_name as string | null) ||
+          linkedUserName ||
+          'External participant',
+        title: linkedUserName
+          ? `Linked workspace user: ${linkedUserName}`
+          : 'External participant',
+        linkedUserId: (member.linked_user_id as string | null) || undefined,
+        linkedUserName,
+        externalUserKey:
+          (member.transport_external_id as string | null) || undefined,
       });
     }
   }

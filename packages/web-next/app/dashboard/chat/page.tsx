@@ -66,7 +66,7 @@ export default function ChatPage() {
 
   async function handleSend(
     contentBlocks: CanonicalContentBlock[],
-    targetActorIds?: string[]
+    targetParticipantIds?: string[]
   ) {
     if (!workspaceId || !selectedGroupId) return
     try {
@@ -74,7 +74,7 @@ export default function ChatPage() {
         workspaceId,
         selectedGroupId,
         contentBlocks,
-        targetActorIds
+        targetParticipantIds
       )
     } catch (err) {
       console.error("Failed to send:", err)
@@ -160,6 +160,7 @@ export default function ChatPage() {
             onBack={handleBackToList}
             workspaceId={workspaceId}
             onRefreshGroup={() => loadGroups(workspaceId)}
+            contactBasePath="/dashboard/contacts"
           />
         ) : loadingGroups && (groupParam || selectedGroupId) ? (
           <GroupChatSkeleton />

@@ -3,7 +3,7 @@
 import { startTransition, useDeferredValue, useEffect, useState } from "react"
 import { extractText, type Actor } from "@synapse/shared"
 import { Bot, Mail, Search, Sparkles, Users } from "lucide-react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 
 import ChatAvatar from "@/app/dashboard/chat/chat-avatar"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
@@ -47,6 +47,7 @@ function actorSummary(actor: Actor) {
 
 export default function MobileContactsPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { workspaceId } = useWorkspace()
   const createGroup = useChatStore((state) => state.createGroup)
   const selectGroup = useChatStore((state) => state.selectGroup)
@@ -60,6 +61,8 @@ export default function MobileContactsPage() {
 
   const deferredSearch = useDeferredValue(search)
   const normalizedQuery = deferredSearch.trim().toLowerCase()
+  const focusedKind = searchParams.get("kind")
+  const focusedId = searchParams.get("id")
 
   useEffect(() => {
     if (!workspaceId) return
@@ -100,7 +103,34 @@ export default function MobileContactsPage() {
     }
   }, [workspaceId])
 
-  const visibleActors = normalizedQuery
+  useEffect(() => {
+    if (focusedKind === "user") {
+      setMode("people")
+    } else if (focusedKind === "actor") {
+      setMode("actors")
+    }
+  }, [focusedKind])
+
+  function prioritizeFocused<T>(
+    items: T[],
+    getId: (item: T) => string,
+    isMatch: boolean
+  ) {
+    if (!isMatch || !focusedId) return items
+    const focusedItems: T[] = []
+    const otherItems: T[] = []
+    for (const item of items) {
+      if (getId(item) === focusedId) {
+        focusedItems.push(item)
+      } else {
+        otherItems.push(item)
+      }
+    }
+    return [...focusedItems, ...otherItems]
+  }
+
+  const visibleActors = prioritizeFocused(
+    normalizedQuery
     ? actors.filter((actor) => {
         const haystack = [
           actor.definition.name,
@@ -112,9 +142,13 @@ export default function MobileContactsPage() {
           .toLowerCase()
         return haystack.includes(normalizedQuery)
       })
-    : actors
+    : actors,
+    (actor) => actor.id,
+    focusedKind === "actor"
+  )
 
-  const visibleMembers = normalizedQuery
+  const visibleMembers = prioritizeFocused(
+    normalizedQuery
     ? members.filter((member) => {
         const haystack = [
           member.userName || "",
@@ -125,7 +159,10 @@ export default function MobileContactsPage() {
           .toLowerCase()
         return haystack.includes(normalizedQuery)
       })
-    : members
+    : members,
+    (member) => member.userId,
+    focusedKind === "user"
+  )
 
   async function handleStartActorChat(actor: Actor) {
     if (!workspaceId || launchingActorId) return
@@ -218,9 +255,15 @@ export default function MobileContactsPage() {
             visibleActors.length > 0 ? (
               <div className="-mx-4 divide-y divide-border/70 border-y border-border/70 bg-background/80">
                 {visibleActors.map((actor) => (
+                  (() => {
+                    const isFocused = focusedKind === "actor" && focusedId === actor.id
+                    return (
                   <div
                     key={actor.id}
-                    className="px-4 py-4"
+                    className={cn(
+                      "px-4 py-4",
+                      isFocused && "bg-accent/60"
+                    )}
                   >
                   <div className="flex items-start gap-3">
                     <ChatAvatar
@@ -242,6 +285,11 @@ export default function MobileContactsPage() {
                         <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
                           {actor.definition.title || titleCase(actor.definition.role)}
                         </span>
+                        {isFocused ? (
+                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+                            From chat
+                          </span>
+                        ) : null}
                       </div>
                       <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
                         {actorSummary(actor)}
@@ -258,6 +306,7 @@ export default function MobileContactsPage() {
                     </div>
                   </div>
                   </div>
+                )})()
                 ))}
               </div>
             ) : (
@@ -274,10 +323,14 @@ export default function MobileContactsPage() {
             <div className="-mx-4 divide-y divide-border/70 border-y border-border/70 bg-background/80">
               {visibleMembers.map((member) => {
                 const displayName = member.userName || "Unknown user"
+                const isFocused = focusedKind === "user" && focusedId === member.userId
                 return (
                   <div
                     key={member.userId}
-                    className="px-4 py-4"
+                    className={cn(
+                      "px-4 py-4",
+                      isFocused && "bg-accent/60"
+                    )}
                   >
                   <div className="flex items-start gap-3">
                     <Avatar className="size-12">
@@ -290,8 +343,15 @@ export default function MobileContactsPage() {
                       </AvatarFallback>
                     </Avatar>
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {displayName}
+                      <div className="flex items-center gap-2">
+                        <div className="truncate text-sm font-medium text-foreground">
+                          {displayName}
+                        </div>
+                        {isFocused ? (
+                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+                            From chat
+                          </span>
+                        ) : null}
                       </div>
                       <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
                         <Mail className="size-4" />

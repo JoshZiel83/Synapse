@@ -1,17 +1,21 @@
 'use client';
 
 import { ArrowDown, MoreHorizontal } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 
 import ChatAvatar from '@/app/dashboard/chat/chat-avatar';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import type { Group, GroupMember } from '@/stores/chat-store';
+import { getGroupMemberContactHref, getGroupMemberSubtitle } from './member-utils';
 
 function summarizeMemberCounts(group: Group) {
   const userCount = group.members.filter((member) => member.type === 'user').length;
   const actorCount = group.members.filter((member) => member.type === 'actor').length;
+  const externalCount = group.members.filter((member) => member.type === 'external').length;
   const userLabel = `${userCount} user${userCount === 1 ? '' : 's'}`;
   const actorLabel = `${actorCount} actor${actorCount === 1 ? '' : 's'}`;
-  return `${userLabel} · ${actorLabel}`;
+  if (externalCount === 0) return `${userLabel} · ${actorLabel}`;
+  return `${userLabel} · ${actorLabel} · ${externalCount} external${externalCount === 1 ? '' : 's'}`;
 }
 
 function orderMembers(members: GroupMember[]) {
@@ -28,13 +32,18 @@ interface MobileGroupDetailsDialogProps {
   group: Group;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onMemberClick?: (member: GroupMember) => void;
+  contactBasePath?: string;
 }
 
 export default function MobileGroupDetailsDialog({
   group,
   open,
   onOpenChange,
+  onMemberClick,
+  contactBasePath = '/dashboard/contacts',
 }: MobileGroupDetailsDialogProps) {
+  const router = useRouter();
   const title = group.title || group.participants.map((participant) => participant.name).join(', ');
   const memberSummary = summarizeMemberCounts(group);
   const orderedMembers = orderMembers(group.members);
@@ -91,11 +100,26 @@ export default function MobileGroupDetailsDialog({
               <div className="mb-4 text-sm font-medium text-foreground">
                 Members
               </div>
-              <div className="grid grid-cols-4 gap-x-3 gap-y-5">
-                {orderedMembers.map((member) => (
-                  <div
+              <div className="divide-y divide-border/70 rounded-3xl border border-border/70 bg-background">
+                {orderedMembers.map((member) => {
+                  const href = getGroupMemberContactHref(member, contactBasePath);
+                  const subtitle = getGroupMemberSubtitle(member);
+                  const canOpen = Boolean(onMemberClick || href);
+                  return (
+                  <button
                     key={`${member.type}-${member.id}`}
-                    className="flex min-w-0 flex-col items-center gap-2"
+                    type="button"
+                    onClick={() => {
+                      if (onMemberClick) {
+                        onMemberClick(member);
+                        return;
+                      }
+                      if (!href) return;
+                      onOpenChange(false);
+                      router.push(href);
+                    }}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/25 disabled:cursor-default disabled:hover:bg-transparent"
+                    disabled={!canOpen}
                   >
                     <ChatAvatar
                       name={member.name}
@@ -105,11 +129,16 @@ export default function MobileGroupDetailsDialog({
                       size="lg"
                       className="size-12"
                     />
-                    <div className="w-full truncate text-center text-xs text-foreground">
-                      {member.name}
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium text-foreground">
+                        {member.name}
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {subtitle}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  </button>
+                )})}
               </div>
             </section>
           </div>

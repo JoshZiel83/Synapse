@@ -11,7 +11,7 @@ export async function ensureAutomationSchedulerJob() {
     {},
     {
       repeat: { every: getAutomationSchedulerIntervalMs() },
-      jobId: 'automation:scheduler:tick',
+      jobId: 'automation-scheduler-tick',
     },
   );
 }

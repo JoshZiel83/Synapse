@@ -46,15 +46,13 @@ export async function sendMessageToGroup(
   userId: UUID,
   content: string,
   contentBlocks?: CanonicalContentBlock[],
-  targetActorIds?: string[],
-  targetUserIds?: string[],
+  targetParticipantIds?: string[],
 ) {
   return sendGroupMessage({
     groupId,
     senderType: 'user',
     senderUserId: userId,
-    targetActorIds,
-    targetUserIds,
+    targetParticipantIds,
     content,
     contentBlocks,
   });

@@ -7,6 +7,8 @@ import type {
   ConversationFeedEventType,
   ConversationFeedItem,
   ConversationFeedMessageItem,
+  ConversationMessageTransportContext,
+  ConversationMessageTransportDelivery,
   ConversationEventContextPolicy,
   ConversationEventTimelinePolicy,
 } from "@synapse/shared/types";
@@ -108,13 +110,31 @@ export async function getConversation(conversationId: string) {
 
 export async function ensureConversationMember(params: {
   conversationId: string;
-  memberType: "actor" | "user" | "remote_agent" | "system";
+  memberType: "actor" | "user" | "external" | "remote_agent" | "system";
   actorId?: string;
   userId?: string;
   displayName?: string;
   actorJoinVersionId?: string;
   metadata?: Record<string, unknown>;
 }) {
+  const result = await ensureConversationMemberActivation(params);
+  return result.member;
+}
+
+export async function ensureConversationMemberActivation(params: {
+  conversationId: string;
+  memberType: "actor" | "user" | "external" | "remote_agent" | "system";
+  actorId?: string;
+  userId?: string;
+  displayName?: string;
+  actorJoinVersionId?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<{
+  member: any;
+  activated: boolean;
+  created: boolean;
+  revived: boolean;
+}> {
   const {
     conversationId,
     memberType,
@@ -139,6 +159,20 @@ export async function ensureConversationMember(params: {
        WHERE conversation_id = $1 AND user_id = $2
        LIMIT 1`,
       [conversationId, userId || null],
+    );
+  } else if (
+    memberType === "external" &&
+    typeof metadata.externalUserKey === "string" &&
+    metadata.externalUserKey.trim()
+  ) {
+    existing = await query(
+      `SELECT *
+       FROM conversation_members
+       WHERE conversation_id = $1
+         AND member_type = 'external'
+         AND metadata->>'externalUserKey' = $2
+       LIMIT 1`,
+      [conversationId, metadata.externalUserKey.trim()],
     );
   } else {
     existing = await query(
@@ -167,9 +201,19 @@ export async function ensureConversationMember(params: {
           actorJoinVersionId || null,
         ],
       );
-      return revived.rows[0];
+      return {
+        member: revived.rows[0],
+        activated: true,
+        created: false,
+        revived: true,
+      };
     }
-    return existing.rows[0];
+    return {
+      member: existing.rows[0],
+      activated: false,
+      created: false,
+      revived: false,
+    };
   }
 
   const result = await query(
@@ -189,7 +233,12 @@ export async function ensureConversationMember(params: {
     ],
   );
 
-  return result.rows[0];
+  return {
+    member: result.rows[0],
+    activated: true,
+    created: true,
+    revived: false,
+  };
 }
 
 export async function getConversationMember(params: {
@@ -526,15 +575,17 @@ async function loadItemsWithRelations(itemRows: any[]) {
   const targetsResult = await query(
     `SELECT cit.item_id,
             cit.target_kind,
-            cm.id AS member_id,
-            cm.member_type,
-            cm.actor_id,
-            cm.user_id,
-            COALESCE(a.name, u.name, cm.display_name) AS member_name
+            ${buildEntitySelect({
+              memberAlias: "cm",
+              actorAlias: "a",
+              userAlias: "u",
+              addressAlias: "primary_address",
+            })}
      FROM conversation_item_targets cit
      JOIN conversation_members cm ON cm.id = cit.target_member_id
      LEFT JOIN actors a ON a.id = cm.actor_id
      LEFT JOIN users u ON u.id = cm.user_id
+     ${buildPrimaryTransportAddressJoin("cm", "primary_address")}
      WHERE cit.item_id = ANY($1)
      ORDER BY cit.item_id`,
     [itemIds],
@@ -542,17 +593,37 @@ async function loadItemsWithRelations(itemRows: any[]) {
 
   const contextTargetsResult = await query(
     `SELECT cict.item_id,
-            cm.id AS member_id,
-            cm.member_type,
-            cm.actor_id,
-            cm.user_id,
-            COALESCE(a.name, u.name, cm.display_name) AS member_name
+            ${buildEntitySelect({
+              memberAlias: "cm",
+              actorAlias: "a",
+              userAlias: "u",
+              addressAlias: "primary_address",
+            })}
      FROM conversation_item_context_targets cict
      JOIN conversation_members cm ON cm.id = cict.target_member_id
      LEFT JOIN actors a ON a.id = cm.actor_id
      LEFT JOIN users u ON u.id = cm.user_id
+     ${buildPrimaryTransportAddressJoin("cm", "primary_address")}
      WHERE cict.item_id = ANY($1)
      ORDER BY cict.item_id`,
+    [itemIds],
+  );
+  const transportDeliveriesResult = await query(
+    `SELECT tml.item_id,
+            tml.id AS link_id,
+            tml.transport_kind,
+            tml.direction,
+            tml.delivery_status,
+            tml.external_message_id,
+            tml.metadata,
+            tml.delivered_at,
+            te.endpoint_type,
+            te.external_id AS endpoint_external_id,
+            te.display_name AS endpoint_display_name
+     FROM transport_message_links tml
+     JOIN transport_endpoints te ON te.id = tml.transport_endpoint_id
+     WHERE tml.item_id = ANY($1)
+     ORDER BY tml.item_id, tml.created_at ASC`,
     [itemIds],
   );
 
@@ -575,6 +646,14 @@ async function loadItemsWithRelations(itemRows: any[]) {
     contextTargetsByItem.get(row.item_id)!.push(row);
   }
 
+  const transportDeliveriesByItem = new Map<string, any[]>();
+  for (const row of transportDeliveriesResult.rows) {
+    if (!transportDeliveriesByItem.has(row.item_id)) {
+      transportDeliveriesByItem.set(row.item_id, []);
+    }
+    transportDeliveriesByItem.get(row.item_id)!.push(row);
+  }
+
   const feedEventByItem = new Map<string, number>();
   for (const row of feedEventsResult.rows) {
     feedEventByItem.set(row.item_id, Number(row.workspace_sequence));
@@ -586,6 +665,7 @@ async function loadItemsWithRelations(itemRows: any[]) {
     parts: partsByItem.get(row.id) || [],
     targets: targetsByItem.get(row.id) || [],
     context_targets: contextTargetsByItem.get(row.id) || [],
+    transport_deliveries: transportDeliveriesByItem.get(row.id) || [],
   }));
 }
 
@@ -604,18 +684,76 @@ function parseJsonObject(value: unknown): Record<string, unknown> {
   return typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+function buildPrimaryTransportAddressJoin(
+  memberAlias: string,
+  addressAlias: string,
+) {
+  return `LEFT JOIN LATERAL (
+            SELECT ta.id,
+                   ta.transport_kind,
+                   ta.external_id,
+                   COALESCE(ta.display_name, ${memberAlias}.display_name) AS display_name
+            FROM conversation_participant_addresses cpa
+            JOIN transport_addresses ta ON ta.id = cpa.transport_address_id
+            WHERE cpa.conversation_member_id = ${memberAlias}.id
+            ORDER BY cpa.is_primary DESC, cpa.created_at ASC
+            LIMIT 1
+          ) ${addressAlias} ON TRUE`;
+}
+
+function buildEntitySelect(params: {
+  memberAlias: string;
+  actorAlias: string;
+  userAlias: string;
+  addressAlias: string;
+  prefix?: string;
+}) {
+  const prefix = params.prefix || "";
+  return `${params.memberAlias}.id AS ${prefix}member_id,
+          ${params.memberAlias}.member_type AS ${prefix}member_type,
+          ${params.memberAlias}.actor_id AS ${prefix}actor_id,
+          ${params.memberAlias}.user_id AS ${prefix}user_id,
+          COALESCE(
+            ${params.memberAlias}.metadata->>'externalUserKey',
+            CASE
+              WHEN ${params.addressAlias}.transport_kind IS NOT NULL
+               AND ${params.addressAlias}.external_id IS NOT NULL
+              THEN ${params.addressAlias}.transport_kind || ':' || ${params.addressAlias}.external_id
+              ELSE NULL
+            END
+          ) AS ${prefix}external_user_key,
+          ${params.addressAlias}.id AS ${prefix}transport_address_id,
+          ${params.addressAlias}.transport_kind AS ${prefix}transport_kind,
+          COALESCE(
+            ${params.actorAlias}.name,
+            ${params.userAlias}.name,
+            ${params.addressAlias}.display_name,
+            ${params.memberAlias}.display_name
+          ) AS ${prefix}name,
+          ${params.actorAlias}.title AS ${prefix}title,
+          ${params.actorAlias}.role AS ${prefix}role`;
+}
+
 function mapEntityRef(row: any): ConversationEntityRef | undefined {
   if (!row) return undefined;
   const memberType = row.member_type || row.author_member_type;
   if (!memberType) return undefined;
+  const participantId = row.member_id || row.author_member_id || row.id;
   return {
-    memberId: row.member_id || row.author_member_id || row.id,
+    memberId: participantId,
+    participantId,
     memberType,
     actorId: row.actor_id || row.author_actor_id || undefined,
     userId: row.user_id || row.author_user_id || undefined,
+    externalUserKey:
+      row.external_user_key || row.author_external_user_key || undefined,
+    transportAddressId:
+      row.transport_address_id || row.author_transport_address_id || undefined,
+    transportKind:
+      row.transport_kind || row.author_transport_kind || undefined,
     name: row.member_name || row.author_name || undefined,
-    title: row.title || row.actor_title || undefined,
-    role: row.role || row.actor_role || undefined,
+    title: row.title || row.actor_title || row.author_title || undefined,
+    role: row.role || row.actor_role || row.author_role || undefined,
     avatarUrl: row.avatar_url || undefined,
     avatarEmoji: row.avatar_emoji || undefined,
   };
@@ -631,13 +769,86 @@ function buildTextContentFromParts(parts: any[]) {
   return extractText(itemPartsToCanonicalContentBlocks(parts || []));
 }
 
+function mapMessageTransportContext(
+  metadata: Record<string, unknown>,
+): ConversationMessageTransportContext | undefined {
+  const raw = metadata.transport;
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+
+  const value = raw as Record<string, unknown>;
+  const direction =
+    value.direction === "inbound" || value.direction === "outbound"
+      ? value.direction
+      : undefined;
+  const transportKind =
+    value.transportKind === "feishu" || value.transportKind === "weixin"
+      ? value.transportKind
+      : undefined;
+  if (!direction || !transportKind) {
+    return undefined;
+  }
+
+  return {
+    direction,
+    transportKind,
+    transportAccountId:
+      typeof value.transportAccountId === "string"
+        ? value.transportAccountId
+        : undefined,
+    endpointType:
+      value.endpointType === "direct" || value.endpointType === "group"
+        ? value.endpointType
+        : undefined,
+    endpointExternalId:
+      typeof value.endpointExternalId === "string"
+        ? value.endpointExternalId
+        : undefined,
+    externalMessageId:
+      typeof value.externalMessageId === "string"
+        ? value.externalMessageId
+        : undefined,
+    transportAddressId:
+      typeof value.transportAddressId === "string"
+        ? value.transportAddressId
+        : undefined,
+    senderExternalId:
+      typeof value.senderExternalId === "string"
+        ? value.senderExternalId
+        : undefined,
+  };
+}
+
+function mapTransportDeliveries(
+  rows: any[],
+): ConversationMessageTransportDelivery[] {
+  return rows.map((row) => ({
+    linkId: row.link_id,
+    transportKind: row.transport_kind,
+    direction: row.direction,
+    deliveryStatus: row.delivery_status,
+    endpointType: row.endpoint_type || undefined,
+    endpointExternalId: row.endpoint_external_id || undefined,
+    endpointDisplayName: row.endpoint_display_name || undefined,
+    externalMessageId: row.external_message_id || undefined,
+    deliveredAt: row.delivered_at || undefined,
+    metadata: parseJsonObject(row.metadata),
+  }));
+}
+
 export function conversationItemRowToFeedItem(row: any): ConversationFeedItem {
   const author = mapEntityRef({
     author_member_id: row.author_member_id,
     author_member_type: row.author_member_type,
     author_actor_id: row.author_actor_id,
     author_user_id: row.author_user_id,
+    author_external_user_key: row.author_external_user_key,
+    author_transport_address_id: row.author_transport_address_id,
+    author_transport_kind: row.author_transport_kind,
     author_name: row.author_name,
+    author_title: row.author_title,
+    author_role: row.author_role,
   });
   const base = {
     itemId: row.id,
@@ -664,6 +875,7 @@ export function conversationItemRowToFeedItem(row: any): ConversationFeedItem {
     };
   }
 
+  const metadata = parseJsonObject(row.metadata);
   return {
     kind: "message",
     ...base,
@@ -671,7 +883,9 @@ export function conversationItemRowToFeedItem(row: any): ConversationFeedItem {
     targets: mapTargets(row.targets || []),
     content: buildTextContentFromParts(row.parts || []),
     contentBlocks: itemPartsToCanonicalContentBlocks(row.parts || []),
-    metadata: parseJsonObject(row.metadata),
+    metadata,
+    transport: mapMessageTransportContext(metadata),
+    transportDeliveries: mapTransportDeliveries(row.transport_deliveries || []),
     clientMessageId: row.client_message_id || undefined,
   } satisfies ConversationFeedMessageItem;
 }
@@ -679,14 +893,18 @@ export function conversationItemRowToFeedItem(row: any): ConversationFeedItem {
 export async function getConversationFeedItemById(itemId: string) {
   const result = await query(
     `SELECT ci.*,
-            cm.member_type AS author_member_type,
-            cm.actor_id AS author_actor_id,
-            cm.user_id AS author_user_id,
-            COALESCE(a.name, u.name, cm.display_name) AS author_name
+            ${buildEntitySelect({
+              memberAlias: "cm",
+              actorAlias: "a",
+              userAlias: "u",
+              addressAlias: "author_primary_address",
+              prefix: "author_",
+            })}
      FROM conversation_items ci
      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
      LEFT JOIN actors a ON a.id = cm.actor_id
      LEFT JOIN users u ON u.id = cm.user_id
+     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
      WHERE ci.id = $1
      LIMIT 1`,
     [itemId],
@@ -711,15 +929,19 @@ export async function listWorkspaceFeedEventsAfter(params: {
   const result = await query(
     `SELECT rfe.workspace_sequence,
             ci.*,
-            cm.member_type AS author_member_type,
-            cm.actor_id AS author_actor_id,
-            cm.user_id AS author_user_id,
-            COALESCE(a.name, u.name, cm.display_name) AS author_name
+            ${buildEntitySelect({
+              memberAlias: "cm",
+              actorAlias: "a",
+              userAlias: "u",
+              addressAlias: "author_primary_address",
+              prefix: "author_",
+            })}
      FROM realtime_feed_events rfe
      JOIN conversation_items ci ON ci.id = rfe.item_id
      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
      LEFT JOIN actors a ON a.id = cm.actor_id
      LEFT JOIN users u ON u.id = cm.user_id
+     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
      WHERE rfe.workspace_id = $1
        AND rfe.conversation_id = ANY($2)
        AND rfe.workspace_sequence > $3
@@ -784,15 +1006,19 @@ export async function getVisibleConversationItemsForMember(params: {
   const items = await query(
     `SELECT ci.*,
             c.kind AS conversation_kind,
-            cm.member_type AS author_member_type,
-            cm.actor_id AS author_actor_id,
-            cm.user_id AS author_user_id,
-            COALESCE(a.name, u.name, cm.display_name) AS author_name
+            ${buildEntitySelect({
+              memberAlias: "cm",
+              actorAlias: "a",
+              userAlias: "u",
+              addressAlias: "author_primary_address",
+              prefix: "author_",
+            })}
      FROM conversation_items ci
      JOIN conversations c ON c.id = ci.conversation_id
      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
      LEFT JOIN actors a ON a.id = cm.actor_id
      LEFT JOIN users u ON u.id = cm.user_id
+     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
      WHERE ci.conversation_id = $1
        AND ci.scope = 'shared'
        AND ci.surface = 'visible'
@@ -805,6 +1031,49 @@ export async function getVisibleConversationItemsForMember(params: {
            WHERE cit.item_id = ci.id AND cit.target_member_id = $2
          )
        )
+       ${extra}
+     ORDER BY ci.sequence DESC
+     LIMIT $${values.length}`,
+    values,
+  );
+
+  const loaded = await loadItemsWithRelations(items.rows);
+  return loaded.reverse();
+}
+
+export async function getSharedVisibleConversationItems(params: {
+  conversationId: string;
+  beforeSequence?: number;
+  limit?: number;
+}) {
+  const { conversationId, beforeSequence, limit = 200 } = params;
+  const values: any[] = [conversationId];
+  let extra = "";
+  if (beforeSequence !== undefined) {
+    values.push(beforeSequence);
+    extra += ` AND ci.sequence < $${values.length}`;
+  }
+  values.push(limit);
+
+  const items = await query(
+    `SELECT ci.*,
+            c.kind AS conversation_kind,
+            ${buildEntitySelect({
+              memberAlias: "cm",
+              actorAlias: "a",
+              userAlias: "u",
+              addressAlias: "author_primary_address",
+              prefix: "author_",
+            })}
+     FROM conversation_items ci
+     JOIN conversations c ON c.id = ci.conversation_id
+     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
+     LEFT JOIN actors a ON a.id = cm.actor_id
+     LEFT JOIN users u ON u.id = cm.user_id
+     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
+     WHERE ci.conversation_id = $1
+       AND ci.scope = 'shared'
+       AND ci.surface = 'visible'
        ${extra}
      ORDER BY ci.sequence DESC
      LIMIT $${values.length}`,
@@ -833,15 +1102,19 @@ export async function getContextConversationItemsForMember(params: {
   const items = await query(
     `SELECT ci.*,
             c.kind AS conversation_kind,
-            cm.member_type AS author_member_type,
-            cm.actor_id AS author_actor_id,
-            cm.user_id AS author_user_id,
-            COALESCE(a.name, u.name, cm.display_name) AS author_name
+            ${buildEntitySelect({
+              memberAlias: "cm",
+              actorAlias: "a",
+              userAlias: "u",
+              addressAlias: "author_primary_address",
+              prefix: "author_",
+            })}
      FROM conversation_items ci
      JOIN conversations c ON c.id = ci.conversation_id
      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
      LEFT JOIN actors a ON a.id = cm.actor_id
      LEFT JOIN users u ON u.id = cm.user_id
+     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
      WHERE ci.conversation_id = $1
       AND ci.scope = 'shared'
        AND (
@@ -875,14 +1148,18 @@ export async function getContextConversationItemsForMember(params: {
 export async function getPrivateSessionItems(sessionId: string) {
   const items = await query(
     `SELECT ci.*,
-            cm.member_type AS author_member_type,
-            cm.actor_id AS author_actor_id,
-            cm.user_id AS author_user_id,
-            COALESCE(a.name, u.name, cm.display_name) AS author_name
+            ${buildEntitySelect({
+              memberAlias: "cm",
+              actorAlias: "a",
+              userAlias: "u",
+              addressAlias: "author_primary_address",
+              prefix: "author_",
+            })}
      FROM conversation_items ci
      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
      LEFT JOIN actors a ON a.id = cm.actor_id
      LEFT JOIN users u ON u.id = cm.user_id
+     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
      WHERE ci.session_id = $1
        AND ci.scope = 'private'
      ORDER BY ci.created_at ASC, ci.sequence ASC`,
@@ -895,14 +1172,18 @@ export async function getPrivateSessionItems(sessionId: string) {
 export async function getLastVisibleConversationItem(conversationId: string) {
   const items = await query(
     `SELECT ci.*,
-            cm.member_type AS author_member_type,
-            cm.actor_id AS author_actor_id,
-            cm.user_id AS author_user_id,
-            COALESCE(a.name, u.name, cm.display_name) AS author_name
+            ${buildEntitySelect({
+              memberAlias: "cm",
+              actorAlias: "a",
+              userAlias: "u",
+              addressAlias: "author_primary_address",
+              prefix: "author_",
+            })}
      FROM conversation_items ci
      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
      LEFT JOIN actors a ON a.id = cm.actor_id
      LEFT JOIN users u ON u.id = cm.user_id
+     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
      WHERE ci.conversation_id = $1
        AND ci.scope = 'shared'
        AND ci.surface = 'visible'
@@ -921,6 +1202,7 @@ export async function listUserGroupConversations(
 ) {
   const result = await query(
     `SELECT c.*,
+            transport_account.transport_kind,
             cr.last_read_at,
             COALESCE(cr.last_read_sequence, 0) AS last_read_sequence,
             (
@@ -933,6 +1215,10 @@ export async function listUserGroupConversations(
                 AND ci.sequence > COALESCE(cr.last_read_sequence, 0)
             ) AS unread_count
      FROM conversations c
+     LEFT JOIN conversation_transport_bindings ctb
+       ON ctb.conversation_id = c.id
+     LEFT JOIN transport_accounts transport_account
+       ON transport_account.id = ctb.transport_account_id
      JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $2 AND cm.state = 'active'
      LEFT JOIN conversation_reads cr ON cr.conversation_id = c.id AND cr.user_id = $2
      WHERE c.workspace_id = $1

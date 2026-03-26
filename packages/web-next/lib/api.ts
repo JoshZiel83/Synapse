@@ -18,7 +18,13 @@ import type {
   CanonicalContentBlock,
   ConversationFeedItem,
   ConversationFeedPage,
+  ConversationTransportBindingSummary,
   InstalledSkill,
+  TransportAccountSummary,
+  TransportConnectorCapability,
+  TransportExternalUserSummary,
+  TransportSessionSummary,
+  WeixinQrLoginSessionSummary,
   WorkspaceFeedPage,
   WorkspaceChiefActorPreference,
   RelayDashboardView,
@@ -912,19 +918,123 @@ class ApiClient {
     groupId: string,
     contentBlocks: CanonicalContentBlock[],
     clientMessageId: string,
-    targetActorIds?: string[],
-    targetUserIds?: string[]
+    targetParticipantIds?: string[]
   ): Promise<{ item: ConversationFeedItem }> {
     const body: any = { contentBlocks }
-    if (targetActorIds && targetActorIds.length > 0)
-      body.targetActorIds = targetActorIds
-    if (targetUserIds && targetUserIds.length > 0)
-      body.targetUserIds = targetUserIds
+    if (targetParticipantIds && targetParticipantIds.length > 0)
+      body.targetParticipantIds = targetParticipantIds
     body.clientMessageId = clientMessageId
     return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
     })
+  }
+  getTransportConnectors(
+    wsId: string
+  ): Promise<{ connectors: TransportConnectorCapability[] }> {
+    return this.fetch(`/workspaces/${wsId}/im/connectors`)
+  }
+  getTransportAccounts(
+    wsId: string
+  ): Promise<{ accounts: TransportAccountSummary[] }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts`)
+  }
+  getTransportSessions(
+    wsId: string
+  ): Promise<{ sessions: TransportSessionSummary[] }> {
+    return this.fetch(`/workspaces/${wsId}/im/sessions`)
+  }
+  getTransportExternalUsers(
+    wsId: string,
+    transportAccountId?: string
+  ): Promise<{ externalUsers: TransportExternalUserSummary[] }> {
+    const params = new URLSearchParams()
+    if (transportAccountId) params.set("transportAccountId", transportAccountId)
+    return this.fetch(
+      `/workspaces/${wsId}/im/external-users${params.size ? `?${params.toString()}` : ""}`
+    )
+  }
+  createFeishuTransportAccount(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/feishu`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  updateFeishuTransportAccount(
+    wsId: string,
+    accountId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/feishu/${accountId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+  startWeixinQrTransportSession(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<{ session: WeixinQrLoginSessionSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/weixin/qr`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  getWeixinQrTransportSession(
+    wsId: string,
+    sessionId: string
+  ): Promise<{ session: WeixinQrLoginSessionSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/weixin/qr/${sessionId}`)
+  }
+  createTransportAccount(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  updateTransportAccount(
+    wsId: string,
+    accountId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/${accountId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+  getGroupTransportBinding(
+    wsId: string,
+    groupId: string
+  ): Promise<{ binding: ConversationTransportBindingSummary | null }> {
+    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/transport-binding`)
+  }
+  updateTransportSessionSettings(
+    wsId: string,
+    sessionId: string,
+    data: Record<string, unknown>
+  ): Promise<{ session: TransportSessionSummary | null }> {
+    return this.fetch(`/workspaces/${wsId}/im/sessions/${sessionId}/settings`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+  setTransportExternalUserWorkspaceUser(
+    wsId: string,
+    addressId: string,
+    userId: string | null
+  ): Promise<{ externalUser: TransportExternalUserSummary }> {
+    return this.fetch(
+      `/workspaces/${wsId}/im/external-users/${addressId}/workspace-user`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ userId }),
+      }
+    )
   }
   markGroupRead(wsId: string, groupId: string) {
     return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/read`, {

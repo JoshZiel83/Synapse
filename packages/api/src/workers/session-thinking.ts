@@ -246,11 +246,36 @@ export function startSessionThinkingWorker() {
               memberEntries.push({
                 type: 'user',
                 id: member.user_id,
+                participantId: member.id,
                 name: member.user_name || 'User',
               });
               if (!groupUserId) {
                 groupUserId = member.user_id;
               }
+            } else if (member.member_type === 'external' && member.state === 'active') {
+              const linkedUserName =
+                (member.linked_user_name as string | null) || undefined;
+              memberEntries.push({
+                type: 'external',
+                id:
+                  (member.linked_user_id as string | null) ||
+                  (member.transport_external_id as string | null) ||
+                  (member.id as string),
+                participantId: member.id,
+                name:
+                  (member.transport_display_name as string | null) ||
+                  (member.display_name as string | null) ||
+                  linkedUserName ||
+                  'External participant',
+                title: linkedUserName
+                  ? `Linked workspace user: ${linkedUserName}`
+                  : 'External participant',
+                linkedUserId:
+                  (member.linked_user_id as string | null) || undefined,
+                linkedUserName,
+                externalUserKey:
+                  (member.transport_external_id as string | null) || undefined,
+              });
             }
           }
 

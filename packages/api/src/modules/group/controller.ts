@@ -35,8 +35,7 @@ const sendGroupMessageSchema = z
     content: z.string().max(10000).optional().default(""),
     contentBlocks: z.array(z.any()).optional(),
     clientMessageId: z.string().min(1).max(128),
-    targetActorIds: z.array(z.string().uuid()).optional(),
-    targetUserIds: z.array(z.string().uuid()).optional(),
+    targetParticipantIds: z.array(z.string().uuid()).optional(),
   })
   .refine(
     (body) =>
@@ -151,6 +150,7 @@ function mapMember(row: any) {
   if (row.actor_id) {
     return {
       memberId: row.id,
+      participantId: row.id,
       type: "actor",
       actorId: row.actor_id,
       id: row.actor_id,
@@ -166,12 +166,37 @@ function mapMember(row: any) {
     };
   }
 
+  if (row.member_type === "external") {
+    return {
+      memberId: row.id,
+      participantId: row.id,
+      type: "external",
+      id: row.id,
+      externalUserKey: row.transport_external_id || undefined,
+      transportKind: row.transport_kind || undefined,
+      transportAddressId: row.transport_address_id || undefined,
+      linkedUserId: row.linked_user_id || undefined,
+      linkedUserName: row.linked_user_name || undefined,
+      linkedUserAvatarUrl: row.linked_user_avatar_file_id
+        ? getFileUrlById(row.linked_user_avatar_file_id)
+        : undefined,
+      name:
+        row.transport_display_name ||
+        row.display_name ||
+        "External participant",
+      state: row.state,
+    };
+  }
+
   return {
     memberId: row.id,
+    participantId: row.id,
     type: "user",
     userId: row.user_id,
     id: row.user_id,
     name: row.user_name || "User",
+    transportKind: row.transport_kind || undefined,
+    transportAddressId: row.transport_address_id || undefined,
     avatarUrl: row.user_avatar_file_id
       ? getFileUrlById(row.user_avatar_file_id)
       : undefined,
@@ -245,6 +270,7 @@ export default async function groupController(app: FastifyInstance) {
           return {
             id: row.id,
             status: hasOpenLane ? "active" : "completed",
+            transportKind: row.transport_kind || undefined,
             participants,
             members: mappedMembers,
             lastMessage: row.last_message
@@ -405,8 +431,7 @@ export default async function groupController(app: FastifyInstance) {
         content: string;
         contentBlocks?: CanonicalContentBlock[];
         clientMessageId: string;
-        targetActorIds?: string[];
-        targetUserIds?: string[];
+        targetParticipantIds?: string[];
       };
       const userId = (request as any).user!.userId;
 
@@ -415,8 +440,7 @@ export default async function groupController(app: FastifyInstance) {
         senderType: "user",
         senderUserId: userId,
         clientMessageId: body.clientMessageId,
-        targetActorIds: body.targetActorIds,
-        targetUserIds: body.targetUserIds,
+        targetParticipantIds: body.targetParticipantIds,
         content: body.content,
         contentBlocks: body.contentBlocks,
       });

@@ -19,8 +19,7 @@ const createGroupSchema = z.object({
 const sendMessageSchema = z.object({
   content: z.string().max(10000).optional().default(''),
   contentBlocks: z.array(z.any()).optional(),
-  targetActorIds: z.array(z.string().uuid()).optional(),
-  targetUserIds: z.array(z.string().uuid()).optional(),
+  targetParticipantIds: z.array(z.string().uuid()).optional(),
 }).refine(
   (body) => body.content.trim().length > 0 || (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
   { message: 'content or contentBlocks is required' },
@@ -71,13 +70,13 @@ export async function chatController(app: FastifyInstance) {
   // POST /workspaces/:wsId/chat/groups/:groupId/messages — send message to group
   app.post<{
     Params: { workspaceId: string; groupId: string };
-    Body: { content?: string; contentBlocks?: CanonicalContentBlock[]; targetActorIds?: string[]; targetUserIds?: string[] };
+    Body: { content?: string; contentBlocks?: CanonicalContentBlock[]; targetParticipantIds?: string[] };
   }>('/workspaces/:workspaceId/chat/groups/:groupId/messages', async (request, reply) => {
     const { workspaceId, groupId } = request.params;
-    const { content, contentBlocks, targetActorIds, targetUserIds } = sendMessageSchema.parse(request.body);
+    const { content, contentBlocks, targetParticipantIds } = sendMessageSchema.parse(request.body);
     const userId = (request as any).user!.userId;
 
-    const result = await sendMessageToGroup(workspaceId, groupId, userId, content, contentBlocks, targetActorIds, targetUserIds);
+    const result = await sendMessageToGroup(workspaceId, groupId, userId, content, contentBlocks, targetParticipantIds);
     return reply.status(201).send(result);
   });
 

@@ -29,6 +29,14 @@ type InviteableActor = {
   summary?: string;
 };
 
+type SendToCandidate = {
+  type: 'actor' | 'user' | 'external';
+  participantId: string;
+  name: string;
+  label: string;
+  aliases: string[];
+};
+
 function parseActorDocs(value: unknown): ActorDoc[] {
   if (!value) return [];
   if (typeof value === 'string') {
@@ -65,6 +73,82 @@ function summarizeInviteableActor(row: {
 function formatInviteableActor(actor: InviteableActor): string {
   const title = actor.title || actor.role || 'Actor';
   return `${actor.name} (${title}) [${actor.id}]${actor.summary ? ` - ${actor.summary}` : ''}`;
+}
+
+function normalizeRecipientAlias(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function buildSendToCandidates(
+  members: any[],
+  currentActorId?: string,
+): SendToCandidate[] {
+  const candidates: SendToCandidate[] = [];
+
+  for (const member of members) {
+    if (member.state !== 'active') continue;
+
+    if (member.actor_id) {
+      if (member.actor_id === currentActorId) continue;
+      const name = member.actor_name || 'Unknown actor';
+      const title = member.actor_title || member.actor_role || 'Actor';
+      candidates.push({
+        type: 'actor',
+        participantId: member.id,
+        name,
+        label: `"${name}" (actor${title ? `, ${title}` : ''})`,
+        aliases: [name],
+      });
+      continue;
+    }
+
+    if (member.user_id) {
+      const name = member.user_name || 'User';
+      const transportKind =
+        member.transport_kind === 'feishu' || member.transport_kind === 'weixin'
+          ? member.transport_kind
+          : undefined;
+      const transportLabel = transportKind
+        ? `, reachable via ${transportKind === 'feishu' ? 'Feishu' : 'WeChat'}`
+        : '';
+      candidates.push({
+        type: 'user',
+        participantId: member.id,
+        name,
+        label: `"${name}" (user${transportLabel})`,
+        aliases: [name],
+      });
+      continue;
+    }
+
+    if (member.member_type === 'external') {
+      const linkedUserName =
+        (member.linked_user_name as string | null) || undefined;
+      const name =
+        (member.transport_display_name as string | null) ||
+        (member.display_name as string | null) ||
+        linkedUserName ||
+        'External participant';
+      const aliases = Array.from(
+        new Set(
+          [name, linkedUserName].filter(
+            (value): value is string => typeof value === 'string' && value.trim().length > 0,
+          ),
+        ),
+      );
+      candidates.push({
+        type: 'external',
+        participantId: member.id,
+        name,
+        label: linkedUserName && linkedUserName !== name
+          ? `"${name}" (external, linked to workspace user ${linkedUserName})`
+          : `"${name}" (external)`,
+        aliases,
+      });
+    }
+  }
+
+  return candidates;
 }
 
 async function listInviteableActors(params: {
@@ -275,11 +359,13 @@ export function registerCallableToolPlugins(): void {
       if (otherMembers.length === 0) {
         return { active: false, definition: null as any };
       }
-      const recipientNames = otherMembers.map(m => m.name);
+      const recipientNames = Array.from(new Set(otherMembers.map(m => m.name)));
       const rosterDesc = otherMembers.map(m =>
         m.type === 'user'
           ? `"${m.name}" (user)`
-          : `"${m.name}" (actor${m.title ? ', ' + m.title : ''})`
+          : m.type === 'external'
+            ? `"${m.name}" (external${m.linkedUserName ? `, linked to workspace user ${m.linkedUserName}` : ''})`
+            : `"${m.name}" (actor${m.title ? ', ' + m.title : ''})`
       ).join(', ');
       return {
         active: true,
@@ -331,45 +417,64 @@ export function registerCallableToolPlugins(): void {
       // Load all current group members (excluding self)
       const allMembers = await getGroupMembers(session.group_id);
 
-      const memberMap = new Map<string, { type: 'actor' | 'user'; id: string; name: string }>();
-      for (const m of allMembers) {
-        if (m.actor_id && m.actor_id !== context.actorId) {
-          memberMap.set(m.actor_name.toLowerCase(), { type: 'actor', id: m.actor_id, name: m.actor_name });
-        }
-        if (m.user_id) {
-          memberMap.set(m.user_name.toLowerCase(), { type: 'user', id: m.user_id, name: m.user_name });
+      const candidates = buildSendToCandidates(allMembers, context.actorId);
+      const aliasMap = new Map<string, SendToCandidate[]>();
+      for (const candidate of candidates) {
+        for (const alias of candidate.aliases) {
+          const normalized = normalizeRecipientAlias(alias);
+          if (!normalized) continue;
+          const existing = aliasMap.get(normalized) || [];
+          existing.push(candidate);
+          aliasMap.set(normalized, existing);
         }
       }
 
-      const targetActorIds: string[] = [];
-      const targetUserIds: string[] = [];
+      const targetParticipantIds: string[] = [];
       const resolved: string[] = [];
       const errors: string[] = [];
+      let hasNonActorRecipients = false;
 
       for (const name of recipientNames) {
-        const member = memberMap.get(name.toLowerCase());
-        if (!member) {
-          let bestMatch: { name: string; dist: number } | null = null;
-          for (const [key, val] of memberMap) {
-            const dist = levenshtein(name.toLowerCase(), key);
-            if (dist <= 2 && (!bestMatch || dist < bestMatch.dist)) {
-              bestMatch = { name: val.name, dist };
+        const normalizedName = normalizeRecipientAlias(name);
+        const exactMatches = aliasMap.get(normalizedName) || [];
+        if (exactMatches.length > 1) {
+          const options = Array.from(new Set(exactMatches.map((candidate) => candidate.label)));
+          errors.push(`"${name}" is ambiguous. Matches: ${options.join(', ')}.`);
+          continue;
+        }
+
+        let candidate = exactMatches[0];
+        if (!candidate) {
+          let bestMatch: { candidate: SendToCandidate; dist: number } | null = null;
+          for (const currentCandidate of candidates) {
+            const distance = Math.min(
+              ...currentCandidate.aliases.map((alias) =>
+                levenshtein(normalizedName, normalizeRecipientAlias(alias)),
+              ),
+            );
+            if (distance <= 2 && (!bestMatch || distance < bestMatch.dist)) {
+              bestMatch = { candidate: currentCandidate, dist: distance };
             }
           }
           if (bestMatch) {
-            errors.push(`"${name}" not found. Did you mean "${bestMatch.name}"?`);
+            errors.push(`"${name}" not found. Did you mean ${bestMatch.candidate.label}?`);
           } else {
             errors.push(`"${name}" is not a member of this group.`);
           }
           continue;
         }
-        if (member.type === 'actor') targetActorIds.push(member.id);
-        else targetUserIds.push(member.id);
-        resolved.push(member.name);
+
+        if (!targetParticipantIds.includes(candidate.participantId)) {
+          targetParticipantIds.push(candidate.participantId);
+        }
+        if (candidate.type !== 'actor') {
+          hasNonActorRecipients = true;
+        }
+        resolved.push(candidate.label);
       }
 
       if (resolved.length === 0) {
-        const available = Array.from(memberMap.values()).map((m) => `${m.name} (${m.type})`);
+        const available = candidates.map((candidate) => candidate.label);
         return JSON.stringify({
           error: 'No valid recipients found.',
           details: errors,
@@ -377,15 +482,14 @@ export function registerCallableToolPlugins(): void {
         });
       }
 
-      const isCoordination = targetUserIds.length === 0;
+      const isCoordination = !hasNonActorRecipients;
 
       await sendGroupMessage({
         groupId: session.group_id,
         senderType: 'actor',
         senderActorId: context.actorId,
         senderSessionId: context.sessionId,
-        targetActorIds,
-        targetUserIds,
+        targetParticipantIds,
         content: message,
         metadata: isCoordination ? { coordination: true } : undefined,
       });
@@ -586,7 +690,14 @@ export function registerCallableToolPlugins(): void {
           senderType: 'actor',
           senderActorId: context.actorId,
           senderSessionId: context.sessionId,
-          targetActorIds: invitedActors.map((candidate) => candidate.id),
+          targetParticipantIds: invitedActors
+            .map((candidate) =>
+              (addResult.members || []).find(
+                (member: any) =>
+                  member.type === 'actor' && member.actorId === candidate.id,
+              )?.memberId,
+            )
+            .filter((memberId): memberId is string => Boolean(memberId)),
           content: reason,
         });
 

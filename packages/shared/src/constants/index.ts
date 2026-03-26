@@ -31,6 +31,7 @@ export const QUEUE_NAMES = {
   SESSION_THINKING: 'session-thinking',
   AUTOMATION_SCHEDULER: 'automation-scheduler',
   AUTOMATION_EXECUTION: 'automation-execution',
+  IM_TRANSPORT_DELIVERY: 'im-transport-delivery',
 } as const;
 
 export const WS_AUTH_TIMEOUT = 5000;

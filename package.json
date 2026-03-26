@@ -10,6 +10,7 @@
   "scripts": {
     "dev:api": "npm run dev -w packages/api",
     "dev:web": "npm run dev -w packages/web-next",
+    "dev:mock-chat": "node .workbuddy/mock-chat-completions-server.cjs",
     "build": "npm run build -w packages/shared && npm run build -w packages/api && npm run build -w packages/web-next",
     "build:shared": "npm run build -w packages/shared",
     "build:api": "npm run build -w packages/api",

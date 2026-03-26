@@ -17,6 +17,7 @@ import {
   House,
   ImagePlus,
   Loader2,
+  Link2,
   LogOut,
   MessageSquare,
   Moon,
@@ -60,6 +61,7 @@ import { toast } from "sonner"
 const mainItems = [
   { href: "/dashboard", label: "Home", icon: House },
   { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
+  { href: "/dashboard/im", label: "IM", icon: Link2 },
   { href: "/dashboard/contacts", label: "Contacts", icon: ContactRound },
 ]
 

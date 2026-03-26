@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { Plus, Search } from 'lucide-react';
 import ChatAvatar from './chat-avatar';
+import TransportKindIcon from './transport-kind-icon';
 import type { Group, GroupRuntimeMap } from '@/stores/chat-store';
 
 function formatRelativeTime(dateStr: string) {
@@ -215,6 +216,11 @@ export default function GroupList({
                     avatarUrl={group.avatarUrl}
                     entityType="group"
                     size="lg"
+                  />
+                  <TransportKindIcon
+                    kind={group.transportKind}
+                    size={14}
+                    className="absolute -bottom-1 -right-1 size-5 p-0.5"
                   />
                   {group.unreadCount > 0 && (
                     <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold">

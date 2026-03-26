@@ -9,36 +9,41 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { Send, ArrowDown, Paperclip, X, Pencil, Check, AtSign, MoreHorizontal } from 'lucide-react';
 import MessageBubble from './message-bubble';
-import type { FeedMessage, Group } from '@/stores/chat-store';
+import type { FeedMessage, Group, GroupMember } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
-import type { ChiefActorOption } from '../chief-actor-picker-shared';
 import ChatAvatar from './chat-avatar';
 import ChatMemberStrip from './chat-member-strip';
+import ChatParticipantDetailDialog from './chat-participant-detail-dialog';
 import GroupMemberPickerDialog from './group-member-picker-dialog';
-import ChatMentionsInput, { type MentionableActor } from './chat-mentions-input';
-import { MobileActorPickerDialog } from '@/components/mobile-actor-picker-dialog';
+import ChatMentionsInput, { type MentionableParticipant } from './chat-mentions-input';
+import MobileParticipantPickerDialog from './mobile-participant-picker-dialog';
 import MobileGroupDetailsDialog from './mobile-group-details-dialog';
+import TransportKindIcon from './transport-kind-icon';
 
 interface GroupChatProps {
   group: Group;
   messages: FeedMessage[];
   loading: boolean;
   actorRuntimes?: Record<string, ActorRuntimeState>;
-  onSend: (contentBlocks: CanonicalContentBlock[], targetActorIds?: string[]) => Promise<void> | void;
+  onSend: (contentBlocks: CanonicalContentBlock[], targetParticipantIds?: string[]) => Promise<void> | void;
   onBack?: () => void;
   workspaceId?: string;
   onRefreshGroup?: () => Promise<void> | void;
   viewportLocked?: boolean;
   mobileMentionPickerWorkspaceId?: string;
+  contactBasePath?: string;
 }
 
 function summarizeMemberCounts(group: Group) {
   const userCount = group.members.filter((member) => member.type === 'user').length;
   const actorCount = group.members.filter((member) => member.type === 'actor').length;
+  const externalCount = group.members.filter((member) => member.type === 'external').length;
   const userLabel = `${userCount} user${userCount === 1 ? '' : 's'}`;
   const actorLabel = `${actorCount} actor${actorCount === 1 ? '' : 's'}`;
-  return `${userLabel} · ${actorLabel}`;
+  if (externalCount === 0) return `${userLabel} · ${actorLabel}`;
+  const externalLabel = `${externalCount} external${externalCount === 1 ? '' : 's'}`;
+  return `${userLabel} · ${actorLabel} · ${externalLabel}`;
 }
 
 function getRuntimePriority(runtime: ActorRuntimeState) {
@@ -54,6 +59,20 @@ function summarizeCurrentUserProcessingActors(runtimes: ActorRuntimeState[]) {
   if (names.length === 1) return `${names[0]} is processing your message`;
   if (names.length === 2) return `${names[0]} and ${names[1]} are processing your messages`;
   return `${names[0]}, ${names[1]} +${names.length - 2} are processing your messages`;
+}
+
+function buildMentionSearchTerms(member: Group["members"][number]) {
+  return Array.from(
+    new Set(
+      [
+        member.name,
+        member.title,
+        member.role,
+        member.linkedUserName,
+        member.externalUserKey,
+      ].filter((value): value is string => Boolean(value && value.trim())),
+    ),
+  );
 }
 
 function extractPendingMentionQuery(value: string) {
@@ -214,12 +233,13 @@ export default function GroupChat({
   onRefreshGroup,
   viewportLocked = false,
   mobileMentionPickerWorkspaceId,
+  contactBasePath = '/dashboard/contacts',
 }: GroupChatProps) {
   const { user } = useAuthStore();
   const currentUserId = user?.id || '';
   const [inputValue, setInputValue] = useState('');
   const [inputPlainTextValue, setInputPlainTextValue] = useState('');
-  const [mentionedActorIds, setMentionedActorIds] = useState<string[]>([]);
+  const [mentionedParticipantIds, setMentionedParticipantIds] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [titleDraft, setTitleDraft] = useState(group.title || '');
@@ -238,22 +258,41 @@ export default function GroupChat({
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
   const [mentionPickerQuery, setMentionPickerQuery] = useState('');
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false);
+  const [participantDetailOpen, setParticipantDetailOpen] = useState(false);
+  const [selectedParticipantMember, setSelectedParticipantMember] = useState<GroupMember | null>(null);
   const prevMsgCount = useRef(messages.length);
-  const mentionableActors = useMemo<MentionableActor[]>(
-    () => group.participants.map((participant) => ({
-      id: participant.id,
-      name: participant.name,
-      role: participant.role,
-      avatarUrl: participant.avatarUrl,
-      emoji: participant.emoji,
+  const mentionableParticipants = useMemo<MentionableParticipant[]>(
+    () => group.members.map((member) => ({
+      id: member.participantId,
+      name: member.name,
+      type: member.type,
+      role: member.role,
+      avatarUrl: member.avatarUrl,
+      emoji: member.emoji,
+      description:
+        member.type === 'actor'
+          ? member.title || member.role || 'Actor'
+          : member.type === 'external'
+            ? member.linkedUserName
+              ? `External participant · linked to ${member.linkedUserName}`
+              : 'External participant'
+            : 'Workspace user',
+      searchTerms: buildMentionSearchTerms(member),
     })),
-    [group.participants],
+    [group.members],
   );
-  const mentionedActors = useMemo(
-    () => mentionedActorIds
-      .map((actorId) => mentionableActors.find((actor) => actor.id === actorId))
-      .filter((actor): actor is MentionableActor => Boolean(actor)),
-    [mentionedActorIds, mentionableActors],
+  const mentionableParticipantMap = useMemo(
+    () =>
+      Object.fromEntries(
+        mentionableParticipants.map((participant) => [participant.id, participant]),
+      ),
+    [mentionableParticipants],
+  );
+  const mentionedParticipants = useMemo(
+    () => mentionedParticipantIds
+      .map((participantId) => mentionableParticipants.find((participant) => participant.id === participantId))
+      .filter((participant): participant is MentionableParticipant => Boolean(participant)),
+    [mentionedParticipantIds, mentionableParticipants],
   );
   const actorMemberMap = useMemo(
     () => Object.fromEntries(
@@ -285,6 +324,9 @@ export default function GroupChat({
     [myProcessingRuntimes],
   );
   const usesExternalMentionPicker = Boolean(mobileMentionPickerWorkspaceId);
+  const participantInteractionHandler = usesExternalMentionPicker
+    ? openParticipantDetails
+    : undefined;
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -334,6 +376,12 @@ export default function GroupChat({
   }, [group.id, group.title]);
 
   useEffect(() => {
+    setParticipantDetailOpen(false);
+    setSelectedParticipantMember(null);
+    setGroupDetailsOpen(false);
+  }, [group.id]);
+
+  useEffect(() => {
     const element = textareaRef.current;
     if (!element || !usesExternalMentionPicker) return;
 
@@ -360,7 +408,7 @@ export default function GroupChat({
     const filesToUpload = [...pendingFiles];
     setInputValue('');
     setInputPlainTextValue('');
-    setMentionedActorIds([]);
+    setMentionedParticipantIds([]);
     setPendingFiles([]);
     setSending(true);
 
@@ -389,7 +437,7 @@ export default function GroupChat({
           }));
         }
       }
-      const targetIds = mentionedActorIds.length > 0 ? mentionedActorIds : undefined;
+      const targetIds = mentionedParticipantIds.length > 0 ? mentionedParticipantIds : undefined;
       await onSend(contentBlocks, targetIds);
     } catch {
       // error handled upstream
@@ -412,13 +460,25 @@ export default function GroupChat({
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
-  function removeMentionedActor(actorId: string) {
-    setMentionedActorIds((prev) => prev.filter((currentActorId) => currentActorId !== actorId));
+  function removeMentionedParticipant(participantId: string) {
+    setMentionedParticipantIds((prev) => prev.filter((currentParticipantId) => currentParticipantId !== participantId));
   }
 
   function openMentionPicker(query?: string) {
     setMentionPickerQuery(query || '');
     setMentionPickerOpen(true);
+  }
+
+  function openParticipantDetails(member: GroupMember) {
+    setSelectedParticipantMember(member);
+    setParticipantDetailOpen(true);
+  }
+
+  function openParticipantDetailsFromGroupSheet(member: GroupMember) {
+    setGroupDetailsOpen(false);
+    requestAnimationFrame(() => {
+      openParticipantDetails(member);
+    });
   }
 
   function insertMentionTrigger() {
@@ -460,19 +520,18 @@ export default function GroupChat({
   }
 
   async function handleMentionPickerConfirm({
-    selectedActors,
+    selectedParticipantIds,
   }: {
-    selectedActors: ChiefActorOption[];
-    saveAsDefault: boolean;
+    selectedParticipantIds: string[];
   }) {
-    setMentionedActorIds((currentActorIds) => {
-      const nextActorIds = [...currentActorIds];
-      for (const actor of selectedActors) {
-        if (!nextActorIds.includes(actor.id)) {
-          nextActorIds.push(actor.id);
+    setMentionedParticipantIds((currentParticipantIds) => {
+      const nextParticipantIds = [...currentParticipantIds];
+      for (const participantId of selectedParticipantIds) {
+        if (!nextParticipantIds.includes(participantId)) {
+          nextParticipantIds.push(participantId);
         }
       }
-      return nextActorIds;
+      return nextParticipantIds;
     });
     setMentionPickerOpen(false);
     setMentionPickerQuery('');
@@ -573,7 +632,7 @@ export default function GroupChat({
             <div className="group relative">
               <button
                 type="button"
-                className="rounded-full transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-70"
+                className="relative rounded-full transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-70"
                 onClick={() => groupAvatarInputRef.current?.click()}
                 disabled={!group.permissions?.canManage || avatarUploading}
                 title={group.permissions?.canManage ? 'Change group avatar' : undefined}
@@ -585,12 +644,17 @@ export default function GroupChat({
                   size="lg"
                   className="size-12"
                 />
+                <TransportKindIcon
+                  kind={group.transportKind}
+                  size={14}
+                  className="absolute -bottom-1 -right-1 size-5 p-0.5"
+                />
+                {group.permissions?.canManage ? (
+                  <div className="absolute inset-0 flex items-center justify-center rounded-full bg-foreground/55 text-background opacity-0 transition-opacity group-hover:opacity-100">
+                    <Pencil className="size-4" />
+                  </div>
+                ) : null}
               </button>
-              {group.permissions?.canManage ? (
-                <div className="pointer-events-none absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
-                  <Pencil className="size-3" />
-                </div>
-              ) : null}
               <input
                 ref={groupAvatarInputRef}
                 type="file"
@@ -656,6 +720,8 @@ export default function GroupChat({
               runtimeByActor={actorRuntimes}
               max={5}
               size="lg"
+              onMemberClick={participantInteractionHandler}
+              contactBasePath={contactBasePath}
               onAdd={group.permissions?.canManageMembers ? () => setMemberDialogOpen(true) : undefined}
             />
           </div>
@@ -686,7 +752,7 @@ export default function GroupChat({
                     Chat in {title}
                   </h3>
                   <p className="max-w-md text-sm text-muted-foreground">
-                    Messages from all participants will appear here.
+                    No shared messages in this conversation yet.
                   </p>
                 </div>
               </div>
@@ -695,6 +761,7 @@ export default function GroupChat({
                 <MessageBubble
                   key={msg.id}
                   role={msg.role}
+                  author={msg.author}
                   contentBlocks={msg.contentBlocks}
                   actorName={msg.actorName}
                   actorAvatarUrl={msg.fromActorId ? actorMemberMap[msg.fromActorId]?.avatarUrl : undefined}
@@ -702,18 +769,24 @@ export default function GroupChat({
                   actorRole={msg.actorRole}
                   actorRuntime={msg.fromActorId ? actorRuntimes?.[msg.fromActorId] : undefined}
                   timestamp={msg.createdAt}
-                  isUser={msg.role === 'user'}
-                  fromUserId={msg.fromUserId}
+                  isUser={
+                    msg.author
+                      ? msg.author.memberType === 'user' && msg.author.userId === currentUserId
+                      : msg.role === 'user'
+                  }
                   status={msg.deliveryStatus}
                   toolsUsed={msg.toolsUsed}
                   serverToolCalls={msg.serverToolCalls}
                   citationSources={msg.citationSources}
                   coordination={msg.coordination}
                   groupMembers={group.members}
-                  targetActorIds={msg.targetActorIds}
-                  targetUserIds={msg.targetUserIds}
+                  targetParticipantIds={msg.targetParticipantIds}
+                  transport={msg.transport}
+                  transportDeliveries={msg.transportDeliveries}
                   enableTablePreview={viewportLocked}
                   viewerUserId={currentUserId || undefined}
+                  contactBasePath={contactBasePath}
+                  onParticipantClick={participantInteractionHandler}
                 />
               ))
             )}
@@ -780,27 +853,27 @@ export default function GroupChat({
             onChange={handleFileSelect}
             className="hidden"
           />
-          {mentionedActors.length > 0 ? (
+          {mentionedParticipants.length > 0 ? (
             <div className="flex flex-wrap gap-2 border-b border-border/70 px-3 pt-3 pb-2">
-              {mentionedActors.map((actor) => (
+              {mentionedParticipants.map((participant) => (
                 <div
-                  key={actor.id}
+                  key={participant.id}
                   className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs text-foreground"
                 >
                   <ChatAvatar
-                    name={actor.name}
-                    avatarUrl={actor.avatarUrl}
-                    emoji={actor.emoji}
-                    entityType="actor"
+                    name={participant.name}
+                    avatarUrl={participant.avatarUrl}
+                    emoji={participant.emoji}
+                    entityType={participant.type}
                     size="sm"
                   />
-                  <span className="font-medium">@{actor.name}</span>
+                  <span className="font-medium">@{participant.name}</span>
                   {usesExternalMentionPicker ? (
                     <button
                       type="button"
-                      onClick={() => removeMentionedActor(actor.id)}
+                      onClick={() => removeMentionedParticipant(participant.id)}
                       className="text-muted-foreground/60 transition-colors hover:text-foreground"
-                      aria-label={`Remove @${actor.name}`}
+                      aria-label={`Remove @${participant.name}`}
                     >
                       <X className="size-3" />
                     </button>
@@ -831,14 +904,14 @@ export default function GroupChat({
               />
             ) : (
               <ChatMentionsInput
-                actors={mentionableActors}
+                participants={mentionableParticipants}
                 value={inputValue}
                 plainTextValue={inputPlainTextValue}
                 inputRef={textareaRef}
-                onChange={(nextValue, nextPlainTextValue, nextMentionedActorIds) => {
+                onChange={(nextValue, nextPlainTextValue, nextMentionedParticipantIds) => {
                   setInputValue(nextValue);
                   setInputPlainTextValue(nextPlainTextValue);
-                  setMentionedActorIds(nextMentionedActorIds);
+                  setMentionedParticipantIds(nextMentionedParticipantIds);
                 }}
                 onSubmit={() => {
                   void submitMessage();
@@ -859,9 +932,9 @@ export default function GroupChat({
                 variant="ghost"
                 size="icon-sm"
                 onClick={insertMentionTrigger}
-                disabled={sending || mentionableActors.length === 0}
+                disabled={sending || mentionableParticipants.length === 0}
                 className="rounded-full text-muted-foreground"
-                aria-label="Mention an actor"
+                aria-label="Mention a participant"
               >
                 <AtSign className="w-5 h-5" />
               </Button>
@@ -891,18 +964,20 @@ export default function GroupChat({
         </form>
       </div>
       {usesExternalMentionPicker && mobileMentionPickerWorkspaceId ? (
-        <MobileActorPickerDialog
+        <MobileParticipantPickerDialog
           open={mentionPickerOpen}
           onOpenChange={setMentionPickerOpen}
-          workspaceId={mobileMentionPickerWorkspaceId}
-          title="Mention actors"
+          title="Mention participants"
           description={undefined}
-          initialActorIds={mentionedActorIds}
+          participants={mentionableParticipants}
           initialSearch={mentionPickerQuery}
           selectionMode="single"
           selectionBehavior="immediate"
           confirmLabel="Apply mentions"
           confirmPendingLabel="Applying..."
+          initialParticipantIds={mentionedParticipantIds.filter(
+            (participantId) => Boolean(mentionableParticipantMap[participantId]),
+          )}
           onConfirm={handleMentionPickerConfirm}
         />
       ) : null}
@@ -911,6 +986,16 @@ export default function GroupChat({
           group={group}
           open={groupDetailsOpen}
           onOpenChange={setGroupDetailsOpen}
+          onMemberClick={openParticipantDetailsFromGroupSheet}
+          contactBasePath={contactBasePath}
+        />
+      ) : null}
+      {usesExternalMentionPicker ? (
+        <ChatParticipantDetailDialog
+          member={selectedParticipantMember}
+          open={participantDetailOpen}
+          onOpenChange={setParticipantDetailOpen}
+          contactBasePath={contactBasePath}
         />
       ) : null}
       <GroupMemberPickerDialog

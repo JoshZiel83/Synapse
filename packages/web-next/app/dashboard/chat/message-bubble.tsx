@@ -1,9 +1,18 @@
 "use client"
 
 import type { ComponentPropsWithoutRef } from "react"
-import type { ActorRuntimeState } from "@synapse/shared"
+import type {
+  ActorRuntimeState,
+  CanonicalContentBlock,
+  ConversationEntityRef,
+  ConversationMessageTransportContext,
+  ConversationMessageTransportDelivery,
+} from "@synapse/shared"
+import { useRouter } from "next/navigation"
 import { useMemo, useState } from "react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
+import { useIsMobile } from "@/hooks/use-mobile"
 import {
   Tooltip,
   TooltipContent,
@@ -25,7 +34,6 @@ import {
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import type { CanonicalContentBlock } from "@synapse/shared"
 import { extractText } from "@synapse/shared"
 import { runtimeToAvatarStatus } from "@/stores/chat-store"
 import type { ServerToolCall } from "@/stores/chat-store"
@@ -33,12 +41,20 @@ import type { GroupMember } from "@/stores/chat-store"
 import { cn, resolveFileUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
 import {
+  formatTransportKindLabel,
+  getAuthorContactHref,
+  getGroupMemberSubtitle,
+  resolveAuthorMember,
+} from "./member-utils"
+import ChatParticipantHoverCard from "./chat-participant-hover-card"
+import {
   TablePreviewOverlay,
   type TablePreviewContent,
 } from "./table-preview-overlay"
 
 interface MessageBubbleProps {
   role: string
+  author?: ConversationEntityRef
   contentBlocks: CanonicalContentBlock[]
   actorName?: string
   actorAvatarUrl?: string
@@ -47,17 +63,19 @@ interface MessageBubbleProps {
   actorRuntime?: ActorRuntimeState
   timestamp?: string
   isUser: boolean
-  fromUserId?: string
   status?: "sending" | "retrying" | "sent"
   toolsUsed?: string[]
   serverToolCalls?: ServerToolCall[]
   citationSources?: Record<string, { url: string; title: string }>
   coordination?: boolean
   groupMembers?: GroupMember[]
-  targetActorIds?: string[]
-  targetUserIds?: string[]
+  targetParticipantIds?: string[]
+  transport?: ConversationMessageTransportContext
+  transportDeliveries?: ConversationMessageTransportDelivery[]
   enableTablePreview?: boolean
   viewerUserId?: string
+  contactBasePath?: string
+  onParticipantClick?: (member: GroupMember) => void
 }
 
 function formatToolsUsed(tools: string[]): string {
@@ -240,10 +258,95 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+function formatTransportStatusLabel(status: ConversationMessageTransportDelivery["deliveryStatus"]) {
+  switch (status) {
+    case "sent":
+      return "sent"
+    case "failed":
+      return "failed"
+    case "pending":
+      return "pending"
+    case "skipped":
+      return "skipped"
+    default:
+      return status
+  }
+}
+
+function getTransportBadgeClassName(
+  status?: ConversationMessageTransportDelivery["deliveryStatus"]
+) {
+  switch (status) {
+    case "failed":
+      return "border-destructive/30 bg-destructive/10 text-destructive"
+    case "pending":
+      return "border-amber-500/30 bg-amber-500/10 text-amber-700"
+    case "skipped":
+      return "border-border bg-muted/40 text-muted-foreground"
+    default:
+      return "border-border bg-muted/30 text-muted-foreground"
+  }
+}
+
+function TransportSummary({
+  transport,
+  transportDeliveries,
+}: {
+  transport?: ConversationMessageTransportContext
+  transportDeliveries?: ConversationMessageTransportDelivery[]
+}) {
+  const inboundLabel =
+    transport?.direction === "inbound" && transport.transportKind
+      ? `via ${formatTransportKindLabel(transport.transportKind)}`
+      : null
+  const outboundDeliveries = (transportDeliveries || []).filter(
+    (delivery) => delivery.direction === "outbound"
+  )
+
+  if (!inboundLabel && outboundDeliveries.length === 0) {
+    return null
+  }
+
+  return (
+    <>
+      {inboundLabel ? (
+        <Badge
+          variant="outline"
+          className="rounded-full border-border bg-muted/30 px-2 py-0 text-[10px] font-normal text-muted-foreground"
+        >
+          {inboundLabel}
+        </Badge>
+      ) : null}
+      {outboundDeliveries.map((delivery) => {
+        const transportLabel = formatTransportKindLabel(delivery.transportKind)
+        return (
+          <Badge
+            key={delivery.linkId}
+            variant="outline"
+            className={`rounded-full px-2 py-0 text-[10px] font-normal ${getTransportBadgeClassName(delivery.deliveryStatus)}`}
+          >
+            {transportLabel} {formatTransportStatusLabel(delivery.deliveryStatus)}
+          </Badge>
+        )
+      })}
+    </>
+  )
+}
+
 type MessageRecipient = Pick<
   GroupMember,
-  "id" | "type" | "name" | "title" | "role" | "emoji" | "avatarUrl"
->
+  | "id"
+  | "participantId"
+  | "type"
+  | "name"
+  | "title"
+  | "role"
+  | "emoji"
+  | "avatarUrl"
+  | "linkedUserName"
+> & {
+  member?: GroupMember
+}
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
 type RenderedMessageBlock =
@@ -270,55 +373,77 @@ const AUDIO_EXTENSIONS = [
 
 function resolveRecipients(
   groupMembers: GroupMember[] | undefined,
-  targetActorIds: string[] | undefined,
-  targetUserIds: string[] | undefined
+  targetParticipantIds: string[] | undefined
 ) {
-  const actorIds = Array.from(new Set(targetActorIds || []))
-  const userIds = Array.from(new Set(targetUserIds || []))
-  const actorMap = new Map<string, GroupMember>()
-  const userMap = new Map<string, GroupMember>()
+  const participantIds = Array.from(new Set(targetParticipantIds || []))
+  const memberMap = new Map<string, GroupMember>()
 
   for (const member of groupMembers || []) {
-    if (member.type === "actor") {
-      actorMap.set(member.id, member)
-      continue
-    }
-    userMap.set(member.id, member)
+    memberMap.set(member.participantId || member.memberId, member)
   }
 
-  const recipients: MessageRecipient[] = []
-  for (const actorId of actorIds) {
-    const member = actorMap.get(actorId)
-    recipients.push({
-      id: actorId,
-      type: "actor",
-      name: member?.name || "Unknown actor",
+  return participantIds.map((participantId) => {
+    const member = memberMap.get(participantId)
+    return {
+      participantId,
+      id: member?.id || participantId,
+      type: member?.type || "external",
+      name: member?.name || "Unknown recipient",
       title: member?.title,
       role: member?.role,
       emoji: member?.emoji,
       avatarUrl: member?.avatarUrl,
-    })
-  }
-  for (const userId of userIds) {
-    const member = userMap.get(userId)
-    recipients.push({
-      id: userId,
-      type: "user",
-      name: member?.name || "Unknown user",
-      avatarUrl: member?.avatarUrl,
-    })
-  }
-
-  return recipients
+      linkedUserName: member?.linkedUserName,
+      member,
+    } satisfies MessageRecipient
+  })
 }
 
-function RecipientChip({ recipient }: { recipient: MessageRecipient }) {
+function RecipientChip({
+  recipient,
+  onClick,
+  isMobile,
+  contactBasePath,
+}: {
+  recipient: MessageRecipient
+  onClick?: (member: GroupMember) => void
+  isMobile: boolean
+  contactBasePath?: string
+}) {
+  const trigger = recipient.member && onClick ? (
+    <button
+      type="button"
+      onClick={() => onClick(recipient.member!)}
+      className="cursor-pointer text-foreground/70 transition-colors hover:text-foreground"
+    >
+      @{recipient.name}
+    </button>
+  ) : (
+    <span className="cursor-help text-foreground/70 transition-colors hover:text-foreground">
+      @{recipient.name}
+    </span>
+  )
+
+  if (recipient.member && !isMobile) {
+    return (
+      <ChatParticipantHoverCard
+        member={recipient.member}
+        contactBasePath={contactBasePath}
+      >
+        <span
+          className="cursor-help text-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+          tabIndex={0}
+        >
+          @{recipient.name}
+        </span>
+      </ChatParticipantHoverCard>
+    )
+  }
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="cursor-help text-foreground/70 transition-colors hover:text-foreground">
-          @{recipient.name}
-        </span>
+        {trigger}
       </TooltipTrigger>
       <TooltipContent
         side="top"
@@ -328,7 +453,7 @@ function RecipientChip({ recipient }: { recipient: MessageRecipient }) {
           name={recipient.name}
           avatarUrl={recipient.avatarUrl}
           emoji={recipient.emoji}
-          entityType={recipient.type === "actor" ? "actor" : "user"}
+          entityType={recipient.type}
           size="sm"
           className="shrink-0"
         />
@@ -337,7 +462,11 @@ function RecipientChip({ recipient }: { recipient: MessageRecipient }) {
           <div className="text-background/80">
             {recipient.type === "actor"
               ? recipient.title || recipient.role || "Actor"
-              : "User"}
+              : recipient.type === "external"
+                ? recipient.linkedUserName
+                  ? `External participant · linked to ${recipient.linkedUserName}`
+                  : "External participant"
+                : "User"}
           </div>
         </div>
       </TooltipContent>
@@ -348,9 +477,15 @@ function RecipientChip({ recipient }: { recipient: MessageRecipient }) {
 function RecipientSummary({
   recipients,
   hasExplicitTargets,
+  onRecipientClick,
+  isMobile,
+  contactBasePath,
 }: {
   recipients: MessageRecipient[]
   hasExplicitTargets: boolean
+  onRecipientClick?: (member: GroupMember) => void
+  isMobile: boolean
+  contactBasePath?: string
 }) {
   if (!hasExplicitTargets) {
     return (
@@ -367,6 +502,9 @@ function RecipientSummary({
         <RecipientChip
           key={`${recipient.type}:${recipient.id}`}
           recipient={recipient}
+          onClick={onRecipientClick}
+          isMobile={isMobile}
+          contactBasePath={contactBasePath}
         />
       ))}
     </span>
@@ -824,42 +962,95 @@ function ServerToolCallDisplay({ calls }: { calls: ServerToolCall[] }) {
 
 export default function MessageBubble({
   role,
+  author,
   contentBlocks,
   actorName,
   actorAvatarUrl,
   actorEmoji,
+  actorRole,
   actorRuntime,
   timestamp,
   isUser,
-  fromUserId,
   status,
   toolsUsed,
   serverToolCalls,
   citationSources,
   coordination,
   groupMembers,
-  targetActorIds,
-  targetUserIds,
+  targetParticipantIds,
+  transport,
+  transportDeliveries,
   enableTablePreview = false,
   viewerUserId,
+  contactBasePath = "/dashboard/contacts",
+  onParticipantClick,
 }: MessageBubbleProps) {
+  const router = useRouter()
+  const isMobile = useIsMobile()
   const isChildResult = role === "child_result"
   const isSystem = role === "system"
   const isError = role === "error"
   const textContent = useMemo(() => extractText(contentBlocks), [contentBlocks])
   const recipients = useMemo(
-    () => resolveRecipients(groupMembers, targetActorIds, targetUserIds),
-    [groupMembers, targetActorIds, targetUserIds]
+    () => resolveRecipients(groupMembers, targetParticipantIds),
+    [groupMembers, targetParticipantIds]
   )
-  const hasExplicitTargets =
-    (targetActorIds?.length || 0) + (targetUserIds?.length || 0) > 0
-  const userSender = useMemo(() => {
-    const senderUserId = fromUserId || viewerUserId
-    if (!senderUserId) return undefined
+  const hasExplicitTargets = (targetParticipantIds?.length || 0) > 0
+  const viewerUserMember = useMemo(() => {
+    if (!viewerUserId) return undefined
     return groupMembers?.find(
-      (member) => member.type === "user" && member.id === senderUserId
+      (member) => member.type === "user" && member.id === viewerUserId
     )
-  }, [fromUserId, groupMembers, viewerUserId])
+  }, [groupMembers, viewerUserId])
+  const authorMember = useMemo(
+    () => resolveAuthorMember(author, groupMembers),
+    [author, groupMembers]
+  )
+  const authorContactHref = useMemo(
+    () => getAuthorContactHref(author, groupMembers, contactBasePath),
+    [author, contactBasePath, groupMembers]
+  )
+  const canOpenAuthorDetails = Boolean(isMobile && authorMember && onParticipantClick)
+  const authorEntityType = useMemo(() => {
+    if (author?.memberType === "external") return "external" as const
+    if (author?.memberType === "user") return "user" as const
+    return "actor" as const
+  }, [author?.memberType])
+  const resolvedAuthorName = useMemo(() => {
+    if (author?.memberType === "user") {
+      if (author.userId && author.userId === viewerUserId) return "You"
+      return author.name || authorMember?.name || "User"
+    }
+    if (author?.memberType === "external") {
+      return author.name || authorMember?.name || "External participant"
+    }
+    if (author?.memberType === "actor") {
+      return author.name || actorName || authorMember?.name || "Actor"
+    }
+    return actorName || (isUser ? "You" : "Member")
+  }, [actorName, author, authorMember, isUser, viewerUserId])
+  const resolvedAuthorAvatarUrl =
+    authorEntityType === "actor"
+      ? actorAvatarUrl || author?.avatarUrl || authorMember?.avatarUrl
+      : authorMember?.avatarUrl || author?.avatarUrl
+  const resolvedAuthorEmoji =
+    authorEntityType === "actor"
+      ? actorEmoji || author?.avatarEmoji || authorMember?.emoji
+      : authorMember?.emoji || author?.avatarEmoji
+  const resolvedAuthorSubtitle = useMemo(() => {
+    if (author?.memberType === "actor") {
+      return actorRole || author?.title || author?.role || authorMember?.title || authorMember?.role || "Actor"
+    }
+    if (author?.memberType === "external") {
+      return authorMember
+        ? getGroupMemberSubtitle(authorMember)
+        : "External participant"
+    }
+    if (author?.memberType === "user") {
+      return author.userId && author.userId === viewerUserId ? "You" : "Workspace user"
+    }
+    return undefined
+  }, [actorRole, author, authorMember, viewerUserId])
 
   const { blocks: renderedBlocks, sources } = useMemo(
     () => buildRenderedMessageBlocks(contentBlocks, citationSources),
@@ -912,8 +1103,12 @@ export default function MessageBubble({
   const hasToolsUsed = toolsUsed && toolsUsed.length > 0
   const hasCitations = sources.length > 0
   const isRetrying = isUser && status === "retrying"
+  const viewerParticipantId = useMemo(
+    () => viewerUserMember?.participantId,
+    [viewerUserMember]
+  )
   const isDirectToViewer = Boolean(
-    viewerUserId && targetUserIds?.includes(viewerUserId)
+    viewerParticipantId && targetParticipantIds?.includes(viewerParticipantId)
   )
   const shouldRenderCompact =
     !isUser && (coordination || (hasExplicitTargets && !isDirectToViewer))
@@ -925,35 +1120,94 @@ export default function MessageBubble({
         <div className="flex w-full max-w-[70%] min-w-0 items-start gap-2">
           <AtSign className="mt-1 h-3 w-3 shrink-0 text-primary/60" />
           <div className="min-w-0 flex-1">
-            <button
-              type="button"
-              className="flex w-full min-w-0 items-start gap-1.5 text-left text-xs text-muted-foreground/70 transition-colors hover:text-foreground/80"
-              onClick={() => setCompactExpanded((current) => !current)}
-              aria-expanded={compactExpanded}
-            >
+            <div className="flex items-start gap-1.5 text-xs text-muted-foreground/70">
               <div className="min-w-0 flex-1">
                 {compactExpanded ? (
-                  <div className="mb-0.5 flex items-center gap-1.5">
-                    <span className="text-[11px] font-medium text-muted-foreground/80">
-                      {actorName || "Actor"}
-                    </span>
+                  <div className="mb-0.5 flex flex-wrap items-center gap-1.5">
+                    {authorMember && !isMobile ? (
+                      <ChatParticipantHoverCard
+                        member={authorMember}
+                        contactBasePath={contactBasePath}
+                      >
+                        <span
+                          className="text-[11px] font-medium text-muted-foreground/80 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                          tabIndex={0}
+                        >
+                          {resolvedAuthorName}
+                        </span>
+                      </ChatParticipantHoverCard>
+                    ) : canOpenAuthorDetails ? (
+                      <button
+                        type="button"
+                        onClick={() => onParticipantClick?.(authorMember!)}
+                        className="text-[11px] font-medium text-muted-foreground/80 transition-colors hover:text-foreground"
+                      >
+                        {resolvedAuthorName}
+                      </button>
+                    ) : (
+                      <span className="text-[11px] font-medium text-muted-foreground/80">
+                        {resolvedAuthorName}
+                      </span>
+                    )}
+                    {resolvedAuthorSubtitle ? (
+                      <span className="text-[10px] text-muted-foreground/55">
+                        {resolvedAuthorSubtitle}
+                      </span>
+                    ) : null}
                   </div>
                 ) : (
-                  <div className="truncate">
-                    <span className="font-medium text-muted-foreground/80">
-                      {actorName || "Actor"}
-                    </span>
-                    <span className="mx-1 text-muted-foreground/40">·</span>
-                    <span>{compactPreview}</span>
+                  <div className="flex min-w-0 items-center gap-1">
+                    {authorMember && !isMobile ? (
+                      <ChatParticipantHoverCard
+                        member={authorMember}
+                        contactBasePath={contactBasePath}
+                      >
+                        <span
+                          className="shrink-0 font-medium text-muted-foreground/80 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                          tabIndex={0}
+                        >
+                          {resolvedAuthorName}
+                        </span>
+                      </ChatParticipantHoverCard>
+                    ) : canOpenAuthorDetails ? (
+                      <button
+                        type="button"
+                        onClick={() => onParticipantClick?.(authorMember!)}
+                        className="shrink-0 font-medium text-muted-foreground/80 transition-colors hover:text-foreground"
+                      >
+                        {resolvedAuthorName}
+                      </button>
+                    ) : (
+                      <span className="shrink-0 font-medium text-muted-foreground/80">
+                        {resolvedAuthorName}
+                      </span>
+                    )}
+                    <span className="shrink-0 text-muted-foreground/40">·</span>
+                    <button
+                      type="button"
+                      onClick={() => setCompactExpanded((current) => !current)}
+                      className="min-w-0 flex-1 truncate text-left transition-colors hover:text-foreground/80"
+                      aria-expanded={compactExpanded}
+                    >
+                      {compactPreview}
+                    </button>
                   </div>
                 )}
               </div>
-              {compactExpanded ? (
-                <ChevronDown className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/45" />
-              ) : (
-                <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/45" />
-              )}
-            </button>
+              <button
+                type="button"
+                className="shrink-0 text-muted-foreground/45 transition-colors hover:text-foreground/70"
+                onClick={() => setCompactExpanded((current) => !current)}
+                aria-expanded={compactExpanded}
+                aria-label={compactExpanded ? "Collapse message" : "Expand message"}
+              >
+                {compactExpanded ? (
+                  <ChevronDown className="mt-0.5 h-3 w-3" />
+                ) : (
+                  <ChevronRight className="mt-0.5 h-3 w-3" />
+                )}
+              </button>
+            </div>
 
             {compactExpanded ? (
               <>
@@ -973,9 +1227,16 @@ export default function MessageBubble({
                       })}
                     </span>
                   ) : null}
+                  <TransportSummary
+                    transport={transport}
+                    transportDeliveries={transportDeliveries}
+                  />
                   <RecipientSummary
                     recipients={recipients}
                     hasExplicitTargets={hasExplicitTargets}
+                    onRecipientClick={onParticipantClick}
+                    isMobile={isMobile}
+                    contactBasePath={contactBasePath}
                   />
                 </div>
               </>
@@ -992,8 +1253,8 @@ export default function MessageBubble({
     >
       {isUser ? (
         <ChatAvatar
-          name={userSender?.name || "You"}
-          avatarUrl={userSender?.avatarUrl}
+          name={viewerUserMember?.name || resolvedAuthorName}
+          avatarUrl={viewerUserMember?.avatarUrl || resolvedAuthorAvatarUrl}
           entityType="user"
           className="mt-1 shrink-0"
         />
@@ -1003,26 +1264,123 @@ export default function MessageBubble({
             <GitBranch className="h-4 w-4" />
           </AvatarFallback>
         </Avatar>
+      ) : authorMember && !isMobile ? (
+        <ChatParticipantHoverCard
+          member={authorMember}
+          contactBasePath={contactBasePath}
+        >
+          <span
+            className="mt-1 block shrink-0 rounded-full transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+            tabIndex={0}
+            aria-label={`View ${resolvedAuthorName}`}
+          >
+            <ChatAvatar
+              name={resolvedAuthorName}
+              avatarUrl={resolvedAuthorAvatarUrl}
+              emoji={resolvedAuthorEmoji}
+              entityType={authorEntityType}
+              statusState={
+                authorEntityType === "actor"
+                  ? runtimeToAvatarStatus(actorRuntime)
+                  : undefined
+              }
+              statusLabel={
+                authorEntityType === "actor" ? getRuntimeLabel(actorRuntime) : undefined
+              }
+              statusDetail={
+                authorEntityType === "actor" ? getRuntimeDetail(actorRuntime) : undefined
+              }
+            />
+          </span>
+        </ChatParticipantHoverCard>
+      ) : canOpenAuthorDetails ? (
+        <button
+          type="button"
+          onClick={() => onParticipantClick?.(authorMember!)}
+          className="mt-1 shrink-0 rounded-full transition-opacity hover:opacity-90"
+          aria-label={`Open ${resolvedAuthorName}`}
+        >
+          <ChatAvatar
+            name={resolvedAuthorName}
+            avatarUrl={resolvedAuthorAvatarUrl}
+            emoji={resolvedAuthorEmoji}
+            entityType={authorEntityType}
+            statusState={
+              authorEntityType === "actor"
+                ? runtimeToAvatarStatus(actorRuntime)
+                : undefined
+            }
+            statusLabel={
+              authorEntityType === "actor" ? getRuntimeLabel(actorRuntime) : undefined
+            }
+            statusDetail={
+              authorEntityType === "actor" ? getRuntimeDetail(actorRuntime) : undefined
+            }
+          />
+        </button>
       ) : (
         <ChatAvatar
-          name={actorName}
-          avatarUrl={actorAvatarUrl}
-          emoji={actorEmoji}
-          entityType="actor"
+          name={resolvedAuthorName}
+          avatarUrl={resolvedAuthorAvatarUrl}
+          emoji={resolvedAuthorEmoji}
+          entityType={authorEntityType}
           className="mt-1 shrink-0"
-          statusState={runtimeToAvatarStatus(actorRuntime)}
-          statusLabel={getRuntimeLabel(actorRuntime)}
-          statusDetail={getRuntimeDetail(actorRuntime)}
+          statusState={
+            authorEntityType === "actor"
+              ? runtimeToAvatarStatus(actorRuntime)
+              : undefined
+          }
+          statusLabel={
+            authorEntityType === "actor" ? getRuntimeLabel(actorRuntime) : undefined
+          }
+          statusDetail={
+            authorEntityType === "actor" ? getRuntimeDetail(actorRuntime) : undefined
+          }
         />
       )}
 
       <div
         className={`flex w-full max-w-[75%] min-w-0 flex-col ${isUser ? "items-end" : "items-start"}`}
       >
-        {!isUser && actorName && (
-          <span className="mb-1 ml-1 self-start text-xs text-muted-foreground/70">
-            {actorName}
-          </span>
+        {!isUser && resolvedAuthorName && (
+          <div className="mb-1 ml-1 self-start text-xs text-muted-foreground/70">
+            {authorMember && !isMobile ? (
+              <ChatParticipantHoverCard
+                member={authorMember}
+                contactBasePath={contactBasePath}
+              >
+                <span
+                  className="transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                  tabIndex={0}
+                >
+                  {resolvedAuthorName}
+                </span>
+              </ChatParticipantHoverCard>
+            ) : authorMember && onParticipantClick ? (
+              <button
+                type="button"
+                onClick={() => onParticipantClick(authorMember)}
+                className="transition-colors hover:text-foreground"
+              >
+                {resolvedAuthorName}
+              </button>
+            ) : authorContactHref ? (
+              <button
+                type="button"
+                onClick={() => router.push(authorContactHref)}
+                className="transition-colors hover:text-foreground"
+              >
+                {resolvedAuthorName}
+              </button>
+            ) : (
+              <span>{resolvedAuthorName}</span>
+            )}
+            {resolvedAuthorSubtitle ? (
+              <span className="ml-1 text-[11px] text-muted-foreground/50">
+                · {resolvedAuthorSubtitle}
+              </span>
+            ) : null}
+          </div>
         )}
         <div
           className={`flex w-full min-w-0 max-w-full items-end gap-2 ${isUser ? "justify-end" : "justify-start"}`}
@@ -1072,6 +1430,13 @@ export default function MessageBubble({
           <RecipientSummary
             recipients={recipients}
             hasExplicitTargets={hasExplicitTargets}
+            onRecipientClick={onParticipantClick}
+            isMobile={isMobile}
+            contactBasePath={contactBasePath}
+          />
+          <TransportSummary
+            transport={transport}
+            transportDeliveries={transportDeliveries}
           />
           {status === "sending" && (
             <span className="text-[10px] text-muted-foreground/40">

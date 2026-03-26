@@ -1,0 +1,373 @@
+import crypto from "node:crypto";
+import * as Lark from "@larksuiteoapi/node-sdk";
+import { Worker } from "bullmq";
+import { QUEUE_NAMES } from "@synapse/shared";
+import type {
+  ConversationFeedMessageItem,
+  TransportAccountSummary,
+} from "@synapse/shared/types";
+import { redis } from "../infrastructure/redis/index.js";
+import { getConversationFeedItemById } from "../modules/conversation/service.js";
+import {
+  getConversationTransportBinding,
+  getPrimaryTransportAddressForParticipant,
+  getReachableTransportAddressForParticipant,
+  getTransportAddressByExternalId,
+  loadTransportMessageLinkForDelivery,
+  updateTransportMessageLinkStatus,
+} from "../modules/im/service.js";
+import { registerWorker } from "./registry.js";
+
+function nonEmptyString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function getFeishuCredentials(account: TransportAccountSummary) {
+  const credentials = account.credentials || {};
+  const appId =
+    nonEmptyString(credentials.appId) ||
+    nonEmptyString(credentials.appID) ||
+    nonEmptyString(credentials.cliAppId);
+  const appSecret =
+    nonEmptyString(credentials.appSecret) ||
+    nonEmptyString(credentials.app_secret) ||
+    nonEmptyString(credentials.cliAppSecret);
+  if (!appId || !appSecret) {
+    throw new Error(
+      `Feishu transport account ${account.id} is missing appId/appSecret`,
+    );
+  }
+  return { appId, appSecret };
+}
+
+function createFeishuClient(account: TransportAccountSummary) {
+  const { appId, appSecret } = getFeishuCredentials(account);
+  return new Lark.Client({
+    appId,
+    appSecret,
+    loggerLevel: Lark.LoggerLevel.info,
+  });
+}
+
+function buildFeishuMentionPrefix(
+  mentions: Array<{ externalId: string; displayName?: string }>,
+) {
+  if (!mentions.length) return "";
+  return mentions
+    .map((mention) => {
+      const name = mention.displayName || mention.externalId;
+      return `<at user_id="${mention.externalId}">${name}</at>`;
+    })
+    .join(" ");
+}
+
+function buildWeixinHeaders(body: string, token?: string) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    AuthorizationType: "ilink_bot_token",
+    "Content-Length": String(Buffer.byteLength(body, "utf8")),
+    "X-WECHAT-UIN": Buffer.from(
+      String(crypto.randomBytes(4).readUInt32BE(0)),
+      "utf8",
+    ).toString("base64"),
+  };
+  if (token?.trim()) {
+    headers.Authorization = `Bearer ${token.trim()}`;
+  }
+  return headers;
+}
+
+async function postWeixinMessage(params: {
+  account: TransportAccountSummary;
+  to: string;
+  text: string;
+  contextToken: string;
+}) {
+  const token = nonEmptyString(params.account.credentials?.token);
+  if (!token) {
+    throw new Error(`Weixin transport account ${params.account.id} is missing token`);
+  }
+  const baseUrl =
+    nonEmptyString(params.account.config.baseUrl) ||
+    "https://ilinkai.weixin.qq.com";
+  const body = JSON.stringify({
+    msg: {
+      from_user_id: "",
+      to_user_id: params.to,
+      client_id: crypto.randomUUID(),
+      message_type: 2,
+      message_state: 2,
+      item_list: [
+        {
+          type: 1,
+          text_item: {
+            text: params.text,
+          },
+        },
+      ],
+      context_token: params.contextToken,
+    },
+    base_info: {},
+  });
+  const response = await fetch(
+    `${baseUrl.replace(/\/+$/, "")}/ilink/bot/sendmessage`,
+    {
+      method: "POST",
+      headers: buildWeixinHeaders(body, token),
+      body,
+    },
+  );
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Weixin send failed with ${response.status}: ${text}`);
+  }
+  return {
+    messageId: crypto.randomUUID(),
+  };
+}
+
+async function resolveTransportRecipients(params: {
+  transportKind: "feishu" | "weixin";
+  transportAccountId: string;
+  endpointType: "direct" | "group";
+  endpointExternalId: string;
+  item: ConversationFeedMessageItem;
+}) {
+  const recipients = new Map<string, { externalId: string; displayName?: string }>();
+
+  for (const target of params.item.targets) {
+    const participantId = target.participantId || target.memberId || "";
+    if (!participantId) continue;
+
+    const useAttachedAddressOnly =
+      params.endpointType === "group" ||
+      (params.endpointType === "direct" && params.transportKind === "feishu");
+    const address = useAttachedAddressOnly
+        ? await getPrimaryTransportAddressForParticipant({
+            conversationMemberId: participantId,
+            transportAccountId: params.transportAccountId,
+          })
+        : await getReachableTransportAddressForParticipant({
+            conversationMemberId: participantId,
+            transportAccountId: params.transportAccountId,
+          });
+    const externalId = nonEmptyString(address?.external_id);
+    if (!externalId) continue;
+    if (
+      params.endpointType === "direct" &&
+      params.transportKind !== "feishu" &&
+      externalId !== params.endpointExternalId
+    ) {
+      continue;
+    }
+
+    if (!recipients.has(externalId)) {
+      recipients.set(externalId, {
+        externalId,
+        displayName:
+          nonEmptyString(address?.display_name) || target.name || externalId,
+      });
+    }
+  }
+
+  return Array.from(recipients.values());
+}
+
+async function deliverViaFeishu(params: {
+  account: TransportAccountSummary;
+  endpoint: {
+    endpointType: "direct" | "group";
+    externalId: string;
+  };
+  item: ConversationFeedMessageItem;
+}) {
+  const client = createFeishuClient(params.account);
+  const mentions =
+    params.endpoint.endpointType === "group"
+      ? await resolveTransportRecipients({
+          transportKind: "feishu",
+          transportAccountId: params.account.id,
+          endpointType: params.endpoint.endpointType,
+          endpointExternalId: params.endpoint.externalId,
+          item: params.item,
+        })
+      : [];
+  const mentionPrefix = buildFeishuMentionPrefix(mentions);
+  const text = [mentionPrefix, params.item.content.trim() || "[消息]"]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  const response: any = await client.im.message.create({
+    params: { receive_id_type: "chat_id" },
+    data: {
+      receive_id: params.endpoint.externalId,
+      msg_type: "text",
+      content: JSON.stringify({ text }),
+    },
+  });
+
+  if (response?.code !== 0) {
+    throw new Error(response?.msg || "Feishu send failed");
+  }
+
+  return {
+    messageId:
+      nonEmptyString(response?.data?.message_id) ||
+      nonEmptyString(response?.data?.message?.message_id) ||
+      crypto.randomUUID(),
+  };
+}
+
+async function deliverViaWeixin(params: {
+  account: TransportAccountSummary;
+  endpoint: {
+    externalId: string;
+    metadata: Record<string, unknown>;
+  };
+  item: ConversationFeedMessageItem;
+}) {
+  const endpointExternalId = params.endpoint.externalId;
+  const endpointAddress = await getTransportAddressByExternalId({
+    transportAccountId: params.account.id,
+    externalId: endpointExternalId,
+    addressType: "user",
+  });
+  const contextToken =
+    nonEmptyString(endpointAddress?.metadata?.contextToken) ||
+    nonEmptyString(params.endpoint.metadata.contextToken);
+  if (!contextToken) {
+    throw new Error(
+      `Weixin direct conversation ${endpointExternalId} is missing contextToken`,
+    );
+  }
+
+  return postWeixinMessage({
+    account: params.account,
+    to: endpointExternalId,
+    text: params.item.content.trim() || "[消息]",
+    contextToken,
+  });
+}
+
+export function startImTransportDeliveryWorker() {
+  const worker = new Worker(
+    QUEUE_NAMES.IM_TRANSPORT_DELIVERY,
+    async (job) => {
+      const linkId = nonEmptyString(job.data?.linkId);
+      if (!linkId) {
+        return { success: false, reason: "missing linkId" };
+      }
+
+      const link = await loadTransportMessageLinkForDelivery(linkId);
+      if (!link) {
+        return { success: false, reason: "missing link" };
+      }
+      if (link.direction !== "outbound") {
+        await updateTransportMessageLinkStatus({
+          linkId,
+          status: "skipped",
+          metadata: { skippedReason: "not_outbound" },
+        });
+        return { success: true, reason: "not outbound" };
+      }
+      if (link.deliveryStatus !== "pending") {
+        return { success: true, reason: "already processed" };
+      }
+
+      const binding = await getConversationTransportBinding({
+        workspaceId: link.workspaceId,
+        conversationId: link.conversationId,
+      });
+      if (
+        !binding ||
+        !binding.outboundEnabled ||
+        binding.account.id !== link.transportAccountId ||
+        binding.endpoint.id !== link.transportEndpointId
+      ) {
+        await updateTransportMessageLinkStatus({
+          linkId,
+          status: "skipped",
+          metadata: {
+            skippedReason:
+              !binding || !binding.outboundEnabled
+                ? "binding_disabled"
+                : "binding_changed",
+          },
+        });
+        return { success: true, reason: "binding unavailable" };
+      }
+
+      const item = await getConversationFeedItemById(link.itemId);
+      if (!item || item.kind !== "message") {
+        await updateTransportMessageLinkStatus({
+          linkId,
+          status: "skipped",
+          metadata: { skippedReason: "item_missing_or_not_message" },
+        });
+        return { success: true, reason: "item missing" };
+      }
+      if (item.author?.memberType === "external") {
+        await updateTransportMessageLinkStatus({
+          linkId,
+          status: "skipped",
+          metadata: { skippedReason: "external_author" },
+        });
+        return { success: true, reason: "external author" };
+      }
+      const resolvedRecipients = await resolveTransportRecipients({
+        transportKind: link.transportKind,
+        transportAccountId: link.account.id,
+        endpointType: link.endpoint.endpointType,
+        endpointExternalId: link.endpoint.externalId,
+        item,
+      });
+      if (resolvedRecipients.length === 0) {
+        await updateTransportMessageLinkStatus({
+          linkId,
+          status: "skipped",
+          metadata: { skippedReason: "no_reachable_transport_target" },
+        });
+        return { success: true, reason: "no reachable transport target" };
+      }
+
+      try {
+        const deliveryResult =
+          link.transportKind === "feishu"
+            ? await deliverViaFeishu({
+                account: link.account,
+                endpoint: {
+                  endpointType: link.endpoint.endpointType,
+                  externalId: link.endpoint.externalId,
+                },
+                item,
+              })
+            : await deliverViaWeixin({
+                account: link.account,
+                endpoint: {
+                  externalId: link.endpoint.externalId,
+                  metadata: link.endpoint.metadata,
+                },
+                item,
+              });
+
+        await updateTransportMessageLinkStatus({
+          linkId,
+          status: "sent",
+          externalMessageId: deliveryResult.messageId,
+        });
+        return { success: true, messageId: deliveryResult.messageId };
+      } catch (error: any) {
+        await updateTransportMessageLinkStatus({
+          linkId,
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+    { connection: redis },
+  );
+
+  registerWorker(worker);
+}

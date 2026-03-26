@@ -257,7 +257,7 @@ export async function enqueueSessionWakeup(params: {
   sourceType: SessionWakeupSourceType;
   sourceItemId?: string;
   sourceSessionId?: string;
-  sourceMemberType?: 'user' | 'actor' | 'system';
+  sourceMemberType?: 'user' | 'actor' | 'external' | 'system';
   sourceMemberId?: string;
   sourceName?: string;
   summary: string;

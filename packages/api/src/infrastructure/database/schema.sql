@@ -702,7 +702,7 @@ CREATE TABLE conversation_members (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   member_type VARCHAR(20) NOT NULL
-    CHECK (member_type IN ('actor', 'user', 'remote_agent', 'system')),
+    CHECK (member_type IN ('actor', 'user', 'external', 'remote_agent', 'system')),
   actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   actor_join_version_id UUID REFERENCES actor_versions(id) ON DELETE SET NULL,
@@ -715,7 +715,7 @@ CREATE TABLE conversation_members (
   CHECK (
     (member_type = 'actor' AND actor_id IS NOT NULL AND user_id IS NULL) OR
     (member_type = 'user' AND actor_id IS NULL AND user_id IS NOT NULL) OR
-    (member_type IN ('remote_agent', 'system') AND actor_id IS NULL AND user_id IS NULL)
+    (member_type IN ('external', 'remote_agent', 'system') AND actor_id IS NULL AND user_id IS NULL)
   )
 );
 
@@ -726,6 +726,102 @@ CREATE UNIQUE INDEX idx_conversation_members_unique_actor
   ON conversation_members(conversation_id, actor_id) WHERE actor_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_conversation_members_unique_user
   ON conversation_members(conversation_id, user_id) WHERE user_id IS NOT NULL;
+
+CREATE TABLE transport_accounts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  transport_kind VARCHAR(20) NOT NULL
+    CHECK (transport_kind IN ('feishu', 'weixin')),
+  account_key VARCHAR(120) NOT NULL,
+  display_name VARCHAR(255) NOT NULL,
+  connection_mode VARCHAR(30) NOT NULL
+    CHECK (connection_mode IN ('webhook', 'long_connection')),
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'disabled', 'error')),
+  credentials JSONB NOT NULL DEFAULT '{}',
+  config JSONB NOT NULL DEFAULT '{}',
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(workspace_id, transport_kind, account_key)
+);
+
+CREATE INDEX idx_transport_accounts_workspace
+  ON transport_accounts(workspace_id, transport_kind, created_at DESC);
+
+CREATE TABLE transport_endpoints (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  transport_account_id UUID NOT NULL REFERENCES transport_accounts(id) ON DELETE CASCADE,
+  endpoint_type VARCHAR(20) NOT NULL
+    CHECK (endpoint_type IN ('direct', 'group')),
+  external_id VARCHAR(255) NOT NULL,
+  parent_external_id VARCHAR(255),
+  display_name VARCHAR(255),
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(transport_account_id, endpoint_type, external_id)
+);
+
+CREATE INDEX idx_transport_endpoints_account
+  ON transport_endpoints(transport_account_id, endpoint_type, created_at DESC);
+
+CREATE TABLE conversation_transport_bindings (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  transport_account_id UUID NOT NULL REFERENCES transport_accounts(id) ON DELETE CASCADE,
+  transport_endpoint_id UUID NOT NULL REFERENCES transport_endpoints(id) ON DELETE CASCADE,
+  outbound_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  default_target_member_id UUID REFERENCES conversation_members(id) ON DELETE SET NULL,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(conversation_id),
+  UNIQUE(transport_endpoint_id)
+);
+
+CREATE INDEX idx_conversation_transport_bindings_workspace
+  ON conversation_transport_bindings(workspace_id, created_at DESC);
+
+CREATE TABLE transport_addresses (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  transport_account_id UUID NOT NULL REFERENCES transport_accounts(id) ON DELETE CASCADE,
+  transport_kind VARCHAR(20) NOT NULL
+    CHECK (transport_kind IN ('feishu', 'weixin')),
+  address_type VARCHAR(20) NOT NULL DEFAULT 'user'
+    CHECK (address_type IN ('user', 'bot', 'system')),
+  external_id VARCHAR(255) NOT NULL,
+  display_name VARCHAR(255),
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(transport_account_id, address_type, external_id)
+);
+
+CREATE INDEX idx_transport_addresses_workspace
+  ON transport_addresses(workspace_id, transport_kind, created_at DESC);
+CREATE INDEX idx_transport_addresses_user
+  ON transport_addresses(user_id, transport_kind, created_at DESC)
+  WHERE user_id IS NOT NULL;
+
+CREATE TABLE conversation_participant_addresses (
+  conversation_member_id UUID NOT NULL REFERENCES conversation_members(id) ON DELETE CASCADE,
+  transport_address_id UUID NOT NULL REFERENCES transport_addresses(id) ON DELETE CASCADE,
+  is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (conversation_member_id, transport_address_id)
+);
+
+CREATE UNIQUE INDEX idx_conversation_participant_addresses_primary
+  ON conversation_participant_addresses(conversation_member_id)
+  WHERE is_primary = TRUE;
+CREATE INDEX idx_conversation_participant_addresses_address
+  ON conversation_participant_addresses(transport_address_id, created_at DESC);
 
 CREATE TABLE conversation_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -857,6 +953,34 @@ CREATE INDEX idx_realtime_feed_events_workspace_created
   ON realtime_feed_events(workspace_id, workspace_sequence DESC);
 CREATE INDEX idx_realtime_feed_events_conversation_created
   ON realtime_feed_events(conversation_id, conversation_sequence DESC);
+
+CREATE TABLE transport_message_links (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  item_id UUID NOT NULL REFERENCES conversation_items(id) ON DELETE CASCADE,
+  transport_account_id UUID NOT NULL REFERENCES transport_accounts(id) ON DELETE CASCADE,
+  transport_endpoint_id UUID NOT NULL REFERENCES transport_endpoints(id) ON DELETE CASCADE,
+  transport_kind VARCHAR(20) NOT NULL
+    CHECK (transport_kind IN ('feishu', 'weixin')),
+  direction VARCHAR(20) NOT NULL
+    CHECK (direction IN ('inbound', 'outbound')),
+  delivery_status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (delivery_status IN ('pending', 'sent', 'failed', 'skipped')),
+  external_message_id VARCHAR(255),
+  metadata JSONB NOT NULL DEFAULT '{}',
+  delivered_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(item_id, transport_endpoint_id, direction)
+);
+
+CREATE INDEX idx_transport_message_links_conversation
+  ON transport_message_links(conversation_id, created_at DESC);
+CREATE INDEX idx_transport_message_links_endpoint
+  ON transport_message_links(transport_endpoint_id, created_at DESC);
+CREATE INDEX idx_transport_message_links_status
+  ON transport_message_links(delivery_status, created_at DESC);
 
 -- ============ Turns ============
 CREATE TABLE turns (
@@ -1023,7 +1147,7 @@ CREATE TABLE session_wakeups (
   source_item_id UUID REFERENCES conversation_items(id) ON DELETE SET NULL,
   source_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   source_member_type VARCHAR(20)
-    CHECK (source_member_type IN ('user', 'actor', 'system')),
+    CHECK (source_member_type IN ('user', 'actor', 'external', 'system')),
   source_member_id UUID,
   source_name VARCHAR(255),
   summary TEXT NOT NULL,

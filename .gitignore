@@ -34,3 +34,4 @@ relay/cmd/synapse-relay-gui/build/
 
 # Local reference checkouts
 .refer/
+.workbuddy/
