@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type {
   TransportAccountSummary,
+  TransportAccountOwnerScope,
   WeixinQrLoginSessionSummary,
   WeixinQrLoginStatus,
 } from "@synapse/shared/types";
@@ -24,6 +25,8 @@ type ActiveWeixinQrLogin = {
   baseUrl: string;
   botType: string;
   displayName?: string;
+  ownerScope: TransportAccountOwnerScope;
+  ownerUserId?: string | null;
   status: WeixinQrLoginStatus;
   message: string;
   createdAt: number;
@@ -112,10 +115,7 @@ async function fetchWeixinJson<T>(params: {
   }
 }
 
-async function fetchWeixinQrCode(params: {
-  baseUrl: string;
-  botType: string;
-}) {
+async function fetchWeixinQrCode(params: { baseUrl: string; botType: string }) {
   const url = new URL(
     `ilink/bot/get_bot_qrcode?bot_type=${encodeURIComponent(params.botType)}`,
     params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`,
@@ -126,10 +126,7 @@ async function fetchWeixinQrCode(params: {
   });
 }
 
-async function pollWeixinQrStatus(params: {
-  baseUrl: string;
-  qrcode: string;
-}) {
+async function pollWeixinQrStatus(params: { baseUrl: string; qrcode: string }) {
   const url = new URL(
     `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(params.qrcode)}`,
     params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`,
@@ -143,7 +140,9 @@ async function pollWeixinQrStatus(params: {
   });
 }
 
-function mapStatus(status?: WeixinQrStatusResponse["status"]): WeixinQrLoginStatus {
+function mapStatus(
+  status?: WeixinQrStatusResponse["status"],
+): WeixinQrLoginStatus {
   switch (status) {
     case "scaned":
       return "scanned";
@@ -173,7 +172,9 @@ async function persistWeixinAccount(params: {
     (nonEmptyString(params.scannerUserId)
       ? `WeChat ${params.scannerUserId}`
       : "WeChat Bot");
-  const resolvedBaseUrl = normalizeBaseUrl(params.baseUrl || params.session.baseUrl);
+  const resolvedBaseUrl = normalizeBaseUrl(
+    params.baseUrl || params.session.baseUrl,
+  );
   const metadata = {
     source: "qr_login",
     ilinkBotId: params.botId || null,
@@ -192,6 +193,8 @@ async function persistWeixinAccount(params: {
       workspaceId: params.session.workspaceId,
       accountId: existing.id,
       displayName,
+      ownerScope: params.session.ownerScope,
+      ownerUserId: params.session.ownerUserId ?? null,
       connectionMode: "long_connection",
       status: "active",
       credentials: {
@@ -215,6 +218,8 @@ async function persistWeixinAccount(params: {
       transportKind: "weixin",
       accountKey,
       displayName,
+      ownerScope: params.session.ownerScope,
+      ownerUserId: params.session.ownerUserId ?? null,
       connectionMode: "long_connection",
       credentials: {
         token: params.botToken,
@@ -240,6 +245,8 @@ async function persistWeixinAccount(params: {
       workspaceId: params.session.workspaceId,
       accountId: concurrent.id,
       displayName,
+      ownerScope: params.session.ownerScope,
+      ownerUserId: params.session.ownerUserId ?? null,
       connectionMode: "long_connection",
       status: "active",
       credentials: {
@@ -283,6 +290,8 @@ export async function startWeixinQrLoginSession(params: {
   displayName?: string;
   baseUrl?: string;
   botType?: string;
+  ownerScope?: TransportAccountOwnerScope;
+  ownerUserId?: string | null;
 }) {
   purgeExpiredSessions();
 
@@ -304,6 +313,8 @@ export async function startWeixinQrLoginSession(params: {
     baseUrl,
     botType,
     displayName: nonEmptyString(params.displayName),
+    ownerScope: params.ownerScope || "workspace",
+    ownerUserId: params.ownerUserId || null,
     status: "waiting",
     message: "Scan the QR code with WeChat to finish connecting.",
     createdAt: now,

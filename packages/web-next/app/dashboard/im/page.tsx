@@ -1,16 +1,17 @@
-"use client";
+"use client"
 
-import Link from "next/link";
-import Image from "next/image";
-import QRCode from "qrcode";
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link"
+import Image from "next/image"
+import QRCode from "qrcode"
+import { useEffect, useMemo, useState } from "react"
 import type {
   TransportAccountSummary,
   TransportConnectionMode,
+  TransportAccountOwnerScope,
   TransportExternalUserSummary,
   TransportSessionSummary,
   WeixinQrLoginSessionSummary,
-} from "@synapse/shared";
+} from "@synapse/shared"
 import {
   ArrowUpRight,
   Bot,
@@ -19,164 +20,282 @@ import {
   RefreshCw,
   ScanLine,
   Users,
-} from "lucide-react";
-import { toast } from "sonner";
+} from "lucide-react"
+import { toast } from "sonner"
 
-import { useWorkspace } from "@/app/dashboard/workspace-provider";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { useWorkspace } from "@/app/dashboard/workspace-provider"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+} from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { API_BASE, api } from "@/lib/api";
+} from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
+import { API_BASE, api } from "@/lib/api"
 
-type FeishuFormState = {
-  displayName: string;
-  appId: string;
-  appSecret: string;
-  connectionMode: TransportConnectionMode;
-  verificationToken: string;
-  encryptKey: string;
-};
+type TransportAccountOwnerFormState = {
+  ownerScope: TransportAccountOwnerScope
+  ownerUserId: string
+}
 
-type WeixinFormState = {
-  displayName: string;
-  baseUrl: string;
-};
+type FeishuFormState = TransportAccountOwnerFormState & {
+  displayName: string
+  appId: string
+  appSecret: string
+  connectionMode: TransportConnectionMode
+  verificationToken: string
+  encryptKey: string
+}
+
+type WeixinFormState = TransportAccountOwnerFormState & {
+  displayName: string
+  baseUrl: string
+}
 
 type WorkspaceDirectoryMember = {
-  userId: string;
-  userName?: string;
-  userEmail?: string;
-  avatarUrl?: string | null;
-  trustLevel?: string;
-};
+  userId: string
+  userName?: string
+  userEmail?: string
+  avatarUrl?: string | null
+  trustLevel?: string
+}
 
 type SessionActorOption = {
-  memberId: string;
-  name: string;
-};
+  memberId: string
+  name: string
+}
 
 type SessionDraft = {
-  outboundEnabled: boolean;
-  defaultTargetParticipantId: string;
-};
+  outboundEnabled: boolean
+  defaultTargetParticipantId: string
+}
+
+type AccountOwnerDraft = {
+  ownerScope: TransportAccountOwnerScope
+  ownerUserId: string
+}
+
+const UNASSIGNED_VALUE = "__none__"
 
 const EMPTY_FEISHU_FORM: FeishuFormState = {
   displayName: "",
   appId: "",
   appSecret: "",
+  ownerScope: "workspace",
+  ownerUserId: "",
   connectionMode: "webhook",
   verificationToken: "",
   encryptKey: "",
-};
+}
 
 const EMPTY_WEIXIN_FORM: WeixinFormState = {
   displayName: "",
   baseUrl: "",
-};
-
-const UNASSIGNED_VALUE = "__none__";
+  ownerScope: "workspace",
+  ownerUserId: "",
+}
 
 function prettyTransportKind(kind: "feishu" | "weixin") {
-  return kind === "feishu" ? "Feishu" : "WeChat";
+  return kind === "feishu" ? "Feishu" : "WeChat"
+}
+
+function prettyTransportAccountOwnerScope(scope: TransportAccountOwnerScope) {
+  return scope === "workspace" ? "Workspace-owned" : "Member-owned"
 }
 
 function prettyEndpointType(endpointType: "direct" | "group") {
-  return endpointType === "group" ? "Group chat" : "Direct chat";
+  return endpointType === "group" ? "Group chat" : "Direct chat"
 }
 
 function prettyConnectionMode(mode: TransportConnectionMode) {
-  return mode === "webhook" ? "Webhook" : "Long connection";
+  return mode === "webhook" ? "Webhook" : "Long connection"
 }
 
 function formatDateTime(value?: string) {
-  if (!value) return "Never";
+  if (!value) return "Never"
   try {
-    return new Date(value).toLocaleString();
+    return new Date(value).toLocaleString()
   } catch {
-    return "Unknown";
+    return "Unknown"
   }
 }
 
 function buildWebhookUrl(accountId: string) {
-  if (typeof window === "undefined") return "";
+  if (typeof window === "undefined") return ""
   try {
     return new URL(
       `${API_BASE}/im/public/feishu/accounts/${accountId}/webhook`,
-      window.location.origin,
-    ).toString();
+      window.location.origin
+    ).toString()
   } catch {
-    return "";
+    return ""
   }
 }
 
 function workspaceMemberLabel(member: WorkspaceDirectoryMember) {
-  return member.userName || member.userEmail || member.userId;
+  return member.userName || member.userEmail || member.userId
+}
+
+function transportAccountOwnerLabel(
+  account: Pick<TransportAccountSummary, "ownerScope" | "ownerUserId">,
+  workspaceMemberById: Map<string, WorkspaceDirectoryMember>,
+  workspaceName?: string | null
+) {
+  if (account.ownerScope === "workspace") {
+    return workspaceName || "Workspace"
+  }
+  const member = account.ownerUserId
+    ? workspaceMemberById.get(account.ownerUserId)
+    : undefined
+  return member
+    ? workspaceMemberLabel(member)
+    : account.ownerUserId || "Unknown member"
+}
+
+type TransportAccountOwnerFieldsProps = {
+  idPrefix: string
+  ownerScope: TransportAccountOwnerScope
+  ownerUserId: string
+  workspaceMembers: WorkspaceDirectoryMember[]
+  onOwnerScopeChange: (value: TransportAccountOwnerScope) => void
+  onOwnerUserIdChange: (value: string) => void
+}
+
+function TransportAccountOwnerFields({
+  idPrefix,
+  ownerScope,
+  ownerUserId,
+  workspaceMembers,
+  onOwnerScopeChange,
+  onOwnerUserIdChange,
+}: TransportAccountOwnerFieldsProps) {
+  return (
+    <div className="space-y-4 rounded-2xl border bg-muted/20 p-4">
+      <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]">
+        <div className="space-y-2">
+          <Label htmlFor={`${idPrefix}-owner-scope`}>Account owner</Label>
+          <Select
+            value={ownerScope}
+            onValueChange={(value) =>
+              onOwnerScopeChange(value as TransportAccountOwnerScope)
+            }
+          >
+            <SelectTrigger id={`${idPrefix}-owner-scope`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="workspace">Workspace</SelectItem>
+              <SelectItem value="workspace_user">Workspace member</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {ownerScope === "workspace_user" ? (
+          <div className="space-y-2">
+            <Label htmlFor={`${idPrefix}-owner-user`}>Owner member</Label>
+            <Select
+              value={ownerUserId || UNASSIGNED_VALUE}
+              onValueChange={(value) =>
+                onOwnerUserIdChange(value === UNASSIGNED_VALUE ? "" : value)
+              }
+              disabled={workspaceMembers.length === 0}
+            >
+              <SelectTrigger id={`${idPrefix}-owner-user`}>
+                <SelectValue placeholder="Select workspace member" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNASSIGNED_VALUE}>
+                  Select workspace member
+                </SelectItem>
+                {workspaceMembers.map((member) => (
+                  <SelectItem key={member.userId} value={member.userId}>
+                    {workspaceMemberLabel(member)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
+      </div>
+      <div className="text-xs text-muted-foreground">
+        Workspace-owned accounts are shared workspace infrastructure.
+        Member-owned accounts keep the transport login bound to one workspace
+        member while sessions still sync into workspace conversations.
+      </div>
+    </div>
+  )
 }
 
 export default function ImPage() {
-  const { workspaceId, workspaceName } = useWorkspace();
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [creatingFeishu, setCreatingFeishu] = useState(false);
-  const [creatingWeixin, setCreatingWeixin] = useState(false);
-  const [savingSessionId, setSavingSessionId] = useState<string | null>(null);
-  const [linkingAddressId, setLinkingAddressId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [accounts, setAccounts] = useState<TransportAccountSummary[]>([]);
-  const [sessions, setSessions] = useState<TransportSessionSummary[]>([]);
-  const [externalUsers, setExternalUsers] = useState<TransportExternalUserSummary[]>(
-    [],
-  );
+  const { workspaceId, workspaceName } = useWorkspace()
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [creatingFeishu, setCreatingFeishu] = useState(false)
+  const [creatingWeixin, setCreatingWeixin] = useState(false)
+  const [savingAccountId, setSavingAccountId] = useState<string | null>(null)
+  const [savingSessionId, setSavingSessionId] = useState<string | null>(null)
+  const [linkingAddressId, setLinkingAddressId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [accounts, setAccounts] = useState<TransportAccountSummary[]>([])
+  const [sessions, setSessions] = useState<TransportSessionSummary[]>([])
+  const [externalUsers, setExternalUsers] = useState<
+    TransportExternalUserSummary[]
+  >([])
   const [workspaceMembers, setWorkspaceMembers] = useState<
     WorkspaceDirectoryMember[]
-  >([]);
-  const [sessionDrafts, setSessionDrafts] = useState<Record<string, SessionDraft>>(
-    {},
-  );
+  >([])
+  const [accountOwnerDrafts, setAccountOwnerDrafts] = useState<
+    Record<string, AccountOwnerDraft>
+  >({})
+  const [sessionDrafts, setSessionDrafts] = useState<
+    Record<string, SessionDraft>
+  >({})
   const [externalUserDrafts, setExternalUserDrafts] = useState<
     Record<string, string>
-  >({});
+  >({})
   const [sessionActorOptions, setSessionActorOptions] = useState<
     Record<string, SessionActorOption[]>
-  >({});
-  const [feishuForm, setFeishuForm] = useState<FeishuFormState>(EMPTY_FEISHU_FORM);
-  const [weixinForm, setWeixinForm] = useState<WeixinFormState>(EMPTY_WEIXIN_FORM);
+  >({})
+  const [feishuForm, setFeishuForm] =
+    useState<FeishuFormState>(EMPTY_FEISHU_FORM)
+  const [weixinForm, setWeixinForm] =
+    useState<WeixinFormState>(EMPTY_WEIXIN_FORM)
   const [weixinSession, setWeixinSession] =
-    useState<WeixinQrLoginSessionSummary | null>(null);
-  const [weixinQrImageUrl, setWeixinQrImageUrl] = useState<string | null>(null);
+    useState<WeixinQrLoginSessionSummary | null>(null)
+  const [weixinQrImageUrl, setWeixinQrImageUrl] = useState<string | null>(null)
 
   const sortedWorkspaceMembers = useMemo(
     () =>
       [...workspaceMembers].sort((left, right) =>
-        workspaceMemberLabel(left).localeCompare(workspaceMemberLabel(right)),
+        workspaceMemberLabel(left).localeCompare(workspaceMemberLabel(right))
       ),
-    [workspaceMembers],
-  );
+    [workspaceMembers]
+  )
+  const workspaceMemberById = useMemo(
+    () => new Map(workspaceMembers.map((member) => [member.userId, member])),
+    [workspaceMembers]
+  )
 
   useEffect(() => {
-    let cancelled = false;
+    let cancelled = false
 
     async function renderWeixinQr() {
-      const qrTarget = weixinSession?.qrCodeUrl?.trim();
+      const qrTarget = weixinSession?.qrCodeUrl?.trim()
       if (!qrTarget) {
-        setWeixinQrImageUrl(null);
-        return;
+        setWeixinQrImageUrl(null)
+        return
       }
 
       try {
@@ -187,69 +306,74 @@ export default function ImPage() {
             dark: "#111827",
             light: "#ffffff",
           },
-        });
+        })
         if (!cancelled) {
-          setWeixinQrImageUrl(imageUrl);
+          setWeixinQrImageUrl(imageUrl)
         }
       } catch (error) {
-        console.error("Failed to render WeChat QR image:", error);
+        console.error("Failed to render WeChat QR image:", error)
         if (!cancelled) {
-          setWeixinQrImageUrl(null);
+          setWeixinQrImageUrl(null)
         }
       }
     }
 
-    void renderWeixinQr();
+    void renderWeixinQr()
 
     return () => {
-      cancelled = true;
-    };
-  }, [weixinSession?.qrCodeUrl]);
+      cancelled = true
+    }
+  }, [weixinSession?.qrCodeUrl])
 
   async function loadSessionActorOptions(
     activeWorkspaceId: string,
-    nextSessions: TransportSessionSummary[],
+    nextSessions: TransportSessionSummary[]
   ) {
     const conversationIds = Array.from(
       new Set(
         nextSessions
           .map((session) => session.conversationId)
           .filter((conversationId): conversationId is string =>
-            Boolean(conversationId),
-          ),
-      ),
-    );
+            Boolean(conversationId)
+          )
+      )
+    )
 
     if (conversationIds.length === 0) {
-      setSessionActorOptions({});
-      return;
+      setSessionActorOptions({})
+      return
     }
 
     const entries = await Promise.all(
       conversationIds.map(async (conversationId) => {
         try {
-          const result = await api.getGroupMembers(activeWorkspaceId, conversationId);
+          const result = await api.getGroupMembers(
+            activeWorkspaceId,
+            conversationId
+          )
           const members = Array.isArray((result as any)?.members)
             ? ((result as any).members as Array<Record<string, unknown>>)
-            : [];
+            : []
           const actorOptions = members
             .filter((member) => member.type === "actor")
             .map((member) => ({
-              memberId: String(member.memberId || member.participantId || member.id),
+              memberId: String(
+                member.memberId || member.participantId || member.id
+              ),
               name: String(member.name || "Actor"),
-            }));
-          return [conversationId, actorOptions] as const;
+            }))
+          return [conversationId, actorOptions] as const
         } catch (loadError) {
           console.error(
             `Failed to load IM session actor options for ${conversationId}:`,
-            loadError,
-          );
-          return [conversationId, []] as const;
+            loadError
+          )
+          return [conversationId, []] as const
         }
-      }),
-    );
+      })
+    )
 
-    setSessionActorOptions(Object.fromEntries(entries));
+    setSessionActorOptions(Object.fromEntries(entries))
   }
 
   function syncSessionDrafts(nextSessions: TransportSessionSummary[]) {
@@ -262,31 +386,47 @@ export default function ImPage() {
             defaultTargetParticipantId:
               session.defaultTargetParticipantId || UNASSIGNED_VALUE,
           },
-        ]),
-      ),
-    );
+        ])
+      )
+    )
   }
 
-  function syncExternalUserDrafts(nextExternalUsers: TransportExternalUserSummary[]) {
+  function syncAccountOwnerDrafts(nextAccounts: TransportAccountSummary[]) {
+    setAccountOwnerDrafts(
+      Object.fromEntries(
+        nextAccounts.map((account) => [
+          account.id,
+          {
+            ownerScope: account.ownerScope,
+            ownerUserId: account.ownerUserId || "",
+          },
+        ])
+      )
+    )
+  }
+
+  function syncExternalUserDrafts(
+    nextExternalUsers: TransportExternalUserSummary[]
+  ) {
     setExternalUserDrafts(
       Object.fromEntries(
         nextExternalUsers.map((externalUser) => [
           externalUser.id,
           externalUser.linkedUserId || UNASSIGNED_VALUE,
-        ]),
-      ),
-    );
+        ])
+      )
+    )
   }
 
   async function loadData(showSpinner = false) {
-    if (!workspaceId) return;
+    if (!workspaceId) return
     if (showSpinner) {
-      setRefreshing(true);
+      setRefreshing(true)
     } else {
-      setLoading(true);
+      setLoading(true)
     }
 
-    setError(null);
+    setError(null)
     try {
       const [accountsRes, sessionsRes, externalUsersRes, workspaceMembersRes] =
         await Promise.all([
@@ -294,178 +434,214 @@ export default function ImPage() {
           api.getTransportSessions(workspaceId),
           api.getTransportExternalUsers(workspaceId),
           api.getWorkspaceMembers(workspaceId).catch((loadError) => {
-            console.error("Failed to load workspace members for IM page:", loadError);
-            return null;
+            console.error(
+              "Failed to load workspace members for IM page:",
+              loadError
+            )
+            return null
           }),
-        ]);
+        ])
 
-      const nextAccounts = accountsRes?.accounts || [];
-      const nextSessions = sessionsRes?.sessions || [];
-      const nextExternalUsers = externalUsersRes?.externalUsers || [];
-      const nextWorkspaceMembers = Array.isArray((workspaceMembersRes as any)?.data)
-        ? (((workspaceMembersRes as any).data as WorkspaceDirectoryMember[]) || [])
-        : [];
+      const nextAccounts = accountsRes?.accounts || []
+      const nextSessions = sessionsRes?.sessions || []
+      const nextExternalUsers = externalUsersRes?.externalUsers || []
+      const nextWorkspaceMembers = Array.isArray(
+        (workspaceMembersRes as any)?.data
+      )
+        ? ((workspaceMembersRes as any).data as WorkspaceDirectoryMember[]) ||
+          []
+        : []
 
-      setAccounts(nextAccounts);
-      setSessions(nextSessions);
-      setExternalUsers(nextExternalUsers);
-      setWorkspaceMembers(nextWorkspaceMembers);
-      syncSessionDrafts(nextSessions);
-      syncExternalUserDrafts(nextExternalUsers);
-      await loadSessionActorOptions(workspaceId, nextSessions);
+      setAccounts(nextAccounts)
+      setSessions(nextSessions)
+      setExternalUsers(nextExternalUsers)
+      setWorkspaceMembers(nextWorkspaceMembers)
+      syncAccountOwnerDrafts(nextAccounts)
+      syncSessionDrafts(nextSessions)
+      syncExternalUserDrafts(nextExternalUsers)
+      await loadSessionActorOptions(workspaceId, nextSessions)
     } catch (loadError) {
-      console.error("Failed to load IM workspace state:", loadError);
+      console.error("Failed to load IM workspace state:", loadError)
       setError(
         loadError instanceof Error
           ? loadError.message
-          : "Failed to load IM workspace state",
-      );
+          : "Failed to load IM workspace state"
+      )
     } finally {
-      setRefreshing(false);
-      setLoading(false);
+      setRefreshing(false)
+      setLoading(false)
     }
   }
 
   useEffect(() => {
-    void loadData();
-  }, [workspaceId]);
+    void loadData()
+  }, [workspaceId])
 
   useEffect(() => {
-    if (!workspaceId || !weixinSession) return;
-    const activeWorkspaceId = workspaceId;
-    const activeSessionId = weixinSession.sessionId;
+    if (!workspaceId || !weixinSession) return
+    const activeWorkspaceId = workspaceId
+    const activeSessionId = weixinSession.sessionId
     if (!["waiting", "scanned"].includes(weixinSession.status)) {
       if (weixinSession.transportAccount) {
-        void loadData(true);
+        void loadData(true)
       }
-      return;
+      return
     }
 
-    let cancelled = false;
+    let cancelled = false
 
     async function poll() {
       try {
         const result = await api.getWeixinQrTransportSession(
           activeWorkspaceId,
-          activeSessionId,
-        );
-        if (cancelled) return;
-        setWeixinSession(result?.session || null);
+          activeSessionId
+        )
+        if (cancelled) return
+        setWeixinSession(result?.session || null)
         if (result?.session?.transportAccount) {
-          toast.success("WeChat account connected");
-          await loadData(true);
-          return;
+          toast.success("WeChat account connected")
+          await loadData(true)
+          return
         }
         if (["expired", "error"].includes(result?.session?.status || "")) {
-          return;
+          return
         }
       } catch (pollError) {
-        if (cancelled) return;
-        console.error("Failed to poll WeChat QR session:", pollError);
+        if (cancelled) return
+        console.error("Failed to poll WeChat QR session:", pollError)
         setError(
           pollError instanceof Error
             ? pollError.message
-            : "Failed to poll WeChat QR session",
-        );
-        return;
+            : "Failed to poll WeChat QR session"
+        )
+        return
       }
 
       if (!cancelled) {
         setTimeout(() => {
           if (!cancelled) {
-            void poll();
+            void poll()
           }
-        }, 1500);
+        }, 1500)
       }
     }
 
-    void poll();
+    void poll()
 
     return () => {
-      cancelled = true;
-    };
-  }, [workspaceId, weixinSession]);
+      cancelled = true
+    }
+  }, [workspaceId, weixinSession])
 
   async function handleCreateFeishuAccount() {
-    if (!workspaceId) return;
-    setCreatingFeishu(true);
-    setError(null);
+    if (!workspaceId) return
+    setCreatingFeishu(true)
+    setError(null)
+    if (feishuForm.ownerScope === "workspace_user" && !feishuForm.ownerUserId) {
+      setError("Select a workspace member owner for the Feishu account.")
+      setCreatingFeishu(false)
+      return
+    }
     try {
       const result = await api.createFeishuTransportAccount(workspaceId, {
         displayName: feishuForm.displayName.trim() || "Feishu Bot",
         appId: feishuForm.appId.trim(),
         appSecret: feishuForm.appSecret.trim(),
+        ownerScope: feishuForm.ownerScope,
+        ownerUserId:
+          feishuForm.ownerScope === "workspace_user"
+            ? feishuForm.ownerUserId
+            : null,
         connectionMode: feishuForm.connectionMode,
         verificationToken: feishuForm.verificationToken.trim() || undefined,
         encryptKey: feishuForm.encryptKey.trim() || undefined,
-      });
+      })
       setFeishuForm((current) => ({
         ...EMPTY_FEISHU_FORM,
         connectionMode: current.connectionMode,
-      }));
-      await loadData(true);
+        ownerScope: current.ownerScope,
+        ownerUserId:
+          current.ownerScope === "workspace_user" ? current.ownerUserId : "",
+      }))
+      await loadData(true)
       if (result?.account?.connectionMode === "webhook") {
-        toast.success("Feishu account created. Configure the callback URL next.");
+        toast.success(
+          "Feishu account created. Configure the callback URL next."
+        )
       } else {
-        toast.success("Feishu account created");
+        toast.success("Feishu account created")
       }
     } catch (createError) {
-      console.error("Failed to create Feishu account:", createError);
+      console.error("Failed to create Feishu account:", createError)
       setError(
         createError instanceof Error
           ? createError.message
-          : "Failed to create Feishu account",
-      );
+          : "Failed to create Feishu account"
+      )
     } finally {
-      setCreatingFeishu(false);
+      setCreatingFeishu(false)
     }
   }
 
   async function handleStartWeixinQr() {
-    if (!workspaceId) return;
-    setCreatingWeixin(true);
-    setError(null);
+    if (!workspaceId) return
+    setCreatingWeixin(true)
+    setError(null)
+    if (weixinForm.ownerScope === "workspace_user" && !weixinForm.ownerUserId) {
+      setError("Select a workspace member owner for the WeChat account.")
+      setCreatingWeixin(false)
+      return
+    }
     try {
       const result = await api.startWeixinQrTransportSession(workspaceId, {
         displayName: weixinForm.displayName.trim() || undefined,
         baseUrl: weixinForm.baseUrl.trim() || undefined,
-      });
-      setWeixinSession(result?.session || null);
-      toast.success("WeChat QR code ready");
+        ownerScope: weixinForm.ownerScope,
+        ownerUserId:
+          weixinForm.ownerScope === "workspace_user"
+            ? weixinForm.ownerUserId
+            : null,
+      })
+      setWeixinSession(result?.session || null)
+      toast.success("WeChat QR code ready")
     } catch (createError) {
-      console.error("Failed to start WeChat QR session:", createError);
+      console.error("Failed to start WeChat QR session:", createError)
       setError(
         createError instanceof Error
           ? createError.message
-          : "Failed to start WeChat QR session",
-      );
+          : "Failed to start WeChat QR session"
+      )
     } finally {
-      setCreatingWeixin(false);
+      setCreatingWeixin(false)
     }
   }
 
   async function handleSaveSessionSettings(session: TransportSessionSummary) {
-    if (!workspaceId) return;
-    const draft = sessionDrafts[session.id];
-    if (!draft) return;
+    if (!workspaceId) return
+    const draft = sessionDrafts[session.id]
+    if (!draft) return
 
-    setSavingSessionId(session.id);
-    setError(null);
+    setSavingSessionId(session.id)
+    setError(null)
     try {
-      const result = await api.updateTransportSessionSettings(workspaceId, session.id, {
-        outboundEnabled: draft.outboundEnabled,
-        defaultTargetParticipantId:
-          draft.defaultTargetParticipantId === UNASSIGNED_VALUE
-            ? null
-            : draft.defaultTargetParticipantId,
-      });
-      const updatedSession = result?.session;
+      const result = await api.updateTransportSessionSettings(
+        workspaceId,
+        session.id,
+        {
+          outboundEnabled: draft.outboundEnabled,
+          defaultTargetParticipantId:
+            draft.defaultTargetParticipantId === UNASSIGNED_VALUE
+              ? null
+              : draft.defaultTargetParticipantId,
+        }
+      )
+      const updatedSession = result?.session
       if (updatedSession) {
         setSessions((current) =>
           current.map((entry) =>
-            entry.id === updatedSession.id ? updatedSession : entry,
-          ),
-        );
+            entry.id === updatedSession.id ? updatedSession : entry
+          )
+        )
         setSessionDrafts((current) => ({
           ...current,
           [session.id]: {
@@ -473,53 +649,98 @@ export default function ImPage() {
             defaultTargetParticipantId:
               updatedSession.defaultTargetParticipantId || UNASSIGNED_VALUE,
           },
-        }));
+        }))
       }
-      toast.success("IM session settings saved");
+      toast.success("IM session settings saved")
     } catch (saveError) {
-      console.error("Failed to update IM session settings:", saveError);
+      console.error("Failed to update IM session settings:", saveError)
       setError(
         saveError instanceof Error
           ? saveError.message
-          : "Failed to update IM session settings",
-      );
+          : "Failed to update IM session settings"
+      )
     } finally {
-      setSavingSessionId(null);
+      setSavingSessionId(null)
+    }
+  }
+
+  async function handleSaveAccountOwner(account: TransportAccountSummary) {
+    if (!workspaceId) return
+    const draft = accountOwnerDrafts[account.id]
+    if (!draft) return
+    if (draft.ownerScope === "workspace_user" && !draft.ownerUserId) {
+      setError("Select a workspace member owner before saving the account.")
+      return
+    }
+
+    setSavingAccountId(account.id)
+    setError(null)
+    try {
+      const result = await api.updateTransportAccount(workspaceId, account.id, {
+        ownerScope: draft.ownerScope,
+        ownerUserId:
+          draft.ownerScope === "workspace_user" ? draft.ownerUserId : null,
+      })
+      const updatedAccount = result?.account
+      if (updatedAccount) {
+        setAccounts((current) =>
+          current.map((entry) =>
+            entry.id === updatedAccount.id ? updatedAccount : entry
+          )
+        )
+        setAccountOwnerDrafts((current) => ({
+          ...current,
+          [account.id]: {
+            ownerScope: updatedAccount.ownerScope,
+            ownerUserId: updatedAccount.ownerUserId || "",
+          },
+        }))
+      }
+      toast.success("Transport account owner updated")
+    } catch (saveError) {
+      console.error("Failed to update transport account owner:", saveError)
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Failed to update transport account owner"
+      )
+    } finally {
+      setSavingAccountId(null)
     }
   }
 
   async function handleLinkExternalUser(addressId: string, userId: string) {
-    if (!workspaceId) return;
-    setLinkingAddressId(addressId);
-    setError(null);
+    if (!workspaceId) return
+    setLinkingAddressId(addressId)
+    setError(null)
     try {
       const result = await api.setTransportExternalUserWorkspaceUser(
         workspaceId,
         addressId,
-        userId === UNASSIGNED_VALUE ? null : userId,
-      );
-      const updatedExternalUser = result?.externalUser;
+        userId === UNASSIGNED_VALUE ? null : userId
+      )
+      const updatedExternalUser = result?.externalUser
       if (updatedExternalUser) {
         setExternalUsers((current) =>
           current.map((entry) =>
-            entry.id === updatedExternalUser.id ? updatedExternalUser : entry,
-          ),
-        );
+            entry.id === updatedExternalUser.id ? updatedExternalUser : entry
+          )
+        )
         setExternalUserDrafts((current) => ({
           ...current,
           [addressId]: updatedExternalUser.linkedUserId || UNASSIGNED_VALUE,
-        }));
+        }))
       }
-      toast.success("External user mapping updated");
+      toast.success("External user mapping updated")
     } catch (linkError) {
-      console.error("Failed to update external user mapping:", linkError);
+      console.error("Failed to update external user mapping:", linkError)
       setError(
         linkError instanceof Error
           ? linkError.message
-          : "Failed to update external user mapping",
-      );
+          : "Failed to update external user mapping"
+      )
     } finally {
-      setLinkingAddressId(null);
+      setLinkingAddressId(null)
     }
   }
 
@@ -528,7 +749,7 @@ export default function ImPage() {
       <div className="flex h-[60vh] items-center justify-center text-muted-foreground">
         No workspace selected.
       </div>
-    );
+    )
   }
 
   return (
@@ -539,10 +760,11 @@ export default function ImPage() {
             <div>
               <CardTitle className="text-2xl">IM</CardTitle>
               <CardDescription className="mt-1 max-w-3xl">
-                Connect Feishu and WeChat at the workspace level. Each external
-                direct chat or group chat creates its own conversation automatically.
-                Session routing and address ownership mapping are managed here, not in
-                the chat page.
+                Connect Feishu and WeChat as shared workspace accounts or bind
+                the login to a specific workspace member. Each external direct
+                chat or group chat still creates its own workspace conversation
+                automatically. Session routing and address ownership mapping are
+                managed here, not in the chat page.
               </CardDescription>
             </div>
             <Button
@@ -587,8 +809,9 @@ export default function ImPage() {
               Add Feishu App Bot
             </CardTitle>
             <CardDescription>
-              Enter app credentials directly. For webhook mode, Synapse generates the
-              callback URL after the account is created.
+              Enter app credentials directly. Choose whether this transport
+              account is workspace-owned or member-owned. For webhook mode,
+              Synapse generates the callback URL after the account is created.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -623,7 +846,9 @@ export default function ImPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="webhook">Webhook</SelectItem>
-                    <SelectItem value="long_connection">Long connection</SelectItem>
+                    <SelectItem value="long_connection">
+                      Long connection
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -664,7 +889,9 @@ export default function ImPage() {
             {feishuForm.connectionMode === "webhook" ? (
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="feishu-verification-token">Verification token</Label>
+                  <Label htmlFor="feishu-verification-token">
+                    Verification token
+                  </Label>
                   <Input
                     id="feishu-verification-token"
                     value={feishuForm.verificationToken}
@@ -695,6 +922,26 @@ export default function ImPage() {
               </div>
             ) : null}
 
+            <TransportAccountOwnerFields
+              idPrefix="feishu"
+              ownerScope={feishuForm.ownerScope}
+              ownerUserId={feishuForm.ownerUserId}
+              workspaceMembers={sortedWorkspaceMembers}
+              onOwnerScopeChange={(value) =>
+                setFeishuForm((current) => ({
+                  ...current,
+                  ownerScope: value,
+                  ownerUserId: value === "workspace" ? "" : current.ownerUserId,
+                }))
+              }
+              onOwnerUserIdChange={(value) =>
+                setFeishuForm((current) => ({
+                  ...current,
+                  ownerUserId: value,
+                }))
+              }
+            />
+
             <div className="flex justify-end">
               <Button
                 onClick={() => void handleCreateFeishuAccount()}
@@ -713,8 +960,9 @@ export default function ImPage() {
               Connect WeChat via QR
             </CardTitle>
             <CardDescription>
-              Start a QR session, scan with WeChat, and Synapse stores the bot token
-              automatically after confirmation.
+              Start a QR session, scan with WeChat, and Synapse stores the bot
+              token automatically after confirmation. The connected login can be
+              owned by the workspace or by a specific workspace member.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -747,6 +995,26 @@ export default function ImPage() {
               />
             </div>
 
+            <TransportAccountOwnerFields
+              idPrefix="weixin"
+              ownerScope={weixinForm.ownerScope}
+              ownerUserId={weixinForm.ownerUserId}
+              workspaceMembers={sortedWorkspaceMembers}
+              onOwnerScopeChange={(value) =>
+                setWeixinForm((current) => ({
+                  ...current,
+                  ownerScope: value,
+                  ownerUserId: value === "workspace" ? "" : current.ownerUserId,
+                }))
+              }
+              onOwnerUserIdChange={(value) =>
+                setWeixinForm((current) => ({
+                  ...current,
+                  ownerUserId: value,
+                }))
+              }
+            />
+
             <Button
               className="w-full"
               onClick={() => void handleStartWeixinQr()}
@@ -759,7 +1027,9 @@ export default function ImPage() {
               <div className="space-y-3 rounded-2xl border bg-muted/20 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-sm font-medium text-foreground">QR session</div>
+                    <div className="text-sm font-medium text-foreground">
+                      QR session
+                    </div>
                     <div className="text-xs text-muted-foreground">
                       Status: {weixinSession.status}
                     </div>
@@ -804,13 +1074,16 @@ export default function ImPage() {
         <CardHeader>
           <CardTitle>Connected Accounts</CardTitle>
           <CardDescription>
-            Account credentials live at the workspace level. Conversations are created
-            from inbound IM sessions, not hand-bound from chat.
+            Accounts can be owned by the workspace or by a specific workspace
+            member. Conversations are still created from inbound IM sessions,
+            not hand-bound from chat.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {loading ? (
-            <div className="text-sm text-muted-foreground">Loading accounts...</div>
+            <div className="text-sm text-muted-foreground">
+              Loading accounts...
+            </div>
           ) : accounts.length === 0 ? (
             <div className="rounded-2xl border border-dashed px-4 py-4 text-sm text-muted-foreground">
               No IM accounts connected yet.
@@ -821,7 +1094,24 @@ export default function ImPage() {
                 account.transportKind === "feishu" &&
                 account.connectionMode === "webhook"
                   ? buildWebhookUrl(account.id)
-                  : "";
+                  : ""
+              const draft = accountOwnerDrafts[account.id] || {
+                ownerScope: account.ownerScope,
+                ownerUserId: account.ownerUserId || "",
+              }
+              const savedOwnerLabel = transportAccountOwnerLabel(
+                account,
+                workspaceMemberById,
+                workspaceName
+              )
+              const draftOwnerLabel = transportAccountOwnerLabel(
+                {
+                  ownerScope: draft.ownerScope,
+                  ownerUserId: draft.ownerUserId || undefined,
+                },
+                workspaceMemberById,
+                workspaceName
+              )
               return (
                 <div
                   key={account.id}
@@ -838,34 +1128,134 @@ export default function ImPage() {
                       <Badge variant="outline">
                         {prettyConnectionMode(account.connectionMode)}
                       </Badge>
+                      <Badge variant="outline">
+                        {prettyTransportAccountOwnerScope(account.ownerScope)}
+                      </Badge>
                       <Badge variant="outline">{account.status}</Badge>
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
                       Account key: {account.accountKey}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
+                      Owner: {savedOwnerLabel}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
                       Updated: {formatDateTime(account.updatedAt)}
                     </div>
                   </div>
 
-                  <div className="min-w-0 space-y-2">
+                  <div className="min-w-0 space-y-3">
                     {account.transportKind === "weixin" ? (
                       <div className="text-xs text-muted-foreground">
                         Base URL:{" "}
                         {String(
-                          account.config?.baseUrl || "https://ilinkai.weixin.qq.com",
+                          account.config?.baseUrl ||
+                            "https://ilinkai.weixin.qq.com"
                         )}
                       </div>
                     ) : null}
                     {webhookUrl ? (
                       <div className="rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
                         Webhook URL:{" "}
-                        <span className="break-all text-foreground">{webhookUrl}</span>
+                        <span className="break-all text-foreground">
+                          {webhookUrl}
+                        </span>
                       </div>
                     ) : null}
+                    <div className="grid gap-3 rounded-xl border bg-background/80 p-3">
+                      <div>
+                        <div className="text-sm font-medium text-foreground">
+                          Account owner
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Change whether this login belongs to the workspace or
+                          a specific workspace member.
+                        </div>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-[12rem_minmax(0,1fr)]">
+                        <Select
+                          value={draft.ownerScope}
+                          onValueChange={(value) =>
+                            setAccountOwnerDrafts((current) => ({
+                              ...current,
+                              [account.id]: {
+                                ...draft,
+                                ownerScope: value as TransportAccountOwnerScope,
+                                ownerUserId:
+                                  value === "workspace"
+                                    ? ""
+                                    : draft.ownerUserId,
+                              },
+                            }))
+                          }
+                          disabled={savingAccountId === account.id}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="workspace">Workspace</SelectItem>
+                            <SelectItem value="workspace_user">
+                              Workspace member
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {draft.ownerScope === "workspace_user" ? (
+                          <Select
+                            value={draft.ownerUserId || UNASSIGNED_VALUE}
+                            onValueChange={(value) =>
+                              setAccountOwnerDrafts((current) => ({
+                                ...current,
+                                [account.id]: {
+                                  ...draft,
+                                  ownerUserId:
+                                    value === UNASSIGNED_VALUE ? "" : value,
+                                },
+                              }))
+                            }
+                            disabled={
+                              savingAccountId === account.id ||
+                              sortedWorkspaceMembers.length === 0
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select workspace member" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={UNASSIGNED_VALUE}>
+                                Select workspace member
+                              </SelectItem>
+                              {sortedWorkspaceMembers.map((member) => (
+                                <SelectItem
+                                  key={member.userId}
+                                  value={member.userId}
+                                >
+                                  {workspaceMemberLabel(member)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : null}
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-xs text-muted-foreground">
+                          Effective owner: {draftOwnerLabel}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void handleSaveAccountOwner(account)}
+                          disabled={savingAccountId === account.id}
+                        >
+                          {savingAccountId === account.id
+                            ? "Saving..."
+                            : "Save owner"}
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              );
+              )
             })
           )}
         </CardContent>
@@ -875,17 +1265,20 @@ export default function ImPage() {
         <CardHeader>
           <CardTitle>IM Sessions</CardTitle>
           <CardDescription>
-            Each external direct chat or group chat maps to its own conversation.
-            Routing and outbound delivery are configured at the session level here.
+            Each external direct chat or group chat maps to its own
+            conversation. Routing and outbound delivery are configured at the
+            session level here.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {loading ? (
-            <div className="text-sm text-muted-foreground">Loading sessions...</div>
+            <div className="text-sm text-muted-foreground">
+              Loading sessions...
+            </div>
           ) : sessions.length === 0 ? (
             <div className="rounded-2xl border border-dashed px-4 py-4 text-sm text-muted-foreground">
-              No IM sessions discovered yet. Send a message to the bot from Feishu or
-              WeChat to create one automatically.
+              No IM sessions discovered yet. Send a message to the bot from
+              Feishu or WeChat to create one automatically.
             </div>
           ) : (
             sessions.map((session) => {
@@ -893,10 +1286,10 @@ export default function ImPage() {
                 outboundEnabled: session.outboundEnabled,
                 defaultTargetParticipantId:
                   session.defaultTargetParticipantId || UNASSIGNED_VALUE,
-              };
+              }
               const actorOptions = session.conversationId
                 ? sessionActorOptions[session.conversationId] || []
-                : [];
+                : []
               return (
                 <div
                   key={session.id}
@@ -905,7 +1298,8 @@ export default function ImPage() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="truncate text-sm font-medium text-foreground">
-                        {session.endpoint.displayName || session.endpoint.externalId}
+                        {session.endpoint.displayName ||
+                          session.endpoint.externalId}
                       </div>
                       <Badge variant="secondary">
                         {prettyTransportKind(session.transportKind)}
@@ -949,9 +1343,9 @@ export default function ImPage() {
                             Outbound enabled
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            External delivery only happens when a message explicitly
-                            targets a participant that is reachable in this IM
-                            session.
+                            External delivery only happens when a message
+                            explicitly targets a participant that is reachable
+                            in this IM session.
                           </div>
                         </div>
                         <Switch
@@ -987,7 +1381,9 @@ export default function ImPage() {
                         }
                         disabled={!session.conversationId}
                       >
-                        <SelectTrigger id={`session-default-target-${session.id}`}>
+                        <SelectTrigger
+                          id={`session-default-target-${session.id}`}
+                        >
                           <SelectValue placeholder="No default actor" />
                         </SelectTrigger>
                         <SelectContent>
@@ -995,22 +1391,27 @@ export default function ImPage() {
                             No default actor
                           </SelectItem>
                           {actorOptions.map((option) => (
-                            <SelectItem key={option.memberId} value={option.memberId}>
+                            <SelectItem
+                              key={option.memberId}
+                              value={option.memberId}
+                            >
                               {option.name}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                       <div className="text-xs text-muted-foreground">
-                        Inbound IM messages without an explicit internal target will
-                        wake this actor.
+                        Inbound IM messages without an explicit internal target
+                        will wake this actor.
                       </div>
                     </div>
 
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       {session.conversationId ? (
                         <Button asChild variant="outline" size="sm">
-                          <Link href={`/dashboard/chat?group=${session.conversationId}`}>
+                          <Link
+                            href={`/dashboard/chat?group=${session.conversationId}`}
+                          >
                             <MessageSquare className="size-4" />
                             Open conversation
                             <ArrowUpRight className="size-3.5" />
@@ -1025,14 +1426,19 @@ export default function ImPage() {
                       <Button
                         size="sm"
                         onClick={() => void handleSaveSessionSettings(session)}
-                        disabled={!session.conversationId || savingSessionId === session.id}
+                        disabled={
+                          !session.conversationId ||
+                          savingSessionId === session.id
+                        }
                       >
-                        {savingSessionId === session.id ? "Saving..." : "Save session"}
+                        {savingSessionId === session.id
+                          ? "Saving..."
+                          : "Save session"}
                       </Button>
                     </div>
                   </div>
                 </div>
-              );
+              )
             })
           )}
         </CardContent>
@@ -1045,10 +1451,10 @@ export default function ImPage() {
             Transport Addresses
           </CardTitle>
           <CardDescription>
-            Address ownership is workspace-scoped at the transport level. The same
-            external address under the same bot maps to one workspace user across
-            every session, and linked addresses speak as that workspace user inside
-            bound conversations.
+            Address ownership is workspace-scoped at the transport level. The
+            same external address under the same bot maps to one workspace user
+            across every session, and linked addresses speak as that workspace
+            user inside bound conversations.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -1074,7 +1480,9 @@ export default function ImPage() {
                     <Badge variant="secondary">
                       {prettyTransportKind(externalUser.transportKind)}
                     </Badge>
-                    <Badge variant="outline">{externalUser.accountDisplayName}</Badge>
+                    <Badge variant="outline">
+                      {externalUser.accountDisplayName}
+                    </Badge>
                   </div>
                   <div className="text-xs text-muted-foreground">
                     External ID: {externalUser.externalId}
@@ -1111,7 +1519,7 @@ export default function ImPage() {
                               sessionRef.endpointExternalId ||
                               "Session"}
                           </Badge>
-                        ),
+                        )
                       )
                     ) : (
                       <div className="text-xs text-muted-foreground">
@@ -1133,13 +1541,15 @@ export default function ImPage() {
                     </div>
                   </div>
                   <Select
-                    value={externalUserDrafts[externalUser.id] || UNASSIGNED_VALUE}
+                    value={
+                      externalUserDrafts[externalUser.id] || UNASSIGNED_VALUE
+                    }
                     onValueChange={(value) => {
                       setExternalUserDrafts((current) => ({
                         ...current,
                         [externalUser.id]: value,
-                      }));
-                      void handleLinkExternalUser(externalUser.id, value);
+                      }))
+                      void handleLinkExternalUser(externalUser.id, value)
                     }}
                     disabled={linkingAddressId === externalUser.id}
                   >
@@ -1179,10 +1589,10 @@ export default function ImPage() {
           connection only needs App ID and App Secret.
         </div>
         <div className="rounded-2xl border bg-muted/20 px-4 py-3">
-          WeChat QR login stores the token after confirmation and starts polling via
-          the transport runtime automatically.
+          WeChat QR login stores the token after confirmation and starts polling
+          via the transport runtime automatically.
         </div>
       </div>
     </div>
-  );
+  )
 }

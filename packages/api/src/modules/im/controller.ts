@@ -20,40 +20,108 @@ import {
   startWeixinQrLoginSession,
 } from "./weixin-qr.js";
 
-const accountSchema = z.object({
-  transportKind: z.enum(["feishu", "weixin"]),
-  accountKey: z.string().trim().min(1).max(120),
-  displayName: z.string().trim().min(1).max(255),
-  connectionMode: z.enum(["webhook", "long_connection"]),
-  status: z.enum(["active", "disabled", "error"]).optional(),
-  credentials: z.record(z.unknown()).optional(),
-  config: z.record(z.unknown()).optional(),
-  metadata: z.record(z.unknown()).optional(),
-});
+const transportAccountOwnerCreateShape = {
+  ownerScope: z.enum(["workspace", "workspace_user"]).default("workspace"),
+  ownerUserId: z.string().uuid().nullable().optional(),
+};
 
-const updateAccountSchema = z.object({
-  displayName: z.string().trim().min(1).max(255).optional(),
-  connectionMode: z.enum(["webhook", "long_connection"]).optional(),
-  status: z.enum(["active", "disabled", "error"]).optional(),
-  credentials: z.record(z.unknown()).optional(),
-  config: z.record(z.unknown()).optional(),
-  metadata: z.record(z.unknown()).optional(),
-});
+const transportAccountOwnerUpdateShape = {
+  ownerScope: z.enum(["workspace", "workspace_user"]).optional(),
+  ownerUserId: z.string().uuid().nullable().optional(),
+};
 
-const feishuAccountSchema = z.object({
-  displayName: z.string().trim().min(1).max(255),
-  accountKey: z.string().trim().min(1).max(120).optional(),
-  connectionMode: z.enum(["webhook", "long_connection"]),
-  appId: z.string().trim().min(1).max(255),
-  appSecret: z.string().trim().min(1).max(255),
-  verificationToken: z.string().trim().max(255).optional(),
-  encryptKey: z.string().trim().max(255).optional(),
-  status: z.enum(["active", "disabled", "error"]).optional(),
-});
+function validateTransportAccountOwnerCreate(
+  value: {
+    ownerScope: "workspace" | "workspace_user";
+    ownerUserId?: string | null;
+  },
+  ctx: z.RefinementCtx,
+) {
+  if (value.ownerScope === "workspace" && value.ownerUserId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Workspace-owned transport accounts cannot include ownerUserId",
+      path: ["ownerUserId"],
+    });
+  }
+  if (value.ownerScope === "workspace_user" && !value.ownerUserId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Workspace-user transport accounts require ownerUserId",
+      path: ["ownerUserId"],
+    });
+  }
+}
 
-const updateFeishuAccountSchema = feishuAccountSchema.partial().extend({
-  displayName: z.string().trim().min(1).max(255).optional(),
-});
+function validateTransportAccountOwnerUpdate(
+  value: {
+    ownerScope?: "workspace" | "workspace_user";
+    ownerUserId?: string | null;
+  },
+  ctx: z.RefinementCtx,
+) {
+  if (value.ownerScope === "workspace" && value.ownerUserId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Workspace-owned transport accounts cannot include ownerUserId",
+      path: ["ownerUserId"],
+    });
+  }
+}
+
+const accountSchema = z
+  .object({
+    transportKind: z.enum(["feishu", "weixin"]),
+    accountKey: z.string().trim().min(1).max(120),
+    displayName: z.string().trim().min(1).max(255),
+    connectionMode: z.enum(["webhook", "long_connection"]),
+    status: z.enum(["active", "disabled", "error"]).optional(),
+    credentials: z.record(z.unknown()).optional(),
+    config: z.record(z.unknown()).optional(),
+    metadata: z.record(z.unknown()).optional(),
+    ...transportAccountOwnerCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreate);
+
+const updateAccountSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255).optional(),
+    connectionMode: z.enum(["webhook", "long_connection"]).optional(),
+    status: z.enum(["active", "disabled", "error"]).optional(),
+    credentials: z.record(z.unknown()).optional(),
+    config: z.record(z.unknown()).optional(),
+    metadata: z.record(z.unknown()).optional(),
+    ...transportAccountOwnerUpdateShape,
+  })
+  .superRefine(validateTransportAccountOwnerUpdate);
+
+const feishuAccountSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.enum(["webhook", "long_connection"]),
+    appId: z.string().trim().min(1).max(255),
+    appSecret: z.string().trim().min(1).max(255),
+    verificationToken: z.string().trim().max(255).optional(),
+    encryptKey: z.string().trim().max(255).optional(),
+    status: z.enum(["active", "disabled", "error"]).optional(),
+    ...transportAccountOwnerCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreate);
+
+const updateFeishuAccountSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255).optional(),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.enum(["webhook", "long_connection"]).optional(),
+    appId: z.string().trim().min(1).max(255).optional(),
+    appSecret: z.string().trim().min(1).max(255).optional(),
+    verificationToken: z.string().trim().max(255).optional(),
+    encryptKey: z.string().trim().max(255).optional(),
+    status: z.enum(["active", "disabled", "error"]).optional(),
+    ...transportAccountOwnerUpdateShape,
+  })
+  .superRefine(validateTransportAccountOwnerUpdate);
 
 const transportSessionSettingsSchema = z.object({
   outboundEnabled: z.boolean().optional(),
@@ -61,11 +129,14 @@ const transportSessionSettingsSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 
-const weixinQrSessionSchema = z.object({
-  displayName: z.string().trim().max(255).optional(),
-  baseUrl: z.string().trim().url().optional(),
-  botType: z.string().trim().max(32).optional(),
-});
+const weixinQrSessionSchema = z
+  .object({
+    displayName: z.string().trim().max(255).optional(),
+    baseUrl: z.string().trim().url().optional(),
+    botType: z.string().trim().max(32).optional(),
+    ...transportAccountOwnerCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreate);
 
 const linkedUserSchema = z.object({
   userId: z.string().uuid().nullable(),
@@ -78,7 +149,13 @@ async function requireWorkspaceAction(
   errorMessage: string,
 ) {
   const { workspaceId } = request.params as { workspaceId: string };
-  return requireRequestAction(request, reply, action, workspaceId, errorMessage);
+  return requireRequestAction(
+    request,
+    reply,
+    action,
+    workspaceId,
+    errorMessage,
+  );
 }
 
 async function requireConversationAction(
@@ -216,6 +293,8 @@ export default async function imController(app: FastifyInstance) {
         transportKind: "feishu",
         accountKey: body.accountKey || body.appId,
         displayName: body.displayName,
+        ownerScope: body.ownerScope,
+        ownerUserId: body.ownerUserId ?? null,
         connectionMode: body.connectionMode,
         status: body.status,
         credentials,
@@ -277,9 +356,13 @@ export default async function imController(app: FastifyInstance) {
       });
 
       const externalUsers = await listTransportExternalUsers({ workspaceId });
-      const externalUser = externalUsers.find((entry) => entry.id === addressId);
+      const externalUser = externalUsers.find(
+        (entry) => entry.id === addressId,
+      );
       if (!externalUser) {
-        return reply.status(404).send({ error: "Transport external user not found" });
+        return reply
+          .status(404)
+          .send({ error: "Transport external user not found" });
       }
       return reply.send({ externalUser });
     },
@@ -302,7 +385,10 @@ export default async function imController(app: FastifyInstance) {
       const { workspaceId, accountId } = request.params;
       const body = updateFeishuAccountSchema.parse(request.body);
       const credentials =
-        body.appId || body.appSecret || body.verificationToken || body.encryptKey
+        body.appId ||
+        body.appSecret ||
+        body.verificationToken ||
+        body.encryptKey
           ? {
               ...(body.appId ? { appId: body.appId } : {}),
               ...(body.appSecret ? { appSecret: body.appSecret } : {}),
@@ -317,6 +403,8 @@ export default async function imController(app: FastifyInstance) {
         workspaceId,
         accountId,
         displayName: body.displayName,
+        ownerScope: body.ownerScope,
+        ownerUserId: body.ownerUserId,
         connectionMode: body.connectionMode,
         status: body.status,
         credentials,
@@ -343,6 +431,8 @@ export default async function imController(app: FastifyInstance) {
         displayName: body.displayName,
         baseUrl: body.baseUrl,
         botType: body.botType,
+        ownerScope: body.ownerScope,
+        ownerUserId: body.ownerUserId ?? null,
       });
       return reply.status(201).send({ session });
     },
@@ -390,6 +480,8 @@ export default async function imController(app: FastifyInstance) {
         transportKind: body.transportKind,
         accountKey: body.accountKey,
         displayName: body.displayName,
+        ownerScope: body.ownerScope,
+        ownerUserId: body.ownerUserId ?? null,
         connectionMode: body.connectionMode,
         status: body.status,
         credentials: body.credentials,
@@ -420,6 +512,8 @@ export default async function imController(app: FastifyInstance) {
         workspaceId,
         accountId,
         displayName: body.displayName,
+        ownerScope: body.ownerScope,
+        ownerUserId: body.ownerUserId,
         connectionMode: body.connectionMode,
         status: body.status,
         credentials: body.credentials,

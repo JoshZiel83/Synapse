@@ -1,6 +1,7 @@
 import type {
   ConversationTransportBindingSummary,
   TransportAccountSummary,
+  TransportAccountOwnerScope,
   TransportConnectionMode,
   TransportDeliveryStatus,
   TransportEndpointSummary,
@@ -117,6 +118,10 @@ function normalizeAccountRow(row: any): TransportAccountSummary {
     transportKind: row.transport_kind,
     accountKey: row.account_key,
     displayName: row.display_name,
+    ownerScope:
+      (row.owner_scope as TransportAccountOwnerScope | undefined) ||
+      "workspace",
+    ownerUserId: row.owner_user_id || undefined,
     connectionMode: row.connection_mode,
     status: row.status,
     credentials: parseJsonObject(row.credentials),
@@ -177,8 +182,10 @@ function normalizeTransportSessionRow(row: any): TransportSessionSummary {
     metadata: parseJsonObject(
       row.binding_metadata || row.endpoint_metadata || row.metadata,
     ),
-    createdAt: row.binding_created_at || row.endpoint_created_at || row.created_at,
-    updatedAt: row.binding_updated_at || row.endpoint_updated_at || row.updated_at,
+    createdAt:
+      row.binding_created_at || row.endpoint_created_at || row.created_at,
+    updatedAt:
+      row.binding_updated_at || row.endpoint_updated_at || row.updated_at,
     conversationId: row.conversation_id || undefined,
     conversationTitle: readTrimmedString(row, "conversation_title"),
     lastInboundAt: row.last_inbound_at || undefined,
@@ -188,7 +195,9 @@ function normalizeTransportSessionRow(row: any): TransportSessionSummary {
   };
 }
 
-function normalizeTransportExternalUserRow(row: any): TransportExternalUserSummary {
+function normalizeTransportExternalUserRow(
+  row: any,
+): TransportExternalUserSummary {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -205,6 +214,36 @@ function normalizeTransportExternalUserRow(row: any): TransportExternalUserSumma
     lastSeenAt: row.last_seen_at || undefined,
     sessions: parseJsonArray<TransportExternalUserSessionRef>(row.sessions),
   };
+}
+
+async function assertTransportAccountOwner(params: {
+  workspaceId: string;
+  ownerScope: TransportAccountOwnerScope;
+  ownerUserId?: string | null;
+}) {
+  if (params.ownerScope === "workspace") {
+    if (params.ownerUserId) {
+      throw new Error(
+        "Workspace-owned transport account cannot have an owner user",
+      );
+    }
+    return null;
+  }
+
+  const ownerUserId = params.ownerUserId || null;
+  if (!ownerUserId) {
+    throw new Error("Workspace-user transport account requires ownerUserId");
+  }
+
+  const isWorkspaceMember = await assertWorkspaceMember({
+    workspaceId: params.workspaceId,
+    userId: ownerUserId,
+  });
+  if (!isWorkspaceMember) {
+    throw new Error("Transport account owner must be a workspace member");
+  }
+
+  return ownerUserId;
 }
 
 async function loadTransportAccountRow(workspaceId: string, accountId: string) {
@@ -260,9 +299,13 @@ async function assertConversationMembers(params: {
     [params.conversationId, params.memberIds],
   );
   const existing = new Set(result.rows.map((row) => row.id as string));
-  const missing = params.memberIds.filter((memberId) => !existing.has(memberId));
+  const missing = params.memberIds.filter(
+    (memberId) => !existing.has(memberId),
+  );
   if (missing.length > 0) {
-    throw new Error("One or more target participants do not belong to this conversation");
+    throw new Error(
+      "One or more target participants do not belong to this conversation",
+    );
   }
 }
 
@@ -400,6 +443,8 @@ export async function listTransportSessions(
             ta.account_key,
             ta.display_name,
             ta.transport_kind,
+            ta.owner_scope,
+            ta.owner_user_id,
             ta.connection_mode,
             ta.status,
             ta.credentials,
@@ -518,6 +563,8 @@ export async function createTransportAccount(params: {
   transportKind: TransportKind;
   accountKey: string;
   displayName: string;
+  ownerScope?: TransportAccountOwnerScope;
+  ownerUserId?: string | null;
   connectionMode: TransportConnectionMode;
   status?: "active" | "disabled" | "error";
   credentials?: Record<string, unknown>;
@@ -532,11 +579,17 @@ export async function createTransportAccount(params: {
     status: nextStatus,
     credentials: params.credentials,
   });
+  const ownerScope = params.ownerScope || "workspace";
+  const ownerUserId = await assertTransportAccountOwner({
+    workspaceId: params.workspaceId,
+    ownerScope,
+    ownerUserId: ownerScope === "workspace" ? null : params.ownerUserId,
+  });
 
   const result = await query(
     `INSERT INTO transport_accounts
-       (id, workspace_id, transport_kind, account_key, display_name, connection_mode, status, credentials, config, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+       (id, workspace_id, transport_kind, account_key, display_name, owner_scope, owner_user_id, connection_mode, status, credentials, config, metadata, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
      RETURNING *`,
     [
       uuidv4(),
@@ -544,6 +597,8 @@ export async function createTransportAccount(params: {
       params.transportKind,
       params.accountKey.trim(),
       params.displayName.trim(),
+      ownerScope,
+      ownerUserId,
       params.connectionMode,
       nextStatus,
       JSON.stringify(params.credentials || {}),
@@ -559,40 +614,63 @@ export async function updateTransportAccount(params: {
   workspaceId: string;
   accountId: string;
   displayName?: string;
+  ownerScope?: TransportAccountOwnerScope;
+  ownerUserId?: string | null;
   connectionMode?: TransportConnectionMode;
   status?: "active" | "disabled" | "error";
   credentials?: Record<string, unknown>;
   config?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }) {
-  const existing = await loadTransportAccountRow(params.workspaceId, params.accountId);
+  const existing = await loadTransportAccountRow(
+    params.workspaceId,
+    params.accountId,
+  );
   if (!existing) {
     throw new Error("Transport account not found");
   }
 
   const nextConnectionMode =
-    params.connectionMode || (existing.connection_mode as TransportConnectionMode);
+    params.connectionMode ||
+    (existing.connection_mode as TransportConnectionMode);
   assertSupportedConnectionMode(existing.transport_kind, nextConnectionMode);
   const nextStatus =
     params.status || (existing.status as "active" | "disabled" | "error");
   const nextCredentials = params.credentials
     ? params.credentials
     : parseJsonObject(existing.credentials);
+  const nextOwnerScope =
+    params.ownerScope ||
+    (existing.owner_scope as TransportAccountOwnerScope | undefined) ||
+    "workspace";
+  const nextOwnerUserId =
+    nextOwnerScope === "workspace"
+      ? null
+      : params.ownerUserId !== undefined
+        ? params.ownerUserId
+        : (existing.owner_user_id as string | null | undefined) || null;
   assertTransportAccountConfiguration({
     transportKind: existing.transport_kind as TransportKind,
     connectionMode: nextConnectionMode,
     status: nextStatus,
     credentials: nextCredentials,
   });
+  const resolvedOwnerUserId = await assertTransportAccountOwner({
+    workspaceId: params.workspaceId,
+    ownerScope: nextOwnerScope,
+    ownerUserId: nextOwnerUserId,
+  });
 
   const result = await query(
     `UPDATE transport_accounts
      SET display_name = COALESCE($3, display_name),
-         connection_mode = $4,
-         status = COALESCE($5, status),
-         credentials = CASE WHEN $6::jsonb IS NULL THEN credentials ELSE $6::jsonb END,
-         config = CASE WHEN $7::jsonb IS NULL THEN config ELSE $7::jsonb END,
-         metadata = CASE WHEN $8::jsonb IS NULL THEN metadata ELSE $8::jsonb END,
+         owner_scope = $4,
+         owner_user_id = $5,
+         connection_mode = $6,
+         status = COALESCE($7, status),
+         credentials = CASE WHEN $8::jsonb IS NULL THEN credentials ELSE $8::jsonb END,
+         config = CASE WHEN $9::jsonb IS NULL THEN config ELSE $9::jsonb END,
+         metadata = CASE WHEN $10::jsonb IS NULL THEN metadata ELSE $10::jsonb END,
          updated_at = NOW()
      WHERE workspace_id = $1
        AND id = $2
@@ -601,6 +679,8 @@ export async function updateTransportAccount(params: {
       params.workspaceId,
       params.accountId,
       params.displayName?.trim() || null,
+      nextOwnerScope,
+      resolvedOwnerUserId,
       nextConnectionMode,
       params.status || null,
       params.credentials ? JSON.stringify(params.credentials) : null,
@@ -629,6 +709,8 @@ export async function getConversationTransportBinding(params: {
             ta.account_key,
             ta.display_name,
             ta.transport_kind,
+            ta.owner_scope,
+            ta.owner_user_id,
             ta.connection_mode,
             ta.status,
             ta.credentials,
@@ -675,6 +757,8 @@ export async function findConversationTransportBindingByEndpoint(params: {
             ta.account_key,
             ta.display_name,
             ta.transport_kind,
+            ta.owner_scope,
+            ta.owner_user_id,
             ta.connection_mode,
             ta.status,
             ta.credentials,
@@ -888,8 +972,9 @@ export async function updateTransportSessionSettings(params: {
 
   const updatedSessions = await listTransportSessions(params.workspaceId);
   return (
-    updatedSessions.find((session) => session.id === params.transportEndpointId) ||
-    null
+    updatedSessions.find(
+      (session) => session.id === params.transportEndpointId,
+    ) || null
   );
 }
 
@@ -1051,7 +1136,9 @@ async function removeConversationParticipantTransportAddress(params: {
   );
 }
 
-async function archiveConversationMemberIfOrphaned(conversationMemberId: string) {
+async function archiveConversationMemberIfOrphaned(
+  conversationMemberId: string,
+) {
   const result = await query(
     `SELECT cm.member_type,
             cm.state,
@@ -1067,7 +1154,11 @@ async function archiveConversationMemberIfOrphaned(conversationMemberId: string)
   );
   const row = result.rows[0];
   if (!row) return;
-  if (row.member_type !== "external" || row.state !== "active" || row.has_addresses) {
+  if (
+    row.member_type !== "external" ||
+    row.state !== "active" ||
+    row.has_addresses
+  ) {
     return;
   }
 
@@ -1077,10 +1168,7 @@ async function archiveConversationMemberIfOrphaned(conversationMemberId: string)
          left_at = COALESCE(left_at, NOW()),
          metadata = metadata || $2::jsonb
      WHERE id = $1`,
-    [
-      conversationMemberId,
-      JSON.stringify({ retiredByTransportLink: true }),
-    ],
+    [conversationMemberId, JSON.stringify({ retiredByTransportLink: true })],
   );
 }
 
@@ -1150,7 +1238,9 @@ export async function syncTransportAddressConversationMember(params: {
   return desiredMember;
 }
 
-async function listConversationIdsForTransportAddress(transportAddressId: string) {
+async function listConversationIdsForTransportAddress(
+  transportAddressId: string,
+) {
   const result = await query(
     `SELECT DISTINCT cm.conversation_id
      FROM conversation_participant_addresses cpa
@@ -1203,12 +1293,7 @@ async function loadConversationExternalMemberPrimaryAddress(params: {
        AND cm.id = $3
        AND cm.member_type = 'external'
      LIMIT $4`,
-    [
-      params.workspaceId,
-      params.conversationId,
-      params.conversationMemberId,
-      1,
-    ],
+    [params.workspaceId, params.conversationId, params.conversationMemberId, 1],
   );
   return result.rows[0] ?? null;
 }
@@ -1449,7 +1534,9 @@ export async function findTransportMessageLinkByExternalMessage(params: {
      LIMIT 1`,
     values,
   );
-  return result.rows[0] ? normalizeTransportMessageLinkRow(result.rows[0]) : null;
+  return result.rows[0]
+    ? normalizeTransportMessageLinkRow(result.rows[0])
+    : null;
 }
 
 export async function updateTransportMessageLinkStatus(params: {
@@ -1481,7 +1568,9 @@ export async function updateTransportMessageLinkStatus(params: {
       }),
     ],
   );
-  return result.rows[0] ? normalizeTransportMessageLinkRow(result.rows[0]) : null;
+  return result.rows[0]
+    ? normalizeTransportMessageLinkRow(result.rows[0])
+    : null;
 }
 
 export async function loadTransportMessageLinkForDelivery(linkId: string) {
@@ -1490,6 +1579,8 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
             ta.workspace_id AS account_workspace_id,
             ta.account_key,
             ta.display_name AS account_display_name,
+            ta.owner_scope,
+            ta.owner_user_id,
             ta.connection_mode,
             ta.status AS account_status,
             ta.credentials,
@@ -1524,6 +1615,8 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
       transport_kind: row.transport_kind,
       account_key: row.account_key,
       display_name: row.account_display_name,
+      owner_scope: row.owner_scope,
+      owner_user_id: row.owner_user_id,
       connection_mode: row.connection_mode,
       status: row.account_status,
       credentials: row.credentials,

@@ -1551,9 +1551,7 @@ export interface ToolPlugin {
   name: string;
   kind: "action" | "callable";
   definition: ToolDefinition;
-  resolve?: (
-    ctx: ToolResolveContext,
-  ) =>
+  resolve?: (ctx: ToolResolveContext) =>
     | {
         active: boolean;
         definition: ToolDefinition;
@@ -1580,11 +1578,7 @@ export interface AIResponse {
 // MCP Plugin Marketplace Types
 // ============================================================
 
-export type MarketplaceItemKind =
-  | "plugin"
-  | "skill"
-  | "actor"
-  | "model";
+export type MarketplaceItemKind = "plugin" | "skill" | "actor" | "model";
 export type PluginTransport =
   | "builtin"
   | "stdio"
@@ -1671,10 +1665,7 @@ export type PluginInstallStepKind =
   | "confirm"
   | "attachment_scope"
   | "reuse_scope";
-export type PluginInstallActionKind =
-  | "auth_start"
-  | "external_link"
-  | "noop";
+export type PluginInstallActionKind = "auth_start" | "external_link" | "noop";
 export type PluginAuthBindingDriverKind =
   | "oauth2_authorization_code_pkce"
   | "mijia_qr_login";
@@ -2134,11 +2125,11 @@ export interface AvailableSkillSummary {
 }
 
 export type SkillUseScope =
-  | 'workspace'
-  | 'conversation'
-  | 'actor_global'
-  | 'actor_conversation'
-  | 'user';
+  | "workspace"
+  | "conversation"
+  | "actor_global"
+  | "actor_conversation"
+  | "user";
 
 export interface SkillAttachmentFile {
   id: string;
@@ -2368,11 +2359,7 @@ export type TransportKind = "feishu" | "weixin";
 export type TransportConnectionMode = "webhook" | "long_connection";
 export type TransportEndpointType = "direct" | "group";
 export type TransportAccountStatus = "active" | "disabled" | "error";
-export type TransportDeliveryStatus =
-  | "pending"
-  | "sent"
-  | "failed"
-  | "skipped";
+export type TransportDeliveryStatus = "pending" | "sent" | "failed" | "skipped";
 
 export interface ConversationEntityRef {
   memberId?: UUID;
@@ -2404,12 +2391,16 @@ export interface TransportConnectorCapability {
   supportsGroupMessages: boolean;
 }
 
+export type TransportAccountOwnerScope = "workspace" | "workspace_user";
+
 export interface TransportAccountSummary {
   id: UUID;
   workspaceId: UUID;
   transportKind: TransportKind;
   accountKey: string;
   displayName: string;
+  ownerScope: TransportAccountOwnerScope;
+  ownerUserId?: UUID;
   connectionMode: TransportConnectionMode;
   status: TransportAccountStatus;
   credentials?: Record<string, unknown>;
@@ -2572,9 +2563,7 @@ export type ActorVersionChangeWire =
   | ({ kind: "field" } & ActorVersionFieldChangeWire)
   | ({ kind: "doc" } & ActorVersionDocChangeWire);
 
-export type InteractionRequestKind =
-  | "question_choice"
-  | "relay_authorization";
+export type InteractionRequestKind = "question_choice" | "relay_authorization";
 
 export type InteractionRequestStatus =
   | "pending"
@@ -2619,8 +2608,7 @@ export interface InteractionQuestionFieldAnswer {
   text?: string;
 }
 
-export interface InteractionQuestionFieldSummary
-  extends InteractionQuestionFieldDefinition {
+export interface InteractionQuestionFieldSummary extends InteractionQuestionFieldDefinition {
   required: boolean;
   answer?: InteractionQuestionFieldAnswer;
 }
@@ -2826,8 +2814,7 @@ function formatConversationEntityName(
   entity: Partial<ConversationEntityRef> | undefined,
   fallback: string,
 ) {
-  const name =
-    typeof entity?.name === "string" ? entity.name.trim() : "";
+  const name = typeof entity?.name === "string" ? entity.name.trim() : "";
   return name || fallback;
 }
 
@@ -3002,7 +2989,9 @@ export function summarizeConversationEvent(
 
     const fragments: string[] = [];
     if (fromVersion !== null && toVersion !== null) {
-      fragments.push(`${actorName} updated from v${fromVersion} to v${toVersion}.`);
+      fragments.push(
+        `${actorName} updated from v${fromVersion} to v${toVersion}.`,
+      );
     } else {
       fragments.push(`${actorName} updated their profile.`);
     }
@@ -3031,7 +3020,9 @@ export function summarizeConversationEvent(
     const sourceTitle =
       typeof payload.sourceTitle === "string" ? payload.sourceTitle.trim() : "";
     const sourceSummary =
-      typeof payload.sourceSummary === "string" ? payload.sourceSummary.trim() : "";
+      typeof payload.sourceSummary === "string"
+        ? payload.sourceSummary.trim()
+        : "";
     if (sourceTitle && sourceSummary) {
       return `${sourceTitle}: ${sourceSummary}`;
     }
@@ -3863,7 +3854,14 @@ export interface RelayExposureRecord {
   stableKey: string;
   displayName: string;
   transport: "builtin" | "stdio" | "http" | "sse" | "custom";
-  runtimeStatus: "discovered" | "starting" | "healthy" | "degraded" | "failed" | "quarantined" | "offline";
+  runtimeStatus:
+    | "discovered"
+    | "starting"
+    | "healthy"
+    | "degraded"
+    | "failed"
+    | "quarantined"
+    | "offline";
   managementMode: "manual" | "imported" | "mirrored" | "managed" | "builtin";
   projectedCatalogItemId?: string;
   metadata: Record<string, unknown>;

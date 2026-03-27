@@ -738,6 +738,9 @@ CREATE TABLE transport_accounts (
     CHECK (transport_kind IN ('feishu', 'weixin')),
   account_key VARCHAR(120) NOT NULL,
   display_name VARCHAR(255) NOT NULL,
+  owner_scope VARCHAR(30) NOT NULL DEFAULT 'workspace'
+    CHECK (owner_scope IN ('workspace', 'workspace_user')),
+  owner_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   connection_mode VARCHAR(30) NOT NULL
     CHECK (connection_mode IN ('webhook', 'long_connection')),
   status VARCHAR(20) NOT NULL DEFAULT 'active'
@@ -747,11 +750,18 @@ CREATE TABLE transport_accounts (
   metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (
+    (owner_scope = 'workspace' AND owner_user_id IS NULL) OR
+    (owner_scope = 'workspace_user' AND owner_user_id IS NOT NULL)
+  ),
   UNIQUE(workspace_id, transport_kind, account_key)
 );
 
 CREATE INDEX idx_transport_accounts_workspace
   ON transport_accounts(workspace_id, transport_kind, created_at DESC);
+CREATE INDEX idx_transport_accounts_owner_user
+  ON transport_accounts(owner_user_id, created_at DESC)
+  WHERE owner_user_id IS NOT NULL;
 
 CREATE TABLE transport_endpoints (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

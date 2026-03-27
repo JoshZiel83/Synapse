@@ -42,6 +42,17 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "workspace-level chief actor preferences",
   },
   {
+    table: "transport_accounts",
+    requiredColumns: [
+      "workspace_id",
+      "transport_kind",
+      "account_key",
+      "owner_scope",
+      "owner_user_id",
+    ],
+    reason: "IM transport account ownership",
+  },
+  {
     table: "platform_access_bindings",
     requiredColumns: ["user_id", "access_key", "source"],
     reason: "platform access bindings",
@@ -78,12 +89,22 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
   },
   {
     table: "session_engine_branches",
-    requiredColumns: ["session_id", "engine_kind", "binding_key", "native_state"],
+    requiredColumns: [
+      "session_id",
+      "engine_kind",
+      "binding_key",
+      "native_state",
+    ],
     reason: "provider/session branch persistence",
   },
   {
     table: "engine_branch_checkpoints",
-    requiredColumns: ["branch_id", "engine_kind", "binding_key", "native_state"],
+    requiredColumns: [
+      "branch_id",
+      "engine_kind",
+      "binding_key",
+      "native_state",
+    ],
     reason: "branch checkpoints and recovery",
   },
   {
