@@ -714,6 +714,10 @@ export async function actorThink(
       // Set turn+round context for MCP executor
       if (options?.mcpSetTurnId) options.mcpSetTurnId(turnId, currentRound);
 
+      if (onStatus) {
+        await onStatus('Calling AI model...');
+      }
+
       const {
         response,
         provider,

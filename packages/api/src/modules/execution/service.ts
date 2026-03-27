@@ -1,6 +1,8 @@
 import { createHash } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../../infrastructure/database/index.js';
+import { updateSessionStatus } from '../session/service.js';
+import { publishSessionRuntime } from '../session/runtime.js';
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -423,7 +425,7 @@ export async function logRuntimeEvent(params: {
 export async function recoverInterruptedExecutions(params?: {
   errorMessage?: string;
 }) {
-  const errorMessage = params?.errorMessage || 'Interrupted by server shutdown before the tool call completed.';
+  const errorMessage = params?.errorMessage || 'Interrupted while the turn was still running.';
 
   const interruptedToolCalls = await query<{
     tool_call_id: string;
@@ -478,30 +480,47 @@ export async function recoverInterruptedExecutions(params?: {
     recoveredToolCalls += 1;
   }
 
-  const interruptedTurns = await query<{ id: string; session_id: string | null }>(
-    `SELECT id, session_id FROM turns WHERE status = 'running'`,
+  const interruptedTurns = await query<{
+    id: string;
+    session_id: string | null;
+    workspace_id: string | null;
+  }>(
+    `SELECT t.id, t.session_id, c.workspace_id
+     FROM turns t
+     LEFT JOIN sessions s ON s.id = t.session_id
+     LEFT JOIN conversations c ON c.id = s.conversation_id
+     WHERE t.status = 'running'`,
   );
 
-  const sessionIds = new Set<string>();
+  const sessionsById = new Map<string, { workspaceId: string | null; turnId: string }>();
   for (const row of interruptedTurns.rows) {
     await updateTurnStatus(row.id, 'failed', {
-      metadata: { errorMessage, interruptedByShutdown: true },
+      metadata: { errorMessage, interruptedByRecovery: true },
     });
-    if (row.session_id) sessionIds.add(row.session_id);
+    if (row.session_id) {
+      sessionsById.set(row.session_id, {
+        workspaceId: row.workspace_id,
+        turnId: row.id,
+      });
+    }
   }
 
   let recoveredSessions = 0;
-  for (const sessionId of sessionIds) {
-    await query(
-      `UPDATE sessions
-       SET status = 'failed',
-           error_message = COALESCE(error_message, $2),
-           completed_at = COALESCE(completed_at, NOW()),
-           updated_at = NOW()
-       WHERE id = $1
-         AND status = 'active'`,
-      [sessionId, errorMessage],
-    );
+  for (const [sessionId, sessionInfo] of sessionsById.entries()) {
+    await updateSessionStatus(sessionId, 'blocked', { errorMessage });
+    if (sessionInfo.workspaceId) {
+      await publishSessionRuntime(sessionInfo.workspaceId, sessionId, {
+        laneState: 'blocked',
+        health: 'error',
+        phase: 'error',
+        statusText: errorMessage,
+        currentTurnId: sessionInfo.turnId,
+        lastError: {
+          message: errorMessage,
+          at: new Date().toISOString(),
+        },
+      }).catch(() => {});
+    }
     recoveredSessions += 1;
   }
 

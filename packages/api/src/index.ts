@@ -56,6 +56,7 @@ import {
   shutdownAllRelays,
 } from "./modules/mcp-plugins/relay-manager.js";
 import { shutdownAllInstances } from "./modules/mcp-plugins/instance-manager.js";
+import { recoverInterruptedExecutions } from "./modules/execution/service.js";
 import { registerActionToolPlugins } from "./modules/ai/tools.js";
 import { registerCallableToolPlugins } from "./modules/ai/session-tools.js";
 import { startSessionThinkingWorker } from "./workers/session-thinking.js";
@@ -147,6 +148,24 @@ async function main() {
   } catch (err) {
     console.error("Failed to initialize MCP runtime:", err);
     process.exit(1);
+  }
+
+  try {
+    const recovered = await recoverInterruptedExecutions({
+      errorMessage:
+        "Recovered after the previous worker stopped while this turn was still running.",
+    });
+    if (
+      recovered.recoveredToolCalls > 0 ||
+      recovered.recoveredTurns > 0 ||
+      recovered.recoveredSessions > 0
+    ) {
+      console.warn(
+        `Recovered interrupted executions (toolCalls=${recovered.recoveredToolCalls}, turns=${recovered.recoveredTurns}, sessions=${recovered.recoveredSessions})`,
+      );
+    }
+  } catch (err) {
+    console.error("Failed to recover interrupted executions:", err);
   }
 
   registerActionToolPlugins();
