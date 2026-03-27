@@ -1,6 +1,7 @@
 import { query } from '../../infrastructure/database/index.js';
 import { saveFromBuffer, type FileRecord } from '../../infrastructure/storage/file-io.js';
 import { getFileUrl, getFullUrl, readAsBuffer } from '../../infrastructure/storage/index.js';
+import type { FileRecordView } from '@synapse/shared/types';
 
 export function getFileUrlById(fileId: string): string {
   return `/files/${fileId}`;
@@ -25,7 +26,7 @@ export async function uploadFile(
  */
 export async function getFileRecord(fileId: string): Promise<FileRecord | null> {
   const result = await query(
-    `SELECT id, stored_name, original_name, mime_type, size_bytes
+    `SELECT id, stored_name, original_name, mime_type, size_bytes, metadata
      FROM files WHERE id = $1`,
     [fileId],
   );
@@ -40,6 +41,32 @@ export async function getFileRecord(fileId: string): Promise<FileRecord | null> 
     originalName: row.original_name,
     mimeType: row.mime_type,
     sizeBytes: Number(row.size_bytes),
+    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : undefined,
+  };
+}
+
+export async function getFileDetail(fileId: string): Promise<FileRecordView | null> {
+  const result = await query(
+    `SELECT id, workspace_id, uploader_user_id, stored_name, original_name, mime_type, size_bytes, metadata, created_at
+     FROM files
+     WHERE id = $1`,
+    [fileId],
+  );
+  if (result.rows.length === 0) return null;
+
+  const row = result.rows[0];
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    uploaderUserId: row.uploader_user_id,
+    originalName: row.original_name,
+    storedName: row.stored_name,
+    url: getFileUrl(row.stored_name),
+    fullUrl: getFullUrl(row.stored_name),
+    mimeType: row.mime_type,
+    sizeBytes: Number(row.size_bytes),
+    createdAt: new Date(row.created_at).toISOString(),
+    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : undefined,
   };
 }
 

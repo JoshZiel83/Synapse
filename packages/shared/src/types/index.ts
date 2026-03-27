@@ -1134,6 +1134,40 @@ export type CanonicalContentBlockInput =
   | CanonicalTextBlockInput
   | CanonicalFileRefBlockInput;
 
+// ============ Files ============
+
+export interface RelayMcpFileSourceMetadata {
+  kind: "relay_mcp";
+  deviceId: UUID;
+  deviceDisplayName?: string;
+  exposureId: UUID;
+  exposureStableKey: string;
+  exposureDisplayName?: string;
+  runtimeSessionId: UUID;
+  visibleToolName: string;
+  namespacedToolName: string;
+}
+
+export interface FileRecordView {
+  id: UUID;
+  workspaceId?: UUID | null;
+  uploaderUserId?: UUID | null;
+  originalName: string;
+  storedName: string;
+  url: string;
+  fullUrl: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: Timestamp;
+  metadata?: Record<string, unknown> & {
+    source?: RelayMcpFileSourceMetadata | Record<string, unknown>;
+    absolutePath?: string;
+    sha256?: string;
+    modifiedAt?: Timestamp;
+    createdAt?: Timestamp;
+  };
+}
+
 export interface ActorDocTemplate {
   key: CoreActorDocKey;
   title: string;

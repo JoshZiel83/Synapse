@@ -161,8 +161,9 @@ func TestValidateBuiltinFilesystemServer(t *testing.T) {
 					Kind:       "filesystem",
 					InstanceID: "filesystem_default",
 					Filesystem: &BuiltinFilesystemConfig{
-						ReadOnly: boolPtr(true),
-						Scope:    "roots",
+						ReadOnly:            boolPtr(true),
+						Scope:               "roots",
+						MaxGetFileSizeBytes: 4096,
 						Roots: []BuiltinFilesystemRootConfig{
 							{Path: "/tmp", Access: "ro"},
 						},
@@ -181,6 +182,50 @@ func TestValidateBuiltinFilesystemServer(t *testing.T) {
 
 	if errs := Validate(cfg); len(errs) != 0 {
 		t.Fatalf("expected builtin filesystem config to validate, got %v", errs)
+	}
+}
+
+func TestValidateBuiltinFilesystemServerRejectsNonPositiveMaxGetFileSize(t *testing.T) {
+	cfg := &Config{
+		Relay: RelayConfig{
+			ServerBaseURL:         "http://127.0.0.1:3001",
+			WebSocketURL:          "ws://127.0.0.1:3001/ws/relay",
+			DeviceID:              "device-123",
+			PrivateKeyPath:        "/tmp/device-key.pem",
+			ServerTLSPublicKeyPin: "",
+		},
+		Servers: []ServerConfig{
+			{
+				Name:      "filesystem",
+				Transport: "builtin",
+				Builtin: &BuiltinServerConfig{
+					Kind:       "filesystem",
+					InstanceID: "filesystem_default",
+					Filesystem: &BuiltinFilesystemConfig{
+						Scope:               "roots",
+						MaxGetFileSizeBytes: -1,
+						Roots: []BuiltinFilesystemRootConfig{
+							{Path: "/tmp", Access: "ro"},
+						},
+						Index: BuiltinFilesystemIndexConfig{
+							MaxFileSizeBytes: 1024,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	errs := Validate(cfg)
+	found := false
+	for _, err := range errs {
+		if err == `server "filesystem": builtin.filesystem.max_get_file_size_bytes must be greater than 0` {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected max_get_file_size_bytes validation error, got %v", errs)
 	}
 }
 
@@ -248,6 +293,38 @@ servers:
 	}
 	if len(cfg.Servers) != 1 || cfg.Servers[0].Name != "filesystem" {
 		t.Fatalf("expected filesystem server to load, got %+v", cfg.Servers)
+	}
+}
+
+func TestLoadAppliesDefaultBuiltinFilesystemMaxGetFileSize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	data := []byte(`
+servers:
+  - name: filesystem
+    transport: builtin
+    builtin:
+      kind: filesystem
+      filesystem:
+        scope: roots
+        roots:
+          - path: "/tmp"
+            access: ro
+`)
+
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Servers) != 1 || cfg.Servers[0].Builtin == nil || cfg.Servers[0].Builtin.Filesystem == nil {
+		t.Fatalf("expected filesystem builtin config, got %+v", cfg.Servers)
+	}
+	if cfg.Servers[0].Builtin.Filesystem.MaxGetFileSizeBytes != defaultBuiltinFilesystemMaxGetFileSizeBytes {
+		t.Fatalf("expected default max get file size %d, got %d", defaultBuiltinFilesystemMaxGetFileSizeBytes, cfg.Servers[0].Builtin.Filesystem.MaxGetFileSizeBytes)
 	}
 }
 

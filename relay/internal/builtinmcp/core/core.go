@@ -38,6 +38,20 @@ type ImageContent struct {
 	MimeType string `json:"mimeType"`
 }
 
+type ResourceDescriptor struct {
+	Text     string                 `json:"text,omitempty"`
+	Blob     string                 `json:"blob,omitempty"`
+	MimeType string                 `json:"mimeType,omitempty"`
+	URI      string                 `json:"uri,omitempty"`
+	Name     string                 `json:"name,omitempty"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
+}
+
+type ResourceContent struct {
+	Type     string             `json:"type"`
+	Resource ResourceDescriptor `json:"resource"`
+}
+
 func Text(text string) TextContent {
 	return TextContent{
 		Type: "text",
@@ -50,5 +64,17 @@ func PNGImage(data string) ImageContent {
 		Type:     "image",
 		Data:     data,
 		MimeType: "image/png",
+	}
+}
+
+func BinaryResource(name, mimeType, blob string, metadata map[string]interface{}) ResourceContent {
+	return ResourceContent{
+		Type: "resource",
+		Resource: ResourceDescriptor{
+			Name:     name,
+			Blob:     blob,
+			MimeType: mimeType,
+			Metadata: metadata,
+		},
 	}
 }

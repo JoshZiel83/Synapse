@@ -95,12 +95,13 @@ func newBuiltinServer(cfg config.ServerConfig, authStore *runtimeauth.Store) (Se
 		}
 
 		server, err := filesystem.New(filesystem.Config{
-			StableKey:    cfg.StableKey,
-			Name:         cfg.Name,
-			ReadOnly:     cfg.Builtin.Filesystem.ReadOnly != nil && *cfg.Builtin.Filesystem.ReadOnly,
-			Scope:        cfg.Builtin.Filesystem.Scope,
-			GlobalAccess: cfg.Builtin.Filesystem.GlobalAccess,
-			Roots:        roots,
+			StableKey:           cfg.StableKey,
+			Name:                cfg.Name,
+			ReadOnly:            cfg.Builtin.Filesystem.ReadOnly != nil && *cfg.Builtin.Filesystem.ReadOnly,
+			Scope:               cfg.Builtin.Filesystem.Scope,
+			GlobalAccess:        cfg.Builtin.Filesystem.GlobalAccess,
+			MaxGetFileSizeBytes: cfg.Builtin.Filesystem.MaxGetFileSizeBytes,
+			Roots:               roots,
 			Index: filesystem.IndexConfig{
 				Dir:              filepath.Join(config.DefaultDir(), "indexes", "filesystem", cfg.StableKey),
 				ContentEnabled:   cfg.Builtin.Filesystem.Index.ContentEnabled != nil && *cfg.Builtin.Filesystem.Index.ContentEnabled,

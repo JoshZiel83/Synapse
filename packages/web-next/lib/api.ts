@@ -35,6 +35,7 @@ import type {
   SkillMarketplaceEntry,
   SkillUseScope,
 } from "@synapse/shared"
+import type { FileRecordView } from "@synapse/shared/types"
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
 
@@ -1443,6 +1444,9 @@ class ApiClient {
       throw new Error(data.error || "Upload failed")
     }
     return res.json()
+  }
+  getFileInfo(fileId: string): Promise<FileRecordView> {
+    return this.fetch(`/files/${fileId}/info`)
   }
 
   // A2A Apps

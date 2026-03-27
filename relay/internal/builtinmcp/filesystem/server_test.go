@@ -3,6 +3,7 @@ package filesystem
 import (
 	"archive/zip"
 	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -346,6 +347,128 @@ func TestReadTextFileWorksWithoutContentIndexing(t *testing.T) {
 	}
 	if !strings.Contains(content.Text, "plain text still readable") {
 		t.Fatalf("expected file content, got %q", content.Text)
+	}
+}
+
+func TestGetFileReturnsBinaryResource(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "payload.bin")
+	payload := []byte{0x00, 0x01, 0x02, 0x03, 0xff, 0x10}
+	if err := os.WriteFile(target, payload, 0o644); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+
+	server := newTestServer(t, Config{
+		StableKey:           "test-get-file",
+		Name:                "filesystem",
+		Scope:               "roots",
+		MaxGetFileSizeBytes: 1024,
+		Roots: []Root{
+			{ID: "root_0", Path: root, Access: "ro"},
+		},
+		Index: IndexConfig{
+			Dir:              filepath.Join(t.TempDir(), "index"),
+			ContentEnabled:   false,
+			FileTypes:        []string{".bin"},
+			MaxFileSizeBytes: 1024,
+			ParsePDF:         true,
+			ParseOffice:      true,
+		},
+	})
+
+	result, err := server.CallTool(context.Background(), "get_file", map[string]interface{}{
+		"path": target,
+	})
+	if err != nil {
+		t.Fatalf("call get_file: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected get_file to succeed, got error result")
+	}
+	if len(result.Content) != 2 {
+		t.Fatalf("expected text and resource content blocks, got %d", len(result.Content))
+	}
+
+	resource, ok := result.Content[1].(core.ResourceContent)
+	if !ok {
+		t.Fatalf("expected resource content, got %T", result.Content[1])
+	}
+	if resource.Resource.Name != "payload.bin" {
+		t.Fatalf("expected resource name payload.bin, got %q", resource.Resource.Name)
+	}
+	if resource.Resource.MimeType != "application/octet-stream" {
+		t.Fatalf("expected application/octet-stream, got %q", resource.Resource.MimeType)
+	}
+	if resource.Resource.Blob != base64.StdEncoding.EncodeToString(payload) {
+		t.Fatalf("expected base64 payload to match file content")
+	}
+	if resource.Resource.Metadata["absolutePath"] != target {
+		t.Fatalf("expected resource metadata absolutePath %q, got %#v", target, resource.Resource.Metadata["absolutePath"])
+	}
+	if _, ok := resource.Resource.Metadata["sha256"].(string); !ok {
+		t.Fatalf("expected resource metadata sha256, got %#v", resource.Resource.Metadata["sha256"])
+	}
+	if _, ok := resource.Resource.Metadata["modifiedAt"].(string); !ok {
+		t.Fatalf("expected resource metadata modifiedAt, got %#v", resource.Resource.Metadata["modifiedAt"])
+	}
+
+	structured, ok := result.StructuredContent.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected structured content map, got %T", result.StructuredContent)
+	}
+	if structured["path"] != target {
+		t.Fatalf("expected structured path %q, got %#v", target, structured["path"])
+	}
+	if _, ok := structured["sha256"].(string); !ok {
+		t.Fatalf("expected structured sha256, got %#v", structured["sha256"])
+	}
+	if _, ok := structured["modified_at"].(string); !ok {
+		t.Fatalf("expected structured modified_at, got %#v", structured["modified_at"])
+	}
+}
+
+func TestGetFileRejectsOversizedFile(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "large.bin")
+	payload := strings.Repeat("a", 32)
+	if err := os.WriteFile(target, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+
+	server := newTestServer(t, Config{
+		StableKey:           "test-get-file-limit",
+		Name:                "filesystem",
+		Scope:               "roots",
+		MaxGetFileSizeBytes: 16,
+		Roots: []Root{
+			{ID: "root_0", Path: root, Access: "ro"},
+		},
+		Index: IndexConfig{
+			Dir:              filepath.Join(t.TempDir(), "index"),
+			ContentEnabled:   false,
+			FileTypes:        []string{".bin"},
+			MaxFileSizeBytes: 1024,
+			ParsePDF:         true,
+			ParseOffice:      true,
+		},
+	})
+
+	result, err := server.CallTool(context.Background(), "get_file", map[string]interface{}{
+		"path": target,
+	})
+	if err != nil {
+		t.Fatalf("call get_file: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected oversized get_file request to fail")
+	}
+
+	content, ok := result.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if !strings.Contains(content.Text, "exceeds the configured get_file limit") {
+		t.Fatalf("expected size limit message, got %q", content.Text)
 	}
 }
 

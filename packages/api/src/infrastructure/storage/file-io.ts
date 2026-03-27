@@ -18,6 +18,7 @@ export interface FileRecord {
   originalName: string;
   mimeType: string;
   sizeBytes: number;
+  metadata?: Record<string, unknown>;
 }
 
 /** Insert a row in the files table and return a FileRecord */
@@ -45,6 +46,7 @@ async function insertFileRow(
     originalName,
     mimeType,
     sizeBytes,
+    metadata,
   };
 }
 

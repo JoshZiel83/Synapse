@@ -64,6 +64,7 @@ export interface BuiltinFilesystemConfig {
   readOnly?: boolean
   scope?: 'roots' | 'global'
   globalAccess?: 'ro' | 'rw'
+  maxGetFileSizeBytes?: number
   roots?: BuiltinFilesystemRootConfig[]
   index?: BuiltinFilesystemIndexConfig
 }

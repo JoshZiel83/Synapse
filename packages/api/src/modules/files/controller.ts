@@ -5,6 +5,7 @@ import { readAsBuffer } from '../../infrastructure/storage/index.js';
 import {
   canUserAccessFileWorkspace,
   getFileAccessInfo,
+  getFileDetail,
   getStoredFileAccessInfo,
   uploadFile,
 } from './service.js';
@@ -67,6 +68,23 @@ export async function filesUploadController(app: FastifyInstance) {
 
 export async function filesReadController(app: FastifyInstance) {
   app.addHook('onRequest', authMiddleware);
+
+  app.get<{
+    Params: { fileId: string };
+  }>('/files/:fileId/info', async (request, reply) => {
+    const userId = (request as any).user!.userId;
+    const detail = await getFileDetail(request.params.fileId);
+    if (!detail) {
+      return reply.status(404).send({ error: 'File not found' });
+    }
+
+    const allowed = await canUserAccessFileWorkspace(detail.workspaceId ?? null, userId);
+    if (!allowed) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    return detail;
+  });
 
   app.get<{
     Params: { fileId: string };

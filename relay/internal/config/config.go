@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	defaultBuiltinCommandlineMaxTimeoutSec int64 = 300
-	CloseBehaviorAsk                             = "ask"
-	CloseBehaviorTray                            = "tray"
-	CloseBehaviorQuit                            = "quit"
+	defaultBuiltinCommandlineMaxTimeoutSec      int64 = 300
+	defaultBuiltinFilesystemMaxGetFileSizeBytes       = 20 * 1024 * 1024
+	CloseBehaviorAsk                                  = "ask"
+	CloseBehaviorTray                                 = "tray"
+	CloseBehaviorQuit                                 = "quit"
 )
 
 type RelayConfig struct {
@@ -95,11 +96,12 @@ type BuiltinFilesystemIndexConfig struct {
 }
 
 type BuiltinFilesystemConfig struct {
-	ReadOnly     *bool                         `yaml:"read_only,omitempty" json:"readOnly,omitempty"`
-	Scope        string                        `yaml:"scope,omitempty" json:"scope,omitempty"`
-	GlobalAccess string                        `yaml:"global_access,omitempty" json:"globalAccess,omitempty"`
-	Roots        []BuiltinFilesystemRootConfig `yaml:"roots,omitempty" json:"roots,omitempty"`
-	Index        BuiltinFilesystemIndexConfig  `yaml:"index,omitempty" json:"index,omitempty"`
+	ReadOnly            *bool                         `yaml:"read_only,omitempty" json:"readOnly,omitempty"`
+	Scope               string                        `yaml:"scope,omitempty" json:"scope,omitempty"`
+	GlobalAccess        string                        `yaml:"global_access,omitempty" json:"globalAccess,omitempty"`
+	MaxGetFileSizeBytes int64                         `yaml:"max_get_file_size_bytes,omitempty" json:"maxGetFileSizeBytes,omitempty"`
+	Roots               []BuiltinFilesystemRootConfig `yaml:"roots,omitempty" json:"roots,omitempty"`
+	Index               BuiltinFilesystemIndexConfig  `yaml:"index,omitempty" json:"index,omitempty"`
 }
 
 type BuiltinChromeConfig struct {
@@ -517,10 +519,11 @@ func cloneBuiltin(input *BuiltinServerConfig) *BuiltinServerConfig {
 		copy(roots, input.Filesystem.Roots)
 
 		clone.Filesystem = &BuiltinFilesystemConfig{
-			ReadOnly:     cloneBoolPtr(input.Filesystem.ReadOnly),
-			Scope:        input.Filesystem.Scope,
-			GlobalAccess: input.Filesystem.GlobalAccess,
-			Roots:        roots,
+			ReadOnly:            cloneBoolPtr(input.Filesystem.ReadOnly),
+			Scope:               input.Filesystem.Scope,
+			GlobalAccess:        input.Filesystem.GlobalAccess,
+			MaxGetFileSizeBytes: input.Filesystem.MaxGetFileSizeBytes,
+			Roots:               roots,
 			Index: BuiltinFilesystemIndexConfig{
 				ContentEnabled:   cloneBoolPtr(input.Filesystem.Index.ContentEnabled),
 				FileTypes:        fileTypes,
@@ -649,6 +652,9 @@ func applyBuiltinDefaults(server *ServerConfig) {
 		}
 		if strings.TrimSpace(server.Builtin.Filesystem.GlobalAccess) == "" {
 			server.Builtin.Filesystem.GlobalAccess = "ro"
+		}
+		if server.Builtin.Filesystem.MaxGetFileSizeBytes == 0 {
+			server.Builtin.Filesystem.MaxGetFileSizeBytes = defaultBuiltinFilesystemMaxGetFileSizeBytes
 		}
 		if server.Builtin.Filesystem.Index.ContentEnabled == nil {
 			server.Builtin.Filesystem.Index.ContentEnabled = boolPtr(false)
@@ -792,6 +798,9 @@ func validateServerConfig(server ServerConfig) error {
 				}
 			default:
 				return fmt.Errorf("builtin.filesystem.scope %q is unsupported", server.Builtin.Filesystem.Scope)
+			}
+			if server.Builtin.Filesystem.MaxGetFileSizeBytes <= 0 {
+				return fmt.Errorf("builtin.filesystem.max_get_file_size_bytes must be greater than 0")
 			}
 			for i, root := range server.Builtin.Filesystem.Roots {
 				if strings.TrimSpace(root.Path) == "" {

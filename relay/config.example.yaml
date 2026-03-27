@@ -43,6 +43,7 @@ servers:
   #       read_only: false
   #       scope: "roots"        # roots | global
   #       global_access: "ro"   # ro | rw, only used when scope=global
+  #       max_get_file_size_bytes: 20971520
   #       roots:
   #         - path: "/workspace"
   #           access: "rw"

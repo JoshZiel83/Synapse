@@ -2,6 +2,10 @@ import { fileRefBlock, normalizeCanonicalContentBlocks, textBlock, textBlocks, t
 import type { NormalizedMcpToolResult } from '@synapse/shared/types';
 import { saveFromBase64, saveFromUrl, type FileRecord } from '../../infrastructure/storage/file-io.js';
 
+export interface McpResultNormalizeOptions {
+  binaryMetadata?: Record<string, unknown>;
+}
+
 function mimeToCategory(mimeType: string): 'image' | 'audio' | 'video' | 'document' {
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('audio/')) return 'audio';
@@ -21,9 +25,30 @@ function fileRecordToFileRef(rec: FileRecord, category: 'image' | 'audio' | 'vid
   });
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function mergeBinaryMetadata(
+  base?: Record<string, unknown>,
+  specific?: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!base && !specific) {
+    return {};
+  }
+  return {
+    ...(base || {}),
+    ...(specific || {}),
+  };
+}
+
 async function normalizeMcpContentArray(
   content: unknown[],
   workspaceId: string,
+  options?: McpResultNormalizeOptions,
 ): Promise<CanonicalContentBlock[]> {
   const blocks: CanonicalContentBlock[] = [];
 
@@ -54,6 +79,7 @@ async function normalizeMcpContentArray(
               workspaceId,
               null,
               'plugin_output',
+              options?.binaryMetadata,
             );
             blocks.push(fileRecordToFileRef(rec, 'image'));
             break;
@@ -65,6 +91,7 @@ async function normalizeMcpContentArray(
               null,
               'mcp-image.png',
               'plugin_output',
+              options?.binaryMetadata,
             );
             blocks.push(fileRecordToFileRef(rec, mimeToCategory(rec.mimeType)));
             break;
@@ -78,6 +105,7 @@ async function normalizeMcpContentArray(
               workspaceId,
               null,
               'plugin_output',
+              options?.binaryMetadata,
             );
             blocks.push(fileRecordToFileRef(rec, 'image'));
             break;
@@ -101,6 +129,7 @@ async function normalizeMcpContentArray(
               workspaceId,
               null,
               'plugin_output',
+              options?.binaryMetadata,
             );
             blocks.push(fileRecordToFileRef(rec, 'audio'));
             break;
@@ -121,13 +150,22 @@ async function normalizeMcpContentArray(
             const mimeType = block.resource.mimeType;
             const category = mimeToCategory(mimeType);
             const ext = mimeType.split('/')[1] || 'bin';
+            const originalName =
+              typeof block.resource?.name === 'string' && block.resource.name.trim()
+                ? block.resource.name.trim()
+                : `mcp-resource.${ext}`;
+            const perFileMetadata = mergeBinaryMetadata(
+              options?.binaryMetadata,
+              asRecord(block.resource?.metadata),
+            );
             const rec = await saveFromBase64(
               block.resource.blob,
-              `mcp-resource.${ext}`,
+              originalName,
               mimeType,
               workspaceId,
               null,
               'plugin_output',
+              perFileMetadata,
             );
             blocks.push(fileRecordToFileRef(rec, category));
           } else if (block.resource?.uri) {
@@ -158,6 +196,7 @@ async function normalizeMcpContentArray(
 export async function normalizeMcpToolResult(
   rawResult: unknown,
   workspaceId: string,
+  options?: McpResultNormalizeOptions,
 ): Promise<NormalizedMcpToolResult> {
   if (typeof rawResult === 'string') {
     return {
@@ -168,7 +207,7 @@ export async function normalizeMcpToolResult(
 
   if (Array.isArray(rawResult)) {
     return {
-      content: await normalizeMcpContentArray(rawResult, workspaceId),
+      content: await normalizeMcpContentArray(rawResult, workspaceId, options),
       rawResult,
     };
   }
@@ -196,7 +235,7 @@ export async function normalizeMcpToolResult(
 
   if (Array.isArray(candidate.content)) {
     return {
-      content: await normalizeMcpContentArray(candidate.content, workspaceId),
+      content: await normalizeMcpContentArray(candidate.content, workspaceId, options),
       isError: candidate.isError === true,
       structuredContent,
       rawResult,

@@ -118,6 +118,25 @@ function clearRelayToolRuntimeContexts(sessionId: string) {
   }
 }
 
+function buildRelayBinaryMetadata(
+  context: RelayToolRuntimeContext,
+  namespacedToolName: string,
+): Record<string, unknown> {
+  return {
+    source: {
+      kind: "relay_mcp",
+      deviceId: context.deviceId,
+      deviceDisplayName: context.deviceDisplayName,
+      exposureId: context.exposureId,
+      exposureStableKey: context.exposureStableKey,
+      exposureDisplayName: context.exposureDisplayName,
+      runtimeSessionId: context.runtimeSessionId,
+      visibleToolName: context.visibleToolName,
+      namespacedToolName,
+    },
+  };
+}
+
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
@@ -780,7 +799,17 @@ export async function resolveMcpToolsForActor(
 
     try {
       rawOutput = await instance.execute(toolName, input);
-      return await normalizeMcpToolResult(rawOutput, params.workspaceId);
+      const relayContext =
+        instance.transport === "relay"
+          ? getRelayToolRuntimeContext(params.sessionId, namespacedToolName)
+          : undefined;
+      return await normalizeMcpToolResult(
+        rawOutput,
+        params.workspaceId,
+        relayContext
+          ? { binaryMetadata: buildRelayBinaryMetadata(relayContext, namespacedToolName) }
+          : undefined,
+      );
     } catch (error: any) {
       isError = true;
       errorMessage = error.message;

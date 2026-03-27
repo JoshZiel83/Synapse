@@ -17,6 +17,13 @@ func (s *Server) buildTools() []core.Tool {
 			}, []string{"path"}),
 		},
 		{
+			Name:        "get_file",
+			Description: "Return one regular file as a binary attachment. The relay refuses files larger than the configured max_get_file_size_bytes limit.",
+			InputSchema: objectSchema(map[string]interface{}{
+				"path": stringSchema("Absolute path to the file. Relative paths are only allowed when exactly one scoped root exists."),
+			}, []string{"path"}),
+		},
+		{
 			Name:        "read_multiple_files",
 			Description: "Read multiple files as UTF-8 text or extracted document text in one request.",
 			InputSchema: objectSchema(map[string]interface{}{

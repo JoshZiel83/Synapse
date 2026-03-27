@@ -2,9 +2,14 @@ package filesystem
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +19,7 @@ import (
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
+	"github.com/djherbis/times"
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -120,6 +126,8 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 		return s.listAllowedDirectories(runtimeSessionID), nil
 	case "read_text_file":
 		return s.readTextFile(runtimeSessionID, args)
+	case "get_file":
+		return s.getFile(runtimeSessionID, args)
 	case "read_multiple_files":
 		return s.readMultipleFiles(runtimeSessionID, args)
 	case "write_file":
@@ -441,6 +449,70 @@ func (s *Server) readTextFile(runtimeSessionID string, args map[string]interface
 	}), nil
 }
 
+func (s *Server) getFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+	var input struct {
+		Path string `json:"path"`
+	}
+	if err := decodeArgs(args, &input); err != nil {
+		return errorResult(fmt.Sprintf("Invalid get_file arguments: %v", err)), nil
+	}
+
+	resolved, err := s.resolvePath(runtimeSessionID, input.Path, false, false)
+	if err != nil {
+		return toolResultError("get_file", "get_file", err), nil
+	}
+
+	info, err := os.Stat(resolved.Path)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to stat %q: %v", resolved.Path, err)), nil
+	}
+	if info.IsDir() {
+		return errorResult(fmt.Sprintf("%q is a directory. Use list_directory or directory_tree instead.", resolved.Path)), nil
+	}
+	if !info.Mode().IsRegular() {
+		return errorResult(fmt.Sprintf("%q is not a regular file and cannot be returned as an attachment.", resolved.Path)), nil
+	}
+
+	maxSizeBytes := s.cfg.MaxGetFileSizeBytes
+	if maxSizeBytes <= 0 {
+		maxSizeBytes = 20 * 1024 * 1024
+	}
+	if info.Size() > maxSizeBytes {
+		return errorResult(fmt.Sprintf("The file %q is %d bytes, which exceeds the configured get_file limit of %d bytes.", resolved.Path, info.Size(), maxSizeBytes)), nil
+	}
+
+	data, err := os.ReadFile(resolved.Path)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to read %q: %v", resolved.Path, err)), nil
+	}
+	if int64(len(data)) > maxSizeBytes {
+		return errorResult(fmt.Sprintf("The file %q grew beyond the configured get_file limit of %d bytes while being read.", resolved.Path, maxSizeBytes)), nil
+	}
+
+	mimeType := detectFileMimeType(resolved.Path, data)
+	encoded := base64.StdEncoding.EncodeToString(data)
+	sha256Sum := sha256.Sum256(data)
+	sha256Hex := hex.EncodeToString(sha256Sum[:])
+	fileMetadata := buildGetFileMetadata(resolved.Path, info, sha256Hex)
+	return core.CallResult{
+		Content: []interface{}{
+			core.Text(fmt.Sprintf("Retrieved %q as an attachment (%d bytes, %s).", resolved.Path, len(data), mimeType)),
+			core.BinaryResource(filepath.Base(resolved.Path), mimeType, encoded, fileMetadata),
+		},
+		StructuredContent: map[string]interface{}{
+			"path":        resolved.Path,
+			"name":        filepath.Base(resolved.Path),
+			"mime_type":   mimeType,
+			"size_bytes":  len(data),
+			"sha256":      sha256Hex,
+			"modified_at": fileMetadata["modifiedAt"],
+			"created_at":  fileMetadata["createdAt"],
+			"root_id":     resolved.Root.ID,
+			"access":      resolved.Root.Access,
+		},
+	}, nil
+}
+
 func (s *Server) readMultipleFiles(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		Paths []string `json:"paths"`
@@ -755,6 +827,39 @@ func decodeArgs(input map[string]interface{}, target interface{}) error {
 		return err
 	}
 	return json.Unmarshal(data, target)
+}
+
+func detectFileMimeType(path string, data []byte) string {
+	extMime := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
+	if extMime != "" {
+		if mediaType, _, err := mime.ParseMediaType(extMime); err == nil && mediaType != "" {
+			return mediaType
+		}
+		return extMime
+	}
+
+	if len(data) == 0 {
+		return "application/octet-stream"
+	}
+	if len(data) > 512 {
+		data = data[:512]
+	}
+	return http.DetectContentType(data)
+}
+
+func buildGetFileMetadata(path string, info os.FileInfo, sha256Hex string) map[string]interface{} {
+	metadata := map[string]interface{}{
+		"absolutePath": path,
+		"sha256":       sha256Hex,
+		"sizeBytes":    info.Size(),
+		"modifiedAt":   info.ModTime().UTC().Format(time.RFC3339),
+	}
+
+	if statTimes, err := times.Stat(path); err == nil && statTimes.HasBirthTime() {
+		metadata["createdAt"] = statTimes.BirthTime().UTC().Format(time.RFC3339)
+	}
+
+	return metadata
 }
 
 func textResult(text string, structured interface{}) core.CallResult {
