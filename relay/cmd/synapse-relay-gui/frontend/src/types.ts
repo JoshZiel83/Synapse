@@ -105,7 +105,6 @@ export interface BuiltinServerConfig {
 export interface ServerConfig {
   stableKey?: string
   syncSourceKey?: string
-  managementMode?: 'manual' | 'imported' | 'mirrored' | 'managed' | 'builtin'
   enabled?: boolean
   name: string
   transport: 'stdio' | 'http' | 'builtin'
@@ -121,7 +120,7 @@ export interface SyncSourceConfig {
   sourceKind: 'manual' | 'claude_code' | 'claude_desktop' | 'codex' | 'gemini' | 'opencode' | 'custom'
   sourceKey: string
   configPath?: string
-  syncMode: 'import_only' | 'observe' | 'mirror' | 'managed' | 'detached'
+  syncMode: 'snapshot' | 'follow'
   status: 'unknown' | 'idle' | 'syncing' | 'error' | 'disabled'
   lastSyncedAt?: string
   lastError?: string

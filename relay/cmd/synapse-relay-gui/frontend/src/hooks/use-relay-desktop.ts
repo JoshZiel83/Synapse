@@ -183,6 +183,11 @@ export function useRelayDesktop() {
     await saveConfig({
       ...currentConfig,
       syncSources: (currentConfig.syncSources || []).filter((item) => item.sourceKey !== sourceKey),
+      servers: (currentConfig.servers || []).map((server) => (
+        server.syncSourceKey === sourceKey
+          ? { ...server, syncSourceKey: undefined }
+          : server
+      )),
     })
     await detectSources()
   })

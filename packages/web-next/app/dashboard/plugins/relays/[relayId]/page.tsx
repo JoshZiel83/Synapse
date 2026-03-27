@@ -523,7 +523,7 @@ export default function RelayDevicePage() {
                           <Badge variant={exposureVariant(exposure.runtimeStatus)}>{exposure.runtimeStatus}</Badge>
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          {exposure.transport} · {exposure.managementMode}
+                          {exposure.transport}
                         </div>
                         <div className="flex flex-wrap gap-2">
                           <Badge variant="outline">{exposure.tools.length} tools</Badge>
@@ -552,7 +552,7 @@ export default function RelayDevicePage() {
                         </Badge>
                       </div>
                       <AppCardDescription className="mt-2">
-                        {activeExposure.transport} transport · {activeExposure.managementMode} management
+                        {activeExposure.transport} transport
                       </AppCardDescription>
                     </div>
                   </div>

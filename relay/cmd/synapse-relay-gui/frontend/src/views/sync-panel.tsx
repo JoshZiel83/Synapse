@@ -29,10 +29,8 @@ const syncModes: Array<{
   value: SyncSourceConfig['syncMode']
   label: string
 }> = [
-  { value: 'observe', label: 'Observe' },
-  { value: 'mirror', label: 'Mirror' },
-  { value: 'managed', label: 'Managed' },
-  { value: 'import_only', label: 'Import Only' },
+  { value: 'follow', label: 'Follow' },
+  { value: 'snapshot', label: 'Snapshot' },
 ]
 
 function metadataDisplayName(metadata?: Record<string, unknown>) {
@@ -52,7 +50,7 @@ export function SyncPanel({
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [selectedSourceKey, setSelectedSourceKey] = useState('')
-  const [selectedMode, setSelectedMode] = useState<SyncSourceConfig['syncMode']>('observe')
+  const [selectedMode, setSelectedMode] = useState<SyncSourceConfig['syncMode']>('follow')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
 
@@ -115,7 +113,7 @@ export function SyncPanel({
       await onAddSyncSource(selectedSource, selectedMode)
       setExpanded((current) => new Set(current).add(selectedSource.sourceKey))
       setSelectedSourceKey('')
-      setSelectedMode('observe')
+      setSelectedMode('follow')
       setOpen(false)
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : String(cause))
@@ -208,7 +206,7 @@ export function SyncPanel({
 
                     <Button variant="ghost" onClick={() => void handleRemoveTarget(target.sourceKey)}>
                       <Trash2 data-icon="inline-start" />
-                      Remove
+                      Detach
                     </Button>
                   </div>
 
@@ -285,7 +283,7 @@ export function SyncPanel({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Sync Target</DialogTitle>
-            <DialogDescription>Choose one target and one mode.</DialogDescription>
+            <DialogDescription>Choose one source and how Relay should sync from it.</DialogDescription>
           </DialogHeader>
 
           <div className="mt-5 flex flex-col gap-5">

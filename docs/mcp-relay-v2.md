@@ -14,7 +14,7 @@
 
 - Device key generation and local secure storage
 - Pairing UX
-- Local MCP discovery, import, watch, merge, and write-back
+- Local MCP discovery, import, and one-way follow sync from external MCP sources
 - Exposure supervision and health isolation
 - Tool catalog tracking and list-changed handling
 - Operation execution dedupe by `operation_id`
@@ -84,7 +84,7 @@
 The server keeps source metadata only.
 
 - `source_kind`: `manual`, `claude_code`, `claude_desktop`, `codex`, `gemini`, `opencode`, `custom`
-- `sync_mode`: `import_only`, `observe`, `mirror`, `managed`, `detached`
+- `sync_mode`: `snapshot`, `follow`
 - `status`: `unknown`, `idle`, `syncing`, `error`, `disabled`
 
 The server does not read or write source config files itself.

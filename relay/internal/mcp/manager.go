@@ -18,13 +18,12 @@ import (
 
 // ServerInfo describes a server and its tools for registration with the cloud
 type ServerInfo struct {
-	StableKey      string                 `json:"stableKey"`
-	SyncSourceKey  string                 `json:"syncSourceKey,omitempty"`
-	ManagementMode string                 `json:"managementMode"`
-	Name           string                 `json:"name"`
-	Transport      string                 `json:"transport"`
-	Metadata       map[string]interface{} `json:"metadata,omitempty"`
-	Tools          []ToolInfo             `json:"tools"`
+	StableKey     string                 `json:"stableKey"`
+	SyncSourceKey string                 `json:"syncSourceKey,omitempty"`
+	Name          string                 `json:"name"`
+	Transport     string                 `json:"transport"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	Tools         []ToolInfo             `json:"tools"`
 }
 
 // ToolInfo describes a single tool
@@ -45,14 +44,13 @@ type Server interface {
 }
 
 type serverEntry struct {
-	stableKey      string
-	syncSourceKey  string
-	managementMode string
-	name           string
-	transport      string
-	metadata       map[string]interface{}
-	server         Server
-	tools          []Tool
+	stableKey     string
+	syncSourceKey string
+	name          string
+	transport     string
+	metadata      map[string]interface{}
+	server        Server
+	tools         []Tool
 }
 
 type toolListChangeNotifier interface {
@@ -162,14 +160,13 @@ func (m *Manager) InitAll(ctx context.Context) error {
 
 		m.mu.Lock()
 		m.servers = append(m.servers, serverEntry{
-			stableKey:      cfg.StableKey,
-			syncSourceKey:  cfg.SyncSourceKey,
-			managementMode: cfg.ManagementMode,
-			name:           cfg.Name,
-			transport:      cfg.Transport,
-			metadata:       configCloneMetadata(cfg.Metadata),
-			server:         srv,
-			tools:          tools,
+			stableKey:     cfg.StableKey,
+			syncSourceKey: cfg.SyncSourceKey,
+			name:          cfg.Name,
+			transport:     cfg.Transport,
+			metadata:      configCloneMetadata(cfg.Metadata),
+			server:        srv,
+			tools:         tools,
 		})
 		m.mu.Unlock()
 	}
@@ -205,13 +202,12 @@ func (m *Manager) GetServerInfo() []ServerInfo {
 			}
 		}
 		infos = append(infos, ServerInfo{
-			StableKey:      s.stableKey,
-			SyncSourceKey:  s.syncSourceKey,
-			ManagementMode: s.managementMode,
-			Name:           s.name,
-			Transport:      s.transport,
-			Metadata:       configCloneMetadata(s.metadata),
-			Tools:          tools,
+			StableKey:     s.stableKey,
+			SyncSourceKey: s.syncSourceKey,
+			Name:          s.name,
+			Transport:     s.transport,
+			Metadata:      configCloneMetadata(s.metadata),
+			Tools:         tools,
 		})
 	}
 	return infos

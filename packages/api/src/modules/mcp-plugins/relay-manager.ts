@@ -44,7 +44,6 @@ interface RelayExposureRegistration {
   displayName: string;
   transport: 'builtin' | 'stdio' | 'http' | 'sse' | 'custom';
   runtimeStatus: 'discovered' | 'starting' | 'healthy' | 'degraded' | 'failed' | 'quarantined' | 'offline';
-  managementMode: 'manual' | 'imported' | 'mirrored' | 'managed' | 'builtin';
   metadata: Record<string, unknown>;
   tools: RelayToolRegistration[];
 }
@@ -53,7 +52,7 @@ interface RelaySyncSourceRegistration {
   sourceKind: 'manual' | 'claude_code' | 'claude_desktop' | 'codex' | 'gemini' | 'opencode' | 'custom';
   sourceKey: string;
   configPath: string | null;
-  syncMode: 'import_only' | 'observe' | 'mirror' | 'managed' | 'detached';
+  syncMode: 'snapshot' | 'follow';
   status: 'unknown' | 'idle' | 'syncing' | 'error' | 'disabled';
   lastSyncedAt: string | null;
   lastError: string | null;
@@ -1310,7 +1309,6 @@ function normalizeExposureRegistration(raw: unknown, index: number): RelayExposu
     displayName,
     transport: normalizeTransport(raw.transport),
     runtimeStatus: normalizeRuntimeStatus(raw.runtimeStatus),
-    managementMode: normalizeManagementMode(raw.managementMode),
     metadata: asObject(raw.metadata),
     tools: toolsRaw
       .map((tool, toolIndex) => normalizeToolRegistration(tool, toolIndex))
@@ -1375,7 +1373,7 @@ function normalizeToolRegistration(raw: unknown, index: number): RelayToolRegist
 }
 
 function normalizeTransport(value: unknown): RelayExposureRegistration['transport'] {
-  if (value === 'http' || value === 'sse' || value === 'custom') return value;
+  if (value === 'builtin' || value === 'http' || value === 'sse' || value === 'custom') return value;
   return 'stdio';
 }
 
@@ -1390,17 +1388,6 @@ function normalizeRuntimeStatus(value: unknown): RelayExposureRegistration['runt
       return value;
     default:
       return 'healthy';
-  }
-}
-
-function normalizeManagementMode(value: unknown): RelayExposureRegistration['managementMode'] {
-  switch (value) {
-    case 'imported':
-    case 'mirrored':
-    case 'managed':
-      return value;
-    default:
-      return 'manual';
   }
 }
 
@@ -1420,13 +1407,17 @@ function normalizeSyncSourceKind(value: unknown): RelaySyncSourceRegistration['s
 
 function normalizeSyncMode(value: unknown): RelaySyncSourceRegistration['syncMode'] {
   switch (value) {
+    case 'snapshot':
     case 'import_only':
+    case 'detached':
+      return 'snapshot';
+    case 'follow':
+    case 'observe':
     case 'mirror':
     case 'managed':
-    case 'detached':
-      return value;
+      return 'follow';
     default:
-      return 'observe';
+      return 'follow';
   }
 }
 
@@ -1516,16 +1507,15 @@ async function syncDeviceCatalog(
 async function upsertExposure(deviceId: string, exposure: RelayExposureRegistration, syncSourceId: string | null) {
   const result = await query(
      `INSERT INTO relay_exposures (
-       device_id, sync_source_id, stable_key, display_name, transport, runtime_status, management_mode,
+       device_id, sync_source_id, stable_key, display_name, transport, runtime_status,
        last_seen_at, last_healthy_at, metadata
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), CASE WHEN $8 IN ('healthy', 'degraded') THEN NOW() ELSE NULL END, $9)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW(), CASE WHEN $7 IN ('healthy', 'degraded') THEN NOW() ELSE NULL END, $8)
      ON CONFLICT (device_id, stable_key) DO UPDATE SET
        sync_source_id = EXCLUDED.sync_source_id,
        display_name = EXCLUDED.display_name,
        transport = EXCLUDED.transport,
        runtime_status = EXCLUDED.runtime_status,
-       management_mode = EXCLUDED.management_mode,
        last_seen_at = NOW(),
        last_healthy_at = CASE
          WHEN EXCLUDED.runtime_status IN ('healthy', 'degraded') THEN NOW()
@@ -1541,7 +1531,6 @@ async function upsertExposure(deviceId: string, exposure: RelayExposureRegistrat
       exposure.displayName,
       exposure.transport,
       exposure.runtimeStatus,
-      exposure.managementMode,
       exposure.runtimeStatus,
       JSON.stringify(exposure.metadata),
     ],

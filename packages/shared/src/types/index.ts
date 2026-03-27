@@ -3916,7 +3916,6 @@ export interface RelayExposureRecord {
     | "failed"
     | "quarantined"
     | "offline";
-  managementMode: "manual" | "imported" | "mirrored" | "managed" | "builtin";
   projectedCatalogItemId?: string;
   metadata: Record<string, unknown>;
   createdAt: string;

@@ -112,6 +112,11 @@ func (a *App) startup(ctx context.Context) {
 	if err != nil {
 		cfg = &config.Config{LogLevel: "info"}
 	}
+	if importer.ReconcileConfig(cfg, importer.DetectAll()) {
+		if err := a.persistConfigSilently(cfg); err != nil {
+			log.Printf("Warning: failed to persist follow sync updates: %v", err)
+		}
+	}
 	if changed, syncErr := a.syncStartupStateFromSystem(cfg); syncErr != nil {
 		log.Printf("Warning: failed to read startup preference: %v", syncErr)
 	} else if changed {
@@ -296,7 +301,6 @@ func (a *App) GetConfig() *config.Config {
 }
 
 func (a *App) SaveConfig(cfg config.Config) error {
-	normalizeLinkedServerManagementModes(&cfg)
 	a.setConfig(&cfg)
 	message, autoApplied, err := a.persistConfig(&cfg)
 	if err != nil {
@@ -382,7 +386,6 @@ func (a *App) claimPairing(serverBaseURL, pairingCode, displayName string) (*clo
 	}
 
 	cfg.Relay = *nextRelay
-	normalizeLinkedServerManagementModes(cfg)
 	a.setConfig(cfg)
 
 	message, autoApplied, err := a.persistConfig(cfg)
@@ -433,6 +436,12 @@ func (a *App) StartRelay() error {
 	}
 
 	cfg := a.getConfigSnapshot()
+	if importer.ReconcileConfig(cfg, importer.DetectAll()) {
+		if err := a.persistConfigSilently(cfg); err != nil {
+			return err
+		}
+		a.emitConfigUpdated(cfg, "Follow sync sources updated from disk.", false)
+	}
 	errs := config.Validate(cfg)
 	if len(errs) > 0 {
 		return fmt.Errorf("config invalid: %s", errs[0])
@@ -529,11 +538,7 @@ func (a *App) AddServer(sc config.ServerConfig) error {
 			return fmt.Errorf("server %q already exists", sc.Name)
 		}
 	}
-	if sc.ManagementMode == "" {
-		sc.ManagementMode = "manual"
-	}
 	cfg.Servers = append(cfg.Servers, sc)
-	normalizeLinkedServerManagementModes(cfg)
 	a.setConfig(cfg)
 	message, autoApplied, err := a.persistConfig(cfg)
 	if err != nil {
@@ -548,7 +553,6 @@ func (a *App) RemoveServer(name string) error {
 	for i, s := range cfg.Servers {
 		if s.Name == name {
 			cfg.Servers = append(cfg.Servers[:i], cfg.Servers[i+1:]...)
-			normalizeLinkedServerManagementModes(cfg)
 			a.setConfig(cfg)
 			message, autoApplied, err := a.persistConfig(cfg)
 			if err != nil {
@@ -566,6 +570,7 @@ func (a *App) RemoveServer(name string) error {
 func (a *App) DetectSources() []GUISource {
 	sources := importer.DetectAll()
 	cfg := a.getConfigSnapshot()
+	dirty := importer.ReconcileConfig(cfg, sources)
 	bySourceKey := make(map[string]config.SyncSourceConfig, len(cfg.SyncSources))
 	linkedServers := make(map[string]int)
 	for _, source := range cfg.SyncSources {
@@ -577,7 +582,6 @@ func (a *App) DetectSources() []GUISource {
 		}
 	}
 
-	dirty := false
 	result := make([]GUISource, len(sources))
 	for i, s := range sources {
 		existing := bySourceKey[s.SourceKey]
@@ -587,13 +591,13 @@ func (a *App) DetectSources() []GUISource {
 			Name:       s.Name,
 			ConfigPath: s.ConfigPath,
 			Available:  s.Available,
-			SyncMode:   existing.SyncMode,
+			SyncMode:   config.NormalizeSyncMode(existing.SyncMode),
 			Status:     existing.Status,
 			LinkedMCPs: linkedServers[s.SourceKey],
 			Error:      s.Error,
 			Servers:    make([]GUIImportServer, len(s.Servers)),
 		}
-		gs.Status = syncSourceStatusForDetection(s.Available, s.Error)
+		gs.Status = importer.SyncSourceStatus(s.Available, s.Error)
 		for j, srv := range s.Servers {
 			gs.Servers[j] = GUIImportServer{
 				SourceKind:       srv.SourceKind,
@@ -608,23 +612,6 @@ func (a *App) DetectSources() []GUISource {
 			}
 		}
 
-		if existing.SourceKey != "" {
-			next := existing
-			next.SourceKind = s.Kind
-			next.ConfigPath = s.ConfigPath
-			next.Status = gs.Status
-			if s.Error != "" {
-				next.LastError = s.Error
-			} else {
-				next.LastError = ""
-			}
-			next.Metadata = ensureMetadata(next.Metadata)
-			next.Metadata["detectedServerCount"] = len(s.Servers)
-			if !syncSourceEqual(existing, next) {
-				upsertSyncSourceConfig(cfg, next)
-				dirty = true
-			}
-		}
 		result[i] = gs
 	}
 
@@ -653,9 +640,9 @@ func (a *App) ImportServers(servers []GUIImportServer) error {
 		}
 		if srv.SourceKey != "" {
 			syncSource := findSyncSourceConfig(cfg, srv.SourceKey)
-			syncMode := "import_only"
+			syncMode := config.SyncModeSnapshot
 			if syncSource != nil && strings.TrimSpace(syncSource.SyncMode) != "" {
-				syncMode = syncSource.SyncMode
+				syncMode = config.NormalizeSyncMode(syncSource.SyncMode)
 			}
 			upsertSyncSourceConfig(cfg, config.SyncSourceConfig{
 				SourceKind: srv.SourceKind,
@@ -669,14 +656,13 @@ func (a *App) ImportServers(servers []GUIImportServer) error {
 			})
 		}
 		sc := config.ServerConfig{
-			SyncSourceKey:  srv.SourceKey,
-			ManagementMode: managementModeForImport(srv.SourceKey),
-			Name:           srv.Name,
-			Transport:      srv.Transport,
-			Command:        srv.Command,
-			Args:           srv.Args,
-			Env:            srv.Env,
-			Endpoint:       srv.Endpoint,
+			SyncSourceKey: srv.SourceKey,
+			Name:          srv.Name,
+			Transport:     srv.Transport,
+			Command:       srv.Command,
+			Args:          srv.Args,
+			Env:           srv.Env,
+			Endpoint:      srv.Endpoint,
 			Metadata: map[string]interface{}{
 				"sourceKind": srv.SourceKind,
 			},
@@ -693,7 +679,6 @@ func (a *App) ImportServers(servers []GUIImportServer) error {
 		return fmt.Errorf("all selected servers already exist in config")
 	}
 
-	normalizeLinkedServerManagementModes(cfg)
 	a.setConfig(cfg)
 	message, autoApplied, err := a.persistConfig(cfg)
 	if err != nil {
@@ -703,28 +688,12 @@ func (a *App) ImportServers(servers []GUIImportServer) error {
 	return nil
 }
 
-func syncSourceStatusForDetection(available bool, detectErr string) string {
-	if available {
-		return "idle"
-	}
-	if detectErr != "" {
-		return "error"
-	}
-	return "disabled"
-}
-
-func managementModeForImport(sourceKey string) string {
-	if strings.TrimSpace(sourceKey) == "" {
-		return "manual"
-	}
-	return "imported"
-}
-
 func upsertSyncSourceConfig(cfg *config.Config, next config.SyncSourceConfig) {
 	if cfg == nil || strings.TrimSpace(next.SourceKey) == "" {
 		return
 	}
 
+	next.SyncMode = config.NormalizeSyncMode(next.SyncMode)
 	next.Metadata = ensureMetadata(next.Metadata)
 	for i := range cfg.SyncSources {
 		if cfg.SyncSources[i].SourceKey == next.SourceKey {
@@ -745,17 +714,6 @@ func findSyncSourceConfig(cfg *config.Config, sourceKey string) *config.SyncSour
 		}
 	}
 	return nil
-}
-
-func syncSourceEqual(left, right config.SyncSourceConfig) bool {
-	return left.SourceKind == right.SourceKind &&
-		left.SourceKey == right.SourceKey &&
-		left.ConfigPath == right.ConfigPath &&
-		left.SyncMode == right.SyncMode &&
-		left.Status == right.Status &&
-		left.LastSyncedAt == right.LastSyncedAt &&
-		left.LastError == right.LastError &&
-		metadataString(left.Metadata, "detectedServerCount") == metadataString(right.Metadata, "detectedServerCount")
 }
 
 func ensureMetadata(metadata map[string]interface{}) map[string]interface{} {
@@ -812,40 +770,6 @@ func (a *App) getAuthFailurePermanent() bool {
 	a.authFailureMu.RLock()
 	defer a.authFailureMu.RUnlock()
 	return a.authFailurePermanent
-}
-
-func normalizeLinkedServerManagementModes(cfg *config.Config) {
-	if cfg == nil {
-		return
-	}
-
-	bySourceKey := make(map[string]string, len(cfg.SyncSources))
-	for _, source := range cfg.SyncSources {
-		bySourceKey[source.SourceKey] = source.SyncMode
-	}
-
-	for i := range cfg.Servers {
-		if cfg.Servers[i].Transport == "builtin" {
-			cfg.Servers[i].ManagementMode = "builtin"
-			continue
-		}
-		if strings.TrimSpace(cfg.Servers[i].SyncSourceKey) == "" {
-			cfg.Servers[i].ManagementMode = "manual"
-			continue
-		}
-		cfg.Servers[i].ManagementMode = managementModeForSyncMode(bySourceKey[cfg.Servers[i].SyncSourceKey])
-	}
-}
-
-func managementModeForSyncMode(syncMode string) string {
-	switch syncMode {
-	case "mirror":
-		return "mirrored"
-	case "managed":
-		return "managed"
-	default:
-		return "imported"
-	}
 }
 
 // --- Logs ---

@@ -2058,8 +2058,8 @@ CREATE TABLE relay_sync_sources (
     CHECK (source_kind IN ('manual', 'claude_code', 'claude_desktop', 'codex', 'gemini', 'opencode', 'custom')),
   source_key VARCHAR(255) NOT NULL,
   config_path TEXT,
-  sync_mode VARCHAR(20) NOT NULL DEFAULT 'observe'
-    CHECK (sync_mode IN ('import_only', 'observe', 'mirror', 'managed', 'detached')),
+  sync_mode VARCHAR(20) NOT NULL DEFAULT 'follow'
+    CHECK (sync_mode IN ('snapshot', 'follow')),
   status VARCHAR(20) NOT NULL DEFAULT 'unknown'
     CHECK (status IN ('unknown', 'idle', 'syncing', 'error', 'disabled')),
   last_synced_at TIMESTAMPTZ,
@@ -2080,8 +2080,6 @@ CREATE TABLE relay_exposures (
     CHECK (transport IN ('builtin', 'stdio', 'http', 'sse', 'custom')),
   runtime_status VARCHAR(20) NOT NULL DEFAULT 'discovered'
     CHECK (runtime_status IN ('discovered', 'starting', 'healthy', 'degraded', 'failed', 'quarantined', 'offline')),
-  management_mode VARCHAR(20) NOT NULL DEFAULT 'manual'
-    CHECK (management_mode IN ('manual', 'imported', 'mirrored', 'managed', 'builtin')),
   projected_catalog_item_id UUID REFERENCES catalog_items(id) ON DELETE SET NULL,
   last_seen_at TIMESTAMPTZ,
   last_healthy_at TIMESTAMPTZ,
