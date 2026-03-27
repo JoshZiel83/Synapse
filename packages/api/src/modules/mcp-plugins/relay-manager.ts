@@ -23,6 +23,13 @@ import { emitEvent } from '../../infrastructure/events/index.js';
 import { touchRelayExposureAuthzState } from './relay-access.js';
 import { ingestAutomationProviderEvent } from '../automation/service.js';
 import { enqueueAutomationExecutionJobs } from '../../workers/queues.js';
+import {
+  getPendingRelayAuthorizationApplication,
+  listPendingRelayAuthorizationApplicationsForDevice,
+  markRelayAuthorizationInteractionApplied,
+  markRelayAuthorizationInteractionApplyFailed,
+  type PendingRelayAuthorizationApplication,
+} from '../interactions/service.js';
 
 interface RelayToolRegistration {
   stableKey: string;
@@ -68,6 +75,7 @@ interface PendingRelayOperation {
   workspaceId: string;
   exposureId: string;
   exposureStableKey: string;
+  runtimeSessionId: string;
   visibleToolName: string;
   toolId: string;
   toolRevisionId: string;
@@ -80,6 +88,23 @@ interface PendingRelayOperation {
   deliverySeq: number | null;
   deliveryId: string | null;
   resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+}
+
+interface PendingRelayAuthorizationApply {
+  interactionId: string;
+  deviceId: string;
+  deliveryId: string | null;
+  timeoutTimer: NodeJS.Timeout;
+}
+
+interface PendingRelayRuntimeSessionRequest {
+  action: 'open' | 'close';
+  runtimeSessionId: string;
+  deviceId: string;
+  deliveryId: string | null;
+  timeoutTimer: NodeJS.Timeout;
+  resolve: () => void;
   reject: (error: Error) => void;
 }
 
@@ -101,6 +126,7 @@ interface RelayExposureCatalog {
   deviceId: string;
   deviceDisplayName: string;
   exposureId: string;
+  exposureStableKey: string;
   exposureDisplayName: string;
   transport: string;
   tools: RelayCatalogToolSnapshot[];
@@ -112,6 +138,7 @@ interface RelayCallParams {
   visibleToolName: string;
   binding: RelayHiddenToolBinding;
   args: Record<string, unknown>;
+  runtimeSessionId: string;
 }
 
 type RelayAuthRow = {
@@ -130,6 +157,10 @@ let relayLifecycleSweepTimer: NodeJS.Timeout | null = null;
 const RELAY_LIFECYCLE_OFFLINE_GRACE_MS =
   relayDeviceOfflineEventDefinition.graceWindowMs || 60_000;
 const RELAY_LIFECYCLE_SWEEP_INTERVAL_MS = 15_000;
+const RELAY_AUTHORIZATION_APPLY_TIMEOUT_MS = 30_000;
+const pendingRelayAuthorizationApplies = new Map<string, PendingRelayAuthorizationApply>();
+const RELAY_RUNTIME_SESSION_TIMEOUT_MS = 15_000;
+const pendingRelayRuntimeSessionRequests = new Map<string, PendingRelayRuntimeSessionRequest>();
 
 export function handleRelayConnection(socket: any, _req: any, _app: FastifyInstance) {
   let deviceId: string | null = null;
@@ -355,6 +386,7 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
           socket.send(JSON.stringify({ type: 'catalog.sync_error', code: 'catalog_sync_rejected', message: error, retryable: true }));
         } else {
           void redrivePendingRelayOperations(connected);
+          void redrivePendingRelayAuthorizations(connected);
           socket.send(JSON.stringify({ type: 'catalog.synced', exposureCount: exposures.length }));
         }
       } catch (error: any) {
@@ -380,6 +412,16 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
       await resolveOperationResult(connected, msg);
       return;
     }
+
+    if (msg.type === 'authorization.result' && typeof msg.interactionId === 'string') {
+      await resolveAuthorizationResult(connected, msg);
+      return;
+    }
+
+    if (msg.type === 'runtime_session.result' && typeof msg.runtimeSessionId === 'string') {
+      await resolveRuntimeSessionResult(connected, msg);
+      return;
+    }
   });
 
   socket.on('close', () => {
@@ -394,6 +436,14 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
 }
 
 export async function callRelayTool(params: RelayCallParams): Promise<unknown> {
+  if (!params.runtimeSessionId) {
+    throw buildRelayExecutionError({
+      code: 'delivery_rejected',
+      message: 'Relay runtime session is not initialized for this tool instance',
+      retryable: true,
+    });
+  }
+
   const connected = connectedRelays.get(params.deviceId);
   if (!connected || connected.ws.readyState !== 1) {
     throw buildRelayExecutionError({
@@ -479,6 +529,7 @@ export async function callRelayTool(params: RelayCallParams): Promise<unknown> {
       workspaceId: connected.workspaceId,
       exposureId: params.exposureId,
       exposureStableKey: exposure.stableKey,
+      runtimeSessionId: params.runtimeSessionId,
       visibleToolName: currentTool.visible.name,
       toolId: params.binding.toolId,
       toolRevisionId: params.binding.toolRevisionId,
@@ -565,6 +616,7 @@ async function dispatchPendingRelayOperation(connected: ConnectedRelay, pending:
     const payload = {
       exposureId: pending.exposureId,
       exposureStableKey: pending.exposureStableKey,
+      runtimeSessionId: pending.runtimeSessionId,
       toolId: pending.toolId,
       toolRevisionId: pending.toolRevisionId,
       toolName: pending.visibleToolName,
@@ -669,6 +721,7 @@ export function getRelayExposureCatalog(deviceId: string, exposureId: string): R
     deviceId: connected.deviceId,
     deviceDisplayName: connected.displayName,
     exposureId: exposure.exposureId,
+    exposureStableKey: exposure.stableKey,
     exposureDisplayName: exposure.displayName,
     transport: exposure.transport,
     tools: exposure.tools.map((tool) => ({
@@ -681,6 +734,180 @@ export function getRelayExposureCatalog(deviceId: string, exposureId: string): R
       definitionHash: tool.definitionHash,
     })),
   };
+}
+
+export function getConnectedRelaySessionId(deviceId: string): string | null {
+  const connected = connectedRelays.get(deviceId);
+  if (!connected || connected.ws.readyState !== 1) {
+    return null;
+  }
+  return connected.sessionId;
+}
+
+function buildRuntimeSessionRequestKey(action: 'open' | 'close', runtimeSessionId: string) {
+  return `${action}:${runtimeSessionId}`;
+}
+
+export async function openRelayRuntimeSession(params: {
+  deviceId: string;
+  exposureId: string;
+  exposureStableKey: string;
+}): Promise<string> {
+  const connected = connectedRelays.get(params.deviceId);
+  if (!connected || connected.ws.readyState !== 1) {
+    throw buildRelayExecutionError({
+      code: 'mcp_unavailable',
+      message: `Relay device ${params.deviceId} is not connected`,
+      retryable: true,
+    });
+  }
+
+  const exposure = connected.exposures.get(params.exposureId);
+  if (!exposure || exposure.stableKey !== params.exposureStableKey) {
+    throw buildRelayExecutionError({
+      code: 'mcp_unavailable',
+      message: `Relay exposure ${params.exposureId} is not available`,
+      retryable: true,
+    });
+  }
+
+  const runtimeSessionId = crypto.randomUUID();
+  await dispatchRelayRuntimeSessionRequest({
+    action: 'open',
+    connected,
+    runtimeSessionId,
+    payload: {
+      exposureId: params.exposureId,
+      exposureStableKey: params.exposureStableKey,
+    },
+  });
+  return runtimeSessionId;
+}
+
+export async function closeRelayRuntimeSession(params: {
+  deviceId: string;
+  runtimeSessionId: string;
+}): Promise<void> {
+  if (!params.runtimeSessionId) {
+    return;
+  }
+
+  const connected = connectedRelays.get(params.deviceId);
+  if (!connected || connected.ws.readyState !== 1) {
+    return;
+  }
+
+  await dispatchRelayRuntimeSessionRequest({
+    action: 'close',
+    connected,
+    runtimeSessionId: params.runtimeSessionId,
+  }).catch(() => {});
+}
+
+async function dispatchRelayRuntimeSessionRequest(params: {
+  action: 'open' | 'close';
+  connected: ConnectedRelay;
+  runtimeSessionId: string;
+  payload?: {
+    exposureId: string;
+    exposureStableKey: string;
+  };
+}) {
+  const pendingKey = buildRuntimeSessionRequestKey(
+    params.action,
+    params.runtimeSessionId,
+  );
+  if (pendingRelayRuntimeSessionRequests.has(pendingKey)) {
+    return new Promise<void>((resolve, reject) => {
+      const existing = pendingRelayRuntimeSessionRequests.get(pendingKey);
+      if (!existing) {
+        resolve();
+        return;
+      }
+      const poll = setInterval(() => {
+        if (pendingRelayRuntimeSessionRequests.has(pendingKey)) {
+          return;
+        }
+        clearInterval(poll);
+        resolve();
+      }, 50);
+      poll.unref?.();
+      setTimeout(() => {
+        clearInterval(poll);
+        reject(
+          buildRelayExecutionError({
+            code: 'delivery_timed_out',
+            message: 'Relay runtime session request timed out',
+            retryable: true,
+          }),
+        );
+      }, RELAY_RUNTIME_SESSION_TIMEOUT_MS);
+    });
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const timeoutTimer = setTimeout(() => {
+      const pending = pendingRelayRuntimeSessionRequests.get(pendingKey);
+      if (!pending) {
+        return;
+      }
+      pendingRelayRuntimeSessionRequests.delete(pendingKey);
+      pending.reject(
+        buildRelayExecutionError({
+          code: 'delivery_timed_out',
+          message: 'Relay runtime session request timed out',
+          retryable: true,
+        }),
+      );
+    }, RELAY_RUNTIME_SESSION_TIMEOUT_MS);
+
+    const pending: PendingRelayRuntimeSessionRequest = {
+      action: params.action,
+      runtimeSessionId: params.runtimeSessionId,
+      deviceId: params.connected.deviceId,
+      deliveryId: crypto.randomUUID(),
+      timeoutTimer,
+      resolve,
+      reject,
+    };
+    pendingRelayRuntimeSessionRequests.set(pendingKey, pending);
+
+    try {
+      if (params.action === 'open') {
+        params.connected.ws.send(
+          JSON.stringify({
+            type: 'relay.runtime_session.open',
+            protocolVersion: RELAY_PROTOCOL_VERSION,
+            sessionId: params.connected.sessionId,
+            runtimeSessionId: params.runtimeSessionId,
+            deliveryId: pending.deliveryId,
+            payload: params.payload,
+          }),
+        );
+      } else {
+        params.connected.ws.send(
+          JSON.stringify({
+            type: 'relay.runtime_session.close',
+            protocolVersion: RELAY_PROTOCOL_VERSION,
+            sessionId: params.connected.sessionId,
+            runtimeSessionId: params.runtimeSessionId,
+            deliveryId: pending.deliveryId,
+          }),
+        );
+      }
+    } catch (error: any) {
+      clearTimeout(timeoutTimer);
+      pendingRelayRuntimeSessionRequests.delete(pendingKey);
+      reject(
+        buildRelayExecutionError({
+          code: 'delivery_rejected',
+          message:
+            error?.message || 'Failed to dispatch relay runtime session request',
+          retryable: true,
+        }),
+      );
+    }
+  });
 }
 
 export function disconnectRelay(relayId: string) {
@@ -770,9 +997,20 @@ export async function shutdownAllRelays() {
     void failOperation(pending.operationId, 'delivery_rejected', 'Server shutting down', true, false);
   }
 
+  for (const pending of pendingRelayAuthorizationApplies.values()) {
+    clearTimeout(pending.timeoutTimer);
+  }
+
+  for (const pending of pendingRelayRuntimeSessionRequests.values()) {
+    clearTimeout(pending.timeoutTimer);
+    pending.reject(new Error('Server shutting down'));
+  }
+
   const deviceIds = [...connectedRelays.keys()];
   connectedRelays.clear();
   pendingRelayOperations.clear();
+  pendingRelayAuthorizationApplies.clear();
+  pendingRelayRuntimeSessionRequests.clear();
 
   if (deviceIds.length > 0) {
     await query(
@@ -1710,6 +1948,149 @@ async function redrivePendingRelayOperations(connected: ConnectedRelay) {
   }
 }
 
+export async function enqueueRelayAuthorizationApply(interactionId: string) {
+  const application = await getPendingRelayAuthorizationApplication(interactionId);
+  if (!application) {
+    return;
+  }
+
+  const connected = connectedRelays.get(application.deviceId);
+  if (!connected || connected.ws.readyState !== 1) {
+    return;
+  }
+
+  await dispatchPendingRelayAuthorizationApply(connected, application);
+}
+
+async function redrivePendingRelayAuthorizations(connected: ConnectedRelay) {
+  const applications =
+    await listPendingRelayAuthorizationApplicationsForDevice(connected.deviceId);
+
+  for (const application of applications) {
+    await dispatchPendingRelayAuthorizationApply(connected, application);
+  }
+}
+
+async function dispatchPendingRelayAuthorizationApply(
+  connected: ConnectedRelay,
+  application: PendingRelayAuthorizationApplication,
+) {
+  if (pendingRelayAuthorizationApplies.has(application.interactionId)) {
+    return;
+  }
+  if (connected.ws.readyState !== 1) {
+    return;
+  }
+
+  const exposure = connected.exposures.get(application.exposureId);
+  if (!exposure) {
+    await markRelayAuthorizationInteractionApplyFailed(
+      application.interactionId,
+      `Relay exposure ${application.exposureId} is not currently available`,
+    );
+    return;
+  }
+
+  const deliveryId = crypto.randomUUID();
+  const timeoutTimer = setTimeout(() => {
+    const pending = pendingRelayAuthorizationApplies.get(application.interactionId);
+    if (!pending) {
+      return;
+    }
+    pendingRelayAuthorizationApplies.delete(application.interactionId);
+    void markRelayAuthorizationInteractionApplyFailed(
+      application.interactionId,
+      `Relay authorization apply timed out after ${RELAY_AUTHORIZATION_APPLY_TIMEOUT_MS}ms`,
+    );
+  }, RELAY_AUTHORIZATION_APPLY_TIMEOUT_MS);
+
+  pendingRelayAuthorizationApplies.set(application.interactionId, {
+    interactionId: application.interactionId,
+    deviceId: application.deviceId,
+    deliveryId,
+    timeoutTimer,
+  });
+
+  try {
+    connected.ws.send(JSON.stringify({
+      type: 'relay.authorization.apply',
+      protocolVersion: RELAY_PROTOCOL_VERSION,
+      sessionId: connected.sessionId,
+      interactionId: application.interactionId,
+      deliveryId,
+      payload: {
+        exposureId: application.exposureId,
+        exposureStableKey: application.exposureStableKey,
+        runtimeSessionId: application.requestedEffect.runtimeSessionId,
+        relayToolName: application.requestedEffect.relayToolName,
+        reason: application.requestedEffect.reason,
+        duration: application.requestedEffect.duration,
+        requestedScope: application.requestedEffect.requestedScope,
+      },
+    }));
+  } catch (error: any) {
+    clearTimeout(timeoutTimer);
+    pendingRelayAuthorizationApplies.delete(application.interactionId);
+    await markRelayAuthorizationInteractionApplyFailed(
+      application.interactionId,
+      error?.message || 'Failed to dispatch relay authorization apply',
+    );
+  }
+}
+
+async function resolveAuthorizationResult(
+  connected: ConnectedRelay,
+  msg: Record<string, unknown>,
+) {
+  const interactionId = msg.interactionId as string;
+  const pending = pendingRelayAuthorizationApplies.get(interactionId);
+  if (!pending || pending.deviceId !== connected.deviceId) {
+    return;
+  }
+
+  clearTimeout(pending.timeoutTimer);
+  pendingRelayAuthorizationApplies.delete(interactionId);
+
+  const isError = msg.success === false || Boolean(msg.error);
+  if (isError) {
+    const error = normalizeOperationError(msg.error);
+    await markRelayAuthorizationInteractionApplyFailed(
+      interactionId,
+      error.message,
+    );
+    return;
+  }
+
+  await markRelayAuthorizationInteractionApplied(interactionId);
+}
+
+async function resolveRuntimeSessionResult(
+  connected: ConnectedRelay,
+  msg: Record<string, unknown>,
+) {
+  const runtimeSessionId = msg.runtimeSessionId as string;
+  const action =
+    msg.action === 'close'
+      ? 'close'
+      : 'open';
+  const pendingKey = buildRuntimeSessionRequestKey(action, runtimeSessionId);
+  const pending = pendingRelayRuntimeSessionRequests.get(pendingKey);
+  if (!pending || pending.deviceId !== connected.deviceId) {
+    return;
+  }
+
+  clearTimeout(pending.timeoutTimer);
+  pendingRelayRuntimeSessionRequests.delete(pendingKey);
+
+  const isError = msg.success === false || Boolean(msg.error);
+  if (isError) {
+    pending.reject(buildRelayExecutionError(normalizeOperationError(msg.error)));
+    return;
+  }
+
+  pending.resolve();
+}
+
 async function failOperation(
   operationId: string,
   code: string,
@@ -1787,6 +2168,25 @@ function cleanupRelay(deviceId: string) {
       pending.deliveryId = null;
       pending.relaySessionRowId = null;
     }
+  }
+
+  for (const pending of pendingRelayAuthorizationApplies.values()) {
+    if (pending.deviceId !== deviceId) continue;
+    clearTimeout(pending.timeoutTimer);
+    pendingRelayAuthorizationApplies.delete(pending.interactionId);
+  }
+
+  for (const [key, pending] of pendingRelayRuntimeSessionRequests.entries()) {
+    if (pending.deviceId !== deviceId) continue;
+    clearTimeout(pending.timeoutTimer);
+    pendingRelayRuntimeSessionRequests.delete(key);
+    pending.reject(
+      buildRelayExecutionError({
+        code: 'mcp_unavailable',
+        message: `Relay device ${deviceId} disconnected`,
+        retryable: true,
+      }),
+    );
   }
 
   void query(

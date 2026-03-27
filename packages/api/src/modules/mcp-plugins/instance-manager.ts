@@ -25,6 +25,13 @@ export interface McpInstance {
   configHash: string;
   tools: ToolDefinition[];
   execute: (toolName: string, input: Record<string, unknown>) => Promise<unknown>;
+  executeWithBinding?: (
+    toolName: string,
+    input: Record<string, unknown>,
+    binding: unknown,
+  ) => Promise<unknown>;
+  ensureRuntimeSession?: () => Promise<string>;
+  getRuntimeSessionId?: () => string | undefined;
   shutdown: () => Promise<void>;
   lastUsed: number;
   createdAt: number;
@@ -80,6 +87,7 @@ export async function getOrCreateInstance(params: {
   workspaceId?: string;
   idleTtlMs?: number;
   maxAgeMs?: number;
+  factory?: (details: { key: string; configHash: string }) => Promise<McpInstance>;
 }): Promise<McpInstance> {
   const configHash = computeConfigHash(params.config);
   const key = buildInstanceKey(params.installationId, configHash, params.scope, params.scopeId);
@@ -107,8 +115,14 @@ export async function getOrCreateInstance(params: {
     instance = await createStdioInstance(params, key, configHash);
   } else if (params.transport === 'http') {
     instance = await createHttpInstance(params, key, configHash);
+  } else if (params.factory) {
+    instance = await params.factory({ key, configHash });
   } else {
     throw new Error(`Unsupported transport: ${params.transport}`);
+  }
+
+  if (!(instance.idleTtlMs > 0)) {
+    instance.idleTtlMs = params.idleTtlMs ?? getTTLForScope(params.scope);
   }
 
   instanceCache.set(key, instance);
@@ -336,6 +350,8 @@ function resetTTL(key: string, ttl: number) {
       // Check if it was used recently
       if (Date.now() - instance.lastUsed > ttl) {
         instance.shutdown().catch(() => {});
+        instanceCache.delete(key);
+        clearTTLTimer(key);
         logEvent({
           pluginId: instance.pluginId,
           eventType: 'instance.shutdown',
@@ -373,6 +389,8 @@ export async function shutdownSessionInstances(sessionId: string) {
     const instance = instanceCache.get(key);
     if (instance) {
       await instance.shutdown().catch(() => {});
+      instanceCache.delete(key);
+      clearTTLTimer(key);
       logEvent({
         pluginId: instance.pluginId,
         eventType: 'instance.shutdown',

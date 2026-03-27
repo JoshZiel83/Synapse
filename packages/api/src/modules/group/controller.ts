@@ -26,9 +26,20 @@ import {
   listAuthorizedResourceIds,
   userSubject,
 } from "../access/service.js";
-import { listWorkspaceFeedEventsPage } from "../conversation/service.js";
+import {
+  isFeedItemVisibleToUser,
+  listWorkspaceFeedEventsPage,
+} from "../conversation/service.js";
 import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
+import { getConversationMember } from "../conversation/service.js";
+import {
+  enrichFeedItemInteractionsForUser,
+  enrichInteractionForUser,
+  getInteractionRequestSummary,
+  resolveInteractionRequest,
+} from "../interactions/service.js";
+import { enqueueRelayAuthorizationApply } from "../mcp-plugins/relay-manager.js";
 
 const sendGroupMessageSchema = z
   .object({
@@ -88,6 +99,26 @@ const issueConversationGrantSchema = z
       invalid("Exactly one of userId or actorId is required");
     }
   });
+
+const resolveInteractionSchema = z
+  .object({
+    answers: z.array(z.object({
+      fieldId: z.string().min(1),
+      selectedOptionIds: z.array(z.string().min(1)).optional(),
+      otherText: z.string().trim().max(4000).optional(),
+      text: z.string().trim().max(4000).optional(),
+    })).max(50).optional(),
+    selectedOptionId: z.string().min(1).optional(),
+    decision: z.enum(["approve", "reject"]).optional(),
+    note: z.string().trim().max(2000).optional(),
+  })
+  .refine(
+    (body) =>
+      (Array.isArray(body.answers) && body.answers.length > 0) ||
+      typeof body.selectedOptionId === "string" ||
+      typeof body.decision === "string",
+    { message: "answers, selectedOptionId, or decision is required" },
+  );
 
 async function requireWorkspacePermission(
   request: any,
@@ -332,7 +363,18 @@ export default async function groupController(app: FastifyInstance) {
         : 0,
       limit: Number.isFinite(limit) ? limit : 200,
     });
-    return reply.send(page);
+    const visibleRecords = page.records.filter((record) =>
+      isFeedItemVisibleToUser(record.item, userId),
+    );
+    return reply.send({
+      ...page,
+      records: await Promise.all(
+        visibleRecords.map(async (record) => ({
+          ...record,
+          item: await enrichFeedItemInteractionsForUser(record.item, userId),
+        })),
+      ),
+    });
   });
 
   // Create group — accepts { actorId } or { actorIds }, content is optional
@@ -411,7 +453,14 @@ export default async function groupController(app: FastifyInstance) {
       const limit = parseInt(request.query.limit || "100", 10);
       const before = request.query.before;
       const page = await getGroupMessages(group.id, { userId }, limit, before);
-      return reply.send(page);
+      return reply.send({
+        ...page,
+        items: await Promise.all(
+          page.items.map((item) =>
+            enrichFeedItemInteractionsForUser(item, userId),
+          ),
+        ),
+      });
     },
   );
 
@@ -446,6 +495,79 @@ export default async function groupController(app: FastifyInstance) {
       });
 
       return reply.status(201).send(msg);
+    },
+  );
+
+  app.post<{
+    Params: { workspaceId: string; groupId: string; interactionId: string };
+    Body: unknown;
+  }>(
+    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/interactions/:interactionId/respond",
+    async (request, reply) => {
+      const group = await requireGroupPermission(
+        request,
+        reply,
+        "view",
+        "Not allowed to view this conversation",
+      );
+      if (!group) return;
+
+      const userId = (request as any).user!.userId;
+      const interaction = await getInteractionRequestSummary(
+        request.params.interactionId,
+      );
+      if (
+        !interaction ||
+        interaction.workspaceId !== request.params.workspaceId ||
+        interaction.conversationId !== group.id
+      ) {
+        return reply.status(404).send({ error: "Interaction not found" });
+      }
+
+      if (
+        interaction.kind === "relay_authorization" &&
+        interaction.relayAuthorization?.deviceId
+      ) {
+        const allowed = await authorizeAction({
+          subject: userSubject(userId),
+          action: "relay_device.authorize_runtime_access",
+          resourceId: interaction.relayAuthorization.deviceId,
+        });
+        if (!allowed) {
+          return reply
+            .status(403)
+            .send({ error: "Not allowed to authorize this relay device" });
+        }
+      }
+
+      const resolverMember = await getConversationMember({
+        conversationId: group.id,
+        userId,
+      });
+      if (!resolverMember) {
+        return reply
+          .status(403)
+          .send({ error: "You are not an active member of this conversation" });
+      }
+
+      const body = resolveInteractionSchema.parse(request.body);
+      const result = await resolveInteractionRequest({
+        interactionId: interaction.id,
+        resolverUserId: userId,
+        resolverMemberId: resolverMember.id,
+        answers: body.answers,
+        selectedOptionId: body.selectedOptionId,
+        decision: body.decision,
+        note: body.note,
+      });
+
+      if (result.relayApplyNeeded) {
+        await enqueueRelayAuthorizationApply(result.interaction.id);
+      }
+
+      return reply.send({
+        interaction: await enrichInteractionForUser(result.interaction, userId),
+      });
     },
   );
 

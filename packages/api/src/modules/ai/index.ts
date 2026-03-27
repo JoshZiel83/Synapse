@@ -9,6 +9,7 @@ import { buildActorPrompt } from './prompt-builder.js';
 import { logAIRequest } from '../model-groups/service.js';
 import { resolveBuiltinTools, executeCallableTools, isCallableTool, isActionTool } from './tool-plugins.js';
 import { runWithToolContext } from './session-tools.js';
+import { maybeAutoBridgeRelayApproval } from './relay-approval-bridge.js';
 import { getMcpVersion } from '../mcp-plugins/instance-manager.js';
 import { ingestResponseMedia } from './content-ingest.js';
 import { resolveFileRefSegments } from './fileref-resolver.js';
@@ -913,17 +914,44 @@ export async function actorThink(
             const attemptStart = Date.now();
             try {
               const normalizedResult = await options.mcpExecutor(tc.toolName, tc.input);
-              const normalizedContent = normalizedResult.content;
+              let normalizedContent = normalizedResult.content;
+              let metadata: Record<string, unknown> = {
+                ...(normalizedResult.metadata || {}),
+                ...(normalizedResult.structuredContent ? { structuredContent: normalizedResult.structuredContent } : {}),
+              };
+
+              try {
+                const approvalBridge = await maybeAutoBridgeRelayApproval({
+                  actorId: actor.id,
+                  workspaceId,
+                  sessionId: options?.sessionId,
+                  conversationId: options?.groupId || options?.conversationId,
+                  userId: options?.userId,
+                  relayToolName: tc.toolName,
+                  toolInput: tc.input,
+                  result: normalizedResult,
+                });
+                if (approvalBridge) {
+                  normalizedContent = [...normalizedContent, textBlock(approvalBridge.note)];
+                  metadata = {
+                    ...metadata,
+                    relayApprovalBridge: {
+                      status: approvalBridge.status,
+                      interactionId: 'interactionId' in approvalBridge ? approvalBridge.interactionId : undefined,
+                    },
+                  };
+                }
+              } catch (bridgeError: any) {
+                console.error('[AI] Failed to auto-bridge relay approval:', bridgeError?.message || bridgeError);
+              }
+
               mcpResults.push({
                 toolCallId: tc.callId,
                 providerCallId: tc.providerCallId,
                 toolName: tc.toolName,
                 content: normalizedContent,
                 isError: normalizedResult.isError,
-                metadata: {
-                  ...(normalizedResult.metadata || {}),
-                  ...(normalizedResult.structuredContent ? { structuredContent: normalizedResult.structuredContent } : {}),
-                },
+                metadata,
               });
               allSupplementalBlocks.push(...collectFileRefBlocks(normalizedContent));
 

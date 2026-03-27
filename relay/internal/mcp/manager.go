@@ -11,7 +11,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/PekingSpades/Synapse/relay/internal/cloud"
 	"github.com/PekingSpades/Synapse/relay/internal/config"
+	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 // ServerInfo describes a server and its tools for registration with the cloud
@@ -58,10 +60,11 @@ type toolListChangeNotifier interface {
 }
 
 type Manager struct {
-	configs []config.ServerConfig
-	servers []serverEntry
-	mu      sync.RWMutex
-	hints   chan struct{}
+	configs   []config.ServerConfig
+	servers   []serverEntry
+	authStore *runtimeauth.Store
+	mu        sync.RWMutex
+	hints     chan struct{}
 
 	// OnEvent is an optional callback for relay events (e.g. for GUI observability).
 	OnEvent func(evtType string, msg string, data map[string]interface{})
@@ -69,8 +72,9 @@ type Manager struct {
 
 func NewManager(configs []config.ServerConfig) *Manager {
 	return &Manager{
-		configs: configs,
-		hints:   make(chan struct{}, 1),
+		configs:   configs,
+		authStore: runtimeauth.NewStore(""),
+		hints:     make(chan struct{}, 1),
 	}
 }
 
@@ -104,7 +108,7 @@ func (m *Manager) InitAll(ctx context.Context) error {
 
 		case "builtin":
 			var err error
-			srv, err = newBuiltinServer(cfg)
+			srv, err = newBuiltinServer(cfg, m.authStore)
 			if err != nil {
 				log.Printf("Warning: server %s builtin init failed: %v", cfg.Name, err)
 				m.emit("server_failed", fmt.Sprintf("Server %s builtin init failed: %v", cfg.Name, err), map[string]interface{}{
@@ -229,6 +233,105 @@ func (m *Manager) CallTool(ctx context.Context, exposureStableKey, toolName stri
 		return target.CallTool(ctx, toolName, args)
 	}
 	return nil, fmt.Errorf("relay exposure %q not found", exposureStableKey)
+}
+
+func (m *Manager) OpenRuntimeSession(_ context.Context, request cloud.RuntimeSessionRequest) error {
+	if m.authStore == nil {
+		return fmt.Errorf("runtime authorization store is not initialized")
+	}
+	if strings.TrimSpace(request.ExposureStableKey) == "" {
+		return fmt.Errorf("exposure stable key is required")
+	}
+
+	m.mu.RLock()
+	exists := false
+	for _, s := range m.servers {
+		if s.stableKey == request.ExposureStableKey {
+			exists = true
+			break
+		}
+	}
+	m.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("relay exposure %q not found", request.ExposureStableKey)
+	}
+
+	return m.authStore.OpenSession(runtimeauth.RuntimeSession{
+		ID:                request.RuntimeSessionID,
+		ExposureStableKey: request.ExposureStableKey,
+	})
+}
+
+func (m *Manager) CloseRuntimeSession(_ context.Context, runtimeSessionID string) error {
+	if m.authStore != nil {
+		m.authStore.CloseSession(runtimeSessionID)
+	}
+
+	m.mu.RLock()
+	servers := make([]serverEntry, len(m.servers))
+	copy(servers, m.servers)
+	m.mu.RUnlock()
+
+	for _, server := range servers {
+		if aware, ok := server.server.(interface{ CloseRuntimeSession(string) }); ok {
+			aware.CloseRuntimeSession(runtimeSessionID)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) ResetRuntimeSessions(_ context.Context) error {
+	if m.authStore != nil {
+		m.authStore.ResetSessions()
+	}
+
+	m.mu.RLock()
+	servers := make([]serverEntry, len(m.servers))
+	copy(servers, m.servers)
+	m.mu.RUnlock()
+
+	for _, server := range servers {
+		if aware, ok := server.server.(interface{ ResetRuntimeSessions() }); ok {
+			aware.ResetRuntimeSessions()
+		}
+	}
+	return nil
+}
+
+func (m *Manager) ApplyRuntimeAuthorization(_ context.Context, application cloud.RuntimeAuthorizationApplication) error {
+	if m.authStore == nil {
+		return fmt.Errorf("runtime authorization store is not initialized")
+	}
+
+	grant := runtimeauth.Grant{
+		InteractionID:     application.InteractionID,
+		RuntimeSessionID:  application.RuntimeSessionID,
+		ExposureStableKey: application.ExposureStableKey,
+		Duration:          application.Duration,
+		Reason:            application.Reason,
+	}
+
+	capability, _ := application.RequestedScope["capability"].(string)
+	switch strings.TrimSpace(strings.ToLower(capability)) {
+	case "filesystem":
+		grant.Capability = "filesystem"
+		if path, ok := application.RequestedScope["path"].(string); ok {
+			grant.Path = path
+		}
+		if access, ok := application.RequestedScope["access"].(string); ok {
+			grant.Access = access
+		}
+	case "cua":
+		grant.Capability = "cua"
+		if mode, ok := application.RequestedScope["mode"].(string); ok {
+			grant.Mode = mode
+		}
+	default:
+		return fmt.Errorf("unsupported authorization capability %q", capability)
+	}
+
+	return m.authStore.Apply(grant)
 }
 
 // ShutdownAll stops all MCP servers

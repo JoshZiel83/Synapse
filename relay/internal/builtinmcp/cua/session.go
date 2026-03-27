@@ -2,25 +2,41 @@ package cua
 
 import "strconv"
 
+const defaultRuntimeSessionKey = "__default__"
+
 type displaySnapshot struct {
 	Key     string
 	Display DisplayInfo
 }
 
-func (s *Server) initializeSessionDisplays() error {
+type sessionState struct {
+	displays []displaySnapshot
+	ready    bool
+}
+
+func runtimeSessionStateKey(runtimeSessionID string) string {
+	if runtimeSessionID == "" {
+		return defaultRuntimeSessionKey
+	}
+	return runtimeSessionID
+}
+
+func (s *Server) initializeSessionDisplays(runtimeSessionID string) error {
 	displays, err := s.desktop.ListDisplays()
 	if err != nil {
 		return err
 	}
 
 	s.mu.Lock()
-	s.sessionDisplays = snapshotDisplays(displays)
-	s.sessionReady = true
+	s.sessionStates[runtimeSessionStateKey(runtimeSessionID)] = sessionState{
+		displays: snapshotDisplays(displays),
+		ready:    true,
+	}
 	s.mu.Unlock()
 	return nil
 }
 
-func (s *Server) ensureStableDisplays() ([]DisplayInfo, bool, error) {
+func (s *Server) ensureStableDisplays(runtimeSessionID string) ([]DisplayInfo, bool, error) {
 	displays, err := s.desktop.ListDisplays()
 	if err != nil {
 		return nil, false, err
@@ -29,16 +45,23 @@ func (s *Server) ensureStableDisplays() ([]DisplayInfo, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !s.sessionReady {
-		s.sessionDisplays = snapshotDisplays(displays)
-		s.sessionReady = true
+	sessionKey := runtimeSessionStateKey(runtimeSessionID)
+	state := s.sessionStates[sessionKey]
+	if !state.ready {
+		s.sessionStates[sessionKey] = sessionState{
+			displays: snapshotDisplays(displays),
+			ready:    true,
+		}
 		return cloneDisplays(displays), false, nil
 	}
-	if displaySnapshotsEqual(s.sessionDisplays, displays) {
+	if displaySnapshotsEqual(state.displays, displays) {
 		return cloneDisplays(displays), false, nil
 	}
 
-	s.sessionDisplays = snapshotDisplays(displays)
+	s.sessionStates[sessionKey] = sessionState{
+		displays: snapshotDisplays(displays),
+		ready:    true,
+	}
 	return cloneDisplays(displays), true, nil
 }
 

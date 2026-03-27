@@ -11,6 +11,7 @@ import type {
   ConversationFeedItem,
   ConversationMessageTransportContext,
   ConversationMessageTransportDelivery,
+  InteractionRequestSummary,
   TransportKind,
   WorkspaceFeedEventRecord,
 } from "@synapse/shared"
@@ -107,6 +108,7 @@ export interface FeedMessage {
   transportDeliveries?: ConversationMessageTransportDelivery[]
   eventType?: ConversationFeedEventType
   eventPayload?: ConversationFeedEventPayloadMap[ConversationFeedEventType]
+  interaction?: InteractionRequestSummary
 }
 
 export type ThinkingPhase = "thinking" | "tool" | "responding" | "error"
@@ -169,6 +171,12 @@ interface ChatState {
     action: "created" | "profile_updated" | "cancelled"
     title?: string | null
     avatarUrl?: string | null
+  }) => void
+  handleInteractionUpdated: (payload: {
+    conversationId: string
+    interactionId: string
+    itemId?: string
+    interaction: InteractionRequestSummary
   }) => void
 }
 
@@ -388,6 +396,13 @@ function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
       deliveryStatus: "sent",
       eventType: item.eventType,
       eventPayload: item.payload,
+      interaction:
+        item.eventType === "interaction_requested" &&
+        item.payload &&
+        typeof item.payload === "object" &&
+        "interaction" in item.payload
+          ? (item.payload.interaction as InteractionRequestSummary)
+          : undefined,
     }
   }
 
@@ -1088,6 +1103,51 @@ export const useChatStore = create<ChatState>((set, get) => ({
       )
 
       return { groups }
+    })
+  },
+
+  handleInteractionUpdated: (payload) => {
+    set((state) => {
+      if (state.selectedGroupId !== payload.conversationId) {
+        return state
+      }
+
+      const messages = state.messages.map((message) => {
+        const currentInteractionId =
+          message.interaction?.id ||
+          (message.eventType === "interaction_requested" &&
+          message.eventPayload &&
+          typeof message.eventPayload === "object" &&
+          "interaction" in message.eventPayload
+            ? (message.eventPayload.interaction as InteractionRequestSummary).id
+            : undefined)
+
+        if (
+          message.id !== payload.itemId &&
+          currentInteractionId !== payload.interactionId
+        ) {
+          return message
+        }
+
+        const nextPayload = {
+          interaction: payload.interaction,
+        } as ConversationFeedEventPayloadMap["interaction_requested"]
+        const content = summarizeConversationEvent(
+          "interaction_requested",
+          nextPayload
+        )
+
+        return {
+          ...message,
+          content,
+          contentBlocks: textBlocks(content),
+          eventType: "interaction_requested" as const,
+          eventPayload: nextPayload,
+          interaction: payload.interaction,
+        }
+      })
+
+      return { messages }
     })
   },
 }))

@@ -790,7 +790,7 @@ func (s *Server) compileSearchOptions(input SearchQuery) (searchOptions, error) 
 	}
 
 	if strings.TrimSpace(input.Path) != "" {
-		resolved, err := s.resolvePath(input.Path, false, false)
+		resolved, err := s.resolvePath("", input.Path, false, false)
 		if err != nil {
 			return options, err
 		}

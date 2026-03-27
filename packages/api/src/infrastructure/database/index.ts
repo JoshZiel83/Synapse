@@ -86,6 +86,22 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     requiredColumns: ["branch_id", "engine_kind", "binding_key", "native_state"],
     reason: "branch checkpoints and recovery",
   },
+  {
+    table: "interaction_question_requests",
+    requiredColumns: ["interaction_id", "prompt_payload", "resolution_payload"],
+    reason: "question interaction subtype storage",
+  },
+  {
+    table: "interaction_relay_authorization_requests",
+    requiredColumns: [
+      "interaction_id",
+      "relay_device_id",
+      "relay_exposure_id",
+      "requested_effect",
+      "resolution_payload",
+    ],
+    reason: "relay authorization interaction subtype storage",
+  },
 ];
 
 function summarizeParams(params?: any[]) {

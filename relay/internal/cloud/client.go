@@ -15,6 +15,7 @@ import (
 
 	"github.com/PekingSpades/Synapse/relay/internal/config"
 	"github.com/PekingSpades/Synapse/relay/internal/deviceauth"
+	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 	"github.com/gorilla/websocket"
 )
 
@@ -51,6 +52,33 @@ type ToolCaller interface {
 	CallTool(ctx context.Context, exposureStableKey, toolName string, args map[string]interface{}) (interface{}, error)
 }
 
+type RuntimeAuthorizationApplication struct {
+	InteractionID     string
+	RuntimeSessionID  string
+	ExposureID        string
+	ExposureStableKey string
+	RelayToolName     string
+	Reason            string
+	Duration          string
+	RequestedScope    map[string]interface{}
+}
+
+type RuntimeAuthorizationApplier interface {
+	ApplyRuntimeAuthorization(ctx context.Context, application RuntimeAuthorizationApplication) error
+}
+
+type RuntimeSessionRequest struct {
+	RuntimeSessionID  string
+	ExposureID        string
+	ExposureStableKey string
+}
+
+type RuntimeSessionManager interface {
+	OpenRuntimeSession(ctx context.Context, request RuntimeSessionRequest) error
+	CloseRuntimeSession(ctx context.Context, runtimeSessionID string) error
+	ResetRuntimeSessions(ctx context.Context) error
+}
+
 type operationOutcome struct {
 	success bool
 	result  interface{}
@@ -63,28 +91,37 @@ type runningOperation struct {
 }
 
 type Client struct {
-	relay         config.RelayConfig
-	caller        ToolCaller
-	syncSources   interface{}
-	exposures     interface{}
-	mu            sync.Mutex
-	inflight      map[string]*runningOperation
-	journal       *OperationJournal
-	clientVersion string
-	conn          *websocket.Conn
-	writeMu       sync.Mutex
-	catalogSyncMu sync.Mutex
-	catalogSyncCh chan error
-	BeforeConnect func(ctx context.Context) error
-	OnEvent       func(evtType string, msg string, data map[string]interface{})
+	relay          config.RelayConfig
+	caller         ToolCaller
+	authApplier    RuntimeAuthorizationApplier
+	sessionManager RuntimeSessionManager
+	syncSources    interface{}
+	exposures      interface{}
+	mu             sync.Mutex
+	inflight       map[string]*runningOperation
+	journal        *OperationJournal
+	clientVersion  string
+	conn           *websocket.Conn
+	writeMu        sync.Mutex
+	catalogSyncMu  sync.Mutex
+	catalogSyncCh  chan error
+	BeforeConnect  func(ctx context.Context) error
+	OnEvent        func(evtType string, msg string, data map[string]interface{})
 }
 
-func NewClient(relayCfg config.RelayConfig, caller ToolCaller) *Client {
+func NewClient(
+	relayCfg config.RelayConfig,
+	caller ToolCaller,
+	authApplier RuntimeAuthorizationApplier,
+	sessionManager RuntimeSessionManager,
+) *Client {
 	return &Client{
-		relay:    relayCfg,
-		caller:   caller,
-		inflight: make(map[string]*runningOperation),
-		journal:  NewOperationJournal(""),
+		relay:          relayCfg,
+		caller:         caller,
+		authApplier:    authApplier,
+		sessionManager: sessionManager,
+		inflight:       make(map[string]*runningOperation),
+		journal:        NewOperationJournal(""),
 	}
 }
 
@@ -95,6 +132,52 @@ func (c *Client) SetClientVersion(version string) {
 func (c *Client) emit(evtType, msg string, data map[string]interface{}) {
 	if c.OnEvent != nil {
 		c.OnEvent(evtType, msg, data)
+	}
+}
+
+func (c *Client) emitLog(msg string, data map[string]interface{}) {
+	log.Printf("%s", msg)
+	c.emit("log", msg, data)
+}
+
+func (c *Client) emitError(msg string, data map[string]interface{}) {
+	log.Printf("%s", msg)
+	c.emit("error", msg, data)
+}
+
+func asTrimmedString(value interface{}) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func summarizeRequestedScope(scope map[string]interface{}) string {
+	capability := strings.ToLower(asTrimmedString(scope["capability"]))
+	switch capability {
+	case "filesystem":
+		access := strings.ToLower(asTrimmedString(scope["access"]))
+		path := asTrimmedString(scope["path"])
+		switch {
+		case access != "" && path != "":
+			return fmt.Sprintf("filesystem %s access to %s", access, path)
+		case path != "":
+			return fmt.Sprintf("filesystem access to %s", path)
+		default:
+			return "filesystem access"
+		}
+	case "cua":
+		mode := strings.ToLower(asTrimmedString(scope["mode"]))
+		if mode == "" {
+			mode = "control"
+		}
+		return fmt.Sprintf("cua %s access", mode)
+	default:
+		if capability != "" {
+			return fmt.Sprintf("%s access", capability)
+		}
+		return "runtime access"
 	}
 }
 
@@ -211,6 +294,42 @@ func (c *Client) connectAndServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if c.sessionManager != nil {
+		if err := c.sessionManager.ResetRuntimeSessions(ctx); err != nil {
+			c.emitError(
+				fmt.Sprintf("Failed to reset local runtime sessions after authentication: %v", err),
+				map[string]interface{}{
+					"phase": "post_auth_reset",
+				},
+			)
+		} else {
+			c.emitLog(
+				"Reset local runtime sessions after authentication.",
+				map[string]interface{}{
+					"phase": "post_auth_reset",
+				},
+			)
+		}
+	}
+	defer func() {
+		if c.sessionManager != nil {
+			if err := c.sessionManager.ResetRuntimeSessions(context.Background()); err != nil {
+				c.emitError(
+					fmt.Sprintf("Failed to reset local runtime sessions after disconnect: %v", err),
+					map[string]interface{}{
+						"phase": "disconnect_reset",
+					},
+				)
+			} else {
+				c.emitLog(
+					"Reset local runtime sessions after disconnect.",
+					map[string]interface{}{
+						"phase": "disconnect_reset",
+					},
+				)
+			}
+		}
+	}()
 
 	c.emit("log", fmt.Sprintf("Authenticated relay device %s; syncing relay catalog...", authOK.DeviceID), map[string]interface{}{
 		"deviceId":  authOK.DeviceID,
@@ -438,6 +557,27 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 				continue
 			}
 			go c.handleOperationDispatch(ctx, conn, loopDone, dispatch)
+		case "relay.authorization.apply":
+			var apply RelayAuthorizationApplyMessage
+			if err := json.Unmarshal(raw, &apply); err != nil {
+				log.Printf("Failed to parse relay authorization apply: %v", err)
+				continue
+			}
+			go c.handleAuthorizationApply(ctx, conn, apply)
+		case "relay.runtime_session.open":
+			var open RelayRuntimeSessionOpenMessage
+			if err := json.Unmarshal(raw, &open); err != nil {
+				log.Printf("Failed to parse relay runtime session open: %v", err)
+				continue
+			}
+			go c.handleRuntimeSessionOpen(ctx, conn, open)
+		case "relay.runtime_session.close":
+			var closeMsg RelayRuntimeSessionCloseMessage
+			if err := json.Unmarshal(raw, &closeMsg); err != nil {
+				log.Printf("Failed to parse relay runtime session close: %v", err)
+				continue
+			}
+			go c.handleRuntimeSessionClose(ctx, conn, closeMsg)
 		}
 	}
 }
@@ -460,6 +600,7 @@ func (c *Client) handleOperationDispatch(
 		"operationId":       dispatch.OperationID,
 		"exposureStableKey": dispatch.Payload.ExposureStableKey,
 		"toolName":          dispatch.Payload.ToolName,
+		"runtimeSessionId":  dispatch.Payload.RuntimeSessionID,
 	})
 
 	_ = c.writeJSON(conn, OperationReceivedMessage{
@@ -517,6 +658,7 @@ func (c *Client) handleOperationDispatch(
 		callCtx, cancel = context.WithTimeout(ctx, time.Duration(dispatch.Payload.ExpiresInMs)*time.Millisecond)
 	}
 	defer cancel()
+	callCtx = runtimeauth.ContextWithRuntimeSessionID(callCtx, dispatch.Payload.RuntimeSessionID)
 
 	result, err := c.caller.CallTool(callCtx, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, dispatch.Payload.Arguments)
 	if err != nil {
@@ -526,8 +668,9 @@ func (c *Client) handleOperationDispatch(
 		c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
 		c.sendOperationOutcome(conn, dispatch.OperationID, dispatch.DeliveryID, outcome)
 		c.emit("tool_result", fmt.Sprintf("%s failed: %s", dispatch.Payload.ToolName, err.Error()), map[string]interface{}{
-			"operationId": dispatch.OperationID,
-			"error":       true,
+			"operationId":      dispatch.OperationID,
+			"runtimeSessionId": dispatch.Payload.RuntimeSessionID,
+			"error":            true,
 		})
 		return
 	}
@@ -537,8 +680,317 @@ func (c *Client) handleOperationDispatch(
 	c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
 	c.sendOperationOutcome(conn, dispatch.OperationID, dispatch.DeliveryID, outcome)
 	c.emit("tool_result", fmt.Sprintf("%s completed", dispatch.Payload.ToolName), map[string]interface{}{
-		"operationId": dispatch.OperationID,
-		"error":       false,
+		"operationId":      dispatch.OperationID,
+		"runtimeSessionId": dispatch.Payload.RuntimeSessionID,
+		"error":            false,
+	})
+}
+
+func (c *Client) handleAuthorizationApply(
+	ctx context.Context,
+	conn *websocket.Conn,
+	apply RelayAuthorizationApplyMessage,
+) {
+	scopeSummary := summarizeRequestedScope(apply.Payload.RequestedScope)
+	c.emitLog(
+		fmt.Sprintf(
+			"Applying relay authorization %s for runtime session %s (%s).",
+			apply.InteractionID,
+			apply.Payload.RuntimeSessionID,
+			scopeSummary,
+		),
+		map[string]interface{}{
+			"interactionId":     apply.InteractionID,
+			"deliveryId":        apply.DeliveryID,
+			"runtimeSessionId":  apply.Payload.RuntimeSessionID,
+			"exposureId":        apply.Payload.ExposureID,
+			"exposureStableKey": apply.Payload.ExposureStableKey,
+			"relayToolName":     apply.Payload.RelayToolName,
+			"duration":          apply.Payload.Duration,
+			"requestedScope":    apply.Payload.RequestedScope,
+			"scopeSummary":      scopeSummary,
+			"reason":            apply.Payload.Reason,
+		},
+	)
+	if c.authApplier == nil {
+		c.emitError(
+			fmt.Sprintf(
+				"Rejected relay authorization %s because runtime authorization is not supported by this client.",
+				apply.InteractionID,
+			),
+			map[string]interface{}{
+				"interactionId":     apply.InteractionID,
+				"deliveryId":        apply.DeliveryID,
+				"runtimeSessionId":  apply.Payload.RuntimeSessionID,
+				"exposureId":        apply.Payload.ExposureID,
+				"exposureStableKey": apply.Payload.ExposureStableKey,
+			},
+		)
+		_ = c.writeJSON(conn, AuthorizationResultMessage{
+			Type:          "authorization.result",
+			InteractionID: apply.InteractionID,
+			DeliveryID:    apply.DeliveryID,
+			Success:       false,
+			Error: &RelayOperationError{
+				Code:      "tool_execution_failed",
+				Message:   "relay runtime authorization is not supported by this client",
+				Retryable: false,
+			},
+		})
+		return
+	}
+
+	err := c.authApplier.ApplyRuntimeAuthorization(ctx, RuntimeAuthorizationApplication{
+		InteractionID:     apply.InteractionID,
+		RuntimeSessionID:  apply.Payload.RuntimeSessionID,
+		ExposureID:        apply.Payload.ExposureID,
+		ExposureStableKey: apply.Payload.ExposureStableKey,
+		RelayToolName:     apply.Payload.RelayToolName,
+		Reason:            apply.Payload.Reason,
+		Duration:          apply.Payload.Duration,
+		RequestedScope:    apply.Payload.RequestedScope,
+	})
+	if err != nil {
+		c.emitError(
+			fmt.Sprintf(
+				"Relay authorization %s failed for runtime session %s: %v",
+				apply.InteractionID,
+				apply.Payload.RuntimeSessionID,
+				err,
+			),
+			map[string]interface{}{
+				"interactionId":     apply.InteractionID,
+				"deliveryId":        apply.DeliveryID,
+				"runtimeSessionId":  apply.Payload.RuntimeSessionID,
+				"exposureId":        apply.Payload.ExposureID,
+				"exposureStableKey": apply.Payload.ExposureStableKey,
+				"relayToolName":     apply.Payload.RelayToolName,
+				"duration":          apply.Payload.Duration,
+				"requestedScope":    apply.Payload.RequestedScope,
+				"scopeSummary":      scopeSummary,
+				"error":             err.Error(),
+			},
+		)
+		_ = c.writeJSON(conn, AuthorizationResultMessage{
+			Type:          "authorization.result",
+			InteractionID: apply.InteractionID,
+			DeliveryID:    apply.DeliveryID,
+			Success:       false,
+			Error:         normalizeOperationError(err),
+		})
+		return
+	}
+
+	c.emitLog(
+		fmt.Sprintf(
+			"Relay authorization %s applied for runtime session %s (%s).",
+			apply.InteractionID,
+			apply.Payload.RuntimeSessionID,
+			scopeSummary,
+		),
+		map[string]interface{}{
+			"interactionId":     apply.InteractionID,
+			"deliveryId":        apply.DeliveryID,
+			"runtimeSessionId":  apply.Payload.RuntimeSessionID,
+			"exposureId":        apply.Payload.ExposureID,
+			"exposureStableKey": apply.Payload.ExposureStableKey,
+			"relayToolName":     apply.Payload.RelayToolName,
+			"duration":          apply.Payload.Duration,
+			"requestedScope":    apply.Payload.RequestedScope,
+			"scopeSummary":      scopeSummary,
+		},
+	)
+
+	_ = c.writeJSON(conn, AuthorizationResultMessage{
+		Type:          "authorization.result",
+		InteractionID: apply.InteractionID,
+		DeliveryID:    apply.DeliveryID,
+		Success:       true,
+	})
+}
+
+func (c *Client) handleRuntimeSessionOpen(
+	ctx context.Context,
+	conn *websocket.Conn,
+	open RelayRuntimeSessionOpenMessage,
+) {
+	c.emitLog(
+		fmt.Sprintf(
+			"Opening relay runtime session %s for exposure %s.",
+			open.RuntimeSessionID,
+			open.Payload.ExposureStableKey,
+		),
+		map[string]interface{}{
+			"action":            "open",
+			"runtimeSessionId":  open.RuntimeSessionID,
+			"deliveryId":        open.DeliveryID,
+			"exposureId":        open.Payload.ExposureID,
+			"exposureStableKey": open.Payload.ExposureStableKey,
+		},
+	)
+	if c.sessionManager == nil {
+		c.emitError(
+			fmt.Sprintf(
+				"Failed to open relay runtime session %s because runtime sessions are not supported by this client.",
+				open.RuntimeSessionID,
+			),
+			map[string]interface{}{
+				"action":            "open",
+				"runtimeSessionId":  open.RuntimeSessionID,
+				"deliveryId":        open.DeliveryID,
+				"exposureId":        open.Payload.ExposureID,
+				"exposureStableKey": open.Payload.ExposureStableKey,
+			},
+		)
+		_ = c.writeJSON(conn, RuntimeSessionResultMessage{
+			Type:             "runtime_session.result",
+			Action:           "open",
+			RuntimeSessionID: open.RuntimeSessionID,
+			DeliveryID:       open.DeliveryID,
+			Success:          false,
+			Error: &RelayOperationError{
+				Code:      "tool_execution_failed",
+				Message:   "relay runtime sessions are not supported by this client",
+				Retryable: false,
+			},
+		})
+		return
+	}
+
+	err := c.sessionManager.OpenRuntimeSession(ctx, RuntimeSessionRequest{
+		RuntimeSessionID:  open.RuntimeSessionID,
+		ExposureID:        open.Payload.ExposureID,
+		ExposureStableKey: open.Payload.ExposureStableKey,
+	})
+	if err != nil {
+		c.emitError(
+			fmt.Sprintf(
+				"Failed to open relay runtime session %s for exposure %s: %v",
+				open.RuntimeSessionID,
+				open.Payload.ExposureStableKey,
+				err,
+			),
+			map[string]interface{}{
+				"action":            "open",
+				"runtimeSessionId":  open.RuntimeSessionID,
+				"deliveryId":        open.DeliveryID,
+				"exposureId":        open.Payload.ExposureID,
+				"exposureStableKey": open.Payload.ExposureStableKey,
+				"error":             err.Error(),
+			},
+		)
+		_ = c.writeJSON(conn, RuntimeSessionResultMessage{
+			Type:             "runtime_session.result",
+			Action:           "open",
+			RuntimeSessionID: open.RuntimeSessionID,
+			DeliveryID:       open.DeliveryID,
+			Success:          false,
+			Error:            normalizeOperationError(err),
+		})
+		return
+	}
+
+	c.emitLog(
+		fmt.Sprintf(
+			"Opened relay runtime session %s for exposure %s.",
+			open.RuntimeSessionID,
+			open.Payload.ExposureStableKey,
+		),
+		map[string]interface{}{
+			"action":            "open",
+			"runtimeSessionId":  open.RuntimeSessionID,
+			"deliveryId":        open.DeliveryID,
+			"exposureId":        open.Payload.ExposureID,
+			"exposureStableKey": open.Payload.ExposureStableKey,
+		},
+	)
+
+	_ = c.writeJSON(conn, RuntimeSessionResultMessage{
+		Type:             "runtime_session.result",
+		Action:           "open",
+		RuntimeSessionID: open.RuntimeSessionID,
+		DeliveryID:       open.DeliveryID,
+		Success:          true,
+	})
+}
+
+func (c *Client) handleRuntimeSessionClose(
+	ctx context.Context,
+	conn *websocket.Conn,
+	closeMsg RelayRuntimeSessionCloseMessage,
+) {
+	c.emitLog(
+		fmt.Sprintf("Closing relay runtime session %s.", closeMsg.RuntimeSessionID),
+		map[string]interface{}{
+			"action":           "close",
+			"runtimeSessionId": closeMsg.RuntimeSessionID,
+			"deliveryId":       closeMsg.DeliveryID,
+		},
+	)
+	if c.sessionManager == nil {
+		c.emitLog(
+			fmt.Sprintf(
+				"Relay runtime session %s close acknowledged without a local session manager.",
+				closeMsg.RuntimeSessionID,
+			),
+			map[string]interface{}{
+				"action":           "close",
+				"runtimeSessionId": closeMsg.RuntimeSessionID,
+				"deliveryId":       closeMsg.DeliveryID,
+				"skipped":          true,
+			},
+		)
+		_ = c.writeJSON(conn, RuntimeSessionResultMessage{
+			Type:             "runtime_session.result",
+			Action:           "close",
+			RuntimeSessionID: closeMsg.RuntimeSessionID,
+			DeliveryID:       closeMsg.DeliveryID,
+			Success:          true,
+		})
+		return
+	}
+
+	err := c.sessionManager.CloseRuntimeSession(ctx, closeMsg.RuntimeSessionID)
+	if err != nil {
+		c.emitError(
+			fmt.Sprintf(
+				"Failed to close relay runtime session %s: %v",
+				closeMsg.RuntimeSessionID,
+				err,
+			),
+			map[string]interface{}{
+				"action":           "close",
+				"runtimeSessionId": closeMsg.RuntimeSessionID,
+				"deliveryId":       closeMsg.DeliveryID,
+				"error":            err.Error(),
+			},
+		)
+		_ = c.writeJSON(conn, RuntimeSessionResultMessage{
+			Type:             "runtime_session.result",
+			Action:           "close",
+			RuntimeSessionID: closeMsg.RuntimeSessionID,
+			DeliveryID:       closeMsg.DeliveryID,
+			Success:          false,
+			Error:            normalizeOperationError(err),
+		})
+		return
+	}
+
+	c.emitLog(
+		fmt.Sprintf("Closed relay runtime session %s.", closeMsg.RuntimeSessionID),
+		map[string]interface{}{
+			"action":           "close",
+			"runtimeSessionId": closeMsg.RuntimeSessionID,
+			"deliveryId":       closeMsg.DeliveryID,
+		},
+	)
+
+	_ = c.writeJSON(conn, RuntimeSessionResultMessage{
+		Type:             "runtime_session.result",
+		Action:           "close",
+		RuntimeSessionID: closeMsg.RuntimeSessionID,
+		DeliveryID:       closeMsg.DeliveryID,
+		Success:          true,
 	})
 }
 

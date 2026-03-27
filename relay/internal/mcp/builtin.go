@@ -12,13 +12,14 @@ import (
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/cua"
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/filesystem"
 	"github.com/PekingSpades/Synapse/relay/internal/config"
+	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 type builtinAdapter struct {
 	inner core.Server
 }
 
-func newBuiltinServer(cfg config.ServerConfig) (Server, error) {
+func newBuiltinServer(cfg config.ServerConfig, authStore *runtimeauth.Store) (Server, error) {
 	if cfg.Builtin == nil {
 		return nil, fmt.Errorf("builtin config is required")
 	}
@@ -58,6 +59,7 @@ func newBuiltinServer(cfg config.ServerConfig) (Server, error) {
 			return nil, fmt.Errorf("builtin.cua config is required")
 		}
 		server, err := cua.New(cua.Config{
+			StableKey:            cfg.StableKey,
 			ReadOnly:             cfg.Builtin.CUA.ReadOnly != nil && *cfg.Builtin.CUA.ReadOnly,
 			RelativeCoordinate:   cfg.Builtin.CUA.RelativeCoordinate,
 			ImageSize:            cfg.Builtin.CUA.ImageSize,
@@ -72,6 +74,7 @@ func newBuiltinServer(cfg config.ServerConfig) (Server, error) {
 				ID:         cfg.Builtin.CUA.DisplaySelector.ID,
 				ElectronID: cfg.Builtin.CUA.DisplaySelector.ElectronID,
 			},
+			AuthStore: authStore,
 		})
 		if err != nil {
 			return nil, err
@@ -107,6 +110,7 @@ func newBuiltinServer(cfg config.ServerConfig) (Server, error) {
 				ParseOffice:      cfg.Builtin.Filesystem.Index.ParseOffice == nil || *cfg.Builtin.Filesystem.Index.ParseOffice,
 				ParseImages:      cfg.Builtin.Filesystem.Index.ParseImages == nil || *cfg.Builtin.Filesystem.Index.ParseImages,
 			},
+			AuthStore: authStore,
 		})
 		if err != nil {
 			return nil, err
@@ -173,4 +177,16 @@ func (b *builtinAdapter) CallTool(ctx context.Context, toolName string, args map
 
 func (b *builtinAdapter) Shutdown() {
 	b.inner.Shutdown()
+}
+
+func (b *builtinAdapter) CloseRuntimeSession(runtimeSessionID string) {
+	if aware, ok := b.inner.(core.RuntimeSessionAware); ok {
+		aware.CloseRuntimeSession(runtimeSessionID)
+	}
+}
+
+func (b *builtinAdapter) ResetRuntimeSessions() {
+	if aware, ok := b.inner.(core.RuntimeSessionAware); ok {
+		aware.ResetRuntimeSessions()
+	}
 }

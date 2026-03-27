@@ -2161,3 +2161,69 @@ CREATE TABLE relay_operation_results (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE interaction_requests (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  conversation_item_id UUID UNIQUE REFERENCES conversation_items(id) ON DELETE SET NULL,
+  requester_member_id UUID REFERENCES conversation_members(id) ON DELETE SET NULL,
+  requester_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  requester_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  kind VARCHAR(40) NOT NULL
+    CHECK (kind IN ('question_choice', 'relay_authorization')),
+  status VARCHAR(40) NOT NULL DEFAULT 'pending'
+    CHECK (
+      status IN (
+        'pending',
+        'answered',
+        'approved_pending_apply',
+        'applied',
+        'rejected',
+        'expired',
+        'apply_failed'
+      )
+    ),
+  target_member_id UUID REFERENCES conversation_members(id) ON DELETE RESTRICT,
+  target_user_id UUID REFERENCES users(id) ON DELETE RESTRICT,
+  resolved_by_member_id UUID REFERENCES conversation_members(id) ON DELETE SET NULL,
+  resolved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  resolved_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT interaction_requests_target_requirement_chk CHECK (
+    (
+      kind = 'question_choice'
+      AND target_member_id IS NOT NULL
+      AND target_user_id IS NOT NULL
+    )
+    OR (
+      kind = 'relay_authorization'
+      AND target_member_id IS NULL
+      AND target_user_id IS NULL
+    )
+  )
+);
+
+CREATE TABLE interaction_question_requests (
+  interaction_id UUID PRIMARY KEY REFERENCES interaction_requests(id) ON DELETE CASCADE,
+  prompt_payload JSONB NOT NULL DEFAULT '{}',
+  resolution_payload JSONB NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE interaction_relay_authorization_requests (
+  interaction_id UUID PRIMARY KEY REFERENCES interaction_requests(id) ON DELETE CASCADE,
+  relay_device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
+  relay_exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
+  requested_effect JSONB NOT NULL DEFAULT '{}',
+  resolution_payload JSONB NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX idx_interaction_requests_conversation
+  ON interaction_requests(conversation_id, created_at DESC);
+CREATE INDEX idx_interaction_requests_target
+  ON interaction_requests(target_user_id, status, created_at DESC);
+CREATE INDEX idx_interaction_relay_authorization_requests_device
+  ON interaction_relay_authorization_requests(relay_device_id, interaction_id);

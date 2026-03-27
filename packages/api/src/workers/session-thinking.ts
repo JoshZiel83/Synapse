@@ -126,6 +126,14 @@ export function startSessionThinkingWorker() {
       let requeueAfterUnlock = false;
       let currentStatusText: string | undefined;
       let currentPhase: ThinkingPhase | 'error' = 'thinking';
+      let mcpTools: ResolvedMcpTools = {
+        tools: [],
+        executor: async () => ({ content: [] }),
+        mcpVersion: 0,
+        refresh: async () => ({ tools: [], mcpVersion: 0 }),
+        setTurnId: () => {},
+        shutdown: async () => {},
+      };
 
       try {
         let session = await getSession(sessionId);
@@ -225,7 +233,6 @@ export function startSessionThinkingWorker() {
         let lastKnownGroupSequence = 0;
         let contextItems: CanonicalContextItem[];
         let contextWindow: ProviderContextWindow;
-
         if (groupId) {
           groupMembers = await getGroupMembers(groupId);
           promptGroupMembers = await getGroupMembers(groupId, { useProfileSnapshot: true });
@@ -379,13 +386,6 @@ export function startSessionThinkingWorker() {
           items: finalContextItems,
         });
 
-        let mcpTools: ResolvedMcpTools = {
-          tools: [],
-          executor: async () => ({ content: [] }),
-          mcpVersion: 0,
-          refresh: async () => ({ tools: [], mcpVersion: 0 }),
-          setTurnId: () => {},
-        };
         try {
           mcpTools = await resolveMcpToolsForActor({
             actorId,
@@ -632,6 +632,7 @@ export function startSessionThinkingWorker() {
           await sleepActor(sessionId);
         }
 
+        await mcpTools.shutdown().catch(() => {});
         return { success: true, actions: result.actions.length, requeued: requeueAfterUnlock };
       } catch (err: any) {
         console.error(`[session-thinking] Session ${sessionId} failed:`, err.message);
@@ -641,6 +642,7 @@ export function startSessionThinkingWorker() {
           await updateTurnStatus(turn.id, 'failed', { metadata: { errorMessage: err.message } }).catch(() => {});
         }
 
+        await mcpTools.shutdown().catch(() => {});
         await shutdownSessionInstances(sessionId).catch(() => {});
         await updateSessionStatus(sessionId, 'blocked', { errorMessage: err.message });
         await publishSessionRuntime(workspaceId, sessionId, {

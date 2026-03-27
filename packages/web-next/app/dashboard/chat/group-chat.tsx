@@ -1,6 +1,6 @@
 'use client';
 
-import type { ActorRuntimeState } from '@synapse/shared';
+import type { ActorRuntimeState, InteractionRequestSummary } from '@synapse/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fileRefBlock, textBlock, type CanonicalContentBlock } from '@synapse/shared';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,7 @@ import ChatMentionsInput, { type MentionableParticipant } from './chat-mentions-
 import MobileParticipantPickerDialog from './mobile-participant-picker-dialog';
 import MobileGroupDetailsDialog from './mobile-group-details-dialog';
 import TransportKindIcon from './transport-kind-icon';
+import { useChatStore } from '@/stores/chat-store';
 
 interface GroupChatProps {
   group: Group;
@@ -236,6 +237,7 @@ export default function GroupChat({
   contactBasePath = '/dashboard/contacts',
 }: GroupChatProps) {
   const { user } = useAuthStore();
+  const handleInteractionUpdated = useChatStore((state) => state.handleInteractionUpdated);
   const currentUserId = user?.id || '';
   const [inputValue, setInputValue] = useState('');
   const [inputPlainTextValue, setInputPlainTextValue] = useState('');
@@ -587,6 +589,34 @@ export default function GroupChat({
     }
   }
 
+  async function handleResolveInteraction(
+    interactionId: string,
+    data: {
+      answers?: {
+        fieldId: string;
+        selectedOptionIds?: string[];
+        otherText?: string;
+        text?: string;
+      }[];
+      selectedOptionId?: string;
+      decision?: 'approve' | 'reject';
+      note?: string;
+    },
+  ): Promise<InteractionRequestSummary> {
+    if (!workspaceId) {
+      throw new Error('Workspace context is required to respond to interactions.');
+    }
+
+    const result = await api.resolveInteraction(workspaceId, group.id, interactionId, data);
+    handleInteractionUpdated({
+      conversationId: group.id,
+      interactionId,
+      itemId: result.interaction.itemId,
+      interaction: result.interaction,
+    });
+    return result.interaction;
+  }
+
   return (
     <div
       className={cn(
@@ -783,10 +813,12 @@ export default function GroupChat({
                   targetParticipantIds={msg.targetParticipantIds}
                   transport={msg.transport}
                   transportDeliveries={msg.transportDeliveries}
+                  interaction={msg.interaction}
                   enableTablePreview={viewportLocked}
                   viewerUserId={currentUserId || undefined}
                   contactBasePath={contactBasePath}
                   onParticipantClick={participantInteractionHandler}
+                  onResolveInteraction={handleResolveInteraction}
                 />
               ))
             )}

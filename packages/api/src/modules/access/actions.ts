@@ -74,9 +74,11 @@ export const ACCESS_ACTIONS = {
   'relay.delete': { resourceType: 'mcp_relay', permission: 'delete' },
   'relay_device.view': { resourceType: 'relay_device', permission: 'view' },
   'relay_device.manage': { resourceType: 'relay_device', permission: 'manage' },
+  'relay_device.authorize_runtime_access': { resourceType: 'relay_device', permission: 'authorize_runtime_access' },
   'relay_device.delete': { resourceType: 'relay_device', permission: 'delete' },
   'relay_exposure.view': { resourceType: 'relay_exposure', permission: 'view' },
   'relay_exposure.invoke': { resourceType: 'relay_exposure', permission: 'invoke' },
+  'relay_exposure.request_authorization': { resourceType: 'relay_exposure', permission: 'request_authorization' },
   'relay_exposure.edit': { resourceType: 'relay_exposure', permission: 'edit' },
   'relay_exposure.delete': { resourceType: 'relay_exposure', permission: 'delete' },
 

@@ -22,6 +22,11 @@ type Server interface {
 	Shutdown()
 }
 
+type RuntimeSessionAware interface {
+	CloseRuntimeSession(runtimeSessionID string)
+	ResetRuntimeSessions()
+}
+
 type TextContent struct {
 	Type string `json:"type"`
 	Text string `json:"text"`

@@ -876,6 +876,7 @@ export function conversationItemRowToFeedItem(row: any): ConversationFeedItem {
     return {
       kind: "event",
       ...base,
+      targets: mapTargets(row.targets || []),
       causedByItemId: row.caused_by_item_id || undefined,
       eventType: row.subtype,
       payload: parseJsonObject(
@@ -897,6 +898,25 @@ export function conversationItemRowToFeedItem(row: any): ConversationFeedItem {
     transportDeliveries: mapTransportDeliveries(row.transport_deliveries || []),
     clientMessageId: row.client_message_id || undefined,
   } satisfies ConversationFeedMessageItem;
+}
+
+export function isFeedItemVisibleToUser(
+  item: ConversationFeedItem,
+  userId: string,
+) {
+  if (item.kind === "message") {
+    return true;
+  }
+
+  if (!item.targets || item.targets.length === 0) {
+    return true;
+  }
+
+  if (item.author?.userId === userId) {
+    return true;
+  }
+
+  return item.targets.some((target) => target.userId === userId);
 }
 
 export async function getConversationFeedItemById(itemId: string) {

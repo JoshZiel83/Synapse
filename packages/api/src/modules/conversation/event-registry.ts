@@ -105,6 +105,12 @@ const EVENT_SPECS: Record<string, ConversationEventSpec> = {
     renderTimeline: ({ payload }) => automationNoticeBlocks(payload),
     renderContext: ({ payload }) => automationNoticeBlocks(payload),
   },
+  interaction_requested: {
+    timelinePolicy: 'targeted_members',
+    contextPolicy: 'targeted_members',
+    renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
+    renderContext: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
+  },
 };
 
 const DEFAULT_EVENT_SPEC: ConversationEventSpec = {

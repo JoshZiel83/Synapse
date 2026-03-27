@@ -69,12 +69,54 @@ type RelayDispatchMessage struct {
 type RelayDispatchPayload struct {
 	ExposureID        string                 `json:"exposureId"`
 	ExposureStableKey string                 `json:"exposureStableKey"`
+	RuntimeSessionID  string                 `json:"runtimeSessionId,omitempty"`
 	ToolID            string                 `json:"toolId"`
 	ToolRevisionID    string                 `json:"toolRevisionId"`
 	ToolName          string                 `json:"toolName"`
 	InputHash         string                 `json:"inputHash"`
 	Arguments         map[string]interface{} `json:"arguments"`
 	ExpiresInMs       int                    `json:"expiresInMs"`
+}
+
+type RelayRuntimeSessionOpenMessage struct {
+	Type             string                         `json:"type"`
+	ProtocolVersion  int                            `json:"protocolVersion"`
+	SessionID        string                         `json:"sessionId"`
+	RuntimeSessionID string                         `json:"runtimeSessionId"`
+	DeliveryID       string                         `json:"deliveryId"`
+	Payload          RelayRuntimeSessionOpenPayload `json:"payload"`
+}
+
+type RelayRuntimeSessionOpenPayload struct {
+	ExposureID        string `json:"exposureId"`
+	ExposureStableKey string `json:"exposureStableKey"`
+}
+
+type RelayRuntimeSessionCloseMessage struct {
+	Type             string `json:"type"`
+	ProtocolVersion  int    `json:"protocolVersion"`
+	SessionID        string `json:"sessionId"`
+	RuntimeSessionID string `json:"runtimeSessionId"`
+	DeliveryID       string `json:"deliveryId"`
+}
+
+type RelayAuthorizationApplyMessage struct {
+	Type            string                         `json:"type"`
+	ProtocolVersion int                            `json:"protocolVersion"`
+	SessionID       string                         `json:"sessionId"`
+	InteractionID   string                         `json:"interactionId"`
+	DeliveryID      string                         `json:"deliveryId"`
+	Payload         RelayAuthorizationApplyPayload `json:"payload"`
+}
+
+type RelayAuthorizationApplyPayload struct {
+	ExposureID        string                 `json:"exposureId"`
+	ExposureStableKey string                 `json:"exposureStableKey"`
+	RuntimeSessionID  string                 `json:"runtimeSessionId,omitempty"`
+	RelayToolName     string                 `json:"relayToolName"`
+	Reason            string                 `json:"reason,omitempty"`
+	Duration          string                 `json:"duration"`
+	RequestedScope    map[string]interface{} `json:"requestedScope"`
 }
 
 type OperationReceivedMessage struct {
@@ -96,6 +138,23 @@ type OperationResultMessage struct {
 	Success     bool                 `json:"success"`
 	Result      interface{}          `json:"result,omitempty"`
 	Error       *RelayOperationError `json:"error,omitempty"`
+}
+
+type AuthorizationResultMessage struct {
+	Type          string               `json:"type"`
+	InteractionID string               `json:"interactionId"`
+	DeliveryID    string               `json:"deliveryId,omitempty"`
+	Success       bool                 `json:"success"`
+	Error         *RelayOperationError `json:"error,omitempty"`
+}
+
+type RuntimeSessionResultMessage struct {
+	Type             string               `json:"type"`
+	Action           string               `json:"action"`
+	RuntimeSessionID string               `json:"runtimeSessionId"`
+	DeliveryID       string               `json:"deliveryId,omitempty"`
+	Success          bool                 `json:"success"`
+	Error            *RelayOperationError `json:"error,omitempty"`
 }
 
 type RelayOperationError struct {

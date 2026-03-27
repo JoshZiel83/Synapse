@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
+	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 func newTestServer(t *testing.T, cfg Config) *Server {
@@ -116,6 +117,109 @@ func TestRootReadOnlyBlocksWriteTool(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(content.Text), "grant write access") {
 		t.Fatalf("expected client authorization hint, got %q", content.Text)
+	}
+}
+
+func TestSessionGrantAllowsWriteOnlyForMatchingRuntimeSession(t *testing.T) {
+	root := t.TempDir()
+	authStore := runtimeauth.NewStore(filepath.Join(t.TempDir(), "runtime-auth.json"))
+	if err := authStore.OpenSession(runtimeauth.RuntimeSession{
+		ID:                "fs-session-a",
+		ExposureStableKey: "test-session-grant",
+	}); err != nil {
+		t.Fatalf("open session-a: %v", err)
+	}
+	if err := authStore.OpenSession(runtimeauth.RuntimeSession{
+		ID:                "fs-session-b",
+		ExposureStableKey: "test-session-grant",
+	}); err != nil {
+		t.Fatalf("open session-b: %v", err)
+	}
+	if err := authStore.Apply(runtimeauth.Grant{
+		InteractionID:     "grant-session-a",
+		RuntimeSessionID:  "fs-session-a",
+		ExposureStableKey: "test-session-grant",
+		Duration:          "session",
+		Capability:        "filesystem",
+		Path:              root,
+		Access:            "read_write",
+	}); err != nil {
+		t.Fatalf("apply runtime session grant: %v", err)
+	}
+
+	server := newTestServer(t, Config{
+		StableKey: "test-session-grant",
+		Name:      "filesystem",
+		Scope:     "roots",
+		Roots: []Root{
+			{ID: "root_0", Path: root, Access: "ro"},
+		},
+		AuthStore: authStore,
+		Index: IndexConfig{
+			Dir:              filepath.Join(t.TempDir(), "index"),
+			ContentEnabled:   false,
+			FileTypes:        []string{".txt"},
+			MaxFileSizeBytes: 1024,
+			ParsePDF:         true,
+			ParseOffice:      true,
+		},
+	})
+
+	target := filepath.Join(root, "session-note.txt")
+
+	noSessionResult, err := server.CallTool(context.Background(), "write_file", map[string]interface{}{
+		"path":    target,
+		"content": "blocked",
+	})
+	if err != nil {
+		t.Fatalf("call write_file without session: %v", err)
+	}
+	if !noSessionResult.IsError {
+		t.Fatalf("expected write_file without runtime session to be blocked")
+	}
+
+	otherSessionCtx := runtimeauth.ContextWithRuntimeSessionID(context.Background(), "fs-session-b")
+	otherSessionResult, err := server.CallTool(otherSessionCtx, "write_file", map[string]interface{}{
+		"path":    target,
+		"content": "still blocked",
+	})
+	if err != nil {
+		t.Fatalf("call write_file for other session: %v", err)
+	}
+	if !otherSessionResult.IsError {
+		t.Fatalf("expected write_file for different runtime session to remain blocked")
+	}
+
+	grantedCtx := runtimeauth.ContextWithRuntimeSessionID(context.Background(), "fs-session-a")
+	grantedResult, err := server.CallTool(grantedCtx, "write_file", map[string]interface{}{
+		"path":    target,
+		"content": "allowed",
+	})
+	if err != nil {
+		t.Fatalf("call write_file for granted session: %v", err)
+	}
+	if grantedResult.IsError {
+		t.Fatalf("expected write_file for granted runtime session to succeed")
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read written file: %v", err)
+	}
+	if string(data) != "allowed" {
+		t.Fatalf("expected granted write to persist file content, got %q", string(data))
+	}
+
+	authStore.CloseSession("fs-session-a")
+	afterCloseResult, err := server.CallTool(grantedCtx, "write_file", map[string]interface{}{
+		"path":    target,
+		"content": "blocked again",
+	})
+	if err != nil {
+		t.Fatalf("call write_file after session close: %v", err)
+	}
+	if !afterCloseResult.IsError {
+		t.Fatalf("expected closed runtime session grant to be removed")
 	}
 }
 

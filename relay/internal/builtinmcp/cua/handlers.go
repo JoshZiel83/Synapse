@@ -72,12 +72,12 @@ func (s *Server) listDisplays() core.CallResult {
 	})
 }
 
-func (s *Server) captureDisplay(raw map[string]interface{}) (core.CallResult, error) {
+func (s *Server) captureDisplay(runtimeSessionID string, raw map[string]interface{}) (core.CallResult, error) {
 	var args captureArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
 	}
-	if result, blocked := s.guardStableDisplays(); blocked {
+	if result, blocked := s.guardStableDisplays(runtimeSessionID); blocked {
 		return result, nil
 	}
 
@@ -118,12 +118,12 @@ func (s *Server) captureDisplay(raw map[string]interface{}) (core.CallResult, er
 	), nil
 }
 
-func (s *Server) captureOverview(raw map[string]interface{}) (core.CallResult, error) {
+func (s *Server) captureOverview(runtimeSessionID string, raw map[string]interface{}) (core.CallResult, error) {
 	var args captureArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
 	}
-	if result, blocked := s.guardStableDisplays(); blocked {
+	if result, blocked := s.guardStableDisplays(runtimeSessionID); blocked {
 		return result, nil
 	}
 
@@ -162,12 +162,12 @@ func (s *Server) captureOverview(raw map[string]interface{}) (core.CallResult, e
 	), nil
 }
 
-func (s *Server) movePointer(raw map[string]interface{}) (core.CallResult, error) {
+func (s *Server) movePointer(runtimeSessionID string, raw map[string]interface{}) (core.CallResult, error) {
 	var args movePointerArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
 	}
-	if result, blocked := s.guardStableDisplays(); blocked {
+	if result, blocked := s.guardStableDisplays(runtimeSessionID); blocked {
 		return result, nil
 	}
 
@@ -194,12 +194,12 @@ func (s *Server) movePointer(raw map[string]interface{}) (core.CallResult, error
 	), nil
 }
 
-func (s *Server) click(raw map[string]interface{}) (core.CallResult, error) {
+func (s *Server) click(runtimeSessionID string, raw map[string]interface{}) (core.CallResult, error) {
 	var args clickArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
 	}
-	if result, blocked := s.guardStableDisplays(); blocked {
+	if result, blocked := s.guardStableDisplays(runtimeSessionID); blocked {
 		return result, nil
 	}
 
@@ -239,12 +239,12 @@ func (s *Server) click(raw map[string]interface{}) (core.CallResult, error) {
 	), nil
 }
 
-func (s *Server) drag(raw map[string]interface{}) (core.CallResult, error) {
+func (s *Server) drag(runtimeSessionID string, raw map[string]interface{}) (core.CallResult, error) {
 	var args dragArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
 	}
-	if result, blocked := s.guardStableDisplays(); blocked {
+	if result, blocked := s.guardStableDisplays(runtimeSessionID); blocked {
 		return result, nil
 	}
 
@@ -280,12 +280,12 @@ func (s *Server) drag(raw map[string]interface{}) (core.CallResult, error) {
 	), nil
 }
 
-func (s *Server) scroll(raw map[string]interface{}) (core.CallResult, error) {
+func (s *Server) scroll(runtimeSessionID string, raw map[string]interface{}) (core.CallResult, error) {
 	var args scrollArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
 	}
-	if result, blocked := s.guardStableDisplays(); blocked {
+	if result, blocked := s.guardStableDisplays(runtimeSessionID); blocked {
 		return result, nil
 	}
 
@@ -365,7 +365,7 @@ func validateScrollUnit(unit ScrollUnit) error {
 	}
 }
 
-func (s *Server) typeText(raw map[string]interface{}) (core.CallResult, error) {
+func (s *Server) typeText(runtimeSessionID string, raw map[string]interface{}) (core.CallResult, error) {
 	var args typeArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
@@ -376,7 +376,7 @@ func (s *Server) typeText(raw map[string]interface{}) (core.CallResult, error) {
 
 	var display *DisplayInfo
 	if args.Coordinate != nil {
-		if result, blocked := s.guardStableDisplays(); blocked {
+		if result, blocked := s.guardStableDisplays(runtimeSessionID); blocked {
 			return result, nil
 		}
 		resolvedDisplay, err := s.resolveDisplay(args.Display)
@@ -409,7 +409,7 @@ func (s *Server) typeText(raw map[string]interface{}) (core.CallResult, error) {
 	), nil
 }
 
-func (s *Server) pressKeys(raw map[string]interface{}) (core.CallResult, error) {
+func (s *Server) pressKeys(_ string, raw map[string]interface{}) (core.CallResult, error) {
 	var args pressKeysArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil

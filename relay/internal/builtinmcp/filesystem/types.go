@@ -1,5 +1,7 @@
 package filesystem
 
+import "github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
+
 type Config struct {
 	StableKey    string
 	Name         string
@@ -8,6 +10,7 @@ type Config struct {
 	GlobalAccess string
 	Roots        []Root
 	Index        IndexConfig
+	AuthStore    *runtimeauth.Store
 }
 
 type Root struct {

@@ -142,7 +142,7 @@ func (e *Engine) run(ctx context.Context) {
 	}
 
 	// Connect to cloud
-	client := cloud.NewClient(e.cfg.Relay, mgr)
+	client := cloud.NewClient(e.cfg.Relay, mgr, mgr, mgr)
 	client.SetSyncSources(e.cfg.SyncSources)
 	client.SetExposures(servers)
 	client.BeforeConnect = e.beforeConnect

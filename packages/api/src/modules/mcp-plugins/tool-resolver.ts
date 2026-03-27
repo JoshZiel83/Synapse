@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import type { ToolDefinition } from "@synapse/shared";
+import type { RelayHiddenToolBinding, ToolDefinition } from "@synapse/shared";
 import type { NormalizedMcpToolResult } from "@synapse/shared/types";
 import {
   buildActorConversationContextId,
@@ -14,7 +14,13 @@ import {
   type McpInstance,
 } from "./instance-manager.js";
 import { logToolCall } from "./audit.js";
-import { callRelayTool, getRelayExposureCatalog } from "./relay-manager.js";
+import {
+  callRelayTool,
+  closeRelayRuntimeSession,
+  getConnectedRelaySessionId,
+  getRelayExposureCatalog,
+  openRelayRuntimeSession,
+} from "./relay-manager.js";
 import { normalizeMcpToolResult } from "./result-normalizer.js";
 
 const MCP_TOOL_NAMESPACE_SEPARATOR = "__";
@@ -25,6 +31,7 @@ export interface ResolvedMcpTools {
   mcpVersion: number;
   refresh: () => Promise<{ tools: ToolDefinition[]; mcpVersion: number }>;
   setTurnId: (turnId: string, round?: number) => void;
+  shutdown: () => Promise<void>;
 }
 
 interface ResolveParams {
@@ -33,6 +40,16 @@ interface ResolveParams {
   sessionId: string;
   conversationId: string;
   userId?: string;
+}
+
+export interface ResolvedRelayToolTarget {
+  deviceId: string;
+  deviceDisplayName: string;
+  exposureId: string;
+  exposureStableKey: string;
+  exposureDisplayName: string;
+  visibleToolName: string;
+  runtimeSessionId?: string;
 }
 
 type VisiblePluginRow = {
@@ -55,6 +72,51 @@ type VisibleRelayExposureRow = {
   device_id: string;
   device_display_name: string;
 };
+
+type RelayToolRuntimeContext = {
+  deviceId: string;
+  deviceDisplayName: string;
+  exposureId: string;
+  exposureStableKey: string;
+  exposureDisplayName: string;
+  visibleToolName: string;
+  runtimeSessionId: string;
+};
+
+const activeRelayToolContexts = new Map<string, RelayToolRuntimeContext>();
+
+function buildRelayToolContextKey(sessionId: string, namespacedToolName: string) {
+  return `${sessionId}:${namespacedToolName}`;
+}
+
+function setRelayToolRuntimeContext(
+  sessionId: string,
+  namespacedToolName: string,
+  context: RelayToolRuntimeContext,
+) {
+  activeRelayToolContexts.set(
+    buildRelayToolContextKey(sessionId, namespacedToolName),
+    context,
+  );
+}
+
+function getRelayToolRuntimeContext(
+  sessionId: string,
+  namespacedToolName: string,
+) {
+  return activeRelayToolContexts.get(
+    buildRelayToolContextKey(sessionId, namespacedToolName),
+  );
+}
+
+function clearRelayToolRuntimeContexts(sessionId: string) {
+  const prefix = `${sessionId}:`;
+  for (const key of activeRelayToolContexts.keys()) {
+    if (key.startsWith(prefix)) {
+      activeRelayToolContexts.delete(key);
+    }
+  }
+}
 
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
@@ -176,6 +238,166 @@ function buildPluginNamespace(
     "install",
   );
   return `${publisher}${MCP_TOOL_NAMESPACE_SEPARATOR}${basePluginSlug}_${installationSuffix}`;
+}
+
+async function createRelayBaseInstance(params: {
+  pluginId: string;
+  installationId: string;
+  pluginSlug: string;
+  orgSlug: string;
+  scope: string;
+  scopeId: string;
+  workspaceId: string;
+  deviceId: string;
+  exposureId: string;
+  exposureStableKey: string;
+  key: string;
+  configHash: string;
+}): Promise<McpInstance> {
+  let runtimeSessionId: string | undefined;
+  let relaySessionId: string | undefined;
+
+  const ensureRuntimeSession = async () => {
+    const currentRelaySessionId = getConnectedRelaySessionId(params.deviceId);
+    if (!currentRelaySessionId) {
+      runtimeSessionId = undefined;
+      relaySessionId = undefined;
+      throw new Error(`Relay device ${params.deviceId} is not connected`);
+    }
+
+    if (
+      runtimeSessionId &&
+      relaySessionId &&
+      relaySessionId === currentRelaySessionId
+    ) {
+      return runtimeSessionId;
+    }
+
+    runtimeSessionId = await openRelayRuntimeSession({
+      deviceId: params.deviceId,
+      exposureId: params.exposureId,
+      exposureStableKey: params.exposureStableKey,
+    });
+    relaySessionId = currentRelaySessionId;
+    return runtimeSessionId;
+  };
+
+  return {
+    pluginId: params.pluginId,
+    installationId: params.installationId,
+    pluginSlug: params.pluginSlug,
+    orgSlug: params.orgSlug,
+    transport: "relay",
+    scope: params.scope,
+    scopeId: params.scopeId,
+    workspaceId: params.workspaceId,
+    configHash: params.configHash,
+    tools: [],
+    execute: async (toolName, input) => {
+      const runtimeSession = await ensureRuntimeSession();
+      const relayCatalog = getRelayExposureCatalog(
+        params.deviceId,
+        params.exposureId,
+      );
+      if (!relayCatalog) {
+        throw new Error(
+          `Relay exposure ${params.exposureId} is not currently connected`,
+        );
+      }
+      const toolBinding = relayCatalog.tools.find(
+        (tool) => tool.visible.name === toolName,
+      );
+      if (!toolBinding) {
+        throw new Error(`Relay binding missing for tool ${toolName}`);
+      }
+      return callRelayTool({
+        deviceId: params.deviceId,
+        exposureId: params.exposureId,
+        visibleToolName: toolBinding.visible.name,
+        binding: toolBinding.binding,
+        args: input,
+        runtimeSessionId: runtimeSession,
+      });
+    },
+    executeWithBinding: async (toolName, input, binding) => {
+      const runtimeSession = await ensureRuntimeSession();
+      return callRelayTool({
+        deviceId: params.deviceId,
+        exposureId: params.exposureId,
+        visibleToolName: toolName,
+        binding: binding as RelayHiddenToolBinding,
+        args: input,
+        runtimeSessionId: runtimeSession,
+      });
+    },
+    ensureRuntimeSession,
+    getRuntimeSessionId: () => runtimeSessionId,
+    shutdown: async () => {
+      const activeRuntimeSessionId = runtimeSessionId;
+      runtimeSessionId = undefined;
+      relaySessionId = undefined;
+      if (activeRuntimeSessionId) {
+        await closeRelayRuntimeSession({
+          deviceId: params.deviceId,
+          runtimeSessionId: activeRuntimeSessionId,
+        }).catch(() => {});
+      }
+    },
+    lastUsed: Date.now(),
+    createdAt: Date.now(),
+    idleTtlMs: 0,
+    maxAgeMs: undefined,
+  };
+}
+
+function buildRelayScopedInstance(params: {
+  baseInstance: McpInstance;
+  tools: ToolDefinition[];
+  deviceId: string;
+  deviceDisplayName: string;
+  exposureId: string;
+  exposureStableKey: string;
+  exposureDisplayName: string;
+  sessionId: string;
+  namespace: string;
+  bindingMap: Map<string, { binding: RelayHiddenToolBinding; visibleToolName: string }>;
+}): McpInstance {
+  return {
+    ...params.baseInstance,
+    tools: params.tools,
+    execute: async (toolName, input) => {
+      const toolBinding = params.bindingMap.get(toolName);
+      if (!toolBinding) {
+        throw new Error(`Relay binding missing for tool ${toolName}`);
+      }
+      const runtimeSessionId = params.baseInstance.ensureRuntimeSession
+        ? await params.baseInstance.ensureRuntimeSession()
+        : undefined;
+      if (runtimeSessionId) {
+        setRelayToolRuntimeContext(
+          params.sessionId,
+          `${params.namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${toolName}`,
+          {
+            deviceId: params.deviceId,
+            deviceDisplayName: params.deviceDisplayName,
+            exposureId: params.exposureId,
+            exposureStableKey: params.exposureStableKey,
+            exposureDisplayName: params.exposureDisplayName,
+            visibleToolName: toolBinding.visibleToolName,
+            runtimeSessionId,
+          },
+        );
+      }
+      if (params.baseInstance.executeWithBinding) {
+        return params.baseInstance.executeWithBinding(
+          toolName,
+          input,
+          toolBinding.binding,
+        );
+      }
+      return params.baseInstance.execute(toolName, input);
+    },
+  };
 }
 
 async function loadVisiblePlugins(params: ResolveParams) {
@@ -331,37 +553,50 @@ async function resolveTools(
         });
 
         const reuseScope = publicReuseScope(plugin.reuse_scope);
-        const relayInstance: McpInstance = {
+        const scopeId = resolveReuseOwnerKey(reuseScope, params, turnOwnerKey);
+        const baseRelayInstance = await getOrCreateInstance({
           pluginId: plugin.catalog_item_id,
           installationId: plugin.installation_id,
           pluginSlug: plugin.item_slug,
           orgSlug: plugin.publisher_slug || "plugin",
           transport: "relay",
+          entryPoint: plugin.entry_point || "",
           scope: reuseScope,
-          scopeId: resolveReuseOwnerKey(reuseScope, params, turnOwnerKey),
+          scopeId,
+          config: {
+            deviceId: entry.deviceId,
+            exposureId: entry.exposureId,
+            exposureStableKey: relayCatalog.exposureStableKey,
+          },
           workspaceId: params.workspaceId,
-          configHash: `relay:${entry.deviceId}:${entry.exposureId}`,
-          tools: relayTools,
-          execute: async (toolName: string, input: Record<string, unknown>) => {
-            const toolBinding = bindingMap.get(toolName);
-            if (!toolBinding) {
-              throw new Error(`Relay binding missing for tool ${toolName}`);
-            }
-
-            return callRelayTool({
+          factory: async ({ key, configHash }) =>
+            createRelayBaseInstance({
+              pluginId: plugin.catalog_item_id,
+              installationId: plugin.installation_id,
+              pluginSlug: plugin.item_slug,
+              orgSlug: plugin.publisher_slug || "plugin",
+              scope: reuseScope,
+              scopeId,
+              workspaceId: params.workspaceId,
               deviceId: entry.deviceId!,
               exposureId: entry.exposureId!,
-              visibleToolName: toolBinding.visibleToolName,
-              binding: toolBinding.binding,
-              args: input,
-            });
-          },
-          shutdown: async () => {},
-          lastUsed: Date.now(),
-          createdAt: Date.now(),
-          idleTtlMs: 0,
-          maxAgeMs: undefined,
-        };
+              exposureStableKey: relayCatalog.exposureStableKey,
+              key,
+              configHash,
+            }),
+        });
+        const relayInstance = buildRelayScopedInstance({
+          baseInstance: baseRelayInstance,
+          tools: relayTools,
+          deviceId: entry.deviceId,
+          deviceDisplayName: relayCatalog.deviceDisplayName,
+          exposureId: entry.exposureId,
+          exposureStableKey: relayCatalog.exposureStableKey,
+          exposureDisplayName: relayCatalog.exposureDisplayName,
+          sessionId: params.sessionId,
+          namespace,
+          bindingMap,
+        });
 
         const namespacedTools = relayTools.map((tool) => ({
           ...tool,
@@ -432,40 +667,59 @@ async function resolveTools(
         inputSchema: tool.visible.inputSchema,
       }),
     );
-
-    const relayInstance: McpInstance = {
+    const bindingMap = new Map<string, { binding: RelayHiddenToolBinding; visibleToolName: string }>();
+    for (const tool of relayCatalog.tools) {
+      bindingMap.set(tool.visible.name, {
+        binding: tool.binding,
+        visibleToolName: tool.visible.name,
+      });
+    }
+    const baseRelayInstance = await getOrCreateInstance({
       pluginId: exposure.exposure_id,
       installationId: exposure.exposure_id,
       pluginSlug: exposureSlug,
       orgSlug: "relay",
       transport: "relay",
+      entryPoint: JSON.stringify({
+        deviceId: exposure.device_id,
+        exposureId: exposure.exposure_id,
+      }),
       scope: "conversation",
       scopeId: params.conversationId,
+      config: {
+        deviceId: exposure.device_id,
+        exposureId: exposure.exposure_id,
+        exposureStableKey: relayCatalog.exposureStableKey,
+      },
       workspaceId: params.workspaceId,
-      configHash: `relay:${exposure.device_id}:${exposure.exposure_id}`,
-      tools: relayTools,
-      execute: async (toolName: string, input: Record<string, unknown>) => {
-        const toolBinding = relayCatalog.tools.find(
-          (tool) => tool.visible.name === toolName,
-        );
-        if (!toolBinding) {
-          throw new Error(`Relay binding missing for tool ${toolName}`);
-        }
-
-        return callRelayTool({
+      factory: async ({ key, configHash }) =>
+        createRelayBaseInstance({
+          pluginId: exposure.exposure_id,
+          installationId: exposure.exposure_id,
+          pluginSlug: exposureSlug,
+          orgSlug: "relay",
+          scope: "conversation",
+          scopeId: params.conversationId,
+          workspaceId: params.workspaceId,
           deviceId: exposure.device_id,
           exposureId: exposure.exposure_id,
-          visibleToolName: toolBinding.visible.name,
-          binding: toolBinding.binding,
-          args: input,
-        });
-      },
-      shutdown: async () => {},
-      lastUsed: Date.now(),
-      createdAt: Date.now(),
-      idleTtlMs: 0,
-      maxAgeMs: undefined,
-    };
+          exposureStableKey: relayCatalog.exposureStableKey,
+          key,
+          configHash,
+        }),
+    });
+    const relayInstance = buildRelayScopedInstance({
+      baseInstance: baseRelayInstance,
+      tools: relayTools,
+      deviceId: exposure.device_id,
+      deviceDisplayName: exposure.device_display_name,
+      exposureId: exposure.exposure_id,
+      exposureStableKey: relayCatalog.exposureStableKey,
+      exposureDisplayName: exposure.exposure_display_name,
+      sessionId: params.sessionId,
+      namespace,
+      bindingMap,
+    });
 
     const namespacedTools = relayTools.map((tool) => ({
       ...tool,
@@ -486,6 +740,7 @@ export async function resolveMcpToolsForActor(
   const mcpVersion = await getMcpVersion(params.workspaceId);
   const turnOwnerKey = `session:${params.sessionId}:turn:${randomUUID()}`;
   const instances = new Map<string, McpInstance>();
+  clearRelayToolRuntimeContexts(params.sessionId);
   const allTools = await resolveTools(
     params,
     instances,
@@ -564,6 +819,7 @@ export async function resolveMcpToolsForActor(
 
   const refresh = async () => {
     const nextVersion = await getMcpVersion(params.workspaceId);
+    clearRelayToolRuntimeContexts(params.sessionId);
     const refreshedTools = await resolveTools(
       params,
       instances,
@@ -575,11 +831,70 @@ export async function resolveMcpToolsForActor(
     };
   };
 
+  const shutdown = async () => {
+    clearRelayToolRuntimeContexts(params.sessionId);
+    const turnScopedInstances = Array.from(instances.values()).filter(
+      (instance) =>
+        instance.scope === "turn" && instance.scopeId === turnOwnerKey,
+    );
+    await Promise.allSettled(
+      turnScopedInstances.map((instance) => instance.shutdown()),
+    );
+  };
+
   return {
     tools: allTools,
     executor,
     mcpVersion,
     refresh,
     setTurnId,
+    shutdown,
   };
+}
+
+export async function resolveRelayTargetForNamespacedTool(
+  params: ResolveParams & { namespacedToolName: string },
+): Promise<ResolvedRelayToolTarget | null> {
+  const activeContext = getRelayToolRuntimeContext(
+    params.sessionId,
+    params.namespacedToolName,
+  );
+  if (activeContext) {
+    return { ...activeContext };
+  }
+
+  const visibleExposures = await loadVisibleRelayExposures(params);
+
+  for (const exposure of visibleExposures) {
+    const relayCatalog = getRelayExposureCatalog(
+      exposure.device_id,
+      exposure.exposure_id,
+    );
+    if (!relayCatalog) {
+      continue;
+    }
+
+    const exposureSlug = sanitizeNamespaceSegment(
+      exposure.exposure_stable_key,
+      `exposure_${exposure.exposure_id.slice(0, 8)}`,
+    );
+    const namespace = `relay${MCP_TOOL_NAMESPACE_SEPARATOR}${exposureSlug}_${exposure.exposure_id.slice(0, 8)}`;
+
+    for (const tool of relayCatalog.tools) {
+      const namespacedToolName = `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.visible.name}`;
+      if (namespacedToolName !== params.namespacedToolName) {
+        continue;
+      }
+      return {
+        deviceId: exposure.device_id,
+        deviceDisplayName: exposure.device_display_name,
+        exposureId: exposure.exposure_id,
+        exposureStableKey: exposure.exposure_stable_key,
+        exposureDisplayName: exposure.exposure_display_name,
+        visibleToolName: tool.visible.name,
+      };
+    }
+  }
+
+  return null;
 }

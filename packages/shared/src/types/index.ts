@@ -768,6 +768,7 @@ export type EventType =
   | "chat.feed.item.created"
   | "chat.runtime.updated"
   | "chat.conversation.updated"
+  | "chat.interaction.updated"
   | "mcp.config.changed"
   | "relay.connected"
   | "relay.disconnected"
@@ -2571,6 +2572,120 @@ export type ActorVersionChangeWire =
   | ({ kind: "field" } & ActorVersionFieldChangeWire)
   | ({ kind: "doc" } & ActorVersionDocChangeWire);
 
+export type InteractionRequestKind =
+  | "question_choice"
+  | "relay_authorization";
+
+export type InteractionRequestStatus =
+  | "pending"
+  | "answered"
+  | "approved_pending_apply"
+  | "applied"
+  | "rejected"
+  | "expired"
+  | "apply_failed";
+
+export interface InteractionChoiceOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+export type InteractionQuestionFieldType =
+  | "single_select"
+  | "multi_select"
+  | "text";
+
+export interface InteractionQuestionFieldDefinition {
+  id: string;
+  type: InteractionQuestionFieldType;
+  label: string;
+  description?: string;
+  required?: boolean;
+  options?: InteractionChoiceOption[];
+  allowOther?: boolean;
+  otherLabel?: string;
+  otherPlaceholder?: string;
+  placeholder?: string;
+  minSelections?: number;
+  maxSelections?: number;
+}
+
+export interface InteractionQuestionFieldAnswer {
+  fieldId: string;
+  selectedOptionIds?: string[];
+  selectedOptionLabels?: string[];
+  otherText?: string;
+  text?: string;
+}
+
+export interface InteractionQuestionFieldSummary
+  extends InteractionQuestionFieldDefinition {
+  required: boolean;
+  answer?: InteractionQuestionFieldAnswer;
+}
+
+export interface QuestionChoiceInteractionSummary {
+  prompt: string;
+  instructions?: string;
+  fields: InteractionQuestionFieldSummary[];
+}
+
+export type RelayAuthorizationDuration = "session" | "persistent";
+
+export type RelayFilesystemAuthorizationAccess =
+  | "read"
+  | "write"
+  | "read_write";
+
+export interface RelayFilesystemAuthorizationScope {
+  capability: "filesystem";
+  path: string;
+  access: RelayFilesystemAuthorizationAccess;
+}
+
+export interface RelayCuaAuthorizationScope {
+  capability: "cua";
+  mode: "control";
+}
+
+export type RelayAuthorizationScope =
+  | RelayFilesystemAuthorizationScope
+  | RelayCuaAuthorizationScope;
+
+export interface RelayAuthorizationInteractionSummary {
+  relayToolName: string;
+  reason: string;
+  deviceId: UUID;
+  deviceDisplayName: string;
+  exposureId: UUID;
+  exposureDisplayName: string;
+  duration: RelayAuthorizationDuration;
+  requestedScope: RelayAuthorizationScope;
+  approvedScope?: RelayAuthorizationScope;
+  applyError?: string;
+}
+
+export interface InteractionRequestSummary {
+  id: UUID;
+  workspaceId: UUID;
+  conversationId: UUID;
+  itemId?: UUID;
+  kind: InteractionRequestKind;
+  status: InteractionRequestStatus;
+  requester?: ConversationEntityRef;
+  target?: ConversationEntityRef;
+  resolvedBy?: ConversationEntityRef;
+  resolutionNote?: string;
+  question?: QuestionChoiceInteractionSummary;
+  relayAuthorization?: RelayAuthorizationInteractionSummary;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  resolvedAt?: Timestamp;
+  expiresAt?: Timestamp;
+  viewerCanResolve?: boolean;
+}
+
 export type ConversationFeedEventType =
   | "member_joined"
   | "member_kicked"
@@ -2580,7 +2695,8 @@ export type ConversationFeedEventType =
   | "actor_renamed"
   | "actor_avatar_changed"
   | "actor_version_changed"
-  | "automation_notice";
+  | "automation_notice"
+  | "interaction_requested";
 
 export interface ConversationFeedEventPayloadMap {
   member_joined: {
@@ -2659,6 +2775,9 @@ export interface ConversationFeedEventPayloadMap {
     message: string;
     messageBlocks?: CanonicalContentBlock[];
   };
+  interaction_requested: {
+    interaction: InteractionRequestSummary;
+  };
 }
 
 export type ConversationFeedEventPayload<
@@ -2696,6 +2815,7 @@ export interface ConversationFeedEventItem<
   sessionId?: UUID;
   turnId?: UUID;
   author?: ConversationEntityRef;
+  targets: ConversationEntityRef[];
   causedByItemId?: UUID;
   eventType: T;
   payload: ConversationFeedEventPayloadMap[T];
@@ -2923,6 +3043,37 @@ export function summarizeConversationEvent(
     return "Automation notice";
   }
 
+  if (eventType === "interaction_requested") {
+    const interaction =
+      payload.interaction && typeof payload.interaction === "object"
+        ? (payload.interaction as InteractionRequestSummary)
+        : undefined;
+    if (!interaction) {
+      return "Interaction requested";
+    }
+    if (interaction.kind === "question_choice") {
+      const targetName = interaction.target?.name?.trim() || "a user";
+      const prompt = interaction.question?.prompt?.trim() || "A question";
+      return interaction.status === "answered"
+        ? `${targetName} answered: ${prompt}`
+        : `Question for ${targetName}: ${prompt}`;
+    }
+    const deviceName =
+      interaction.relayAuthorization?.deviceDisplayName?.trim() || "relay";
+    if (interaction.status === "rejected") {
+      const resolverName = interaction.resolvedBy?.name?.trim() || "A user";
+      return `${resolverName} rejected relay access for ${deviceName}`;
+    }
+    if (
+      interaction.status === "approved_pending_apply" ||
+      interaction.status === "applied"
+    ) {
+      const resolverName = interaction.resolvedBy?.name?.trim() || "A user";
+      return `${resolverName} approved relay access for ${deviceName}`;
+    }
+    return `Relay authorization requested for ${deviceName}`;
+  }
+
   return `[Event: ${eventType}]`;
 }
 
@@ -2974,6 +3125,7 @@ export type ChatSocketEventType =
   | "feed.item.created"
   | "runtime.updated"
   | "conversation.updated"
+  | "interaction.updated"
   | "feed.resync.required";
 
 export interface ChatSocketEventPayloadMap {
@@ -3004,6 +3156,12 @@ export interface ChatSocketEventPayloadMap {
     action: "created" | "profile_updated" | "cancelled";
     title?: string | null;
     avatarUrl?: string | null;
+  };
+  "interaction.updated": {
+    conversationId: UUID;
+    interactionId: UUID;
+    itemId?: UUID;
+    interaction: InteractionRequestSummary;
   };
   "feed.resync.required": {
     expectedWorkspaceSequence: number;

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CanonicalContentBlock } from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
+import { enrichFeedItemInteractionsForUser } from '../interactions/service.js';
 import {
   listGroups,
   getGroupMessages,
@@ -64,7 +65,13 @@ export async function chatController(app: FastifyInstance) {
 
     const userId = (request as any).user!.userId;
     const messages = await getGroupMessages(groupId, userId, limit, before);
-    return reply.send({ messages });
+    return reply.send({
+      messages: await Promise.all(
+        messages.items.map((item: any) =>
+          enrichFeedItemInteractionsForUser(item, userId),
+        ),
+      ),
+    });
   });
 
   // POST /workspaces/:wsId/chat/groups/:groupId/messages — send message to group

@@ -12,7 +12,15 @@ import { query } from "../database/index.js";
 import { handleRelayConnection } from "../../modules/mcp-plugins/relay-manager.js";
 import { isShuttingDown } from "../shutdown/state.js";
 import { authenticateSessionToken } from "../../modules/auth/service.js";
-import { listWorkspaceFeedEventsAfter } from "../../modules/conversation/service.js";
+import {
+  isFeedItemVisibleToUser,
+  listWorkspaceFeedEventsAfter,
+} from "../../modules/conversation/service.js";
+import {
+  canUserViewInteraction,
+  enrichFeedItemInteractionsForUser,
+  enrichInteractionForUser,
+} from "../../modules/interactions/service.js";
 import {
   initAuthSessionRegistry,
   registerAuthenticatedSocket,
@@ -115,6 +123,12 @@ function mapInternalEventToSocketEvent(
         payload:
           event.payload as ChatSocketEventPayloadMap["conversation.updated"],
       };
+    case "chat.interaction.updated":
+      return {
+        type: "interaction.updated",
+        payload:
+          event.payload as ChatSocketEventPayloadMap["interaction.updated"],
+      };
     case "session.message.new":
     case "session.status.changed":
     case "session.thinking":
@@ -137,6 +151,7 @@ function getConversationIdFromSocketEvent(
       return (event.payload as WorkspaceFeedEventRecord).item.conversationId;
     case "runtime.updated":
     case "conversation.updated":
+    case "interaction.updated":
       return (event.payload as { conversationId: string }).conversationId;
     default:
       return undefined;
@@ -229,15 +244,26 @@ async function replayWorkspaceFeed(clientId: string, afterSequence: number) {
     }
 
     for (const record of page) {
+      const enrichedRecord = {
+        ...record,
+        item: await enrichFeedItemInteractionsForUser(
+          record.item,
+          client.userId,
+        ),
+      };
+      if (!isFeedItemVisibleToUser(enrichedRecord.item, client.userId)) {
+        cursor = enrichedRecord.workspaceSequence;
+        continue;
+      }
       if (
         !safeSendSocketEvent(clientId, {
           type: "feed.item.created",
-          payload: record,
+          payload: enrichedRecord,
         })
       ) {
         return;
       }
-      cursor = record.workspaceSequence;
+      cursor = enrichedRecord.workspaceSequence;
     }
   }
 
@@ -254,15 +280,22 @@ async function replayWorkspaceFeed(clientId: string, afterSequence: number) {
     }
 
     for (const record of buffered) {
+      const enrichedRecord = {
+        ...record,
+        item: await enrichFeedItemInteractionsForUser(
+          record.item,
+          current.userId,
+        ),
+      };
       if (
         !safeSendSocketEvent(clientId, {
           type: "feed.item.created",
-          payload: record,
+          payload: enrichedRecord,
         })
       ) {
         return;
       }
-      cursor = record.workspaceSequence;
+      cursor = enrichedRecord.workspaceSequence;
     }
   }
 }
@@ -489,15 +522,73 @@ export function setupWebSocket(app: FastifyInstance) {
         }
       }
 
+      if (outbound.type === "interaction.updated") {
+        const payload =
+          outbound.payload as ChatSocketEventPayloadMap["interaction.updated"];
+        const canView = await canUserViewInteraction({
+          interactionId: payload.interactionId,
+          userId: client.userId,
+        });
+        if (!canView) {
+          continue;
+        }
+        if (client.syncState !== "live") {
+          continue;
+        }
+        safeSendSocketEvent(clientId, {
+          type: "interaction.updated",
+          payload: {
+            ...payload,
+            interaction: await enrichInteractionForUser(
+              payload.interaction,
+              client.userId,
+            ),
+          },
+        });
+        continue;
+      }
+
       if (isFeedItem && client.syncState !== "live") {
+        const rawRecord =
+          (outbound as ChatSocketEvent<"feed.item.created">).payload;
+        const record = {
+          ...rawRecord,
+          item: await enrichFeedItemInteractionsForUser(
+            rawRecord.item,
+            client.userId,
+          ),
+        };
+        if (!isFeedItemVisibleToUser(record.item, client.userId)) {
+          continue;
+        }
         bufferFeedRecord(
           client,
-          (outbound as ChatSocketEvent<"feed.item.created">).payload,
+          record,
         );
         continue;
       }
 
       if (!isFeedItem && client.syncState !== "live") {
+        continue;
+      }
+
+      if (isFeedItem) {
+        const rawRecord =
+          (outbound as ChatSocketEvent<"feed.item.created">).payload;
+        const record = {
+          ...rawRecord,
+          item: await enrichFeedItemInteractionsForUser(
+            rawRecord.item,
+            client.userId,
+          ),
+        };
+        if (!isFeedItemVisibleToUser(record.item, client.userId)) {
+          continue;
+        }
+        safeSendSocketEvent(clientId, {
+          type: "feed.item.created",
+          payload: record,
+        });
         continue;
       }
 

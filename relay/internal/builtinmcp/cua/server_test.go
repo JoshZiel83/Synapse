@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
+	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 type fakeDesktop struct {
@@ -329,6 +330,161 @@ func TestReadOnlyStillAllowsObservationTools(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("expected observation tool to remain available")
+	}
+}
+
+func TestReadOnlyGrantIsScopedToMatchingRuntimeSession(t *testing.T) {
+	authStore := runtimeauth.NewStore(t.TempDir() + "/runtime-auth.json")
+	if err := authStore.OpenSession(runtimeauth.RuntimeSession{
+		ID:                "cua-session-a",
+		ExposureStableKey: "test-cua-session",
+	}); err != nil {
+		t.Fatalf("open session-a: %v", err)
+	}
+	if err := authStore.OpenSession(runtimeauth.RuntimeSession{
+		ID:                "cua-session-b",
+		ExposureStableKey: "test-cua-session",
+	}); err != nil {
+		t.Fatalf("open session-b: %v", err)
+	}
+	if err := authStore.Apply(runtimeauth.Grant{
+		InteractionID:     "grant-cua-session-a",
+		RuntimeSessionID:  "cua-session-a",
+		ExposureStableKey: "test-cua-session",
+		Duration:          "session",
+		Capability:        "cua",
+		Mode:              "control",
+	}); err != nil {
+		t.Fatalf("apply cua session grant: %v", err)
+	}
+
+	server := NewWithDesktop(Config{
+		StableKey:       "test-cua-session",
+		ReadOnly:        true,
+		ImageSize:       [2]int{1280, 800},
+		RelativeSize:    [2]int{1000, 1000},
+		DisplaySelector: DisplaySelector{Mode: "main"},
+		AuthStore:       authStore,
+	}, &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	})
+	if err := server.Initialize(); err != nil {
+		t.Fatalf("initialize server: %v", err)
+	}
+
+	blockedResult, err := server.CallTool(context.Background(), "desktop_press_keys", map[string]interface{}{
+		"keys": []string{"enter"},
+	})
+	if err != nil {
+		t.Fatalf("call desktop_press_keys without session: %v", err)
+	}
+	if !blockedResult.IsError {
+		t.Fatalf("expected read-only cua tool to be blocked without runtime session grant")
+	}
+
+	otherSessionCtx := runtimeauth.ContextWithRuntimeSessionID(context.Background(), "cua-session-b")
+	otherSessionResult, err := server.CallTool(otherSessionCtx, "desktop_press_keys", map[string]interface{}{
+		"keys": []string{"enter"},
+	})
+	if err != nil {
+		t.Fatalf("call desktop_press_keys for other session: %v", err)
+	}
+	if !otherSessionResult.IsError {
+		t.Fatalf("expected different runtime session to remain blocked")
+	}
+
+	grantedCtx := runtimeauth.ContextWithRuntimeSessionID(context.Background(), "cua-session-a")
+	grantedResult, err := server.CallTool(grantedCtx, "desktop_press_keys", map[string]interface{}{
+		"keys": []string{"enter"},
+	})
+	if err != nil {
+		t.Fatalf("call desktop_press_keys for granted session: %v", err)
+	}
+	if grantedResult.IsError {
+		t.Fatalf("expected granted runtime session to bypass read-only block")
+	}
+
+	authStore.CloseSession("cua-session-a")
+	afterCloseResult, err := server.CallTool(grantedCtx, "desktop_press_keys", map[string]interface{}{
+		"keys": []string{"enter"},
+	})
+	if err != nil {
+		t.Fatalf("call desktop_press_keys after close: %v", err)
+	}
+	if !afterCloseResult.IsError {
+		t.Fatalf("expected runtime session close to remove cua control grant")
+	}
+}
+
+func TestDisplayStabilityIsTrackedPerRuntimeSession(t *testing.T) {
+	desktop := &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	}
+	server := NewWithDesktop(Config{
+		ImageSize:            [2]int{1280, 800},
+		RelativeSize:         [2]int{1000, 1000},
+		AllowDisplayOverride: true,
+		IncludeOverviewTool:  true,
+		DisplaySelector:      DisplaySelector{Mode: "main"},
+	}, desktop)
+	if err := server.Initialize(); err != nil {
+		t.Fatalf("initialize server: %v", err)
+	}
+
+	sessionA := runtimeauth.ContextWithRuntimeSessionID(context.Background(), "display-session-a")
+	initialA, err := server.CallTool(sessionA, "desktop_capture_display", nil)
+	if err != nil {
+		t.Fatalf("capture display for session-a: %v", err)
+	}
+	if initialA.IsError {
+		t.Fatalf("expected initial capture for session-a to succeed")
+	}
+
+	desktop.displays[0].Origin = Rect{X: 0, Y: 0, W: 2560, H: 1440}
+	desktop.displays[0].Size = Size{W: 2560, H: 1440}
+
+	sessionB := runtimeauth.ContextWithRuntimeSessionID(context.Background(), "display-session-b")
+	initialB, err := server.CallTool(sessionB, "desktop_capture_display", nil)
+	if err != nil {
+		t.Fatalf("capture display for session-b: %v", err)
+	}
+	if initialB.IsError {
+		t.Fatalf("expected new runtime session to establish a fresh display baseline")
+	}
+
+	revisitA, err := server.CallTool(sessionA, "desktop_capture_display", nil)
+	if err != nil {
+		t.Fatalf("capture display for session-a after change: %v", err)
+	}
+	if !revisitA.IsError {
+		t.Fatalf("expected prior runtime session to detect display configuration change")
+	}
+	content, ok := revisitA.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", revisitA.Content[0])
+	}
+	if !strings.Contains(content.Text, "display configuration change") {
+		t.Fatalf("expected display change error, got %q", content.Text)
 	}
 }
 

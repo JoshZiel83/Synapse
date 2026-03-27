@@ -6,7 +6,12 @@ import {
   normalizeActorDocs,
   summarizeActorForRole,
   type ActorDoc,
+  type RelayAuthorizationScope,
 } from '@synapse/shared';
+import type {
+  InteractionQuestionFieldDefinition,
+  InteractionQuestionFieldType,
+} from '@synapse/shared/types';
 import { registerToolPlugin } from './tool-plugins.js';
 import { query } from '../../infrastructure/database/index.js';
 import { getSession } from '../session/service.js';
@@ -20,6 +25,13 @@ import {
   deleteAutomationRule,
   listAutomationRules,
 } from '../automation/service.js';
+import { actorSubject, authorizeAction } from '../access/service.js';
+import {
+  createQuestionInteractionRequest,
+  createRelayAuthorizationInteractionRequest,
+  findOpenRelayAuthorizationInteraction,
+} from '../interactions/service.js';
+import { resolveRelayTargetForNamespacedTool } from '../mcp-plugins/tool-resolver.js';
 
 type InviteableActor = {
   id: string;
@@ -35,6 +47,28 @@ type SendToCandidate = {
   name: string;
   label: string;
   aliases: string[];
+};
+
+type UserInteractionCandidate = {
+  memberId: string;
+  userId: string;
+  name: string;
+  label: string;
+};
+
+type ToolQuestionFieldInput = {
+  id?: string;
+  type?: string;
+  label?: string;
+  description?: string;
+  required?: boolean;
+  options?: string[];
+  allowOther?: boolean;
+  otherLabel?: string;
+  otherPlaceholder?: string;
+  placeholder?: string;
+  minSelections?: number;
+  maxSelections?: number;
 };
 
 function parseActorDocs(value: unknown): ActorDoc[] {
@@ -149,6 +183,181 @@ function buildSendToCandidates(
   }
 
   return candidates;
+}
+
+function buildUserInteractionCandidates(members: any[]): UserInteractionCandidate[] {
+  const candidates: UserInteractionCandidate[] = [];
+
+  for (const member of members) {
+    const state =
+      typeof member.state === 'string' && member.state.trim().length > 0
+        ? member.state
+        : 'active';
+    if (state !== 'active') continue;
+
+    const userId =
+      typeof member.user_id === 'string' && member.user_id.trim().length > 0
+        ? member.user_id
+        : typeof member.userId === 'string' && member.userId.trim().length > 0
+          ? member.userId
+          : member.type === 'user' && typeof member.id === 'string' && member.id.trim().length > 0
+            ? member.id
+            : null;
+    if (!userId) continue;
+
+    const memberId =
+      typeof member.participantId === 'string' && member.participantId.trim().length > 0
+        ? member.participantId
+        : typeof member.id === 'string' && member.id.trim().length > 0
+          ? member.id
+          : null;
+    if (!memberId) continue;
+
+    const name =
+      (typeof member.user_name === 'string' && member.user_name.trim()) ||
+      (typeof member.name === 'string' && member.name.trim()) ||
+      'User';
+    candidates.push({
+      memberId,
+      userId,
+      name,
+      label: `"${name}" (user)`,
+    });
+  }
+
+  return candidates;
+}
+
+function buildUserInteractionDirectory(
+  candidates: UserInteractionCandidate[],
+) {
+  return candidates
+    .map((candidate) => `\`${candidate.memberId}\`: ${candidate.label}`)
+    .join(', ');
+}
+
+function resolveUserInteractionCandidate(
+  requestedMemberId: string,
+  candidates: UserInteractionCandidate[],
+) {
+  const candidate = candidates.find((entry) => entry.memberId === requestedMemberId) || null;
+  if (candidate) {
+    return { candidate, error: null };
+  }
+
+  return {
+    candidate: null,
+    error: `targetMemberId must be one of: ${candidates.map((entry) => entry.memberId).join(', ')}`,
+  };
+}
+
+function normalizeQuestionFieldType(value: unknown): InteractionQuestionFieldType | null {
+  if (typeof value !== 'string') return null;
+  switch (value.trim().toLowerCase()) {
+    case 'single_select':
+    case 'single':
+    case 'radio':
+      return 'single_select';
+    case 'multi_select':
+    case 'multiple':
+    case 'checkbox':
+      return 'multi_select';
+    case 'text':
+    case 'input':
+    case 'textarea':
+      return 'text';
+    default:
+      return null;
+  }
+}
+
+function buildQuestionFieldDefinition(
+  rawField: ToolQuestionFieldInput,
+  fallbackIndex: number,
+): { field: InteractionQuestionFieldDefinition | null; error?: string } {
+  const label = String(rawField.label || '').trim();
+  if (!label) {
+    return { field: null, error: `Field ${fallbackIndex + 1} is missing a label.` };
+  }
+
+  const normalizedType = normalizeQuestionFieldType(rawField.type);
+  const type = normalizedType || (Array.isArray(rawField.options) ? 'single_select' : 'text');
+  const id = String(rawField.id || `field_${fallbackIndex + 1}`).trim() || `field_${fallbackIndex + 1}`;
+  const field: InteractionQuestionFieldDefinition = {
+    id,
+    type,
+    label,
+    description: typeof rawField.description === 'string' ? rawField.description.trim() || undefined : undefined,
+    required: rawField.required !== false,
+  };
+
+  if (type === 'text') {
+    field.placeholder =
+      typeof rawField.placeholder === 'string' ? rawField.placeholder.trim() || undefined : undefined;
+    return { field };
+  }
+
+  const optionLabels = Array.from(
+    new Set(
+      (Array.isArray(rawField.options) ? rawField.options : [])
+        .map((value) => String(value || '').trim())
+        .filter((value) => value.length > 0),
+    ),
+  );
+  if (optionLabels.length === 0) {
+    return { field: null, error: `"${label}" requires at least one option.` };
+  }
+
+  field.options = optionLabels.map((optionLabel, optionIndex) => ({
+    id: `${id}_option_${optionIndex + 1}`,
+    label: optionLabel,
+  }));
+  field.allowOther = rawField.allowOther === true;
+  field.otherLabel =
+    typeof rawField.otherLabel === 'string' ? rawField.otherLabel.trim() || undefined : undefined;
+  field.otherPlaceholder =
+    typeof rawField.otherPlaceholder === 'string'
+      ? rawField.otherPlaceholder.trim() || undefined
+      : undefined;
+
+  if (type === 'multi_select') {
+    if (typeof rawField.minSelections === 'number' && Number.isFinite(rawField.minSelections)) {
+      field.minSelections = Math.max(0, Math.trunc(rawField.minSelections));
+    }
+    if (typeof rawField.maxSelections === 'number' && Number.isFinite(rawField.maxSelections)) {
+      field.maxSelections = Math.max(1, Math.trunc(rawField.maxSelections));
+    }
+  }
+
+  return { field };
+}
+
+function buildQuestionFieldDefinitions(
+  rawFields: unknown,
+): { fields: InteractionQuestionFieldDefinition[]; error?: string } {
+  if (!Array.isArray(rawFields) || rawFields.length === 0) {
+    return { fields: [], error: 'fields must contain at least one question.' };
+  }
+
+  const fields: InteractionQuestionFieldDefinition[] = [];
+  const usedIds = new Set<string>();
+
+  for (const [index, rawField] of rawFields.entries()) {
+    if (!rawField || typeof rawField !== 'object') {
+      return { fields: [], error: `Field ${index + 1} is invalid.` };
+    }
+    const { field, error } = buildQuestionFieldDefinition(rawField as ToolQuestionFieldInput, index);
+    if (!field) {
+      return { fields: [], error: error || `Field ${index + 1} is invalid.` };
+    }
+    if (usedIds.has(field.id)) {
+      return { fields: [], error: `Field id "${field.id}" is duplicated.` };
+    }
+    usedIds.add(field.id);
+    fields.push(field);
+  }
+
+  return { fields };
 }
 
 async function listInviteableActors(params: {
@@ -503,6 +712,673 @@ export function registerCallableToolPlugins(): void {
         result.warnings = errors;
       }
       return JSON.stringify(result);
+    },
+  });
+
+  registerToolPlugin({
+    name: 'ask_user_question',
+    kind: 'callable',
+    definition: {
+      name: 'ask_user_question',
+      description: 'Ask one specific user in the current group a structured question. Supports single-select, multi-select, and an optional other input. Only that targeted user will be able to answer it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          targetMemberId: {
+            type: 'string',
+            description: 'The exact conversation member ID of the target user in the current group.',
+          },
+          question: {
+            type: 'string',
+            description: 'The question to ask.',
+          },
+          instructions: {
+            type: 'string',
+            description: 'Optional short instructions or context for the user.',
+          },
+          options: {
+            type: 'array',
+            description: 'One or more answer choices shown to the user.',
+            items: { type: 'string' },
+          },
+          selectionMode: {
+            type: 'string',
+            description: 'Whether the user may pick one option or multiple options.',
+            enum: ['single_select', 'multi_select'],
+          },
+          allowOther: {
+            type: 'boolean',
+            description: 'Whether to allow a free-text "other" response in addition to the listed options.',
+          },
+          otherLabel: {
+            type: 'string',
+            description: 'Optional label for the free-text "other" response.',
+          },
+          otherPlaceholder: {
+            type: 'string',
+            description: 'Optional placeholder for the free-text "other" response.',
+          },
+          minSelections: {
+            type: 'number',
+            description: 'Minimum number of selections when selectionMode is multi_select.',
+          },
+          maxSelections: {
+            type: 'number',
+            description: 'Maximum number of selections when selectionMode is multi_select.',
+          },
+        },
+        required: ['targetMemberId', 'question', 'options'],
+      },
+    },
+    resolve: (ctx) => {
+      if (!ctx.groupId || !ctx.groupMembers?.length) {
+        return { active: false, definition: null as any };
+      }
+      const candidates = buildUserInteractionCandidates(ctx.groupMembers);
+      if (candidates.length === 0) {
+        return { active: false, definition: null as any };
+      }
+      const candidateDirectory = buildUserInteractionDirectory(candidates);
+      return {
+        active: true,
+        definition: {
+          name: 'ask_user_question',
+          description: `Ask exactly one user in this group a structured question. Supports single-select, multi-select, and optional other input. Only the targeted user can answer it. Available targetMemberId values: ${candidateDirectory}.`,
+          parameters: {
+            type: 'object',
+            properties: {
+              targetMemberId: {
+                type: 'string',
+                description: 'The exact conversation member ID of the target user in the current group.',
+                enum: candidates.map((candidate) => candidate.memberId),
+              },
+              question: {
+                type: 'string',
+                description: 'The question to ask.',
+              },
+              instructions: {
+                type: 'string',
+                description: 'Optional short instructions or context for the user.',
+              },
+              options: {
+                type: 'array',
+                description: 'One or more answer choices shown to the user.',
+                items: { type: 'string' },
+              },
+              selectionMode: {
+                type: 'string',
+                description: 'Whether the user may pick one option or multiple options.',
+                enum: ['single_select', 'multi_select'],
+              },
+              allowOther: {
+                type: 'boolean',
+                description: 'Whether to allow a free-text "other" response.',
+              },
+              otherLabel: {
+                type: 'string',
+                description: 'Optional label for the free-text "other" response.',
+              },
+              otherPlaceholder: {
+                type: 'string',
+                description: 'Optional placeholder for the free-text "other" response.',
+              },
+              minSelections: {
+                type: 'number',
+                description: 'Minimum number of selections when selectionMode is multi_select.',
+              },
+              maxSelections: {
+                type: 'number',
+                description: 'Maximum number of selections when selectionMode is multi_select.',
+              },
+            },
+            required: ['targetMemberId', 'question', 'options'],
+          },
+        },
+      };
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const session = await getSession(context.sessionId);
+      if (!session || !session.group_id) {
+        return JSON.stringify({ error: 'Current session is not in a group' });
+      }
+
+      const allMembers = await getGroupMembers(session.group_id);
+      const requesterMember = allMembers.find((member) => member.actor_id === context.actorId && member.state === 'active');
+      if (!requesterMember) {
+        return JSON.stringify({ error: 'Current actor is not an active member of this group' });
+      }
+
+      const candidates = buildUserInteractionCandidates(allMembers);
+      if (candidates.length === 0) {
+        return JSON.stringify({ error: 'There are no active user members in this group' });
+      }
+
+      const targetMemberId = String((input as any).targetMemberId || '').trim();
+      const resolution = resolveUserInteractionCandidate(targetMemberId, candidates);
+      if (!resolution.candidate) {
+        return JSON.stringify({ error: resolution.error || 'Target user not found' });
+      }
+
+      const question = String((input as any).question || '').trim();
+      if (!question) {
+        return JSON.stringify({ error: 'question is required' });
+      }
+
+      const instructions =
+        typeof (input as any).instructions === 'string'
+          ? String((input as any).instructions).trim()
+          : '';
+      const rawOptions = Array.isArray((input as any).options)
+        ? (input as any).options
+        : [];
+      const optionLabels: string[] = Array.from(
+        new Set(
+          rawOptions
+            .map((value: unknown) => String(value || '').trim())
+            .filter((value: string) => value.length > 0),
+        ),
+      );
+      if (optionLabels.length < 1) {
+        return JSON.stringify({ error: 'options must contain at least one non-empty choice' });
+      }
+
+      const selectionMode = normalizeQuestionFieldType((input as any).selectionMode) || 'single_select';
+      if (selectionMode === 'text') {
+        return JSON.stringify({ error: 'selectionMode must be single_select or multi_select' });
+      }
+
+      const field: InteractionQuestionFieldDefinition = {
+        id: 'field_1',
+        type: selectionMode,
+        label: question,
+        required: true,
+        options: optionLabels.map((label, index) => ({
+          id: `field_1_option_${index + 1}`,
+          label,
+        })),
+        allowOther: (input as any).allowOther === true,
+        otherLabel:
+          typeof (input as any).otherLabel === 'string'
+            ? String((input as any).otherLabel).trim() || undefined
+            : undefined,
+        otherPlaceholder:
+          typeof (input as any).otherPlaceholder === 'string'
+            ? String((input as any).otherPlaceholder).trim() || undefined
+            : undefined,
+      };
+
+      if (
+        selectionMode === 'multi_select' &&
+        typeof (input as any).minSelections === 'number' &&
+        Number.isFinite((input as any).minSelections)
+      ) {
+        field.minSelections = Math.max(0, Math.trunc(Number((input as any).minSelections)));
+      }
+      if (
+        selectionMode === 'multi_select' &&
+        typeof (input as any).maxSelections === 'number' &&
+        Number.isFinite((input as any).maxSelections)
+      ) {
+        field.maxSelections = Math.max(1, Math.trunc(Number((input as any).maxSelections)));
+      }
+
+      const interaction = await createQuestionInteractionRequest({
+        workspaceId: context.workspaceId,
+        conversationId: session.group_id,
+        requesterMemberId: requesterMember.id,
+        requesterActorId: context.actorId,
+        requesterUserId: context.userId,
+        targetMemberId: resolution.candidate.memberId,
+        targetUserId: resolution.candidate.userId,
+        prompt: question,
+        instructions: instructions || undefined,
+        fields: [field],
+      });
+
+      return JSON.stringify({
+        success: true,
+        interactionId: interaction.id,
+        targetUser: resolution.candidate.name,
+        message: `Question sent to ${resolution.candidate.name}. Only that user can answer it.`,
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: 'ask_user_form',
+    kind: 'callable',
+    definition: {
+      name: 'ask_user_form',
+      description: 'Ask one specific user in the current group a structured multi-question form. Supports single-select, multi-select, and text input fields. Only that targeted user can answer it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          targetMemberId: {
+            type: 'string',
+            description: 'The exact conversation member ID of the target user in the current group.',
+          },
+          title: {
+            type: 'string',
+            description: 'Short title or prompt shown at the top of the form.',
+          },
+          instructions: {
+            type: 'string',
+            description: 'Optional instructions or context for the whole form.',
+          },
+          fields: {
+            type: 'array',
+            description: 'The questions or inputs shown to the user.',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                type: {
+                  type: 'string',
+                  enum: ['single_select', 'multi_select', 'text'],
+                },
+                label: { type: 'string' },
+                description: { type: 'string' },
+                required: { type: 'boolean' },
+                options: {
+                  type: 'array',
+                  items: { type: 'string' },
+                },
+                allowOther: { type: 'boolean' },
+                otherLabel: { type: 'string' },
+                otherPlaceholder: { type: 'string' },
+                placeholder: { type: 'string' },
+                minSelections: { type: 'number' },
+                maxSelections: { type: 'number' },
+              },
+              required: ['type', 'label'],
+            } as any,
+          },
+        },
+        required: ['targetMemberId', 'title', 'fields'],
+      },
+    },
+    resolve: (ctx) => {
+      if (!ctx.groupId || !ctx.groupMembers?.length) {
+        return { active: false, definition: null as any };
+      }
+      const candidates = buildUserInteractionCandidates(ctx.groupMembers);
+      if (candidates.length === 0) {
+        return { active: false, definition: null as any };
+      }
+      const candidateDirectory = buildUserInteractionDirectory(candidates);
+      return {
+        active: true,
+        definition: {
+          name: 'ask_user_form',
+          description: `Ask exactly one user in this group a structured form with one or more fields. Only the targeted user can answer it. Available targetMemberId values: ${candidateDirectory}.`,
+          parameters: {
+            type: 'object',
+            properties: {
+              targetMemberId: {
+                type: 'string',
+                description: 'The exact conversation member ID of the target user in the current group.',
+                enum: candidates.map((candidate) => candidate.memberId),
+              },
+              title: {
+                type: 'string',
+                description: 'Short title or prompt shown at the top of the form.',
+              },
+              instructions: {
+                type: 'string',
+                description: 'Optional instructions or context for the whole form.',
+              },
+              fields: {
+                type: 'array',
+                description: 'The questions or inputs shown to the user.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    type: {
+                      type: 'string',
+                      enum: ['single_select', 'multi_select', 'text'],
+                    },
+                    label: { type: 'string' },
+                    description: { type: 'string' },
+                    required: { type: 'boolean' },
+                    options: {
+                      type: 'array',
+                      items: { type: 'string' },
+                    },
+                    allowOther: { type: 'boolean' },
+                    otherLabel: { type: 'string' },
+                    otherPlaceholder: { type: 'string' },
+                    placeholder: { type: 'string' },
+                    minSelections: { type: 'number' },
+                    maxSelections: { type: 'number' },
+                  },
+                  required: ['type', 'label'],
+                } as any,
+              },
+            },
+            required: ['targetMemberId', 'title', 'fields'],
+          },
+        },
+      };
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const session = await getSession(context.sessionId);
+      if (!session || !session.group_id) {
+        return JSON.stringify({ error: 'Current session is not in a group' });
+      }
+
+      const allMembers = await getGroupMembers(session.group_id);
+      const requesterMember = allMembers.find((member) => member.actor_id === context.actorId && member.state === 'active');
+      if (!requesterMember) {
+        return JSON.stringify({ error: 'Current actor is not an active member of this group' });
+      }
+
+      const candidates = buildUserInteractionCandidates(allMembers);
+      if (candidates.length === 0) {
+        return JSON.stringify({ error: 'There are no active user members in this group' });
+      }
+
+      const targetMemberId = String((input as any).targetMemberId || '').trim();
+      const resolution = resolveUserInteractionCandidate(targetMemberId, candidates);
+      if (!resolution.candidate) {
+        return JSON.stringify({ error: resolution.error || 'Target user not found' });
+      }
+
+      const title = String((input as any).title || '').trim();
+      if (!title) {
+        return JSON.stringify({ error: 'title is required' });
+      }
+
+      const instructions =
+        typeof (input as any).instructions === 'string'
+          ? String((input as any).instructions).trim()
+          : '';
+
+      const { fields, error } = buildQuestionFieldDefinitions((input as any).fields);
+      if (error) {
+        return JSON.stringify({ error });
+      }
+
+      const interaction = await createQuestionInteractionRequest({
+        workspaceId: context.workspaceId,
+        conversationId: session.group_id,
+        requesterMemberId: requesterMember.id,
+        requesterActorId: context.actorId,
+        requesterUserId: context.userId,
+        targetMemberId: resolution.candidate.memberId,
+        targetUserId: resolution.candidate.userId,
+        prompt: title,
+        instructions: instructions || undefined,
+        fields,
+      });
+
+      return JSON.stringify({
+        success: true,
+        interactionId: interaction.id,
+        targetUser: resolution.candidate.name,
+        message: `Form sent to ${resolution.candidate.name}. Only that user can answer it.`,
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: 'request_relay_authorization',
+    kind: 'callable',
+    definition: {
+      name: 'request_relay_authorization',
+      description: 'Create a relay runtime access approval request for the current conversation. Any current conversation user with permission to authorize that relay device will be able to approve or reject it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          relayToolName: {
+            type: 'string',
+            description: 'The exact namespaced relay tool name this authorization is for.',
+          },
+          reason: {
+            type: 'string',
+            description: 'Explain why the access is needed right now.',
+          },
+          capability: {
+            type: 'string',
+            description: 'The kind of runtime access to request.',
+            enum: ['filesystem', 'cua'],
+          },
+          duration: {
+            type: 'string',
+            description: 'How long the authorization should last.',
+            enum: ['session', 'persistent'],
+          },
+          path: {
+            type: 'string',
+            description: 'Required for filesystem requests: the absolute path prefix to authorize.',
+          },
+          access: {
+            type: 'string',
+            description: 'Required for filesystem requests: the access level to request.',
+            enum: ['read', 'write', 'read_write'],
+          },
+        },
+        required: ['relayToolName', 'reason', 'capability', 'duration'],
+      },
+    },
+    resolve: (ctx) => {
+      if (!ctx.groupId || !ctx.groupMembers?.length) {
+        return { active: false, definition: null as any };
+      }
+      const candidates = buildUserInteractionCandidates(ctx.groupMembers);
+      if (candidates.length === 0) {
+        return { active: false, definition: null as any };
+      }
+      return {
+        active: true,
+        definition: {
+          name: 'request_relay_authorization',
+          description: 'Create a relay runtime access approval request. Any current conversation user who has permission to authorize the target relay device will be able to approve or reject it. Use the exact relay tool name you already called.',
+          parameters: {
+            type: 'object',
+            properties: {
+              relayToolName: {
+                type: 'string',
+                description: 'The exact namespaced relay tool name this authorization is for.',
+              },
+              reason: {
+                type: 'string',
+                description: 'Explain why the access is needed right now.',
+              },
+              capability: {
+                type: 'string',
+                description: 'The kind of runtime access to request.',
+                enum: ['filesystem', 'cua'],
+              },
+              duration: {
+                type: 'string',
+                description: 'How long the authorization should last.',
+                enum: ['session', 'persistent'],
+              },
+              path: {
+                type: 'string',
+                description: 'Required for filesystem requests: the absolute path prefix to authorize.',
+              },
+              access: {
+                type: 'string',
+                description: 'Required for filesystem requests: the access level to request.',
+                enum: ['read', 'write', 'read_write'],
+              },
+            },
+            required: ['relayToolName', 'reason', 'capability', 'duration'],
+          },
+        },
+      };
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        return JSON.stringify({ error: 'No session context available' });
+      }
+
+      const session = await getSession(context.sessionId);
+      if (!session || !session.group_id) {
+        return JSON.stringify({ error: 'Current session is not in a group' });
+      }
+
+      const allMembers = await getGroupMembers(session.group_id);
+      const requesterMember = allMembers.find((member) => member.actor_id === context.actorId && member.state === 'active');
+      if (!requesterMember) {
+        return JSON.stringify({ error: 'Current actor is not an active member of this group' });
+      }
+
+      const candidates = buildUserInteractionCandidates(allMembers);
+      if (candidates.length === 0) {
+        return JSON.stringify({
+          error:
+            'This conversation has no active user who could receive a relay authorization request',
+        });
+      }
+
+      const relayToolName = String((input as any).relayToolName || '').trim();
+      if (!relayToolName) {
+        return JSON.stringify({ error: 'relayToolName is required' });
+      }
+
+      const relayTarget = await resolveRelayTargetForNamespacedTool({
+        actorId: context.actorId,
+        workspaceId: context.workspaceId,
+        sessionId: context.sessionId,
+        conversationId: session.group_id,
+        userId: context.userId,
+        namespacedToolName: relayToolName,
+      });
+      if (!relayTarget) {
+        return JSON.stringify({ error: `Relay tool "${relayToolName}" is not currently available in this conversation.` });
+      }
+      if (!relayTarget.runtimeSessionId) {
+        return JSON.stringify({
+          error:
+            'This relay tool does not have an active runtime session yet. Call the relay tool first, then request authorization.',
+        });
+      }
+
+      const requesterAllowed = await authorizeAction({
+        subject: actorSubject(context.actorId),
+        action: 'relay_exposure.request_authorization',
+        resourceId: relayTarget.exposureId,
+      });
+      if (!requesterAllowed) {
+        return JSON.stringify({ error: 'Current actor is not allowed to request authorization for this relay exposure' });
+      }
+
+      const capability = String((input as any).capability || '').trim();
+      const duration =
+        (input as any).duration === 'persistent' ? 'persistent' : 'session';
+      let requestedScope: RelayAuthorizationScope;
+
+      if (capability === 'filesystem') {
+        const path = String((input as any).path || '').trim();
+        const access = String((input as any).access || '').trim();
+        if (!path) {
+          return JSON.stringify({ error: 'path is required for filesystem authorization requests' });
+        }
+        if (access !== 'read' && access !== 'write' && access !== 'read_write') {
+          return JSON.stringify({ error: 'access must be read, write, or read_write for filesystem requests' });
+        }
+        requestedScope = {
+          capability: 'filesystem',
+          path,
+          access: access as 'read' | 'write' | 'read_write',
+        };
+      } else if (capability === 'cua') {
+        requestedScope = {
+          capability: 'cua',
+          mode: 'control',
+        };
+      } else {
+        return JSON.stringify({ error: 'capability must be filesystem or cua' });
+      }
+
+      const reason = String((input as any).reason || '').trim();
+      if (!reason) {
+        return JSON.stringify({ error: 'reason is required' });
+      }
+
+      const existing = await findOpenRelayAuthorizationInteraction({
+        workspaceId: context.workspaceId,
+        conversationId: session.group_id,
+        requesterMemberId: requesterMember.id,
+        relayDeviceId: relayTarget.deviceId,
+        relayExposureId: relayTarget.exposureId,
+        runtimeSessionId: relayTarget.runtimeSessionId,
+        duration,
+        requestedScope,
+      });
+      if (existing) {
+        return JSON.stringify({
+          success: true,
+          interactionId: existing.id,
+          relayDevice: relayTarget.deviceDisplayName,
+          relayExposure: relayTarget.exposureDisplayName,
+          message:
+            existing.status === 'approved_pending_apply'
+              ? 'A matching authorization request has already been approved and is waiting for the relay to apply it.'
+              : 'A matching authorization request is already pending in this conversation. Wait for an authorized user to approve or reject it.',
+        });
+      }
+
+      const authorizerCandidates = await Promise.all(
+        candidates.map(async (candidate) => ({
+          candidate,
+          allowed: await authorizeAction({
+            subject: { type: 'user', id: candidate.userId },
+            action: 'relay_device.authorize_runtime_access',
+            resourceId: relayTarget.deviceId,
+          }),
+        })),
+      );
+      const availableAuthorizers = authorizerCandidates
+        .filter((entry) => entry.allowed)
+        .map((entry) => entry.candidate);
+      if (availableAuthorizers.length === 0) {
+        return JSON.stringify({
+          error:
+            'No active user in this conversation is currently allowed to authorize runtime access for this relay device',
+        });
+      }
+
+      const interaction = await createRelayAuthorizationInteractionRequest({
+        workspaceId: context.workspaceId,
+        conversationId: session.group_id,
+        requesterMemberId: requesterMember.id,
+        requesterActorId: context.actorId,
+        requesterUserId: context.userId,
+        relayDeviceId: relayTarget.deviceId,
+        relayExposureId: relayTarget.exposureId,
+        runtimeSessionId: relayTarget.runtimeSessionId,
+        relayToolName,
+        reason,
+        duration,
+        requestedScope,
+      });
+
+      return JSON.stringify({
+        success: true,
+        interactionId: interaction.id,
+        approverCount: availableAuthorizers.length,
+        relayDevice: relayTarget.deviceDisplayName,
+        relayExposure: relayTarget.exposureDisplayName,
+        message:
+          availableAuthorizers.length === 1
+            ? `Authorization request created. ${availableAuthorizers[0]!.name} can approve or reject it, and the relay will apply it locally if approved.`
+            : `Authorization request created. ${availableAuthorizers.length} current conversation users can approve or reject it, and the relay will apply it locally if approved.`,
+      });
     },
   });
 

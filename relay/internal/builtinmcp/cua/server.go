@@ -7,16 +7,16 @@ import (
 	"sync"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
+	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 type Server struct {
-	cfg             Config
-	desktop         Desktop
-	tools           []core.Tool
-	system          string
-	mu              sync.Mutex
-	sessionDisplays []displaySnapshot
-	sessionReady    bool
+	cfg           Config
+	desktop       Desktop
+	tools         []core.Tool
+	system        string
+	mu            sync.Mutex
+	sessionStates map[string]sessionState
 }
 
 func New(cfg Config) (*Server, error) {
@@ -30,9 +30,10 @@ func New(cfg Config) (*Server, error) {
 func NewWithDesktop(cfg Config, desktop Desktop) *Server {
 	cfg = applyDefaults(cfg)
 	server := &Server{
-		cfg:     cfg,
-		desktop: desktop,
-		system:  detectSystemDescription(),
+		cfg:           cfg,
+		desktop:       desktop,
+		system:        detectSystemDescription(),
+		sessionStates: make(map[string]sessionState),
 	}
 	server.tools = server.buildTools()
 	return server
@@ -49,7 +50,7 @@ func (s *Server) Initialize() error {
 	if s.desktop == nil {
 		return fmt.Errorf("desktop integration is not available in this build")
 	}
-	return s.initializeSessionDisplays()
+	return s.initializeSessionDisplays("")
 }
 
 func (s *Server) ListTools() ([]core.Tool, error) {
@@ -64,11 +65,28 @@ func (s *Server) Shutdown() {
 	}
 }
 
+func (s *Server) CloseRuntimeSession(runtimeSessionID string) {
+	sessionKey := runtimeSessionStateKey(runtimeSessionID)
+	if sessionKey == defaultRuntimeSessionKey {
+		return
+	}
+	s.mu.Lock()
+	delete(s.sessionStates, sessionKey)
+	s.mu.Unlock()
+}
+
+func (s *Server) ResetRuntimeSessions() {
+	s.mu.Lock()
+	s.sessionStates = make(map[string]sessionState)
+	s.mu.Unlock()
+}
+
 func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
 	if s.desktop == nil {
 		return errorResult("desktop integration is not available in this build"), nil
 	}
-	if blocked, operation := s.readOnlyBlock(toolName, args); blocked {
+	runtimeSessionID := runtimeauth.RuntimeSessionIDFromContext(ctx)
+	if blocked, operation := s.readOnlyBlock(runtimeSessionID, toolName, args); blocked {
 		return readOnlyResult(toolName, operation), nil
 	}
 
@@ -76,21 +94,21 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 	case "desktop_list_displays":
 		return s.listDisplays(), nil
 	case "desktop_capture_display":
-		return s.captureDisplay(args)
+		return s.captureDisplay(runtimeSessionID, args)
 	case "desktop_capture_overview":
-		return s.captureOverview(args)
+		return s.captureOverview(runtimeSessionID, args)
 	case "desktop_move_pointer":
-		return s.movePointer(args)
+		return s.movePointer(runtimeSessionID, args)
 	case "desktop_click":
-		return s.click(args)
+		return s.click(runtimeSessionID, args)
 	case "desktop_drag":
-		return s.drag(args)
+		return s.drag(runtimeSessionID, args)
 	case "desktop_scroll":
-		return s.scroll(args)
+		return s.scroll(runtimeSessionID, args)
 	case "desktop_type_text":
-		return s.typeText(args)
+		return s.typeText(runtimeSessionID, args)
 	case "desktop_press_keys":
-		return s.pressKeys(args)
+		return s.pressKeys(runtimeSessionID, args)
 	case "desktop_get_keyboard_state":
 		return s.keyboardState(), nil
 	case "desktop_list_windows":
@@ -189,7 +207,10 @@ func readOnlyResult(toolName, operation string) core.CallResult {
 	}
 }
 
-func (s *Server) readOnlyBlock(toolName string, args map[string]interface{}) (bool, string) {
+func (s *Server) readOnlyBlock(runtimeSessionID, toolName string, args map[string]interface{}) (bool, string) {
+	if s.cfg.AuthStore != nil && s.cfg.AuthStore.AllowsCUAControl(s.cfg.StableKey, runtimeSessionID) {
+		return false, ""
+	}
 	if !s.cfg.ReadOnly {
 		return false, ""
 	}
@@ -202,8 +223,8 @@ func (s *Server) readOnlyBlock(toolName string, args map[string]interface{}) (bo
 	return false, ""
 }
 
-func (s *Server) guardStableDisplays() (core.CallResult, bool) {
-	displays, changed, err := s.ensureStableDisplays()
+func (s *Server) guardStableDisplays(runtimeSessionID string) (core.CallResult, bool) {
+	displays, changed, err := s.ensureStableDisplays(runtimeSessionID)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read displays: %v", err)), true
 	}

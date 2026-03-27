@@ -3,9 +3,12 @@ package cua
 import (
 	"context"
 	"image"
+
+	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 type Config struct {
+	StableKey            string
 	ReadOnly             bool
 	RelativeCoordinate   bool
 	ImageSize            [2]int
@@ -15,6 +18,7 @@ type Config struct {
 	AllowDisplayOverride bool
 	IncludeOverviewTool  bool
 	DisplaySelector      DisplaySelector
+	AuthStore            *runtimeauth.Store
 }
 
 type DisplaySelector struct {

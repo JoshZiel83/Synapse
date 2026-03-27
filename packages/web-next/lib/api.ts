@@ -20,6 +20,7 @@ import type {
   ConversationFeedPage,
   ConversationTransportBindingSummary,
   InstalledSkill,
+  InteractionRequestSummary,
   TransportAccountSummary,
   TransportConnectorCapability,
   TransportExternalUserSummary,
@@ -912,6 +913,30 @@ class ApiClient {
       method: "POST",
       body: JSON.stringify(body),
     })
+  }
+  resolveInteraction(
+    wsId: string,
+    groupId: string,
+    interactionId: string,
+    data: {
+      answers?: {
+        fieldId: string
+        selectedOptionIds?: string[]
+        otherText?: string
+        text?: string
+      }[]
+      selectedOptionId?: string
+      decision?: "approve" | "reject"
+      note?: string
+    }
+  ): Promise<{ interaction: InteractionRequestSummary }> {
+    return this.fetch(
+      `/workspaces/${wsId}/chat/groups/${groupId}/interactions/${interactionId}/respond`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
   }
   getTransportConnectors(
     wsId: string

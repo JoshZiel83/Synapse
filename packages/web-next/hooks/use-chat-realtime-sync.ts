@@ -28,6 +28,9 @@ export function useChatRealtimeSync({
   const handleConversationUpdated = useChatStore(
     (state) => state.handleConversationUpdated
   )
+  const handleInteractionUpdated = useChatStore(
+    (state) => state.handleInteractionUpdated
+  )
 
   const onEvent = useCallback(
     (event: ChatSocketEvent | Record<string, unknown>) => {
@@ -68,6 +71,11 @@ export function useChatRealtimeSync({
           }
           break
         }
+        case "interaction.updated":
+          handleInteractionUpdated(
+            (event as ChatSocketEvent<"interaction.updated">).payload
+          )
+          break
         case "feed.resync.required":
           if (workspaceId) {
             void loadGroups(workspaceId)
@@ -88,6 +96,7 @@ export function useChatRealtimeSync({
     [
       handleConversationUpdated,
       handleFeedItemCreated,
+      handleInteractionUpdated,
       handleRuntimeUpdated,
       loadGroups,
       loadMessages,

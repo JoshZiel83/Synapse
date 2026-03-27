@@ -206,6 +206,8 @@ export function useWebSocket({
                     ? "runtime.updated"
                     : rawType === "chat.conversation.updated"
                       ? "conversation.updated"
+                      : rawType === "chat.interaction.updated"
+                        ? "interaction.updated"
                       : rawType
         const normalizedMessage = {
           ...msg,
