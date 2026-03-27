@@ -57,6 +57,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	if importer.ReconcileConfig(cfg, importer.DetectAll()) {
+		if err := config.Save(cfgPath, cfg); err != nil {
+			log.Printf("Warning: failed to persist follow sync updates: %v", err)
+		}
+	}
 	if errs := config.Validate(cfg); len(errs) > 0 {
 		log.Fatalf("Invalid relay config: %s", errs[0])
 	}
@@ -213,10 +218,10 @@ func runImport(cfgPath string) {
 		if strings.TrimSpace(srv.SourceKey) == "" {
 			continue
 		}
-		syncMode := "import_only"
+		syncMode := config.SyncModeSnapshot
 		for i := range cfg.SyncSources {
 			if cfg.SyncSources[i].SourceKey == srv.SourceKey && strings.TrimSpace(cfg.SyncSources[i].SyncMode) != "" {
-				syncMode = cfg.SyncSources[i].SyncMode
+				syncMode = config.NormalizeSyncMode(cfg.SyncSources[i].SyncMode)
 				break
 			}
 		}
@@ -300,6 +305,7 @@ func runPair(cfgPath, serverBaseURL, pairingCode, displayName string) {
 }
 
 func upsertSyncSource(cfg *config.Config, next config.SyncSourceConfig) {
+	next.SyncMode = config.NormalizeSyncMode(next.SyncMode)
 	for i := range cfg.SyncSources {
 		if cfg.SyncSources[i].SourceKey == next.SourceKey {
 			cfg.SyncSources[i] = next

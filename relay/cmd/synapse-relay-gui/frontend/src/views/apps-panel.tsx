@@ -60,7 +60,6 @@ function defaultChromeServer(): ServerConfig {
     name: 'chrome-browser',
     enabled: false,
     transport: 'builtin',
-    managementMode: 'builtin',
     builtin: {
       kind: 'chrome',
       instanceId: 'chrome_default',
@@ -94,7 +93,6 @@ function defaultCUAServer(): ServerConfig {
     name: 'computer-use',
     enabled: false,
     transport: 'builtin',
-    managementMode: 'builtin',
     builtin: {
       kind: 'cua',
       instanceId: 'cua_default',
@@ -122,7 +120,6 @@ function defaultFilesystemServer(): ServerConfig {
     name: 'filesystem',
     enabled: false,
     transport: 'builtin',
-    managementMode: 'builtin',
     builtin: {
       kind: 'filesystem',
       instanceId: 'filesystem_default',
@@ -157,7 +154,6 @@ function defaultCommandlineServer(): ServerConfig {
     name: 'command-line',
     enabled: false,
     transport: 'builtin',
-    managementMode: 'builtin',
     builtin: {
       kind: 'commandline',
       instanceId: 'commandline_default',
@@ -198,7 +194,6 @@ function normalizeChromeServer(input?: ServerConfig): ServerConfig {
     ...defaults,
     ...current,
     transport: 'builtin',
-    managementMode: 'builtin',
     enabled: current.enabled !== false,
     metadata: {
       ...(defaults.metadata || {}),
@@ -231,7 +226,6 @@ function normalizeCommandlineServer(input?: ServerConfig): ServerConfig {
     ...defaults,
     ...current,
     transport: 'builtin',
-    managementMode: 'builtin',
     enabled: current.enabled !== false,
     metadata: {
       ...(defaults.metadata || {}),
@@ -257,7 +251,6 @@ function normalizeCUAServer(input?: ServerConfig): ServerConfig {
     ...defaults,
     ...current,
     transport: 'builtin',
-    managementMode: 'builtin',
     enabled: current.enabled !== false,
     metadata: {
       ...(defaults.metadata || {}),
@@ -290,7 +283,6 @@ function normalizeFilesystemServer(input?: ServerConfig): ServerConfig {
     ...defaults,
     ...current,
     transport: 'builtin',
-    managementMode: 'builtin',
     enabled: current.enabled !== false,
     metadata: {
       ...(defaults.metadata || {}),

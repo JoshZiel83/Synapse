@@ -31,11 +31,8 @@ export type RelaySyncSourceKind =
   | 'custom';
 
 export type RelaySyncMode =
-  | 'import_only'
-  | 'observe'
-  | 'mirror'
-  | 'managed'
-  | 'detached';
+  | 'snapshot'
+  | 'follow';
 
 export type RelaySyncStatus =
   | 'unknown'
@@ -54,16 +51,11 @@ export type RelayExposureRuntimeStatus =
   | 'offline';
 
 export type RelayExposureTransport =
+  | 'builtin'
   | 'stdio'
   | 'http'
   | 'sse'
   | 'custom';
-
-export type RelayExposureManagementMode =
-  | 'manual'
-  | 'imported'
-  | 'mirrored'
-  | 'managed';
 
 export type RelayCatalogRevisionStatus =
   | 'active'
@@ -200,7 +192,6 @@ export interface RelayExposureView {
   displayName: string;
   transport: RelayExposureTransport;
   runtimeStatus: RelayExposureRuntimeStatus;
-  managementMode: RelayExposureManagementMode;
   lastSeenAt?: string;
   lastHealthyAt?: string;
   lastError?: string;

@@ -170,7 +170,6 @@ type RelayExposureToolRow = {
   exposure_display_name: string;
   exposure_transport: RelayExposureView['transport'];
   exposure_runtime_status: RelayExposureView['runtimeStatus'];
-  exposure_management_mode: RelayExposureView['managementMode'];
   exposure_last_seen_at: string | null;
   exposure_last_healthy_at: string | null;
   exposure_last_error: string | null;
@@ -341,7 +340,7 @@ function mapRelaySyncSource(row: RelaySyncSourceRow): RelaySyncSourceView {
     sourceKind: row.source_kind,
     sourceKey: row.source_key,
     configPath: row.config_path || undefined,
-    syncMode: row.sync_mode,
+    syncMode: normalizeRelaySyncMode(row.sync_mode),
     status: row.status,
     lastSyncedAt: row.last_synced_at || undefined,
     lastError: row.last_error || undefined,
@@ -392,7 +391,7 @@ function mapInlineSyncSource(row: RelayExposureToolRow): RelaySyncSourceView | u
     sourceKind: row.sync_source_kind,
     sourceKey: row.sync_source_key,
     configPath: row.sync_source_config_path || undefined,
-    syncMode: row.sync_source_sync_mode,
+    syncMode: normalizeRelaySyncMode(row.sync_source_sync_mode),
     status: row.sync_source_status,
     lastSyncedAt: row.sync_source_last_synced_at || undefined,
     lastError: row.sync_source_last_error || undefined,
@@ -414,7 +413,6 @@ function groupRelayExposures(rows: RelayExposureToolRow[]): RelayExposureView[] 
         displayName: row.exposure_display_name,
         transport: row.exposure_transport,
         runtimeStatus: row.exposure_runtime_status,
-        managementMode: row.exposure_management_mode,
         lastSeenAt: row.exposure_last_seen_at || undefined,
         lastHealthyAt: row.exposure_last_healthy_at || undefined,
         lastError: row.exposure_last_error || undefined,
@@ -434,6 +432,21 @@ function groupRelayExposures(rows: RelayExposureToolRow[]): RelayExposureView[] 
   }
 
   return [...exposures.values()];
+}
+
+function normalizeRelaySyncMode(value: unknown): RelaySyncSourceView['syncMode'] {
+  switch (value) {
+    case 'snapshot':
+    case 'import_only':
+    case 'detached':
+      return 'snapshot';
+    case 'follow':
+    case 'observe':
+    case 'mirror':
+    case 'managed':
+    default:
+      return 'follow';
+  }
 }
 
 function createNotFoundError(code: string, message: string) {
@@ -844,7 +857,6 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
           e.display_name AS exposure_display_name,
           e.transport AS exposure_transport,
           e.runtime_status AS exposure_runtime_status,
-          e.management_mode AS exposure_management_mode,
           e.last_seen_at AS exposure_last_seen_at,
           e.last_healthy_at AS exposure_last_healthy_at,
           e.last_error AS exposure_last_error,

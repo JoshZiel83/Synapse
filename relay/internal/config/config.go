@@ -20,6 +20,8 @@ const (
 	CloseBehaviorAsk                                  = "ask"
 	CloseBehaviorTray                                 = "tray"
 	CloseBehaviorQuit                                 = "quit"
+	SyncModeSnapshot                                  = "snapshot"
+	SyncModeFollow                                    = "follow"
 )
 
 type RelayConfig struct {
@@ -148,18 +150,17 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	StableKey      string                 `yaml:"stable_key" json:"stableKey,omitempty"`
-	SyncSourceKey  string                 `yaml:"sync_source_key" json:"syncSourceKey,omitempty"`
-	ManagementMode string                 `yaml:"management_mode" json:"managementMode,omitempty"`
-	Enabled        *bool                  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	Name           string                 `yaml:"name" json:"name"`
-	Transport      string                 `yaml:"transport" json:"transport"`
-	Command        string                 `yaml:"command" json:"command,omitempty"`
-	Args           []string               `yaml:"args" json:"args,omitempty"`
-	Env            map[string]string      `yaml:"env" json:"env,omitempty"`
-	Endpoint       string                 `yaml:"endpoint" json:"endpoint,omitempty"`
-	Builtin        *BuiltinServerConfig   `yaml:"builtin,omitempty" json:"builtin,omitempty"`
-	Metadata       map[string]interface{} `yaml:"metadata" json:"metadata,omitempty"`
+	StableKey     string                 `yaml:"stable_key" json:"stableKey,omitempty"`
+	SyncSourceKey string                 `yaml:"sync_source_key" json:"syncSourceKey,omitempty"`
+	Enabled       *bool                  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Name          string                 `yaml:"name" json:"name"`
+	Transport     string                 `yaml:"transport" json:"transport"`
+	Command       string                 `yaml:"command" json:"command,omitempty"`
+	Args          []string               `yaml:"args" json:"args,omitempty"`
+	Env           map[string]string      `yaml:"env" json:"env,omitempty"`
+	Endpoint      string                 `yaml:"endpoint" json:"endpoint,omitempty"`
+	Builtin       *BuiltinServerConfig   `yaml:"builtin,omitempty" json:"builtin,omitempty"`
+	Metadata      map[string]interface{} `yaml:"metadata" json:"metadata,omitempty"`
 }
 
 func Clone(cfg *Config) *Config {
@@ -221,18 +222,17 @@ func Clone(cfg *Config) *Config {
 		}
 
 		clone.Servers[i] = ServerConfig{
-			StableKey:      server.StableKey,
-			SyncSourceKey:  server.SyncSourceKey,
-			ManagementMode: server.ManagementMode,
-			Enabled:        cloneBoolPtr(server.Enabled),
-			Name:           server.Name,
-			Transport:      server.Transport,
-			Command:        server.Command,
-			Args:           args,
-			Env:            env,
-			Endpoint:       server.Endpoint,
-			Builtin:        cloneBuiltin(server.Builtin),
-			Metadata:       cloneMetadata(server.Metadata),
+			StableKey:     server.StableKey,
+			SyncSourceKey: server.SyncSourceKey,
+			Enabled:       cloneBoolPtr(server.Enabled),
+			Name:          server.Name,
+			Transport:     server.Transport,
+			Command:       server.Command,
+			Args:          args,
+			Env:           env,
+			Endpoint:      server.Endpoint,
+			Builtin:       cloneBuiltin(server.Builtin),
+			Metadata:      cloneMetadata(server.Metadata),
 		}
 	}
 
@@ -416,9 +416,7 @@ func applyDefaults(cfg *Config) {
 	}
 
 	for i := range cfg.SyncSources {
-		if cfg.SyncSources[i].SyncMode == "" {
-			cfg.SyncSources[i].SyncMode = "observe"
-		}
+		cfg.SyncSources[i].SyncMode = NormalizeSyncMode(cfg.SyncSources[i].SyncMode)
 		if cfg.SyncSources[i].Status == "" {
 			cfg.SyncSources[i].Status = "unknown"
 		}
@@ -434,15 +432,6 @@ func applyDefaults(cfg *Config) {
 		if cfg.Servers[i].Enabled == nil {
 			cfg.Servers[i].Enabled = boolPtr(true)
 		}
-		if cfg.Servers[i].ManagementMode == "" {
-			if cfg.Servers[i].Transport == "builtin" {
-				cfg.Servers[i].ManagementMode = "builtin"
-			} else if cfg.Servers[i].SyncSourceKey != "" {
-				cfg.Servers[i].ManagementMode = "imported"
-			} else {
-				cfg.Servers[i].ManagementMode = "manual"
-			}
-		}
 		applyBuiltinDefaults(&cfg.Servers[i])
 		if cfg.Servers[i].StableKey == "" {
 			cfg.Servers[i].StableKey = StableKeyForServer(cfg.Servers[i])
@@ -450,6 +439,17 @@ func applyDefaults(cfg *Config) {
 		if cfg.Servers[i].Metadata == nil {
 			cfg.Servers[i].Metadata = map[string]interface{}{}
 		}
+	}
+}
+
+func NormalizeSyncMode(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case SyncModeSnapshot, "import_only", "detached":
+		return SyncModeSnapshot
+	case "follow", "observe", "mirror", "managed", "":
+		return SyncModeFollow
+	default:
+		return SyncModeFollow
 	}
 }
 

@@ -16,7 +16,6 @@ servers:
   # - name: "computer-use"
   #   enabled: true
   #   transport: "builtin"
-  #   management_mode: "builtin"
   #   builtin:
   #     kind: "cua"
   #     instance_id: "cua_default"
@@ -35,7 +34,6 @@ servers:
   # - name: "filesystem"
   #   enabled: true
   #   transport: "builtin"
-  #   management_mode: "builtin"
   #   builtin:
   #     kind: "filesystem"
   #     instance_id: "filesystem_default"
@@ -61,7 +59,6 @@ servers:
   # - name: "command-line"
   #   enabled: true
   #   transport: "builtin"
-  #   management_mode: "builtin"
   #   builtin:
   #     kind: "commandline"
   #     instance_id: "commandline_default"

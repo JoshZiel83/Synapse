@@ -423,3 +423,23 @@ func TestValidateBuiltinCommandlineServerRejectsNegativeMaxTimeout(t *testing.T)
 		t.Fatalf("expected validation errors for negative commandline max timeout")
 	}
 }
+
+func TestNormalizeSyncMode(t *testing.T) {
+	cases := map[string]string{
+		"":            SyncModeFollow,
+		"follow":      SyncModeFollow,
+		"observe":     SyncModeFollow,
+		"mirror":      SyncModeFollow,
+		"managed":     SyncModeFollow,
+		"snapshot":    SyncModeSnapshot,
+		"import_only": SyncModeSnapshot,
+		"detached":    SyncModeSnapshot,
+		"weird":       SyncModeFollow,
+	}
+
+	for input, expected := range cases {
+		if got := NormalizeSyncMode(input); got != expected {
+			t.Fatalf("NormalizeSyncMode(%q) = %q, want %q", input, got, expected)
+		}
+	}
+}
