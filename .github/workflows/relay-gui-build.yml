@@ -18,6 +18,10 @@ on:
       version:
         description: 'Version tag (e.g. v0.1.0)'
         required: true
+      platforms:
+        description: 'Build platforms: leave blank to use repo variable, or set all / a comma or space separated list, e.g. linux-amd64 windows-amd64'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -32,57 +36,31 @@ env:
   COMMANDLINE_PACKAGE_PROFILE: 'default-data-v5'
 
 jobs:
+  prepare-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+      selected_platforms: ${{ steps.select.outputs.selected_platforms }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select target platforms
+        id: select
+        env:
+          MATRIX_JSON: >-
+            [
+              {"runner":"ubuntu-latest","goos":"linux","goarch":"amd64","suffix":"linux-amd64","wails_tags":"desktop_cua,webkit2_41","cgo_ldflags_allow":"","wails_extra_args":"","setup":"sudo apt-get update -qq\nsudo apt-get install -y -qq libgtk-3-dev libwebkit2gtk-4.1-dev"},
+              {"runner":"macos-15","goos":"darwin","goarch":"arm64","suffix":"darwin-arm64","wails_tags":"desktop_cua","cgo_ldflags_allow":"^(-weak_framework|ScreenCaptureKit)$","wails_extra_args":"","setup":""},
+              {"runner":"macos-15-intel","goos":"darwin","goarch":"amd64","suffix":"darwin-amd64","wails_tags":"desktop_cua","cgo_ldflags_allow":"^(-weak_framework|ScreenCaptureKit)$","wails_extra_args":"","setup":""},
+              {"runner":"windows-latest","goos":"windows","goarch":"amd64","suffix":"windows-amd64","ext":".exe","wails_tags":"desktop_cua","cgo_ldflags_allow":"","wails_extra_args":"-nsis","setup":"choco install nsis -y\nchoco install 7zip -y\n$nsisCandidates = @(\n  (Join-Path ${env:ProgramFiles(x86)} 'NSIS'),\n  (Join-Path $env:ChocolateyInstall 'bin')\n)\n$nsisDir = $nsisCandidates | Where-Object { Test-Path (Join-Path $_ 'makensis.exe') } | Select-Object -First 1\nif (-not $nsisDir) {\n  throw 'makensis.exe not found after installing NSIS'\n}\n$nsisDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append\n& (Join-Path $nsisDir 'makensis.exe') /VERSION"}
+            ]
+          REQUESTED_PLATFORMS: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || vars.RELAY_GUI_BUILD_PLATFORMS || 'all' }}
+        run: python3 .github/scripts/filter-platform-matrix.py
+
   build:
+    needs: prepare-matrix
     strategy:
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            goos: linux
-            goarch: amd64
-            suffix: linux-amd64
-            wails_tags: desktop_cua,webkit2_41
-            cgo_ldflags_allow: ''
-            wails_extra_args: ''
-            setup: |
-              sudo apt-get update -qq
-              sudo apt-get install -y -qq libgtk-3-dev libwebkit2gtk-4.1-dev
-          - runner: macos-15
-            goos: darwin
-            goarch: arm64
-            suffix: darwin-arm64
-            wails_tags: desktop_cua
-            cgo_ldflags_allow: ^(-weak_framework|ScreenCaptureKit)$
-            wails_extra_args: ''
-            setup: ''
-          - runner: macos-15-intel
-            goos: darwin
-            goarch: amd64
-            suffix: darwin-amd64
-            wails_tags: desktop_cua
-            cgo_ldflags_allow: ^(-weak_framework|ScreenCaptureKit)$
-            wails_extra_args: ''
-            setup: ''
-          - runner: windows-latest
-            goos: windows
-            goarch: amd64
-            suffix: windows-amd64
-            ext: .exe
-            wails_tags: desktop_cua
-            cgo_ldflags_allow: ''
-            wails_extra_args: -nsis
-            setup: |
-              choco install nsis -y
-              choco install 7zip -y
-              $nsisCandidates = @(
-                (Join-Path ${env:ProgramFiles(x86)} 'NSIS'),
-                (Join-Path $env:ChocolateyInstall 'bin')
-              )
-              $nsisDir = $nsisCandidates | Where-Object { Test-Path (Join-Path $_ 'makensis.exe') } | Select-Object -First 1
-              if (-not $nsisDir) {
-                throw 'makensis.exe not found after installing NSIS'
-              }
-              $nsisDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-              & (Join-Path $nsisDir 'makensis.exe') /VERSION
+      matrix: ${{ fromJSON(needs.prepare-matrix.outputs.matrix) }}
 
     runs-on: ${{ matrix.runner }}
     steps:
@@ -118,6 +96,9 @@ jobs:
           else
             echo "version=dev-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
           fi
+
+      - name: Show selected platforms
+        run: echo "Selected GUI platforms: ${{ needs.prepare-matrix.outputs.selected_platforms }}"
 
       - name: Prepare shared Node runtime
         run: node relay/scripts/prepare-node-bundle.mjs --target-platform=${{ matrix.goos }}-${{ matrix.goarch }} --node-version=${{ env.BUNDLED_NODE_VERSION }}

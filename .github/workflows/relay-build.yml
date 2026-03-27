@@ -18,6 +18,10 @@ on:
       version:
         description: 'Version tag (e.g. v0.1.0)'
         required: true
+      platforms:
+        description: 'Build platforms: leave blank to use repo variable, or set all / a comma or space separated list, e.g. linux-amd64 windows-amd64'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -32,27 +36,33 @@ env:
   COMMANDLINE_PACKAGE_PROFILE: 'default-data-v5'
 
 jobs:
+  prepare-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+      selected_platforms: ${{ steps.select.outputs.selected_platforms }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select target platforms
+        id: select
+        env:
+          MATRIX_JSON: >-
+            [
+              {"goos":"linux","goarch":"amd64","suffix":"linux-amd64"},
+              {"goos":"linux","goarch":"arm64","suffix":"linux-arm64"},
+              {"goos":"darwin","goarch":"amd64","suffix":"darwin-amd64"},
+              {"goos":"darwin","goarch":"arm64","suffix":"darwin-arm64"},
+              {"goos":"windows","goarch":"amd64","suffix":"windows-amd64","ext":".exe"}
+            ]
+          REQUESTED_PLATFORMS: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || vars.RELAY_CLI_BUILD_PLATFORMS || 'all' }}
+        run: python3 .github/scripts/filter-platform-matrix.py
+
   build:
+    needs: prepare-matrix
     runs-on: ubuntu-latest
     strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-            suffix: linux-amd64
-          - goos: linux
-            goarch: arm64
-            suffix: linux-arm64
-          - goos: darwin
-            goarch: amd64
-            suffix: darwin-amd64
-          - goos: darwin
-            goarch: arm64
-            suffix: darwin-arm64
-          - goos: windows
-            goarch: amd64
-            suffix: windows-amd64
-            ext: .exe
+      matrix: ${{ fromJSON(needs.prepare-matrix.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -84,6 +94,9 @@ jobs:
           else
             echo "version=dev-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
           fi
+
+      - name: Show selected platforms
+        run: echo "Selected CLI platforms: ${{ needs.prepare-matrix.outputs.selected_platforms }}"
 
       - name: Prepare shared Node runtime
         run: node relay/scripts/prepare-node-bundle.mjs --target-platform=${{ matrix.goos }}-${{ matrix.goarch }} --node-version=${{ env.BUNDLED_NODE_VERSION }}
