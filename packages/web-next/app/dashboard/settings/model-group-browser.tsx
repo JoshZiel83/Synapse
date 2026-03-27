@@ -2,6 +2,14 @@
 
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import {
+  getDefaultModelBaseUrl,
+  getDefaultModelEngineKind,
+  getDefaultModelName,
+  getModelProviderEngineDefinitions,
+  listModelProviderDefinitions,
+  providerSupportsBuiltinTools,
+} from '@synapse/shared';
+import {
   Building2,
   Cpu,
   Globe2,
@@ -13,6 +21,7 @@ import {
   Trash2,
   UserRound,
 } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { useWorkspace } from '../workspace-provider';
 import { api } from '@/lib/api';
@@ -24,6 +33,12 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import ModelGroupDialog from './model-group-dialog';
+import {
+  getEffectiveMaxTokensLimit,
+  getKnownModelOptions,
+  getModelConfigValidationMessage,
+  getSaveErrorMessage,
+} from './model-config-utils';
 
 type ModelGroupScope = 'workspace' | 'platform' | 'user';
 
@@ -99,28 +114,7 @@ const MULTIMODAL_TYPES = [
   { key: 'document', label: 'Documents' },
 ];
 
-const ENGINE_KIND_OPTIONS: Record<string, Array<{ value: string; label: string }>> = {
-  anthropic: [
-    { value: 'anthropic.messages', label: 'Messages API' },
-  ],
-  openai: [
-    { value: 'openai.chat_completions', label: 'Chat Completions' },
-    { value: 'openai.responses', label: 'Responses API' },
-  ],
-};
-
-function defaultEngineKind(providerType: string) {
-  return providerType === 'openai' ? 'openai.chat_completions' : 'anthropic.messages';
-}
-
-function defaultBaseUrl(providerType: string) {
-  return providerType === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com';
-}
-
-function defaultModelName(providerType: string, engineKind?: string) {
-  if (providerType !== 'openai') return 'claude-sonnet-4-20250514';
-  return engineKind === 'openai.responses' ? 'gpt-5' : 'gpt-4.1';
-}
+const PROVIDER_OPTIONS = listModelProviderDefinitions();
 
 function resolveScope(group: ModelGroupSummary): ModelGroupScope {
   if (group.owner_type === 'platform' || (!group.owner_type && !group.workspace_id)) {
@@ -172,15 +166,15 @@ function createFormState(item?: ModelItem | null): ModelItemFormState {
   const extraConfig = (item?.extra_config || {}) as Record<string, any>;
   const multimodal = extraConfig.multimodal || {};
   const providerType = item?.provider_type || 'anthropic';
-  const engineKind = item?.engine_kind || extraConfig.engine_kind || defaultEngineKind(providerType);
+  const engineKind = item?.engine_kind || extraConfig.engine_kind || getDefaultModelEngineKind(providerType);
 
   return {
     displayName: item?.display_name || '',
     providerType,
     engineKind,
     apiKey: '',
-    baseUrl: item?.base_url || defaultBaseUrl(providerType),
-    modelName: item?.model_name || defaultModelName(providerType, engineKind),
+    baseUrl: item?.base_url || getDefaultModelBaseUrl(providerType),
+    modelName: item?.model_name || getDefaultModelName(providerType, engineKind),
     maxTokens: String(item?.max_tokens || 4096),
     priority: String(item?.priority ?? 0),
     weight: String(item?.weight ?? 100),
@@ -317,6 +311,15 @@ export default function ModelGroupBrowser({
   const [savingItem, setSavingItem] = useState(false);
   const [groupSearch, setGroupSearch] = useState('');
   const deferredGroupSearch = useDeferredValue(groupSearch);
+  const knownModels = getKnownModelOptions(itemDraft.providerType, itemDraft.engineKind);
+  const maxTokensLimit = getEffectiveMaxTokensLimit(itemDraft.providerType, itemDraft.engineKind, itemDraft.modelName);
+  const itemConfigError = getModelConfigValidationMessage({
+    providerType: itemDraft.providerType,
+    engineKind: itemDraft.engineKind,
+    modelName: itemDraft.modelName,
+    maxTokens: itemDraft.maxTokens,
+  });
+  const modelDatalistId = `browser-model-options-${itemDraft.providerType}-${itemDraft.engineKind}`.replace(/[^a-zA-Z0-9_-]/g, '-');
 
   const currentItem = useMemo(
     () => selectedGroup?.items.find((item) => item.id === selectedItemId) || null,
@@ -442,11 +445,15 @@ export default function ModelGroupBrowser({
     if (!selectedGroup) return;
     if (!itemDraft.displayName.trim()) return;
     if (!currentItem && (!itemDraft.apiKey.trim() || !itemDraft.baseUrl.trim() || !itemDraft.modelName.trim())) return;
+    if (itemConfigError) {
+      toast.error(itemConfigError);
+      return;
+    }
 
     setSavingItem(true);
     try {
       const extraConfig: Record<string, unknown> = {};
-      if (itemDraft.providerType === 'anthropic' && itemDraft.builtinTools.length > 0) {
+      if (providerSupportsBuiltinTools(itemDraft.providerType) && itemDraft.builtinTools.length > 0) {
         extraConfig.builtin_tools = itemDraft.builtinTools;
       }
       if (itemDraft.multimodalTypes.length > 0) {
@@ -504,6 +511,7 @@ export default function ModelGroupBrowser({
       }
     } catch (error) {
       console.error('Failed to save model config:', error);
+      toast.error(getSaveErrorMessage(error, 'Failed to save model config.'));
     } finally {
       setSavingItem(false);
     }
@@ -675,7 +683,7 @@ export default function ModelGroupBrowser({
                       Delete
                     </Button>
                   ) : null}
-                  <Button onClick={() => void handleSaveItem()} disabled={savingItem || !selectedGroup}>
+                  <Button onClick={() => void handleSaveItem()} disabled={savingItem || !selectedGroup || !!itemConfigError}>
                     <Save data-icon="inline-start" />
                     {savingItem ? 'Saving...' : 'Save'}
                   </Button>
@@ -710,15 +718,19 @@ export default function ModelGroupBrowser({
                           onChange={(event) => setItemDraft((current) => ({
                             ...current,
                             providerType: event.target.value,
-                            engineKind: defaultEngineKind(event.target.value),
-                            baseUrl: defaultBaseUrl(event.target.value),
-                            modelName: defaultModelName(event.target.value, defaultEngineKind(event.target.value)),
-                            builtinTools: event.target.value === 'anthropic' ? current.builtinTools : [],
+                            engineKind: getDefaultModelEngineKind(event.target.value),
+                            baseUrl: getDefaultModelBaseUrl(event.target.value),
+                            modelName: getDefaultModelName(
+                              event.target.value,
+                              getDefaultModelEngineKind(event.target.value),
+                            ),
+                            builtinTools: providerSupportsBuiltinTools(event.target.value) ? current.builtinTools : [],
                           }))}
                           className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
                         >
-                          <option value="anthropic">Anthropic</option>
-                          <option value="openai">OpenAI</option>
+                          {PROVIDER_OPTIONS.map((option) => (
+                            <option key={option.providerType} value={option.providerType}>{option.label}</option>
+                          ))}
                         </select>
                       </div>
                       <div className="space-y-2">
@@ -728,12 +740,12 @@ export default function ModelGroupBrowser({
                           onChange={(event) => setItemDraft((current) => ({
                             ...current,
                             engineKind: event.target.value,
-                            modelName: defaultModelName(current.providerType, event.target.value),
+                            modelName: getDefaultModelName(current.providerType, event.target.value),
                           }))}
                           className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
                         >
-                          {(ENGINE_KIND_OPTIONS[itemDraft.providerType] || []).map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
+                          {getModelProviderEngineDefinitions(itemDraft.providerType).map((option) => (
+                            <option key={option.engineKind} value={option.engineKind}>{option.label}</option>
                           ))}
                         </select>
                       </div>
@@ -745,8 +757,23 @@ export default function ModelGroupBrowser({
                         <Input
                           value={itemDraft.modelName}
                           onChange={(event) => setItemDraft((current) => ({ ...current, modelName: event.target.value }))}
+                          list={knownModels.length > 0 ? modelDatalistId : undefined}
                           placeholder="claude-sonnet-4-20250514"
                         />
+                        {knownModels.length > 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            Suggested models: {knownModels.slice(0, 6).map((model) => model.modelName).join(', ')}
+                            {knownModels.length > 6 ? '...' : ''}
+                          </p>
+                        ) : null}
+                        {itemConfigError ? <p className="text-xs text-red-500">{itemConfigError}</p> : null}
+                        {knownModels.length > 0 ? (
+                          <datalist id={modelDatalistId}>
+                            {knownModels.map((model) => (
+                              <option key={model.modelName} value={model.modelName}>{model.label}</option>
+                            ))}
+                          </datalist>
+                        ) : null}
                       </div>
                     </div>
 
@@ -765,7 +792,7 @@ export default function ModelGroupBrowser({
                       <Input
                         value={itemDraft.baseUrl}
                         onChange={(event) => setItemDraft((current) => ({ ...current, baseUrl: event.target.value }))}
-                        placeholder="https://api.anthropic.com"
+                        placeholder={getDefaultModelBaseUrl(itemDraft.providerType) || 'https://api.example.com'}
                       />
                     </div>
 
@@ -776,7 +803,11 @@ export default function ModelGroupBrowser({
                           type="number"
                           value={itemDraft.maxTokens}
                           onChange={(event) => setItemDraft((current) => ({ ...current, maxTokens: event.target.value }))}
+                          max={maxTokensLimit}
                         />
+                        {maxTokensLimit ? (
+                          <p className="text-xs text-muted-foreground">This model supports up to {maxTokensLimit} output tokens.</p>
+                        ) : null}
                       </div>
                       <div className="space-y-2">
                         <Label>Priority</Label>
@@ -810,11 +841,11 @@ export default function ModelGroupBrowser({
                 </Card>
 
                 <div className="flex flex-col gap-6">
-                  {itemDraft.providerType === 'anthropic' ? (
+                  {providerSupportsBuiltinTools(itemDraft.providerType) ? (
                     <Card>
                       <CardHeader>
                         <CardTitle>Built-in Tools</CardTitle>
-                        <CardDescription>Anthropic server-side tools exposed to this config.</CardDescription>
+                        <CardDescription>Provider-side tools exposed to this config.</CardDescription>
                       </CardHeader>
                       <CardContent className="flex flex-col gap-3">
                         {ANTHROPIC_BUILTIN_TOOLS.map((tool) => {

@@ -3,6 +3,14 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
+  getDefaultModelBaseUrl,
+  getDefaultModelEngineKind,
+  getDefaultModelName,
+  getModelProviderEngineDefinitions,
+  listModelProviderDefinitions,
+  providerSupportsBuiltinTools,
+} from '@synapse/shared';
+import {
   ChevronDown,
   Cpu,
   Pencil,
@@ -13,6 +21,7 @@ import {
   ShieldCheck,
   Trash2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { useWorkspace } from '../workspace-provider';
 import { useAuthStore } from '@/stores/auth-store';
@@ -27,6 +36,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import ModelGroupDialog from './model-group-dialog';
+import {
+  getEffectiveMaxTokensLimit,
+  getKnownModelOptions,
+  getModelConfigValidationMessage,
+  getSaveErrorMessage,
+} from './model-config-utils';
 
 type ModelGroupScope = 'workspace' | 'platform' | 'user';
 type GrantScope = 'platform' | 'workspace' | 'user' | 'workspace_user' | 'actor';
@@ -131,28 +146,7 @@ const MULTIMODAL_TYPES = [
   { key: 'document', label: 'Documents' },
 ];
 
-const ENGINE_KIND_OPTIONS: Record<string, Array<{ value: string; label: string }>> = {
-  anthropic: [
-    { value: 'anthropic.messages', label: 'Messages API' },
-  ],
-  openai: [
-    { value: 'openai.chat_completions', label: 'Chat Completions' },
-    { value: 'openai.responses', label: 'Responses API' },
-  ],
-};
-
-function defaultEngineKind(providerType: string) {
-  return providerType === 'openai' ? 'openai.chat_completions' : 'anthropic.messages';
-}
-
-function defaultBaseUrl(providerType: string) {
-  return providerType === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com';
-}
-
-function defaultModelName(providerType: string, engineKind?: string) {
-  if (providerType !== 'openai') return 'claude-sonnet-4-20250514';
-  return engineKind === 'openai.responses' ? 'gpt-5' : 'gpt-4.1';
-}
+const PROVIDER_OPTIONS = listModelProviderDefinitions();
 
 const ROUTING_STRATEGIES = [
   { value: 'priority_failover', label: 'Priority Failover' },
@@ -174,15 +168,15 @@ function createDraft(item?: ModelItem | null): ConfigDraft {
   const extraConfig = (item?.extra_config || {}) as Record<string, any>;
   const multimodal = extraConfig.multimodal || {};
   const providerType = item?.provider_type || 'anthropic';
-  const engineKind = item?.engine_kind || extraConfig.engine_kind || defaultEngineKind(providerType);
+  const engineKind = item?.engine_kind || extraConfig.engine_kind || getDefaultModelEngineKind(providerType);
 
   return {
     displayName: item?.display_name || '',
     providerType,
     engineKind,
     apiKey: '',
-    baseUrl: item?.base_url || defaultBaseUrl(providerType),
-    modelName: item?.model_name || defaultModelName(providerType, engineKind),
+    baseUrl: item?.base_url || getDefaultModelBaseUrl(providerType),
+    modelName: item?.model_name || getDefaultModelName(providerType, engineKind),
     maxTokens: String(item?.max_tokens || 4096),
     priority: String(item?.priority ?? 0),
     weight: String(item?.weight ?? 100),
@@ -535,6 +529,16 @@ function ConfigEditor({
   saving: boolean;
   isNew: boolean;
 }) {
+  const knownModels = getKnownModelOptions(draft.providerType, draft.engineKind);
+  const maxTokensLimit = getEffectiveMaxTokensLimit(draft.providerType, draft.engineKind, draft.modelName);
+  const modelConfigError = getModelConfigValidationMessage({
+    providerType: draft.providerType,
+    engineKind: draft.engineKind,
+    modelName: draft.modelName,
+    maxTokens: draft.maxTokens,
+  });
+  const modelDatalistId = `workbench-model-options-${draft.providerType}-${draft.engineKind}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
       <Card>
@@ -555,20 +559,21 @@ function ConfigEditor({
                 value={draft.providerType}
                 onChange={(event) => {
                   const nextProviderType = event.target.value;
-                  const nextEngineKind = defaultEngineKind(nextProviderType);
+                  const nextEngineKind = getDefaultModelEngineKind(nextProviderType);
                   onChange({
                     ...draft,
                     providerType: nextProviderType,
                     engineKind: nextEngineKind,
-                    baseUrl: defaultBaseUrl(nextProviderType),
-                    modelName: defaultModelName(nextProviderType, nextEngineKind),
-                    builtinTools: nextProviderType === 'anthropic' ? draft.builtinTools : [],
+                    baseUrl: getDefaultModelBaseUrl(nextProviderType),
+                    modelName: getDefaultModelName(nextProviderType, nextEngineKind),
+                    builtinTools: providerSupportsBuiltinTools(nextProviderType) ? draft.builtinTools : [],
                   });
                 }}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
               >
-                <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI</option>
+                {PROVIDER_OPTIONS.map((option) => (
+                  <option key={option.providerType} value={option.providerType}>{option.label}</option>
+                ))}
               </select>
             </div>
             <div className="space-y-2">
@@ -578,12 +583,12 @@ function ConfigEditor({
                 onChange={(event) => onChange({
                   ...draft,
                   engineKind: event.target.value,
-                  modelName: defaultModelName(draft.providerType, event.target.value),
+                  modelName: getDefaultModelName(draft.providerType, event.target.value),
                 })}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
               >
-                {(ENGINE_KIND_OPTIONS[draft.providerType] || []).map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
+                {getModelProviderEngineDefinitions(draft.providerType).map((option) => (
+                  <option key={option.engineKind} value={option.engineKind}>{option.label}</option>
                 ))}
               </select>
             </div>
@@ -595,8 +600,23 @@ function ConfigEditor({
               <Input
                 value={draft.modelName}
                 onChange={(event) => onChange({ ...draft, modelName: event.target.value })}
+                list={knownModels.length > 0 ? modelDatalistId : undefined}
                 placeholder="claude-sonnet-4-20250514"
               />
+              {knownModels.length > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Suggested models: {knownModels.slice(0, 6).map((model) => model.modelName).join(', ')}
+                  {knownModels.length > 6 ? '...' : ''}
+                </p>
+              ) : null}
+              {modelConfigError ? <p className="text-xs text-red-500">{modelConfigError}</p> : null}
+              {knownModels.length > 0 ? (
+                <datalist id={modelDatalistId}>
+                  {knownModels.map((model) => (
+                    <option key={model.modelName} value={model.modelName}>{model.label}</option>
+                  ))}
+                </datalist>
+              ) : null}
             </div>
           </div>
 
@@ -615,7 +635,7 @@ function ConfigEditor({
             <Input
               value={draft.baseUrl}
               onChange={(event) => onChange({ ...draft, baseUrl: event.target.value })}
-              placeholder="https://api.anthropic.com"
+              placeholder={getDefaultModelBaseUrl(draft.providerType) || 'https://api.example.com'}
             />
           </div>
 
@@ -626,7 +646,11 @@ function ConfigEditor({
                 type="number"
                 value={draft.maxTokens}
                 onChange={(event) => onChange({ ...draft, maxTokens: event.target.value })}
+                max={maxTokensLimit}
               />
+              {maxTokensLimit ? (
+                <p className="text-xs text-muted-foreground">This model supports up to {maxTokensLimit} output tokens.</p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label>Priority</Label>
@@ -660,7 +684,7 @@ function ConfigEditor({
       </Card>
 
       <div className="flex flex-col gap-4">
-        {draft.providerType === 'anthropic' ? (
+        {providerSupportsBuiltinTools(draft.providerType) ? (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Built-in Tools</CardTitle>
@@ -717,7 +741,7 @@ function ConfigEditor({
         </Card>
 
         <div className="flex items-center gap-2">
-          <Button onClick={onSave} disabled={saving}>
+          <Button onClick={onSave} disabled={saving || !!modelConfigError}>
             <Save data-icon="inline-start" />
             {saving ? 'Saving...' : 'Save'}
           </Button>
@@ -925,11 +949,21 @@ export default function ModelSettingsWorkbench() {
     if (!selectedGroup) return;
     if (!draft.displayName.trim()) return;
     if (!itemId && (!draft.apiKey.trim() || !draft.baseUrl.trim() || !draft.modelName.trim())) return;
+    const modelConfigError = getModelConfigValidationMessage({
+      providerType: draft.providerType,
+      engineKind: draft.engineKind,
+      modelName: draft.modelName,
+      maxTokens: draft.maxTokens,
+    });
+    if (modelConfigError) {
+      toast.error(modelConfigError);
+      return;
+    }
 
     setSavingConfig(true);
     try {
       const extraConfig: Record<string, unknown> = {};
-      if (draft.providerType === 'anthropic' && draft.builtinTools.length > 0) {
+      if (providerSupportsBuiltinTools(draft.providerType) && draft.builtinTools.length > 0) {
         extraConfig.builtin_tools = draft.builtinTools;
       }
       if (draft.multimodalTypes.length > 0) {
@@ -956,6 +990,7 @@ export default function ModelSettingsWorkbench() {
       setExpandedItemId(itemId || response?.item?.id || null);
     } catch (error) {
       console.error('Failed to save model config:', error);
+      toast.error(getSaveErrorMessage(error, 'Failed to save model config.'));
     } finally {
       setSavingConfig(false);
     }

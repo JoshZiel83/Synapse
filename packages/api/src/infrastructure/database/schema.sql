@@ -606,7 +606,7 @@ CREATE TABLE model_profile_revisions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   profile_id UUID NOT NULL REFERENCES model_profiles(id) ON DELETE CASCADE,
   version INT NOT NULL DEFAULT 1,
-  provider_type VARCHAR(30) NOT NULL CHECK (provider_type IN ('anthropic', 'openai')),
+  provider_type VARCHAR(64) NOT NULL CHECK (provider_type ~ '^[a-z][a-z0-9_-]*$'),
   api_key TEXT NOT NULL,
   base_url TEXT NOT NULL,
   model_name VARCHAR(255) NOT NULL,
@@ -1057,7 +1057,7 @@ CREATE TABLE provider_steps (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   turn_id UUID NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
   step_index INT NOT NULL,
-  provider_type VARCHAR(30) NOT NULL CHECK (provider_type IN ('anthropic', 'openai')),
+  provider_type VARCHAR(64) NOT NULL CHECK (provider_type ~ '^[a-z][a-z0-9_-]*$'),
   request_type VARCHAR(30) NOT NULL CHECK (request_type IN ('actor_think', 'ai_complete')),
   model_group_id UUID REFERENCES model_groups(id) ON DELETE SET NULL,
   model_profile_id UUID REFERENCES model_profiles(id) ON DELETE SET NULL,
@@ -1733,9 +1733,9 @@ CREATE TABLE session_engine_branches (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  provider_type VARCHAR(30) NOT NULL CHECK (provider_type IN ('anthropic', 'openai')),
-  engine_kind VARCHAR(50) NOT NULL
-    CHECK (engine_kind IN ('anthropic.messages', 'openai.chat_completions', 'openai.responses')),
+  provider_type VARCHAR(64) NOT NULL CHECK (provider_type ~ '^[a-z][a-z0-9_-]*$'),
+  engine_kind VARCHAR(120) NOT NULL
+    CHECK (engine_kind ~ '^[a-z][a-z0-9_-]*([.][a-z][a-z0-9_-]*)+$'),
   binding_key VARCHAR(255) NOT NULL,
   last_shared_sequence BIGINT NOT NULL DEFAULT 0,
   last_private_sequence BIGINT NOT NULL DEFAULT 0,
@@ -1759,9 +1759,9 @@ CREATE TABLE engine_branch_checkpoints (
   branch_id UUID NOT NULL REFERENCES session_engine_branches(id) ON DELETE CASCADE,
   session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  provider_type VARCHAR(30) NOT NULL CHECK (provider_type IN ('anthropic', 'openai')),
-  engine_kind VARCHAR(50) NOT NULL
-    CHECK (engine_kind IN ('anthropic.messages', 'openai.chat_completions', 'openai.responses')),
+  provider_type VARCHAR(64) NOT NULL CHECK (provider_type ~ '^[a-z][a-z0-9_-]*$'),
+  engine_kind VARCHAR(120) NOT NULL
+    CHECK (engine_kind ~ '^[a-z][a-z0-9_-]*([.][a-z][a-z0-9_-]*)+$'),
   binding_key VARCHAR(255) NOT NULL,
   checkpoint_kind VARCHAR(20) NOT NULL DEFAULT 'snapshot'
     CHECK (checkpoint_kind IN ('snapshot', 'compaction')),

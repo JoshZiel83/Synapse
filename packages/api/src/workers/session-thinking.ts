@@ -126,6 +126,7 @@ export function startSessionThinkingWorker() {
       let requeueAfterUnlock = false;
       let currentStatusText: string | undefined;
       let currentPhase: ThinkingPhase | 'error' = 'thinking';
+      let pendingWakeups: Awaited<ReturnType<typeof getPendingWakeups>> = [];
       let mcpTools: ResolvedMcpTools = {
         tools: [],
         executor: async () => ({ content: [] }),
@@ -219,7 +220,7 @@ export function startSessionThinkingWorker() {
 
         const sessionMessages = await getSessionMessages(sessionId);
         const interrupts = await consumeInterrupts(sessionId);
-        const pendingWakeups = await getPendingWakeups(sessionId);
+        pendingWakeups = await getPendingWakeups(sessionId);
         if (pendingWakeups.length === 0) {
           await sleepActor(sessionId);
           return { success: true, reason: 'wakeup already handled' };
@@ -637,6 +638,63 @@ export function startSessionThinkingWorker() {
       } catch (err: any) {
         console.error(`[session-thinking] Session ${sessionId} failed:`, err.message);
         const failedSession = await getSession(sessionId).catch(() => null);
+        const wakeupTargets = pendingWakeups.filter(
+          (wakeup) =>
+            (wakeup.sourceMemberType === 'user' || wakeup.sourceMemberType === 'external') &&
+            wakeup.sourceMemberId,
+        );
+
+        if (failedSession?.conversation_id && wakeupTargets.length > 0) {
+          const targetMembers = await Promise.all(
+            wakeupTargets.map(async (wakeup) => {
+              if (wakeup.sourceMemberType === 'user') {
+                return getConversationMember({
+                  conversationId: failedSession.conversation_id,
+                  userId: wakeup.sourceMemberId as string,
+                });
+              }
+
+              const result = await query(
+                `SELECT *
+                 FROM conversation_members
+                 WHERE conversation_id = $1
+                   AND id = $2
+                 LIMIT 1`,
+                [failedSession.conversation_id, wakeup.sourceMemberId],
+              );
+              return result.rows[0] ?? null;
+            }),
+          ).catch(() => []);
+          const targetMemberIds = [...new Set(
+            targetMembers
+              .map((member: any) => member?.id as string | undefined)
+              .filter((memberId): memberId is string => Boolean(memberId)),
+          )];
+
+          if (targetMemberIds.length > 0) {
+            await addSessionMessage({
+              sessionId,
+              workspaceId,
+              role: 'assistant',
+              subtype: 'model_error_notice',
+              visibility: 'shared_visible',
+              content: '出错了',
+              fromActorId: actorId,
+              targetMemberIds,
+              projectTransportOutbound: true,
+              metadata: {
+                excludeFromContext: true,
+                retrySessionId: sessionId,
+                retryTurnId: turn?.id,
+                notificationType: 'model_error',
+                errorMessage: err.message || 'Unknown error',
+              },
+            }).catch((messageError) => {
+              console.error(`[session-thinking] Failed to publish model error notice for session ${sessionId}:`, messageError);
+            });
+          }
+        }
+
         if (turn?.id) {
           await markTurnWakeupsDropped(turn.id).catch(() => {});
           await updateTurnStatus(turn.id, 'failed', { metadata: { errorMessage: err.message } }).catch(() => {});

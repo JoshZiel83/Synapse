@@ -963,7 +963,7 @@ export type RoutingStrategy =
   | "weighted_random"
   | "round_robin"
   | "priority_failover";
-export type ProviderType = "anthropic" | "openai";
+export type ProviderType = string;
 export type AIRequestType = "actor_think" | "ai_complete";
 export type AIRequestStatus = "success" | "error" | "timeout";
 
@@ -1052,10 +1052,7 @@ export interface AIRequestLog {
 }
 
 export type AnthropicBuiltinTool = "web_search" | "web_fetch";
-export type ModelEngineKind =
-  | "anthropic.messages"
-  | "openai.chat_completions"
-  | "openai.responses";
+export type ModelEngineKind = string;
 
 export type MultimodalType = "image" | "audio" | "video" | "document";
 
@@ -2835,6 +2832,7 @@ export interface ConversationFeedMessageItem {
   sessionId?: UUID;
   turnId?: UUID;
   role: "user" | "assistant" | "system";
+  messageType: string;
   author?: ConversationEntityRef;
   targets: ConversationEntityRef[];
   content: string;

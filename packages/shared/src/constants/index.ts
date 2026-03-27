@@ -58,3 +58,5 @@ export const RELAY_OPERATION_TTL_MS = 5 * 60 * 1000;
 export const A2A_PROTOCOL_VERSION = '0.3';
 export const A2A_API_KEY_HEADER = 'x-api-key';
 export const A2A_DEFAULT_RATE_LIMIT = 60;
+
+export * from './model-providers.js';

@@ -1,4 +1,8 @@
 import { config } from '../../config/index.js';
+import {
+  resolveModelEngineKind,
+  validateModelProviderConfig,
+} from '@synapse/shared';
 import { query } from '../../infrastructure/database/index.js';
 import {
   DEFAULT_MODEL_ATTEMPT_POLICY,
@@ -85,6 +89,30 @@ function withEngineKind(extraConfig: JsonMap | undefined, engineKind?: string): 
     next.engine_kind = engineKind;
   }
   return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function assertValidModelRevisionInput(input: {
+  providerType: string;
+  engineKind?: string;
+  modelName: string;
+  maxTokens?: number;
+  extraConfig?: JsonMap;
+}) {
+  const engineKind = input.engineKind || resolveModelEngineKind(input.providerType, input.extraConfig);
+  const issues = validateModelProviderConfig({
+    providerType: input.providerType,
+    engineKind,
+    modelName: input.modelName,
+    maxTokens: input.maxTokens,
+  });
+
+  if (issues.length > 0) {
+    throw new ModelGroupError(400, issues[0].message);
+  }
+
+  return {
+    engineKind,
+  };
 }
 
 async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
@@ -181,11 +209,7 @@ function mapGroupRow(row: ModelGroupRow) {
 
 function mapGroupItem(row: any) {
   const extraConfig = asObject(row.extra_config);
-  const engineKind = typeof extraConfig.engine_kind === 'string'
-    ? extraConfig.engine_kind
-    : row.provider_type === 'openai'
-      ? 'openai.chat_completions'
-      : 'anthropic.messages';
+  const engineKind = resolveModelEngineKind(row.provider_type || 'anthropic', extraConfig);
 
   return {
     id: row.item_id ?? row.id,
@@ -395,6 +419,7 @@ async function createProfileRevision(input: {
   profileId: string;
   version: number;
   providerType: string;
+  engineKind?: string;
   apiKey: string;
   baseUrl: string;
   modelName: string;
@@ -404,6 +429,15 @@ async function createProfileRevision(input: {
   requestTimeoutMs?: number;
   maxRetries?: number;
 }) {
+  const validated = assertValidModelRevisionInput({
+    providerType: input.providerType,
+    engineKind: input.engineKind,
+    modelName: input.modelName,
+    maxTokens: input.maxTokens,
+    extraConfig: input.extraConfig,
+  });
+  const effectiveMaxTokens = input.maxTokens ?? 4096;
+
   const result = await query(
     `INSERT INTO model_profile_revisions (
        profile_id, version, provider_type, api_key, base_url, model_name,
@@ -418,9 +452,9 @@ async function createProfileRevision(input: {
       input.apiKey,
       input.baseUrl,
       input.modelName,
-      input.maxTokens ?? 4096,
+      effectiveMaxTokens,
       input.capabilityTags || [],
-      JSON.stringify(input.extraConfig || {}),
+      JSON.stringify(withEngineKind(input.extraConfig, validated.engineKind) || {}),
       input.requestTimeoutMs ?? null,
       input.maxRetries ?? null,
     ],
@@ -988,12 +1022,13 @@ export async function addModelItem(groupId: string, data: {
     profileId: profile.id as string,
     version: 1,
     providerType: data.providerType,
+    engineKind: data.engineKind,
     apiKey: data.apiKey,
     baseUrl: data.baseUrl,
     modelName: data.modelName,
     maxTokens: data.maxTokens,
     capabilityTags: data.capabilityTags,
-    extraConfig: withEngineKind(data.extraConfig, data.engineKind),
+    extraConfig: data.extraConfig,
     requestTimeoutMs: data.requestTimeoutMs,
     maxRetries: data.maxRetries,
   });
@@ -1171,15 +1206,16 @@ export async function updateModelItem(groupId: string, itemId: string, data: {
       profileId: item.profile_id as string,
       version: nextVersion,
       providerType: data.providerType || (item.provider_type as string),
+      engineKind: data.engineKind || resolveModelEngineKind(
+        data.providerType || (item.provider_type as string),
+        data.extraConfig ?? asObject(item.extra_config),
+      ),
       apiKey: data.apiKey || (item.api_key as string),
       baseUrl: data.baseUrl || (item.base_url as string),
       modelName: data.modelName || (item.model_name as string),
       maxTokens: data.maxTokens ?? (item.max_tokens as number | null) ?? undefined,
       capabilityTags: data.capabilityTags || (item.capability_tags as string[] | null) || [],
-      extraConfig: withEngineKind(
-        data.extraConfig ?? asObject(item.extra_config),
-        data.engineKind,
-      ),
+      extraConfig: data.extraConfig ?? asObject(item.extra_config),
       requestTimeoutMs: data.requestTimeoutMs ?? (item.request_timeout_ms as number | null) ?? undefined,
       maxRetries: data.maxRetries ?? (item.max_retries as number | null) ?? undefined,
     });
@@ -1591,7 +1627,7 @@ export async function logAIRequest(data: {
     return;
   }
 
-  let providerType: 'anthropic' | 'openai' = config.ai.provider === 'openai' ? 'openai' : 'anthropic';
+  let providerType = config.ai.provider;
   let modelName = config.ai.model;
   if (data.profileRevisionId) {
     const revisionResult = await query(
@@ -1602,7 +1638,7 @@ export async function logAIRequest(data: {
       [data.profileRevisionId],
     );
     if (revisionResult.rows[0]) {
-      providerType = revisionResult.rows[0].provider_type === 'openai' ? 'openai' : 'anthropic';
+      providerType = revisionResult.rows[0].provider_type as string;
       modelName = revisionResult.rows[0].model_name || modelName;
     }
   }
@@ -1696,6 +1732,7 @@ export async function seedPlatformDefaultGroup() {
         priority: 0,
         weight: 100,
         providerType: config.ai.provider,
+        engineKind: config.ai.engineKind,
         apiKey: config.ai.apiKey,
         baseUrl: config.ai.baseUrl,
         modelName: config.ai.model,

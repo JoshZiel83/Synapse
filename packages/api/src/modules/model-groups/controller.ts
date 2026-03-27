@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { isKnownModelEngineKind, isKnownModelProviderType } from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { AUTHZ_PLATFORM_ID } from '../../infrastructure/authz/index.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
@@ -28,8 +29,8 @@ import {
 } from './service.js';
 
 const routingStrategyEnum = z.enum(['weighted_random', 'round_robin', 'priority_failover']);
-const providerTypeEnum = z.enum(['anthropic', 'openai']);
-const engineKindEnum = z.enum(['anthropic.messages', 'openai.chat_completions', 'openai.responses']);
+const providerTypeSchema = z.string().min(1).refine(isKnownModelProviderType, 'Unknown provider type');
+const engineKindSchema = z.string().min(1).refine(isKnownModelEngineKind, 'Unknown engine kind');
 const grantScopeEnum = z.enum(['platform', 'workspace', 'user', 'workspace_user', 'actor']);
 
 const attemptPolicySchema = z.object({
@@ -62,8 +63,8 @@ const addItemSchema = z.object({
   displayName: z.string().min(1).max(255),
   priority: z.number().int().optional(),
   weight: z.number().int().min(0).max(1000).optional(),
-  providerType: providerTypeEnum,
-  engineKind: engineKindEnum.optional(),
+  providerType: providerTypeSchema,
+  engineKind: engineKindSchema.optional(),
   apiKey: z.string().min(1),
   baseUrl: z.string().min(1),
   modelName: z.string().min(1),
@@ -79,8 +80,8 @@ const updateItemSchema = z.object({
   priority: z.number().int().optional(),
   weight: z.number().int().min(0).max(1000).optional(),
   isEnabled: z.boolean().optional(),
-  providerType: providerTypeEnum.optional(),
-  engineKind: engineKindEnum.optional(),
+  providerType: providerTypeSchema.optional(),
+  engineKind: engineKindSchema.optional(),
   apiKey: z.string().min(1).optional(),
   baseUrl: z.string().min(1).optional(),
   modelName: z.string().min(1).optional(),

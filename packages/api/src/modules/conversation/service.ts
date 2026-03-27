@@ -890,6 +890,7 @@ export function conversationItemRowToFeedItem(row: any): ConversationFeedItem {
     kind: "message",
     ...base,
     role: row.role,
+    messageType: row.subtype || "chat",
     targets: mapTargets(row.targets || []),
     content: buildTextContentFromParts(row.parts || []),
     contentBlocks: itemPartsToCanonicalContentBlocks(row.parts || []),
@@ -905,6 +906,18 @@ export function isFeedItemVisibleToUser(
   userId: string,
 ) {
   if (item.kind === "message") {
+    if (item.messageType === "model_error_notice") {
+      if (!item.targets || item.targets.length === 0) {
+        return true;
+      }
+
+      if (item.author?.userId === userId) {
+        return true;
+      }
+
+      return item.targets.some((target) => target.userId === userId);
+    }
+
     return true;
   }
 
@@ -1052,7 +1065,7 @@ export async function getVisibleConversationItemsForMember(params: {
        AND ci.scope = 'shared'
        AND ci.surface = 'visible'
        AND (
-         (c.kind = 'group' AND ci.item_type = 'message')
+         (c.kind = 'group' AND ci.item_type = 'message' AND ci.subtype <> 'model_error_notice')
          OR ci.author_member_id = $2
          OR NOT EXISTS (SELECT 1 FROM conversation_item_targets cit0 WHERE cit0.item_id = ci.id)
          OR EXISTS (
@@ -1150,7 +1163,7 @@ export async function getContextConversationItemsForMember(params: {
          (
            ci.surface = 'visible'
            AND (
-             (c.kind = 'group' AND ci.item_type = 'message')
+             (c.kind = 'group' AND ci.item_type = 'message' AND ci.subtype <> 'model_error_notice')
              OR ci.author_member_id = $2
              OR NOT EXISTS (SELECT 1 FROM conversation_item_targets cit0 WHERE cit0.item_id = ci.id)
              OR EXISTS (
@@ -1241,6 +1254,21 @@ export async function listUserGroupConversations(
               WHERE ci.conversation_id = c.id
                 AND ci.scope = 'shared'
                 AND ci.surface = 'visible'
+                AND (
+                  ci.subtype <> 'model_error_notice'
+                  OR NOT EXISTS (
+                    SELECT 1 FROM conversation_item_targets cit0
+                    WHERE cit0.item_id = ci.id
+                  )
+                  OR EXISTS (
+                    SELECT 1
+                    FROM conversation_item_targets cit
+                    JOIN conversation_members cm_target
+                      ON cm_target.id = cit.target_member_id
+                    WHERE cit.item_id = ci.id
+                      AND cm_target.user_id = $2
+                  )
+                )
                 AND ci.sequence > COALESCE(cr.last_read_sequence, 0)
             ) AS unread_count
      FROM conversations c

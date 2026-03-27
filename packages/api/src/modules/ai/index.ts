@@ -1,6 +1,12 @@
 import type { Actor, ThinkingResult, ActorAction, ConversationMessage, ResolvedModelConfig, ResolvedModelPlan, ServerToolCall, ToolRound, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory, GroupMemberEntry, ToolResolveContext, CanonicalContentBlock, ProviderContextWindow, AvailableSkillSummary, ModelAttemptPolicy, EngineBranchState } from '@synapse/shared';
 import type { CanonicalContextItem, NormalizedMcpToolResult } from '@synapse/shared/types';
-import { normalizeCanonicalContentBlocks, textBlock, textBlocks, extractText } from '@synapse/shared';
+import {
+  extractText,
+  getDefaultModelEngineKind,
+  normalizeCanonicalContentBlocks,
+  textBlock,
+  textBlocks,
+} from '@synapse/shared';
 import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
 import { createAIProvider, type AIProvider, type AIProviderConfig } from './providers/index.js';
@@ -55,7 +61,7 @@ function getProvider(resolved?: ResolvedModelConfig | null): AIProvider {
         baseUrl: config.ai.baseUrl,
         model: config.ai.model,
         maxTokens: config.ai.maxTokens,
-        engineKind: config.ai.provider === 'openai' ? 'openai.chat_completions' : 'anthropic.messages',
+        engineKind: config.ai.engineKind,
       };
 
   const providerName = resolved?.providerType || config.ai.provider;
@@ -74,8 +80,8 @@ function getFallbackResolvedConfig(): ResolvedModelConfig {
     groupId: 'env-fallback',
     profileId: 'env-fallback',
     profileRevisionId: 'env-fallback',
-    providerType: config.ai.provider === 'openai' ? 'openai' : 'anthropic',
-    engineKind: config.ai.provider === 'openai' ? 'openai.chat_completions' : 'anthropic.messages',
+    providerType: config.ai.provider,
+    engineKind: config.ai.engineKind,
     apiKey: config.ai.apiKey,
     baseUrl: config.ai.baseUrl,
     modelName: config.ai.model,
@@ -408,7 +414,7 @@ export async function actorThink(
 
   const buildRequestLog = (round: number, resolved?: ResolvedModelConfig | null, attempt?: number) => ({
     provider: resolved?.providerType || config.ai.provider,
-    engineKind: resolved?.engineKind || (config.ai.provider === 'openai' ? 'openai.chat_completions' : 'anthropic.messages'),
+    engineKind: resolved?.engineKind || config.ai.engineKind || getDefaultModelEngineKind(config.ai.provider),
     model: resolved?.modelName || config.ai.model,
     round,
     attempt: attempt || 1,
@@ -517,7 +523,7 @@ export async function actorThink(
         return logProviderStep({
           turnId: options!.turnId!,
           stepIndex,
-          providerType: params.resolved.providerType === 'openai' ? 'openai' : 'anthropic',
+          providerType: params.resolved.providerType,
           requestType: 'actor_think',
           modelGroupId: effectiveModelPlan.groupId,
           modelProfileId: params.resolved.profileId,

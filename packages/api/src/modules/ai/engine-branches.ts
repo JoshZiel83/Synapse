@@ -7,6 +7,7 @@ import type {
   ProviderContextWindow,
   ResolvedModelConfig,
 } from '@synapse/shared';
+import { getModelBranchStateMode } from '@synapse/shared';
 import { query, transaction } from '../../infrastructure/database/index.js';
 
 const MAX_APPLIED_ITEM_IDS = 512;
@@ -51,7 +52,9 @@ export function buildToolCallBatchAppliedKey(
 }
 
 function extractNativeTailToolCalls(branch: EngineBranchState) {
-  if (branch.engineKind === 'anthropic.messages') {
+  const branchStateMode = getModelBranchStateMode(branch.engineKind);
+
+  if (branchStateMode === 'anthropic.messages') {
     const messages = Array.isArray(branch.nativeState?.messages)
       ? branch.nativeState.messages as Array<Record<string, unknown>>
       : [];
@@ -69,7 +72,7 @@ function extractNativeTailToolCalls(branch: EngineBranchState) {
     return toolCalls.length > 0 ? toolCalls : undefined;
   }
 
-  if (branch.engineKind === 'openai.chat_completions') {
+  if (branchStateMode === 'openai.chat_completions') {
     const messages = Array.isArray(branch.nativeState?.messages)
       ? branch.nativeState.messages as Array<Record<string, unknown>>
       : [];
@@ -98,7 +101,7 @@ function extractNativeTailToolCalls(branch: EngineBranchState) {
     return toolCalls.length > 0 ? toolCalls : undefined;
   }
 
-  if (branch.engineKind === 'openai.responses') {
+  if (branchStateMode === 'openai.responses') {
     const items = Array.isArray(branch.nativeState?.items)
       ? branch.nativeState.items as Array<Record<string, unknown>>
       : [];
@@ -298,7 +301,7 @@ function rowToBranchState(row: Record<string, unknown>): EngineBranchState {
     branchId: String(row.id),
     sessionId: String(row.session_id),
     conversationId: typeof row.conversation_id === 'string' ? row.conversation_id : undefined,
-    providerType: row.provider_type === 'openai' ? 'openai' : 'anthropic',
+    providerType: row.provider_type as string,
     engineKind: row.engine_kind as EngineBranchState['engineKind'],
     bindingKey: String(row.binding_key),
     cursor: {

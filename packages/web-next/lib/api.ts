@@ -819,6 +819,12 @@ class ApiClient {
   getSessionTree(wsId: string, sessionId: string) {
     return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/tree`)
   }
+  retrySession(wsId: string, sessionId: string, itemId?: string) {
+    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/retry`, {
+      method: "POST",
+      body: JSON.stringify(itemId ? { itemId } : {}),
+    })
+  }
   cancelSession(wsId: string, sessionId: string) {
     return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}`, {
       method: "DELETE",

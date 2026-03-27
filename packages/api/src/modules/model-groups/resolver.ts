@@ -5,6 +5,7 @@ import type {
   ResolvedModelConfig,
   ResolvedModelPlan,
 } from '@synapse/shared';
+import { resolveModelEngineKind } from '@synapse/shared';
 import { redis } from '../../infrastructure/redis/index.js';
 import { query } from '../../infrastructure/database/index.js';
 import { config } from '../../config/index.js';
@@ -37,7 +38,7 @@ type GroupItemRow = {
   profile_id: string;
   display_name: string;
   current_revision_id: string | null;
-  provider_type: 'anthropic' | 'openai' | null;
+  provider_type: string | null;
   api_key: string | null;
   base_url: string | null;
   model_name: string | null;
@@ -68,27 +69,6 @@ function asStringArray(value: unknown): string[] {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function deriveEngineKind(
-  providerType: 'anthropic' | 'openai',
-  extraConfig: Record<string, unknown>,
-): ModelEngineKind {
-  const raw = typeof extraConfig.engine_kind === 'string'
-    ? extraConfig.engine_kind
-    : typeof extraConfig.api_style === 'string'
-      ? extraConfig.api_style
-      : undefined;
-
-  if (providerType === 'anthropic') {
-    return 'anthropic.messages';
-  }
-
-  if (raw === 'openai.responses' || raw === 'responses') {
-    return 'openai.responses';
-  }
-
-  return 'openai.chat_completions';
 }
 
 function parseAttemptPolicy(value: unknown): ModelAttemptPolicy {
@@ -327,7 +307,7 @@ function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {
     profileId: row.profile_id,
     profileRevisionId: row.current_revision_id,
     providerType: row.provider_type,
-    engineKind: deriveEngineKind(row.provider_type, extraConfig),
+    engineKind: resolveModelEngineKind(row.provider_type, extraConfig),
     apiKey: row.api_key,
     baseUrl: row.base_url,
     modelName: row.model_name,
@@ -403,8 +383,8 @@ export function getEnvFallbackConfig(): ResolvedModelConfig {
     groupId: 'env-fallback',
     profileId: 'env-fallback',
     profileRevisionId: 'env-fallback',
-    providerType: config.ai.provider === 'openai' ? 'openai' : 'anthropic',
-    engineKind: config.ai.provider === 'openai' ? 'openai.chat_completions' : 'anthropic.messages',
+    providerType: config.ai.provider,
+    engineKind: config.ai.engineKind,
     apiKey: config.ai.apiKey,
     baseUrl: config.ai.baseUrl,
     modelName: config.ai.model,

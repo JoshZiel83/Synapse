@@ -103,7 +103,7 @@ export async function updateTurnStatus(turnId: string, status: 'completed' | 'fa
 export async function logProviderStep(params: {
   turnId: string;
   stepIndex: number;
-  providerType: 'anthropic' | 'openai';
+  providerType: string;
   requestType: 'actor_think' | 'ai_complete';
   modelGroupId?: string;
   modelProfileId?: string;

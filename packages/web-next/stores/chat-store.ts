@@ -88,6 +88,7 @@ export interface FeedMessage {
   workspaceSequence?: number
   sessionId: string
   role: string
+  messageType?: string
   content: string
   contentBlocks: CanonicalContentBlock[]
   author?: ConversationEntityRef
@@ -99,6 +100,7 @@ export interface FeedMessage {
   createdAt: string
   clientMessageId?: string
   deliveryStatus?: "sending" | "retrying" | "sent"
+  metadata?: Record<string, unknown>
   toolsUsed?: string[]
   serverToolCalls?: ServerToolCall[]
   citationSources?: Record<string, { url: string; title: string }>
@@ -419,6 +421,7 @@ function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
     workspaceSequence: item.workspaceSequence,
     sessionId: item.sessionId || "",
     role: item.role,
+    messageType: item.messageType,
     content: item.content,
     contentBlocks: normalizeContentBlocks(item.contentBlocks),
     author: item.author,
@@ -431,6 +434,7 @@ function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
     createdAt: item.createdAt,
     clientMessageId: item.clientMessageId,
     deliveryStatus: "sent",
+    metadata,
     toolsUsed: metadata.toolsUsed as string[] | undefined,
     serverToolCalls: metadata.serverToolCalls as ServerToolCall[] | undefined,
     citationSources: metadata.citationSources as

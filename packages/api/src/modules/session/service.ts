@@ -8,6 +8,7 @@ import {
 import { query } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { shutdownSessionInstances } from '../mcp-plugins/instance-manager.js';
+import { queueConversationTransportProjection } from '../im/service.js';
 import {
   createConversation,
   createConversationItem,
@@ -294,9 +295,26 @@ export async function addSessionMessage(params: {
   contentBlocks?: import('@synapse/shared').CanonicalContentBlock[];
   fromActorId?: UUID;
   fromUserId?: UUID;
+  subtype?: string;
+  visibility?: 'default' | 'shared_visible';
   metadata?: Record<string, unknown>;
+  targetMemberIds?: UUID[];
+  projectTransportOutbound?: boolean;
 }): Promise<any> {
-  const { sessionId, workspaceId, role, content, contentBlocks, fromActorId, fromUserId, metadata = {} } = params;
+  const {
+    sessionId,
+    workspaceId,
+    role,
+    content,
+    contentBlocks,
+    fromActorId,
+    fromUserId,
+    subtype,
+    visibility = 'default',
+    metadata = {},
+    targetMemberIds,
+    projectTransportOutbound = false,
+  } = params;
   const session = await getSession(sessionId);
   if (!session) throw new Error(`Session ${sessionId} not found`);
   const normalizedMessage = await buildNormalizedMessageContent({ content, contentBlocks, metadata });
@@ -306,9 +324,11 @@ export async function addSessionMessage(params: {
     fromActorId,
     fromUserId,
   });
-  const { scope, surface } = getSurfaceForSessionMessage(session.conversation_kind, role);
+  const { scope, surface } = visibility === 'shared_visible'
+    ? { scope: 'shared' as const, surface: 'visible' as const }
+    : getSurfaceForSessionMessage(session.conversation_kind, role);
   const itemType = role === 'tool_result' ? 'control' : 'message';
-  const subtype = role;
+  const resolvedSubtype = subtype || role;
 
   const item = await createConversationItem({
     workspaceId,
@@ -317,15 +337,42 @@ export async function addSessionMessage(params: {
     scope,
     surface,
     itemType,
-    subtype,
+    subtype: resolvedSubtype,
     role: role === 'tool_result' ? 'tool' : role === 'system' ? 'system' : role === 'assistant' ? 'assistant' : 'user',
     authorMemberId: authorMember?.id,
     metadata: normalizedMessage.normalizedMetadata,
     parts: normalizedMessage.parts,
+    targetMemberIds,
   });
 
   if (scope === 'shared' && surface === 'visible' && (role === 'user' || role === 'assistant' || role === 'system')) {
     await emitChatFeedItem(workspaceId, item.id);
+  }
+
+  if (
+    projectTransportOutbound &&
+    scope === 'shared' &&
+    surface === 'visible' &&
+    Array.isArray(targetMemberIds) &&
+    targetMemberIds.length > 0
+  ) {
+    await queueConversationTransportProjection({
+      workspaceId,
+      conversationId: session.conversation_id,
+      itemId: item.id,
+      direction: 'outbound',
+      metadata: {
+        senderType: fromActorId ? 'actor' : fromUserId ? 'user' : 'system',
+        senderActorId: fromActorId || undefined,
+        senderUserId: fromUserId || undefined,
+        targetMemberIds,
+      },
+    }).catch((error) => {
+      console.error(
+        `Failed to queue transport projection for session item ${item.id}:`,
+        error?.message || error,
+      );
+    });
   }
 
   if (!session.group_id && (role === 'user' || role === 'assistant')) {

@@ -31,6 +31,10 @@ const sendMessageSchema = z.object({
   { message: 'content or contentBlocks is required' },
 );
 
+const retrySessionSchema = z.object({
+  itemId: z.string().uuid().optional(),
+});
+
 async function requireActorPermission(
   request: any,
   reply: any,
@@ -208,6 +212,50 @@ export async function sessionController(app: FastifyInstance) {
 
     const messages = await getSessionMessages(sessionId);
     return reply.send({ messages });
+  });
+
+  // POST /workspaces/:wsId/sessions/:sessionId/retry — retry a failed/blocked session
+  app.post<{
+    Params: { workspaceId: string; sessionId: string };
+    Body: { itemId?: string };
+  }>('/workspaces/:workspaceId/sessions/:sessionId/retry', async (request, reply) => {
+    const { workspaceId, sessionId } = request.params;
+    const { itemId } = retrySessionSchema.parse(request.body || {});
+    const userId = (request as any).user!.userId;
+
+    const session = await requireSessionConversationPermission(
+      request,
+      reply,
+      'conversation.send',
+      'Not allowed to retry this session',
+    );
+    if (!session) return;
+
+    if (session.status === 'closed') {
+      return reply.status(400).send({ error: `Cannot retry ${session.status} session` });
+    }
+
+    const wakeup = await enqueueSessionWakeup({
+      sessionId,
+      actorId: session.actor_id,
+      workspaceId,
+      sourceType: 'retry',
+      sourceItemId: itemId,
+      sourceMemberType: 'user',
+      sourceMemberId: userId,
+      summary: 'Retry requested',
+      reasonText: 'User requested a retry after a model error.',
+      trigger: 'retry',
+      metadata: {
+        requestedByUserId: userId,
+        source: 'model_error_notice',
+      },
+    });
+
+    return reply.status(201).send({
+      wakeupId: wakeup.id,
+      status: 'queued',
+    });
   });
 
   // GET /workspaces/:wsId/actors/:actorId/sessions — list actor's sessions

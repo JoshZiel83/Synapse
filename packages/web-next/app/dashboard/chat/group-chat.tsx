@@ -3,6 +3,7 @@
 import type { ActorRuntimeState, InteractionRequestSummary } from '@synapse/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fileRefBlock, textBlock, type CanonicalContentBlock } from '@synapse/shared';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -262,6 +263,7 @@ export default function GroupChat({
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false);
   const [participantDetailOpen, setParticipantDetailOpen] = useState(false);
   const [selectedParticipantMember, setSelectedParticipantMember] = useState<GroupMember | null>(null);
+  const [retryingMessageIds, setRetryingMessageIds] = useState<string[]>([]);
   const prevMsgCount = useRef(messages.length);
   const mentionableParticipants = useMemo<MentionableParticipant[]>(
     () => group.members.map((member) => ({
@@ -402,6 +404,21 @@ export default function GroupChat({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     setShowJumpButton(false);
   };
+
+  async function handleRetryModelError(sessionId: string, itemId: string) {
+    if (!workspaceId) return;
+    setRetryingMessageIds((current) => current.includes(itemId) ? current : [...current, itemId]);
+    try {
+      await api.retrySession(workspaceId, sessionId, itemId);
+      toast.success('已请求重试');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '重试失败';
+      toast.error(message);
+      throw error;
+    } finally {
+      setRetryingMessageIds((current) => current.filter((currentItemId) => currentItemId !== itemId));
+    }
+  }
 
   async function submitMessage() {
     if ((!inputPlainTextValue.trim() && pendingFiles.length === 0) || sending) return;
@@ -790,7 +807,10 @@ export default function GroupChat({
               messages.map((msg) => (
                 <MessageBubble
                   key={msg.id}
+                  messageId={msg.id}
                   role={msg.role}
+                  messageType={msg.messageType}
+                  metadata={msg.metadata}
                   author={msg.author}
                   contentBlocks={msg.contentBlocks}
                   actorName={msg.actorName}
@@ -819,6 +839,8 @@ export default function GroupChat({
                   contactBasePath={contactBasePath}
                   onParticipantClick={participantInteractionHandler}
                   onResolveInteraction={handleResolveInteraction}
+                  retryPending={retryingMessageIds.includes(msg.id)}
+                  onRetryModelError={handleRetryModelError}
                 />
               ))
             )}

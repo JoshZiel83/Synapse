@@ -41,6 +41,7 @@ import {
   FolderOpen,
   Loader2,
   MousePointerClick,
+  RotateCcw,
   Shield,
   XCircle,
 } from "lucide-react"
@@ -65,7 +66,10 @@ import {
 } from "./table-preview-overlay"
 
 interface MessageBubbleProps {
+  messageId: string
   role: string
+  messageType?: string
+  metadata?: Record<string, unknown>
   author?: ConversationEntityRef
   contentBlocks: CanonicalContentBlock[]
   actorName?: string
@@ -88,7 +92,9 @@ interface MessageBubbleProps {
   enableTablePreview?: boolean
   viewerUserId?: string
   contactBasePath?: string
+  retryPending?: boolean
   onParticipantClick?: (member: GroupMember) => void
+  onRetryModelError?: (sessionId: string, itemId: string) => Promise<void> | void
   onResolveInteraction?: (
     interactionId: string,
     payload: {
@@ -1742,7 +1748,10 @@ function ServerToolCallDisplay({ calls }: { calls: ServerToolCall[] }) {
 }
 
 export default function MessageBubble({
+  messageId,
   role,
+  messageType,
+  metadata,
   author,
   contentBlocks,
   actorName,
@@ -1765,7 +1774,9 @@ export default function MessageBubble({
   enableTablePreview = false,
   viewerUserId,
   contactBasePath = "/dashboard/contacts",
+  retryPending = false,
   onParticipantClick,
+  onRetryModelError,
   onResolveInteraction,
 }: MessageBubbleProps) {
   const router = useRouter()
@@ -1892,6 +1903,17 @@ export default function MessageBubble({
   )
   const isDirectToViewer = Boolean(
     viewerParticipantId && targetParticipantIds?.includes(viewerParticipantId)
+  )
+  const retrySessionId =
+    typeof metadata?.retrySessionId === "string"
+      ? metadata.retrySessionId
+      : undefined
+  const canRetryModelError = Boolean(
+    messageType === "model_error_notice" &&
+      retrySessionId &&
+      viewerParticipantId &&
+      targetParticipantIds?.includes(viewerParticipantId) &&
+      onRetryModelError
   )
   const shouldRenderCompact =
     !interaction &&
@@ -2220,6 +2242,32 @@ export default function MessageBubble({
               })}
             </span>
           )}
+          {canRetryModelError && retrySessionId ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-5 w-5 rounded-full text-muted-foreground/60 hover:text-foreground"
+                  disabled={retryPending}
+                  onClick={async () => {
+                    await onRetryModelError?.(retrySessionId, messageId)
+                  }}
+                  aria-label="重试"
+                >
+                  {retryPending ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-3 w-3" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{retryPending ? "正在重试" : "重试"}</p>
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
           <RecipientSummary
             recipients={recipients}
             hasExplicitTargets={hasExplicitTargets}

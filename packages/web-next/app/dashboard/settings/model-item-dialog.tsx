@@ -1,6 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import {
+  getDefaultModelBaseUrl,
+  getDefaultModelEngineKind,
+  getDefaultModelName,
+  getModelProviderEngineDefinitions,
+  listModelProviderDefinitions,
+  providerSupportsBuiltinTools,
+} from '@synapse/shared';
 import { useWorkspace } from '../workspace-provider';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -15,6 +23,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Globe, FileText, Image, Mic, Video, FileIcon } from 'lucide-react';
+import { toast } from 'sonner';
+import {
+  getEffectiveMaxTokensLimit,
+  getKnownModelOptions,
+  getModelConfigValidationMessage,
+  getSaveErrorMessage,
+} from './model-config-utils';
 
 interface ModelItemDialogProps {
   open: boolean;
@@ -47,28 +62,7 @@ const MULTIMODAL_TYPES = [
   { key: 'document', label: 'Documents', description: 'Send PDF and document files to the model', icon: FileIcon },
 ];
 
-const ENGINE_KIND_OPTIONS: Record<string, Array<{ value: string; label: string }>> = {
-  anthropic: [
-    { value: 'anthropic.messages', label: 'Messages API' },
-  ],
-  openai: [
-    { value: 'openai.chat_completions', label: 'Chat Completions' },
-    { value: 'openai.responses', label: 'Responses API' },
-  ],
-};
-
-function defaultEngineKind(providerType: string) {
-  return providerType === 'openai' ? 'openai.chat_completions' : 'anthropic.messages';
-}
-
-function defaultBaseUrl(providerType: string) {
-  return providerType === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com';
-}
-
-function defaultModelName(providerType: string, engineKind?: string) {
-  if (providerType !== 'openai') return 'claude-sonnet-4-20250514';
-  return engineKind === 'openai.responses' ? 'gpt-5' : 'gpt-4.1';
-}
+const PROVIDER_OPTIONS = listModelProviderDefinitions();
 
 export default function ModelItemDialog({
   open,
@@ -91,11 +85,20 @@ export default function ModelItemDialog({
   const [builtinTools, setBuiltinTools] = useState<string[]>([]);
   const [multimodalTypes, setMultimodalTypes] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const knownModels = getKnownModelOptions(providerType, engineKind);
+  const maxTokensLimit = getEffectiveMaxTokensLimit(providerType, engineKind, modelName);
+  const modelConfigError = getModelConfigValidationMessage({
+    providerType,
+    engineKind,
+    modelName,
+    maxTokens,
+  });
+  const modelDatalistId = `model-options-${providerType}-${engineKind}`.replace(/[^a-zA-Z0-9_-]/g, '-');
 
   useEffect(() => {
     if (item) {
       const resolvedProviderType = item.provider_type || 'anthropic';
-      const resolvedEngineKind = item.engine_kind || item.extra_config?.engine_kind || defaultEngineKind(resolvedProviderType);
+      const resolvedEngineKind = item.engine_kind || item.extra_config?.engine_kind || getDefaultModelEngineKind(resolvedProviderType);
       setDisplayName(item.display_name || '');
       setProviderType(resolvedProviderType);
       setEngineKind(resolvedEngineKind);
@@ -114,8 +117,8 @@ export default function ModelItemDialog({
       setProviderType('anthropic');
       setEngineKind('anthropic.messages');
       setApiKey('');
-      setBaseUrl(defaultBaseUrl('anthropic'));
-      setModelName(defaultModelName('anthropic', 'anthropic.messages'));
+      setBaseUrl(getDefaultModelBaseUrl('anthropic'));
+      setModelName(getDefaultModelName('anthropic', 'anthropic.messages'));
       setMaxTokens('4096');
       setPriority('0');
       setWeight('100');
@@ -140,9 +143,14 @@ export default function ModelItemDialog({
     if ((!workspaceId && scope === 'workspace') || !displayName.trim()) return;
     setSaving(true);
     try {
+      if (modelConfigError) {
+        toast.error(modelConfigError);
+        return;
+      }
+
       // Build extraConfig with builtin_tools and multimodal
       const extraConfig: Record<string, unknown> = {};
-      if (providerType === 'anthropic' && builtinTools.length > 0) {
+      if (providerSupportsBuiltinTools(providerType) && builtinTools.length > 0) {
         extraConfig.builtin_tools = builtinTools;
       }
       if (multimodalTypes.length > 0) {
@@ -197,12 +205,13 @@ export default function ModelItemDialog({
       onSaved();
     } catch (err) {
       console.error('Failed to save model item:', err);
+      toast.error(getSaveErrorMessage(err, 'Failed to save model item.'));
     } finally {
       setSaving(false);
     }
   };
 
-  const isValid = displayName.trim() && (item || (apiKey.trim() && baseUrl.trim() && modelName.trim()));
+  const isValid = displayName.trim() && !modelConfigError && (item || (apiKey.trim() && baseUrl.trim() && modelName.trim()));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -231,17 +240,18 @@ export default function ModelItemDialog({
                 value={providerType}
                 onChange={(e) => {
                   const nextProviderType = e.target.value;
-                  const nextEngineKind = defaultEngineKind(nextProviderType);
+                  const nextEngineKind = getDefaultModelEngineKind(nextProviderType);
                   setProviderType(nextProviderType);
                   setEngineKind(nextEngineKind);
-                  setBaseUrl(defaultBaseUrl(nextProviderType));
-                  setModelName(defaultModelName(nextProviderType, nextEngineKind));
-                  if (nextProviderType !== 'anthropic') setBuiltinTools([]);
+                  setBaseUrl(getDefaultModelBaseUrl(nextProviderType));
+                  setModelName(getDefaultModelName(nextProviderType, nextEngineKind));
+                  if (!providerSupportsBuiltinTools(nextProviderType)) setBuiltinTools([]);
                 }}
                 className="w-full h-10 px-3 rounded-md bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 text-sm text-foreground focus:border-blue-500/40 outline-none"
               >
-                <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI</option>
+                {PROVIDER_OPTIONS.map((option) => (
+                  <option key={option.providerType} value={option.providerType}>{option.label}</option>
+                ))}
               </select>
             </div>
             <div className="space-y-2">
@@ -251,12 +261,12 @@ export default function ModelItemDialog({
                 onChange={(e) => {
                   const nextEngineKind = e.target.value;
                   setEngineKind(nextEngineKind);
-                  setModelName(defaultModelName(providerType, nextEngineKind));
+                  setModelName(getDefaultModelName(providerType, nextEngineKind));
                 }}
                 className="w-full h-10 px-3 rounded-md bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 text-sm text-foreground focus:border-blue-500/40 outline-none"
               >
-                {(ENGINE_KIND_OPTIONS[providerType] || []).map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
+                {getModelProviderEngineDefinitions(providerType).map((option) => (
+                  <option key={option.engineKind} value={option.engineKind}>{option.label}</option>
                 ))}
               </select>
             </div>
@@ -266,8 +276,23 @@ export default function ModelItemDialog({
             <div className="space-y-2">
               <Label>Model Name</Label>
               <Input value={modelName} onChange={(e) => setModelName(e.target.value)}
+                list={knownModels.length > 0 ? modelDatalistId : undefined}
                 placeholder="claude-sonnet-4-20250514"
                 className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40" />
+              {knownModels.length > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Suggested models: {knownModels.slice(0, 6).map((model) => model.modelName).join(', ')}
+                  {knownModels.length > 6 ? '...' : ''}
+                </p>
+              ) : null}
+              {modelConfigError ? <p className="text-xs text-red-500">{modelConfigError}</p> : null}
+              {knownModels.length > 0 ? (
+                <datalist id={modelDatalistId}>
+                  {knownModels.map((model) => (
+                    <option key={model.modelName} value={model.modelName}>{model.label}</option>
+                  ))}
+                </datalist>
+              ) : null}
             </div>
           </div>
 
@@ -281,7 +306,7 @@ export default function ModelItemDialog({
           <div className="space-y-2">
             <Label>Base URL</Label>
             <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://api.anthropic.com"
+              placeholder={getDefaultModelBaseUrl(providerType) || 'https://api.example.com'}
               className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40" />
           </div>
 
@@ -289,7 +314,12 @@ export default function ModelItemDialog({
             <div className="space-y-2">
               <Label>Max Tokens</Label>
               <Input value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)}
-                type="number" className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40" />
+                type="number"
+                max={maxTokensLimit}
+                className="bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10 focus:border-blue-500/40" />
+              {maxTokensLimit ? (
+                <p className="text-xs text-muted-foreground">This model supports up to {maxTokensLimit} output tokens.</p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label>Priority</Label>
@@ -305,10 +335,10 @@ export default function ModelItemDialog({
             </div>
           </div>
 
-          {/* Anthropic Built-in Tools */}
-          {providerType === 'anthropic' && (
+          {/* Provider Built-in Tools */}
+          {providerSupportsBuiltinTools(providerType) && (
             <div className="space-y-3 pt-1">
-              <Label className="text-sm">Built-in Tools (Anthropic Server-side)</Label>
+              <Label className="text-sm">Built-in Tools</Label>
               <div className="space-y-2">
                 {ANTHROPIC_BUILTIN_TOOLS.map((tool) => {
                   const Icon = tool.icon;
@@ -362,7 +392,7 @@ export default function ModelItemDialog({
                 })}
               </div>
               <p className="text-xs text-muted-foreground/60">
-                These tools run on Anthropic&apos;s servers. Web Search incurs additional charges ($10/1000 searches).
+                These tools run on the selected provider&apos;s servers when supported.
               </p>
             </div>
           )}

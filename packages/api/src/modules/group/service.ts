@@ -1037,6 +1037,21 @@ export async function getGroupsByWorkspace(
                     WHERE ci.conversation_id = c.id
                       AND ci.scope = 'shared'
                       AND ci.surface = 'visible'
+                      AND (
+                        ci.subtype <> 'model_error_notice'
+                        OR NOT EXISTS (
+                          SELECT 1 FROM conversation_item_targets cit0
+                          WHERE cit0.item_id = ci.id
+                        )
+                        OR EXISTS (
+                          SELECT 1
+                          FROM conversation_item_targets cit
+                          JOIN conversation_members cm_target
+                            ON cm_target.id = cit.target_member_id
+                          WHERE cit.item_id = ci.id
+                            AND cm_target.user_id = $2
+                        )
+                      )
                       AND ci.sequence > COALESCE(cr.last_read_sequence, 0)
                   ) AS unread_count
            FROM conversations c
@@ -1088,8 +1103,23 @@ export async function getGroupsByWorkspace(
      WHERE ci.conversation_id = ANY($1)
        AND ci.scope = 'shared'
        AND ci.surface = 'visible'
+       AND (
+         ci.subtype <> 'model_error_notice'
+         OR NOT EXISTS (
+           SELECT 1 FROM conversation_item_targets cit0
+           WHERE cit0.item_id = ci.id
+         )
+         OR EXISTS (
+           SELECT 1
+           FROM conversation_item_targets cit
+           JOIN conversation_members cm_target
+             ON cm_target.id = cit.target_member_id
+           WHERE cit.item_id = ci.id
+             AND cm_target.user_id = $2
+         )
+       )
      ORDER BY ci.conversation_id, ci.sequence DESC`,
-    [resolvedGroupIds],
+    [resolvedGroupIds, userId],
   );
 
   const lastItemMap = new Map<string, any>(

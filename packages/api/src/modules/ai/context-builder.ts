@@ -126,6 +126,10 @@ export function conversationItemToContextItem(item: any, actorId: string): Canon
   const author = buildAuthor(item, actorId);
   const targets = buildTargets(item.context_targets?.length > 0 ? item.context_targets : item.targets || []);
 
+  if (metadata.excludeFromContext === true) {
+    return null;
+  }
+
   if (item.item_type === 'event' || item.role === 'system') {
     const contextPolicy = (item.event_context_policy || 'shared') as
       | 'none'

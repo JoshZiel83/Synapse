@@ -1,4 +1,10 @@
 import 'dotenv/config';
+import {
+  getDefaultModelBaseUrl,
+  getDefaultModelEngineKind,
+  getDefaultModelName,
+  getModelProviderDefinition,
+} from '@synapse/shared';
 
 const authzEnabled = process.env.AUTHZ_ENABLED !== 'false';
 
@@ -33,9 +39,19 @@ export const config = {
   },
   ai: {
     provider: process.env.AI_PROVIDER || 'anthropic',
-    apiKey: process.env.AI_API_KEY || process.env.ANTHROPIC_API_KEY || '',
-    baseUrl: process.env.AI_BASE_URL || process.env.ANTHROPIC_BASE_URL || '',
-    model: process.env.AI_MODEL || process.env.MODEL_NAME || 'claude-opus-4-6',
+    engineKind: process.env.AI_ENGINE_KIND || getDefaultModelEngineKind(process.env.AI_PROVIDER || 'anthropic'),
+    apiKey: process.env.AI_API_KEY
+      || getModelProviderDefinition(process.env.AI_PROVIDER || 'anthropic')?.envApiKeyAliases
+        .map((envKey: string) => process.env[envKey])
+        .find((value: string | undefined) => typeof value === 'string' && value.length > 0)
+      || '',
+    baseUrl: process.env.AI_BASE_URL || getDefaultModelBaseUrl(process.env.AI_PROVIDER || 'anthropic'),
+    model: process.env.AI_MODEL
+      || process.env.MODEL_NAME
+      || getDefaultModelName(
+        process.env.AI_PROVIDER || 'anthropic',
+        process.env.AI_ENGINE_KIND || getDefaultModelEngineKind(process.env.AI_PROVIDER || 'anthropic'),
+      ),
     maxTokens: parseInt(process.env.AI_MAX_TOKENS || '4096'),
   },
   audioFallback: {
