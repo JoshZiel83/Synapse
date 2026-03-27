@@ -16,6 +16,7 @@ import type {
   AutomationRuleCreatePayload,
   AutomationRuleUpdatePayload,
   CanonicalContentBlock,
+  CurrentUserWeixinBindingSummary,
   ConversationFeedItem,
   ConversationFeedPage,
   ConversationTransportBindingSummary,
@@ -997,6 +998,49 @@ class ApiClient {
     sessionId: string
   ): Promise<{ session: WeixinQrLoginSessionSummary }> {
     return this.fetch(`/workspaces/${wsId}/im/accounts/weixin/qr/${sessionId}`)
+  }
+  getCurrentUserWeixinBinding(
+    wsId: string
+  ): Promise<{ binding: CurrentUserWeixinBindingSummary | null }> {
+    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding`)
+  }
+  getCurrentUserWeixinBindingCandidates(
+    wsId: string
+  ): Promise<{ data: Array<Record<string, unknown>> }> {
+    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/candidates`)
+  }
+  startCurrentUserWeixinBindingQr(
+    wsId: string
+  ): Promise<{ session: WeixinQrLoginSessionSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/qr`, {
+      method: "POST",
+      body: "{}",
+    })
+  }
+  getCurrentUserWeixinBindingQr(
+    wsId: string,
+    sessionId: string
+  ): Promise<{ session: WeixinQrLoginSessionSummary }> {
+    return this.fetch(
+      `/workspaces/${wsId}/im/me/weixin-binding/qr/${sessionId}`
+    )
+  }
+  linkCurrentUserWeixinBinding(
+    wsId: string
+  ): Promise<{ binding: CurrentUserWeixinBindingSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/link`, {
+      method: "POST",
+      body: "{}",
+    })
+  }
+  setCurrentUserWeixinBindingAutoLink(
+    wsId: string,
+    userId: string | null
+  ): Promise<{ binding: CurrentUserWeixinBindingSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/auto-link`, {
+      method: "PUT",
+      body: JSON.stringify({ userId }),
+    })
   }
   createTransportAccount(
     wsId: string,

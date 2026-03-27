@@ -5,9 +5,12 @@ import Image from "next/image"
 import QRCode from "qrcode"
 import { useEffect, useMemo, useState } from "react"
 import type {
+  Actor,
+  TransportAccountInboundActorMode,
   TransportAccountSummary,
   TransportConnectionMode,
   TransportAccountOwnerScope,
+  TransportConversationInboundActorMode,
   TransportExternalUserSummary,
   TransportSessionSummary,
   WeixinQrLoginSessionSummary,
@@ -48,6 +51,8 @@ import { API_BASE, api } from "@/lib/api"
 type TransportAccountOwnerFormState = {
   ownerScope: TransportAccountOwnerScope
   ownerUserId: string
+  inboundActorMode: TransportAccountInboundActorMode
+  inboundActorId: string
 }
 
 type FeishuFormState = TransportAccountOwnerFormState & {
@@ -72,19 +77,23 @@ type WorkspaceDirectoryMember = {
   trustLevel?: string
 }
 
-type SessionActorOption = {
-  memberId: string
+type WorkspaceActorOption = {
+  actorId: string
   name: string
+  title?: string
 }
 
 type SessionDraft = {
   outboundEnabled: boolean
-  defaultTargetParticipantId: string
+  inboundActorMode: TransportConversationInboundActorMode
+  inboundActorId: string
 }
 
-type AccountOwnerDraft = {
+type AccountSettingsDraft = {
   ownerScope: TransportAccountOwnerScope
   ownerUserId: string
+  inboundActorMode: TransportAccountInboundActorMode
+  inboundActorId: string
 }
 
 const UNASSIGNED_VALUE = "__none__"
@@ -95,6 +104,8 @@ const EMPTY_FEISHU_FORM: FeishuFormState = {
   appSecret: "",
   ownerScope: "workspace",
   ownerUserId: "",
+  inboundActorMode: "none",
+  inboundActorId: "",
   connectionMode: "webhook",
   verificationToken: "",
   encryptKey: "",
@@ -105,6 +116,8 @@ const EMPTY_WEIXIN_FORM: WeixinFormState = {
   baseUrl: "",
   ownerScope: "workspace",
   ownerUserId: "",
+  inboundActorMode: "none",
+  inboundActorId: "",
 }
 
 function prettyTransportKind(kind: "feishu" | "weixin") {
@@ -121,6 +134,32 @@ function prettyEndpointType(endpointType: "direct" | "group") {
 
 function prettyConnectionMode(mode: TransportConnectionMode) {
   return mode === "webhook" ? "Webhook" : "Long connection"
+}
+
+function prettyAccountInboundActorMode(
+  mode: TransportAccountInboundActorMode
+) {
+  switch (mode) {
+    case "follow_owner_chief_actor":
+      return "Follow owner chief actor"
+    case "specified_actor":
+      return "Specific actor"
+    default:
+      return "No default actor"
+  }
+}
+
+function prettySessionInboundActorMode(
+  mode: TransportConversationInboundActorMode
+) {
+  switch (mode) {
+    case "inherit_account":
+      return "Follow binding setting"
+    case "specified_actor":
+      return "Specific actor"
+    default:
+      return "No default actor"
+  }
 }
 
 function formatDateTime(value?: string) {
@@ -148,6 +187,10 @@ function workspaceMemberLabel(member: WorkspaceDirectoryMember) {
   return member.userName || member.userEmail || member.userId
 }
 
+function actorOptionLabel(actor: WorkspaceActorOption) {
+  return actor.title ? `${actor.name} · ${actor.title}` : actor.name
+}
+
 function transportAccountOwnerLabel(
   account: Pick<TransportAccountSummary, "ownerScope" | "ownerUserId">,
   workspaceMemberById: Map<string, WorkspaceDirectoryMember>,
@@ -162,6 +205,35 @@ function transportAccountOwnerLabel(
   return member
     ? workspaceMemberLabel(member)
     : account.ownerUserId || "Unknown member"
+}
+
+function transportAccountInboundActorLabel(
+  account: Pick<
+    TransportAccountSummary,
+    "ownerScope" | "inboundActorMode" | "inboundActorId"
+  >,
+  actorById: Map<string, WorkspaceActorOption>
+) {
+  if (account.inboundActorMode === "specified_actor") {
+    const actor = account.inboundActorId
+      ? actorById.get(account.inboundActorId)
+      : undefined
+    return actor ? actorOptionLabel(actor) : account.inboundActorId || "Unknown actor"
+  }
+  return prettyAccountInboundActorMode(account.inboundActorMode)
+}
+
+function sessionInboundActorLabel(
+  session: Pick<TransportSessionSummary, "inboundActorMode" | "inboundActorId">,
+  actorById: Map<string, WorkspaceActorOption>
+) {
+  if (session.inboundActorMode === "specified_actor") {
+    const actor = session.inboundActorId
+      ? actorById.get(session.inboundActorId)
+      : undefined
+    return actor ? actorOptionLabel(actor) : session.inboundActorId || "Unknown actor"
+  }
+  return prettySessionInboundActorMode(session.inboundActorMode)
 }
 
 type TransportAccountOwnerFieldsProps = {
@@ -238,6 +310,151 @@ function TransportAccountOwnerFields({
   )
 }
 
+type TransportAccountInboundActorFieldsProps = {
+  idPrefix: string
+  ownerScope: TransportAccountOwnerScope
+  inboundActorMode: TransportAccountInboundActorMode
+  inboundActorId: string
+  actors: WorkspaceActorOption[]
+  onInboundActorModeChange: (value: TransportAccountInboundActorMode) => void
+  onInboundActorIdChange: (value: string) => void
+}
+
+function TransportAccountInboundActorFields({
+  idPrefix,
+  ownerScope,
+  inboundActorMode,
+  inboundActorId,
+  actors,
+  onInboundActorModeChange,
+  onInboundActorIdChange,
+}: TransportAccountInboundActorFieldsProps) {
+  return (
+    <div className="space-y-4 rounded-2xl border bg-muted/20 p-4">
+      <div className="grid gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">
+        <div className="space-y-2">
+          <Label htmlFor={`${idPrefix}-inbound-actor-mode`}>
+            Inbound actor
+          </Label>
+          <Select
+            value={inboundActorMode}
+            onValueChange={(value) =>
+              onInboundActorModeChange(value as TransportAccountInboundActorMode)
+            }
+          >
+            <SelectTrigger id={`${idPrefix}-inbound-actor-mode`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No default actor</SelectItem>
+              <SelectItem value="specified_actor">Specific actor</SelectItem>
+              {ownerScope === "workspace_user" ? (
+                <SelectItem value="follow_owner_chief_actor">
+                  Follow owner chief actor
+                </SelectItem>
+              ) : null}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {inboundActorMode === "specified_actor" ? (
+          <div className="space-y-2">
+            <Label htmlFor={`${idPrefix}-inbound-actor-id`}>Actor</Label>
+            <Select
+              value={inboundActorId || UNASSIGNED_VALUE}
+              onValueChange={(value) =>
+                onInboundActorIdChange(value === UNASSIGNED_VALUE ? "" : value)
+              }
+              disabled={actors.length === 0}
+            >
+              <SelectTrigger id={`${idPrefix}-inbound-actor-id`}>
+                <SelectValue placeholder="Select actor" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNASSIGNED_VALUE}>Select actor</SelectItem>
+                {actors.map((actor) => (
+                  <SelectItem key={actor.actorId} value={actor.actorId}>
+                    {actorOptionLabel(actor)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+type TransportSessionInboundActorFieldsProps = {
+  sessionId: string
+  draft: SessionDraft
+  actors: WorkspaceActorOption[]
+  disabled?: boolean
+  onChange: (next: SessionDraft) => void
+}
+
+function TransportSessionInboundActorFields({
+  sessionId,
+  draft,
+  actors,
+  disabled,
+  onChange,
+}: TransportSessionInboundActorFieldsProps) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={`session-inbound-actor-mode-${sessionId}`}>
+        Inbound actor
+      </Label>
+      <Select
+        value={draft.inboundActorMode}
+        onValueChange={(value) =>
+          onChange({
+            ...draft,
+            inboundActorMode: value as TransportConversationInboundActorMode,
+            inboundActorId:
+              value === "specified_actor" ? draft.inboundActorId : "",
+          })
+        }
+        disabled={disabled}
+      >
+        <SelectTrigger id={`session-inbound-actor-mode-${sessionId}`}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="inherit_account">Follow binding setting</SelectItem>
+          <SelectItem value="specified_actor">Specific actor</SelectItem>
+          <SelectItem value="none">No default actor</SelectItem>
+        </SelectContent>
+      </Select>
+      {draft.inboundActorMode === "specified_actor" ? (
+        <Select
+          value={draft.inboundActorId || UNASSIGNED_VALUE}
+          onValueChange={(value) =>
+            onChange({
+              ...draft,
+              inboundActorId: value === UNASSIGNED_VALUE ? "" : value,
+            })
+          }
+          disabled={disabled || actors.length === 0}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Select actor" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={UNASSIGNED_VALUE}>Select actor</SelectItem>
+            {actors.map((actor) => (
+              <SelectItem key={actor.actorId} value={actor.actorId}>
+                {actorOptionLabel(actor)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
+    </div>
+  )
+}
+
 export default function ImPage() {
   const { workspaceId, workspaceName } = useWorkspace()
   const [loading, setLoading] = useState(true)
@@ -245,6 +462,9 @@ export default function ImPage() {
   const [creatingFeishu, setCreatingFeishu] = useState(false)
   const [creatingWeixin, setCreatingWeixin] = useState(false)
   const [savingAccountId, setSavingAccountId] = useState<string | null>(null)
+  const [disconnectingAccountId, setDisconnectingAccountId] = useState<
+    string | null
+  >(null)
   const [savingSessionId, setSavingSessionId] = useState<string | null>(null)
   const [linkingAddressId, setLinkingAddressId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -253,20 +473,18 @@ export default function ImPage() {
   const [externalUsers, setExternalUsers] = useState<
     TransportExternalUserSummary[]
   >([])
+  const [actors, setActors] = useState<Actor[]>([])
   const [workspaceMembers, setWorkspaceMembers] = useState<
     WorkspaceDirectoryMember[]
   >([])
-  const [accountOwnerDrafts, setAccountOwnerDrafts] = useState<
-    Record<string, AccountOwnerDraft>
+  const [accountSettingsDrafts, setAccountSettingsDrafts] = useState<
+    Record<string, AccountSettingsDraft>
   >({})
   const [sessionDrafts, setSessionDrafts] = useState<
     Record<string, SessionDraft>
   >({})
   const [externalUserDrafts, setExternalUserDrafts] = useState<
     Record<string, string>
-  >({})
-  const [sessionActorOptions, setSessionActorOptions] = useState<
-    Record<string, SessionActorOption[]>
   >({})
   const [feishuForm, setFeishuForm] =
     useState<FeishuFormState>(EMPTY_FEISHU_FORM)
@@ -286,6 +504,22 @@ export default function ImPage() {
   const workspaceMemberById = useMemo(
     () => new Map(workspaceMembers.map((member) => [member.userId, member])),
     [workspaceMembers]
+  )
+  const actorOptions = useMemo<WorkspaceActorOption[]>(
+    () =>
+      actors
+        .filter((actor) => actor.isActive)
+        .map((actor) => ({
+          actorId: actor.id,
+          name: actor.definition.name,
+          title: actor.definition.title || actor.definition.role,
+        }))
+        .sort((left, right) => actorOptionLabel(left).localeCompare(actorOptionLabel(right))),
+    [actors]
+  )
+  const actorById = useMemo(
+    () => new Map(actorOptions.map((actor) => [actor.actorId, actor])),
+    [actorOptions]
   )
 
   useEffect(() => {
@@ -325,57 +559,6 @@ export default function ImPage() {
     }
   }, [weixinSession?.qrCodeUrl])
 
-  async function loadSessionActorOptions(
-    activeWorkspaceId: string,
-    nextSessions: TransportSessionSummary[]
-  ) {
-    const conversationIds = Array.from(
-      new Set(
-        nextSessions
-          .map((session) => session.conversationId)
-          .filter((conversationId): conversationId is string =>
-            Boolean(conversationId)
-          )
-      )
-    )
-
-    if (conversationIds.length === 0) {
-      setSessionActorOptions({})
-      return
-    }
-
-    const entries = await Promise.all(
-      conversationIds.map(async (conversationId) => {
-        try {
-          const result = await api.getGroupMembers(
-            activeWorkspaceId,
-            conversationId
-          )
-          const members = Array.isArray((result as any)?.members)
-            ? ((result as any).members as Array<Record<string, unknown>>)
-            : []
-          const actorOptions = members
-            .filter((member) => member.type === "actor")
-            .map((member) => ({
-              memberId: String(
-                member.memberId || member.participantId || member.id
-              ),
-              name: String(member.name || "Actor"),
-            }))
-          return [conversationId, actorOptions] as const
-        } catch (loadError) {
-          console.error(
-            `Failed to load IM session actor options for ${conversationId}:`,
-            loadError
-          )
-          return [conversationId, []] as const
-        }
-      })
-    )
-
-    setSessionActorOptions(Object.fromEntries(entries))
-  }
-
   function syncSessionDrafts(nextSessions: TransportSessionSummary[]) {
     setSessionDrafts(
       Object.fromEntries(
@@ -383,22 +566,24 @@ export default function ImPage() {
           session.id,
           {
             outboundEnabled: session.outboundEnabled,
-            defaultTargetParticipantId:
-              session.defaultTargetParticipantId || UNASSIGNED_VALUE,
+            inboundActorMode: session.inboundActorMode,
+            inboundActorId: session.inboundActorId || "",
           },
         ])
       )
     )
   }
 
-  function syncAccountOwnerDrafts(nextAccounts: TransportAccountSummary[]) {
-    setAccountOwnerDrafts(
+  function syncAccountSettingsDrafts(nextAccounts: TransportAccountSummary[]) {
+    setAccountSettingsDrafts(
       Object.fromEntries(
         nextAccounts.map((account) => [
           account.id,
           {
             ownerScope: account.ownerScope,
             ownerUserId: account.ownerUserId || "",
+            inboundActorMode: account.inboundActorMode,
+            inboundActorId: account.inboundActorId || "",
           },
         ])
       )
@@ -428,7 +613,13 @@ export default function ImPage() {
 
     setError(null)
     try {
-      const [accountsRes, sessionsRes, externalUsersRes, workspaceMembersRes] =
+      const [
+        accountsRes,
+        sessionsRes,
+        externalUsersRes,
+        workspaceMembersRes,
+        actorsRes,
+      ] =
         await Promise.all([
           api.getTransportAccounts(workspaceId),
           api.getTransportSessions(workspaceId),
@@ -439,6 +630,10 @@ export default function ImPage() {
               loadError
             )
             return null
+          }),
+          api.getActors(workspaceId).catch((loadError) => {
+            console.error("Failed to load actors for IM page:", loadError)
+            return []
           }),
         ])
 
@@ -451,15 +646,16 @@ export default function ImPage() {
         ? ((workspaceMembersRes as any).data as WorkspaceDirectoryMember[]) ||
           []
         : []
+      const nextActors = Array.isArray(actorsRes) ? (actorsRes as Actor[]) : []
 
       setAccounts(nextAccounts)
       setSessions(nextSessions)
       setExternalUsers(nextExternalUsers)
       setWorkspaceMembers(nextWorkspaceMembers)
-      syncAccountOwnerDrafts(nextAccounts)
+      setActors(nextActors)
+      syncAccountSettingsDrafts(nextAccounts)
       syncSessionDrafts(nextSessions)
       syncExternalUserDrafts(nextExternalUsers)
-      await loadSessionActorOptions(workspaceId, nextSessions)
     } catch (loadError) {
       console.error("Failed to load IM workspace state:", loadError)
       setError(
@@ -542,6 +738,14 @@ export default function ImPage() {
       setCreatingFeishu(false)
       return
     }
+    if (
+      feishuForm.inboundActorMode === "specified_actor" &&
+      !feishuForm.inboundActorId
+    ) {
+      setError("Select an actor for inbound routing.")
+      setCreatingFeishu(false)
+      return
+    }
     try {
       const result = await api.createFeishuTransportAccount(workspaceId, {
         displayName: feishuForm.displayName.trim() || "Feishu Bot",
@@ -551,6 +755,11 @@ export default function ImPage() {
         ownerUserId:
           feishuForm.ownerScope === "workspace_user"
             ? feishuForm.ownerUserId
+            : null,
+        inboundActorMode: feishuForm.inboundActorMode,
+        inboundActorId:
+          feishuForm.inboundActorMode === "specified_actor"
+            ? feishuForm.inboundActorId
             : null,
         connectionMode: feishuForm.connectionMode,
         verificationToken: feishuForm.verificationToken.trim() || undefined,
@@ -562,6 +771,16 @@ export default function ImPage() {
         ownerScope: current.ownerScope,
         ownerUserId:
           current.ownerScope === "workspace_user" ? current.ownerUserId : "",
+        inboundActorMode:
+          current.ownerScope === "workspace_user"
+            ? current.inboundActorMode
+            : current.inboundActorMode === "follow_owner_chief_actor"
+              ? "none"
+              : current.inboundActorMode,
+        inboundActorId:
+          current.inboundActorMode === "specified_actor"
+            ? current.inboundActorId
+            : "",
       }))
       await loadData(true)
       if (result?.account?.connectionMode === "webhook") {
@@ -592,6 +811,14 @@ export default function ImPage() {
       setCreatingWeixin(false)
       return
     }
+    if (
+      weixinForm.inboundActorMode === "specified_actor" &&
+      !weixinForm.inboundActorId
+    ) {
+      setError("Select an actor for inbound routing.")
+      setCreatingWeixin(false)
+      return
+    }
     try {
       const result = await api.startWeixinQrTransportSession(workspaceId, {
         displayName: weixinForm.displayName.trim() || undefined,
@@ -600,6 +827,11 @@ export default function ImPage() {
         ownerUserId:
           weixinForm.ownerScope === "workspace_user"
             ? weixinForm.ownerUserId
+            : null,
+        inboundActorMode: weixinForm.inboundActorMode,
+        inboundActorId:
+          weixinForm.inboundActorMode === "specified_actor"
+            ? weixinForm.inboundActorId
             : null,
       })
       setWeixinSession(result?.session || null)
@@ -620,6 +852,10 @@ export default function ImPage() {
     if (!workspaceId) return
     const draft = sessionDrafts[session.id]
     if (!draft) return
+    if (draft.inboundActorMode === "specified_actor" && !draft.inboundActorId) {
+      setError("Select an actor for this session.")
+      return
+    }
 
     setSavingSessionId(session.id)
     setError(null)
@@ -629,10 +865,11 @@ export default function ImPage() {
         session.id,
         {
           outboundEnabled: draft.outboundEnabled,
-          defaultTargetParticipantId:
-            draft.defaultTargetParticipantId === UNASSIGNED_VALUE
-              ? null
-              : draft.defaultTargetParticipantId,
+          inboundActorMode: draft.inboundActorMode,
+          inboundActorId:
+            draft.inboundActorMode === "specified_actor"
+              ? draft.inboundActorId
+              : null,
         }
       )
       const updatedSession = result?.session
@@ -646,8 +883,8 @@ export default function ImPage() {
           ...current,
           [session.id]: {
             outboundEnabled: updatedSession.outboundEnabled,
-            defaultTargetParticipantId:
-              updatedSession.defaultTargetParticipantId || UNASSIGNED_VALUE,
+            inboundActorMode: updatedSession.inboundActorMode,
+            inboundActorId: updatedSession.inboundActorId || "",
           },
         }))
       }
@@ -664,12 +901,16 @@ export default function ImPage() {
     }
   }
 
-  async function handleSaveAccountOwner(account: TransportAccountSummary) {
+  async function handleSaveAccountSettings(account: TransportAccountSummary) {
     if (!workspaceId) return
-    const draft = accountOwnerDrafts[account.id]
+    const draft = accountSettingsDrafts[account.id]
     if (!draft) return
     if (draft.ownerScope === "workspace_user" && !draft.ownerUserId) {
       setError("Select a workspace member owner before saving the account.")
+      return
+    }
+    if (draft.inboundActorMode === "specified_actor" && !draft.inboundActorId) {
+      setError("Select an actor before saving the account.")
       return
     }
 
@@ -680,6 +921,11 @@ export default function ImPage() {
         ownerScope: draft.ownerScope,
         ownerUserId:
           draft.ownerScope === "workspace_user" ? draft.ownerUserId : null,
+        inboundActorMode: draft.inboundActorMode,
+        inboundActorId:
+          draft.inboundActorMode === "specified_actor"
+            ? draft.inboundActorId
+            : null,
       })
       const updatedAccount = result?.account
       if (updatedAccount) {
@@ -688,24 +934,60 @@ export default function ImPage() {
             entry.id === updatedAccount.id ? updatedAccount : entry
           )
         )
-        setAccountOwnerDrafts((current) => ({
+        setAccountSettingsDrafts((current) => ({
           ...current,
           [account.id]: {
             ownerScope: updatedAccount.ownerScope,
             ownerUserId: updatedAccount.ownerUserId || "",
+            inboundActorMode: updatedAccount.inboundActorMode,
+            inboundActorId: updatedAccount.inboundActorId || "",
           },
         }))
       }
-      toast.success("Transport account owner updated")
+      toast.success("Binding settings saved")
     } catch (saveError) {
-      console.error("Failed to update transport account owner:", saveError)
+      console.error("Failed to update transport account settings:", saveError)
       setError(
         saveError instanceof Error
           ? saveError.message
-          : "Failed to update transport account owner"
+          : "Failed to update transport account settings"
       )
     } finally {
       setSavingAccountId(null)
+    }
+  }
+
+  async function handleDisconnectAccount(account: TransportAccountSummary) {
+    if (!workspaceId || account.status !== "active") return
+    const confirmed = window.confirm(
+      "Disconnect this account? It will stop receiving and sending new messages."
+    )
+    if (!confirmed) return
+
+    setDisconnectingAccountId(account.id)
+    setError(null)
+    try {
+      const result = await api.updateTransportAccount(workspaceId, account.id, {
+        status: "disabled",
+      })
+      const updatedAccount = result?.account
+      if (updatedAccount) {
+        setAccounts((current) =>
+          current.map((entry) =>
+            entry.id === updatedAccount.id ? updatedAccount : entry
+          )
+        )
+      }
+      toast.success("Account disconnected")
+    } catch (disconnectError) {
+      console.error("Failed to disconnect transport account:", disconnectError)
+      setError(
+        disconnectError instanceof Error
+          ? disconnectError.message
+          : "Failed to disconnect transport account"
+      )
+    } finally {
+      setDisconnectingAccountId(null)
     }
   }
 
@@ -932,12 +1214,39 @@ export default function ImPage() {
                   ...current,
                   ownerScope: value,
                   ownerUserId: value === "workspace" ? "" : current.ownerUserId,
+                  inboundActorMode:
+                    value === "workspace" &&
+                    current.inboundActorMode === "follow_owner_chief_actor"
+                      ? "none"
+                      : current.inboundActorMode,
                 }))
               }
               onOwnerUserIdChange={(value) =>
                 setFeishuForm((current) => ({
                   ...current,
                   ownerUserId: value,
+                }))
+              }
+            />
+
+            <TransportAccountInboundActorFields
+              idPrefix="feishu"
+              ownerScope={feishuForm.ownerScope}
+              inboundActorMode={feishuForm.inboundActorMode}
+              inboundActorId={feishuForm.inboundActorId}
+              actors={actorOptions}
+              onInboundActorModeChange={(value) =>
+                setFeishuForm((current) => ({
+                  ...current,
+                  inboundActorMode: value,
+                  inboundActorId:
+                    value === "specified_actor" ? current.inboundActorId : "",
+                }))
+              }
+              onInboundActorIdChange={(value) =>
+                setFeishuForm((current) => ({
+                  ...current,
+                  inboundActorId: value,
                 }))
               }
             />
@@ -1005,12 +1314,39 @@ export default function ImPage() {
                   ...current,
                   ownerScope: value,
                   ownerUserId: value === "workspace" ? "" : current.ownerUserId,
+                  inboundActorMode:
+                    value === "workspace" &&
+                    current.inboundActorMode === "follow_owner_chief_actor"
+                      ? "none"
+                      : current.inboundActorMode,
                 }))
               }
               onOwnerUserIdChange={(value) =>
                 setWeixinForm((current) => ({
                   ...current,
                   ownerUserId: value,
+                }))
+              }
+            />
+
+            <TransportAccountInboundActorFields
+              idPrefix="weixin"
+              ownerScope={weixinForm.ownerScope}
+              inboundActorMode={weixinForm.inboundActorMode}
+              inboundActorId={weixinForm.inboundActorId}
+              actors={actorOptions}
+              onInboundActorModeChange={(value) =>
+                setWeixinForm((current) => ({
+                  ...current,
+                  inboundActorMode: value,
+                  inboundActorId:
+                    value === "specified_actor" ? current.inboundActorId : "",
+                }))
+              }
+              onInboundActorIdChange={(value) =>
+                setWeixinForm((current) => ({
+                  ...current,
+                  inboundActorId: value,
                 }))
               }
             />
@@ -1090,14 +1426,19 @@ export default function ImPage() {
             </div>
           ) : (
             accounts.map((account) => {
+              const accountBusy =
+                savingAccountId === account.id ||
+                disconnectingAccountId === account.id
               const webhookUrl =
                 account.transportKind === "feishu" &&
                 account.connectionMode === "webhook"
                   ? buildWebhookUrl(account.id)
                   : ""
-              const draft = accountOwnerDrafts[account.id] || {
+              const draft = accountSettingsDrafts[account.id] || {
                 ownerScope: account.ownerScope,
                 ownerUserId: account.ownerUserId || "",
+                inboundActorMode: account.inboundActorMode,
+                inboundActorId: account.inboundActorId || "",
               }
               const savedOwnerLabel = transportAccountOwnerLabel(
                 account,
@@ -1112,6 +1453,21 @@ export default function ImPage() {
                 workspaceMemberById,
                 workspaceName
               )
+              const savedInboundActorLabel = transportAccountInboundActorLabel(
+                account,
+                actorById
+              )
+              const draftInboundActorLabel =
+                draft.inboundActorMode === "specified_actor"
+                  ? draft.inboundActorId
+                    ? actorOptionLabel(
+                        actorById.get(draft.inboundActorId) || {
+                          actorId: draft.inboundActorId,
+                          name: draft.inboundActorId,
+                        }
+                      )
+                    : "Select actor"
+                  : prettyAccountInboundActorMode(draft.inboundActorMode)
               return (
                 <div
                   key={account.id}
@@ -1140,6 +1496,9 @@ export default function ImPage() {
                       Owner: {savedOwnerLabel}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
+                      Inbound actor: {savedInboundActorLabel}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
                       Updated: {formatDateTime(account.updatedAt)}
                     </div>
                   </div>
@@ -1165,18 +1524,17 @@ export default function ImPage() {
                     <div className="grid gap-3 rounded-xl border bg-background/80 p-3">
                       <div>
                         <div className="text-sm font-medium text-foreground">
-                          Account owner
+                          Binding settings
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          Change whether this login belongs to the workspace or
-                          a specific workspace member.
+                          Owner and default inbound actor.
                         </div>
                       </div>
                       <div className="grid gap-3 md:grid-cols-[12rem_minmax(0,1fr)]">
                         <Select
                           value={draft.ownerScope}
                           onValueChange={(value) =>
-                            setAccountOwnerDrafts((current) => ({
+                            setAccountSettingsDrafts((current) => ({
                               ...current,
                               [account.id]: {
                                 ...draft,
@@ -1185,10 +1543,16 @@ export default function ImPage() {
                                   value === "workspace"
                                     ? ""
                                     : draft.ownerUserId,
+                                inboundActorMode:
+                                  value === "workspace" &&
+                                  draft.inboundActorMode ===
+                                    "follow_owner_chief_actor"
+                                    ? "none"
+                                    : draft.inboundActorMode,
                               },
                             }))
                           }
-                          disabled={savingAccountId === account.id}
+                          disabled={accountBusy}
                         >
                           <SelectTrigger>
                             <SelectValue />
@@ -1204,7 +1568,7 @@ export default function ImPage() {
                           <Select
                             value={draft.ownerUserId || UNASSIGNED_VALUE}
                             onValueChange={(value) =>
-                              setAccountOwnerDrafts((current) => ({
+                              setAccountSettingsDrafts((current) => ({
                                 ...current,
                                 [account.id]: {
                                   ...draft,
@@ -1214,7 +1578,7 @@ export default function ImPage() {
                               }))
                             }
                             disabled={
-                              savingAccountId === account.id ||
+                              accountBusy ||
                               sortedWorkspaceMembers.length === 0
                             }
                           >
@@ -1237,20 +1601,64 @@ export default function ImPage() {
                           </Select>
                         ) : null}
                       </div>
+                      <TransportAccountInboundActorFields
+                        idPrefix={`account-${account.id}`}
+                        ownerScope={draft.ownerScope}
+                        inboundActorMode={draft.inboundActorMode}
+                        inboundActorId={draft.inboundActorId}
+                        actors={actorOptions}
+                        onInboundActorModeChange={(value) =>
+                          setAccountSettingsDrafts((current) => ({
+                            ...current,
+                            [account.id]: {
+                              ...draft,
+                              inboundActorMode: value,
+                              inboundActorId:
+                                value === "specified_actor"
+                                  ? draft.inboundActorId
+                                  : "",
+                            },
+                          }))
+                        }
+                        onInboundActorIdChange={(value) =>
+                          setAccountSettingsDrafts((current) => ({
+                            ...current,
+                            [account.id]: {
+                              ...draft,
+                              inboundActorId: value,
+                            },
+                          }))
+                        }
+                      />
                       <div className="flex items-center justify-between gap-3">
-                        <div className="text-xs text-muted-foreground">
-                          Effective owner: {draftOwnerLabel}
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                          <div>Effective owner: {draftOwnerLabel}</div>
+                          <div>Effective inbound actor: {draftInboundActorLabel}</div>
                         </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void handleSaveAccountOwner(account)}
-                          disabled={savingAccountId === account.id}
-                        >
-                          {savingAccountId === account.id
-                            ? "Saving..."
-                            : "Save owner"}
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          {account.status === "active" ? (
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => void handleDisconnectAccount(account)}
+                              disabled={accountBusy}
+                            >
+                              {disconnectingAccountId === account.id
+                                ? "Disconnecting..."
+                                : "Disconnect"}
+                            </Button>
+                          ) : null}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void handleSaveAccountSettings(account)}
+                            disabled={accountBusy}
+                          >
+                            {savingAccountId === account.id
+                              ? "Saving..."
+                              : "Save"}
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1284,12 +1692,9 @@ export default function ImPage() {
             sessions.map((session) => {
               const draft = sessionDrafts[session.id] || {
                 outboundEnabled: session.outboundEnabled,
-                defaultTargetParticipantId:
-                  session.defaultTargetParticipantId || UNASSIGNED_VALUE,
+                inboundActorMode: session.inboundActorMode,
+                inboundActorId: session.inboundActorId || "",
               }
-              const actorOptions = session.conversationId
-                ? sessionActorOptions[session.conversationId] || []
-                : []
               return (
                 <div
                   key={session.id}
@@ -1322,6 +1727,9 @@ export default function ImPage() {
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
                       Last outbound: {formatDateTime(session.lastOutboundAt)}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Inbound actor: {sessionInboundActorLabel(session, actorById)}
                     </div>
                     <div className="mt-3 text-sm">
                       <div className="font-medium text-foreground">
@@ -1365,44 +1773,21 @@ export default function ImPage() {
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor={`session-default-target-${session.id}`}>
-                        Default inbound actor
-                      </Label>
-                      <Select
-                        value={draft.defaultTargetParticipantId}
-                        onValueChange={(value) =>
+                      <TransportSessionInboundActorFields
+                        sessionId={session.id}
+                        draft={draft}
+                        actors={actorOptions}
+                        disabled={!session.conversationId}
+                        onChange={(next) =>
                           setSessionDrafts((current) => ({
                             ...current,
-                            [session.id]: {
-                              ...draft,
-                              defaultTargetParticipantId: value,
-                            },
+                            [session.id]: next,
                           }))
                         }
-                        disabled={!session.conversationId}
-                      >
-                        <SelectTrigger
-                          id={`session-default-target-${session.id}`}
-                        >
-                          <SelectValue placeholder="No default actor" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={UNASSIGNED_VALUE}>
-                            No default actor
-                          </SelectItem>
-                          {actorOptions.map((option) => (
-                            <SelectItem
-                              key={option.memberId}
-                              value={option.memberId}
-                            >
-                              {option.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      />
                       <div className="text-xs text-muted-foreground">
-                        Inbound IM messages without an explicit internal target
-                        will wake this actor.
+                        Choose whether this session follows the binding, uses a
+                        specific actor, or has no default actor.
                       </div>
                     </div>
 

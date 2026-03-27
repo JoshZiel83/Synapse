@@ -741,6 +741,9 @@ CREATE TABLE transport_accounts (
   owner_scope VARCHAR(30) NOT NULL DEFAULT 'workspace'
     CHECK (owner_scope IN ('workspace', 'workspace_user')),
   owner_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  inbound_actor_mode VARCHAR(40) NOT NULL DEFAULT 'none'
+    CHECK (inbound_actor_mode IN ('none', 'specified_actor', 'follow_owner_chief_actor')),
+  inbound_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   connection_mode VARCHAR(30) NOT NULL
     CHECK (connection_mode IN ('webhook', 'long_connection')),
   status VARCHAR(20) NOT NULL DEFAULT 'active'
@@ -753,6 +756,14 @@ CREATE TABLE transport_accounts (
   CHECK (
     (owner_scope = 'workspace' AND owner_user_id IS NULL) OR
     (owner_scope = 'workspace_user' AND owner_user_id IS NOT NULL)
+  ),
+  CHECK (
+    owner_scope = 'workspace_user' OR
+    inbound_actor_mode <> 'follow_owner_chief_actor'
+  ),
+  CHECK (
+    (inbound_actor_mode = 'specified_actor' AND inbound_actor_id IS NOT NULL) OR
+    (inbound_actor_mode <> 'specified_actor' AND inbound_actor_id IS NULL)
   ),
   UNIQUE(workspace_id, transport_kind, account_key)
 );
@@ -787,10 +798,16 @@ CREATE TABLE conversation_transport_bindings (
   transport_account_id UUID NOT NULL REFERENCES transport_accounts(id) ON DELETE CASCADE,
   transport_endpoint_id UUID NOT NULL REFERENCES transport_endpoints(id) ON DELETE CASCADE,
   outbound_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-  default_target_member_id UUID REFERENCES conversation_members(id) ON DELETE SET NULL,
+  inbound_actor_mode VARCHAR(40) NOT NULL DEFAULT 'inherit_account'
+    CHECK (inbound_actor_mode IN ('inherit_account', 'none', 'specified_actor')),
+  inbound_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (
+    (inbound_actor_mode = 'specified_actor' AND inbound_actor_id IS NOT NULL) OR
+    (inbound_actor_mode <> 'specified_actor' AND inbound_actor_id IS NULL)
+  ),
   UNIQUE(conversation_id),
   UNIQUE(transport_endpoint_id)
 );

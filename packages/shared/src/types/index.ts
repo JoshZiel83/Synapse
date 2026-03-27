@@ -2426,6 +2426,14 @@ export interface TransportConnectorCapability {
 }
 
 export type TransportAccountOwnerScope = "workspace" | "workspace_user";
+export type TransportAccountInboundActorMode =
+  | "none"
+  | "specified_actor"
+  | "follow_owner_chief_actor";
+export type TransportConversationInboundActorMode =
+  | "inherit_account"
+  | "none"
+  | "specified_actor";
 
 export interface TransportAccountSummary {
   id: UUID;
@@ -2435,6 +2443,8 @@ export interface TransportAccountSummary {
   displayName: string;
   ownerScope: TransportAccountOwnerScope;
   ownerUserId?: UUID;
+  inboundActorMode: TransportAccountInboundActorMode;
+  inboundActorId?: UUID;
   connectionMode: TransportConnectionMode;
   status: TransportAccountStatus;
   credentials?: Record<string, unknown>;
@@ -2463,7 +2473,8 @@ export interface ConversationTransportBindingSummary {
   workspaceId: UUID;
   transportKind: TransportKind;
   outboundEnabled: boolean;
-  defaultTargetParticipantId?: UUID;
+  inboundActorMode: TransportConversationInboundActorMode;
+  inboundActorId?: UUID;
   metadata: Record<string, unknown>;
   createdAt: Timestamp;
   updatedAt: Timestamp;
@@ -2476,7 +2487,8 @@ export interface TransportSessionSummary {
   workspaceId: UUID;
   transportKind: TransportKind;
   outboundEnabled: boolean;
-  defaultTargetParticipantId?: UUID;
+  inboundActorMode: TransportConversationInboundActorMode;
+  inboundActorId?: UUID;
   metadata: Record<string, unknown>;
   createdAt: Timestamp;
   updatedAt: Timestamp;
@@ -2508,6 +2520,14 @@ export interface WeixinQrLoginSessionSummary {
   updatedAt: Timestamp;
   expiresAt: Timestamp;
   transportAccount?: TransportAccountSummary;
+}
+
+export interface CurrentUserWeixinBindingSummary {
+  account: TransportAccountSummary;
+  scannerUserId?: string;
+  externalUser?: TransportExternalUserSummary;
+  pendingAutoLinkUserId?: UUID;
+  pendingAutoLinkUserName?: string;
 }
 
 export interface TransportExternalUserSessionRef {

@@ -2,7 +2,13 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import type { ConversationTransportBindingSummary, TransportKind } from '@synapse/shared';
+import type {
+  Actor,
+  ConversationTransportBindingSummary,
+  TransportAccountInboundActorMode,
+  TransportConversationInboundActorMode,
+  TransportKind,
+} from '@synapse/shared';
 import { ArrowUpRight, Bot, Link2, MessageCircle, RefreshCw } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -29,6 +35,28 @@ function prettyConnectionMode(mode: 'webhook' | 'long_connection') {
   return mode === 'webhook' ? 'Webhook' : 'Long connection';
 }
 
+function prettyAccountInboundActorMode(mode: TransportAccountInboundActorMode) {
+  switch (mode) {
+    case 'follow_owner_chief_actor':
+      return 'Follow owner chief actor';
+    case 'specified_actor':
+      return 'Specific actor';
+    default:
+      return 'No default actor';
+  }
+}
+
+function prettySessionInboundActorMode(mode: TransportConversationInboundActorMode) {
+  switch (mode) {
+    case 'inherit_account':
+      return 'Follow binding setting';
+    case 'specified_actor':
+      return 'Specific actor';
+    default:
+      return 'No default actor';
+  }
+}
+
 function buildWebhookUrl(accountId: string) {
   if (typeof window === 'undefined') return '';
   try {
@@ -49,16 +77,43 @@ export default function ConversationTransportBindingCard({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [binding, setBinding] = useState<ConversationTransportBindingSummary | null>(null);
+  const [actors, setActors] = useState<Actor[]>([]);
 
-  const defaultInboundActorName = useMemo(() => {
-    if (!binding?.defaultTargetParticipantId) return null;
-    const target = group.members.find(
-      (member) =>
-        member.type === 'actor' &&
-        member.memberId === binding.defaultTargetParticipantId,
-    );
-    return target?.name || null;
-  }, [binding?.defaultTargetParticipantId, group.members]);
+  const actorById = useMemo(
+    () =>
+      new Map(
+        actors
+          .filter((actor) => actor.isActive)
+          .map((actor) => [actor.id, actor.definition.name]),
+      ),
+    [actors],
+  );
+
+  const bindingInboundActorLabel = useMemo(() => {
+    if (!binding) return null;
+    if (binding.inboundActorMode === 'specified_actor') {
+      return (
+        (binding.inboundActorId ? actorById.get(binding.inboundActorId) : null) ||
+        binding.inboundActorId ||
+        'Unknown actor'
+      );
+    }
+    return prettySessionInboundActorMode(binding.inboundActorMode);
+  }, [actorById, binding]);
+
+  const accountInboundActorLabel = useMemo(() => {
+    if (!binding) return null;
+    if (binding.account.inboundActorMode === 'specified_actor') {
+      return (
+        (binding.account.inboundActorId
+          ? actorById.get(binding.account.inboundActorId)
+          : null) ||
+        binding.account.inboundActorId ||
+        'Unknown actor'
+      );
+    }
+    return prettyAccountInboundActorMode(binding.account.inboundActorMode);
+  }, [actorById, binding]);
 
   const webhookUrl =
     binding?.transportKind === 'feishu' && binding.account.connectionMode === 'webhook'
@@ -69,8 +124,15 @@ export default function ConversationTransportBindingCard({
     setLoading(true);
     setError(null);
     try {
-      const result = await api.getGroupTransportBinding(workspaceId, group.id);
-      setBinding(result?.binding || null);
+      const [bindingResult, actorsResult] = await Promise.all([
+        api.getGroupTransportBinding(workspaceId, group.id),
+        api.getActors(workspaceId).catch((loadError) => {
+          console.error('Failed to load actors for IM binding card:', loadError);
+          return [];
+        }),
+      ]);
+      setBinding(bindingResult?.binding || null);
+      setActors(Array.isArray(actorsResult) ? (actorsResult as Actor[]) : []);
     } catch (loadError) {
       console.error('Failed to load conversation transport binding:', loadError);
       setError(loadError instanceof Error ? loadError.message : 'Failed to load IM session');
@@ -152,10 +214,12 @@ export default function ConversationTransportBindingCard({
                   Account: {binding.account.displayName}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  Default inbound actor:{' '}
-                  <span className="text-foreground">
-                    {defaultInboundActorName || 'None'}
-                  </span>
+                  Session inbound actor:{' '}
+                  <span className="text-foreground">{bindingInboundActorLabel || 'None'}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Binding inbound actor:{' '}
+                  <span className="text-foreground">{accountInboundActorLabel || 'None'}</span>
                 </div>
               </div>
 

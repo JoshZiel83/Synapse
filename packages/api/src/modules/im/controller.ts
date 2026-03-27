@@ -4,12 +4,16 @@ import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
 import { requireRequestAction } from "../access/guards.js";
 import { getGroup } from "../group/service.js";
+import { listMembers } from "../workspace/service.js";
 import {
   createTransportAccount,
   getConversationTransportBinding,
+  getCurrentUserWeixinBinding,
   listTransportExternalUsers,
   listTransportSessions,
   listTransportAccounts,
+  setCurrentUserWeixinBindingAutoLink,
+  linkCurrentUserWeixinBinding,
   setTransportAddressLinkedUser,
   updateTransportSessionSettings,
   updateTransportAccount,
@@ -17,8 +21,10 @@ import {
 import { listTransportConnectorCapabilities } from "./connectors/index.js";
 import {
   getWeixinQrLoginSession,
+  getWeixinQrLoginSessionOwner,
   startWeixinQrLoginSession,
 } from "./weixin-qr.js";
+import { refreshTransportRuntimeManager } from "./runtime.js";
 
 const transportAccountOwnerCreateShape = {
   ownerScope: z.enum(["workspace", "workspace_user"]).default("workspace"),
@@ -28,6 +34,33 @@ const transportAccountOwnerCreateShape = {
 const transportAccountOwnerUpdateShape = {
   ownerScope: z.enum(["workspace", "workspace_user"]).optional(),
   ownerUserId: z.string().uuid().nullable().optional(),
+};
+
+const transportAccountInboundActorModeSchema = z.enum([
+  "none",
+  "specified_actor",
+  "follow_owner_chief_actor",
+]);
+
+const transportConversationInboundActorModeSchema = z.enum([
+  "inherit_account",
+  "none",
+  "specified_actor",
+]);
+
+const transportAccountInboundActorCreateShape = {
+  inboundActorMode: transportAccountInboundActorModeSchema.optional(),
+  inboundActorId: z.string().uuid().nullable().optional(),
+};
+
+const transportAccountInboundActorUpdateShape = {
+  inboundActorMode: transportAccountInboundActorModeSchema.optional(),
+  inboundActorId: z.string().uuid().nullable().optional(),
+};
+
+const transportConversationInboundActorUpdateShape = {
+  inboundActorMode: transportConversationInboundActorModeSchema.optional(),
+  inboundActorId: z.string().uuid().nullable().optional(),
 };
 
 function validateTransportAccountOwnerCreate(
@@ -69,6 +102,118 @@ function validateTransportAccountOwnerUpdate(
   }
 }
 
+function validateTransportAccountInboundActorCreate(
+  value: {
+    ownerScope: "workspace" | "workspace_user";
+    inboundActorMode?: "none" | "specified_actor" | "follow_owner_chief_actor";
+    inboundActorId?: string | null;
+  },
+  ctx: z.RefinementCtx,
+) {
+  if (!value.inboundActorMode && value.inboundActorId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "inboundActorId requires inboundActorMode=specified_actor",
+      path: ["inboundActorId"],
+    });
+  }
+  if (value.inboundActorMode === "specified_actor" && !value.inboundActorId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "specified_actor requires inboundActorId",
+      path: ["inboundActorId"],
+    });
+  }
+  if (
+    value.inboundActorMode &&
+    value.inboundActorMode !== "specified_actor" &&
+    value.inboundActorId
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Only specified_actor can include inboundActorId",
+      path: ["inboundActorId"],
+    });
+  }
+  if (
+    value.inboundActorMode === "follow_owner_chief_actor" &&
+    value.ownerScope !== "workspace_user"
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "follow_owner_chief_actor requires a workspace_user-owned account",
+      path: ["inboundActorMode"],
+    });
+  }
+}
+
+function validateTransportAccountInboundActorUpdate(
+  value: {
+    ownerScope?: "workspace" | "workspace_user";
+    inboundActorMode?: "none" | "specified_actor" | "follow_owner_chief_actor";
+    inboundActorId?: string | null;
+  },
+  ctx: z.RefinementCtx,
+) {
+  if (value.inboundActorMode === "specified_actor" && !value.inboundActorId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "specified_actor requires inboundActorId",
+      path: ["inboundActorId"],
+    });
+  }
+  if (
+    value.inboundActorMode &&
+    value.inboundActorMode !== "specified_actor" &&
+    value.inboundActorId
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Only specified_actor can include inboundActorId",
+      path: ["inboundActorId"],
+    });
+  }
+  if (
+    value.inboundActorMode === "follow_owner_chief_actor" &&
+    value.ownerScope === "workspace"
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "follow_owner_chief_actor requires a workspace_user-owned account",
+      path: ["inboundActorMode"],
+    });
+  }
+}
+
+function validateTransportConversationInboundActorUpdate(
+  value: {
+    inboundActorMode?: "inherit_account" | "none" | "specified_actor";
+    inboundActorId?: string | null;
+  },
+  ctx: z.RefinementCtx,
+) {
+  if (value.inboundActorMode === "specified_actor" && !value.inboundActorId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "specified_actor requires inboundActorId",
+      path: ["inboundActorId"],
+    });
+  }
+  if (
+    value.inboundActorMode &&
+    value.inboundActorMode !== "specified_actor" &&
+    value.inboundActorId
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Only specified_actor can include inboundActorId",
+      path: ["inboundActorId"],
+    });
+  }
+}
+
 const accountSchema = z
   .object({
     transportKind: z.enum(["feishu", "weixin"]),
@@ -80,8 +225,10 @@ const accountSchema = z
     config: z.record(z.unknown()).optional(),
     metadata: z.record(z.unknown()).optional(),
     ...transportAccountOwnerCreateShape,
+    ...transportAccountInboundActorCreateShape,
   })
-  .superRefine(validateTransportAccountOwnerCreate);
+  .superRefine(validateTransportAccountOwnerCreate)
+  .superRefine(validateTransportAccountInboundActorCreate);
 
 const updateAccountSchema = z
   .object({
@@ -92,8 +239,10 @@ const updateAccountSchema = z
     config: z.record(z.unknown()).optional(),
     metadata: z.record(z.unknown()).optional(),
     ...transportAccountOwnerUpdateShape,
+    ...transportAccountInboundActorUpdateShape,
   })
-  .superRefine(validateTransportAccountOwnerUpdate);
+  .superRefine(validateTransportAccountOwnerUpdate)
+  .superRefine(validateTransportAccountInboundActorUpdate);
 
 const feishuAccountSchema = z
   .object({
@@ -106,8 +255,10 @@ const feishuAccountSchema = z
     encryptKey: z.string().trim().max(255).optional(),
     status: z.enum(["active", "disabled", "error"]).optional(),
     ...transportAccountOwnerCreateShape,
+    ...transportAccountInboundActorCreateShape,
   })
-  .superRefine(validateTransportAccountOwnerCreate);
+  .superRefine(validateTransportAccountOwnerCreate)
+  .superRefine(validateTransportAccountInboundActorCreate);
 
 const updateFeishuAccountSchema = z
   .object({
@@ -120,14 +271,18 @@ const updateFeishuAccountSchema = z
     encryptKey: z.string().trim().max(255).optional(),
     status: z.enum(["active", "disabled", "error"]).optional(),
     ...transportAccountOwnerUpdateShape,
+    ...transportAccountInboundActorUpdateShape,
   })
-  .superRefine(validateTransportAccountOwnerUpdate);
+  .superRefine(validateTransportAccountOwnerUpdate)
+  .superRefine(validateTransportAccountInboundActorUpdate);
 
-const transportSessionSettingsSchema = z.object({
-  outboundEnabled: z.boolean().optional(),
-  defaultTargetParticipantId: z.string().uuid().optional().nullable(),
-  metadata: z.record(z.unknown()).optional(),
-});
+const transportSessionSettingsSchema = z
+  .object({
+    outboundEnabled: z.boolean().optional(),
+    metadata: z.record(z.unknown()).optional(),
+    ...transportConversationInboundActorUpdateShape,
+  })
+  .superRefine(validateTransportConversationInboundActorUpdate);
 
 const weixinQrSessionSchema = z
   .object({
@@ -135,10 +290,16 @@ const weixinQrSessionSchema = z
     baseUrl: z.string().trim().url().optional(),
     botType: z.string().trim().max(32).optional(),
     ...transportAccountOwnerCreateShape,
+    ...transportAccountInboundActorCreateShape,
   })
-  .superRefine(validateTransportAccountOwnerCreate);
+  .superRefine(validateTransportAccountOwnerCreate)
+  .superRefine(validateTransportAccountInboundActorCreate);
 
 const linkedUserSchema = z.object({
+  userId: z.string().uuid().nullable(),
+});
+
+const bindingAutoLinkSchema = z.object({
   userId: z.string().uuid().nullable(),
 });
 
@@ -183,6 +344,12 @@ async function requireConversationAction(
   );
   if (!allowed) return null;
   return group;
+}
+
+async function refreshTransportRuntimeState() {
+  await refreshTransportRuntimeManager().catch((error) => {
+    console.error("[im] Failed to refresh transport runtime manager:", error);
+  });
 }
 
 export default async function imController(app: FastifyInstance) {
@@ -262,6 +429,173 @@ export default async function imController(app: FastifyInstance) {
     },
   );
 
+  app.get<{ Params: { workspaceId: string } }>(
+    "/api/v1/workspaces/:workspaceId/im/me/weixin-binding",
+    async (request, reply) => {
+      const allowed = await requireWorkspaceAction(
+        request,
+        reply,
+        "workspace.view",
+        "Not allowed to access WeChat binding in this workspace",
+      );
+      if (!allowed) return;
+
+      const binding = await getCurrentUserWeixinBinding({
+        workspaceId: request.params.workspaceId,
+        userId: (request as any).user!.userId,
+      });
+      return reply.send({ binding });
+    },
+  );
+
+  app.get<{ Params: { workspaceId: string } }>(
+    "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/candidates",
+    async (request, reply) => {
+      const allowed = await requireWorkspaceAction(
+        request,
+        reply,
+        "workspace.view",
+        "Not allowed to access WeChat binding in this workspace",
+      );
+      if (!allowed) return;
+
+      const members = await listMembers(request.params.workspaceId);
+      return reply.send({ data: members });
+    },
+  );
+
+  app.post<{ Params: { workspaceId: string } }>(
+    "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/qr",
+    async (request, reply) => {
+      const allowed = await requireWorkspaceAction(
+        request,
+        reply,
+        "workspace.view",
+        "Not allowed to bind WeChat in this workspace",
+      );
+      if (!allowed) return;
+
+      const { workspaceId } = request.params;
+      const userId = (request as any).user!.userId as string;
+      const existing = await getCurrentUserWeixinBinding({
+        workspaceId,
+        userId,
+      });
+      if (existing) {
+        return reply.status(409).send({ error: "WeChat already bound" });
+      }
+
+      const session = await startWeixinQrLoginSession({
+        workspaceId,
+        ownerScope: "workspace_user",
+        ownerUserId: userId,
+        inboundActorMode: "follow_owner_chief_actor",
+      });
+      return reply.status(201).send({ session });
+    },
+  );
+
+  app.get<{
+    Params: { workspaceId: string; sessionId: string };
+  }>(
+    "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/qr/:sessionId",
+    async (request, reply) => {
+      const allowed = await requireWorkspaceAction(
+        request,
+        reply,
+        "workspace.view",
+        "Not allowed to access WeChat binding in this workspace",
+      );
+      if (!allowed) return;
+
+      const { workspaceId, sessionId } = request.params;
+      const userId = (request as any).user!.userId as string;
+      const owner = getWeixinQrLoginSessionOwner({ workspaceId, sessionId });
+      if (
+        !owner ||
+        owner.ownerScope !== "workspace_user" ||
+        owner.ownerUserId !== userId
+      ) {
+        return reply.status(404).send({ error: "Weixin QR session not found" });
+      }
+
+      const session = await getWeixinQrLoginSession({
+        workspaceId,
+        sessionId,
+      });
+      if (!session) {
+        return reply.status(404).send({ error: "Weixin QR session not found" });
+      }
+      return reply.send({ session });
+    },
+  );
+
+  app.post<{ Params: { workspaceId: string } }>(
+    "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/link",
+    async (request, reply) => {
+      const allowed = await requireWorkspaceAction(
+        request,
+        reply,
+        "workspace.view",
+        "Not allowed to link WeChat in this workspace",
+      );
+      if (!allowed) return;
+
+      try {
+        const binding = await linkCurrentUserWeixinBinding({
+          workspaceId: request.params.workspaceId,
+          userId: (request as any).user!.userId,
+        });
+        return reply.send({ binding });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to link WeChat";
+        if (message === "WeChat binding not found") {
+          return reply.status(404).send({ error: message });
+        }
+        if (message === "WeChat user is already linked to another workspace member") {
+          return reply.status(409).send({ error: message });
+        }
+        return reply.status(400).send({ error: message });
+      }
+    },
+  );
+
+  app.put<{ Params: { workspaceId: string }; Body: unknown }>(
+    "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/auto-link",
+    async (request, reply) => {
+      const allowed = await requireWorkspaceAction(
+        request,
+        reply,
+        "workspace.view",
+        "Not allowed to configure WeChat binding in this workspace",
+      );
+      if (!allowed) return;
+
+      try {
+        const body = bindingAutoLinkSchema.parse(request.body);
+        const binding = await setCurrentUserWeixinBindingAutoLink({
+          workspaceId: request.params.workspaceId,
+          userId: (request as any).user!.userId,
+          targetUserId: body.userId,
+        });
+        return reply.send({ binding });
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Failed to configure WeChat binding";
+        if (message === "WeChat binding not found") {
+          return reply.status(404).send({ error: message });
+        }
+        if (message === "Workspace user not found") {
+          return reply.status(404).send({ error: message });
+        }
+        return reply.status(400).send({ error: message });
+      }
+    },
+  );
+
   app.post<{ Params: { workspaceId: string }; Body: unknown }>(
     "/api/v1/workspaces/:workspaceId/im/accounts/feishu",
     async (request, reply) => {
@@ -297,8 +631,11 @@ export default async function imController(app: FastifyInstance) {
         ownerUserId: body.ownerUserId ?? null,
         connectionMode: body.connectionMode,
         status: body.status,
+        inboundActorMode: body.inboundActorMode,
+        inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
         credentials,
       });
+      await refreshTransportRuntimeState();
       return reply.status(201).send({ account });
     },
   );
@@ -323,10 +660,8 @@ export default async function imController(app: FastifyInstance) {
         workspaceId,
         transportEndpointId: sessionId,
         outboundEnabled: body.outboundEnabled,
-        defaultTargetParticipantId:
-          body.defaultTargetParticipantId === null
-            ? null
-            : body.defaultTargetParticipantId,
+        inboundActorMode: body.inboundActorMode,
+        inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
         metadata: body.metadata,
       });
       return reply.send({ session });
@@ -407,8 +742,11 @@ export default async function imController(app: FastifyInstance) {
         ownerUserId: body.ownerUserId,
         connectionMode: body.connectionMode,
         status: body.status,
+        inboundActorMode: body.inboundActorMode,
+        inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
         credentials,
       });
+      await refreshTransportRuntimeState();
       return reply.send({ account });
     },
   );
@@ -433,6 +771,8 @@ export default async function imController(app: FastifyInstance) {
         botType: body.botType,
         ownerScope: body.ownerScope,
         ownerUserId: body.ownerUserId ?? null,
+        inboundActorMode: body.inboundActorMode,
+        inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
       });
       return reply.status(201).send({ session });
     },
@@ -484,10 +824,13 @@ export default async function imController(app: FastifyInstance) {
         ownerUserId: body.ownerUserId ?? null,
         connectionMode: body.connectionMode,
         status: body.status,
+        inboundActorMode: body.inboundActorMode,
+        inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
         credentials: body.credentials,
         config: body.config,
         metadata: body.metadata,
       });
+      await refreshTransportRuntimeState();
       return reply.status(201).send({ account });
     },
   );
@@ -516,10 +859,13 @@ export default async function imController(app: FastifyInstance) {
         ownerUserId: body.ownerUserId,
         connectionMode: body.connectionMode,
         status: body.status,
+        inboundActorMode: body.inboundActorMode,
+        inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
         credentials: body.credentials,
         config: body.config,
         metadata: body.metadata,
       });
+      await refreshTransportRuntimeState();
       return reply.send({ account });
     },
   );

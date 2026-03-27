@@ -274,6 +274,14 @@ export function startImTransportDeliveryWorker() {
       if (link.deliveryStatus !== "pending") {
         return { success: true, reason: "already processed" };
       }
+      if (link.account.status !== "active") {
+        await updateTransportMessageLinkStatus({
+          linkId,
+          status: "skipped",
+          metadata: { skippedReason: "account_disabled" },
+        });
+        return { success: true, reason: "account disabled" };
+      }
 
       const binding = await getConversationTransportBinding({
         workspaceId: link.workspaceId,
@@ -281,6 +289,7 @@ export function startImTransportDeliveryWorker() {
       });
       if (
         !binding ||
+        binding.account.status !== "active" ||
         !binding.outboundEnabled ||
         binding.account.id !== link.transportAccountId ||
         binding.endpoint.id !== link.transportEndpointId
@@ -290,9 +299,13 @@ export function startImTransportDeliveryWorker() {
           status: "skipped",
           metadata: {
             skippedReason:
-              !binding || !binding.outboundEnabled
-                ? "binding_disabled"
-                : "binding_changed",
+              !binding
+                ? "binding_missing"
+                : binding.account.status !== "active"
+                  ? "account_disabled"
+                  : !binding.outboundEnabled
+                    ? "binding_disabled"
+                    : "binding_changed",
           },
         });
         return { success: true, reason: "binding unavailable" };

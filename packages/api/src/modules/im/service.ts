@@ -1,7 +1,10 @@
 import type {
+  CurrentUserWeixinBindingSummary,
   ConversationTransportBindingSummary,
+  TransportAccountInboundActorMode,
   TransportAccountSummary,
   TransportAccountOwnerScope,
+  TransportConversationInboundActorMode,
   TransportConnectionMode,
   TransportDeliveryStatus,
   TransportEndpointSummary,
@@ -122,6 +125,13 @@ function normalizeAccountRow(row: any): TransportAccountSummary {
       (row.owner_scope as TransportAccountOwnerScope | undefined) ||
       "workspace",
     ownerUserId: row.owner_user_id || undefined,
+    inboundActorMode:
+      (row.account_inbound_actor_mode as
+        | TransportAccountInboundActorMode
+        | undefined) ||
+      (row.inbound_actor_mode as TransportAccountInboundActorMode | undefined) ||
+      "none",
+    inboundActorId: row.account_inbound_actor_id || row.inbound_actor_id || undefined,
     connectionMode: row.connection_mode,
     status: row.status,
     credentials: parseJsonObject(row.credentials),
@@ -158,7 +168,10 @@ function normalizeBindingRow(row: any): ConversationTransportBindingSummary {
     workspaceId: row.workspace_id,
     transportKind: row.transport_kind,
     outboundEnabled: Boolean(row.outbound_enabled),
-    defaultTargetParticipantId: row.default_target_member_id || undefined,
+    inboundActorMode:
+      (row.inbound_actor_mode as TransportConversationInboundActorMode | undefined) ||
+      "inherit_account",
+    inboundActorId: row.inbound_actor_id || undefined,
     metadata: parseJsonObject(row.binding_metadata || row.metadata),
     createdAt: row.binding_created_at || row.created_at,
     updatedAt: row.binding_updated_at || row.updated_at,
@@ -178,7 +191,10 @@ function normalizeTransportSessionRow(row: any): TransportSessionSummary {
     workspaceId,
     transportKind: row.transport_kind,
     outboundEnabled: Boolean(row.outbound_enabled),
-    defaultTargetParticipantId: row.default_target_member_id || undefined,
+    inboundActorMode:
+      (row.inbound_actor_mode as TransportConversationInboundActorMode | undefined) ||
+      "inherit_account",
+    inboundActorId: row.inbound_actor_id || undefined,
     metadata: parseJsonObject(
       row.binding_metadata || row.endpoint_metadata || row.metadata,
     ),
@@ -216,6 +232,49 @@ function normalizeTransportExternalUserRow(
   };
 }
 
+function pickCurrentWeixinExternalUser(params: {
+  externalUsers: TransportExternalUserSummary[];
+  scannerUserId?: string;
+}) {
+  if (params.scannerUserId) {
+    return (
+      params.externalUsers.find(
+        (externalUser) => externalUser.externalId === params.scannerUserId,
+      ) || null
+    );
+  }
+  return params.externalUsers[0] || null;
+}
+
+function readPendingAutoLinkUserId(metadata: Record<string, unknown>) {
+  return readTrimmedString(metadata, "pendingAutoLinkUserId");
+}
+
+async function assertWorkspaceActor(params: {
+  workspaceId: string;
+  actorId?: string | null;
+  label: string;
+}) {
+  const actorId = params.actorId || null;
+  if (!actorId) {
+    throw new Error(`${params.label} is required`);
+  }
+
+  const result = await query(
+    `SELECT id
+     FROM actors
+     WHERE id = $1
+       AND workspace_id = $2
+       AND is_active = TRUE
+     LIMIT $3`,
+    [actorId, params.workspaceId, 1],
+  );
+  if (!result.rows[0]?.id) {
+    throw new Error(`${params.label} is not available in this workspace`);
+  }
+  return actorId;
+}
+
 async function assertTransportAccountOwner(params: {
   workspaceId: string;
   ownerScope: TransportAccountOwnerScope;
@@ -244,6 +303,49 @@ async function assertTransportAccountOwner(params: {
   }
 
   return ownerUserId;
+}
+
+async function assertTransportAccountInboundActor(params: {
+  workspaceId: string;
+  ownerScope: TransportAccountOwnerScope;
+  ownerUserId?: string | null;
+  inboundActorMode: TransportAccountInboundActorMode;
+  inboundActorId?: string | null;
+}) {
+  if (params.inboundActorMode === "none") {
+    return null;
+  }
+
+  if (params.inboundActorMode === "follow_owner_chief_actor") {
+    if (params.ownerScope !== "workspace_user" || !params.ownerUserId) {
+      throw new Error(
+        "Follow chief actor is only available for workspace-member-owned IM accounts",
+      );
+    }
+    return null;
+  }
+
+  return assertWorkspaceActor({
+    workspaceId: params.workspaceId,
+    actorId: params.inboundActorId,
+    label: "Inbound actor",
+  });
+}
+
+async function assertConversationInboundActor(params: {
+  workspaceId: string;
+  inboundActorMode: TransportConversationInboundActorMode;
+  inboundActorId?: string | null;
+}) {
+  if (params.inboundActorMode !== "specified_actor") {
+    return null;
+  }
+
+  return assertWorkspaceActor({
+    workspaceId: params.workspaceId,
+    actorId: params.inboundActorId,
+    label: "Inbound actor",
+  });
 }
 
 async function loadTransportAccountRow(workspaceId: string, accountId: string) {
@@ -284,6 +386,47 @@ async function loadTransportAccountRowById(accountId: string) {
     [accountId, 1],
   );
   return result.rows[0] ?? null;
+}
+
+async function loadWorkspaceUserTransportAccountRow(params: {
+  workspaceId: string;
+  userId: string;
+  transportKind: TransportKind;
+}) {
+  const result = await query(
+    `SELECT *
+     FROM transport_accounts
+     WHERE workspace_id = $1
+       AND transport_kind = $2
+       AND owner_scope = 'workspace_user'
+       AND owner_user_id = $3
+     ORDER BY CASE
+                WHEN status = 'active' THEN 0
+                WHEN status = 'error' THEN 1
+                ELSE 2
+              END,
+              updated_at DESC,
+              created_at DESC
+     LIMIT $4`,
+    [params.workspaceId, params.transportKind, params.userId, 1],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function loadWorkspaceMemberDisplayName(params: {
+  workspaceId: string;
+  userId: string;
+}) {
+  const result = await query(
+    `SELECT u.name
+     FROM workspace_members wm
+     JOIN users u ON u.id = wm.user_id
+     WHERE wm.workspace_id = $1
+       AND wm.user_id = $2
+     LIMIT $3`,
+    [params.workspaceId, params.userId, 1],
+  );
+  return readTrimmedString(result.rows[0] || {}, "name");
 }
 
 async function assertConversationMembers(params: {
@@ -401,6 +544,191 @@ export async function getTransportAccountByWorkspaceKindAndKey(params: {
   return row ? normalizeAccountRow(row) : null;
 }
 
+export async function getCurrentUserWeixinBinding(params: {
+  workspaceId: string;
+  userId: string;
+}): Promise<CurrentUserWeixinBindingSummary | null> {
+  const row = await loadWorkspaceUserTransportAccountRow({
+    workspaceId: params.workspaceId,
+    userId: params.userId,
+    transportKind: "weixin",
+  });
+  if (!row) {
+    return null;
+  }
+
+  const account = normalizeAccountRow(row);
+  if (account.status !== "active") {
+    return null;
+  }
+  const metadata = parseJsonObject(row.metadata);
+  const scannerUserId = readTrimmedString(metadata, "scannerUserId");
+  const pendingAutoLinkUserId = readPendingAutoLinkUserId(metadata);
+  const externalUsers = await listTransportExternalUsers({
+    workspaceId: params.workspaceId,
+    transportAccountId: account.id,
+  });
+  const pendingAutoLinkUserName = pendingAutoLinkUserId
+    ? await loadWorkspaceMemberDisplayName({
+        workspaceId: params.workspaceId,
+        userId: pendingAutoLinkUserId,
+      })
+    : undefined;
+
+  return {
+    account,
+    scannerUserId,
+    pendingAutoLinkUserId: pendingAutoLinkUserId || undefined,
+    pendingAutoLinkUserName,
+    externalUser:
+      pickCurrentWeixinExternalUser({ externalUsers, scannerUserId }) ||
+      undefined,
+  };
+}
+
+export async function setCurrentUserWeixinBindingAutoLink(params: {
+  workspaceId: string;
+  userId: string;
+  targetUserId?: string | null;
+}): Promise<CurrentUserWeixinBindingSummary> {
+  const binding = await getCurrentUserWeixinBinding({
+    workspaceId: params.workspaceId,
+    userId: params.userId,
+  });
+  if (!binding) {
+    throw new Error("WeChat binding not found");
+  }
+
+  const nextTargetUserId = params.targetUserId || null;
+  if (nextTargetUserId) {
+    const isWorkspaceMember = await assertWorkspaceMember({
+      workspaceId: params.workspaceId,
+      userId: nextTargetUserId,
+    });
+    if (!isWorkspaceMember) {
+      throw new Error("Workspace user not found");
+    }
+  }
+
+  const nextMetadata = {
+    ...(binding.account.metadata || {}),
+  } as Record<string, unknown>;
+  if (nextTargetUserId) {
+    nextMetadata.pendingAutoLinkUserId = nextTargetUserId;
+    nextMetadata.pendingAutoLinkMode = "first_inbound_once";
+    nextMetadata.pendingAutoLinkConfiguredAt = new Date().toISOString();
+  } else {
+    delete (nextMetadata as any).pendingAutoLinkUserId;
+    delete (nextMetadata as any).pendingAutoLinkMode;
+    delete (nextMetadata as any).pendingAutoLinkConfiguredAt;
+  }
+  delete (nextMetadata as any).pendingAutoLinkConsumedAt;
+  delete (nextMetadata as any).pendingAutoLinkConsumedExternalId;
+
+  await updateTransportAccount({
+    workspaceId: params.workspaceId,
+    accountId: binding.account.id,
+    metadata: nextMetadata,
+  });
+
+  const updatedBinding = await getCurrentUserWeixinBinding({
+    workspaceId: params.workspaceId,
+    userId: params.userId,
+  });
+  if (!updatedBinding) {
+    throw new Error("WeChat binding not found");
+  }
+  return updatedBinding;
+}
+
+export async function linkCurrentUserWeixinBinding(params: {
+  workspaceId: string;
+  userId: string;
+}): Promise<CurrentUserWeixinBindingSummary> {
+  const binding = await getCurrentUserWeixinBinding(params);
+  if (!binding) {
+    throw new Error("WeChat binding not found");
+  }
+
+  const scannerUserId = binding.scannerUserId || binding.externalUser?.externalId;
+  if (!scannerUserId) {
+    throw new Error("WeChat binding does not expose a user ID yet");
+  }
+
+  let externalUser = binding.externalUser || null;
+  if (!externalUser) {
+    await ensureTransportAddress({
+      workspaceId: params.workspaceId,
+      transportAccountId: binding.account.id,
+      transportKind: "weixin",
+      addressType: "user",
+      externalId: scannerUserId,
+      displayName: scannerUserId,
+      metadata: {
+        source: "qr_login",
+        scannerUserId,
+      },
+    });
+
+    const refreshed = await getCurrentUserWeixinBinding(params);
+    externalUser = refreshed?.externalUser || null;
+  }
+
+  if (!externalUser) {
+    throw new Error("WeChat user not found");
+  }
+  if (externalUser.linkedUserId && externalUser.linkedUserId !== params.userId) {
+    throw new Error("WeChat user is already linked to another workspace member");
+  }
+
+  await setTransportAddressLinkedUser({
+    workspaceId: params.workspaceId,
+    transportAddressId: externalUser.id,
+    userId: params.userId,
+  });
+
+  const updatedBinding = await getCurrentUserWeixinBinding(params);
+  if (!updatedBinding) {
+    throw new Error("WeChat binding not found");
+  }
+  return updatedBinding;
+}
+
+export function getPendingTransportAccountAutoLinkUserId(
+  account: Pick<TransportAccountSummary, "metadata">,
+) {
+  const metadata = parseJsonObject(account.metadata);
+  return readPendingAutoLinkUserId(metadata) || null;
+}
+
+export async function consumeTransportAccountAutoLink(params: {
+  account: TransportAccountSummary;
+  transportAddressId: string;
+  targetUserId: string;
+  matchedExternalId: string;
+}) {
+  await setTransportAddressLinkedUser({
+    workspaceId: params.account.workspaceId,
+    transportAddressId: params.transportAddressId,
+    userId: params.targetUserId,
+  });
+
+  const nextMetadata = {
+    ...parseJsonObject(params.account.metadata),
+    pendingAutoLinkConsumedAt: new Date().toISOString(),
+    pendingAutoLinkConsumedExternalId: params.matchedExternalId,
+  };
+  delete (nextMetadata as any).pendingAutoLinkUserId;
+  delete (nextMetadata as any).pendingAutoLinkMode;
+  delete (nextMetadata as any).pendingAutoLinkConfiguredAt;
+
+  return updateTransportAccount({
+    workspaceId: params.account.workspaceId,
+    accountId: params.account.id,
+    metadata: nextMetadata,
+  });
+}
+
 export async function listActiveTransportAccounts(params?: {
   connectionMode?: TransportConnectionMode;
   transportKind?: TransportKind;
@@ -433,7 +761,8 @@ export async function listTransportSessions(
             ctb.workspace_id,
             ctb.conversation_id,
             ctb.outbound_enabled,
-            ctb.default_target_member_id,
+            ctb.inbound_actor_mode,
+            ctb.inbound_actor_id,
             ctb.metadata AS binding_metadata,
             ctb.created_at AS binding_created_at,
             ctb.updated_at AS binding_updated_at,
@@ -445,6 +774,8 @@ export async function listTransportSessions(
             ta.transport_kind,
             ta.owner_scope,
             ta.owner_user_id,
+            ta.inbound_actor_mode AS account_inbound_actor_mode,
+            ta.inbound_actor_id AS account_inbound_actor_id,
             ta.connection_mode,
             ta.status,
             ta.credentials,
@@ -565,6 +896,8 @@ export async function createTransportAccount(params: {
   displayName: string;
   ownerScope?: TransportAccountOwnerScope;
   ownerUserId?: string | null;
+  inboundActorMode?: TransportAccountInboundActorMode;
+  inboundActorId?: string | null;
   connectionMode: TransportConnectionMode;
   status?: "active" | "disabled" | "error";
   credentials?: Record<string, unknown>;
@@ -585,11 +918,19 @@ export async function createTransportAccount(params: {
     ownerScope,
     ownerUserId: ownerScope === "workspace" ? null : params.ownerUserId,
   });
+  const inboundActorMode = params.inboundActorMode || "none";
+  const inboundActorId = await assertTransportAccountInboundActor({
+    workspaceId: params.workspaceId,
+    ownerScope,
+    ownerUserId,
+    inboundActorMode,
+    inboundActorId: params.inboundActorId,
+  });
 
   const result = await query(
     `INSERT INTO transport_accounts
-       (id, workspace_id, transport_kind, account_key, display_name, owner_scope, owner_user_id, connection_mode, status, credentials, config, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+       (id, workspace_id, transport_kind, account_key, display_name, owner_scope, owner_user_id, inbound_actor_mode, inbound_actor_id, connection_mode, status, credentials, config, metadata, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
      RETURNING *`,
     [
       uuidv4(),
@@ -599,6 +940,8 @@ export async function createTransportAccount(params: {
       params.displayName.trim(),
       ownerScope,
       ownerUserId,
+      inboundActorMode,
+      inboundActorId,
       params.connectionMode,
       nextStatus,
       JSON.stringify(params.credentials || {}),
@@ -616,6 +959,8 @@ export async function updateTransportAccount(params: {
   displayName?: string;
   ownerScope?: TransportAccountOwnerScope;
   ownerUserId?: string | null;
+  inboundActorMode?: TransportAccountInboundActorMode;
+  inboundActorId?: string | null;
   connectionMode?: TransportConnectionMode;
   status?: "active" | "disabled" | "error";
   credentials?: Record<string, unknown>;
@@ -660,17 +1005,36 @@ export async function updateTransportAccount(params: {
     ownerScope: nextOwnerScope,
     ownerUserId: nextOwnerUserId,
   });
+  const nextInboundActorMode =
+    params.inboundActorMode ||
+    (existing.inbound_actor_mode as TransportAccountInboundActorMode | undefined) ||
+    "none";
+  const nextInboundActorId =
+    nextInboundActorMode === "specified_actor"
+      ? params.inboundActorId !== undefined
+        ? params.inboundActorId
+        : (existing.inbound_actor_id as string | null | undefined) || null
+      : null;
+  const resolvedInboundActorId = await assertTransportAccountInboundActor({
+    workspaceId: params.workspaceId,
+    ownerScope: nextOwnerScope,
+    ownerUserId: resolvedOwnerUserId,
+    inboundActorMode: nextInboundActorMode,
+    inboundActorId: nextInboundActorId,
+  });
 
   const result = await query(
     `UPDATE transport_accounts
      SET display_name = COALESCE($3, display_name),
          owner_scope = $4,
          owner_user_id = $5,
-         connection_mode = $6,
-         status = COALESCE($7, status),
-         credentials = CASE WHEN $8::jsonb IS NULL THEN credentials ELSE $8::jsonb END,
-         config = CASE WHEN $9::jsonb IS NULL THEN config ELSE $9::jsonb END,
-         metadata = CASE WHEN $10::jsonb IS NULL THEN metadata ELSE $10::jsonb END,
+         inbound_actor_mode = $6,
+         inbound_actor_id = $7,
+         connection_mode = $8,
+         status = COALESCE($9, status),
+         credentials = CASE WHEN $10::jsonb IS NULL THEN credentials ELSE $10::jsonb END,
+         config = CASE WHEN $11::jsonb IS NULL THEN config ELSE $11::jsonb END,
+         metadata = CASE WHEN $12::jsonb IS NULL THEN metadata ELSE $12::jsonb END,
          updated_at = NOW()
      WHERE workspace_id = $1
        AND id = $2
@@ -681,6 +1045,8 @@ export async function updateTransportAccount(params: {
       params.displayName?.trim() || null,
       nextOwnerScope,
       resolvedOwnerUserId,
+      nextInboundActorMode,
+      resolvedInboundActorId,
       nextConnectionMode,
       params.status || null,
       params.credentials ? JSON.stringify(params.credentials) : null,
@@ -701,7 +1067,8 @@ export async function getConversationTransportBinding(params: {
             ctb.workspace_id,
             ctb.conversation_id,
             ctb.outbound_enabled,
-            ctb.default_target_member_id,
+            ctb.inbound_actor_mode,
+            ctb.inbound_actor_id,
             ctb.metadata AS binding_metadata,
             ctb.created_at AS binding_created_at,
             ctb.updated_at AS binding_updated_at,
@@ -711,6 +1078,8 @@ export async function getConversationTransportBinding(params: {
             ta.transport_kind,
             ta.owner_scope,
             ta.owner_user_id,
+            ta.inbound_actor_mode AS account_inbound_actor_mode,
+            ta.inbound_actor_id AS account_inbound_actor_id,
             ta.connection_mode,
             ta.status,
             ta.credentials,
@@ -749,7 +1118,8 @@ export async function findConversationTransportBindingByEndpoint(params: {
             ctb.workspace_id,
             ctb.conversation_id,
             ctb.outbound_enabled,
-            ctb.default_target_member_id,
+            ctb.inbound_actor_mode,
+            ctb.inbound_actor_id,
             ctb.metadata AS binding_metadata,
             ctb.created_at AS binding_created_at,
             ctb.updated_at AS binding_updated_at,
@@ -759,6 +1129,8 @@ export async function findConversationTransportBindingByEndpoint(params: {
             ta.transport_kind,
             ta.owner_scope,
             ta.owner_user_id,
+            ta.inbound_actor_mode AS account_inbound_actor_mode,
+            ta.inbound_actor_id AS account_inbound_actor_id,
             ta.connection_mode,
             ta.status,
             ta.credentials,
@@ -802,7 +1174,8 @@ export async function upsertConversationTransportBinding(params: {
   parentExternalId?: string;
   endpointDisplayName?: string;
   outboundEnabled?: boolean;
-  defaultTargetParticipantId?: string;
+  inboundActorMode?: TransportConversationInboundActorMode;
+  inboundActorId?: string | null;
   metadata?: Record<string, unknown>;
 }) {
   const account = await loadTransportAccountRow(
@@ -814,17 +1187,11 @@ export async function upsertConversationTransportBinding(params: {
   }
 
   assertSupportedEndpointType(account.transport_kind, params.endpointType);
-  await assertConversationMembers({
-    conversationId: params.conversationId,
-    memberIds: [params.defaultTargetParticipantId].filter(
-      (memberId): memberId is string => Boolean(memberId),
-    ),
-  });
-  await assertConversationMemberType({
-    conversationId: params.conversationId,
-    memberId: params.defaultTargetParticipantId,
-    allowedTypes: ["actor"],
-    label: "Default inbound target",
+  const inboundActorMode = params.inboundActorMode || "inherit_account";
+  const inboundActorId = await assertConversationInboundActor({
+    workspaceId: params.workspaceId,
+    inboundActorMode,
+    inboundActorId: params.inboundActorId,
   });
 
   await transaction(async (client) => {
@@ -853,14 +1220,15 @@ export async function upsertConversationTransportBinding(params: {
 
     await client.query(
       `INSERT INTO conversation_transport_bindings
-         (id, workspace_id, conversation_id, transport_account_id, transport_endpoint_id, outbound_enabled, default_target_member_id, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+         (id, workspace_id, conversation_id, transport_account_id, transport_endpoint_id, outbound_enabled, inbound_actor_mode, inbound_actor_id, metadata, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
        ON CONFLICT (conversation_id)
        DO UPDATE SET
          transport_account_id = EXCLUDED.transport_account_id,
          transport_endpoint_id = EXCLUDED.transport_endpoint_id,
          outbound_enabled = EXCLUDED.outbound_enabled,
-         default_target_member_id = EXCLUDED.default_target_member_id,
+         inbound_actor_mode = EXCLUDED.inbound_actor_mode,
+         inbound_actor_id = EXCLUDED.inbound_actor_id,
          metadata = EXCLUDED.metadata,
          updated_at = NOW()`,
       [
@@ -870,7 +1238,8 @@ export async function upsertConversationTransportBinding(params: {
         params.transportAccountId,
         endpointId,
         params.outboundEnabled ?? true,
-        params.defaultTargetParticipantId || null,
+        inboundActorMode,
+        inboundActorId,
         JSON.stringify(params.metadata || {}),
       ],
     );
@@ -886,7 +1255,8 @@ export async function updateConversationTransportSettings(params: {
   workspaceId: string;
   conversationId: string;
   outboundEnabled?: boolean;
-  defaultTargetParticipantId?: string | null;
+  inboundActorMode?: TransportConversationInboundActorMode;
+  inboundActorId?: string | null;
   metadata?: Record<string, unknown>;
 }) {
   const existing = await getConversationTransportBinding({
@@ -897,28 +1267,33 @@ export async function updateConversationTransportSettings(params: {
     throw new Error("Transport session not found for this conversation");
   }
 
-  await assertConversationMembers({
-    conversationId: params.conversationId,
-    memberIds: [params.defaultTargetParticipantId].filter(
-      (memberId): memberId is string => Boolean(memberId),
-    ),
-  });
-  await assertConversationMemberType({
-    conversationId: params.conversationId,
-    memberId: params.defaultTargetParticipantId,
-    allowedTypes: ["actor"],
-    label: "Default inbound target",
+  const nextInboundActorMode =
+    params.inboundActorMode || existing.inboundActorMode;
+  const nextInboundActorId =
+    nextInboundActorMode === "specified_actor"
+      ? params.inboundActorId !== undefined
+        ? params.inboundActorId
+        : existing.inboundActorId || null
+      : null;
+  const resolvedInboundActorId = await assertConversationInboundActor({
+    workspaceId: params.workspaceId,
+    inboundActorMode: nextInboundActorMode,
+    inboundActorId: nextInboundActorId,
   });
 
   await query(
     `UPDATE conversation_transport_bindings
      SET outbound_enabled = CASE WHEN $3 THEN $4 ELSE outbound_enabled END,
-         default_target_member_id = CASE
-           WHEN $5 THEN $6::uuid
-           ELSE default_target_member_id
+         inbound_actor_mode = CASE
+           WHEN $5 THEN $6::varchar
+           ELSE inbound_actor_mode
+         END,
+         inbound_actor_id = CASE
+           WHEN $5 THEN $7::uuid
+           ELSE inbound_actor_id
          END,
          metadata = CASE
-           WHEN $7 THEN metadata || $8::jsonb
+           WHEN $8 THEN metadata || $9::jsonb
            ELSE metadata
          END,
          updated_at = NOW()
@@ -929,8 +1304,9 @@ export async function updateConversationTransportSettings(params: {
       params.conversationId,
       params.outboundEnabled !== undefined,
       params.outboundEnabled ?? false,
-      params.defaultTargetParticipantId !== undefined,
-      params.defaultTargetParticipantId ?? null,
+      params.inboundActorMode !== undefined || params.inboundActorId !== undefined,
+      nextInboundActorMode,
+      resolvedInboundActorId,
       params.metadata !== undefined,
       JSON.stringify(params.metadata || {}),
     ],
@@ -946,7 +1322,8 @@ export async function updateTransportSessionSettings(params: {
   workspaceId: string;
   transportEndpointId: string;
   outboundEnabled?: boolean;
-  defaultTargetParticipantId?: string | null;
+  inboundActorMode?: TransportConversationInboundActorMode;
+  inboundActorId?: string | null;
   metadata?: Record<string, unknown>;
 }) {
   const result = await query(
@@ -966,7 +1343,8 @@ export async function updateTransportSessionSettings(params: {
     workspaceId: params.workspaceId,
     conversationId,
     outboundEnabled: params.outboundEnabled,
-    defaultTargetParticipantId: params.defaultTargetParticipantId,
+    inboundActorMode: params.inboundActorMode,
+    inboundActorId: params.inboundActorId,
     metadata: params.metadata,
   });
 
@@ -1459,6 +1837,9 @@ export async function queueConversationTransportProjection(params: {
     conversationId: params.conversationId,
   });
   if (!binding) {
+    return null;
+  }
+  if (direction === "outbound" && binding.account.status !== "active") {
     return null;
   }
   if (direction === "outbound" && !binding.outboundEnabled) {

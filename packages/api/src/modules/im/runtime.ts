@@ -10,13 +10,17 @@ import { emitEvent } from "../../infrastructure/events/index.js";
 import { query } from "../../infrastructure/database/index.js";
 import {
   createConversationItem,
+  ensureConversationMember,
   getConversationFeedItemById,
 } from "../conversation/service.js";
-import { createGroup, getGroupMembers, wakeActor } from "../group/service.js";
+import { createGroup, wakeActor } from "../group/service.js";
+import { getWorkspaceChiefActorPreference } from "../workspace/service.js";
 import {
+  consumeTransportAccountAutoLink,
   ensureTransportAddress,
   findConversationTransportBindingByEndpoint,
   findTransportMessageLinkByExternalMessage,
+  getPendingTransportAccountAutoLinkUserId,
   getTransportAccountByKindAndId,
   listActiveTransportAccounts,
   queueConversationTransportProjection,
@@ -436,7 +440,7 @@ async function ensureTransportConversationBinding(params: {
       endpointExternalId: params.endpointExternalId,
       endpointDisplayName: params.endpointDisplayName,
       outboundEnabled: true,
-      defaultTargetParticipantId: undefined,
+      inboundActorMode: "inherit_account",
       metadata: {
         autoCreated: true,
       },
@@ -456,18 +460,38 @@ async function ensureTransportConversationBinding(params: {
 async function resolveDefaultWakeTarget(
   binding: ConversationTransportBindingSummary,
 ) {
-  if (!binding.defaultTargetParticipantId) return null;
-  const members = await getGroupMembers(binding.conversationId);
-  const target = members.find(
-    (member) =>
-      member.id === binding.defaultTargetParticipantId &&
-      member.state === "active" &&
-      member.actor_id,
-  );
-  if (!target?.actor_id) return null;
+  let actorId: string | null = null;
+
+  if (binding.inboundActorMode === "specified_actor") {
+    actorId = binding.inboundActorId || null;
+  } else if (binding.inboundActorMode === "inherit_account") {
+    if (binding.account.inboundActorMode === "specified_actor") {
+      actorId = binding.account.inboundActorId || null;
+    } else if (
+      binding.account.inboundActorMode === "follow_owner_chief_actor" &&
+      binding.account.ownerScope === "workspace_user" &&
+      binding.account.ownerUserId
+    ) {
+      const preference = await getWorkspaceChiefActorPreference(
+        binding.workspaceId,
+        binding.account.ownerUserId,
+      );
+      actorId = preference.chiefActorId || null;
+    }
+  }
+
+  if (!actorId) return null;
+
+  const target = await ensureConversationMember({
+    conversationId: binding.conversationId,
+    memberType: "actor",
+    actorId,
+  });
+
+  if (!target?.id) return null;
   return {
     participantId: target.id as string,
-    actorId: target.actor_id as string,
+    actorId,
   };
 }
 
@@ -501,10 +525,32 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
     displayName: params.senderDisplayName,
     metadata: params.senderMetadata,
   });
-  const linkedUserId =
+  let linkedUserId =
     typeof senderAddress?.user_id === "string" && senderAddress.user_id.trim()
       ? senderAddress.user_id
       : undefined;
+  if (!linkedUserId) {
+    const pendingAutoLinkUserId = getPendingTransportAccountAutoLinkUserId(
+      params.account,
+    );
+    if (pendingAutoLinkUserId) {
+      await consumeTransportAccountAutoLink({
+        account: params.account,
+        transportAddressId: senderAddress.id,
+        targetUserId: pendingAutoLinkUserId,
+        matchedExternalId: params.senderExternalId,
+      });
+      if (params.account.metadata && typeof params.account.metadata === "object") {
+        delete (params.account.metadata as Record<string, unknown>)
+          .pendingAutoLinkUserId;
+        delete (params.account.metadata as Record<string, unknown>)
+          .pendingAutoLinkMode;
+        delete (params.account.metadata as Record<string, unknown>)
+          .pendingAutoLinkConfiguredAt;
+      }
+      linkedUserId = pendingAutoLinkUserId;
+    }
+  }
   const senderMember = await syncTransportAddressConversationMember({
     conversationId: binding.conversationId,
     transportAddressId: senderAddress.id,
@@ -870,6 +916,10 @@ async function reconcileTransportRuntimes() {
     reconcilePromise = null;
   });
   await reconcilePromise;
+}
+
+export async function refreshTransportRuntimeManager() {
+  await reconcileTransportRuntimes();
 }
 
 export async function startTransportRuntimeManager() {

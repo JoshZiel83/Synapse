@@ -55,13 +55,13 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { SidebarWeixinBinding } from "@/components/sidebar-weixin-binding"
 import { TeamSwitcher } from "@/components/team-switcher"
 import { toast } from "sonner"
 
 const mainItems = [
   { href: "/dashboard", label: "Home", icon: House },
   { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
-  { href: "/dashboard/im", label: "IM", icon: Link2 },
   { href: "/dashboard/contacts", label: "Contacts", icon: ContactRound },
 ]
 
@@ -285,6 +285,12 @@ function NavUser({
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
+              <DropdownMenuItem asChild>
+                <Link href="/dashboard/im">
+                  <Link2 />
+                  IM
+                </Link>
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setTheme(mounted && theme === "dark" ? "light" : "dark")}>
                 {mounted && theme === "dark" ? <Sun /> : <Moon />}
                 {mounted && theme === "dark" ? "Light mode" : "Dark mode"}
@@ -415,6 +421,7 @@ export function AppSidebar({
       </SidebarContent>
 
       <SidebarFooter>
+        <SidebarWeixinBinding />
         <NavUser user={user} onLogout={onLogout} />
       </SidebarFooter>
     </Sidebar>

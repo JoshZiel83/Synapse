@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type {
+  TransportAccountInboundActorMode,
   TransportAccountSummary,
   TransportAccountOwnerScope,
   WeixinQrLoginSessionSummary,
@@ -7,10 +8,12 @@ import type {
 } from "@synapse/shared/types";
 import {
   createTransportAccount,
+  ensureTransportAddress,
   getTransportAccountById,
   getTransportAccountByWorkspaceKindAndKey,
   updateTransportAccount,
 } from "./service.js";
+import { refreshTransportRuntimeManager } from "./runtime.js";
 
 const DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com";
 const ACTIVE_LOGIN_TTL_MS = 5 * 60_000;
@@ -27,6 +30,8 @@ type ActiveWeixinQrLogin = {
   displayName?: string;
   ownerScope: TransportAccountOwnerScope;
   ownerUserId?: string | null;
+  inboundActorMode: TransportAccountInboundActorMode;
+  inboundActorId?: string | null;
   status: WeixinQrLoginStatus;
   message: string;
   createdAt: number;
@@ -188,13 +193,16 @@ async function persistWeixinAccount(params: {
     accountKey,
   });
 
+  let account: TransportAccountSummary;
   if (existing) {
-    return updateTransportAccount({
+    account = await updateTransportAccount({
       workspaceId: params.session.workspaceId,
       accountId: existing.id,
       displayName,
       ownerScope: params.session.ownerScope,
       ownerUserId: params.session.ownerUserId ?? null,
+      inboundActorMode: params.session.inboundActorMode,
+      inboundActorId: params.session.inboundActorId ?? null,
       connectionMode: "long_connection",
       status: "active",
       credentials: {
@@ -210,59 +218,102 @@ async function persistWeixinAccount(params: {
         ...metadata,
       },
     });
+  } else {
+    try {
+      account = await createTransportAccount({
+        workspaceId: params.session.workspaceId,
+        transportKind: "weixin",
+        accountKey,
+        displayName,
+        ownerScope: params.session.ownerScope,
+        ownerUserId: params.session.ownerUserId ?? null,
+        inboundActorMode: params.session.inboundActorMode,
+        inboundActorId: params.session.inboundActorId ?? null,
+        connectionMode: "long_connection",
+        credentials: {
+          token: params.botToken,
+        },
+        config: {
+          baseUrl: resolvedBaseUrl,
+        },
+        metadata,
+      });
+    } catch (error: any) {
+      if (error?.code !== "23505") {
+        throw error;
+      }
+      const concurrent = await getTransportAccountByWorkspaceKindAndKey({
+        workspaceId: params.session.workspaceId,
+        transportKind: "weixin",
+        accountKey,
+      });
+      if (!concurrent) {
+        throw error;
+      }
+      account = await updateTransportAccount({
+        workspaceId: params.session.workspaceId,
+        accountId: concurrent.id,
+        displayName,
+        ownerScope: params.session.ownerScope,
+        ownerUserId: params.session.ownerUserId ?? null,
+        inboundActorMode: params.session.inboundActorMode,
+        inboundActorId: params.session.inboundActorId ?? null,
+        connectionMode: "long_connection",
+        status: "active",
+        credentials: {
+          ...(concurrent.credentials || {}),
+          token: params.botToken,
+        },
+        config: {
+          ...(concurrent.config || {}),
+          baseUrl: resolvedBaseUrl,
+        },
+        metadata: {
+          ...(concurrent.metadata || {}),
+          ...metadata,
+        },
+      });
+    }
   }
 
-  try {
-    return await createTransportAccount({
+  if (params.scannerUserId) {
+    await ensureTransportAddress({
       workspaceId: params.session.workspaceId,
+      transportAccountId: account.id,
       transportKind: "weixin",
-      accountKey,
-      displayName,
-      ownerScope: params.session.ownerScope,
-      ownerUserId: params.session.ownerUserId ?? null,
-      connectionMode: "long_connection",
-      credentials: {
-        token: params.botToken,
-      },
-      config: {
-        baseUrl: resolvedBaseUrl,
-      },
-      metadata,
-    });
-  } catch (error: any) {
-    if (error?.code !== "23505") {
-      throw error;
-    }
-    const concurrent = await getTransportAccountByWorkspaceKindAndKey({
-      workspaceId: params.session.workspaceId,
-      transportKind: "weixin",
-      accountKey,
-    });
-    if (!concurrent) {
-      throw error;
-    }
-    return updateTransportAccount({
-      workspaceId: params.session.workspaceId,
-      accountId: concurrent.id,
-      displayName,
-      ownerScope: params.session.ownerScope,
-      ownerUserId: params.session.ownerUserId ?? null,
-      connectionMode: "long_connection",
-      status: "active",
-      credentials: {
-        ...(concurrent.credentials || {}),
-        token: params.botToken,
-      },
-      config: {
-        ...(concurrent.config || {}),
-        baseUrl: resolvedBaseUrl,
-      },
+      addressType: "user",
+      externalId: params.scannerUserId,
+      displayName: params.scannerUserId,
       metadata: {
-        ...(concurrent.metadata || {}),
-        ...metadata,
+        source: "qr_login",
+        scannerUserId: params.scannerUserId,
+        qrConfirmedAt: nowIso(),
       },
     });
   }
+
+  await refreshTransportRuntimeManager().catch((error) => {
+    console.error("[im] Failed to refresh transport runtime manager:", error);
+  });
+
+  return account;
+}
+
+export function getWeixinQrLoginSessionOwner(params: {
+  workspaceId: string;
+  sessionId: string;
+}) {
+  purgeExpiredSessions();
+  const existing = activeWeixinQrLogins.get(
+    buildSessionKey(params.workspaceId, params.sessionId),
+  );
+  if (!existing) {
+    return null;
+  }
+  return {
+    ownerScope: existing.ownerScope,
+    ownerUserId: existing.ownerUserId || null,
+  };
 }
 
 async function buildSummary(session: ActiveWeixinQrLogin) {
@@ -292,6 +343,8 @@ export async function startWeixinQrLoginSession(params: {
   botType?: string;
   ownerScope?: TransportAccountOwnerScope;
   ownerUserId?: string | null;
+  inboundActorMode?: TransportAccountInboundActorMode;
+  inboundActorId?: string | null;
 }) {
   purgeExpiredSessions();
 
@@ -315,6 +368,8 @@ export async function startWeixinQrLoginSession(params: {
     displayName: nonEmptyString(params.displayName),
     ownerScope: params.ownerScope || "workspace",
     ownerUserId: params.ownerUserId || null,
+    inboundActorMode: params.inboundActorMode || "none",
+    inboundActorId: params.inboundActorId || null,
     status: "waiting",
     message: "Scan the QR code with WeChat to finish connecting.",
     createdAt: now,
