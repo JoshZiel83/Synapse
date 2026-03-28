@@ -58,6 +58,7 @@ import {
 import { shutdownAllInstances } from "./modules/mcp-plugins/instance-manager.js";
 import { recoverInterruptedExecutions } from "./modules/execution/service.js";
 import { registerActionToolPlugins } from "./modules/ai/tools.js";
+import { registerActorFileToolPlugins } from "./modules/ai/file-tools.js";
 import { registerCallableToolPlugins } from "./modules/ai/session-tools.js";
 import { startSessionThinkingWorker } from "./workers/session-thinking.js";
 import { ensureAutomationSchedulerJob, startAutomationSchedulerWorker } from "./workers/automation-scheduler.js";
@@ -195,6 +196,7 @@ async function main() {
 
   registerActionToolPlugins();
   registerCallableToolPlugins();
+  registerActorFileToolPlugins();
   await ensureAutomationSchedulerJob();
   startAutomationSchedulerWorker();
   startAutomationExecutionWorker();
