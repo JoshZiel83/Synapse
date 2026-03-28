@@ -15,6 +15,11 @@ type Server struct {
 	desktop       Desktop
 	tools         []core.Tool
 	system        string
+	startCtx      context.Context
+	cancel        context.CancelFunc
+	started       bool
+	initialized   bool
+	startMu       sync.Mutex
 	mu            sync.Mutex
 	sessionStates map[string]sessionState
 }
@@ -40,17 +45,20 @@ func NewWithDesktop(cfg Config, desktop Desktop) *Server {
 }
 
 func (s *Server) Start(ctx context.Context) error {
-	if s.desktop == nil {
-		return fmt.Errorf("desktop integration is not available in this build")
+	childCtx, cancel := context.WithCancel(ctx)
+	s.startCtx = childCtx
+	s.cancel = cancel
+	if !s.canOperate("") {
+		return nil
 	}
-	return s.desktop.Start(ctx)
+	return s.ensureReady("")
 }
 
 func (s *Server) Initialize() error {
-	if s.desktop == nil {
-		return fmt.Errorf("desktop integration is not available in this build")
+	if !s.canOperate("") {
+		return nil
 	}
-	return s.initializeSessionDisplays("")
+	return s.ensureReady("")
 }
 
 func (s *Server) ListTools() ([]core.Tool, error) {
@@ -60,9 +68,14 @@ func (s *Server) ListTools() ([]core.Tool, error) {
 }
 
 func (s *Server) Shutdown() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if s.desktop != nil {
 		_ = s.desktop.Close()
 	}
+	s.started = false
+	s.initialized = false
 }
 
 func (s *Server) CloseRuntimeSession(runtimeSessionID string) {
@@ -86,6 +99,12 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 		return errorResult("desktop integration is not available in this build"), nil
 	}
 	runtimeSessionID := runtimeauth.RuntimeSessionIDFromContext(ctx)
+	if !s.canOperate(runtimeSessionID) {
+		return disabledResult(toolName), nil
+	}
+	if err := s.ensureReady(runtimeSessionID); err != nil {
+		return errorResult(err.Error()), nil
+	}
 	if blocked, operation := s.readOnlyBlock(runtimeSessionID, toolName, args); blocked {
 		return readOnlyResult(toolName, operation), nil
 	}
@@ -207,6 +226,23 @@ func readOnlyResult(toolName, operation string) core.CallResult {
 	}
 }
 
+func disabledResult(toolName string) core.CallResult {
+	message := "This built-in CUA server is currently disabled. Ask the user to enable desktop access in the Synapse Relay client, then retry."
+	return core.CallResult{
+		Content: []interface{}{core.Text(message)},
+		StructuredContent: map[string]interface{}{
+			"code":                   "server_disabled",
+			"tool":                   toolName,
+			"capability":             "cua",
+			"requires_user_approval": true,
+			"authorization_duration": "persistent",
+			"client_hint":            "Enable desktop access in the Synapse Relay client, then retry the action.",
+			"message":                message,
+		},
+		IsError: true,
+	}
+}
+
 func (s *Server) readOnlyBlock(runtimeSessionID, toolName string, args map[string]interface{}) (bool, string) {
 	if s.cfg.AuthStore != nil && s.cfg.AuthStore.AllowsCUAControl(s.cfg.StableKey, runtimeSessionID) {
 		return false, ""
@@ -221,6 +257,43 @@ func (s *Server) readOnlyBlock(runtimeSessionID, toolName string, args map[strin
 	}
 
 	return false, ""
+}
+
+func (s *Server) canOperate(runtimeSessionID string) bool {
+	if s.cfg.Enabled {
+		return true
+	}
+	if s.cfg.AuthStore == nil || s.cfg.StableKey == "" {
+		return false
+	}
+	return s.cfg.AuthStore.AllowsCUAControl(s.cfg.StableKey, runtimeSessionID)
+}
+
+func (s *Server) ensureReady(runtimeSessionID string) error {
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+
+	if s.desktop == nil {
+		return fmt.Errorf("desktop integration is not available in this build")
+	}
+	if !s.started {
+		startCtx := s.startCtx
+		if startCtx == nil {
+			startCtx = context.Background()
+		}
+		if err := s.desktop.Start(startCtx); err != nil {
+			return err
+		}
+		s.started = true
+	}
+	if s.initialized {
+		return nil
+	}
+	if err := s.initializeSessionDisplays(runtimeSessionID); err != nil {
+		return err
+	}
+	s.initialized = true
+	return nil
 }
 
 func (s *Server) guardStableDisplays(runtimeSessionID string) (core.CallResult, bool) {

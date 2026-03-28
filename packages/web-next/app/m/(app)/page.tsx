@@ -54,10 +54,12 @@ function getErrorMessage(error: unknown) {
 export default function MobileHomePage() {
   const router = useRouter()
   const { workspaceId } = useWorkspace()
-  const groups = useChatStore((state) => state.groups)
-  const loadingGroups = useChatStore((state) => state.loadingGroups)
-  const createGroup = useChatStore((state) => state.createGroup)
-  const selectGroup = useChatStore((state) => state.selectGroup)
+  const conversations = useChatStore((state) => state.conversations)
+  const loadingConversations = useChatStore(
+    (state) => state.loadingConversations
+  )
+  const createConversation = useChatStore((state) => state.createConversation)
+  const selectConversation = useChatStore((state) => state.selectConversation)
 
   const [draft, setDraft] = useState("")
   const [preference, setPreference] =
@@ -156,7 +158,12 @@ export default function MobileHomePage() {
     setErrorMessage(null)
 
     try {
-      const groupId = await createGroup(workspaceId, [actor.id], message, actor.id)
+      const conversationId = await createConversation(
+        workspaceId,
+        [actor.id],
+        message,
+        actor.id
+      )
       writeStoredMobileLaunchActor(workspaceId, actor)
 
       if (saveAsDefault) {
@@ -165,11 +172,11 @@ export default function MobileHomePage() {
         setLaunchActor(actor)
       }
 
-      selectGroup(groupId)
+      selectConversation(conversationId)
       setDraft("")
 
       startTransition(() => {
-        router.push(`/m/chat/${groupId}`)
+        router.push(`/m/chat/${conversationId}`)
       })
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
@@ -339,7 +346,7 @@ export default function MobileHomePage() {
               </Button>
             </div>
 
-            {loadingGroups ? (
+            {loadingConversations ? (
               <div className="-mx-4 border-y border-border/70 bg-background/80">
                 {Array.from({ length: 4 }, (_, index) => (
                   <div key={index} className="flex items-center gap-3 px-4 py-4">
@@ -364,31 +371,33 @@ export default function MobileHomePage() {
                   </div>
                 ))}
               </div>
-            ) : groups.length > 0 ? (
+            ) : conversations.length > 0 ? (
               <div className="-mx-4 border-y border-border/70 bg-background/80">
-                {groups.slice(0, 4).map((group) => {
+                {conversations.slice(0, 4).map((conversation) => {
                   const name =
-                    group.title || group.participants.map((p) => p.name).join(", ")
-                  const preview = group.lastMessage?.content || "No messages yet"
+                    conversation.title ||
+                    conversation.participants.map((p) => p.name).join(", ")
+                  const preview =
+                    conversation.lastMessage?.content || "No messages yet"
                   const previewLabel =
                     preview.length > 70 ? `${preview.slice(0, 70)}...` : preview
 
                   return (
                     <button
-                      key={group.id}
+                      key={conversation.id}
                       type="button"
                       onClick={() => {
-                        selectGroup(group.id)
+                        selectConversation(conversation.id)
                         startTransition(() => {
-                          router.push(`/m/chat/${group.id}`)
+                          router.push(`/m/chat/${conversation.id}`)
                         })
                       }}
                       className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-muted/35"
                     >
                       <ChatAvatar
                         name={name}
-                        avatarUrl={group.avatarUrl}
-                        entityType="group"
+                        avatarUrl={conversation.avatarUrl}
+                        entityType="conversation"
                         size="lg"
                       />
                       <div className="min-w-0 flex-1">

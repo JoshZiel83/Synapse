@@ -200,15 +200,7 @@ export function useWebSocket({
               ? "auth.error"
               : rawType === "server_shutdown"
                 ? "server.shutdown"
-                : rawType === "chat.feed.item.created"
-                  ? "feed.item.created"
-                  : rawType === "chat.runtime.updated"
-                    ? "runtime.updated"
-                    : rawType === "chat.conversation.updated"
-                      ? "conversation.updated"
-                      : rawType === "chat.interaction.updated"
-                        ? "interaction.updated"
-                      : rawType
+                : rawType
         const normalizedMessage = {
           ...msg,
           type: normalizedType,

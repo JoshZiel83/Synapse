@@ -3,33 +3,37 @@
 import { startTransition, useState } from "react"
 import { useRouter } from "next/navigation"
 
-import GroupList from "@/app/dashboard/chat/group-list"
-import NewGroupDialog from "@/app/dashboard/chat/new-group-dialog"
+import ConversationList from "@/app/dashboard/chat/conversation-list"
+import NewConversationDialog from "@/app/dashboard/chat/new-conversation-dialog"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { useChatStore } from "@/stores/chat-store"
 
 export default function MobileChatListPage() {
   const router = useRouter()
   const { workspaceId } = useWorkspace()
-  const groups = useChatStore((state) => state.groups)
-  const loadingGroups = useChatStore((state) => state.loadingGroups)
-  const selectedGroupId = useChatStore((state) => state.selectedGroupId)
+  const conversations = useChatStore((state) => state.conversations)
+  const loadingConversations = useChatStore(
+    (state) => state.loadingConversations
+  )
+  const selectedConversationId = useChatStore(
+    (state) => state.selectedConversationId
+  )
   const runtimeMap = useChatStore((state) => state.runtimeMap)
-  const createGroup = useChatStore((state) => state.createGroup)
-  const selectGroup = useChatStore((state) => state.selectGroup)
+  const createConversation = useChatStore((state) => state.createConversation)
+  const selectConversation = useChatStore((state) => state.selectConversation)
 
   const [dialogOpen, setDialogOpen] = useState(false)
 
-  async function handleCreateGroup(actorIds: string[]) {
+  async function handleCreateConversation(actorIds: string[]) {
     if (!workspaceId) return
     try {
-      const groupId = await createGroup(workspaceId, actorIds)
-      selectGroup(groupId)
+      const conversationId = await createConversation(workspaceId, actorIds)
+      selectConversation(conversationId)
       startTransition(() => {
-        router.push(`/m/chat/${groupId}`)
+        router.push(`/m/chat/${conversationId}`)
       })
     } catch (error) {
-      console.error("Failed to create group:", error)
+      console.error("Failed to create conversation:", error)
     }
   }
 
@@ -46,15 +50,15 @@ export default function MobileChatListPage() {
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col">
-        <GroupList
-          groups={groups}
-          loading={loadingGroups}
-          selectedId={selectedGroupId}
+        <ConversationList
+          conversations={conversations}
+          loading={loadingConversations}
+          selectedId={selectedConversationId}
           runtimeMap={runtimeMap}
-          onSelect={(groupId) => {
-            selectGroup(groupId)
+          onSelect={(conversationId) => {
+            selectConversation(conversationId)
             startTransition(() => {
-              router.push(`/m/chat/${groupId}`)
+              router.push(`/m/chat/${conversationId}`)
             })
           }}
           onNewConversation={() => setDialogOpen(true)}
@@ -64,11 +68,11 @@ export default function MobileChatListPage() {
         />
       </div>
 
-      <NewGroupDialog
+      <NewConversationDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         workspaceId={workspaceId}
-        onCreateGroup={handleCreateGroup}
+        onCreateConversation={handleCreateConversation}
       />
     </>
   )

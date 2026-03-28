@@ -1,28 +1,46 @@
-import type { AIResponse, ToolDefinition, ToolCall, AnthropicBuiltinTool, ConversationMessage, MultimodalConfig, CanonicalContentBlock, ProviderContextWindow } from '@synapse/shared';
-import { extractText, textBlock } from '@synapse/shared';
-import { createHash, randomUUID } from 'crypto';
-import type { AIProvider, AIProviderConfig, FileRefSegment } from './types.js';
-import { readAsBuffer, getFullUrl } from '../../../infrastructure/storage/index.js';
-import { compileContextWindowToConversationMessages, compressContextWindow } from '../context-compiler.js';
-import { parseFileRefSegments } from '../fileref-resolver.js';
-import { buildAudioFallbackContext } from '../audio-fallback.js';
-import { buildImageFallbackContext } from '../image-fallback.js';
+import type {
+  AIResponse,
+  ToolDefinition,
+  ToolCall,
+  AnthropicBuiltinTool,
+  ConversationMessage,
+  MultimodalConfig,
+  CanonicalContentBlock,
+  ProviderContextWindow,
+} from "@synapse/shared";
+import { extractText, formatMentionText, textBlock } from "@synapse/shared";
+import { createHash, randomUUID } from "crypto";
+import type { AIProvider, AIProviderConfig, FileRefSegment } from "./types.js";
+import {
+  readAsBuffer,
+  getFullUrl,
+} from "../../../infrastructure/storage/index.js";
+import {
+  compileContextWindowToConversationMessages,
+  compressContextWindow,
+} from "../context-compiler.js";
+import { parseFileRefSegments } from "../fileref-resolver.js";
+import { buildAudioFallbackContext } from "../audio-fallback.js";
+import { buildImageFallbackContext } from "../image-fallback.js";
 import {
   advanceEngineBranchState,
   buildAssistantMessageAppliedKey,
   buildToolCallBatchAppliedKey,
   buildBranchDeltaWindow,
   canResumeBranchFromWindow,
-} from '../engine-branches.js';
+} from "../engine-branches.js";
 
 // Map tool names to their latest versioned type identifiers
 const BUILTIN_TOOL_TYPES: Record<string, string> = {
-  web_search: 'web_search_20250305',
-  web_fetch: 'web_fetch_20250910',
+  web_search: "web_search_20250305",
+  web_fetch: "web_fetch_20250910",
 };
 
 const SUPPORTED_IMAGE_FORMATS = new Set([
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
 ]);
 
 // Anthropic API enforces 5 MB per base64 image/document
@@ -34,13 +52,16 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function buildAnthropicToolAlias(rawName: string, usedAliases: Set<string>): string {
-  const normalized = rawName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'tool';
-  const hash = createHash('sha256').update(rawName).digest('hex').slice(0, 8);
+function buildAnthropicToolAlias(
+  rawName: string,
+  usedAliases: Set<string>,
+): string {
+  const normalized = rawName.replace(/[^a-zA-Z0-9_-]/g, "_") || "tool";
+  const hash = createHash("sha256").update(rawName).digest("hex").slice(0, 8);
   let candidate = normalized;
 
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(candidate)) {
-    candidate = normalized.slice(0, 119) + '_' + hash;
+    candidate = normalized.slice(0, 119) + "_" + hash;
   }
 
   if (candidate.length > 128) {
@@ -48,14 +69,17 @@ function buildAnthropicToolAlias(rawName: string, usedAliases: Set<string>): str
   }
 
   if (candidate !== rawName || usedAliases.has(candidate)) {
-    const suffix = '_' + hash;
+    const suffix = "_" + hash;
     const base = normalized.slice(0, Math.max(1, 128 - suffix.length));
     candidate = `${base}${suffix}`;
   }
 
   while (usedAliases.has(candidate)) {
-    const retryHash = createHash('sha256').update(`${rawName}:${candidate}`).digest('hex').slice(0, 8);
-    const suffix = '_' + retryHash;
+    const retryHash = createHash("sha256")
+      .update(`${rawName}:${candidate}`)
+      .digest("hex")
+      .slice(0, 8);
+    const suffix = "_" + retryHash;
     const base = normalized.slice(0, Math.max(1, 128 - suffix.length));
     candidate = `${base}${suffix}`;
   }
@@ -86,26 +110,36 @@ async function ensureSupportedFormat(
     return { buffer, mimeType };
   }
   try {
-    const sharp = (await import('sharp')).default;
+    const sharp = (await import("sharp")).default;
     const converted = await sharp(buffer).png().toBuffer();
-    return { buffer: converted, mimeType: 'image/png' };
+    return { buffer: converted, mimeType: "image/png" };
   } catch (err) {
     console.error(`[anthropic] Failed to convert ${mimeType} to PNG:`, err);
     return { buffer, mimeType };
   }
 }
 
-function extractAnthropicServerToolCalls(blocks: Array<Record<string, any>>): AIResponse['serverToolCalls'] {
-  const calls: NonNullable<AIResponse['serverToolCalls']> = [];
-  const pendingByUseId = new Map<string, NonNullable<AIResponse['serverToolCalls']>[number]>();
+function extractAnthropicServerToolCalls(
+  blocks: Array<Record<string, any>>,
+): AIResponse["serverToolCalls"] {
+  const calls: NonNullable<AIResponse["serverToolCalls"]> = [];
+  const pendingByUseId = new Map<
+    string,
+    NonNullable<AIResponse["serverToolCalls"]>[number]
+  >();
 
   for (const block of blocks) {
-    if (block.type === 'server_tool_use') {
-      const call = { type: block.name === 'web_fetch' ? 'web_fetch' as const : 'web_search' as const } as NonNullable<AIResponse['serverToolCalls']>[number];
-      if (block.name === 'web_search' && block.input?.query) {
+    if (block.type === "server_tool_use") {
+      const call = {
+        type:
+          block.name === "web_fetch"
+            ? ("web_fetch" as const)
+            : ("web_search" as const),
+      } as NonNullable<AIResponse["serverToolCalls"]>[number];
+      if (block.name === "web_search" && block.input?.query) {
         call.query = block.input.query;
       }
-      if (block.name === 'web_fetch' && block.input?.url) {
+      if (block.name === "web_fetch" && block.input?.url) {
         call.url = block.input.url;
       }
       if (block.id) pendingByUseId.set(block.id, call);
@@ -113,21 +147,21 @@ function extractAnthropicServerToolCalls(blocks: Array<Record<string, any>>): AI
       continue;
     }
 
-    if (block.type === 'web_search_tool_result' && block.tool_use_id) {
+    if (block.type === "web_search_tool_result" && block.tool_use_id) {
       const parent = pendingByUseId.get(block.tool_use_id);
       if (parent && Array.isArray(block.content)) {
         parent.results = block.content
-          .filter((item: any) => item.type === 'web_search_result' && item.url)
+          .filter((item: any) => item.type === "web_search_result" && item.url)
           .map((item: any) => ({
             url: item.url,
-            title: item.title || '',
+            title: item.title || "",
             pageAge: item.page_age,
           }));
       }
       continue;
     }
 
-    if (block.type === 'web_fetch_tool_result' && block.tool_use_id) {
+    if (block.type === "web_fetch_tool_result" && block.tool_use_id) {
       const parent = pendingByUseId.get(block.tool_use_id);
       if (parent && block.content?.url) {
         parent.url = block.content.url;
@@ -146,27 +180,33 @@ function extractAnthropicCitationSources(
 
   for (let i = 0; i < blocks.length; i += 1) {
     const block = blocks[i];
-    if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
-      const results = block.content.filter((item: any) => item.type === 'web_search_result');
+    if (
+      block.type === "web_search_tool_result" &&
+      Array.isArray(block.content)
+    ) {
+      const results = block.content.filter(
+        (item: any) => item.type === "web_search_result",
+      );
       for (let j = 0; j < results.length; j += 1) {
         const result = results[j];
         if (!result.url) continue;
         sources[`${i}-${j}`] = {
           url: result.url,
-          title: result.title || '',
+          title: result.title || "",
         };
         hasSources = true;
       }
     }
 
-    if (block.type === 'text' && Array.isArray(block.citations)) {
+    if (block.type === "text" && Array.isArray(block.citations)) {
       for (const citation of block.citations) {
-        if (!citation.url || citation.type !== 'web_search_result_location') continue;
+        if (!citation.url || citation.type !== "web_search_result_location")
+          continue;
         const key = `cit-${citation.url}`;
         if (sources[key]) continue;
         sources[key] = {
           url: citation.url,
-          title: citation.title || '',
+          title: citation.title || "",
         };
         hasSources = true;
       }
@@ -177,8 +217,8 @@ function extractAnthropicCitationSources(
 }
 
 export class AnthropicProvider implements AIProvider {
-  readonly name = 'anthropic';
-  readonly kind = 'anthropic.messages' as const;
+  readonly name = "anthropic";
+  readonly kind = "anthropic.messages" as const;
   private config: AIProviderConfig;
 
   constructor(config: AIProviderConfig) {
@@ -188,36 +228,39 @@ export class AnthropicProvider implements AIProvider {
   async chat(params: {
     system: string;
     contextWindow: ProviderContextWindow;
-    branchState?: import('@synapse/shared').EngineBranchState;
+    branchState?: import("@synapse/shared").EngineBranchState;
     tools?: ToolDefinition[];
     builtinTools?: AnthropicBuiltinTool[];
     multimodal?: MultimodalConfig;
   }): Promise<AIResponse> {
-    const base = this.config.baseUrl.replace(/\/+$/, '');
+    const base = this.config.baseUrl.replace(/\/+$/, "");
     const toolNameMaps = buildToolNameMaps(params.tools || []);
-    const resumeState = params.branchState?.engineKind === this.kind
-      ? params.branchState
-      : undefined;
+    const resumeState =
+      params.branchState?.engineKind === this.kind
+        ? params.branchState
+        : undefined;
     const resumedMessages = Array.isArray(resumeState?.nativeState?.messages)
-      ? resumeState.nativeState.messages as Record<string, unknown>[]
+      ? (resumeState.nativeState.messages as Record<string, unknown>[])
       : null;
-    const canResume = (
+    const canResume =
       !!resumedMessages &&
       resumeState?.metadata?.systemPrompt === params.system &&
-      canResumeBranchFromWindow(params.contextWindow, resumeState)
-    );
+      canResumeBranchFromWindow(params.contextWindow, resumeState);
 
     const sourceWindow = canResume
       ? buildBranchDeltaWindow(params.contextWindow, resumeState)
       : params.contextWindow;
     const preparedWindow = await this.compressContextWindow(sourceWindow);
-    const conversationMessages = await this.compileContextWindow(preparedWindow);
+    const conversationMessages =
+      await this.compileContextWindow(preparedWindow);
     const deltaMessages = await this.convertMessages(
       conversationMessages,
       params.multimodal,
       toolNameMaps.canonicalToAlias,
     );
-    const allMessages = canResume ? [...resumedMessages, ...deltaMessages] : deltaMessages;
+    const allMessages = canResume
+      ? [...resumedMessages, ...deltaMessages]
+      : deltaMessages;
 
     const body: Record<string, unknown> = {
       model: this.config.model,
@@ -253,11 +296,12 @@ export class AnthropicProvider implements AIProvider {
 
     if (allTools.length > 0) {
       body.tools = allTools;
-      body.tool_choice = { type: 'auto' };
+      body.tool_choice = { type: "auto" };
     }
 
     // Increase timeout when server tools are enabled (they can take a long time)
-    const hasServerTools = params.builtinTools && params.builtinTools.length > 0;
+    const hasServerTools =
+      params.builtinTools && params.builtinTools.length > 0;
     const timeoutMs = hasServerTools ? 300_000 : 120_000;
 
     const controller = new AbortController();
@@ -266,11 +310,11 @@ export class AnthropicProvider implements AIProvider {
     let response: Response;
     try {
       response = await fetch(`${base}/v1/messages`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'x-api-key': this.config.apiKey,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
+          "x-api-key": this.config.apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
         },
         body: JSON.stringify(body),
         signal: controller.signal,
@@ -284,33 +328,42 @@ export class AnthropicProvider implements AIProvider {
       throw new Error(`Anthropic API error (${response.status}): ${errorBody}`);
     }
 
-    const data = await response.json() as {
-      content: Array<{ type: string; id?: string; text?: string; name?: string; input?: Record<string, unknown>; citations?: unknown[] }>;
+    const data = (await response.json()) as {
+      content: Array<{
+        type: string;
+        id?: string;
+        text?: string;
+        name?: string;
+        input?: Record<string, unknown>;
+        citations?: unknown[];
+      }>;
       usage: { input_tokens: number; output_tokens: number };
       stop_reason?: string;
     };
 
     const toolCalls: ToolCall[] = [];
-    let textContent = '';
+    let textContent = "";
     const mediaBlocks: unknown[] = [];
 
     // Debug: log content block types for diagnosing server tool behavior
     const blockTypes = data.content.map((b) => b.type);
-    if (blockTypes.some((t) => t !== 'text' && t !== 'tool_use')) {
-      console.log(`[anthropic] non-standard blocks: ${JSON.stringify(blockTypes)} stop_reason=${data.stop_reason}`);
+    if (blockTypes.some((t) => t !== "text" && t !== "tool_use")) {
+      console.log(
+        `[anthropic] non-standard blocks: ${JSON.stringify(blockTypes)} stop_reason=${data.stop_reason}`,
+      );
     }
 
     for (const block of data.content) {
-      if (block.type === 'tool_use' && block.name && block.input) {
+      if (block.type === "tool_use" && block.name && block.input) {
         toolCalls.push({
           callId: randomUUID(),
           providerCallId: block.id || undefined,
           toolName: toolNameMaps.aliasToCanonical.get(block.name) || block.name,
           input: block.input,
         });
-      } else if (block.type === 'text' && block.text) {
+      } else if (block.type === "text" && block.text) {
         textContent += block.text;
-      } else if (block.type === 'image') {
+      } else if (block.type === "image") {
         // Collect media blocks from model response for ingestion
         mediaBlocks.push(block);
       }
@@ -323,7 +376,7 @@ export class AnthropicProvider implements AIProvider {
     if (textContent) contentBlocks.push(textBlock(textContent));
 
     const assistantMsg: ConversationMessage = {
-      role: 'assistant' as const,
+      role: "assistant" as const,
       content: contentBlocks,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     };
@@ -331,7 +384,10 @@ export class AnthropicProvider implements AIProvider {
     const rawAssistantMessage = data.content as Array<Record<string, any>>;
     const appliedKeys = [
       textContent
-        ? buildAssistantMessageAppliedKey(params.branchState?.sessionId, textContent)
+        ? buildAssistantMessageAppliedKey(
+            params.branchState?.sessionId,
+            textContent,
+          )
         : undefined,
       buildToolCallBatchAppliedKey(toolCalls, textContent),
     ].filter((value): value is string => !!value);
@@ -340,7 +396,10 @@ export class AnthropicProvider implements AIProvider {
           params.branchState,
           params.contextWindow,
           {
-            messages: [...allMessages, { role: 'assistant', content: rawAssistantMessage }],
+            messages: [
+              ...allMessages,
+              { role: "assistant", content: rawAssistantMessage },
+            ],
           },
           {
             systemPrompt: params.system,
@@ -355,7 +414,7 @@ export class AnthropicProvider implements AIProvider {
         input: data.usage.input_tokens,
         output: data.usage.output_tokens,
       },
-      stopReason: data.stop_reason || 'end_turn',
+      stopReason: data.stop_reason || "end_turn",
       rawAssistantMessage,
       mediaBlocks: mediaBlocks.length > 0 ? mediaBlocks : undefined,
       serverToolCalls: extractAnthropicServerToolCalls(rawAssistantMessage),
@@ -367,14 +426,17 @@ export class AnthropicProvider implements AIProvider {
   async rebuildBranchState(params: {
     system: string;
     contextWindow: ProviderContextWindow;
-    branchState: import('@synapse/shared').EngineBranchState;
+    branchState: import("@synapse/shared").EngineBranchState;
     tools?: ToolDefinition[];
     builtinTools?: AnthropicBuiltinTool[];
     multimodal?: MultimodalConfig;
   }) {
     const toolNameMaps = buildToolNameMaps(params.tools || []);
-    const preparedWindow = await this.compressContextWindow(params.contextWindow);
-    const conversationMessages = await this.compileContextWindow(preparedWindow);
+    const preparedWindow = await this.compressContextWindow(
+      params.contextWindow,
+    );
+    const conversationMessages =
+      await this.compileContextWindow(preparedWindow);
     const messages = await this.convertMessages(
       conversationMessages,
       params.multimodal,
@@ -412,47 +474,55 @@ export class AnthropicProvider implements AIProvider {
 
     for (const msg of messages) {
       switch (msg.role) {
-        case 'user': {
-          const { nativeBlocks } = await this.resolveBlocks(msg.content, multimodal);
-          this.appendOrMerge(result, 'user', nativeBlocks);
+        case "user": {
+          const { nativeBlocks } = await this.resolveBlocks(
+            msg.content,
+            multimodal,
+          );
+          this.appendOrMerge(result, "user", nativeBlocks);
           break;
         }
 
-        case 'assistant': {
+        case "assistant": {
           if (msg.toolCalls && msg.toolCalls.length > 0) {
             const contentBlocks: unknown[] = [];
             const text = extractText(msg.content);
             if (text) {
-              contentBlocks.push({ type: 'text', text });
+              contentBlocks.push({ type: "text", text });
             }
             for (const tc of msg.toolCalls) {
               contentBlocks.push({
-                type: 'tool_use',
+                type: "tool_use",
                 id: tc.providerCallId || tc.callId,
-                name: canonicalToAlias?.get(tc.toolName) || buildAnthropicToolAlias(tc.toolName, new Set()),
+                name:
+                  canonicalToAlias?.get(tc.toolName) ||
+                  buildAnthropicToolAlias(tc.toolName, new Set()),
                 input: tc.input,
               });
             }
-            this.appendOrMerge(result, 'assistant', contentBlocks);
+            this.appendOrMerge(result, "assistant", contentBlocks);
           } else {
             const text = extractText(msg.content);
-            this.appendOrMerge(result, 'assistant', text);
+            this.appendOrMerge(result, "assistant", text);
           }
           break;
         }
 
-        case 'tool_result': {
+        case "tool_result": {
           const toolResultBlocks: unknown[] = [];
           for (const tr of msg.results) {
-            const { nativeBlocks } = await this.resolveBlocks(tr.content, multimodal);
+            const { nativeBlocks } = await this.resolveBlocks(
+              tr.content,
+              multimodal,
+            );
             toolResultBlocks.push({
-              type: 'tool_result',
+              type: "tool_result",
               tool_use_id: tr.providerCallId || tr.toolCallId,
-              content: nativeBlocks.length > 0 ? nativeBlocks : '',
+              content: nativeBlocks.length > 0 ? nativeBlocks : "",
               is_error: tr.isError || false,
             });
           }
-          this.appendOrMerge(result, 'user', toolResultBlocks);
+          this.appendOrMerge(result, "user", toolResultBlocks);
           break;
         }
       }
@@ -462,10 +532,10 @@ export class AnthropicProvider implements AIProvider {
     // Group/session retries can legitimately rebuild a transcript whose latest
     // visible item is authored by the actor, so we add a synthetic user turn.
     const last = result[result.length - 1];
-    if (last?.role === 'assistant') {
+    if (last?.role === "assistant") {
       result.push({
-        role: 'user',
-        content: [{ type: 'text', text: 'Please continue.' }],
+        role: "user",
+        content: [{ type: "text", text: "Please continue." }],
       });
     }
 
@@ -478,35 +548,52 @@ export class AnthropicProvider implements AIProvider {
     blocks: CanonicalContentBlock[],
     multimodal?: MultimodalConfig,
   ): Promise<{ nativeBlocks: unknown[]; textFallback: string }> {
-    const supportedTypes = multimodal?.supported ? new Set(multimodal.types) : new Set<string>();
+    const supportedTypes = multimodal?.supported
+      ? new Set(multimodal.types)
+      : new Set<string>();
     const nativeBlocks: unknown[] = [];
     const textParts: string[] = [];
 
     for (const block of blocks) {
-      if (block.type === 'text') {
-        nativeBlocks.push({ type: 'text', text: block.text });
+      if (block.type === "text") {
+        nativeBlocks.push({ type: "text", text: block.text });
         textParts.push(block.text);
+        continue;
+      }
+
+      if (block.type === "mention") {
+        const text = formatMentionText(block);
+        nativeBlocks.push({ type: "text", text });
+        textParts.push(text);
         continue;
       }
 
       // file_ref block — check multimodal capability
       if (!supportedTypes.has(block.category)) {
         // Unsupported — text fallback
-        const desc = block.category === 'audio'
-          ? await buildAudioFallbackContext(
-              { ...block, category: 'audio' },
-              'Audio input is not enabled for this provider request.',
-            )
-          : block.category === 'image'
-            ? await buildImageFallbackContext(
-                { ...block, category: 'image' },
-                'Image input is not enabled for this provider request.',
+        const desc =
+          block.category === "audio"
+            ? await buildAudioFallbackContext(
+                { ...block, category: "audio" },
+                "Audio input is not enabled for this provider request.",
               )
-            : `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`;
-        nativeBlocks.push({ type: 'text', text: desc });
+            : block.category === "image"
+              ? await buildImageFallbackContext(
+                  { ...block, category: "image" },
+                  "Image input is not enabled for this provider request.",
+                )
+              : `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`;
+        nativeBlocks.push({ type: "text", text: desc });
         textParts.push(desc);
         // Always inject FileRef hint even for unsupported types
-        nativeBlocks.push({ type: 'text', text: this.buildFileRefHint(block.fileId, block.originalName, block.category) });
+        nativeBlocks.push({
+          type: "text",
+          text: this.buildFileRefHint(
+            block.fileId,
+            block.originalName,
+            block.category,
+          ),
+        });
         continue;
       }
 
@@ -515,7 +602,7 @@ export class AnthropicProvider implements AIProvider {
         let buffer = await readAsBuffer(block.storedName);
         let mimeType = block.mimeType;
 
-        if (block.category === 'image') {
+        if (block.category === "image") {
           const converted = await ensureSupportedFormat(buffer, mimeType);
           buffer = converted.buffer;
           mimeType = converted.mimeType;
@@ -523,27 +610,47 @@ export class AnthropicProvider implements AIProvider {
 
         let nativeBlock: unknown | null = null;
         switch (block.category) {
-          case 'image': {
+          case "image": {
             if (buffer.length <= BASE64_THRESHOLD) {
-              nativeBlock = { type: 'image', source: { type: 'base64', media_type: mimeType, data: buffer.toString('base64') } };
+              nativeBlock = {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: mimeType,
+                  data: buffer.toString("base64"),
+                },
+              };
             } else {
-              nativeBlock = { type: 'image', source: { type: 'url', url: getFullUrl(block.storedName) } };
+              nativeBlock = {
+                type: "image",
+                source: { type: "url", url: getFullUrl(block.storedName) },
+              };
             }
             break;
           }
-          case 'document': {
+          case "document": {
             if (buffer.length <= BASE64_THRESHOLD) {
-              nativeBlock = { type: 'document', source: { type: 'base64', media_type: mimeType, data: buffer.toString('base64') } };
+              nativeBlock = {
+                type: "document",
+                source: {
+                  type: "base64",
+                  media_type: mimeType,
+                  data: buffer.toString("base64"),
+                },
+              };
             } else {
-              nativeBlock = { type: 'document', source: { type: 'url', url: getFullUrl(block.storedName) } };
+              nativeBlock = {
+                type: "document",
+                source: { type: "url", url: getFullUrl(block.storedName) },
+              };
             }
             break;
           }
-          case 'audio':
+          case "audio":
             // Anthropic Messages API does not accept audio input
             nativeBlock = null;
             break;
-          case 'video':
+          case "video":
             nativeBlock = null;
             break;
         }
@@ -552,40 +659,55 @@ export class AnthropicProvider implements AIProvider {
           nativeBlocks.push(nativeBlock);
           textParts.push(`[${block.category}: ${block.originalName}]`);
         } else {
-          const desc = block.category === 'audio'
-            ? await buildAudioFallbackContext(
-                { ...block, category: 'audio' },
-                'Direct audio input is not available for Anthropic in this request.',
-              )
-            : block.category === 'image'
-              ? await buildImageFallbackContext(
-                  { ...block, category: 'image' },
-                  'Direct image input is not available for Anthropic in this request.',
+          const desc =
+            block.category === "audio"
+              ? await buildAudioFallbackContext(
+                  { ...block, category: "audio" },
+                  "Direct audio input is not available for Anthropic in this request.",
                 )
-              : `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)}) - provider does not support this type]`;
-          nativeBlocks.push({ type: 'text', text: desc });
+              : block.category === "image"
+                ? await buildImageFallbackContext(
+                    { ...block, category: "image" },
+                    "Direct image input is not available for Anthropic in this request.",
+                  )
+                : `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)}) - provider does not support this type]`;
+          nativeBlocks.push({ type: "text", text: desc });
           textParts.push(desc);
         }
       } catch (err: any) {
-        console.error(`[anthropic] Failed to resolve file_ref ${block.storedName}:`, err.message);
+        console.error(
+          `[anthropic] Failed to resolve file_ref ${block.storedName}:`,
+          err.message,
+        );
         const desc = `[${block.category}: ${block.originalName} (read failed)]`;
-        nativeBlocks.push({ type: 'text', text: desc });
+        nativeBlocks.push({ type: "text", text: desc });
         textParts.push(desc);
       }
 
       // Inject FileRef hint after every file_ref block
-      nativeBlocks.push({ type: 'text', text: this.buildFileRefHint(block.fileId, block.originalName, block.category) });
+      nativeBlocks.push({
+        type: "text",
+        text: this.buildFileRefHint(
+          block.fileId,
+          block.originalName,
+          block.category,
+        ),
+      });
     }
 
-    return { nativeBlocks, textFallback: textParts.join('\n') };
+    return { nativeBlocks, textFallback: textParts.join("\n") };
   }
 
-  private buildFileRefHint(fileId: string, originalName: string, category: string): string {
+  private buildFileRefHint(
+    fileId: string,
+    originalName: string,
+    category: string,
+  ): string {
     return [
       `This ${category} "${originalName}" is available as <FileRef id="${fileId}"/>.`,
       `To display it in your response, use exactly: <FileRef id="${fileId}"/>.`,
       `If a tool parameter expects a fileRef, pass the same exact string <FileRef id="${fileId}"/> instead of inventing a URL or data URI.`,
-    ].join(' ');
+    ].join(" ");
   }
 
   // ─── Internal: role alternation helpers ───
@@ -608,12 +730,12 @@ export class AnthropicProvider implements AIProvider {
   }
 
   private normalizeContent(content: unknown): unknown[] {
-    if (typeof content === 'string') {
-      return [{ type: 'text', text: content }];
+    if (typeof content === "string") {
+      return [{ type: "text", text: content }];
     }
     if (Array.isArray(content)) {
       return content;
     }
-    return [{ type: 'text', text: String(content) }];
+    return [{ type: "text", text: String(content) }];
   }
 }

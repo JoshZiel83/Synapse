@@ -7,6 +7,28 @@ export function getFileUrlById(fileId: string): string {
   return `/files/${fileId}`;
 }
 
+export async function storeFile(
+  params: {
+    buffer: Buffer;
+    originalName: string;
+    mimeType: string;
+    workspaceId: string | null;
+    uploaderUserId?: string | null;
+    category?: string;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<FileRecord> {
+  return saveFromBuffer(
+    params.buffer,
+    params.originalName,
+    params.mimeType,
+    params.workspaceId,
+    params.uploaderUserId ?? null,
+    params.category,
+    params.metadata,
+  );
+}
+
 /**
  * Upload a file from a multipart buffer.
  */
@@ -18,7 +40,14 @@ export async function uploadFile(
   uploaderUserId: string,
   category: string = 'chat_attachment',
 ): Promise<FileRecord> {
-  return saveFromBuffer(buffer, originalName, mimeType, workspaceId, uploaderUserId, category);
+  return storeFile({
+    buffer,
+    originalName,
+    mimeType,
+    workspaceId,
+    uploaderUserId,
+    category,
+  });
 }
 
 /**
@@ -51,6 +80,35 @@ export async function getFileDetail(fileId: string): Promise<FileRecordView | nu
      FROM files
      WHERE id = $1`,
     [fileId],
+  );
+  if (result.rows.length === 0) return null;
+
+  const row = result.rows[0];
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    uploaderUserId: row.uploader_user_id,
+    originalName: row.original_name,
+    storedName: row.stored_name,
+    url: getFileUrl(row.stored_name),
+    fullUrl: getFullUrl(row.stored_name),
+    mimeType: row.mime_type,
+    sizeBytes: Number(row.size_bytes),
+    createdAt: new Date(row.created_at).toISOString(),
+    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : undefined,
+  };
+}
+
+export async function getWorkspaceFileDetail(
+  fileId: string,
+  workspaceId: string,
+): Promise<FileRecordView | null> {
+  const result = await query(
+    `SELECT id, workspace_id, uploader_user_id, stored_name, original_name, mime_type, size_bytes, metadata, created_at
+     FROM files
+     WHERE id = $1
+       AND workspace_id = $2`,
+    [fileId, workspaceId],
   );
   if (result.rows.length === 0) return null;
 
@@ -111,15 +169,15 @@ export async function duplicateFileRecord(
   }
 
   const buffer = await readAsBuffer(info.storedName);
-  return saveFromBuffer(
+  return storeFile({
     buffer,
-    info.originalName,
-    info.mimeType,
-    options.workspaceId,
-    options.uploaderUserId,
-    options.category,
-    options.metadata,
-  );
+    originalName: info.originalName,
+    mimeType: info.mimeType,
+    workspaceId: options.workspaceId,
+    uploaderUserId: options.uploaderUserId,
+    category: options.category,
+    metadata: options.metadata,
+  });
 }
 
 export async function getStoredFileAccessInfo(

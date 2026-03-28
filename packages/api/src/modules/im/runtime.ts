@@ -13,7 +13,7 @@ import {
   ensureConversationMember,
   getConversationFeedItemById,
 } from "../conversation/service.js";
-import { createGroup, wakeActor } from "../group/service.js";
+import { createConversation, wakeActor } from "../conversation/chat-service.js";
 import { getWorkspaceChiefActorPreference } from "../workspace/service.js";
 import {
   consumeTransportAccountAutoLink,
@@ -375,12 +375,12 @@ function buildWeixinBodyText(itemList?: WeixinMessageItem[]) {
   return "";
 }
 
-async function emitChatFeedItem(workspaceId: string, itemId: string) {
+async function emitFeedItemCreated(workspaceId: string, itemId: string) {
   const item = await getConversationFeedItemById(itemId);
   if (!item || item.workspaceSequence === undefined) return;
 
   await emitEvent({
-    type: "chat.feed.item.created",
+    type: "feed.item.created",
     workspaceId,
     payload: {
       workspaceSequence: item.workspaceSequence,
@@ -421,7 +421,7 @@ async function ensureTransportConversationBinding(params: {
   }
 
   const ownerId = await getWorkspaceOwnerId(params.account.workspaceId);
-  const created = await createGroup({
+  const created = await createConversation({
     workspaceId: params.account.workspaceId,
     createdBy: ownerId,
     title:
@@ -434,7 +434,7 @@ async function ensureTransportConversationBinding(params: {
   try {
     return await upsertConversationTransportBinding({
       workspaceId: params.account.workspaceId,
-      conversationId: created.group.id,
+      conversationId: created.conversation.id,
       transportAccountId: params.account.id,
       endpointType: params.endpointType,
       endpointExternalId: params.endpointExternalId,
@@ -605,7 +605,7 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
     targetMemberIds: wakeTarget ? [wakeTarget.participantId] : [],
   });
 
-  await emitChatFeedItem(binding.workspaceId, item.id);
+  await emitFeedItemCreated(binding.workspaceId, item.id);
   const link = await queueConversationTransportProjection({
     workspaceId: binding.workspaceId,
     conversationId: binding.conversationId,
@@ -628,7 +628,7 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
 
   if (wakeTarget) {
     await wakeActor({
-      groupId: binding.conversationId,
+      conversationId: binding.conversationId,
       actorId: wakeTarget.actorId,
       sourceType: "user_message",
       sourceItemId: item.id,

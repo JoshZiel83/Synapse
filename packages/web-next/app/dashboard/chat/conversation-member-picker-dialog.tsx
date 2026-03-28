@@ -9,7 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Search, UserPlus } from 'lucide-react';
 import { api } from '@/lib/api';
 import ChatAvatar from './chat-avatar';
-import type { GroupMember } from '@/stores/chat-store';
+import type { ConversationMember } from '@/stores/chat-store';
 
 type PickerOption = {
   type: 'actor' | 'user';
@@ -42,23 +42,23 @@ function normalizeUserOption(member: any): PickerOption {
   };
 }
 
-interface GroupMemberPickerDialogProps {
+interface ConversationMemberPickerDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   workspaceId: string;
-  groupId: string;
-  existingMembers: GroupMember[];
+  conversationId: string;
+  existingMembers: ConversationMember[];
   onAdded: () => Promise<void> | void;
 }
 
-export default function GroupMemberPickerDialog({
+export default function ConversationMemberPickerDialog({
   open,
   onOpenChange,
   workspaceId,
-  groupId,
+  conversationId,
   existingMembers,
   onAdded,
-}: GroupMemberPickerDialogProps) {
+}: ConversationMemberPickerDialogProps) {
   const [options, setOptions] = useState<PickerOption[]>([]);
   const [search, setSearch] = useState('');
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
@@ -90,7 +90,7 @@ export default function GroupMemberPickerDialog({
         ...userOptions.filter((option: PickerOption) => !existingUserIds.has(option.id)),
       ]);
     })().catch((error) => {
-      console.error('Failed to load available group members:', error);
+      console.error('Failed to load available conversation members:', error);
       if (!cancelled) setOptions([]);
     });
 
@@ -136,11 +136,14 @@ export default function GroupMemberPickerDialog({
         if (type === 'user') userIds.push(id);
       }
 
-      await api.addGroupMembers(workspaceId, groupId, { actorIds, userIds });
+      await api.addConversationMembers(workspaceId, conversationId, {
+        actorIds,
+        userIds,
+      });
       await onAdded();
       onOpenChange(false);
     } catch (error) {
-      console.error('Failed to add group members:', error);
+      console.error('Failed to add conversation members:', error);
     } finally {
       setSubmitting(false);
     }

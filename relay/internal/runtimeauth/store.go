@@ -144,6 +144,10 @@ func (s *Store) Apply(grant Grant) error {
 		if grant.Mode != "control" {
 			return fmt.Errorf("unsupported cua mode %q", grant.Mode)
 		}
+	case "chrome":
+		if grant.Duration != "persistent" {
+			return fmt.Errorf("chrome authorization must be persistent")
+		}
 	default:
 		return fmt.Errorf("unsupported capability %q", grant.Capability)
 	}
@@ -241,6 +245,19 @@ func (s *Store) AllowsCUAControl(exposureStableKey, runtimeSessionID string) boo
 	}
 	for _, grant := range s.sessionGrants[runtimeSessionID] {
 		if grant.Capability == "cua" && grant.Mode == "control" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (s *Store) AllowsChromeAutomation(exposureStableKey string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, grant := range s.persistentGrants {
+		if grant.ExposureStableKey == exposureStableKey && grant.Capability == "chrome" {
 			return true
 		}
 	}

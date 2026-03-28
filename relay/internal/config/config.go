@@ -15,13 +15,15 @@ import (
 )
 
 const (
-	defaultBuiltinCommandlineMaxTimeoutSec      int64 = 300
-	defaultBuiltinFilesystemMaxGetFileSizeBytes       = 20 * 1024 * 1024
-	CloseBehaviorAsk                                  = "ask"
-	CloseBehaviorTray                                 = "tray"
-	CloseBehaviorQuit                                 = "quit"
-	SyncModeSnapshot                                  = "snapshot"
-	SyncModeFollow                                    = "follow"
+	defaultBuiltinCommandlineMaxTimeoutSec          int64 = 300
+	defaultBuiltinFilesystemMaxGetFileSizeBytes           = 20 * 1024 * 1024
+	defaultBuiltinFilesystemBackupMaxTotalSizeBytes       = 256 * 1024 * 1024
+	defaultBuiltinFilesystemBackupMaxFileSizeBytes        = 32 * 1024 * 1024
+	CloseBehaviorAsk                                      = "ask"
+	CloseBehaviorTray                                     = "tray"
+	CloseBehaviorQuit                                     = "quit"
+	SyncModeSnapshot                                      = "snapshot"
+	SyncModeFollow                                        = "follow"
 )
 
 type RelayConfig struct {
@@ -97,6 +99,12 @@ type BuiltinFilesystemIndexConfig struct {
 	ParseImages      *bool    `yaml:"parse_images,omitempty" json:"parseImages,omitempty"`
 }
 
+type BuiltinFilesystemBackupConfig struct {
+	Enabled           *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	MaxTotalSizeBytes int64 `yaml:"max_total_size_bytes,omitempty" json:"maxTotalSizeBytes,omitempty"`
+	MaxFileSizeBytes  int64 `yaml:"max_file_size_bytes,omitempty" json:"maxFileSizeBytes,omitempty"`
+}
+
 type BuiltinFilesystemConfig struct {
 	ReadOnly            *bool                         `yaml:"read_only,omitempty" json:"readOnly,omitempty"`
 	Scope               string                        `yaml:"scope,omitempty" json:"scope,omitempty"`
@@ -104,6 +112,7 @@ type BuiltinFilesystemConfig struct {
 	MaxGetFileSizeBytes int64                         `yaml:"max_get_file_size_bytes,omitempty" json:"maxGetFileSizeBytes,omitempty"`
 	Roots               []BuiltinFilesystemRootConfig `yaml:"roots,omitempty" json:"roots,omitempty"`
 	Index               BuiltinFilesystemIndexConfig  `yaml:"index,omitempty" json:"index,omitempty"`
+	Backup              BuiltinFilesystemBackupConfig `yaml:"backup,omitempty" json:"backup,omitempty"`
 }
 
 type BuiltinChromeConfig struct {
@@ -532,6 +541,11 @@ func cloneBuiltin(input *BuiltinServerConfig) *BuiltinServerConfig {
 				ParseOffice:      cloneBoolPtr(input.Filesystem.Index.ParseOffice),
 				ParseImages:      cloneBoolPtr(input.Filesystem.Index.ParseImages),
 			},
+			Backup: BuiltinFilesystemBackupConfig{
+				Enabled:           cloneBoolPtr(input.Filesystem.Backup.Enabled),
+				MaxTotalSizeBytes: input.Filesystem.Backup.MaxTotalSizeBytes,
+				MaxFileSizeBytes:  input.Filesystem.Backup.MaxFileSizeBytes,
+			},
 		}
 	}
 	if input.Chrome != nil {
@@ -686,6 +700,15 @@ func applyBuiltinDefaults(server *ServerConfig) {
 		if server.Builtin.Filesystem.Index.ParseImages == nil {
 			server.Builtin.Filesystem.Index.ParseImages = boolPtr(true)
 		}
+		if server.Builtin.Filesystem.Backup.Enabled == nil {
+			server.Builtin.Filesystem.Backup.Enabled = boolPtr(true)
+		}
+		if server.Builtin.Filesystem.Backup.MaxTotalSizeBytes == 0 {
+			server.Builtin.Filesystem.Backup.MaxTotalSizeBytes = defaultBuiltinFilesystemBackupMaxTotalSizeBytes
+		}
+		if server.Builtin.Filesystem.Backup.MaxFileSizeBytes == 0 {
+			server.Builtin.Filesystem.Backup.MaxFileSizeBytes = defaultBuiltinFilesystemBackupMaxFileSizeBytes
+		}
 	case "chrome":
 		if server.Builtin.InstanceID == "" {
 			server.Builtin.InstanceID = "chrome_default"
@@ -814,6 +837,15 @@ func validateServerConfig(server ServerConfig) error {
 			}
 			if server.Builtin.Filesystem.Index.MaxFileSizeBytes <= 0 {
 				return fmt.Errorf("builtin.filesystem.index.max_file_size_bytes must be greater than 0")
+			}
+			if server.Builtin.Filesystem.Backup.MaxTotalSizeBytes <= 0 {
+				return fmt.Errorf("builtin.filesystem.backup.max_total_size_bytes must be greater than 0")
+			}
+			if server.Builtin.Filesystem.Backup.MaxFileSizeBytes <= 0 {
+				return fmt.Errorf("builtin.filesystem.backup.max_file_size_bytes must be greater than 0")
+			}
+			if server.Builtin.Filesystem.Backup.MaxFileSizeBytes > server.Builtin.Filesystem.Backup.MaxTotalSizeBytes {
+				return fmt.Errorf("builtin.filesystem.backup.max_file_size_bytes must be less than or equal to builtin.filesystem.backup.max_total_size_bytes")
 			}
 		case "chrome":
 			if server.Builtin.Chrome == nil {

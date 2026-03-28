@@ -5,12 +5,14 @@ import "github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 type Config struct {
 	StableKey           string
 	Name                string
+	Enabled             bool
 	ReadOnly            bool
 	Scope               string
 	GlobalAccess        string
 	MaxGetFileSizeBytes int64
 	Roots               []Root
 	Index               IndexConfig
+	Backup              BackupConfig
 	AuthStore           *runtimeauth.Store
 }
 
@@ -30,24 +32,33 @@ type IndexConfig struct {
 	ParseImages      bool
 }
 
+type BackupConfig struct {
+	Dir               string
+	Enabled           bool
+	MaxTotalSizeBytes int64
+	MaxFileSizeBytes  int64
+}
+
 type SearchQuery struct {
-	Query          string   `json:"query"`
-	Mode           string   `json:"mode,omitempty"`
-	Path           string   `json:"path,omitempty"`
-	Roots          []string `json:"roots,omitempty"`
-	Extensions     []string `json:"extensions,omitempty"`
-	Type           string   `json:"type,omitempty"`
-	Access         string   `json:"access,omitempty"`
-	Parsers        []string `json:"parsers,omitempty"`
-	ContentIndexed *bool    `json:"content_indexed,omitempty"`
-	MinSizeBytes   int64    `json:"min_size_bytes,omitempty"`
-	MaxSizeBytes   int64    `json:"max_size_bytes,omitempty"`
-	ModifiedAfter  string   `json:"modified_after,omitempty"`
-	ModifiedBefore string   `json:"modified_before,omitempty"`
-	Limit          int      `json:"limit,omitempty"`
-	Offset         int      `json:"offset,omitempty"`
-	SortBy         string   `json:"sort_by,omitempty"`
-	SortDirection  string   `json:"sort_direction,omitempty"`
+	Query            string   `json:"query"`
+	Mode             string   `json:"mode,omitempty"`
+	Path             string   `json:"path,omitempty"`
+	Roots            []string `json:"roots,omitempty"`
+	Exclude          []string `json:"exclude,omitempty"`
+	Extensions       []string `json:"extensions,omitempty"`
+	EntryType        string   `json:"entry_type,omitempty"`
+	Access           string   `json:"access,omitempty"`
+	Parsers          []string `json:"parsers,omitempty"`
+	RespectGitignore bool     `json:"respect_gitignore,omitempty"`
+	ContentIndexed   *bool    `json:"content_indexed,omitempty"`
+	MinSizeBytes     int64    `json:"min_size_bytes,omitempty"`
+	MaxSizeBytes     int64    `json:"max_size_bytes,omitempty"`
+	ModifiedAfter    string   `json:"modified_after,omitempty"`
+	ModifiedBefore   string   `json:"modified_before,omitempty"`
+	Limit            int      `json:"limit,omitempty"`
+	Offset           int      `json:"offset,omitempty"`
+	SortBy           string   `json:"sort_by,omitempty"`
+	SortDirection    string   `json:"sort_direction,omitempty"`
 }
 
 type SearchResult struct {

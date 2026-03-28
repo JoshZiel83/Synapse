@@ -72,14 +72,14 @@ export default function PluginAdvancedStep({
 
     const load = async () => {
       try {
-        const [actorData, groupData] = await Promise.all([
+        const [actorData, conversationData] = await Promise.all([
           api.getActors(workspaceId),
-          api.getGroups(workspaceId),
+          api.getConversations(workspaceId),
         ]);
 
         if (cancelled) return;
         setActors((Array.isArray(actorData) ? actorData : []).map(normalizeActorOption));
-        setConversations((Array.isArray(groupData) ? groupData : groupData?.groups || []).map(normalizeConversationOption));
+        setConversations((conversationData?.conversations || []).map(normalizeConversationOption));
       } catch (error) {
         if (!cancelled) {
           console.error('Failed to load advanced plugin options:', error);

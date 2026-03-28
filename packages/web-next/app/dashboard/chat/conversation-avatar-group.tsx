@@ -3,7 +3,7 @@
 import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount, AvatarImage } from '@/components/ui/avatar';
 import { getTwemojiUrl } from '@/lib/twemoji';
 import { cn } from '@/lib/utils';
-import type { GroupParticipant, ThinkingPhase } from '@/stores/chat-store';
+import type { ConversationParticipant, ThinkingPhase } from '@/stores/chat-store';
 
 const STATUS_EMOJI: Record<ThinkingPhase | 'idle', string> = {
   thinking: '🤔',
@@ -20,7 +20,7 @@ function getInitials(name: string) {
   return `${parts[0]![0] || ''}${parts[1]![0] || ''}`.toUpperCase();
 }
 
-function moveActiveActorToFront(participants: GroupParticipant[], activeActorId?: string) {
+function moveActiveActorToFront(participants: ConversationParticipant[], activeActorId?: string) {
   if (!activeActorId) return participants;
 
   const activeIndex = participants.findIndex((participant) => participant.id === activeActorId);
@@ -35,7 +35,7 @@ function moveActiveActorToFront(participants: GroupParticipant[], activeActorId?
 }
 
 interface ConversationAvatarGroupProps {
-  participants: GroupParticipant[];
+  participants: ConversationParticipant[];
   activeActorId?: string;
   activePhase?: ThinkingPhase;
   className?: string;

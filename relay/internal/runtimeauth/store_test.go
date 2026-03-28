@@ -142,3 +142,30 @@ func TestSessionGrantRequiresMatchingOpenSession(t *testing.T) {
 		t.Fatalf("expected missing session grant to fail")
 	}
 }
+
+func TestChromeAuthorizationIsPersistentOnly(t *testing.T) {
+	store := NewStore(t.TempDir() + "/runtime-auth.json")
+
+	err := store.Apply(Grant{
+		InteractionID:     "chrome-session",
+		ExposureStableKey: "chrome-demo",
+		Duration:          "session",
+		Capability:        "chrome",
+	})
+	if err == nil {
+		t.Fatalf("expected session-scoped chrome authorization to fail")
+	}
+
+	if err := store.Apply(Grant{
+		InteractionID:     "chrome-persistent",
+		ExposureStableKey: "chrome-demo",
+		Duration:          "persistent",
+		Capability:        "chrome",
+	}); err != nil {
+		t.Fatalf("apply persistent chrome grant: %v", err)
+	}
+
+	if !store.AllowsChromeAutomation("chrome-demo") {
+		t.Fatalf("expected persistent chrome authorization to be available")
+	}
+}

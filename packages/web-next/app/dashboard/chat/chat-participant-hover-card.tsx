@@ -12,13 +12,13 @@ import {
   HoverCardTrigger,
 } from "@/components/ui/hover-card"
 import { useIsMobile } from "@/hooks/use-mobile"
-import type { GroupMember } from "@/stores/chat-store"
+import type { ConversationMember } from "@/stores/chat-store"
 import ChatAvatar from "./chat-avatar"
 import {
   formatTransportKindLabel,
-  getGroupMemberContactHref,
-  getGroupMemberSubtitle,
-  getGroupMemberTypeLabel,
+  getConversationMemberContactHref,
+  getConversationMemberSubtitle,
+  getConversationMemberTypeLabel,
 } from "./member-utils"
 import TransportKindIcon from "./transport-kind-icon"
 
@@ -37,7 +37,7 @@ function CompactDetail({
   )
 }
 
-function getCompactNote(member: GroupMember) {
+function getCompactNote(member: ConversationMember) {
   if (member.type === "actor") {
     return member.title || member.role || "Actor"
   }
@@ -57,7 +57,7 @@ function getCompactNote(member: GroupMember) {
 }
 
 interface ChatParticipantHoverCardProps {
-  member?: GroupMember | null
+  member?: ConversationMember | null
   children: ReactNode
   contactBasePath?: string
   side?: ComponentProps<typeof HoverCardContent>["side"]
@@ -78,10 +78,13 @@ export default function ChatParticipantHoverCard({
     return <>{children}</>
   }
 
-  const subtitle = getGroupMemberSubtitle(member)
-  const typeLabel = getGroupMemberTypeLabel(member)
+  const subtitle = getConversationMemberSubtitle(member)
+  const typeLabel = getConversationMemberTypeLabel(member)
   const transportLabel = formatTransportKindLabel(member.transportKind)
-  const contactHref = getGroupMemberContactHref(member, contactBasePath)
+  const contactHref = getConversationMemberContactHref(
+    member,
+    contactBasePath
+  )
   const compactNote = getCompactNote(member)
 
   return (

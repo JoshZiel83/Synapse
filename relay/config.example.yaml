@@ -54,6 +54,10 @@ servers:
   #         parse_pdf: true
   #         parse_office: true
   #         parse_images: true
+  #       backup:
+  #         enabled: true
+  #         max_total_size_bytes: 268435456
+  #         max_file_size_bytes: 33554432
 
   # Example: built-in command line runtime
   # - name: "command-line"

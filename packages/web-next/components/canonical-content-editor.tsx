@@ -18,10 +18,21 @@ import {
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
 import { type CanonicalContentBlock } from "@synapse/shared"
-import { GripVertical, Loader2, Paperclip, Plus, Trash2, Type } from "lucide-react"
+import {
+  GripVertical,
+  Loader2,
+  Paperclip,
+  Plus,
+  Trash2,
+  Type,
+} from "lucide-react"
 import { toast } from "sonner"
 
-import { createEmptyTextContentBlock, fileRecordToBlock, type UploadedFile } from "@/components/actor-editor-model"
+import {
+  createEmptyTextContentBlock,
+  fileRecordToBlock,
+  type UploadedFile,
+} from "@/components/actor-editor-model"
 import { CanonicalContentRenderer } from "@/components/canonical-content-renderer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -66,7 +77,14 @@ function SortableBlockCard({
   onTextChange: (blockId: string, text: string) => void
   onRemove: (blockId: string) => void
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
     id: block.id,
   })
 
@@ -89,11 +107,22 @@ function SortableBlockCard({
             <GripVertical />
             <span className="sr-only">Reorder block</span>
           </Button>
-          <Badge variant="outline">{block.type === "text" ? "Text" : "File"}</Badge>
+          <Badge variant="outline">
+            {block.type === "text"
+              ? "Text"
+              : block.type === "mention"
+                ? "Mention"
+                : "File"}
+          </Badge>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="ghost" size="icon-sm" onClick={() => onRemove(block.id)}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onRemove(block.id)}
+          >
             <Trash2 />
             <span className="sr-only">Delete block</span>
           </Button>
@@ -140,7 +169,9 @@ export function CanonicalContentEditor({
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 8 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 180, tolerance: 8 },
+    })
   )
 
   function commit(next: CanonicalContentBlock[]) {
@@ -160,7 +191,11 @@ export function CanonicalContentEditor({
 
   function updateTextBlock(blockId: string, text: string) {
     commit(
-      value.map((block) => (block.id === blockId && block.type === "text" ? { ...block, text } : block)),
+      value.map((block) =>
+        block.id === blockId && block.type === "text"
+          ? { ...block, text }
+          : block
+      )
     )
   }
 
@@ -174,14 +209,19 @@ export function CanonicalContentEditor({
     try {
       const uploadedBlocks: FileRefBlock[] = []
       for (const file of files) {
-        const uploaded = (await api.uploadFile(workspaceId, file)) as UploadedFile
+        const uploaded = (await api.uploadFile(
+          workspaceId,
+          file
+        )) as UploadedFile
         uploadedBlocks.push(fileRecordToBlock(uploaded))
       }
 
       const next = [...value]
       next.splice(insertIndex, 0, ...uploadedBlocks)
       commit(next)
-      toast.success(`${uploadedBlocks.length} file reference${uploadedBlocks.length > 1 ? "s" : ""} attached`)
+      toast.success(
+        `${uploadedBlocks.length} file reference${uploadedBlocks.length > 1 ? "s" : ""} attached`
+      )
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Attachment failed")
     } finally {
@@ -205,9 +245,16 @@ export function CanonicalContentEditor({
     if (droppedFiles.length === 0) return
 
     event.preventDefault()
-    const blockContainer = (event.target as HTMLElement | null)?.closest("[data-block-index]")
-    const blockIndex = blockContainer ? Number(blockContainer.getAttribute("data-block-index")) : value.length - 1
-    const insertIndex = Number.isFinite(blockIndex) && blockIndex >= 0 ? blockIndex + 1 : value.length
+    const blockContainer = (event.target as HTMLElement | null)?.closest(
+      "[data-block-index]"
+    )
+    const blockIndex = blockContainer
+      ? Number(blockContainer.getAttribute("data-block-index"))
+      : value.length - 1
+    const insertIndex =
+      Number.isFinite(blockIndex) && blockIndex >= 0
+        ? blockIndex + 1
+        : value.length
     void insertFiles(insertIndex, droppedFiles)
   }
 
@@ -220,19 +267,24 @@ export function CanonicalContentEditor({
   const helperText =
     description !== undefined
       ? description
-      : placeholder || "Compose the section as ordered text blocks and file blocks."
+      : placeholder ||
+        "Compose the section as ordered text blocks and file blocks."
 
   return (
     <div className="flex flex-col gap-5">
       <FieldGroup>
         <Field>
-          {(label || helperText || showCount) ? (
+          {label || helperText || showCount ? (
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 {label ? <FieldLabel>{label}</FieldLabel> : null}
-                {helperText ? <FieldDescription>{helperText}</FieldDescription> : null}
+                {helperText ? (
+                  <FieldDescription>{helperText}</FieldDescription>
+                ) : null}
               </div>
-              {showCount ? <Badge variant="outline">{value.length} blocks</Badge> : null}
+              {showCount ? (
+                <Badge variant="outline">{value.length} blocks</Badge>
+              ) : null}
             </div>
           ) : null}
 
@@ -258,12 +310,26 @@ export function CanonicalContentEditor({
             onDragOver={handleEditorDragOver}
           >
             {value.length > 0 ? (
-              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                <SortableContext items={value.map((block) => block.id)} strategy={verticalListSortingStrategy}>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={value.map((block) => block.id)}
+                  strategy={verticalListSortingStrategy}
+                >
                   <div className="flex flex-col gap-3">
-                    <InsertBar onInsertText={() => insertTextBlock(0)} onInsertFile={() => openFilePicker(0)} />
+                    <InsertBar
+                      onInsertText={() => insertTextBlock(0)}
+                      onInsertFile={() => openFilePicker(0)}
+                    />
                     {value.map((block, index) => (
-                      <div key={block.id} data-block-index={index} className="flex flex-col gap-3">
+                      <div
+                        key={block.id}
+                        data-block-index={index}
+                        className="flex flex-col gap-3"
+                      >
                         <SortableBlockCard
                           block={block}
                           onTextChange={updateTextBlock}
@@ -281,17 +347,27 @@ export function CanonicalContentEditor({
             ) : (
               <div className="flex min-h-40 flex-col items-center justify-center gap-4 rounded-[24px] border border-border bg-background/70 p-6 text-center">
                 <div className="space-y-1">
-                  <div className="text-sm font-medium text-foreground">No blocks yet</div>
+                  <div className="text-sm font-medium text-foreground">
+                    No blocks yet
+                  </div>
                   <div className="text-sm text-muted-foreground">
                     Add a text block, attach a file block, or drop files here.
                   </div>
                 </div>
                 <div className="flex flex-wrap justify-center gap-2">
-                  <Button type="button" variant="outline" onClick={() => insertTextBlock(0)}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => insertTextBlock(0)}
+                  >
                     <Plus data-icon="inline-start" />
                     Add text block
                   </Button>
-                  <Button type="button" variant="outline" onClick={() => openFilePicker(0)}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => openFilePicker(0)}
+                  >
                     <Paperclip data-icon="inline-start" />
                     Add file block
                   </Button>

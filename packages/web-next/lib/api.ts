@@ -316,7 +316,10 @@ class ApiClient {
     const qs = params.toString()
     return this.fetch(`/skills/marketplace${qs ? "?" + qs : ""}`)
   }
-  getSkillMarketplaceItem(skillId: string, workspaceId?: string): Promise<{ skill: SkillMarketplaceEntry }> {
+  getSkillMarketplaceItem(
+    skillId: string,
+    workspaceId?: string
+  ): Promise<{ skill: SkillMarketplaceEntry }> {
     const params = new URLSearchParams()
     if (workspaceId) params.set("workspaceId", workspaceId)
     const qs = params.toString()
@@ -367,10 +370,16 @@ class ApiClient {
   }
 
   // Installed Skills
-  getInstalledSkills(wsId: string, params?: string): Promise<{ skills: InstalledSkill[] }> {
+  getInstalledSkills(
+    wsId: string,
+    params?: string
+  ): Promise<{ skills: InstalledSkill[] }> {
     return this.fetch(`/workspaces/${wsId}/skills${params ? "?" + params : ""}`)
   }
-  getInstalledSkill(wsId: string, installedSkillId: string): Promise<{ skill: InstalledSkill }> {
+  getInstalledSkill(
+    wsId: string,
+    installedSkillId: string
+  ): Promise<{ skill: InstalledSkill }> {
     return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`)
   }
   installSkill(
@@ -408,11 +417,17 @@ class ApiClient {
       body: JSON.stringify(data),
     })
   }
-  upgradeInstalledSkill(wsId: string, installedSkillId: string): Promise<{ skill: InstalledSkill }> {
-    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/upgrade`, {
-      method: "POST",
-      body: "{}",
-    })
+  upgradeInstalledSkill(
+    wsId: string,
+    installedSkillId: string
+  ): Promise<{ skill: InstalledSkill }> {
+    return this.fetch(
+      `/workspaces/${wsId}/skills/${installedSkillId}/upgrade`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
   }
   uninstallInstalledSkill(wsId: string, installedSkillId: string) {
     return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`, {
@@ -445,10 +460,17 @@ class ApiClient {
       body: JSON.stringify(data),
     })
   }
-  revokeInstalledSkillAccess(wsId: string, installedSkillId: string, grantId: string) {
-    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/access/${grantId}`, {
-      method: "DELETE",
-    })
+  revokeInstalledSkillAccess(
+    wsId: string,
+    installedSkillId: string,
+    grantId: string
+  ) {
+    return this.fetch(
+      `/workspaces/${wsId}/skills/${installedSkillId}/access/${grantId}`,
+      {
+        method: "DELETE",
+      }
+    )
   }
 
   // Workspace Invites
@@ -788,7 +810,7 @@ class ApiClient {
     })
   }
 
-  // Sessions
+  // Actor lanes
   createSession(
     wsId: string,
     actorId: string,
@@ -819,7 +841,11 @@ class ApiClient {
   getSessionTree(wsId: string, sessionId: string) {
     return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/tree`)
   }
-  retrySession(wsId: string, sessionId: string, itemId?: string) {
+  retryConversationActorLane(
+    wsId: string,
+    sessionId: string,
+    itemId?: string
+  ) {
     return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/retry`, {
       method: "POST",
       body: JSON.stringify(itemId ? { itemId } : {}),
@@ -831,42 +857,68 @@ class ApiClient {
     })
   }
 
-  // Chat Groups
-  getGroups(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/chat/groups`)
+  // Conversations
+  getConversations(wsId: string) {
+    return this.fetch(`/workspaces/${wsId}/conversations`)
   }
-  updateGroup(
+  updateConversation(
     wsId: string,
-    groupId: string,
+    conversationId: string,
     data: { title?: string; avatarFileId?: string | null }
   ) {
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}`, {
+    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}`, {
       method: "PUT",
       body: JSON.stringify(data),
     })
   }
-  createGroup(
+  createConversation(
     wsId: string,
     actorIds: string[],
     content?: string,
-    targetActorId?: string
+    targetActorIdOrIds?: string | string[],
+    contentBlocks?: CanonicalContentBlock[]
   ) {
-    const body: any =
+    const targetActorIds = Array.isArray(targetActorIdOrIds)
+      ? targetActorIdOrIds.filter(Boolean)
+      : typeof targetActorIdOrIds === "string" && targetActorIdOrIds
+        ? [targetActorIdOrIds]
+        : []
+    const body: {
+      actorId?: string
+      actorIds?: string[]
+      content?: string
+      contentBlocks?: CanonicalContentBlock[]
+      targetActorIds?: string[]
+      targetActorId?: string
+    } =
       actorIds.length === 1
-        ? { actorId: actorIds[0], ...(content && { content }) }
+        ? {
+            actorId: actorIds[0],
+            ...(content && { content }),
+            ...(contentBlocks && contentBlocks.length > 0 && { contentBlocks }),
+            ...(targetActorIds.length > 0 && { targetActorIds }),
+          }
         : {
             actorIds,
             ...(content && { content }),
-            targetActorId: targetActorId || actorIds[0],
+            ...(contentBlocks && contentBlocks.length > 0 && { contentBlocks }),
+            ...(targetActorIds.length > 0
+              ? {
+                  targetActorIds,
+                  targetActorId: targetActorIds[0],
+                }
+              : {
+                  targetActorId: actorIds[0],
+                }),
           }
-    return this.fetch(`/workspaces/${wsId}/chat/groups`, {
+    return this.fetch(`/workspaces/${wsId}/conversations`, {
       method: "POST",
       body: JSON.stringify(body),
     })
   }
-  getGroupMessages(
+  getConversationMessages(
     wsId: string,
-    groupId: string,
+    conversationId: string,
     limit?: number,
     before?: string
   ): Promise<ConversationFeedPage> {
@@ -875,10 +927,10 @@ class ApiClient {
     if (before) params.set("before", before)
     const qs = params.toString()
     return this.fetch(
-      `/workspaces/${wsId}/chat/groups/${groupId}/messages${qs ? "?" + qs : ""}`
+      `/workspaces/${wsId}/conversations/${conversationId}/messages${qs ? "?" + qs : ""}`
     )
   }
-  getWorkspaceFeed(
+  getConversationFeed(
     wsId: string,
     after?: number,
     limit?: number
@@ -891,40 +943,57 @@ class ApiClient {
       params.set("limit", String(limit))
     }
     const qs = params.toString()
-    return this.fetch(`/workspaces/${wsId}/chat/feed${qs ? "?" + qs : ""}`)
+    return this.fetch(`/workspaces/${wsId}/conversations/feed${qs ? "?" + qs : ""}`)
   }
-  getGroupMembers(wsId: string, groupId: string) {
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/members`)
-  }
-  addGroupMembers(
+  getWorkspaceFeed(
     wsId: string,
-    groupId: string,
+    after?: number,
+    limit?: number
+  ): Promise<WorkspaceFeedPage> {
+    return this.getConversationFeed(wsId, after, limit)
+  }
+  getConversationMembers(wsId: string, conversationId: string) {
+    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}/members`)
+  }
+  addConversationMembers(
+    wsId: string,
+    conversationId: string,
     data: { actorIds?: string[]; userIds?: string[] }
   ) {
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/members`, {
+    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}/members`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
-  sendGroupMessage(
+  sendConversationMessage(
     wsId: string,
-    groupId: string,
+    conversationId: string,
     contentBlocks: CanonicalContentBlock[],
     clientMessageId: string,
-    targetParticipantIds?: string[]
+    targetParticipantIds?: string[],
+    targetActorIds?: string[]
   ): Promise<{ item: ConversationFeedItem }> {
-    const body: any = { contentBlocks }
+    const body: {
+      contentBlocks: CanonicalContentBlock[]
+      clientMessageId: string
+      targetParticipantIds?: string[]
+      targetActorIds?: string[]
+    } = {
+      contentBlocks,
+      clientMessageId,
+    }
     if (targetParticipantIds && targetParticipantIds.length > 0)
       body.targetParticipantIds = targetParticipantIds
-    body.clientMessageId = clientMessageId
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/messages`, {
+    if (targetActorIds && targetActorIds.length > 0)
+      body.targetActorIds = targetActorIds
+    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
     })
   }
-  resolveInteraction(
+  resolveConversationInteraction(
     wsId: string,
-    groupId: string,
+    conversationId: string,
     interactionId: string,
     data: {
       answers?: {
@@ -939,7 +1008,7 @@ class ApiClient {
     }
   ): Promise<{ interaction: InteractionRequestSummary }> {
     return this.fetch(
-      `/workspaces/${wsId}/chat/groups/${groupId}/interactions/${interactionId}/respond`,
+      `/workspaces/${wsId}/conversations/${conversationId}/interactions/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(data),
@@ -1067,11 +1136,13 @@ class ApiClient {
       body: JSON.stringify(data),
     })
   }
-  getGroupTransportBinding(
+  getConversationTransportBinding(
     wsId: string,
-    groupId: string
+    conversationId: string
   ): Promise<{ binding: ConversationTransportBindingSummary | null }> {
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/transport-binding`)
+    return this.fetch(
+      `/workspaces/${wsId}/conversations/${conversationId}/transport-binding`
+    )
   }
   updateTransportSessionSettings(
     wsId: string,
@@ -1096,14 +1167,14 @@ class ApiClient {
       }
     )
   }
-  markGroupRead(wsId: string, groupId: string) {
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/read`, {
+  markConversationRead(wsId: string, conversationId: string) {
+    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}/read`, {
       method: "POST",
       body: "{}",
     })
   }
-  cancelGroup(wsId: string, groupId: string) {
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}`, {
+  cancelConversation(wsId: string, conversationId: string) {
+    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}`, {
       method: "DELETE",
     })
   }
@@ -1193,7 +1264,9 @@ class ApiClient {
     return this.fetch(`/workspaces/${wsId}/mcp/auth/sessions/${sessionId}`)
   }
   getPluginInstallationAccess(wsId: string, installId: string) {
-    return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}/access`)
+    return this.fetch(
+      `/workspaces/${wsId}/mcp/installations/${installId}/access`
+    )
   }
   grantPluginInstallationAccess(
     wsId: string,
@@ -1213,15 +1286,25 @@ class ApiClient {
       metadata?: Record<string, unknown>
     }
   ) {
-    return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}/access`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+    return this.fetch(
+      `/workspaces/${wsId}/mcp/installations/${installId}/access`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
   }
-  revokePluginInstallationAccess(wsId: string, installId: string, grantId: string) {
-    return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}/access/${grantId}`, {
-      method: "DELETE",
-    })
+  revokePluginInstallationAccess(
+    wsId: string,
+    installId: string,
+    grantId: string
+  ) {
+    return this.fetch(
+      `/workspaces/${wsId}/mcp/installations/${installId}/access/${grantId}`,
+      {
+        method: "DELETE",
+      }
+    )
   }
 
   // MCP Audit
@@ -1296,7 +1379,12 @@ class ApiClient {
     relayId: string,
     exposureId: string,
     data: {
-      grantScope?: "workspace" | "conversation" | "actor_global" | "actor_conversation" | "user"
+      grantScope?:
+        | "workspace"
+        | "conversation"
+        | "actor_global"
+        | "actor_conversation"
+        | "user"
       actorId?: string
       conversationId?: string
       userId?: string
@@ -1377,7 +1465,9 @@ class ApiClient {
     if (filters?.providerRef) params.set("providerRef", filters.providerRef)
     if (filters?.sourceKey) params.set("sourceKey", filters.sourceKey)
     const qs = params.toString()
-    return this.fetch(`/workspaces/${wsId}/automation-event-sources${qs ? `?${qs}` : ""}`)
+    return this.fetch(
+      `/workspaces/${wsId}/automation-event-sources${qs ? `?${qs}` : ""}`
+    )
   }
   createAutomationEventSource(
     wsId: string,
@@ -1421,21 +1511,29 @@ class ApiClient {
       metadata?: Record<string, unknown>
     }
   ): Promise<AutomationEventSource> {
-    return this.fetch(`/workspaces/${wsId}/automation-event-sources/${eventSourceId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
+    return this.fetch(
+      `/workspaces/${wsId}/automation-event-sources/${eventSourceId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
   }
   archiveAutomationEventSource(wsId: string, eventSourceId: string) {
-    return this.fetch(`/workspaces/${wsId}/automation-event-sources/${eventSourceId}`, {
-      method: "DELETE",
-    })
+    return this.fetch(
+      `/workspaces/${wsId}/automation-event-sources/${eventSourceId}`,
+      {
+        method: "DELETE",
+      }
+    )
   }
   getAutomationEventSourceOccurrences(
     wsId: string,
     eventSourceId: string
   ): Promise<AutomationOccurrence[]> {
-    return this.fetch(`/workspaces/${wsId}/automation-event-sources/${eventSourceId}/occurrences`)
+    return this.fetch(
+      `/workspaces/${wsId}/automation-event-sources/${eventSourceId}/occurrences`
+    )
   }
 
   // Automation Rules / Triggers
@@ -1450,7 +1548,8 @@ class ApiClient {
     const params = new URLSearchParams()
     if (filters?.status) params.set("status", filters.status)
     if (filters?.category) params.set("category", filters.category)
-    if (filters?.ownerSessionId) params.set("ownerSessionId", filters.ownerSessionId)
+    if (filters?.ownerSessionId)
+      params.set("ownerSessionId", filters.ownerSessionId)
     const qs = params.toString()
     return this.fetch(`/workspaces/${wsId}/automations${qs ? `?${qs}` : ""}`)
   }
@@ -1485,7 +1584,9 @@ class ApiClient {
     wsId: string,
     automationId: string
   ): Promise<AutomationExecution[]> {
-    return this.fetch(`/workspaces/${wsId}/automations/${automationId}/executions`)
+    return this.fetch(
+      `/workspaces/${wsId}/automations/${automationId}/executions`
+    )
   }
 
   // File Upload

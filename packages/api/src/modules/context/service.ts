@@ -1,30 +1,35 @@
-import type { CanonicalContentBlock, CanonicalContextItem, ConversationMessage } from '@synapse/shared';
-import { query, transaction } from '../../infrastructure/database/index.js';
+import type {
+  CanonicalContentBlock,
+  CanonicalContextItem,
+  ConversationMessage,
+} from "@synapse/shared";
+import { query, transaction } from "../../infrastructure/database/index.js";
 import type {
   CanonicalArchiveFrame,
   CanonicalArchivePoint,
   ProviderContextWindow,
-} from '@synapse/shared';
-import { itemPartsToCanonicalBlocks } from '../ai/context-builder.js';
-import { compileContextItemsToConversationMessages } from '../ai/context-compiler.js';
+} from "@synapse/shared";
+import { itemPartsToCanonicalBlocks } from "../ai/context-builder.js";
+import { compileContextItemsToConversationMessages } from "../ai/context-compiler.js";
 
 const MIN_COMPACTION_ITEMS = 12;
 const SHARED_ARCHIVE_TAIL_TARGET = 24;
 const PRIVATE_ARCHIVE_TAIL_TARGET = 32;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type QueryRunner = (text: string, params?: any[]) => Promise<{ rows: any[] }>;
 
 function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
   if (!value) return undefined;
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     try {
       return JSON.parse(value) as Record<string, unknown>;
     } catch {
       return undefined;
     }
   }
-  if (typeof value === 'object') {
+  if (typeof value === "object") {
     return value as Record<string, unknown>;
   }
   return undefined;
@@ -32,7 +37,7 @@ function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
 
 function parseJsonArray<T>(value: unknown): T[] | undefined {
   if (!value) return undefined;
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     try {
       return JSON.parse(value) as T[];
     } catch {
@@ -123,16 +128,20 @@ async function loadArchivePoint(
     }
   }
 
-  const frames: CanonicalArchiveFrame[] = Array.from(frameMap.values()).map(({ row, parts }) => ({
-    frameId: row.id,
-    role: row.role,
-    frameType: row.frame_type,
-    parts: parts.length > 0 ? itemPartsToCanonicalBlocks(parts) : undefined,
-    toolCalls: parseJsonArray(row.tool_calls),
-    toolResults: parseJsonArray(row.tool_results),
-    sourceItemIds: Array.isArray(row.source_item_ids) ? row.source_item_ids : undefined,
-    metadata: parseJsonObject(row.metadata),
-  }));
+  const frames: CanonicalArchiveFrame[] = Array.from(frameMap.values()).map(
+    ({ row, parts }) => ({
+      frameId: row.id,
+      role: row.role,
+      frameType: row.frame_type,
+      parts: parts.length > 0 ? itemPartsToCanonicalBlocks(parts) : undefined,
+      toolCalls: parseJsonArray(row.tool_calls),
+      toolResults: parseJsonArray(row.tool_results),
+      sourceItemIds: Array.isArray(row.source_item_ids)
+        ? row.source_item_ids
+        : undefined,
+      metadata: parseJsonObject(row.metadata),
+    }),
+  );
 
   return {
     archivePointId: point.id,
@@ -153,31 +162,36 @@ function isUuid(value: string | undefined) {
 
 function buildArchiveFrameType(item: CanonicalContextItem) {
   switch (item.kind) {
-    case 'message':
-      return item.messageType || 'message';
-    case 'event':
+    case "message":
+      return item.messageType || "message";
+    case "event":
       return `event:${item.eventType}`;
-    case 'system_notice':
+    case "system_notice":
       return `notice:${item.noticeType}`;
-    case 'tool_call_batch':
-      return 'tool_call_batch';
-    case 'tool_result_batch':
-      return 'tool_result_batch';
-    case 'summary':
+    case "tool_call_batch":
+      return "tool_call_batch";
+    case "tool_result_batch":
+      return "tool_result_batch";
+    case "summary":
       return `summary:${item.summaryType}`;
-    case 'memory_recall':
+    case "memory_recall":
       return `memory_recall:${item.recallType}`;
   }
 }
 
-function buildArchiveFrameMetadata(item: CanonicalContextItem, frameIndex: number) {
+function buildArchiveFrameMetadata(
+  item: CanonicalContextItem,
+  frameIndex: number,
+) {
   return {
     contextKind: item.kind,
     scope: item.scope,
     surface: item.surface,
     sequence: item.sequence,
     frameIndex,
-    ...(item.itemId && !isUuid(item.itemId) ? { syntheticSourceItemId: item.itemId } : {}),
+    ...(item.itemId && !isUuid(item.itemId)
+      ? { syntheticSourceItemId: item.itemId }
+      : {}),
   };
 }
 
@@ -188,13 +202,14 @@ function conversationMessageToArchiveFrame(
 ): CanonicalArchiveFrame {
   const sourceItemId = isUuid(item.itemId) ? item.itemId : undefined;
   const sourceItemIds = sourceItemId ? [sourceItemId] : undefined;
-  const frameType = frameIndex === 0
-    ? buildArchiveFrameType(item)
-    : `${buildArchiveFrameType(item)}:${frameIndex}`;
+  const frameType =
+    frameIndex === 0
+      ? buildArchiveFrameType(item)
+      : `${buildArchiveFrameType(item)}:${frameIndex}`;
 
-  if (message.role === 'assistant') {
+  if (message.role === "assistant") {
     return {
-      role: 'assistant',
+      role: "assistant",
       frameType,
       parts: message.content,
       toolCalls: message.toolCalls,
@@ -203,9 +218,9 @@ function conversationMessageToArchiveFrame(
     };
   }
 
-  if (message.role === 'tool_result') {
+  if (message.role === "tool_result") {
     return {
-      role: 'tool',
+      role: "tool",
       frameType,
       toolResults: message.results,
       sourceItemIds,
@@ -214,7 +229,7 @@ function conversationMessageToArchiveFrame(
   }
 
   return {
-    role: 'user',
+    role: "user",
     frameType,
     parts: message.content,
     sourceItemIds,
@@ -222,11 +237,15 @@ function conversationMessageToArchiveFrame(
   };
 }
 
-async function buildArchiveFrames(items: CanonicalContextItem[]): Promise<CanonicalArchiveFrame[]> {
+async function buildArchiveFrames(
+  items: CanonicalContextItem[],
+): Promise<CanonicalArchiveFrame[]> {
   const frames: CanonicalArchiveFrame[] = [];
 
   for (const item of items) {
-    const compiledMessages = await compileContextItemsToConversationMessages([item]);
+    const compiledMessages = await compileContextItemsToConversationMessages([
+      item,
+    ]);
     compiledMessages.forEach((message, index) => {
       frames.push(conversationMessageToArchiveFrame(item, message, index));
     });
@@ -236,9 +255,9 @@ async function buildArchiveFrames(items: CanonicalContextItem[]): Promise<Canoni
 }
 
 function blockToArchivePart(block: CanonicalContentBlock) {
-  if (block.type === 'text') {
+  if (block.type === "text") {
     return {
-      partType: 'text',
+      partType: "text",
       textValue: block.text,
       fileId: null,
       jsonValue: null,
@@ -248,8 +267,24 @@ function blockToArchivePart(block: CanonicalContentBlock) {
     };
   }
 
+  if (block.type === "mention") {
+    return {
+      partType: "json",
+      textValue: null,
+      fileId: null,
+      jsonValue: {
+        id: block.id,
+        type: "mention",
+        mention: block.mention,
+      },
+      mimeType: "application/vnd.synapse.mention+json",
+      name: "mention",
+      metadata: {},
+    };
+  }
+
   return {
-    partType: 'file_ref',
+    partType: "file_ref",
     textValue: null,
     fileId: block.fileId,
     jsonValue: null,
@@ -282,7 +317,9 @@ async function insertArchiveFrames(
         frame.frameType,
         frame.toolCalls ? JSON.stringify(frame.toolCalls) : null,
         frame.toolResults ? JSON.stringify(frame.toolResults) : null,
-        frame.sourceItemIds && frame.sourceItemIds.length > 0 ? frame.sourceItemIds : [],
+        frame.sourceItemIds && frame.sourceItemIds.length > 0
+          ? frame.sourceItemIds
+          : [],
         JSON.stringify(frame.metadata || {}),
       ],
     );
@@ -315,34 +352,38 @@ async function insertArchiveFrames(
 async function maybeCompactChain(params: {
   conversationId: string;
   sessionId?: string;
-  chainScope: 'shared' | 'private';
+  chainScope: "shared" | "private";
   items: CanonicalContextItem[];
 }) {
-  if (params.chainScope === 'private' && !params.sessionId) return;
+  if (params.chainScope === "private" && !params.sessionId) return;
 
-  if (params.chainScope === 'shared') {
+  if (params.chainScope === "shared") {
     await ensureConversationContextState(params.conversationId);
   } else {
     await ensureSessionContextState(params.sessionId!);
   }
 
-  const tailTarget = params.chainScope === 'shared'
-    ? SHARED_ARCHIVE_TAIL_TARGET
-    : PRIVATE_ARCHIVE_TAIL_TARGET;
-  const stateTable = params.chainScope === 'shared'
-    ? 'conversation_context_states'
-    : 'session_context_states';
-  const stateIdColumn = params.chainScope === 'shared'
-    ? 'conversation_id'
-    : 'session_id';
-  const archiveIdColumn = params.chainScope === 'shared'
-    ? 'active_shared_archive_point_id'
-    : 'active_private_archive_point_id';
-  const stateIdValue = params.chainScope === 'shared'
-    ? params.conversationId
-    : params.sessionId!;
+  const tailTarget =
+    params.chainScope === "shared"
+      ? SHARED_ARCHIVE_TAIL_TARGET
+      : PRIVATE_ARCHIVE_TAIL_TARGET;
+  const stateTable =
+    params.chainScope === "shared"
+      ? "conversation_context_states"
+      : "session_context_states";
+  const stateIdColumn =
+    params.chainScope === "shared" ? "conversation_id" : "session_id";
+  const archiveIdColumn =
+    params.chainScope === "shared"
+      ? "active_shared_archive_point_id"
+      : "active_private_archive_point_id";
+  const stateIdValue =
+    params.chainScope === "shared" ? params.conversationId : params.sessionId!;
   const scopedItems = params.items
-    .filter((item) => item.scope === params.chainScope && typeof item.sequence === 'number')
+    .filter(
+      (item) =>
+        item.scope === params.chainScope && typeof item.sequence === "number",
+    )
     .sort((left, right) => (left.sequence || 0) - (right.sequence || 0));
 
   if (scopedItems.length <= tailTarget + MIN_COMPACTION_ITEMS) {
@@ -364,28 +405,30 @@ async function maybeCompactChain(params: {
       ? await loadArchivePoint(activeArchivePointId, runQuery)
       : null;
     const activeCoverage = activeArchivePoint?.coversUntilSequence ?? 0;
-    const uncoveredItems = scopedItems.filter((item) => (item.sequence || 0) > activeCoverage);
+    const uncoveredItems = scopedItems.filter(
+      (item) => (item.sequence || 0) > activeCoverage,
+    );
 
     if (uncoveredItems.length <= tailTarget + MIN_COMPACTION_ITEMS) {
       return;
     }
 
     const targetIndex = uncoveredItems.length - tailTarget - 1;
-    const targetCoverage = uncoveredItems[targetIndex]?.sequence ?? activeCoverage;
+    const targetCoverage =
+      uncoveredItems[targetIndex]?.sequence ?? activeCoverage;
     if (targetCoverage <= activeCoverage) {
       return;
     }
 
-    const itemsToArchive = uncoveredItems.filter((item) => (item.sequence || 0) <= targetCoverage);
+    const itemsToArchive = uncoveredItems.filter(
+      (item) => (item.sequence || 0) <= targetCoverage,
+    );
     if (itemsToArchive.length < MIN_COMPACTION_ITEMS) {
       return;
     }
 
     const deltaFrames = await buildArchiveFrames(itemsToArchive);
-    const frames = [
-      ...(activeArchivePoint?.frames || []),
-      ...deltaFrames,
-    ];
+    const frames = [...(activeArchivePoint?.frames || []), ...deltaFrames];
     if (frames.length === 0) {
       return;
     }
@@ -397,12 +440,12 @@ async function maybeCompactChain(params: {
        RETURNING id`,
       [
         params.conversationId,
-        params.chainScope === 'private' ? params.sessionId || null : null,
+        params.chainScope === "private" ? params.sessionId || null : null,
         params.chainScope,
         activeArchivePointId,
         targetCoverage,
         JSON.stringify({
-          strategyKey: 'lossless_archive_v1',
+          strategyKey: "lossless_archive_v1",
           appendedItemCount: itemsToArchive.length,
           totalFrameCount: frames.length,
         }),
@@ -423,9 +466,9 @@ async function maybeCompactChain(params: {
        RETURNING id`,
       [
         params.conversationId,
-        params.chainScope === 'private' ? params.sessionId || null : null,
+        params.chainScope === "private" ? params.sessionId || null : null,
         params.chainScope,
-        'lossless_archive_v1',
+        "lossless_archive_v1",
         activeArchivePointId,
         archivePointId,
         JSON.stringify({
@@ -445,7 +488,7 @@ async function maybeCompactChain(params: {
           [
             compactionRunId,
             activeArchivePointId,
-            JSON.stringify({ role: 'base' }),
+            JSON.stringify({ role: "base" }),
           ],
         );
       }
@@ -473,7 +516,9 @@ async function maybeCompactChain(params: {
   });
 }
 
-async function loadActiveSharedArchivePoint(conversationId: string): Promise<CanonicalArchivePoint | null> {
+async function loadActiveSharedArchivePoint(
+  conversationId: string,
+): Promise<CanonicalArchivePoint | null> {
   await ensureConversationContextState(conversationId);
   const result = await query(
     `SELECT active_shared_archive_point_id
@@ -485,7 +530,9 @@ async function loadActiveSharedArchivePoint(conversationId: string): Promise<Can
   return archivePointId ? loadArchivePoint(archivePointId) : null;
 }
 
-async function loadActivePrivateArchivePoint(sessionId?: string): Promise<CanonicalArchivePoint | null> {
+async function loadActivePrivateArchivePoint(
+  sessionId?: string,
+): Promise<CanonicalArchivePoint | null> {
   if (!sessionId) return null;
   await ensureSessionContextState(sessionId);
   const result = await query(
@@ -498,8 +545,13 @@ async function loadActivePrivateArchivePoint(sessionId?: string): Promise<Canoni
   return archivePointId ? loadArchivePoint(archivePointId) : null;
 }
 
-function isCoveredByArchive(item: CanonicalContextItem, coversUntilSequence: number) {
-  return typeof item.sequence === 'number' && item.sequence <= coversUntilSequence;
+function isCoveredByArchive(
+  item: CanonicalContextItem,
+  coversUntilSequence: number,
+) {
+  return (
+    typeof item.sequence === "number" && item.sequence <= coversUntilSequence
+  );
 }
 
 export async function buildProviderContextWindow(params: {
@@ -510,13 +562,13 @@ export async function buildProviderContextWindow(params: {
   await Promise.all([
     maybeCompactChain({
       conversationId: params.conversationId,
-      chainScope: 'shared',
+      chainScope: "shared",
       items: params.items,
     }),
     maybeCompactChain({
       conversationId: params.conversationId,
       sessionId: params.sessionId,
-      chainScope: 'private',
+      chainScope: "private",
       items: params.items,
     }),
   ]);
@@ -534,13 +586,14 @@ export async function buildProviderContextWindow(params: {
   const orderedTailItems: CanonicalContextItem[] = [];
 
   for (const item of params.items) {
-    const covered = item.scope === 'shared'
-      ? isCoveredByArchive(item, sharedCoverage)
-      : isCoveredByArchive(item, privateCoverage);
+    const covered =
+      item.scope === "shared"
+        ? isCoveredByArchive(item, sharedCoverage)
+        : isCoveredByArchive(item, privateCoverage);
 
     if (covered) continue;
 
-    if (item.scope === 'shared') {
+    if (item.scope === "shared") {
       sharedTailItems.push(item);
     } else {
       privateTailItems.push(item);
@@ -557,7 +610,9 @@ export async function buildProviderContextWindow(params: {
   };
 }
 
-export function buildAdHocProviderContextWindow(items: CanonicalContextItem[]): ProviderContextWindow {
+export function buildAdHocProviderContextWindow(
+  items: CanonicalContextItem[],
+): ProviderContextWindow {
   return {
     sharedArchivePoint: null,
     sharedTailItems: items,

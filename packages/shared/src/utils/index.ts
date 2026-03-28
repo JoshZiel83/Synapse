@@ -20,3 +20,9 @@ export function paginate(page: number, pageSize: number, maxPageSize = 100) {
 export function nowISO(): string {
   return new Date().toISOString();
 }
+
+export const MULTI_MEMBER_CONVERSATION_KIND = 'group';
+
+export function isMultiMemberConversationKind(kind: string | null | undefined): boolean {
+  return kind === MULTI_MEMBER_CONVERSATION_KIND;
+}

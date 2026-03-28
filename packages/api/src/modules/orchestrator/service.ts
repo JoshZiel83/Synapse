@@ -65,12 +65,12 @@ function parsePixelArtAvatarOptions(value: unknown): PixelArtAvatarOptionsInput 
   return options as PixelArtAvatarOptionsInput;
 }
 
-async function emitChatFeedItem(workspaceId: UUID, itemId: UUID) {
+async function emitFeedItemCreated(workspaceId: UUID, itemId: UUID) {
   const item = await getConversationFeedItemById(itemId);
   if (!item || item.workspaceSequence === undefined) return;
 
   await emitEvent({
-    type: 'chat.feed.item.created',
+    type: 'feed.item.created',
     workspaceId,
     payload: {
       workspaceSequence: item.workspaceSequence,
@@ -110,7 +110,7 @@ async function emitUserVisibleSystemNotice<T extends 'memory_saved' | 'memory_up
     eventPayload: params.eventPayload,
     targetMemberIds: targetUserMembers.map((member: any) => member.id),
   });
-  await emitChatFeedItem(params.workspaceId, created.item.id);
+  await emitFeedItemCreated(params.workspaceId, created.item.id);
 }
 
 export async function executeActorActions(

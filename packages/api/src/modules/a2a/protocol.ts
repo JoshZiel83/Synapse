@@ -1,4 +1,4 @@
-import type { SessionStatus, A2ATaskState, A2AMessage, A2ATaskResponse, A2APart } from '@synapse/shared';
+import { isMultiMemberConversationKind, type SessionStatus, type A2ATaskState, type A2AMessage, type A2ATaskResponse, type A2APart } from '@synapse/shared';
 import { getSession, getSessionMessages } from '../session/service.js';
 
 export function sessionStatusToTaskState(status: SessionStatus): A2ATaskState {
@@ -35,7 +35,7 @@ export async function buildTaskResponse(
 
   // For A2A/direct sessions, idle means the actor finished its latest turn.
   let state = sessionStatusToTaskState(session.status);
-  if (session.status === 'idle' && !session.group_id) {
+  if (session.status === 'idle' && !isMultiMemberConversationKind(session.conversation_kind)) {
     state = 'completed';
   }
   const messages = await getSessionMessages(sessionId);

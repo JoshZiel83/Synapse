@@ -6,9 +6,11 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useWorkspace } from "../workspace-provider"
 import { useChatRealtimeSync } from "@/hooks/use-chat-realtime-sync"
 import { useChatStore } from "@/stores/chat-store"
-import GroupList from "./group-list"
-import GroupChat, { GroupChatSkeleton } from "./group-chat"
-import NewGroupDialog from "./new-group-dialog"
+import ConversationList from "./conversation-list"
+import ConversationChat, {
+  ConversationChatSkeleton,
+} from "./conversation-chat"
+import NewConversationDialog from "./new-conversation-dialog"
 import { MessageSquare } from "lucide-react"
 
 export default function ChatPage() {
@@ -17,77 +19,81 @@ export default function ChatPage() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const actorParam = searchParams.get("actor")
-  const groupParam = searchParams.get("group")
+  const conversationParam = searchParams.get("conversation")
 
   const {
-    groups,
-    selectedGroupId,
+    conversations,
+    selectedConversationId,
     messages,
-    loadingGroups,
+    loadingConversations,
     loadingMessages,
     runtimeMap,
-    loadGroups,
-    selectGroup,
+    loadConversations,
+    selectConversation,
     loadMessages,
     sendMessage,
-    createGroup,
-    markRead,
+    createConversation,
+    markConversationRead,
   } = useChatStore()
 
   const [dialogOpen, setDialogOpen] = useState(false)
-  useChatRealtimeSync({ workspaceId, selectedGroupId })
+  useChatRealtimeSync({ workspaceId, selectedConversationId })
 
   useEffect(() => {
-    if (!groupParam) return
-    if (!groups.some((group) => group.id === groupParam)) return
-    selectGroup(groupParam)
-  }, [groupParam, groups, selectGroup])
+    if (!conversationParam) return
+    if (!conversations.some((conversation) => conversation.id === conversationParam)) return
+    selectConversation(conversationParam)
+  }, [conversationParam, conversations, selectConversation])
 
-  // Load messages when selecting a group
   useEffect(() => {
-    if (workspaceId && selectedGroupId) {
-      loadMessages(workspaceId, selectedGroupId)
-      markRead(workspaceId, selectedGroupId)
+    if (workspaceId && selectedConversationId) {
+      loadMessages(workspaceId, selectedConversationId)
+      markConversationRead(workspaceId, selectedConversationId)
     }
-  }, [workspaceId, selectedGroupId, loadMessages, markRead])
+  }, [
+    workspaceId,
+    selectedConversationId,
+    loadMessages,
+    markConversationRead,
+  ])
 
-  const selectedGroup = groups.find((g) => g.id === selectedGroupId)
+  const selectedConversation = conversations.find(
+    (conversation) => conversation.id === selectedConversationId
+  )
 
-  function updateGroupRoute(groupId: string) {
+  function updateConversationRoute(conversationId: string) {
     const nextParams = new URLSearchParams(searchParams.toString())
-    nextParams.set("group", groupId)
+    nextParams.set("conversation", conversationId)
     nextParams.delete("actor")
     router.replace(`${pathname}?${nextParams.toString()}`, { scroll: false })
   }
 
-  function handleSelectGroup(id: string) {
-    updateGroupRoute(id)
+  function handleSelectConversation(id: string) {
+    updateConversationRoute(id)
   }
 
   async function handleSend(
     contentBlocks: CanonicalContentBlock[],
-    targetParticipantIds?: string[]
+    targetParticipantIds?: string[],
+    targetActorIds?: string[]
   ) {
-    if (!workspaceId || !selectedGroupId) return
-    try {
-      await sendMessage(
-        workspaceId,
-        selectedGroupId,
-        contentBlocks,
-        targetParticipantIds
-      )
-    } catch (err) {
-      console.error("Failed to send:", err)
-    }
+    if (!workspaceId || !selectedConversationId) return
+    await sendMessage(
+      workspaceId,
+      selectedConversationId,
+      contentBlocks,
+      targetParticipantIds,
+      targetActorIds
+    )
   }
 
-  async function handleCreateGroup(actorIds: string[]) {
+  async function handleCreateConversation(actorIds: string[]) {
     if (!workspaceId) return
     try {
-      const groupId = await createGroup(workspaceId, actorIds)
-      updateGroupRoute(groupId)
+      const conversationId = await createConversation(workspaceId, actorIds)
+      updateConversationRoute(conversationId)
     } catch (err) {
-      console.error("Failed to create group:", err)
+      console.error("Failed to create conversation:", err)
     }
   }
 
@@ -109,14 +115,14 @@ export default function ChatPage() {
 
   function handleBackToList() {
     const nextParams = new URLSearchParams(searchParams.toString())
-    nextParams.delete("group")
+    nextParams.delete("conversation")
     const nextQuery = nextParams.toString()
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, {
       scroll: false,
     })
   }
 
-  const mobileView = groupParam ? "chat" : "list"
+  const mobileView = conversationParam ? "chat" : "list"
 
   if (!workspaceId) {
     return (
@@ -127,19 +133,19 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 max-w-full overflow-hidden">
+    <div className="flex h-full min-h-0 w-full max-w-full min-w-0 overflow-hidden">
       {/* Desktop: side-by-side. Mobile: toggle */}
 
-      {/* Group List */}
+      {/* Conversation List */}
       <div
         className={`w-[22rem] shrink-0 ${mobileView === "list" ? "flex" : "hidden"} min-h-0 min-w-0 flex-col lg:flex`}
       >
-        <GroupList
-          groups={groups}
-          loading={loadingGroups}
-          selectedId={selectedGroupId}
+        <ConversationList
+          conversations={conversations}
+          loading={loadingConversations}
+          selectedId={selectedConversationId}
           runtimeMap={runtimeMap}
-          onSelect={handleSelectGroup}
+          onSelect={handleSelectConversation}
           onNewConversation={handleNewConversation}
         />
       </div>
@@ -148,22 +154,25 @@ export default function ChatPage() {
       <div
         className={`flex-1 ${mobileView === "chat" ? "flex" : "hidden"} min-h-0 min-w-0 flex-col lg:flex`}
       >
-        {selectedGroup ? (
-          <GroupChat
-            group={selectedGroup}
+        {selectedConversation ? (
+          <ConversationChat
+            conversation={selectedConversation}
             messages={messages}
             loading={loadingMessages}
             actorRuntimes={
-              selectedGroupId ? runtimeMap[selectedGroupId] : undefined
+              selectedConversationId
+                ? runtimeMap[selectedConversationId]
+                : undefined
             }
             onSend={handleSend}
             onBack={handleBackToList}
             workspaceId={workspaceId}
-            onRefreshGroup={() => loadGroups(workspaceId)}
+            onRefreshConversation={() => loadConversations(workspaceId)}
             contactBasePath="/dashboard/contacts"
           />
-        ) : loadingGroups && (groupParam || selectedGroupId) ? (
-          <GroupChatSkeleton />
+        ) : loadingConversations &&
+          (conversationParam || selectedConversationId) ? (
+          <ConversationChatSkeleton />
         ) : (
           <div className="flex h-full flex-col items-center justify-center space-y-4 p-8 text-center">
             <div className="flex h-24 w-24 items-center justify-center rounded-3xl bg-gray-100 dark:bg-white/5">
@@ -182,12 +191,12 @@ export default function ChatPage() {
         )}
       </div>
 
-      {/* New Group Dialog */}
-      <NewGroupDialog
+      {/* New Conversation Dialog */}
+      <NewConversationDialog
         open={dialogOpen || Boolean(actorParam && workspaceId)}
         onOpenChange={handleDialogOpenChange}
         workspaceId={workspaceId}
-        onCreateGroup={handleCreateGroup}
+        onCreateConversation={handleCreateConversation}
         preselectedActorId={actorParam || undefined}
       />
     </div>

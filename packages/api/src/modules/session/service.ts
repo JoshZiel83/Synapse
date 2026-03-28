@@ -21,23 +21,26 @@ import {
   itemPartsToCanonicalContentBlocks,
 } from '../conversation/message-content.js';
 import type { UUID } from '@synapse/shared';
-import { nowISO } from '@synapse/shared';
+import { isMultiMemberConversationKind, nowISO } from '@synapse/shared';
 import { v4 as uuidv4 } from 'uuid';
 
 function normalizeSessionRow(row: any) {
   if (!row) return null;
   return {
     ...row,
-    group_id: row.conversation_kind === 'group' ? row.conversation_id : null,
+    conversationId: row.conversation_id,
+    conversationKind: row.conversation_kind,
+    conversationTitle: row.conversation_title,
+    isMultiMemberConversation: isMultiMemberConversationKind(row.conversation_kind),
   };
 }
 
-async function emitChatFeedItem(workspaceId: string, itemId: string) {
+async function emitFeedItemCreated(workspaceId: string, itemId: string) {
   const item = await getConversationFeedItemById(itemId);
   if (!item || item.workspaceSequence === undefined) return;
 
   await emitEvent({
-    type: 'chat.feed.item.created',
+    type: 'feed.item.created',
     workspaceId,
     payload: {
       workspaceSequence: item.workspaceSequence,
@@ -103,7 +106,7 @@ async function resolveSessionMessageAuthor(params: {
 }
 
 function getSurfaceForSessionMessage(conversationKind: string, role: string) {
-  if (conversationKind === 'group') {
+  if (isMultiMemberConversationKind(conversationKind)) {
     return { scope: 'private' as const, surface: 'internal' as const };
   }
 
@@ -142,7 +145,6 @@ async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
 export async function createSession(params: {
   workspaceId: UUID;
   actorId: UUID;
-  groupId?: UUID;
   conversationId?: UUID;
   userId?: UUID;
   channelType?: string;
@@ -152,7 +154,6 @@ export async function createSession(params: {
   const {
     workspaceId,
     actorId,
-    groupId,
     conversationId,
     userId,
     channelType = 'web',
@@ -161,7 +162,7 @@ export async function createSession(params: {
   } = params;
 
   const resolvedUserId = userId || (typeof metadata.userId === 'string' ? metadata.userId as UUID : undefined);
-  let resolvedConversationId = conversationId || groupId;
+  let resolvedConversationId = conversationId;
   let directConversationCreated = false;
   if (!resolvedConversationId) {
     const conversation = await createConversation({
@@ -346,7 +347,7 @@ export async function addSessionMessage(params: {
   });
 
   if (scope === 'shared' && surface === 'visible' && (role === 'user' || role === 'assistant' || role === 'system')) {
-    await emitChatFeedItem(workspaceId, item.id);
+    await emitFeedItemCreated(workspaceId, item.id);
   }
 
   if (
@@ -375,7 +376,7 @@ export async function addSessionMessage(params: {
     });
   }
 
-  if (!session.group_id && (role === 'user' || role === 'assistant')) {
+  if (!isMultiMemberConversationKind(session.conversation_kind) && (role === 'user' || role === 'assistant')) {
     let actorName: string | undefined;
     if (fromActorId) {
       const actorResult = await query('SELECT name FROM actors WHERE id = $1', [fromActorId]);

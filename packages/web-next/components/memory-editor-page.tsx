@@ -69,14 +69,14 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
     if (!workspaceId) return
     setLoading(true)
     try {
-      const [actorData, groupData, memoryData] = await Promise.all([
+      const [actorData, conversationData, memoryData] = await Promise.all([
         api.getActors(workspaceId),
-        api.getGroups(workspaceId),
+        api.getConversations(workspaceId),
         memoryId ? api.getMemory(workspaceId, memoryId) : Promise.resolve(null),
       ])
 
       const actorItems = (Array.isArray(actorData) ? actorData : []).map(normalizeActorOption)
-      const groupItems = (Array.isArray(groupData) ? groupData : groupData?.groups || []).map(normalizeGroupOption)
+      const groupItems = (conversationData?.conversations || []).map(normalizeGroupOption)
       setActors(actorItems)
       setGroups(groupItems)
 

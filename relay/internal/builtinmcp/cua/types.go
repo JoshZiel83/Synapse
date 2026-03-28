@@ -9,6 +9,7 @@ import (
 
 type Config struct {
 	StableKey            string
+	Enabled              bool
 	ReadOnly             bool
 	RelativeCoordinate   bool
 	ImageSize            [2]int

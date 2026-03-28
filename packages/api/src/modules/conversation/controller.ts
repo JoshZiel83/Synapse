@@ -4,22 +4,22 @@ import type { CanonicalContentBlock } from "@synapse/shared";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
 import {
-  createGroup,
-  getGroup,
-  getGroupsByWorkspace,
-  getGroupMessages,
-  sendGroupMessage,
-  markGroupRead,
-  cancelGroup,
-  getGroupMembers,
-  addMembersToGroup,
+  createConversation,
+  getConversation,
+  getConversationsByWorkspace,
+  getConversationMessages,
+  sendConversationMessage,
+  markConversationRead,
+  cancelConversation,
+  getConversationMembers,
+  addMembersToConversation,
   issueConversationGrant,
   listConversationGrants,
-  removeActorFromGroup,
-  updateGroupProfile,
+  removeActorFromConversation,
+  updateConversationProfile,
   revokeConversationGrant,
-} from "./service.js";
-import { getGroupRuntimeMap } from "../session/runtime.js";
+} from "./chat-service.js";
+import { getConversationRuntimeMap } from "../session/runtime.js";
 import { requireRequestAction } from "../access/guards.js";
 import {
   authorizeAction,
@@ -29,10 +29,10 @@ import {
 import {
   isFeedItemVisibleToUser,
   listWorkspaceFeedEventsPage,
-} from "../conversation/service.js";
+} from "./service.js";
 import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
-import { getConversationMember } from "../conversation/service.js";
+import { getConversationMember } from "./service.js";
 import {
   enrichFeedItemInteractionsForUser,
   enrichInteractionForUser,
@@ -41,12 +41,18 @@ import {
 } from "../interactions/service.js";
 import { enqueueRelayAuthorizationApply } from "../mcp-plugins/relay-manager.js";
 
-const sendGroupMessageSchema = z
+const CONVERSATIONS_BASE_PATH =
+  "/api/v1/workspaces/:workspaceId/conversations";
+const CONVERSATIONS_FEED_PATH =
+  "/api/v1/workspaces/:workspaceId/conversations/feed";
+
+const sendConversationMessageSchema = z
   .object({
     content: z.string().max(10000).optional().default(""),
     contentBlocks: z.array(z.any()).optional(),
     clientMessageId: z.string().min(1).max(128),
     targetParticipantIds: z.array(z.string().uuid()).optional(),
+    targetActorIds: z.array(z.string().uuid()).optional(),
   })
   .refine(
     (body) =>
@@ -55,7 +61,7 @@ const sendGroupMessageSchema = z
     { message: "content or contentBlocks is required" },
   );
 
-const updateGroupSchema = z
+const updateConversationSchema = z
   .object({
     title: z.string().trim().min(1).max(255).optional(),
     avatarFileId: z.string().uuid().nullable().optional(),
@@ -67,7 +73,7 @@ const updateGroupSchema = z
     },
   );
 
-const addGroupMembersSchema = z
+const addConversationMembersSchema = z
   .object({
     actorIds: z.array(z.string().uuid()).optional().default([]),
     userIds: z.array(z.string().uuid()).optional().default([]),
@@ -102,12 +108,17 @@ const issueConversationGrantSchema = z
 
 const resolveInteractionSchema = z
   .object({
-    answers: z.array(z.object({
-      fieldId: z.string().min(1),
-      selectedOptionIds: z.array(z.string().min(1)).optional(),
-      otherText: z.string().trim().max(4000).optional(),
-      text: z.string().trim().max(4000).optional(),
-    })).max(50).optional(),
+    answers: z
+      .array(
+        z.object({
+          fieldId: z.string().min(1),
+          selectedOptionIds: z.array(z.string().min(1)).optional(),
+          otherText: z.string().trim().max(4000).optional(),
+          text: z.string().trim().max(4000).optional(),
+        }),
+      )
+      .max(50)
+      .optional(),
     selectedOptionId: z.string().min(1).optional(),
     decision: z.enum(["approve", "reject"]).optional(),
     note: z.string().trim().max(2000).optional(),
@@ -138,20 +149,18 @@ async function requireWorkspacePermission(
   );
 }
 
-async function requireGroupPermission(
+async function requireConversationPermission(
   request: any,
   reply: any,
   permission: "view" | "send" | "manage" | "manage_members",
   errorMessage: string,
 ) {
-  const { workspaceId, groupId } = request.params as {
-    workspaceId: string;
-    groupId: string;
-  };
-  const group = await getGroup(groupId);
+  const { workspaceId } = request.params as { workspaceId: string };
+  const conversationId = readConversationId(request.params);
+  const conversation = await getConversation(conversationId);
 
-  if (!group || group.workspace_id !== workspaceId) {
-    reply.status(404).send({ error: "Group not found" });
+  if (!conversation || conversation.workspace_id !== workspaceId) {
+    reply.status(404).send({ error: "Conversation not found" });
     return null;
   }
 
@@ -167,15 +176,48 @@ async function requireGroupPermission(
     request,
     reply,
     action,
-    groupId,
+    conversationId,
     errorMessage,
   );
   if (!allowed) {
     return null;
   }
 
-  return group;
+  return conversation;
 }
+
+function readConversationId(params: Record<string, unknown>) {
+  return typeof params.conversationId === "string" ? params.conversationId : "";
+}
+
+function collectionPaths() {
+  return [CONVERSATIONS_BASE_PATH] as const;
+}
+
+function feedPaths() {
+  return [CONVERSATIONS_FEED_PATH] as const;
+}
+
+function conversationPaths(suffix = "") {
+  return [`${CONVERSATIONS_BASE_PATH}/:conversationId${suffix}`] as const;
+}
+
+type ConversationRouteParams = {
+  workspaceId: string;
+  conversationId: string;
+};
+
+type ConversationInteractionRouteParams = ConversationRouteParams & {
+  interactionId: string;
+};
+
+type ConversationActorRouteParams = ConversationRouteParams & {
+  actorId: string;
+};
+
+type ConversationGrantRouteParams = ConversationRouteParams & {
+  grantId: string;
+};
 
 function mapMember(row: any) {
   if (row.actor_id) {
@@ -235,14 +277,13 @@ function mapMember(row: any) {
   };
 }
 
-export default async function groupController(app: FastifyInstance) {
+export default async function conversationController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware);
   app.addHook("onRequest", workspaceMiddleware);
 
-  // List groups for current user
-  app.get<{ Params: { workspaceId: string } }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups",
-    async (request, reply) => {
+  // List conversations for current user
+  for (const path of collectionPaths()) {
+    app.get<{ Params: { workspaceId: string } }>(path, async (request, reply) => {
       const userId = (request as any).user!.userId;
       const { workspaceId } = request.params;
       const allowed = await requireWorkspacePermission(
@@ -253,20 +294,20 @@ export default async function groupController(app: FastifyInstance) {
       );
       if (!allowed) return;
 
-      const groupIds = await listAuthorizedResourceIds({
+      const conversationIds = await listAuthorizedResourceIds({
         subject: userSubject(userId),
         action: "conversation.view",
       });
-      const rawGroups = await getGroupsByWorkspace(
+      const rawConversations = await getConversationsByWorkspace(
         workspaceId,
         userId,
-        groupIds,
+        conversationIds,
       );
 
       // Transform to frontend format
-      const groups = await Promise.all(
-        rawGroups.map(async (row: any) => {
-          const members = (await getGroupMembers(row.id)).filter(
+      const conversations = await Promise.all(
+        rawConversations.map(async (row: any) => {
+          const members = (await getConversationMembers(row.id)).filter(
             (member: any) => member.state === "active",
           );
           const mappedMembers = members.map(mapMember);
@@ -328,22 +369,26 @@ export default async function groupController(app: FastifyInstance) {
         }),
       );
 
-      const runtimeMap = await getGroupRuntimeMap(
-        groups.map((group: any) => group.id),
+      const runtimeMap = await getConversationRuntimeMap(
+        conversations.map((conversation: any) => conversation.id),
       );
-      return reply.send({ groups, runtimeMap });
-    },
-  );
+      return reply.send({
+        conversations,
+        runtimeMap,
+      });
+    });
+  }
 
-  app.get<{
-    Params: { workspaceId: string };
-    Querystring: { after?: string; limit?: string };
-  }>("/api/v1/workspaces/:workspaceId/chat/feed", async (request, reply) => {
-    const userId = (request as any).user!.userId;
-    const { workspaceId } = request.params;
-    const allowed = await requireWorkspacePermission(
-      request,
-      reply,
+  for (const path of feedPaths()) {
+    app.get<{
+      Params: { workspaceId: string };
+      Querystring: { after?: string; limit?: string };
+    }>(path, async (request, reply) => {
+      const userId = (request as any).user!.userId;
+      const { workspaceId } = request.params;
+      const allowed = await requireWorkspacePermission(
+        request,
+        reply,
       "view",
       "Not allowed to access this workspace",
     );
@@ -368,19 +413,21 @@ export default async function groupController(app: FastifyInstance) {
     );
     return reply.send({
       ...page,
-      records: await Promise.all(
-        visibleRecords.map(async (record) => ({
-          ...record,
-          item: await enrichFeedItemInteractionsForUser(record.item, userId),
-        })),
-      ),
+        records: await Promise.all(
+          visibleRecords.map(async (record) => ({
+            ...record,
+            item: await enrichFeedItemInteractionsForUser(record.item, userId),
+          })),
+        ),
+      });
     });
-  });
+  }
 
-  // Create group — accepts { actorId } or { actorIds }, content is optional
-  app.post<{ Params: { workspaceId: string }; Body: any }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups",
-    async (request, reply) => {
+  // Create conversation — accepts { actorId } or { actorIds }, content is optional
+  for (const path of collectionPaths()) {
+    app.post<{ Params: { workspaceId: string }; Body: any }>(
+      path,
+      async (request, reply) => {
       const allowed = await requireWorkspacePermission(
         request,
         reply,
@@ -395,14 +442,24 @@ export default async function groupController(app: FastifyInstance) {
 
       // Support both single-actor and multi-actor formats
       let actorIds: string[];
-      let targetActorId: string | undefined;
+      let targetActorIds: string[] | undefined;
 
       if (body.actorIds) {
         actorIds = body.actorIds;
-        targetActorId = body.targetActorId || actorIds[0];
+        targetActorIds = Array.isArray(body.targetActorIds)
+          ? body.targetActorIds
+          : body.targetActorId
+            ? [body.targetActorId]
+            : actorIds[0]
+              ? [actorIds[0]]
+              : undefined;
       } else if (body.actorId) {
         actorIds = [body.actorId];
-        targetActorId = body.actorId;
+        targetActorIds = Array.isArray(body.targetActorIds)
+          ? body.targetActorIds
+          : body.targetActorId
+            ? [body.targetActorId]
+            : [body.actorId];
       } else {
         return reply
           .status(400)
@@ -413,46 +470,60 @@ export default async function groupController(app: FastifyInstance) {
         body.content && typeof body.content === "string"
           ? body.content
           : undefined;
+      const contentBlocks = Array.isArray(body.contentBlocks)
+        ? (body.contentBlocks as CanonicalContentBlock[])
+        : undefined;
 
-      const result = await createGroup({
+      const result = await createConversation({
         workspaceId,
         createdBy: userId,
         actorIds,
         initialMessage: content,
-        targetActorId: content ? targetActorId : undefined,
+        initialContentBlocks: contentBlocks,
+        targetActorIds:
+          content || (contentBlocks && contentBlocks.length > 0)
+            ? targetActorIds
+            : undefined,
       });
 
-      const members = await getGroupMembers(result.group.id);
+      const members = await getConversationMembers(result.conversation.id);
 
       return reply.status(201).send({
-        id: result.group.id,
-        sessionId: result.group.id,
-        group: result.group,
+        id: result.conversation.id,
+        conversationId: result.conversation.id,
+        conversation: result.conversation,
         members,
         status: "active",
       });
-    },
-  );
+      },
+    );
+  }
 
-  // Get group messages — transformed to frontend format
-  app.get<{
-    Params: { workspaceId: string; groupId: string };
-    Querystring: { limit?: string; before?: string };
-  }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/messages",
-    async (request, reply) => {
-      const group = await requireGroupPermission(
+  // Get conversation messages — transformed to frontend format
+  for (const path of conversationPaths("/messages")) {
+    app.get<{
+      Params: ConversationRouteParams;
+      Querystring: { limit?: string; before?: string };
+    }>(
+      path,
+      async (request, reply) => {
+      const conversation = await requireConversationPermission(
         request,
         reply,
         "view",
         "Not allowed to view this conversation",
       );
-      if (!group) return;
+      if (!conversation) return;
 
       const userId = (request as any).user!.userId;
       const limit = parseInt(request.query.limit || "100", 10);
       const before = request.query.before;
-      const page = await getGroupMessages(group.id, { userId }, limit, before);
+      const page = await getConversationMessages(
+        conversation.id,
+        { userId },
+        limit,
+        before,
+      );
       return reply.send({
         ...page,
         items: await Promise.all(
@@ -461,56 +532,62 @@ export default async function groupController(app: FastifyInstance) {
           ),
         ),
       });
-    },
-  );
+      },
+    );
+  }
 
-  // Send message to group — explicit targets are optional.
-  app.post<{ Params: { workspaceId: string; groupId: string }; Body: any }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/messages",
-    async (request, reply) => {
-      const group = await requireGroupPermission(
+  // Send message to conversation — explicit targets are optional.
+  for (const path of conversationPaths("/messages")) {
+    app.post<{ Params: ConversationRouteParams; Body: any }>(
+      path,
+      async (request, reply) => {
+      const conversation = await requireConversationPermission(
         request,
         reply,
         "send",
         "Not allowed to send messages to this conversation",
       );
-      if (!group) return;
+      if (!conversation) return;
 
-      const body = sendGroupMessageSchema.parse(request.body) as {
+      const body = sendConversationMessageSchema.parse(request.body) as {
         content: string;
         contentBlocks?: CanonicalContentBlock[];
         clientMessageId: string;
         targetParticipantIds?: string[];
+        targetActorIds?: string[];
       };
       const userId = (request as any).user!.userId;
 
-      const msg = await sendGroupMessage({
-        groupId: group.id,
+      const msg = await sendConversationMessage({
+        conversationId: conversation.id,
         senderType: "user",
         senderUserId: userId,
         clientMessageId: body.clientMessageId,
         targetParticipantIds: body.targetParticipantIds,
+        targetActorIds: body.targetActorIds,
         content: body.content,
         contentBlocks: body.contentBlocks,
       });
 
       return reply.status(201).send(msg);
-    },
-  );
+      },
+    );
+  }
 
-  app.post<{
-    Params: { workspaceId: string; groupId: string; interactionId: string };
-    Body: unknown;
-  }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/interactions/:interactionId/respond",
-    async (request, reply) => {
-      const group = await requireGroupPermission(
+  for (const path of conversationPaths("/interactions/:interactionId/respond")) {
+    app.post<{
+      Params: ConversationInteractionRouteParams;
+      Body: unknown;
+    }>(
+      path,
+      async (request, reply) => {
+      const conversation = await requireConversationPermission(
         request,
         reply,
         "view",
         "Not allowed to view this conversation",
       );
-      if (!group) return;
+      if (!conversation) return;
 
       const userId = (request as any).user!.userId;
       const interaction = await getInteractionRequestSummary(
@@ -519,7 +596,7 @@ export default async function groupController(app: FastifyInstance) {
       if (
         !interaction ||
         interaction.workspaceId !== request.params.workspaceId ||
-        interaction.conversationId !== group.id
+        interaction.conversationId !== conversation.id
       ) {
         return reply.status(404).send({ error: "Interaction not found" });
       }
@@ -541,7 +618,7 @@ export default async function groupController(app: FastifyInstance) {
       }
 
       const resolverMember = await getConversationMember({
-        conversationId: group.id,
+        conversationId: conversation.id,
         userId,
       });
       if (!resolverMember) {
@@ -568,65 +645,71 @@ export default async function groupController(app: FastifyInstance) {
       return reply.send({
         interaction: await enrichInteractionForUser(result.interaction, userId),
       });
-    },
-  );
+      },
+    );
+  }
 
-  // Mark group as read
-  app.post<{ Params: { workspaceId: string; groupId: string } }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/read",
-    async (request, reply) => {
-      const group = await requireGroupPermission(
+  // Mark conversation as read
+  for (const path of conversationPaths("/read")) {
+    app.post<{ Params: ConversationRouteParams }>(
+      path,
+      async (request, reply) => {
+      const conversation = await requireConversationPermission(
         request,
         reply,
         "view",
         "Not allowed to view this conversation",
       );
-      if (!group) return;
+      if (!conversation) return;
 
       const userId = (request as any).user!.userId;
-      await markGroupRead(userId, group.id);
+      await markConversationRead(userId, conversation.id);
       return reply.status(204).send();
-    },
-  );
+      },
+    );
+  }
 
-  // Cancel group (stop all actors)
-  app.delete<{ Params: { workspaceId: string; groupId: string } }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId",
-    async (request, reply) => {
-      const group = await requireGroupPermission(
+  // Cancel conversation (stop all actors)
+  for (const path of conversationPaths()) {
+    app.delete<{ Params: ConversationRouteParams }>(
+      path,
+      async (request, reply) => {
+      const conversation = await requireConversationPermission(
         request,
         reply,
         "manage",
         "Not allowed to manage this conversation",
       );
-      if (!group) return;
+      if (!conversation) return;
 
-      await cancelGroup(group.id);
+      await cancelConversation(conversation.id);
       return reply.status(204).send();
-    },
-  );
+      },
+    );
+  }
 
-  app.put<{ Params: { workspaceId: string; groupId: string }; Body: unknown }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId",
-    async (request, reply) => {
-      const group = await requireGroupPermission(
+  for (const path of conversationPaths()) {
+    app.put<{ Params: ConversationRouteParams; Body: unknown }>(
+      path,
+      async (request, reply) => {
+      const conversation = await requireConversationPermission(
         request,
         reply,
         "manage",
         "Not allowed to manage this conversation",
       );
-      if (!group) return;
+      if (!conversation) return;
 
       try {
-        const body = updateGroupSchema.parse(request.body);
-        const updated = await updateGroupProfile({
-          groupId: group.id,
-          workspaceId: group.workspace_id,
+        const body = updateConversationSchema.parse(request.body);
+        const updated = await updateConversationProfile({
+          conversationId: conversation.id,
+          workspaceId: conversation.workspace_id,
           updatedBy: (request as any).user!.userId,
           title: body.title,
           avatarFileId: body.avatarFileId,
         });
-        return reply.send({ group: updated });
+        return reply.send({ conversation: updated });
       } catch (error) {
         if (error instanceof z.ZodError) {
           return reply.status(400).send({
@@ -637,51 +720,55 @@ export default async function groupController(app: FastifyInstance) {
             })),
           });
         }
-        return reply
-          .status(400)
-          .send({
-            error:
-              error instanceof Error ? error.message : "Failed to update group",
-          });
+        return reply.status(400).send({
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to update conversation",
+        });
       }
-    },
-  );
+      },
+    );
+  }
 
-  // Get group members
-  app.get<{ Params: { workspaceId: string; groupId: string } }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/members",
-    async (request, reply) => {
-      const group = await requireGroupPermission(
+  // Get conversation members
+  for (const path of conversationPaths("/members")) {
+    app.get<{ Params: ConversationRouteParams }>(
+      path,
+      async (request, reply) => {
+      const conversation = await requireConversationPermission(
         request,
         reply,
         "view",
         "Not allowed to view this conversation",
       );
-      if (!group) return;
+      if (!conversation) return;
 
-      const members = (await getGroupMembers(group.id))
+      const members = (await getConversationMembers(conversation.id))
         .filter((member: any) => member.state === "active")
         .map(mapMember);
       return reply.send({ members });
-    },
-  );
+      },
+    );
+  }
 
-  app.post<{ Params: { workspaceId: string; groupId: string }; Body: unknown }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/members",
-    async (request, reply) => {
-      const group = await requireGroupPermission(
+  for (const path of conversationPaths("/members")) {
+    app.post<{ Params: ConversationRouteParams; Body: unknown }>(
+      path,
+      async (request, reply) => {
+      const conversation = await requireConversationPermission(
         request,
         reply,
         "manage_members",
         "Not allowed to manage conversation members",
       );
-      if (!group) return;
+      if (!conversation) return;
 
       try {
-        const body = addGroupMembersSchema.parse(request.body);
-        const result = await addMembersToGroup({
-          groupId: group.id,
-          workspaceId: group.workspace_id,
+        const body = addConversationMembersSchema.parse(request.body);
+        const result = await addMembersToConversation({
+          conversationId: conversation.id,
+          workspaceId: conversation.workspace_id,
           actorIds: body.actorIds,
           userIds: body.userIds,
           initiator: {
@@ -700,69 +787,74 @@ export default async function groupController(app: FastifyInstance) {
             })),
           });
         }
-        return reply
-          .status(400)
-          .send({
-            error:
-              error instanceof Error ? error.message : "Failed to add members",
-          });
+        return reply.status(400).send({
+          error:
+            error instanceof Error ? error.message : "Failed to add members",
+        });
       }
-    },
-  );
+      },
+    );
+  }
 
-  // Remove actor from group (kick)
-  app.delete<{
-    Params: { workspaceId: string; groupId: string; actorId: string };
-  }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/members/:actorId",
-    async (request, reply) => {
-      const group = await requireGroupPermission(
+  // Remove actor from conversation (kick)
+  for (const path of conversationPaths("/members/:actorId")) {
+    app.delete<{
+      Params: ConversationActorRouteParams;
+    }>(
+      path,
+      async (request, reply) => {
+      const conversation = await requireConversationPermission(
         request,
         reply,
         "manage_members",
         "Not allowed to manage conversation members",
       );
-      if (!group) return;
+      if (!conversation) return;
 
-      const { groupId, actorId } = request.params;
-      await removeActorFromGroup(group.id, actorId);
+      const actorId = request.params.actorId;
+      await removeActorFromConversation(conversation.id, actorId);
       return reply.status(204).send();
-    },
-  );
+      },
+    );
+  }
 
-  app.get<{ Params: { workspaceId: string; groupId: string } }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/grants",
-    async (request, reply) => {
-      const group = await requireGroupPermission(
+  for (const path of conversationPaths("/grants")) {
+    app.get<{ Params: ConversationRouteParams }>(
+      path,
+      async (request, reply) => {
+      const conversation = await requireConversationPermission(
         request,
         reply,
         "manage",
         "Not allowed to manage conversation permissions",
       );
-      if (!group) return;
+      if (!conversation) return;
 
-      const { workspaceId, groupId } = request.params;
-      const grants = await listConversationGrants(groupId, workspaceId);
+      const { workspaceId } = request.params;
+      const conversationId = readConversationId(request.params);
+      const grants = await listConversationGrants(conversationId, workspaceId);
       return reply.send({ grants });
-    },
-  );
+      },
+    );
+  }
 
-  app.post<{ Params: { workspaceId: string; groupId: string }; Body: unknown }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/grants",
-    async (request, reply) => {
-      const group = await requireGroupPermission(
+  for (const path of conversationPaths("/grants")) {
+    app.post<{ Params: ConversationRouteParams; Body: unknown }>(
+      path,
+      async (request, reply) => {
+      const conversation = await requireConversationPermission(
         request,
         reply,
         "manage",
         "Not allowed to manage conversation permissions",
       );
-      if (!group) return;
+      if (!conversation) return;
 
       try {
         const body = issueConversationGrantSchema.parse(request.body);
         const grant = await issueConversationGrant({
-          groupId: group.id,
-          workspaceId: group.workspace_id,
+          conversationId: conversation.id,
+          workspaceId: conversation.workspace_id,
           permission: body.permission,
           userId: body.userId,
           actorId: body.actorId,
@@ -781,35 +873,36 @@ export default async function groupController(app: FastifyInstance) {
             })),
           });
         }
-        return reply
-          .status(400)
-          .send({
-            error:
-              error instanceof Error
-                ? error.message
-                : "Failed to issue conversation grant",
-          });
+        return reply.status(400).send({
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to issue conversation grant",
+        });
       }
-    },
-  );
+      },
+    );
+  }
 
-  app.post<{
-    Params: { workspaceId: string; groupId: string; grantId: string };
-  }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/grants/:grantId/revoke",
-    async (request, reply) => {
-      const group = await requireGroupPermission(
+  for (const path of conversationPaths("/grants/:grantId/revoke")) {
+    app.post<{
+      Params: ConversationGrantRouteParams;
+    }>(
+      path,
+      async (request, reply) => {
+      const conversation = await requireConversationPermission(
         request,
         reply,
         "manage",
         "Not allowed to manage conversation permissions",
       );
-      if (!group) return;
+      if (!conversation) return;
 
-      const { groupId, grantId } = request.params;
+      const conversationId = readConversationId(request.params);
+      const { grantId } = request.params;
       const revoked = await revokeConversationGrant({
-        groupId,
-        workspaceId: group.workspace_id,
+        conversationId,
+        workspaceId: conversation.workspace_id,
         grantId,
       });
       if (!revoked) {
@@ -818,6 +911,7 @@ export default async function groupController(app: FastifyInstance) {
           .send({ error: "Conversation grant not found" });
       }
       return reply.send({ grant: revoked });
-    },
-  );
+      },
+    );
+  }
 }

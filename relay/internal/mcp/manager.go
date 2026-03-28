@@ -82,10 +82,26 @@ func (m *Manager) emit(evtType, msg string, data map[string]interface{}) {
 	}
 }
 
+func shouldInitializeServer(cfg config.ServerConfig) bool {
+	if config.ServerEnabled(cfg) {
+		return true
+	}
+	if cfg.Transport != "builtin" || cfg.Builtin == nil {
+		return false
+	}
+
+	switch strings.TrimSpace(strings.ToLower(cfg.Builtin.Kind)) {
+	case "chrome", "cua", "filesystem":
+		return true
+	default:
+		return false
+	}
+}
+
 // InitAll starts all configured MCP servers, initializes them, and discovers their tools
 func (m *Manager) InitAll(ctx context.Context) error {
 	for _, cfg := range m.configs {
-		if !config.ServerEnabled(cfg) {
+		if !shouldInitializeServer(cfg) {
 			m.emit("server_skipped", fmt.Sprintf("Skipping disabled server %s", cfg.Name), map[string]interface{}{
 				"server":    cfg.Name,
 				"stableKey": cfg.StableKey,
@@ -323,6 +339,9 @@ func (m *Manager) ApplyRuntimeAuthorization(_ context.Context, application cloud
 		if mode, ok := application.RequestedScope["mode"].(string); ok {
 			grant.Mode = mode
 		}
+	case "chrome":
+		grant.Capability = "chrome"
+		grant.Duration = "persistent"
 	default:
 		return fmt.Errorf("unsupported authorization capability %q", capability)
 	}

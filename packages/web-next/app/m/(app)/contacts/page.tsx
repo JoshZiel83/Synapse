@@ -49,8 +49,8 @@ export default function MobileContactsPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { workspaceId } = useWorkspace()
-  const createGroup = useChatStore((state) => state.createGroup)
-  const selectGroup = useChatStore((state) => state.selectGroup)
+  const createConversation = useChatStore((state) => state.createConversation)
+  const selectConversation = useChatStore((state) => state.selectConversation)
 
   const [mode, setMode] = useState<DirectoryMode>("actors")
   const [members, setMembers] = useState<WorkspaceMember[]>([])
@@ -168,10 +168,10 @@ export default function MobileContactsPage() {
     if (!workspaceId || launchingActorId) return
     setLaunchingActorId(actor.id)
     try {
-      const groupId = await createGroup(workspaceId, [actor.id])
-      selectGroup(groupId)
+      const conversationId = await createConversation(workspaceId, [actor.id])
+      selectConversation(conversationId)
       startTransition(() => {
-        router.push(`/m/chat/${groupId}`)
+        router.push(`/m/chat/${conversationId}`)
       })
     } catch (error) {
       console.error("Failed to start actor chat:", error)

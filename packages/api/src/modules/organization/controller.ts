@@ -19,8 +19,8 @@ const actorRoles = [
 ] as const;
 const actorDocVisibility = [
   "always",
-  "solo_only",
-  "group_only",
+  "direct_only",
+  "multi_member_only",
   "internal_only",
 ] as const;
 const actorDocKeys = new Set(ACTOR_DOC_TEMPLATES.map((template) => template.key));

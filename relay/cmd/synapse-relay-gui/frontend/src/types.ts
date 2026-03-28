@@ -60,6 +60,12 @@ export interface BuiltinFilesystemIndexConfig {
   parseImages?: boolean
 }
 
+export interface BuiltinFilesystemBackupConfig {
+  enabled?: boolean
+  maxTotalSizeBytes?: number
+  maxFileSizeBytes?: number
+}
+
 export interface BuiltinFilesystemConfig {
   readOnly?: boolean
   scope?: 'roots' | 'global'
@@ -67,6 +73,7 @@ export interface BuiltinFilesystemConfig {
   maxGetFileSizeBytes?: number
   roots?: BuiltinFilesystemRootConfig[]
   index?: BuiltinFilesystemIndexConfig
+  backup?: BuiltinFilesystemBackupConfig
 }
 
 export interface BuiltinChromeConfig {

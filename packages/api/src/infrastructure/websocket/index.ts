@@ -107,23 +107,23 @@ function mapInternalEventToSocketEvent(
   event: SystemEvent,
 ): ChatSocketEvent | SystemEvent | null {
   switch (event.type) {
-    case "chat.feed.item.created":
+    case "feed.item.created":
       return {
         type: "feed.item.created",
         payload: event.payload as unknown as WorkspaceFeedEventRecord,
       };
-    case "chat.runtime.updated":
+    case "runtime.updated":
       return {
         type: "runtime.updated",
         payload: event.payload as ChatSocketEventPayloadMap["runtime.updated"],
       };
-    case "chat.conversation.updated":
+    case "conversation.updated":
       return {
         type: "conversation.updated",
         payload:
           event.payload as ChatSocketEventPayloadMap["conversation.updated"],
       };
-    case "chat.interaction.updated":
+    case "interaction.updated":
       return {
         type: "interaction.updated",
         payload:
@@ -132,10 +132,6 @@ function mapInternalEventToSocketEvent(
     case "session.message.new":
     case "session.status.changed":
     case "session.thinking":
-    case "group.actor.runtime.updated":
-    case "group.updated":
-    case "group.member_joined":
-    case "group.member_kicked":
     case "actor.version_changed":
       return null;
     default:

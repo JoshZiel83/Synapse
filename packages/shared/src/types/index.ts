@@ -160,8 +160,8 @@ export type ActorRole =
 
 export type ActorDocVisibility =
   | "always"
-  | "solo_only"
-  | "group_only"
+  | "direct_only"
+  | "multi_member_only"
   | "internal_only";
 
 export type CoreActorDocKey =
@@ -777,15 +777,11 @@ export type EventType =
   | "session.message.new"
   | "session.status.changed"
   | "session.thinking"
-  | "group.actor.runtime.updated"
-  | "group.updated"
-  | "group.member_joined"
-  | "group.member_kicked"
+  | "feed.item.created"
+  | "runtime.updated"
+  | "conversation.updated"
+  | "interaction.updated"
   | "actor.version_changed"
-  | "chat.feed.item.created"
-  | "chat.runtime.updated"
-  | "chat.conversation.updated"
-  | "chat.interaction.updated"
   | "mcp.config.changed"
   | "relay.connected"
   | "relay.disconnected"
@@ -849,7 +845,10 @@ export interface Session {
   id: UUID;
   workspaceId: UUID;
   actorId: UUID;
-  groupId?: UUID;
+  conversationId?: UUID;
+  conversationKind?: "direct" | "group";
+  conversationTitle?: string;
+  isMultiMemberConversation?: boolean;
   channelType: ChannelType;
   trigger: string;
   status: SessionStatus;
@@ -899,7 +898,7 @@ export interface ActorRuntimeWakeup {
 }
 
 export interface ActorRuntimeState {
-  groupId: UUID;
+  conversationId: UUID;
   sessionId: UUID;
   actorId: UUID;
   actorName: string;
@@ -1136,7 +1135,16 @@ export interface CanonicalFileRefBlock {
   category: CanonicalFileCategory;
 }
 
-export type CanonicalContentBlock = CanonicalTextBlock | CanonicalFileRefBlock;
+export interface CanonicalMentionBlock {
+  id: UUID;
+  type: "mention";
+  mention: ConversationEntityRef;
+}
+
+export type CanonicalContentBlock =
+  | CanonicalTextBlock
+  | CanonicalFileRefBlock
+  | CanonicalMentionBlock;
 
 export type CanonicalTextBlockInput = Omit<CanonicalTextBlock, "id"> & {
   id?: UUID;
@@ -1144,9 +1152,13 @@ export type CanonicalTextBlockInput = Omit<CanonicalTextBlock, "id"> & {
 export type CanonicalFileRefBlockInput = Omit<CanonicalFileRefBlock, "id"> & {
   id?: UUID;
 };
+export type CanonicalMentionBlockInput = Omit<CanonicalMentionBlock, "id"> & {
+  id?: UUID;
+};
 export type CanonicalContentBlockInput =
   | CanonicalTextBlockInput
-  | CanonicalFileRefBlockInput;
+  | CanonicalFileRefBlockInput
+  | CanonicalMentionBlockInput;
 
 // ============ Files ============
 
@@ -1237,7 +1249,7 @@ export const ACTOR_DOC_TEMPLATES: ActorDocTemplate[] = [
     key: "relationship_with_team",
     title: "Relationship With Team",
     description: "How this actor views and works with other actors.",
-    defaultVisibility: "group_only",
+    defaultVisibility: "multi_member_only",
     defaultPriority: 96,
   },
   {
@@ -1251,7 +1263,7 @@ export const ACTOR_DOC_TEMPLATES: ActorDocTemplate[] = [
     key: "social_protocol",
     title: "Social Protocol",
     description: "When to speak, when to stay quiet, and what not to share.",
-    defaultVisibility: "group_only",
+    defaultVisibility: "multi_member_only",
     defaultPriority: 92,
   },
   {
@@ -1385,6 +1397,7 @@ interface CanonicalContextItemBase {
   sessionId?: string;
   turnId?: string;
   sequence?: number;
+  createdAt?: Timestamp;
   scope: CanonicalContextScope;
   surface: CanonicalContextSurface;
   metadata?: Record<string, unknown>;
@@ -1574,7 +1587,7 @@ export interface NormalizedMcpToolResult {
 
 // ============ Tool Plugin System ============
 
-export interface GroupMemberEntry {
+export interface ConversationMemberEntry {
   type: "actor" | "user" | "external";
   id: string;
   name: string;
@@ -1589,8 +1602,8 @@ export interface ToolResolveContext {
   sessionId: string;
   actorId: string;
   workspaceId: string;
-  groupId?: string;
-  groupMembers?: GroupMemberEntry[];
+  conversationId?: string;
+  conversationMembers?: ConversationMemberEntry[];
   userId?: string;
   availableSkills?: AvailableSkillSummary[];
 }
@@ -2355,46 +2368,6 @@ export interface McpSetupStep {
   metadata?: Record<string, unknown>;
 }
 
-// ============ Groups (Chat Groups) ============
-export interface Group {
-  id: UUID;
-  workspaceId: UUID;
-  title?: string;
-  createdBy?: UUID;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
-
-export interface GroupMember {
-  id: UUID;
-  groupId: UUID;
-  actorId?: UUID;
-  userId?: UUID;
-  sessionId?: UUID;
-  joinedAt: Timestamp;
-  // Joined fields
-  actorName?: string;
-  actorTitle?: string;
-  actorRole?: string;
-  userName?: string;
-  status?: SessionStatus;
-}
-
-export interface GroupMessage {
-  id: UUID;
-  groupId: UUID;
-  sessionId: UUID | "";
-  role: "user" | "assistant" | "system";
-  fromUserId?: UUID;
-  fromActorId?: UUID;
-  actorName?: string;
-  targetParticipantIds: UUID[];
-  content: string;
-  contentBlocks: CanonicalContentBlock[];
-  metadata: Record<string, unknown>;
-  createdAt: Timestamp;
-}
-
 export type ConversationParticipantType =
   | "actor"
   | "user"
@@ -2706,9 +2679,14 @@ export interface RelayCuaAuthorizationScope {
   mode: "control";
 }
 
+export interface RelayChromeAuthorizationScope {
+  capability: "chrome";
+}
+
 export type RelayAuthorizationScope =
   | RelayFilesystemAuthorizationScope
-  | RelayCuaAuthorizationScope;
+  | RelayCuaAuthorizationScope
+  | RelayChromeAuthorizationScope;
 
 export interface RelayAuthorizationInteractionSummary {
   relayToolName: string;
@@ -2927,29 +2905,29 @@ function summarizeMembershipEvent(
         members.some((member) => member.memberId === initiatorMemberId)
       ) {
         if (nonInitiatorMembers.length === 0) {
-          return `${initiatorName} joined the group`;
+          return `${initiatorName} joined the conversation`;
         }
-        return `${initiatorName} started the group with ${formatConversationEntityList(nonInitiatorMembers)}`;
+        return `${initiatorName} started the conversation with ${formatConversationEntityList(nonInitiatorMembers)}`;
       }
-      return `${initiatorName} invited ${memberList} to the group`;
+      return `${initiatorName} invited ${memberList} to the conversation`;
     }
-    return `${memberList} joined the group`;
+    return `${memberList} joined the conversation`;
   }
 
   if (eventType === "member_kicked") {
     if (initiatorName) {
-      return `${initiatorName} removed ${memberList} from the group`;
+      return `${initiatorName} removed ${memberList} from the conversation`;
     }
-    return `${memberList} was removed from the group`;
+    return `${memberList} was removed from the conversation`;
   }
 
   if (initiatorName && initiatorMemberId && members.length === 1) {
     const leftMember = members[0];
     if (leftMember && leftMember.memberId === initiatorMemberId) {
-      return `${initiatorName} left the group`;
+      return `${initiatorName} left the conversation`;
     }
   }
-  return `${memberList} left the group`;
+  return `${memberList} left the conversation`;
 }
 
 export function summarizeConversationEvent(
@@ -3360,6 +3338,19 @@ export function fileRefBlock(
   };
 }
 
+export function mentionBlock(
+  input: Omit<CanonicalMentionBlock, "id" | "type"> & { id?: UUID },
+): CanonicalMentionBlock {
+  return {
+    id:
+      typeof input.id === "string" && input.id.trim().length > 0
+        ? input.id
+        : createCanonicalContentBlockId("mention"),
+    type: "mention",
+    mention: input.mention,
+  };
+}
+
 function normalizeContentBlockSizeBytes(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -3371,6 +3362,39 @@ function normalizeContentBlockSizeBytes(value: unknown): number | null {
     }
   }
   return null;
+}
+
+function isConversationEntityRef(
+  value: unknown,
+): value is ConversationEntityRef {
+  if (!value || typeof value !== "object") return false;
+  const entity = value as Record<string, unknown>;
+  return (
+    typeof entity.memberType === "string" &&
+    entity.memberType.trim().length > 0 &&
+    (entity.memberId === undefined || typeof entity.memberId === "string") &&
+    (entity.participantId === undefined ||
+      typeof entity.participantId === "string") &&
+    (entity.actorId === undefined || typeof entity.actorId === "string") &&
+    (entity.userId === undefined || typeof entity.userId === "string") &&
+    (entity.externalUserKey === undefined ||
+      typeof entity.externalUserKey === "string") &&
+    (entity.transportAddressId === undefined ||
+      typeof entity.transportAddressId === "string") &&
+    (entity.transportKind === undefined ||
+      entity.transportKind === "feishu" ||
+      entity.transportKind === "weixin") &&
+    (entity.name === undefined || typeof entity.name === "string") &&
+    (entity.title === undefined || typeof entity.title === "string") &&
+    (entity.role === undefined || typeof entity.role === "string") &&
+    (entity.avatarUrl === undefined || typeof entity.avatarUrl === "string") &&
+    (entity.avatarEmoji === undefined || typeof entity.avatarEmoji === "string")
+  );
+}
+
+export function formatMentionText(block: CanonicalMentionBlock): string {
+  const name = block.mention.name?.trim() || "Unknown";
+  return `@${name}`;
 }
 
 export function isCanonicalContentBlock(
@@ -3400,6 +3424,10 @@ export function isCanonicalContentBlock(
         block.category === "video" ||
         block.category === "document")
     );
+  }
+
+  if (block.type === "mention") {
+    return isConversationEntityRef(block.mention);
   }
 
   return false;
@@ -3440,6 +3468,18 @@ export function normalizeCanonicalContentBlocks(
         fileRefBlock({
           ...block,
           sizeBytes,
+        }),
+      );
+      continue;
+    }
+
+    if (block.type === "mention") {
+      if (!isConversationEntityRef(block.mention)) continue;
+
+      normalized.push(
+        mentionBlock({
+          id: block.id,
+          mention: block.mention,
         }),
       );
     }
@@ -3487,10 +3527,39 @@ export const SECRETARY_DEFAULT_DOCS: ActorDoc[] = normalizeActorDocs([
 
 /** Extract concatenated text from CanonicalContentBlock[] */
 export function extractText(blocks: CanonicalContentBlock[]): string {
-  return blocks
-    .filter((b): b is CanonicalTextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n\n");
+  let result = "";
+  let previousKind: "text" | "mention" | null = null;
+
+  for (const block of blocks) {
+    const chunk =
+      block.type === "text"
+        ? block.text
+        : block.type === "mention"
+          ? formatMentionText(block)
+          : "";
+
+    if (!chunk) continue;
+
+    if (!result) {
+      result = chunk;
+      previousKind = block.type === "mention" ? "mention" : "text";
+      continue;
+    }
+
+    const nextKind = block.type === "mention" ? "mention" : "text";
+    const separator =
+      previousKind === "mention" ||
+      nextKind === "mention" ||
+      /\s$/.test(result) ||
+      /^\s/.test(chunk)
+        ? ""
+        : "\n\n";
+
+    result += `${separator}${chunk}`;
+    previousKind = nextKind;
+  }
+
+  return result;
 }
 
 export function getActorDocTemplate(
@@ -3505,6 +3574,20 @@ function isNonEmptyActorDoc(doc: ActorDoc): boolean {
     if (block.type === "text") return block.text.trim().length > 0;
     return true;
   });
+}
+
+export function normalizeActorDocVisibility(
+  value: unknown,
+): ActorDocVisibility {
+  if (
+    value === "always" ||
+    value === "direct_only" ||
+    value === "multi_member_only" ||
+    value === "internal_only"
+  ) {
+    return value;
+  }
+  return "always";
 }
 
 export function normalizeActorDocs(docs: ActorDocInput[]): ActorDoc[] {
@@ -3532,7 +3615,9 @@ export function normalizeActorDocs(docs: ActorDocInput[]): ActorDoc[] {
         template?.title ||
         (doc.key === "custom" ? "Custom section" : doc.key),
       content: normalizeCanonicalContentBlocks(doc.content),
-      visibility: doc.visibility || template?.defaultVisibility || "always",
+      visibility: normalizeActorDocVisibility(
+        doc.visibility || template?.defaultVisibility || "always",
+      ),
       priority: Number.isFinite(doc.priority)
         ? doc.priority
         : template?.defaultPriority || 0,

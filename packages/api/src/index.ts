@@ -36,7 +36,7 @@ import authModule from "./modules/auth/index.js";
 import workspaceModule from "./modules/workspace/index.js";
 import organizationModule from "./modules/organization/index.js";
 import skillsModule from "./modules/skills/index.js";
-import groupModule from "./modules/group/index.js";
+import conversationModule from "./modules/conversation/index.js";
 import automationModule from "./modules/automation/index.js";
 import filesModule from "./modules/files/index.js";
 import memoryModule from "./modules/memory/index.js";
@@ -58,6 +58,7 @@ import {
 import { shutdownAllInstances } from "./modules/mcp-plugins/instance-manager.js";
 import { recoverInterruptedExecutions } from "./modules/execution/service.js";
 import { registerActionToolPlugins } from "./modules/ai/tools.js";
+import { registerActorFileToolPlugins } from "./modules/ai/file-tools.js";
 import { registerCallableToolPlugins } from "./modules/ai/session-tools.js";
 import { startSessionThinkingWorker } from "./workers/session-thinking.js";
 import { ensureAutomationSchedulerJob, startAutomationSchedulerWorker } from "./workers/automation-scheduler.js";
@@ -142,7 +143,7 @@ async function main() {
   await app.register(workspaceModule);
   await app.register(organizationModule);
   await app.register(skillsModule);
-  await app.register(groupModule);
+  await app.register(conversationModule);
   await app.register(automationModule);
   await app.register(filesModule);
   await app.register(memoryModule);
@@ -159,33 +160,6 @@ async function main() {
     console.error("Failed to initialize MCP runtime:", err);
     process.exit(1);
   }
-
-  try {
-    const recovered = await recoverInterruptedExecutions({
-      errorMessage:
-        "Recovered after the previous worker stopped while this turn was still running.",
-    });
-    if (
-      recovered.recoveredToolCalls > 0 ||
-      recovered.recoveredTurns > 0 ||
-      recovered.recoveredSessions > 0
-    ) {
-      console.warn(
-        `Recovered interrupted executions (toolCalls=${recovered.recoveredToolCalls}, turns=${recovered.recoveredTurns}, sessions=${recovered.recoveredSessions})`,
-      );
-    }
-  } catch (err) {
-    console.error("Failed to recover interrupted executions:", err);
-  }
-
-  registerActionToolPlugins();
-  registerCallableToolPlugins();
-  await ensureAutomationSchedulerJob();
-  startAutomationSchedulerWorker();
-  startAutomationExecutionWorker();
-  startSessionThinkingWorker();
-  startImTransportDeliveryWorker();
-  await startTransportRuntimeManager();
 
   // Health check
   app.get("/api/v1/health", async () => {
@@ -211,6 +185,34 @@ async function main() {
     app.log.error(err);
     process.exit(1);
   }
+
+  try {
+    const recovered = await recoverInterruptedExecutions({
+      errorMessage:
+        "Recovered after the previous worker stopped while this turn was still running.",
+    });
+    if (
+      recovered.recoveredToolCalls > 0 ||
+      recovered.recoveredTurns > 0 ||
+      recovered.recoveredSessions > 0
+    ) {
+      console.warn(
+        `Recovered interrupted executions (toolCalls=${recovered.recoveredToolCalls}, turns=${recovered.recoveredTurns}, sessions=${recovered.recoveredSessions})`,
+      );
+    }
+  } catch (err) {
+    console.error("Failed to recover interrupted executions:", err);
+  }
+
+  registerActionToolPlugins();
+  registerCallableToolPlugins();
+  registerActorFileToolPlugins();
+  await ensureAutomationSchedulerJob();
+  startAutomationSchedulerWorker();
+  startAutomationExecutionWorker();
+  startSessionThinkingWorker();
+  startImTransportDeliveryWorker();
+  await startTransportRuntimeManager();
 
   const waitWithTimeout = async (
     label: string,

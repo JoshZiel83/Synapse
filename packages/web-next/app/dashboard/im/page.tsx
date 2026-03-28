@@ -1795,7 +1795,7 @@ export default function ImPage() {
                       {session.conversationId ? (
                         <Button asChild variant="outline" size="sm">
                           <Link
-                            href={`/dashboard/chat?group=${session.conversationId}`}
+                            href={`/dashboard/chat?conversation=${session.conversationId}`}
                           >
                             <MessageSquare className="size-4" />
                             Open conversation
@@ -1886,7 +1886,7 @@ export default function ImPage() {
                             size="sm"
                           >
                             <Link
-                              href={`/dashboard/chat?group=${sessionRef.conversationId}`}
+                              href={`/dashboard/chat?conversation=${sessionRef.conversationId}`}
                             >
                               {sessionRef.endpointDisplayName ||
                                 sessionRef.conversationTitle ||

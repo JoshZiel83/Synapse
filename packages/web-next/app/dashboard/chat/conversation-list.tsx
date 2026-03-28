@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils';
 import { Plus, Search } from 'lucide-react';
 import ChatAvatar from './chat-avatar';
 import TransportKindIcon from './transport-kind-icon';
-import type { Group, GroupRuntimeMap } from '@/stores/chat-store';
+import type { ConversationRuntimeMap, ConversationSummary } from '@/stores/chat-store';
 
 function formatRelativeTime(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -23,10 +23,10 @@ function formatRelativeTime(dateStr: string) {
   return new Date(dateStr).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-interface GroupListProps {
-  groups: Group[];
+interface ConversationListProps {
+  conversations: ConversationSummary[];
   selectedId: string | null;
-  runtimeMap: GroupRuntimeMap;
+  runtimeMap: ConversationRuntimeMap;
   onSelect: (id: string) => void;
   onNewConversation: () => void;
   className?: string;
@@ -71,7 +71,11 @@ function summarizeRuntimePreview(runtimeByActor?: Record<string, ActorRuntimeSta
   return `${lead}${suffix} · working`;
 }
 
-function GroupListSkeletonRows({ isMobileHeader }: { isMobileHeader: boolean }) {
+function ConversationListSkeletonRows({
+  isMobileHeader,
+}: {
+  isMobileHeader: boolean
+}) {
   return (
     <div className="divide-y divide-border/70">
       {Array.from({ length: isMobileHeader ? 6 : 8 }, (_, index) => (
@@ -100,8 +104,8 @@ function GroupListSkeletonRows({ isMobileHeader }: { isMobileHeader: boolean }) 
   );
 }
 
-export default function GroupList({
-  groups,
+export default function ConversationList({
+  conversations,
   selectedId,
   runtimeMap,
   onSelect,
@@ -110,21 +114,23 @@ export default function GroupList({
   headerVariant = 'default',
   title,
   loading = false,
-}: GroupListProps) {
+}: ConversationListProps) {
   const [search, setSearch] = useState('');
   const headerTitle = title || (headerVariant === 'mobile' ? APP_NAME : 'Messages');
   const isMobileHeader = headerVariant === 'mobile';
 
   const filtered = search
-    ? groups.filter((g) => {
+    ? conversations.filter((conversation) => {
         const s = search.toLowerCase();
         return (
-          g.title?.toLowerCase().includes(s) ||
-          g.participants.some((p) => p.name.toLowerCase().includes(s)) ||
-          g.lastMessage?.content.toLowerCase().includes(s)
+          conversation.title?.toLowerCase().includes(s) ||
+          conversation.participants.some((participant) =>
+            participant.name.toLowerCase().includes(s),
+          ) ||
+          conversation.lastMessage?.content.toLowerCase().includes(s)
         );
       })
-    : groups;
+    : conversations;
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col border-r border-border bg-muted/20", className)}>
@@ -171,7 +177,7 @@ export default function GroupList({
         </div>
       </div>
 
-      {/* Group List */}
+      {/* Conversation List */}
       <div
         className={cn(
           'min-h-0 flex-1 overflow-y-auto',
@@ -179,23 +185,28 @@ export default function GroupList({
         )}
       >
         {loading ? (
-          <GroupListSkeletonRows isMobileHeader={isMobileHeader} />
-        ) : filtered.map((group) => {
-          const isSelected = group.id === selectedId;
-          const runtimePreview = summarizeRuntimePreview(runtimeMap[group.id]);
-          const name = group.title || group.participants.map((p) => p.name).join(', ');
+          <ConversationListSkeletonRows isMobileHeader={isMobileHeader} />
+        ) : filtered.map((conversation) => {
+          const isSelected = conversation.id === selectedId;
+          const runtimePreview = summarizeRuntimePreview(
+            runtimeMap[conversation.id]
+          );
+          const name =
+            conversation.title ||
+            conversation.participants.map((participant) => participant.name).join(', ');
 
-          const preview = group.lastMessage
-            ? `${group.lastMessage.role === 'user' ? 'You' : group.lastMessage.actorName || 'Actor'}: ${group.lastMessage.content}`
+          const preview = conversation.lastMessage
+            ? `${conversation.lastMessage.role === 'user' ? 'You' : conversation.lastMessage.actorName || 'Actor'}: ${conversation.lastMessage.content}`
             : '';
           const previewTrunc = preview.length > 50 ? preview.substring(0, 50) + '...' : preview;
 
-          const timeStr = group.lastMessage?.createdAt || group.createdAt;
+          const timeStr =
+            conversation.lastMessage?.createdAt || conversation.createdAt;
 
           return (
             <button
-              key={group.id}
-              onClick={() => onSelect(group.id)}
+              key={conversation.id}
+              onClick={() => onSelect(conversation.id)}
               className={`
                 relative w-full px-4 py-3 text-left transition-colors
                 ${isSelected
@@ -213,18 +224,18 @@ export default function GroupList({
                 <div className="relative shrink-0">
                   <ChatAvatar
                     name={name}
-                    avatarUrl={group.avatarUrl}
-                    entityType="group"
+                    avatarUrl={conversation.avatarUrl}
+                    entityType="conversation"
                     size="lg"
                   />
                   <TransportKindIcon
-                    kind={group.transportKind}
+                    kind={conversation.transportKind}
                     size={14}
                     className="absolute -bottom-1 -right-1 size-5 p-0.5"
                   />
-                  {group.unreadCount > 0 && (
+                  {conversation.unreadCount > 0 && (
                     <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold">
-                      {group.unreadCount > 99 ? '99+' : group.unreadCount}
+                      {conversation.unreadCount > 99 ? '99+' : conversation.unreadCount}
                     </span>
                   )}
                 </div>

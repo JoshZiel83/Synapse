@@ -24,12 +24,12 @@ type ParticipantInitiator = {
   name?: string;
 };
 
-async function emitChatFeedItem(workspaceId: string, itemId: string) {
+async function emitFeedItemCreated(workspaceId: string, itemId: string) {
   const item = await getConversationFeedItemById(itemId);
   if (!item || item.workspaceSequence === undefined) return;
 
   await emitEvent({
-    type: "chat.feed.item.created",
+    type: "feed.item.created",
     workspaceId,
     payload: {
       workspaceSequence: item.workspaceSequence,
@@ -160,7 +160,7 @@ async function recordMembershipEvent(params: {
     },
   });
 
-  await emitChatFeedItem(params.workspaceId, created.item.id);
+  await emitFeedItemCreated(params.workspaceId, created.item.id);
 }
 
 export async function activateConversationParticipant(params: {

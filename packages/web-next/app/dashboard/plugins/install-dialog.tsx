@@ -37,6 +37,7 @@ import { PluginIcon } from './plugin-ui';
 import {
   AccessAttachmentTypeStep,
   AccessReuseScopeStep,
+  type AccessVisualConversation,
   getConversationDisplayName,
 } from '@/app/dashboard/access/attachment-visuals';
 
@@ -546,14 +547,14 @@ export default function InstallDialog({
 
   useEffect(() => {
     if ((selectedAttachmentType === 'actor_global' || selectedAttachmentType === 'actor_conversation') && workspaceId) {
-      api.getActors(workspaceId).then((result: any) => {
+      api.getActors(workspaceId).then((result) => {
         const actorList = result?.actors ?? result ?? [];
         setActors(Array.isArray(actorList) ? actorList.map(normalizeActorOption) : []);
       }).catch(() => {});
     }
     if ((selectedAttachmentType === 'conversation' || selectedAttachmentType === 'actor_conversation') && workspaceId) {
-      api.getGroups(workspaceId).then((res: any) => setConversations(
-        (res.groups || []).map((conversation: any) => ({
+      api.getConversations(workspaceId).then((res) => setConversations(
+        (res.conversations || []).map((conversation: AccessVisualConversation) => ({
           ...conversation,
           name: getConversationDisplayName(conversation),
         })),

@@ -21,7 +21,7 @@ import {
   getConversationFeedItemById,
 } from "../conversation/service.js";
 import { getFileUrlById } from "../files/service.js";
-import { wakeActor } from "../group/service.js";
+import { wakeActor } from "../conversation/chat-service.js";
 
 type RawInteractionRow = {
   id: string;
@@ -690,12 +690,12 @@ async function getInteractionRowById(interactionId: string) {
   return result.rows[0] || null;
 }
 
-async function emitChatFeedItem(workspaceId: string, itemId: string) {
+async function emitFeedItemCreated(workspaceId: string, itemId: string) {
   const item = await getConversationFeedItemById(itemId);
   if (!item || item.workspaceSequence === undefined) return;
 
   await emitEvent({
-    type: "chat.feed.item.created",
+    type: "feed.item.created",
     workspaceId,
     payload: {
       workspaceSequence: item.workspaceSequence,
@@ -707,7 +707,7 @@ async function emitChatFeedItem(workspaceId: string, itemId: string) {
 
 async function emitInteractionUpdated(interaction: InteractionRequestSummary) {
   await emitEvent({
-    type: "chat.interaction.updated",
+    type: "interaction.updated",
     workspaceId: interaction.workspaceId,
     payload: {
       conversationId: interaction.conversationId,
@@ -756,7 +756,7 @@ async function wakeRequesterActor(interaction: InteractionRequestSummary) {
       : interaction.resolvedBy;
 
   await wakeActor({
-    groupId: interaction.conversationId,
+    conversationId: interaction.conversationId,
     actorId: requesterActorId,
     sourceType: "system_interrupt",
     sourceItemId: interaction.itemId,
@@ -948,7 +948,7 @@ export async function createQuestionInteractionRequest(
   }
   await syncInteractionEventPayload(interaction);
   if (interaction.itemId) {
-    await emitChatFeedItem(params.workspaceId, interaction.itemId);
+    await emitFeedItemCreated(params.workspaceId, interaction.itemId);
   }
 
   return interaction;
@@ -1013,7 +1013,7 @@ export async function createRelayAuthorizationInteractionRequest(
   }
   await syncInteractionEventPayload(interaction);
   if (interaction.itemId) {
-    await emitChatFeedItem(params.workspaceId, interaction.itemId);
+    await emitFeedItemCreated(params.workspaceId, interaction.itemId);
   }
 
   return interaction;

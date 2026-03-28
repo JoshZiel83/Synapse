@@ -7,10 +7,13 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
 import { PlusIcon } from 'lucide-react';
 import { runtimeToAvatarStatus } from '@/stores/chat-store';
-import type { GroupMember } from '@/stores/chat-store';
+import type { ConversationMember } from '@/stores/chat-store';
 import ChatAvatar from './chat-avatar';
 import ChatParticipantHoverCard from './chat-participant-hover-card';
-import { getGroupMemberContactHref, getGroupMemberSubtitle } from './member-utils';
+import {
+  getConversationMemberContactHref,
+  getConversationMemberSubtitle,
+} from './member-utils';
 
 function getRuntimePriority(runtime?: ActorRuntimeState) {
   if (!runtime) return 3;
@@ -20,7 +23,7 @@ function getRuntimePriority(runtime?: ActorRuntimeState) {
   return 3;
 }
 
-function orderMembers(members: GroupMember[], runtimeByActor?: Record<string, ActorRuntimeState>) {
+function orderMembers(members: ConversationMember[], runtimeByActor?: Record<string, ActorRuntimeState>) {
   return [...members].sort((left, right) => {
     if (left.type !== 'actor' || right.type !== 'actor') {
       if (left.type === right.type) return 0;
@@ -57,13 +60,13 @@ function getRuntimeDetail(runtime?: ActorRuntimeState) {
 }
 
 interface ChatMemberStripProps {
-  members: GroupMember[];
+  members: ConversationMember[];
   runtimeByActor?: Record<string, ActorRuntimeState>;
   max?: number;
   size?: 'sm' | 'default' | 'lg';
   className?: string;
   onAdd?: () => void;
-  onMemberClick?: (member: GroupMember) => void;
+  onMemberClick?: (member: ConversationMember) => void;
   contactBasePath?: string;
 }
 
@@ -87,8 +90,8 @@ export default function ChatMemberStrip({
     <AvatarGroup className={cn('items-center', className)}>
       {visibleMembers.map((member) => {
         const runtime = member.type === 'actor' ? runtimeByActor?.[member.id] : undefined;
-        const href = getGroupMemberContactHref(member, contactBasePath);
-        const subtitle = getGroupMemberSubtitle(member);
+        const href = getConversationMemberContactHref(member, contactBasePath);
+        const subtitle = getConversationMemberSubtitle(member);
         const canOpen = Boolean(onMemberClick || href);
         const avatar = (
           <ChatAvatar
