@@ -1699,6 +1699,7 @@ export type PluginConfigFieldType =
   | "number"
   | "boolean"
   | "select"
+  | "multiselect"
   | "secret"
   | "auth_connection"
   | "file";
@@ -1712,7 +1713,8 @@ export type PluginInstallStepKind =
 export type PluginInstallActionKind = "auth_start" | "external_link" | "noop";
 export type PluginAuthBindingDriverKind =
   | "oauth2_authorization_code_pkce"
-  | "mijia_qr_login";
+  | "mijia_qr_login"
+  | "feishu_cli_setup";
 export type PluginAuthOwnerScope = "installation" | "user" | "workspace";
 export type PluginAuthSessionStatus =
   | "pending"

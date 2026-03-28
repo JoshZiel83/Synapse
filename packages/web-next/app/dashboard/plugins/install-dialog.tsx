@@ -88,6 +88,14 @@ type AuthFieldState = {
   authConnectionId?: string;
 };
 
+type AuthChallengeMetadata = {
+  title?: string;
+  description?: string;
+  actionLabel?: string;
+  scanUrl?: string;
+  userCode?: string;
+};
+
 function normalizeActorOption(actor: any) {
   const definition = actor?.definition || actor;
   return {
@@ -129,6 +137,38 @@ function translate(text: LocalizedText | undefined, locale: string, fallback?: s
     Object.values(text)[0] ||
     ''
   );
+}
+
+function getStringArrayValue(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function isMissingFieldValue(value: unknown) {
+  return (
+    value === undefined ||
+    value === null ||
+    value === '' ||
+    (typeof value === 'string' && value.trim() === '') ||
+    (Array.isArray(value) && value.length === 0)
+  );
+}
+
+function getAuthChallengeMetadata(authState?: AuthFieldState): AuthChallengeMetadata {
+  const metadata = authState?.challenge?.metadata;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return {};
+  }
+
+  const record = metadata as Record<string, unknown>;
+  return {
+    title: typeof record.title === 'string' ? record.title : undefined,
+    description: typeof record.description === 'string' ? record.description : undefined,
+    actionLabel: typeof record.actionLabel === 'string' ? record.actionLabel : undefined,
+    scanUrl: typeof record.scanUrl === 'string' ? record.scanUrl : undefined,
+    userCode: typeof record.userCode === 'string' ? record.userCode : undefined,
+  };
 }
 
 function deriveConfigFields(plugin: any): PluginConfigFieldDefinition[] {
@@ -201,6 +241,10 @@ function buildInitialConfig(plugin: any, configFields: PluginConfigFieldDefiniti
     }
     if (field.type === 'boolean') {
       initial[field.key] = false;
+      continue;
+    }
+    if (field.type === 'multiselect') {
+      initial[field.key] = [];
     }
   }
   return initial;
@@ -244,11 +288,15 @@ function hasStoredAuthConnection(value: unknown) {
 }
 
 function getAuthPendingMessage(authState: AuthFieldState) {
+  const metadata = getAuthChallengeMetadata(authState);
+  if (metadata.description) {
+    return metadata.description;
+  }
   if (authState.phase === 'pending_confirm') {
-    return 'Authorization scanned. Confirm it in the Mi Home app.';
+    return 'Authorization scanned. Confirm it in the provider app.';
   }
   if (authState.challenge?.kind === 'qr_code') {
-    return 'Scan the QR code with the Mi Home app to authorize this account.';
+    return 'Scan the QR code to authorize this account.';
   }
   return 'Waiting for authorization...';
 }
@@ -325,7 +373,7 @@ function runClientValidation(
         }
       } else if (field.type === 'boolean') {
         continue;
-      } else if (value === undefined || value === null || value === '') {
+      } else if (isMissingFieldValue(value)) {
         errors[field.key] = 'This field is required.';
       }
     }
@@ -337,7 +385,7 @@ function runClientValidation(
     if (errors[rule.field]) continue;
     switch (rule.rule) {
       case 'required':
-        if (value === undefined || value === null || value === '') errors[rule.field] = rule.message;
+        if (isMissingFieldValue(value)) errors[rule.field] = rule.message;
         break;
       case 'min_length':
         if (typeof value === 'string' && value.length < Number(rule.value)) errors[rule.field] = rule.message;
@@ -937,6 +985,60 @@ export default function InstallDialog({
       );
     }
 
+    if (field.type === 'multiselect') {
+      const selectedValues = new Set(getStringArrayValue(value));
+      return (
+        <div key={field.key} className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Label className="block text-sm/6 font-medium text-gray-900 dark:text-white">{label}</Label>
+            {field.required && <span className="text-xs text-red-500">*</span>}
+          </div>
+          {description && <p className="text-sm text-gray-500 dark:text-gray-400">{description}</p>}
+          <div className="grid gap-3 sm:grid-cols-2">
+            {(field.options || []).map((option) => {
+              const optionLabel =
+                translate(option.labelI18n, locale, plugin.default_locale || 'en') || option.value;
+              const optionDescription = translate(
+                option.descriptionI18n,
+                locale,
+                plugin.default_locale || 'en',
+              );
+              const checked = selectedValues.has(option.value);
+              return (
+                <label
+                  key={option.value}
+                  className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors ${
+                    checked
+                      ? 'border-foreground/20 bg-accent/60'
+                      : 'border-border/70 bg-background hover:bg-muted/40'
+                  }`}
+                >
+                  <Checkbox
+                    checked={checked}
+                    onCheckedChange={(nextChecked) => {
+                      const current = getStringArrayValue(configData[field.key]);
+                      const next = nextChecked === true
+                        ? Array.from(new Set([...current, option.value]))
+                        : current.filter((item) => item !== option.value);
+                      handleFieldChange(field.key, next);
+                    }}
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium text-foreground">{optionLabel}</div>
+                    {optionDescription && (
+                      <p className="text-sm text-muted-foreground">{optionDescription}</p>
+                    )}
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+        </div>
+      );
+    }
+
     if (field.type === 'textarea') {
       return (
         <div key={field.key} className="space-y-1">
@@ -965,11 +1067,14 @@ export default function InstallDialog({
       const bindingLabel = binding
         ? translate(binding.displayNameI18n, locale, plugin.default_locale || 'en') || binding.key
         : field.authBindingKey || 'binding';
+      const challengeMetadata = getAuthChallengeMetadata(authState);
       const scanUrl =
-        authState?.challenge?.kind === 'qr_code' && typeof authState.challenge.metadata?.scanUrl === 'string'
-          ? authState.challenge.metadata.scanUrl
+        authState?.challenge?.kind === 'qr_code'
+          ? authState.challenge.qrUrl || challengeMetadata.scanUrl || authState.challenge.url
           : undefined;
       const challengeExpiresAt = authState?.challenge?.expiresAt;
+      const challengeTitle = challengeMetadata.title || label;
+      const challengeActionLabel = challengeMetadata.actionLabel || 'Open authorization page';
       return (
         <div key={field.key} className="space-y-2 rounded-lg border border-gray-200 dark:border-white/10 p-3">
           <div className="flex items-center justify-between gap-3">
@@ -998,14 +1103,20 @@ export default function InstallDialog({
                       <div className="flex items-start gap-3">
                         <AuthQrCodeImage value={scanUrl} label={label} />
                         <div className="space-y-2">
-                          <p>Open the Mi Home app and scan this QR code.</p>
+                          <p className="font-medium text-foreground">{challengeTitle}</p>
+                          <p>{getAuthPendingMessage(authState)}</p>
+                          {challengeMetadata.userCode && (
+                            <p className="text-xs text-muted-foreground">
+                              User code: <span className="font-mono text-foreground">{challengeMetadata.userCode}</span>
+                            </p>
+                          )}
                           <a
                             href={scanUrl}
                             target="_blank"
                             rel="noreferrer"
                             className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-400"
                           >
-                            Open scan page
+                            {challengeActionLabel}
                             <ExternalLink className="h-3.5 w-3.5" />
                           </a>
                           {challengeExpiresAt && (

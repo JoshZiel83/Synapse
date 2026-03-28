@@ -19,6 +19,19 @@ import {
   progressMijiaQrLoginSession,
   startMijiaQrLoginSession,
 } from "./mijia/auth.js";
+import {
+  progressFeishuCliSetup,
+  refreshFeishuUserAccessToken,
+  startFeishuCliSetup,
+} from "./feishu/auth.js";
+import {
+  resolveFeishuAccountsBaseUrl,
+  resolveFeishuOpenBaseUrl,
+} from "./feishu/client.js";
+import {
+  assertFeishuInitialSetupFeatures,
+  normalizeFeishuFeatureKeys,
+} from "./feishu/features.js";
 
 type JsonObject = Record<string, unknown>;
 type QueryRunner = <T extends pg.QueryResultRow = any>(
@@ -131,6 +144,30 @@ function asString(value: unknown): string {
 function asNullableString(value: unknown): string | null {
   const normalized = asString(value);
   return normalized || null;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter(
+      (item): item is string => typeof item === "string" && item.trim().length > 0,
+    );
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/\s+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function isMissingConfigValue(value: unknown) {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" && value.trim() === "") ||
+    (Array.isArray(value) && value.length === 0)
+  );
 }
 
 function base64Url(buffer: Buffer) {
@@ -482,11 +519,7 @@ function validatePrerequisiteFields(
 ) {
   for (const fieldKey of binding.prerequisiteFields || []) {
     const value = configData[fieldKey];
-    if (
-      value === undefined ||
-      value === null ||
-      (typeof value === "string" && value.trim() === "")
-    ) {
+    if (isMissingConfigValue(value)) {
       throw new PluginAuthError(
         400,
         `Field '${fieldKey}' is required before starting '${binding.key}'`,
@@ -536,6 +569,83 @@ function buildMijiaResultPayload(authState: object) {
     secretPayload: {
       ...(encryptDeep(state) as JsonObject),
       expiresAt,
+    },
+  };
+}
+
+function buildFeishuResultPreview(input: {
+  brand: "feishu" | "lark";
+  tokenScope: string;
+  profile: JsonObject;
+  requestedFeatures: string[];
+}) {
+  const externalAccountId =
+    asNullableString(input.profile.open_id) ||
+    asNullableString(input.profile.union_id) ||
+    asNullableString(input.profile.user_id);
+  const displayName =
+    asNullableString(input.profile.name) ||
+    asNullableString(input.profile.en_name) ||
+    externalAccountId;
+  const avatarUrl = asNullableString(input.profile.avatar_url);
+  const scopes = asStringArray(input.tokenScope);
+
+  return {
+    externalAccountId: externalAccountId || undefined,
+    displayName: displayName || undefined,
+    avatarUrl: avatarUrl || undefined,
+    brand: input.brand,
+    scopes,
+    features: input.requestedFeatures,
+  };
+}
+
+function buildFeishuResultPayload(input: {
+  brand: "feishu" | "lark";
+  appId: string;
+  appSecret: string;
+  tokenData: {
+    accessToken: string;
+    refreshToken: string;
+    expiresIn: number;
+    refreshExpiresIn: number;
+    scope: string;
+    tokenType: string;
+  };
+  profile: JsonObject;
+  requestedFeatures: string[];
+}) {
+  const expiresAt = new Date(Date.now() + input.tokenData.expiresIn * 1000).toISOString();
+  const refreshExpiresAt = new Date(
+    Date.now() + input.tokenData.refreshExpiresIn * 1000,
+  ).toISOString();
+  const preview = buildFeishuResultPreview({
+    brand: input.brand,
+    tokenScope: input.tokenData.scope,
+    profile: input.profile,
+    requestedFeatures: input.requestedFeatures,
+  });
+
+  return {
+    externalAccountId: preview.externalAccountId || null,
+    displayName: preview.displayName || null,
+    avatarUrl: preview.avatarUrl || null,
+    publicPayload: {
+      brand: input.brand,
+      openBaseUrl: resolveFeishuOpenBaseUrl(input.brand),
+      accountsBaseUrl: resolveFeishuAccountsBaseUrl(input.brand),
+      scopes: preview.scopes,
+      features: input.requestedFeatures,
+      profile: input.profile,
+    },
+    secretPayload: {
+      appId: encrypt(input.appId),
+      appSecret: encrypt(input.appSecret),
+      accessToken: encrypt(input.tokenData.accessToken),
+      refreshToken: encrypt(input.tokenData.refreshToken),
+      tokenType: input.tokenData.tokenType,
+      expiresAt,
+      refreshExpiresAt,
     },
   };
 }
@@ -649,6 +759,127 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
        SET status = 'failed',
            phase = NULL,
            error_code = 'MIJIA_AUTH_ERROR',
+           error_message = $2,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [row.id, message],
+    );
+    return failed.rows[0]!;
+  }
+}
+
+async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
+  if (row.driver !== "feishu_cli_setup" || row.status !== "pending") {
+    return row;
+  }
+
+  if (new Date(row.expires_at).getTime() <= Date.now()) {
+    return expirePluginAuthSession(row.id);
+  }
+
+  const transientPayload = asObject(decryptDeep(asObject(row.transient_payload)));
+
+  try {
+    const progress = await progressFeishuCliSetup(transientPayload as any);
+    switch (progress.status) {
+      case "pending": {
+        const nextTransient = progress.transientPayload || (transientPayload as any);
+        const nextChallenge = progress.challengePayload || asObject(row.challenge_payload);
+        const nextExpiresAt = progress.expiresAt || row.expires_at;
+
+        const updated = await query<PluginAuthSessionRow>(
+          `UPDATE plugin_auth_sessions
+           SET phase = 'pending_scan',
+               challenge_payload = $2::jsonb,
+               transient_payload = $3::jsonb,
+               expires_at = $4,
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING *`,
+          [
+            row.id,
+            JSON.stringify(nextChallenge),
+            JSON.stringify(encryptDeep(nextTransient)),
+            nextExpiresAt,
+          ],
+        );
+        return updated.rows[0]!;
+      }
+      case "completed": {
+        const resultPayload = buildFeishuResultPayload({
+          brand: progress.appCredentials.brand,
+          appId: progress.appCredentials.appId,
+          appSecret: progress.appCredentials.appSecret,
+          tokenData: progress.tokenData,
+          profile: progress.profile,
+          requestedFeatures: progress.requestedFeatures,
+        });
+        const resultPreview = buildFeishuResultPreview({
+          brand: progress.appCredentials.brand,
+          tokenScope: progress.tokenData.scope,
+          profile: progress.profile,
+          requestedFeatures: progress.requestedFeatures,
+        });
+
+        const updated = await query<PluginAuthSessionRow>(
+          `UPDATE plugin_auth_sessions
+           SET status = 'completed',
+               phase = NULL,
+               result_preview = $2::jsonb,
+               result_payload = $3::jsonb,
+               error_code = NULL,
+               error_message = NULL,
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING *`,
+          [
+            row.id,
+            JSON.stringify(resultPreview),
+            JSON.stringify(resultPayload),
+          ],
+        );
+        return updated.rows[0]!;
+      }
+      case "expired": {
+        const expired = await query<PluginAuthSessionRow>(
+          `UPDATE plugin_auth_sessions
+           SET status = 'expired',
+               phase = NULL,
+               error_code = $2,
+               error_message = $3,
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING *`,
+          [row.id, progress.errorCode, progress.errorMessage],
+        );
+        return expired.rows[0]!;
+      }
+      case "failed": {
+        const failed = await query<PluginAuthSessionRow>(
+          `UPDATE plugin_auth_sessions
+           SET status = 'failed',
+               phase = NULL,
+               error_code = $2,
+               error_message = $3,
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING *`,
+          [row.id, progress.errorCode, progress.errorMessage],
+        );
+        return failed.rows[0]!;
+      }
+      default:
+        return row;
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unable to complete Feishu authorization.";
+    const failed = await query<PluginAuthSessionRow>(
+      `UPDATE plugin_auth_sessions
+       SET status = 'failed',
+           phase = NULL,
+           error_code = 'FEISHU_AUTH_ERROR',
            error_message = $2,
            updated_at = NOW()
        WHERE id = $1
@@ -827,6 +1058,69 @@ async function refreshOAuthConnection(
   return getConnectionRow(row.id);
 }
 
+async function refreshFeishuConnection(row: PluginConnectionRow) {
+  const storedSecretPayload = asObject(row.secret_payload);
+  const secretPayload = asObject(decryptDeep(storedSecretPayload));
+  const publicPayload = asObject(row.public_payload);
+  const brand =
+    asString(publicPayload.brand) === "lark"
+      ? "lark"
+      : "feishu";
+  const appId = asString(secretPayload.appId);
+  const appSecret = asString(secretPayload.appSecret);
+  const refreshToken = asString(secretPayload.refreshToken);
+
+  if (!appId || !appSecret || !refreshToken) {
+    throw new PluginAuthError(
+      400,
+      "Feishu auth connection is missing refresh credentials",
+    );
+  }
+
+  const tokenResponse = await refreshFeishuUserAccessToken({
+    brand,
+    openBaseUrl: asString(publicPayload.openBaseUrl) || undefined,
+    appId,
+    appSecret,
+    refreshToken,
+  });
+
+  const expiresAt = new Date(Date.now() + tokenResponse.expiresIn * 1000).toISOString();
+  const refreshExpiresAt = new Date(
+    Date.now() + tokenResponse.refreshExpiresIn * 1000,
+  ).toISOString();
+  const nextPublicPayload = {
+    ...publicPayload,
+    scopes: asStringArray(tokenResponse.scope),
+  };
+  const nextSecretPayload = {
+    ...storedSecretPayload,
+    accessToken: encrypt(tokenResponse.accessToken),
+    refreshToken: encrypt(tokenResponse.refreshToken),
+    tokenType: tokenResponse.tokenType,
+    expiresAt,
+    refreshExpiresAt,
+  };
+
+  await query(
+    `UPDATE plugin_connections
+     SET public_payload = $2::jsonb,
+         secret_payload = $3::jsonb,
+         status = 'active',
+         expires_at = $4,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [
+      row.id,
+      JSON.stringify(nextPublicPayload),
+      JSON.stringify(nextSecretPayload),
+      expiresAt,
+    ],
+  );
+
+  return getConnectionRow(row.id);
+}
+
 async function ensureFreshPluginConnection(row: PluginConnectionRow) {
   if (
     row.status !== "active" ||
@@ -857,6 +1151,8 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
         return await refreshOAuthConnection(binding, row, configData);
       case "mijia_qr_login":
         return row;
+      case "feishu_cli_setup":
+        return await refreshFeishuConnection(row);
       default:
         throw new PluginAuthError(
           400,
@@ -1062,6 +1358,87 @@ export async function startPluginAuthSession(input: {
         session: mapSessionRow(inserted.rows[0]!),
       };
     }
+    case "feishu_cli_setup": {
+      const selectedFeatures = normalizeFeishuFeatureKeys(draftConfig.features);
+      const existingConnectionRef = asObject(draftConfig.feishuAccount);
+      let existingAppCredentials:
+        | {
+            brand: "feishu" | "lark";
+            appId: string;
+            appSecret: string;
+          }
+        | undefined;
+      if (
+        existingConnectionRef.__kind === "auth_connection_ref" &&
+        typeof existingConnectionRef.connectionId === "string"
+      ) {
+        const connectionRow = await getConnectionRow(
+          existingConnectionRef.connectionId,
+          input.workspaceId,
+        );
+        const publicPayload = asObject(connectionRow.public_payload);
+        const secretPayload = asObject(decryptDeep(asObject(connectionRow.secret_payload)));
+        const appId = asString(secretPayload.appId);
+        const appSecret = asString(secretPayload.appSecret);
+        if (appId && appSecret) {
+          existingAppCredentials = {
+            brand:
+              asString(publicPayload.brand) === "lark"
+                ? "lark"
+                : "feishu",
+            appId,
+            appSecret,
+          };
+        }
+      } else {
+        assertFeishuInitialSetupFeatures(selectedFeatures);
+      }
+
+      const result = await startFeishuCliSetup(
+        selectedFeatures,
+        existingAppCredentials,
+      );
+      const inserted = await query<PluginAuthSessionRow>(
+        `INSERT INTO plugin_auth_sessions (
+           workspace_id,
+           catalog_item_id,
+           catalog_version_id,
+           installation_id,
+           binding_key,
+           driver,
+           user_id,
+           status,
+           phase,
+           state,
+           challenge_payload,
+           transient_payload,
+           metadata,
+           expires_at
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, $6, $7, 'pending', 'pending_scan', NULL,
+           $8::jsonb, $9::jsonb, $10::jsonb, $11
+         )
+         RETURNING *`,
+        [
+          input.workspaceId,
+          spec.catalogItemId,
+          spec.catalogVersionId,
+          input.installationId || null,
+          binding.key,
+          binding.driver,
+          input.userId,
+          JSON.stringify(result.challengePayload),
+          JSON.stringify(encryptDeep(result.transientPayload)),
+          JSON.stringify(input.metadata || {}),
+          result.expiresAt,
+        ],
+      );
+
+      return {
+        session: mapSessionRow(inserted.rows[0]!),
+      };
+    }
     default:
       throw new PluginAuthError(
         400,
@@ -1078,6 +1455,8 @@ export async function getPluginAuthSession(
   let row = await getSessionRow(sessionId, workspaceId, userId);
   if (row.driver === "mijia_qr_login" && row.status === "pending") {
     row = await progressMijiaPluginAuthSession(row);
+  } else if (row.driver === "feishu_cli_setup" && row.status === "pending") {
+    row = await progressFeishuPluginAuthSession(row);
   } else if (
     row.status === "pending" &&
     new Date(row.expires_at).getTime() <= Date.now()

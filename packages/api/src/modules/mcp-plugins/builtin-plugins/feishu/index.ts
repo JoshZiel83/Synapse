@@ -1,72 +1,48 @@
-import path from "path";
-import { createRequire } from "module";
 import type { BuiltinOrgSeed } from "../types.js";
-import { buildFeishuToolRuntime } from "../../builtin/feishu/openapi/runtime.js";
+import {
+  DEFAULT_FEISHU_FEATURES,
+  FEISHU_FEATURES,
+  getFeishuFeatureConfigOptions,
+} from "../../feishu/features.js";
+import { getFeishuToolDefinitions } from "../../feishu/tools.js";
 
 const i18n = (en: string, zhCN: string) => ({ en, "zh-CN": zhCN });
-const require = createRequire(import.meta.url);
 
+const allFeatureKeys = FEISHU_FEATURES.map((feature) => feature.key);
 const defaultConfig = {
-  domain: "https://open.feishu.cn",
-  language: "zh",
-  tools: "preset.default",
+  features: DEFAULT_FEISHU_FEATURES,
 };
-
-const toolsManifest = buildFeishuToolRuntime(defaultConfig).toolsManifest;
-const larkMcpPackageRoot = path.dirname(
-  require.resolve("@larksuiteoapi/lark-mcp/package.json"),
-);
-const feishuStdioEntryPoint = JSON.stringify({
-  command: "${node}",
-  args: [
-    path.join(larkMcpPackageRoot, "dist/cli.js"),
-    "mcp",
-    "--mode",
-    "stdio",
-    "--tool-name-case",
-    "dot",
-    "--token-mode",
-    "user_access_token",
-    "--language",
-    "${config:language}",
-  ],
-  env: {
-    APP_ID: "${config:appId}",
-    APP_SECRET: "${config:appSecret}",
-    USER_ACCESS_TOKEN: "${config:feishuAccount.secretPayload.accessToken}",
-    LARK_TOOLS: "${config:tools}",
-  },
-});
 
 export const feishuSeed: BuiltinOrgSeed = {
   slug: "feishu",
   displayName: "Feishu",
-  description: "Feishu official MCP integration powered by the official Lark OpenAPI MCP toolkit.",
+  description: "Feishu plugin with QR setup, feature-scoped permissions, and Synapse-native tools.",
   plugins: [
     {
-      slug: "openapi",
-      displayName: "Feishu Official MCP",
-      description: "Official Feishu OpenAPI MCP with user-provided app credentials and one-click OAuth sign-in.",
+      slug: "app",
+      displayName: "Feishu",
+      description:
+        "Connect Feishu with QR setup, then expose only the Feishu capabilities you enable.",
       longDescription:
-        "Connect Synapse to Feishu using the official Lark OpenAPI MCP toolkit. Users first provide their own Feishu app credentials, then authorize their Feishu account with one click. The default toolset covers IM, docs, wiki, contacts, and Bitable workflows supported by the official MCP package.",
-      displayNameI18n: i18n("Feishu Official MCP", "飞书官方 MCP"),
+        "Connect Synapse to Feishu with a guided QR setup flow. Synapse provisions a personal Feishu app during setup, asks the user to authorize only the selected feature groups, and then exposes Synapse-native Feishu tools over our own file system abstraction.",
+      displayNameI18n: i18n("Feishu", "飞书"),
       descriptionI18n: i18n(
-        "Official Feishu OpenAPI MCP with user-provided app credentials and one-click OAuth sign-in.",
-        "基于官方 Feishu OpenAPI MCP 的飞书插件，先填写应用配置，再一键 OAuth 登录访问用户态能力。",
+        "Connect Feishu with QR setup, then expose only the Feishu capabilities you enable.",
+        "通过扫码完成飞书接入，并只启用你选择的飞书能力。",
       ),
       longDescriptionI18n: i18n(
-        "Connect Synapse to Feishu using the official Lark OpenAPI MCP toolkit. Users first provide their own Feishu app credentials, then authorize their Feishu account with one click. The default toolset covers IM, docs, wiki, contacts, and Bitable workflows supported by the official MCP package.",
-        "通过官方 Lark OpenAPI MCP 工具包把 Synapse 连接到飞书。用户先填写自己的飞书应用配置，再一键授权飞书账号。默认工具集覆盖 IM、文档、知识库、联系人和多维表格等官方支持场景。",
+        "Connect Synapse to Feishu with a guided QR setup flow. Synapse provisions a personal Feishu app during setup, asks the user to authorize only the selected feature groups, and then exposes Synapse-native Feishu tools over our own file system abstraction.",
+        "通过引导式扫码流程把 Synapse 连接到飞书。安装时会先为当前连接创建个人应用，再根据你选择的功能包申请对应权限，最后以 Synapse 自己抽象过的飞书工具提供能力，并接入我们的文件系统。",
       ),
       summaryI18n: i18n(
-        "Official Feishu MCP with user-managed app credentials and account authorization.",
-        "使用用户自填应用配置和账号授权的官方飞书 MCP。",
+        "Feature-scoped Feishu plugin with QR-based setup and Synapse-native tools.",
+        "按功能包授权、通过扫码接入的飞书原生插件。",
       ),
       defaultLocale: "zh-CN",
-      transport: "stdio",
-      entryPoint: feishuStdioEntryPoint,
+      transport: "builtin",
+      entryPoint: "feishu/app",
       defaultInstanceScope: "workspace",
-      defaultReuseScope: "turn",
+      defaultReuseScope: "conversation",
       requiresHandshake: false,
       iconAssetPath: "assets/icons/feishu.svg",
       categorySlugs: [
@@ -76,133 +52,71 @@ export const feishuSeed: BuiltinOrgSeed = {
       tags: [
         "feishu",
         "lark",
-        "official",
-        "mcp",
-        "oauth",
-        "docs",
-        "wiki",
-        "bitable",
+        "builtin",
+        "qr-login",
+        "contacts",
         "im",
-        "stdio",
+        "calendar",
+        "drive",
+        "bitable",
       ],
-      toolsManifest,
+      toolsManifest: getFeishuToolDefinitions({
+        features: allFeatureKeys,
+      }),
       configSchema: {
         type: "object",
         properties: {
-          appId: { type: "string" },
-          appSecret: { type: "string", sensitive: true },
-          domain: { type: "string" },
-          feishuAccount: { type: "object" },
-          language: { type: "string" },
-          tools: { type: "string" },
+          features: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: allFeatureKeys,
+            },
+          },
+          feishuAccount: {
+            type: "object",
+          },
         },
-        required: ["appId", "appSecret", "feishuAccount"],
+        required: ["features", "feishuAccount"],
       },
       configFields: [
         {
-          key: "appId",
-          type: "text",
-          titleI18n: i18n("App ID", "应用 ID"),
+          key: "features",
+          type: "multiselect",
+          titleI18n: i18n("Enabled Features", "启用功能"),
           descriptionI18n: i18n(
-            "Enter the App ID of your Feishu app.",
-            "填写你的飞书应用 App ID。",
+            "Choose which Feishu feature groups this installation should expose. The QR authorization step will request only the scopes required by these features.",
+            "选择这个安装实例要暴露的飞书功能包。后续扫码授权时，只会申请这些功能所需的权限。",
           ),
           required: true,
-        },
-        {
-          key: "appSecret",
-          type: "secret",
-          titleI18n: i18n("App Secret", "应用 Secret"),
-          descriptionI18n: i18n(
-            "Enter the App Secret of your Feishu app.",
-            "填写你的飞书应用 App Secret。",
-          ),
-          required: true,
-          secret: true,
-        },
-        {
-          key: "domain",
-          type: "text",
-          titleI18n: i18n("Open Platform Domain", "开放平台域名"),
-          descriptionI18n: i18n(
-            "Override the Feishu Open Platform domain if needed.",
-            "如有需要，可覆盖飞书开放平台域名。",
-          ),
-          defaultValue: defaultConfig.domain,
+          defaultValue: defaultConfig.features,
+          options: getFeishuFeatureConfigOptions(),
         },
         {
           key: "feishuAccount",
           type: "auth_connection",
           titleI18n: i18n("Feishu Account", "飞书账号"),
           descriptionI18n: i18n(
-            "Authorize your Feishu account to enable user-scoped Feishu tools.",
-            "授权你的飞书账号以启用用户态的飞书工具能力。",
+            "Scan the QR code to create the Feishu app and authorize the selected features for the connected account.",
+            "扫码创建飞书应用，并为当前账号授权所选功能包对应的权限。",
           ),
           required: true,
-          authBindingKey: "feishu_user",
-        },
-        {
-          key: "language",
-          type: "select",
-          titleI18n: i18n("Tool Language", "工具语言"),
-          descriptionI18n: i18n(
-            "Choose the language used in tool names and descriptions.",
-            "选择工具名称和描述展示语言。",
-          ),
-          defaultValue: defaultConfig.language,
-          options: [
-            { value: "zh", labelI18n: i18n("Chinese", "中文") },
-            { value: "en", labelI18n: i18n("English", "英文") },
-          ],
-        },
-        {
-          key: "tools",
-          type: "textarea",
-          titleI18n: i18n("Enabled Tools", "启用工具"),
-          descriptionI18n: i18n(
-            "Comma or space separated tool names or preset names such as preset.default or preset.calendar.default.",
-            "填写逗号或空格分隔的工具名或 preset 名称，例如 preset.default、preset.calendar.default。",
-          ),
-          placeholderI18n: i18n(
-            "preset.default",
-            "preset.default",
-          ),
-          defaultValue: defaultConfig.tools,
+          authBindingKey: "feishu_account",
         },
       ],
       defaultConfig,
-      setupSteps: [
-        {
-          id: "feishu_credentials",
-          title: "Configure Feishu App",
-          description: "Provide the Feishu app credentials used for OAuth.",
-          scope: "plugin",
-          fields: ["appId", "appSecret", "domain"],
-          helpUrl: "https://open.feishu.cn/document/home/introduction-to-lark-open-platform",
-          helpText: "Review the Feishu Open Platform guide.",
-        },
-        {
-          id: "feishu_user",
-          title: "Connect Feishu",
-          description: "Authorize your Feishu account to let Synapse call the official Feishu MCP tools as you.",
-          scope: "plugin",
-          fields: ["feishuAccount"],
-          helpUrl: "https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/mcp_integration/mcp_introduction",
-          helpText: "Review the official Feishu MCP documentation.",
-        },
-      ],
       installFlow: {
         steps: [
           {
-            id: "credentials",
+            id: "features",
             kind: "form",
-            titleI18n: i18n("Configure App", "填写应用配置"),
+            titleI18n: i18n("Choose Features", "选择功能"),
             descriptionI18n: i18n(
-              "Enter your Feishu app credentials before account authorization.",
-              "先填写飞书应用配置，再进行账号授权。",
+              "Choose the Feishu capabilities you want this installation to expose.",
+              "选择这个飞书插件实例要暴露的功能包。",
             ),
             scope: "plugin",
-            fields: ["appId", "appSecret", "domain"],
+            fields: ["features"],
             helpUrl: "https://open.feishu.cn/document/home/introduction-to-lark-open-platform",
             helpTextI18n: i18n(
               "Open the Feishu Open Platform guide.",
@@ -214,73 +128,44 @@ export const feishuSeed: BuiltinOrgSeed = {
             kind: "auth",
             titleI18n: i18n("Connect Feishu", "连接飞书"),
             descriptionI18n: i18n(
-              "Authorize your Feishu account with one click.",
-              "一键授权你的飞书账号。",
+              "Scan the QR code to create the Feishu app and authorize the selected features.",
+              "扫码创建飞书应用，并授权你在上一步选择的功能包。",
             ),
             scope: "plugin",
             fields: ["feishuAccount"],
             helpUrl: "https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/mcp_integration/mcp_introduction",
             helpTextI18n: i18n(
-              "Open the official Feishu MCP guide.",
-              "查看飞书官方 MCP 接入文档。",
+              "Open the Feishu CLI integration guide.",
+              "查看飞书 CLI 接入文档。",
             ),
-          },
-          {
-            id: "preferences",
-            kind: "form",
-            titleI18n: i18n("Configure Tools", "配置工具"),
-            descriptionI18n: i18n(
-              "Choose the display language and the official tool presets you want to expose.",
-              "选择工具展示语言，以及要暴露的官方工具 preset。",
-            ),
-            scope: "plugin",
-            fields: ["language", "tools"],
-          },
-          {
-            id: "review",
-            kind: "confirm",
-            titleI18n: i18n("Review and Install", "确认并安装"),
-            descriptionI18n: i18n(
-              "Review the connection and selected tools before installing.",
-              "确认账号连接和所选工具后安装。",
-            ),
-            scope: "plugin",
-            fields: [],
           },
         ],
       },
       authBindings: [
         {
-          key: "feishu_user",
-          driver: "oauth2_authorization_code_pkce",
+          key: "feishu_account",
+          driver: "feishu_cli_setup",
           fieldKey: "feishuAccount",
           displayNameI18n: i18n("Feishu", "飞书"),
           descriptionI18n: i18n(
-            "Official Feishu OAuth provider for Synapse-managed MCP access.",
-            "用于 Synapse 托管 MCP 接入的官方飞书 OAuth 提供方。",
+            "Create a Feishu app and authorize the selected feature scopes with QR sign-in.",
+            "通过扫码创建飞书应用，并授权所选功能包对应的权限。",
           ),
-          prerequisiteFields: ["appId", "appSecret"],
+          prerequisiteFields: ["features"],
           ownerScope: "installation",
-          authorizeUrl: "https://open.feishu.cn/open-apis/authen/v1/authorize",
-          tokenUrl: "https://open.feishu.cn/open-apis/authen/v2/oauth/token",
-          userInfoUrl: "https://open.feishu.cn/open-apis/authen/v1/user_info",
-          profileIdPath: "data.open_id",
-          profileDisplayNamePath: "data.name",
-          profileAvatarUrlPath: "data.avatar_url",
-          inputs: {
-            clientId: { source: "config", field: "appId" },
-            clientSecret: { source: "config", field: "appSecret" },
-            callbackUrl: { source: "derived", name: "oauth_callback_url" },
-          },
-          metadata: {
-            tokenRequestContentType: "application/json",
-          },
+        },
+      ],
+      validationRules: [
+        {
+          field: "features",
+          rule: "required",
+          message: "Select at least one Feishu feature.",
         },
       ],
       authorization: {
         requiredPermissions: ["network:outbound"],
         defaultGrantScope: "workspace",
-        reason: "Feishu MCP needs outbound network access to call official Feishu OpenAPI endpoints on behalf of the user.",
+        reason: "Feishu integration needs outbound network access to call Feishu OpenAPI endpoints on behalf of the connected account.",
       },
     },
   ],
