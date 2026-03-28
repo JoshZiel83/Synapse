@@ -5,99 +5,268 @@ import "github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 func (s *Server) buildTools() []core.Tool {
 	return []core.Tool{
 		{
-			Name:        "list_allowed_directories",
-			Description: "List directories the built-in filesystem server is allowed to access, including read/write scope information.",
+			Name:        "ListAllowedDirectories",
+			Description: "Lists the directories this filesystem server can currently access, including effective read and write scope.",
 			InputSchema: objectSchema(nil, nil),
 		},
 		{
-			Name:        "read_text_file",
-			Description: "Read one file as UTF-8 text. For supported PDFs and office files, the server extracts readable text instead of returning binary bytes.",
+			Name:        "View",
+			Description: "Reads UTF-8 text content from one file. file_path must be an absolute path. By default it returns up to 2000 lines from the start of the file. Use offset and limit for long files. Lines longer than 2000 characters are truncated.",
 			InputSchema: objectSchema(map[string]interface{}{
-				"path": stringSchema("Absolute path to the file. Relative paths are only allowed when exactly one scoped root exists."),
-			}, []string{"path"}),
-		},
-		{
-			Name:        "get_file",
-			Description: "Return one regular file as a binary attachment. The relay refuses files larger than the configured max_get_file_size_bytes limit.",
-			InputSchema: objectSchema(map[string]interface{}{
-				"path": stringSchema("Absolute path to the file. Relative paths are only allowed when exactly one scoped root exists."),
-			}, []string{"path"}),
-		},
-		{
-			Name:        "read_multiple_files",
-			Description: "Read multiple files as UTF-8 text or extracted document text in one request.",
-			InputSchema: objectSchema(map[string]interface{}{
-				"paths": stringArraySchema("Absolute file paths to read."),
-			}, []string{"paths"}),
-		},
-		{
-			Name:        "write_file",
-			Description: s.writeToolDescription("Create or replace a UTF-8 text file."),
-			InputSchema: objectSchema(map[string]interface{}{
-				"path":    stringSchema("Absolute file path to create or overwrite."),
-				"content": stringSchema("UTF-8 text content to write."),
-			}, []string{"path", "content"}),
-		},
-		{
-			Name:        "edit_file",
-			Description: s.writeToolDescription("Apply one or more exact string replacements to a text file."),
-			InputSchema: objectSchema(map[string]interface{}{
-				"path": stringSchema("Absolute text file path to edit."),
-				"edits": map[string]interface{}{
-					"type":        "array",
-					"description": "Sequential exact-match replacements.",
-					"items": objectSchema(map[string]interface{}{
-						"old_text": stringSchema("Text to find."),
-						"new_text": stringSchema("Replacement text."),
-					}, []string{"old_text", "new_text"}),
+				"file_path": stringSchema("The absolute path to the file to read."),
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "Optional line offset to start reading from.",
+					"minimum":     0,
 				},
-			}, []string{"path", "edits"}),
+				"limit": map[string]interface{}{
+					"type":        "integer",
+					"description": "Optional number of lines to read. Defaults to 2000.",
+					"minimum":     1,
+					"maximum":     2000,
+				},
+			}, []string{"file_path"}),
 		},
 		{
-			Name:        "create_directory",
-			Description: s.writeToolDescription("Create a directory and any missing parent directories."),
+			Name:        "ViewMany",
+			Description: "Reads UTF-8 text content from multiple files in one call. Every file_path must be an absolute path. Each item can optionally set offset and limit for long files. Use this when you need to inspect several related files together.",
 			InputSchema: objectSchema(map[string]interface{}{
-				"path": stringSchema("Absolute directory path to create."),
-			}, []string{"path"}),
+				"files": map[string]interface{}{
+					"type":        "array",
+					"description": "The files to read.",
+					"minItems":    1,
+					"maxItems":    50,
+					"items": objectSchema(map[string]interface{}{
+						"file_path": stringSchema("The absolute path to the file to read."),
+						"offset": map[string]interface{}{
+							"type":        "integer",
+							"description": "Optional line offset to start reading from.",
+							"minimum":     0,
+						},
+						"limit": map[string]interface{}{
+							"type":        "integer",
+							"description": "Optional number of lines to read. Defaults to 2000.",
+							"minimum":     1,
+							"maximum":     2000,
+						},
+					}, []string{"file_path"}),
+				},
+			}, []string{"files"}),
 		},
 		{
-			Name:        "list_directory",
-			Description: "List direct children in one directory.",
+			Name:        "GetFile",
+			Description: "Returns one regular file as a binary attachment. Use this for full-file reads. file_path must be an absolute path. The relay refuses files larger than the configured max_get_file_size_bytes limit.",
 			InputSchema: objectSchema(map[string]interface{}{
-				"path": stringSchema("Absolute directory path to list."),
-			}, []string{"path"}),
+				"file_path": stringSchema("The absolute path to the file to return."),
+			}, []string{"file_path"}),
 		},
 		{
-			Name:        "directory_tree",
-			Description: "Return a recursive directory tree rooted at one directory.",
+			Name:        "Replace",
+			Description: s.writeToolDescription("Writes UTF-8 text to a file, replacing the entire file contents. file_path must be an absolute path and the parent directory must already exist."),
 			InputSchema: objectSchema(map[string]interface{}{
-				"path": stringSchema("Absolute directory path to expand."),
+				"file_path": stringSchema("The absolute path to the file to write."),
+				"content":   stringSchema("UTF-8 text content to write."),
+			}, []string{"file_path", "content"}),
+		},
+		{
+			Name:        "Edit",
+			Description: s.writeToolDescription("Replaces exactly one unique occurrence of old_string in a UTF-8 text file. file_path must be an absolute path. Use an empty old_string only when creating a brand new file in an existing directory."),
+			InputSchema: objectSchema(map[string]interface{}{
+				"file_path":  stringSchema("The absolute path to the file to modify."),
+				"old_string": stringSchema("The exact text to replace. Must match exactly once unless the file is being created."),
+				"new_string": stringSchema("The replacement text."),
+			}, []string{"file_path", "old_string", "new_string"}),
+		},
+		{
+			Name:        "Patch",
+			Description: s.writeToolDescription("Applies a batch of exact text edits across one or more UTF-8 text files. All operations are validated before any file is written, so the patch fails atomically if any replacement is ambiguous or invalid."),
+			InputSchema: objectSchema(map[string]interface{}{
+				"operations": map[string]interface{}{
+					"type":        "array",
+					"description": "The ordered list of exact text replacements to apply.",
+					"minItems":    1,
+					"maxItems":    200,
+					"items": objectSchema(map[string]interface{}{
+						"file_path":  stringSchema("The absolute path to the file to modify."),
+						"old_string": stringSchema("The exact text to replace. Use an empty string only when creating a brand new file."),
+						"new_string": stringSchema("The replacement text."),
+					}, []string{"file_path", "old_string", "new_string"}),
+				},
+			}, []string{"operations"}),
+		},
+		{
+			Name:        "UpdateStructuredData",
+			Description: s.writeToolDescription("Updates structured documents such as JSON, YAML, or TOML using path-based set and delete operations. file_path must be an absolute path. Formatting, comments, and key ordering are not preserved."),
+			InputSchema: objectSchema(map[string]interface{}{
+				"file_path": stringSchema("The absolute path to the structured data file to update."),
+				"format": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"json", "yaml", "yml", "toml"},
+					"description": "Optional explicit format. If omitted, the format is inferred from the file extension.",
+				},
+				"updates": map[string]interface{}{
+					"type":        "array",
+					"description": "The ordered path-based updates to apply.",
+					"minItems":    1,
+					"maxItems":    200,
+					"items": objectSchema(map[string]interface{}{
+						"path": stringSchema("A dotted path such as scripts.build, compiler.options.strict, or services[0].name."),
+						"action": map[string]interface{}{
+							"type":        "string",
+							"enum":        []string{"set", "delete"},
+							"description": "Whether to set or delete the target path. Defaults to set.",
+						},
+						"value": map[string]interface{}{
+							"description": "The value to write for set operations.",
+						},
+					}, []string{"path"}),
+				},
+			}, []string{"file_path", "updates"}),
+		},
+		{
+			Name:        "CreateDirectory",
+			Description: s.writeToolDescription("Creates a directory and any missing parent directories. directory_path must be an absolute path."),
+			InputSchema: objectSchema(map[string]interface{}{
+				"directory_path": stringSchema("The absolute path to the directory to create."),
+			}, []string{"directory_path"}),
+		},
+		{
+			Name:        "LS",
+			Description: "Lists files and directories in one directory. directory_path must be an absolute path. Supports paging, sorting, and filename filtering. Prefer GlobTool or GrepTool when you already know the pattern to search.",
+			InputSchema: objectSchema(map[string]interface{}{
+				"directory_path": stringSchema("The absolute path to the directory to list."),
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "Skip this many entries after sorting. Defaults to 0.",
+					"minimum":     0,
+				},
+				"limit": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of entries to return. Defaults to 200.",
+					"minimum":     1,
+					"maximum":     1000,
+				},
+				"sort_by": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"name", "modified_at", "size", "type"},
+					"description": "How to sort results. Defaults to name.",
+				},
+				"sort_direction": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"asc", "desc"},
+					"description": "Sort ascending or descending.",
+				},
+				"name_contains": stringSchema("Optional case-insensitive filename filter."),
+				"entry_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"all", "file", "directory"},
+					"description": "Restrict results to files, directories, or both.",
+				},
+			}, []string{"directory_path"}),
+		},
+		{
+			Name:        "DirectoryTree",
+			Description: "Returns a recursive directory tree rooted at one directory. directory_path must be an absolute path.",
+			InputSchema: objectSchema(map[string]interface{}{
+				"directory_path": stringSchema("The absolute path to the directory to expand."),
 				"max_depth": map[string]interface{}{
 					"type":        "integer",
 					"description": "Maximum depth to traverse. Defaults to 4.",
 					"minimum":     1,
 					"maximum":     16,
 				},
+			}, []string{"directory_path"}),
+		},
+		{
+			Name:        "Move",
+			Description: s.writeToolDescription("Moves or renames a file or directory. source_path and destination_path must be absolute paths."),
+			InputSchema: objectSchema(map[string]interface{}{
+				"source_path":      stringSchema("The absolute source path."),
+				"destination_path": stringSchema("The absolute destination path."),
+			}, []string{"source_path", "destination_path"}),
+		},
+		{
+			Name:        "Copy",
+			Description: s.writeToolDescription("Copies a file or directory to a new absolute destination_path. Set recursive to copy directories. Set overwrite to replace an existing destination after backing it up first when backups are enabled."),
+			InputSchema: objectSchema(map[string]interface{}{
+				"source_path":      stringSchema("The absolute source path to copy."),
+				"destination_path": stringSchema("The absolute destination path to write."),
+				"recursive": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Required for directory copies.",
+				},
+				"overwrite": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Whether to replace an existing destination path.",
+				},
+			}, []string{"source_path", "destination_path"}),
+		},
+		{
+			Name:        "Delete",
+			Description: s.writeToolDescription("Deletes one file or directory. path must be an absolute path. Set recursive to delete directories. When automatic backups are enabled, the previous contents are captured before deletion when they fit within the configured limits."),
+			InputSchema: objectSchema(map[string]interface{}{
+				"path": stringSchema("The absolute path to delete."),
+				"recursive": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Required for deleting directories.",
+				},
 			}, []string{"path"}),
 		},
 		{
-			Name:        "move_file",
-			Description: s.writeToolDescription("Rename or move a file or directory."),
+			Name:        "Stat",
+			Description: "Returns basic metadata for one file or directory. path must be an absolute path.",
 			InputSchema: objectSchema(map[string]interface{}{
-				"source":      stringSchema("Absolute source path."),
-				"destination": stringSchema("Absolute destination path."),
-			}, []string{"source", "destination"}),
-		},
-		{
-			Name:        "get_file_info",
-			Description: "Read basic stat metadata for one file or directory.",
-			InputSchema: objectSchema(map[string]interface{}{
-				"path": stringSchema("Absolute path to inspect."),
+				"path": stringSchema("The absolute path to inspect."),
 			}, []string{"path"}),
 		},
 		{
-			Name:        "search_files",
-			Description: "Search indexed paths and, when enabled, indexed document text. Supports path/content/hybrid search, relevance ranking, paging, and structured filters.",
+			Name:        "GlobTool",
+			Description: "Finds files by glob pattern. Supports patterns like \"**/*.js\" or \"src/**/*.ts\" and returns matches sorted by modification time. Use this tool when you need to find files by name pattern. For open-ended multi-step investigation, prefer the Agent tool.",
+			InputSchema: objectSchema(map[string]interface{}{
+				"pattern": stringSchema("The glob pattern to match files against."),
+				"path":    stringSchema("The directory to search in. Defaults to the current working directory."),
+				"exclude": stringArraySchema("Optional glob patterns to exclude from the search."),
+				"respect_gitignore": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Whether to honor the search root's .gitignore file. Defaults to false.",
+				},
+			}, []string{"pattern"}),
+		},
+		{
+			Name:        "GrepTool",
+			Description: "Searches file contents with a regular expression and returns matching locations sorted by file modification time. Supports full regex syntax, optional include filtering such as \"*.js\" or \"*.{ts,tsx}\", and optional context lines around each hit. For open-ended multi-step investigation, prefer the Agent tool.",
+			InputSchema: objectSchema(map[string]interface{}{
+				"pattern": stringSchema("The regular expression pattern to search for in file contents."),
+				"path":    stringSchema("The directory to search in. Defaults to the current working directory."),
+				"include": stringSchema("Optional file pattern to include in the search, for example *.js or *.{ts,tsx}."),
+				"exclude": stringArraySchema("Optional glob patterns to exclude from the search."),
+				"respect_gitignore": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Whether to honor the search root's .gitignore file. Defaults to false.",
+				},
+				"max_matches": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of matching locations to return across all files. Defaults to 50.",
+					"minimum":     1,
+					"maximum":     500,
+				},
+				"context_before": map[string]interface{}{
+					"type":        "integer",
+					"description": "Number of context lines to include before each match. Defaults to 0.",
+					"minimum":     0,
+					"maximum":     20,
+				},
+				"context_after": map[string]interface{}{
+					"type":        "integer",
+					"description": "Number of context lines to include after each match. Defaults to 0.",
+					"minimum":     0,
+					"maximum":     20,
+				},
+			}, []string{"pattern"}),
+		},
+		{
+			Name:        "SearchFiles",
+			Description: "Searches indexed file paths and, when enabled, indexed text content. Supports path, content, or hybrid search with paging, sorting, and structured filters. SearchFiles uses a background index, so very recent filesystem changes might not appear immediately.",
 			InputSchema: objectSchema(map[string]interface{}{
 				"query": stringSchema("Search query text."),
 				"mode": map[string]interface{}{
@@ -106,9 +275,10 @@ func (s *Server) buildTools() []core.Tool {
 					"description": "Search paths only, content only, or both. Defaults to hybrid when content indexing is enabled, otherwise path.",
 				},
 				"path":       stringSchema("Optional absolute path prefix to constrain the search."),
-				"roots":      stringArraySchema("Optional root filters. Each item may be a root ID from list_allowed_directories or an absolute root path."),
+				"roots":      stringArraySchema("Optional root filters. Each item may be a root ID from ListAllowedDirectories or an absolute root path."),
+				"exclude":    stringArraySchema("Optional glob patterns to exclude from the search."),
 				"extensions": stringArraySchema("Optional extension or basename filters, for example .go, .md, Dockerfile."),
-				"type": map[string]interface{}{
+				"entry_type": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"all", "file", "directory"},
 					"description": "Restrict results to files only, directories only, or both. Defaults to all.",
@@ -122,6 +292,10 @@ func (s *Server) buildTools() []core.Tool {
 				"content_indexed": map[string]interface{}{
 					"type":        "boolean",
 					"description": "Optional filter for whether a file currently has indexed extracted content.",
+				},
+				"respect_gitignore": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Whether to honor the search root's .gitignore file. Defaults to false.",
 				},
 				"min_size_bytes": map[string]interface{}{
 					"type":        "integer",
@@ -159,6 +333,46 @@ func (s *Server) buildTools() []core.Tool {
 				},
 			}, []string{"query"}),
 		},
+		{
+			Name:        "ListBackups",
+			Description: "Lists automatic backups with paging and optional path or operation filters. When path is provided it must be an absolute path. Results are sorted newest first and include current backup storage usage.",
+			InputSchema: objectSchema(map[string]interface{}{
+				"path":      stringSchema("Optional absolute original path to filter backups by."),
+				"operation": stringSchema("Optional operation filter such as replace, edit, patch, move, copy, delete, restore, or update_structured_data."),
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "Skip this many backups after sorting newest first. Defaults to 0.",
+					"minimum":     0,
+				},
+				"limit": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of backups to return. Defaults to 50.",
+					"minimum":     1,
+					"maximum":     500,
+				},
+			}, nil),
+		},
+		{
+			Name:        "GetBackup",
+			Description: "Retrieves one automatic backup snapshot by backup_id or by the original absolute path plus an offset. Use this to inspect the previous contents captured before a mutating tool changed or deleted a path.",
+			InputSchema: objectSchema(map[string]interface{}{
+				"backup_id": stringSchema("The backup ID to retrieve."),
+				"path":      stringSchema("The original absolute path to look up backups for."),
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "When using path instead of backup_id, skip this many newer backups. Defaults to 0.",
+					"minimum":     0,
+				},
+			}, nil),
+		},
+		{
+			Name:        "RestoreBackup",
+			Description: s.writeToolDescription("Restores a previously captured automatic backup. backup_id is required. If target_path is omitted, the backup is restored to its original absolute path. The current target is backed up first when automatic backups are enabled and the snapshot fits within the configured limits."),
+			InputSchema: objectSchema(map[string]interface{}{
+				"backup_id":   stringSchema("The backup ID to restore."),
+				"target_path": stringSchema("Optional absolute path to restore into instead of the original path."),
+			}, []string{"backup_id"}),
+		},
 	}
 }
 
@@ -174,9 +388,10 @@ func objectSchema(properties map[string]interface{}, required []string) map[stri
 		properties = map[string]interface{}{}
 	}
 	return map[string]interface{}{
-		"type":       "object",
-		"properties": properties,
-		"required":   required,
+		"type":                 "object",
+		"properties":           properties,
+		"required":             required,
+		"additionalProperties": false,
 	}
 }
 

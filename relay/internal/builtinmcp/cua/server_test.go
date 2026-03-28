@@ -86,6 +86,7 @@ func (f *fakeDesktop) ListInstalledApps() ([]ApplicationInfo, error) {
 
 func TestListToolsHonorsOverviewFlag(t *testing.T) {
 	server := NewWithDesktop(Config{
+		Enabled:             true,
 		ImageSize:           [2]int{1280, 800},
 		RelativeSize:        [2]int{1000, 1000},
 		IncludeOverviewTool: false,
@@ -175,6 +176,7 @@ func TestListToolsHonorsOverviewFlag(t *testing.T) {
 
 func TestRemovedPointerToolReturnsUnknownTool(t *testing.T) {
 	server := NewWithDesktop(Config{
+		Enabled:         true,
 		ImageSize:       [2]int{1280, 800},
 		RelativeSize:    [2]int{1000, 1000},
 		DisplaySelector: DisplaySelector{Mode: "main"},
@@ -196,8 +198,38 @@ func TestRemovedPointerToolReturnsUnknownTool(t *testing.T) {
 	}
 }
 
+func TestDisabledCUARequestsPersistentAuthorization(t *testing.T) {
+	server := NewWithDesktop(Config{
+		Enabled:         false,
+		StableKey:       "disabled-cua",
+		ImageSize:       [2]int{1280, 800},
+		RelativeSize:    [2]int{1000, 1000},
+		DisplaySelector: DisplaySelector{Mode: "main"},
+	}, &fakeDesktop{})
+
+	result, err := server.CallTool(context.Background(), "desktop_capture_display", nil)
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected disabled CUA server to require approval")
+	}
+
+	structured, ok := result.StructuredContent.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected structured content map, got %T", result.StructuredContent)
+	}
+	if structured["capability"] != "cua" {
+		t.Fatalf("expected cua capability, got %#v", structured["capability"])
+	}
+	if structured["authorization_duration"] != "persistent" {
+		t.Fatalf("expected persistent authorization hint, got %#v", structured["authorization_duration"])
+	}
+}
+
 func TestListDisplaysReturnsStructuredContent(t *testing.T) {
 	server := NewWithDesktop(Config{
+		Enabled:              true,
 		ImageSize:            [2]int{1280, 800},
 		RelativeSize:         [2]int{1000, 1000},
 		AllowDisplayOverride: true,
@@ -241,6 +273,7 @@ func TestListDisplaysReturnsStructuredContent(t *testing.T) {
 
 func TestRemovedComputerToolReturnsUnknownTool(t *testing.T) {
 	server := NewWithDesktop(Config{
+		Enabled:              true,
 		ImageSize:            [2]int{1280, 800},
 		RelativeSize:         [2]int{1000, 1000},
 		AllowDisplayOverride: true,
@@ -278,6 +311,7 @@ func TestRemovedComputerToolReturnsUnknownTool(t *testing.T) {
 
 func TestReadOnlyBlocksDesktopWriteTool(t *testing.T) {
 	server := NewWithDesktop(Config{
+		Enabled:             true,
 		ReadOnly:            true,
 		ImageSize:           [2]int{1280, 800},
 		RelativeSize:        [2]int{1000, 1000},
@@ -304,6 +338,7 @@ func TestReadOnlyBlocksDesktopWriteTool(t *testing.T) {
 
 func TestReadOnlyStillAllowsObservationTools(t *testing.T) {
 	server := NewWithDesktop(Config{
+		Enabled:             true,
 		ReadOnly:            true,
 		ImageSize:           [2]int{1280, 800},
 		RelativeSize:        [2]int{1000, 1000},
@@ -359,6 +394,7 @@ func TestReadOnlyGrantIsScopedToMatchingRuntimeSession(t *testing.T) {
 	}
 
 	server := NewWithDesktop(Config{
+		Enabled:         true,
 		StableKey:       "test-cua-session",
 		ReadOnly:        true,
 		ImageSize:       [2]int{1280, 800},
@@ -441,6 +477,7 @@ func TestDisplayStabilityIsTrackedPerRuntimeSession(t *testing.T) {
 		},
 	}
 	server := NewWithDesktop(Config{
+		Enabled:              true,
 		ImageSize:            [2]int{1280, 800},
 		RelativeSize:         [2]int{1000, 1000},
 		AllowDisplayOverride: true,
@@ -503,6 +540,7 @@ func TestCaptureDisplayUsesConfiguredImageSize(t *testing.T) {
 		},
 	}
 	server := NewWithDesktop(Config{
+		Enabled:              true,
 		ImageSize:            [2]int{1280, 800},
 		RelativeSize:         [2]int{1000, 1000},
 		AllowDisplayOverride: true,
@@ -553,6 +591,7 @@ func TestCaptureDisplayUsesRelativeBaseWhenEnabled(t *testing.T) {
 		},
 	}
 	server := NewWithDesktop(Config{
+		Enabled:              true,
 		RelativeCoordinate:   true,
 		ImageSize:            [2]int{1280, 800},
 		RelativeSize:         [2]int{1000, 1000},
@@ -604,6 +643,7 @@ func TestCaptureDisplayRejectsAfterDisplayConfigurationChanges(t *testing.T) {
 		},
 	}
 	server := NewWithDesktop(Config{
+		Enabled:              true,
 		ImageSize:            [2]int{1280, 800},
 		RelativeSize:         [2]int{1000, 1000},
 		AllowDisplayOverride: true,
@@ -658,6 +698,7 @@ func TestCaptureDisplayRejectsAfterDisplayConfigurationChanges(t *testing.T) {
 
 func TestListAppsSupportsSourceAndSearch(t *testing.T) {
 	server := NewWithDesktop(Config{
+		Enabled:         true,
 		ImageSize:       [2]int{1280, 800},
 		RelativeSize:    [2]int{1000, 1000},
 		DisplaySelector: DisplaySelector{Mode: "main"},
@@ -719,6 +760,7 @@ func TestMovePointerClampsScaledCoordinates(t *testing.T) {
 		},
 	}
 	server := NewWithDesktop(Config{
+		Enabled:         true,
 		ImageSize:       [2]int{1280, 800},
 		RelativeSize:    [2]int{1000, 1000},
 		DisplaySelector: DisplaySelector{Mode: "main"},
@@ -759,6 +801,7 @@ func TestMovePointerRejectsPartialCoordinateBaseOverride(t *testing.T) {
 		},
 	}
 	server := NewWithDesktop(Config{
+		Enabled:         true,
 		ImageSize:       [2]int{1280, 800},
 		RelativeSize:    [2]int{1000, 1000},
 		DisplaySelector: DisplaySelector{Mode: "main"},
@@ -805,6 +848,7 @@ func TestScrollSupportsPixelUnit(t *testing.T) {
 		},
 	}
 	server := NewWithDesktop(Config{
+		Enabled:         true,
 		ImageSize:       [2]int{1280, 800},
 		RelativeSize:    [2]int{1000, 1000},
 		DisplaySelector: DisplaySelector{Mode: "main"},
@@ -848,6 +892,7 @@ func TestScrollRejectsUnsupportedUnit(t *testing.T) {
 		},
 	}
 	server := NewWithDesktop(Config{
+		Enabled:         true,
 		ImageSize:       [2]int{1280, 800},
 		RelativeSize:    [2]int{1000, 1000},
 		DisplaySelector: DisplaySelector{Mode: "main"},

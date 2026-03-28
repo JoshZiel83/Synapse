@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/chromemcpbundle"
@@ -14,7 +15,12 @@ import (
 
 type Server struct {
 	cfg      Config
+	tools    []core.Tool
 	delegate *delegateServer
+	startCtx context.Context
+	cancel   context.CancelFunc
+	mu       sync.Mutex
+	ready    bool
 }
 
 func New(cfg Config) (*Server, error) {
@@ -24,10 +30,106 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Channel == "" {
 		cfg.Channel = "stable"
 	}
-	return &Server{cfg: cfg}, nil
+	tools, err := staticCatalog(cfg.Slim)
+	if err != nil {
+		return nil, err
+	}
+	return &Server{cfg: cfg, tools: tools}, nil
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	childCtx, cancel := context.WithCancel(ctx)
+
+	s.mu.Lock()
+	s.startCtx = childCtx
+	s.cancel = cancel
+	shouldActivate := s.isAuthorized()
+	s.mu.Unlock()
+
+	if !shouldActivate {
+		return nil
+	}
+
+	return s.ensureReady(childCtx)
+}
+
+func (s *Server) Initialize() error {
+	if !s.isAuthorized() {
+		return nil
+	}
+	return s.ensureReady(nil)
+}
+
+func (s *Server) ListTools() ([]core.Tool, error) {
+	tools := make([]core.Tool, len(s.tools))
+	copy(tools, s.tools)
+	return tools, nil
+}
+
+func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
+	if !s.isAuthorized() {
+		return disabledResult(toolName), nil
+	}
+	if err := s.ensureReady(ctx); err != nil {
+		return core.CallResult{}, err
+	}
+
+	s.mu.Lock()
+	delegate := s.delegate
+	s.mu.Unlock()
+	if delegate == nil {
+		return core.CallResult{}, fmt.Errorf("chrome devtools delegate is not started")
+	}
+	return delegate.CallTool(ctx, toolName, args)
+}
+
+func (s *Server) Shutdown() {
+	s.mu.Lock()
+	cancel := s.cancel
+	delegate := s.delegate
+	s.cancel = nil
+	s.delegate = nil
+	s.ready = false
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if delegate != nil {
+		delegate.Shutdown()
+	}
+}
+
+func (s *Server) isAuthorized() bool {
+	if s.cfg.Enabled {
+		return true
+	}
+	if s.cfg.AuthStore == nil || s.cfg.StableKey == "" {
+		return false
+	}
+	return s.cfg.AuthStore.AllowsChromeAutomation(s.cfg.StableKey)
+}
+
+func (s *Server) ensureReady(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.delegate == nil {
+		if err := s.startDelegateLocked(ctx); err != nil {
+			return err
+		}
+	}
+	if s.ready {
+		return nil
+	}
+	if err := s.delegate.Initialize(); err != nil {
+		return err
+	}
+	s.ready = true
+	return nil
+}
+
+func (s *Server) startDelegateLocked(ctx context.Context) error {
 	installation, err := chromemcpbundle.EnsureInstalled()
 	if err != nil {
 		return err
@@ -37,7 +139,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if logFile == "" {
 		logFile = filepath.Join(config.DefaultDir(), "logs", "chrome-devtools-mcp", s.cfg.InstanceID+".log")
 	}
-	if err := os.MkdirAll(filepath.Dir(logFile), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
 		return fmt.Errorf("create chrome-devtools log directory: %w", err)
 	}
 
@@ -46,34 +148,35 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
-	s.delegate = newDelegateServer(installation.NodeBinaryPath, args, nil)
-	return s.delegate.Start(ctx)
-}
-
-func (s *Server) Initialize() error {
-	if s.delegate == nil {
-		return fmt.Errorf("chrome devtools delegate is not started")
+	delegate := newDelegateServer(installation.NodeBinaryPath, args, nil)
+	startCtx := ctx
+	if startCtx == nil {
+		startCtx = s.startCtx
 	}
-	return s.delegate.Initialize()
-}
-
-func (s *Server) ListTools() ([]core.Tool, error) {
-	if s.delegate == nil {
-		return nil, fmt.Errorf("chrome devtools delegate is not started")
+	if startCtx == nil {
+		startCtx = context.Background()
 	}
-	return s.delegate.ListTools()
-}
-
-func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
-	if s.delegate == nil {
-		return core.CallResult{}, fmt.Errorf("chrome devtools delegate is not started")
+	if err := delegate.Start(startCtx); err != nil {
+		return err
 	}
-	return s.delegate.CallTool(ctx, toolName, args)
+	s.delegate = delegate
+	return nil
 }
 
-func (s *Server) Shutdown() {
-	if s.delegate != nil {
-		s.delegate.Shutdown()
+func disabledResult(toolName string) core.CallResult {
+	message := "This built-in browser MCP server is currently disabled. Ask the user to enable browser access in the Synapse Relay client, then retry."
+	return core.CallResult{
+		Content: []interface{}{core.Text(message)},
+		StructuredContent: map[string]interface{}{
+			"code":                   "server_disabled",
+			"tool":                   toolName,
+			"capability":             "chrome",
+			"requires_user_approval": true,
+			"authorization_duration": "persistent",
+			"client_hint":            "Enable browser access in the Synapse Relay client, then retry the tool.",
+			"message":                message,
+		},
+		IsError: true,
 	}
 }
 

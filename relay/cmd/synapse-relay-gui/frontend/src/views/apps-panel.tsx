@@ -141,6 +141,11 @@ function defaultFilesystemServer(): ServerConfig {
           parseOffice: true,
           parseImages: true,
         },
+        backup: {
+          enabled: true,
+          maxTotalSizeBytes: 256 * 1024 * 1024,
+          maxFileSizeBytes: 32 * 1024 * 1024,
+        },
       },
     },
     metadata: {
@@ -276,8 +281,10 @@ function normalizeFilesystemServer(input?: ServerConfig): ServerConfig {
   const current = input || defaults
   const defaultFilesystem = defaults.builtin?.filesystem || {}
   const defaultIndex = defaultFilesystem.index || {}
+  const defaultBackup = defaultFilesystem.backup || {}
   const currentFilesystem = current.builtin?.filesystem || {}
   const currentIndex = currentFilesystem.index || {}
+  const currentBackup = currentFilesystem.backup || {}
 
   return {
     ...defaults,
@@ -302,6 +309,10 @@ function normalizeFilesystemServer(input?: ServerConfig): ServerConfig {
           ...defaultIndex,
           ...currentIndex,
           fileTypes: currentIndex.fileTypes && currentIndex.fileTypes.length > 0 ? currentIndex.fileTypes : defaultIndex.fileTypes || defaultFilesystemFileTypes,
+        },
+        backup: {
+          ...defaultBackup,
+          ...currentBackup,
         },
       },
     },
@@ -329,6 +340,16 @@ function validateFilesystemServerDraft(server: ServerConfig): string {
   const emptyRootIndex = roots.findIndex((root) => !root.path.trim())
   if (emptyRootIndex >= 0) {
     return `Filesystem root ${emptyRootIndex + 1} needs a path before you can save it.`
+  }
+
+  if ((filesystem.backup?.maxTotalSizeBytes ?? 0) <= 0) {
+    return 'Filesystem backup max total size must be greater than 0.'
+  }
+  if ((filesystem.backup?.maxFileSizeBytes ?? 0) <= 0) {
+    return 'Filesystem backup max file size must be greater than 0.'
+  }
+  if ((filesystem.backup?.maxFileSizeBytes ?? 0) > (filesystem.backup?.maxTotalSizeBytes ?? 0)) {
+    return 'Filesystem backup max file size must be less than or equal to the total backup size.'
   }
 
   return ''
@@ -486,6 +507,7 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
   const cua = cuaDraft.builtin?.cua || defaultCUAServer().builtin?.cua || {}
   const filesystem = filesystemDraft.builtin?.filesystem || defaultFilesystemServer().builtin?.filesystem || {}
   const filesystemIndex = filesystem.index || defaultFilesystemServer().builtin?.filesystem?.index || {}
+  const filesystemBackup = filesystem.backup || defaultFilesystemServer().builtin?.filesystem?.backup || {}
   const commandline = commandlineDraft.builtin?.commandline || defaultCommandlineServer().builtin?.commandline || {}
   const hasUnsavedChanges = dirty.chrome || dirty.cua || dirty.filesystem || dirty.commandline
 
@@ -1546,7 +1568,7 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
               <Separator />
               <SettingToggle
                 label="PDF Extraction"
-                description="Use the bundled PDF parser when content indexing or read_text_file needs PDF text."
+                description="Use the bundled PDF parser when content indexing or View needs PDF text."
                 checked={filesystemIndex.parsePdf !== false}
                 onChange={(checked) =>
                   updateFilesystemDraft((current) =>
@@ -1563,7 +1585,7 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
               <Separator />
               <SettingToggle
                 label="Office Extraction"
-                description="Enable spreadsheet, OOXML/ODF, and legacy .doc/.xls/.ppt extraction for indexing and read_text_file. Legacy binary files use pure Go where available, then LibreOffice/OLE fallbacks."
+                description="Enable spreadsheet, OOXML/ODF, and legacy .doc/.xls/.ppt extraction for indexing and View. Legacy binary files use pure Go where available, then LibreOffice/OLE fallbacks."
                 checked={filesystemIndex.parseOffice !== false}
                 onChange={(checked) =>
                   updateFilesystemDraft((current) =>
@@ -1787,6 +1809,80 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
                       placeholder=".go, .md, .pdf, .xlsx, Dockerfile"
                     />
                     <FieldDescription>Comma-separated extensions or exact basenames. Legacy .doc/.xls/.ppt are supported when Office extraction is enabled.</FieldDescription>
+                  </FieldContent>
+                </Field>
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-border/70 bg-background/35 p-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Shield className="size-4" />
+                Backup Settings
+              </div>
+              <div className="mt-2 text-sm text-muted-foreground">
+                Mutating filesystem tools can snapshot the previous file or directory state before applying changes. Older backups are pruned automatically when the configured storage limit is reached.
+              </div>
+              <div className="mt-4">
+                <SettingToggle
+                  label="Automatic Backups"
+                  description="Capture a restorable snapshot before replace, edit, patch, move, copy overwrite, delete, and restore operations."
+                  checked={filesystemBackup.enabled !== false}
+                  onChange={(checked) =>
+                    updateFilesystemDraft((current) =>
+                      withFilesystemConfig(current, (currentFilesystem) => ({
+                        ...currentFilesystem,
+                        backup: {
+                          ...(currentFilesystem.backup || {}),
+                          enabled: checked,
+                        },
+                      })),
+                    )
+                  }
+                />
+              </div>
+              <div className="mt-4 grid gap-5 md:grid-cols-2">
+                <Field>
+                  <FieldLabel htmlFor="filesystem-backup-max-total-size">Max Backup Storage (bytes)</FieldLabel>
+                  <FieldContent>
+                    <Input
+                      id="filesystem-backup-max-total-size"
+                      type="number"
+                      value={filesystemBackup.maxTotalSizeBytes ?? 256 * 1024 * 1024}
+                      onChange={(event) =>
+                        updateFilesystemDraft((current) =>
+                          withFilesystemConfig(current, (currentFilesystem) => ({
+                            ...currentFilesystem,
+                            backup: {
+                              ...(currentFilesystem.backup || {}),
+                              maxTotalSizeBytes: Number(event.target.value || 0),
+                            },
+                          })),
+                        )
+                      }
+                    />
+                  </FieldContent>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor="filesystem-backup-max-file-size">Max Single Backup Size (bytes)</FieldLabel>
+                  <FieldContent>
+                    <Input
+                      id="filesystem-backup-max-file-size"
+                      type="number"
+                      value={filesystemBackup.maxFileSizeBytes ?? 32 * 1024 * 1024}
+                      onChange={(event) =>
+                        updateFilesystemDraft((current) =>
+                          withFilesystemConfig(current, (currentFilesystem) => ({
+                            ...currentFilesystem,
+                            backup: {
+                              ...(currentFilesystem.backup || {}),
+                              maxFileSizeBytes: Number(event.target.value || 0),
+                            },
+                          })),
+                        )
+                      }
+                    />
+                    <FieldDescription>Snapshots larger than this limit are skipped and the tool result reports that backup was unavailable for that mutation.</FieldDescription>
                   </FieldContent>
                 </Field>
               </div>

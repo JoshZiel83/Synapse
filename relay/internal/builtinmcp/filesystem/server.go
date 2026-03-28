@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/djherbis/times"
 	"github.com/fsnotify/fsnotify"
 )
@@ -27,12 +29,19 @@ type Server struct {
 	cfg         Config
 	tools       []core.Tool
 	roots       []Root
+	backups     *backupStore
 	db          *sql.DB
 	watcher     *fsnotify.Watcher
 	syncCh      chan syncRequest
 	watchedDirs map[string]struct{}
 	watchMu     sync.Mutex
+	indexSyncMu sync.Mutex
+	pathLocks   map[string]*sync.Mutex
+	pathLockMu  sync.Mutex
 	bg          sync.WaitGroup
+	startCtx    context.Context
+	startMu     sync.Mutex
+	started     bool
 	cancel      context.CancelFunc
 }
 
@@ -43,11 +52,14 @@ type resolvedPath struct {
 }
 
 type toolError struct {
-	Code                 string
-	Message              string
-	Path                 string
-	RequiresUserApproval bool
-	ClientHint           string
+	Code                  string
+	Message               string
+	Path                  string
+	RequiresUserApproval  bool
+	ClientHint            string
+	Capability            string
+	Access                string
+	AuthorizationDuration string
 }
 
 func (e *toolError) Error() string {
@@ -67,6 +79,15 @@ func (e *toolError) result(toolName, operation string) core.CallResult {
 	if e.RequiresUserApproval {
 		structured["requires_user_approval"] = true
 	}
+	if strings.TrimSpace(e.Capability) != "" {
+		structured["capability"] = e.Capability
+	}
+	if strings.TrimSpace(e.Access) != "" {
+		structured["access"] = e.Access
+	}
+	if strings.TrimSpace(e.AuthorizationDuration) != "" {
+		structured["authorization_duration"] = e.AuthorizationDuration
+	}
 	if strings.TrimSpace(e.ClientHint) != "" {
 		structured["client_hint"] = e.ClientHint
 	}
@@ -84,19 +105,20 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	server.roots = roots
+	server.backups = newBackupStore(cfg.Backup)
+	server.pathLocks = make(map[string]*sync.Mutex)
 	server.tools = server.buildTools()
 	return server, nil
 }
 
 func (s *Server) Start(ctx context.Context) error {
 	childCtx, cancel := context.WithCancel(ctx)
+	s.startCtx = childCtx
 	s.cancel = cancel
-	if err := s.openIndex(); err != nil {
-		return err
-	}
-	if err := s.startBackgroundSync(childCtx); err != nil {
-		s.closeIndex()
-		return err
+	if s.shouldStart("") {
+		if err := s.ensureStarted(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -117,35 +139,81 @@ func (s *Server) Shutdown() {
 	}
 	s.bg.Wait()
 	s.closeIndex()
+	s.started = false
+}
+
+func (s *Server) shouldStart(runtimeSessionID string) bool {
+	return s.cfg.Enabled || len(s.effectiveRootsForSession(runtimeSessionID)) > 0
+}
+
+func (s *Server) ensureStarted() error {
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+
+	if s.started {
+		return nil
+	}
+
+	startCtx := s.startCtx
+	if startCtx == nil {
+		startCtx = context.Background()
+	}
+	if err := s.openIndex(); err != nil {
+		return err
+	}
+	if err := s.startBackgroundSync(startCtx); err != nil {
+		s.closeIndex()
+		return err
+	}
+	s.started = true
+	return nil
 }
 
 func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
 	runtimeSessionID := runtimeauth.RuntimeSessionIDFromContext(ctx)
 	switch toolName {
-	case "list_allowed_directories":
+	case "ListAllowedDirectories":
 		return s.listAllowedDirectories(runtimeSessionID), nil
-	case "read_text_file":
-		return s.readTextFile(runtimeSessionID, args)
-	case "get_file":
+	case "View":
+		return s.viewFile(runtimeSessionID, args)
+	case "ViewMany":
+		return s.viewMany(runtimeSessionID, args)
+	case "GetFile":
 		return s.getFile(runtimeSessionID, args)
-	case "read_multiple_files":
-		return s.readMultipleFiles(runtimeSessionID, args)
-	case "write_file":
-		return s.writeFile(runtimeSessionID, args)
-	case "edit_file":
-		return s.editFile(runtimeSessionID, args)
-	case "create_directory":
+	case "Replace":
+		return s.replaceFile(runtimeSessionID, args)
+	case "Edit":
+		return s.editFileContent(runtimeSessionID, args)
+	case "Patch":
+		return s.patchTool(runtimeSessionID, args)
+	case "UpdateStructuredData":
+		return s.updateStructuredData(runtimeSessionID, args)
+	case "CreateDirectory":
 		return s.createDirectory(runtimeSessionID, args)
-	case "list_directory":
-		return s.listDirectory(runtimeSessionID, args)
-	case "directory_tree":
+	case "LS":
+		return s.listFiles(runtimeSessionID, args)
+	case "DirectoryTree":
 		return s.directoryTree(runtimeSessionID, args)
-	case "move_file":
+	case "Move":
 		return s.moveFile(runtimeSessionID, args)
-	case "get_file_info":
+	case "Copy":
+		return s.copyPath(runtimeSessionID, args)
+	case "Delete":
+		return s.deletePath(runtimeSessionID, args)
+	case "Stat":
 		return s.getFileInfo(runtimeSessionID, args)
-	case "search_files":
+	case "GlobTool":
+		return s.globTool(runtimeSessionID, args)
+	case "GrepTool":
+		return s.grepTool(runtimeSessionID, args)
+	case "SearchFiles":
 		return s.searchFiles(ctx, runtimeSessionID, args)
+	case "ListBackups":
+		return s.listBackups(runtimeSessionID, args)
+	case "GetBackup":
+		return s.getBackup(runtimeSessionID, args)
+	case "RestoreBackup":
+		return s.restoreBackup(runtimeSessionID, args)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", toolName)), nil
 	}
@@ -197,8 +265,10 @@ func (s *Server) effectiveRoots() []Root {
 }
 
 func (s *Server) effectiveRootsForSession(runtimeSessionID string) []Root {
-	roots := make([]Root, len(s.roots))
-	copy(roots, s.roots)
+	roots := make([]Root, 0, len(s.roots))
+	if s.cfg.Enabled {
+		roots = append(roots, s.roots...)
+	}
 	if s.cfg.AuthStore != nil && strings.TrimSpace(s.cfg.StableKey) != "" {
 		for index, grant := range s.cfg.AuthStore.FilesystemGrants(s.cfg.StableKey, runtimeSessionID) {
 			roots = append(roots, Root{
@@ -280,8 +350,9 @@ func (s *Server) resolvePath(runtimeSessionID, input string, write bool, allowMi
 	}
 
 	if !filepath.IsAbs(input) {
-		if s.cfg.Scope == "roots" && len(s.roots) == 1 {
-			input = filepath.Join(s.roots[0].Path, input)
+		effectiveRoots := s.effectiveRootsForSession(runtimeSessionID)
+		if s.cfg.Scope == "roots" && len(effectiveRoots) == 1 {
+			input = filepath.Join(effectiveRoots[0].Path, input)
 		} else {
 			return resolvedPath{}, &toolError{
 				Code:    "invalid_arguments",
@@ -331,11 +402,28 @@ func (s *Server) resolvePath(runtimeSessionID, input string, write bool, allowMi
 
 	root, ok := s.matchRootForSession(runtimeSessionID, resolved)
 	if !ok {
-		return resolvedPath{}, &toolError{
+		message := fmt.Sprintf("The path %q is outside the directories exposed by this filesystem server.", absPath)
+		toolErr := &toolError{
 			Code:    "path_not_allowed",
-			Message: fmt.Sprintf("The path %q is outside the directories exposed by this filesystem server.", absPath),
+			Message: message,
 			Path:    absPath,
 		}
+		if s.cfg.AuthStore != nil && strings.TrimSpace(s.cfg.StableKey) != "" {
+			access := "read"
+			if write {
+				access = "write"
+			}
+			toolErr.Code = "path_authorization_required"
+			toolErr.Message = fmt.Sprintf("The path %q is not currently exposed by this filesystem server. Ask the user to grant %s access for this location in the Synapse Relay client, then retry.", absPath, access)
+			toolErr.RequiresUserApproval = true
+			toolErr.ClientHint = fmt.Sprintf("Grant %s access for this location in the Synapse Relay client, then retry.", access)
+			toolErr.Capability = "filesystem"
+			toolErr.Access = access
+			if !s.cfg.Enabled {
+				toolErr.AuthorizationDuration = "persistent"
+			}
+		}
+		return resolvedPath{}, toolErr
 	}
 	if write {
 		if s.cfg.ReadOnly {
@@ -409,6 +497,7 @@ func (s *Server) listAllowedDirectories(runtimeSessionID string) core.CallResult
 	return textResult(
 		fmt.Sprintf("Filesystem server exposes %d allowed directories.", len(entries)),
 		map[string]interface{}{
+			"enabled":     s.cfg.Enabled,
 			"scope":       s.cfg.Scope,
 			"read_only":   s.cfg.ReadOnly,
 			"directories": entries,
@@ -416,50 +505,543 @@ func (s *Server) listAllowedDirectories(runtimeSessionID string) core.CallResult
 	)
 }
 
-func (s *Server) readTextFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func requireAbsolutePath(fieldName, value string) error {
+	if filepath.IsAbs(strings.TrimSpace(value)) {
+		return nil
+	}
+	return &toolError{
+		Code:    "invalid_arguments",
+		Message: fmt.Sprintf("%s must be an absolute path.", fieldName),
+		Path:    value,
+	}
+}
+
+func currentWorkingDirectory() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(wd), nil
+}
+
+func ensureParentDirectory(path string) error {
+	parent := filepath.Dir(path)
+	info, err := os.Stat(parent)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("parent directory %q does not exist", parent)
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("parent path %q is not a directory", parent)
+	}
+	return nil
+}
+
+func truncateLine(line string, maxChars int) (string, bool) {
+	if maxChars <= 0 {
+		return line, false
+	}
+	runes := []rune(line)
+	if len(runes) <= maxChars {
+		return line, false
+	}
+	return string(runes[:maxChars]) + "... [truncated]", true
+}
+
+func sliceTextByLine(text string, offset, limit int) (string, int, int, bool) {
+	normalized := strings.ReplaceAll(text, "\r\n", "\n")
+	lines := strings.Split(normalized, "\n")
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(lines) {
+		offset = len(lines)
+	}
+	if limit <= 0 {
+		limit = 2000
+	}
+	end := offset + limit
+	if end > len(lines) {
+		end = len(lines)
+	}
+	selected := make([]string, 0, end-offset)
+	truncatedAny := false
+	for _, line := range lines[offset:end] {
+		truncatedLine, truncated := truncateLine(line, 2000)
+		if truncated {
+			truncatedAny = true
+		}
+		selected = append(selected, truncatedLine)
+	}
+	return strings.Join(selected, "\n"), len(lines), end - offset, truncatedAny
+}
+
+func (s *Server) resolveOptionalSearchPath(runtimeSessionID, input string) (resolvedPath, error) {
+	if strings.TrimSpace(input) == "" {
+		wd, err := currentWorkingDirectory()
+		if err != nil {
+			return resolvedPath{}, &toolError{
+				Code:    "invalid_arguments",
+				Message: fmt.Sprintf("Failed to resolve current working directory: %v", err),
+			}
+		}
+		input = wd
+	}
+	return s.resolvePath(runtimeSessionID, input, false, false)
+}
+
+type listedEntry struct {
+	Name       string
+	Path       string
+	IsDir      bool
+	SizeBytes  int64
+	ModifiedAt string
+	ModTime    time.Time
+}
+
+func (s *Server) viewFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
-		Path string `json:"path"`
+		FilePath string `json:"file_path"`
+		Offset   int    `json:"offset"`
+		Limit    int    `json:"limit"`
 	}
 	if err := decodeArgs(args, &input); err != nil {
-		return errorResult(fmt.Sprintf("Invalid read_text_file arguments: %v", err)), nil
+		return errorResult(fmt.Sprintf("Invalid View arguments: %v", err)), nil
+	}
+	viewed, err := s.readViewFile(runtimeSessionID, input.FilePath, input.Offset, input.Limit)
+	if err != nil {
+		if toolErr, ok := err.(*toolError); ok {
+			return toolErr.result("View", "read"), nil
+		}
+		return errorResult(err.Error()), nil
+	}
+	return textResult(viewed.Text, viewed.Structured), nil
+}
+
+func (s *Server) replaceFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+	var input struct {
+		FilePath string `json:"file_path"`
+		Content  string `json:"content"`
+	}
+	if err := decodeArgs(args, &input); err != nil {
+		return errorResult(fmt.Sprintf("Invalid Replace arguments: %v", err)), nil
+	}
+	if err := requireAbsolutePath("file_path", input.FilePath); err != nil {
+		return toolResultError("Replace", "replace", err), nil
 	}
 
-	resolved, err := s.resolvePath(runtimeSessionID, input.Path, false, false)
+	resolved, err := s.resolvePath(runtimeSessionID, input.FilePath, true, true)
 	if err != nil {
-		return toolResultError("read_text_file", "read", err), nil
+		return toolResultError("Replace", "replace", err), nil
+	}
+	unlock := s.lockPaths([]string{resolved.Path})
+	defer unlock()
+	backups, err := s.captureBackups([]string{resolved.Path}, "replace")
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to prepare backups for Replace: %v", err)), nil
+	}
+	if err := writeTextFile(resolved.Path, input.Content); err != nil {
+		return errorResultWithBackups(fmt.Sprintf("Failed to replace %q: %v", resolved.Path, err), map[string]interface{}{
+			"file_path": resolved.Path,
+		}, backups), nil
+	}
+	s.syncAfterMutation(resolved.Path, false)
+	return textResultWithBackups(fmt.Sprintf("Replaced %q.", resolved.Path), map[string]interface{}{
+		"file_path": resolved.Path,
+	}, backups), nil
+}
+
+func (s *Server) editFileContent(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+	var input struct {
+		FilePath  string `json:"file_path"`
+		OldString string `json:"old_string"`
+		NewString string `json:"new_string"`
+	}
+	if err := decodeArgs(args, &input); err != nil {
+		return errorResult(fmt.Sprintf("Invalid Edit arguments: %v", err)), nil
+	}
+	if err := requireAbsolutePath("file_path", input.FilePath); err != nil {
+		return toolResultError("Edit", "edit", err), nil
+	}
+
+	trimmedOld := input.OldString
+	if trimmedOld == "" {
+		resolved, err := s.resolvePath(runtimeSessionID, input.FilePath, true, true)
+		if err != nil {
+			return toolResultError("Edit", "edit", err), nil
+		}
+		unlock := s.lockPaths([]string{resolved.Path})
+		defer unlock()
+		if resolved.Exists {
+			return errorResult("old_string must not be empty when editing an existing file. Use Replace to overwrite the file."), nil
+		}
+		backups, err := s.captureBackups([]string{resolved.Path}, "edit")
+		if err != nil {
+			return errorResult(fmt.Sprintf("Failed to prepare backups for Edit: %v", err)), nil
+		}
+		if err := writeTextFile(resolved.Path, input.NewString); err != nil {
+			return errorResultWithBackups(fmt.Sprintf("Failed to create %q: %v", resolved.Path, err), map[string]interface{}{
+				"file_path": resolved.Path,
+				"created":   true,
+			}, backups), nil
+		}
+		s.syncAfterMutation(resolved.Path, false)
+		return textResultWithBackups(fmt.Sprintf("Created %q.", resolved.Path), map[string]interface{}{
+			"file_path": resolved.Path,
+			"created":   true,
+		}, backups), nil
+	}
+
+	resolved, err := s.resolvePath(runtimeSessionID, input.FilePath, true, false)
+	if err != nil {
+		return toolResultError("Edit", "edit", err), nil
+	}
+	unlock := s.lockPaths([]string{resolved.Path})
+	defer unlock()
+	content, err := loadEditableTextFile(resolved.Path)
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	matches := strings.Count(content, input.OldString)
+	switch {
+	case matches == 0:
+		return errorResult(fmt.Sprintf("old_string was not found in %q.", resolved.Path)), nil
+	case matches > 1:
+		return errorResult(fmt.Sprintf("old_string matched %d locations in %q. Provide more surrounding context so the replacement is unique.", matches, resolved.Path)), nil
+	}
+	content = strings.Replace(content, input.OldString, input.NewString, 1)
+	backups, err := s.captureBackups([]string{resolved.Path}, "edit")
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to prepare backups for Edit: %v", err)), nil
+	}
+	if err := writeTextFile(resolved.Path, content); err != nil {
+		return errorResultWithBackups(fmt.Sprintf("Failed to edit %q: %v", resolved.Path, err), map[string]interface{}{
+			"file_path": resolved.Path,
+		}, backups), nil
+	}
+	s.syncAfterMutation(resolved.Path, false)
+	return textResultWithBackups(fmt.Sprintf("Edited %q.", resolved.Path), map[string]interface{}{
+		"file_path": resolved.Path,
+	}, backups), nil
+}
+
+func (s *Server) listFiles(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+	var input struct {
+		DirectoryPath string `json:"directory_path"`
+		Offset        int    `json:"offset"`
+		Limit         int    `json:"limit"`
+		SortBy        string `json:"sort_by"`
+		SortDirection string `json:"sort_direction"`
+		NameContains  string `json:"name_contains"`
+		EntryType     string `json:"entry_type"`
+	}
+	if err := decodeArgs(args, &input); err != nil {
+		return errorResult(fmt.Sprintf("Invalid LS arguments: %v", err)), nil
+	}
+	if err := requireAbsolutePath("directory_path", input.DirectoryPath); err != nil {
+		return toolResultError("LS", "list", err), nil
+	}
+
+	resolved, err := s.resolvePath(runtimeSessionID, input.DirectoryPath, false, false)
+	if err != nil {
+		return toolResultError("LS", "list", err), nil
 	}
 	info, err := os.Stat(resolved.Path)
 	if err != nil {
 		return errorResult(fmt.Sprintf("Failed to stat %q: %v", resolved.Path, err)), nil
 	}
-	if info.IsDir() {
-		return errorResult(fmt.Sprintf("%q is a directory. Use list_directory or directory_tree instead.", resolved.Path)), nil
+	if !info.IsDir() {
+		return errorResult(fmt.Sprintf("%q is not a directory.", resolved.Path)), nil
 	}
-	text, parser, err := s.extractTextContent(resolved.Path, info)
+
+	entries, err := os.ReadDir(resolved.Path)
 	if err != nil {
-		return errorResult(fmt.Sprintf("Failed to read %q: %v", resolved.Path, err)), nil
+		return errorResult(fmt.Sprintf("Failed to list %q: %v", resolved.Path, err)), nil
 	}
-	if text == "" {
-		return errorResult(fmt.Sprintf("No readable text could be extracted from %q.", resolved.Path)), nil
+
+	filter := strings.ToLower(strings.TrimSpace(input.NameContains))
+	entryType := strings.TrimSpace(strings.ToLower(input.EntryType))
+	if entryType == "" {
+		entryType = "all"
 	}
-	return textResult(text, map[string]interface{}{
-		"path":   resolved.Path,
-		"parser": parser,
-		"size":   info.Size(),
+
+	items := make([]listedEntry, 0, len(entries))
+	for _, entry := range entries {
+		childPath := filepath.Join(resolved.Path, entry.Name())
+		if _, blocked := s.blockedSystemPath(childPath); blocked {
+			continue
+		}
+		if filter != "" && !strings.Contains(strings.ToLower(entry.Name()), filter) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		switch entryType {
+		case "file":
+			if info.IsDir() {
+				continue
+			}
+		case "directory":
+			if !info.IsDir() {
+				continue
+			}
+		}
+		items = append(items, listedEntry{
+			Name:       entry.Name(),
+			Path:       childPath,
+			IsDir:      info.IsDir(),
+			SizeBytes:  info.Size(),
+			ModifiedAt: info.ModTime().UTC().Format(time.RFC3339),
+			ModTime:    info.ModTime(),
+		})
+	}
+
+	sortBy := strings.TrimSpace(strings.ToLower(input.SortBy))
+	if sortBy == "" {
+		sortBy = "name"
+	}
+	sortDirection := strings.TrimSpace(strings.ToLower(input.SortDirection))
+	if sortDirection == "" {
+		if sortBy == "modified_at" || sortBy == "size" {
+			sortDirection = "desc"
+		} else {
+			sortDirection = "asc"
+		}
+	}
+	desc := sortDirection == "desc"
+
+	sort.Slice(items, func(i, j int) bool {
+		compare := 0
+		switch sortBy {
+		case "modified_at":
+			switch {
+			case items[i].ModTime.Before(items[j].ModTime):
+				compare = -1
+			case items[i].ModTime.After(items[j].ModTime):
+				compare = 1
+			}
+		case "size":
+			switch {
+			case items[i].SizeBytes < items[j].SizeBytes:
+				compare = -1
+			case items[i].SizeBytes > items[j].SizeBytes:
+				compare = 1
+			}
+		case "type":
+			leftType := 1
+			rightType := 1
+			if items[i].IsDir {
+				leftType = 0
+			}
+			if items[j].IsDir {
+				rightType = 0
+			}
+			switch {
+			case leftType < rightType:
+				compare = -1
+			case leftType > rightType:
+				compare = 1
+			}
+		default:
+		}
+		if compare == 0 {
+			switch {
+			case items[i].Name < items[j].Name:
+				compare = -1
+			case items[i].Name > items[j].Name:
+				compare = 1
+			}
+		}
+		if compare == 0 {
+			switch {
+			case items[i].Path < items[j].Path:
+				compare = -1
+			case items[i].Path > items[j].Path:
+				compare = 1
+			}
+		}
+		if desc {
+			return compare > 0
+		}
+		return compare < 0
+	})
+
+	if input.Offset < 0 {
+		input.Offset = 0
+	}
+	if input.Limit <= 0 {
+		input.Limit = 200
+	}
+	if input.Limit > 1000 {
+		input.Limit = 1000
+	}
+	total := len(items)
+	start := input.Offset
+	if start > total {
+		start = total
+	}
+	end := start + input.Limit
+	if end > total {
+		end = total
+	}
+	paged := items[start:end]
+
+	lines := make([]string, 0, len(paged))
+	structuredEntries := make([]map[string]interface{}, 0, len(paged))
+	for _, item := range paged {
+		prefix := "file"
+		if item.IsDir {
+			prefix = "dir"
+		}
+		lines = append(lines, fmt.Sprintf("[%s] %s", prefix, item.Path))
+		structuredEntries = append(structuredEntries, map[string]interface{}{
+			"name":        item.Name,
+			"path":        item.Path,
+			"is_dir":      item.IsDir,
+			"size_bytes":  item.SizeBytes,
+			"modified_at": item.ModifiedAt,
+		})
+	}
+
+	return textResult(strings.Join(lines, "\n"), map[string]interface{}{
+		"directory_path": resolved.Path,
+		"entries":        structuredEntries,
+		"total":          total,
+		"offset":         start,
+		"limit":          input.Limit,
+		"has_more":       end < total,
+		"sort_by":        sortBy,
+		"sort_direction": sortDirection,
+		"name_contains":  input.NameContains,
+		"entry_type":     entryType,
 	}), nil
+}
+
+func (s *Server) globTool(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+	var input struct {
+		Pattern          string   `json:"pattern"`
+		Path             string   `json:"path"`
+		Exclude          []string `json:"exclude"`
+		RespectGitignore bool     `json:"respect_gitignore"`
+	}
+	if err := decodeArgs(args, &input); err != nil {
+		return errorResult(fmt.Sprintf("Invalid GlobTool arguments: %v", err)), nil
+	}
+	if strings.TrimSpace(input.Pattern) == "" {
+		return errorResult("pattern is required."), nil
+	}
+
+	root, err := s.resolveOptionalSearchPath(runtimeSessionID, input.Path)
+	if err != nil {
+		return toolResultError("GlobTool", "read", err), nil
+	}
+	info, err := os.Stat(root.Path)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to stat %q: %v", root.Path, err)), nil
+	}
+
+	filterRoot := root.Path
+	if !info.IsDir() {
+		filterRoot = filepath.Dir(root.Path)
+	}
+	pathFilter, err := newPathSearchFilter(filterRoot, input.Exclude, input.RespectGitignore)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Glob failed to compile path filters: %v", err)), nil
+	}
+
+	matches, err := s.globMatches(root.Path, info, input.Pattern, pathFilter)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Glob failed: %v", err)), nil
+	}
+	sortMatchedPaths(matches)
+	return matchedPathResult(input.Pattern, root.Path, matches), nil
+}
+
+func (s *Server) grepTool(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+	var input struct {
+		Pattern          string   `json:"pattern"`
+		Path             string   `json:"path"`
+		Include          string   `json:"include"`
+		Exclude          []string `json:"exclude"`
+		RespectGitignore bool     `json:"respect_gitignore"`
+		MaxMatches       int      `json:"max_matches"`
+		ContextBefore    int      `json:"context_before"`
+		ContextAfter     int      `json:"context_after"`
+	}
+	if err := decodeArgs(args, &input); err != nil {
+		return errorResult(fmt.Sprintf("Invalid GrepTool arguments: %v", err)), nil
+	}
+	if strings.TrimSpace(input.Pattern) == "" {
+		return errorResult("pattern is required."), nil
+	}
+
+	re, err := regexp.Compile(input.Pattern)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Invalid regular expression %q: %v", input.Pattern, err)), nil
+	}
+
+	root, err := s.resolveOptionalSearchPath(runtimeSessionID, input.Path)
+	if err != nil {
+		return toolResultError("GrepTool", "read", err), nil
+	}
+	info, err := os.Stat(root.Path)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to stat %q: %v", root.Path, err)), nil
+	}
+	filterRoot := root.Path
+	if !info.IsDir() {
+		filterRoot = filepath.Dir(root.Path)
+	}
+	pathFilter, err := newPathSearchFilter(filterRoot, input.Exclude, input.RespectGitignore)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Grep failed to compile path filters: %v", err)), nil
+	}
+
+	if input.MaxMatches <= 0 {
+		input.MaxMatches = 50
+	}
+	if input.MaxMatches > 500 {
+		input.MaxMatches = 500
+	}
+	if input.ContextBefore < 0 {
+		input.ContextBefore = 0
+	}
+	if input.ContextBefore > 20 {
+		input.ContextBefore = 20
+	}
+	if input.ContextAfter < 0 {
+		input.ContextAfter = 0
+	}
+	if input.ContextAfter > 20 {
+		input.ContextAfter = 20
+	}
+
+	matches, truncated, err := s.grepMatchesDetailed(root.Path, info, re, input.Include, pathFilter, input.MaxMatches, input.ContextBefore, input.ContextAfter)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Grep failed: %v", err)), nil
+	}
+	sortGrepFileMatches(matches)
+	return grepMatchResult(input.Pattern, root.Path, matches, input.MaxMatches, truncated), nil
 }
 
 func (s *Server) getFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
-		Path string `json:"path"`
+		FilePath string `json:"file_path"`
 	}
 	if err := decodeArgs(args, &input); err != nil {
-		return errorResult(fmt.Sprintf("Invalid get_file arguments: %v", err)), nil
+		return errorResult(fmt.Sprintf("Invalid GetFile arguments: %v", err)), nil
+	}
+	if err := requireAbsolutePath("file_path", input.FilePath); err != nil {
+		return toolResultError("GetFile", "read", err), nil
 	}
 
-	resolved, err := s.resolvePath(runtimeSessionID, input.Path, false, false)
+	resolved, err := s.resolvePath(runtimeSessionID, input.FilePath, false, false)
 	if err != nil {
-		return toolResultError("get_file", "get_file", err), nil
+		return toolResultError("GetFile", "read", err), nil
 	}
 
 	info, err := os.Stat(resolved.Path)
@@ -467,7 +1049,7 @@ func (s *Server) getFile(runtimeSessionID string, args map[string]interface{}) (
 		return errorResult(fmt.Sprintf("Failed to stat %q: %v", resolved.Path, err)), nil
 	}
 	if info.IsDir() {
-		return errorResult(fmt.Sprintf("%q is a directory. Use list_directory or directory_tree instead.", resolved.Path)), nil
+		return errorResult(fmt.Sprintf("%q is a directory. Use LS or DirectoryTree instead.", resolved.Path)), nil
 	}
 	if !info.Mode().IsRegular() {
 		return errorResult(fmt.Sprintf("%q is not a regular file and cannot be returned as an attachment.", resolved.Path)), nil
@@ -478,7 +1060,7 @@ func (s *Server) getFile(runtimeSessionID string, args map[string]interface{}) (
 		maxSizeBytes = 20 * 1024 * 1024
 	}
 	if info.Size() > maxSizeBytes {
-		return errorResult(fmt.Sprintf("The file %q is %d bytes, which exceeds the configured get_file limit of %d bytes.", resolved.Path, info.Size(), maxSizeBytes)), nil
+		return errorResult(fmt.Sprintf("The file %q is %d bytes, which exceeds the configured GetFile limit of %d bytes.", resolved.Path, info.Size(), maxSizeBytes)), nil
 	}
 
 	data, err := os.ReadFile(resolved.Path)
@@ -486,7 +1068,7 @@ func (s *Server) getFile(runtimeSessionID string, args map[string]interface{}) (
 		return errorResult(fmt.Sprintf("Failed to read %q: %v", resolved.Path, err)), nil
 	}
 	if int64(len(data)) > maxSizeBytes {
-		return errorResult(fmt.Sprintf("The file %q grew beyond the configured get_file limit of %d bytes while being read.", resolved.Path, maxSizeBytes)), nil
+		return errorResult(fmt.Sprintf("The file %q grew beyond the configured GetFile limit of %d bytes while being read.", resolved.Path, maxSizeBytes)), nil
 	}
 
 	mimeType := detectFileMimeType(resolved.Path, data)
@@ -500,7 +1082,7 @@ func (s *Server) getFile(runtimeSessionID string, args map[string]interface{}) (
 			core.BinaryResource(filepath.Base(resolved.Path), mimeType, encoded, fileMetadata),
 		},
 		StructuredContent: map[string]interface{}{
-			"path":        resolved.Path,
+			"file_path":   resolved.Path,
 			"name":        filepath.Base(resolved.Path),
 			"mime_type":   mimeType,
 			"size_bytes":  len(data),
@@ -513,183 +1095,55 @@ func (s *Server) getFile(runtimeSessionID string, args map[string]interface{}) (
 	}, nil
 }
 
-func (s *Server) readMultipleFiles(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
-	var input struct {
-		Paths []string `json:"paths"`
-	}
-	if err := decodeArgs(args, &input); err != nil {
-		return errorResult(fmt.Sprintf("Invalid read_multiple_files arguments: %v", err)), nil
-	}
-	if len(input.Paths) == 0 {
-		return errorResult("At least one path is required."), nil
-	}
-
-	parts := make([]string, 0, len(input.Paths))
-	results := make([]map[string]interface{}, 0, len(input.Paths))
-	for _, path := range input.Paths {
-		result, err := s.readTextFile(runtimeSessionID, map[string]interface{}{"path": path})
-		if err != nil {
-			return result, err
-		}
-		if result.IsError {
-			return result, nil
-		}
-		content, ok := result.Content[0].(core.TextContent)
-		if !ok {
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("==> %s <==\n%s", path, content.Text))
-		if structured, ok := result.StructuredContent.(map[string]interface{}); ok {
-			results = append(results, structured)
-		}
-	}
-
-	return textResult(strings.Join(parts, "\n\n"), map[string]interface{}{
-		"files": results,
-	}), nil
-}
-
-func (s *Server) writeFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
-	var input struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
-	}
-	if err := decodeArgs(args, &input); err != nil {
-		return errorResult(fmt.Sprintf("Invalid write_file arguments: %v", err)), nil
-	}
-	resolved, err := s.resolvePath(runtimeSessionID, input.Path, true, true)
-	if err != nil {
-		return toolResultError("write_file", "write", err), nil
-	}
-	if err := os.MkdirAll(filepath.Dir(resolved.Path), 0o755); err != nil {
-		return errorResult(fmt.Sprintf("Failed to create parent directory for %q: %v", resolved.Path, err)), nil
-	}
-	if err := os.WriteFile(resolved.Path, []byte(input.Content), 0o644); err != nil {
-		return errorResult(fmt.Sprintf("Failed to write %q: %v", resolved.Path, err)), nil
-	}
-	s.enqueueSync(resolved.Path, false)
-	return textResult(fmt.Sprintf("Wrote %q.", resolved.Path), map[string]interface{}{"path": resolved.Path}), nil
-}
-
-func (s *Server) editFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
-	var input struct {
-		Path  string `json:"path"`
-		Edits []struct {
-			OldText string `json:"old_text"`
-			NewText string `json:"new_text"`
-		} `json:"edits"`
-	}
-	if err := decodeArgs(args, &input); err != nil {
-		return errorResult(fmt.Sprintf("Invalid edit_file arguments: %v", err)), nil
-	}
-	if len(input.Edits) == 0 {
-		return errorResult("At least one edit is required."), nil
-	}
-	resolved, err := s.resolvePath(runtimeSessionID, input.Path, true, false)
-	if err != nil {
-		return toolResultError("edit_file", "edit", err), nil
-	}
-	data, err := os.ReadFile(resolved.Path)
-	if err != nil {
-		return errorResult(fmt.Sprintf("Failed to read %q: %v", resolved.Path, err)), nil
-	}
-	if !looksLikeText(resolved.Path, data) {
-		return errorResult(fmt.Sprintf("The file %q is not editable as plain text.", resolved.Path)), nil
-	}
-	content := string(data)
-	for _, edit := range input.Edits {
-		if !strings.Contains(content, edit.OldText) {
-			return errorResult(fmt.Sprintf("The text %q was not found in %q.", edit.OldText, resolved.Path)), nil
-		}
-		content = strings.Replace(content, edit.OldText, edit.NewText, 1)
-	}
-	if err := os.WriteFile(resolved.Path, []byte(content), 0o644); err != nil {
-		return errorResult(fmt.Sprintf("Failed to edit %q: %v", resolved.Path, err)), nil
-	}
-	s.enqueueSync(resolved.Path, false)
-	return textResult(fmt.Sprintf("Edited %q.", resolved.Path), map[string]interface{}{"path": resolved.Path}), nil
-}
-
 func (s *Server) createDirectory(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
-		Path string `json:"path"`
+		DirectoryPath string `json:"directory_path"`
 	}
 	if err := decodeArgs(args, &input); err != nil {
-		return errorResult(fmt.Sprintf("Invalid create_directory arguments: %v", err)), nil
+		return errorResult(fmt.Sprintf("Invalid CreateDirectory arguments: %v", err)), nil
 	}
-	resolved, err := s.resolvePath(runtimeSessionID, input.Path, true, true)
+	if err := requireAbsolutePath("directory_path", input.DirectoryPath); err != nil {
+		return toolResultError("CreateDirectory", "write", err), nil
+	}
+	resolved, err := s.resolvePath(runtimeSessionID, input.DirectoryPath, true, true)
 	if err != nil {
-		return toolResultError("create_directory", "create_directory", err), nil
+		return toolResultError("CreateDirectory", "write", err), nil
+	}
+	unlock := s.lockPaths([]string{resolved.Path})
+	defer unlock()
+	var backups []backupResult
+	if !resolved.Exists {
+		backups, err = s.captureBackups([]string{resolved.Path}, "create_directory")
+		if err != nil {
+			return errorResult(fmt.Sprintf("Failed to prepare backups for CreateDirectory: %v", err)), nil
+		}
 	}
 	if err := os.MkdirAll(resolved.Path, 0o755); err != nil {
-		return errorResult(fmt.Sprintf("Failed to create %q: %v", resolved.Path, err)), nil
+		return errorResultWithBackups(fmt.Sprintf("Failed to create %q: %v", resolved.Path, err), map[string]interface{}{
+			"directory_path": resolved.Path,
+		}, backups), nil
 	}
-	s.enqueueSync(resolved.Path, true)
-	return textResult(fmt.Sprintf("Created %q.", resolved.Path), map[string]interface{}{"path": resolved.Path}), nil
-}
-
-func (s *Server) listDirectory(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
-	var input struct {
-		Path string `json:"path"`
-	}
-	if err := decodeArgs(args, &input); err != nil {
-		return errorResult(fmt.Sprintf("Invalid list_directory arguments: %v", err)), nil
-	}
-	resolved, err := s.resolvePath(runtimeSessionID, input.Path, false, false)
-	if err != nil {
-		return toolResultError("list_directory", "list_directory", err), nil
-	}
-	entries, err := os.ReadDir(resolved.Path)
-	if err != nil {
-		return errorResult(fmt.Sprintf("Failed to list %q: %v", resolved.Path, err)), nil
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	items := make([]map[string]interface{}, 0, len(entries))
-	lines := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		childPath := filepath.Join(resolved.Path, entry.Name())
-		if blockedPath, blocked := s.blockedSystemPath(childPath); blocked {
-			lines = append(lines, fmt.Sprintf("[blocked] %s", blockedPath))
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		item := map[string]interface{}{
-			"name":        entry.Name(),
-			"path":        childPath,
-			"is_dir":      entry.IsDir(),
-			"size_bytes":  info.Size(),
-			"modified_at": info.ModTime().UTC().Format(time.RFC3339),
-		}
-		items = append(items, item)
-		prefix := "file"
-		if entry.IsDir() {
-			prefix = "dir"
-		}
-		lines = append(lines, fmt.Sprintf("[%s] %s", prefix, childPath))
-	}
-	return textResult(strings.Join(lines, "\n"), map[string]interface{}{
-		"path":    resolved.Path,
-		"entries": items,
-	}), nil
+	s.syncAfterMutation(resolved.Path, true)
+	return textResultWithBackups(fmt.Sprintf("Created %q.", resolved.Path), map[string]interface{}{"directory_path": resolved.Path}, backups), nil
 }
 
 func (s *Server) directoryTree(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
-		Path     string `json:"path"`
-		MaxDepth int    `json:"max_depth"`
+		DirectoryPath string `json:"directory_path"`
+		MaxDepth      int    `json:"max_depth"`
 	}
 	if err := decodeArgs(args, &input); err != nil {
-		return errorResult(fmt.Sprintf("Invalid directory_tree arguments: %v", err)), nil
+		return errorResult(fmt.Sprintf("Invalid DirectoryTree arguments: %v", err)), nil
 	}
 	if input.MaxDepth <= 0 {
 		input.MaxDepth = 4
 	}
-	resolved, err := s.resolvePath(runtimeSessionID, input.Path, false, false)
+	if err := requireAbsolutePath("directory_path", input.DirectoryPath); err != nil {
+		return toolResultError("DirectoryTree", "list", err), nil
+	}
+	resolved, err := s.resolvePath(runtimeSessionID, input.DirectoryPath, false, false)
 	if err != nil {
-		return toolResultError("directory_tree", "directory_tree", err), nil
+		return toolResultError("DirectoryTree", "list", err), nil
 	}
 	tree, lines, err := s.buildDirectoryTree(resolved.Path, input.MaxDepth, 0)
 	if err != nil {
@@ -737,32 +1191,64 @@ func (s *Server) buildDirectoryTree(path string, maxDepth, depth int) (map[strin
 
 func (s *Server) moveFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
-		Source      string `json:"source"`
-		Destination string `json:"destination"`
+		SourcePath      string `json:"source_path"`
+		DestinationPath string `json:"destination_path"`
 	}
 	if err := decodeArgs(args, &input); err != nil {
-		return errorResult(fmt.Sprintf("Invalid move_file arguments: %v", err)), nil
+		return errorResult(fmt.Sprintf("Invalid Move arguments: %v", err)), nil
 	}
-	source, err := s.resolvePath(runtimeSessionID, input.Source, true, false)
-	if err != nil {
-		return toolResultError("move_file", "move", err), nil
+	if err := requireAbsolutePath("source_path", input.SourcePath); err != nil {
+		return toolResultError("Move", "write", err), nil
 	}
-	destination, err := s.resolvePath(runtimeSessionID, input.Destination, true, true)
+	if err := requireAbsolutePath("destination_path", input.DestinationPath); err != nil {
+		return toolResultError("Move", "write", err), nil
+	}
+	source, err := s.resolvePath(runtimeSessionID, input.SourcePath, true, false)
 	if err != nil {
-		return toolResultError("move_file", "move", err), nil
+		return toolResultError("Move", "write", err), nil
+	}
+	destination, err := s.resolvePath(runtimeSessionID, input.DestinationPath, true, true)
+	if err != nil {
+		return toolResultError("Move", "write", err), nil
+	}
+	unlock := s.lockPaths([]string{source.Path, destination.Path})
+	defer unlock()
+	if source.Path == destination.Path {
+		return errorResult("source_path and destination_path must be different."), nil
+	}
+	sourceInfo, err := os.Stat(source.Path)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to stat %q: %v", source.Path, err)), nil
+	}
+	if sourceInfo.IsDir() && pathWithinPrefix(normalizePathForMatch(destination.Path), normalizePathForMatch(source.Path)) {
+		return errorResult("destination_path cannot be inside source_path when moving a directory."), nil
+	}
+	backupPaths := []string{source.Path}
+	if destination.Path != source.Path {
+		backupPaths = append(backupPaths, destination.Path)
+	}
+	backups, err := s.captureBackups(backupPaths, "move")
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to prepare backups for Move: %v", err)), nil
 	}
 	if err := os.MkdirAll(filepath.Dir(destination.Path), 0o755); err != nil {
-		return errorResult(fmt.Sprintf("Failed to create parent directory for %q: %v", destination.Path, err)), nil
+		return errorResultWithBackups(fmt.Sprintf("Failed to create parent directory for %q: %v", destination.Path, err), map[string]interface{}{
+			"source_path":      source.Path,
+			"destination_path": destination.Path,
+		}, backups), nil
 	}
 	if err := os.Rename(source.Path, destination.Path); err != nil {
-		return errorResult(fmt.Sprintf("Failed to move %q to %q: %v", source.Path, destination.Path, err)), nil
+		return errorResultWithBackups(fmt.Sprintf("Failed to move %q to %q: %v", source.Path, destination.Path, err), map[string]interface{}{
+			"source_path":      source.Path,
+			"destination_path": destination.Path,
+		}, backups), nil
 	}
-	s.enqueueSync(source.Path, false)
-	s.enqueueSync(destination.Path, true)
-	return textResult(fmt.Sprintf("Moved %q to %q.", source.Path, destination.Path), map[string]interface{}{
-		"source":      source.Path,
-		"destination": destination.Path,
-	}), nil
+	s.syncAfterMutation(source.Path, false)
+	s.syncAfterMutation(destination.Path, sourceInfo.IsDir())
+	return textResultWithBackups(fmt.Sprintf("Moved %q to %q.", source.Path, destination.Path), map[string]interface{}{
+		"source_path":      source.Path,
+		"destination_path": destination.Path,
+	}, backups), nil
 }
 
 func (s *Server) getFileInfo(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
@@ -770,11 +1256,14 @@ func (s *Server) getFileInfo(runtimeSessionID string, args map[string]interface{
 		Path string `json:"path"`
 	}
 	if err := decodeArgs(args, &input); err != nil {
-		return errorResult(fmt.Sprintf("Invalid get_file_info arguments: %v", err)), nil
+		return errorResult(fmt.Sprintf("Invalid Stat arguments: %v", err)), nil
+	}
+	if err := requireAbsolutePath("path", input.Path); err != nil {
+		return toolResultError("Stat", "read", err), nil
 	}
 	resolved, err := s.resolvePath(runtimeSessionID, input.Path, false, false)
 	if err != nil {
-		return toolResultError("get_file_info", "get_file_info", err), nil
+		return toolResultError("Stat", "read", err), nil
 	}
 	info, err := os.Stat(resolved.Path)
 	if err != nil {
@@ -793,10 +1282,38 @@ func (s *Server) getFileInfo(runtimeSessionID string, args map[string]interface{
 	return textResult(fmt.Sprintf("Retrieved metadata for %q.", resolved.Path), result), nil
 }
 
-func (s *Server) searchFiles(_ context.Context, _ string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) searchFiles(_ context.Context, runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
 	var input SearchQuery
 	if err := decodeArgs(args, &input); err != nil {
-		return errorResult(fmt.Sprintf("Invalid search_files arguments: %v", err)), nil
+		return errorResult(fmt.Sprintf("Invalid SearchFiles arguments: %v", err)), nil
+	}
+	if !s.started {
+		if !s.shouldStart(runtimeSessionID) {
+			requestPath := strings.TrimSpace(input.Path)
+			if requestPath == "" {
+				if cwd, err := currentWorkingDirectory(); err == nil {
+					requestPath = cwd
+				}
+			}
+			return toolResultError("SearchFiles", "read", &toolError{
+				Code:                 "path_authorization_required",
+				Message:              fmt.Sprintf("Search is not currently enabled for %q. Ask the user to grant read access for this location in the Synapse Relay client, then retry.", requestPath),
+				Path:                 requestPath,
+				RequiresUserApproval: true,
+				ClientHint:           "Grant read access for this location in the Synapse Relay client, then retry.",
+				Capability:           "filesystem",
+				Access:               "read",
+				AuthorizationDuration: func() string {
+					if !s.cfg.Enabled {
+						return "persistent"
+					}
+					return ""
+				}(),
+			}), nil
+		}
+		if err := s.ensureStarted(); err != nil {
+			return errorResult(fmt.Sprintf("Search failed: %v", err)), nil
+		}
 	}
 	results, err := s.searchIndex(input)
 	if err != nil {
@@ -811,11 +1328,185 @@ func (s *Server) searchFiles(_ context.Context, _ string, args map[string]interf
 		lines = append(lines, line)
 	}
 	return textResult(strings.Join(lines, "\n"), map[string]interface{}{
-		"query":   input.Query,
-		"mode":    input.Mode,
-		"results": results,
-		"filters": input,
+		"query":               input.Query,
+		"mode":                input.Mode,
+		"results":             results,
+		"filters":             input,
+		"freshness_guarantee": "eventually_consistent",
 	}), nil
+}
+
+type matchedPath struct {
+	Path       string
+	ModifiedAt string
+	ModTime    time.Time
+}
+
+func sortMatchedPaths(matches []matchedPath) {
+	sort.Slice(matches, func(i, j int) bool {
+		if !matches[i].ModTime.Equal(matches[j].ModTime) {
+			return matches[i].ModTime.After(matches[j].ModTime)
+		}
+		return matches[i].Path < matches[j].Path
+	})
+}
+
+func matchedPathResult(pattern, root string, matches []matchedPath) core.CallResult {
+	lines := make([]string, 0, len(matches))
+	structuredMatches := make([]map[string]interface{}, 0, len(matches))
+	for _, match := range matches {
+		lines = append(lines, match.Path)
+		structuredMatches = append(structuredMatches, map[string]interface{}{
+			"path":        match.Path,
+			"modified_at": match.ModifiedAt,
+		})
+	}
+	return textResult(strings.Join(lines, "\n"), map[string]interface{}{
+		"pattern": pattern,
+		"path":    root,
+		"matches": structuredMatches,
+		"total":   len(matches),
+	})
+}
+
+func (s *Server) globMatches(root string, rootInfo os.FileInfo, pattern string, pathFilter *pathSearchFilter) ([]matchedPath, error) {
+	pattern = strings.TrimSpace(pattern)
+	matches := make([]matchedPath, 0)
+
+	if !rootInfo.IsDir() {
+		if pathFilter != nil && pathFilter.Skip(root, false) {
+			return matches, nil
+		}
+		rel := filepath.Base(root)
+		ok, err := doublestar.PathMatch(pattern, filepath.ToSlash(rel))
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			matches = append(matches, matchedPath{
+				Path:       root,
+				ModifiedAt: rootInfo.ModTime().UTC().Format(time.RFC3339),
+				ModTime:    rootInfo.ModTime(),
+			})
+		}
+		return matches, nil
+	}
+
+	err := filepath.WalkDir(root, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if current == root {
+			return nil
+		}
+		if _, blocked := s.blockedSystemPath(current); blocked {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			if pathFilter != nil && pathFilter.Skip(current, true) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if pathFilter != nil && pathFilter.Skip(current, false) {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+		rel, err := filepath.Rel(root, current)
+		if err != nil {
+			return nil
+		}
+		ok, err := doublestar.PathMatch(pattern, filepath.ToSlash(rel))
+		if err != nil {
+			return err
+		}
+		if ok {
+			matches = append(matches, matchedPath{
+				Path:       current,
+				ModifiedAt: info.ModTime().UTC().Format(time.RFC3339),
+				ModTime:    info.ModTime(),
+			})
+		}
+		return nil
+	})
+	return matches, err
+}
+
+func (s *Server) grepMatches(root string, rootInfo os.FileInfo, re *regexp.Regexp, include string) ([]matchedPath, error) {
+	include = strings.TrimSpace(include)
+	matches := make([]matchedPath, 0)
+
+	matchInclude := func(rel string) (bool, error) {
+		if include == "" {
+			return true, nil
+		}
+		normalized := filepath.ToSlash(rel)
+		ok, err := doublestar.PathMatch(include, normalized)
+		if err != nil || ok {
+			return ok, err
+		}
+		return doublestar.PathMatch(include, filepath.Base(normalized))
+	}
+
+	searchFile := func(path string, info os.FileInfo, rel string) error {
+		allowed, err := matchInclude(rel)
+		if err != nil || !allowed {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || !looksLikeText(path, data) {
+			return nil
+		}
+		if re.Match(data) {
+			matches = append(matches, matchedPath{
+				Path:       path,
+				ModifiedAt: info.ModTime().UTC().Format(time.RFC3339),
+				ModTime:    info.ModTime(),
+			})
+		}
+		return nil
+	}
+
+	if !rootInfo.IsDir() {
+		if err := searchFile(root, rootInfo, filepath.Base(root)); err != nil {
+			return nil, err
+		}
+		return matches, nil
+	}
+
+	err := filepath.WalkDir(root, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if current == root {
+			return nil
+		}
+		if _, blocked := s.blockedSystemPath(current); blocked {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+		rel, err := filepath.Rel(root, current)
+		if err != nil {
+			return nil
+		}
+		return searchFile(current, info, rel)
+	})
+	return matches, err
 }
 
 func decodeArgs(input map[string]interface{}, target interface{}) error {

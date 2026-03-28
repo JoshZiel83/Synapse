@@ -171,7 +171,7 @@ func (s *Server) runSyncWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case req := <-s.syncCh:
-			if err := s.syncPath(req.path, req.recursive); err != nil {
+			if err := s.runSyncPath(req.path, req.recursive); err != nil {
 				log.Printf("filesystem sync error for %s: %v", req.path, err)
 			}
 		}
@@ -221,7 +221,7 @@ func (s *Server) handleWatchEvent(event fsnotify.Event) {
 }
 
 func (s *Server) enqueueSync(path string, recursive bool) {
-	if path == "" {
+	if path == "" || s.syncCh == nil {
 		return
 	}
 	select {
@@ -234,6 +234,26 @@ func (s *Server) enqueueSync(path string, recursive bool) {
 			}
 		}()
 	}
+}
+
+func (s *Server) runSyncPath(path string, recursive bool) error {
+	s.indexSyncMu.Lock()
+	defer s.indexSyncMu.Unlock()
+	return s.syncPath(path, recursive)
+}
+
+func (s *Server) syncAfterMutation(path string, recursive bool) {
+	if path == "" {
+		return
+	}
+	if s.started && s.db != nil {
+		if err := s.runSyncPath(path, recursive); err == nil {
+			return
+		} else {
+			log.Printf("filesystem immediate sync error for %s: %v", path, err)
+		}
+	}
+	s.enqueueSync(path, recursive)
 }
 
 func (s *Server) syncPath(target string, recursive bool) error {
@@ -622,10 +642,13 @@ type searchOptions struct {
 	mode              string
 	prefix            string
 	roots             []string
+	exclude           []string
 	extensions        []string
 	typeFilter        string
 	accessFilter      string
 	parsers           []string
+	respectGitignore  bool
+	pathFilters       map[string]*pathSearchFilter
 	contentIndexed    *bool
 	minSizeBytes      int64
 	maxSizeBytes      int64
@@ -704,15 +727,17 @@ func (s *Server) searchIndex(input SearchQuery) ([]SearchResult, error) {
 
 func (s *Server) compileSearchOptions(input SearchQuery) (searchOptions, error) {
 	options := searchOptions{
-		query:          strings.TrimSpace(input.Query),
-		roots:          normalizeSearchFilters(input.Roots),
-		extensions:     normalizeSearchFilters(input.Extensions),
-		parsers:        normalizeSearchFilters(input.Parsers),
-		minSizeBytes:   input.MinSizeBytes,
-		maxSizeBytes:   input.MaxSizeBytes,
-		contentIndexed: input.ContentIndexed,
-		limit:          input.Limit,
-		offset:         input.Offset,
+		query:            strings.TrimSpace(input.Query),
+		roots:            normalizeSearchFilters(input.Roots),
+		exclude:          normalizeExcludePatterns(input.Exclude),
+		extensions:       normalizeSearchFilters(input.Extensions),
+		parsers:          normalizeSearchFilters(input.Parsers),
+		minSizeBytes:     input.MinSizeBytes,
+		maxSizeBytes:     input.MaxSizeBytes,
+		contentIndexed:   input.ContentIndexed,
+		limit:            input.Limit,
+		offset:           input.Offset,
+		respectGitignore: input.RespectGitignore,
 	}
 	if options.query == "" {
 		return options, fmt.Errorf("a non-empty query is required")
@@ -746,13 +771,13 @@ func (s *Server) compileSearchOptions(input SearchQuery) (searchOptions, error) 
 		options.mode = "path"
 	}
 
-	switch strings.TrimSpace(input.Type) {
+	switch strings.TrimSpace(input.EntryType) {
 	case "", "all":
 		options.typeFilter = "all"
 	case "file", "directory":
-		options.typeFilter = strings.TrimSpace(input.Type)
+		options.typeFilter = strings.TrimSpace(input.EntryType)
 	default:
-		return options, fmt.Errorf("unsupported type filter %q", input.Type)
+		return options, fmt.Errorf("unsupported entry_type value %q", input.EntryType)
 	}
 
 	switch strings.TrimSpace(input.Access) {
@@ -790,6 +815,9 @@ func (s *Server) compileSearchOptions(input SearchQuery) (searchOptions, error) 
 	}
 
 	if strings.TrimSpace(input.Path) != "" {
+		if !filepath.IsAbs(input.Path) {
+			return options, fmt.Errorf("path must be an absolute path")
+		}
 		resolved, err := s.resolvePath("", input.Path, false, false)
 		if err != nil {
 			return options, err
@@ -811,6 +839,26 @@ func (s *Server) compileSearchOptions(input SearchQuery) (searchOptions, error) 
 		}
 		options.modifiedBefore = parsed
 		options.hasModifiedBefore = true
+	}
+
+	options.pathFilters = make(map[string]*pathSearchFilter)
+	for _, root := range s.effectiveRoots() {
+		filter, err := newPathSearchFilter(root.Path, options.exclude, options.respectGitignore)
+		if err != nil {
+			return options, fmt.Errorf("compile path filters for %q: %w", root.Path, err)
+		}
+		options.pathFilters[root.Path] = filter
+	}
+	if options.prefix != "" {
+		filterRoot := options.prefix
+		if info, statErr := os.Stat(options.prefix); statErr == nil && !info.IsDir() {
+			filterRoot = filepath.Dir(options.prefix)
+		}
+		filter, err := newPathSearchFilter(filterRoot, options.exclude, options.respectGitignore)
+		if err != nil {
+			return options, fmt.Errorf("compile path filters for %q: %w", filterRoot, err)
+		}
+		options.pathFilters[options.prefix] = filter
 	}
 
 	return options, nil
@@ -1083,6 +1131,9 @@ func (s *Server) matchesSearchFilters(candidate searchCandidate, options searchO
 	if options.maxSizeBytes > 0 && result.SizeBytes > options.maxSizeBytes {
 		return false
 	}
+	if filter := s.searchPathFilterForResult(result.Path, options); filter != nil && filter.Skip(result.Path, result.IsDir) {
+		return false
+	}
 	modifiedAt := time.Unix(0, candidate.modifiedNS)
 	if options.hasModifiedAfter && modifiedAt.Before(options.modifiedAfter) {
 		return false
@@ -1091,6 +1142,17 @@ func (s *Server) matchesSearchFilters(candidate searchCandidate, options searchO
 		return false
 	}
 	return true
+}
+
+func (s *Server) searchPathFilterForResult(path string, options searchOptions) *pathSearchFilter {
+	if options.prefix != "" && pathWithinPrefix(path, options.prefix) {
+		return options.pathFilters[options.prefix]
+	}
+	root, ok := s.matchRoot(path)
+	if !ok {
+		return nil
+	}
+	return options.pathFilters[root.Path]
 }
 
 func matchesRootFilters(path, rootID string, filters []string) bool {

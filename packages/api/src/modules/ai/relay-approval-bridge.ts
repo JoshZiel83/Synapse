@@ -43,20 +43,30 @@ export type AutoBridgeRelayApprovalResult =
     };
 
 const FILESYSTEM_READ_TOOL_NAMES = new Set([
-  'list_allowed_directories',
-  'read_text_file',
-  'read_multiple_files',
-  'list_directory',
-  'directory_tree',
-  'get_file_info',
-  'search_files',
+  'ListAllowedDirectories',
+  'View',
+  'ViewMany',
+  'GetFile',
+  'LS',
+  'DirectoryTree',
+  'Stat',
+  'GlobTool',
+  'GrepTool',
+  'SearchFiles',
+  'ListBackups',
+  'GetBackup',
 ]);
 
 const FILESYSTEM_WRITE_TOOL_NAMES = new Set([
-  'write_file',
-  'edit_file',
-  'create_directory',
-  'move_file',
+  'Edit',
+  'Replace',
+  'Patch',
+  'UpdateStructuredData',
+  'CreateDirectory',
+  'Move',
+  'Copy',
+  'Delete',
+  'RestoreBackup',
 ]);
 
 function asTrimmedString(value: unknown): string | undefined {
@@ -78,9 +88,21 @@ function buildActiveConversationUsers(members: any[]): ActiveConversationUser[] 
 function inferFilesystemAccess(params: {
   structuredToolName?: string;
   structuredOperation?: string;
+  structuredAccess?: string;
   visibleToolName: string;
   toolInput: Record<string, unknown>;
 }): 'read' | 'write' | 'read_write' | null {
+  const structuredAccess = params.structuredAccess?.trim().toLowerCase();
+  if (structuredAccess === 'read' || structuredAccess === 'ro') {
+    return 'read';
+  }
+  if (structuredAccess === 'write') {
+    return 'write';
+  }
+  if (structuredAccess === 'read_write' || structuredAccess === 'rw') {
+    return 'read_write';
+  }
+
   const names = [
     params.structuredToolName,
     params.structuredOperation,
@@ -97,8 +119,12 @@ function inferFilesystemAccess(params: {
   }
   if (
     Object.prototype.hasOwnProperty.call(params.toolInput, 'content') ||
-    Object.prototype.hasOwnProperty.call(params.toolInput, 'edits') ||
-    Object.prototype.hasOwnProperty.call(params.toolInput, 'destination')
+    Object.prototype.hasOwnProperty.call(params.toolInput, 'destination_path') ||
+    Object.prototype.hasOwnProperty.call(params.toolInput, 'old_string') ||
+    Object.prototype.hasOwnProperty.call(params.toolInput, 'new_string') ||
+    Object.prototype.hasOwnProperty.call(params.toolInput, 'operations') ||
+    Object.prototype.hasOwnProperty.call(params.toolInput, 'updates') ||
+    Object.prototype.hasOwnProperty.call(params.toolInput, 'target_path')
   ) {
     return 'write';
   }
@@ -113,10 +139,13 @@ function inferRelayAuthorizationScope(params: {
   const structuredToolName = asTrimmedString(params.structuredContent?.tool);
   const structuredOperation = asTrimmedString(params.structuredContent?.operation);
   const structuredPath = asTrimmedString(params.structuredContent?.path);
+  const structuredCapability = asTrimmedString(params.structuredContent?.capability);
+  const structuredAccess = asTrimmedString(params.structuredContent?.access);
 
   const filesystemAccess = inferFilesystemAccess({
     structuredToolName,
     structuredOperation,
+    structuredAccess,
     visibleToolName: params.visibleToolName,
     toolInput: params.toolInput,
   });
@@ -124,9 +153,12 @@ function inferRelayAuthorizationScope(params: {
   if (filesystemAccess) {
     const inferredPath =
       structuredPath ||
+      asTrimmedString(params.toolInput.directory_path) ||
+      asTrimmedString(params.toolInput.file_path) ||
       asTrimmedString(params.toolInput.path) ||
-      asTrimmedString(params.toolInput.destination) ||
-      asTrimmedString(params.toolInput.source);
+      asTrimmedString(params.toolInput.destination_path) ||
+      asTrimmedString(params.toolInput.source_path) ||
+      asTrimmedString(params.toolInput.target_path);
     if (!inferredPath || !path.isAbsolute(inferredPath)) {
       return null;
     }
@@ -134,6 +166,12 @@ function inferRelayAuthorizationScope(params: {
       capability: 'filesystem',
       path: inferredPath,
       access: filesystemAccess,
+    };
+  }
+
+  if (structuredCapability === 'chrome') {
+    return {
+      capability: 'chrome',
     };
   }
 
@@ -151,6 +189,20 @@ function inferRelayAuthorizationScope(params: {
   return null;
 }
 
+function inferRelayAuthorizationDuration(
+  structuredContent?: Record<string, unknown>,
+  requestedScope?: RelayAuthorizationScope | null,
+): 'session' | 'persistent' {
+  const structuredDuration = asTrimmedString(structuredContent?.authorization_duration);
+  if (structuredDuration === 'persistent') {
+    return 'persistent';
+  }
+  if (requestedScope?.capability === 'chrome') {
+    return 'persistent';
+  }
+  return 'session';
+}
+
 function buildAuthorizationReason(params: {
   visibleToolName: string;
   requestedScope: RelayAuthorizationScope;
@@ -161,6 +213,10 @@ function buildAuthorizationReason(params: {
         ? 'read and write'
         : params.requestedScope.access;
     return `Allow ${accessLabel} access to ${params.requestedScope.path} so the actor can continue ${params.visibleToolName}.`;
+  }
+
+  if (params.requestedScope.capability === 'chrome') {
+    return `Enable browser access so the actor can continue ${params.visibleToolName}.`;
   }
 
   return `Allow desktop control so the actor can continue ${params.visibleToolName}.`;
@@ -238,6 +294,7 @@ export async function maybeAutoBridgeRelayApproval(
         'This relay tool requires user approval, but Synapse could not infer the required relay authorization scope automatically. Use request_relay_authorization with an explicit scope if you still need it.',
     };
   }
+  const duration = inferRelayAuthorizationDuration(structuredContent, requestedScope);
 
   const existing = await findOpenRelayAuthorizationInteraction({
     workspaceId: params.workspaceId,
@@ -246,7 +303,7 @@ export async function maybeAutoBridgeRelayApproval(
     relayDeviceId: relayTarget.deviceId,
     relayExposureId: relayTarget.exposureId,
     runtimeSessionId: relayTarget.runtimeSessionId,
-    duration: 'session',
+    duration,
     requestedScope,
   });
   if (existing) {
@@ -299,7 +356,7 @@ export async function maybeAutoBridgeRelayApproval(
     relayExposureId: relayTarget.exposureId,
     runtimeSessionId: relayTarget.runtimeSessionId,
     relayToolName: params.relayToolName,
-    duration: 'session',
+    duration,
     reason: buildAuthorizationReason({
       visibleToolName: relayTarget.visibleToolName,
       requestedScope,
@@ -315,6 +372,6 @@ export async function maybeAutoBridgeRelayApproval(
   return {
     status: 'created',
     interactionId: interaction.id,
-    note: `A session-scoped relay authorization request was created automatically in this conversation. ${authorizerMessage} Wait for a decision instead of calling request_relay_authorization again for the same scope unless you need a different path, access level, or duration.`,
+    note: `A ${duration === 'persistent' ? 'persistent' : 'session-scoped'} relay authorization request was created automatically in this conversation. ${authorizerMessage} Wait for a decision instead of calling request_relay_authorization again for the same scope unless you need a different path, access level, or duration.`,
   };
 }

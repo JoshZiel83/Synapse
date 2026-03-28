@@ -173,6 +173,8 @@ func summarizeRequestedScope(scope map[string]interface{}) string {
 			mode = "control"
 		}
 		return fmt.Sprintf("cua %s access", mode)
+	case "chrome":
+		return "chrome browser access"
 	default:
 		if capability != "" {
 			return fmt.Sprintf("%s access", capability)
