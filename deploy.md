@@ -80,6 +80,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now synapse-api synapse-web-dev
 ```
 
+Important:
+
+- On hosts with `synapse-api.service` enabled, do not also start the API manually with `npm run start -w packages/api`, `node dist/index.js`, or `npm run dev -w packages/api`.
+- `synapse-api.service` is the only supported API process on the host. A second API instance can grab port `3001`, trigger `EADDRINUSE`, and cause repeated restart attempts.
+- `infrastructure/scripts/start-api.sh` now refuses to start when port `3001` is already in use, and exits with status `200`. The unit file treats that exit code as non-restartable to avoid restart storms.
+
 ## 7. Nginx
 
 Do not commit the real `infrastructure/nginx.conf`.
@@ -117,4 +123,31 @@ Check health:
 ```bash
 curl -sS http://localhost:3001/api/v1/health
 curl -sS https://<your-domain>/api/v1/health
+```
+
+## 9. Troubleshooting
+
+If a session shows `Recovered after the previous worker stopped while this turn was still running.`:
+
+- A previous API worker exited while a turn was still marked `running`. The message is a recovery marker, not a model response.
+- First check for duplicate API processes:
+
+```bash
+systemctl status synapse-api.service --no-pager
+ss -ltnp | rg ':3001'
+ps -eo pid,ppid,lstart,etime,cmd | rg 'node dist/index.js|npm run start -w packages/api|tsx watch src/index.ts'
+```
+
+- If port `3001` is owned by a user-session process instead of `synapse-api.service`, stop the stray process and then restart the service:
+
+```bash
+sudo systemctl stop synapse-api.service
+kill <stray-pid>
+sudo systemctl start synapse-api.service
+```
+
+- If you need to confirm whether the service is looping on startup, inspect the API journal:
+
+```bash
+journalctl -u synapse-api.service -n 100 --no-pager
 ```

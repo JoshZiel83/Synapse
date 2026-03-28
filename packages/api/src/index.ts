@@ -150,6 +150,31 @@ async function main() {
     process.exit(1);
   }
 
+  // Health check
+  app.get("/api/v1/health", async () => {
+    const [db, dbSchema, rds, authz] = await Promise.all([
+      testConnection(),
+      testRequiredSchema(),
+      testRedisConnection(),
+      testAuthzConnection(),
+    ]);
+    return {
+      status: db && dbSchema && rds && authz ? "healthy" : "degraded",
+      services: { database: db, databaseSchema: dbSchema, redis: rds, authz },
+      authzEnabled: config.authz.enabled,
+      timestamp: new Date().toISOString(),
+    };
+  });
+
+  // Start server
+  try {
+    await app.listen({ port: config.port, host: config.host });
+    console.log(`Synapse API running on http://${config.host}:${config.port}`);
+  } catch (err) {
+    app.log.error(err);
+    process.exit(1);
+  }
+
   try {
     const recovered = await recoverInterruptedExecutions({
       errorMessage:
@@ -176,31 +201,6 @@ async function main() {
   startSessionThinkingWorker();
   startImTransportDeliveryWorker();
   await startTransportRuntimeManager();
-
-  // Health check
-  app.get("/api/v1/health", async () => {
-    const [db, dbSchema, rds, authz] = await Promise.all([
-      testConnection(),
-      testRequiredSchema(),
-      testRedisConnection(),
-      testAuthzConnection(),
-    ]);
-    return {
-      status: db && dbSchema && rds && authz ? "healthy" : "degraded",
-      services: { database: db, databaseSchema: dbSchema, redis: rds, authz },
-      authzEnabled: config.authz.enabled,
-      timestamp: new Date().toISOString(),
-    };
-  });
-
-  // Start server
-  try {
-    await app.listen({ port: config.port, host: config.host });
-    console.log(`Synapse API running on http://${config.host}:${config.port}`);
-  } catch (err) {
-    app.log.error(err);
-    process.exit(1);
-  }
 
   const waitWithTimeout = async (
     label: string,
