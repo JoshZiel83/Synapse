@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   Actor,
   ConversationTransportBindingSummary,
@@ -15,11 +15,11 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { API_BASE, api } from '@/lib/api';
-import type { Group } from '@/stores/chat-store';
+import type { ConversationSummary } from '@/stores/chat-store';
 
 interface ConversationTransportBindingCardProps {
   workspaceId: string;
-  group: Group;
+  conversation: ConversationSummary;
   compact?: boolean;
 }
 
@@ -71,7 +71,7 @@ function buildWebhookUrl(accountId: string) {
 
 export default function ConversationTransportBindingCard({
   workspaceId,
-  group,
+  conversation,
   compact = false,
 }: ConversationTransportBindingCardProps) {
   const [loading, setLoading] = useState(true);
@@ -120,12 +120,12 @@ export default function ConversationTransportBindingCard({
       ? buildWebhookUrl(binding.account.id)
       : '';
 
-  async function loadBinding() {
+  const loadBinding = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const [bindingResult, actorsResult] = await Promise.all([
-        api.getGroupTransportBinding(workspaceId, group.id),
+        api.getConversationTransportBinding(workspaceId, conversation.id),
         api.getActors(workspaceId).catch((loadError) => {
           console.error('Failed to load actors for IM binding card:', loadError);
           return [];
@@ -139,11 +139,11 @@ export default function ConversationTransportBindingCard({
     } finally {
       setLoading(false);
     }
-  }
+  }, [conversation.id, workspaceId]);
 
   useEffect(() => {
     void loadBinding();
-  }, [workspaceId, group.id]);
+  }, [loadBinding]);
 
   return (
     <Card className={compact ? 'border-dashed bg-background/70' : undefined}>

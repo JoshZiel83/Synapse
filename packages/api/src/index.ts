@@ -36,7 +36,7 @@ import authModule from "./modules/auth/index.js";
 import workspaceModule from "./modules/workspace/index.js";
 import organizationModule from "./modules/organization/index.js";
 import skillsModule from "./modules/skills/index.js";
-import groupModule from "./modules/group/index.js";
+import conversationModule from "./modules/conversation/index.js";
 import automationModule from "./modules/automation/index.js";
 import filesModule from "./modules/files/index.js";
 import memoryModule from "./modules/memory/index.js";
@@ -132,7 +132,7 @@ async function main() {
   await app.register(workspaceModule);
   await app.register(organizationModule);
   await app.register(skillsModule);
-  await app.register(groupModule);
+  await app.register(conversationModule);
   await app.register(automationModule);
   await app.register(filesModule);
   await app.register(memoryModule);

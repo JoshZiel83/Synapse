@@ -46,15 +46,15 @@ function normalizeActor(actor: RawActorLike): Actor {
   };
 }
 
-interface NewGroupDialogProps {
+interface NewConversationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   workspaceId: string;
-  onCreateGroup: (actorIds: string[]) => void;
+  onCreateConversation: (actorIds: string[]) => void;
   preselectedActorId?: string;
 }
 
-// Group actors by role
+// Group actors by role for the picker UI
 function groupByRole(actors: Actor[]): { role: string; actors: Actor[] }[] {
   const map = new Map<string, Actor[]>();
   for (const a of actors) {
@@ -81,7 +81,13 @@ function roleLabel(role: string): string {
   }
 }
 
-export default function NewGroupDialog({ open, onOpenChange, workspaceId, onCreateGroup, preselectedActorId }: NewGroupDialogProps) {
+export default function NewConversationDialog({
+  open,
+  onOpenChange,
+  workspaceId,
+  onCreateConversation,
+  preselectedActorId,
+}: NewConversationDialogProps) {
   const [actors, setActors] = useState<Actor[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
@@ -133,7 +139,7 @@ export default function NewGroupDialog({ open, onOpenChange, workspaceId, onCrea
     if (selectedIds.size === 0) return;
     setLoading(true);
     try {
-      onCreateGroup(Array.from(selectedIds));
+      onCreateConversation(Array.from(selectedIds));
       onOpenChange(false);
     } finally {
       setLoading(false);
@@ -247,7 +253,7 @@ export default function NewGroupDialog({ open, onOpenChange, workspaceId, onCrea
           <div className="flex min-w-0 min-h-0 flex-col">
             {/* Header */}
             <div className="px-6 py-4 border-b border-gray-100 dark:border-white/5 flex justify-between items-center">
-              <h2 className="text-base font-semibold text-gray-900 dark:text-white">New Group</h2>
+              <h2 className="text-base font-semibold text-gray-900 dark:text-white">New Conversation</h2>
               <span className="text-sm text-gray-500 dark:text-gray-400">
                 {selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Select actors'}
               </span>

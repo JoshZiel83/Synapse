@@ -4,9 +4,11 @@ import {
   describeAutomationDelivery,
   describeAutomationPolicy,
   describeAutomationTrigger,
+  isMultiMemberConversationKind,
   normalizeActorDocs,
   summarizeActorForRole,
   type ActorDoc,
+  type ToolResolveContext,
   type RelayAuthorizationScope,
 } from "@synapse/shared";
 import type {
@@ -18,10 +20,10 @@ import { registerToolPlugin } from "./tool-plugins.js";
 import { query } from "../../infrastructure/database/index.js";
 import { getSession } from "../session/service.js";
 import {
-  sendGroupMessage,
-  addMembersToGroup,
-  getGroupMembers,
-} from "../group/service.js";
+  sendConversationMessage,
+  addMembersToConversation,
+  getConversationMembers,
+} from "../conversation/chat-service.js";
 import { buildNormalizedMessageContent } from "../conversation/message-content.js";
 import { buildDefaultUserMention } from "./inline-ref-resolver.js";
 import { runMemorySearch } from "../memory/service.js";
@@ -100,6 +102,23 @@ const currentTimeInputSchema = z
   })
   .strict();
 
+function getToolContextConversationId(ctx: ToolResolveContext) {
+  return ctx.conversationId;
+}
+
+function getToolContextConversationMembers(ctx: ToolResolveContext) {
+  return ctx.conversationMembers;
+}
+
+function getMultiMemberConversationId(session: {
+  conversation_id?: string;
+  conversation_kind?: string;
+} | null | undefined) {
+  return isMultiMemberConversationKind(session?.conversation_kind)
+    ? session?.conversation_id || null
+    : null;
+}
+
 function normalizeRawSendToInput(input: Record<string, unknown>) {
   const rawRecipients = input.recipients;
   return {
@@ -174,7 +193,9 @@ function parseActorDocs(value: unknown): ActorDoc[] {
 }
 
 function isGroupVisibleDoc(doc: ActorDoc): boolean {
-  return doc.visibility === "always" || doc.visibility === "group_only";
+  return (
+    doc.visibility === "always" || doc.visibility === "multi_member_only"
+  );
 }
 
 function summarizeInviteableActor(row: {
@@ -493,7 +514,7 @@ function buildQuestionFieldDefinitions(rawFields: unknown): {
 
 async function listInviteableActors(params: {
   workspaceId: string;
-  groupId: string;
+  conversationId: string;
   actorId: string;
 }): Promise<InviteableActor[]> {
   const result = await query(
@@ -533,7 +554,7 @@ async function listInviteableActors(params: {
            AND cm.state = 'active'
        )
      ORDER BY a.name ASC, a.id ASC`,
-    [params.workspaceId, params.groupId, params.actorId],
+    [params.workspaceId, params.conversationId, params.actorId],
   );
 
   return result.rows.map((row) => ({
@@ -555,7 +576,7 @@ function buildInviteActorDefinition(candidates: InviteableActor[]) {
   return {
     name: "invite_actor",
     description:
-      "Invite one or more new actors to join the current group. " +
+      "Invite one or more new actors to join the current conversation. " +
       "Only the listed actors can be invited right now. " +
       `Available invite candidates: ${candidateDirectory}`,
     parameters: {
@@ -751,7 +772,7 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "send_to",
       description:
-        "Send a visible group message to one or more members by name. You must specify whether this is a reply or a request, and include a short structured summary for UI rendering. Recipients are the addressees; inline mentions are optional body references and should not be used by default.",
+        "Send a visible conversation message to one or more members by name. You must specify whether this is a reply or a request, and include a short structured summary for UI rendering. Recipients are the addressees; inline mentions are optional body references and should not be used by default.",
       parameters: {
         type: "object",
         properties: {
@@ -780,10 +801,12 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: (ctx) => {
-      if (!ctx.groupId || !ctx.groupMembers?.length) {
+      const conversationId = getToolContextConversationId(ctx);
+      const conversationMembers = getToolContextConversationMembers(ctx);
+      if (!conversationId || !conversationMembers?.length) {
         return { active: false, definition: null as any };
       }
-      const otherMembers = ctx.groupMembers.filter(
+      const otherMembers = conversationMembers.filter(
         (m) => m.type === "user" || m.id !== ctx.actorId,
       );
       if (otherMembers.length === 0) {
@@ -805,7 +828,7 @@ export function registerCallableToolPlugins(): void {
         active: true,
         definition: {
           name: "send_to",
-          description: `Send a visible group message to one or more members in the current group. Mark whether it is a reply or a request, and provide a short summary for UI rendering. Recipients are the addressees. Inline mentions are optional body references only and should not be used by default. Available recipients: ${rosterDesc}.`,
+          description: `Send a visible conversation message to one or more members in the current conversation. Mark whether it is a reply or a request, and provide a short summary for UI rendering. Recipients are the addressees. Inline mentions are optional body references only and should not be used by default. Available recipients: ${rosterDesc}.`,
           parameters: {
             type: "object",
             properties: {
@@ -859,11 +882,15 @@ export function registerCallableToolPlugins(): void {
       }
 
       const session = await getSession(context.sessionId);
-      if (!session || !session.group_id) {
-        return JSON.stringify({ error: "Current session is not in a group" });
+      const conversationId = getMultiMemberConversationId(session);
+      if (!session || !conversationId) {
+        return JSON.stringify({
+          error:
+            "Current session is not attached to a multi-member conversation",
+        });
       }
 
-      const allMembers = await getGroupMembers(session.group_id);
+      const allMembers = await getConversationMembers(conversationId);
       const candidates = buildSendToCandidates(allMembers, context.actorId);
       const aliasMap = new Map<string, SendToCandidate[]>();
       for (const candidate of candidates) {
@@ -913,7 +940,7 @@ export function registerCallableToolPlugins(): void {
               `"${name}" not found. Did you mean ${bestMatch.candidate.label}?`,
             );
           } else {
-            errors.push(`"${name}" is not a member of this group.`);
+            errors.push(`"${name}" is not a member of this conversation.`);
           }
           continue;
         }
@@ -954,8 +981,8 @@ export function registerCallableToolPlugins(): void {
         });
       }
 
-      await sendGroupMessage({
-        groupId: session.group_id,
+      await sendConversationMessage({
+        conversationId,
         senderType: "actor",
         senderActorId: context.actorId,
         senderSessionId: context.sessionId,
@@ -989,14 +1016,14 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "ask_user_question",
       description:
-        "Ask one specific user in the current group a structured question. Supports single-select, multi-select, and an optional other input. Only that targeted user will be able to answer it.",
+        "Ask one specific user in the current conversation a structured question. Supports single-select, multi-select, and an optional other input. Only that targeted user will be able to answer it.",
       parameters: {
         type: "object",
         properties: {
           targetMemberId: {
             type: "string",
             description:
-              "The exact conversation member ID of the target user in the current group.",
+              "The exact conversation member ID of the target user in the current conversation.",
           },
           question: {
             type: "string",
@@ -1046,10 +1073,11 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: (ctx) => {
-      if (!ctx.groupId || !ctx.groupMembers?.length) {
+      const conversationMembers = getToolContextConversationMembers(ctx);
+      if (!getToolContextConversationId(ctx) || !conversationMembers?.length) {
         return { active: false, definition: null as any };
       }
-      const candidates = buildUserInteractionCandidates(ctx.groupMembers);
+      const candidates = buildUserInteractionCandidates(conversationMembers);
       if (candidates.length === 0) {
         return { active: false, definition: null as any };
       }
@@ -1058,14 +1086,14 @@ export function registerCallableToolPlugins(): void {
         active: true,
         definition: {
           name: "ask_user_question",
-          description: `Ask exactly one user in this group a structured question. Supports single-select, multi-select, and optional other input. Only the targeted user can answer it. Available targetMemberId values: ${candidateDirectory}.`,
+          description: `Ask exactly one user in this conversation a structured question. Supports single-select, multi-select, and optional other input. Only the targeted user can answer it. Available targetMemberId values: ${candidateDirectory}.`,
           parameters: {
             type: "object",
             properties: {
               targetMemberId: {
                 type: "string",
                 description:
-                  "The exact conversation member ID of the target user in the current group.",
+                  "The exact conversation member ID of the target user in the current conversation.",
                 enum: candidates.map((candidate) => candidate.memberId),
               },
               question: {
@@ -1125,25 +1153,29 @@ export function registerCallableToolPlugins(): void {
       }
 
       const session = await getSession(context.sessionId);
-      if (!session || !session.group_id) {
-        return JSON.stringify({ error: "Current session is not in a group" });
+      const conversationId = getMultiMemberConversationId(session);
+      if (!session || !conversationId) {
+        return JSON.stringify({
+          error:
+            "Current session is not attached to a multi-member conversation",
+        });
       }
 
-      const allMembers = await getGroupMembers(session.group_id);
+      const allMembers = await getConversationMembers(conversationId);
       const requesterMember = allMembers.find(
         (member) =>
           member.actor_id === context.actorId && member.state === "active",
       );
       if (!requesterMember) {
         return JSON.stringify({
-          error: "Current actor is not an active member of this group",
+          error: "Current actor is not an active member of this conversation",
         });
       }
 
       const candidates = buildUserInteractionCandidates(allMembers);
       if (candidates.length === 0) {
         return JSON.stringify({
-          error: "There are no active user members in this group",
+          error: "There are no active user members in this conversation",
         });
       }
 
@@ -1235,7 +1267,7 @@ export function registerCallableToolPlugins(): void {
 
       const interaction = await createQuestionInteractionRequest({
         workspaceId: context.workspaceId,
-        conversationId: session.group_id,
+        conversationId,
         requesterMemberId: requesterMember.id,
         requesterActorId: context.actorId,
         requesterUserId: context.userId,
@@ -1261,14 +1293,14 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "ask_user_form",
       description:
-        "Ask one specific user in the current group a structured multi-question form. Supports single-select, multi-select, and text input fields. Only that targeted user can answer it.",
+        "Ask one specific user in the current conversation a structured multi-question form. Supports single-select, multi-select, and text input fields. Only that targeted user can answer it.",
       parameters: {
         type: "object",
         properties: {
           targetMemberId: {
             type: "string",
             description:
-              "The exact conversation member ID of the target user in the current group.",
+              "The exact conversation member ID of the target user in the current conversation.",
           },
           title: {
             type: "string",
@@ -1311,10 +1343,11 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: (ctx) => {
-      if (!ctx.groupId || !ctx.groupMembers?.length) {
+      const conversationMembers = getToolContextConversationMembers(ctx);
+      if (!getToolContextConversationId(ctx) || !conversationMembers?.length) {
         return { active: false, definition: null as any };
       }
-      const candidates = buildUserInteractionCandidates(ctx.groupMembers);
+      const candidates = buildUserInteractionCandidates(conversationMembers);
       if (candidates.length === 0) {
         return { active: false, definition: null as any };
       }
@@ -1323,14 +1356,14 @@ export function registerCallableToolPlugins(): void {
         active: true,
         definition: {
           name: "ask_user_form",
-          description: `Ask exactly one user in this group a structured form with one or more fields. Only the targeted user can answer it. Available targetMemberId values: ${candidateDirectory}.`,
+          description: `Ask exactly one user in this conversation a structured form with one or more fields. Only the targeted user can answer it. Available targetMemberId values: ${candidateDirectory}.`,
           parameters: {
             type: "object",
             properties: {
               targetMemberId: {
                 type: "string",
                 description:
-                  "The exact conversation member ID of the target user in the current group.",
+                  "The exact conversation member ID of the target user in the current conversation.",
                 enum: candidates.map((candidate) => candidate.memberId),
               },
               title: {
@@ -1384,25 +1417,29 @@ export function registerCallableToolPlugins(): void {
       }
 
       const session = await getSession(context.sessionId);
-      if (!session || !session.group_id) {
-        return JSON.stringify({ error: "Current session is not in a group" });
+      const conversationId = getMultiMemberConversationId(session);
+      if (!session || !conversationId) {
+        return JSON.stringify({
+          error:
+            "Current session is not attached to a multi-member conversation",
+        });
       }
 
-      const allMembers = await getGroupMembers(session.group_id);
+      const allMembers = await getConversationMembers(conversationId);
       const requesterMember = allMembers.find(
         (member) =>
           member.actor_id === context.actorId && member.state === "active",
       );
       if (!requesterMember) {
         return JSON.stringify({
-          error: "Current actor is not an active member of this group",
+          error: "Current actor is not an active member of this conversation",
         });
       }
 
       const candidates = buildUserInteractionCandidates(allMembers);
       if (candidates.length === 0) {
         return JSON.stringify({
-          error: "There are no active user members in this group",
+          error: "There are no active user members in this conversation",
         });
       }
 
@@ -1436,7 +1473,7 @@ export function registerCallableToolPlugins(): void {
 
       const interaction = await createQuestionInteractionRequest({
         workspaceId: context.workspaceId,
-        conversationId: session.group_id,
+        conversationId,
         requesterMemberId: requesterMember.id,
         requesterActorId: context.actorId,
         requesterUserId: context.userId,
@@ -1501,10 +1538,11 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: (ctx) => {
-      if (!ctx.groupId || !ctx.groupMembers?.length) {
+      const conversationMembers = getToolContextConversationMembers(ctx);
+      if (!getToolContextConversationId(ctx) || !conversationMembers?.length) {
         return { active: false, definition: null as any };
       }
-      const candidates = buildUserInteractionCandidates(ctx.groupMembers);
+      const candidates = buildUserInteractionCandidates(conversationMembers);
       if (candidates.length === 0) {
         return { active: false, definition: null as any };
       }
@@ -1560,18 +1598,22 @@ export function registerCallableToolPlugins(): void {
       }
 
       const session = await getSession(context.sessionId);
-      if (!session || !session.group_id) {
-        return JSON.stringify({ error: "Current session is not in a group" });
+      const conversationId = getMultiMemberConversationId(session);
+      if (!session || !conversationId) {
+        return JSON.stringify({
+          error:
+            "Current session is not attached to a multi-member conversation",
+        });
       }
 
-      const allMembers = await getGroupMembers(session.group_id);
+      const allMembers = await getConversationMembers(conversationId);
       const requesterMember = allMembers.find(
         (member) =>
           member.actor_id === context.actorId && member.state === "active",
       );
       if (!requesterMember) {
         return JSON.stringify({
-          error: "Current actor is not an active member of this group",
+          error: "Current actor is not an active member of this conversation",
         });
       }
 
@@ -1592,7 +1634,7 @@ export function registerCallableToolPlugins(): void {
         actorId: context.actorId,
         workspaceId: context.workspaceId,
         sessionId: context.sessionId,
-        conversationId: session.group_id,
+        conversationId,
         userId: context.userId,
         namespacedToolName: relayToolName,
       });
@@ -1666,7 +1708,7 @@ export function registerCallableToolPlugins(): void {
 
       const existing = await findOpenRelayAuthorizationInteraction({
         workspaceId: context.workspaceId,
-        conversationId: session.group_id,
+        conversationId,
         requesterMemberId: requesterMember.id,
         relayDeviceId: relayTarget.deviceId,
         relayExposureId: relayTarget.exposureId,
@@ -1709,7 +1751,7 @@ export function registerCallableToolPlugins(): void {
 
       const interaction = await createRelayAuthorizationInteractionRequest({
         workspaceId: context.workspaceId,
-        conversationId: session.group_id,
+        conversationId,
         requesterMemberId: requesterMember.id,
         requesterActorId: context.actorId,
         requesterUserId: context.userId,
@@ -1742,7 +1784,8 @@ export function registerCallableToolPlugins(): void {
     kind: "callable",
     definition: {
       name: "invite_actor",
-      description: "Invite one or more new actors to join the current group.",
+      description:
+        "Invite one or more new actors to join the current conversation.",
       parameters: {
         type: "object",
         properties: {
@@ -1761,13 +1804,14 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: async (ctx): Promise<{ active: boolean; definition: any }> => {
-      if (!ctx.groupId) {
+      const conversationId = getToolContextConversationId(ctx);
+      if (!conversationId) {
         return { active: false, definition: null as any };
       }
 
       const candidates = await listInviteableActors({
         workspaceId: ctx.workspaceId,
-        groupId: ctx.groupId,
+        conversationId,
         actorId: ctx.actorId,
       });
 
@@ -1787,8 +1831,12 @@ export function registerCallableToolPlugins(): void {
       }
 
       const session = await getSession(context.sessionId);
-      if (!session || !session.group_id) {
-        return JSON.stringify({ error: "Current session is not in a group" });
+      const conversationId = getMultiMemberConversationId(session);
+      if (!session || !conversationId) {
+        return JSON.stringify({
+          error:
+            "Current session is not attached to a multi-member conversation",
+        });
       }
 
       const reason =
@@ -1801,7 +1849,7 @@ export function registerCallableToolPlugins(): void {
 
       const candidates = await listInviteableActors({
         workspaceId: session.workspace_id,
-        groupId: session.group_id,
+        conversationId,
         actorId: context.actorId,
       });
       const candidateById = new Map(
@@ -1895,13 +1943,13 @@ export function registerCallableToolPlugins(): void {
       );
 
       try {
-        const inviterMember = (await getGroupMembers(session.group_id)).find(
+        const inviterMember = (await getConversationMembers(conversationId)).find(
           (member: any) =>
             member.actor_id === context.actorId && member.state === "active",
         );
         const inviterName = inviterMember?.actor_name || "Unknown";
-        const addResult = await addMembersToGroup({
-          groupId: session.group_id,
+        const addResult = await addMembersToConversation({
+          conversationId,
           workspaceId: session.workspace_id,
           actorIds: uniqueActors.map((candidate) => candidate.id),
           initiator: {
@@ -1924,7 +1972,7 @@ export function registerCallableToolPlugins(): void {
           .map((candidate) => ({
             id: candidate.id,
             name: candidate.name,
-            reason: "Actor already in group",
+            reason: "Actor already in conversation",
           }));
 
         if (invitedActors.length === 0) {
@@ -1934,8 +1982,8 @@ export function registerCallableToolPlugins(): void {
           });
         }
 
-        await sendGroupMessage({
-          groupId: session.group_id,
+        await sendConversationMessage({
+          conversationId,
           senderType: "actor",
           senderActorId: context.actorId,
           senderSessionId: context.sessionId,
@@ -1962,8 +2010,8 @@ export function registerCallableToolPlugins(): void {
           skippedActors,
           message:
             invitedActors.length === 1
-              ? `${invitedActors[0]!.name} has been invited to the group and notified.`
-              : `${invitedActors.map((candidate) => candidate.name).join(", ")} have been invited to the group and notified.`,
+              ? `${invitedActors[0]!.name} has been invited to the conversation and notified.`
+              : `${invitedActors.map((candidate) => candidate.name).join(", ")} have been invited to the conversation and notified.`,
         });
       } catch (err: any) {
         throw new Error(`Failed to invite actor(s): ${err.message}`);
@@ -2762,7 +2810,7 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "sleep",
       description:
-        "Enter idle/sleeping state after completing your current work. You will be woken up when someone sends you a message in the group.",
+        "Enter idle/sleeping state after completing your current work. You will be woken up when someone sends you a message in this conversation.",
       parameters: {
         type: "object",
         properties: {
@@ -2776,11 +2824,11 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: (ctx) => ({
-      active: !!ctx.groupId,
+      active: !!getToolContextConversationId(ctx),
       definition: {
         name: "sleep",
         description:
-          "Enter idle/sleeping state after completing your current work. You will be woken up when someone sends you a message in the group.",
+          "Enter idle/sleeping state after completing your current work. You will be woken up when someone sends you a message in this conversation.",
         parameters: {
           type: "object",
           properties: {

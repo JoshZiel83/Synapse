@@ -160,8 +160,8 @@ export type ActorRole =
 
 export type ActorDocVisibility =
   | "always"
-  | "solo_only"
-  | "group_only"
+  | "direct_only"
+  | "multi_member_only"
   | "internal_only";
 
 export type CoreActorDocKey =
@@ -760,15 +760,11 @@ export type EventType =
   | "session.message.new"
   | "session.status.changed"
   | "session.thinking"
-  | "group.actor.runtime.updated"
-  | "group.updated"
-  | "group.member_joined"
-  | "group.member_kicked"
+  | "feed.item.created"
+  | "runtime.updated"
+  | "conversation.updated"
+  | "interaction.updated"
   | "actor.version_changed"
-  | "chat.feed.item.created"
-  | "chat.runtime.updated"
-  | "chat.conversation.updated"
-  | "chat.interaction.updated"
   | "mcp.config.changed"
   | "relay.connected"
   | "relay.disconnected"
@@ -832,7 +828,10 @@ export interface Session {
   id: UUID;
   workspaceId: UUID;
   actorId: UUID;
-  groupId?: UUID;
+  conversationId?: UUID;
+  conversationKind?: "direct" | "group";
+  conversationTitle?: string;
+  isMultiMemberConversation?: boolean;
   channelType: ChannelType;
   trigger: string;
   status: SessionStatus;
@@ -882,7 +881,7 @@ export interface ActorRuntimeWakeup {
 }
 
 export interface ActorRuntimeState {
-  groupId: UUID;
+  conversationId: UUID;
   sessionId: UUID;
   actorId: UUID;
   actorName: string;
@@ -1233,7 +1232,7 @@ export const ACTOR_DOC_TEMPLATES: ActorDocTemplate[] = [
     key: "relationship_with_team",
     title: "Relationship With Team",
     description: "How this actor views and works with other actors.",
-    defaultVisibility: "group_only",
+    defaultVisibility: "multi_member_only",
     defaultPriority: 96,
   },
   {
@@ -1247,7 +1246,7 @@ export const ACTOR_DOC_TEMPLATES: ActorDocTemplate[] = [
     key: "social_protocol",
     title: "Social Protocol",
     description: "When to speak, when to stay quiet, and what not to share.",
-    defaultVisibility: "group_only",
+    defaultVisibility: "multi_member_only",
     defaultPriority: 92,
   },
   {
@@ -1571,7 +1570,7 @@ export interface NormalizedMcpToolResult {
 
 // ============ Tool Plugin System ============
 
-export interface GroupMemberEntry {
+export interface ConversationMemberEntry {
   type: "actor" | "user" | "external";
   id: string;
   name: string;
@@ -1586,8 +1585,8 @@ export interface ToolResolveContext {
   sessionId: string;
   actorId: string;
   workspaceId: string;
-  groupId?: string;
-  groupMembers?: GroupMemberEntry[];
+  conversationId?: string;
+  conversationMembers?: ConversationMemberEntry[];
   userId?: string;
   availableSkills?: AvailableSkillSummary[];
 }
@@ -2351,46 +2350,6 @@ export interface McpSetupStep {
   metadata?: Record<string, unknown>;
 }
 
-// ============ Groups (Chat Groups) ============
-export interface Group {
-  id: UUID;
-  workspaceId: UUID;
-  title?: string;
-  createdBy?: UUID;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
-
-export interface GroupMember {
-  id: UUID;
-  groupId: UUID;
-  actorId?: UUID;
-  userId?: UUID;
-  sessionId?: UUID;
-  joinedAt: Timestamp;
-  // Joined fields
-  actorName?: string;
-  actorTitle?: string;
-  actorRole?: string;
-  userName?: string;
-  status?: SessionStatus;
-}
-
-export interface GroupMessage {
-  id: UUID;
-  groupId: UUID;
-  sessionId: UUID | "";
-  role: "user" | "assistant" | "system";
-  fromUserId?: UUID;
-  fromActorId?: UUID;
-  actorName?: string;
-  targetParticipantIds: UUID[];
-  content: string;
-  contentBlocks: CanonicalContentBlock[];
-  metadata: Record<string, unknown>;
-  createdAt: Timestamp;
-}
-
 export type ConversationParticipantType =
   | "actor"
   | "user"
@@ -2923,29 +2882,29 @@ function summarizeMembershipEvent(
         members.some((member) => member.memberId === initiatorMemberId)
       ) {
         if (nonInitiatorMembers.length === 0) {
-          return `${initiatorName} joined the group`;
+          return `${initiatorName} joined the conversation`;
         }
-        return `${initiatorName} started the group with ${formatConversationEntityList(nonInitiatorMembers)}`;
+        return `${initiatorName} started the conversation with ${formatConversationEntityList(nonInitiatorMembers)}`;
       }
-      return `${initiatorName} invited ${memberList} to the group`;
+      return `${initiatorName} invited ${memberList} to the conversation`;
     }
-    return `${memberList} joined the group`;
+    return `${memberList} joined the conversation`;
   }
 
   if (eventType === "member_kicked") {
     if (initiatorName) {
-      return `${initiatorName} removed ${memberList} from the group`;
+      return `${initiatorName} removed ${memberList} from the conversation`;
     }
-    return `${memberList} was removed from the group`;
+    return `${memberList} was removed from the conversation`;
   }
 
   if (initiatorName && initiatorMemberId && members.length === 1) {
     const leftMember = members[0];
     if (leftMember && leftMember.memberId === initiatorMemberId) {
-      return `${initiatorName} left the group`;
+      return `${initiatorName} left the conversation`;
     }
   }
-  return `${memberList} left the group`;
+  return `${memberList} left the conversation`;
 }
 
 export function summarizeConversationEvent(
@@ -3594,6 +3553,20 @@ function isNonEmptyActorDoc(doc: ActorDoc): boolean {
   });
 }
 
+export function normalizeActorDocVisibility(
+  value: unknown,
+): ActorDocVisibility {
+  if (
+    value === "always" ||
+    value === "direct_only" ||
+    value === "multi_member_only" ||
+    value === "internal_only"
+  ) {
+    return value;
+  }
+  return "always";
+}
+
 export function normalizeActorDocs(docs: ActorDocInput[]): ActorDoc[] {
   const standardDocs = new Map<CoreActorDocKey, ActorDoc>();
   const customDocs = new Map<UUID, ActorDoc>();
@@ -3619,7 +3592,9 @@ export function normalizeActorDocs(docs: ActorDocInput[]): ActorDoc[] {
         template?.title ||
         (doc.key === "custom" ? "Custom section" : doc.key),
       content: normalizeCanonicalContentBlocks(doc.content),
-      visibility: doc.visibility || template?.defaultVisibility || "always",
+      visibility: normalizeActorDocVisibility(
+        doc.visibility || template?.defaultVisibility || "always",
+      ),
       priority: Number.isFinite(doc.priority)
         ? doc.priority
         : template?.defaultPriority || 0,

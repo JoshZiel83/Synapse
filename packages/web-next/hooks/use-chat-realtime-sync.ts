@@ -9,13 +9,13 @@ import { useChatStore } from "@/stores/chat-store"
 
 export function useChatRealtimeSync({
   workspaceId,
-  selectedGroupId,
+  selectedConversationId,
 }: {
   workspaceId: string | null
-  selectedGroupId?: string | null
+  selectedConversationId?: string | null
 }) {
   const { notify } = useNotifications()
-  const loadGroups = useChatStore((state) => state.loadGroups)
+  const loadConversations = useChatStore((state) => state.loadConversations)
   const loadMessages = useChatStore((state) => state.loadMessages)
   const hydrateOutbox = useChatStore((state) => state.hydrateOutbox)
   const flushOutbox = useChatStore((state) => state.flushOutbox)
@@ -67,7 +67,7 @@ export function useChatRealtimeSync({
             .payload
           handleConversationUpdated(payload)
           if (workspaceId && payload.action === "created") {
-            void loadGroups(workspaceId)
+            void loadConversations(workspaceId)
           }
           break
         }
@@ -78,15 +78,15 @@ export function useChatRealtimeSync({
           break
         case "feed.resync.required":
           if (workspaceId) {
-            void loadGroups(workspaceId)
-            if (selectedGroupId) {
-              void loadMessages(workspaceId, selectedGroupId)
+            void loadConversations(workspaceId)
+            if (selectedConversationId) {
+              void loadMessages(workspaceId, selectedConversationId)
             }
           }
           break
         case "actor.action":
           if (workspaceId) {
-            void loadGroups(workspaceId)
+            void loadConversations(workspaceId)
           }
           break
         default:
@@ -98,20 +98,20 @@ export function useChatRealtimeSync({
       handleFeedItemCreated,
       handleInteractionUpdated,
       handleRuntimeUpdated,
-      loadGroups,
+      loadConversations,
       loadMessages,
       notify,
-      selectedGroupId,
+      selectedConversationId,
       workspaceId,
     ]
   )
 
   const handleSocketConnected = useCallback(
     (payload: { workspaceId: string; lastWorkspaceSequence: number }) => {
-      void loadGroups(payload.workspaceId)
+      void loadConversations(payload.workspaceId)
       flushOutbox(payload.workspaceId)
     },
-    [flushOutbox, loadGroups]
+    [flushOutbox, loadConversations]
   )
 
   useWebSocket({ workspaceId, onEvent, onConnected: handleSocketConnected })
@@ -119,6 +119,6 @@ export function useChatRealtimeSync({
   useEffect(() => {
     if (!workspaceId) return
     hydrateOutbox(workspaceId)
-    void loadGroups(workspaceId)
-  }, [workspaceId, hydrateOutbox, loadGroups])
+    void loadConversations(workspaceId)
+  }, [workspaceId, hydrateOutbox, loadConversations])
 }

@@ -5,20 +5,23 @@ import { useRouter } from 'next/navigation';
 
 import ChatAvatar from '@/app/dashboard/chat/chat-avatar';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
-import type { Group, GroupMember } from '@/stores/chat-store';
-import { getGroupMemberContactHref, getGroupMemberSubtitle } from './member-utils';
+import type { ConversationMember, ConversationSummary } from '@/stores/chat-store';
+import {
+  getConversationMemberContactHref,
+  getConversationMemberSubtitle,
+} from './member-utils';
 
-function summarizeMemberCounts(group: Group) {
-  const userCount = group.members.filter((member) => member.type === 'user').length;
-  const actorCount = group.members.filter((member) => member.type === 'actor').length;
-  const externalCount = group.members.filter((member) => member.type === 'external').length;
+function summarizeMemberCounts(conversation: ConversationSummary) {
+  const userCount = conversation.members.filter((member) => member.type === 'user').length;
+  const actorCount = conversation.members.filter((member) => member.type === 'actor').length;
+  const externalCount = conversation.members.filter((member) => member.type === 'external').length;
   const userLabel = `${userCount} user${userCount === 1 ? '' : 's'}`;
   const actorLabel = `${actorCount} actor${actorCount === 1 ? '' : 's'}`;
   if (externalCount === 0) return `${userLabel} · ${actorLabel}`;
   return `${userLabel} · ${actorLabel} · ${externalCount} external${externalCount === 1 ? '' : 's'}`;
 }
 
-function orderMembers(members: GroupMember[]) {
+function orderMembers(members: ConversationMember[]) {
   return [...members].sort((left, right) => {
     if (left.type !== right.type) {
       return left.type === 'actor' ? -1 : 1;
@@ -28,25 +31,27 @@ function orderMembers(members: GroupMember[]) {
   });
 }
 
-interface MobileGroupDetailsDialogProps {
-  group: Group;
+interface MobileConversationDetailsDialogProps {
+  conversation: ConversationSummary;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onMemberClick?: (member: GroupMember) => void;
+  onMemberClick?: (member: ConversationMember) => void;
   contactBasePath?: string;
 }
 
-export default function MobileGroupDetailsDialog({
-  group,
+export default function MobileConversationDetailsDialog({
+  conversation,
   open,
   onOpenChange,
   onMemberClick,
   contactBasePath = '/dashboard/contacts',
-}: MobileGroupDetailsDialogProps) {
+}: MobileConversationDetailsDialogProps) {
   const router = useRouter();
-  const title = group.title || group.participants.map((participant) => participant.name).join(', ');
-  const memberSummary = summarizeMemberCounts(group);
-  const orderedMembers = orderMembers(group.members);
+  const title =
+    conversation.title ||
+    conversation.participants.map((participant) => participant.name).join(', ');
+  const memberSummary = summarizeMemberCounts(conversation);
+  const orderedMembers = orderMembers(conversation.members);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -54,7 +59,7 @@ export default function MobileGroupDetailsDialog({
         showCloseButton={false}
         className="inset-0 top-0 start-0 h-[100dvh] max-w-none translate-x-0 rtl:translate-x-0 translate-y-0 gap-0 rounded-none border-0 p-0 ring-0"
       >
-        <DialogTitle className="sr-only">Group details</DialogTitle>
+        <DialogTitle className="sr-only">Conversation details</DialogTitle>
         <div className="flex min-h-svh flex-col bg-background">
           <header className="sticky top-0 z-20 border-b border-border bg-background px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
             <div className="relative flex items-center justify-between">
@@ -68,7 +73,7 @@ export default function MobileGroupDetailsDialog({
               </button>
               <div className="pointer-events-none absolute inset-x-12 left-1/2 -translate-x-1/2 text-center">
                 <h1 className="truncate text-sm font-semibold text-foreground">
-                  Group details
+                  Conversation details
                 </h1>
               </div>
               <div className="flex h-8 w-8 items-center justify-center text-muted-foreground">
@@ -82,8 +87,8 @@ export default function MobileGroupDetailsDialog({
               <div className="flex flex-col items-center text-center">
                 <ChatAvatar
                   name={title}
-                  avatarUrl={group.avatarUrl}
-                  entityType="group"
+                  avatarUrl={conversation.avatarUrl}
+                  entityType="conversation"
                   size="lg"
                   className="size-16"
                 />
@@ -102,8 +107,11 @@ export default function MobileGroupDetailsDialog({
               </div>
               <div className="divide-y divide-border/70 rounded-3xl border border-border/70 bg-background">
                 {orderedMembers.map((member) => {
-                  const href = getGroupMemberContactHref(member, contactBasePath);
-                  const subtitle = getGroupMemberSubtitle(member);
+                  const href = getConversationMemberContactHref(
+                    member,
+                    contactBasePath
+                  );
+                  const subtitle = getConversationMemberSubtitle(member);
                   const canOpen = Boolean(onMemberClick || href);
                   return (
                   <button

@@ -36,7 +36,11 @@ import { createConversationEvent, getConversation, listConversationMembers } fro
 import { buildNormalizedMessageContent } from '../conversation/message-content.js';
 import { enqueueSessionWakeup } from '../session/runtime.js';
 import { getSession } from '../session/service.js';
-import { addMembersToGroup, createGroup, getGroupMembers } from '../group/service.js';
+import {
+  addMembersToConversation,
+  createConversation,
+  getConversationMembers,
+} from '../conversation/chat-service.js';
 
 type AutomationRuleRow = {
   id: string;
@@ -1769,7 +1773,7 @@ async function resolveExistingConversationId(rule: AutomationRule) {
     }
   }
 
-  const created = await createGroup({
+  const created = await createConversation({
     workspaceId: rule.workspaceId,
     createdBy: operatorUserId,
     title: rule.delivery.conversationTitle || rule.name,
@@ -1777,8 +1781,8 @@ async function resolveExistingConversationId(rule: AutomationRule) {
   });
 
   if (participantUserIds.length > 0) {
-    await addMembersToGroup({
-      groupId: created.group.id,
+    await addMembersToConversation({
+      conversationId: created.conversation.id,
       workspaceId: rule.workspaceId,
       userIds: participantUserIds,
       initiator: {
@@ -1794,15 +1798,15 @@ async function resolveExistingConversationId(rule: AutomationRule) {
        SET reused_conversation_id = $2,
            updated_at = NOW()
        WHERE rule_id = $1`,
-      [rule.id, created.group.id],
+      [rule.id, created.conversation.id],
     );
-    rule.delivery.reusedConversationId = created.group.id;
+    rule.delivery.reusedConversationId = created.conversation.id;
   }
 
   return {
-    conversationId: created.group.id as string,
+    conversationId: created.conversation.id as string,
     sessionId: undefined,
-    createdConversationId: created.group.id as string,
+    createdConversationId: created.conversation.id as string,
   };
 }
 
@@ -1882,7 +1886,9 @@ async function wakeAutomationTargets(params: {
   createdItemId: string;
   actorRecipientIds: string[];
 }) {
-  const memberRows = await getGroupMembers(params.conversationId).catch(() => [] as any[]);
+  const memberRows = await getConversationMembers(params.conversationId).catch(
+    () => [] as any[]
+  );
   const sessionsByActor = new Map<string, { sessionId: string }>();
   for (const member of memberRows) {
     if (member.actor_id && member.session_id && member.state === 'active') {

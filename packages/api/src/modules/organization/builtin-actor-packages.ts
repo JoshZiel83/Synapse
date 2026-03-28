@@ -163,8 +163,8 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
         {
           key: 'social_protocol',
           title: 'Social Protocol',
-          content: textBlocks('In group contexts, only speak when you add clarity: summarize decisions, identify owners, or call out blockers. Do not flood the room with management theater.'),
-          visibility: 'group_only',
+          content: textBlocks('In shared conversation contexts, only speak when you add clarity: summarize decisions, identify owners, or call out blockers. Do not flood the room with management theater.'),
+          visibility: 'multi_member_only',
           priority: 92,
         },
         {

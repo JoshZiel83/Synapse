@@ -10,7 +10,7 @@ import type {
   CanonicalToolCall,
   CanonicalToolResult,
   AssistantToolHistory,
-  GroupMemberEntry,
+  ConversationMemberEntry,
   ToolResolveContext,
   CanonicalContentBlock,
   ProviderContextWindow,
@@ -52,7 +52,7 @@ import { getMcpVersion } from "../mcp-plugins/instance-manager.js";
 import { ingestResponseMedia } from "./content-ingest.js";
 import {
   buildDefaultUserMention,
-  groupMemberEntryToEntityRef,
+  conversationMemberEntryToEntityRef,
   parseInlineReferenceSegments,
   resolveInlineReferenceSegments,
   type InlineReferenceResolveOptions,
@@ -67,7 +67,7 @@ import {
   shouldRebuildBranchState,
 } from "./engine-branches.js";
 import { DEFAULT_MODEL_ATTEMPT_POLICY } from "../model-groups/defaults.js";
-import { getGroupMembers as getLiveGroupMembers } from "../group/service.js";
+import { getConversationMembers as getLiveConversationMembers } from "../conversation/chat-service.js";
 import {
   createToolCall,
   createToolExecutionAttempt,
@@ -286,12 +286,12 @@ async function buildMergedResponseContentBlocks(
 }
 
 function buildInlineReferenceOptions(params: {
-  groupMembers?: GroupMemberEntry[];
+  conversationMembers?: ConversationMemberEntry[];
   userId?: string;
   userName?: string;
 }): InlineReferenceResolveOptions | undefined {
-  const mentionCandidates = (params.groupMembers || []).map(
-    groupMemberEntryToEntityRef,
+  const mentionCandidates = (params.conversationMembers || []).map(
+    conversationMemberEntryToEntityRef,
   );
   const defaultUser = buildDefaultUserMention({
     userId: params.userId,
@@ -314,17 +314,17 @@ interface Subordinate {
   summary: string;
 }
 
-async function loadToolResolveGroupMembers(params: {
-  groupId?: string;
+async function loadToolResolveConversationMembers(params: {
+  conversationId?: string;
   actorId: string;
-  fallback?: GroupMemberEntry[];
-}): Promise<GroupMemberEntry[] | undefined> {
-  if (!params.groupId) {
+  fallback?: ConversationMemberEntry[];
+}): Promise<ConversationMemberEntry[] | undefined> {
+  if (!params.conversationId) {
     return params.fallback;
   }
 
-  const members = await getLiveGroupMembers(params.groupId);
-  const entries: GroupMemberEntry[] = [];
+  const members = await getLiveConversationMembers(params.conversationId);
+  const entries: ConversationMemberEntry[] = [];
 
   for (const member of members) {
     if (member.state !== "active") continue;
@@ -419,7 +419,7 @@ function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
 
 function buildSleepWithoutSendToReminder(params: {
   participantCount: number;
-  otherMembers: GroupMemberEntry[];
+  otherMembers: ConversationMemberEntry[];
   allowConfirmSleepWithoutReply: boolean;
 }): CanonicalContextItem {
   const otherMemberName = params.otherMembers[0]?.name || "the other member";
@@ -445,9 +445,9 @@ function buildSleepWithoutSendToReminder(params: {
     surface: "internal",
     parts: textBlocks(
       params.allowConfirmSleepWithoutReply
-        ? `You called \`sleep\` before using \`send_to\` in this wakeup. Your reasoning and tool calls are invisible to the group unless you use \`send_to\`. ` +
+        ? `You called \`sleep\` before using \`send_to\` in this wakeup. Your reasoning and tool calls are invisible to other conversation members unless you use \`send_to\`. ` +
             `Before sleeping, either send a visible update, result, handoff, clarification, or explicit "no action needed" message to the relevant member(s), or if the wakeup is truly unrelated to you and the message already reached the correct assignee, call \`sleep\` again now to confirm that no visible reply from you is needed.`
-        : `You called \`sleep\` again without using \`send_to\`. Your reasoning and tool calls are still invisible to the group. ` +
+        : `You called \`sleep\` again without using \`send_to\`. Your reasoning and tool calls are still invisible to other conversation members. ` +
             `If no visible reply from you is genuinely needed because the wakeup is entirely unrelated to you and the correct assignee already received it, you may remain asleep. Otherwise, use \`send_to\` now before sleeping.`,
     ),
   };
@@ -511,8 +511,7 @@ export async function actorThink(
     sessionId?: string;
     turnId?: string;
     conversationId?: string;
-    groupId?: string;
-    groupMembers?: GroupMemberEntry[];
+    conversationMembers?: ConversationMemberEntry[];
     userId?: string;
     availableSkills?: AvailableSkillSummary[];
     onStatus?: (status: string) => Promise<void>;
@@ -593,28 +592,28 @@ export async function actorThink(
   // MCP tools (already resolved and authorized by tool-resolver.ts)
   let mcpToolDefs = options?.mcpTools || [];
   let mcpToolNames = new Set(mcpToolDefs.map((t) => t.name));
-  let currentToolGroupMembers = options?.groupMembers;
+  let currentToolConversationMembers = options?.conversationMembers;
   const buildResolveCtx = (): ToolResolveContext => ({
     sessionId: options?.sessionId || "",
     actorId: actor.id,
     workspaceId: workspaceId || "",
-    groupId: options?.groupId,
-    groupMembers: currentToolGroupMembers,
+    conversationId: options?.conversationId,
+    conversationMembers: currentToolConversationMembers,
     userId: options?.userId,
     availableSkills: options?.availableSkills,
   });
   const getInlineReferenceOptions = () =>
     buildInlineReferenceOptions({
-      groupMembers: currentToolGroupMembers,
+      conversationMembers: currentToolConversationMembers,
       userId: options?.userId,
     });
   const refreshBuiltinTools = async (): Promise<
     import("@synapse/shared").ToolDefinition[]
   > => {
-    currentToolGroupMembers = await loadToolResolveGroupMembers({
-      groupId: options?.groupId,
+    currentToolConversationMembers = await loadToolResolveConversationMembers({
+      conversationId: options?.conversationId,
       actorId: actor.id,
-      fallback: currentToolGroupMembers,
+      fallback: currentToolConversationMembers,
     });
     const resolvedBuiltin = await resolveBuiltinTools(buildResolveCtx());
     const filteredBuiltin = resolvedBuiltin.filter(
@@ -645,11 +644,11 @@ export async function actorThink(
   let finalDraftProvider: AIProvider | null = null;
   let sendToCalledThisTurn = false;
   let sleepWithoutSendToReminderCount = 0;
-  const participantCount = options?.groupId
-    ? (options.groupMembers?.length || 0) + 1
+  const participantCount = options?.conversationId
+    ? (options?.conversationMembers?.length || 0) + 1
     : 0;
   const enforceVisibleReplyBeforeSleep =
-    !!options?.sessionId && !!options?.groupId && participantCount > 1;
+    !!options?.sessionId && !!options?.conversationId && participantCount > 1;
 
   // Common fields for logAIRequest
   const logCommon = {
@@ -1194,7 +1193,7 @@ export async function actorThink(
                   actorId: actor.id,
                   workspaceId,
                   sessionId: options?.sessionId,
-                  conversationId: options?.groupId || options?.conversationId,
+                  conversationId: options?.conversationId,
                   userId: options?.userId,
                   relayToolName: tc.toolName,
                   toolInput: tc.input,
@@ -1482,7 +1481,7 @@ export async function actorThink(
             appendPrivateTailItems([
               buildSleepWithoutSendToReminder({
                 participantCount,
-                otherMembers: options?.groupMembers || [],
+                otherMembers: options?.conversationMembers || [],
                 allowConfirmSleepWithoutReply: participantCount > 2,
               }),
             ]);

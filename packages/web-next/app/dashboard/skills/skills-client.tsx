@@ -2458,10 +2458,10 @@ export function WorkspaceSkillCreationPage() {
 
     Promise.all([
       api.getActors(workspaceId),
-      api.getGroups(workspaceId),
+      api.getConversations(workspaceId),
       api.getWorkspaceMembers(workspaceId),
     ])
-      .then(([actorsResponse, groupsResponse, membersResponse]) => {
+      .then(([actorsResponse, conversationsResponse, membersResponse]) => {
         if (cancelled) return
         setActors(
           Array.isArray(actorsResponse)
@@ -2469,8 +2469,10 @@ export function WorkspaceSkillCreationPage() {
             : []
         )
         setConversations(
-          Array.isArray(groupsResponse?.groups)
-            ? groupsResponse.groups.map(normalizeConversationOption)
+          Array.isArray(conversationsResponse?.conversations)
+            ? conversationsResponse.conversations.map(
+                normalizeConversationOption
+              )
             : []
         )
         setMembers(
@@ -3081,19 +3083,26 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
     }
     setLoading(true)
     try {
-      const [skillResponse, actorsResponse, groupsResponse, membersResponse] =
+      const [
+        skillResponse,
+        actorsResponse,
+        conversationsResponse,
+        membersResponse,
+      ] =
         await Promise.all([
           api.getSkillMarketplaceItem(skillId, workspaceId),
           api.getActors(workspaceId),
-          api.getGroups(workspaceId),
+          api.getConversations(workspaceId),
           api.getWorkspaceMembers(workspaceId),
         ])
 
       const nextActors = Array.isArray(actorsResponse)
         ? actorsResponse.map(normalizeActorOption)
         : []
-      const nextConversations = Array.isArray(groupsResponse?.groups)
-        ? groupsResponse.groups.map(normalizeConversationOption)
+      const nextConversations = Array.isArray(
+        conversationsResponse?.conversations
+      )
+        ? conversationsResponse.conversations.map(normalizeConversationOption)
         : []
       const nextMembers = Array.isArray(membersResponse?.data)
         ? membersResponse.data.map(normalizeMemberOption)

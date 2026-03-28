@@ -12,7 +12,7 @@ import type {
   ConversationEventContextPolicy,
   ConversationEventTimelinePolicy,
 } from "@synapse/shared/types";
-import { extractText } from "@synapse/shared";
+import { extractText, MULTI_MEMBER_CONVERSATION_KIND } from "@synapse/shared";
 import { buildNormalizedMessageContent } from "./message-content.js";
 import { itemPartsToCanonicalContentBlocks } from "./message-content.js";
 import { getFileUrlById } from "../files/service.js";
@@ -1037,7 +1037,11 @@ export async function getVisibleConversationItemsForMember(params: {
   limit?: number;
 }) {
   const { conversationId, memberId, beforeSequence, limit = 200 } = params;
-  const values: any[] = [conversationId, memberId];
+  const values: any[] = [
+    conversationId,
+    memberId,
+    MULTI_MEMBER_CONVERSATION_KIND,
+  ];
   let extra = "";
   if (beforeSequence !== undefined) {
     values.push(beforeSequence);
@@ -1065,7 +1069,7 @@ export async function getVisibleConversationItemsForMember(params: {
        AND ci.scope = 'shared'
        AND ci.surface = 'visible'
        AND (
-         (c.kind = 'group' AND ci.item_type = 'message' AND ci.subtype <> 'model_error_notice')
+         (c.kind = $3 AND ci.item_type = 'message' AND ci.subtype <> 'model_error_notice')
          OR ci.author_member_id = $2
          OR NOT EXISTS (SELECT 1 FROM conversation_item_targets cit0 WHERE cit0.item_id = ci.id)
          OR EXISTS (
@@ -1133,7 +1137,11 @@ export async function getContextConversationItemsForMember(params: {
   limit?: number;
 }) {
   const { conversationId, memberId, beforeSequence, limit = 200 } = params;
-  const values: any[] = [conversationId, memberId];
+  const values: any[] = [
+    conversationId,
+    memberId,
+    MULTI_MEMBER_CONVERSATION_KIND,
+  ];
   let extra = "";
   if (beforeSequence !== undefined) {
     values.push(beforeSequence);
@@ -1163,7 +1171,7 @@ export async function getContextConversationItemsForMember(params: {
          (
            ci.surface = 'visible'
            AND (
-             (c.kind = 'group' AND ci.item_type = 'message' AND ci.subtype <> 'model_error_notice')
+             (c.kind = $3 AND ci.item_type = 'message' AND ci.subtype <> 'model_error_notice')
              OR ci.author_member_id = $2
              OR NOT EXISTS (SELECT 1 FROM conversation_item_targets cit0 WHERE cit0.item_id = ci.id)
              OR EXISTS (
@@ -1238,7 +1246,7 @@ export async function getLastVisibleConversationItem(conversationId: string) {
   return item || null;
 }
 
-export async function listUserGroupConversations(
+export async function listUserMultiMemberConversations(
   workspaceId: string,
   userId: string,
 ) {
@@ -1279,9 +1287,9 @@ export async function listUserGroupConversations(
      JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $2 AND cm.state = 'active'
      LEFT JOIN conversation_reads cr ON cr.conversation_id = c.id AND cr.user_id = $2
      WHERE c.workspace_id = $1
-       AND c.kind = 'group'
+       AND c.kind = $3
      ORDER BY c.updated_at DESC, c.created_at DESC`,
-    [workspaceId, userId],
+    [workspaceId, userId, MULTI_MEMBER_CONVERSATION_KIND],
   );
 
   return result.rows;

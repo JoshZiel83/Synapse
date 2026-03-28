@@ -6,7 +6,7 @@ import {
 } from "@synapse/shared";
 import type { ActorDoc, ToolDefinition } from "@synapse/shared";
 
-export interface GroupMemberInfo {
+export interface ConversationMemberInfo {
   id?: string;
   member_type?: string;
   actor_id?: string;
@@ -51,13 +51,15 @@ function parseActorDocs(actor: any): ActorDoc[] {
 
 function isDocVisible(
   doc: ActorDoc,
-  mode: "solo" | "group",
+  mode: "direct_conversation" | "multi_member_conversation",
   includeInternal: boolean,
 ): boolean {
   if (doc.visibility === "always") return true;
   if (doc.visibility === "internal_only") return includeInternal;
-  if (mode === "group") return doc.visibility === "group_only";
-  return doc.visibility === "solo_only";
+  if (mode === "multi_member_conversation") {
+    return doc.visibility === "multi_member_only";
+  }
+  return doc.visibility === "direct_only";
 }
 
 function blocksToPromptText(blocks: ActorDoc["content"]): string {
@@ -88,7 +90,10 @@ function summarizeDoc(doc: ActorDoc, maxLength = 160): string {
   return file ? `Attached file: ${file.originalName}` : "";
 }
 
-function renderDocSections(actor: any, mode: "solo" | "group"): string {
+function renderDocSections(
+  actor: any,
+  mode: "direct_conversation" | "multi_member_conversation",
+): string {
   const visibleDocs = parseActorDocs(actor)
     .filter((doc) => isDocVisible(doc, mode, true))
     .sort((left, right) => right.priority - left.priority);
@@ -105,10 +110,10 @@ function renderDocSections(actor: any, mode: "solo" | "group"): string {
     .join("\n\n");
 }
 
-function buildRosterEntry(member: GroupMemberInfo): string {
+function buildRosterEntry(member: ConversationMemberInfo): string {
   const title = member.actor_title || member.actor_role || "Actor";
   const docs = parseActorDocs(member)
-    .filter((doc) => isDocVisible(doc, "group", false))
+    .filter((doc) => isDocVisible(doc, "multi_member_conversation", false))
     .sort((left, right) => right.priority - left.priority);
 
   const summary = docs.map((doc) => summarizeDoc(doc, 120)).find(Boolean) || "";
@@ -121,11 +126,11 @@ function buildRosterEntry(member: GroupMemberInfo): string {
 }
 
 /**
- * Build the system prompt for an actor in a group chat.
+ * Build the system prompt for an actor in a conversation.
  * Structure:
  *   1. Actor identity & profile documents
  *   2. Memory usage rules
- *   3. Group member roster with type + database UUID
+ *   3. Conversation member roster with type + database UUID
  *   4. send_to tool description & collaboration rules
  *   5. MCP plugin tools (if any)
  */
@@ -134,12 +139,14 @@ export function buildActorPrompt(
   _subordinates?: any,
   _sessionContext?: any,
   extraTools?: ToolDefinition[],
-  groupMembers?: GroupMemberInfo[],
+  conversationMembers?: ConversationMemberInfo[],
   availableSkills?: AvailableSkillSummary[],
 ): { system: string } {
   const parts: string[] = [];
-  const mode: "solo" | "group" =
-    groupMembers && groupMembers.length > 0 ? "group" : "solo";
+  const mode: "direct_conversation" | "multi_member_conversation" =
+    conversationMembers && conversationMembers.length > 0
+      ? "multi_member_conversation"
+      : "direct_conversation";
   const source = actorSource(actor);
   const actorName = source.name || actor.name || "Actor";
   const actorTitle =
@@ -197,24 +204,24 @@ export function buildActorPrompt(
     );
   }
 
-  if (groupMembers && groupMembers.length > 0) {
+  if (conversationMembers && conversationMembers.length > 0) {
     const exampleRecipient =
-      groupMembers.find((member) => member.user_id)?.user_name ||
-      groupMembers.find(
+      conversationMembers.find((member) => member.user_id)?.user_name ||
+      conversationMembers.find(
         (member) =>
           member.member_type === "external" || member.transport_external_id,
       )?.transport_display_name ||
-      groupMembers.find(
+      conversationMembers.find(
         (member) =>
           member.member_type === "external" || member.transport_external_id,
       )?.display_name ||
       "User";
     const roster = [
-      "# Group Members",
+      "# Conversation Members",
       "",
-      "You are in a group chat with the following members:",
+      "You are in a conversation with the following members:",
       "",
-      ...groupMembers.flatMap((member) => {
+      ...conversationMembers.flatMap((member) => {
         if (member.user_id) {
           const participantIdNote = member.id
             ? `; participantId=${member.id}`
@@ -253,11 +260,11 @@ export function buildActorPrompt(
 
     parts.push(
       `# Message Format\n\n` +
-        `Messages in the group chat use this format:\n` +
-        `- \`[YYYY-MM-DD HH:mm UTC | SenderName → RecipientName]: message\` — a public group message addressed to a specific recipient at that exact time\n` +
+        `Messages in this conversation use this format:\n` +
+        `- \`[YYYY-MM-DD HH:mm UTC | SenderName → RecipientName]: message\` — a visible conversation message addressed to a specific recipient at that exact time\n` +
         `- \`[System]: event description\` — a system event (member joined/left, profile updated)\n\n` +
         `# Communication\n\n` +
-        `All visible communication uses the \`send_to\` tool. Group messages are public to all members. Recipient labels indicate who you are addressing, not private visibility. Every visible reply must target a specific recipient.\n\n` +
+        `All visible communication uses the \`send_to\` tool. Conversation messages are shared with all members. Recipient labels indicate who you are addressing, not private visibility. Every visible reply must target a specific recipient.\n\n` +
         `## send_to\n` +
         `Send a message to one or more members by name.\n` +
         `Parameters:\n` +
@@ -267,32 +274,32 @@ export function buildActorPrompt(
         `- \`message\`: your visible message content\n` +
         `- To mention a member inside \`message\`, use either \`<Mention name="${exampleRecipient}"/>\` or an explicit id form such as \`<Mention type="actor" id="..."/>\`.\n` +
         `- Name matching is convenient but may be ambiguous when multiple members share the same display name. If that happens, use \`type="actor|user|external"\` plus \`id="..."\`, or use an explicit id attribute such as \`actorId\`, \`userId\`, \`participantId\`, \`memberId\`, or \`externalUserKey\`.\n` +
-        `- The group roster above includes the ids you need for disambiguation.\n` +
+        `- The conversation roster above includes the ids you need for disambiguation.\n` +
         `- \`recipients\` and inline \`<Mention .../>\` mean different things: \`recipients\` decides who the visible message is addressed to, while \`<Mention .../>\` is only an inline reference inside the sentence body.\n` +
         `- Do not mechanically mention the recipient at the start of every message. If the body does not need an explicit inline person reference, do not add a mention.\n` +
         `- Use inline mention only when the wording itself needs to point to someone, such as referring to a third party, calling out a subset in a multi-person message, or making the sentence clearer.\n\n` +
         `## Other tools\n` +
         `- \`get_current_time\`: Get the current wall-clock time when timing matters or you need to reference "now"\n` +
-        `- \`invite_actor\`: Invite one or more currently listed candidate actors into this group when the current roster lacks a needed skill\n` +
+        `- \`invite_actor\`: Invite one or more currently listed candidate actors into this conversation when the current roster lacks a needed skill\n` +
         `- \`sleep\`: When you have finished your work, call sleep. You will be automatically woken when someone sends you a message\n` +
         `- \`memory_search\`: Search durable memories when recalled context is insufficient\n` +
         `- \`create_memory\`: Save a durable established fact for future reference\n` +
         `${availableSkills && availableSkills.length > 0 ? "- `read_skill`: Load an installed skill package on demand when a listed skill clearly applies\n" : ""}\n` +
         `## Workflow\n` +
-        `1. Read the current public group context and identify whether someone is asking you to act\n` +
+        `1. Read the current shared conversation context and identify whether someone is asking you to act\n` +
         `2. Do the work using your tools and profile\n` +
         `3. Use \`send_to\` to reply to whoever sent you the message (user or actor), and set \`intent\` plus \`summary\` correctly\n` +
         `4. If you need help from another actor, use \`send_to\` for current members or \`invite_actor\` for listed non-members\n` +
         `5. When done, call \`sleep\` so you can be woken only when needed\n\n` +
         `## Important\n` +
         `- **You MUST use \`send_to\` to reply.** Plain text output is internal reasoning only.\n` +
-        `- Your internal tool calls (MCP tools, memory_search, create_memory, and so on) are not visible to the group.\n` +
+        `- Your internal tool calls (MCP tools, memory_search, create_memory, and so on) are not visible to other conversation members.\n` +
         `- Only \`send_to\` produces visible messages.\n` +
-        `- Do not call \`sleep\` until you have decided whether the group needs a visible message from you.\n` +
+        `- Do not call \`sleep\` until you have decided whether the conversation needs a visible message from you.\n` +
         `- If this wakeup leads to a result, handoff, clarification, or explicit "no action needed" decision that others should know, use \`send_to\` first and only then call \`sleep\`.\n` +
         `- In a two-member conversation, you must use \`send_to\` before \`sleep\`.\n` +
-        `- In larger groups, you may sleep without \`send_to\` only when the wakeup is truly unrelated to you and the intended assignee already received the message, so your own visible reply would add no value.\n` +
-        `- All visible group messages are public to the whole group.\n` +
+        `- In larger multi-member conversations, you may sleep without \`send_to\` only when the wakeup is truly unrelated to you and the intended assignee already received the message, so your own visible reply would add no value.\n` +
+        `- All visible conversation messages are shared with the whole conversation.\n` +
         `- A \`send_to\` recipient indicates who should read or act on the message first; it does not make the message private.\n` +
         `- A \`send_to\` recipient already tells the UI who the message is for. Do not duplicate that with a leading \`<Mention .../>\` unless the sentence itself needs an inline reference.\n` +
         `- If a public message is not addressed to you, treat it as shared context unless you are explicitly asked to respond or need to step in to unblock the work.\n` +
@@ -302,7 +309,7 @@ export function buildActorPrompt(
   } else {
     parts.push(
       `# Working Mode\n\n` +
-        `You are working independently with no group roster.\n` +
+        `You are working in a conversation with no additional participant roster.\n` +
         `Handle the task directly. Do not defer obvious work.\n` +
         `Use recalled memory when the task depends on durable facts or prior decisions, and use \`memory_search\` if you need deeper retrieval.\n` +
         `Use \`get_current_time\` when the task depends on the current time or date.\n` +

@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { RelayAuthorizationScope } from '@synapse/shared';
 import type { NormalizedMcpToolResult } from '@synapse/shared/types';
 import { actorSubject, authorizeAction } from '../access/service.js';
-import { getGroupMembers } from '../group/service.js';
+import { getConversationMembers } from '../conversation/chat-service.js';
 import {
   createRelayAuthorizationInteractionRequest,
   findOpenRelayAuthorizationInteraction,
@@ -181,7 +181,7 @@ export async function maybeAutoBridgeRelayApproval(
     return {
       status: 'missing_context',
       note:
-        'This relay tool requires user approval, but no group conversation context is available to create an authorization request automatically.',
+        'This relay tool requires user approval, but no shared conversation context is available to create an authorization request automatically.',
     };
   }
 
@@ -201,7 +201,7 @@ export async function maybeAutoBridgeRelayApproval(
     };
   }
 
-  const members = await getGroupMembers(params.conversationId);
+  const members = await getConversationMembers(params.conversationId);
   const requesterMember = members.find(
     (member) => member.actor_id === params.actorId && member.state === 'active',
   );

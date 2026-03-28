@@ -5,52 +5,60 @@ import { MessageSquare } from "lucide-react"
 import { useParams, useRouter } from "next/navigation"
 import { type CanonicalContentBlock } from "@synapse/shared"
 
-import GroupChat, { GroupChatSkeleton } from "@/app/dashboard/chat/group-chat"
+import ConversationChat, {
+  ConversationChatSkeleton,
+} from "@/app/dashboard/chat/conversation-chat"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { Button } from "@/components/ui/button"
 import { useChatStore } from "@/stores/chat-store"
 
 export default function MobileChatDetailPage() {
-  const params = useParams<{ groupId: string }>()
+  const params = useParams<{ conversationId: string }>()
   const router = useRouter()
-  const groupId = Array.isArray(params.groupId)
-    ? params.groupId[0]
-    : params.groupId
+  const conversationId = Array.isArray(params.conversationId)
+    ? params.conversationId[0]
+    : params.conversationId
   const { workspaceId } = useWorkspace()
 
-  const groups = useChatStore((state) => state.groups)
+  const conversations = useChatStore((state) => state.conversations)
   const messages = useChatStore((state) => state.messages)
-  const loadingGroups = useChatStore((state) => state.loadingGroups)
+  const loadingConversations = useChatStore(
+    (state) => state.loadingConversations
+  )
   const loadingMessages = useChatStore((state) => state.loadingMessages)
   const runtimeMap = useChatStore((state) => state.runtimeMap)
-  const loadGroups = useChatStore((state) => state.loadGroups)
+  const loadConversations = useChatStore((state) => state.loadConversations)
   const loadMessages = useChatStore((state) => state.loadMessages)
-  const selectGroup = useChatStore((state) => state.selectGroup)
+  const selectConversation = useChatStore((state) => state.selectConversation)
   const sendMessage = useChatStore((state) => state.sendMessage)
-  const markRead = useChatStore((state) => state.markRead)
+  const markConversationRead = useChatStore(
+    (state) => state.markConversationRead
+  )
 
   useEffect(() => {
-    if (!groupId) return
-    selectGroup(groupId)
-  }, [groupId, selectGroup])
+    if (!conversationId) return
+    selectConversation(conversationId)
+  }, [conversationId, selectConversation])
 
   useEffect(() => {
-    if (!workspaceId || !groupId) return
-    void loadMessages(workspaceId, groupId)
-    void markRead(workspaceId, groupId)
-  }, [groupId, loadMessages, markRead, workspaceId])
+    if (!workspaceId || !conversationId) return
+    void loadMessages(workspaceId, conversationId)
+    void markConversationRead(workspaceId, conversationId)
+  }, [conversationId, loadMessages, markConversationRead, workspaceId])
 
-  const selectedGroup = groups.find((group) => group.id === groupId)
+  const selectedConversation = conversations.find(
+    (conversation) => conversation.id === conversationId
+  )
 
   async function handleSend(
     contentBlocks: CanonicalContentBlock[],
     targetParticipantIds?: string[],
     targetActorIds?: string[]
   ) {
-    if (!workspaceId || !groupId) return
+    if (!workspaceId || !conversationId) return
     await sendMessage(
       workspaceId,
-      groupId,
+      conversationId,
       contentBlocks,
       targetParticipantIds,
       targetActorIds
@@ -74,23 +82,23 @@ export default function MobileChatDetailPage() {
   }
 
   return (
-    <div className="flex h-[100dvh] min-h-0 w-full max-w-full min-w-0 flex-1 flex-col overflow-hidden">
-      {selectedGroup ? (
-        <GroupChat
-          group={selectedGroup}
+      <div className="flex h-[100dvh] min-h-0 w-full max-w-full min-w-0 flex-1 flex-col overflow-hidden">
+      {selectedConversation ? (
+        <ConversationChat
+          conversation={selectedConversation}
           messages={messages}
           loading={loadingMessages}
-          actorRuntimes={runtimeMap[groupId]}
+          actorRuntimes={conversationId ? runtimeMap[conversationId] : undefined}
           onSend={handleSend}
           onBack={handleBack}
           workspaceId={workspaceId}
-          onRefreshGroup={() => loadGroups(workspaceId)}
+          onRefreshConversation={() => loadConversations(workspaceId)}
           viewportLocked
           mobileMentionPickerWorkspaceId={workspaceId}
           contactBasePath="/m/contacts"
         />
-      ) : loadingGroups ? (
-        <GroupChatSkeleton mobile />
+      ) : loadingConversations ? (
+        <ConversationChatSkeleton mobile />
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
           <div className="mb-4 flex size-16 items-center justify-center rounded-3xl bg-muted">

@@ -528,7 +528,7 @@ CREATE TABLE actor_version_docs (
   doc_key VARCHAR(40) NOT NULL,
   title VARCHAR(255) NOT NULL,
   visibility VARCHAR(20) NOT NULL DEFAULT 'always'
-    CHECK (visibility IN ('always', 'solo_only', 'group_only', 'internal_only')),
+    CHECK (visibility IN ('always', 'direct_only', 'multi_member_only', 'internal_only')),
   priority INT NOT NULL DEFAULT 0,
   content_blocks JSONB NOT NULL DEFAULT '[]',
   created_at TIMESTAMPTZ DEFAULT NOW(),

@@ -7,15 +7,16 @@ import {
   SESSION_LOCK_TTL,
   REDIS_CHANNELS,
   DEFAULT_MAX_CONCURRENT_SESSIONS,
+  isMultiMemberConversationKind,
   nowISO,
   textBlocks,
 } from '@synapse/shared';
-import type { ActorAction, GroupMemberEntry, ProviderContextWindow } from '@synapse/shared';
+import type { ActorAction, ConversationMemberEntry, ProviderContextWindow } from '@synapse/shared';
 import type { CanonicalContextItem } from '@synapse/shared/types';
 import { actorThink } from '../modules/ai/index.js';
 import { buildActorPrompt } from '../modules/ai/prompt-builder.js';
 import {
-  buildGroupContextItems,
+  buildConversationContextItems,
   buildSessionContextItems,
   conversationItemToContextItem,
 } from '../modules/ai/context-builder.js';
@@ -33,7 +34,10 @@ import {
   addSessionMessage,
   consumeInterrupts,
 } from '../modules/session/service.js';
-import { getGroupMembers, sleepActor } from '../modules/group/service.js';
+import {
+  getConversationMembers,
+  sleepActor,
+} from '../modules/conversation/chat-service.js';
 import {
   attachPendingWakeupsToTurn,
   getPendingWakeupCount,
@@ -70,13 +74,13 @@ function deriveThinkingPhase(status: string): ThinkingPhase {
 }
 
 async function loadNewContextItems(params: {
-  groupId: string;
+  conversationId: string;
   memberId: string;
   actorId: string;
   sinceSequence: number;
 }) {
   const visibleItems = await getContextConversationItemsForMember({
-    conversationId: params.groupId,
+    conversationId: params.conversationId,
     memberId: params.memberId,
     limit: 200,
   });
@@ -158,12 +162,16 @@ export function startSessionThinkingWorker() {
 
         const previousStatus = session.status;
         if (session.status !== 'running') {
+          const conversationId =
+            isMultiMemberConversationKind(session.conversation_kind)
+              ? session.conversation_id
+              : undefined;
           await updateSessionStatus(sessionId, 'running', { errorMessage: null });
           await emitEvent({
             type: 'session.status.changed',
             workspaceId,
             payload: {
-              groupId: session.group_id,
+              conversationId,
               sessionId,
               actorId,
               status: 'running',
@@ -176,13 +184,15 @@ export function startSessionThinkingWorker() {
             return { success: false, reason: 'session disappeared after status update' };
           }
         }
-
-        const groupId = session.group_id;
+        const conversationId =
+          isMultiMemberConversationKind(session.conversation_kind)
+            ? session.conversation_id
+            : undefined;
 
         await emitEvent({
           type: 'actor.thinking',
           workspaceId,
-          payload: { actorId, sessionId, groupId },
+          payload: { actorId, sessionId, conversationId },
           timestamp: nowISO(),
         });
 
@@ -190,7 +200,7 @@ export function startSessionThinkingWorker() {
           currentStatusText = status;
           currentPhase = deriveThinkingPhase(status);
           const thinkingPayload = {
-            groupId,
+            conversationId,
             sessionId,
             actorId,
             actorName: thinkingActorName || session.actor_name || 'Unknown',
@@ -226,23 +236,30 @@ export function startSessionThinkingWorker() {
           return { success: true, reason: 'wakeup already handled' };
         }
 
-        let groupMembers: any[] | undefined;
-        let promptGroupMembers: any[] | undefined;
-        let memberEntries: GroupMemberEntry[] = [];
-        let groupUserId: string | undefined;
+        let conversationMembers: any[] | undefined;
+        let promptConversationMembers: any[] | undefined;
+        let memberEntries: ConversationMemberEntry[] = [];
+        let conversationUserId: string | undefined;
         let actorMemberId: string | undefined;
-        let lastKnownGroupSequence = 0;
+        let lastKnownConversationSequence = 0;
         let contextItems: CanonicalContextItem[];
         let contextWindow: ProviderContextWindow;
-        if (groupId) {
-          groupMembers = await getGroupMembers(groupId);
-          promptGroupMembers = await getGroupMembers(groupId, { useProfileSnapshot: true });
-          actorMemberId = groupMembers.find((member: any) => member.actor_id === actorId && member.state === 'active')?.id;
+        if (conversationId) {
+          conversationMembers = await getConversationMembers(conversationId);
+          promptConversationMembers = await getConversationMembers(
+            conversationId,
+            {
+              useProfileSnapshot: true,
+            },
+          );
+          actorMemberId = conversationMembers.find((member: any) => member.actor_id === actorId && member.state === 'active')?.id;
           if (!actorMemberId) {
-            throw new Error(`Actor ${actorId} is not an active member of group ${groupId}`);
+            throw new Error(
+              `Actor ${actorId} is not an active member of conversation ${conversationId}`,
+            );
           }
 
-          for (const member of groupMembers) {
+          for (const member of conversationMembers) {
             if (member.actor_id && member.actor_id !== actorId && member.state === 'active') {
               memberEntries.push({
                 type: 'actor',
@@ -257,8 +274,8 @@ export function startSessionThinkingWorker() {
                 participantId: member.id,
                 name: member.user_name || 'User',
               });
-              if (!groupUserId) {
-                groupUserId = member.user_id;
+              if (!conversationUserId) {
+                conversationUserId = member.user_id;
               }
             } else if (member.member_type === 'external' && member.state === 'active') {
               const linkedUserName =
@@ -288,11 +305,11 @@ export function startSessionThinkingWorker() {
           }
 
           const visibleItems = await getContextConversationItemsForMember({
-            conversationId: groupId,
+            conversationId,
             memberId: actorMemberId,
             limit: 200,
           });
-          const built = buildGroupContextItems({
+          const built = buildConversationContextItems({
             visibleItems,
             actorId,
             sessionMessages,
@@ -300,7 +317,7 @@ export function startSessionThinkingWorker() {
             wakeups: pendingWakeups,
           });
           contextItems = built.items;
-          lastKnownGroupSequence = built.lastSequence;
+          lastKnownConversationSequence = built.lastSequence;
         } else {
           contextItems = buildSessionContextItems(sessionMessages, {
             crossTurnToolHistory: false,
@@ -354,11 +371,11 @@ export function startSessionThinkingWorker() {
 
         const resolvedModelPlan = await resolveModelPlan(actorId, workspaceId, {
           conversationId: session.conversation_id,
-          userId: groupUserId || userId,
+          userId: conversationUserId || userId,
         });
         const primaryModel = resolvedModelPlan?.candidates[0] || null;
         let finalContextItems = contextItems;
-        if (primaryModel?.crossTurnToolHistory && !groupId) {
+        if (primaryModel?.crossTurnToolHistory && !conversationId) {
           finalContextItems = buildSessionContextItems(sessionMessages, {
             crossTurnToolHistory: true,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
@@ -393,7 +410,7 @@ export function startSessionThinkingWorker() {
             workspaceId,
             sessionId,
             conversationId: session.conversation_id,
-            userId: groupUserId || userId,
+            userId: conversationUserId || userId,
           });
           if (mcpTools.tools.length > 0) {
             console.log(`[session-thinking] Resolved ${mcpTools.tools.length} MCP tools for actor ${actorId}`);
@@ -409,8 +426,8 @@ export function startSessionThinkingWorker() {
         });
 
         const actorPromptSource = (() => {
-          if (!promptGroupMembers) return actor;
-          const selfMember = promptGroupMembers.find(
+          if (!promptConversationMembers) return actor;
+          const selfMember = promptConversationMembers.find(
             (member: any) => member.actor_id === actorId && member.state === 'active',
           );
           if (!selfMember) return actor;
@@ -443,7 +460,7 @@ export function startSessionThinkingWorker() {
           undefined,
           undefined,
           mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
-          promptGroupMembers || groupMembers,
+          promptConversationMembers || conversationMembers,
           availableSkills,
         );
 
@@ -454,7 +471,7 @@ export function startSessionThinkingWorker() {
           triggerType: pendingWakeups[0]!.sourceType,
           triggerItemId: pendingWakeups[0]!.sourceItemId,
           metadata: {
-            triggerUserId: userId || groupUserId || null,
+            triggerUserId: userId || conversationUserId || null,
             wakeupIds: pendingWakeups.map((wakeup) => wakeup.wakeupId),
             wakeupCount: pendingWakeups.length,
           },
@@ -477,7 +494,6 @@ export function startSessionThinkingWorker() {
         }, Math.floor(SESSION_LOCK_TTL / 2));
 
         let result;
-        const thinkStartSequence = lastKnownGroupSequence;
 
         try {
           await emitThinkingStatus('Calling AI model...');
@@ -492,9 +508,8 @@ export function startSessionThinkingWorker() {
               sessionId,
               turnId: turn.id,
               conversationId: session.conversation_id,
-              groupId,
-              groupMembers: memberEntries,
-              userId: groupUserId || userId,
+              conversationMembers: memberEntries,
+              userId: conversationUserId || userId,
               availableSkills,
               onStatus: emitThinkingStatus,
               mcpTools: mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
@@ -503,14 +518,14 @@ export function startSessionThinkingWorker() {
               mcpRefresh: mcpTools.refresh,
               mcpSetTurnId: mcpTools.setTurnId,
               system,
-              checkNewMessages: groupId && actorMemberId ? async () => {
+              checkNewMessages: conversationId && actorMemberId ? async () => {
                 const update = await loadNewContextItems({
-                  groupId,
+                  conversationId,
                   memberId: actorMemberId!,
                   actorId,
-                  sinceSequence: lastKnownGroupSequence,
+                  sinceSequence: lastKnownConversationSequence,
                 });
-                lastKnownGroupSequence = update.maxSequence;
+                lastKnownConversationSequence = update.maxSequence;
                 if (update.items.length > 0) {
                   await attachPendingWakeupsToTurn(sessionId, turn.id);
                   await publishSessionRuntime(workspaceId, sessionId, {
@@ -532,7 +547,7 @@ export function startSessionThinkingWorker() {
         await executeActorActions(workspaceId, actorId, result.actions, {
           sessionId,
           turnId: turn.id,
-          userId: groupUserId || userId,
+          userId: conversationUserId || userId,
           conversationId: session.conversation_id,
         });
 
@@ -602,7 +617,13 @@ export function startSessionThinkingWorker() {
         await emitEvent({
           type: 'actor.action',
           workspaceId,
-          payload: { actorId, sessionId, groupId, actions: result.actions, turnId: turn.id },
+          payload: {
+            actorId,
+            sessionId,
+            conversationId,
+            actions: result.actions,
+            turnId: turn.id,
+          },
           timestamp: nowISO(),
         });
 
@@ -621,7 +642,7 @@ export function startSessionThinkingWorker() {
             type: 'session.status.changed',
             workspaceId,
             payload: {
-              groupId,
+              conversationId,
               sessionId,
               actorId,
               status: 'queued',
@@ -719,7 +740,10 @@ export function startSessionThinkingWorker() {
           type: 'session.status.changed',
           workspaceId,
           payload: {
-            groupId: failedSession?.group_id,
+            conversationId:
+              isMultiMemberConversationKind(failedSession?.conversation_kind)
+                ? failedSession.conversation_id
+                : undefined,
             sessionId,
             actorId,
             actorName: thinkingActorName,

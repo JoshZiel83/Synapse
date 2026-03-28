@@ -4,8 +4,8 @@ import {
   textBlock,
   type CanonicalContentBlock,
   type ConversationEntityRef,
+  type ConversationMemberEntry,
 } from "@synapse/shared";
-import type { GroupMemberEntry } from "@synapse/shared";
 import { getFileRecord } from "../files/service.js";
 
 type InlineReferenceSegment =
@@ -397,8 +397,8 @@ export async function resolveInlineReferenceSegments(
   return { blocks, warnings };
 }
 
-export function groupMemberEntryToEntityRef(
-  member: GroupMemberEntry,
+export function conversationMemberEntryToEntityRef(
+  member: ConversationMemberEntry,
 ): ConversationEntityRef {
   if (member.type === "actor") {
     return {

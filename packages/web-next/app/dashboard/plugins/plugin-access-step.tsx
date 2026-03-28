@@ -576,10 +576,10 @@ export default function PluginAccessStep({
 
   const loadAccessState = async () => {
     if (!workspaceId || !resolvedResourceId) return;
-    const [accessData, actorData, groupData, memberData] = await Promise.all([
+    const [accessData, actorData, conversationData, memberData] = await Promise.all([
       accessAdapter.loadAccess(workspaceId, resolvedResourceId),
       api.getActors(workspaceId),
-      api.getGroups(workspaceId),
+      api.getConversations(workspaceId),
       api.getWorkspaceMembers(workspaceId),
     ]);
 
@@ -590,7 +590,7 @@ export default function PluginAccessStep({
       setGrantScope(suggestedGrantScope);
     }
     setActors(Array.isArray(actorData) ? actorData : actorData?.actors || []);
-    setConversations(groupData.groups || []);
+    setConversations(conversationData?.conversations || []);
     setMembers(memberData.data || []);
   };
 

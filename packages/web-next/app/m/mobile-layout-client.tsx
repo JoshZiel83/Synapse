@@ -84,14 +84,16 @@ function MobileOnboardingGuard({
 function MobileShell({ children }: { children: ReactNode }) {
   const pathname = usePathname()
   const { workspaceId } = useWorkspace()
-  const selectedGroupId = useChatStore((state) => state.selectedGroupId)
+  const selectedConversationId = useChatStore(
+    (state) => state.selectedConversationId
+  )
   const [tabBarClearance, setTabBarClearance] = useState(
     DEFAULT_MOBILE_TAB_BAR_CLEARANCE
   )
   const hideTabBar =
     /^\/m\/chat\/[^/]+$/.test(pathname) || pathname === "/m/welcome"
 
-  useChatRealtimeSync({ workspaceId, selectedGroupId })
+  useChatRealtimeSync({ workspaceId, selectedConversationId })
 
   const pageMotion = getMobilePageMotion(pathname)
   const shellStyle = {

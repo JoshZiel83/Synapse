@@ -81,8 +81,8 @@ export const VISIBILITY_OPTIONS: Array<{
   label: string
 }> = [
   { value: "always", label: "Always" },
-  { value: "solo_only", label: "Solo only" },
-  { value: "group_only", label: "Group only" },
+  { value: "direct_only", label: "Direct only" },
+  { value: "multi_member_only", label: "Multi-member only" },
   { value: "internal_only", label: "Internal only" },
 ]
 

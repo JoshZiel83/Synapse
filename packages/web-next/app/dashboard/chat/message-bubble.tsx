@@ -51,13 +51,13 @@ import remarkGfm from "remark-gfm"
 import { extractText } from "@synapse/shared"
 import { runtimeToAvatarStatus } from "@/stores/chat-store"
 import type { ServerToolCall } from "@/stores/chat-store"
-import type { GroupMember } from "@/stores/chat-store"
+import type { ConversationMember } from "@/stores/chat-store"
 import { cn, resolveFileUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
 import {
   formatTransportKindLabel,
   getAuthorContactHref,
-  getGroupMemberSubtitle,
+  getConversationMemberSubtitle,
   resolveAuthorMember,
 } from "./member-utils"
 import ChatParticipantHoverCard from "./chat-participant-hover-card"
@@ -85,7 +85,7 @@ interface MessageBubbleProps {
   serverToolCalls?: ServerToolCall[]
   citationSources?: Record<string, { url: string; title: string }>
   coordination?: boolean
-  groupMembers?: GroupMember[]
+  conversationMembers?: ConversationMember[]
   targetParticipantIds?: string[]
   targetActorIds?: string[]
   workspaceActors?: Array<{
@@ -103,7 +103,7 @@ interface MessageBubbleProps {
   viewerUserId?: string
   contactBasePath?: string
   retryPending?: boolean
-  onParticipantClick?: (member: GroupMember) => void
+  onParticipantClick?: (member: ConversationMember) => void
   onRetryModelError?: (
     sessionId: string,
     itemId: string
@@ -1181,7 +1181,7 @@ function InteractionCard({
 }
 
 type MessageRecipient = Pick<
-  GroupMember,
+  ConversationMember,
   | "id"
   | "participantId"
   | "type"
@@ -1192,7 +1192,7 @@ type MessageRecipient = Pick<
   | "avatarUrl"
   | "linkedUserName"
 > & {
-  member?: GroupMember
+  member?: ConversationMember
 }
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
@@ -1225,18 +1225,18 @@ const AUDIO_EXTENSIONS = [
 ]
 
 function resolveRecipients(
-  groupMembers: GroupMember[] | undefined,
+  conversationMembers: ConversationMember[] | undefined,
   targetParticipantIds: string[] | undefined,
   targetActorIds: string[] | undefined,
   workspaceActors: MessageBubbleProps["workspaceActors"]
 ) {
   const participantIds = Array.from(new Set(targetParticipantIds || []))
   const actorIds = Array.from(new Set(targetActorIds || []))
-  const memberMap = new Map<string, GroupMember>()
+  const memberMap = new Map<string, ConversationMember>()
   const recipients: MessageRecipient[] = []
   const actorIdsRepresentedByParticipantTargets = new Set<string>()
 
-  for (const member of groupMembers || []) {
+  for (const member of conversationMembers || []) {
     memberMap.set(member.participantId || member.memberId, member)
   }
 
@@ -1265,7 +1265,7 @@ function resolveRecipients(
       continue
     }
 
-    const representedMember = (groupMembers || []).find(
+    const representedMember = (conversationMembers || []).find(
       (member) => member.type === "actor" && member.id === actorId
     )
     if (representedMember) {
@@ -1318,10 +1318,10 @@ function resolveRecipients(
 
 function resolveMentionMember(
   mention: ConversationEntityRef,
-  groupMembers: GroupMember[] | undefined,
+  conversationMembers: ConversationMember[] | undefined,
   workspaceActors: MessageBubbleProps["workspaceActors"]
 ) {
-  const members = groupMembers || []
+  const members = conversationMembers || []
   const matchedMember =
     members.find(
       (member) =>
@@ -1459,7 +1459,7 @@ function RecipientChip({
   contactBasePath,
 }: {
   recipient: MessageRecipient
-  onClick?: (member: GroupMember) => void
+  onClick?: (member: ConversationMember) => void
   isMobile: boolean
   contactBasePath?: string
 }) {
@@ -1535,7 +1535,7 @@ function RecipientSummary({
 }: {
   recipients: MessageRecipient[]
   hasExplicitTargets: boolean
-  onRecipientClick?: (member: GroupMember) => void
+  onRecipientClick?: (member: ConversationMember) => void
   isMobile: boolean
   contactBasePath?: string
 }) {
@@ -1830,14 +1830,14 @@ function MessageContentBlocks({
   blocks,
   isUser,
   enableTablePreview,
-  groupMembers,
+  conversationMembers,
   workspaceActors,
   contactBasePath,
 }: {
   blocks: RenderedMessageBlock[]
   isUser: boolean
   enableTablePreview: boolean
-  groupMembers?: GroupMember[]
+  conversationMembers?: ConversationMember[]
   workspaceActors?: MessageBubbleProps["workspaceActors"]
   contactBasePath?: string
 }) {
@@ -1856,7 +1856,7 @@ function MessageContentBlocks({
             blocks={group.blocks}
             isUser={isUser}
             enableTablePreview={enableTablePreview}
-            groupMembers={groupMembers}
+            conversationMembers={conversationMembers}
             workspaceActors={workspaceActors}
             contactBasePath={contactBasePath}
           />
@@ -1869,19 +1869,19 @@ function MessageContentBlocks({
 function MentionInlineBlock({
   block,
   isUser,
-  groupMembers,
+  conversationMembers,
   workspaceActors,
   contactBasePath,
 }: {
   block: MentionBlock
   isUser: boolean
-  groupMembers?: GroupMember[]
+  conversationMembers?: ConversationMember[]
   workspaceActors?: MessageBubbleProps["workspaceActors"]
   contactBasePath?: string
 }) {
   const member = resolveMentionMember(
     block.mention,
-    groupMembers,
+    conversationMembers,
     workspaceActors
   )
   const name = member?.name || block.mention.name?.trim() || "Unknown"
@@ -1907,14 +1907,14 @@ function InlineMessageSequence({
   blocks,
   isUser,
   enableTablePreview,
-  groupMembers,
+  conversationMembers,
   workspaceActors,
   contactBasePath,
 }: {
   blocks: InlineRenderedMessageBlock[]
   isUser: boolean
   enableTablePreview: boolean
-  groupMembers?: GroupMember[]
+  conversationMembers?: ConversationMember[]
   workspaceActors?: MessageBubbleProps["workspaceActors"]
   contactBasePath?: string
 }) {
@@ -1951,7 +1951,7 @@ function InlineMessageSequence({
             key={block.id}
             block={block.block}
             isUser={isUser}
-            groupMembers={groupMembers}
+            conversationMembers={conversationMembers}
             workspaceActors={workspaceActors}
             contactBasePath={contactBasePath}
           />
@@ -2130,7 +2130,7 @@ export default function MessageBubble({
   serverToolCalls,
   citationSources,
   coordination,
-  groupMembers,
+  conversationMembers,
   targetParticipantIds,
   targetActorIds,
   workspaceActors,
@@ -2154,28 +2154,28 @@ export default function MessageBubble({
   const recipients = useMemo(
     () =>
       resolveRecipients(
-        groupMembers,
+        conversationMembers,
         targetParticipantIds,
         targetActorIds,
         workspaceActors
       ),
-    [groupMembers, targetActorIds, targetParticipantIds, workspaceActors]
+    [conversationMembers, targetActorIds, targetParticipantIds, workspaceActors]
   )
   const hasExplicitTargets =
     (targetParticipantIds?.length || 0) > 0 || (targetActorIds?.length || 0) > 0
   const viewerUserMember = useMemo(() => {
     if (!viewerUserId) return undefined
-    return groupMembers?.find(
+    return conversationMembers?.find(
       (member) => member.type === "user" && member.id === viewerUserId
     )
-  }, [groupMembers, viewerUserId])
+  }, [conversationMembers, viewerUserId])
   const authorMember = useMemo(
-    () => resolveAuthorMember(author, groupMembers),
-    [author, groupMembers]
+    () => resolveAuthorMember(author, conversationMembers),
+    [author, conversationMembers]
   )
   const authorContactHref = useMemo(
-    () => getAuthorContactHref(author, groupMembers, contactBasePath),
-    [author, contactBasePath, groupMembers]
+    () => getAuthorContactHref(author, conversationMembers, contactBasePath),
+    [author, contactBasePath, conversationMembers]
   )
   const canOpenAuthorDetails = Boolean(
     isMobile && authorMember && onParticipantClick
@@ -2219,7 +2219,7 @@ export default function MessageBubble({
     }
     if (author?.memberType === "external") {
       return authorMember
-        ? getGroupMemberSubtitle(authorMember)
+        ? getConversationMemberSubtitle(authorMember)
         : "External participant"
     }
     if (author?.memberType === "user") {
@@ -2414,7 +2414,7 @@ export default function MessageBubble({
                     blocks={renderedBlocks}
                     isUser={false}
                     enableTablePreview={enableTablePreview}
-                    groupMembers={groupMembers}
+                    conversationMembers={conversationMembers}
                     workspaceActors={workspaceActors}
                     contactBasePath={contactBasePath}
                   />
@@ -2625,7 +2625,7 @@ export default function MessageBubble({
                 blocks={renderedBlocks}
                 isUser={isUser}
                 enableTablePreview={enableTablePreview}
-                groupMembers={groupMembers}
+                conversationMembers={conversationMembers}
                 workspaceActors={workspaceActors}
                 contactBasePath={contactBasePath}
               />

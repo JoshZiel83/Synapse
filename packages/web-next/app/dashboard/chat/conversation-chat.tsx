@@ -19,19 +19,23 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { ArrowDown, Pencil, Check, MoreHorizontal } from "lucide-react"
 import MessageBubble from "./message-bubble"
-import type { FeedMessage, Group, GroupMember } from "@/stores/chat-store"
+import type {
+  ConversationMember,
+  ConversationSummary,
+  FeedMessage,
+} from "@/stores/chat-store"
 import { useAuthStore } from "@/stores/auth-store"
 import { api } from "@/lib/api"
 import ChatAvatar from "./chat-avatar"
 import ChatMemberStrip from "./chat-member-strip"
 import ChatParticipantDetailDialog from "./chat-participant-detail-dialog"
-import GroupMemberPickerDialog from "./group-member-picker-dialog"
-import MobileGroupDetailsDialog from "./mobile-group-details-dialog"
+import ConversationMemberPickerDialog from "./conversation-member-picker-dialog"
+import MobileConversationDetailsDialog from "./mobile-conversation-details-dialog"
 import TransportKindIcon from "./transport-kind-icon"
 import { useChatStore } from "@/stores/chat-store"
 
-interface GroupChatProps {
-  group: Group
+interface ConversationChatProps {
+  conversation: ConversationSummary
   messages: FeedMessage[]
   loading: boolean
   actorRuntimes?: Record<string, ActorRuntimeState>
@@ -42,20 +46,20 @@ interface GroupChatProps {
   ) => Promise<void> | void
   onBack?: () => void
   workspaceId?: string
-  onRefreshGroup?: () => Promise<void> | void
+  onRefreshConversation?: () => Promise<void> | void
   viewportLocked?: boolean
   mobileMentionPickerWorkspaceId?: string
   contactBasePath?: string
 }
 
-function summarizeMemberCounts(group: Group) {
-  const userCount = group.members.filter(
+function summarizeMemberCounts(conversation: ConversationSummary) {
+  const userCount = conversation.members.filter(
     (member) => member.type === "user"
   ).length
-  const actorCount = group.members.filter(
+  const actorCount = conversation.members.filter(
     (member) => member.type === "actor"
   ).length
-  const externalCount = group.members.filter(
+  const externalCount = conversation.members.filter(
     (member) => member.type === "external"
   ).length
   const userLabel = `${userCount} user${userCount === 1 ? "" : "s"}`
@@ -81,7 +85,9 @@ function summarizeCurrentUserProcessingActors(runtimes: ActorRuntimeState[]) {
   return `${names[0]}, ${names[1]} +${names.length - 2} are processing your messages`
 }
 
-function buildMentionSearchTerms(member: Group["members"][number]) {
+function buildMentionSearchTerms(
+  member: ConversationSummary["members"][number]
+) {
   return Array.from(
     new Set(
       [
@@ -154,7 +160,11 @@ function ChatThreadSkeleton() {
   )
 }
 
-export function GroupChatSkeleton({ mobile = false }: { mobile?: boolean }) {
+export function ConversationChatSkeleton({
+  mobile = false,
+}: {
+  mobile?: boolean
+}) {
   return (
     <div
       className={cn(
@@ -214,49 +224,50 @@ export function GroupChatSkeleton({ mobile = false }: { mobile?: boolean }) {
   )
 }
 
-export default function GroupChat({
-  group,
+export default function ConversationChat({
+  conversation,
   messages,
   loading,
   actorRuntimes,
   onSend,
   onBack,
   workspaceId,
-  onRefreshGroup,
+  onRefreshConversation,
   viewportLocked = false,
   mobileMentionPickerWorkspaceId,
   contactBasePath = "/dashboard/contacts",
-}: GroupChatProps) {
+}: ConversationChatProps) {
   const { user } = useAuthStore()
   const handleInteractionUpdated = useChatStore(
     (state) => state.handleInteractionUpdated
   )
   const currentUserId = user?.id || ""
-  const [titleDraft, setTitleDraft] = useState(group.title || "")
+  const [titleDraft, setTitleDraft] = useState(conversation.title || "")
   const [editingTitle, setEditingTitle] = useState(false)
   const [savingTitle, setSavingTitle] = useState(false)
   const [avatarUploading, setAvatarUploading] = useState(false)
   const [memberDialogOpen, setMemberDialogOpen] = useState(false)
-  const groupAvatarInputRef = useRef<HTMLInputElement>(null)
+  const conversationAvatarInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const initialScrollPendingRef = useRef(true)
-  const hasObservedLoadingForGroupRef = useRef(false)
+  const hasObservedLoadingForConversationRef = useRef(false)
   const [showJumpButton, setShowJumpButton] = useState(false)
-  const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
+  const [conversationDetailsOpen, setConversationDetailsOpen] =
+    useState(false)
   const [participantDetailOpen, setParticipantDetailOpen] = useState(false)
   const [selectedParticipantMember, setSelectedParticipantMember] =
-    useState<GroupMember | null>(null)
+    useState<ConversationMember | null>(null)
   const [retryingMessageIds, setRetryingMessageIds] = useState<string[]>([])
   const [workspaceActors, setWorkspaceActors] = useState<Actor[]>([])
   const prevMsgCount = useRef(messages.length)
   const mentionableParticipants = useMemo<ChatComposerParticipant[]>(() => {
-    const inGroupActorIds = new Set(
-      group.members
+    const inConversationActorIds = new Set(
+      conversation.members
         .filter((member) => member.type === "actor")
         .map((member) => member.id)
     )
-    const inGroupActors = group.members
+    const inConversationActors = conversation.members
       .filter((member) => member.type === "actor")
       .map((member) => ({
         id: member.id,
@@ -271,10 +282,10 @@ export default function GroupChat({
         title: member.title,
         avatarUrl: member.avatarUrl,
         emoji: member.emoji,
-        description: `${member.title || member.role || "Actor"} · In this chat`,
+        description: `${member.title || member.role || "Actor"} · In this conversation`,
         searchTerms: buildMentionSearchTerms(member),
       }))
-    const inGroupParticipants = group.members
+    const inConversationParticipants = conversation.members
       .filter((member) => member.type !== "actor")
       .map((member) => ({
         id: member.participantId,
@@ -302,8 +313,8 @@ export default function GroupChat({
             : "Workspace user",
         searchTerms: buildMentionSearchTerms(member),
       }))
-    const outOfGroupActors = workspaceActors
-      .filter((actor) => !inGroupActorIds.has(actor.id))
+    const outOfConversationActors = workspaceActors
+      .filter((actor) => !inConversationActorIds.has(actor.id))
       .map((actor) => {
         const normalized = normalizeChiefActorOption(actor)
         return {
@@ -317,7 +328,7 @@ export default function GroupChat({
           title: normalized.title,
           avatarUrl: normalized.avatarUrl,
           emoji: normalized.emoji,
-          description: `${normalized.title || normalized.role} · Not in this chat`,
+          description: `${normalized.title || normalized.role} · Not in this conversation`,
           searchTerms: [
             normalized.name,
             normalized.title,
@@ -327,16 +338,20 @@ export default function GroupChat({
         } satisfies ChatComposerParticipant
       })
 
-    return [...inGroupActors, ...inGroupParticipants, ...outOfGroupActors]
-  }, [group.members, workspaceActors])
+    return [
+      ...inConversationActors,
+      ...inConversationParticipants,
+      ...outOfConversationActors,
+    ]
+  }, [conversation.members, workspaceActors])
   const actorMemberMap = useMemo(
     () =>
       Object.fromEntries(
-        group.members
+        conversation.members
           .filter((member) => member.type === "actor")
           .map((member) => [member.id, member])
       ),
-    [group.members]
+    [conversation.members]
   )
   const workspaceActorDirectory = useMemo(
     () => workspaceActors.map((actor) => normalizeChiefActorOption(actor)),
@@ -397,19 +412,22 @@ export default function GroupChat({
   // Initial scroll to bottom
   useEffect(() => {
     initialScrollPendingRef.current = true
-    hasObservedLoadingForGroupRef.current = false
+    hasObservedLoadingForConversationRef.current = false
     setShowJumpButton(false)
-  }, [group.id])
+  }, [conversation.id])
 
   useEffect(() => {
     if (!initialScrollPendingRef.current) return
 
     if (loading) {
-      hasObservedLoadingForGroupRef.current = true
+      hasObservedLoadingForConversationRef.current = true
       return
     }
 
-    if (!hasObservedLoadingForGroupRef.current && messages.length === 0) {
+    if (
+      !hasObservedLoadingForConversationRef.current &&
+      messages.length === 0
+    ) {
       return
     }
 
@@ -421,15 +439,15 @@ export default function GroupChat({
   }, [loading, messages.length])
 
   useEffect(() => {
-    setTitleDraft(group.title || "")
+    setTitleDraft(conversation.title || "")
     setEditingTitle(false)
-  }, [group.id, group.title])
+  }, [conversation.id, conversation.title])
 
   useEffect(() => {
     setParticipantDetailOpen(false)
     setSelectedParticipantMember(null)
-    setGroupDetailsOpen(false)
-  }, [group.id])
+    setConversationDetailsOpen(false)
+  }, [conversation.id])
 
   useEffect(() => {
     if (!workspaceId) {
@@ -483,7 +501,7 @@ export default function GroupChat({
       current.includes(itemId) ? current : [...current, itemId]
     )
     try {
-      await api.retrySession(workspaceId, sessionId, itemId)
+      await api.retryConversationActorLane(workspaceId, sessionId, itemId)
       toast.success("已请求重试")
     } catch (error) {
       const message = error instanceof Error ? error.message : "重试失败"
@@ -496,59 +514,65 @@ export default function GroupChat({
     }
   }
 
-  function openParticipantDetails(member: GroupMember) {
+  function openParticipantDetails(member: ConversationMember) {
     setSelectedParticipantMember(member)
     setParticipantDetailOpen(true)
   }
 
-  function openParticipantDetailsFromGroupSheet(member: GroupMember) {
-    setGroupDetailsOpen(false)
+  function openParticipantDetailsFromConversationSheet(
+    member: ConversationMember
+  ) {
+    setConversationDetailsOpen(false)
     requestAnimationFrame(() => {
       openParticipantDetails(member)
     })
   }
 
-  const title = group.title || group.participants.map((p) => p.name).join(", ")
-  const memberSummary = summarizeMemberCounts(group)
+  const title =
+    conversation.title ||
+    conversation.participants.map((participant) => participant.name).join(", ")
+  const memberSummary = summarizeMemberCounts(conversation)
 
   async function handleSaveTitle() {
-    if (!workspaceId || !group.permissions?.canManage) {
+    if (!workspaceId || !conversation.permissions?.canManage) {
       setEditingTitle(false)
-      setTitleDraft(group.title || "")
+      setTitleDraft(conversation.title || "")
       return
     }
 
     const nextTitle = titleDraft.trim()
-    if (!nextTitle || nextTitle === (group.title || "").trim()) {
+    if (!nextTitle || nextTitle === (conversation.title || "").trim()) {
       setEditingTitle(false)
-      setTitleDraft(group.title || "")
+      setTitleDraft(conversation.title || "")
       return
     }
 
     setSavingTitle(true)
     try {
-      await api.updateGroup(workspaceId, group.id, { title: nextTitle })
-      await onRefreshGroup?.()
+      await api.updateConversation(workspaceId, conversation.id, {
+        title: nextTitle,
+      })
+      await onRefreshConversation?.()
       setEditingTitle(false)
     } catch (error) {
-      console.error("Failed to update group title:", error)
-      setTitleDraft(group.title || "")
+      console.error("Failed to update conversation title:", error)
+      setTitleDraft(conversation.title || "")
     } finally {
       setSavingTitle(false)
     }
   }
 
-  async function handleGroupAvatarFile(file: File | null) {
-    if (!file || !workspaceId || !group.permissions?.canManage) return
+  async function handleConversationAvatarFile(file: File | null) {
+    if (!file || !workspaceId || !conversation.permissions?.canManage) return
     setAvatarUploading(true)
     try {
       const uploaded = await api.uploadFile(workspaceId, file)
-      await api.updateGroup(workspaceId, group.id, {
+      await api.updateConversation(workspaceId, conversation.id, {
         avatarFileId: uploaded.id,
       })
-      await onRefreshGroup?.()
+      await onRefreshConversation?.()
     } catch (error) {
-      console.error("Failed to update group avatar:", error)
+      console.error("Failed to update conversation avatar:", error)
     } finally {
       setAvatarUploading(false)
     }
@@ -574,14 +598,14 @@ export default function GroupChat({
       )
     }
 
-    const result = await api.resolveInteraction(
+    const result = await api.resolveConversationInteraction(
       workspaceId,
-      group.id,
+      conversation.id,
       interactionId,
       data
     )
     handleInteractionUpdated({
-      conversationId: group.id,
+      conversationId: conversation.id,
       interactionId,
       itemId: result.interaction.itemId,
       interaction: result.interaction,
@@ -626,7 +650,7 @@ export default function GroupChat({
             </div>
             <button
               type="button"
-              onClick={() => setGroupDetailsOpen(true)}
+              onClick={() => setConversationDetailsOpen(true)}
               className="inline-flex h-8 w-8 items-center justify-center text-foreground transition-colors hover:text-primary"
               aria-label="More"
             >
@@ -651,40 +675,40 @@ export default function GroupChat({
               <button
                 type="button"
                 className="relative rounded-full transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-70"
-                onClick={() => groupAvatarInputRef.current?.click()}
-                disabled={!group.permissions?.canManage || avatarUploading}
+                onClick={() => conversationAvatarInputRef.current?.click()}
+                disabled={!conversation.permissions?.canManage || avatarUploading}
                 title={
-                  group.permissions?.canManage
-                    ? "Change group avatar"
+                  conversation.permissions?.canManage
+                    ? "Change conversation avatar"
                     : undefined
                 }
               >
                 <ChatAvatar
                   name={title}
-                  avatarUrl={group.avatarUrl}
-                  entityType="group"
+                  avatarUrl={conversation.avatarUrl}
+                  entityType="conversation"
                   size="lg"
                   className="size-12"
                 />
                 <TransportKindIcon
-                  kind={group.transportKind}
+                  kind={conversation.transportKind}
                   size={14}
                   className="absolute -right-1 -bottom-1 size-5 p-0.5"
                 />
-                {group.permissions?.canManage ? (
+                {conversation.permissions?.canManage ? (
                   <div className="absolute inset-0 flex items-center justify-center rounded-full bg-foreground/55 text-background opacity-0 transition-opacity group-hover:opacity-100">
                     <Pencil className="size-4" />
                   </div>
                 ) : null}
               </button>
               <input
-                ref={groupAvatarInputRef}
+                ref={conversationAvatarInputRef}
                 type="file"
                 accept="image/*"
                 className="hidden"
                 onChange={(event) => {
                   const file = event.target.files?.[0] || null
-                  void handleGroupAvatarFile(file)
+                  void handleConversationAvatarFile(file)
                   event.target.value = ""
                 }}
               />
@@ -703,7 +727,7 @@ export default function GroupChat({
                         }
                         if (event.key === "Escape") {
                           setEditingTitle(false)
-                          setTitleDraft(group.title || "")
+                          setTitleDraft(conversation.title || "")
                         }
                       }}
                       className="h-8 w-[220px]"
@@ -724,7 +748,7 @@ export default function GroupChat({
                     <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
                       {title}
                     </h2>
-                    {group.permissions?.canManage ? (
+                    {conversation.permissions?.canManage ? (
                       <Button
                         size="icon"
                         variant="ghost"
@@ -739,20 +763,20 @@ export default function GroupChat({
               </div>
               <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
                 {memberSummary ||
-                  `${group.members.length} member${group.members.length > 1 ? "s" : ""}`}
+                  `${conversation.members.length} member${conversation.members.length > 1 ? "s" : ""}`}
               </div>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-3">
             <ChatMemberStrip
-              members={group.members}
+              members={conversation.members}
               runtimeByActor={actorRuntimes}
               max={5}
               size="lg"
               onMemberClick={participantInteractionHandler}
               contactBasePath={contactBasePath}
               onAdd={
-                group.permissions?.canManageMembers
+                conversation.permissions?.canManageMembers
                   ? () => setMemberDialogOpen(true)
                   : undefined
               }
@@ -775,8 +799,8 @@ export default function GroupChat({
               <div className="flex h-full min-h-[12rem] flex-1 flex-col items-center justify-center gap-4 rounded-[28px] border border-dashed border-border bg-background px-6 py-10 text-center shadow-sm">
                 <ChatAvatar
                   name={title}
-                  avatarUrl={group.avatarUrl}
-                  entityType="group"
+                  avatarUrl={conversation.avatarUrl}
+                  entityType="conversation"
                   size="lg"
                   className="size-20 rounded-3xl"
                 />
@@ -824,7 +848,7 @@ export default function GroupChat({
                   serverToolCalls={msg.serverToolCalls}
                   citationSources={msg.citationSources}
                   coordination={msg.coordination}
-                  groupMembers={group.members}
+                  conversationMembers={conversation.members}
                   targetParticipantIds={msg.targetParticipantIds}
                   targetActorIds={msg.targetActorIds}
                   workspaceActors={workspaceActorDirectory}
@@ -875,11 +899,11 @@ export default function GroupChat({
         />
       </div>
       {usesExternalMentionPicker ? (
-        <MobileGroupDetailsDialog
-          group={group}
-          open={groupDetailsOpen}
-          onOpenChange={setGroupDetailsOpen}
-          onMemberClick={openParticipantDetailsFromGroupSheet}
+        <MobileConversationDetailsDialog
+          conversation={conversation}
+          open={conversationDetailsOpen}
+          onOpenChange={setConversationDetailsOpen}
+          onMemberClick={openParticipantDetailsFromConversationSheet}
           contactBasePath={contactBasePath}
         />
       ) : null}
@@ -891,14 +915,14 @@ export default function GroupChat({
           contactBasePath={contactBasePath}
         />
       ) : null}
-      <GroupMemberPickerDialog
+      <ConversationMemberPickerDialog
         open={memberDialogOpen}
         onOpenChange={setMemberDialogOpen}
         workspaceId={workspaceId || ""}
-        groupId={group.id}
-        existingMembers={group.members}
+        conversationId={conversation.id}
+        existingMembers={conversation.members}
         onAdded={async () => {
-          await onRefreshGroup?.()
+          await onRefreshConversation?.()
         }}
       />
     </div>

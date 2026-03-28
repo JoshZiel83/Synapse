@@ -3,6 +3,8 @@ import { query } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { sessionThinkingQueue } from '../../workers/queues.js';
 import {
+  MULTI_MEMBER_CONVERSATION_KIND,
+  isMultiMemberConversationKind,
   nowISO,
   type ActorRuntimePhase,
   type ActorRuntimeState,
@@ -12,12 +14,12 @@ import {
 } from '@synapse/shared';
 import { getSession, updateSessionStatus } from './service.js';
 
-function runtimeHashKey(groupId: string) {
-  return `runtime:group:${groupId}`;
+function runtimeHashKey(conversationId: string) {
+  return `runtime:conversation:${conversationId}`;
 }
 
-function runtimeSequenceKey(groupId: string) {
-  return `runtime:group:${groupId}:seq`;
+function runtimeSequenceKey(conversationId: string) {
+  return `runtime:conversation:${conversationId}:seq`;
 }
 
 function parseMetadata(value: unknown): Record<string, unknown> {
@@ -110,19 +112,21 @@ async function loadRuntimeWakeups(sessionId: string, statuses: SessionWakeupStat
   return result.rows.map(mapWakeupRow);
 }
 
-export async function getGroupRuntimeMap(groupIds: string[]) {
-  if (groupIds.length === 0) return {} as Record<string, Record<string, ActorRuntimeState>>;
+export async function getConversationRuntimeMap(conversationIds: string[]) {
+  if (conversationIds.length === 0) {
+    return {} as Record<string, Record<string, ActorRuntimeState>>;
+  }
 
   const pipeline = redis.pipeline();
-  for (const groupId of groupIds) {
-    pipeline.hgetall(runtimeHashKey(groupId));
+  for (const conversationId of conversationIds) {
+    pipeline.hgetall(runtimeHashKey(conversationId));
   }
 
   const responses = await pipeline.exec();
   const runtimeMap: Record<string, Record<string, ActorRuntimeState>> = {};
 
-  for (let index = 0; index < groupIds.length; index++) {
-    const groupId = groupIds[index]!;
+  for (let index = 0; index < conversationIds.length; index++) {
+    const conversationId = conversationIds[index]!;
     const [, rawMap] = responses?.[index] || [];
     const parsed: Record<string, ActorRuntimeState> = {};
     for (const [actorId, rawValue] of Object.entries((rawMap || {}) as Record<string, string>)) {
@@ -132,19 +136,21 @@ export async function getGroupRuntimeMap(groupIds: string[]) {
         // ignore malformed cache entry
       }
     }
-    runtimeMap[groupId] = parsed;
+    runtimeMap[conversationId] = parsed;
   }
 
   const sessionResult = await query(
-    `SELECT s.id, s.actor_id, s.conversation_id AS group_id
+    `SELECT s.id, s.actor_id, s.conversation_id
      FROM sessions s
      JOIN conversations c ON c.id = s.conversation_id
      WHERE s.conversation_id = ANY($1)
-       AND c.kind = 'group'`,
-    [groupIds],
+       AND c.kind = $2`,
+    [conversationIds, MULTI_MEMBER_CONVERSATION_KIND],
   );
 
-  const missingSessions = sessionResult.rows.filter((row) => !runtimeMap[row.group_id]?.[row.actor_id]);
+  const missingSessions = sessionResult.rows.filter(
+    (row) => !runtimeMap[row.conversation_id]?.[row.actor_id],
+  );
   if (missingSessions.length === 0) {
     return runtimeMap;
   }
@@ -152,16 +158,22 @@ export async function getGroupRuntimeMap(groupIds: string[]) {
   const hydratedSnapshots = await Promise.all(
     missingSessions.map(async (row) => {
       const snapshot = await buildSessionRuntimeSnapshot(row.id);
-      return snapshot ? { groupId: row.group_id as string, snapshot } : null;
+      return snapshot
+        ? { conversationId: row.conversation_id as string, snapshot }
+        : null;
     }),
   );
 
   const hydratePipeline = redis.pipeline();
   for (const entry of hydratedSnapshots) {
     if (!entry) continue;
-    runtimeMap[entry.groupId] = runtimeMap[entry.groupId] || {};
-    runtimeMap[entry.groupId]![entry.snapshot.actorId] = entry.snapshot;
-    hydratePipeline.hset(runtimeHashKey(entry.groupId), entry.snapshot.actorId, JSON.stringify(entry.snapshot));
+    runtimeMap[entry.conversationId] = runtimeMap[entry.conversationId] || {};
+    runtimeMap[entry.conversationId]![entry.snapshot.actorId] = entry.snapshot;
+    hydratePipeline.hset(
+      runtimeHashKey(entry.conversationId),
+      entry.snapshot.actorId,
+      JSON.stringify(entry.snapshot),
+    );
   }
   await hydratePipeline.exec();
 
@@ -173,7 +185,7 @@ export async function buildSessionRuntimeSnapshot(
   overrides: Partial<Pick<ActorRuntimeState, 'laneState' | 'health' | 'phase' | 'statusText' | 'currentTurnId' | 'lastError'>> = {},
 ): Promise<ActorRuntimeState | null> {
   const session = await getSession(sessionId);
-  if (!session || !session.group_id) return null;
+  if (!session || !isMultiMemberConversationKind(session.conversation_kind)) return null;
 
   const rawWakeups = await loadRuntimeWakeups(sessionId, ['pending', 'attached']);
   const activeWakeups = dedupeRuntimeWakeups(rawWakeups);
@@ -197,7 +209,7 @@ export async function buildSessionRuntimeSnapshot(
   const health = overrides.health || (lastError ? 'error' : 'ok');
 
   return {
-    groupId: session.group_id,
+    conversationId: session.conversation_id,
     sessionId: session.id,
     actorId: session.actor_id,
     actorName: session.actor_name || 'Unknown',
@@ -222,22 +234,20 @@ export async function publishSessionRuntime(
   const snapshot = await buildSessionRuntimeSnapshot(sessionId, overrides);
   if (!snapshot) return null;
 
-  await redis.hset(runtimeHashKey(snapshot.groupId), snapshot.actorId, JSON.stringify(snapshot));
-  const runtimeSeq = await redis.incr(runtimeSequenceKey(snapshot.groupId));
+  await redis.hset(
+    runtimeHashKey(snapshot.conversationId),
+    snapshot.actorId,
+    JSON.stringify(snapshot),
+  );
+  const runtimeSeq = await redis.incr(runtimeSequenceKey(snapshot.conversationId));
   await emitEvent({
-    type: 'chat.runtime.updated',
+    type: 'runtime.updated',
     workspaceId,
     payload: {
-      conversationId: snapshot.groupId,
+      conversationId: snapshot.conversationId,
       runtimeSeq,
       snapshot,
     },
-    timestamp: nowISO(),
-  });
-  await emitEvent({
-    type: 'group.actor.runtime.updated',
-    workspaceId,
-    payload: snapshot as unknown as Record<string, unknown>,
     timestamp: nowISO(),
   });
 
@@ -246,8 +256,8 @@ export async function publishSessionRuntime(
 
 export async function removeSessionRuntime(sessionId: string) {
   const session = await getSession(sessionId);
-  if (!session?.group_id) return;
-  await redis.hdel(runtimeHashKey(session.group_id), session.actor_id);
+  if (!session || !isMultiMemberConversationKind(session.conversation_kind)) return;
+  await redis.hdel(runtimeHashKey(session.conversation_id), session.actor_id);
 }
 
 export async function enqueueSessionWakeup(params: {

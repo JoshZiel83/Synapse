@@ -1,6 +1,7 @@
 import type pg from "pg";
 import {
   extractText,
+  MULTI_MEMBER_CONVERSATION_KIND,
   normalizeActorDocs,
   normalizeCanonicalContentBlocks,
   summarizeActorDoc,
@@ -820,8 +821,8 @@ async function emitActorVersionChangedEvents(params: {
      JOIN conversations c ON c.id = cm.conversation_id
      WHERE cm.actor_id = $1
        AND cm.state = 'active'
-       AND c.kind = 'group'`,
-    [params.actorId],
+       AND c.kind = $2`,
+    [params.actorId, MULTI_MEMBER_CONVERSATION_KIND],
   );
 
   if (memberships.rows.length === 0) return;

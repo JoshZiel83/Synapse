@@ -13,13 +13,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useIsMobile } from "@/hooks/use-mobile"
-import type { GroupMember } from "@/stores/chat-store"
+import type { ConversationMember } from "@/stores/chat-store"
 import ChatAvatar from "./chat-avatar"
 import {
   formatTransportKindLabel,
-  getGroupMemberContactHref,
-  getGroupMemberSubtitle,
-  getGroupMemberTypeLabel,
+  getConversationMemberContactHref,
+  getConversationMemberSubtitle,
+  getConversationMemberTypeLabel,
 } from "./member-utils"
 
 function DetailItem({
@@ -44,12 +44,12 @@ function ParticipantDetailBody({
   onOpenContact,
   contactHref,
 }: {
-  member: GroupMember
+  member: ConversationMember
   onOpenContact: () => void
   contactHref?: string
 }) {
-  const subtitle = getGroupMemberSubtitle(member)
-  const typeLabel = getGroupMemberTypeLabel(member)
+  const subtitle = getConversationMemberSubtitle(member)
+  const typeLabel = getConversationMemberTypeLabel(member)
   const transportLabel = formatTransportKindLabel(member.transportKind)
   const actorRole = member.title || member.role || "Actor"
 
@@ -198,7 +198,7 @@ function ParticipantDetailBody({
 }
 
 interface ChatParticipantDetailDialogProps {
-  member: GroupMember | null
+  member: ConversationMember | null
   open: boolean
   onOpenChange: (open: boolean) => void
   contactBasePath?: string
@@ -215,8 +215,11 @@ export default function ChatParticipantDetailDialog({
 
   if (!member) return null
 
-  const subtitle = getGroupMemberSubtitle(member)
-  const contactHref = getGroupMemberContactHref(member, contactBasePath)
+  const subtitle = getConversationMemberSubtitle(member)
+  const contactHref = getConversationMemberContactHref(
+    member,
+    contactBasePath
+  )
 
   function handleOpenContact() {
     if (!contactHref) return

@@ -810,7 +810,7 @@ class ApiClient {
     })
   }
 
-  // Sessions
+  // Actor lanes
   createSession(
     wsId: string,
     actorId: string,
@@ -841,7 +841,11 @@ class ApiClient {
   getSessionTree(wsId: string, sessionId: string) {
     return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/tree`)
   }
-  retrySession(wsId: string, sessionId: string, itemId?: string) {
+  retryConversationActorLane(
+    wsId: string,
+    sessionId: string,
+    itemId?: string
+  ) {
     return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/retry`, {
       method: "POST",
       body: JSON.stringify(itemId ? { itemId } : {}),
@@ -853,21 +857,21 @@ class ApiClient {
     })
   }
 
-  // Chat Groups
-  getGroups(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/chat/groups`)
+  // Conversations
+  getConversations(wsId: string) {
+    return this.fetch(`/workspaces/${wsId}/conversations`)
   }
-  updateGroup(
+  updateConversation(
     wsId: string,
-    groupId: string,
+    conversationId: string,
     data: { title?: string; avatarFileId?: string | null }
   ) {
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}`, {
+    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}`, {
       method: "PUT",
       body: JSON.stringify(data),
     })
   }
-  createGroup(
+  createConversation(
     wsId: string,
     actorIds: string[],
     content?: string,
@@ -879,7 +883,14 @@ class ApiClient {
       : typeof targetActorIdOrIds === "string" && targetActorIdOrIds
         ? [targetActorIdOrIds]
         : []
-    const body: any =
+    const body: {
+      actorId?: string
+      actorIds?: string[]
+      content?: string
+      contentBlocks?: CanonicalContentBlock[]
+      targetActorIds?: string[]
+      targetActorId?: string
+    } =
       actorIds.length === 1
         ? {
             actorId: actorIds[0],
@@ -900,14 +911,14 @@ class ApiClient {
                   targetActorId: actorIds[0],
                 }),
           }
-    return this.fetch(`/workspaces/${wsId}/chat/groups`, {
+    return this.fetch(`/workspaces/${wsId}/conversations`, {
       method: "POST",
       body: JSON.stringify(body),
     })
   }
-  getGroupMessages(
+  getConversationMessages(
     wsId: string,
-    groupId: string,
+    conversationId: string,
     limit?: number,
     before?: string
   ): Promise<ConversationFeedPage> {
@@ -916,10 +927,10 @@ class ApiClient {
     if (before) params.set("before", before)
     const qs = params.toString()
     return this.fetch(
-      `/workspaces/${wsId}/chat/groups/${groupId}/messages${qs ? "?" + qs : ""}`
+      `/workspaces/${wsId}/conversations/${conversationId}/messages${qs ? "?" + qs : ""}`
     )
   }
-  getWorkspaceFeed(
+  getConversationFeed(
     wsId: string,
     after?: number,
     limit?: number
@@ -932,43 +943,57 @@ class ApiClient {
       params.set("limit", String(limit))
     }
     const qs = params.toString()
-    return this.fetch(`/workspaces/${wsId}/chat/feed${qs ? "?" + qs : ""}`)
+    return this.fetch(`/workspaces/${wsId}/conversations/feed${qs ? "?" + qs : ""}`)
   }
-  getGroupMembers(wsId: string, groupId: string) {
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/members`)
-  }
-  addGroupMembers(
+  getWorkspaceFeed(
     wsId: string,
-    groupId: string,
+    after?: number,
+    limit?: number
+  ): Promise<WorkspaceFeedPage> {
+    return this.getConversationFeed(wsId, after, limit)
+  }
+  getConversationMembers(wsId: string, conversationId: string) {
+    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}/members`)
+  }
+  addConversationMembers(
+    wsId: string,
+    conversationId: string,
     data: { actorIds?: string[]; userIds?: string[] }
   ) {
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/members`, {
+    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}/members`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
-  sendGroupMessage(
+  sendConversationMessage(
     wsId: string,
-    groupId: string,
+    conversationId: string,
     contentBlocks: CanonicalContentBlock[],
     clientMessageId: string,
     targetParticipantIds?: string[],
     targetActorIds?: string[]
   ): Promise<{ item: ConversationFeedItem }> {
-    const body: any = { contentBlocks }
+    const body: {
+      contentBlocks: CanonicalContentBlock[]
+      clientMessageId: string
+      targetParticipantIds?: string[]
+      targetActorIds?: string[]
+    } = {
+      contentBlocks,
+      clientMessageId,
+    }
     if (targetParticipantIds && targetParticipantIds.length > 0)
       body.targetParticipantIds = targetParticipantIds
     if (targetActorIds && targetActorIds.length > 0)
       body.targetActorIds = targetActorIds
-    body.clientMessageId = clientMessageId
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/messages`, {
+    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
     })
   }
-  resolveInteraction(
+  resolveConversationInteraction(
     wsId: string,
-    groupId: string,
+    conversationId: string,
     interactionId: string,
     data: {
       answers?: {
@@ -983,7 +1008,7 @@ class ApiClient {
     }
   ): Promise<{ interaction: InteractionRequestSummary }> {
     return this.fetch(
-      `/workspaces/${wsId}/chat/groups/${groupId}/interactions/${interactionId}/respond`,
+      `/workspaces/${wsId}/conversations/${conversationId}/interactions/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(data),
@@ -1111,12 +1136,12 @@ class ApiClient {
       body: JSON.stringify(data),
     })
   }
-  getGroupTransportBinding(
+  getConversationTransportBinding(
     wsId: string,
-    groupId: string
+    conversationId: string
   ): Promise<{ binding: ConversationTransportBindingSummary | null }> {
     return this.fetch(
-      `/workspaces/${wsId}/chat/groups/${groupId}/transport-binding`
+      `/workspaces/${wsId}/conversations/${conversationId}/transport-binding`
     )
   }
   updateTransportSessionSettings(
@@ -1142,14 +1167,14 @@ class ApiClient {
       }
     )
   }
-  markGroupRead(wsId: string, groupId: string) {
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}/read`, {
+  markConversationRead(wsId: string, conversationId: string) {
+    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}/read`, {
       method: "POST",
       body: "{}",
     })
   }
-  cancelGroup(wsId: string, groupId: string) {
-    return this.fetch(`/workspaces/${wsId}/chat/groups/${groupId}`, {
+  cancelConversation(wsId: string, conversationId: string) {
+    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}`, {
       method: "DELETE",
     })
   }

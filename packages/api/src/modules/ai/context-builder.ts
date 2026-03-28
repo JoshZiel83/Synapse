@@ -544,7 +544,7 @@ export function buildSessionContextItems(
   return items;
 }
 
-export function buildGroupContextItems(params: {
+export function buildConversationContextItems(params: {
   visibleItems: any[];
   actorId: string;
   sessionMessages: SessionMessageRow[];

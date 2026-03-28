@@ -75,7 +75,7 @@ const SEND_BUTTON_ANIMATION_MS = 1280
 export default function DashboardHomePage() {
   const router = useRouter()
   const { workspaceId, workspaceName } = useWorkspace()
-  const { createGroup, selectGroup } = useChatStore()
+  const { createConversation, selectConversation } = useChatStore()
   const sendAnimationTimerRef = useRef<number | null>(null)
 
   const [pendingLaunchPayload, setPendingLaunchPayload] =
@@ -285,7 +285,7 @@ export default function DashboardHomePage() {
 
     const [[groupResult, preferenceResult]] = await Promise.all([
       Promise.allSettled([
-        createGroup(
+        createConversation(
           workspaceId,
           actorIds,
           message || undefined,
@@ -317,14 +317,14 @@ export default function DashboardHomePage() {
       toast.error("Conversation started, but saving your chief actor failed.")
     }
 
-    const groupId = groupResult.value
-    selectGroup(groupId)
+    const conversationId = groupResult.value
+    selectConversation(conversationId)
     setPendingLaunchPayload(null)
     setPickerOpen(false)
     setLaunchActor(nextLaunchActor)
     setComposerResetSignal((currentValue) => currentValue + 1)
     startTransition(() => {
-      router.push(`/dashboard/chat?group=${groupId}`)
+      router.push(`/dashboard/chat?conversation=${conversationId}`)
     })
     return true
   }

@@ -138,15 +138,15 @@ export default function MemoryBrowser() {
     if (!workspaceId) return
     setLoading(true)
     try {
-      const [memoryData, actorData, groupData] = await Promise.all([
+      const [memoryData, actorData, conversationData] = await Promise.all([
         api.getMemories(workspaceId),
         api.getActors(workspaceId),
-        api.getGroups(workspaceId),
+        api.getConversations(workspaceId),
       ])
 
       setMemories(Array.isArray(memoryData) ? memoryData : memoryData?.memories || [])
       setActors((Array.isArray(actorData) ? actorData : []).map(normalizeActorOption))
-      setGroups((Array.isArray(groupData) ? groupData : groupData?.groups || []).map(normalizeGroupOption))
+      setGroups((conversationData?.conversations || []).map(normalizeGroupOption))
     } catch (error) {
       console.error("Failed to load memories:", error)
       toast.error(error instanceof Error ? error.message : "Failed to load memories")

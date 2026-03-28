@@ -156,7 +156,7 @@ function ChiefActorPickerDialogBody({
         <DialogDescription>
           {mode === "settings"
             ? "This actor becomes the default launch target for new conversations from the dashboard home page."
-            : "Pick one actor for this new group chat. You can also save the choice as your default chief actor."}
+            : "Pick one actor for this new conversation. You can also save the choice as your default chief actor."}
         </DialogDescription>
       </DialogHeader>
 

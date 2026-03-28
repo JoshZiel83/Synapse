@@ -3,7 +3,7 @@ import { z } from "zod";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
 import { requireRequestAction } from "../access/guards.js";
-import { getGroup } from "../group/service.js";
+import { getConversation } from "../conversation/chat-service.js";
 import { listMembers } from "../workspace/service.js";
 import {
   createTransportAccount,
@@ -325,13 +325,13 @@ async function requireConversationAction(
   action: "conversation.view" | "conversation.manage",
   errorMessage: string,
 ) {
-  const { workspaceId, groupId } = request.params as {
+  const { workspaceId } = request.params as {
     workspaceId: string;
-    groupId: string;
   };
-  const group = await getGroup(groupId);
-  if (!group || group.workspace_id !== workspaceId) {
-    reply.status(404).send({ error: "Group not found" });
+  const conversationId = request.params.conversationId;
+  const conversation = await getConversation(conversationId);
+  if (!conversation || conversation.workspace_id !== workspaceId) {
+    reply.status(404).send({ error: "Conversation not found" });
     return null;
   }
 
@@ -339,11 +339,11 @@ async function requireConversationAction(
     request,
     reply,
     action,
-    groupId,
+    conversationId,
     errorMessage,
   );
   if (!allowed) return null;
-  return group;
+  return conversation;
 }
 
 async function refreshTransportRuntimeState() {
@@ -870,22 +870,25 @@ export default async function imController(app: FastifyInstance) {
     },
   );
 
-  app.get<{ Params: { workspaceId: string; groupId: string } }>(
-    "/api/v1/workspaces/:workspaceId/chat/groups/:groupId/transport-binding",
-    async (request, reply) => {
-      const group = await requireConversationAction(
+  for (const path of [
+    "/api/v1/workspaces/:workspaceId/conversations/:conversationId/transport-binding",
+  ]) {
+    app.get<{
+      Params: { workspaceId: string; conversationId: string };
+    }>(path, async (request, reply) => {
+      const conversation = await requireConversationAction(
         request,
         reply,
         "conversation.view",
         "Not allowed to view this conversation transport binding",
       );
-      if (!group) return;
+      if (!conversation) return;
 
       const binding = await getConversationTransportBinding({
-        workspaceId: group.workspace_id,
-        conversationId: group.id,
+        workspaceId: conversation.workspace_id,
+        conversationId: conversation.id,
       });
       return reply.send({ binding });
-    },
-  );
+    });
+  }
 }

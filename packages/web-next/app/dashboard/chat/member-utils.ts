@@ -2,9 +2,9 @@
 
 import type { ConversationEntityRef } from "@synapse/shared"
 
-import type { GroupMember } from "@/stores/chat-store"
+import type { ConversationMember } from "@/stores/chat-store"
 
-export function getGroupMemberSubtitle(member: GroupMember) {
+export function getConversationMemberSubtitle(member: ConversationMember) {
   if (member.type === "actor") {
     return member.title || member.role || "Actor"
   }
@@ -19,13 +19,15 @@ export function getGroupMemberSubtitle(member: GroupMember) {
   return "Workspace user"
 }
 
-export function getGroupMemberTypeLabel(member: GroupMember) {
+export function getConversationMemberTypeLabel(member: ConversationMember) {
   if (member.type === "actor") return "Actor"
   if (member.type === "external") return "External participant"
   return "Workspace user"
 }
 
-export function formatTransportKindLabel(kind: GroupMember["transportKind"]) {
+export function formatTransportKindLabel(
+  kind: ConversationMember["transportKind"]
+) {
   if (!kind) return undefined
   switch (kind) {
     case "feishu":
@@ -37,8 +39,8 @@ export function formatTransportKindLabel(kind: GroupMember["transportKind"]) {
   }
 }
 
-export function getGroupMemberContactHref(
-  member: GroupMember,
+export function getConversationMemberContactHref(
+  member: ConversationMember,
   basePath = "/dashboard/contacts",
 ) {
   if (member.type === "actor") {
@@ -55,11 +57,11 @@ export function getGroupMemberContactHref(
 
 export function resolveAuthorMember(
   author: ConversationEntityRef | undefined,
-  groupMembers: GroupMember[] | undefined,
+  conversationMembers: ConversationMember[] | undefined,
 ) {
   if (!author) return undefined
   const participantId = author.participantId || author.memberId
-  return groupMembers?.find((member) => {
+  return conversationMembers?.find((member) => {
     if (participantId && member.participantId === participantId) {
       return true
     }
@@ -85,12 +87,12 @@ export function resolveAuthorMember(
 
 export function getAuthorContactHref(
   author: ConversationEntityRef | undefined,
-  groupMembers: GroupMember[] | undefined,
+  conversationMembers: ConversationMember[] | undefined,
   basePath = "/dashboard/contacts",
 ) {
-  const authorMember = resolveAuthorMember(author, groupMembers)
+  const authorMember = resolveAuthorMember(author, conversationMembers)
   if (authorMember) {
-    return getGroupMemberContactHref(authorMember, basePath)
+    return getConversationMemberContactHref(authorMember, basePath)
   }
   if (author?.memberType === "actor" && author.actorId) {
     return `${basePath}?kind=actor&id=${author.actorId}`

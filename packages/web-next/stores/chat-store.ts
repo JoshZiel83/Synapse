@@ -22,7 +22,7 @@ import {
   textBlocks,
 } from "@synapse/shared"
 
-export interface GroupParticipant {
+export interface ConversationParticipant {
   id: string
   name: string
   role: string
@@ -31,7 +31,7 @@ export interface GroupParticipant {
   title?: string
 }
 
-export interface GroupMember {
+export interface ConversationMember {
   memberId: string
   participantId: string
   type: "actor" | "user" | "external"
@@ -50,12 +50,12 @@ export interface GroupMember {
   linkedUserAvatarUrl?: string
 }
 
-export interface Group {
+export interface ConversationSummary {
   id: string
   status: "active" | "completed" | "failed"
   transportKind?: TransportKind
-  participants: GroupParticipant[]
-  members: GroupMember[]
+  participants: ConversationParticipant[]
+  members: ConversationMember[]
   lastMessage?: {
     content: string
     role: string
@@ -116,7 +116,10 @@ export interface FeedMessage {
 
 export type ThinkingPhase = "thinking" | "tool" | "responding" | "error"
 export type ActorAvatarStatus = "idle" | ThinkingPhase
-export type GroupRuntimeMap = Record<string, Record<string, ActorRuntimeState>>
+export type ConversationRuntimeMap = Record<
+  string,
+  Record<string, ActorRuntimeState>
+>
 
 export interface OutboxEntry {
   clientMessageId: string
@@ -135,36 +138,39 @@ export interface OutboxEntry {
 }
 
 interface ChatState {
-  groups: Group[]
-  selectedGroupId: string | null
+  conversations: ConversationSummary[]
+  selectedConversationId: string | null
   messages: FeedMessage[]
   outbox: Record<string, OutboxEntry>
-  loadingGroups: boolean
+  loadingConversations: boolean
   loadingMessages: boolean
-  runtimeMap: GroupRuntimeMap
+  runtimeMap: ConversationRuntimeMap
   runtimeSeqMap: Record<string, number>
   totalUnread: number
 
-  loadGroups: (workspaceId: string) => Promise<void>
-  selectGroup: (groupId: string | null) => void
-  loadMessages: (workspaceId: string, groupId: string) => Promise<void>
+  loadConversations: (workspaceId: string) => Promise<void>
+  selectConversation: (conversationId: string | null) => void
+  loadMessages: (workspaceId: string, conversationId: string) => Promise<void>
   sendMessage: (
     workspaceId: string,
-    groupId: string,
+    conversationId: string,
     contentBlocks: CanonicalContentBlock[],
     targetParticipantIds?: string[],
     targetActorIds?: string[]
   ) => Promise<void>
   hydrateOutbox: (workspaceId: string) => void
   flushOutbox: (workspaceId: string) => void
-  createGroup: (
+  createConversation: (
     workspaceId: string,
     actorIds: string[],
     content?: string,
     targetActorIdOrIds?: string | string[],
     contentBlocks?: CanonicalContentBlock[]
   ) => Promise<string>
-  markRead: (workspaceId: string, groupId: string) => Promise<void>
+  markConversationRead: (
+    workspaceId: string,
+    conversationId: string
+  ) => Promise<void>
 
   handleFeedItemCreated: (record: WorkspaceFeedEventRecord) => void
   handleRuntimeUpdated: (payload: {
@@ -210,16 +216,19 @@ function sortMessages(messages: FeedMessage[]) {
   })
 }
 
-function sortGroups(groups: Group[]) {
-  return [...groups].sort((left, right) => {
+function sortConversations(conversations: ConversationSummary[]) {
+  return [...conversations].sort((left, right) => {
     const leftAt = left.lastMessage?.createdAt || left.createdAt
     const rightAt = right.lastMessage?.createdAt || right.createdAt
     return new Date(rightAt).getTime() - new Date(leftAt).getTime()
   })
 }
 
-function sumUnread(groups: Group[]) {
-  return groups.reduce((sum, group) => sum + group.unreadCount, 0)
+function sumConversationUnread(conversations: ConversationSummary[]) {
+  return conversations.reduce(
+    (sum, conversation) => sum + conversation.unreadCount,
+    0
+  )
 }
 
 function createClientMessageId() {
@@ -327,12 +336,12 @@ function mergeConversationMessagesWithOutbox(
   return nextMessages
 }
 
-function applyOutboxToGroups(
-  groups: Group[],
+function applyOutboxToConversations(
+  conversations: ConversationSummary[],
   outbox: Record<string, OutboxEntry>,
-  runtimeMap: GroupRuntimeMap
+  runtimeMap: ConversationRuntimeMap
 ) {
-  let nextGroups = groups
+  let nextConversations = conversations
   const pendingEntries = Object.values(outbox).sort(
     (left, right) =>
       new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
@@ -340,22 +349,26 @@ function applyOutboxToGroups(
 
   for (const entry of pendingEntries) {
     const optimisticMessage = outboxEntryToMessage(entry)
-    nextGroups = sortGroups(
-      nextGroups.map((group) =>
-        group.id === entry.conversationId &&
-        (!group.lastMessage ||
+    nextConversations = sortConversations(
+      nextConversations.map((conversation) =>
+        conversation.id === entry.conversationId &&
+        (!conversation.lastMessage ||
           new Date(entry.createdAt).getTime() >=
-            new Date(group.lastMessage.createdAt).getTime())
-          ? applyRuntimeMapToGroup(
-              applyFeedMessageToGroup(group, optimisticMessage, true),
-              runtimeMap[group.id]
+            new Date(conversation.lastMessage.createdAt).getTime())
+          ? applyRuntimeMapToConversation(
+              applyFeedMessageToConversation(
+                conversation,
+                optimisticMessage,
+                true
+              ),
+              runtimeMap[conversation.id]
             )
-          : group
+          : conversation
       )
     )
   }
 
-  return nextGroups
+  return nextConversations
 }
 
 function upsertFeedMessage(messages: FeedMessage[], item: FeedMessage) {
@@ -460,18 +473,18 @@ function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
 }
 
 function applyMemberJoined(
-  group: Group,
+  conversation: ConversationSummary,
   payload: ConversationFeedEventPayloadMap["member_joined"]
 ) {
-  const nextMembers = [...group.members]
-  const nextParticipants = [...group.participants]
+  const nextMembers = [...conversation.members]
+  const nextParticipants = [...conversation.participants]
 
   for (const member of payload.members) {
     const id =
       member.actorId || member.userId || member.participantId || member.memberId
     if (!id) continue
 
-    const normalizedMember: GroupMember = {
+    const normalizedMember: ConversationMember = {
       memberId: member.memberId,
       participantId: member.participantId || member.memberId,
       type:
@@ -513,11 +526,15 @@ function applyMemberJoined(
     }
   }
 
-  return { ...group, members: nextMembers, participants: nextParticipants }
+  return {
+    ...conversation,
+    members: nextMembers,
+    participants: nextParticipants,
+  }
 }
 
 function applyMemberRemoved(
-  group: Group,
+  conversation: ConversationSummary,
   payload:
     | ConversationFeedEventPayloadMap["member_kicked"]
     | ConversationFeedEventPayloadMap["member_left"]
@@ -534,11 +551,11 @@ function applyMemberRemoved(
   )
 
   return {
-    ...group,
-    participants: group.participants.filter(
+    ...conversation,
+    participants: conversation.participants.filter(
       (participant) => !removedActorIds.has(participant.id)
     ),
-    members: group.members.filter((member) =>
+    members: conversation.members.filter((member) =>
       member.type === "actor"
         ? !removedActorIds.has(member.id)
         : !removedUserIds.has(member.id)
@@ -547,16 +564,16 @@ function applyMemberRemoved(
 }
 
 function applyActorPatch(
-  group: Group,
+  conversation: ConversationSummary,
   actorId: string,
-  patch: Partial<GroupMember & GroupParticipant>
+  patch: Partial<ConversationMember & ConversationParticipant>
 ) {
   return {
-    ...group,
-    participants: group.participants.map((participant) =>
+    ...conversation,
+    participants: conversation.participants.map((participant) =>
       participant.id === actorId ? { ...participant, ...patch } : participant
     ),
-    members: group.members.map((member) =>
+    members: conversation.members.map((member) =>
       member.type === "actor" && member.id === actorId
         ? { ...member, ...patch }
         : member
@@ -564,37 +581,39 @@ function applyActorPatch(
   }
 }
 
-function applyFeedMessageToGroup(
-  group: Group,
+function applyFeedMessageToConversation(
+  conversation: ConversationSummary,
   item: FeedMessage,
   isSelected: boolean
 ) {
-  let nextGroup: Group = {
-    ...group,
+  let nextConversation: ConversationSummary = {
+    ...conversation,
     lastMessage: {
       content: previewTextForItem(item),
       role: item.role,
       actorName: item.actorName,
       createdAt: item.createdAt,
     },
-    unreadCount: isSelected ? group.unreadCount : group.unreadCount + 1,
+    unreadCount: isSelected
+      ? conversation.unreadCount
+      : conversation.unreadCount + 1,
   }
 
   if (item.kind !== "event" || !item.eventType || !item.eventPayload) {
-    return nextGroup
+    return nextConversation
   }
 
   switch (item.eventType) {
     case "member_joined":
-      nextGroup = applyMemberJoined(
-        nextGroup,
+      nextConversation = applyMemberJoined(
+        nextConversation,
         item.eventPayload as ConversationFeedEventPayloadMap["member_joined"]
       )
       break
     case "member_kicked":
     case "member_left":
-      nextGroup = applyMemberRemoved(
-        nextGroup,
+      nextConversation = applyMemberRemoved(
+        nextConversation,
         item.eventPayload as
           | ConversationFeedEventPayloadMap["member_kicked"]
           | ConversationFeedEventPayloadMap["member_left"]
@@ -604,9 +623,13 @@ function applyFeedMessageToGroup(
       const payload =
         item.eventPayload as ConversationFeedEventPayloadMap["actor_renamed"]
       if (payload.actor.actorId) {
-        nextGroup = applyActorPatch(nextGroup, payload.actor.actorId, {
+        nextConversation = applyActorPatch(
+          nextConversation,
+          payload.actor.actorId,
+          {
           name: payload.newName,
-        })
+          }
+        )
       }
       break
     }
@@ -614,10 +637,14 @@ function applyFeedMessageToGroup(
       const payload =
         item.eventPayload as ConversationFeedEventPayloadMap["actor_avatar_changed"]
       if (payload.actor.actorId) {
-        nextGroup = applyActorPatch(nextGroup, payload.actor.actorId, {
-          avatarUrl: payload.newAvatarUrl,
-          emoji: payload.newAvatarEmoji,
-        })
+        nextConversation = applyActorPatch(
+          nextConversation,
+          payload.actor.actorId,
+          {
+            avatarUrl: payload.newAvatarUrl,
+            emoji: payload.newAvatarEmoji,
+          }
+        )
       }
       break
     }
@@ -625,11 +652,15 @@ function applyFeedMessageToGroup(
       const payload =
         item.eventPayload as ConversationFeedEventPayloadMap["actor_version_changed"]
       if (payload.actor.actorId) {
-        nextGroup = applyActorPatch(nextGroup, payload.actor.actorId, {
-          name: payload.actor.name,
-          avatarUrl: payload.actor.avatarUrl,
-          emoji: payload.actor.avatarEmoji,
-        })
+        nextConversation = applyActorPatch(
+          nextConversation,
+          payload.actor.actorId,
+          {
+            name: payload.actor.name,
+            avatarUrl: payload.actor.avatarUrl,
+            emoji: payload.actor.avatarEmoji,
+          }
+        )
       }
       break
     }
@@ -637,7 +668,7 @@ function applyFeedMessageToGroup(
       break
   }
 
-  return nextGroup
+  return nextConversation
 }
 
 export function runtimePhaseToBadgePhase(
@@ -664,13 +695,13 @@ export function runtimeToAvatarStatus(
   return runtimePhaseToBadgePhase(runtime) || "idle"
 }
 
-function applyRuntimeToGroupMembers(
-  group: Group,
+function applyRuntimeToConversationMembers(
+  conversation: ConversationSummary,
   runtime: ActorRuntimeState
-): Group {
+): ConversationSummary {
   return {
-    ...group,
-    members: group.members.map((member) =>
+    ...conversation,
+    members: conversation.members.map((member) =>
       member.type === "actor" && member.id === runtime.actorId
         ? { ...member, sessionStatus: runtime.laneState }
         : member
@@ -678,39 +709,47 @@ function applyRuntimeToGroupMembers(
   }
 }
 
-function deriveGroupStatus(
-  group: Group,
-  runtimesForGroup?: Record<string, ActorRuntimeState>
+function deriveConversationStatus(
+  conversation: ConversationSummary,
+  runtimesForConversation?: Record<string, ActorRuntimeState>
 ) {
-  const actorMembers = group.members.filter((member) => member.type === "actor")
+  const actorMembers = conversation.members.filter(
+    (member) => member.type === "actor"
+  )
   if (actorMembers.length === 0) return "completed" as const
   const hasOpenLane = actorMembers.some((member) => {
-    const runtime = runtimesForGroup?.[member.id]
+    const runtime = runtimesForConversation?.[member.id]
     const laneState = runtime?.laneState || member.sessionStatus
     return laneState !== "closed"
   })
   return hasOpenLane ? ("active" as const) : ("completed" as const)
 }
 
-function applyRuntimeMapToGroup(
-  group: Group,
-  runtimesForGroup?: Record<string, ActorRuntimeState>
-): Group {
-  if (!runtimesForGroup) {
+function applyRuntimeMapToConversation(
+  conversation: ConversationSummary,
+  runtimesForConversation?: Record<string, ActorRuntimeState>
+): ConversationSummary {
+  if (!runtimesForConversation) {
     return {
-      ...group,
-      status: deriveGroupStatus(group, undefined),
+      ...conversation,
+      status: deriveConversationStatus(conversation, undefined),
     }
   }
 
-  let nextGroup = group
-  for (const runtime of Object.values(runtimesForGroup)) {
-    nextGroup = applyRuntimeToGroupMembers(nextGroup, runtime)
+  let nextConversation = conversation
+  for (const runtime of Object.values(runtimesForConversation)) {
+    nextConversation = applyRuntimeToConversationMembers(
+      nextConversation,
+      runtime
+    )
   }
 
   return {
-    ...nextGroup,
-    status: deriveGroupStatus(nextGroup, runtimesForGroup),
+    ...nextConversation,
+    status: deriveConversationStatus(
+      nextConversation,
+      runtimesForConversation
+    ),
   }
 }
 
@@ -790,76 +829,91 @@ function applyFeedItemToRuntimeMap(
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
-  groups: [],
-  selectedGroupId: null,
+  conversations: [],
+  selectedConversationId: null,
   messages: [],
   outbox: {},
-  loadingGroups: false,
+  loadingConversations: false,
   loadingMessages: false,
   runtimeMap: {},
   runtimeSeqMap: {},
   totalUnread: 0,
 
-  loadGroups: async (workspaceId) => {
-    set({ loadingGroups: true })
+  loadConversations: async (workspaceId) => {
+    set({ loadingConversations: true })
     try {
-      const res = await api.getGroups(workspaceId)
-      const incomingGroups = Array.isArray(res?.groups)
-        ? (res.groups as Group[])
+      const res = await api.getConversations(workspaceId)
+      const incomingConversations = Array.isArray(res?.conversations)
+        ? (res.conversations as ConversationSummary[])
         : []
-      const serverRuntime = (res?.runtimeMap || {}) as GroupRuntimeMap
+      const serverRuntime = (res?.runtimeMap || {}) as ConversationRuntimeMap
 
       set((state) => {
         const runtimeMap = { ...state.runtimeMap, ...serverRuntime }
-        const groups = applyOutboxToGroups(
-          sortGroups(
-            incomingGroups.map((group) =>
-              applyRuntimeMapToGroup(group, runtimeMap[group.id])
+        const conversations = applyOutboxToConversations(
+          sortConversations(
+            incomingConversations.map((conversation) =>
+              applyRuntimeMapToConversation(
+                conversation,
+                runtimeMap[conversation.id]
+              )
             )
           ),
           state.outbox,
           runtimeMap
         )
-        const nextSelectedGroupId =
-          state.selectedGroupId &&
-          groups.some((group) => group.id === state.selectedGroupId)
-            ? state.selectedGroupId
+        const currentSelection = state.selectedConversationId
+        const nextSelectedConversationId =
+          currentSelection &&
+          conversations.some(
+            (conversation) => conversation.id === currentSelection
+          )
+            ? currentSelection
             : null
 
         return {
-          groups,
+          conversations,
           runtimeMap,
-          totalUnread: sumUnread(groups),
-          loadingGroups: false,
-          ...(nextSelectedGroupId === state.selectedGroupId
+          totalUnread: sumConversationUnread(conversations),
+          loadingConversations: false,
+          ...(nextSelectedConversationId === currentSelection
             ? {}
             : {
-                selectedGroupId: nextSelectedGroupId,
+                selectedConversationId: nextSelectedConversationId,
                 messages: [],
               }),
         }
       })
     } catch (err) {
-      console.error("Failed to load groups:", err)
-      set({ loadingGroups: false })
+      console.error("Failed to load conversations:", err)
+      set({ loadingConversations: false })
     }
   },
 
-  selectGroup: (groupId) => {
-    if (get().selectedGroupId === groupId) return
-    set({ selectedGroupId: groupId, messages: [] })
+  selectConversation: (conversationId) => {
+    const currentSelection = get().selectedConversationId
+    if (currentSelection === conversationId) return
+    set({
+      selectedConversationId: conversationId,
+      messages: [],
+    })
   },
 
-  loadMessages: async (workspaceId, groupId) => {
+  loadMessages: async (workspaceId, conversationId) => {
     set({ loadingMessages: true })
     try {
-      const res = await api.getGroupMessages(workspaceId, groupId, 100)
+      const res = await api.getConversationMessages(
+        workspaceId,
+        conversationId,
+        100
+      )
       const fetchedMessages = sortMessages(
         (res?.items || []).map(feedItemToMessage)
       )
 
       set((state) => {
-        if (state.selectedGroupId !== groupId) {
+        const currentSelection = state.selectedConversationId
+        if (currentSelection !== conversationId) {
           return { loadingMessages: false }
         }
 
@@ -867,7 +921,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           messages: mergeConversationMessagesWithOutbox(
             fetchedMessages,
             state.outbox,
-            groupId
+            conversationId
           ),
           loadingMessages: false,
         }
@@ -880,7 +934,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   sendMessage: async (
     workspaceId,
-    groupId,
+    conversationId,
     contentBlocks,
     targetParticipantIds,
     targetActorIds
@@ -891,7 +945,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const entry: OutboxEntry = {
       clientMessageId,
       workspaceId,
-      conversationId: groupId,
+      conversationId,
       contentBlocks,
       targetParticipantIds: targetParticipantIds || [],
       targetActorIds: targetActorIds || [],
@@ -907,27 +961,32 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...state.outbox,
         [clientMessageId]: entry,
       }
-      const groups = sortGroups(
-        state.groups.map((group) =>
-          group.id === groupId
-            ? applyRuntimeMapToGroup(
-                applyFeedMessageToGroup(group, optimisticMessage, true),
-                state.runtimeMap[groupId]
+      const conversations = sortConversations(
+        state.conversations.map((conversation) =>
+          conversation.id === conversationId
+            ? applyRuntimeMapToConversation(
+                applyFeedMessageToConversation(
+                  conversation,
+                  optimisticMessage,
+                  true
+                ),
+                state.runtimeMap[conversationId]
               )
-            : group
+            : conversation
         )
       )
 
       persistOutbox(outbox)
+      const currentSelection = state.selectedConversationId
 
       return {
         outbox,
         messages:
-          state.selectedGroupId === groupId
+          currentSelection === conversationId
             ? upsertFeedMessage(state.messages, optimisticMessage)
             : state.messages,
-        groups,
-        totalUnread: sumUnread(groups),
+        conversations,
+        totalUnread: sumConversationUnread(conversations),
       }
     })
 
@@ -937,22 +996,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
   hydrateOutbox: (workspaceId) => {
     const storedOutbox = loadStoredOutbox()
     set((state) => {
-      const groups = applyOutboxToGroups(
-        state.groups,
+      const conversations = applyOutboxToConversations(
+        state.conversations,
         storedOutbox,
         state.runtimeMap
       )
+      const currentSelection = state.selectedConversationId
       return {
         outbox: storedOutbox,
-        groups,
-        messages: state.selectedGroupId
+        conversations,
+        messages: currentSelection
           ? mergeConversationMessagesWithOutbox(
               state.messages,
               storedOutbox,
-              state.selectedGroupId
+              currentSelection
             )
           : state.messages,
-        totalUnread: sumUnread(groups),
+        totalUnread: sumConversationUnread(conversations),
       }
     })
     get().flushOutbox(workspaceId)
@@ -965,35 +1025,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  createGroup: async (
+  createConversation: async (
     workspaceId,
     actorIds,
     content,
     targetActorIdOrIds,
     contentBlocks
   ) => {
-    const res = await api.createGroup(
+    const res = await api.createConversation(
       workspaceId,
       actorIds,
       content,
       targetActorIdOrIds,
       contentBlocks
     )
-    const groupId = res.id || res.sessionId
-    await get().loadGroups(workspaceId)
-    return groupId
+    const conversationId = res.conversationId || res.id
+    await get().loadConversations(workspaceId)
+    return conversationId
   },
 
-  markRead: async (workspaceId, groupId) => {
+  markConversationRead: async (workspaceId, conversationId) => {
     try {
-      await api.markGroupRead(workspaceId, groupId)
+      await api.markConversationRead(workspaceId, conversationId)
       set((state) => {
-        const groups = state.groups.map((group) =>
-          group.id === groupId ? { ...group, unreadCount: 0 } : group
+        const conversations = state.conversations.map((conversation) =>
+          conversation.id === conversationId
+            ? { ...conversation, unreadCount: 0 }
+            : conversation
         )
         return {
-          groups,
-          totalUnread: sumUnread(groups),
+          conversations,
+          totalUnread: sumConversationUnread(conversations),
         }
       })
     } catch (err) {
@@ -1018,22 +1080,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
 
-      const isSelected = state.selectedGroupId === message.conversationId
+      const currentSelection = state.selectedConversationId
+      const isSelected = currentSelection === message.conversationId
       const currentRuntime = state.runtimeMap[message.conversationId] || {}
       const nextRuntime = applyFeedItemToRuntimeMap(currentRuntime, message)
       const runtimeMap =
         nextRuntime === currentRuntime
           ? state.runtimeMap
           : { ...state.runtimeMap, [message.conversationId]: nextRuntime }
-      const groups = applyOutboxToGroups(
-        sortGroups(
-          state.groups.map((group) =>
-            group.id === message.conversationId
-              ? applyRuntimeMapToGroup(
-                  applyFeedMessageToGroup(group, message, isSelected),
+      const conversations = applyOutboxToConversations(
+        sortConversations(
+          state.conversations.map((conversation) =>
+            conversation.id === message.conversationId
+              ? applyRuntimeMapToConversation(
+                  applyFeedMessageToConversation(
+                    conversation,
+                    message,
+                    isSelected
+                  ),
                   runtimeMap[message.conversationId]
                 )
-              : group
+              : conversation
           )
         ),
         nextOutbox,
@@ -1051,9 +1118,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             )
           : state.messages,
         outbox: nextOutbox,
-        groups,
+        conversations,
         runtimeMap,
-        totalUnread: sumUnread(groups),
+        totalUnread: sumConversationUnread(conversations),
       }
     })
   },
@@ -1065,22 +1132,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return state
       }
 
-      const nextRuntimeForGroup = {
+      const nextRuntimeForConversation = {
         ...(state.runtimeMap[payload.conversationId] || {}),
         [payload.snapshot.actorId]: payload.snapshot,
       }
       const runtimeMap = {
         ...state.runtimeMap,
-        [payload.conversationId]: nextRuntimeForGroup,
+        [payload.conversationId]: nextRuntimeForConversation,
       }
-      const groups = state.groups.map((group) =>
-        group.id === payload.conversationId
-          ? applyRuntimeMapToGroup(group, nextRuntimeForGroup)
-          : group
+      const conversations = state.conversations.map((conversation) =>
+        conversation.id === payload.conversationId
+          ? applyRuntimeMapToConversation(
+              conversation,
+              nextRuntimeForConversation
+            )
+          : conversation
       )
 
       return {
-        groups,
+        conversations,
         runtimeMap,
         runtimeSeqMap: {
           ...state.runtimeSeqMap,
@@ -1092,50 +1162,54 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   handleConversationUpdated: (payload) => {
     set((state) => {
-      const hasGroup = state.groups.some(
-        (group) => group.id === payload.conversationId
+      const hasConversation = state.conversations.some(
+        (conversation) => conversation.id === payload.conversationId
       )
-      if (!hasGroup) return state
+      if (!hasConversation) return state
 
-      const groups = sortGroups(
-        state.groups.map((group) => {
-          if (group.id !== payload.conversationId) return group
+      const conversations = sortConversations(
+        state.conversations.map((conversation) => {
+          if (conversation.id !== payload.conversationId) return conversation
 
-          let nextGroup = group
+          let nextConversation = conversation
           if (payload.action === "profile_updated") {
-            const nextTitle = payload.title?.trim() || group.title || group.name
-            nextGroup = {
-              ...nextGroup,
+            const nextTitle =
+              payload.title?.trim() ||
+              conversation.title ||
+              conversation.name
+            nextConversation = {
+              ...nextConversation,
               title: nextTitle,
               name: nextTitle,
               avatarUrl:
                 payload.avatarUrl === undefined
-                  ? group.avatarUrl
+                  ? conversation.avatarUrl
                   : payload.avatarUrl || undefined,
             }
           }
 
           if (payload.action === "cancelled") {
-            nextGroup = {
-              ...nextGroup,
+            nextConversation = {
+              ...nextConversation,
               status: "completed",
             }
           }
 
-          return applyRuntimeMapToGroup(
-            nextGroup,
+          return applyRuntimeMapToConversation(
+            nextConversation,
             state.runtimeMap[payload.conversationId]
           )
         })
       )
 
-      return { groups }
+      return { conversations }
     })
   },
 
   handleInteractionUpdated: (payload) => {
     set((state) => {
-      if (state.selectedGroupId !== payload.conversationId) {
+      const currentSelection = state.selectedConversationId
+      if (currentSelection !== payload.conversationId) {
         return state
       }
 
@@ -1220,7 +1294,7 @@ async function processOutboxEntry(clientMessageId: string) {
     return {
       outbox: nextOutbox,
       messages:
-        currentState.selectedGroupId === currentEntry.conversationId
+        currentState.selectedConversationId === currentEntry.conversationId
           ? mergeConversationMessagesWithOutbox(
               currentState.messages,
               nextOutbox,
@@ -1231,7 +1305,7 @@ async function processOutboxEntry(clientMessageId: string) {
   })
 
   try {
-    const result = await api.sendGroupMessage(
+    const result = await api.sendConversationMessage(
       entry.workspaceId,
       entry.conversationId,
       entry.contentBlocks,
@@ -1274,7 +1348,7 @@ async function processOutboxEntry(clientMessageId: string) {
       return {
         outbox: nextOutbox,
         messages:
-          currentState.selectedGroupId === nextEntry.conversationId
+          currentState.selectedConversationId === nextEntry.conversationId
             ? mergeConversationMessagesWithOutbox(
                 currentState.messages,
                 nextOutbox,
