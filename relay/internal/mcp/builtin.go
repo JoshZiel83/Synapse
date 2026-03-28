@@ -23,6 +23,7 @@ func newBuiltinServer(cfg config.ServerConfig, authStore *runtimeauth.Store) (Se
 	if cfg.Builtin == nil {
 		return nil, fmt.Errorf("builtin config is required")
 	}
+	enabled := config.ServerEnabled(cfg)
 
 	switch cfg.Builtin.Kind {
 	case "chrome":
@@ -31,8 +32,10 @@ func newBuiltinServer(cfg config.ServerConfig, authStore *runtimeauth.Store) (Se
 		}
 
 		server, err := chrome.New(chrome.Config{
+			StableKey:               cfg.StableKey,
 			Name:                    cfg.Name,
 			InstanceID:              cfg.Builtin.InstanceID,
+			Enabled:                 enabled,
 			ConnectionMode:          cfg.Builtin.Chrome.ConnectionMode,
 			Channel:                 cfg.Builtin.Chrome.Channel,
 			ExecutablePath:          cfg.Builtin.Chrome.ExecutablePath,
@@ -49,6 +52,7 @@ func newBuiltinServer(cfg config.ServerConfig, authStore *runtimeauth.Store) (Se
 			Slim:                    cfg.Builtin.Chrome.Slim == nil || *cfg.Builtin.Chrome.Slim,
 			UsageStatistics:         cfg.Builtin.Chrome.UsageStatistics != nil && *cfg.Builtin.Chrome.UsageStatistics,
 			PerformanceCrux:         cfg.Builtin.Chrome.PerformanceCrux != nil && *cfg.Builtin.Chrome.PerformanceCrux,
+			AuthStore:               authStore,
 		})
 		if err != nil {
 			return nil, err
@@ -60,6 +64,7 @@ func newBuiltinServer(cfg config.ServerConfig, authStore *runtimeauth.Store) (Se
 		}
 		server, err := cua.New(cua.Config{
 			StableKey:            cfg.StableKey,
+			Enabled:              enabled,
 			ReadOnly:             cfg.Builtin.CUA.ReadOnly != nil && *cfg.Builtin.CUA.ReadOnly,
 			RelativeCoordinate:   cfg.Builtin.CUA.RelativeCoordinate,
 			ImageSize:            cfg.Builtin.CUA.ImageSize,
@@ -94,25 +99,32 @@ func newBuiltinServer(cfg config.ServerConfig, authStore *runtimeauth.Store) (Se
 			})
 		}
 
-		server, err := filesystem.New(filesystem.Config{
-			StableKey:           cfg.StableKey,
-			Name:                cfg.Name,
+			server, err := filesystem.New(filesystem.Config{
+				StableKey:           cfg.StableKey,
+				Name:                cfg.Name,
+				Enabled:             enabled,
 			ReadOnly:            cfg.Builtin.Filesystem.ReadOnly != nil && *cfg.Builtin.Filesystem.ReadOnly,
 			Scope:               cfg.Builtin.Filesystem.Scope,
 			GlobalAccess:        cfg.Builtin.Filesystem.GlobalAccess,
 			MaxGetFileSizeBytes: cfg.Builtin.Filesystem.MaxGetFileSizeBytes,
 			Roots:               roots,
-			Index: filesystem.IndexConfig{
-				Dir:              filepath.Join(config.DefaultDir(), "indexes", "filesystem", cfg.StableKey),
-				ContentEnabled:   cfg.Builtin.Filesystem.Index.ContentEnabled != nil && *cfg.Builtin.Filesystem.Index.ContentEnabled,
-				FileTypes:        cfg.Builtin.Filesystem.Index.FileTypes,
-				MaxFileSizeBytes: cfg.Builtin.Filesystem.Index.MaxFileSizeBytes,
-				ParsePDF:         cfg.Builtin.Filesystem.Index.ParsePDF == nil || *cfg.Builtin.Filesystem.Index.ParsePDF,
-				ParseOffice:      cfg.Builtin.Filesystem.Index.ParseOffice == nil || *cfg.Builtin.Filesystem.Index.ParseOffice,
-				ParseImages:      cfg.Builtin.Filesystem.Index.ParseImages == nil || *cfg.Builtin.Filesystem.Index.ParseImages,
-			},
-			AuthStore: authStore,
-		})
+				Index: filesystem.IndexConfig{
+					Dir:              filepath.Join(config.DefaultDir(), "indexes", "filesystem", cfg.StableKey),
+					ContentEnabled:   cfg.Builtin.Filesystem.Index.ContentEnabled != nil && *cfg.Builtin.Filesystem.Index.ContentEnabled,
+					FileTypes:        cfg.Builtin.Filesystem.Index.FileTypes,
+					MaxFileSizeBytes: cfg.Builtin.Filesystem.Index.MaxFileSizeBytes,
+					ParsePDF:         cfg.Builtin.Filesystem.Index.ParsePDF == nil || *cfg.Builtin.Filesystem.Index.ParsePDF,
+					ParseOffice:      cfg.Builtin.Filesystem.Index.ParseOffice == nil || *cfg.Builtin.Filesystem.Index.ParseOffice,
+					ParseImages:      cfg.Builtin.Filesystem.Index.ParseImages == nil || *cfg.Builtin.Filesystem.Index.ParseImages,
+				},
+				Backup: filesystem.BackupConfig{
+					Dir:               filepath.Join(config.DefaultDir(), "backups", "filesystem", cfg.StableKey),
+					Enabled:           cfg.Builtin.Filesystem.Backup.Enabled == nil || *cfg.Builtin.Filesystem.Backup.Enabled,
+					MaxTotalSizeBytes: cfg.Builtin.Filesystem.Backup.MaxTotalSizeBytes,
+					MaxFileSizeBytes:  cfg.Builtin.Filesystem.Backup.MaxFileSizeBytes,
+				},
+				AuthStore: authStore,
+			})
 		if err != nil {
 			return nil, err
 		}

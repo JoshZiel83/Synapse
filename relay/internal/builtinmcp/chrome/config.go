@@ -1,8 +1,12 @@
 package chrome
 
+import "github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
+
 type Config struct {
+	StableKey               string
 	Name                    string
 	InstanceID              string
+	Enabled                 bool
 	ConnectionMode          string
 	Channel                 string
 	ExecutablePath          string
@@ -19,4 +23,5 @@ type Config struct {
 	Slim                    bool
 	UsageStatistics         bool
 	PerformanceCrux         bool
+	AuthStore               *runtimeauth.Store
 }

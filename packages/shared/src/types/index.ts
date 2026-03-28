@@ -2702,9 +2702,14 @@ export interface RelayCuaAuthorizationScope {
   mode: "control";
 }
 
+export interface RelayChromeAuthorizationScope {
+  capability: "chrome";
+}
+
 export type RelayAuthorizationScope =
   | RelayFilesystemAuthorizationScope
-  | RelayCuaAuthorizationScope;
+  | RelayCuaAuthorizationScope
+  | RelayChromeAuthorizationScope;
 
 export interface RelayAuthorizationInteractionSummary {
   relayToolName: string;

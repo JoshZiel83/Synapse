@@ -1478,7 +1478,7 @@ export function registerCallableToolPlugins(): void {
           capability: {
             type: "string",
             description: "The kind of runtime access to request.",
-            enum: ["filesystem", "cua"],
+            enum: ["filesystem", "cua", "chrome"],
           },
           duration: {
             type: "string",
@@ -1529,7 +1529,7 @@ export function registerCallableToolPlugins(): void {
               capability: {
                 type: "string",
                 description: "The kind of runtime access to request.",
-                enum: ["filesystem", "cua"],
+                enum: ["filesystem", "cua", "chrome"],
               },
               duration: {
                 type: "string",
@@ -1653,9 +1653,18 @@ export function registerCallableToolPlugins(): void {
           capability: "cua",
           mode: "control",
         };
+      } else if (capability === "chrome") {
+        if (duration !== "persistent") {
+          return JSON.stringify({
+            error: "chrome authorization requests must use persistent duration",
+          });
+        }
+        requestedScope = {
+          capability: "chrome",
+        };
       } else {
         return JSON.stringify({
-          error: "capability must be filesystem or cua",
+          error: "capability must be filesystem, cua, or chrome",
         });
       }
 

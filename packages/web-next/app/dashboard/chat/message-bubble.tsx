@@ -453,6 +453,14 @@ function describeRelayAuthorizationScope(scope: RelayAuthorizationScope) {
     }
   }
 
+  if (scope.capability === "chrome") {
+    return {
+      icon: Globe,
+      summary: "browser access",
+      detail: "Chrome DevTools MCP",
+    }
+  }
+
   return {
     icon: MousePointerClick,
     summary: "control access",

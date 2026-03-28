@@ -328,6 +328,92 @@ servers:
 	}
 }
 
+func TestLoadAppliesDefaultBuiltinFilesystemBackupLimits(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	data := []byte(`
+servers:
+  - name: filesystem
+    transport: builtin
+    builtin:
+      kind: filesystem
+      instance_id: filesystem_default
+      filesystem:
+        scope: roots
+        roots:
+          - path: /tmp
+            access: rw
+        index:
+          max_file_size_bytes: 1024
+`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	backup := cfg.Servers[0].Builtin.Filesystem.Backup
+	if backup.Enabled == nil || !*backup.Enabled {
+		t.Fatalf("expected filesystem backups to default to enabled, got %#v", backup.Enabled)
+	}
+	if backup.MaxTotalSizeBytes != defaultBuiltinFilesystemBackupMaxTotalSizeBytes {
+		t.Fatalf("expected default backup total size %d, got %d", defaultBuiltinFilesystemBackupMaxTotalSizeBytes, backup.MaxTotalSizeBytes)
+	}
+	if backup.MaxFileSizeBytes != defaultBuiltinFilesystemBackupMaxFileSizeBytes {
+		t.Fatalf("expected default backup file size %d, got %d", defaultBuiltinFilesystemBackupMaxFileSizeBytes, backup.MaxFileSizeBytes)
+	}
+}
+
+func TestValidateBuiltinFilesystemBackupRejectsFileLimitAboveTotalLimit(t *testing.T) {
+	cfg := &Config{
+		Relay: RelayConfig{
+			ServerBaseURL:         "http://127.0.0.1:3001",
+			WebSocketURL:          "ws://127.0.0.1:3001/ws/relay",
+			DeviceID:              "device-123",
+			PrivateKeyPath:        "/tmp/device-key.pem",
+			ServerTLSPublicKeyPin: "",
+		},
+		Servers: []ServerConfig{
+			{
+				Name:      "filesystem",
+				Transport: "builtin",
+				Builtin: &BuiltinServerConfig{
+					Kind:       "filesystem",
+					InstanceID: "filesystem_default",
+					Filesystem: &BuiltinFilesystemConfig{
+						Scope: "roots",
+						Roots: []BuiltinFilesystemRootConfig{
+							{Path: "/tmp", Access: "rw"},
+						},
+						Index: BuiltinFilesystemIndexConfig{
+							MaxFileSizeBytes: 1024,
+						},
+						Backup: BuiltinFilesystemBackupConfig{
+							MaxTotalSizeBytes: 1024,
+							MaxFileSizeBytes:  2048,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	errs := Validate(cfg)
+	found := false
+	for _, err := range errs {
+		if err == `server "filesystem": builtin.filesystem.backup.max_file_size_bytes must be less than or equal to builtin.filesystem.backup.max_total_size_bytes` {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected backup size validation error, got %v", errs)
+	}
+}
+
 func TestValidateBuiltinChromeServer(t *testing.T) {
 	cfg := &Config{
 		Relay: RelayConfig{
