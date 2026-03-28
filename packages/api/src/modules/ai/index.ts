@@ -501,6 +501,48 @@ function formatMcpExecutionErrorMessage(
   return `Error: ${message} Re-read the latest tool definitions before retrying.`;
 }
 
+function getToolErrorDetails(
+  metadata?: Record<string, unknown>,
+): {
+  kind?: "model_actionable" | "internal";
+  retryable?: boolean;
+  code?: string;
+} {
+  const raw =
+    typeof metadata?.toolError === "object" && metadata.toolError !== null
+      ? (metadata.toolError as Record<string, unknown>)
+      : null;
+
+  return {
+    kind:
+      raw?.kind === "model_actionable" || raw?.kind === "internal"
+        ? raw.kind
+        : undefined,
+    retryable:
+      typeof raw?.retryable === "boolean" ? raw.retryable : undefined,
+    code: typeof raw?.code === "string" ? raw.code : undefined,
+  };
+}
+
+function buildCallableInternalErrorNotice(toolNames: string[]) {
+  const uniqueToolNames = Array.from(new Set(toolNames));
+  const renderedToolNames = uniqueToolNames
+    .map((toolName) => `\`${toolName}\``)
+    .join(", ");
+  return {
+    kind: "system_notice" as const,
+    noticeType: "task_instruction" as const,
+    scope: "private" as const,
+    surface: "internal" as const,
+    parts: textBlocks(
+      `The callable tool(s) ${renderedToolNames} failed with internal system errors. ` +
+        `These failures are not fixable by changing tool arguments alone. ` +
+        `Do not retry the same failing call unless external state has changed. ` +
+        `Choose an alternate path, send a visible status/failure update if needed, or sleep.`,
+    ),
+  };
+}
+
 export async function actorThink(
   actor: Actor,
   contextWindow: ProviderContextWindow,
@@ -1089,6 +1131,7 @@ export async function actorThink(
                 res.isError && typeof res.content === "string"
                   ? res.content
                   : undefined,
+              metadata: res.metadata,
               parts: blocksToToolResultParts(blocks),
             });
             await updateToolCallStatus(
@@ -1097,6 +1140,14 @@ export async function actorThink(
             );
           }
         }
+
+        const callableInternalErrorToolNames = callableResults
+          .filter(
+            (result) =>
+              result.isError &&
+              getToolErrorDetails(result.metadata).kind === "internal",
+          )
+          .map((result) => result.toolName);
 
         // Execute MCP tools via mcpExecutor, with content ingestion
         const mcpResults: {
@@ -1154,6 +1205,7 @@ export async function actorThink(
                   attemptId: attemptRow.id,
                   isError: true,
                   errorMessage: params.message,
+                  metadata: params.metadata,
                   parts: blocksToToolResultParts(content),
                 });
                 await updateToolCallStatus(params.callRow.id, "failed");
@@ -1253,6 +1305,7 @@ export async function actorThink(
                   errorMessage: normalizedResult.isError
                     ? extractText(normalizedContent)
                     : undefined,
+                  metadata,
                   parts: blocksToToolResultParts(normalizedContent),
                 });
                 await updateToolCallStatus(
@@ -1400,6 +1453,12 @@ export async function actorThink(
             toolResults: roundToolResults,
           },
         ]);
+
+        if (callableInternalErrorToolNames.length > 0) {
+          appendPrivateTailItems([
+            buildCallableInternalErrorNotice(callableInternalErrorToolNames),
+          ]);
+        }
 
         if (mcpReplanRequired && !options?.mcpRefresh) {
           throw new Error(

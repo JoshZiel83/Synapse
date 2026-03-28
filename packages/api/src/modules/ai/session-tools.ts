@@ -16,6 +16,10 @@ import type {
   InteractionQuestionFieldDefinition,
   InteractionQuestionFieldType,
 } from "@synapse/shared/types";
+import {
+  rethrowToolExecutionError,
+  throwToolError,
+} from "./tool-errors.js";
 import { registerToolPlugin } from "./tool-plugins.js";
 import { query } from "../../infrastructure/database/index.js";
 import { getSession } from "../session/service.js";
@@ -672,12 +676,12 @@ export function registerCallableToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const session = await getSession(context.sessionId);
       if (!session) {
-        return JSON.stringify({ error: "Session not found" });
+        throwToolError("Session not found");
       }
 
       const skillName = String((input as any).skillName || "").trim();
@@ -686,7 +690,7 @@ export function registerCallableToolPlugins(): void {
           ? String((input as any).path).trim()
           : undefined;
       if (!skillName) {
-        return JSON.stringify({ error: "skillName is required" });
+        throwToolError("skillName is required");
       }
 
       try {
@@ -707,7 +711,7 @@ export function registerCallableToolPlugins(): void {
           result.asset.textContent || "",
         ].join("\n");
       } catch (err: any) {
-        return JSON.stringify({ error: err.message || "Failed to read skill" });
+        rethrowToolExecutionError(err, "Failed to read skill");
       }
     },
   });
@@ -734,8 +738,7 @@ export function registerCallableToolPlugins(): void {
     execute: async (input) => {
       const parsed = currentTimeInputSchema.safeParse(input);
       if (!parsed.success) {
-        return JSON.stringify({
-          error: "Invalid input for get_current_time.",
+        throwToolError("Invalid input for get_current_time.", {
           details: parsed.error.issues.map((issue) => issue.message),
         });
       }
@@ -758,10 +761,12 @@ export function registerCallableToolPlugins(): void {
           weekday,
         });
       } catch (error: any) {
-        return JSON.stringify({
-          error: `Invalid timeZone "${resolvedTimeZone}". Use an IANA timezone such as Asia/Shanghai or America/Los_Angeles.`,
-          details: error?.message ? [error.message] : undefined,
-        });
+        throwToolError(
+          `Invalid timeZone "${resolvedTimeZone}". Use an IANA timezone such as Asia/Shanghai or America/Los_Angeles.`,
+          {
+            details: error?.message ? [error.message] : undefined,
+          },
+        );
       }
     },
   });
@@ -864,8 +869,7 @@ export function registerCallableToolPlugins(): void {
         normalizeRawSendToInput(input as Record<string, unknown>),
       );
       if (!parsed.success) {
-        return JSON.stringify({
-          error: "Invalid input for send_to.",
+        throwToolError("Invalid input for send_to.", {
           details: parsed.error.issues.map((issue) => issue.message),
         });
       }
@@ -878,16 +882,15 @@ export function registerCallableToolPlugins(): void {
 
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const session = await getSession(context.sessionId);
       const conversationId = getMultiMemberConversationId(session);
       if (!session || !conversationId) {
-        return JSON.stringify({
-          error:
-            "Current session is not attached to a multi-member conversation",
-        });
+        throwToolError(
+          "Current session is not attached to a multi-member conversation",
+        );
       }
 
       const allMembers = await getConversationMembers(conversationId);
@@ -956,10 +959,9 @@ export function registerCallableToolPlugins(): void {
 
       if (resolved.length === 0) {
         const available = candidates.map((candidate) => candidate.label);
-        return JSON.stringify({
-          error: "No valid recipients found.",
+        throwToolError("No valid recipients found.", {
           details: errors,
-          availableMembers: available,
+          extra: { availableMembers: available },
         });
       }
 
@@ -975,8 +977,7 @@ export function registerCallableToolPlugins(): void {
         },
       });
       if (normalizedMessage.referenceWarnings.length > 0) {
-        return JSON.stringify({
-          error: "Invalid inline references in message.",
+        throwToolError("Invalid inline references in message.", {
           details: normalizedMessage.referenceWarnings,
         });
       }
@@ -1149,16 +1150,15 @@ export function registerCallableToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const session = await getSession(context.sessionId);
       const conversationId = getMultiMemberConversationId(session);
       if (!session || !conversationId) {
-        return JSON.stringify({
-          error:
-            "Current session is not attached to a multi-member conversation",
-        });
+        throwToolError(
+          "Current session is not attached to a multi-member conversation",
+        );
       }
 
       const allMembers = await getConversationMembers(conversationId);
@@ -1167,16 +1167,14 @@ export function registerCallableToolPlugins(): void {
           member.actor_id === context.actorId && member.state === "active",
       );
       if (!requesterMember) {
-        return JSON.stringify({
-          error: "Current actor is not an active member of this conversation",
-        });
+        throwToolError(
+          "Current actor is not an active member of this conversation",
+        );
       }
 
       const candidates = buildUserInteractionCandidates(allMembers);
       if (candidates.length === 0) {
-        return JSON.stringify({
-          error: "There are no active user members in this conversation",
-        });
+        throwToolError("There are no active user members in this conversation");
       }
 
       const targetMemberId = String((input as any).targetMemberId || "").trim();
@@ -1185,14 +1183,12 @@ export function registerCallableToolPlugins(): void {
         candidates,
       );
       if (!resolution.candidate) {
-        return JSON.stringify({
-          error: resolution.error || "Target user not found",
-        });
+        throwToolError(resolution.error || "Target user not found");
       }
 
       const question = String((input as any).question || "").trim();
       if (!question) {
-        return JSON.stringify({ error: "question is required" });
+        throwToolError("question is required");
       }
 
       const instructions =
@@ -1210,18 +1206,16 @@ export function registerCallableToolPlugins(): void {
         ),
       );
       if (optionLabels.length < 1) {
-        return JSON.stringify({
-          error: "options must contain at least one non-empty choice",
-        });
+        throwToolError("options must contain at least one non-empty choice");
       }
 
       const selectionMode =
         normalizeQuestionFieldType((input as any).selectionMode) ||
         "single_select";
       if (selectionMode === "text") {
-        return JSON.stringify({
-          error: "selectionMode must be single_select or multi_select",
-        });
+        throwToolError(
+          "selectionMode must be single_select or multi_select",
+        );
       }
 
       const field: InteractionQuestionFieldDefinition = {
@@ -1413,16 +1407,15 @@ export function registerCallableToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const session = await getSession(context.sessionId);
       const conversationId = getMultiMemberConversationId(session);
       if (!session || !conversationId) {
-        return JSON.stringify({
-          error:
-            "Current session is not attached to a multi-member conversation",
-        });
+        throwToolError(
+          "Current session is not attached to a multi-member conversation",
+        );
       }
 
       const allMembers = await getConversationMembers(conversationId);
@@ -1431,16 +1424,14 @@ export function registerCallableToolPlugins(): void {
           member.actor_id === context.actorId && member.state === "active",
       );
       if (!requesterMember) {
-        return JSON.stringify({
-          error: "Current actor is not an active member of this conversation",
-        });
+        throwToolError(
+          "Current actor is not an active member of this conversation",
+        );
       }
 
       const candidates = buildUserInteractionCandidates(allMembers);
       if (candidates.length === 0) {
-        return JSON.stringify({
-          error: "There are no active user members in this conversation",
-        });
+        throwToolError("There are no active user members in this conversation");
       }
 
       const targetMemberId = String((input as any).targetMemberId || "").trim();
@@ -1449,14 +1440,12 @@ export function registerCallableToolPlugins(): void {
         candidates,
       );
       if (!resolution.candidate) {
-        return JSON.stringify({
-          error: resolution.error || "Target user not found",
-        });
+        throwToolError(resolution.error || "Target user not found");
       }
 
       const title = String((input as any).title || "").trim();
       if (!title) {
-        return JSON.stringify({ error: "title is required" });
+        throwToolError("title is required");
       }
 
       const instructions =
@@ -1468,7 +1457,7 @@ export function registerCallableToolPlugins(): void {
         (input as any).fields,
       );
       if (error) {
-        return JSON.stringify({ error });
+        throwToolError(error);
       }
 
       const interaction = await createQuestionInteractionRequest({
@@ -1594,16 +1583,15 @@ export function registerCallableToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const session = await getSession(context.sessionId);
       const conversationId = getMultiMemberConversationId(session);
       if (!session || !conversationId) {
-        return JSON.stringify({
-          error:
-            "Current session is not attached to a multi-member conversation",
-        });
+        throwToolError(
+          "Current session is not attached to a multi-member conversation",
+        );
       }
 
       const allMembers = await getConversationMembers(conversationId);
@@ -1612,22 +1600,21 @@ export function registerCallableToolPlugins(): void {
           member.actor_id === context.actorId && member.state === "active",
       );
       if (!requesterMember) {
-        return JSON.stringify({
-          error: "Current actor is not an active member of this conversation",
-        });
+        throwToolError(
+          "Current actor is not an active member of this conversation",
+        );
       }
 
       const candidates = buildUserInteractionCandidates(allMembers);
       if (candidates.length === 0) {
-        return JSON.stringify({
-          error:
-            "This conversation has no active user who could receive a relay authorization request",
-        });
+        throwToolError(
+          "This conversation has no active user who could receive a relay authorization request",
+        );
       }
 
       const relayToolName = String((input as any).relayToolName || "").trim();
       if (!relayToolName) {
-        return JSON.stringify({ error: "relayToolName is required" });
+        throwToolError("relayToolName is required");
       }
 
       const relayTarget = await resolveRelayTargetForNamespacedTool({
@@ -1639,15 +1626,14 @@ export function registerCallableToolPlugins(): void {
         namespacedToolName: relayToolName,
       });
       if (!relayTarget) {
-        return JSON.stringify({
-          error: `Relay tool "${relayToolName}" is not currently available in this conversation.`,
-        });
+        throwToolError(
+          `Relay tool "${relayToolName}" is not currently available in this conversation.`,
+        );
       }
       if (!relayTarget.runtimeSessionId) {
-        return JSON.stringify({
-          error:
-            "This relay tool does not have an active runtime session yet. Call the relay tool first, then request authorization.",
-        });
+        throwToolError(
+          "This relay tool does not have an active runtime session yet. Call the relay tool first, then request authorization.",
+        );
       }
 
       const requesterAllowed = await authorizeAction({
@@ -1656,10 +1642,9 @@ export function registerCallableToolPlugins(): void {
         resourceId: relayTarget.exposureId,
       });
       if (!requesterAllowed) {
-        return JSON.stringify({
-          error:
-            "Current actor is not allowed to request authorization for this relay exposure",
-        });
+        throwToolError(
+          "Current actor is not allowed to request authorization for this relay exposure",
+        );
       }
 
       const capability = String((input as any).capability || "").trim();
@@ -1671,19 +1656,18 @@ export function registerCallableToolPlugins(): void {
         const path = String((input as any).path || "").trim();
         const access = String((input as any).access || "").trim();
         if (!path) {
-          return JSON.stringify({
-            error: "path is required for filesystem authorization requests",
-          });
+          throwToolError(
+            "path is required for filesystem authorization requests",
+          );
         }
         if (
           access !== "read" &&
           access !== "write" &&
           access !== "read_write"
         ) {
-          return JSON.stringify({
-            error:
-              "access must be read, write, or read_write for filesystem requests",
-          });
+          throwToolError(
+            "access must be read, write, or read_write for filesystem requests",
+          );
         }
         requestedScope = {
           capability: "filesystem",
@@ -1697,22 +1681,20 @@ export function registerCallableToolPlugins(): void {
         };
       } else if (capability === "chrome") {
         if (duration !== "persistent") {
-          return JSON.stringify({
-            error: "chrome authorization requests must use persistent duration",
-          });
+          throwToolError(
+            "chrome authorization requests must use persistent duration",
+          );
         }
         requestedScope = {
           capability: "chrome",
         };
       } else {
-        return JSON.stringify({
-          error: "capability must be filesystem, cua, or chrome",
-        });
+        throwToolError("capability must be filesystem, cua, or chrome");
       }
 
       const reason = String((input as any).reason || "").trim();
       if (!reason) {
-        return JSON.stringify({ error: "reason is required" });
+        throwToolError("reason is required");
       }
 
       const existing = await findOpenRelayAuthorizationInteraction({
@@ -1752,10 +1734,9 @@ export function registerCallableToolPlugins(): void {
         .filter((entry) => entry.allowed)
         .map((entry) => entry.candidate);
       if (availableAuthorizers.length === 0) {
-        return JSON.stringify({
-          error:
-            "No active user in this conversation is currently allowed to authorize runtime access for this relay device",
-        });
+        throwToolError(
+          "No active user in this conversation is currently allowed to authorize runtime access for this relay device",
+        );
       }
 
       const interaction = await createRelayAuthorizationInteractionRequest({
@@ -1836,16 +1817,15 @@ export function registerCallableToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const session = await getSession(context.sessionId);
       const conversationId = getMultiMemberConversationId(session);
       if (!session || !conversationId) {
-        return JSON.stringify({
-          error:
-            "Current session is not attached to a multi-member conversation",
-        });
+        throwToolError(
+          "Current session is not attached to a multi-member conversation",
+        );
       }
 
       const reason =
@@ -1853,7 +1833,7 @@ export function registerCallableToolPlugins(): void {
           ? String((input as any).reason).trim()
           : "";
       if (!reason) {
-        return JSON.stringify({ error: "reason is required" });
+        throwToolError("reason is required");
       }
 
       const candidates = await listInviteableActors({
@@ -1920,28 +1900,30 @@ export function registerCallableToolPlugins(): void {
       }
 
       if (resolvedActors.length === 0) {
-        return JSON.stringify({
-          error: "No inviteable actors were resolved.",
+        throwToolError("No inviteable actors were resolved.", {
           details: resolutionErrors,
-          availableCandidates: candidates.map((candidate) => ({
-            id: candidate.id,
-            name: candidate.name,
-            title: candidate.title || candidate.role || "Actor",
-            summary: candidate.summary,
-          })),
+          extra: {
+            availableCandidates: candidates.map((candidate) => ({
+              id: candidate.id,
+              name: candidate.name,
+              title: candidate.title || candidate.role || "Actor",
+              summary: candidate.summary,
+            })),
+          },
         });
       }
 
       if (resolutionErrors.length > 0) {
-        return JSON.stringify({
-          error: "Some requested actors are invalid or ambiguous.",
+        throwToolError("Some requested actors are invalid or ambiguous.", {
           details: resolutionErrors,
-          availableCandidates: candidates.map((candidate) => ({
-            id: candidate.id,
-            name: candidate.name,
-            title: candidate.title || candidate.role || "Actor",
-            summary: candidate.summary,
-          })),
+          extra: {
+            availableCandidates: candidates.map((candidate) => ({
+              id: candidate.id,
+              name: candidate.name,
+              title: candidate.title || candidate.role || "Actor",
+              summary: candidate.summary,
+            })),
+          },
         });
       }
 
@@ -1985,9 +1967,8 @@ export function registerCallableToolPlugins(): void {
           }));
 
         if (invitedActors.length === 0) {
-          return JSON.stringify({
-            error: "No new actors were invited.",
-            skippedActors,
+          throwToolError("No new actors were invited.", {
+            extra: { skippedActors },
           });
         }
 
@@ -2023,7 +2004,7 @@ export function registerCallableToolPlugins(): void {
               : `${invitedActors.map((candidate) => candidate.name).join(", ")} have been invited to the conversation and notified.`,
         });
       } catch (err: any) {
-        throw new Error(`Failed to invite actor(s): ${err.message}`);
+        rethrowToolExecutionError(err, "Failed to invite actor(s)");
       }
     },
   });
@@ -2054,12 +2035,12 @@ export function registerCallableToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const session = await getSession(context.sessionId);
       if (!session) {
-        return JSON.stringify({ error: "Session not found" });
+        throwToolError("Session not found");
       }
 
       const queryText = String((input as any).queryText || "").trim();
@@ -2068,7 +2049,7 @@ export function registerCallableToolPlugins(): void {
         Math.min(10, parseInt(String((input as any).limit || "5"), 10) || 5),
       );
       if (!queryText) {
-        return JSON.stringify({ error: "queryText is required" });
+        throwToolError("queryText is required");
       }
 
       const result = await runMemorySearch(context.workspaceId, {
@@ -2207,12 +2188,12 @@ export function registerCallableToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const session = await getSession(context.sessionId);
       if (!session) {
-        return JSON.stringify({ error: "Session not found" });
+        throwToolError("Session not found");
       }
 
       const name = String((input as any).name || "").trim();
@@ -2244,7 +2225,7 @@ export function registerCallableToolPlugins(): void {
           : undefined;
 
       if (!name || !message) {
-        return JSON.stringify({ error: "name and message are required" });
+        throwToolError("name and message are required");
       }
 
       try {
@@ -2296,9 +2277,7 @@ export function registerCallableToolPlugins(): void {
           message: `Scheduled self wakeup created: ${rule.name}.`,
         });
       } catch (err: any) {
-        return JSON.stringify({
-          error: err.message || "Failed to create schedule",
-        });
+        rethrowToolExecutionError(err, "Failed to create schedule");
       }
     },
   });
@@ -2342,7 +2321,7 @@ export function registerCallableToolPlugins(): void {
     execute: async () => {
       const context = getToolExecutionContext();
       if (!context?.sessionId) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const sources = await listAutomationEventSources(context.workspaceId, {
@@ -2484,12 +2463,12 @@ export function registerCallableToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const session = await getSession(context.sessionId);
       if (!session) {
-        return JSON.stringify({ error: "Session not found" });
+        throwToolError("Session not found");
       }
 
       const name = String((input as any).name || "").trim();
@@ -2514,9 +2493,7 @@ export function registerCallableToolPlugins(): void {
           : undefined;
 
       if (!name || !eventSourceId || !message) {
-        return JSON.stringify({
-          error: "name, eventSourceId, and message are required",
-        });
+        throwToolError("name, eventSourceId, and message are required");
       }
 
       let matcher: Record<string, unknown> | undefined;
@@ -2524,13 +2501,11 @@ export function registerCallableToolPlugins(): void {
         try {
           const parsed = JSON.parse(matcherInput) as unknown;
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            return JSON.stringify({
-              error: "matcher must be a JSON object string",
-            });
+            throwToolError("matcher must be a JSON object string");
           }
           matcher = parsed as Record<string, unknown>;
         } catch {
-          return JSON.stringify({ error: "matcher must be valid JSON" });
+          throwToolError("matcher must be valid JSON");
         }
       }
 
@@ -2578,9 +2553,7 @@ export function registerCallableToolPlugins(): void {
           message: `Event subscription created: ${rule.name}.`,
         });
       } catch (err: any) {
-        return JSON.stringify({
-          error: err.message || "Failed to create event subscription",
-        });
+        rethrowToolExecutionError(err, "Failed to create event subscription");
       }
     },
   });
@@ -2634,12 +2607,12 @@ export function registerCallableToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const eventSourceId = String((input as any).eventSourceId || "").trim();
       if (!eventSourceId) {
-        return JSON.stringify({ error: "eventSourceId is required" });
+        throwToolError("eventSourceId is required");
       }
 
       const occurrences = await listAutomationOccurrences(context.workspaceId, {
@@ -2691,7 +2664,7 @@ export function registerCallableToolPlugins(): void {
     execute: async () => {
       const context = getToolExecutionContext();
       if (!context?.sessionId) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const rules = await listAutomationRules(context.workspaceId, {
@@ -2783,11 +2756,11 @@ export function registerCallableToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context?.sessionId) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
       const automationId = String((input as any).automationId || "").trim();
       if (!automationId) {
-        return JSON.stringify({ error: "automationId is required" });
+        throwToolError("automationId is required");
       }
 
       const rules = await listAutomationRules(context.workspaceId, {
@@ -2795,9 +2768,7 @@ export function registerCallableToolPlugins(): void {
       });
       const rule = rules.find((entry) => entry.id === automationId);
       if (!rule) {
-        return JSON.stringify({
-          error: "Automation not found in this session scope",
-        });
+        throwToolError("Automation not found in this session scope");
       }
 
       await deleteAutomationRule(context.workspaceId, automationId, {
@@ -2854,12 +2825,12 @@ export function registerCallableToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: "No session context available" });
+        throwToolError("No session context available");
       }
 
       const session = await getSession(context.sessionId);
       if (!session) {
-        return JSON.stringify({ error: "Session not found" });
+        throwToolError("Session not found");
       }
 
       const summary =
