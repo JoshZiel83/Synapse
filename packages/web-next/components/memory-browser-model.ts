@@ -10,7 +10,13 @@ import {
   type MemoryStatus,
 } from "@synapse/shared"
 
-import { Bot, Building2, MessagesSquare, type LucideIcon, UserRound } from "lucide-react"
+import {
+  Bot,
+  Building2,
+  MessagesSquare,
+  type LucideIcon,
+  UserRound,
+} from "lucide-react"
 
 import { createEmptyTextContentBlock } from "@/components/actor-editor-model"
 
@@ -82,7 +88,9 @@ export function normalizeGroupOption(group: any): GroupOption {
     id: group.id,
     title: group.title || group.name || "Untitled conversation",
     actorIds: Array.isArray(group.participants)
-      ? group.participants.map((participant: any) => participant.id).filter(Boolean)
+      ? group.participants
+          .map((participant: any) => participant.id)
+          .filter(Boolean)
       : [],
   }
 }
@@ -96,7 +104,9 @@ export function summarizeMemory(memory: Memory) {
     return text.length > 160 ? `${text.slice(0, 157)}...` : text
   }
 
-  const fileBlock = memory.contentBlocks.find((block) => block.type === "file_ref")
+  const fileBlock = memory.contentBlocks.find(
+    (block) => block.type === "file_ref"
+  )
   if (fileBlock?.originalName) {
     return fileBlock.originalName
   }
@@ -109,12 +119,16 @@ export function cloneBlocks(blocks: CanonicalContentBlock[]) {
 }
 
 export function hasMeaningfulBlocks(blocks: CanonicalContentBlock[]) {
-  return blocks.some((block) => block.type === "file_ref" || block.text.trim().length > 0)
+  return blocks.some((block) => {
+    if (block.type === "file_ref") return true
+    if (block.type === "mention") return true
+    return block.text.trim().length > 0
+  })
 }
 
 export function createDraftState(
   preset: MemoryFolderPreset,
-  currentUserId: string,
+  currentUserId: string
 ): EditorState {
   return {
     mode: "create",
@@ -148,7 +162,11 @@ export function createEditorStateFromMemory(memory: Memory): EditorState {
     confidence: memory.confidence,
     tags: memory.tags.join(", "),
     textDigest: memory.textDigest,
-    contentBlocks: cloneBlocks(memory.contentBlocks.length > 0 ? memory.contentBlocks : [createEmptyTextContentBlock("")]),
+    contentBlocks: cloneBlocks(
+      memory.contentBlocks.length > 0
+        ? memory.contentBlocks
+        : [createEmptyTextContentBlock("")]
+    ),
   }
 }
 
@@ -164,33 +182,48 @@ export function serializeEditorState(editor: EditorState | null) {
 export function buildMemoryPayload(editor: EditorState) {
   return {
     ownerScope: editor.ownerScope,
-    ownerActorId: editor.ownerScope === "actor_global" || editor.ownerScope === "actor_conversation"
-      ? editor.ownerActorId || undefined
-      : undefined,
-    ownerConversationId: editor.ownerScope === "conversation" || editor.ownerScope === "actor_conversation"
-      ? editor.ownerConversationId || undefined
-      : undefined,
-    ownerUserId: editor.ownerScope === "user"
-      ? editor.ownerUserId || undefined
-      : undefined,
+    ownerActorId:
+      editor.ownerScope === "actor_global" ||
+      editor.ownerScope === "actor_conversation"
+        ? editor.ownerActorId || undefined
+        : undefined,
+    ownerConversationId:
+      editor.ownerScope === "conversation" ||
+      editor.ownerScope === "actor_conversation"
+        ? editor.ownerConversationId || undefined
+        : undefined,
+    ownerUserId:
+      editor.ownerScope === "user"
+        ? editor.ownerUserId || undefined
+        : undefined,
     category: editor.category,
     status: editor.status,
     stability: editor.stability,
     importance: editor.importance,
     confidence: editor.confidence,
-    tags: editor.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+    tags: editor.tags
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean),
     textDigest: editor.textDigest || undefined,
     contentBlocks: editor.contentBlocks,
   }
 }
 
 function sortByName<T extends { label: string }>(items: T[]) {
-  return [...items].sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }))
+  return [...items].sort((left, right) =>
+    left.label.localeCompare(right.label, undefined, { sensitivity: "base" })
+  )
 }
 
-export function describeFolderVisibility(folder: Pick<MemoryFolderNode, "createPreset" | "description">) {
+export function describeFolderVisibility(
+  folder: Pick<MemoryFolderNode, "createPreset" | "description">
+) {
   if (!folder.createPreset) {
-    return folder.description || "Move a memory into a concrete path to define who can read it."
+    return (
+      folder.description ||
+      "Move a memory into a concrete path to define who can read it."
+    )
   }
 
   switch (folder.createPreset.ownerScope) {
@@ -209,28 +242,41 @@ export function describeFolderVisibility(folder: Pick<MemoryFolderNode, "createP
   }
 }
 
-export function buildMemoryFolderPathLabel(folderId: string, folders: Map<string, MemoryFolderNode>) {
+export function buildMemoryFolderPathLabel(
+  folderId: string,
+  folders: Map<string, MemoryFolderNode>
+) {
   return getFolderSegments(folderId, folders)
     .filter((segment) => segment.id !== "root")
     .map((segment) => segment.label)
     .join(" / ")
 }
 
-export function buildMemoryOwnerStateFromPreset(preset: MemoryFolderPreset, currentUserId: string) {
+export function buildMemoryOwnerStateFromPreset(
+  preset: MemoryFolderPreset,
+  currentUserId: string
+) {
   return {
     ownerScope: preset.ownerScope,
     ownerActorId: preset.ownerActorId || "",
     ownerConversationId: preset.ownerConversationId || "",
-    ownerUserId: preset.ownerScope === "user" ? preset.ownerUserId || currentUserId : "",
+    ownerUserId:
+      preset.ownerScope === "user" ? preset.ownerUserId || currentUserId : "",
   }
 }
 
-export function buildMemoryOwnerPayloadFromPreset(preset: MemoryFolderPreset, currentUserId: string) {
+export function buildMemoryOwnerPayloadFromPreset(
+  preset: MemoryFolderPreset,
+  currentUserId: string
+) {
   return {
     ownerScope: preset.ownerScope,
     ownerActorId: preset.ownerActorId || undefined,
     ownerConversationId: preset.ownerConversationId || undefined,
-    ownerUserId: preset.ownerScope === "user" ? preset.ownerUserId || currentUserId : undefined,
+    ownerUserId:
+      preset.ownerScope === "user"
+        ? preset.ownerUserId || currentUserId
+        : undefined,
   }
 }
 
@@ -273,7 +319,15 @@ export function buildMemoryFolders(params: {
   actors: ActorOption[]
   groups: GroupOption[]
 }) {
-  const { workspaceId, workspaceName, currentUserId, currentUserLabel, memories, actors, groups } = params
+  const {
+    workspaceId,
+    workspaceName,
+    currentUserId,
+    currentUserLabel,
+    memories,
+    actors,
+    groups,
+  } = params
 
   const folders: MemoryFolderNode[] = [
     {
@@ -290,7 +344,10 @@ export function buildMemoryFolders(params: {
       description: "Visible only in your personal memory path.",
       icon: UserRound,
       directMemoryIds: memories
-        .filter((memory) => memory.ownerScope === "user" && memory.ownerUserId === currentUserId)
+        .filter(
+          (memory) =>
+            memory.ownerScope === "user" && memory.ownerUserId === currentUserId
+        )
         .map((memory) => memory.id),
       createPreset: {
         ownerScope: "user",
@@ -315,7 +372,9 @@ export function buildMemoryFolders(params: {
   const actorMap = new Map(actors.map((actor) => [actor.id, actor]))
   const groupMap = new Map(groups.map((group) => [group.id, group]))
 
-  for (const group of sortByName(groups.map((item) => ({ ...item, label: item.title })))) {
+  for (const group of sortByName(
+    groups.map((item) => ({ ...item, label: item.title }))
+  )) {
     const conversationFolderId = `folder:workspace:${workspaceId}:conversation:${group.id}`
     folders.push({
       id: conversationFolderId,
@@ -324,7 +383,11 @@ export function buildMemoryFolders(params: {
       description: "Visible to participants in this conversation.",
       icon: MessagesSquare,
       directMemoryIds: memories
-        .filter((memory) => memory.ownerScope === "conversation" && memory.ownerConversationId === group.id)
+        .filter(
+          (memory) =>
+            memory.ownerScope === "conversation" &&
+            memory.ownerConversationId === group.id
+        )
         .map((memory) => memory.id),
       createPreset: {
         ownerScope: "conversation",
@@ -334,7 +397,11 @@ export function buildMemoryFolders(params: {
 
     const scopedActorIds = new Set(group.actorIds)
     for (const memory of memories) {
-      if (memory.ownerScope === "actor_conversation" && memory.ownerConversationId === group.id && memory.ownerActorId) {
+      if (
+        memory.ownerScope === "actor_conversation" &&
+        memory.ownerConversationId === group.id &&
+        memory.ownerActorId
+      ) {
         scopedActorIds.add(memory.ownerActorId)
       }
     }
@@ -342,7 +409,9 @@ export function buildMemoryFolders(params: {
     for (const actorId of Array.from(scopedActorIds).sort((left, right) => {
       const leftName = actorMap.get(left)?.name || left
       const rightName = actorMap.get(right)?.name || right
-      return leftName.localeCompare(rightName, undefined, { sensitivity: "base" })
+      return leftName.localeCompare(rightName, undefined, {
+        sensitivity: "base",
+      })
     })) {
       const actor = actorMap.get(actorId)
       folders.push({
@@ -356,7 +425,7 @@ export function buildMemoryFolders(params: {
             (memory) =>
               memory.ownerScope === "actor_conversation" &&
               memory.ownerConversationId === group.id &&
-              memory.ownerActorId === actorId,
+              memory.ownerActorId === actorId
           )
           .map((memory) => memory.id),
         createPreset: {
@@ -368,7 +437,9 @@ export function buildMemoryFolders(params: {
     }
   }
 
-  for (const actor of sortByName(actors.map((item) => ({ ...item, label: item.name })))) {
+  for (const actor of sortByName(
+    actors.map((item) => ({ ...item, label: item.name }))
+  )) {
     folders.push({
       id: `folder:workspace:${workspaceId}:actor:${actor.id}`,
       parentId: `folder:workspace:${workspaceId}`,
@@ -376,7 +447,11 @@ export function buildMemoryFolders(params: {
       description: "Available to this actor across conversations.",
       icon: Bot,
       directMemoryIds: memories
-        .filter((memory) => memory.ownerScope === "actor_global" && memory.ownerActorId === actor.id)
+        .filter(
+          (memory) =>
+            memory.ownerScope === "actor_global" &&
+            memory.ownerActorId === actor.id
+        )
         .map((memory) => memory.id),
       createPreset: {
         ownerScope: "actor_global",
@@ -386,7 +461,11 @@ export function buildMemoryFolders(params: {
   }
 
   for (const memory of memories) {
-    if (memory.ownerScope === "user" && memory.ownerUserId && memory.ownerUserId !== currentUserId) {
+    if (
+      memory.ownerScope === "user" &&
+      memory.ownerUserId &&
+      memory.ownerUserId !== currentUserId
+    ) {
       folders.push({
         id: `folder:user:${memory.ownerUserId}`,
         parentId: "root",
@@ -394,7 +473,11 @@ export function buildMemoryFolders(params: {
         description: "Visible only in this personal memory path.",
         icon: UserRound,
         directMemoryIds: memories
-          .filter((item) => item.ownerScope === "user" && item.ownerUserId === memory.ownerUserId)
+          .filter(
+            (item) =>
+              item.ownerScope === "user" &&
+              item.ownerUserId === memory.ownerUserId
+          )
           .map((item) => item.id),
         createPreset: {
           ownerScope: "user",
@@ -403,7 +486,11 @@ export function buildMemoryFolders(params: {
       })
     }
 
-    if (memory.ownerScope === "conversation" && memory.ownerConversationId && !groupMap.has(memory.ownerConversationId)) {
+    if (
+      memory.ownerScope === "conversation" &&
+      memory.ownerConversationId &&
+      !groupMap.has(memory.ownerConversationId)
+    ) {
       folders.push({
         id: `folder:workspace:${workspaceId}:conversation:${memory.ownerConversationId}`,
         parentId: `folder:workspace:${workspaceId}`,
@@ -411,7 +498,11 @@ export function buildMemoryFolders(params: {
         description: "Visible to participants in this conversation.",
         icon: MessagesSquare,
         directMemoryIds: memories
-          .filter((item) => item.ownerScope === "conversation" && item.ownerConversationId === memory.ownerConversationId)
+          .filter(
+            (item) =>
+              item.ownerScope === "conversation" &&
+              item.ownerConversationId === memory.ownerConversationId
+          )
           .map((item) => item.id),
         createPreset: {
           ownerScope: "conversation",
@@ -426,10 +517,16 @@ export function buildMemoryFolders(params: {
     }
   }
 
-  return folders.filter((folder, index, all) => all.findIndex((candidate) => candidate.id === folder.id) === index)
+  return folders.filter(
+    (folder, index, all) =>
+      all.findIndex((candidate) => candidate.id === folder.id) === index
+  )
 }
 
-export function getFolderSegments(folderId: string, folders: Map<string, MemoryFolderNode>) {
+export function getFolderSegments(
+  folderId: string,
+  folders: Map<string, MemoryFolderNode>
+) {
   const segments: MemoryFolderNode[] = []
   let current = folders.get(folderId)
 

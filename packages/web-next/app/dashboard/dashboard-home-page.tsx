@@ -195,6 +195,7 @@ export default function DashboardHomePage() {
         name: actor.name,
         type: "actor",
         targetType: "actor",
+        actorId: actor.id,
         role: actor.role,
         title: actor.title,
         avatarUrl: actor.avatarUrl,

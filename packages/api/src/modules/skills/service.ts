@@ -117,7 +117,12 @@ type InstalledSkillRow = {
   version_metadata: unknown;
   source_catalog_item_id: string | null;
   source_catalog_version_id: string | null;
-  source_sync_mode: "notify" | "manual_merge" | "follow_upstream" | "detached" | null;
+  source_sync_mode:
+    | "notify"
+    | "manual_merge"
+    | "follow_upstream"
+    | "detached"
+    | null;
   source_is_customized: boolean | null;
   source_slug: string | null;
   source_latest_version_id: string | null;
@@ -289,9 +294,7 @@ function defaultDescriptionBlock(): CanonicalContentBlock {
 
 function normalizeSkillDescription(description?: CanonicalContentBlockInput) {
   const normalized = normalizeCanonicalContentBlocks(
-    description
-      ? [description]
-      : [defaultDescriptionBlock()],
+    description ? [description] : [defaultDescriptionBlock()],
   );
 
   return normalized[0] || defaultDescriptionBlock();
@@ -299,7 +302,10 @@ function normalizeSkillDescription(description?: CanonicalContentBlockInput) {
 
 function normalizeSkillAttachments(files?: SkillAttachmentInput[]) {
   if (!Array.isArray(files) || files.length === 0) {
-    return [] as Array<{ path: string; contentBlocks: CanonicalContentBlock[] }>;
+    return [] as Array<{
+      path: string;
+      contentBlocks: CanonicalContentBlock[];
+    }>;
   }
 
   const normalized = files.map((file) => ({
@@ -348,7 +354,10 @@ function normalizeScopeTarget(input: {
       };
     case "conversation":
       if (!input.conversationId) {
-        throw new SkillError(400, "conversationId is required for conversation scope");
+        throw new SkillError(
+          400,
+          "conversationId is required for conversation scope",
+        );
       }
       return {
         bindScope: "conversation",
@@ -370,7 +379,10 @@ function normalizeScopeTarget(input: {
       };
     case "actor_conversation":
       if (!input.actorId || !input.conversationId) {
-        throw new SkillError(400, "actorId and conversationId are required for actor_conversation scope");
+        throw new SkillError(
+          400,
+          "actorId and conversationId are required for actor_conversation scope",
+        );
       }
       return {
         bindScope: "actor_conversation",
@@ -391,7 +403,10 @@ function normalizeScopeTarget(input: {
         userId: input.userId,
       };
     default:
-      throw new SkillError(400, `Unsupported skill scope: ${String(input.useScope)}`);
+      throw new SkillError(
+        400,
+        `Unsupported skill scope: ${String(input.useScope)}`,
+      );
   }
 }
 
@@ -439,7 +454,9 @@ function renderSkillBlocksToText(blocks: CanonicalContentBlock[]) {
     .map((block) =>
       block.type === "text"
         ? block.text
-        : `[File: ${block.originalName} | ${block.mimeType} | ${block.url}]`,
+        : block.type === "mention"
+          ? `@${block.mention.name || "Unknown"}`
+          : `[File: ${block.originalName} | ${block.mimeType} | ${block.url}]`,
     )
     .filter((chunk) => chunk.trim().length > 0)
     .join("\n");
@@ -470,7 +487,10 @@ async function normalizeWorkspaceSkillIconFileId(
   }
 
   if (fileInfo.workspaceId && fileInfo.workspaceId !== workspaceId) {
-    throw new SkillError(400, "Skill icon file must belong to the current workspace");
+    throw new SkillError(
+      400,
+      "Skill icon file must belong to the current workspace",
+    );
   }
 
   return iconFileId;
@@ -486,12 +506,18 @@ async function normalizeMarketplaceSkillIconFileId(
   }
 
   if (authorUserId) {
-    const canAccess = await canUserAccessFileWorkspace(fileInfo.workspaceId, authorUserId);
+    const canAccess = await canUserAccessFileWorkspace(
+      fileInfo.workspaceId,
+      authorUserId,
+    );
     if (!canAccess) {
       throw new SkillError(403, "Skill icon file is not accessible");
     }
   } else if (fileInfo.workspaceId) {
-    throw new SkillError(400, "Marketplace skill icon file must be platform-accessible");
+    throw new SkillError(
+      400,
+      "Marketplace skill icon file must be platform-accessible",
+    );
   }
 
   if (!fileInfo.workspaceId) {
@@ -510,7 +536,9 @@ async function normalizeMarketplaceSkillIconFileId(
   return duplicated.id;
 }
 
-function buildSkillAttachmentFromCatalogFile(row: CatalogFileRow): SkillAttachmentFile {
+function buildSkillAttachmentFromCatalogFile(
+  row: CatalogFileRow,
+): SkillAttachmentFile {
   return {
     id: row.id,
     path: row.path,
@@ -520,7 +548,9 @@ function buildSkillAttachmentFromCatalogFile(row: CatalogFileRow): SkillAttachme
   };
 }
 
-function buildSkillAttachmentFromSkillFile(row: SkillFileRow): SkillAttachmentFile {
+function buildSkillAttachmentFromSkillFile(
+  row: SkillFileRow,
+): SkillAttachmentFile {
   return {
     id: row.id,
     path: row.path,
@@ -564,10 +594,15 @@ function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
   if (scopeOrder[left.bind_scope] !== scopeOrder[right.bind_scope]) {
     return scopeOrder[left.bind_scope] - scopeOrder[right.bind_scope];
   }
-  return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
+  return (
+    new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+  );
 }
 
-function compareVisibleBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
+function compareVisibleBindingPriority(
+  left: SkillAccessRow,
+  right: SkillAccessRow,
+) {
   const statusOrder: Record<SkillAccessRow["status"], number> = {
     active: 0,
     revoked: 1,
@@ -589,10 +624,15 @@ function compareVisibleBindingPriority(left: SkillAccessRow, right: SkillAccessR
   if (isPrimaryAccessBinding(left) !== isPrimaryAccessBinding(right)) {
     return isPrimaryAccessBinding(left) ? -1 : 1;
   }
-  return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
+  return (
+    new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+  );
 }
 
-function matchesScopeTarget(binding: SkillAccessRow, filter?: SkillScopeTarget) {
+function matchesScopeTarget(
+  binding: SkillAccessRow,
+  filter?: SkillScopeTarget,
+) {
   if (!filter) {
     return true;
   }
@@ -634,7 +674,9 @@ function mapMarketplaceEntry(
     slug: row.spec_canonical_slug || row.item_slug,
     name: row.spec_name || row.item_display_name,
     description: descriptionBlockFromStored(row.spec_description_blocks),
-    iconUrl: row.item_icon_file_id ? getFileUrlById(row.item_icon_file_id) : undefined,
+    iconUrl: row.item_icon_file_id
+      ? getFileUrlById(row.item_icon_file_id)
+      : undefined,
     tags: row.item_tags || [],
     authorUserId: row.publisher_owner_user_id || undefined,
     authorName: row.publisher_display_name || undefined,
@@ -670,7 +712,9 @@ function buildInstalledSkillPayload(
     conversationId: chosenBinding?.conversation_id || undefined,
     userId: chosenBinding?.user_id || undefined,
     isEnabled: Boolean(row.is_active),
-    isCustomized: Boolean(row.source_catalog_item_id && row.source_is_customized),
+    isCustomized: Boolean(
+      row.source_catalog_item_id && row.source_is_customized,
+    ),
     installedBy: row.created_by || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -690,9 +734,9 @@ function buildInstalledSkillPayload(
 function buildAvailableSkillPayload(
   row: VisibleSkillRow,
 ): AvailableSkillSummary {
-  const description = renderSkillBlocksToText(
-    [descriptionBlockFromStored(row.description_blocks)],
-  );
+  const description = renderSkillBlocksToText([
+    descriptionBlockFromStored(row.description_blocks),
+  ]);
 
   return {
     instanceId: row.skill_id,
@@ -797,7 +841,10 @@ async function assertWorkspaceSkillSlugAvailable(
   );
 
   if (existing.rows.length > 0) {
-    throw new SkillError(409, `Skill slug "${slug}" already exists in this workspace`);
+    throw new SkillError(
+      409,
+      `Skill slug "${slug}" already exists in this workspace`,
+    );
   }
 }
 
@@ -896,9 +943,7 @@ async function insertSkillFiles(
   }
 }
 
-async function loadCatalogVersionFilesMap(
-  versionIds: string[],
-) {
+async function loadCatalogVersionFilesMap(versionIds: string[]) {
   if (versionIds.length === 0) return new Map<string, SkillAttachmentFile[]>();
 
   const result = await query<CatalogFileRow>(
@@ -919,10 +964,9 @@ async function loadCatalogVersionFilesMap(
   return filesByVersionId;
 }
 
-async function loadSkillFilesMap(
-  skillVersionIds: string[],
-) {
-  if (skillVersionIds.length === 0) return new Map<string, SkillAttachmentFile[]>();
+async function loadSkillFilesMap(skillVersionIds: string[]) {
+  if (skillVersionIds.length === 0)
+    return new Map<string, SkillAttachmentFile[]>();
 
   const result = await query<SkillFileRow>(
     `SELECT id, skill_version_id, path, content_blocks, created_at, updated_at
@@ -1002,13 +1046,11 @@ async function getMarketplaceRowBySlug(
   return result.rows[0] || null;
 }
 
-async function loadInstalledSkillRows(
-  params: {
-    workspaceId: string;
-    skillIds?: string[];
-    sourceSkillId?: string;
-  },
-) {
+async function loadInstalledSkillRows(params: {
+  workspaceId: string;
+  skillIds?: string[];
+  sourceSkillId?: string;
+}) {
   const values: unknown[] = [params.workspaceId];
   const conditions = [`skill.workspace_id = $1`];
 
@@ -1084,10 +1126,7 @@ async function loadAccessBindingsBySkillIds(
   return map;
 }
 
-async function listSkillAccessRows(
-  skillId: string,
-  includeRevoked = false,
-) {
+async function listSkillAccessRows(skillId: string, includeRevoked = false) {
   const rows = await loadAccessBindingsBySkillIds([skillId], includeRevoked);
   return rows.get(skillId) || [];
 }
@@ -1130,9 +1169,13 @@ async function chooseBindingMap(
   for (const skillId of skillIds) {
     const candidates = bindingsBySkillId.get(skillId) || [];
     const matching = preferredTarget
-      ? candidates.filter((binding) => matchesScopeTarget(binding, preferredTarget))
+      ? candidates.filter((binding) =>
+          matchesScopeTarget(binding, preferredTarget),
+        )
       : candidates;
-    const chosen = [...(matching.length > 0 ? matching : candidates)].sort(compareBindingPriority)[0];
+    const chosen = [...(matching.length > 0 ? matching : candidates)].sort(
+      compareBindingPriority,
+    )[0];
     map.set(skillId, chosen);
   }
 
@@ -1146,7 +1189,12 @@ async function findSkillIdsByBindingFilter(params: {
   conversationId?: string;
   userId?: string;
 }) {
-  if (!params.useScope && !params.actorId && !params.conversationId && !params.userId) {
+  if (
+    !params.useScope &&
+    !params.actorId &&
+    !params.conversationId &&
+    !params.userId
+  ) {
     return null;
   }
 
@@ -1321,7 +1369,9 @@ async function ensureSkillBinding(
       operation: "touch",
     }),
     {
-      source: input.isPrimary ? "skill.access.primary.create" : "skill.access.grant",
+      source: input.isPrimary
+        ? "skill.access.primary.create"
+        : "skill.access.grant",
       workspaceId: input.workspaceId,
       skillId: input.skillId,
       bindingId,
@@ -1373,7 +1423,9 @@ export async function listMarketplaceSkills(filters?: {
     );
   }
 
-  const normalizedTags = (filters?.tags || []).map((tag) => tag.trim()).filter(Boolean);
+  const normalizedTags = (filters?.tags || [])
+    .map((tag) => tag.trim())
+    .filter(Boolean);
   if (normalizedTags.length > 0) {
     values.push(normalizedTags);
     conditions.push(`item.tags && $${values.length}::text[]`);
@@ -1391,7 +1443,9 @@ export async function listMarketplaceSkills(filters?: {
     .filter((value): value is string => Boolean(value));
   const [filesMap, installationMap] = await Promise.all([
     loadCatalogVersionFilesMap(latestVersionIds),
-    filters?.workspaceId ? buildMarketplaceInstallationMap(filters.workspaceId) : Promise.resolve(null),
+    filters?.workspaceId
+      ? buildMarketplaceInstallationMap(filters.workspaceId)
+      : Promise.resolve(null),
   ]);
 
   return result.rows.map((row) =>
@@ -1405,15 +1459,22 @@ export async function listMarketplaceSkills(filters?: {
   );
 }
 
-export async function getMarketplaceSkill(skillId: string, workspaceId?: string) {
+export async function getMarketplaceSkill(
+  skillId: string,
+  workspaceId?: string,
+) {
   const row = await getMarketplaceRowById(skillId);
   if (!row) {
     throw new SkillError(404, "Skill not found");
   }
 
   const [filesMap, installationMap] = await Promise.all([
-    loadCatalogVersionFilesMap(row.latest_version_id ? [row.latest_version_id] : []),
-    workspaceId ? buildMarketplaceInstallationMap(workspaceId) : Promise.resolve(null),
+    loadCatalogVersionFilesMap(
+      row.latest_version_id ? [row.latest_version_id] : [],
+    ),
+    workspaceId
+      ? buildMarketplaceInstallationMap(workspaceId)
+      : Promise.resolve(null),
   ]);
 
   return mapMarketplaceEntry(
@@ -1460,10 +1521,17 @@ export async function publishMarketplaceSkill(input: {
   const attachmentFiles = normalizeSkillAttachments(input.attachmentFiles);
 
   const result = await transaction(async (client) => {
-    const publisherId = await ensureMarketplacePublisher(client.query.bind(client), input.authorUserId);
+    const publisherId = await ensureMarketplacePublisher(
+      client.query.bind(client),
+      input.authorUserId,
+    );
     const existing = input.skillId
       ? await getMarketplaceRowById(input.skillId, client.query.bind(client))
-      : await getMarketplaceRowBySlug(publisherId, canonicalSlug, client.query.bind(client));
+      : await getMarketplaceRowBySlug(
+          publisherId,
+          canonicalSlug,
+          client.query.bind(client),
+        );
 
     let itemId = existing?.item_id || null;
     if (existing && existing.item_id !== input.skillId && input.skillId) {
@@ -1475,11 +1543,15 @@ export async function publishMarketplaceSkill(input: {
       canonicalSlug,
       ...(input.metadata || {}),
     };
-    const nextIconFileId = input.iconFileId === undefined
-      ? existing?.item_icon_file_id ?? null
-      : input.iconFileId
-        ? await normalizeMarketplaceSkillIconFileId(input.iconFileId, input.authorUserId)
-        : null;
+    const nextIconFileId =
+      input.iconFileId === undefined
+        ? (existing?.item_icon_file_id ?? null)
+        : input.iconFileId
+          ? await normalizeMarketplaceSkillIconFileId(
+              input.iconFileId,
+              input.authorUserId,
+            )
+          : null;
 
     if (existing) {
       await client.query(
@@ -1563,8 +1635,9 @@ export async function publishMarketplaceSkill(input: {
     );
 
     const versionMetadata = input.metadata || {};
-    const versionId = existingVersion.rows[0]?.id
-      || (
+    const versionId =
+      existingVersion.rows[0]?.id ||
+      (
         await client.query<{ id: string }>(
           `INSERT INTO catalog_versions (
              catalog_item_id,
@@ -1630,7 +1703,11 @@ export async function publishMarketplaceSkill(input: {
       ],
     );
 
-    await upsertCatalogVersionFiles(client.query.bind(client), versionId, attachmentFiles);
+    await upsertCatalogVersionFiles(
+      client.query.bind(client),
+      versionId,
+      attachmentFiles,
+    );
 
     await client.query(
       `UPDATE catalog_items
@@ -1669,7 +1746,10 @@ export async function createWorkspaceSkill(input: {
   const attachmentFiles = normalizeSkillAttachments(input.attachmentFiles);
   assertRequiredSkillFile(attachmentFiles);
   const iconFileId = input.iconFileId
-    ? await normalizeWorkspaceSkillIconFileId(input.iconFileId, input.workspaceId)
+    ? await normalizeWorkspaceSkillIconFileId(
+        input.iconFileId,
+        input.workspaceId,
+      )
     : null;
   const target = normalizeScopeTarget({
     useScope: input.useScope,
@@ -1728,7 +1808,11 @@ export async function createWorkspaceSkill(input: {
     );
     const skillVersionId = insertedVersion.rows[0]!.id;
 
-    await insertSkillFiles(client.query.bind(client), skillVersionId, attachmentFiles);
+    await insertSkillFiles(
+      client.query.bind(client),
+      skillVersionId,
+      attachmentFiles,
+    );
 
     const installedSkillAuthzEntryIds = await queueAuthzRelationships(
       client,
@@ -1766,13 +1850,16 @@ export async function createWorkspaceSkill(input: {
   return getInstalledSkillResponse(input.workspaceId, result.skillId);
 }
 
-export async function listInstalledSkills(workspaceId: string, filters?: {
-  useScope?: SkillUseScope;
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
-  sourceSkillId?: string;
-}) {
+export async function listInstalledSkills(
+  workspaceId: string,
+  filters?: {
+    useScope?: SkillUseScope;
+    actorId?: string;
+    conversationId?: string;
+    userId?: string;
+    sourceSkillId?: string;
+  },
+) {
   const filteredSkillIds = await findSkillIdsByBindingFilter({
     workspaceId,
     useScope: filters?.useScope,
@@ -1811,7 +1898,10 @@ export async function listInstalledSkills(workspaceId: string, filters?: {
   );
 }
 
-export async function getInstalledSkill(workspaceId: string, installedSkillId: string) {
+export async function getInstalledSkill(
+  workspaceId: string,
+  installedSkillId: string,
+) {
   return getInstalledSkillResponse(workspaceId, installedSkillId);
 }
 
@@ -1819,7 +1909,10 @@ export async function getInstalledSkillAccessState(
   workspaceId: string,
   installedSkillId: string,
 ) {
-  const skillRow = await loadInstalledSkillForUpdate(workspaceId, installedSkillId);
+  const skillRow = await loadInstalledSkillForUpdate(
+    workspaceId,
+    installedSkillId,
+  );
   if (!skillRow) {
     throw new SkillError(404, "Installed skill not found");
   }
@@ -2043,8 +2136,11 @@ export async function installMarketplaceSkill(input: {
     throw new SkillError(404, "Marketplace skill not found");
   }
 
-  const sourceFilesMap = await loadCatalogVersionFilesMap([marketplaceSkill.latest_version_id]);
-  const sourceFiles = sourceFilesMap.get(marketplaceSkill.latest_version_id) || [];
+  const sourceFilesMap = await loadCatalogVersionFilesMap([
+    marketplaceSkill.latest_version_id,
+  ]);
+  const sourceFiles =
+    sourceFilesMap.get(marketplaceSkill.latest_version_id) || [];
 
   const result = await transaction(async (client) => {
     const existingSkillId = await findInstalledSkillBySource(
@@ -2054,13 +2150,16 @@ export async function installMarketplaceSkill(input: {
     );
 
     if (existingSkillId) {
-      const bindingResult = await ensureSkillBinding(client.query.bind(client), {
-        skillId: existingSkillId,
-        workspaceId: input.workspaceId,
-        target,
-        createdBy: input.installedBy,
-        isPrimary: false,
-      });
+      const bindingResult = await ensureSkillBinding(
+        client.query.bind(client),
+        {
+          skillId: existingSkillId,
+          workspaceId: input.workspaceId,
+          target,
+          createdBy: input.installedBy,
+          isPrimary: false,
+        },
+      );
 
       return {
         skillId: existingSkillId,
@@ -2071,7 +2170,9 @@ export async function installMarketplaceSkill(input: {
     const installedSlug = await allocateInstalledSkillSlug(
       client.query.bind(client),
       input.workspaceId,
-      sanitizeSlug(marketplaceSkill.spec_canonical_slug || marketplaceSkill.item_slug),
+      sanitizeSlug(
+        marketplaceSkill.spec_canonical_slug || marketplaceSkill.item_slug,
+      ),
     );
 
     const insertedSkill = await client.query<{ id: string }>(
@@ -2098,7 +2199,9 @@ export async function installMarketplaceSkill(input: {
     );
     const skillId = insertedSkill.rows[0]!.id;
 
-    const descriptionBlocks = normalizeStoredBlocks(marketplaceSkill.spec_description_blocks);
+    const descriptionBlocks = normalizeStoredBlocks(
+      marketplaceSkill.spec_description_blocks,
+    );
     const insertedVersion = await client.query<{ id: string }>(
       `INSERT INTO skill_versions (
          skill_id,
@@ -2115,7 +2218,8 @@ export async function installMarketplaceSkill(input: {
         skillId,
         marketplaceSkill.spec_name || marketplaceSkill.item_display_name,
         JSON.stringify(descriptionBlocks),
-        marketplaceSkill.spec_summary_text || renderSkillBlocksToText(descriptionBlocks),
+        marketplaceSkill.spec_summary_text ||
+          renderSkillBlocksToText(descriptionBlocks),
         JSON.stringify({}),
         input.installedBy || null,
       ],
@@ -2141,11 +2245,7 @@ export async function installMarketplaceSkill(input: {
          metadata
        )
        VALUES ($1, $2, $3, 'manual_merge', FALSE, '{}'::jsonb)`,
-      [
-        skillId,
-        marketplaceSkill.item_id,
-        marketplaceSkill.latest_version_id,
-      ],
+      [skillId, marketplaceSkill.item_id, marketplaceSkill.latest_version_id],
     );
 
     await client.query(
@@ -2203,14 +2303,22 @@ export async function updateInstalledSkill(input: {
   isEnabled?: boolean;
   attachmentFiles?: SkillAttachmentInput[];
 }) {
-  const existing = await loadInstalledSkillForUpdate(input.workspaceId, input.installedSkillId);
+  const existing = await loadInstalledSkillForUpdate(
+    input.workspaceId,
+    input.installedSkillId,
+  );
   if (!existing) {
     throw new SkillError(404, "Installed skill not found");
   }
 
-  const currentFilesMap = await loadSkillFilesMap([existing.current_skill_version_id]);
-  const currentFiles = currentFilesMap.get(existing.current_skill_version_id) || [];
-  const currentDescription = descriptionBlockFromStored(existing.version_description_blocks);
+  const currentFilesMap = await loadSkillFilesMap([
+    existing.current_skill_version_id,
+  ]);
+  const currentFiles =
+    currentFilesMap.get(existing.current_skill_version_id) || [];
+  const currentDescription = descriptionBlockFromStored(
+    existing.version_description_blocks,
+  );
   const touchesContent =
     input.name !== undefined ||
     input.description !== undefined ||
@@ -2232,11 +2340,15 @@ export async function updateInstalledSkill(input: {
         ? normalizeSkillDescription(input.description)
         : currentDescription;
       const descriptionBlocks = [descriptionBlock];
-      const nextIconFileId = input.iconFileId === undefined
-        ? existing.icon_file_id
-        : input.iconFileId
-          ? await normalizeWorkspaceSkillIconFileId(input.iconFileId, input.workspaceId)
-          : null;
+      const nextIconFileId =
+        input.iconFileId === undefined
+          ? existing.icon_file_id
+          : input.iconFileId
+            ? await normalizeWorkspaceSkillIconFileId(
+                input.iconFileId,
+                input.workspaceId,
+              )
+            : null;
       const attachmentFiles = input.attachmentFiles
         ? normalizeSkillAttachments(input.attachmentFiles)
         : currentFiles.map((file) => ({
@@ -2324,7 +2436,10 @@ export async function upgradeInstalledSkill(input: {
   workspaceId: string;
   installedSkillId: string;
 }) {
-  const existing = await loadInstalledSkillForUpdate(input.workspaceId, input.installedSkillId);
+  const existing = await loadInstalledSkillForUpdate(
+    input.workspaceId,
+    input.installedSkillId,
+  );
   if (!existing) {
     throw new SkillError(404, "Installed skill not found");
   }
@@ -2332,7 +2447,9 @@ export async function upgradeInstalledSkill(input: {
     throw new SkillError(400, "Installed skill has no marketplace source");
   }
 
-  const marketplaceSkill = await getMarketplaceRowById(existing.source_catalog_item_id);
+  const marketplaceSkill = await getMarketplaceRowById(
+    existing.source_catalog_item_id,
+  );
   if (!marketplaceSkill || !marketplaceSkill.latest_version_id) {
     throw new SkillError(400, "Marketplace source has no latest version");
   }
@@ -2344,11 +2461,16 @@ export async function upgradeInstalledSkill(input: {
     return getInstalledSkillResponse(input.workspaceId, input.installedSkillId);
   }
 
-  const sourceFilesMap = await loadCatalogVersionFilesMap([marketplaceSkill.latest_version_id]);
-  const sourceFiles = sourceFilesMap.get(marketplaceSkill.latest_version_id) || [];
+  const sourceFilesMap = await loadCatalogVersionFilesMap([
+    marketplaceSkill.latest_version_id,
+  ]);
+  const sourceFiles =
+    sourceFilesMap.get(marketplaceSkill.latest_version_id) || [];
 
   await transaction(async (client) => {
-    const descriptionBlocks = normalizeStoredBlocks(marketplaceSkill.spec_description_blocks);
+    const descriptionBlocks = normalizeStoredBlocks(
+      marketplaceSkill.spec_description_blocks,
+    );
     const versionInsert = await client.query<{ id: string }>(
       `INSERT INTO skill_versions (
          skill_id,
@@ -2366,7 +2488,8 @@ export async function upgradeInstalledSkill(input: {
         existing.current_version + 1,
         marketplaceSkill.spec_name || marketplaceSkill.item_display_name,
         JSON.stringify(descriptionBlocks),
-        marketplaceSkill.spec_summary_text || renderSkillBlocksToText(descriptionBlocks),
+        marketplaceSkill.spec_summary_text ||
+          renderSkillBlocksToText(descriptionBlocks),
         JSON.stringify(parseJsonObject(existing.version_metadata)),
         existing.created_by || null,
       ],
@@ -2404,17 +2527,17 @@ export async function upgradeInstalledSkill(input: {
            is_customized = FALSE,
            updated_at = NOW()
        WHERE skill_id = $1`,
-      [
-        existing.skill_id,
-        marketplaceSkill.latest_version_id,
-      ],
+      [existing.skill_id, marketplaceSkill.latest_version_id],
     );
   });
 
   return getInstalledSkillResponse(input.workspaceId, input.installedSkillId);
 }
 
-export async function uninstallInstalledSkill(workspaceId: string, installedSkillId: string) {
+export async function uninstallInstalledSkill(
+  workspaceId: string,
+  installedSkillId: string,
+) {
   const result = await transaction(async (client) => {
     const existing = await client.query<InstalledSkillRow>(
       `${INSTALLED_SKILL_SELECT}
@@ -2656,8 +2779,8 @@ export async function listVisibleSkills(input: {
 
   const deduped = new Map<string, VisibleSkillRow>();
   for (const row of rows.rows) {
-    const bindings = (bindingsBySkillId.get(row.skill_id) || []).filter((binding) =>
-      accessMatchesVisibilityContext(binding, input),
+    const bindings = (bindingsBySkillId.get(row.skill_id) || []).filter(
+      (binding) => accessMatchesVisibilityContext(binding, input),
     );
     const chosenBinding = [...bindings].sort(compareVisibleBindingPriority)[0];
     const candidate: VisibleSkillRow = {
@@ -2713,13 +2836,18 @@ export async function readVisibleSkill(input: {
     throw new SkillError(404, `Visible skill "${input.skillName}" not found`);
   }
 
-  const installedSkill = await loadInstalledSkillForUpdate(input.workspaceId, match.instanceId);
+  const installedSkill = await loadInstalledSkillForUpdate(
+    input.workspaceId,
+    match.instanceId,
+  );
   if (!installedSkill) {
     throw new SkillError(404, `Visible skill "${input.skillName}" not found`);
   }
 
   if (!input.assetPath) {
-    const description = descriptionBlockFromStored(installedSkill.version_description_blocks);
+    const description = descriptionBlockFromStored(
+      installedSkill.version_description_blocks,
+    );
     return {
       skill: match,
       asset: {

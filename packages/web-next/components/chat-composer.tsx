@@ -13,12 +13,15 @@ import {
 import { Extension } from "@tiptap/core"
 import {
   fileRefBlock,
+  mentionBlock,
   textBlock,
   type CanonicalContentBlock,
+  type ConversationEntityRef,
 } from "@synapse/shared"
 import Mention from "@tiptap/extension-mention"
 import Placeholder from "@tiptap/extension-placeholder"
 import StarterKit from "@tiptap/starter-kit"
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model"
 import { EditorContent, ReactRenderer, useEditor } from "@tiptap/react"
 import Suggestion from "@tiptap/suggestion"
 import type {
@@ -64,6 +67,18 @@ type ComposerMentionNodeAttrs = {
   label?: string | null
   mentionSuggestionChar?: SuggestionTrigger | null
   targetType?: MentionTargetType | null
+  memberType?: ConversationEntityRef["memberType"] | null
+  memberId?: string | null
+  participantId?: string | null
+  actorId?: string | null
+  userId?: string | null
+  externalUserKey?: string | null
+  transportAddressId?: string | null
+  transportKind?: ConversationEntityRef["transportKind"] | null
+  title?: string | null
+  role?: string | null
+  avatarUrl?: string | null
+  avatarEmoji?: string | null
 }
 
 type ComposerSuggestionItem = {
@@ -78,6 +93,17 @@ type ComposerSuggestionItem = {
   emoji?: string
   inGroup?: boolean
   native?: string
+  memberType?: ConversationEntityRef["memberType"]
+  memberId?: string
+  participantId?: string
+  actorId?: string
+  userId?: string
+  externalUserKey?: string
+  transportAddressId?: string
+  transportKind?: ConversationEntityRef["transportKind"]
+  title?: string
+  role?: string
+  avatarEmoji?: string
 }
 
 type SuggestionListHandle = {
@@ -96,6 +122,13 @@ export type ChatComposerParticipant = {
   emoji?: string
   description?: string
   searchTerms?: string[]
+  memberId?: string
+  participantId?: string
+  actorId?: string
+  userId?: string
+  externalUserKey?: string
+  transportAddressId?: string
+  transportKind?: ConversationEntityRef["transportKind"]
 }
 
 export type ChatComposerSubmitPayload = {
@@ -163,20 +196,39 @@ function filterParticipants(
 
       return haystack.includes(normalizedQuery)
     })
-    .map((participant) => ({
-      id: participant.id,
-      label: participant.name,
-      description: participant.description,
-      trigger: "@",
-      kind: "participant" as const,
-      targetType:
+    .map((participant) => {
+      const targetType =
         participant.targetType ||
-        (participant.type === "actor" ? "actor" : "participant"),
-      participantType: participant.type,
-      avatarUrl: participant.avatarUrl,
-      emoji: participant.emoji,
-      inGroup: participant.inGroup,
-    }))
+        (participant.type === "actor" ? "actor" : "participant")
+
+      return {
+        id: participant.id,
+        label: participant.name,
+        description: participant.description,
+        trigger: "@",
+        kind: "participant" as const,
+        targetType,
+        participantType: participant.type,
+        avatarUrl: participant.avatarUrl,
+        emoji: participant.emoji,
+        inGroup: participant.inGroup,
+        memberType: participant.type,
+        memberId: participant.memberId,
+        participantId:
+          participant.participantId ||
+          (targetType === "participant" ? participant.id : undefined),
+        actorId:
+          participant.actorId ||
+          (participant.type === "actor" ? participant.id : undefined),
+        userId: participant.userId,
+        externalUserKey: participant.externalUserKey,
+        transportAddressId: participant.transportAddressId,
+        transportKind: participant.transportKind,
+        title: participant.title,
+        role: participant.role,
+        avatarEmoji: participant.emoji,
+      }
+    })
 }
 
 function filterAttachments(
@@ -235,6 +287,115 @@ function collectMentionTargets(
     mentionedActorIds: Array.from(mentionedActorIds),
     citedAttachmentIds: Array.from(citedAttachmentIds),
   }
+}
+
+function buildMentionRef(
+  attrs: ComposerMentionNodeAttrs
+): ConversationEntityRef | null {
+  const memberType = attrs.memberType
+  if (!memberType) return null
+
+  const mention: ConversationEntityRef = {
+    memberType,
+    ...(attrs.memberId ? { memberId: attrs.memberId } : {}),
+    ...(attrs.participantId ? { participantId: attrs.participantId } : {}),
+    ...(attrs.actorId ? { actorId: attrs.actorId } : {}),
+    ...(attrs.userId ? { userId: attrs.userId } : {}),
+    ...(attrs.externalUserKey
+      ? { externalUserKey: attrs.externalUserKey }
+      : {}),
+    ...(attrs.transportAddressId
+      ? { transportAddressId: attrs.transportAddressId }
+      : {}),
+    ...(attrs.transportKind ? { transportKind: attrs.transportKind } : {}),
+    ...(attrs.label ? { name: attrs.label } : {}),
+    ...(attrs.title ? { title: attrs.title } : {}),
+    ...(attrs.role ? { role: attrs.role } : {}),
+    ...(attrs.avatarUrl ? { avatarUrl: attrs.avatarUrl } : {}),
+    ...(attrs.avatarEmoji ? { avatarEmoji: attrs.avatarEmoji } : {}),
+  }
+
+  if (!mention.actorId && memberType === "actor" && attrs.id) {
+    mention.actorId = attrs.id
+  }
+
+  if (
+    !mention.participantId &&
+    attrs.targetType === "participant" &&
+    attrs.id
+  ) {
+    mention.participantId = attrs.id
+  }
+
+  return mention
+}
+
+function buildComposerContentBlocks(
+  editor: NonNullable<ReturnType<typeof useEditor>>,
+  attachmentBlocks: Array<Extract<CanonicalContentBlock, { type: "file_ref" }>>
+) {
+  const contentBlocks: CanonicalContentBlock[] = []
+  let textBuffer = ""
+
+  function flushTextBuffer() {
+    if (!textBuffer) return
+    contentBlocks.push(textBlock(textBuffer))
+    textBuffer = ""
+  }
+
+  function appendText(text: string | null | undefined) {
+    if (!text) return
+    textBuffer += text
+  }
+
+  function serializeNode(node: ProseMirrorNode) {
+    if (node.isText) {
+      appendText(node.text)
+      return
+    }
+
+    if (node.type.name === "hardBreak") {
+      appendText("\n")
+      return
+    }
+
+    if (node.type.name === "mention") {
+      const attrs = node.attrs as ComposerMentionNodeAttrs
+      const label = attrs.label?.trim() || attrs.id || "unknown"
+
+      if (attrs.targetType === "attachment") {
+        appendText(`#${label}`)
+        return
+      }
+
+      const mention = buildMentionRef(attrs)
+      if (!mention) {
+        appendText(`${attrs.mentionSuggestionChar || "@"}${label}`)
+        return
+      }
+
+      flushTextBuffer()
+      contentBlocks.push(mentionBlock({ mention }))
+      return
+    }
+
+    node.forEach((child) => {
+      serializeNode(child)
+    })
+  }
+
+  editor.state.doc.forEach((node, _offset, index) => {
+    serializeNode(node)
+
+    if (index < editor.state.doc.childCount - 1) {
+      appendText("\n")
+    }
+  })
+
+  flushTextBuffer()
+  contentBlocks.push(...attachmentBlocks)
+
+  return contentBlocks
 }
 
 function removeAttachmentMentions(
@@ -464,6 +625,18 @@ const ComposerMention = Mention.extend({
               }
             : {},
       },
+      memberType: { default: null },
+      memberId: { default: null },
+      participantId: { default: null },
+      actorId: { default: null },
+      userId: { default: null },
+      externalUserKey: { default: null },
+      transportAddressId: { default: null },
+      transportKind: { default: null },
+      title: { default: null },
+      role: { default: null },
+      avatarUrl: { default: null },
+      avatarEmoji: { default: null },
     }
   },
 })
@@ -822,13 +995,7 @@ export default function ChatComposer({
 
     try {
       const uploadedBlocks = await uploadPendingAttachments()
-      const contentBlocks: CanonicalContentBlock[] = []
-
-      if (plainText) {
-        contentBlocks.push(textBlock(plainText))
-      }
-
-      contentBlocks.push(...uploadedBlocks)
+      const contentBlocks = buildComposerContentBlocks(editor, uploadedBlocks)
 
       const submissionResult = await onSubmit({
         plainText,

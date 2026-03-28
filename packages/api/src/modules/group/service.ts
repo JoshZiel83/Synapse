@@ -11,7 +11,7 @@ import {
 import { emitEvent } from "../../infrastructure/events/index.js";
 import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
-import { nowISO } from "@synapse/shared";
+import { extractText, nowISO } from "@synapse/shared";
 import { v4 as uuidv4 } from "uuid";
 import {
   conversationItemRowToFeedItem,
@@ -287,10 +287,7 @@ function mapConversationGrant(
 }
 
 function buildTextContentFromParts(parts: any[]) {
-  const text = parts
-    .filter((part) => part.part_type === "text")
-    .map((part) => part.text_value || "")
-    .join("\n");
+  const text = extractText(itemPartsToCanonicalContentBlocks(parts || []));
 
   if (text) return text;
 

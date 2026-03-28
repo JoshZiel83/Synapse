@@ -3,12 +3,12 @@ import type {
   CanonicalContentBlock,
   ConversationMessage,
   ProviderContextWindow,
-} from '@synapse/shared';
-import { extractText, textBlock } from '@synapse/shared';
+} from "@synapse/shared";
+import { extractText, formatMentionText, textBlock } from "@synapse/shared";
 import type {
   CanonicalContextItem,
   CanonicalContextTarget,
-} from '@synapse/shared/types';
+} from "@synapse/shared/types";
 
 function withTextPrefix(prefix: string, blocks: CanonicalContentBlock[]) {
   if (!prefix) return blocks;
@@ -16,17 +16,57 @@ function withTextPrefix(prefix: string, blocks: CanonicalContentBlock[]) {
 }
 
 function targetLabel(targets?: CanonicalContextTarget[]) {
-  if (!targets || targets.length === 0) return '';
-  const names = targets.map((target) => target.name || 'Unknown');
-  return names.join(', ');
+  if (!targets || targets.length === 0) return "";
+  const names = targets.map((target) => target.name || "Unknown");
+  return names.join(", ");
 }
 
-function authorLabel(item: Extract<CanonicalContextItem, { kind: 'message' | 'event' }>) {
-  return item.author?.name || 'Unknown';
+function authorLabel(
+  item: Extract<CanonicalContextItem, { kind: "message" | "event" }>,
+) {
+  return item.author?.name || "Unknown";
 }
 
 function normalizeParts(parts?: CanonicalContentBlock[]) {
-  return parts && parts.length > 0 ? parts : [textBlock('')];
+  if (!parts || parts.length === 0) {
+    return [textBlock("")];
+  }
+
+  return parts.flatMap((part) => {
+    if (part.type === "mention") {
+      return [textBlock(formatMentionText(part))];
+    }
+    return [part];
+  });
+}
+
+function formatContextTimestamp(timestamp?: string) {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const hour = String(date.getUTCHours()).padStart(2, "0");
+  const minute = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hour}:${minute} UTC`;
+}
+
+function buildMessageHeader(params: {
+  timestamp?: string;
+  author: string;
+  targets?: CanonicalContextTarget[];
+}) {
+  const segments: string[] = [];
+  const formattedTime = formatContextTimestamp(params.timestamp);
+  if (formattedTime) {
+    segments.push(formattedTime);
+  }
+
+  const targets = targetLabel(params.targets);
+  segments.push(`${params.author}${targets ? ` → ${targets}` : ""}`);
+
+  return `[${segments.join(" | ")}]: `;
 }
 
 export async function compressContextItems(
@@ -42,7 +82,9 @@ export async function compressContextWindow(
 }
 
 function archiveFramePrefix(frame: CanonicalArchiveFrame, chainLabel: string) {
-  const frameLabel = frame.frameType ? `${chainLabel}/${frame.frameType}` : chainLabel;
+  const frameLabel = frame.frameType
+    ? `${chainLabel}/${frame.frameType}`
+    : chainLabel;
   return `[Archive ${frameLabel}]: `;
 }
 
@@ -53,37 +95,50 @@ function compileArchiveFrameToConversationMessages(
   const parts = normalizeParts(frame.parts);
 
   switch (frame.role) {
-    case 'assistant':
-      return [{
-        role: 'assistant',
-        content: parts,
-        toolCalls: frame.toolCalls && frame.toolCalls.length > 0 ? frame.toolCalls : undefined,
-      }];
+    case "assistant":
+      return [
+        {
+          role: "assistant",
+          content: parts,
+          toolCalls:
+            frame.toolCalls && frame.toolCalls.length > 0
+              ? frame.toolCalls
+              : undefined,
+        },
+      ];
 
-    case 'tool':
+    case "tool":
       if (frame.toolResults && frame.toolResults.length > 0) {
-        return [{
-          role: 'tool_result',
-          results: frame.toolResults,
-        }];
+        return [
+          {
+            role: "tool_result",
+            results: frame.toolResults,
+          },
+        ];
       }
-      return [{
-        role: 'user',
-        content: withTextPrefix(archiveFramePrefix(frame, chainLabel), parts),
-      }];
+      return [
+        {
+          role: "user",
+          content: withTextPrefix(archiveFramePrefix(frame, chainLabel), parts),
+        },
+      ];
 
-    case 'system':
-      return [{
-        role: 'user',
-        content: withTextPrefix(archiveFramePrefix(frame, chainLabel), parts),
-      }];
+    case "system":
+      return [
+        {
+          role: "user",
+          content: withTextPrefix(archiveFramePrefix(frame, chainLabel), parts),
+        },
+      ];
 
-    case 'user':
+    case "user":
     default:
-      return [{
-        role: 'user',
-        content: parts,
-      }];
+      return [
+        {
+          role: "user",
+          content: parts,
+        },
+      ];
   }
 }
 
@@ -94,97 +149,121 @@ export async function compileContextItemsToConversationMessages(
 
   for (const item of items) {
     switch (item.kind) {
-      case 'system_notice': {
+      case "system_notice": {
         messages.push({
-          role: 'user',
+          role: "user",
           content: normalizeParts(item.parts),
         });
         break;
       }
 
-      case 'event': {
+      case "event": {
         const parts = normalizeParts(item.parts);
+        const timestamp = formatContextTimestamp(item.createdAt);
         messages.push({
-          role: 'user',
-          content: withTextPrefix('[System]: ', parts),
+          role: "user",
+          content: withTextPrefix(
+            timestamp ? `[System | ${timestamp}]: ` : "[System]: ",
+            parts,
+          ),
         });
         break;
       }
 
-      case 'message': {
-        if (item.role === 'system') {
+      case "message": {
+        if (item.role === "system") {
+          const timestamp = formatContextTimestamp(item.createdAt);
           messages.push({
-            role: 'user',
-            content: withTextPrefix('[System]: ', normalizeParts(item.parts)),
+            role: "user",
+            content: withTextPrefix(
+              timestamp ? `[System | ${timestamp}]: ` : "[System]: ",
+              normalizeParts(item.parts),
+            ),
           });
           break;
         }
 
-        if (item.role === 'assistant' && item.author?.isSelf) {
+        if (item.role === "assistant" && item.author?.isSelf) {
           const targetNames = targetLabel(item.targets);
-          const prefix = targetNames ? `[→ ${targetNames}] ` : '';
+          const timestamp = formatContextTimestamp(item.createdAt);
+          const prefix = targetNames
+            ? `[${timestamp ? `${timestamp} | ` : ""}→ ${targetNames}] `
+            : timestamp
+              ? `[${timestamp}] `
+              : "";
           messages.push({
-            role: 'assistant',
+            role: "assistant",
             content: withTextPrefix(prefix, normalizeParts(item.parts)),
           });
           break;
         }
 
-        const targets = targetLabel(item.targets);
-        const header = `[${authorLabel(item)}${targets ? ` → ${targets}` : ''}]: `;
+        const header = buildMessageHeader({
+          timestamp: item.createdAt,
+          author: authorLabel(item),
+          targets: item.targets,
+        });
         messages.push({
-          role: 'user',
+          role: "user",
           content: withTextPrefix(header, normalizeParts(item.parts)),
         });
         break;
       }
 
-      case 'tool_call_batch': {
+      case "tool_call_batch": {
         messages.push({
-          role: 'assistant',
+          role: "assistant",
           content: item.content && item.content.length > 0 ? item.content : [],
           toolCalls: item.toolCalls,
         });
         break;
       }
 
-      case 'tool_result_batch': {
+      case "tool_result_batch": {
         messages.push({
-          role: 'tool_result',
+          role: "tool_result",
           results: item.toolResults,
         });
         break;
       }
 
-      case 'summary': {
+      case "summary": {
         messages.push({
-          role: 'user',
-          content: withTextPrefix('[Summary]: ', normalizeParts(item.parts)),
+          role: "user",
+          content: withTextPrefix("[Summary]: ", normalizeParts(item.parts)),
         });
         break;
       }
 
-      case 'memory_recall': {
+      case "memory_recall": {
         const content: CanonicalContentBlock[] = [
-          textBlock(item.recallType === 'bootstrap' ? '[Recalled Memory / Bootstrap]\n' : '[Recalled Memory / Turn]\n'),
+          textBlock(
+            item.recallType === "bootstrap"
+              ? "[Recalled Memory / Bootstrap]\n"
+              : "[Recalled Memory / Turn]\n",
+          ),
         ];
 
         item.memories.forEach((memory, index) => {
           const fallbackText = extractText(memory.contentBlocks).trim();
           const digest = memory.textDigest || fallbackText;
-          content.push(textBlock(`[${memory.ownerScope}/${memory.category}]${digest ? ` ${digest}` : ''}\n`));
+          content.push(
+            textBlock(
+              `[${memory.ownerScope}/${memory.category}]${digest ? ` ${digest}` : ""}\n`,
+            ),
+          );
 
           if (memory.contentBlocks.length > 0) {
             content.push(...memory.contentBlocks);
           }
 
           if (index < item.memories.length - 1) {
-            content.push(textBlock('\n'));
+            content.push(textBlock("\n"));
           }
         });
 
         messages.push({
-          role: 'user',
+          role: "user",
           content: normalizeParts(content),
         });
         break;
@@ -202,21 +281,27 @@ export async function compileContextWindowToConversationMessages(
 
   if (window.sharedArchivePoint) {
     for (const frame of window.sharedArchivePoint.frames) {
-      messages.push(...compileArchiveFrameToConversationMessages(frame, 'shared'));
+      messages.push(
+        ...compileArchiveFrameToConversationMessages(frame, "shared"),
+      );
     }
   }
 
   if (window.privateArchivePoint) {
     for (const frame of window.privateArchivePoint.frames) {
-      messages.push(...compileArchiveFrameToConversationMessages(frame, 'private'));
+      messages.push(
+        ...compileArchiveFrameToConversationMessages(frame, "private"),
+      );
     }
   }
 
-  const orderedTailItems = window.orderedTailItems.length > 0
-    ? window.orderedTailItems
-    : [...window.sharedTailItems, ...window.privateTailItems];
+  const orderedTailItems =
+    window.orderedTailItems.length > 0
+      ? window.orderedTailItems
+      : [...window.sharedTailItems, ...window.privateTailItems];
 
-  const tailMessages = await compileContextItemsToConversationMessages(orderedTailItems);
+  const tailMessages =
+    await compileContextItemsToConversationMessages(orderedTailItems);
   messages.push(...tailMessages);
 
   return messages;

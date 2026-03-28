@@ -195,11 +195,17 @@ function buildRenderedMessageBlocks(
               type: "text" as const,
               text: block.text.replace(/<br\s*\/?>/gi, "\n"),
             }
-          : {
-              id: block.id,
-              type: "file_ref" as const,
-              block,
-            }
+          : block.type === "mention"
+            ? {
+                id: block.id,
+                type: "mention" as const,
+                block,
+              }
+            : {
+                id: block.id,
+                type: "file_ref" as const,
+                block,
+              }
       ),
       sources: [],
     }
@@ -222,6 +228,14 @@ function buildRenderedMessageBlocks(
       return {
         id: block.id,
         type: "file_ref" as const,
+        block,
+      }
+    }
+
+    if (block.type === "mention") {
+      return {
+        id: block.id,
+        type: "mention" as const,
         block,
       }
     }
@@ -1182,6 +1196,7 @@ type MessageRecipient = Pick<
 }
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
+type MentionBlock = Extract<CanonicalContentBlock, { type: "mention" }>
 type RenderedMessageBlock =
   | {
       id: string
@@ -1192,6 +1207,11 @@ type RenderedMessageBlock =
       id: string
       type: "file_ref"
       block: FileRefBlock
+    }
+  | {
+      id: string
+      type: "mention"
+      block: MentionBlock
     }
 
 const AUDIO_EXTENSIONS = [
@@ -1294,6 +1314,142 @@ function resolveRecipients(
   }
 
   return recipients
+}
+
+function resolveMentionMember(
+  mention: ConversationEntityRef,
+  groupMembers: GroupMember[] | undefined,
+  workspaceActors: MessageBubbleProps["workspaceActors"]
+) {
+  const members = groupMembers || []
+  const matchedMember =
+    members.find(
+      (member) =>
+        (mention.participantId &&
+          member.participantId === mention.participantId) ||
+        (mention.memberId && member.memberId === mention.memberId) ||
+        (mention.actorId &&
+          member.type === "actor" &&
+          member.id === mention.actorId) ||
+        (mention.userId &&
+          member.type === "user" &&
+          member.id === mention.userId) ||
+        (mention.externalUserKey &&
+          member.type === "external" &&
+          member.externalUserKey === mention.externalUserKey)
+    ) || null
+
+  if (matchedMember) return matchedMember
+
+  if (mention.memberType === "actor") {
+    const actor = workspaceActors?.find(
+      (candidate) => candidate.id === mention.actorId
+    )
+    const fallbackId =
+      mention.actorId ||
+      mention.participantId ||
+      mention.memberId ||
+      "unknown-actor"
+
+    return {
+      memberId: mention.memberId || fallbackId,
+      participantId: mention.participantId || fallbackId,
+      type: "actor" as const,
+      id: mention.actorId || actor?.id || fallbackId,
+      name: mention.name || actor?.name || "Unknown actor",
+      role: mention.role || actor?.role,
+      title: mention.title || actor?.title,
+      emoji: mention.avatarEmoji || actor?.emoji,
+      avatarUrl: mention.avatarUrl || actor?.avatarUrl,
+    }
+  }
+
+  if (mention.memberType === "user") {
+    const fallbackId =
+      mention.userId ||
+      mention.participantId ||
+      mention.memberId ||
+      "unknown-user"
+
+    return {
+      memberId: mention.memberId || fallbackId,
+      participantId: mention.participantId || fallbackId,
+      type: "user" as const,
+      id: mention.userId || fallbackId,
+      name: mention.name || "Unknown user",
+      role: mention.role,
+      title: mention.title,
+      emoji: mention.avatarEmoji,
+      avatarUrl: mention.avatarUrl,
+    }
+  }
+
+  const fallbackId =
+    mention.externalUserKey ||
+    mention.participantId ||
+    mention.memberId ||
+    "unknown-external"
+
+  return {
+    memberId: mention.memberId || fallbackId,
+    participantId: mention.participantId || fallbackId,
+    type: "external" as const,
+    id: fallbackId,
+    name: mention.name || "Unknown participant",
+    role: mention.role,
+    title: mention.title,
+    emoji: mention.avatarEmoji,
+    avatarUrl: mention.avatarUrl,
+    externalUserKey: mention.externalUserKey,
+  }
+}
+
+type InlineRenderedMessageBlock = Extract<
+  RenderedMessageBlock,
+  { type: "text" | "mention" }
+>
+
+function groupRenderedMessageBlocks(blocks: RenderedMessageBlock[]) {
+  const groups: Array<
+    | {
+        id: string
+        type: "inline"
+        blocks: InlineRenderedMessageBlock[]
+      }
+    | {
+        id: string
+        type: "file_ref"
+        block: FileRefBlock
+      }
+  > = []
+  let inlineBlocks: InlineRenderedMessageBlock[] = []
+
+  function flushInlineBlocks() {
+    if (inlineBlocks.length === 0) return
+    groups.push({
+      id: inlineBlocks.map((block) => block.id).join(":"),
+      type: "inline",
+      blocks: inlineBlocks,
+    })
+    inlineBlocks = []
+  }
+
+  for (const block of blocks) {
+    if (block.type === "file_ref") {
+      flushInlineBlocks()
+      groups.push({
+        id: block.id,
+        type: "file_ref",
+        block: block.block,
+      })
+      continue
+    }
+
+    inlineBlocks.push(block)
+  }
+
+  flushInlineBlocks()
+  return groups
 }
 
 function RecipientChip({
@@ -1674,37 +1830,136 @@ function MessageContentBlocks({
   blocks,
   isUser,
   enableTablePreview,
+  groupMembers,
+  workspaceActors,
+  contactBasePath,
 }: {
   blocks: RenderedMessageBlock[]
   isUser: boolean
   enableTablePreview: boolean
+  groupMembers?: GroupMember[]
+  workspaceActors?: MessageBubbleProps["workspaceActors"]
+  contactBasePath?: string
 }) {
   if (blocks.length === 0) return null
 
+  const groupedBlocks = groupRenderedMessageBlocks(blocks)
+
   return (
     <div className="max-w-full min-w-0 space-y-2">
-      {blocks.map((block) =>
-        block.type === "file_ref" ? (
-          <FileBlockPreview key={block.id} blocks={[block.block]} />
-        ) : isUser ? (
-          block.text ? (
-            <TwemojiScope
-              as="p"
-              key={block.id}
-              className="[overflow-wrap:anywhere] break-words whitespace-pre-wrap"
-            >
-              {block.text}
-            </TwemojiScope>
-          ) : null
+      {groupedBlocks.map((group) =>
+        group.type === "file_ref" ? (
+          <FileBlockPreview key={group.id} blocks={[group.block]} />
         ) : (
-          <MarkdownTextBlock
-            key={block.id}
-            text={block.text}
+          <InlineMessageSequence
+            key={group.id}
+            blocks={group.blocks}
+            isUser={isUser}
             enableTablePreview={enableTablePreview}
+            groupMembers={groupMembers}
+            workspaceActors={workspaceActors}
+            contactBasePath={contactBasePath}
           />
         )
       )}
     </div>
+  )
+}
+
+function MentionInlineBlock({
+  block,
+  isUser,
+  groupMembers,
+  workspaceActors,
+  contactBasePath,
+}: {
+  block: MentionBlock
+  isUser: boolean
+  groupMembers?: GroupMember[]
+  workspaceActors?: MessageBubbleProps["workspaceActors"]
+  contactBasePath?: string
+}) {
+  const member = resolveMentionMember(
+    block.mention,
+    groupMembers,
+    workspaceActors
+  )
+  const name = member?.name || block.mention.name?.trim() || "Unknown"
+
+  return (
+    <ChatParticipantHoverCard member={member} contactBasePath={contactBasePath}>
+      <span
+        className={cn(
+          "inline-flex max-w-full cursor-help items-center rounded-md px-1.5 py-0.5 align-baseline text-[0.95em] font-medium ring-1 transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none",
+          isUser
+            ? "bg-white/16 text-white ring-white/18 hover:bg-white/24"
+            : "bg-sky-500/12 text-sky-700 ring-sky-500/15 hover:bg-sky-500/18 dark:text-sky-300"
+        )}
+        tabIndex={0}
+      >
+        @{name}
+      </span>
+    </ChatParticipantHoverCard>
+  )
+}
+
+function InlineMessageSequence({
+  blocks,
+  isUser,
+  enableTablePreview,
+  groupMembers,
+  workspaceActors,
+  contactBasePath,
+}: {
+  blocks: InlineRenderedMessageBlock[]
+  isUser: boolean
+  enableTablePreview: boolean
+  groupMembers?: GroupMember[]
+  workspaceActors?: MessageBubbleProps["workspaceActors"]
+  contactBasePath?: string
+}) {
+  if (
+    blocks.length === 1 &&
+    blocks[0]?.type === "text" &&
+    !blocks.some((block) => block.type === "mention")
+  ) {
+    return isUser ? (
+      blocks[0].text ? (
+        <TwemojiScope
+          as="p"
+          className="[overflow-wrap:anywhere] break-words whitespace-pre-wrap"
+        >
+          {blocks[0].text}
+        </TwemojiScope>
+      ) : null
+    ) : (
+      <MarkdownTextBlock
+        text={blocks[0].text}
+        enableTablePreview={enableTablePreview}
+      />
+    )
+  }
+
+  return (
+    <TwemojiScope
+      as="div"
+      className="leading-7 [overflow-wrap:anywhere] break-words whitespace-pre-wrap"
+    >
+      {blocks.map((block) =>
+        block.type === "mention" ? (
+          <MentionInlineBlock
+            key={block.id}
+            block={block.block}
+            isUser={isUser}
+            groupMembers={groupMembers}
+            workspaceActors={workspaceActors}
+            contactBasePath={contactBasePath}
+          />
+        ) : (
+          <span key={block.id}>{block.text}</span>
+        )
+      )}
+    </TwemojiScope>
   )
 }
 
@@ -2159,6 +2414,9 @@ export default function MessageBubble({
                     blocks={renderedBlocks}
                     isUser={false}
                     enableTablePreview={enableTablePreview}
+                    groupMembers={groupMembers}
+                    workspaceActors={workspaceActors}
+                    contactBasePath={contactBasePath}
                   />
                 </div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[9px] text-muted-foreground/30">
@@ -2367,6 +2625,9 @@ export default function MessageBubble({
                 blocks={renderedBlocks}
                 isUser={isUser}
                 enableTablePreview={enableTablePreview}
+                groupMembers={groupMembers}
+                workspaceActors={workspaceActors}
+                contactBasePath={contactBasePath}
               />
             )}
 
