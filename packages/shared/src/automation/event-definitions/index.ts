@@ -6,13 +6,28 @@ import type {
   AutomationEventSourceTemplate,
 } from "./types.js";
 import {
+  githubIssueCommentEventDefinition,
+  githubPullRequestEventDefinition,
+  githubPullRequestReviewEventDefinition,
+  githubPushEventDefinition,
+  githubWorkflowRunEventDefinition,
+  gitlabMergeRequestEventDefinition,
+  gitlabNoteEventDefinition,
+  gitlabPipelineEventDefinition,
+  gitlabPushEventDefinition,
+  integrationEventDefinitions,
+} from "./integrations.js";
+import {
   relayDeviceOfflineEventDefinition,
   relayDeviceOnlineEventDefinition,
   relayLifecycleEventDefinitions,
 } from "./relay.js";
 
 const automationEventDefinitions =
-  relayLifecycleEventDefinitions satisfies readonly AutomationEventDefinition[];
+  [
+    ...relayLifecycleEventDefinitions,
+    ...integrationEventDefinitions,
+  ] satisfies readonly AutomationEventDefinition[];
 
 export function listAutomationEventDefinitions(filters?: {
   providerKind?: AutomationEventDefinition["providerKind"];
@@ -56,6 +71,16 @@ export function buildAutomationOccurrenceDisplay(
 }
 
 export {
+  githubIssueCommentEventDefinition,
+  githubPullRequestEventDefinition,
+  githubPullRequestReviewEventDefinition,
+  githubPushEventDefinition,
+  githubWorkflowRunEventDefinition,
+  gitlabMergeRequestEventDefinition,
+  gitlabNoteEventDefinition,
+  gitlabPipelineEventDefinition,
+  gitlabPushEventDefinition,
+  integrationEventDefinitions,
   relayDeviceOfflineEventDefinition,
   relayDeviceOnlineEventDefinition,
   relayLifecycleEventDefinitions,

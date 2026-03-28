@@ -1366,7 +1366,7 @@ class ApiClient {
     wsId: string,
     filters?: {
       status?: "active" | "deprecated" | "disabled" | "archived"
-      providerKind?: "relay" | "webhook" | "internal"
+      providerKind?: "relay" | "webhook" | "internal" | "integration"
       providerRef?: string
       sourceKey?: string
     }
@@ -1382,11 +1382,19 @@ class ApiClient {
   createAutomationEventSource(
     wsId: string,
     data: {
-      providerKind: "relay" | "webhook" | "internal"
+      providerKind: "relay" | "webhook" | "internal" | "integration"
       providerRef?: string
+      integration?: {
+        installationId: string
+        provider: "github" | "gitlab"
+        ingressKind?: "webhook" | "polling"
+        targetKind: "repository" | "project"
+        targetId: string
+        targetLabel?: string
+      }
       sourceKey?: string
-      name: string
-      description: string
+      name?: string
+      description?: string
       recommendedUsage?: string
       payloadSchema?: Record<string, unknown>
       examplePayload?: Record<string, unknown>

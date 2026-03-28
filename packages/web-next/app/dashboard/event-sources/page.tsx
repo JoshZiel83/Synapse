@@ -1,7 +1,11 @@
 "use client";
 
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import type { AutomationEventSource, AutomationOccurrence } from "@synapse/shared";
+import type {
+  AutomationEventSource,
+  AutomationIntegrationProvider,
+  AutomationOccurrence,
+} from "@synapse/shared";
 import {
   Archive,
   BellRing,
@@ -22,6 +26,7 @@ import {
 } from "@/components/app-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -41,29 +46,44 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
+import {
+  createIntegrationEventSources,
+  listIntegrationEventDefinitionOptions,
+  listIntegrationInstallations,
+  type IntegrationInstallationView,
+} from "@/lib/integration-event-sources";
 import { cn } from "@/lib/utils";
 
 type EventSourceStatus = AutomationEventSource["status"];
 type EventSourceProvider = AutomationEventSource["providerKind"];
+type EventSourceMode = "internal" | "webhook" | AutomationIntegrationProvider;
 
 type EventSourceFormState = {
-  providerKind: Exclude<EventSourceProvider, "relay">;
+  mode: EventSourceMode;
   providerRef: string;
   name: string;
   description: string;
   recommendedUsage: string;
   payloadSchemaText: string;
   examplePayloadText: string;
+  installationId: string;
+  targetId: string;
+  targetLabel: string;
+  selectedIntegrationSourceKeys: string[];
 };
 
 const EMPTY_FORM: EventSourceFormState = {
-  providerKind: "internal",
+  mode: "internal",
   providerRef: "",
   name: "",
   description: "",
   recommendedUsage: "",
   payloadSchemaText: "{\n  \"type\": \"object\"\n}",
   examplePayloadText: "{}",
+  installationId: "",
+  targetId: "",
+  targetLabel: "",
+  selectedIntegrationSourceKeys: [],
 };
 
 function formatDateTime(value?: string) {
@@ -128,9 +148,47 @@ function occurrenceTitle(occurrence: AutomationOccurrence) {
   );
 }
 
+function sourceModeLabel(mode: EventSourceMode) {
+  switch (mode) {
+    case "github":
+      return "GitHub"
+    case "gitlab":
+      return "GitLab"
+    case "webhook":
+      return "Webhook"
+    case "internal":
+    default:
+      return "Internal"
+  }
+}
+
+function integrationProviderLabel(provider?: AutomationIntegrationProvider) {
+  if (provider === "github") return "GitHub"
+  if (provider === "gitlab") return "GitLab"
+  return "Integration"
+}
+
+function sourceProviderLabel(source: AutomationEventSource) {
+  if (source.providerKind === "integration") {
+    return integrationProviderLabel(source.integration?.provider)
+  }
+  return source.providerKind
+}
+
+function sourceProviderDetail(source: AutomationEventSource) {
+  if (source.providerKind === "integration" && source.integration) {
+    return `${integrationProviderLabel(source.integration.provider)} / ${source.integration.targetLabel}`
+  }
+  if (source.providerRef) {
+    return `${source.providerKind} / ${source.providerRef}`
+  }
+  return source.providerKind
+}
+
 export default function EventSourcesPage() {
   const { workspaceId, workspaceName } = useWorkspace();
   const [sources, setSources] = useState<AutomationEventSource[]>([]);
+  const [installations, setInstallations] = useState<IntegrationInstallationView[]>([]);
   const [occurrences, setOccurrences] = useState<AutomationOccurrence[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [loadingSources, setLoadingSources] = useState(true);
@@ -142,14 +200,37 @@ export default function EventSourcesPage() {
   const [providerFilter, setProviderFilter] = useState<"all" | EventSourceProvider>("all");
   const [formState, setFormState] = useState<EventSourceFormState>(EMPTY_FORM);
   const deferredSearch = useDeferredValue(search);
+  const integrationProvider =
+    formState.mode === "github" || formState.mode === "gitlab"
+      ? formState.mode
+      : null;
+
+  const availableIntegrationDefinitions = useMemo(
+    () =>
+      integrationProvider
+        ? listIntegrationEventDefinitionOptions(integrationProvider)
+        : [],
+    [integrationProvider],
+  );
+  const availableIntegrationInstallations = useMemo(
+    () =>
+      integrationProvider
+        ? listIntegrationInstallations(installations, integrationProvider)
+        : [],
+    [installations, integrationProvider],
+  );
 
   async function loadSources() {
     if (!workspaceId) return;
 
     setLoadingSources(true);
     try {
-      const nextSources = await api.getAutomationEventSources(workspaceId);
+      const [nextSources, nextInstallations] = await Promise.all([
+        api.getAutomationEventSources(workspaceId),
+        api.getInstallations(workspaceId),
+      ]);
       setSources(nextSources);
+      setInstallations(Array.isArray(nextInstallations) ? nextInstallations : []);
       setSelectedSourceId((currentId) => {
         if (currentId && nextSources.some((source) => source.id === currentId)) {
           return currentId;
@@ -211,8 +292,10 @@ export default function EventSourcesPage() {
         source.description,
         source.recommendedUsage || "",
         source.sourceKey,
-        source.providerKind,
+        sourceProviderLabel(source),
         source.providerRef || "",
+        source.integration?.targetLabel || "",
+        source.integration?.targetId || "",
       ]
         .join(" ")
         .toLowerCase();
@@ -228,6 +311,43 @@ export default function EventSourcesPage() {
   async function handleCreateSource() {
     if (!workspaceId) return;
 
+    if (integrationProvider) {
+      if (!formState.installationId) {
+        toast.error("Select an installed integration first")
+        return
+      }
+      if (!formState.targetId.trim()) {
+        toast.error(`Enter the ${integrationProvider === "github" ? "repository" : "project"} to watch`)
+        return
+      }
+      if (formState.selectedIntegrationSourceKeys.length === 0) {
+        toast.error("Select at least one event source")
+        return
+      }
+
+      setSavingSource(true)
+      try {
+        await createIntegrationEventSources({
+          workspaceId,
+          installationId: formState.installationId,
+          provider: integrationProvider,
+          targetId: formState.targetId,
+          targetLabel: formState.targetLabel,
+          sourceKeys: formState.selectedIntegrationSourceKeys,
+        })
+        toast.success("Integration event sources saved")
+        setCreateDialogOpen(false)
+        setFormState(EMPTY_FORM)
+        await loadSources()
+      } catch (error) {
+        console.error("Failed to create integration event sources:", error)
+        toast.error(error instanceof Error ? error.message : "Failed to create integration event sources")
+      } finally {
+        setSavingSource(false)
+      }
+      return;
+    }
+
     const name = formState.name.trim();
     const description = formState.description.trim();
     const recommendedUsage = formState.recommendedUsage.trim();
@@ -238,15 +358,16 @@ export default function EventSourcesPage() {
       return;
     }
 
-    if (formState.providerKind === "webhook" && !providerRef) {
+    if (formState.mode === "webhook" && !providerRef) {
       toast.error("This provider requires providerRef");
       return;
     }
 
     setSavingSource(true);
     try {
+      const manualProviderKind = formState.mode === "webhook" ? "webhook" : "internal";
       await api.createAutomationEventSource(workspaceId, {
-        providerKind: formState.providerKind,
+        providerKind: manualProviderKind,
         providerRef: providerRef || undefined,
         name,
         description,
@@ -371,6 +492,7 @@ export default function EventSourcesPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All providers</SelectItem>
+                    <SelectItem value="integration">Integration</SelectItem>
                     <SelectItem value="internal">Internal</SelectItem>
                     <SelectItem value="webhook">Webhook</SelectItem>
                   </SelectContent>
@@ -407,10 +529,12 @@ export default function EventSourcesPage() {
                         <div className="flex flex-wrap items-center gap-2">
                           <div className="text-sm font-medium text-foreground">{source.name}</div>
                           <Badge variant={eventSourceStatusVariant(source.status)}>{source.status}</Badge>
+                          {source.providerKind === "integration" && source.integration ? (
+                            <Badge variant="outline">{integrationProviderLabel(source.integration.provider)}</Badge>
+                          ) : null}
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">
-                          {source.providerKind}
-                          {source.providerRef ? ` / ${source.providerRef}` : ""} · {source.sourceKey}
+                          {sourceProviderDetail(source)} · {source.sourceKey}
                         </div>
                       </div>
                       <BellRing className="size-4 text-muted-foreground" />
@@ -504,12 +628,28 @@ export default function EventSourcesPage() {
                     <dl className="mt-3 grid gap-3 text-sm">
                       <div>
                         <dt className="text-muted-foreground">Provider</dt>
-                        <dd className="font-medium text-foreground">{selectedSource.providerKind}</dd>
+                        <dd className="font-medium text-foreground">{sourceProviderLabel(selectedSource)}</dd>
                       </div>
                       <div>
                         <dt className="text-muted-foreground">Provider ref</dt>
-                        <dd className="font-medium text-foreground">{selectedSource.providerRef || "None"}</dd>
+                        <dd className="font-medium text-foreground">
+                          {selectedSource.providerKind === "integration"
+                            ? selectedSource.integration?.targetLabel || selectedSource.integration?.targetId || "None"
+                            : selectedSource.providerRef || "None"}
+                        </dd>
                       </div>
+                      {selectedSource.providerKind === "integration" && selectedSource.integration ? (
+                        <>
+                          <div>
+                            <dt className="text-muted-foreground">Target</dt>
+                            <dd className="font-medium text-foreground">{selectedSource.integration.targetId}</dd>
+                          </div>
+                          <div>
+                            <dt className="text-muted-foreground">Ingress</dt>
+                            <dd className="font-medium text-foreground">{selectedSource.integration.ingressKind}</dd>
+                          </div>
+                        </>
+                      ) : null}
                       <div>
                         <dt className="text-muted-foreground">Source key</dt>
                         <dd className="font-medium text-foreground">{selectedSource.sourceKey}</dd>
@@ -639,8 +779,9 @@ export default function EventSourcesPage() {
           <DialogHeader>
             <DialogTitle>Create Event Source</DialogTitle>
             <DialogDescription>
-              Register a durable event definition. User-created sources receive a system-assigned source key; reserved
-              system registrations still reuse their fixed keys instead of creating duplicates.
+              Register a durable event definition. Internal and generic webhook sources are configured manually.
+              GitHub and GitLab sources reuse an installed official MCP credential, but events still arrive through the
+              platform's official webhook APIs.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
@@ -650,115 +791,230 @@ export default function EventSourcesPage() {
                   Provider
                 </label>
                 <Select
-                  value={formState.providerKind}
+                  value={formState.mode}
                   onValueChange={(value) =>
-                    setFormState((current) => ({ ...current, providerKind: value as EventSourceFormState["providerKind"] }))
+                    setFormState((current) => ({
+                      ...EMPTY_FORM,
+                      mode: value as EventSourceMode,
+                    }))
                   }
                 >
                   <SelectTrigger id="event-source-provider-kind" className="w-full">
                     <SelectValue placeholder="Select provider" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="github">GitHub</SelectItem>
+                    <SelectItem value="gitlab">GitLab</SelectItem>
                     <SelectItem value="internal">Internal</SelectItem>
                     <SelectItem value="webhook">Webhook</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <div className="grid gap-2">
-                <label className="text-sm font-medium text-foreground" htmlFor="event-source-provider-ref">
-                  Provider ref
-                </label>
-                <Input
-                  id="event-source-provider-ref"
-                  value={formState.providerRef}
-                  onChange={(event) =>
-                    setFormState((current) => ({ ...current, providerRef: event.target.value }))
-                  }
+              {integrationProvider ? (
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium text-foreground" htmlFor="event-source-installation">
+                    Installed integration
+                  </label>
+                  <Select
+                    value={formState.installationId}
+                    onValueChange={(value) =>
+                      setFormState((current) => ({ ...current, installationId: value }))
+                    }
+                  >
+                    <SelectTrigger id="event-source-installation" className="w-full">
+                      <SelectValue placeholder={`Select a ${sourceModeLabel(formState.mode)} installation`} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableIntegrationInstallations.length > 0 ? (
+                        availableIntegrationInstallations.map((installation) => (
+                          <SelectItem key={installation.id} value={installation.id}>
+                            {installation.plugin_display_name || installation.plugin_slug || installation.id}
+                          </SelectItem>
+                        ))
+                      ) : (
+                        <SelectItem value="__none" disabled>
+                          No active {sourceModeLabel(formState.mode)} installation found
+                        </SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : (
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium text-foreground" htmlFor="event-source-provider-ref">
+                    Provider ref
+                  </label>
+                  <Input
+                    id="event-source-provider-ref"
+                    value={formState.providerRef}
+                    onChange={(event) =>
+                      setFormState((current) => ({ ...current, providerRef: event.target.value }))
+                    }
                     placeholder={
-                    formState.providerKind === "webhook"
+                      formState.mode === "webhook"
                         ? "Webhook endpoint ID"
                         : "Optional provider reference"
-                  }
-                />
-              </div>
+                    }
+                  />
+                </div>
+              )}
             </div>
 
-            <div className="grid gap-2">
-              <label className="text-sm font-medium text-foreground" htmlFor="event-source-name">
-                Name
-              </label>
-              <Input
-                id="event-source-name"
-                value={formState.name}
-                onChange={(event) =>
-                  setFormState((current) => ({ ...current, name: event.target.value }))
-                }
-                placeholder="Device Online"
-              />
-            </div>
+            {integrationProvider ? (
+              <>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium text-foreground" htmlFor="event-source-target-id">
+                      {integrationProvider === "github" ? "Repository" : "Project"}
+                    </label>
+                    <Input
+                      id="event-source-target-id"
+                      value={formState.targetId}
+                      onChange={(event) =>
+                        setFormState((current) => ({ ...current, targetId: event.target.value }))
+                      }
+                      placeholder={integrationProvider === "github" ? "owner/repo" : "group/project"}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium text-foreground" htmlFor="event-source-target-label">
+                      Display label
+                    </label>
+                    <Input
+                      id="event-source-target-label"
+                      value={formState.targetLabel}
+                      onChange={(event) =>
+                        setFormState((current) => ({ ...current, targetLabel: event.target.value }))
+                      }
+                      placeholder="Optional custom label"
+                    />
+                  </div>
+                </div>
 
-            <div className="grid gap-2">
-              <label className="text-sm font-medium text-foreground" htmlFor="event-source-description">
-                Description
-              </label>
-              <Textarea
-                id="event-source-description"
-                value={formState.description}
-                onChange={(event) =>
-                  setFormState((current) => ({ ...current, description: event.target.value }))
-                }
-                placeholder="Explain when the event fires and what the payload means."
-                rows={4}
-              />
-            </div>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium text-foreground">
+                    Event definitions
+                  </label>
+                  <div className="grid gap-3">
+                    {availableIntegrationDefinitions.map((definition) => {
+                      const checked = formState.selectedIntegrationSourceKeys.includes(definition.sourceKey)
+                      return (
+                        <label
+                          key={definition.sourceKey}
+                          className="flex items-start gap-3 rounded-[22px] border border-border/70 bg-muted/20 px-4 py-4"
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(value) =>
+                              setFormState((current) => ({
+                                ...current,
+                                selectedIntegrationSourceKeys: value === true
+                                  ? [...current.selectedIntegrationSourceKeys, definition.sourceKey]
+                                  : current.selectedIntegrationSourceKeys.filter((key) => key !== definition.sourceKey),
+                              }))
+                            }
+                          />
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium text-foreground">{definition.name}</span>
+                              <Badge variant="outline">{definition.sourceKey}</Badge>
+                            </div>
+                            <p className="text-sm text-muted-foreground">{definition.description}</p>
+                            {definition.recommendedUsage ? (
+                              <p className="text-xs text-muted-foreground/80">{definition.recommendedUsage}</p>
+                            ) : null}
+                          </div>
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
 
-            <div className="grid gap-2">
-              <label className="text-sm font-medium text-foreground" htmlFor="event-source-recommended-usage">
-                Suggested usage
-              </label>
-              <Textarea
-                id="event-source-recommended-usage"
-                value={formState.recommendedUsage}
-                onChange={(event) =>
-                  setFormState((current) => ({ ...current, recommendedUsage: event.target.value }))
-                }
-                placeholder="Explain the scenarios where this source is especially useful, for example what kinds of subscriptions or wakeups it should drive."
-                rows={4}
-              />
-            </div>
+                <div className="rounded-[22px] border border-border/70 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+                  Synapse will create one durable event source and one official platform webhook per selected
+                  definition. Incoming events still use GitHub/GitLab official webhook delivery, not the MCP server.
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium text-foreground" htmlFor="event-source-name">
+                    Name
+                  </label>
+                  <Input
+                    id="event-source-name"
+                    value={formState.name}
+                    onChange={(event) =>
+                      setFormState((current) => ({ ...current, name: event.target.value }))
+                    }
+                    placeholder="Device Online"
+                  />
+                </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="grid gap-2">
-                <label className="text-sm font-medium text-foreground" htmlFor="event-source-payload-schema">
-                  Payload schema
-                </label>
-                <Textarea
-                  id="event-source-payload-schema"
-                  value={formState.payloadSchemaText}
-                  onChange={(event) =>
-                    setFormState((current) => ({ ...current, payloadSchemaText: event.target.value }))
-                  }
-                  className="min-h-52 font-mono text-xs"
-                />
-              </div>
-              <div className="grid gap-2">
-                <label className="text-sm font-medium text-foreground" htmlFor="event-source-example-payload">
-                  Example payload
-                </label>
-                <Textarea
-                  id="event-source-example-payload"
-                  value={formState.examplePayloadText}
-                  onChange={(event) =>
-                    setFormState((current) => ({ ...current, examplePayloadText: event.target.value }))
-                  }
-                  className="min-h-52 font-mono text-xs"
-                />
-              </div>
-            </div>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium text-foreground" htmlFor="event-source-description">
+                    Description
+                  </label>
+                  <Textarea
+                    id="event-source-description"
+                    value={formState.description}
+                    onChange={(event) =>
+                      setFormState((current) => ({ ...current, description: event.target.value }))
+                    }
+                    placeholder="Explain when the event fires and what the payload means."
+                    rows={4}
+                  />
+                </div>
+
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium text-foreground" htmlFor="event-source-recommended-usage">
+                    Suggested usage
+                  </label>
+                  <Textarea
+                    id="event-source-recommended-usage"
+                    value={formState.recommendedUsage}
+                    onChange={(event) =>
+                      setFormState((current) => ({ ...current, recommendedUsage: event.target.value }))
+                    }
+                    placeholder="Explain the scenarios where this source is especially useful, for example what kinds of subscriptions or wakeups it should drive."
+                    rows={4}
+                  />
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium text-foreground" htmlFor="event-source-payload-schema">
+                      Payload schema
+                    </label>
+                    <Textarea
+                      id="event-source-payload-schema"
+                      value={formState.payloadSchemaText}
+                      onChange={(event) =>
+                        setFormState((current) => ({ ...current, payloadSchemaText: event.target.value }))
+                      }
+                      className="min-h-52 font-mono text-xs"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium text-foreground" htmlFor="event-source-example-payload">
+                      Example payload
+                    </label>
+                    <Textarea
+                      id="event-source-example-payload"
+                      value={formState.examplePayloadText}
+                      onChange={(event) =>
+                        setFormState((current) => ({ ...current, examplePayloadText: event.target.value }))
+                      }
+                      className="min-h-52 font-mono text-xs"
+                    />
+                  </div>
+                </div>
+              </>
+            )}
 
             <div className="rounded-[22px] border border-border/70 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
-              Source keys are allocated by the system to avoid collisions. Relay lifecycle sources still use reserved
-              system keys behind the scenes.
+              Source keys are allocated by the system to avoid collisions for manual sources. Integration-backed
+              GitHub/GitLab sources use reserved keys such as `github.issue_comment` and `gitlab.pipeline`.
             </div>
             <div className="rounded-[22px] border border-border/70 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
               Relay lifecycle event sources are best managed from the relay detail page, where online/offline sources

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ExclamationCircleIcon } from '@heroicons/react/16/solid';
 import type {
   AttachmentScope,
+  AutomationIntegrationProvider,
   PluginAuthBindingDefinition,
   PluginAuthSession,
   PluginConfigFieldDefinition,
@@ -22,10 +23,15 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import { Check, ExternalLink, HelpCircle, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { usePluginStore } from '@/stores/plugin-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
+import {
+  createIntegrationEventSources,
+  listIntegrationEventDefinitionOptions,
+} from '@/lib/integration-event-sources';
 import PluginAccessStep from './plugin-access-step';
 import { PluginIcon } from './plugin-ui';
 import {
@@ -74,7 +80,20 @@ type AccessStep = {
   action?: undefined;
   metadata?: Record<string, unknown>;
 };
-type InstallFlowStep = PluginInstallStep | AccessStep;
+type IntegrationEventsStep = {
+  id: 'integration-events';
+  kind: 'integration_events';
+  titleI18n: LocalizedText;
+  descriptionI18n?: LocalizedText;
+  scope: 'plugin';
+  fields: [];
+  optional?: boolean;
+  helpUrl?: string;
+  helpTextI18n?: LocalizedText;
+  action?: undefined;
+  metadata?: Record<string, unknown>;
+};
+type InstallFlowStep = PluginInstallStep | AccessStep | IntegrationEventsStep;
 
 type AuthFieldState = {
   sessionId: string;
@@ -128,6 +147,24 @@ function translate(text: LocalizedText | undefined, locale: string, fallback?: s
     Object.values(text)[0] ||
     ''
   );
+}
+
+function getIntegrationProvider(plugin: any): AutomationIntegrationProvider | null {
+  const orgSlug = plugin?.org_slug;
+  const pluginSlug = plugin?.plugin_slug || plugin?.slug;
+  if (pluginSlug !== 'official-mcp') return null;
+  if (orgSlug === 'github' || orgSlug === 'gitlab') {
+    return orgSlug;
+  }
+  return null;
+}
+
+function integrationTargetLabel(provider: AutomationIntegrationProvider) {
+  return provider === 'github' ? 'Repository' : 'Project';
+}
+
+function integrationTargetPlaceholder(provider: AutomationIntegrationProvider) {
+  return provider === 'github' ? 'owner/repo' : 'group/project';
 }
 
 function deriveConfigFields(plugin: any): PluginConfigFieldDefinition[] {
@@ -378,10 +415,15 @@ export default function InstallDialog({
   const currentUserId = user?.id || '';
 
   const locale = useMemo(() => getLocale(plugin.default_locale), [plugin.default_locale]);
+  const integrationProvider = useMemo(() => getIntegrationProvider(plugin), [plugin]);
   const configFields = useMemo(() => deriveConfigFields(plugin), [plugin]);
   const setupSteps = useMemo(
     () => deriveInstallFlow(plugin, configFields, locale, { includePlacementSteps }),
     [configFields, includePlacementSteps, locale, plugin],
+  );
+  const integrationEventDefinitionOptions = useMemo(
+    () => (integrationProvider ? listIntegrationEventDefinitionOptions(integrationProvider) : []),
+    [integrationProvider],
   );
   const authBindings = useMemo<PluginAuthBindingDefinition[]>(() => plugin.auth_bindings || [], [plugin.auth_bindings]);
   const authBindingMap = useMemo(() => new Map(authBindings.map((binding) => [binding.key, binding])), [authBindings]);
@@ -425,17 +467,40 @@ export default function InstallDialog({
     ),
   );
   const [currentInstallation, setCurrentInstallation] = useState<any>(initialInstallation || null);
+  const [setupIntegrationSources, setSetupIntegrationSources] = useState(false);
+  const [integrationTargetId, setIntegrationTargetId] = useState('');
+  const [integrationTargetLabelValue, setIntegrationTargetLabelValue] = useState('');
+  const [selectedIntegrationSourceKeys, setSelectedIntegrationSourceKeys] = useState<string[]>([]);
+  const [creatingIntegrationSources, setCreatingIntegrationSources] = useState(false);
   const authPollers = useRef<Record<string, number>>({});
 
   const validationRules: ValidationRule[] = plugin.validation_rules || [];
   const resolvedIncludeAccessStep = includeAccessStep ?? presentation === 'page';
   const installSteps = useMemo<InstallFlowStep[]>(() => {
+    const nextSteps: InstallFlowStep[] = [...setupSteps];
+    if (integrationProvider) {
+      nextSteps.push({
+        id: 'integration-events',
+        kind: 'integration_events',
+        titleI18n: {
+          en: `Create ${integrationProvider === 'github' ? 'GitHub' : 'GitLab'} Event Sources`,
+          'zh-CN': `创建 ${integrationProvider === 'github' ? 'GitHub' : 'GitLab'} 事件源`,
+        },
+        descriptionI18n: {
+          en: 'Optionally create durable automation event sources backed by the platform webhook API.',
+          'zh-CN': '按需创建通过平台官方 webhook API 接入的自动化事件源。',
+        },
+        scope: 'plugin',
+        fields: [],
+        optional: true,
+      });
+    }
     if (!resolvedIncludeAccessStep) {
-      return setupSteps;
+      return nextSteps;
     }
 
     return [
-      ...setupSteps,
+      ...nextSteps,
       {
         id: 'access',
         kind: 'access',
@@ -445,10 +510,14 @@ export default function InstallDialog({
         fields: [],
       },
     ];
-  }, [locale, resolvedIncludeAccessStep, setupSteps]);
+  }, [integrationProvider, locale, resolvedIncludeAccessStep, setupSteps]);
   const currentStep = installSteps[currentStepIndex];
   const accessStepIndex = useMemo(
     () => installSteps.findIndex((step) => step.kind === 'access'),
+    [installSteps],
+  );
+  const integrationStepIndex = useMemo(
+    () => installSteps.findIndex((step) => step.kind === 'integration_events'),
     [installSteps],
   );
   const currentAuthStepField = useMemo(() => {
@@ -461,7 +530,12 @@ export default function InstallDialog({
       .filter((field) => field.type === 'auth_connection');
     return authStepFields.length === 1 ? authStepFields[0] : null;
   }, [configFields, currentStep]);
-  const lastSetupStepIndex = setupSteps.length - 1;
+  const lastSetupStepIndex = useMemo(() => {
+    const firstPostInstallStepIndex = installSteps.findIndex(
+      (step) => step.kind === 'integration_events' || step.kind === 'access',
+    );
+    return firstPostInstallStepIndex >= 0 ? firstPostInstallStepIndex - 1 : installSteps.length - 1;
+  }, [installSteps]);
   const installLifecycleOptions = useMemo(
     () => getInstallAllowedReuseScopes(selectedAttachmentType),
     [selectedAttachmentType],
@@ -497,6 +571,13 @@ export default function InstallDialog({
   useEffect(() => {
     setCurrentInstallation(initialInstallation || null);
   }, [initialInstallation]);
+
+  useEffect(() => {
+    setSetupIntegrationSources(false);
+    setIntegrationTargetId('');
+    setIntegrationTargetLabelValue('');
+    setSelectedIntegrationSourceKeys([]);
+  }, [initialInstallation?.id, plugin?.id]);
 
   useEffect(() => {
     setAuthFields((previous) => ({
@@ -704,7 +785,15 @@ export default function InstallDialog({
     setCurrentStepIndex((index) => Math.max(index - 1, 0));
   };
 
-  const persistInstallation = async ({ continueToAccess = false }: { continueToAccess?: boolean } = {}) => {
+  const continueAfterIntegrationStep = async () => {
+    if (accessStepIndex >= 0 && accessStepIndex !== currentStepIndex) {
+      setCurrentStepIndex(accessStepIndex);
+      return;
+    }
+    await finalizeFlow();
+  };
+
+  const persistInstallation = async ({ continueToNextStep = false }: { continueToNextStep?: boolean } = {}) => {
     if (!workspaceId) return;
 
     const errors = validateCurrentState();
@@ -753,8 +842,11 @@ export default function InstallDialog({
       setCurrentInstallation(installation);
       await onInstallationSaved?.(installation);
 
-      if (continueToAccess && accessStepIndex >= 0) {
-        setCurrentStepIndex(accessStepIndex);
+      const nextPostInstallStepIndex =
+        integrationStepIndex >= 0 ? integrationStepIndex : accessStepIndex >= 0 ? accessStepIndex : -1;
+
+      if (continueToNextStep && nextPostInstallStepIndex >= 0) {
+        setCurrentStepIndex(nextPostInstallStepIndex);
       } else if (onSuccess) {
         await onSuccess(installation);
       } else {
@@ -764,6 +856,53 @@ export default function InstallDialog({
       alert(`Install failed: ${error.message}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleIntegrationStepContinue = async () => {
+    if (!workspaceId || !integrationProvider) {
+      await continueAfterIntegrationStep();
+      return;
+    }
+
+    if (!currentInstallation?.id) {
+      toast.error('Save the installation before creating event sources.');
+      return;
+    }
+
+    if (!setupIntegrationSources) {
+      await continueAfterIntegrationStep();
+      return;
+    }
+
+    if (!integrationTargetId.trim()) {
+      toast.error(`Enter the ${integrationTargetLabel(integrationProvider).toLowerCase()} to watch.`);
+      return;
+    }
+
+    if (selectedIntegrationSourceKeys.length === 0) {
+      toast.error('Select at least one event source.');
+      return;
+    }
+
+    setCreatingIntegrationSources(true);
+    try {
+      await createIntegrationEventSources({
+        workspaceId,
+        installationId: currentInstallation.id,
+        provider: integrationProvider,
+        targetId: integrationTargetId.trim(),
+        targetLabel: integrationTargetLabelValue.trim(),
+        sourceKeys: selectedIntegrationSourceKeys,
+      });
+      toast.success(
+        `${integrationProvider === 'github' ? 'GitHub' : 'GitLab'} event sources created.`,
+      );
+      await continueAfterIntegrationStep();
+    } catch (error: any) {
+      toast.error(error?.message || 'Failed to create integration event sources.');
+    } finally {
+      setCreatingIntegrationSources(false);
     }
   };
 
@@ -787,7 +926,9 @@ export default function InstallDialog({
           const label = translate(step.titleI18n, locale, plugin.default_locale || 'en') || step.id;
           const isCurrent = index === currentStepIndex;
           const isComplete = index < currentStepIndex;
-          const isLocked = step.kind === 'access' && !currentInstallation;
+          const isLocked =
+            (step.kind === 'access' || step.kind === 'integration_events') &&
+            !currentInstallation;
 
           return (
             <button
@@ -1126,6 +1267,112 @@ export default function InstallDialog({
           <PluginAccessStep installation={currentInstallation} />
         )}
 
+        {currentStep?.kind === 'integration_events' && integrationProvider && (
+          <div className="space-y-4 border-t border-gray-200 pt-4 dark:border-white/10">
+            <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-6 shrink-0 items-center">
+                  <Checkbox
+                    id="create-integration-event-sources"
+                    checked={setupIntegrationSources}
+                    onCheckedChange={(checked) => setSetupIntegrationSources(checked === true)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label
+                    htmlFor="create-integration-event-sources"
+                    className="text-sm font-medium text-gray-900 dark:text-white"
+                  >
+                    Create {integrationProvider === 'github' ? 'GitHub' : 'GitLab'} event sources now
+                  </label>
+                  <p className="text-sm text-muted-foreground">
+                    Synapse will reuse this installation&apos;s token to register platform webhooks through the official API.
+                    The MCP server remains separate from event ingestion.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {setupIntegrationSources ? (
+              <>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="integration-target-id" className="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                      {integrationTargetLabel(integrationProvider)}
+                    </Label>
+                    <Input
+                      id="integration-target-id"
+                      value={integrationTargetId}
+                      onChange={(event) => setIntegrationTargetId(event.target.value)}
+                      placeholder={integrationTargetPlaceholder(integrationProvider)}
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      {integrationProvider === 'github'
+                        ? 'Use the repository path, for example `owner/repo`.'
+                        : 'Use the project path, for example `group/project`.'}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="integration-target-label" className="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                      Display label
+                    </Label>
+                    <Input
+                      id="integration-target-label"
+                      value={integrationTargetLabelValue}
+                      onChange={(event) => setIntegrationTargetLabelValue(event.target.value)}
+                      placeholder="Optional custom label"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="text-sm font-medium text-gray-900 dark:text-white">Event definitions</div>
+                  <div className="space-y-3">
+                    {integrationEventDefinitionOptions.map((definition) => {
+                      const checked = selectedIntegrationSourceKeys.includes(definition.sourceKey);
+                      return (
+                        <label
+                          key={definition.sourceKey}
+                          className="flex items-start gap-3 rounded-[24px] border border-border/70 bg-muted/20 px-4 py-4"
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(value) =>
+                              setSelectedIntegrationSourceKeys((current) =>
+                                value === true
+                                  ? current.includes(definition.sourceKey)
+                                    ? current
+                                    : [...current, definition.sourceKey]
+                                  : current.filter((sourceKey) => sourceKey !== definition.sourceKey),
+                              )
+                            }
+                          />
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium text-gray-900 dark:text-white">
+                                {definition.name}
+                              </span>
+                              <Badge variant="outline">{definition.sourceKey}</Badge>
+                            </div>
+                            <p className="text-sm text-muted-foreground">{definition.description}</p>
+                            {definition.recommendedUsage ? (
+                              <p className="text-xs text-muted-foreground">{definition.recommendedUsage}</p>
+                            ) : null}
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-[24px] border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
+                Skip this step if you only want MCP tools for now. You can add event sources later from the Event Sources page.
+              </div>
+            )}
+          </div>
+        )}
+
         {(currentStep?.kind === 'form' || currentStep?.kind === 'auth' || currentStep?.kind === 'check') && currentStep?.fields.length > 0 && (
           <div className="space-y-4 border-t border-gray-200 pt-4 dark:border-white/10">
             {currentStep.fields.map((fieldKey) => {
@@ -1151,16 +1398,37 @@ export default function InstallDialog({
           <Button onClick={finalizeFlow} disabled={saving}>
             Done
           </Button>
+        ) : currentStep?.kind === 'integration_events' ? (
+          <Button onClick={() => void handleIntegrationStepContinue()} disabled={saving || creatingIntegrationSources}>
+            {creatingIntegrationSources
+              ? 'Creating event sources...'
+              : setupIntegrationSources
+                ? accessStepIndex >= 0
+                  ? 'Create Event Sources & Continue'
+                  : 'Create Event Sources'
+                : accessStepIndex >= 0
+                  ? 'Continue to Access'
+                  : 'Finish'}
+          </Button>
         ) : currentStepIndex < lastSetupStepIndex ? (
           <Button onClick={nextStep} disabled={saving}>
             Next
           </Button>
         ) : (
-          <Button onClick={() => persistInstallation({ continueToAccess: presentation === 'page' && accessStepIndex >= 0 })} disabled={saving}>
+          <Button
+            onClick={() =>
+              void persistInstallation({
+                continueToNextStep: integrationStepIndex >= 0 || (presentation === 'page' && accessStepIndex >= 0),
+              })
+            }
+            disabled={saving}
+          >
             {saving
               ? (currentInstallation || initialInstallation ? 'Saving...' : 'Installing...')
-              : presentation === 'page' && accessStepIndex >= 0
-                ? (currentInstallation || initialInstallation ? 'Save & Continue to Access' : 'Install & Continue to Access')
+              : integrationStepIndex >= 0
+                ? (currentInstallation || initialInstallation ? 'Save & Continue' : 'Install & Continue')
+                : presentation === 'page' && accessStepIndex >= 0
+                  ? (currentInstallation || initialInstallation ? 'Save & Continue to Access' : 'Install & Continue to Access')
                 : (currentInstallation || initialInstallation ? 'Save Setup' : 'Install')}
           </Button>
         )}

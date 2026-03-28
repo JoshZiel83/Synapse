@@ -507,8 +507,11 @@ export type AutomationStatus =
   | "expired";
 export type AutomationCreatorKind = "user" | "session" | "system";
 export type AutomationTriggerKind = "schedule" | "event";
-export type AutomationSourceKind = "clock" | "relay" | "webhook" | "internal";
-export type AutomationEventProviderKind = "relay" | "webhook" | "internal";
+export type AutomationSourceKind = "clock" | "relay" | "webhook" | "internal" | "integration";
+export type AutomationEventProviderKind = "relay" | "webhook" | "internal" | "integration";
+export type AutomationIntegrationProvider = "github" | "gitlab";
+export type AutomationIntegrationIngressKind = "webhook" | "polling";
+export type AutomationIntegrationTargetKind = "repository" | "project";
 export type AutomationScheduleKind = "cron" | "at" | "interval";
 export type AutomationCompletionStatus = "completed" | "archived";
 export type AutomationDeliveryMode =
@@ -531,11 +534,23 @@ export type AutomationEventSourceStatus =
   | "disabled"
   | "archived";
 
+export interface AutomationEventSourceIntegration {
+  installationId: UUID;
+  provider: AutomationIntegrationProvider;
+  ingressKind: AutomationIntegrationIngressKind;
+  targetKind: AutomationIntegrationTargetKind;
+  targetId: string;
+  targetLabel: string;
+  endpointId?: UUID;
+  externalSubscriptionId?: string;
+}
+
 export interface AutomationEventSource {
   id: UUID;
   workspaceId: UUID;
   providerKind: AutomationEventProviderKind;
   providerRef?: string;
+  integration?: AutomationEventSourceIntegration;
   sourceKey: string;
   name: string;
   description: string;
@@ -586,6 +601,7 @@ export interface AutomationTrigger {
   eventSourceName?: string;
   eventProviderKind?: AutomationEventProviderKind;
   eventProviderRef?: string;
+  eventSourceIntegration?: AutomationEventSourceIntegration;
   eventSourceStatus?: AutomationEventSourceStatus;
   sourceLocator?: string;
   matchKey?: string;
@@ -639,6 +655,7 @@ export interface AutomationOccurrence {
   eventSourceId?: UUID;
   eventSourceKey?: string;
   eventSourceName?: string;
+  eventSourceIntegration?: AutomationEventSourceIntegration;
   displayTitle?: string;
   displaySummary?: string;
   displayDescription?: string;
@@ -1695,7 +1712,8 @@ export type PluginInstallStepKind =
   | "check"
   | "confirm"
   | "attachment_scope"
-  | "reuse_scope";
+  | "reuse_scope"
+  | "integration_events";
 export type PluginInstallActionKind = "auth_start" | "external_link" | "noop";
 export type PluginAuthBindingDriverKind =
   | "oauth2_authorization_code_pkce"

@@ -71,6 +71,79 @@ function buildInstanceKey(installationId: string, configHash: string, scope: str
   return `${installationId}:${configHash}:${scope}:${scopeId}`;
 }
 
+function getConfigValue(config: Record<string, unknown>, pathExpression: string): unknown {
+  const pathParts = pathExpression.split('.').filter(Boolean);
+  let current: unknown = config;
+  for (const segment of pathParts) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
+function stringifyTemplateValue(value: unknown): string {
+  if (value === undefined || value === null) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function resolveTemplate(template: string, config: Record<string, unknown>): string {
+  return template.replace(/\$\{([^}]+)\}/g, (_match, rawExpression: string) => {
+    const expression = rawExpression.trim();
+    if (expression.startsWith('env:')) {
+      return process.env[expression.slice(4)] || '';
+    }
+    if (expression.startsWith('config:')) {
+      return stringifyTemplateValue(getConfigValue(config, expression.slice(7)));
+    }
+    return '';
+  });
+}
+
+function resolveHttpEntryPoint(
+  entryPoint: string,
+  config: Record<string, unknown>,
+): { url: string; headers: Record<string, string> } {
+  const trimmed = entryPoint.trim();
+  if (!trimmed) {
+    throw new Error('HTTP entry point is required');
+  }
+
+  if (trimmed.startsWith('{')) {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const url = typeof parsed.url === 'string'
+      ? resolveTemplate(parsed.url, config)
+      : typeof parsed.endpoint === 'string'
+        ? resolveTemplate(parsed.endpoint, config)
+        : '';
+    if (!url) {
+      throw new Error('HTTP entry point JSON is missing url');
+    }
+    const headers = parsed.headers && typeof parsed.headers === 'object' && !Array.isArray(parsed.headers)
+      ? Object.fromEntries(
+          Object.entries(parsed.headers as Record<string, unknown>)
+            .filter(([, value]) => typeof value === 'string')
+            .map(([key, value]) => [key, resolveTemplate(value as string, config)]),
+        )
+      : {};
+    return { url, headers };
+  }
+
+  return {
+    url: resolveTemplate(trimmed, config),
+    headers: {},
+  };
+}
+
 /**
  * Get or create an MCP instance for the given plugin + scope + config
  */
@@ -203,12 +276,15 @@ async function createHttpInstance(params: {
   maxAgeMs?: number;
 }, key: string, configHash: string): Promise<McpInstance> {
   const apiKey = params.config.apiKey as string;
-  const headers: Record<string, string> = {};
+  const resolvedEntryPoint = resolveHttpEntryPoint(params.entryPoint, params.config);
+  const headers: Record<string, string> = {
+    ...resolvedEntryPoint.headers,
+  };
   if (apiKey) {
-    headers['Authorization'] = `Bearer ${apiKey}`;
+    headers['Authorization'] = headers['Authorization'] || `Bearer ${apiKey}`;
   }
 
-  const client = new McpHttpClient(params.entryPoint, headers);
+  const client = new McpHttpClient(resolvedEntryPoint.url, headers);
 
   // Initialize the MCP connection
   try {
@@ -218,14 +294,14 @@ async function createHttpInstance(params: {
       workspaceId: params.workspaceId,
       pluginId: params.pluginId,
       eventType: 'connection.init',
-      eventData: { endpoint: params.entryPoint, success: true, serverInfo: initResult.serverInfo },
+      eventData: { endpoint: resolvedEntryPoint.url, success: true, serverInfo: initResult.serverInfo },
     });
   } catch (error: any) {
     logEvent({
       workspaceId: params.workspaceId,
       pluginId: params.pluginId,
       eventType: 'connection.error',
-      eventData: { endpoint: params.entryPoint, error: error.message },
+      eventData: { endpoint: resolvedEntryPoint.url, error: error.message },
     });
     throw error;
   }

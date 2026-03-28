@@ -1,5 +1,7 @@
 import type {
   AutomationEventProviderKind,
+  AutomationEventSourceIntegration,
+  AutomationIntegrationProvider,
   AutomationScheduleKind,
   AutomationSourceKind,
   AutomationTriggerKind,
@@ -12,6 +14,9 @@ export interface AutomationTriggerDisplayInput {
   eventSourceKey?: string;
   eventProviderKind?: AutomationEventProviderKind;
   eventProviderRef?: string;
+  eventSourceIntegration?: AutomationEventSourceIntegration;
+  eventIntegrationProvider?: AutomationIntegrationProvider;
+  eventIntegrationTargetLabel?: string;
   matcher?: Record<string, unknown>;
   scheduleKind?: AutomationScheduleKind;
   scheduleExpr?: string;
@@ -76,10 +81,15 @@ function describeEventTrigger(
     readString(input.eventSourceKey) ||
     "Event subscription";
   const providerKind =
-    readString(input.eventProviderKind) ||
+    readString(input.eventSourceIntegration?.provider) ||
+    readString(input.eventIntegrationProvider) ||
+    (input.eventProviderKind === "integration" ? null : readString(input.eventProviderKind)) ||
     readString(input.sourceKind) ||
     "event";
-  const providerRef = readString(input.eventProviderRef);
+  const providerRef =
+    readString(input.eventSourceIntegration?.targetLabel) ||
+    readString(input.eventIntegrationTargetLabel) ||
+    readString(input.eventProviderRef);
   const matcherFieldCount = countMatcherFields(input.matcher);
   const providerLabel = providerRef ? `${providerKind} / ${providerRef}` : providerKind;
   const matcherLabel =

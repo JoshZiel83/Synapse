@@ -29,7 +29,7 @@ const contentBlocksSchema = z.array(z.any()).optional();
 const triggerSchema = z.object({
   triggerKind: z.enum(['schedule', 'event']),
   eventSourceId: z.string().uuid().optional(),
-  sourceKind: z.enum(['clock', 'relay', 'webhook', 'internal']).optional(),
+  sourceKind: z.enum(['clock', 'relay', 'webhook', 'internal', 'integration']).optional(),
   sourceLocator: z.string().trim().min(1).max(255).optional(),
   matchKey: z.string().trim().min(1).max(255).optional(),
   matcher: z.record(z.unknown()).optional(),
@@ -116,16 +116,47 @@ const createWebhookEndpointSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 
+const integrationEventSourceSchema = z.object({
+  installationId: z.string().uuid(),
+  provider: z.enum(['github', 'gitlab']),
+  ingressKind: z.enum(['webhook', 'polling']).optional(),
+  targetKind: z.enum(['repository', 'project']),
+  targetId: z.string().trim().min(1).max(255),
+  targetLabel: z.string().trim().min(1).max(255).optional(),
+});
+
 const eventSourceSchema = z.object({
-  providerKind: z.enum(['relay', 'webhook', 'internal']),
+  providerKind: z.enum(['relay', 'webhook', 'internal', 'integration']),
   providerRef: z.string().trim().min(1).max(255).optional(),
-  name: z.string().trim().min(1).max(255),
-  description: z.string().trim().min(1),
+  integration: integrationEventSourceSchema.optional(),
+  sourceKey: z.string().trim().min(1).max(255).optional(),
+  name: z.string().trim().min(1).max(255).optional(),
+  description: z.string().trim().min(1).optional(),
   recommendedUsage: z.string().trim().min(1).optional(),
   payloadSchema: z.record(z.unknown()).optional(),
   examplePayload: z.record(z.unknown()).optional(),
   status: z.enum(['active', 'deprecated', 'disabled', 'archived']).optional(),
   metadata: z.record(z.unknown()).optional(),
+}).superRefine((value, ctx) => {
+  if (value.providerKind === 'integration') {
+    if (!value.integration) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['integration'], message: 'integration is required' });
+    }
+    if (!value.sourceKey) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['sourceKey'], message: 'sourceKey is required' });
+    }
+    return;
+  }
+
+  if (!value.name?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['name'], message: 'name is required' });
+  }
+  if (!value.description?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: 'description is required' });
+  }
+  if (value.providerKind === 'webhook' && !value.providerRef?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['providerRef'], message: 'providerRef is required' });
+  }
 });
 
 const updateEventSourceSchema = z.object({
@@ -151,7 +182,7 @@ const webhookIngressSchema = z.object({
   sourceSnapshot: z.record(z.unknown()).optional(),
   dedupeKey: z.string().trim().min(1).max(255).optional(),
   occurredAt: z.string().datetime().optional(),
-});
+}).passthrough();
 
 function extractWebhookSecret(headers: Record<string, unknown>) {
   const direct = typeof headers['x-synapse-automation-secret'] === 'string'
@@ -188,7 +219,7 @@ export default async function automationController(app: FastifyInstance) {
 
     const query = request.query as {
       status?: 'active' | 'deprecated' | 'disabled' | 'archived';
-      providerKind?: 'relay' | 'webhook' | 'internal';
+      providerKind?: 'relay' | 'webhook' | 'internal' | 'integration';
       providerRef?: string;
       sourceKey?: string;
     };
@@ -468,21 +499,36 @@ export default async function automationController(app: FastifyInstance) {
 
   app.post('/api/v1/automation-webhooks/:pathToken/sources/:sourceKey/events', async (request, reply) => {
     const { pathToken, sourceKey } = request.params as { pathToken: string; sourceKey: string };
-    const body = webhookIngressSchema.parse(request.body || {});
-    const secret = extractWebhookSecret(request.headers as Record<string, unknown>);
-    if (!secret) {
-      return reply.status(401).send({ error: 'Webhook secret is required' });
-    }
+    const incomingBody =
+      request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+        ? request.body as Record<string, unknown>
+        : {};
+    const isEnvelope =
+      'payload' in incomingBody ||
+      'sourceSnapshot' in incomingBody ||
+      'dedupeKey' in incomingBody ||
+      'occurredAt' in incomingBody;
+    const body = webhookIngressSchema.parse(isEnvelope ? incomingBody : {});
+    const secret = extractWebhookSecret(request.headers as Record<string, unknown>) || undefined;
 
     const result = await ingestAutomationWebhookEvent({
       pathToken,
-      secret,
       sourceKey,
-      payload: body.payload,
-      sourceSnapshot: body.sourceSnapshot,
-      dedupeKey: body.dedupeKey,
-      occurredAt: body.occurredAt,
+      secret,
+      headers: request.headers as Record<string, unknown>,
+      rawBody: (request as any).rawBody as string | undefined,
+      payload: isEnvelope ? body.payload : incomingBody,
+      sourceSnapshot: isEnvelope ? body.sourceSnapshot : undefined,
+      dedupeKey: isEnvelope ? body.dedupeKey : undefined,
+      occurredAt: isEnvelope ? body.occurredAt : undefined,
     });
+    if ((result as { ignored?: boolean }).ignored) {
+      return reply.status(202).send({
+        ignored: true,
+        occurrence: null,
+        executions: [],
+      });
+    }
     await enqueueAutomationExecutions(result.executions.map((execution) => execution.id));
     return reply.status(202).send({
       occurrence: result.occurrence,

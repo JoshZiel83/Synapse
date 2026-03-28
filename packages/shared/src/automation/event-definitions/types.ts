@@ -1,8 +1,16 @@
-import type { AutomationEventProviderKind } from "../../types/index.js";
+import type {
+  AutomationEventProviderKind,
+  AutomationIntegrationProvider,
+  AutomationIntegrationTargetKind,
+} from "../../types/index.js";
 
 export interface AutomationEventSourceDefinitionContext {
   providerRef?: string;
   providerLabel?: string;
+  integrationProvider?: AutomationIntegrationProvider;
+  integrationTargetKind?: AutomationIntegrationTargetKind;
+  integrationTargetId?: string;
+  integrationTargetLabel?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -35,6 +43,7 @@ export interface AutomationEventDefinition<
 > {
   definitionKey: string;
   providerKind: AutomationEventProviderKind;
+  integrationProvider?: AutomationIntegrationProvider;
   managementMode: "system" | "user";
   graceWindowMs?: number;
   buildSource: (context: TContext) => AutomationEventSourceTemplate;

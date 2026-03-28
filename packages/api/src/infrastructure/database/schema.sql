@@ -1257,8 +1257,19 @@ CREATE TABLE automation_event_sources (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   provider_kind VARCHAR(20) NOT NULL
-    CHECK (provider_kind IN ('relay', 'webhook', 'internal')),
+    CHECK (provider_kind IN ('relay', 'webhook', 'internal', 'integration')),
   provider_ref TEXT,
+  webhook_endpoint_id UUID,
+  integration_installation_id UUID,
+  integration_provider VARCHAR(20)
+    CHECK (integration_provider IS NULL OR integration_provider IN ('github', 'gitlab')),
+  integration_ingress_kind VARCHAR(20)
+    CHECK (integration_ingress_kind IS NULL OR integration_ingress_kind IN ('webhook', 'polling')),
+  integration_target_kind VARCHAR(20)
+    CHECK (integration_target_kind IS NULL OR integration_target_kind IN ('repository', 'project')),
+  integration_target_id TEXT,
+  integration_target_label VARCHAR(255),
+  external_subscription_id VARCHAR(255),
   source_key VARCHAR(255) NOT NULL,
   name VARCHAR(255) NOT NULL,
   description TEXT NOT NULL DEFAULT '',
@@ -1275,24 +1286,84 @@ CREATE TABLE automation_event_sources (
   last_triggered_at TIMESTAMPTZ,
   metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (
+    (
+      provider_kind = 'integration' AND
+      integration_installation_id IS NOT NULL AND
+      integration_provider IS NOT NULL AND
+      integration_ingress_kind IS NOT NULL AND
+      integration_target_kind IS NOT NULL AND
+      integration_target_id IS NOT NULL AND
+      integration_target_label IS NOT NULL
+    ) OR (
+      provider_kind <> 'integration' AND
+      integration_installation_id IS NULL AND
+      integration_provider IS NULL AND
+      integration_ingress_kind IS NULL AND
+      integration_target_kind IS NULL AND
+      integration_target_id IS NULL AND
+      integration_target_label IS NULL AND
+      external_subscription_id IS NULL
+    )
+  ),
+  CHECK (
+    (
+      provider_kind = 'integration' AND
+      integration_ingress_kind = 'webhook' AND
+      webhook_endpoint_id IS NOT NULL
+    ) OR (
+      provider_kind = 'integration' AND
+      integration_ingress_kind = 'polling' AND
+      webhook_endpoint_id IS NULL
+    ) OR (
+      provider_kind = 'webhook' AND
+      webhook_endpoint_id IS NOT NULL
+    ) OR (
+      provider_kind IN ('relay', 'internal') AND
+      webhook_endpoint_id IS NULL
+    )
+  )
 );
 
-CREATE UNIQUE INDEX uq_automation_event_sources_provider_key
-  ON automation_event_sources(workspace_id, provider_kind, COALESCE(provider_ref, ''), source_key);
+CREATE UNIQUE INDEX uq_automation_event_sources_provider_key_non_integration
+  ON automation_event_sources(
+    workspace_id,
+    provider_kind,
+    COALESCE(provider_ref, ''),
+    COALESCE(webhook_endpoint_id::text, ''),
+    source_key
+  )
+  WHERE provider_kind <> 'integration';
+CREATE UNIQUE INDEX uq_automation_event_sources_integration_target_key
+  ON automation_event_sources(
+    workspace_id,
+    integration_installation_id,
+    integration_provider,
+    integration_target_kind,
+    integration_target_id,
+    source_key
+  )
+  WHERE provider_kind = 'integration';
 CREATE INDEX idx_automation_event_sources_workspace
   ON automation_event_sources(workspace_id, created_at DESC);
 CREATE INDEX idx_automation_event_sources_workspace_status
   ON automation_event_sources(workspace_id, status, created_at DESC);
 CREATE INDEX idx_automation_event_sources_provider
   ON automation_event_sources(workspace_id, provider_kind, source_key, created_at DESC);
+CREATE INDEX idx_automation_event_sources_endpoint
+  ON automation_event_sources(webhook_endpoint_id)
+  WHERE webhook_endpoint_id IS NOT NULL;
+CREATE INDEX idx_automation_event_sources_integration_installation
+  ON automation_event_sources(integration_installation_id, created_at DESC)
+  WHERE integration_installation_id IS NOT NULL;
 
 CREATE TABLE automation_triggers (
   rule_id UUID PRIMARY KEY REFERENCES automation_rules(id) ON DELETE CASCADE,
   trigger_kind VARCHAR(20) NOT NULL
     CHECK (trigger_kind IN ('schedule', 'event')),
   source_kind VARCHAR(20) NOT NULL
-    CHECK (source_kind IN ('clock', 'relay', 'webhook', 'internal')),
+    CHECK (source_kind IN ('clock', 'relay', 'webhook', 'internal', 'integration')),
   event_source_id UUID REFERENCES automation_event_sources(id) ON DELETE RESTRICT,
   source_locator TEXT,
   match_key VARCHAR(255),
@@ -1310,7 +1381,7 @@ CREATE TABLE automation_triggers (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
     (trigger_kind = 'schedule' AND source_kind = 'clock' AND event_source_id IS NULL) OR
-    (trigger_kind = 'event' AND source_kind IN ('relay', 'webhook', 'internal') AND event_source_id IS NOT NULL)
+    (trigger_kind = 'event' AND source_kind IN ('relay', 'webhook', 'internal', 'integration') AND event_source_id IS NOT NULL)
   ),
   CHECK (
     (trigger_kind = 'schedule' AND schedule_kind IS NOT NULL) OR
@@ -1377,7 +1448,7 @@ CREATE TABLE automation_webhook_endpoints (
   status VARCHAR(20) NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'disabled', 'archived')),
   path_token VARCHAR(64) UNIQUE NOT NULL,
-  secret_hash VARCHAR(128) NOT NULL,
+  secret_ciphertext TEXT NOT NULL,
   secret_hint VARCHAR(16) NOT NULL,
   metadata JSONB NOT NULL DEFAULT '{}',
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -1389,11 +1460,17 @@ CREATE TABLE automation_webhook_endpoints (
 CREATE INDEX idx_automation_webhook_endpoints_workspace
   ON automation_webhook_endpoints(workspace_id, created_at DESC);
 
+ALTER TABLE automation_event_sources
+  ADD CONSTRAINT fk_automation_event_sources_webhook_endpoint
+  FOREIGN KEY (webhook_endpoint_id)
+  REFERENCES automation_webhook_endpoints(id)
+  ON DELETE RESTRICT;
+
 CREATE TABLE automation_occurrences (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   source_kind VARCHAR(20) NOT NULL
-    CHECK (source_kind IN ('clock', 'relay', 'webhook', 'internal')),
+    CHECK (source_kind IN ('clock', 'relay', 'webhook', 'internal', 'integration')),
   event_source_id UUID REFERENCES automation_event_sources(id) ON DELETE SET NULL,
   source_locator TEXT,
   match_key VARCHAR(255),
@@ -1895,6 +1972,12 @@ CREATE TABLE plugin_installations (
 
 CREATE INDEX idx_plugin_installations_workspace ON plugin_installations(workspace_id, created_at DESC);
 CREATE INDEX idx_plugin_installations_item ON plugin_installations(catalog_item_id, created_at DESC);
+
+ALTER TABLE automation_event_sources
+  ADD CONSTRAINT fk_automation_event_sources_integration_installation
+  FOREIGN KEY (integration_installation_id)
+  REFERENCES plugin_installations(id)
+  ON DELETE CASCADE;
 
 CREATE TABLE plugin_auth_sessions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

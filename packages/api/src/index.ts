@@ -76,6 +76,16 @@ async function main() {
     },
   });
 
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
+    try {
+      (request as any).rawBody = body;
+      const trimmed = typeof body === "string" ? body.trim() : "";
+      done(null, trimmed ? JSON.parse(trimmed) : {});
+    } catch (error) {
+      done(error as Error, undefined);
+    }
+  });
+
   // Plugins
   await app.register(cors, { origin: true, credentials: true });
   await app.register(cookie);

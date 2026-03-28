@@ -102,6 +102,9 @@ export function AutomationRuleEditor({
         eventSourceKey: selectedEventSource?.sourceKey,
         eventProviderKind: selectedEventSource?.providerKind,
         eventProviderRef: selectedEventSource?.providerRef,
+        eventSourceIntegration: selectedEventSource?.integration,
+        eventIntegrationProvider: selectedEventSource?.integration?.provider,
+        eventIntegrationTargetLabel: selectedEventSource?.integration?.targetLabel,
         matcher: previewMatcher,
       });
     }
