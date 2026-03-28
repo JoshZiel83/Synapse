@@ -13,7 +13,9 @@ import { useChatStore } from "@/stores/chat-store"
 export default function MobileChatDetailPage() {
   const params = useParams<{ groupId: string }>()
   const router = useRouter()
-  const groupId = Array.isArray(params.groupId) ? params.groupId[0] : params.groupId
+  const groupId = Array.isArray(params.groupId)
+    ? params.groupId[0]
+    : params.groupId
   const { workspaceId } = useWorkspace()
 
   const groups = useChatStore((state) => state.groups)
@@ -42,14 +44,17 @@ export default function MobileChatDetailPage() {
 
   async function handleSend(
     contentBlocks: CanonicalContentBlock[],
-    targetParticipantIds?: string[]
+    targetParticipantIds?: string[],
+    targetActorIds?: string[]
   ) {
     if (!workspaceId || !groupId) return
-    try {
-      await sendMessage(workspaceId, groupId, contentBlocks, targetParticipantIds)
-    } catch (error) {
-      console.error("Failed to send:", error)
-    }
+    await sendMessage(
+      workspaceId,
+      groupId,
+      contentBlocks,
+      targetParticipantIds,
+      targetActorIds
+    )
   }
 
   function handleBack() {
@@ -69,7 +74,7 @@ export default function MobileChatDetailPage() {
   }
 
   return (
-    <div className="flex h-[100dvh] min-h-0 w-full min-w-0 max-w-full flex-1 flex-col overflow-hidden">
+    <div className="flex h-[100dvh] min-h-0 w-full max-w-full min-w-0 flex-1 flex-col overflow-hidden">
       {selectedGroup ? (
         <GroupChat
           group={selectedGroup}

@@ -73,7 +73,7 @@ export async function createGroup(
     createdBy: userId,
     actorIds: [actorId],
     initialMessage: content,
-    targetActorId: content ? actorId : undefined,
+    targetActorIds: content ? [actorId] : undefined,
   });
 
   return {

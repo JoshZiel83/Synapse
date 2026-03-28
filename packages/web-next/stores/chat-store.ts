@@ -106,6 +106,7 @@ export interface FeedMessage {
   citationSources?: Record<string, { url: string; title: string }>
   coordination?: boolean
   targetParticipantIds?: string[]
+  targetActorIds?: string[]
   transport?: ConversationMessageTransportContext
   transportDeliveries?: ConversationMessageTransportDelivery[]
   eventType?: ConversationFeedEventType
@@ -123,6 +124,7 @@ export interface OutboxEntry {
   conversationId: string
   contentBlocks: CanonicalContentBlock[]
   targetParticipantIds: string[]
+  targetActorIds: string[]
   createdAt: string
   optimisticSequence: number
   status: "sending" | "retrying"
@@ -150,7 +152,8 @@ interface ChatState {
     workspaceId: string,
     groupId: string,
     contentBlocks: CanonicalContentBlock[],
-    targetParticipantIds?: string[]
+    targetParticipantIds?: string[],
+    targetActorIds?: string[]
   ) => Promise<void>
   hydrateOutbox: (workspaceId: string) => void
   flushOutbox: (workspaceId: string) => void
@@ -158,7 +161,8 @@ interface ChatState {
     workspaceId: string,
     actorIds: string[],
     content?: string,
-    targetActorId?: string
+    targetActorIdOrIds?: string | string[],
+    contentBlocks?: CanonicalContentBlock[]
   ) => Promise<string>
   markRead: (workspaceId: string, groupId: string) => Promise<void>
 
@@ -293,6 +297,7 @@ function outboxEntryToMessage(entry: OutboxEntry): FeedMessage {
     clientMessageId: entry.clientMessageId,
     deliveryStatus: entry.status,
     targetParticipantIds: entry.targetParticipantIds,
+    targetActorIds: entry.targetActorIds,
   }
 }
 
@@ -412,6 +417,12 @@ function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
     .map((target) => target.participantId || target.memberId)
     .filter((targetId): targetId is string => Boolean(targetId))
   const metadata = item.metadata || {}
+  const targetActorIds = Array.isArray(metadata.targetActorIds)
+    ? metadata.targetActorIds.filter(
+        (targetId): targetId is string =>
+          typeof targetId === "string" && targetId.length > 0
+      )
+    : undefined
 
   return {
     id: item.itemId,
@@ -442,6 +453,7 @@ function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
       | undefined,
     coordination: Boolean(metadata.coordination),
     targetParticipantIds,
+    targetActorIds,
     transport: item.transport,
     transportDeliveries: item.transportDeliveries,
   }
@@ -456,10 +468,7 @@ function applyMemberJoined(
 
   for (const member of payload.members) {
     const id =
-      member.actorId ||
-      member.userId ||
-      member.participantId ||
-      member.memberId
+      member.actorId || member.userId || member.participantId || member.memberId
     if (!id) continue
 
     const normalizedMember: GroupMember = {
@@ -869,7 +878,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (workspaceId, groupId, contentBlocks, targetParticipantIds) => {
+  sendMessage: async (
+    workspaceId,
+    groupId,
+    contentBlocks,
+    targetParticipantIds,
+    targetActorIds
+  ) => {
     const clientMessageId = createClientMessageId()
     const createdAt = new Date().toISOString()
     const optimisticSequence = createOptimisticSequence(get().messages)
@@ -879,6 +894,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       conversationId: groupId,
       contentBlocks,
       targetParticipantIds: targetParticipantIds || [],
+      targetActorIds: targetActorIds || [],
       createdAt,
       optimisticSequence,
       status: "sending",
@@ -949,12 +965,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  createGroup: async (workspaceId, actorIds, content, targetActorId) => {
+  createGroup: async (
+    workspaceId,
+    actorIds,
+    content,
+    targetActorIdOrIds,
+    contentBlocks
+  ) => {
     const res = await api.createGroup(
       workspaceId,
       actorIds,
       content,
-      targetActorId
+      targetActorIdOrIds,
+      contentBlocks
     )
     const groupId = res.id || res.sessionId
     await get().loadGroups(workspaceId)
@@ -1213,7 +1236,8 @@ async function processOutboxEntry(clientMessageId: string) {
       entry.conversationId,
       entry.contentBlocks,
       entry.clientMessageId,
-      entry.targetParticipantIds
+      entry.targetParticipantIds,
+      entry.targetActorIds
     )
 
     if (result?.item) {

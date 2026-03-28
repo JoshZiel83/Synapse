@@ -79,7 +79,8 @@ function normalizeGroupRow(row: any) {
   return {
     ...row,
     group_id: row.id,
-    avatar_url: row.avatar_url || avatarUrlFromConversationMetadata(row.metadata),
+    avatar_url:
+      row.avatar_url || avatarUrlFromConversationMetadata(row.metadata),
   };
 }
 
@@ -711,7 +712,8 @@ export async function createGroup(params: {
   title?: string;
   actorIds: string[];
   initialMessage?: string;
-  targetActorId?: string;
+  initialContentBlocks?: import("@synapse/shared").CanonicalContentBlock[];
+  targetActorIds?: string[];
   includeCreatorMember?: boolean;
 }): Promise<{ group: any; members: any[]; message: any }> {
   const {
@@ -720,12 +722,24 @@ export async function createGroup(params: {
     title,
     actorIds,
     initialMessage,
-    targetActorId,
+    initialContentBlocks,
+    targetActorIds = [],
     includeCreatorMember = true,
   } = params;
+  const actorIdSet = new Set(actorIds);
+  const initialTargetActorIds = Array.from(
+    new Set(
+      targetActorIds.filter(
+        (actorId) => Boolean(actorId) && actorIdSet.has(actorId),
+      ),
+    ),
+  );
   const groupId = uuidv4();
   const batchId = uuidv4();
-  const actorJoinVersionRefs = await loadActorJoinVersionRefs(workspaceId, actorIds);
+  const actorJoinVersionRefs = await loadActorJoinVersionRefs(
+    workspaceId,
+    actorIds,
+  );
 
   const result = await transaction(async (client) => {
     const actorRows =
@@ -808,12 +822,7 @@ export async function createGroup(params: {
         `INSERT INTO conversation_members
            (id, conversation_id, member_type, actor_id, actor_join_version_id, state, metadata, joined_at)
          VALUES ($1, $2, 'actor', $3, $4, 'active', '{}'::jsonb, NOW())`,
-        [
-          memberId,
-          groupId,
-          actorId,
-          actorJoinVersionRefs.get(actorId) || null,
-        ],
+        [memberId, groupId, actorId, actorJoinVersionRefs.get(actorId) || null],
       );
       members.push({ id: memberId, actorId, sessionId });
 
@@ -889,7 +898,8 @@ export async function createGroup(params: {
       conversationId: groupId,
       subtype: "member_joined",
       batchId,
-      authorMemberId: creatorMember?.memberId || result.joinedMembers[0]?.memberId,
+      authorMemberId:
+        creatorMember?.memberId || result.joinedMembers[0]?.memberId,
       initiator: creatorMember
         ? {
             memberType: "user",
@@ -909,13 +919,18 @@ export async function createGroup(params: {
     ),
   );
 
-  if (targetActorId && initialMessage) {
+  if (
+    initialTargetActorIds.length > 0 &&
+    (initialMessage ||
+      (initialContentBlocks && initialContentBlocks.length > 0))
+  ) {
     await sendGroupMessage({
       groupId,
       senderType: "user",
       senderUserId: createdBy,
-      content: initialMessage,
-      targetActorIds: [targetActorId],
+      content: initialMessage || "",
+      contentBlocks: initialContentBlocks,
+      targetActorIds: initialTargetActorIds,
     });
   }
 
@@ -1174,7 +1189,9 @@ export async function addActorToGroup(
 ): Promise<{ member: any; session: any }> {
   const group = await getGroup(groupId);
   if (!group) throw new Error("Group not found");
-  const actorJoinVersionId = (await loadActorJoinVersionRefs(group.workspace_id, [actorId])).get(actorId);
+  const actorJoinVersionId = (
+    await loadActorJoinVersionRefs(group.workspace_id, [actorId])
+  ).get(actorId);
 
   const existing = await getConversationMember({
     conversationId: groupId,
@@ -1336,7 +1353,10 @@ export async function addMembersToGroup(params: {
   const actorMap = new Map(
     actorResult.rows.map((row) => [row.id as string, row]),
   );
-  const actorJoinVersionRefs = await loadActorJoinVersionRefs(params.workspaceId, actorIds);
+  const actorJoinVersionRefs = await loadActorJoinVersionRefs(
+    params.workspaceId,
+    actorIds,
+  );
   const userMap = new Map(
     userResult.rows.map((row) => [row.id as string, row]),
   );
@@ -1813,7 +1833,11 @@ export async function sendGroupMessage(params: {
             memberType: "actor",
             actorId: senderActorId,
             actorJoinVersionId: senderActorId
-              ? (await loadActorJoinVersionRefs(group.workspace_id, [senderActorId])).get(senderActorId)
+              ? (
+                  await loadActorJoinVersionRefs(group.workspace_id, [
+                    senderActorId,
+                  ])
+                ).get(senderActorId)
               : undefined,
             initiator: senderActorId
               ? {
@@ -1841,34 +1865,61 @@ export async function sendGroupMessage(params: {
         ).member;
 
   const members = await listConversationMembers(groupId);
-  const requestedTargetMemberIds = await resolveMemberTargets({
+  const participantTargetMemberIds = await resolveMemberTargets({
     groupId,
     members,
     targetParticipantIds: requestedTargetParticipantIds,
-    targetActorIds: requestedTargetActorIds,
     targetUserIds: requestedTargetUserIds,
   });
   const membersById = new Map(
     members.map((member: any) => [member.id as string, member]),
   );
-  const requestedTargetActorIdsFromMembers = getActorIdsFromTargetMembers({
-    members,
-    targetMemberIds: requestedTargetMemberIds,
-  });
-  const allowedTargetActorIds = await filterAllowedTargetActorIds({
+  const requestedTargetActorIdsFromParticipantTargets =
+    getActorIdsFromTargetMembers({
+      members,
+      targetMemberIds: participantTargetMemberIds,
+    });
+  const requestedExplicitActorIds = Array.from(
+    new Set([
+      ...requestedTargetActorIds,
+      ...requestedTargetActorIdsFromParticipantTargets,
+    ]),
+  );
+  const allowedExplicitActorIds = await filterAllowedTargetActorIds({
     conversationId: groupId,
     senderType,
     senderUserId,
     senderActorId,
-    targetActorIds: requestedTargetActorIdsFromMembers,
-    explicit: requestedTargetActorIdsFromMembers.length > 0,
+    targetActorIds: requestedExplicitActorIds,
+    explicit: requestedExplicitActorIds.length > 0,
   });
-  const allowedTargetActorIdSet = new Set(allowedTargetActorIds);
+  const actorTargetMemberIds =
+    allowedExplicitActorIds.length > 0
+      ? await resolveMemberTargets({
+          groupId,
+          members,
+          targetActorIds: allowedExplicitActorIds,
+        })
+      : [];
+  const requestedTargetMemberIds = Array.from(
+    new Set([...participantTargetMemberIds, ...actorTargetMemberIds]),
+  );
+  const allowedTargetActorIdSet = new Set(allowedExplicitActorIds);
   const targetMemberIds = requestedTargetMemberIds.filter((targetMemberId) => {
     const member = membersById.get(targetMemberId);
     if (!member?.actor_id) return true;
     return allowedTargetActorIdSet.has(member.actor_id);
   });
+  const actorIdsRepresentedByTargetMembers = getActorIdsFromTargetMembers({
+    members,
+    targetMemberIds,
+  });
+  const actorIdsRepresentedByTargetMemberSet = new Set(
+    actorIdsRepresentedByTargetMembers,
+  );
+  const additionalTargetActorIds = allowedExplicitActorIds.filter(
+    (actorId) => !actorIdsRepresentedByTargetMemberSet.has(actorId),
+  );
   const transportBinding =
     targetMemberIds.length > 0
       ? await getConversationTransportBinding({
@@ -1884,14 +1935,14 @@ export async function sendGroupMessage(params: {
         (transportBinding.endpoint.endpointType === "direct" &&
           transportBinding.transportKind === "feishu");
       const reachableAddress = useAttachedAddressOnly
-          ? await getPrimaryTransportAddressForParticipant({
-              conversationMemberId: targetMemberId,
-              transportAccountId: transportBinding.account.id,
-            })
-          : await getReachableTransportAddressForParticipant({
-              conversationMemberId: targetMemberId,
-              transportAccountId: transportBinding.account.id,
-            });
+        ? await getPrimaryTransportAddressForParticipant({
+            conversationMemberId: targetMemberId,
+            transportAccountId: transportBinding.account.id,
+          })
+        : await getReachableTransportAddressForParticipant({
+            conversationMemberId: targetMemberId,
+            transportAccountId: transportBinding.account.id,
+          });
       if (!reachableAddress?.external_id) continue;
       if (
         transportBinding.endpoint.endpointType === "direct" &&
@@ -1904,10 +1955,12 @@ export async function sendGroupMessage(params: {
       break;
     }
   }
-  const explicitWakeActorIds = getActorIdsFromTargetMembers({
-    members,
-    targetMemberIds,
-  });
+  const explicitWakeActorIds = Array.from(
+    new Set([
+      ...allowedExplicitActorIds,
+      ...actorIdsRepresentedByTargetMembers,
+    ]),
+  );
   const automaticWakeCandidateIds = getAutomaticWakeActorIds({
     members,
     senderType,
@@ -1928,7 +1981,13 @@ export async function sendGroupMessage(params: {
   const normalizedMessage = await buildNormalizedMessageContent({
     content,
     contentBlocks,
-    metadata,
+    metadata:
+      additionalTargetActorIds.length > 0
+        ? {
+            ...metadata,
+            targetActorIds: additionalTargetActorIds,
+          }
+        : metadata,
   });
   let item: any;
   try {

@@ -47,6 +47,7 @@ const sendGroupMessageSchema = z
     contentBlocks: z.array(z.any()).optional(),
     clientMessageId: z.string().min(1).max(128),
     targetParticipantIds: z.array(z.string().uuid()).optional(),
+    targetActorIds: z.array(z.string().uuid()).optional(),
   })
   .refine(
     (body) =>
@@ -102,12 +103,17 @@ const issueConversationGrantSchema = z
 
 const resolveInteractionSchema = z
   .object({
-    answers: z.array(z.object({
-      fieldId: z.string().min(1),
-      selectedOptionIds: z.array(z.string().min(1)).optional(),
-      otherText: z.string().trim().max(4000).optional(),
-      text: z.string().trim().max(4000).optional(),
-    })).max(50).optional(),
+    answers: z
+      .array(
+        z.object({
+          fieldId: z.string().min(1),
+          selectedOptionIds: z.array(z.string().min(1)).optional(),
+          otherText: z.string().trim().max(4000).optional(),
+          text: z.string().trim().max(4000).optional(),
+        }),
+      )
+      .max(50)
+      .optional(),
     selectedOptionId: z.string().min(1).optional(),
     decision: z.enum(["approve", "reject"]).optional(),
     note: z.string().trim().max(2000).optional(),
@@ -395,14 +401,24 @@ export default async function groupController(app: FastifyInstance) {
 
       // Support both single-actor and multi-actor formats
       let actorIds: string[];
-      let targetActorId: string | undefined;
+      let targetActorIds: string[] | undefined;
 
       if (body.actorIds) {
         actorIds = body.actorIds;
-        targetActorId = body.targetActorId || actorIds[0];
+        targetActorIds = Array.isArray(body.targetActorIds)
+          ? body.targetActorIds
+          : body.targetActorId
+            ? [body.targetActorId]
+            : actorIds[0]
+              ? [actorIds[0]]
+              : undefined;
       } else if (body.actorId) {
         actorIds = [body.actorId];
-        targetActorId = body.actorId;
+        targetActorIds = Array.isArray(body.targetActorIds)
+          ? body.targetActorIds
+          : body.targetActorId
+            ? [body.targetActorId]
+            : [body.actorId];
       } else {
         return reply
           .status(400)
@@ -413,13 +429,20 @@ export default async function groupController(app: FastifyInstance) {
         body.content && typeof body.content === "string"
           ? body.content
           : undefined;
+      const contentBlocks = Array.isArray(body.contentBlocks)
+        ? (body.contentBlocks as CanonicalContentBlock[])
+        : undefined;
 
       const result = await createGroup({
         workspaceId,
         createdBy: userId,
         actorIds,
         initialMessage: content,
-        targetActorId: content ? targetActorId : undefined,
+        initialContentBlocks: contentBlocks,
+        targetActorIds:
+          content || (contentBlocks && contentBlocks.length > 0)
+            ? targetActorIds
+            : undefined,
       });
 
       const members = await getGroupMembers(result.group.id);
@@ -481,6 +504,7 @@ export default async function groupController(app: FastifyInstance) {
         contentBlocks?: CanonicalContentBlock[];
         clientMessageId: string;
         targetParticipantIds?: string[];
+        targetActorIds?: string[];
       };
       const userId = (request as any).user!.userId;
 
@@ -490,6 +514,7 @@ export default async function groupController(app: FastifyInstance) {
         senderUserId: userId,
         clientMessageId: body.clientMessageId,
         targetParticipantIds: body.targetParticipantIds,
+        targetActorIds: body.targetActorIds,
         content: body.content,
         contentBlocks: body.contentBlocks,
       });
@@ -637,12 +662,10 @@ export default async function groupController(app: FastifyInstance) {
             })),
           });
         }
-        return reply
-          .status(400)
-          .send({
-            error:
-              error instanceof Error ? error.message : "Failed to update group",
-          });
+        return reply.status(400).send({
+          error:
+            error instanceof Error ? error.message : "Failed to update group",
+        });
       }
     },
   );
@@ -700,12 +723,10 @@ export default async function groupController(app: FastifyInstance) {
             })),
           });
         }
-        return reply
-          .status(400)
-          .send({
-            error:
-              error instanceof Error ? error.message : "Failed to add members",
-          });
+        return reply.status(400).send({
+          error:
+            error instanceof Error ? error.message : "Failed to add members",
+        });
       }
     },
   );
@@ -781,14 +802,12 @@ export default async function groupController(app: FastifyInstance) {
             })),
           });
         }
-        return reply
-          .status(400)
-          .send({
-            error:
-              error instanceof Error
-                ? error.message
-                : "Failed to issue conversation grant",
-          });
+        return reply.status(400).send({
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to issue conversation grant",
+        });
       }
     },
   );

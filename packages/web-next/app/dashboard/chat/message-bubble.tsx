@@ -16,6 +16,7 @@ import { useEffect, useMemo, useState } from "react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { TwemojiScope } from "@/components/twemoji-scope"
 import { Textarea } from "@/components/ui/textarea"
 import { useIsMobile } from "@/hooks/use-mobile"
 import {
@@ -86,6 +87,15 @@ interface MessageBubbleProps {
   coordination?: boolean
   groupMembers?: GroupMember[]
   targetParticipantIds?: string[]
+  targetActorIds?: string[]
+  workspaceActors?: Array<{
+    id: string
+    name: string
+    role: string
+    title: string
+    emoji?: string
+    avatarUrl?: string
+  }>
   transport?: ConversationMessageTransportContext
   transportDeliveries?: ConversationMessageTransportDelivery[]
   interaction?: InteractionRequestSummary
@@ -94,7 +104,10 @@ interface MessageBubbleProps {
   contactBasePath?: string
   retryPending?: boolean
   onParticipantClick?: (member: GroupMember) => void
-  onRetryModelError?: (sessionId: string, itemId: string) => Promise<void> | void
+  onRetryModelError?: (
+    sessionId: string,
+    itemId: string
+  ) => Promise<void> | void
   onResolveInteraction?: (
     interactionId: string,
     payload: {
@@ -103,7 +116,10 @@ interface MessageBubbleProps {
       decision?: "approve" | "reject"
       note?: string
     }
-  ) => Promise<InteractionRequestSummary | void> | InteractionRequestSummary | void
+  ) =>
+    | Promise<InteractionRequestSummary | void>
+    | InteractionRequestSummary
+    | void
 }
 
 function formatToolsUsed(tools: string[]): string {
@@ -239,7 +255,10 @@ function buildRenderedMessageBlocks(
   })
 
   for (const [key, source] of Object.entries(citationSources)) {
-    if ((key.startsWith("cit-") || key.startsWith("oai-")) && !urlToNum.has(source.url)) {
+    if (
+      (key.startsWith("cit-") || key.startsWith("oai-")) &&
+      !urlToNum.has(source.url)
+    ) {
       registerSource(source)
     }
   }
@@ -286,7 +305,9 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function formatTransportStatusLabel(status: ConversationMessageTransportDelivery["deliveryStatus"]) {
+function formatTransportStatusLabel(
+  status: ConversationMessageTransportDelivery["deliveryStatus"]
+) {
   switch (status) {
     case "sent":
       return "sent"
@@ -353,7 +374,8 @@ function TransportSummary({
             variant="outline"
             className={`rounded-full px-2 py-0 text-[10px] font-normal ${getTransportBadgeClassName(delivery.deliveryStatus)}`}
           >
-            {transportLabel} {formatTransportStatusLabel(delivery.deliveryStatus)}
+            {transportLabel}{" "}
+            {formatTransportStatusLabel(delivery.deliveryStatus)}
           </Badge>
         )
       })}
@@ -565,9 +587,9 @@ function InteractionCard({
 }) {
   const [submittingAction, setSubmittingAction] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const [draftAnswers, setDraftAnswers] = useState<Record<string, DraftQuestionAnswer>>(
-    () => buildDraftQuestionAnswers(interaction)
-  )
+  const [draftAnswers, setDraftAnswers] = useState<
+    Record<string, DraftQuestionAnswer>
+  >(() => buildDraftQuestionAnswers(interaction))
 
   const isTargetUser =
     interaction.target?.memberType === "user" &&
@@ -583,8 +605,7 @@ function InteractionCard({
     Boolean(onResolveInteraction) &&
     interaction.viewerCanResolve === true &&
     interaction.status === "pending"
-  const canResolve =
-    canResolveQuestion || canResolveRelayAuthorization
+  const canResolve = canResolveQuestion || canResolveRelayAuthorization
 
   useEffect(() => {
     setSubmittingAction(null)
@@ -594,7 +615,9 @@ function InteractionCard({
 
   async function submitResolution(
     actionKey: string,
-    payload: Parameters<NonNullable<MessageBubbleProps["onResolveInteraction"]>>[1]
+    payload: Parameters<
+      NonNullable<MessageBubbleProps["onResolveInteraction"]>
+    >[1]
   ) {
     if (!onResolveInteraction || !canResolve) return
     setSubmittingAction(actionKey)
@@ -641,7 +664,9 @@ function InteractionCard({
       return {
         fieldId: field.id,
         selectedOptionIds:
-          draft.selectedOptionIds.length > 0 ? draft.selectedOptionIds : undefined,
+          draft.selectedOptionIds.length > 0
+            ? draft.selectedOptionIds
+            : undefined,
         otherText: draft.otherText.trim() || undefined,
         text: draft.text.trim() || undefined,
       }
@@ -679,7 +704,7 @@ function InteractionCard({
         </div>
 
         <div className="space-y-1.5">
-          <p className="text-sm font-medium leading-6 text-foreground">
+          <p className="text-sm leading-6 font-medium text-foreground">
             {question.prompt}
           </p>
           {question.instructions ? (
@@ -746,7 +771,7 @@ function InteractionCard({
                       className="min-h-24 resize-y rounded-2xl bg-background"
                     />
                   ) : fieldAnswerText ? (
-                    <div className="rounded-xl border border-border/70 bg-background px-3 py-2 text-sm text-foreground whitespace-pre-wrap">
+                    <div className="rounded-xl border border-border/70 bg-background px-3 py-2 text-sm whitespace-pre-wrap text-foreground">
                       {fieldAnswerText}
                     </div>
                   ) : (
@@ -758,7 +783,8 @@ function InteractionCard({
                   <div className="space-y-2">
                     {(field.options || []).map((option) => {
                       const isSelected = selectedOptionIds.includes(option.id)
-                      const isSubmitting = submittingAction === `${field.id}:${option.id}`
+                      const isSubmitting =
+                        submittingAction === `${field.id}:${option.id}`
 
                       if (canResolve && isSimpleSingleSelect) {
                         return (
@@ -768,14 +794,17 @@ function InteractionCard({
                             variant={isSelected ? "default" : "outline"}
                             disabled={Boolean(submittingAction)}
                             onClick={() =>
-                              void submitResolution(`${field.id}:${option.id}`, {
-                                answers: [
-                                  {
-                                    fieldId: field.id,
-                                    selectedOptionIds: [option.id],
-                                  },
-                                ],
-                              })
+                              void submitResolution(
+                                `${field.id}:${option.id}`,
+                                {
+                                  answers: [
+                                    {
+                                      fieldId: field.id,
+                                      selectedOptionIds: [option.id],
+                                    },
+                                  ],
+                                }
+                              )
                             }
                             className="h-auto w-full justify-start rounded-2xl px-4 py-3 text-left"
                           >
@@ -788,11 +817,11 @@ function InteractionCard({
                                 <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-current/40" />
                               )}
                               <div className="min-w-0">
-                                <div className="whitespace-normal font-medium">
+                                <div className="font-medium whitespace-normal">
                                   {option.label}
                                 </div>
                                 {option.description ? (
-                                  <div className="mt-1 whitespace-normal text-xs opacity-80">
+                                  <div className="mt-1 text-xs whitespace-normal opacity-80">
                                     {option.description}
                                   </div>
                                 ) : null}
@@ -810,18 +839,25 @@ function InteractionCard({
                             disabled={Boolean(submittingAction)}
                             onClick={() =>
                               updateDraftAnswer(field.id, (current) => {
-                                const hasOption = current.selectedOptionIds.includes(option.id)
+                                const hasOption =
+                                  current.selectedOptionIds.includes(option.id)
                                 if (field.type === "single_select") {
                                   return {
                                     ...current,
-                                    selectedOptionIds: hasOption ? [] : [option.id],
-                                    otherText: hasOption ? current.otherText : "",
+                                    selectedOptionIds: hasOption
+                                      ? []
+                                      : [option.id],
+                                    otherText: hasOption
+                                      ? current.otherText
+                                      : "",
                                   }
                                 }
                                 return {
                                   ...current,
                                   selectedOptionIds: hasOption
-                                    ? current.selectedOptionIds.filter((id) => id !== option.id)
+                                    ? current.selectedOptionIds.filter(
+                                        (id) => id !== option.id
+                                      )
                                     : [...current.selectedOptionIds, option.id],
                                 }
                               })
@@ -896,24 +932,29 @@ function InteractionCard({
                                 ...current,
                                 otherText: event.target.value,
                                 selectedOptionIds:
-                                  field.type === "single_select" && event.target.value.trim()
+                                  field.type === "single_select" &&
+                                  event.target.value.trim()
                                     ? []
                                     : current.selectedOptionIds,
                               }))
                             }
-                            placeholder={field.otherPlaceholder || "Add another answer"}
+                            placeholder={
+                              field.otherPlaceholder || "Add another answer"
+                            }
                             disabled={Boolean(submittingAction)}
                             className="min-h-20 resize-y rounded-2xl bg-background"
                           />
                         </div>
                       ) : field.answer?.otherText ? (
-                        <div className="rounded-xl border border-border/70 bg-background px-3 py-2 text-sm text-foreground whitespace-pre-wrap">
+                        <div className="rounded-xl border border-border/70 bg-background px-3 py-2 text-sm whitespace-pre-wrap text-foreground">
                           {`${field.otherLabel || "Other"}: ${field.answer.otherText}`}
                         </div>
                       ) : null
                     ) : null}
 
-                    {!canResolve && !fieldAnswerText && !field.answer?.otherText ? (
+                    {!canResolve &&
+                    !fieldAnswerText &&
+                    !field.answer?.otherText ? (
                       <div className="text-xs text-muted-foreground">
                         No response provided.
                       </div>
@@ -966,12 +1007,17 @@ function InteractionCard({
     )
   }
 
-  if (interaction.kind === "relay_authorization" && interaction.relayAuthorization) {
+  if (
+    interaction.kind === "relay_authorization" &&
+    interaction.relayAuthorization
+  ) {
     const requestedScope = describeRelayAuthorizationScope(
       interaction.relayAuthorization.requestedScope
     )
     const approvedScope = interaction.relayAuthorization.approvedScope
-      ? describeRelayAuthorizationScope(interaction.relayAuthorization.approvedScope)
+      ? describeRelayAuthorizationScope(
+          interaction.relayAuthorization.approvedScope
+        )
       : null
     const ScopeIcon = requestedScope.icon
     const ApprovedScopeIcon = approvedScope?.icon
@@ -998,7 +1044,7 @@ function InteractionCard({
         </div>
 
         <div className="space-y-1.5">
-          <p className="text-sm font-medium leading-6 text-foreground">
+          <p className="text-sm leading-6 font-medium text-foreground">
             {`Grant ${interaction.relayAuthorization.relayToolName} access on ${interaction.relayAuthorization.deviceDisplayName}`}
           </p>
           <p className="text-xs leading-5 text-muted-foreground">
@@ -1008,7 +1054,7 @@ function InteractionCard({
 
         <div className="grid gap-2">
           <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
-            <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+            <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70 uppercase">
               Exposure
             </div>
             <div className="mt-1 text-sm text-foreground">
@@ -1016,21 +1062,21 @@ function InteractionCard({
             </div>
           </div>
           <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
-            <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+            <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70 uppercase">
               Requested Scope
             </div>
             <div className="mt-1 flex items-start gap-2 text-sm text-foreground">
               <ScopeIcon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
               <div className="min-w-0">
                 <div>{requestedScope.summary}</div>
-                <div className="mt-0.5 break-all text-xs text-muted-foreground">
+                <div className="mt-0.5 text-xs break-all text-muted-foreground">
                   {requestedScope.detail}
                 </div>
               </div>
             </div>
           </div>
           <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
-            <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+            <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70 uppercase">
               Duration
             </div>
             <div className="mt-1 inline-flex items-center gap-2 text-sm text-foreground">
@@ -1044,7 +1090,7 @@ function InteractionCard({
           </div>
           {approvedScope ? (
             <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3">
-              <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-emerald-700/80">
+              <div className="text-[11px] font-medium tracking-[0.08em] text-emerald-700/80 uppercase">
                 Approved Scope
               </div>
               <div className="mt-1 flex items-start gap-2 text-sm text-foreground">
@@ -1053,7 +1099,7 @@ function InteractionCard({
                 ) : null}
                 <div className="min-w-0">
                   <div>{approvedScope.summary}</div>
-                  <div className="mt-0.5 break-all text-xs text-muted-foreground">
+                  <div className="mt-0.5 text-xs break-all text-muted-foreground">
                     {approvedScope.detail}
                   </div>
                 </div>
@@ -1160,18 +1206,23 @@ const AUDIO_EXTENSIONS = [
 
 function resolveRecipients(
   groupMembers: GroupMember[] | undefined,
-  targetParticipantIds: string[] | undefined
+  targetParticipantIds: string[] | undefined,
+  targetActorIds: string[] | undefined,
+  workspaceActors: MessageBubbleProps["workspaceActors"]
 ) {
   const participantIds = Array.from(new Set(targetParticipantIds || []))
+  const actorIds = Array.from(new Set(targetActorIds || []))
   const memberMap = new Map<string, GroupMember>()
+  const recipients: MessageRecipient[] = []
+  const actorIdsRepresentedByParticipantTargets = new Set<string>()
 
   for (const member of groupMembers || []) {
     memberMap.set(member.participantId || member.memberId, member)
   }
 
-  return participantIds.map((participantId) => {
+  for (const participantId of participantIds) {
     const member = memberMap.get(participantId)
-    return {
+    recipients.push({
       participantId,
       id: member?.id || participantId,
       type: member?.type || "external",
@@ -1182,8 +1233,67 @@ function resolveRecipients(
       avatarUrl: member?.avatarUrl,
       linkedUserName: member?.linkedUserName,
       member,
-    } satisfies MessageRecipient
-  })
+    })
+
+    if (member?.type === "actor") {
+      actorIdsRepresentedByParticipantTargets.add(member.id)
+    }
+  }
+
+  for (const actorId of actorIds) {
+    if (actorIdsRepresentedByParticipantTargets.has(actorId)) {
+      continue
+    }
+
+    const representedMember = (groupMembers || []).find(
+      (member) => member.type === "actor" && member.id === actorId
+    )
+    if (representedMember) {
+      recipients.push({
+        participantId: representedMember.participantId,
+        id: representedMember.id,
+        type: representedMember.type,
+        name: representedMember.name,
+        title: representedMember.title,
+        role: representedMember.role,
+        emoji: representedMember.emoji,
+        avatarUrl: representedMember.avatarUrl,
+        linkedUserName: representedMember.linkedUserName,
+        member: representedMember,
+      })
+      continue
+    }
+
+    const actor = workspaceActors?.find((candidate) => candidate.id === actorId)
+    if (!actor) {
+      recipients.push({
+        participantId: actorId,
+        id: actorId,
+        type: "actor",
+        name: "Unknown actor",
+        title: undefined,
+        role: undefined,
+        emoji: undefined,
+        avatarUrl: undefined,
+        linkedUserName: undefined,
+      })
+      continue
+    }
+
+    recipients.push({
+      participantId: actor.id,
+      id: actor.id,
+      type: "actor",
+      name: actor.name,
+      title: actor.title,
+      role: actor.role,
+      emoji: actor.emoji,
+      avatarUrl: actor.avatarUrl,
+      linkedUserName: undefined,
+    })
+  }
+
+  return recipients
 }
 
 function RecipientChip({
@@ -1197,19 +1307,20 @@ function RecipientChip({
   isMobile: boolean
   contactBasePath?: string
 }) {
-  const trigger = recipient.member && onClick ? (
-    <button
-      type="button"
-      onClick={() => onClick(recipient.member!)}
-      className="cursor-pointer text-foreground/70 transition-colors hover:text-foreground"
-    >
-      @{recipient.name}
-    </button>
-  ) : (
-    <span className="cursor-help text-foreground/70 transition-colors hover:text-foreground">
-      @{recipient.name}
-    </span>
-  )
+  const trigger =
+    recipient.member && onClick ? (
+      <button
+        type="button"
+        onClick={() => onClick(recipient.member!)}
+        className="cursor-pointer text-foreground/70 transition-colors hover:text-foreground"
+      >
+        @{recipient.name}
+      </button>
+    ) : (
+      <span className="cursor-help text-foreground/70 transition-colors hover:text-foreground">
+        @{recipient.name}
+      </span>
+    )
 
   if (recipient.member && !isMobile) {
     return (
@@ -1218,7 +1329,7 @@ function RecipientChip({
         contactBasePath={contactBasePath}
       >
         <span
-          className="cursor-help text-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+          className="cursor-help text-foreground/70 transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
           tabIndex={0}
         >
           @{recipient.name}
@@ -1229,9 +1340,7 @@ function RecipientChip({
 
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        {trigger}
-      </TooltipTrigger>
+      <TooltipTrigger asChild>{trigger}</TooltipTrigger>
       <TooltipContent
         side="top"
         className="flex max-w-64 items-start gap-2 px-3 py-2"
@@ -1403,9 +1512,8 @@ function MarkdownTextBlock({
   text: string
   enableTablePreview: boolean
 }) {
-  const [expandedTable, setExpandedTable] = useState<TablePreviewContent | null>(
-    null
-  )
+  const [expandedTable, setExpandedTable] =
+    useState<TablePreviewContent | null>(null)
 
   function openTablePreview(table: TablePreviewContent) {
     setExpandedTable(table)
@@ -1415,7 +1523,7 @@ function MarkdownTextBlock({
 
   return (
     <>
-      <div className="prose prose-sm max-w-full min-w-0 break-words prose-p:my-1.5 prose-headings:text-foreground prose-code:rounded prose-code:bg-primary/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-xs prose-code:text-primary prose-code:before:content-none prose-code:after:content-none prose-pre:rounded-2xl prose-pre:border prose-pre:border-border prose-pre:bg-muted prose-strong:text-foreground dark:prose-invert [&_a]:break-words [&_a]:[overflow-wrap:anywhere] [&_code]:break-words [&_code]:[overflow-wrap:anywhere] [&_li]:[overflow-wrap:anywhere] [&_p]:[overflow-wrap:anywhere] [&_pre]:max-w-full [&_pre]:overflow-x-auto">
+      <TwemojiScope className="prose prose-sm prose-p:my-1.5 prose-headings:text-foreground prose-code:rounded prose-code:bg-primary/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-xs prose-code:text-primary prose-code:before:content-none prose-code:after:content-none prose-pre:rounded-2xl prose-pre:border prose-pre:border-border prose-pre:bg-muted prose-strong:text-foreground dark:prose-invert max-w-full min-w-0 break-words [&_a]:[overflow-wrap:anywhere] [&_a]:break-words [&_code]:[overflow-wrap:anywhere] [&_code]:break-words [&_li]:[overflow-wrap:anywhere] [&_p]:[overflow-wrap:anywhere] [&_pre]:max-w-full [&_pre]:overflow-x-auto">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{
@@ -1460,7 +1568,7 @@ function MarkdownTextBlock({
                   className={cn(
                     "w-full max-w-full overflow-x-auto rounded-2xl border border-border/70 bg-muted/30",
                     enableTablePreview &&
-                      "cursor-zoom-in focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                      "cursor-zoom-in focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
                   )}
                   onClick={
                     enableTablePreview
@@ -1516,7 +1624,7 @@ function MarkdownTextBlock({
             th: ({ className, ...props }) => (
               <th
                 className={cn(
-                  "min-w-[7rem] border-b border-border/70 px-3 py-2 text-left align-top font-medium text-foreground whitespace-nowrap",
+                  "min-w-[7rem] border-b border-border/70 px-3 py-2 text-left align-top font-medium whitespace-nowrap text-foreground",
                   className
                 )}
                 {...props}
@@ -1525,7 +1633,7 @@ function MarkdownTextBlock({
             td: ({ className, ...props }) => (
               <td
                 className={cn(
-                  "min-w-[7rem] border-b border-border/70 px-3 py-2 align-top break-words [overflow-wrap:anywhere]",
+                  "min-w-[7rem] border-b border-border/70 px-3 py-2 align-top [overflow-wrap:anywhere] break-words",
                   className
                 )}
                 {...props}
@@ -1539,7 +1647,7 @@ function MarkdownTextBlock({
               <code
                 className={cn(
                   className,
-                  "break-words [overflow-wrap:anywhere]"
+                  "[overflow-wrap:anywhere] break-words"
                 )}
                 {...props}
               >
@@ -1550,7 +1658,7 @@ function MarkdownTextBlock({
         >
           {text}
         </ReactMarkdown>
-      </div>
+      </TwemojiScope>
 
       {enableTablePreview && expandedTable ? (
         <TablePreviewOverlay
@@ -1574,18 +1682,19 @@ function MessageContentBlocks({
   if (blocks.length === 0) return null
 
   return (
-    <div className="min-w-0 max-w-full space-y-2">
+    <div className="max-w-full min-w-0 space-y-2">
       {blocks.map((block) =>
         block.type === "file_ref" ? (
           <FileBlockPreview key={block.id} blocks={[block.block]} />
         ) : isUser ? (
           block.text ? (
-            <p
+            <TwemojiScope
+              as="p"
               key={block.id}
-              className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+              className="[overflow-wrap:anywhere] break-words whitespace-pre-wrap"
             >
               {block.text}
-            </p>
+            </TwemojiScope>
           ) : null
         ) : (
           <MarkdownTextBlock
@@ -1768,6 +1877,8 @@ export default function MessageBubble({
   coordination,
   groupMembers,
   targetParticipantIds,
+  targetActorIds,
+  workspaceActors,
   transport,
   transportDeliveries,
   interaction,
@@ -1786,10 +1897,17 @@ export default function MessageBubble({
   const isError = role === "error"
   const textContent = useMemo(() => extractText(contentBlocks), [contentBlocks])
   const recipients = useMemo(
-    () => resolveRecipients(groupMembers, targetParticipantIds),
-    [groupMembers, targetParticipantIds]
+    () =>
+      resolveRecipients(
+        groupMembers,
+        targetParticipantIds,
+        targetActorIds,
+        workspaceActors
+      ),
+    [groupMembers, targetActorIds, targetParticipantIds, workspaceActors]
   )
-  const hasExplicitTargets = (targetParticipantIds?.length || 0) > 0
+  const hasExplicitTargets =
+    (targetParticipantIds?.length || 0) > 0 || (targetActorIds?.length || 0) > 0
   const viewerUserMember = useMemo(() => {
     if (!viewerUserId) return undefined
     return groupMembers?.find(
@@ -1804,7 +1922,9 @@ export default function MessageBubble({
     () => getAuthorContactHref(author, groupMembers, contactBasePath),
     [author, contactBasePath, groupMembers]
   )
-  const canOpenAuthorDetails = Boolean(isMobile && authorMember && onParticipantClick)
+  const canOpenAuthorDetails = Boolean(
+    isMobile && authorMember && onParticipantClick
+  )
   const authorEntityType = useMemo(() => {
     if (author?.memberType === "external") return "external" as const
     if (author?.memberType === "user") return "user" as const
@@ -1833,7 +1953,14 @@ export default function MessageBubble({
       : authorMember?.emoji || author?.avatarEmoji
   const resolvedAuthorSubtitle = useMemo(() => {
     if (author?.memberType === "actor") {
-      return actorRole || author?.title || author?.role || authorMember?.title || authorMember?.role || "Actor"
+      return (
+        actorRole ||
+        author?.title ||
+        author?.role ||
+        authorMember?.title ||
+        authorMember?.role ||
+        "Actor"
+      )
     }
     if (author?.memberType === "external") {
       return authorMember
@@ -1841,7 +1968,9 @@ export default function MessageBubble({
         : "External participant"
     }
     if (author?.memberType === "user") {
-      return author.userId && author.userId === viewerUserId ? "You" : "Workspace user"
+      return author.userId && author.userId === viewerUserId
+        ? "You"
+        : "Workspace user"
     }
     return undefined
   }, [actorRole, author, authorMember, viewerUserId])
@@ -1858,15 +1987,18 @@ export default function MessageBubble({
 
   if (isError) {
     return (
-      <div className="flex w-full min-w-0 max-w-full gap-3">
+      <div className="flex w-full max-w-full min-w-0 gap-3">
         <div className="text-destructive-foreground mt-1 flex size-8 shrink-0 items-center justify-center rounded-2xl bg-destructive shadow-sm">
           <AlertTriangle className="h-4 w-4 text-white" />
         </div>
         <div className="flex w-full max-w-[75%] min-w-0 flex-col items-start">
           <div className="rounded-3xl rounded-tl-sm border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm leading-relaxed text-destructive shadow-sm">
-            <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+            <TwemojiScope
+              as="p"
+              className="[overflow-wrap:anywhere] break-words whitespace-pre-wrap"
+            >
               {textContent}
-            </p>
+            </TwemojiScope>
           </div>
           {timestamp && (
             <span className="mt-1 text-[10px] text-muted-foreground/50">
@@ -1883,12 +2015,12 @@ export default function MessageBubble({
 
   if (isSystem && !interaction) {
     return (
-      <div className="my-2 flex w-full min-w-0 max-w-full justify-center">
-        <div className="max-w-[80%] text-center text-xs text-muted-foreground/75">
+      <div className="my-2 flex w-full max-w-full min-w-0 justify-center">
+        <TwemojiScope className="max-w-[80%] text-center text-xs text-muted-foreground/75">
           {textContent.length > 200
             ? textContent.substring(0, 200) + "..."
             : textContent}
-        </div>
+        </TwemojiScope>
       </div>
     )
   }
@@ -1910,10 +2042,10 @@ export default function MessageBubble({
       : undefined
   const canRetryModelError = Boolean(
     messageType === "model_error_notice" &&
-      retrySessionId &&
-      viewerParticipantId &&
-      targetParticipantIds?.includes(viewerParticipantId) &&
-      onRetryModelError
+    retrySessionId &&
+    viewerParticipantId &&
+    targetParticipantIds?.includes(viewerParticipantId) &&
+    onRetryModelError
   )
   const shouldRenderCompact =
     !interaction &&
@@ -1923,7 +2055,7 @@ export default function MessageBubble({
   // Non-direct actor traffic stays compact so the main thread focuses on viewer-facing messages.
   if (shouldRenderCompact) {
     return (
-      <div className="ml-10 flex w-[calc(100%-2.5rem)] min-w-0 max-w-full gap-2 opacity-70">
+      <div className="ml-10 flex w-[calc(100%-2.5rem)] max-w-full min-w-0 gap-2 opacity-70">
         <div className="flex w-full max-w-[70%] min-w-0 items-start gap-2">
           <AtSign className="mt-1 h-3 w-3 shrink-0 text-primary/60" />
           <div className="min-w-0 flex-1">
@@ -1937,7 +2069,7 @@ export default function MessageBubble({
                         contactBasePath={contactBasePath}
                       >
                         <span
-                          className="text-[11px] font-medium text-muted-foreground/80 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                          className="text-[11px] font-medium text-muted-foreground/80 transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
                           tabIndex={0}
                         >
                           {resolvedAuthorName}
@@ -1970,7 +2102,7 @@ export default function MessageBubble({
                         contactBasePath={contactBasePath}
                       >
                         <span
-                          className="shrink-0 font-medium text-muted-foreground/80 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                          className="shrink-0 font-medium text-muted-foreground/80 transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
                           tabIndex={0}
                         >
                           {resolvedAuthorName}
@@ -1993,10 +2125,12 @@ export default function MessageBubble({
                     <button
                       type="button"
                       onClick={() => setCompactExpanded((current) => !current)}
-                      className="min-w-0 flex-1 truncate text-left transition-colors hover:text-foreground/80"
+                      className="min-w-0 flex-1 text-left transition-colors hover:text-foreground/80"
                       aria-expanded={compactExpanded}
                     >
-                      {compactPreview}
+                      <TwemojiScope as="span" className="block truncate">
+                        {compactPreview}
+                      </TwemojiScope>
                     </button>
                   </div>
                 )}
@@ -2006,7 +2140,9 @@ export default function MessageBubble({
                 className="shrink-0 text-muted-foreground/45 transition-colors hover:text-foreground/70"
                 onClick={() => setCompactExpanded((current) => !current)}
                 aria-expanded={compactExpanded}
-                aria-label={compactExpanded ? "Collapse message" : "Expand message"}
+                aria-label={
+                  compactExpanded ? "Collapse message" : "Expand message"
+                }
               >
                 {compactExpanded ? (
                   <ChevronDown className="mt-0.5 h-3 w-3" />
@@ -2056,7 +2192,7 @@ export default function MessageBubble({
 
   return (
     <div
-      className={`flex w-full min-w-0 max-w-full gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+      className={`flex w-full max-w-full min-w-0 gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
     >
       {isUser ? (
         <ChatAvatar
@@ -2077,7 +2213,7 @@ export default function MessageBubble({
           contactBasePath={contactBasePath}
         >
           <span
-            className="mt-1 block shrink-0 rounded-full transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+            className="mt-1 block shrink-0 rounded-full transition-opacity hover:opacity-90 focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
             tabIndex={0}
             aria-label={`View ${resolvedAuthorName}`}
           >
@@ -2092,10 +2228,14 @@ export default function MessageBubble({
                   : undefined
               }
               statusLabel={
-                authorEntityType === "actor" ? getRuntimeLabel(actorRuntime) : undefined
+                authorEntityType === "actor"
+                  ? getRuntimeLabel(actorRuntime)
+                  : undefined
               }
               statusDetail={
-                authorEntityType === "actor" ? getRuntimeDetail(actorRuntime) : undefined
+                authorEntityType === "actor"
+                  ? getRuntimeDetail(actorRuntime)
+                  : undefined
               }
             />
           </span>
@@ -2118,10 +2258,14 @@ export default function MessageBubble({
                 : undefined
             }
             statusLabel={
-              authorEntityType === "actor" ? getRuntimeLabel(actorRuntime) : undefined
+              authorEntityType === "actor"
+                ? getRuntimeLabel(actorRuntime)
+                : undefined
             }
             statusDetail={
-              authorEntityType === "actor" ? getRuntimeDetail(actorRuntime) : undefined
+              authorEntityType === "actor"
+                ? getRuntimeDetail(actorRuntime)
+                : undefined
             }
           />
         </button>
@@ -2138,10 +2282,14 @@ export default function MessageBubble({
               : undefined
           }
           statusLabel={
-            authorEntityType === "actor" ? getRuntimeLabel(actorRuntime) : undefined
+            authorEntityType === "actor"
+              ? getRuntimeLabel(actorRuntime)
+              : undefined
           }
           statusDetail={
-            authorEntityType === "actor" ? getRuntimeDetail(actorRuntime) : undefined
+            authorEntityType === "actor"
+              ? getRuntimeDetail(actorRuntime)
+              : undefined
           }
         />
       )}
@@ -2157,7 +2305,7 @@ export default function MessageBubble({
                 contactBasePath={contactBasePath}
               >
                 <span
-                  className="transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                  className="transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
                   tabIndex={0}
                 >
                   {resolvedAuthorName}
@@ -2190,7 +2338,7 @@ export default function MessageBubble({
           </div>
         )}
         <div
-          className={`flex w-full min-w-0 max-w-full items-end gap-2 ${isUser ? "justify-end" : "justify-start"}`}
+          className={`flex w-full max-w-full min-w-0 items-end gap-2 ${isUser ? "justify-end" : "justify-start"}`}
         >
           {isRetrying ? (
             <span className="mb-2 inline-flex size-6 items-center justify-center rounded-full border border-destructive/25 bg-destructive/10 text-destructive shadow-sm">
@@ -2223,7 +2371,9 @@ export default function MessageBubble({
             )}
 
             {/* Citation sources footer */}
-            {!interaction && hasCitations && <CitationFooter sources={sources} />}
+            {!interaction && hasCitations && (
+              <CitationFooter sources={sources} />
+            )}
 
             {/* Server tool calls (web_search / web_fetch) — inside the bubble */}
             {!interaction && hasServerToolCalls && (
@@ -2232,7 +2382,7 @@ export default function MessageBubble({
           </div>
         </div>
         <div
-          className={`mt-1 inline-flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 ${isUser ? "self-end flex-row-reverse justify-start" : "self-start justify-start"}`}
+          className={`mt-1 inline-flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 ${isUser ? "flex-row-reverse justify-start self-end" : "justify-start self-start"}`}
         >
           {timestamp && (
             <span className="text-[10px] text-muted-foreground/50">

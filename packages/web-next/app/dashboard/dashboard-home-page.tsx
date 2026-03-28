@@ -1,14 +1,23 @@
 "use client"
 
-import { startTransition, useEffect, useRef, useState } from "react"
-import { APP_NAME, type WorkspaceChiefActorPreference } from "@synapse/shared"
+import { startTransition, useEffect, useMemo, useRef, useState } from "react"
+import {
+  APP_NAME,
+  type Actor,
+  type WorkspaceChiefActorPreference,
+} from "@synapse/shared"
 import { Bot, ChevronDown, Send } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 
+import { normalizeChiefActorOption } from "@/app/dashboard/chief-actor-picker-shared"
 import ChatAvatar from "@/app/dashboard/chat/chat-avatar"
 import ChiefActorPickerDialog from "@/app/dashboard/chief-actor-picker-dialog"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
+import ChatComposer, {
+  type ChatComposerParticipant,
+  type ChatComposerSubmitPayload,
+} from "@/components/chat-composer"
 import { Button } from "@/components/ui/button"
 import {
   Field,
@@ -17,7 +26,6 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
-import { Textarea } from "@/components/ui/textarea"
 import { api, ApiError } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { useChatStore } from "@/stores/chat-store"
@@ -31,6 +39,7 @@ type LaunchActor = {
   title: string
   avatarUrl?: string
   emoji?: string
+  summary?: string
 }
 
 function getErrorMessage(error: unknown) {
@@ -57,6 +66,7 @@ function toLaunchActor(
     role: actor.role,
     title: actor.title,
     avatarUrl: actor.avatarUrl,
+    summary: actor.title || actor.role,
   }
 }
 
@@ -68,8 +78,8 @@ export default function DashboardHomePage() {
   const { createGroup, selectGroup } = useChatStore()
   const sendAnimationTimerRef = useRef<number | null>(null)
 
-  const [draft, setDraft] = useState("")
-  const [pendingPrompt, setPendingPrompt] = useState("")
+  const [pendingLaunchPayload, setPendingLaunchPayload] =
+    useState<ChatComposerSubmitPayload | null>(null)
   const [preference, setPreference] =
     useState<WorkspaceChiefActorPreference | null>(null)
   const [loadingPreference, setLoadingPreference] = useState(false)
@@ -79,7 +89,9 @@ export default function DashboardHomePage() {
   const [pickerMode, setPickerMode] = useState<PickerMode>("launch")
   const [pickerIntent, setPickerIntent] = useState<PickerIntent>("submit")
   const [launchActor, setLaunchActor] = useState<LaunchActor | null>(null)
+  const [availableActors, setAvailableActors] = useState<LaunchActor[]>([])
   const [sendAnimating, setSendAnimating] = useState(false)
+  const [composerResetSignal, setComposerResetSignal] = useState(0)
 
   useEffect(() => {
     if (!workspaceId) {
@@ -117,6 +129,50 @@ export default function DashboardHomePage() {
   }, [workspaceId])
 
   useEffect(() => {
+    if (!workspaceId) {
+      setAvailableActors([])
+      return
+    }
+
+    let cancelled = false
+
+    void api
+      .getActors(workspaceId)
+      .then((response) => {
+        if (cancelled) return
+        const actors = Array.isArray(response)
+          ? (response as Actor[])
+          : ((response?.actors || []) as Actor[])
+        const nextActors = actors
+          .filter((actor) => actor.isActive !== false)
+          .map((actor) => {
+            const normalized = normalizeChiefActorOption(actor)
+            return {
+              id: normalized.id,
+              name: normalized.name,
+              role: normalized.role,
+              title: normalized.title,
+              avatarUrl: normalized.avatarUrl,
+              emoji: normalized.emoji,
+              summary: normalized.summary,
+            } satisfies LaunchActor
+          })
+          .sort((left, right) => left.name.localeCompare(right.name))
+
+        setAvailableActors(nextActors)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        console.error("Failed to load available dashboard actors:", error)
+        setAvailableActors([])
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceId])
+
+  useEffect(() => {
     setLaunchActor(toLaunchActor(preference?.chiefActor))
   }, [preference])
 
@@ -128,31 +184,49 @@ export default function DashboardHomePage() {
     }
   }, [])
 
-  function handlePickerOpenChange(nextOpen: boolean) {
-    setPickerOpen(nextOpen)
-    if (!nextOpen && !submitting) {
-      setPendingPrompt("")
-    }
+  const availableActorMap = useMemo(
+    () => new Map(availableActors.map((actor) => [actor.id, actor])),
+    [availableActors]
+  )
+  const composerParticipants = useMemo<ChatComposerParticipant[]>(
+    () =>
+      availableActors.map((actor) => ({
+        id: actor.id,
+        name: actor.name,
+        type: "actor",
+        targetType: "actor",
+        role: actor.role,
+        title: actor.title,
+        avatarUrl: actor.avatarUrl,
+        emoji: actor.emoji,
+        description: actor.summary || actor.title || actor.role,
+        searchTerms: [actor.name, actor.title, actor.role, actor.summary || ""],
+      })),
+    [availableActors]
+  )
+
+  function resolveLaunchActors(
+    payload: ChatComposerSubmitPayload,
+    primaryActor?: LaunchActor | null
+  ) {
+    const actorIds = Array.from(
+      new Set([
+        ...(primaryActor ? [primaryActor.id] : []),
+        ...(payload.targetActorIds || []),
+      ])
+    )
+
+    return actorIds
+      .map((actorId) =>
+        primaryActor && primaryActor.id === actorId
+          ? primaryActor
+          : availableActorMap.get(actorId)
+      )
+      .filter((actor): actor is LaunchActor => Boolean(actor))
   }
 
-  async function launchFromDraft() {
-    const message = draft.trim()
-    if (!message) {
-      setErrorMessage("Enter a first message to start a conversation.")
-      return
-    }
-
-    setErrorMessage(null)
-    setPendingPrompt(message)
-
-    if (launchActor) {
-      await handleLaunch(launchActor, false)
-      return
-    }
-
-    setPickerMode("launch")
-    setPickerIntent("submit")
-    setPickerOpen(true)
+  function handlePickerOpenChange(nextOpen: boolean) {
+    setPickerOpen(nextOpen)
   }
 
   function playSendFlight(): Promise<void> {
@@ -180,13 +254,28 @@ export default function DashboardHomePage() {
     })
   }
 
-  async function handleLaunch(actor: LaunchActor, saveAsDefault: boolean) {
+  async function handleLaunch(
+    primaryActor: LaunchActor | null,
+    groupedActors: LaunchActor[],
+    saveAsDefault: boolean,
+    payload?: ChatComposerSubmitPayload | null
+  ) {
     if (!workspaceId) return
 
-    const message = pendingPrompt.trim() || draft.trim()
-    if (!message) {
+    const launchPayload = payload ?? pendingLaunchPayload
+    const message = launchPayload?.plainText.trim() || ""
+    const actorIds = Array.from(
+      new Set(groupedActors.map((actor) => actor.id).filter(Boolean))
+    )
+
+    if (!launchPayload || launchPayload.contentBlocks.length === 0) {
       setErrorMessage("Enter a first message to start a conversation.")
-      return
+      return false
+    }
+
+    if (actorIds.length === 0) {
+      setErrorMessage("Select or mention at least one actor to start.")
+      return false
     }
 
     setSubmitting(true)
@@ -195,10 +284,16 @@ export default function DashboardHomePage() {
 
     const [[groupResult, preferenceResult]] = await Promise.all([
       Promise.allSettled([
-        createGroup(workspaceId, [actor.id], message, actor.id),
-        saveAsDefault
+        createGroup(
+          workspaceId,
+          actorIds,
+          message || undefined,
+          actorIds,
+          launchPayload.contentBlocks
+        ),
+        saveAsDefault && primaryActor
           ? api.updateWorkspaceChiefActorPreference(workspaceId, {
-              chiefActorId: actor.id,
+              chiefActorId: primaryActor.id,
             })
           : Promise.resolve(null),
       ]),
@@ -209,7 +304,7 @@ export default function DashboardHomePage() {
 
     if (groupResult.status === "rejected") {
       setErrorMessage(getErrorMessage(groupResult.reason))
-      return
+      return false
     }
 
     let nextLaunchActor = toLaunchActor(preference?.chiefActor)
@@ -223,18 +318,34 @@ export default function DashboardHomePage() {
 
     const groupId = groupResult.value
     selectGroup(groupId)
-    setDraft("")
-    setPendingPrompt("")
+    setPendingLaunchPayload(null)
     setPickerOpen(false)
     setLaunchActor(nextLaunchActor)
+    setComposerResetSignal((currentValue) => currentValue + 1)
     startTransition(() => {
       router.push(`/dashboard/chat?group=${groupId}`)
     })
+    return true
   }
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    await launchFromDraft()
+  async function handleComposerSubmit(payload: ChatComposerSubmitPayload) {
+    if (payload.contentBlocks.length === 0) {
+      setErrorMessage("Enter a first message to start a conversation.")
+      return false
+    }
+
+    setErrorMessage(null)
+    setPendingLaunchPayload(payload)
+
+    const launchActors = resolveLaunchActors(payload, launchActor)
+    if (launchActors.length > 0) {
+      return handleLaunch(launchActor, launchActors, false, payload)
+    }
+
+    setPickerMode("launch")
+    setPickerIntent("submit")
+    setPickerOpen(true)
+    return false
   }
 
   async function handleSelectLaunchActor(
@@ -283,9 +394,9 @@ export default function DashboardHomePage() {
     <>
       <div className="flex min-h-[calc(100vh-10rem)] items-center justify-center py-8">
         <div className="w-full max-w-3xl -translate-y-8 lg:-translate-y-12">
-          <div className="flex flex-col gap-8 text-center">
-            <div className="flex flex-col items-center gap-2">
-              <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">
+          <div className="flex flex-col gap-8">
+            <div className="flex flex-col items-center gap-2 text-center">
+              <p className="text-xs font-medium tracking-[0.24em] text-muted-foreground uppercase">
                 {workspaceName || "Workspace"}
               </p>
               <h1 className="font-display text-5xl font-semibold tracking-tight text-foreground lg:text-6xl">
@@ -293,28 +404,29 @@ export default function DashboardHomePage() {
               </h1>
             </div>
 
-            <form onSubmit={(event) => void handleSubmit(event)}>
-              <FieldGroup className="gap-5">
-                <Field>
-                  <FieldLabel
-                    htmlFor="dashboard-launcher-input"
-                    className="sr-only"
-                  >
-                    Your first message
-                  </FieldLabel>
-                  <FieldContent className="items-center">
-                    <div className="relative w-full">
+            <FieldGroup className="gap-5">
+              <Field>
+                <FieldLabel className="sr-only">Your first message</FieldLabel>
+                <FieldContent className="items-start">
+                  <ChatComposer
+                    workspaceId={workspaceId}
+                    participants={composerParticipants}
+                    disabled={submitting}
+                    placeholder="Ask anything..."
+                    resetSignal={composerResetSignal}
+                    className="w-full rounded-[28px] border-border bg-card text-left"
+                    editorClassName="[&_.ProseMirror]:min-h-36 [&_.ProseMirror]:text-left [&_.ProseMirror]:text-base"
+                    header={
                       <button
                         type="button"
                         onClick={() => {
                           setErrorMessage(null)
-                          setPendingPrompt("")
                           setPickerMode("launch")
                           setPickerIntent("target")
                           setPickerOpen(true)
                         }}
                         disabled={loadingPreference || submitting}
-                        className="absolute left-5 top-4 z-10 inline-flex max-w-[calc(100%-8rem)] items-center gap-2 text-left text-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                        className="inline-flex w-full max-w-full items-center justify-start gap-2 text-left text-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {launchActor ? (
                           <ChatAvatar
@@ -327,7 +439,7 @@ export default function DashboardHomePage() {
                         ) : (
                           <Bot className="size-4 shrink-0" />
                         )}
-                        <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                        <span className="text-xs tracking-[0.18em] text-muted-foreground uppercase">
                           To
                         </span>
                         <span className="min-w-0 truncate font-medium text-foreground">
@@ -340,48 +452,36 @@ export default function DashboardHomePage() {
                         ) : null}
                         <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
                       </button>
-                      <Textarea
-                        id="dashboard-launcher-input"
-                        value={draft}
-                        onChange={(event) => setDraft(event.target.value)}
-                        placeholder="Ask anything..."
-                        className="min-h-36 resize-none rounded-[28px] border-border bg-card px-5 pb-16 pt-16 text-base shadow-sm"
-                        onKeyDown={(event) => {
-                          if (
-                            event.key === "Enter" &&
-                            (event.metaKey || event.ctrlKey)
-                          ) {
-                            event.preventDefault()
-                            void launchFromDraft()
-                          }
-                        }}
-                      />
-                      <div className="absolute inset-x-0 bottom-0 flex justify-end px-3 py-3">
-                        <Button
-                          type="submit"
-                          size="sm"
-                          disabled={!draft.trim() || submitting}
-                          data-flight={sendAnimating ? "true" : "false"}
-                          className={cn(
-                            "home-send-button min-w-[112px] rounded-full px-4 pr-11 shadow-sm"
-                          )}
+                    }
+                    renderSubmitButton={({ disabled }) => (
+                      <Button
+                        type="submit"
+                        size="sm"
+                        disabled={disabled}
+                        data-flight={sendAnimating ? "true" : "false"}
+                        className={cn(
+                          "home-send-button min-w-[112px] rounded-full px-4 pr-11 shadow-sm"
+                        )}
+                      >
+                        <span className="home-send-button__label">Send</span>
+                        <span
+                          className="home-send-button__plane"
+                          aria-hidden="true"
                         >
-                          <span className="home-send-button__label">Send</span>
-                          <span className="home-send-button__plane" aria-hidden="true">
-                            <Send className="size-4" />
-                          </span>
-                        </Button>
-                      </div>
-                    </div>
-                    {errorMessage ? (
-                      <FieldError className="text-center">
-                        {errorMessage}
-                      </FieldError>
-                    ) : null}
-                  </FieldContent>
-                </Field>
-              </FieldGroup>
-            </form>
+                          <Send className="size-4" />
+                        </span>
+                      </Button>
+                    )}
+                    onSubmit={handleComposerSubmit}
+                  />
+                  {errorMessage ? (
+                    <FieldError className="text-left">
+                      {errorMessage}
+                    </FieldError>
+                  ) : null}
+                </FieldContent>
+              </Field>
+            </FieldGroup>
           </div>
         </div>
       </div>
@@ -399,8 +499,19 @@ export default function DashboardHomePage() {
             return
           }
 
-          setLaunchActor(payload.actor)
-          await handleLaunch(payload.actor, payload.saveAsDefault)
+          const groupedActors = resolveLaunchActors(
+            pendingLaunchPayload || {
+              plainText: "",
+              contentBlocks: [],
+            },
+            payload.actor
+          )
+          await handleLaunch(
+            payload.actor,
+            groupedActors,
+            payload.saveAsDefault,
+            pendingLaunchPayload
+          )
         }}
       />
     </>

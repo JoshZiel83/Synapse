@@ -66,19 +66,17 @@ export default function ChatPage() {
 
   async function handleSend(
     contentBlocks: CanonicalContentBlock[],
-    targetParticipantIds?: string[]
+    targetParticipantIds?: string[],
+    targetActorIds?: string[]
   ) {
     if (!workspaceId || !selectedGroupId) return
-    try {
-      await sendMessage(
-        workspaceId,
-        selectedGroupId,
-        contentBlocks,
-        targetParticipantIds
-      )
-    } catch (err) {
-      console.error("Failed to send:", err)
-    }
+    await sendMessage(
+      workspaceId,
+      selectedGroupId,
+      contentBlocks,
+      targetParticipantIds,
+      targetActorIds
+    )
   }
 
   async function handleCreateGroup(actorIds: string[]) {
@@ -127,7 +125,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 max-w-full overflow-hidden">
+    <div className="flex h-full min-h-0 w-full max-w-full min-w-0 overflow-hidden">
       {/* Desktop: side-by-side. Mobile: toggle */}
 
       {/* Group List */}
