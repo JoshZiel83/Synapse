@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 
 import ChatAvatar from "@/app/dashboard/chat/chat-avatar"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
+import { MobilePageHeader } from "@/components/mobile-page-header"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -78,10 +79,10 @@ export default function MobileContactsPage() {
         if (cancelled) return
         const nextMembers = Array.isArray(memberResponse)
           ? memberResponse
-          : (memberResponse?.data || [])
+          : memberResponse?.data || []
         const nextActors = Array.isArray(actorResponse)
           ? actorResponse
-          : (actorResponse?.actors || [])
+          : actorResponse?.actors || []
 
         setMembers(nextMembers)
         setActors(nextActors.filter((actor: Actor) => actor.isActive))
@@ -131,35 +132,35 @@ export default function MobileContactsPage() {
 
   const visibleActors = prioritizeFocused(
     normalizedQuery
-    ? actors.filter((actor) => {
-        const haystack = [
-          actor.definition.name,
-          actor.definition.title,
-          actor.definition.role,
-          actorSummary(actor),
-        ]
-          .join(" ")
-          .toLowerCase()
-        return haystack.includes(normalizedQuery)
-      })
-    : actors,
+      ? actors.filter((actor) => {
+          const haystack = [
+            actor.definition.name,
+            actor.definition.title,
+            actor.definition.role,
+            actorSummary(actor),
+          ]
+            .join(" ")
+            .toLowerCase()
+          return haystack.includes(normalizedQuery)
+        })
+      : actors,
     (actor) => actor.id,
     focusedKind === "actor"
   )
 
   const visibleMembers = prioritizeFocused(
     normalizedQuery
-    ? members.filter((member) => {
-        const haystack = [
-          member.userName || "",
-          member.userEmail || "",
-          member.trustLevel || "",
-        ]
-          .join(" ")
-          .toLowerCase()
-        return haystack.includes(normalizedQuery)
-      })
-    : members,
+      ? members.filter((member) => {
+          const haystack = [
+            member.userName || "",
+            member.userEmail || "",
+            member.trustLevel || "",
+          ]
+            .join(" ")
+            .toLowerCase()
+          return haystack.includes(normalizedQuery)
+        })
+      : members,
     (member) => member.userId,
     focusedKind === "user"
   )
@@ -191,189 +192,184 @@ export default function MobileContactsPage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col overflow-y-auto px-4 pb-[calc(var(--mobile-tab-bar-clearance,0px)+1.5rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
-      <div className="space-y-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-            Contacts
-          </h1>
-        </div>
+    <div className="flex min-h-0 flex-1 flex-col bg-background">
+      <MobilePageHeader title="Contacts" />
+      <div className="flex-1 overflow-y-auto px-4 pt-3 pb-[calc(var(--mobile-tab-bar-clearance,0px)+1.5rem)]">
+        <div className="space-y-4">
+          <div className="-mx-4 space-y-3 border-b border-border bg-background px-4 py-3">
+            <div className="grid grid-cols-2 gap-2 rounded-2xl bg-muted/60 p-1">
+              <button
+                type="button"
+                className={cn(
+                  "flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-colors",
+                  mode === "actors"
+                    ? "bg-background text-foreground"
+                    : "text-muted-foreground"
+                )}
+                onClick={() => setMode("actors")}
+              >
+                <Sparkles className="size-4" />
+                Actors
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-colors",
+                  mode === "people"
+                    ? "bg-background text-foreground"
+                    : "text-muted-foreground"
+                )}
+                onClick={() => setMode("people")}
+              >
+                <Users className="size-4" />
+                People
+              </button>
+            </div>
 
-        <div className="-mx-4 space-y-3 border-y border-border/70 bg-background/80 px-4 py-4">
-          <div className="grid grid-cols-2 gap-2 rounded-[22px] bg-muted/70 p-1">
-            <button
-              type="button"
-              className={cn(
-                "flex items-center justify-center gap-2 rounded-[18px] px-3 py-2 text-sm font-medium transition-colors",
-                mode === "actors"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground"
-              )}
-              onClick={() => setMode("actors")}
-            >
-              <Sparkles className="size-4" />
-              Actors
-            </button>
-            <button
-              type="button"
-              className={cn(
-                "flex items-center justify-center gap-2 rounded-[18px] px-3 py-2 text-sm font-medium transition-colors",
-                mode === "people"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground"
-              )}
-              onClick={() => setMode("people")}
-            >
-              <Users className="size-4" />
-              People
-            </button>
+            <div className="relative">
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder={
+                  mode === "actors" ? "Search actors…" : "Search people…"
+                }
+                className="h-10 rounded-2xl border-border/70 bg-muted/35 pl-9 shadow-none"
+              />
+            </div>
           </div>
 
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder={
-                mode === "actors"
-                  ? "Search actors..."
-                  : "Search people..."
-              }
-              className="h-11 rounded-full border-border/70 bg-background pl-9"
-            />
-          </div>
-        </div>
+          <div className="space-y-3">
+            {loading ? (
+              <>
+                <Skeleton className="h-20 rounded-2xl" />
+                <Skeleton className="h-20 rounded-2xl" />
+                <Skeleton className="h-20 rounded-2xl" />
+              </>
+            ) : mode === "actors" ? (
+              visibleActors.length > 0 ? (
+                <div className="-mx-4 divide-y divide-border/70 border-y border-border/70 bg-background">
+                  {visibleActors.map((actor) => {
+                    const isFocused =
+                      focusedKind === "actor" && focusedId === actor.id
 
-        <div className="space-y-3">
-          {loading ? (
-            <>
-              <Skeleton className="h-20 rounded-2xl" />
-              <Skeleton className="h-20 rounded-2xl" />
-              <Skeleton className="h-20 rounded-2xl" />
-            </>
-          ) : mode === "actors" ? (
-            visibleActors.length > 0 ? (
-              <div className="-mx-4 divide-y divide-border/70 border-y border-border/70 bg-background/80">
-                {visibleActors.map((actor) => (
-                  (() => {
-                    const isFocused = focusedKind === "actor" && focusedId === actor.id
                     return (
-                  <div
-                    key={actor.id}
-                    className={cn(
-                      "px-4 py-4",
-                      isFocused && "bg-accent/60"
-                    )}
-                  >
-                  <div className="flex items-start gap-3">
-                    <ChatAvatar
-                      name={actor.definition.name}
-                      avatarUrl={actor.avatarUrl}
-                      emoji={actor.definition.avatarEmoji}
-                      entityType="actor"
-                      size="lg"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <div className="truncate text-sm font-medium text-foreground">
-                          {actor.definition.name}
-                        </div>
-                        <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                          {actor.definition.title || titleCase(actor.definition.role)}
-                        </span>
-                        {isFocused ? (
-                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
-                            From chat
-                          </span>
-                        ) : null}
-                      </div>
-                      <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                        {actorSummary(actor)}
-                      </p>
-                      <Button
-                        size="sm"
-                        className="mt-3 rounded-full"
-                        onClick={() => void handleStartActorChat(actor)}
-                        disabled={launchingActorId === actor.id}
+                      <div
+                        key={actor.id}
+                        className={cn("px-4 py-4", isFocused && "bg-accent/60")}
                       >
-                        <Bot className="mr-2 size-4" />
-                        {launchingActorId === actor.id ? "Starting..." : "Chat"}
-                      </Button>
+                        <div className="flex items-start gap-3">
+                          <ChatAvatar
+                            name={actor.definition.name}
+                            avatarUrl={actor.avatarUrl}
+                            emoji={actor.definition.avatarEmoji}
+                            entityType="actor"
+                            size="lg"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <div className="truncate text-sm font-medium text-foreground">
+                                {actor.definition.name}
+                              </div>
+                              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                                {actor.definition.title ||
+                                  titleCase(actor.definition.role)}
+                              </span>
+                              {isFocused ? (
+                                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+                                  From chat
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                              {actorSummary(actor)}
+                            </p>
+                            <Button
+                              size="sm"
+                              className="mt-3 rounded-full"
+                              onClick={() => void handleStartActorChat(actor)}
+                              disabled={launchingActorId === actor.id}
+                            >
+                              <Bot className="mr-2 size-4" />
+                              {launchingActorId === actor.id
+                                ? "Starting..."
+                                : "Chat"}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="-mx-4 border-y border-dashed border-border bg-background px-4 py-8 text-center">
+                  <p className="text-sm font-medium text-foreground">
+                    No actors found
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Try a different search query.
+                  </p>
+                </div>
+              )
+            ) : visibleMembers.length > 0 ? (
+              <div className="-mx-4 divide-y divide-border/70 border-y border-border/70 bg-background">
+                {visibleMembers.map((member) => {
+                  const displayName = member.userName || "Unknown user"
+                  const isFocused =
+                    focusedKind === "user" && focusedId === member.userId
+
+                  return (
+                    <div
+                      key={member.userId}
+                      className={cn("px-4 py-4", isFocused && "bg-accent/60")}
+                    >
+                      <div className="flex items-start gap-3">
+                        <Avatar className="size-12">
+                          <AvatarImage
+                            src={resolveFileUrl(member.avatarUrl) || undefined}
+                            alt={displayName}
+                          />
+                          <AvatarFallback>
+                            {displayName.charAt(0).toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <div className="truncate text-sm font-medium text-foreground">
+                              {displayName}
+                            </div>
+                            {isFocused ? (
+                              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+                                From chat
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+                            <Mail className="size-4" />
+                            <span className="truncate">
+                              {member.userEmail || "No email available"}
+                            </span>
+                          </div>
+                          <div className="mt-2 text-xs tracking-[0.16em] text-muted-foreground uppercase">
+                            {titleCase(member.trustLevel)}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  </div>
-                )})()
-                ))}
+                  )
+                })}
               </div>
             ) : (
-              <div className="-mx-4 border-y border-dashed border-border bg-background/75 px-4 py-8 text-center">
+              <div className="-mx-4 border-y border-dashed border-border bg-background px-4 py-8 text-center">
                 <p className="text-sm font-medium text-foreground">
-                  No actors found
+                  No people found
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
                   Try a different search query.
                 </p>
               </div>
-            )
-          ) : visibleMembers.length > 0 ? (
-            <div className="-mx-4 divide-y divide-border/70 border-y border-border/70 bg-background/80">
-              {visibleMembers.map((member) => {
-                const displayName = member.userName || "Unknown user"
-                const isFocused = focusedKind === "user" && focusedId === member.userId
-                return (
-                  <div
-                    key={member.userId}
-                    className={cn(
-                      "px-4 py-4",
-                      isFocused && "bg-accent/60"
-                    )}
-                  >
-                  <div className="flex items-start gap-3">
-                    <Avatar className="size-12">
-                      <AvatarImage
-                        src={resolveFileUrl(member.avatarUrl) || undefined}
-                        alt={displayName}
-                      />
-                      <AvatarFallback>
-                        {displayName.charAt(0).toUpperCase()}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <div className="truncate text-sm font-medium text-foreground">
-                          {displayName}
-                        </div>
-                        {isFocused ? (
-                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
-                            From chat
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-                        <Mail className="size-4" />
-                        <span className="truncate">
-                          {member.userEmail || "No email available"}
-                        </span>
-                      </div>
-                      <div className="mt-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                        {titleCase(member.trustLevel)}
-                      </div>
-                    </div>
-                  </div>
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="-mx-4 border-y border-dashed border-border bg-background/75 px-4 py-8 text-center">
-              <p className="text-sm font-medium text-foreground">
-                No people found
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Try a different search query.
-              </p>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </div>

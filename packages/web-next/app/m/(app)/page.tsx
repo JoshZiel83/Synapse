@@ -3,7 +3,13 @@
 import Link from "next/link"
 import { startTransition, useEffect, useState } from "react"
 import { APP_NAME, type WorkspaceChiefActorPreference } from "@synapse/shared"
-import { Bot, ChevronRight, MessageSquareText, ScanLine, Send } from "lucide-react"
+import {
+  Bot,
+  ChevronRight,
+  MessageSquareText,
+  ScanLine,
+  Send,
+} from "lucide-react"
 import { useRouter } from "next/navigation"
 
 import ChatAvatar from "@/app/dashboard/chat/chat-avatar"
@@ -16,6 +22,7 @@ import {
 } from "@/app/m/mobile-launcher-state"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { MobileActorPickerDialog } from "@/components/mobile-actor-picker-dialog"
+import { MobilePageHeader } from "@/components/mobile-page-header"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
@@ -136,7 +143,9 @@ export default function MobileHomePage() {
         { chiefActorId: actorId }
       )
       setPreference(nextPreference)
-      setLaunchActor(toLaunchActor(nextPreference.chiefActor) || fallbackActor || null)
+      setLaunchActor(
+        toLaunchActor(nextPreference.chiefActor) || fallbackActor || null
+      )
     } catch (error) {
       console.error("Failed to update chief actor preference:", error)
     }
@@ -222,7 +231,11 @@ export default function MobileHomePage() {
     if (pickerIntent === "target") {
       writeStoredMobileLaunchActor(workspaceId, nextLaunchActor)
       setLaunchActor(nextLaunchActor)
-      await persistDefaultActor(nextLaunchActor.id, saveAsDefault, nextLaunchActor)
+      await persistDefaultActor(
+        nextLaunchActor.id,
+        saveAsDefault,
+        nextLaunchActor
+      )
       setPickerOpen(false)
       return
     }
@@ -249,184 +262,199 @@ export default function MobileHomePage() {
 
   return (
     <>
-      <div className="flex flex-1 flex-col overflow-y-auto px-4 pb-[calc(var(--mobile-tab-bar-clearance,0px)+1.5rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
-        <div className="space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-                {APP_NAME}
-              </h1>
-            </div>
-            <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-full" asChild>
-              <Link href="/m/scan-login" aria-label="Scan QR code to log in on Web">
-                <ScanLine className="size-6" />
+      <div className="flex min-h-0 flex-1 flex-col bg-background">
+        <MobilePageHeader
+          title={APP_NAME}
+          action={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8 shrink-0 rounded-full"
+              asChild
+            >
+              <Link
+                href="/m/scan-login"
+                aria-label="Scan QR code to log in on Web"
+              >
+                <ScanLine className="size-5" />
               </Link>
             </Button>
-          </div>
+          }
+        />
+        <div className="flex-1 overflow-y-auto px-4 pt-3 pb-[calc(var(--mobile-tab-bar-clearance,0px)+1.5rem)]">
+          <div className="space-y-5">
+            <section className="-mx-4 border-b border-border bg-background">
+              <button
+                type="button"
+                onClick={() => openActorPicker("target")}
+                className="flex w-full items-center gap-3 border-b border-border/70 px-4 py-3 text-left transition-colors hover:bg-muted/25"
+                disabled={loadingPreference || submitting}
+              >
+                {launchActor ? (
+                  <ChatAvatar
+                    name={launchActor.name}
+                    avatarUrl={launchActor.avatarUrl}
+                    emoji={launchActor.emoji}
+                    entityType="actor"
+                    size="lg"
+                  />
+                ) : (
+                  <div className="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                    <Bot className="size-5" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] tracking-[0.16em] text-muted-foreground uppercase">
+                    To
+                  </div>
+                  <div className="truncate text-sm font-medium text-foreground">
+                    {launchActor ? launchActor.name : "Select actor"}
+                  </div>
+                  <div className="truncate text-xs text-muted-foreground">
+                    {launchActor
+                      ? launchActor.title || launchActor.role
+                      : "Choose who should take this conversation"}
+                  </div>
+                </div>
+                <ChevronRight className="size-4 text-muted-foreground" />
+              </button>
 
-          <section className="-mx-4 border-y border-border/70 bg-background/80 px-4 py-4">
-            <button
-              type="button"
-              onClick={() => openActorPicker("target")}
-              className="flex w-full items-center gap-3 rounded-[22px] border border-border/70 bg-muted/35 px-3 py-3 text-left transition-colors hover:bg-muted/55"
-              disabled={loadingPreference || submitting}
-            >
-              {launchActor ? (
-                <ChatAvatar
-                  name={launchActor.name}
-                  avatarUrl={launchActor.avatarUrl}
-                  emoji={launchActor.emoji}
-                  entityType="actor"
-                  size="lg"
-                />
+              <div className="px-4 py-4">
+                <div className="space-y-3">
+                  <Textarea
+                    value={draft}
+                    onChange={(event) => {
+                      setDraft(event.target.value)
+                      if (errorMessage) {
+                        setErrorMessage(null)
+                      }
+                    }}
+                    placeholder="Ask anything…"
+                    className="min-h-32 resize-none rounded-2xl border-border/70 bg-muted/25 px-4 py-4 text-base shadow-none"
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "Enter" &&
+                        (event.metaKey || event.ctrlKey)
+                      ) {
+                        event.preventDefault()
+                        launchFromDraft()
+                      }
+                    }}
+                  />
+                  {errorMessage ? (
+                    <p className="text-sm text-destructive">{errorMessage}</p>
+                  ) : null}
+                  <Button
+                    type="button"
+                    className="h-12 w-full rounded-full text-sm font-medium"
+                    onClick={launchFromDraft}
+                    disabled={!draft.trim() || submitting}
+                  >
+                    <Send className="mr-2 size-4" />
+                    {submitting ? "Starting…" : "Start chat"}
+                  </Button>
+                </div>
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-base font-semibold text-foreground">
+                    Recent chats
+                  </h2>
+                </div>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link href="/m/chat">See all</Link>
+                </Button>
+              </div>
+
+              {loadingConversations ? (
+                <div className="-mx-4 border-y border-border/70 bg-background">
+                  {Array.from({ length: 4 }, (_, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center gap-3 px-4 py-4"
+                    >
+                      <Skeleton className="size-11 shrink-0 rounded-2xl" />
+                      <div className="flex min-w-0 flex-1 flex-col gap-2">
+                        <Skeleton
+                          className={
+                            index % 2 === 0
+                              ? "h-4 w-32 rounded-full"
+                              : "h-4 w-40 rounded-full"
+                          }
+                        />
+                        <Skeleton
+                          className={
+                            index % 2 === 0
+                              ? "h-4 w-full max-w-[14rem] rounded-full"
+                              : "h-4 w-[72%] rounded-full"
+                          }
+                        />
+                      </div>
+                      <Skeleton className="size-4 shrink-0 rounded-full" />
+                    </div>
+                  ))}
+                </div>
+              ) : conversations.length > 0 ? (
+                <div className="-mx-4 border-y border-border/70 bg-background">
+                  {conversations.slice(0, 4).map((conversation) => {
+                    const name =
+                      conversation.title ||
+                      conversation.participants.map((p) => p.name).join(", ")
+                    const preview =
+                      conversation.lastMessage?.content || "No messages yet"
+                    const previewLabel =
+                      preview.length > 70 ? `${preview.slice(0, 70)}…` : preview
+
+                    return (
+                      <button
+                        key={conversation.id}
+                        type="button"
+                        onClick={() => {
+                          selectConversation(conversation.id)
+                          startTransition(() => {
+                            router.push(`/m/chat/${conversation.id}`)
+                          })
+                        }}
+                        className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-muted/25"
+                      >
+                        <ChatAvatar
+                          name={name}
+                          avatarUrl={conversation.avatarUrl}
+                          entityType="conversation"
+                          size="lg"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-foreground">
+                            {name}
+                          </div>
+                          <div className="mt-1 truncate text-sm text-muted-foreground">
+                            {previewLabel}
+                          </div>
+                        </div>
+                        <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                      </button>
+                    )
+                  })}
+                </div>
               ) : (
-                <div className="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                  <Bot className="size-5" />
+                <div className="-mx-4 border-y border-dashed border-border bg-background px-4 py-8 text-center">
+                  <div className="mx-auto mb-3 flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                    <MessageSquareText className="size-5" />
+                  </div>
+                  <p className="text-sm font-medium text-foreground">
+                    No chats yet
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Start your first mobile conversation above.
+                  </p>
                 </div>
               )}
-              <div className="min-w-0 flex-1">
-                <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                  To
-                </div>
-                <div className="truncate text-sm font-medium text-foreground">
-                  {launchActor ? launchActor.name : "Select actor"}
-                </div>
-                <div className="truncate text-xs text-muted-foreground">
-                  {launchActor ? launchActor.title || launchActor.role : "Choose who should take this conversation"}
-                </div>
-              </div>
-              <ChevronRight className="size-4 text-muted-foreground" />
-            </button>
-
-            <div className="mt-4 space-y-3">
-              <Textarea
-                value={draft}
-                onChange={(event) => {
-                  setDraft(event.target.value)
-                  if (errorMessage) {
-                    setErrorMessage(null)
-                  }
-                }}
-                placeholder="Ask anything..."
-                className="min-h-32 resize-none rounded-[24px] border-border bg-background px-4 py-4 text-base shadow-none"
-                onKeyDown={(event) => {
-                  if (
-                    event.key === "Enter" &&
-                    (event.metaKey || event.ctrlKey)
-                  ) {
-                    event.preventDefault()
-                    launchFromDraft()
-                  }
-                }}
-              />
-              {errorMessage ? (
-                <p className="text-sm text-destructive">{errorMessage}</p>
-              ) : null}
-              <Button
-                type="button"
-                className="h-12 w-full rounded-full text-sm font-medium"
-                onClick={launchFromDraft}
-                disabled={!draft.trim() || submitting}
-              >
-                <Send className="mr-2 size-4" />
-                {submitting ? "Starting..." : "Start chat"}
-              </Button>
-            </div>
-          </section>
-
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-semibold text-foreground">
-                  Recent chats
-                </h2>
-              </div>
-              <Button variant="ghost" size="sm" asChild>
-                <Link href="/m/chat">See all</Link>
-              </Button>
-            </div>
-
-            {loadingConversations ? (
-              <div className="-mx-4 border-y border-border/70 bg-background/80">
-                {Array.from({ length: 4 }, (_, index) => (
-                  <div key={index} className="flex items-center gap-3 px-4 py-4">
-                    <Skeleton className="size-11 shrink-0 rounded-2xl" />
-                    <div className="flex min-w-0 flex-1 flex-col gap-2">
-                      <Skeleton
-                        className={
-                          index % 2 === 0
-                            ? "h-4 w-32 rounded-full"
-                            : "h-4 w-40 rounded-full"
-                        }
-                      />
-                      <Skeleton
-                        className={
-                          index % 2 === 0
-                            ? "h-4 w-full max-w-[14rem] rounded-full"
-                            : "h-4 w-[72%] rounded-full"
-                        }
-                      />
-                    </div>
-                    <Skeleton className="size-4 shrink-0 rounded-full" />
-                  </div>
-                ))}
-              </div>
-            ) : conversations.length > 0 ? (
-              <div className="-mx-4 border-y border-border/70 bg-background/80">
-                {conversations.slice(0, 4).map((conversation) => {
-                  const name =
-                    conversation.title ||
-                    conversation.participants.map((p) => p.name).join(", ")
-                  const preview =
-                    conversation.lastMessage?.content || "No messages yet"
-                  const previewLabel =
-                    preview.length > 70 ? `${preview.slice(0, 70)}...` : preview
-
-                  return (
-                    <button
-                      key={conversation.id}
-                      type="button"
-                      onClick={() => {
-                        selectConversation(conversation.id)
-                        startTransition(() => {
-                          router.push(`/m/chat/${conversation.id}`)
-                        })
-                      }}
-                      className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-muted/35"
-                    >
-                      <ChatAvatar
-                        name={name}
-                        avatarUrl={conversation.avatarUrl}
-                        entityType="conversation"
-                        size="lg"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium text-foreground">
-                          {name}
-                        </div>
-                        <div className="mt-1 truncate text-sm text-muted-foreground">
-                          {previewLabel}
-                        </div>
-                      </div>
-                      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                    </button>
-                  )
-                })}
-              </div>
-            ) : (
-              <div className="-mx-4 border-y border-dashed border-border bg-background/75 px-4 py-8 text-center">
-                <div className="mx-auto mb-3 flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                  <MessageSquareText className="size-5" />
-                </div>
-                <p className="text-sm font-medium text-foreground">
-                  No chats yet
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Start your first mobile conversation above.
-                </p>
-              </div>
-            )}
-          </section>
+            </section>
+          </div>
         </div>
       </div>
       <MobileActorPickerDialog
@@ -436,8 +464,12 @@ export default function MobileHomePage() {
         title="Choose actor"
         description="Pick who should take this conversation."
         initialActorIds={initialPickerActorIds}
-        confirmLabel={pickerIntent === "submit" ? "Start chat" : "Use this actor"}
-        confirmPendingLabel={pickerIntent === "submit" ? "Starting..." : "Saving..."}
+        confirmLabel={
+          pickerIntent === "submit" ? "Start chat" : "Use this actor"
+        }
+        confirmPendingLabel={
+          pickerIntent === "submit" ? "Starting..." : "Saving..."
+        }
         saveAsDefaultConfig={{
           label: "Save as my chief actor",
           description:

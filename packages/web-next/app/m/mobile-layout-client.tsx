@@ -104,11 +104,8 @@ function MobileShell({ children }: { children: ReactNode }) {
   return (
     <MotionConfig reducedMotion="user">
       <LazyMotion features={domAnimation} strict>
-        <div className="min-h-svh bg-[radial-gradient(circle_at_top,_color-mix(in_oklab,var(--color-primary)_10%,transparent),transparent_36%),linear-gradient(180deg,color-mix(in_oklab,var(--color-muted)_62%,white)_0%,var(--color-background)_42%)]">
-          <div
-            className="flex min-h-svh w-full flex-col bg-background/72 backdrop-blur-[2px]"
-            style={shellStyle}
-          >
+        <div className="min-h-svh bg-muted/30">
+          <div className="flex min-h-svh w-full flex-col" style={shellStyle}>
             <div className="relative flex min-h-svh flex-1 flex-col overflow-hidden">
               <AnimatePresence initial={false} mode="sync">
                 <m.div

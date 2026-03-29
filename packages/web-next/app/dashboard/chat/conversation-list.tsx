@@ -1,74 +1,89 @@
-'use client';
+"use client"
 
-import { useState } from 'react';
-import { APP_NAME, type ActorRuntimeState } from '@synapse/shared';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Skeleton } from '@/components/ui/skeleton';
-import { cn } from '@/lib/utils';
-import { Plus, Search } from 'lucide-react';
-import ChatAvatar from './chat-avatar';
-import TransportKindIcon from './transport-kind-icon';
-import type { ConversationRuntimeMap, ConversationSummary } from '@/stores/chat-store';
+import { useState } from "react"
+import { APP_NAME, type ActorRuntimeState } from "@synapse/shared"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
+import { MobilePageHeader } from "@/components/mobile-page-header"
+import { cn } from "@/lib/utils"
+import { Plus, Search } from "lucide-react"
+import ChatAvatar from "./chat-avatar"
+import TransportKindIcon from "./transport-kind-icon"
+import type {
+  ConversationRuntimeMap,
+  ConversationSummary,
+} from "@/stores/chat-store"
 
 function formatRelativeTime(dateStr: string) {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'now';
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d`;
-  return new Date(dateStr).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return "now"
+  if (mins < 60) return `${mins}m`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d`
+  return new Date(dateStr).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  })
 }
 
 interface ConversationListProps {
-  conversations: ConversationSummary[];
-  selectedId: string | null;
-  runtimeMap: ConversationRuntimeMap;
-  onSelect: (id: string) => void;
-  onNewConversation: () => void;
-  className?: string;
-  headerVariant?: 'default' | 'mobile';
-  title?: string;
-  loading?: boolean;
+  conversations: ConversationSummary[]
+  selectedId: string | null
+  runtimeMap: ConversationRuntimeMap
+  onSelect: (id: string) => void
+  onNewConversation: () => void
+  className?: string
+  headerVariant?: "default" | "mobile"
+  title?: string
+  loading?: boolean
 }
 
 function getRuntimePriority(runtime: ActorRuntimeState) {
-  if (runtime.health === 'error' || runtime.laneState === 'blocked') return 0;
-  if (runtime.laneState === 'running') return 1;
-  if (runtime.laneState === 'queued') return 2;
-  return 3;
+  if (runtime.health === "error" || runtime.laneState === "blocked") return 0
+  if (runtime.laneState === "running") return 1
+  if (runtime.laneState === "queued") return 2
+  return 3
 }
 
-function summarizeRuntimePreview(runtimeByActor?: Record<string, ActorRuntimeState>) {
+function summarizeRuntimePreview(
+  runtimeByActor?: Record<string, ActorRuntimeState>
+) {
   const activeRuntimes = Object.values(runtimeByActor || {})
-    .filter((runtime) => runtime.laneState !== 'idle' && runtime.laneState !== 'closed')
-    .sort((left, right) => getRuntimePriority(left) - getRuntimePriority(right));
+    .filter(
+      (runtime) =>
+        runtime.laneState !== "idle" && runtime.laneState !== "closed"
+    )
+    .sort((left, right) => getRuntimePriority(left) - getRuntimePriority(right))
 
-  if (activeRuntimes.length === 0) return null;
+  if (activeRuntimes.length === 0) return null
 
-  const names = activeRuntimes.map((runtime) => runtime.actorName);
-  const lead = names.slice(0, 2).join(', ');
-  const suffix = names.length > 2 ? ` +${names.length - 2}` : '';
-  const blocked = activeRuntimes.find((runtime) => runtime.health === 'error' || runtime.laneState === 'blocked');
+  const names = activeRuntimes.map((runtime) => runtime.actorName)
+  const lead = names.slice(0, 2).join(", ")
+  const suffix = names.length > 2 ? ` +${names.length - 2}` : ""
+  const blocked = activeRuntimes.find(
+    (runtime) => runtime.health === "error" || runtime.laneState === "blocked"
+  )
   if (blocked) {
-    return `${lead}${suffix} · ${blocked.lastError?.message || 'Needs attention'}`;
+    return `${lead}${suffix} · ${blocked.lastError?.message || "Needs attention"}`
   }
 
   const wakeupCount = activeRuntimes.reduce(
-    (sum, runtime) => sum + Math.max(runtime.activeWakeups.length, runtime.pendingWakeupCount),
-    0,
-  );
-  const statusText = activeRuntimes[0]?.statusText;
+    (sum, runtime) =>
+      sum + Math.max(runtime.activeWakeups.length, runtime.pendingWakeupCount),
+    0
+  )
+  const statusText = activeRuntimes[0]?.statusText
   if (statusText) {
-    return `${lead}${suffix} · ${statusText}`;
+    return `${lead}${suffix} · ${statusText}`
   }
   if (wakeupCount > 0) {
-    return `${lead}${suffix} · handling ${wakeupCount} wakeup${wakeupCount === 1 ? '' : 's'}`;
+    return `${lead}${suffix} · handling ${wakeupCount} wakeup${wakeupCount === 1 ? "" : "s"}`
   }
-  return `${lead}${suffix} · working`;
+  return `${lead}${suffix} · working`
 }
 
 function ConversationListSkeletonRows({
@@ -85,23 +100,23 @@ function ConversationListSkeletonRows({
             <div className="flex items-center justify-between gap-3">
               <Skeleton
                 className={cn(
-                  'h-4 rounded-full',
-                  index % 3 === 0 ? 'w-28' : index % 3 === 1 ? 'w-36' : 'w-24',
+                  "h-4 rounded-full",
+                  index % 3 === 0 ? "w-28" : index % 3 === 1 ? "w-36" : "w-24"
                 )}
               />
               <Skeleton className="h-3 w-10 shrink-0 rounded-full" />
             </div>
             <Skeleton
               className={cn(
-                'h-3.5 rounded-full',
-                index % 2 === 0 ? 'w-full max-w-[15rem]' : 'w-[72%]',
+                "h-3.5 rounded-full",
+                index % 2 === 0 ? "w-full max-w-[15rem]" : "w-[72%]"
               )}
             />
           </div>
         </div>
       ))}
     </div>
-  );
+  )
 }
 
 export default function ConversationList({
@@ -111,162 +126,193 @@ export default function ConversationList({
   onSelect,
   onNewConversation,
   className,
-  headerVariant = 'default',
+  headerVariant = "default",
   title,
   loading = false,
 }: ConversationListProps) {
-  const [search, setSearch] = useState('');
-  const headerTitle = title || (headerVariant === 'mobile' ? APP_NAME : 'Messages');
-  const isMobileHeader = headerVariant === 'mobile';
+  const [search, setSearch] = useState("")
+  const headerTitle =
+    title || (headerVariant === "mobile" ? APP_NAME : "Messages")
+  const isMobileHeader = headerVariant === "mobile"
 
   const filtered = search
     ? conversations.filter((conversation) => {
-        const s = search.toLowerCase();
+        const s = search.toLowerCase()
         return (
           conversation.title?.toLowerCase().includes(s) ||
           conversation.participants.some((participant) =>
-            participant.name.toLowerCase().includes(s),
+            participant.name.toLowerCase().includes(s)
           ) ||
           conversation.lastMessage?.content.toLowerCase().includes(s)
-        );
+        )
       })
-    : conversations;
+    : conversations
 
   return (
-    <div className={cn("flex h-full min-h-0 flex-col border-r border-border bg-muted/20", className)}>
-      {/* Header */}
-      <div
-        className={cn(
-          'border-b border-border px-4',
-          isMobileHeader
-            ? 'pb-4 pt-[calc(env(safe-area-inset-top)+1rem)]'
-            : 'py-4',
-        )}
-      >
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2
-            className={cn(
-              'tracking-tight text-foreground',
-              isMobileHeader ? 'text-2xl font-semibold' : 'text-lg font-semibold',
-            )}
-          >
-            {headerTitle}
-          </h2>
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn(
-              'shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-              isMobileHeader ? 'size-8' : 'size-8',
-            )}
-            onClick={onNewConversation}
-            title="New Conversation"
-          >
-            <Plus className={cn(isMobileHeader ? 'size-6' : 'size-5')} />
-          </Button>
-        </div>
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
-          <Input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search conversations..."
-            className="pl-9"
+    <div
+      className={cn(
+        "flex h-full min-h-0 flex-col border-r border-border bg-muted/20",
+        className
+      )}
+    >
+      {isMobileHeader ? (
+        <>
+          <MobilePageHeader
+            title={headerTitle}
+            action={
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8 shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                onClick={onNewConversation}
+                title="New Conversation"
+              >
+                <Plus className="size-5" />
+              </Button>
+            }
           />
+          <div className="border-b border-border bg-background px-4 py-3">
+            <div className="relative">
+              <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search conversations…"
+                className="h-10 rounded-2xl border-border/70 bg-muted/35 pl-9 shadow-none"
+              />
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="border-b border-border px-4 py-4">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold tracking-tight text-foreground">
+              {headerTitle}
+            </h2>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              onClick={onNewConversation}
+              title="New Conversation"
+            >
+              <Plus className="size-5" />
+            </Button>
+          </div>
+          <div className="relative">
+            <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+            <Input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search conversations..."
+              className="pl-9"
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Conversation List */}
       <div
         className={cn(
-          'min-h-0 flex-1 overflow-y-auto',
-          isMobileHeader && 'pb-[calc(var(--mobile-tab-bar-clearance,0px)+1rem)]',
+          "min-h-0 flex-1 overflow-y-auto",
+          isMobileHeader &&
+            "pb-[calc(var(--mobile-tab-bar-clearance,0px)+1rem)]"
         )}
       >
         {loading ? (
           <ConversationListSkeletonRows isMobileHeader={isMobileHeader} />
-        ) : filtered.map((conversation) => {
-          const isSelected = conversation.id === selectedId;
-          const runtimePreview = summarizeRuntimePreview(
-            runtimeMap[conversation.id]
-          );
-          const name =
-            conversation.title ||
-            conversation.participants.map((participant) => participant.name).join(', ');
+        ) : (
+          filtered.map((conversation) => {
+            const isSelected = conversation.id === selectedId
+            const runtimePreview = summarizeRuntimePreview(
+              runtimeMap[conversation.id]
+            )
+            const name =
+              conversation.title ||
+              conversation.participants
+                .map((participant) => participant.name)
+                .join(", ")
 
-          const preview = conversation.lastMessage
-            ? `${conversation.lastMessage.role === 'user' ? 'You' : conversation.lastMessage.actorName || 'Actor'}: ${conversation.lastMessage.content}`
-            : '';
-          const previewTrunc = preview.length > 50 ? preview.substring(0, 50) + '...' : preview;
+            const preview = conversation.lastMessage
+              ? `${conversation.lastMessage.role === "user" ? "You" : conversation.lastMessage.actorName || "Actor"}: ${conversation.lastMessage.content}`
+              : ""
+            const previewTrunc =
+              preview.length > 50 ? preview.substring(0, 50) + "..." : preview
 
-          const timeStr =
-            conversation.lastMessage?.createdAt || conversation.createdAt;
+            const timeStr =
+              conversation.lastMessage?.createdAt || conversation.createdAt
 
-          return (
-            <button
-              key={conversation.id}
-              onClick={() => onSelect(conversation.id)}
-              className={`
-                relative w-full px-4 py-3 text-left transition-colors
-                ${isSelected
-                  ? 'bg-accent'
-                  : 'hover:bg-accent/70'
-                }
-              `}
-            >
-              {isSelected && (
-                <div className="absolute left-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
-              )}
+            return (
+              <button
+                key={conversation.id}
+                onClick={() => onSelect(conversation.id)}
+                className={`relative w-full px-4 py-3 text-left transition-colors ${
+                  isSelected ? "bg-accent" : "hover:bg-accent/70"
+                } `}
+              >
+                {isSelected && (
+                  <div className="absolute top-1/2 left-0 h-8 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
+                )}
 
-              <div className="flex items-center gap-3">
-                {/* Avatar */}
-                <div className="relative shrink-0">
-                  <ChatAvatar
-                    name={name}
-                    avatarUrl={conversation.avatarUrl}
-                    entityType="conversation"
-                    size="lg"
-                  />
-                  <TransportKindIcon
-                    kind={conversation.transportKind}
-                    size={14}
-                    className="absolute -bottom-1 -right-1 size-5 p-0.5"
-                  />
-                  {conversation.unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold">
-                      {conversation.unreadCount > 99 ? '99+' : conversation.unreadCount}
-                    </span>
-                  )}
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={`text-sm font-semibold truncate ${
-                      isSelected ? 'text-primary' : 'text-foreground'
-                    }`}>{name}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {formatRelativeTime(timeStr)}
-                    </span>
+                <div className="flex items-center gap-3">
+                  {/* Avatar */}
+                  <div className="relative shrink-0">
+                    <ChatAvatar
+                      name={name}
+                      avatarUrl={conversation.avatarUrl}
+                      entityType="conversation"
+                      size="lg"
+                    />
+                    <TransportKindIcon
+                      kind={conversation.transportKind}
+                      size={14}
+                      className="absolute -right-1 -bottom-1 size-5 p-0.5"
+                    />
+                    {conversation.unreadCount > 0 && (
+                      <span className="absolute -top-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+                        {conversation.unreadCount > 99
+                          ? "99+"
+                          : conversation.unreadCount}
+                      </span>
+                    )}
                   </div>
-                  <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                    {runtimePreview || previewTrunc || 'No messages yet'}
-                  </p>
+
+                  {/* Content */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`truncate text-sm font-semibold ${
+                          isSelected ? "text-primary" : "text-foreground"
+                        }`}
+                      >
+                        {name}
+                      </span>
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {formatRelativeTime(timeStr)}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                      {runtimePreview || previewTrunc || "No messages yet"}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            </button>
-          );
-        })}
+              </button>
+            )
+          })
+        )}
 
         {!loading && filtered.length === 0 && (
           <div className="py-8 text-center">
             <p className="text-xs text-muted-foreground">
-              {search ? 'No conversations match your search' : 'No conversations yet'}
+              {search
+                ? "No conversations match your search"
+                : "No conversations yet"}
             </p>
           </div>
         )}
       </div>
     </div>
-  );
+  )
 }
