@@ -1,12 +1,6 @@
 import Feather from "@expo/vector-icons/Feather";
 import { useRouter } from "expo-router";
-import {
-  startTransition,
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   Pressable,
   RefreshControl,
@@ -26,32 +20,14 @@ import {
   SectionBlock,
   SectionTitleRow,
 } from "@/components/ui";
+import { actorSummary, titleCase } from "@/lib/contacts";
 import { api } from "@/lib/api";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
 import type { WorkspaceMemberView } from "@/types/api";
 import type { Actor } from "@shared";
-import { extractText } from "@shared";
 
 type DirectoryMode = "actors" | "people";
-
-function titleCase(input: string) {
-  return input
-    .split("_")
-    .join(" ")
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function actorSummary(actor: Actor) {
-  const docs = [...actor.definition.docs].sort(
-    (left, right) => right.priority - left.priority,
-  );
-  const summary = docs
-    .map((doc) => extractText(doc.content).replace(/\s+/g, " ").trim())
-    .find(Boolean);
-
-  return summary || actor.definition.title || titleCase(actor.definition.role);
-}
 
 export default function ContactsTab() {
   const router = useRouter();
@@ -62,7 +38,6 @@ export default function ContactsTab() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
-  const [launchingActorId, setLaunchingActorId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const deferredSearch = useDeferredValue(search);
@@ -131,24 +106,6 @@ export default function ContactsTab() {
     );
   }, [members, normalizedQuery]);
 
-  async function startActorChat(actor: Actor) {
-    if (!workspaceId || launchingActorId) return;
-
-    setLaunchingActorId(actor.id);
-
-    try {
-      const response = await api.createConversation(workspaceId, [actor.id]);
-      const conversationId = response.conversationId || response.id;
-      if (conversationId) {
-        startTransition(() => {
-          router.push(`/chat/${conversationId}`);
-        });
-      }
-    } finally {
-      setLaunchingActorId(null);
-    }
-  }
-
   return (
     <ScreenScroll
       topPadding={0}
@@ -159,7 +116,20 @@ export default function ContactsTab() {
         />
       }
     >
-      <MobilePageHeader title="联系人" />
+      <MobilePageHeader
+        title="联系人"
+        action={
+          <Pressable
+            onPress={() => router.push("/contacts/group/new")}
+            style={({ pressed }) => [
+              styles.headerAction,
+              pressed && styles.headerActionPressed,
+            ]}
+          >
+            <Feather name="plus" size={18} color={theme.colors.text} />
+          </Pressable>
+        }
+      />
 
       <SectionBlock>
         <View style={styles.segment}>
@@ -226,7 +196,15 @@ export default function ContactsTab() {
               {visibleActors.map((actor) => (
                 <Pressable
                   key={actor.id}
-                  onPress={() => void startActorChat(actor)}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/contacts/[contactType]/[contactId]",
+                      params: {
+                        contactType: "actor",
+                        contactId: actor.id,
+                      },
+                    })
+                  }
                   style={({ pressed }) => [
                     styles.rowCard,
                     pressed && styles.rowCardPressed,
@@ -248,11 +226,11 @@ export default function ContactsTab() {
                       {actorSummary(actor)}
                     </Text>
                   </View>
-                  <View style={styles.rowAction}>
-                    <Text style={styles.rowActionText}>
-                      {launchingActorId === actor.id ? "创建中..." : "开聊"}
-                    </Text>
-                  </View>
+                  <Feather
+                    name="chevron-right"
+                    size={18}
+                    color={theme.colors.textSoft}
+                  />
                 </Pressable>
               ))}
             </View>
@@ -275,7 +253,22 @@ export default function ContactsTab() {
           {visibleMembers.length > 0 ? (
             <View style={styles.listShell}>
               {visibleMembers.map((member) => (
-                <View key={member.id} style={styles.rowCard}>
+                <Pressable
+                  key={member.id}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/contacts/[contactType]/[contactId]",
+                      params: {
+                        contactType: "member",
+                        contactId: member.userId,
+                      },
+                    })
+                  }
+                  style={({ pressed }) => [
+                    styles.rowCard,
+                    pressed && styles.rowCardPressed,
+                  ]}
+                >
                   <Avatar
                     name={member.userName || member.userEmail}
                     uri={member.avatarUrl}
@@ -293,7 +286,12 @@ export default function ContactsTab() {
                       权限级别：{member.trustLevel}
                     </Text>
                   </View>
-                </View>
+                  <Feather
+                    name="chevron-right"
+                    size={18}
+                    color={theme.colors.textSoft}
+                  />
+                </Pressable>
               ))}
             </View>
           ) : (
@@ -331,6 +329,19 @@ function SegmentButton({
 }
 
 const styles = StyleSheet.create({
+  headerAction: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerActionPressed: {
+    opacity: 0.86,
+  },
   segment: {
     flexDirection: "row",
     gap: 6,
@@ -413,14 +424,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     color: theme.colors.textSoft,
-  },
-  rowAction: {
-    minWidth: 48,
-    alignItems: "flex-end",
-  },
-  rowActionText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: theme.colors.primary,
   },
 });

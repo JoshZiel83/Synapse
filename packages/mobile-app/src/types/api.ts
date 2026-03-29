@@ -8,8 +8,9 @@ import type {
   ConversationFeedPage,
   FileRecordView,
   User,
+  WorkspaceFeedEventRecord,
   WorkspaceChiefActorPreference,
-} from '@shared';
+} from "@shared";
 
 export interface AuthMeResponse {
   user: User;
@@ -48,7 +49,7 @@ export interface ActorListResponse {
 export interface ConversationParticipantView {
   memberId?: string;
   participantId?: string;
-  type?: 'actor' | 'user' | 'external';
+  type?: "actor" | "user" | "external";
   id?: string;
   actorId?: string;
   userId?: string;
@@ -62,14 +63,14 @@ export interface ConversationParticipantView {
 
 export interface ConversationMessagePreview {
   content: string;
-  role: 'user' | 'assistant' | 'system';
+  role: "user" | "assistant" | "system";
   actorName?: string;
   createdAt: string;
 }
 
 export interface ConversationSummaryView {
   id: string;
-  status: 'active' | 'completed';
+  status: "active" | "completed";
   transportKind?: string;
   participants: ConversationParticipantView[];
   members: ConversationParticipantView[];
@@ -90,6 +91,10 @@ export interface ConversationCollectionResponse {
   runtimeMap?: Record<string, unknown>;
 }
 
+export interface ConversationMemberListResponse {
+  members: ConversationParticipantView[];
+}
+
 export interface ConversationCreateResponse {
   id?: string;
   conversationId?: string;
@@ -103,6 +108,14 @@ export interface UploadAssetInput {
   uri: string;
   name: string;
   mimeType: string;
+}
+
+export interface WorkspaceFeedPageResponse {
+  records: WorkspaceFeedEventRecord[];
+  hasMore: boolean;
+  nextAfter?: number;
+  after?: number;
+  limit?: number;
 }
 
 export type {

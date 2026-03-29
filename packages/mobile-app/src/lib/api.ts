@@ -1,11 +1,13 @@
-import Constants from 'expo-constants';
-import type {
-  CanonicalContentBlock,
-  AuthSessionPersistence,
-} from '@shared';
-import { Platform } from 'react-native';
+import Constants from "expo-constants";
+import type { CanonicalContentBlock, AuthSessionPersistence } from "@shared";
+import { Platform } from "react-native";
 
-import { API_BASE, getDeviceLabel, getPlatformClientType, resolveApiUrl } from '@/lib/config';
+import {
+  API_BASE,
+  getDeviceLabel,
+  getPlatformClientType,
+  resolveApiUrl,
+} from "@/lib/config";
 import type {
   ActorListResponse,
   AuthMeResponse,
@@ -14,13 +16,15 @@ import type {
   AuthResponse,
   ConversationCollectionResponse,
   ConversationCreateResponse,
+  ConversationMemberListResponse,
   ConversationSendResponse,
   UploadAssetInput,
+  WorkspaceFeedPageResponse,
   WorkspaceChiefActorPreference,
   WorkspaceListResponse,
   WorkspaceMemberListResponse,
-} from '@/types/api';
-import type { ConversationFeedPage, FileRecordView } from '@shared';
+} from "@/types/api";
+import type { ConversationFeedPage, FileRecordView } from "@shared";
 
 let authToken: string | null = null;
 
@@ -29,9 +33,14 @@ export class ApiError extends Error {
   code?: string;
   details?: unknown;
 
-  constructor(message: string, status: number, code?: string, details?: unknown) {
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    details?: unknown,
+  ) {
     super(message);
-    this.name = 'ApiError';
+    this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.details = details;
@@ -47,9 +56,9 @@ function getAuthHeaders() {
 }
 
 function parseErrorMessage(data: unknown, fallback: string) {
-  if (data && typeof data === 'object' && 'error' in data) {
+  if (data && typeof data === "object" && "error" in data) {
     const value = (data as { error?: unknown }).error;
-    if (typeof value === 'string' && value.trim()) {
+    if (typeof value === "string" && value.trim()) {
       return value;
     }
   }
@@ -66,7 +75,7 @@ function normalizeWorkspaceListResponse(data: unknown): WorkspaceListResponse {
     return { data };
   }
 
-  if (data && typeof data === 'object') {
+  if (data && typeof data === "object") {
     return {
       data: asArray((data as { data?: unknown }).data),
     };
@@ -75,12 +84,14 @@ function normalizeWorkspaceListResponse(data: unknown): WorkspaceListResponse {
   return { data: [] };
 }
 
-function normalizeWorkspaceMemberListResponse(data: unknown): WorkspaceMemberListResponse {
+function normalizeWorkspaceMemberListResponse(
+  data: unknown,
+): WorkspaceMemberListResponse {
   if (Array.isArray(data)) {
     return { data };
   }
 
-  if (data && typeof data === 'object') {
+  if (data && typeof data === "object") {
     return {
       data: asArray((data as { data?: unknown }).data),
     };
@@ -94,7 +105,7 @@ function normalizeActorListResponse(data: unknown): ActorListResponse {
     return { actors: data };
   }
 
-  if (data && typeof data === 'object') {
+  if (data && typeof data === "object") {
     const objectData = data as { actors?: unknown; data?: unknown };
     return {
       actors: asArray(objectData.actors ?? objectData.data),
@@ -104,17 +115,23 @@ function normalizeActorListResponse(data: unknown): ActorListResponse {
   return { actors: [] };
 }
 
-function normalizeConversationCollectionResponse(data: unknown): ConversationCollectionResponse {
+function normalizeConversationCollectionResponse(
+  data: unknown,
+): ConversationCollectionResponse {
   if (Array.isArray(data)) {
     return { conversations: data };
   }
 
-  if (data && typeof data === 'object') {
-    const objectData = data as { conversations?: unknown; data?: unknown; runtimeMap?: unknown };
+  if (data && typeof data === "object") {
+    const objectData = data as {
+      conversations?: unknown;
+      data?: unknown;
+      runtimeMap?: unknown;
+    };
     return {
       conversations: asArray(objectData.conversations ?? objectData.data),
       runtimeMap:
-        objectData.runtimeMap && typeof objectData.runtimeMap === 'object'
+        objectData.runtimeMap && typeof objectData.runtimeMap === "object"
           ? (objectData.runtimeMap as Record<string, unknown>)
           : undefined,
     };
@@ -126,15 +143,18 @@ function normalizeConversationCollectionResponse(data: unknown): ConversationCol
 class ApiClient {
   private async request<T>(path: string, options: RequestInit = {}) {
     const headers = new Headers(options.headers as HeadersInit | undefined);
-    const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+    const isFormData =
+      typeof FormData !== "undefined" && options.body instanceof FormData;
 
-    if (!isFormData && !headers.has('Content-Type')) {
-      headers.set('Content-Type', 'application/json');
+    if (!isFormData && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
     }
 
     const authHeaders = getAuthHeaders();
     if (authHeaders) {
-      Object.entries(authHeaders).forEach(([key, value]) => headers.set(key, value));
+      Object.entries(authHeaders).forEach(([key, value]) =>
+        headers.set(key, value),
+      );
     }
 
     const response = await fetch(`${API_BASE}${path}`, {
@@ -150,9 +170,11 @@ class ApiClient {
 
     if (!response.ok) {
       throw new ApiError(
-        parseErrorMessage(data, 'Request failed'),
+        parseErrorMessage(data, "Request failed"),
         response.status,
-        data && typeof data === 'object' && typeof (data as { code?: unknown }).code === 'string'
+        data &&
+          typeof data === "object" &&
+          typeof (data as { code?: unknown }).code === "string"
           ? (data as { code: string }).code
           : undefined,
         data,
@@ -163,48 +185,56 @@ class ApiClient {
   }
 
   login(email: string, password: string): Promise<AuthResponse> {
-    return this.request<AuthResponse>('/auth/login', {
-      method: 'POST',
+    return this.request<AuthResponse>("/auth/login", {
+      method: "POST",
       body: JSON.stringify({
         email,
         password,
         clientType: getPlatformClientType(),
-        transport: 'token',
-        sessionPersistence: 'persistent',
+        transport: "token",
+        sessionPersistence: "persistent",
         deviceName: getDeviceLabel(),
-        platform: `${Platform.OS} / Expo ${Constants.expoVersion ?? 'runtime'}`,
+        platform: `${Platform.OS} / Expo ${Constants.expoVersion ?? "runtime"}`,
       }),
     });
   }
 
   logout() {
-    return this.request<void>('/auth/logout', {
-      method: 'POST',
-      body: '{}',
+    return this.request<void>("/auth/logout", {
+      method: "POST",
+      body: "{}",
     });
   }
 
   getMe(): Promise<AuthMeResponse> {
-    return this.request<AuthMeResponse>('/auth/me');
+    return this.request<AuthMeResponse>("/auth/me");
   }
 
   updateMe(data: { name?: string; avatarFileId?: string | null }) {
-    return this.request<AuthMeResponse>('/auth/me', {
-      method: 'PUT',
+    return this.request<AuthMeResponse>("/auth/me", {
+      method: "PUT",
       body: JSON.stringify(data),
     });
   }
 
   getWorkspaces(): Promise<WorkspaceListResponse> {
-    return this.request<unknown>('/workspaces').then(normalizeWorkspaceListResponse);
+    return this.request<unknown>("/workspaces").then(
+      normalizeWorkspaceListResponse,
+    );
   }
 
-  getWorkspaceMembers(workspaceId: string): Promise<WorkspaceMemberListResponse> {
-    return this.request<unknown>(`/workspaces/${workspaceId}/members`).then(normalizeWorkspaceMemberListResponse);
+  getWorkspaceMembers(
+    workspaceId: string,
+  ): Promise<WorkspaceMemberListResponse> {
+    return this.request<unknown>(`/workspaces/${workspaceId}/members`).then(
+      normalizeWorkspaceMemberListResponse,
+    );
   }
 
   getActors(workspaceId: string): Promise<ActorListResponse> {
-    return this.request<unknown>(`/workspaces/${workspaceId}/actors`).then(normalizeActorListResponse);
+    return this.request<unknown>(`/workspaces/${workspaceId}/actors`).then(
+      normalizeActorListResponse,
+    );
   }
 
   getWorkspaceChiefActorPreference(
@@ -215,9 +245,24 @@ class ApiClient {
     );
   }
 
-  getConversations(workspaceId: string): Promise<ConversationCollectionResponse> {
-    return this.request<unknown>(`/workspaces/${workspaceId}/conversations`).then(
-      normalizeConversationCollectionResponse,
+  getConversations(
+    workspaceId: string,
+  ): Promise<ConversationCollectionResponse> {
+    return this.request<unknown>(
+      `/workspaces/${workspaceId}/conversations`,
+    ).then(normalizeConversationCollectionResponse);
+  }
+
+  getWorkspaceFeed(
+    workspaceId: string,
+    after = 0,
+    limit = 200,
+  ): Promise<WorkspaceFeedPageResponse> {
+    const params = new URLSearchParams();
+    params.set("after", String(Math.max(0, after)));
+    params.set("limit", String(limit));
+    return this.request<WorkspaceFeedPageResponse>(
+      `/workspaces/${workspaceId}/conversations/feed?${params.toString()}`,
     );
   }
 
@@ -228,29 +273,32 @@ class ApiClient {
     targetActorIds?: string[],
     contentBlocks?: CanonicalContentBlock[],
   ): Promise<ConversationCreateResponse> {
-    return this.request<ConversationCreateResponse>(`/workspaces/${workspaceId}/conversations`, {
-      method: 'POST',
-      body: JSON.stringify(
-        actorIds.length === 1
-          ? {
-              actorId: actorIds[0],
-              ...(content ? { content } : {}),
-              ...(contentBlocks?.length ? { contentBlocks } : {}),
-              ...(targetActorIds?.length ? { targetActorIds } : {}),
-            }
-          : {
-              actorIds,
-              ...(content ? { content } : {}),
-              ...(contentBlocks?.length ? { contentBlocks } : {}),
-              ...(targetActorIds?.length
-                ? {
-                    targetActorIds,
-                    targetActorId: targetActorIds[0],
-                  }
-                : {}),
-            },
-      ),
-    });
+    return this.request<ConversationCreateResponse>(
+      `/workspaces/${workspaceId}/conversations`,
+      {
+        method: "POST",
+        body: JSON.stringify(
+          actorIds.length === 1
+            ? {
+                actorId: actorIds[0],
+                ...(content ? { content } : {}),
+                ...(contentBlocks?.length ? { contentBlocks } : {}),
+                ...(targetActorIds?.length ? { targetActorIds } : {}),
+              }
+            : {
+                actorIds,
+                ...(content ? { content } : {}),
+                ...(contentBlocks?.length ? { contentBlocks } : {}),
+                ...(targetActorIds?.length
+                  ? {
+                      targetActorIds,
+                      targetActorId: targetActorIds[0],
+                    }
+                  : {}),
+              },
+        ),
+      },
+    );
   }
 
   getConversationMessages(
@@ -260,11 +308,20 @@ class ApiClient {
     before?: string,
   ): Promise<ConversationFeedPage> {
     const params = new URLSearchParams();
-    if (limit > 0) params.set('limit', String(limit));
-    if (before) params.set('before', before);
+    if (limit > 0) params.set("limit", String(limit));
+    if (before) params.set("before", before);
     const query = params.toString();
     return this.request<ConversationFeedPage>(
-      `/workspaces/${workspaceId}/conversations/${conversationId}/messages${query ? `?${query}` : ''}`,
+      `/workspaces/${workspaceId}/conversations/${conversationId}/messages${query ? `?${query}` : ""}`,
+    );
+  }
+
+  getConversationMembers(
+    workspaceId: string,
+    conversationId: string,
+  ): Promise<ConversationMemberListResponse> {
+    return this.request<ConversationMemberListResponse>(
+      `/workspaces/${workspaceId}/conversations/${conversationId}/members`,
     );
   }
 
@@ -277,7 +334,7 @@ class ApiClient {
     return this.request<ConversationSendResponse>(
       `/workspaces/${workspaceId}/conversations/${conversationId}/messages`,
       {
-        method: 'POST',
+        method: "POST",
         body: JSON.stringify({
           contentBlocks,
           clientMessageId,
@@ -286,16 +343,39 @@ class ApiClient {
     );
   }
 
-  markConversationRead(workspaceId: string, conversationId: string) {
-    return this.request<void>(`/workspaces/${workspaceId}/conversations/${conversationId}/read`, {
-      method: 'POST',
-      body: '{}',
-    });
+  addConversationMembers(
+    workspaceId: string,
+    conversationId: string,
+    input: { actorIds?: string[]; userIds?: string[] },
+  ): Promise<ConversationMemberListResponse> {
+    return this.request<ConversationMemberListResponse>(
+      `/workspaces/${workspaceId}/conversations/${conversationId}/members`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          actorIds: input.actorIds ?? [],
+          userIds: input.userIds ?? [],
+        }),
+      },
+    );
   }
 
-  async uploadAsset(workspaceId: string, asset: UploadAssetInput): Promise<FileRecordView> {
+  markConversationRead(workspaceId: string, conversationId: string) {
+    return this.request<void>(
+      `/workspaces/${workspaceId}/conversations/${conversationId}/read`,
+      {
+        method: "POST",
+        body: "{}",
+      },
+    );
+  }
+
+  async uploadAsset(
+    workspaceId: string,
+    asset: UploadAssetInput,
+  ): Promise<FileRecordView> {
     const formData = new FormData();
-    formData.append('file', {
+    formData.append("file", {
       uri: asset.uri,
       name: asset.name,
       type: asset.mimeType,
@@ -304,27 +384,37 @@ class ApiClient {
     const headers = new Headers();
     const authHeaders = getAuthHeaders();
     if (authHeaders) {
-      Object.entries(authHeaders).forEach(([key, value]) => headers.set(key, value));
+      Object.entries(authHeaders).forEach(([key, value]) =>
+        headers.set(key, value),
+      );
     }
 
-    const response = await fetch(`${API_BASE}/workspaces/${workspaceId}/files`, {
-      method: 'POST',
-      body: formData,
-      headers,
-    });
+    const response = await fetch(
+      `${API_BASE}/workspaces/${workspaceId}/files`,
+      {
+        method: "POST",
+        body: formData,
+        headers,
+      },
+    );
 
     const data = await response.json().catch(() => null);
 
     if (!response.ok) {
-      throw new ApiError(parseErrorMessage(data, 'Upload failed'), response.status, undefined, data);
+      throw new ApiError(
+        parseErrorMessage(data, "Upload failed"),
+        response.status,
+        undefined,
+        data,
+      );
     }
 
     return data as FileRecordView;
   }
 
   resolveQrLogin(token: string): Promise<AuthQrLoginResolveResponse> {
-    return this.request<AuthQrLoginResolveResponse>('/auth/qr-login/resolve', {
-      method: 'POST',
+    return this.request<AuthQrLoginResolveResponse>("/auth/qr-login/resolve", {
+      method: "POST",
       body: JSON.stringify({ token }),
     });
   }
@@ -333,15 +423,15 @@ class ApiClient {
     token: string,
     sessionPersistence: AuthSessionPersistence,
   ): Promise<AuthQrLoginStatusResponse> {
-    return this.request<AuthQrLoginStatusResponse>('/auth/qr-login/approve', {
-      method: 'POST',
+    return this.request<AuthQrLoginStatusResponse>("/auth/qr-login/approve", {
+      method: "POST",
       body: JSON.stringify({ token, sessionPersistence }),
     });
   }
 
   rejectQrLogin(token: string): Promise<AuthQrLoginStatusResponse> {
-    return this.request<AuthQrLoginStatusResponse>('/auth/qr-login/reject', {
-      method: 'POST',
+    return this.request<AuthQrLoginStatusResponse>("/auth/qr-login/reject", {
+      method: "POST",
       body: JSON.stringify({ token }),
     });
   }
@@ -351,6 +441,10 @@ export const api = new ApiClient();
 
 export function setApiAuthToken(token: string | null) {
   authToken = token;
+}
+
+export function getApiAuthToken() {
+  return authToken;
 }
 
 export function buildAuthenticatedSource(pathOrUrl: string) {

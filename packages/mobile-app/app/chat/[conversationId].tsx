@@ -1,6 +1,6 @@
-import Feather from '@expo/vector-icons/Feather';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import Feather from "@expo/vector-icons/Feather";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -10,22 +10,32 @@ import {
   StyleSheet,
   Text,
   View,
-} from 'react-native';
+} from "react-native";
 
-import { ChatComposer } from '@/components/chat-composer';
-import { MessageItem } from '@/components/message-item';
-import { Avatar, EmptyState, LoadingBlock, ScreenView } from '@/components/ui';
-import { api } from '@/lib/api';
-import { createId } from '@/lib/ids';
-import { useWorkspace } from '@/providers/workspace-provider';
-import { theme } from '@/theme/tokens';
-import type { ConversationFeedItem } from '@shared';
+import { ChatComposer } from "@/components/chat-composer";
+import { MessageItem } from "@/components/message-item";
+import { Avatar, EmptyState, LoadingBlock, ScreenView } from "@/components/ui";
+import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket";
+import { api } from "@/lib/api";
+import { sortConversationItems } from "@/lib/conversations";
+import { createId } from "@/lib/ids";
+import { useWorkspace } from "@/providers/workspace-provider";
+import { theme } from "@/theme/tokens";
+import type {
+  ConversationMemberListResponse,
+  ConversationParticipantView,
+  ConversationSummaryView,
+} from "@/types/api";
+import type { ConversationFeedItem } from "@shared";
 
-function sortItems(items: ConversationFeedItem[]) {
-  return [...items].sort((left, right) => {
-    if (left.sequence !== right.sequence) return left.sequence - right.sequence;
-    return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
-  });
+function mergeConversationItem(
+  items: ConversationFeedItem[],
+  incoming: ConversationFeedItem,
+) {
+  if (items.some((item) => item.itemId === incoming.itemId)) {
+    return items;
+  }
+  return sortConversationItems([...items, incoming]);
 }
 
 export default function ChatDetailScreen() {
@@ -36,47 +46,73 @@ export default function ChatDetailScreen() {
   const [messages, setMessages] = useState<ConversationFeedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [title, setTitle] = useState('聊天');
-  const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
+  const [conversation, setConversation] =
+    useState<ConversationSummaryView | null>(null);
+  const [members, setMembers] = useState<ConversationParticipantView[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const canRender = workspaceId && conversationId;
 
-  async function loadConversation(isRefreshing = false) {
-    if (!workspaceId || !conversationId) {
-      setLoading(false);
-      return;
-    }
+  const applyConversationMeta = useCallback(
+    (
+      nextConversation: ConversationSummaryView | null,
+      nextMembers?: ConversationMemberListResponse["members"],
+    ) => {
+      setConversation(nextConversation);
+      if (nextMembers) {
+        setMembers(nextMembers);
+      }
+    },
+    [],
+  );
 
-    if (isRefreshing) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
+  const loadConversation = useCallback(
+    async (isRefreshing = false) => {
+      if (!workspaceId || !conversationId) {
+        setLoading(false);
+        return;
+      }
 
-    try {
-      const [messagesResponse, conversationsResponse] = await Promise.all([
-        api.getConversationMessages(workspaceId, conversationId, 100),
-        api.getConversations(workspaceId),
-      ]);
+      if (isRefreshing) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
 
-      const conversation = conversationsResponse.conversations.find((item) => item.id === conversationId);
-      setTitle(conversation?.title || '聊天');
-      setAvatarUrl(conversation?.avatarUrl || conversation?.participants[0]?.avatarUrl);
-      setMessages(sortItems(messagesResponse.items));
-      setError(null);
-      await api.markConversationRead(workspaceId, conversationId).catch(() => undefined);
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : '聊天记录加载失败。');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }
+      try {
+        const [messagesResponse, conversationsResponse, membersResponse] =
+          await Promise.all([
+            api.getConversationMessages(workspaceId, conversationId, 100),
+            api.getConversations(workspaceId),
+            api.getConversationMembers(workspaceId, conversationId),
+          ]);
+
+        const nextConversation =
+          conversationsResponse.conversations.find(
+            (item) => item.id === conversationId,
+          ) ?? null;
+
+        applyConversationMeta(nextConversation, membersResponse.members);
+        setMessages(sortConversationItems(messagesResponse.items));
+        setError(null);
+        await api
+          .markConversationRead(workspaceId, conversationId)
+          .catch(() => undefined);
+      } catch (nextError) {
+        setError(
+          nextError instanceof Error ? nextError.message : "聊天记录加载失败。",
+        );
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [applyConversationMeta, conversationId, workspaceId],
+  );
 
   useEffect(() => {
     void loadConversation();
-  }, [conversationId, workspaceId]);
+  }, [loadConversation]);
 
   useEffect(() => {
     if (!loading) {
@@ -86,12 +122,97 @@ export default function ChatDetailScreen() {
     }
   }, [loading, messages.length]);
 
+  const handleSocketEvent = useCallback(
+    (event: Record<string, unknown>) => {
+      if (!conversationId || !workspaceId || typeof event.type !== "string") {
+        return;
+      }
+
+      switch (event.type) {
+        case "feed.item.created": {
+          const payload = event.payload as {
+            item: ConversationFeedItem;
+          };
+          if (payload.item.conversationId !== conversationId) {
+            return;
+          }
+
+          setMessages((current) =>
+            mergeConversationItem(current, payload.item),
+          );
+          void api
+            .markConversationRead(workspaceId, conversationId)
+            .catch(() => undefined);
+          return;
+        }
+        case "conversation.updated": {
+          const payload = event.payload as {
+            conversationId: string;
+            title?: string | null;
+            avatarUrl?: string | null;
+          };
+          if (payload.conversationId !== conversationId) {
+            return;
+          }
+
+          setConversation((current) =>
+            current
+              ? {
+                  ...current,
+                  title:
+                    typeof payload.title === "string" && payload.title.trim()
+                      ? payload.title
+                      : current.title,
+                  avatarUrl:
+                    payload.avatarUrl === undefined
+                      ? current.avatarUrl
+                      : payload.avatarUrl || undefined,
+                }
+              : current,
+          );
+          return;
+        }
+        case "runtime.updated":
+        case "interaction.updated": {
+          const payload = event.payload as { conversationId: string };
+          if (payload.conversationId === conversationId) {
+            void loadConversation(true);
+          }
+          return;
+        }
+        default:
+          return;
+      }
+    },
+    [conversationId, loadConversation, workspaceId],
+  );
+
+  useWorkspaceWebSocket({
+    workspaceId: workspaceId ?? null,
+    enabled: Boolean(canRender),
+    onConnected: () => {
+      void loadConversation(true);
+    },
+    onEvent: handleSocketEvent,
+    onGap: () => {
+      void loadConversation(true);
+    },
+  });
+
   async function handleSendMessage(contentBlocks: any[]) {
     if (!workspaceId || !conversationId) return;
 
-    const clientMessageId = createId('message');
-    await api.sendConversationMessage(workspaceId, conversationId, contentBlocks, clientMessageId);
-    await loadConversation(true);
+    const clientMessageId = createId("message");
+    const response = await api.sendConversationMessage(
+      workspaceId,
+      conversationId,
+      contentBlocks,
+      clientMessageId,
+    );
+    setMessages((current) => mergeConversationItem(current, response.item));
+    await api
+      .markConversationRead(workspaceId, conversationId)
+      .catch(() => undefined);
   }
 
   const messageNodes = useMemo(
@@ -115,24 +236,43 @@ export default function ChatDetailScreen() {
     <ScreenView>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
       >
         <View style={styles.header}>
           <Pressable onPress={() => router.back()} style={styles.headerButton}>
             <Feather name="chevron-left" size={20} color={theme.colors.text} />
           </Pressable>
           <View style={styles.headerCenter}>
-            <Avatar name={title} uri={avatarUrl} size={36} icon="message-circle" />
+            <Avatar
+              name={conversation?.title || "聊天"}
+              uri={conversation?.avatarUrl}
+              size={36}
+              icon="message-circle"
+            />
             <View style={styles.headerText}>
               <Text numberOfLines={1} style={styles.headerTitle}>
-                {title}
+                {conversation?.title || "聊天"}
               </Text>
-              <Text style={styles.headerSubtitle}>支持文字、图片、语音、拍照、录像</Text>
+              <Text style={styles.headerSubtitle}>
+                {members.length > 0 ? `${members.length} 位成员` : "实时同步中"}
+              </Text>
             </View>
           </View>
-          <Pressable onPress={() => void loadConversation(true)} style={styles.headerButton}>
-            <Feather name="refresh-cw" size={17} color={theme.colors.text} />
+          <Pressable
+            onPress={() =>
+              router.push({
+                pathname: "/conversations/[conversationId]/details",
+                params: { conversationId },
+              })
+            }
+            style={styles.headerButton}
+          >
+            <Feather
+              name="more-horizontal"
+              size={18}
+              color={theme.colors.text}
+            />
           </Pressable>
         </View>
 
@@ -157,7 +297,10 @@ export default function ChatDetailScreen() {
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={() => void loadConversation(true)} />
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={() => void loadConversation(true)}
+                />
               }
             >
               {messageNodes.length > 0 ? (
@@ -170,7 +313,10 @@ export default function ChatDetailScreen() {
                 />
               )}
             </ScrollView>
-            <ChatComposer workspaceId={workspaceId} onSend={handleSendMessage} />
+            <ChatComposer
+              workspaceId={workspaceId}
+              onSend={handleSendMessage}
+            />
           </>
         )}
       </KeyboardAvoidingView>
@@ -183,30 +329,30 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 12,
     paddingHorizontal: 14,
     paddingTop: 8,
     paddingBottom: 10,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
-    backgroundColor: 'rgba(244, 239, 231, 0.96)',
+    backgroundColor: theme.colors.surface,
   },
   headerButton: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.surfaceMuted,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   headerCenter: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 12,
   },
   headerText: {
@@ -215,7 +361,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: "800",
     color: theme.colors.text,
   },
   headerSubtitle: {
@@ -225,10 +371,11 @@ const styles = StyleSheet.create({
   placeholder: {
     flex: 1,
     paddingHorizontal: 18,
-    justifyContent: 'center',
+    justifyContent: "center",
   },
   messages: {
     flex: 1,
+    backgroundColor: theme.colors.backgroundAlt,
   },
   messagesContent: {
     paddingHorizontal: 14,
