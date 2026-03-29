@@ -1049,12 +1049,37 @@ export async function actorThink(
         mcpToolNames.has(tc.toolName),
       );
       const allContinuableCalls = [...callableCalls, ...mcpCalls];
-
-      if (callableCalls.some((tc: any) => tc.toolName === "send_to")) {
-        sendToCalledThisTurn = true;
-      }
+      const sendToPlanned = callableCalls.some(
+        (tc: any) => tc.toolName === "send_to",
+      );
 
       if (allContinuableCalls.length > 0) {
+        if (sendToPlanned && options?.checkNewMessages) {
+          try {
+            const newMsgs = await options.checkNewMessages();
+            if (newMsgs && newMsgs.length > 0) {
+              appendSharedTailItems(newMsgs);
+              if (onStatus) {
+                await onStatus("Conversation updated. Re-analyzing...");
+              }
+              console.log(
+                `[actorThink] Conversation changed before send_to; rethinking with ${newMsgs.length} new message(s)`,
+              );
+              builtinTools = await refreshBuiltinTools();
+              continue;
+            }
+          } catch (err: any) {
+            console.error(
+              "[actorThink] send_to preflight checkNewMessages failed:",
+              err.message,
+            );
+          }
+        }
+
+        if (sendToPlanned) {
+          sendToCalledThisTurn = true;
+        }
+
         // Track tool names and emit status
         const toolNames = allContinuableCalls.map((tc: any) => tc.toolName);
         allToolsUsed.push(...toolNames);
