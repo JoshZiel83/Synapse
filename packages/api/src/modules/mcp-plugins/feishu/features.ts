@@ -9,7 +9,7 @@ type FeishuFeatureDefinition = {
   titleI18n: Record<string, string>;
   descriptionI18n: Record<string, string>;
   scopes: readonly string[];
-  requiresAppApproval?: boolean;
+  mayRequireAppReview?: boolean;
 };
 
 export const FEISHU_FEATURES = [
@@ -43,26 +43,26 @@ export const FEISHU_FEATURES = [
     key: "im_search",
     titleI18n: i18n("Message Search", "消息搜索"),
     descriptionI18n: i18n(
-      "Search messages across chats. This requires Feishu app approval before authorization succeeds.",
-      "跨群聊搜索消息。这个能力需要飞书应用先完成审核，之后才能授权成功。",
+      "Search messages across chats. Some Feishu tenants may require additional app review before authorization succeeds.",
+      "跨群聊搜索消息。部分飞书租户在授权前可能要求额外的应用审核。",
     ),
     scopes: [
       "search:message",
       "contact:user.basic_profile:readonly",
     ],
-    requiresAppApproval: true,
+    mayRequireAppReview: true,
   },
   {
     key: "im_send",
     titleI18n: i18n("Send Messages", "发送消息"),
     descriptionI18n: i18n(
-      "Send text messages as the connected user. This requires Feishu app approval before authorization succeeds.",
-      "以当前连接用户身份发送文本消息。这个能力需要飞书应用先完成审核，之后才能授权成功。",
+      "Send text messages as the connected user. Some Feishu tenants may require additional app review before authorization succeeds.",
+      "以当前连接用户身份发送文本消息。部分飞书租户在授权前可能要求额外的应用审核。",
     ),
     scopes: [
       "im:message.send_as_user",
     ],
-    requiresAppApproval: true,
+    mayRequireAppReview: true,
   },
   {
     key: "calendar",
@@ -75,6 +75,34 @@ export const FEISHU_FEATURES = [
       "calendar:calendar.event:read",
       "calendar:calendar.event:create",
       "calendar:calendar.event:update",
+    ],
+  },
+  {
+    key: "docs",
+    titleI18n: i18n("Docs", "文档"),
+    descriptionI18n: i18n(
+      "Search docs and sheets, read plain-text document content, and create or update docx documents from Markdown.",
+      "搜索文档和表格，读取文档纯文本内容，并基于 Markdown 创建或更新 docx 文档。",
+    ),
+    scopes: [
+      "search:docs:read",
+      "docx:document:create",
+      "docx:document:readonly",
+      "docx:document:write_only",
+    ],
+  },
+  {
+    key: "docs_media",
+    titleI18n: i18n("Docs Media", "文档素材"),
+    descriptionI18n: i18n(
+      "Insert Synapse files into docx documents as images or attachments, and download document media or whiteboard snapshots back into Synapse.",
+      "把 Synapse 文件作为图片或附件插入 docx 文档，并把文档素材或画板快照下载回 Synapse。",
+    ),
+    scopes: [
+      "docs:document.media:upload",
+      "docs:document.media:download",
+      "docx:document:readonly",
+      "docx:document:write_only",
     ],
   },
   {
@@ -182,30 +210,48 @@ export function resolveFeishuFeatureScopes(features: FeishuFeatureKey[]) {
   return Array.from(scopes);
 }
 
-export function getFeishuFeaturesRequiringApproval(features: FeishuFeatureKey[]) {
-  return FEISHU_FEATURES.filter(
-    (feature) =>
-      features.includes(feature.key) &&
-      ("requiresAppApproval" in feature && feature.requiresAppApproval === true),
-  );
-}
-
 export function assertFeishuFeatureSelection(features: FeishuFeatureKey[]) {
   if (features.length === 0) {
     throw new Error("Select at least one Feishu feature before connecting the account.");
   }
 }
 
-export function assertFeishuInitialSetupFeatures(features: FeishuFeatureKey[]) {
-  const blocked = getFeishuFeaturesRequiringApproval(features);
-  if (blocked.length === 0) {
-    return;
+export function getFeishuFeatureTitle(
+  featureKey: FeishuFeatureKey,
+  locale: "en" | "zh-CN" = "en",
+) {
+  const feature = featureMap.get(featureKey);
+  if (!feature) {
+    return featureKey;
   }
 
-  const names = blocked.map((feature) => feature.titleI18n.en).join(", ");
-  throw new Error(
-    `These Feishu features require app approval before authorization can succeed: ${names}. For initial setup, deselect them first. After the app is approved, reconnect to add them.`,
+  return feature.titleI18n[locale] || feature.titleI18n.en || featureKey;
+}
+
+export function getFeishuFeatureScopeCoverage(
+  features: FeishuFeatureKey[],
+  grantedScopes: unknown,
+) {
+  const granted = new Set(
+    typeof grantedScopes === "string"
+      ? grantedScopes.split(/\s+/).filter(Boolean)
+      : Array.isArray(grantedScopes)
+        ? grantedScopes.filter((item): item is string => typeof item === "string")
+        : [],
   );
+
+  return features.map((featureKey) => {
+    const feature = featureMap.get(featureKey);
+    const scopes = Array.from(feature?.scopes || []);
+    return {
+      key: featureKey,
+      title: getFeishuFeatureTitle(featureKey),
+      mayRequireAppReview:
+        Boolean(feature && "mayRequireAppReview" in feature && feature.mayRequireAppReview === true),
+      scopes,
+      missingScopes: scopes.filter((scope) => !granted.has(scope)),
+    };
+  });
 }
 
 export function hasFeishuScopesForFeatures(

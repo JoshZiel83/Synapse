@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ToolDefinition, ToolParameterProperty } from "@synapse/shared";
 import {
   fileToBuffer,
@@ -39,6 +40,13 @@ const jsonArrayProperty = (description: string): ToolParameterProperty => ({
 
 function asString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function asObject(value: unknown): JsonObject {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as JsonObject;
 }
 
 function asNumber(value: unknown, fallback = 0) {
@@ -144,6 +152,416 @@ function normalizeCalendarAttendees(value: unknown) {
     }
     return { type: "user", user_id: id };
   });
+}
+
+type FeishuDocumentRef = {
+  kind: "doc" | "docx" | "wiki";
+  token: string;
+};
+
+const FEISHU_DOC_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
+const FEISHU_DOC_IMAGE_ALIGN: Record<string, number> = {
+  left: 1,
+  center: 2,
+  right: 3,
+};
+const FEISHU_DOC_MEDIA_EXTENSIONS: Record<string, string> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+  "image/svg+xml": ".svg",
+  "application/pdf": ".pdf",
+  "video/mp4": ".mp4",
+  "text/plain": ".txt",
+};
+
+function extractFeishuDocumentToken(raw: string, marker: string) {
+  const index = raw.indexOf(marker);
+  if (index < 0) {
+    return "";
+  }
+
+  let token = raw.slice(index + marker.length);
+  const endIndex = token.search(/[/?#]/);
+  if (endIndex >= 0) {
+    token = token.slice(0, endIndex);
+  }
+  return token.trim();
+}
+
+function parseFeishuDocumentRef(value: unknown, label: string): FeishuDocumentRef {
+  const raw = asString(value);
+  if (!raw) {
+    throw new Error(`${label} is required.`);
+  }
+
+  const wikiToken = extractFeishuDocumentToken(raw, "/wiki/");
+  if (wikiToken) {
+    return {
+      kind: "wiki",
+      token: wikiToken,
+    };
+  }
+
+  const docxToken = extractFeishuDocumentToken(raw, "/docx/");
+  if (docxToken) {
+    return {
+      kind: "docx",
+      token: docxToken,
+    };
+  }
+
+  const docToken = extractFeishuDocumentToken(raw, "/doc/");
+  if (docToken) {
+    return {
+      kind: "doc",
+      token: docToken,
+    };
+  }
+
+  if (raw.includes("://")) {
+    throw new Error(`${label} must be a docx token, a /docx/ URL, or a /wiki/ URL that resolves to docx.`);
+  }
+
+  if (/[/?#]/.test(raw)) {
+    throw new Error(`${label} must be a docx token or a supported document URL.`);
+  }
+
+  return {
+    kind: "docx",
+    token: raw,
+  };
+}
+
+async function resolveFeishuDocxDocumentId(
+  client: ReturnType<typeof createFeishuApiClient>["client"],
+  value: unknown,
+  label: string,
+) {
+  const ref = parseFeishuDocumentRef(value, label);
+  if (ref.kind === "docx") {
+    return ref.token;
+  }
+  if (ref.kind === "doc") {
+    throw new Error(`${label} must refer to a docx document.`);
+  }
+
+  const result = await client.requestJson<{
+    node?: {
+      obj_type?: string;
+      obj_token?: string;
+    };
+  }>({
+    path: "/open-apis/wiki/v2/spaces/get_node",
+    query: {
+      token: ref.token,
+    },
+  });
+  const objType = asString(result.node?.obj_type);
+  const objToken = asString(result.node?.obj_token);
+  if (!objType || !objToken) {
+    throw new Error("Feishu wiki resolution returned incomplete node data.");
+  }
+  if (objType !== "docx") {
+    throw new Error(`The wiki node resolved to '${objType}', not a docx document.`);
+  }
+  return objToken;
+}
+
+function normalizeDocSearchTimeRange(filter: JsonObject, key: string) {
+  const range = asObject(filter[key]);
+  if (Object.keys(range).length === 0) {
+    return;
+  }
+
+  const normalized: JsonObject = {};
+  if (range.start !== undefined) {
+    normalized.start = Number(toUnixTimestampSeconds(range.start, `${key}.start`));
+  }
+  if (range.end !== undefined) {
+    normalized.end = Number(toUnixTimestampSeconds(range.end, `${key}.end`));
+  }
+  filter[key] = normalized;
+}
+
+function buildFeishuDocSearchRequest(input: Record<string, unknown>) {
+  const request: JsonObject = {
+    query: asString(input.query),
+    page_size: Math.min(Math.max(asNumber(input.pageSize, 15) || 15, 1), 20),
+  };
+  const pageToken = asString(input.pageToken);
+  if (pageToken) {
+    request.page_token = pageToken;
+  }
+
+  const rawFilter = input.filter;
+  if (
+    rawFilter === undefined ||
+    rawFilter === null ||
+    (typeof rawFilter === "string" && rawFilter.trim().length === 0)
+  ) {
+    request.doc_filter = {};
+    request.wiki_filter = {};
+    return request;
+  }
+
+  const filter = parseJsonObjectInput(rawFilter, "filter");
+  normalizeDocSearchTimeRange(filter, "open_time");
+  normalizeDocSearchTimeRange(filter, "create_time");
+  request.doc_filter = filter;
+  request.wiki_filter = { ...filter };
+  return request;
+}
+
+function toIsoStringFromUnixTimestamp(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date((value >= 1e12 ? value : value * 1000)).toISOString();
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) {
+      return new Date((parsed >= 1e12 ? parsed : parsed * 1000)).toISOString();
+    }
+  }
+  return "";
+}
+
+function addIsoTimeFieldsToDocSearchResults(results: unknown[]) {
+  return results.map((item) => {
+    const row = asObject(item);
+    const resultMeta = { ...asObject(row.result_meta) };
+    for (const field of ["create_time", "open_time", "update_time"] as const) {
+      const iso = toIsoStringFromUnixTimestamp(resultMeta[field]);
+      if (iso) {
+        resultMeta[`${field}_iso`] = iso;
+      }
+    }
+    return {
+      ...row,
+      result_meta: resultMeta,
+    };
+  });
+}
+
+async function listFeishuDocumentRootChildren(
+  client: ReturnType<typeof createFeishuApiClient>["client"],
+  documentId: string,
+) {
+  const items: JsonObject[] = [];
+  let pageToken = "";
+
+  for (;;) {
+    const page = await client.requestJson<{
+      items?: unknown[];
+      has_more?: boolean;
+      page_token?: string;
+    }>({
+      path: `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(documentId)}/children`,
+      query: {
+        page_size: 200,
+        page_token: pageToken || undefined,
+      },
+    });
+
+    if (Array.isArray(page.items)) {
+      items.push(...page.items.map((item) => asObject(item)));
+    }
+
+    if (!page.has_more || !asString(page.page_token)) {
+      break;
+    }
+    pageToken = asString(page.page_token);
+  }
+
+  return items;
+}
+
+async function clearFeishuDocumentContent(
+  client: ReturnType<typeof createFeishuApiClient>["client"],
+  documentId: string,
+) {
+  const rootChildren = await listFeishuDocumentRootChildren(client, documentId);
+  if (rootChildren.length === 0) {
+    return 0;
+  }
+
+  await client.requestJson({
+    path: `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(documentId)}/children/batch_delete`,
+    method: "DELETE",
+    query: {
+      client_token: randomUUID(),
+    },
+    body: {
+      start_index: 0,
+      end_index: rootChildren.length,
+    },
+  });
+
+  return rootChildren.length;
+}
+
+async function convertMarkdownToFeishuDocBlocks(
+  client: ReturnType<typeof createFeishuApiClient>["client"],
+  markdown: string,
+) {
+  const converted = await client.requestJson<{
+    first_level_block_ids?: unknown[];
+    blocks?: unknown[];
+  }>({
+    path: "/open-apis/docx/v1/documents/blocks/convert",
+    method: "POST",
+    body: {
+      content_type: "markdown",
+      content: markdown,
+    },
+  });
+
+  const firstLevelBlockIds = Array.isArray(converted.first_level_block_ids)
+    ? converted.first_level_block_ids.filter((item): item is string => typeof item === "string" && item.length > 0)
+    : [];
+  const descendants = Array.isArray(converted.blocks)
+    ? converted.blocks.map((block) => {
+      const { parent_id, ...rest } = asObject(block);
+      return rest;
+    })
+    : [];
+
+  return {
+    firstLevelBlockIds,
+    descendants,
+  };
+}
+
+async function insertConvertedFeishuDocumentBlocks(
+  client: ReturnType<typeof createFeishuApiClient>["client"],
+  documentId: string,
+  converted: {
+    firstLevelBlockIds: string[];
+    descendants: JsonObject[];
+  },
+  index: number,
+) {
+  if (converted.firstLevelBlockIds.length === 0 || converted.descendants.length === 0) {
+    return {
+      insertedBlocks: 0,
+    };
+  }
+
+  await client.requestJson({
+    path: `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(documentId)}/descendant`,
+    method: "POST",
+    body: {
+      children_id: converted.firstLevelBlockIds,
+      index,
+      descendants: converted.descendants,
+    },
+  });
+
+  return {
+    insertedBlocks: converted.firstLevelBlockIds.length,
+  };
+}
+
+function getFeishuDocMediaBlockType(mediaType: "file" | "image") {
+  return mediaType === "file" ? 23 : 27;
+}
+
+function getFeishuDocMediaParentType(mediaType: "file" | "image") {
+  return mediaType === "file" ? "docx_file" : "docx_image";
+}
+
+function buildFeishuDocMediaCreateBlockBody(
+  mediaType: "file" | "image",
+  index: number,
+) {
+  const child: JsonObject = {
+    block_type: getFeishuDocMediaBlockType(mediaType),
+  };
+  child[mediaType] = {};
+  return {
+    children: [child],
+    index,
+  };
+}
+
+function buildFeishuDocMediaRouteExtra(documentId: string) {
+  return JSON.stringify({
+    drive_route_token: documentId,
+  });
+}
+
+function extractFeishuDocMediaTargets(
+  createResult: unknown,
+  mediaType: "file" | "image",
+) {
+  const children = Array.isArray(asObject(createResult).children)
+    ? (asObject(createResult).children as unknown[])
+    : [];
+  const child = asObject(children[0]);
+  const blockId = asString(child.block_id);
+  let uploadParentNode = blockId;
+  let replaceBlockId = blockId;
+
+  if (mediaType === "file" && Array.isArray(child.children) && typeof child.children[0] === "string") {
+    uploadParentNode = child.children[0];
+    replaceBlockId = child.children[0];
+  }
+
+  if (!blockId || !uploadParentNode || !replaceBlockId) {
+    throw new Error("Feishu did not return the created media block identifiers.");
+  }
+
+  return {
+    blockId,
+    uploadParentNode,
+    replaceBlockId,
+  };
+}
+
+function buildFeishuDocMediaReplaceBody(input: {
+  blockId: string;
+  mediaType: "file" | "image";
+  fileToken: string;
+  align?: string;
+  caption?: string;
+}) {
+  const request: JsonObject = {
+    block_id: input.blockId,
+  };
+
+  if (input.mediaType === "file") {
+    request.replace_file = {
+      token: input.fileToken,
+    };
+  } else {
+    const replaceImage: JsonObject = {
+      token: input.fileToken,
+    };
+    const align = asString(input.align).toLowerCase();
+    if (FEISHU_DOC_IMAGE_ALIGN[align]) {
+      replaceImage.align = FEISHU_DOC_IMAGE_ALIGN[align];
+    }
+    const caption = asString(input.caption);
+    if (caption) {
+      replaceImage.caption = {
+        content: caption,
+      };
+    }
+    request.replace_image = replaceImage;
+  }
+
+  return {
+    requests: [request],
+  };
+}
+
+function guessFileExtensionFromContentType(
+  contentType: string,
+  fallback = ".bin",
+) {
+  const mimeType = contentType.split(";")[0]?.trim().toLowerCase();
+  return FEISHU_DOC_MEDIA_EXTENSIONS[mimeType] || fallback;
 }
 
 const feishuToolSpecs: FeishuToolSpec[] = [
@@ -494,6 +912,394 @@ const feishuToolSpecs: FeishuToolSpec[] = [
       }
 
       return event;
+    },
+  },
+  {
+    name: "feishu.docs.search",
+    feature: "docs",
+    definition: {
+      name: "feishu.docs.search",
+      description: "Search Feishu docs, wiki nodes, and sheets with Search v2.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Optional keyword query. Leave empty to use Feishu's default recent/discovery ranking." },
+          filter: jsonObjectProperty("Optional filter object applied to both doc_filter and wiki_filter. open_time/create_time may use ISO time strings."),
+          pageSize: { type: "number", description: "Page size, 1-20." },
+          pageToken: { type: "string", description: "Pagination token from the previous page." },
+        },
+        required: [],
+      },
+    },
+    async execute(input, config) {
+      const { client } = createFeishuApiClient(config);
+      const data = await client.requestJson<{
+        total?: number;
+        has_more?: boolean;
+        page_token?: string;
+        res_units?: unknown[];
+      }>({
+        path: "/open-apis/search/v2/doc_wiki/search",
+        method: "POST",
+        body: buildFeishuDocSearchRequest(input),
+      });
+
+      return {
+        total: typeof data.total === "number" ? data.total : 0,
+        has_more: Boolean(data.has_more),
+        page_token: asString(data.page_token) || undefined,
+        results: addIsoTimeFieldsToDocSearchResults(
+          Array.isArray(data.res_units) ? data.res_units : [],
+        ),
+      };
+    },
+  },
+  {
+    name: "feishu.docs.get_document",
+    feature: "docs",
+    definition: {
+      name: "feishu.docs.get_document",
+      description: "Get docx metadata and raw plain-text content. Rich formatting and embedded media are not reconstructed.",
+      parameters: {
+        type: "object",
+        properties: {
+          documentId: { type: "string", description: "Docx token, /docx/ URL, or a /wiki/ URL that resolves to docx." },
+        },
+        required: ["documentId"],
+      },
+    },
+    async execute(input, config) {
+      const { client } = createFeishuApiClient(config);
+      const documentId = await resolveFeishuDocxDocumentId(client, input.documentId, "documentId");
+      const [metadata, rawContent] = await Promise.all([
+        client.requestJson<{
+          document?: {
+            document_id?: string;
+            revision_id?: number;
+            title?: string;
+          };
+        }>({
+          path: `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}`,
+        }),
+        client.requestJson<{
+          content?: string;
+        }>({
+          path: `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}/raw_content`,
+        }),
+      ]);
+
+      return {
+        document_id: documentId,
+        title: asString(metadata.document?.title),
+        revision_id: metadata.document?.revision_id,
+        content_type: "text/plain",
+        content: asString(rawContent.content),
+      };
+    },
+  },
+  {
+    name: "feishu.docs.create_document",
+    feature: "docs",
+    definition: {
+      name: "feishu.docs.create_document",
+      description: "Create a docx document and seed it from Lark-flavored Markdown.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Optional document title." },
+          markdown: { type: "string", description: "Lark-flavored Markdown content used to initialize the document." },
+          folderToken: { type: "string", description: "Optional Feishu Drive folder token." },
+        },
+        required: ["markdown"],
+      },
+    },
+    async execute(input, config) {
+      const { client } = createFeishuApiClient(config);
+      const markdown = asString(input.markdown);
+      if (!markdown) {
+        throw new Error("markdown is required.");
+      }
+      const converted = await convertMarkdownToFeishuDocBlocks(client, markdown);
+
+      const created = await client.requestJson<{
+        document?: {
+          document_id?: string;
+        };
+      }>({
+        path: "/open-apis/docx/v1/documents",
+        method: "POST",
+        body: {
+          title: asString(input.title) || undefined,
+          folder_token: asString(input.folderToken) || undefined,
+        },
+      });
+      const documentId = asString(created.document?.document_id);
+      if (!documentId) {
+        throw new Error("Feishu did not return the created document_id.");
+      }
+
+      try {
+        const writeResult = await insertConvertedFeishuDocumentBlocks(
+          client,
+          documentId,
+          converted,
+          0,
+        );
+        const metadata = await client.requestJson<{
+          document?: {
+            revision_id?: number;
+            title?: string;
+          };
+        }>({
+          path: `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}`,
+        });
+
+        return {
+          document_id: documentId,
+          title: asString(metadata.document?.title),
+          revision_id: metadata.document?.revision_id,
+          inserted_blocks: writeResult.insertedBlocks,
+        };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "Unknown error";
+        throw new Error(`Document ${documentId} was created, but the initial markdown import failed: ${reason}`);
+      }
+    },
+  },
+  {
+    name: "feishu.docs.update_document",
+    feature: "docs",
+    definition: {
+      name: "feishu.docs.update_document",
+      description: "Append to a docx document or overwrite its current block content with Lark-flavored Markdown.",
+      parameters: {
+        type: "object",
+        properties: {
+          documentId: { type: "string", description: "Docx token, /docx/ URL, or a /wiki/ URL that resolves to docx." },
+          mode: { type: "string", description: "Update mode.", enum: ["append", "overwrite"] },
+          markdown: { type: "string", description: "Lark-flavored Markdown content to write." },
+        },
+        required: ["documentId", "mode", "markdown"],
+      },
+    },
+    async execute(input, config) {
+      const { client } = createFeishuApiClient(config);
+      const documentId = await resolveFeishuDocxDocumentId(client, input.documentId, "documentId");
+      const mode = asString(input.mode);
+      const markdown = asString(input.markdown);
+      if (mode !== "append" && mode !== "overwrite") {
+        throw new Error("mode must be either 'append' or 'overwrite'.");
+      }
+      if (!markdown) {
+        throw new Error("markdown is required.");
+      }
+      const converted = await convertMarkdownToFeishuDocBlocks(client, markdown);
+
+      let clearedBlocks = 0;
+      let insertIndex = 0;
+
+      if (mode === "overwrite") {
+        clearedBlocks = await clearFeishuDocumentContent(client, documentId);
+      } else {
+        const rootChildren = await listFeishuDocumentRootChildren(client, documentId);
+        insertIndex = rootChildren.length;
+      }
+
+      const writeResult = await insertConvertedFeishuDocumentBlocks(
+        client,
+        documentId,
+        converted,
+        insertIndex,
+      );
+
+      const metadata = await client.requestJson<{
+        document?: {
+          revision_id?: number;
+          title?: string;
+        };
+      }>({
+        path: `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}`,
+      });
+
+      return {
+        document_id: documentId,
+        mode,
+        title: asString(metadata.document?.title),
+        revision_id: metadata.document?.revision_id,
+        insert_index: insertIndex,
+        inserted_blocks: writeResult.insertedBlocks,
+        cleared_blocks: clearedBlocks,
+      };
+    },
+  },
+  {
+    name: "feishu.docs.insert_media",
+    feature: "docs_media",
+    definition: {
+      name: "feishu.docs.insert_media",
+      description: "Insert a Synapse FileRef at the end of a docx document as an image or attachment.",
+      parameters: {
+        type: "object",
+        properties: {
+          documentId: { type: "string", description: "Docx token, /docx/ URL, or a /wiki/ URL that resolves to docx." },
+          fileRef: { type: "string", description: "The Synapse FileRef to upload." },
+          type: { type: "string", description: "Media block type.", enum: ["image", "file"] },
+          align: { type: "string", description: "Image alignment.", enum: ["left", "center", "right"] },
+          caption: { type: "string", description: "Optional image caption. Only used when type=image." },
+        },
+        required: ["documentId", "fileRef"],
+      },
+    },
+    async execute(input, config) {
+      const { client } = createFeishuApiClient(config);
+      const documentId = await resolveFeishuDocxDocumentId(client, input.documentId, "documentId");
+      const mediaType = asString(input.type) === "file" ? "file" : "image";
+      const record = await resolveFileRefRecord(input.fileRef, "fileRef");
+      if (record.sizeBytes > FEISHU_DOC_MEDIA_MAX_BYTES) {
+        throw new Error(`Feishu docs media upload only supports files up to 20MB. Current file is ${(record.sizeBytes / 1024 / 1024).toFixed(1)}MB.`);
+      }
+
+      const insertIndex = (await listFeishuDocumentRootChildren(client, documentId)).length;
+      const createdBlock = await client.requestJson({
+        path: `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(documentId)}/children`,
+        method: "POST",
+        body: buildFeishuDocMediaCreateBlockBody(mediaType, insertIndex),
+      });
+      const targets = extractFeishuDocMediaTargets(createdBlock, mediaType);
+
+      const rollback = async () => {
+        await client.requestJson({
+          path: `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(documentId)}/children/batch_delete`,
+          method: "DELETE",
+          query: {
+            client_token: randomUUID(),
+          },
+          body: {
+            start_index: insertIndex,
+            end_index: insertIndex + 1,
+          },
+        });
+      };
+
+      try {
+        const buffer = await fileToBuffer(record.storedName);
+        const form = new FormData();
+        form.append("file_name", record.originalName);
+        form.append("parent_type", getFeishuDocMediaParentType(mediaType));
+        form.append("parent_node", targets.uploadParentNode);
+        form.append("size", String(record.sizeBytes));
+        form.append("extra", buildFeishuDocMediaRouteExtra(documentId));
+        form.append(
+          "file",
+          new Blob([bufferToArrayBuffer(buffer)], { type: record.mimeType }),
+          record.originalName,
+        );
+
+        const upload = await client.requestJson<{
+          file_token?: string;
+        }>({
+          path: "/open-apis/drive/v1/medias/upload_all",
+          method: "POST",
+          body: form,
+        });
+        const fileToken = asString(upload.file_token);
+        if (!fileToken) {
+          throw new Error("Feishu media upload did not return file_token.");
+        }
+
+        await client.requestJson({
+          path: `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/batch_update`,
+          method: "PATCH",
+          body: buildFeishuDocMediaReplaceBody({
+            blockId: targets.replaceBlockId,
+            mediaType,
+            fileToken,
+            align: asString(input.align) || undefined,
+            caption: asString(input.caption) || undefined,
+          }),
+        });
+
+        return {
+          document_id: documentId,
+          block_id: targets.blockId,
+          file_token: fileToken,
+          type: mediaType,
+          file_name: record.originalName,
+        };
+      } catch (error) {
+        try {
+          await rollback();
+        } catch {
+        }
+        throw error;
+      }
+    },
+  },
+  {
+    name: "feishu.docs.download_media",
+    feature: "docs_media",
+    definition: {
+      name: "feishu.docs.download_media",
+      description: "Download document media or a whiteboard snapshot into the Synapse file system and return a FileRef.",
+      parameters: {
+        type: "object",
+        properties: {
+          token: { type: "string", description: "Media file_token or whiteboard token." },
+          type: { type: "string", description: "Token type.", enum: ["media", "whiteboard"] },
+          fileName: { type: "string", description: "Optional output file name override." },
+        },
+        required: ["token"],
+      },
+    },
+    async execute(input, config) {
+      const { client } = createFeishuApiClient(config);
+      const workspaceId = getWorkspaceId(config);
+      const token = asString(input.token);
+      const mediaType = asString(input.type) === "whiteboard" ? "whiteboard" : "media";
+      if (!token) {
+        throw new Error("token is required.");
+      }
+      if (!workspaceId) {
+        throw new Error("workspace_id is missing from plugin runtime config.");
+      }
+
+      const result = await client.requestBuffer({
+        path:
+          mediaType === "whiteboard"
+            ? `/open-apis/board/v1/whiteboards/${encodeURIComponent(token)}/download_as_image`
+            : `/open-apis/drive/v1/medias/${encodeURIComponent(token)}/download`,
+      });
+      const originalName =
+        asString(input.fileName) ||
+        parseContentDispositionFilename(
+          result.contentDisposition,
+          `${token}${guessFileExtensionFromContentType(
+            result.contentType,
+            mediaType === "whiteboard" ? ".png" : ".bin",
+          )}`,
+        );
+      const saved = await saveFromBuffer(
+        result.buffer,
+        originalName,
+        result.contentType,
+        workspaceId,
+        null,
+        "plugin_output",
+        {
+          provider: "feishu",
+          source: "docs.download_media",
+          token,
+          mediaType,
+        },
+      );
+
+      return [
+        {
+          type: "text",
+          text: `Downloaded Feishu ${mediaType} ${token} as ${saved.originalName}.`,
+        },
+        pluginOutputFileRef(saved),
+      ];
     },
   },
   {

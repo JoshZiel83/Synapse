@@ -1263,6 +1263,12 @@ class ApiClient {
   getPluginAuthSession(wsId: string, sessionId: string) {
     return this.fetch(`/workspaces/${wsId}/mcp/auth/sessions/${sessionId}`)
   }
+  inspectPluginAuthSession(wsId: string, sessionId: string) {
+    return this.fetch(`/workspaces/${wsId}/mcp/auth/sessions/${sessionId}/inspect`, {
+      method: "POST",
+      body: "{}",
+    })
+  }
   getPluginInstallationAccess(wsId: string, installId: string) {
     return this.fetch(
       `/workspaces/${wsId}/mcp/installations/${installId}/access`

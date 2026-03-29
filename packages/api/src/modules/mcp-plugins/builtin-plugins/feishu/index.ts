@@ -57,6 +57,7 @@ export const feishuSeed: BuiltinOrgSeed = {
         "contacts",
         "im",
         "calendar",
+        "docs",
         "drive",
         "bitable",
       ],

@@ -25,11 +25,12 @@ import {
   startFeishuCliSetup,
 } from "./feishu/auth.js";
 import {
+  type FeishuAppScopeInspection,
+  inspectFeishuAppScopeStatus,
   resolveFeishuAccountsBaseUrl,
   resolveFeishuOpenBaseUrl,
 } from "./feishu/client.js";
 import {
-  assertFeishuInitialSetupFeatures,
   normalizeFeishuFeatureKeys,
 } from "./feishu/features.js";
 
@@ -578,6 +579,7 @@ function buildFeishuResultPreview(input: {
   tokenScope: string;
   profile: JsonObject;
   requestedFeatures: string[];
+  appScopeStatus?: FeishuAppScopeInspection;
 }) {
   const externalAccountId =
     asNullableString(input.profile.open_id) ||
@@ -597,6 +599,7 @@ function buildFeishuResultPreview(input: {
     brand: input.brand,
     scopes,
     features: input.requestedFeatures,
+    appScopeStatus: input.appScopeStatus,
   };
 }
 
@@ -614,6 +617,7 @@ function buildFeishuResultPayload(input: {
   };
   profile: JsonObject;
   requestedFeatures: string[];
+  appScopeStatus?: FeishuAppScopeInspection;
 }) {
   const expiresAt = new Date(Date.now() + input.tokenData.expiresIn * 1000).toISOString();
   const refreshExpiresAt = new Date(
@@ -624,6 +628,7 @@ function buildFeishuResultPayload(input: {
     tokenScope: input.tokenData.scope,
     profile: input.profile,
     requestedFeatures: input.requestedFeatures,
+    appScopeStatus: input.appScopeStatus,
   });
 
   return {
@@ -637,6 +642,7 @@ function buildFeishuResultPayload(input: {
       scopes: preview.scopes,
       features: input.requestedFeatures,
       profile: input.profile,
+      appScopeStatus: input.appScopeStatus,
     },
     secretPayload: {
       appId: encrypt(input.appId),
@@ -648,6 +654,94 @@ function buildFeishuResultPayload(input: {
       refreshExpiresAt,
     },
   };
+}
+
+function buildFeishuScopeInspectionErrorMessage(input: {
+  baseMessage: string;
+  inspection?: FeishuAppScopeInspection;
+}) {
+  const inspection = input.inspection;
+  if (!inspection) {
+    return input.baseMessage;
+  }
+
+  if (inspection.status === "missing_app_scopes" && inspection.missingScopes.length > 0) {
+    const featureSummary =
+      inspection.missingFeatures.length > 0
+        ? inspection.missingFeatures
+            .map((feature) => `${feature.title} (${feature.missingScopes.join(", ")})`)
+            .join("; ")
+        : inspection.missingScopes.join(", ");
+    return `${input.baseMessage} Missing app scopes: ${featureSummary}. Open the Feishu developer console and refresh app scopes after the review is approved.`;
+  }
+
+  if (inspection.status === "unavailable" && inspection.queryError) {
+    return `${input.baseMessage} ${inspection.queryError}`;
+  }
+
+  return input.baseMessage;
+}
+
+function getFeishuSessionAppCredentials(transientPayload: JsonObject) {
+  const appCredentials = asObject(transientPayload.appCredentials);
+  const appId = asString(appCredentials.appId);
+  const appSecret = asString(appCredentials.appSecret);
+  if (!appId || !appSecret) {
+    return undefined;
+  }
+
+  return {
+    brand:
+      asString(appCredentials.brand) === "lark"
+        ? "lark"
+        : "feishu",
+    appId,
+    appSecret,
+  } as const;
+}
+
+async function buildFeishuAppScopeInspection(input: {
+  transientPayload: JsonObject;
+  resultPayload?: JsonObject;
+}) {
+  const transientAppCredentials = getFeishuSessionAppCredentials(input.transientPayload);
+  const decryptedResultSecret = asObject(
+    decryptDeep(asObject(input.resultPayload?.secretPayload)),
+  );
+  const resultPublicPayload = asObject(input.resultPayload?.publicPayload);
+  const resultAppId = asString(decryptedResultSecret.appId);
+  const resultAppSecret = asString(decryptedResultSecret.appSecret);
+  const appCredentials =
+    transientAppCredentials ||
+    (resultAppId && resultAppSecret
+      ? {
+          brand:
+            asString(resultPublicPayload.brand) === "lark"
+              ? "lark"
+              : "feishu",
+          appId: resultAppId,
+          appSecret: resultAppSecret,
+        }
+      : undefined);
+  if (!appCredentials) {
+    return undefined;
+  }
+
+  const requestedFeatures = normalizeFeishuFeatureKeys(
+    input.transientPayload.requestedFeatures || resultPublicPayload.features,
+  );
+  if (requestedFeatures.length === 0) {
+    return undefined;
+  }
+
+  return inspectFeishuAppScopeStatus({
+    brand: appCredentials.brand,
+    openBaseUrl: asString(resultPublicPayload.openBaseUrl) || undefined,
+    appId: appCredentials.appId,
+    appSecret: appCredentials.appSecret,
+    requestedFeatures,
+    requestedScopes: asStringArray(input.transientPayload.requestedScopes),
+  });
 }
 
 async function expirePluginAuthSession(sessionId: string) {
@@ -807,6 +901,9 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
         return updated.rows[0]!;
       }
       case "completed": {
+        const appScopeStatus = await buildFeishuAppScopeInspection({
+          transientPayload,
+        });
         const resultPayload = buildFeishuResultPayload({
           brand: progress.appCredentials.brand,
           appId: progress.appCredentials.appId,
@@ -814,12 +911,14 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
           tokenData: progress.tokenData,
           profile: progress.profile,
           requestedFeatures: progress.requestedFeatures,
+          appScopeStatus,
         });
         const resultPreview = buildFeishuResultPreview({
           brand: progress.appCredentials.brand,
           tokenScope: progress.tokenData.scope,
           profile: progress.profile,
           requestedFeatures: progress.requestedFeatures,
+          appScopeStatus,
         });
 
         const updated = await query<PluginAuthSessionRow>(
@@ -856,16 +955,31 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
         return expired.rows[0]!;
       }
       case "failed": {
+        const appScopeStatus = await buildFeishuAppScopeInspection({
+          transientPayload,
+        });
         const failed = await query<PluginAuthSessionRow>(
           `UPDATE plugin_auth_sessions
            SET status = 'failed',
                phase = NULL,
+               result_preview = $4::jsonb,
                error_code = $2,
                error_message = $3,
                updated_at = NOW()
            WHERE id = $1
            RETURNING *`,
-          [row.id, progress.errorCode, progress.errorMessage],
+          [
+            row.id,
+            progress.errorCode,
+            buildFeishuScopeInspectionErrorMessage({
+              baseMessage: progress.errorMessage,
+              inspection: appScopeStatus,
+            }),
+            JSON.stringify({
+              features: normalizeFeishuFeatureKeys(transientPayload.requestedFeatures),
+              appScopeStatus,
+            }),
+          ],
         );
         return failed.rows[0]!;
       }
@@ -1390,8 +1504,6 @@ export async function startPluginAuthSession(input: {
             appSecret,
           };
         }
-      } else {
-        assertFeishuInitialSetupFeatures(selectedFeatures);
       }
 
       const result = await startFeishuCliSetup(
@@ -1464,6 +1576,52 @@ export async function getPluginAuthSession(
     row = await expirePluginAuthSession(row.id);
   }
   return mapSessionRow(row);
+}
+
+export async function inspectPluginAuthSession(input: {
+  sessionId: string;
+  workspaceId: string;
+  userId: string;
+}) {
+  const row = await getSessionRow(input.sessionId, input.workspaceId, input.userId);
+  if (row.driver !== "feishu_cli_setup") {
+    throw new PluginAuthError(400, "Only Feishu auth sessions support app scope inspection.");
+  }
+
+  const transientPayload = asObject(decryptDeep(asObject(row.transient_payload)));
+  const resultPayload = asObject(row.result_payload);
+  const inspection = await buildFeishuAppScopeInspection({
+    transientPayload,
+    resultPayload,
+  });
+  if (!inspection) {
+    throw new PluginAuthError(
+      400,
+      "This Feishu auth session does not have app credentials yet. Finish the app creation step first.",
+    );
+  }
+
+  const previousPreview = asObject(row.result_preview);
+  const nextPreview = {
+    ...previousPreview,
+    features:
+      Array.isArray(previousPreview.features) && previousPreview.features.length > 0
+        ? previousPreview.features
+        : normalizeFeishuFeatureKeys(transientPayload.requestedFeatures),
+    appScopeStatus: inspection,
+  };
+  const updated = await query<PluginAuthSessionRow>(
+    `UPDATE plugin_auth_sessions
+     SET result_preview = $2::jsonb,
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [row.id, JSON.stringify(nextPreview)],
+  );
+
+  return {
+    session: mapSessionRow(updated.rows[0]!),
+  };
 }
 
 export async function handlePluginAuthCallback(input: {

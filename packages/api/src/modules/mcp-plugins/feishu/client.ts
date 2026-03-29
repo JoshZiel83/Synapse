@@ -1,3 +1,9 @@
+import {
+  type FeishuFeatureKey,
+  getFeishuFeatureScopeCoverage,
+  resolveFeishuFeatureScopes,
+} from "./features.js";
+
 type JsonObject = Record<string, unknown>;
 type RequestBody =
   | string
@@ -8,6 +14,24 @@ type RequestBody =
   | Uint8Array;
 
 export type FeishuBrand = "feishu" | "lark";
+export type FeishuAppScopeInspection = {
+  status: "ready" | "missing_app_scopes" | "unavailable";
+  canQuery: boolean;
+  checkedAt: string;
+  message: string;
+  requestedFeatures: string[];
+  requestedScopes: string[];
+  enabledScopes: string[];
+  missingScopes: string[];
+  missingFeatures: Array<{
+    key: string;
+    title: string;
+    missingScopes: string[];
+    mayRequireAppReview?: boolean;
+  }>;
+  consoleUrl?: string;
+  queryError?: string;
+};
 
 type FeishuResolvedConnection = {
   status?: string;
@@ -26,6 +50,21 @@ function asString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function asStringArray(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(/\s+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
 export function resolveFeishuOpenBaseUrl(brand: FeishuBrand) {
   return brand === "lark"
     ? "https://open.larksuite.com"
@@ -36,6 +75,20 @@ export function resolveFeishuAccountsBaseUrl(brand: FeishuBrand) {
   return brand === "lark"
     ? "https://accounts.larksuite.com"
     : "https://accounts.feishu.cn";
+}
+
+export function buildFeishuScopeApplyUrl(
+  brand: FeishuBrand,
+  appId: string,
+  scopes: string[],
+) {
+  const host = brand === "lark" ? "open.larksuite.com" : "open.feishu.cn";
+  const url = new URL(`https://${host}/page/scope-apply`);
+  url.searchParams.set("clientID", appId);
+  if (scopes.length > 0) {
+    url.searchParams.set("scopes", Array.from(new Set(scopes)).join(" "));
+  }
+  return url.toString();
 }
 
 function readFeishuConnection(config: Record<string, unknown>): FeishuResolvedConnection {
@@ -107,6 +160,165 @@ async function parseErrorResponse(response: Response) {
 
   const text = await response.text().catch(() => "");
   return text.trim() || `HTTP ${response.status}`;
+}
+
+async function requestTenantAccessToken(input: {
+  brand: FeishuBrand;
+  openBaseUrl?: string;
+  appId: string;
+  appSecret: string;
+}) {
+  const endpoint = `${
+    input.openBaseUrl || resolveFeishuOpenBaseUrl(input.brand)
+  }/open-apis/auth/v3/tenant_access_token/internal`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      app_id: input.appId,
+      app_secret: input.appSecret,
+    }),
+  });
+  const payload = asObject(await response.json().catch(() => ({})));
+  const code = typeof payload.code === "number" ? payload.code : undefined;
+
+  if (!response.ok || code !== undefined && code !== 0) {
+    throw new Error(
+      code !== undefined
+        ? `[${code}] ${asString(payload.msg) || "Failed to request Feishu tenant access token."}`
+        : asString(payload.msg) || asString(payload.error_description) || "Failed to request Feishu tenant access token.",
+    );
+  }
+
+  const tenantAccessToken =
+    asString(payload.tenant_access_token) ||
+    asString(asObject(payload.data).tenant_access_token);
+  if (!tenantAccessToken) {
+    throw new Error("Feishu tenant access token response is missing tenant_access_token.");
+  }
+
+  return tenantAccessToken;
+}
+
+function isUserTokenType(tokenType: string) {
+  return tokenType === "user" || tokenType === "user_access_token";
+}
+
+export async function inspectFeishuAppScopeStatus(input: {
+  brand: FeishuBrand;
+  openBaseUrl?: string;
+  appId: string;
+  appSecret: string;
+  requestedFeatures: FeishuFeatureKey[];
+  requestedScopes?: string[];
+}): Promise<FeishuAppScopeInspection> {
+  const checkedAt = new Date().toISOString();
+  const requestedScopes = Array.from(
+    new Set(
+      (input.requestedScopes && input.requestedScopes.length > 0
+        ? input.requestedScopes
+        : resolveFeishuFeatureScopes(input.requestedFeatures)
+      ).filter(Boolean),
+    ),
+  );
+  const baseResult = {
+    checkedAt,
+    requestedFeatures: input.requestedFeatures,
+    requestedScopes,
+    enabledScopes: [] as string[],
+    missingScopes: requestedScopes,
+    missingFeatures: getFeishuFeatureScopeCoverage(
+      input.requestedFeatures,
+      [],
+    ),
+    consoleUrl: buildFeishuScopeApplyUrl(input.brand, input.appId, requestedScopes),
+  };
+
+  try {
+    const tenantAccessToken = await requestTenantAccessToken(input);
+    const endpoint = `${
+      input.openBaseUrl || resolveFeishuOpenBaseUrl(input.brand)
+    }/open-apis/application/v6/applications/${encodeURIComponent(input.appId)}?lang=zh_cn`;
+    const response = await fetch(endpoint, {
+      headers: {
+        Authorization: `Bearer ${tenantAccessToken}`,
+        Accept: "application/json",
+      },
+    });
+    const payload = asObject(await response.json().catch(() => ({})));
+    const code = typeof payload.code === "number" ? payload.code : undefined;
+
+    if (!response.ok || code !== undefined && code !== 0) {
+      throw new Error(
+        code !== undefined
+          ? `[${code}] ${asString(payload.msg) || "Failed to query Feishu app scopes."}`
+          : asString(payload.msg) || "Failed to query Feishu app scopes.",
+      );
+    }
+
+    const scopeRows = Array.isArray(asObject(asObject(payload.data).app).scopes)
+      ? (asObject(payload.data).app as { scopes?: unknown[] }).scopes || []
+      : [];
+    const enabledScopes = Array.from(
+      new Set(
+        scopeRows.flatMap((row) => {
+          const scope = asString(asObject(row).scope);
+          const tokenTypes = asStringArray(asObject(row).token_types);
+          return scope && tokenTypes.some(isUserTokenType) ? [scope] : [];
+        }),
+      ),
+    ).sort();
+    const enabledScopeSet = new Set(enabledScopes);
+    const missingScopes = requestedScopes.filter((scope) => !enabledScopeSet.has(scope));
+    const missingFeatures = getFeishuFeatureScopeCoverage(
+      input.requestedFeatures,
+      enabledScopes,
+    ).filter((feature) => feature.missingScopes.length > 0);
+
+    return {
+      status: missingScopes.length === 0 ? "ready" : "missing_app_scopes",
+      canQuery: true,
+      checkedAt,
+      message:
+        missingScopes.length === 0
+          ? "The Feishu app already has all selected user scopes enabled."
+          : "The Feishu app is still missing some user scopes for the selected features.",
+      requestedFeatures: input.requestedFeatures,
+      requestedScopes,
+      enabledScopes,
+      missingScopes,
+      missingFeatures,
+      consoleUrl:
+        missingScopes.length > 0
+          ? buildFeishuScopeApplyUrl(input.brand, input.appId, missingScopes)
+          : undefined,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Unable to query Feishu app scopes.";
+
+    return {
+      status: "unavailable",
+      canQuery: false,
+      checkedAt,
+      message:
+        message.includes("application:application:self_manage")
+          ? "Unable to query app scopes because the app has not enabled application:application:self_manage yet."
+          : "Unable to query Feishu app scopes right now.",
+      requestedFeatures: input.requestedFeatures,
+      requestedScopes,
+      enabledScopes: [],
+      missingScopes: requestedScopes,
+      missingFeatures: baseResult.missingFeatures,
+      consoleUrl: baseResult.consoleUrl,
+      queryError: message,
+    };
+  }
 }
 
 export class FeishuApiClient {
