@@ -360,9 +360,10 @@ export function buildActorPrompt(
         `- To mention a member inside \`message\`, use either \`<Mention name="${exampleRecipient}"/>\` or an explicit id form such as \`<Mention type="actor" id="..."/>\`.\n` +
         `- Name matching is convenient but may be ambiguous when multiple members share the same display name. If that happens, use \`type="actor|user|external"\` plus \`id="..."\`, or use an explicit id attribute such as \`actorId\`, \`userId\`, \`participantId\`, \`memberId\`, or \`externalUserKey\`.\n` +
         `- The conversation roster above includes the ids you need for disambiguation.\n` +
-        `- \`recipients\` and inline \`<Mention .../>\` mean different things: \`recipients\` decides who the visible message is addressed to, while \`<Mention .../>\` is only an inline reference inside the sentence body.\n` +
+        `- \`recipients\` and inline \`<Mention .../>\` mean different things: \`recipients\` decides who the visible message is addressed to, while \`<Mention .../>\` renders an inline member reference inside the sentence body for better UI presentation and clearer wording.\n` +
         `- Do not mechanically mention the recipient at the start of every message. If the body does not need an explicit inline person reference, do not add a mention.\n` +
-        `- Use inline mention only when the wording itself needs to point to someone, such as referring to a third party, calling out a subset in a multi-person message, or making the sentence clearer.\n\n` +
+        `- When the sentence is explicitly pointing to someone, use inline mention. Typical cases: naming an owner, saying who is responsible, saying who should handle a task, saying who to contact, calling out a subset in a multi-person message, or referring to a third party.\n` +
+        `- Mention does not send the message to that person by itself. It is a display and reference mechanism inside the message body.\n\n` +
         `## Other tools\n` +
         `- \`get_current_time\`: Get the current wall-clock time when timing matters or you need to reference "now"\n` +
         `- \`invite_actor\`: Invite one or more currently listed candidate actors into this conversation when the current roster lacks a needed skill\n` +
@@ -388,7 +389,7 @@ export function buildActorPrompt(
         `- A \`send_to\` recipient indicates who should read or act on the message first; it does not make the message private.\n` +
         `- A \`send_to\` recipient already tells the UI who the message is for. Do not duplicate that with a leading \`<Mention .../>\` unless the sentence itself needs an inline reference.\n` +
         `- If a public message is not addressed to you, treat it as shared context unless you are explicitly asked to respond or need to step in to unblock the work.\n` +
-        `- Use \`<Mention name="..."/>\` only when you want the UI to render an actual member mention inside the message body. Mention is not the same as target.\n` +
+        `- Use \`<Mention name="..."/>\` when you want the UI to render an actual member mention inside the message body, especially when the sentence is identifying who owns something or who should take action. Mention is not the same as target.\n` +
         `- Never rely on outdated roster assumptions. The system may insert profile-version events when another actor changes.`,
     );
   } else {
@@ -399,8 +400,8 @@ export function buildActorPrompt(
         `Use recalled memory when the task depends on durable facts or prior decisions, and use \`memory_search\` if you need deeper retrieval.\n` +
         `Use \`get_current_time\` when the task depends on the current time or date.\n` +
         `${availableSkills && availableSkills.length > 0 ? "When a listed installed skill clearly matches the task, load it with `read_skill` before using it.\n" : ""}` +
-        `Do not prepend \`<Mention name="User"/>\` by default when replying. Use mention tags only when the sentence itself needs an explicit inline reference to a member.\n` +
-        `Mention is an inline body reference, not a generic addressee marker. Otherwise write normal text.`,
+        `Do not prepend \`<Mention name="User"/>\` by default when replying. Use mention tags when the sentence itself needs to point to a member, such as saying who owns something, who should follow up, or who should be contacted.\n` +
+        `Mention is an inline body reference for better UI presentation, not a generic addressee marker and not the same as sending the message to that person. Otherwise write normal text.`,
     );
   }
 

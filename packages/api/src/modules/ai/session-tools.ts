@@ -777,7 +777,7 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "send_to",
       description:
-        "Send a visible conversation message to one or more members by name. You must specify whether this is a reply or a request, and include a short structured summary for UI rendering. Recipients are the addressees; inline mentions are optional body references and should not be used by default.",
+        "Send a visible conversation message to one or more members by name. You must specify whether this is a reply or a request, and include a short structured summary for UI rendering. Recipients are the addressees. Inline mentions are rich body references for UI rendering and sentence clarity: use them when the message text explicitly points to a member, but do not add them mechanically just because someone is a recipient.",
       parameters: {
         type: "object",
         properties: {
@@ -799,7 +799,7 @@ export function registerCallableToolPlugins(): void {
           message: {
             type: "string",
             description:
-              'The visible message content. To mention a member inline in the body, use <Mention name="Alice"/> or an explicit id form like <Mention type="actor" id="..."/>. If a name is ambiguous, you must disambiguate with type+id or an explicit id attribute. Do not mention a recipient just because they are the recipient; recipients and mentions have different meanings.',
+              'The visible message content. To render a member reference clearly in the UI, use <Mention name="Alice"/> or an explicit id form like <Mention type="actor" id="..."/> whenever the sentence explicitly points to that person, such as ownership, responsibility, follow-up, or who to contact. Mention does not decide who the message is sent to; recipients and mentions have different meanings. If a name is ambiguous, you must disambiguate with type+id or an explicit id attribute.',
           },
         },
         required: ["recipients", "intent", "summary", "message"],
@@ -833,7 +833,7 @@ export function registerCallableToolPlugins(): void {
         active: true,
         definition: {
           name: "send_to",
-          description: `Send a visible conversation message to one or more members in the current conversation. Mark whether it is a reply or a request, and provide a short summary for UI rendering. Recipients are the addressees. Inline mentions are optional body references only and should not be used by default. Available recipients: ${rosterDesc}.`,
+          description: `Send a visible conversation message to one or more members in the current conversation. Mark whether it is a reply or a request, and provide a short summary for UI rendering. Recipients are the addressees. Inline mentions are rich body references for UI rendering and sentence clarity: use them when the message text explicitly points to a member, but do not add them mechanically just because someone is a recipient. Available recipients: ${rosterDesc}.`,
           parameters: {
             type: "object",
             properties: {
@@ -856,7 +856,7 @@ export function registerCallableToolPlugins(): void {
               message: {
                 type: "string",
                 description:
-                  'The visible message content. To mention a member inline in the body, use <Mention name="Alice"/> with the exact roster display name, or use an explicit id form like <Mention type="actor" id="..."/>. If a name matches multiple members, you must disambiguate with type+id or an explicit id attribute. Do not add a mention just to mirror the recipient list.',
+                  'The visible message content. To render a member reference clearly in the UI, use <Mention name="Alice"/> with the exact roster display name, or use an explicit id form like <Mention type="actor" id="..."/> whenever the sentence explicitly points to that person, such as ownership, responsibility, follow-up, or who to contact. Mention does not decide who the message is sent to, so do not add a mention only to mirror the recipient list. If a name matches multiple members, you must disambiguate with type+id or an explicit id attribute.',
               },
             },
             required: ["recipients", "intent", "summary", "message"],
