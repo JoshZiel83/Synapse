@@ -8,6 +8,7 @@ import {
 } from '../files/service.js';
 import { extractFileRefId } from '../mcp-plugins/file-ref.js';
 import { getToolExecutionContext } from './session-tools.js';
+import { throwToolError } from './tool-errors.js';
 import { registerToolPlugin } from './tool-plugins.js';
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -65,7 +66,9 @@ function buildActorUploadMetadata(
 
 function ensureFileSizeLimit(sizeBytes: number) {
   if (sizeBytes > MAX_FILE_BYTES) {
-    throw new Error(`File too large (${sizeBytes} bytes). Max allowed size is ${MAX_FILE_BYTES} bytes.`);
+    throwToolError(
+      `File too large (${sizeBytes} bytes). Max allowed size is ${MAX_FILE_BYTES} bytes.`,
+    );
   }
 }
 
@@ -81,7 +84,7 @@ function decodeBase64Payload(value: string): Buffer {
     return Buffer.alloc(0);
   }
   if (normalized.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
-    throw new Error('base64Content must be valid Base64 data.');
+    throwToolError('base64Content must be valid Base64 data.');
   }
   return Buffer.from(normalized, 'base64');
 }
@@ -106,24 +109,22 @@ async function resolveWorkspaceFileDetail(
 ) {
   const context = getToolExecutionContext();
   if (!context) {
-    return { error: { error: 'No session context available' } as const };
+    throwToolError('No session context available');
   }
 
   const fileId = extractFileRefId(rawValue);
   if (!fileId) {
-    return {
-      error: {
-        error: 'fileRef must be an exact FileRef string like <FileRef id="..."/> or a bare file ID.',
-      } as const,
-    };
+    throwToolError(
+      'fileRef must be an exact FileRef string like <FileRef id="..."/> or a bare file ID.',
+    );
   }
 
   const detail = await getWorkspaceFileDetail(fileId, context.workspaceId);
   if (!detail) {
-    return { error: { error: 'File not found in the current workspace' } as const };
+    throwToolError('File not found in the current workspace');
   }
 
-  return { detail };
+  return detail;
 }
 
 const uploadFileDefinition: ToolDefinition = {
@@ -204,13 +205,12 @@ export function registerActorFileToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: 'No session context available' });
+        throwToolError('No session context available');
       }
 
       const parsed = uploadFileInputSchema.safeParse(input);
       if (!parsed.success) {
-        return JSON.stringify({
-          error: 'Invalid input for upload_file.',
+        throwToolError('Invalid input for upload_file.', {
           details: parsed.error.issues.map((issue) => issue.message),
         });
       }
@@ -218,51 +218,47 @@ export function registerActorFileToolPlugins(): void {
       const { filename, mimeType, textContent, base64Content, category } = parsed.data;
       const nextCategory = category || DEFAULT_CATEGORY;
 
-      try {
-        const record = textContent !== undefined
-          ? await (() => {
-            const buffer = Buffer.from(textContent, 'utf8');
-            ensureFileSizeLimit(buffer.length);
-            return storeFile({
-              buffer,
-              originalName: filename,
-              mimeType: mimeType || DEFAULT_TEXT_MIME_TYPE,
-              workspaceId: context.workspaceId,
-              uploaderUserId: null,
-              category: nextCategory,
-              metadata: buildActorUploadMetadata(context, 'text'),
-            });
-          })()
-          : await (() => {
-            const normalizedBase64 = normalizeBase64Payload(base64Content || '');
-            const buffer = decodeBase64Payload(normalizedBase64);
-            ensureFileSizeLimit(buffer.length);
-            return saveFromBase64(
-              normalizedBase64,
-              filename,
-              mimeType || DEFAULT_BINARY_MIME_TYPE,
-              context.workspaceId,
-              null,
-              nextCategory,
-              buildActorUploadMetadata(context, 'base64'),
-            );
-          })();
+      const record = textContent !== undefined
+        ? await (() => {
+          const buffer = Buffer.from(textContent, 'utf8');
+          ensureFileSizeLimit(buffer.length);
+          return storeFile({
+            buffer,
+            originalName: filename,
+            mimeType: mimeType || DEFAULT_TEXT_MIME_TYPE,
+            workspaceId: context.workspaceId,
+            uploaderUserId: null,
+            category: nextCategory,
+            metadata: buildActorUploadMetadata(context, 'text'),
+          });
+        })()
+        : await (() => {
+          const normalizedBase64 = normalizeBase64Payload(base64Content || '');
+          const buffer = decodeBase64Payload(normalizedBase64);
+          ensureFileSizeLimit(buffer.length);
+          return saveFromBase64(
+            normalizedBase64,
+            filename,
+            mimeType || DEFAULT_BINARY_MIME_TYPE,
+            context.workspaceId,
+            null,
+            nextCategory,
+            buildActorUploadMetadata(context, 'base64'),
+          );
+        })();
 
-        const detail = await getWorkspaceFileDetail(record.id, context.workspaceId);
-        if (!detail) {
-          return JSON.stringify({ error: 'Uploaded file could not be reloaded from the current workspace.' });
-        }
-
-        return JSON.stringify({
-          success: true,
-          ...buildFileToolPayload(detail),
-          note: PROTECTED_LINK_NOTE,
-        });
-      } catch (error: any) {
-        return JSON.stringify({
-          error: error?.message || 'Failed to upload file',
-        });
+      const detail = await getWorkspaceFileDetail(record.id, context.workspaceId);
+      if (!detail) {
+        throwToolError(
+          'Uploaded file could not be reloaded from the current workspace.',
+        );
       }
+
+      return JSON.stringify({
+        success: true,
+        ...buildFileToolPayload(detail),
+        note: PROTECTED_LINK_NOTE,
+      });
     },
   });
 
@@ -277,24 +273,20 @@ export function registerActorFileToolPlugins(): void {
     execute: async (input) => {
       const parsed = fileLookupInputSchema.safeParse(input);
       if (!parsed.success) {
-        return JSON.stringify({
-          error: 'Invalid input for get_file_link.',
+        throwToolError('Invalid input for get_file_link.', {
           details: parsed.error.issues.map((issue) => issue.message),
         });
       }
 
-      const resolved = await resolveWorkspaceFileDetail(parsed.data.fileRef);
-      if ('error' in resolved) {
-        return JSON.stringify(resolved.error);
-      }
+      const detail = await resolveWorkspaceFileDetail(parsed.data.fileRef);
 
       return JSON.stringify({
         success: true,
-        fileId: resolved.detail.id,
-        fileRef: buildFileRef(resolved.detail.id),
-        byIdUrl: getFileUrlById(resolved.detail.id),
-        url: resolved.detail.url,
-        fullUrl: resolved.detail.fullUrl,
+        fileId: detail.id,
+        fileRef: buildFileRef(detail.id),
+        byIdUrl: getFileUrlById(detail.id),
+        url: detail.url,
+        fullUrl: detail.fullUrl,
         note: PROTECTED_LINK_NOTE,
       });
     },
@@ -311,20 +303,16 @@ export function registerActorFileToolPlugins(): void {
     execute: async (input) => {
       const parsed = fileLookupInputSchema.safeParse(input);
       if (!parsed.success) {
-        return JSON.stringify({
-          error: 'Invalid input for get_file_info.',
+        throwToolError('Invalid input for get_file_info.', {
           details: parsed.error.issues.map((issue) => issue.message),
         });
       }
 
-      const resolved = await resolveWorkspaceFileDetail(parsed.data.fileRef);
-      if ('error' in resolved) {
-        return JSON.stringify(resolved.error);
-      }
+      const detail = await resolveWorkspaceFileDetail(parsed.data.fileRef);
 
       return JSON.stringify({
         success: true,
-        ...buildFileToolPayload(resolved.detail),
+        ...buildFileToolPayload(detail),
         note: PROTECTED_LINK_NOTE,
       });
     },

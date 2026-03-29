@@ -1,6 +1,7 @@
 import type { ToolCall, ActorAction } from '@synapse/shared';
 import { z } from 'zod';
 import { registerToolPlugin } from './tool-plugins.js';
+import { throwToolError } from './tool-errors.js';
 import { executeActorActions } from '../orchestrator/service.js';
 import { getToolExecutionContext } from './session-tools.js';
 import { getActor } from '../organization/service.js';
@@ -232,7 +233,7 @@ export function registerActionToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: 'No session context available' });
+        throwToolError('No session context available');
       }
 
       const action = buildCreateMemoryAction(input as Record<string, any>);
@@ -274,7 +275,7 @@ export function registerActionToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: 'No session context available' });
+        throwToolError('No session context available');
       }
 
       const action = buildRenameSelfAction(input as Record<string, any>);
@@ -414,17 +415,18 @@ export function registerActionToolPlugins(): void {
     execute: async (input) => {
       const context = getToolExecutionContext();
       if (!context) {
-        return JSON.stringify({ error: 'No session context available' });
+        throwToolError('No session context available');
       }
 
       const parsed = parseChangeAvatarToolInput(input as Record<string, unknown>);
       if (!parsed.success) {
-        return JSON.stringify({
-          error: 'Invalid change_avatar input',
-          message:
-            `Use mode="${EMOJI_MODE}" with one emoji, or mode="${PIXEL_ART_MODE}" with optional DiceBear pixel-art parameters. ` +
-            `For pixel_art, only use allowed variant names, 6-digit hex colors without #, and probabilities from 0 to 100.`,
+        throwToolError('Invalid change_avatar input', {
           details: parsed.error.flatten(),
+          extra: {
+            guidance:
+              `Use mode="${EMOJI_MODE}" with one emoji, or mode="${PIXEL_ART_MODE}" with optional DiceBear pixel-art parameters. ` +
+              `For pixel_art, only use allowed variant names, 6-digit hex colors without #, and probabilities from 0 to 100.`,
+          },
         });
       }
 

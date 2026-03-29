@@ -105,6 +105,32 @@ type AuthFieldState = {
   accountDisplayName?: string;
   errorMessage?: string;
   authConnectionId?: string;
+  resultPreview?: Record<string, unknown>;
+};
+
+type AuthChallengeMetadata = {
+  title?: string;
+  description?: string;
+  actionLabel?: string;
+  scanUrl?: string;
+  userCode?: string;
+};
+
+type FeishuAppScopeStatusView = {
+  status?: string;
+  canQuery?: boolean;
+  checkedAt?: string;
+  message?: string;
+  consoleUrl?: string;
+  queryError?: string;
+  enabledScopes: string[];
+  missingScopes: string[];
+  missingFeatures: Array<{
+    key?: string;
+    title?: string;
+    missingScopes: string[];
+    mayRequireAppReview?: boolean;
+  }>;
 };
 
 function normalizeActorOption(actor: any) {
@@ -166,6 +192,82 @@ function integrationTargetLabel(provider: AutomationIntegrationProvider) {
 
 function integrationTargetPlaceholder(provider: AutomationIntegrationProvider) {
   return provider === 'github' ? 'owner/repo' : 'group/project';
+}
+
+function getStringArrayValue(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function isMissingFieldValue(value: unknown) {
+  return (
+    value === undefined ||
+    value === null ||
+    value === '' ||
+    (typeof value === 'string' && value.trim() === '') ||
+    (Array.isArray(value) && value.length === 0)
+  );
+}
+
+function getAuthChallengeMetadata(authState?: AuthFieldState): AuthChallengeMetadata {
+  const metadata = authState?.challenge?.metadata;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return {};
+  }
+
+  const record = metadata as Record<string, unknown>;
+  return {
+    title: typeof record.title === 'string' ? record.title : undefined,
+    description: typeof record.description === 'string' ? record.description : undefined,
+    actionLabel: typeof record.actionLabel === 'string' ? record.actionLabel : undefined,
+    scanUrl: typeof record.scanUrl === 'string' ? record.scanUrl : undefined,
+    userCode: typeof record.userCode === 'string' ? record.userCode : undefined,
+  };
+}
+
+function asRecord(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function getFeishuAppScopeStatus(authState?: AuthFieldState): FeishuAppScopeStatusView | undefined {
+  const scopeStatus = asRecord(authState?.resultPreview).appScopeStatus;
+  if (!scopeStatus || typeof scopeStatus !== 'object' || Array.isArray(scopeStatus)) {
+    return undefined;
+  }
+
+  const record = scopeStatus as Record<string, unknown>;
+  const missingFeatures = Array.isArray(record.missingFeatures)
+    ? record.missingFeatures.map((item) => {
+        const feature = asRecord(item);
+        return {
+          key: typeof feature.key === 'string' ? feature.key : undefined,
+          title: typeof feature.title === 'string' ? feature.title : undefined,
+          mayRequireAppReview: feature.mayRequireAppReview === true,
+          missingScopes: Array.isArray(feature.missingScopes)
+            ? feature.missingScopes.filter((scope): scope is string => typeof scope === 'string')
+            : [],
+        };
+      })
+    : [];
+
+  return {
+    status: typeof record.status === 'string' ? record.status : undefined,
+    canQuery: typeof record.canQuery === 'boolean' ? record.canQuery : undefined,
+    checkedAt: typeof record.checkedAt === 'string' ? record.checkedAt : undefined,
+    message: typeof record.message === 'string' ? record.message : undefined,
+    consoleUrl: typeof record.consoleUrl === 'string' ? record.consoleUrl : undefined,
+    queryError: typeof record.queryError === 'string' ? record.queryError : undefined,
+    enabledScopes: Array.isArray(record.enabledScopes)
+      ? record.enabledScopes.filter((scope): scope is string => typeof scope === 'string')
+      : [],
+    missingScopes: Array.isArray(record.missingScopes)
+      ? record.missingScopes.filter((scope): scope is string => typeof scope === 'string')
+      : [],
+    missingFeatures,
+  };
 }
 
 function deriveConfigFields(plugin: any): PluginConfigFieldDefinition[] {
@@ -238,6 +340,10 @@ function buildInitialConfig(plugin: any, configFields: PluginConfigFieldDefiniti
     }
     if (field.type === 'boolean') {
       initial[field.key] = false;
+      continue;
+    }
+    if (field.type === 'multiselect') {
+      initial[field.key] = [];
     }
   }
   return initial;
@@ -281,11 +387,15 @@ function hasStoredAuthConnection(value: unknown) {
 }
 
 function getAuthPendingMessage(authState: AuthFieldState) {
+  const metadata = getAuthChallengeMetadata(authState);
+  if (metadata.description) {
+    return metadata.description;
+  }
   if (authState.phase === 'pending_confirm') {
-    return 'Authorization scanned. Confirm it in the Mi Home app.';
+    return 'Authorization scanned. Confirm it in the provider app.';
   }
   if (authState.challenge?.kind === 'qr_code') {
-    return 'Scan the QR code with the Mi Home app to authorize this account.';
+    return 'Scan the QR code to authorize this account.';
   }
   return 'Waiting for authorization...';
 }
@@ -362,7 +472,7 @@ function runClientValidation(
         }
       } else if (field.type === 'boolean') {
         continue;
-      } else if (value === undefined || value === null || value === '') {
+      } else if (isMissingFieldValue(value)) {
         errors[field.key] = 'This field is required.';
       }
     }
@@ -374,7 +484,7 @@ function runClientValidation(
     if (errors[rule.field]) continue;
     switch (rule.rule) {
       case 'required':
-        if (value === undefined || value === null || value === '') errors[rule.field] = rule.message;
+        if (isMissingFieldValue(value)) errors[rule.field] = rule.message;
         break;
       case 'min_length':
         if (typeof value === 'string' && value.length < Number(rule.value)) errors[rule.field] = rule.message;
@@ -458,6 +568,7 @@ export default function InstallDialog({
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [authInspecting, setAuthInspecting] = useState<Record<string, boolean>>({});
   const [authFields, setAuthFields] = useState<Record<string, AuthFieldState>>(() =>
     buildInitialAuthFields(
       {
@@ -664,6 +775,7 @@ export default function InstallDialog({
           accountDisplayName: typeof session.resultPreview?.displayName === 'string' ? session.resultPreview.displayName : undefined,
           errorMessage: session.errorMessage,
           authConnectionId: session.authConnectionId,
+          resultPreview: session.resultPreview,
         },
       }));
 
@@ -681,6 +793,7 @@ export default function InstallDialog({
           phase: undefined,
           challenge: previous[fieldKey]?.challenge,
           errorMessage: error.message,
+          resultPreview: previous[fieldKey]?.resultPreview,
         },
       }));
       if (authPollers.current[fieldKey]) {
@@ -718,6 +831,7 @@ export default function InstallDialog({
           status: session.status,
           phase: session.phase,
           challenge: session.challenge,
+          resultPreview: session.resultPreview,
         },
       }));
 
@@ -746,6 +860,41 @@ export default function InstallDialog({
         ...previous,
         [field.key]: error?.message || 'Unable to start the auth flow.',
       }));
+    }
+  };
+
+  const inspectAuthSession = async (fieldKey: string) => {
+    const authState = authFields[fieldKey];
+    if (!workspaceId || !authState?.sessionId) {
+      return;
+    }
+
+    setAuthInspecting((previous) => ({ ...previous, [fieldKey]: true }));
+    try {
+      const data = await api.inspectPluginAuthSession(workspaceId, authState.sessionId);
+      const session: PluginAuthSession = data.session;
+      setAuthFields((previous) => ({
+        ...previous,
+        [fieldKey]: {
+          ...(previous[fieldKey] || authState),
+          sessionId: session.id,
+          bindingKey: previous[fieldKey]?.bindingKey || authState.bindingKey,
+          status: session.status,
+          phase: session.phase,
+          challenge: session.challenge,
+          accountDisplayName: typeof session.resultPreview?.displayName === 'string' ? session.resultPreview.displayName : previous[fieldKey]?.accountDisplayName,
+          errorMessage: session.errorMessage,
+          authConnectionId: session.authConnectionId,
+          resultPreview: session.resultPreview,
+        },
+      }));
+    } catch (error: any) {
+      setFieldErrors((previous) => ({
+        ...previous,
+        [fieldKey]: error?.message || 'Unable to refresh app scopes.',
+      }));
+    } finally {
+      setAuthInspecting((previous) => ({ ...previous, [fieldKey]: false }));
     }
   };
 
@@ -1078,6 +1227,60 @@ export default function InstallDialog({
       );
     }
 
+    if (field.type === 'multiselect') {
+      const selectedValues = new Set(getStringArrayValue(value));
+      return (
+        <div key={field.key} className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Label className="block text-sm/6 font-medium text-gray-900 dark:text-white">{label}</Label>
+            {field.required && <span className="text-xs text-red-500">*</span>}
+          </div>
+          {description && <p className="text-sm text-gray-500 dark:text-gray-400">{description}</p>}
+          <div className="grid gap-3 sm:grid-cols-2">
+            {(field.options || []).map((option) => {
+              const optionLabel =
+                translate(option.labelI18n, locale, plugin.default_locale || 'en') || option.value;
+              const optionDescription = translate(
+                option.descriptionI18n,
+                locale,
+                plugin.default_locale || 'en',
+              );
+              const checked = selectedValues.has(option.value);
+              return (
+                <label
+                  key={option.value}
+                  className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors ${
+                    checked
+                      ? 'border-foreground/20 bg-accent/60'
+                      : 'border-border/70 bg-background hover:bg-muted/40'
+                  }`}
+                >
+                  <Checkbox
+                    checked={checked}
+                    onCheckedChange={(nextChecked) => {
+                      const current = getStringArrayValue(configData[field.key]);
+                      const next = nextChecked === true
+                        ? Array.from(new Set([...current, option.value]))
+                        : current.filter((item) => item !== option.value);
+                      handleFieldChange(field.key, next);
+                    }}
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium text-foreground">{optionLabel}</div>
+                    {optionDescription && (
+                      <p className="text-sm text-muted-foreground">{optionDescription}</p>
+                    )}
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+        </div>
+      );
+    }
+
     if (field.type === 'textarea') {
       return (
         <div key={field.key} className="space-y-1">
@@ -1106,11 +1309,19 @@ export default function InstallDialog({
       const bindingLabel = binding
         ? translate(binding.displayNameI18n, locale, plugin.default_locale || 'en') || binding.key
         : field.authBindingKey || 'binding';
+      const challengeMetadata = getAuthChallengeMetadata(authState);
+      const feishuScopeStatus = getFeishuAppScopeStatus(authState);
+      const canInspectFeishuScopes =
+        binding?.driver === 'feishu_cli_setup' &&
+        typeof authState?.sessionId === 'string' &&
+        authState.sessionId.length > 0;
       const scanUrl =
-        authState?.challenge?.kind === 'qr_code' && typeof authState.challenge.metadata?.scanUrl === 'string'
-          ? authState.challenge.metadata.scanUrl
+        authState?.challenge?.kind === 'qr_code'
+          ? authState.challenge.qrUrl || challengeMetadata.scanUrl || authState.challenge.url
           : undefined;
       const challengeExpiresAt = authState?.challenge?.expiresAt;
+      const challengeTitle = challengeMetadata.title || label;
+      const challengeActionLabel = challengeMetadata.actionLabel || 'Open authorization page';
       return (
         <div key={field.key} className="space-y-2 rounded-lg border border-gray-200 dark:border-white/10 p-3">
           <div className="flex items-center justify-between gap-3">
@@ -1122,9 +1333,27 @@ export default function InstallDialog({
               </div>
               {description && <p className="text-sm text-gray-500 dark:text-gray-400">{description}</p>}
             </div>
-            <Button type="button" variant="outline" onClick={() => beginAuth(field)} className="shrink-0">
-              {authState?.status === 'completed' || authState?.status === 'consumed' ? 'Reconnect' : 'Connect'}
-            </Button>
+            <div className="flex items-center gap-2">
+              {canInspectFeishuScopes && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void inspectAuthSession(field.key)}
+                  className="shrink-0"
+                  disabled={authInspecting[field.key] === true}
+                >
+                  {authInspecting[field.key] === true ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Refreshing
+                    </>
+                  ) : 'Refresh app scopes'}
+                </Button>
+              )}
+              <Button type="button" variant="outline" onClick={() => beginAuth(field)} className="shrink-0">
+                {authState?.status === 'completed' || authState?.status === 'consumed' ? 'Reconnect' : 'Connect'}
+              </Button>
+            </div>
           </div>
           {authState && (
             <div className="text-sm text-gray-500 dark:text-gray-400">
@@ -1139,14 +1368,20 @@ export default function InstallDialog({
                       <div className="flex items-start gap-3">
                         <AuthQrCodeImage value={scanUrl} label={label} />
                         <div className="space-y-2">
-                          <p>Open the Mi Home app and scan this QR code.</p>
+                          <p className="font-medium text-foreground">{challengeTitle}</p>
+                          <p>{getAuthPendingMessage(authState)}</p>
+                          {challengeMetadata.userCode && (
+                            <p className="text-xs text-muted-foreground">
+                              User code: <span className="font-mono text-foreground">{challengeMetadata.userCode}</span>
+                            </p>
+                          )}
                           <a
                             href={scanUrl}
                             target="_blank"
                             rel="noreferrer"
                             className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-400"
                           >
-                            Open scan page
+                            {challengeActionLabel}
                             <ExternalLink className="h-3.5 w-3.5" />
                           </a>
                           {challengeExpiresAt && (
@@ -1165,6 +1400,68 @@ export default function InstallDialog({
               )}
               {authState.status === 'failed' && <span className="text-red-500">{authState.errorMessage || 'Authorization failed.'}</span>}
               {authState.status === 'expired' && <span className="text-red-500">Authorization session expired. Start again.</span>}
+              {feishuScopeStatus && (
+                <div className={`mt-3 space-y-3 rounded-lg border p-3 ${
+                  feishuScopeStatus.status === 'ready'
+                    ? 'border-emerald-200 bg-emerald-50/80 text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-100'
+                    : feishuScopeStatus.status === 'missing_app_scopes'
+                      ? 'border-amber-200 bg-amber-50/80 text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100'
+                      : 'border-slate-200 bg-slate-50/80 text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-100'
+                }`}>
+                  <div className="space-y-1">
+                    <p className="font-medium text-current">
+                      {feishuScopeStatus.status === 'ready'
+                        ? 'App scopes are ready'
+                        : feishuScopeStatus.status === 'missing_app_scopes'
+                          ? 'More app scopes still need review'
+                          : 'App scope status is unavailable'}
+                    </p>
+                    {feishuScopeStatus.message && <p className="text-current/80">{feishuScopeStatus.message}</p>}
+                    {feishuScopeStatus.checkedAt && (
+                      <p className="text-xs text-current/70">
+                        Checked at {new Date(feishuScopeStatus.checkedAt).toLocaleString()}.
+                      </p>
+                    )}
+                  </div>
+                  {feishuScopeStatus.missingFeatures.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="font-medium text-current">Missing feature scopes</p>
+                      <div className="space-y-2">
+                        {feishuScopeStatus.missingFeatures.map((feature) => (
+                          <div key={`${feature.key || feature.title}-${feature.missingScopes.join(',')}`} className="rounded-md bg-black/5 px-3 py-2 dark:bg-white/5">
+                            <p className="font-medium text-current">
+                              {feature.title || feature.key || 'Feature'}
+                              {feature.mayRequireAppReview ? ' · may require review' : ''}
+                            </p>
+                            <p className="text-xs text-current/80">{feature.missingScopes.join(', ')}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {feishuScopeStatus.queryError && feishuScopeStatus.status === 'unavailable' && (
+                    <p className="text-xs text-current/80">{feishuScopeStatus.queryError}</p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {feishuScopeStatus.consoleUrl && (
+                      <a
+                        href={feishuScopeStatus.consoleUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-500 dark:text-blue-300 dark:hover:text-blue-200"
+                      >
+                        Open Feishu scope console
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    )}
+                    {feishuScopeStatus.enabledScopes.length > 0 && (
+                      <span className="text-xs text-current/70">
+                        Enabled user scopes: {feishuScopeStatus.enabledScopes.length}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}

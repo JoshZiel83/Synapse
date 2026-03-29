@@ -37,6 +37,11 @@ import { incrementMcpVersion } from "./instance-manager.js";
 import { builtinCapabilityCategories } from "./builtin-plugins/categories.js";
 import { builtinSeeds } from "./builtin-plugins/index.js";
 import {
+  assertFeishuFeatureSelection,
+  assertFeishuScopesForFeatures,
+  normalizeFeishuFeatureKeys,
+} from "./feishu/features.js";
+import {
   buildResourceAccessAuthzMutations,
   isPrimaryAccessBinding,
   mapAccessBindingToGrant,
@@ -301,6 +306,16 @@ function asArray<T>(value: unknown): T[] {
 function asStringArray(value: unknown): string[] {
   return asArray<unknown>(value).filter(
     (item): item is string => typeof item === "string" && item.trim().length > 0,
+  );
+}
+
+function isConfigValueMissing(value: unknown) {
+  return (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (typeof value === "string" && value.trim() === "") ||
+    (Array.isArray(value) && value.length === 0)
   );
 }
 
@@ -1768,6 +1783,58 @@ export async function installPluginUnified(data: {
   const approvedRuntimePermissions =
     plugin.authorization?.requiredPermissions || [];
 
+  async function validateResolvedConfigForInstall(
+    config: Record<string, unknown>,
+    run: QueryRunner,
+  ) {
+    if (plugin.entry_point !== "feishu/app") {
+      return;
+    }
+
+    const features = normalizeFeishuFeatureKeys(config.features);
+    try {
+      assertFeishuFeatureSelection(features);
+    } catch (error) {
+      throw new McpPluginError(
+        400,
+        error instanceof Error ? error.message : "Invalid Feishu feature selection.",
+      );
+    }
+
+    const rawConnection = asObject(config.feishuAccount);
+    if (
+      rawConnection.__kind !== "auth_connection_ref" ||
+      typeof rawConnection.connectionId !== "string"
+    ) {
+      throw new McpPluginError(400, "Feishu account authorization is required.");
+    }
+
+    const connectionResult = await run<{
+      public_payload: unknown;
+    }>(
+      `SELECT public_payload
+       FROM plugin_connections
+       WHERE id = $1
+       LIMIT 1`,
+      [rawConnection.connectionId],
+    );
+    if (connectionResult.rows.length === 0) {
+      throw new McpPluginError(400, "Feishu auth connection not found.");
+    }
+
+    try {
+      assertFeishuScopesForFeatures(
+        features,
+        asObject(connectionResult.rows[0]!.public_payload).scopes,
+      );
+    } catch (error) {
+      throw new McpPluginError(
+        400,
+        error instanceof Error ? error.message : "Feishu scopes do not match the selected features.",
+      );
+    }
+  }
+
   const result = await transaction(async (client) => {
     const insertedInstallation = await client.query<{ id: string }>(
       `INSERT INTO plugin_installations (
@@ -1807,6 +1874,10 @@ export async function installPluginUnified(data: {
       authSessionIds: data.authSessionIds,
       run: client.query.bind(client) as QueryRunner,
     });
+    await validateResolvedConfigForInstall(
+      resolvedConfig,
+      client.query.bind(client) as QueryRunner,
+    );
     const encryptedConfig = encryptSensitiveFields(
       resolvedConfig,
       plugin.config_schema || {},
@@ -2098,6 +2169,58 @@ export async function updateInstallation(
       )
     : asObject(row.config_data);
 
+  async function validateResolvedConfigForUpdate(
+    config: Record<string, unknown>,
+    run: QueryRunner,
+  ) {
+    if (plugin.entry_point !== "feishu/app") {
+      return;
+    }
+
+    const features = normalizeFeishuFeatureKeys(config.features);
+    try {
+      assertFeishuFeatureSelection(features);
+    } catch (error) {
+      throw new McpPluginError(
+        400,
+        error instanceof Error ? error.message : "Invalid Feishu feature selection.",
+      );
+    }
+
+    const rawConnection = asObject(config.feishuAccount);
+    if (
+      rawConnection.__kind !== "auth_connection_ref" ||
+      typeof rawConnection.connectionId !== "string"
+    ) {
+      throw new McpPluginError(400, "Feishu account authorization is required.");
+    }
+
+    const connectionResult = await run<{
+      public_payload: unknown;
+    }>(
+      `SELECT public_payload
+       FROM plugin_connections
+       WHERE id = $1
+       LIMIT 1`,
+      [rawConnection.connectionId],
+    );
+    if (connectionResult.rows.length === 0) {
+      throw new McpPluginError(400, "Feishu auth connection not found.");
+    }
+
+    try {
+      assertFeishuScopesForFeatures(
+        features,
+        asObject(connectionResult.rows[0]!.public_payload).scopes,
+      );
+    } catch (error) {
+      throw new McpPluginError(
+        400,
+        error instanceof Error ? error.message : "Feishu scopes do not match the selected features.",
+      );
+    }
+  }
+
   const authzEntryIds = await transaction(async (client) => {
     const run = client.query.bind(client) as QueryRunner;
 
@@ -2114,6 +2237,10 @@ export async function updateInstallation(
             run,
           })
         : mergedConfig;
+
+    if (data.configData || data.authSessionIds) {
+      await validateResolvedConfigForUpdate(resolvedConfig, run);
+    }
 
     if (data.configData || data.authSessionIds) {
       const encryptedConfig = encryptSensitiveFields(
@@ -2489,7 +2616,7 @@ export function validateConfig(
     const value = config[rule.field];
     switch (rule.rule) {
       case "required":
-        if (value === undefined || value === null || value === "") {
+        if (isConfigValueMissing(value)) {
           errors.push({ field: rule.field, message: rule.message });
         }
         break;

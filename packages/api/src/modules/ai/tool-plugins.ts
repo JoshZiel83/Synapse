@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolCall, ToolResult, ToolPlugin, ToolResolveContext } from '@synapse/shared';
+import { getToolErrorMessage, getToolErrorMetadata } from './tool-errors.js';
 
 /**
  * Unified Built-in Tool Plugin Registry
@@ -51,6 +52,13 @@ export async function executeCallableTools(toolCalls: ToolCall[]): Promise<ToolR
         toolName: tc.toolName,
         content: `Error: unknown callable tool "${tc.toolName}"`,
         isError: true,
+        metadata: {
+          toolError: {
+            kind: 'model_actionable',
+            code: 'unknown_tool',
+            retryable: true,
+          },
+        },
       });
       continue;
     }
@@ -63,12 +71,14 @@ export async function executeCallableTools(toolCalls: ToolCall[]): Promise<ToolR
         content,
       });
     } catch (err: any) {
+      const errorMessage = getToolErrorMessage(err);
       results.push({
         toolCallId: tc.callId,
         providerCallId: tc.providerCallId,
         toolName: tc.toolName,
-        content: `Error executing tool "${tc.toolName}": ${err.message}`,
+        content: `Error executing tool "${tc.toolName}": ${errorMessage}`,
         isError: true,
+        metadata: getToolErrorMetadata(err),
       });
     }
   }

@@ -24,6 +24,7 @@ import {
 import {
   getPluginAuthSession,
   handlePluginAuthCallback,
+  inspectPluginAuthSession,
   PluginAuthError,
   startPluginAuthSession,
 } from "./auth-service.js";
@@ -269,6 +270,35 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         reply.send({
           session: await getPluginAuthSession(sessionId, workspaceId, user.id || user.userId),
         });
+      } catch (error) {
+        handleError(reply, error);
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/workspaces/:workspaceId/mcp/auth/sessions/:sessionId/inspect",
+    workspaceHook,
+    async (request, reply) => {
+      try {
+        const allowed = await requireWorkspacePermission(
+          request,
+          reply,
+          "workspace.manage_plugins",
+          "Not allowed to manage plugin installations in this workspace",
+        );
+        if (!allowed) return;
+
+        const { workspaceId, sessionId } = request.params as {
+          workspaceId: string;
+          sessionId: string;
+        };
+        const user = (request as any).user;
+        reply.send(await inspectPluginAuthSession({
+          workspaceId,
+          sessionId,
+          userId: user.id || user.userId,
+        }));
       } catch (error) {
         handleError(reply, error);
       }
