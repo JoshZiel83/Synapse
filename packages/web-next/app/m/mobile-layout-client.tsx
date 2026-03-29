@@ -2,9 +2,19 @@
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react"
 import { usePathname, useRouter } from "next/navigation"
-import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig } from "framer-motion"
+import {
+  AnimatePresence,
+  domAnimation,
+  LazyMotion,
+  m,
+  MotionConfig,
+} from "framer-motion"
 
-import { WorkspaceProvider, useWorkspace } from "@/app/dashboard/workspace-provider"
+import {
+  WorkspaceProvider,
+  useWorkspace,
+} from "@/app/dashboard/workspace-provider"
+import { WorkspaceLoadingScreen } from "@/components/workspace-loading-screen"
 import { MobileTabBar } from "@/components/mobile-tab-bar"
 import { useChatRealtimeSync } from "@/hooks/use-chat-realtime-sync"
 import { buildMobileLoginRedirect } from "@/lib/auth"
@@ -45,10 +55,8 @@ function MobileOnboardingGuard({
 }) {
   const router = useRouter()
   const { loading, needsOnboarding } = useWorkspace()
-  const shouldRedirectToWelcome =
-    needsOnboarding && pathname !== "/m/welcome"
-  const shouldRedirectToHome =
-    !needsOnboarding && pathname === "/m/welcome"
+  const shouldRedirectToWelcome = needsOnboarding && pathname !== "/m/welcome"
+  const shouldRedirectToHome = !needsOnboarding && pathname === "/m/welcome"
 
   useEffect(() => {
     if (loading) return
@@ -64,14 +72,7 @@ function MobileOnboardingGuard({
   }, [loading, router, shouldRedirectToHome, shouldRedirectToWelcome])
 
   if (loading) {
-    return (
-      <div className="flex min-h-svh items-center justify-center bg-muted/40 px-4">
-        <div className="flex flex-col items-center gap-4">
-          <div className="size-12 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          <p className="text-sm text-muted-foreground">Loading workspace...</p>
-        </div>
-      </div>
-    )
+    return <WorkspaceLoadingScreen />
   }
 
   if (shouldRedirectToWelcome || shouldRedirectToHome) {
@@ -97,9 +98,7 @@ function MobileShell({ children }: { children: ReactNode }) {
 
   const pageMotion = getMobilePageMotion(pathname)
   const shellStyle = {
-    "--mobile-tab-bar-clearance": hideTabBar
-      ? "0px"
-      : `${tabBarClearance}px`,
+    "--mobile-tab-bar-clearance": hideTabBar ? "0px" : `${tabBarClearance}px`,
   } as CSSProperties
 
   return (
