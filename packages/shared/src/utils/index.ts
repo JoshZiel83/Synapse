@@ -1,9 +1,18 @@
-import { randomUUID } from 'crypto';
 import type { WorkItemStatus } from '../types/index.js';
 import { WORK_ITEM_TRANSITIONS } from '../types/index.js';
 
 export function generateId(): string {
-  return randomUUID();
+  const cryptoRef = globalThis as typeof globalThis & {
+    crypto?: {
+      randomUUID?: () => string;
+    };
+  };
+
+  if (typeof cryptoRef.crypto?.randomUUID === 'function') {
+    return cryptoRef.crypto.randomUUID();
+  }
+
+  return `id_${Math.random().toString(36).slice(2)}_${Date.now()}`;
 }
 
 export function isValidTransition(from: WorkItemStatus, to: WorkItemStatus): boolean {

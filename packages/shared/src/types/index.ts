@@ -3303,8 +3303,22 @@ export interface A2ATaskResponse {
 
 // ============ Content Helpers ============
 
+function getRandomUUIDFactory() {
+  const cryptoRef = globalThis as typeof globalThis & {
+    crypto?: {
+      randomUUID?: () => string;
+    };
+  };
+
+  if (typeof cryptoRef.crypto?.randomUUID === "function") {
+    return cryptoRef.crypto.randomUUID.bind(cryptoRef.crypto);
+  }
+
+  return null;
+}
+
 export function createCanonicalContentBlockId(prefix = "block"): UUID {
-  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  const randomUUID = getRandomUUIDFactory();
   if (randomUUID) {
     return randomUUID();
   }
@@ -3497,7 +3511,7 @@ export function textBlocks(s: string): CanonicalContentBlock[] {
 }
 
 function createActorDocId(): UUID {
-  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  const randomUUID = getRandomUUIDFactory();
   if (randomUUID) {
     return randomUUID();
   }
