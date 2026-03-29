@@ -195,6 +195,64 @@ function integrationSpecForSourceKey(
   return spec;
 }
 
+export function listIntegrationRemoteWebhookSubscriptions(
+  provider: AutomationIntegrationProvider,
+  sourceKeys: string[],
+) {
+  const githubEvents = new Set<string>();
+  const gitlabFlags = new Set<string>();
+
+  for (const sourceKey of sourceKeys) {
+    const spec = integrationSpecForSourceKey(sourceKey, provider);
+    if (spec.githubEvent) {
+      githubEvents.add(spec.githubEvent);
+    }
+    if (spec.gitlabFlag) {
+      gitlabFlags.add(spec.gitlabFlag);
+    }
+  }
+
+  return {
+    githubEvents: Array.from(githubEvents).sort(),
+    gitlabFlags: Array.from(gitlabFlags).sort(),
+  };
+}
+
+export function listIntegrationSourceKeysForWebhookIngress(input: {
+  provider: AutomationIntegrationProvider;
+  headers?: Record<string, unknown>;
+  payload?: Record<string, unknown>;
+}) {
+  if (input.provider === "github") {
+    const eventName = headerValue(input.headers || {}, "x-github-event");
+    if (!eventName || eventName === "ping") {
+      return [];
+    }
+    return Object.entries(INTEGRATION_EVENT_SPECS)
+      .filter(([, spec]) => spec.provider === "github" && spec.githubEvent === eventName)
+      .map(([sourceKey]) => sourceKey);
+  }
+
+  const payload = input.payload || {};
+  const objectKind = readString(payload.object_kind)?.toLowerCase();
+  if (!objectKind) {
+    return [];
+  }
+
+  switch (objectKind) {
+    case "note":
+      return ["gitlab.note"];
+    case "merge_request":
+      return ["gitlab.merge_request"];
+    case "pipeline":
+      return ["gitlab.pipeline"];
+    case "push":
+      return ["gitlab.push"];
+    default:
+      return [];
+  }
+}
+
 function githubRepositoryPath(targetId: string) {
   const trimmed = targetId.trim().replace(/^\/+/, "").replace(/\/+$/, "");
   const segments = trimmed.split("/").filter(Boolean);
@@ -346,14 +404,14 @@ export async function getIntegrationInstallation(
   };
 }
 
-export function integrationWebhookCallbackUrl(pathToken: string, sourceKey: string) {
+export function integrationWebhookCallbackUrl(pathToken: string) {
   const baseUrl = trimTrailingSlash(config.app.baseUrl || "http://localhost:3001");
-  return `${baseUrl}/api/v1/automation-webhooks/${pathToken}/sources/${encodeURIComponent(sourceKey)}/events`;
+  return `${baseUrl}/api/v1/automation-webhooks/${pathToken}/events`;
 }
 
 export async function registerIntegrationWebhook(input: {
   installation: ResolvedIntegrationInstallation;
-  sourceKey: string;
+  sourceKeys: string[];
   targetKind: AutomationIntegrationTargetKind;
   targetId: string;
   targetLabel: string;
@@ -362,10 +420,20 @@ export async function registerIntegrationWebhook(input: {
   name: string;
   description: string;
 }): Promise<string> {
-  const spec = integrationSpecForSourceKey(input.sourceKey, input.installation.provider);
-  if (spec.targetKind !== input.targetKind) {
-    throw new Error(`Event source ${input.sourceKey} requires target kind ${spec.targetKind}`);
+  if (input.sourceKeys.length === 0) {
+    throw new Error("Integration webhook registration requires at least one sourceKey");
   }
+
+  const specs = input.sourceKeys.map((sourceKey) =>
+    integrationSpecForSourceKey(sourceKey, input.installation.provider),
+  );
+  if (specs.some((spec) => spec.targetKind !== input.targetKind)) {
+    throw new Error(`Integration webhook target kind ${input.targetKind} does not match all source keys`);
+  }
+  const subscriptions = listIntegrationRemoteWebhookSubscriptions(
+    input.installation.provider,
+    input.sourceKeys,
+  );
 
   if (input.installation.provider === "github") {
     const response = await githubRequest<{ id: number | string }>(
@@ -379,7 +447,7 @@ export async function registerIntegrationWebhook(input: {
         body: JSON.stringify({
           name: "web",
           active: true,
-          events: [spec.githubEvent],
+          events: subscriptions.githubEvents,
           config: {
             url: input.callbackUrl,
             content_type: "json",
@@ -397,14 +465,21 @@ export async function registerIntegrationWebhook(input: {
     `/projects/${gitlabProjectPath(input.targetId)}/hooks`,
     {
       method: "POST",
-      body: JSON.stringify({
-        url: input.callbackUrl,
-        token: input.secret,
-        name: input.name,
-        description: input.description,
-        enable_ssl_verification: true,
-        [spec.gitlabFlag!]: true,
-      }),
+      body: JSON.stringify(
+        subscriptions.gitlabFlags.reduce<Record<string, unknown>>(
+          (payload, flag) => ({
+            ...payload,
+            [flag]: true,
+          }),
+          {
+            url: input.callbackUrl,
+            token: input.secret,
+            name: input.name,
+            description: input.description,
+            enable_ssl_verification: true,
+          },
+        ),
+      ),
     },
   );
   return String(response.id);
@@ -451,20 +526,97 @@ export async function unregisterIntegrationWebhook(input: {
   }
 }
 
+export async function updateIntegrationWebhook(input: {
+  installation: ResolvedIntegrationInstallation;
+  integration: Pick<
+    AutomationEventSourceIntegration,
+    "provider" | "targetKind" | "targetId" | "targetLabel" | "externalSubscriptionId"
+  >;
+  sourceKeys: string[];
+  callbackUrl: string;
+  secret: string;
+  name: string;
+  description: string;
+}) {
+  if (!input.integration.externalSubscriptionId) {
+    throw new Error("Integration webhook update requires externalSubscriptionId");
+  }
+  if (input.sourceKeys.length === 0) {
+    throw new Error("Integration webhook update requires at least one sourceKey");
+  }
+
+  const specs = input.sourceKeys.map((sourceKey) =>
+    integrationSpecForSourceKey(sourceKey, input.installation.provider),
+  );
+  if (specs.some((spec) => spec.targetKind !== input.integration.targetKind)) {
+    throw new Error(`Integration webhook target kind ${input.integration.targetKind} does not match all source keys`);
+  }
+  const subscriptions = listIntegrationRemoteWebhookSubscriptions(
+    input.installation.provider,
+    input.sourceKeys,
+  );
+
+  if (input.installation.provider === "github") {
+    await githubRequest(
+      input.installation,
+      `/repos/${githubRepositoryPath(input.integration.targetId)}/hooks/${encodeURIComponent(input.integration.externalSubscriptionId)}`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: "web",
+          active: true,
+          events: subscriptions.githubEvents,
+          config: {
+            url: input.callbackUrl,
+            content_type: "json",
+            secret: input.secret,
+            insecure_ssl: "0",
+          },
+        }),
+      },
+    );
+    return;
+  }
+
+  await gitlabRequest(
+    input.installation,
+    `/projects/${gitlabProjectPath(input.integration.targetId)}/hooks/${encodeURIComponent(input.integration.externalSubscriptionId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(
+        subscriptions.gitlabFlags.reduce<Record<string, unknown>>(
+          (payload, flag) => ({
+            ...payload,
+            [flag]: true,
+          }),
+          {
+            url: input.callbackUrl,
+            token: input.secret,
+            name: input.name,
+            description: input.description,
+            enable_ssl_verification: true,
+          },
+        ),
+      ),
+    },
+  );
+}
+
 export function normalizeIntegrationWebhookIngress(input: {
-  source: Pick<AutomationEventSource, "sourceKey" | "integration">;
+  integration: Pick<
+    AutomationEventSourceIntegration,
+    "provider" | "targetKind" | "targetId" | "targetLabel"
+  >;
   secret: string;
   headers: Record<string, unknown>;
   rawBody?: string;
   body?: Record<string, unknown>;
 }): IntegrationWebhookIngressResult {
-  const integration = input.source.integration;
-  if (!integration) {
-    throw new Error("Integration webhook ingress requires integration metadata");
-  }
-
   const payload = input.body || {};
-  if (integration.provider === "github") {
+  if (input.integration.provider === "github") {
     const signature = headerValue(input.headers, "x-hub-signature-256");
     if (!signature || !input.rawBody) {
       throw new Error("GitHub webhook signature is required");
@@ -491,14 +643,14 @@ export function normalizeIntegrationWebhookIngress(input: {
         nowISO(),
       sourceSnapshot: {
         integrationProvider: "github",
-        integrationTargetKind: integration.targetKind,
-        integrationTargetId: integration.targetId,
-        integrationTargetLabel: integration.targetLabel,
+        integrationTargetKind: input.integration.targetKind,
+        integrationTargetId: input.integration.targetId,
+        integrationTargetLabel: input.integration.targetLabel,
         githubEvent: eventName,
         githubDeliveryId: headerValue(input.headers, "x-github-delivery"),
         repositoryFullName: readString(
           asObject(payload.repository).full_name,
-        ) || integration.targetLabel,
+        ) || input.integration.targetLabel,
       },
     };
   }
@@ -521,15 +673,15 @@ export function normalizeIntegrationWebhookIngress(input: {
       nowISO(),
     sourceSnapshot: {
       integrationProvider: "gitlab",
-      integrationTargetKind: integration.targetKind,
-      integrationTargetId: integration.targetId,
-      integrationTargetLabel: integration.targetLabel,
+      integrationTargetKind: input.integration.targetKind,
+      integrationTargetId: input.integration.targetId,
+      integrationTargetLabel: input.integration.targetLabel,
       gitlabEvent: headerValue(input.headers, "x-gitlab-event"),
       gitlabEventUuid: headerValue(input.headers, "x-gitlab-event-uuid"),
       gitlabWebhookUuid: headerValue(input.headers, "x-gitlab-webhook-uuid"),
       projectPathWithNamespace: readString(
         asObject(payload.project).path_with_namespace,
-      ) || integration.targetLabel,
+      ) || input.integration.targetLabel,
     },
   };
 }

@@ -13,6 +13,7 @@ import {
   getAutomationEventSource,
   getAutomationRule,
   ingestAutomationEvent,
+  ingestIntegrationAutomationWebhookEvent,
   ingestAutomationWebhookEvent,
   listAutomationOccurrences,
   listAutomationEventSources,
@@ -532,6 +533,34 @@ export default async function automationController(app: FastifyInstance) {
     await enqueueAutomationExecutions(result.executions.map((execution) => execution.id));
     return reply.status(202).send({
       occurrence: result.occurrence,
+      executions: result.executions,
+    });
+  });
+
+  app.post('/api/v1/automation-webhooks/:pathToken/events', async (request, reply) => {
+    const { pathToken } = request.params as { pathToken: string };
+    const payload =
+      request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+        ? request.body as Record<string, unknown>
+        : {};
+
+    const result = await ingestIntegrationAutomationWebhookEvent({
+      pathToken,
+      headers: request.headers as Record<string, unknown>,
+      rawBody: (request as any).rawBody as string | undefined,
+      payload,
+    });
+    if (result.ignored) {
+      return reply.status(202).send({
+        ignored: true,
+        occurrences: [],
+        executions: [],
+      });
+    }
+
+    await enqueueAutomationExecutionJobs(result.executions.map((execution) => execution.id));
+    return reply.status(202).send({
+      occurrences: result.occurrences,
       executions: result.executions,
     });
   });

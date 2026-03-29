@@ -35,6 +35,7 @@ export const gitlabSeed: BuiltinOrgSeed = {
       categorySlugs: [
         "integrations-and-automation",
       ],
+      iconAssetPath: "assets/icons/gitlab.svg",
       tags: [
         "gitlab",
         "official",

@@ -35,6 +35,7 @@ export const githubSeed: BuiltinOrgSeed = {
       categorySlugs: [
         "integrations-and-automation",
       ],
+      iconAssetPath: "assets/icons/github.svg",
       tags: [
         "github",
         "official",

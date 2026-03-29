@@ -535,6 +535,7 @@ export type AutomationEventSourceStatus =
   | "archived";
 
 export interface AutomationEventSourceIntegration {
+  bindingId?: UUID;
   installationId: UUID;
   provider: AutomationIntegrationProvider;
   ingressKind: AutomationIntegrationIngressKind;

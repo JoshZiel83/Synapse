@@ -43,8 +43,10 @@ import {
   buildIntegrationEventSourceTemplate,
   getIntegrationInstallation,
   integrationWebhookCallbackUrl,
+  listIntegrationSourceKeysForWebhookIngress,
   normalizeIntegrationWebhookIngress,
   registerIntegrationWebhook,
+  updateIntegrationWebhook,
   unregisterIntegrationWebhook,
 } from './integrations.js';
 import { enqueueSessionWakeup } from '../session/runtime.js';
@@ -86,12 +88,14 @@ type AutomationTriggerRow = {
   event_provider_kind?: AutomationEventProviderKind | null;
   event_provider_ref?: string | null;
   event_webhook_endpoint_id?: string | null;
+  event_integration_binding_id?: string | null;
   event_integration_installation_id?: string | null;
   event_integration_provider?: AutomationIntegrationProvider | null;
   event_integration_ingress_kind?: AutomationIntegrationIngressKind | null;
   event_integration_target_kind?: AutomationIntegrationTargetKind | null;
   event_integration_target_id?: string | null;
   event_integration_target_label?: string | null;
+  event_integration_webhook_endpoint_id?: string | null;
   event_external_subscription_id?: string | null;
   event_source_status?: AutomationEventSourceStatus | null;
   source_locator: string | null;
@@ -138,13 +142,15 @@ type AutomationEventSourceRow = {
   provider_kind: AutomationEventProviderKind;
   provider_ref: string | null;
   webhook_endpoint_id: string | null;
-  integration_installation_id: string | null;
-  integration_provider: AutomationIntegrationProvider | null;
-  integration_ingress_kind: AutomationIntegrationIngressKind | null;
-  integration_target_kind: AutomationIntegrationTargetKind | null;
-  integration_target_id: string | null;
-  integration_target_label: string | null;
-  external_subscription_id: string | null;
+  integration_binding_id: string | null;
+  integration_installation_id?: string | null;
+  integration_provider?: AutomationIntegrationProvider | null;
+  integration_ingress_kind?: AutomationIntegrationIngressKind | null;
+  integration_target_kind?: AutomationIntegrationTargetKind | null;
+  integration_target_id?: string | null;
+  integration_target_label?: string | null;
+  integration_webhook_endpoint_id?: string | null;
+  integration_external_subscription_id?: string | null;
   source_key: string;
   name: string;
   description: string;
@@ -171,12 +177,14 @@ type AutomationOccurrenceRow = {
   event_source_name?: string | null;
   event_provider_ref?: string | null;
   event_webhook_endpoint_id?: string | null;
+  event_integration_binding_id?: string | null;
   event_integration_installation_id?: string | null;
   event_integration_provider?: AutomationIntegrationProvider | null;
   event_integration_ingress_kind?: AutomationIntegrationIngressKind | null;
   event_integration_target_kind?: AutomationIntegrationTargetKind | null;
   event_integration_target_id?: string | null;
   event_integration_target_label?: string | null;
+  event_integration_webhook_endpoint_id?: string | null;
   event_external_subscription_id?: string | null;
   source_locator: string | null;
   match_key: string | null;
@@ -240,6 +248,22 @@ type AutomationWebhookEndpointRow = {
   metadata: Record<string, unknown> | string | null;
   created_by: string | null;
   last_received_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type AutomationIntegrationBindingRow = {
+  id: string;
+  workspace_id: string;
+  installation_id: string;
+  provider: AutomationIntegrationProvider;
+  ingress_kind: AutomationIntegrationIngressKind;
+  target_kind: AutomationIntegrationTargetKind;
+  target_id: string;
+  target_label: string;
+  webhook_endpoint_id: string | null;
+  external_subscription_id: string | null;
+  metadata: Record<string, unknown> | string | null;
   created_at: string;
   updated_at: string;
 };
@@ -400,14 +424,15 @@ function normalizeContentBlocks(value: unknown): CanonicalContentBlock[] {
 }
 
 function mapEventSourceIntegration(row: {
-  webhook_endpoint_id?: string | null;
+  integration_binding_id?: string | null;
+  integration_webhook_endpoint_id?: string | null;
   integration_installation_id?: string | null;
   integration_provider?: AutomationIntegrationProvider | null;
   integration_ingress_kind?: AutomationIntegrationIngressKind | null;
   integration_target_kind?: AutomationIntegrationTargetKind | null;
   integration_target_id?: string | null;
   integration_target_label?: string | null;
-  external_subscription_id?: string | null;
+  integration_external_subscription_id?: string | null;
 }): AutomationEventSourceIntegration | undefined {
   if (
     !row.integration_installation_id ||
@@ -421,14 +446,15 @@ function mapEventSourceIntegration(row: {
   }
 
   return {
+    bindingId: row.integration_binding_id || undefined,
     installationId: row.integration_installation_id,
     provider: row.integration_provider,
     ingressKind: row.integration_ingress_kind,
     targetKind: row.integration_target_kind,
     targetId: row.integration_target_id,
     targetLabel: row.integration_target_label,
-    endpointId: row.webhook_endpoint_id || undefined,
-    externalSubscriptionId: row.external_subscription_id || undefined,
+    endpointId: row.integration_webhook_endpoint_id || undefined,
+    externalSubscriptionId: row.integration_external_subscription_id || undefined,
   };
 }
 
@@ -477,14 +503,15 @@ function mapTriggerRow(row: AutomationTriggerRow): AutomationTrigger {
     eventProviderRef:
       (row as AutomationTriggerRow & { event_provider_ref?: string | null }).event_provider_ref || undefined,
     eventSourceIntegration: mapEventSourceIntegration({
-      webhook_endpoint_id: row.event_webhook_endpoint_id,
+      integration_binding_id: row.event_integration_binding_id,
+      integration_webhook_endpoint_id: row.event_integration_webhook_endpoint_id,
       integration_installation_id: row.event_integration_installation_id,
       integration_provider: row.event_integration_provider,
       integration_ingress_kind: row.event_integration_ingress_kind,
       integration_target_kind: row.event_integration_target_kind,
       integration_target_id: row.event_integration_target_id,
       integration_target_label: row.event_integration_target_label,
-      external_subscription_id: row.event_external_subscription_id,
+      integration_external_subscription_id: row.event_external_subscription_id,
     }),
     eventSourceStatus:
       ((row as AutomationTriggerRow & { event_source_status?: AutomationEventSourceStatus | null }).event_source_status ||
@@ -612,14 +639,15 @@ function mapOccurrenceRow(row: AutomationOccurrenceRow): AutomationOccurrence {
     eventSourceName:
       (row as AutomationOccurrenceRow & { event_source_name?: string | null }).event_source_name || undefined,
     eventSourceIntegration: mapEventSourceIntegration({
-      webhook_endpoint_id: row.event_webhook_endpoint_id,
+      integration_binding_id: row.event_integration_binding_id,
+      integration_webhook_endpoint_id: row.event_integration_webhook_endpoint_id,
       integration_installation_id: row.event_integration_installation_id,
       integration_provider: row.event_integration_provider,
       integration_ingress_kind: row.event_integration_ingress_kind,
       integration_target_kind: row.event_integration_target_kind,
       integration_target_id: row.event_integration_target_id,
       integration_target_label: row.event_integration_target_label,
-      external_subscription_id: row.event_external_subscription_id,
+      integration_external_subscription_id: row.event_external_subscription_id,
     }),
     sourceLocator: row.source_locator || undefined,
     matchKey: row.match_key || undefined,
@@ -669,6 +697,22 @@ function mapWebhookEndpointRow(row: AutomationWebhookEndpointRow): AutomationWeb
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function automationEventSourceJoinClause(eventSourceAlias = 'aes', bindingAlias = 'aib') {
+  return `LEFT JOIN automation_integration_bindings ${bindingAlias} ON ${bindingAlias}.id = ${eventSourceAlias}.integration_binding_id`;
+}
+
+function automationEventSourceSelectClause(eventSourceAlias = 'aes', bindingAlias = 'aib') {
+  return `${eventSourceAlias}.*,
+          ${bindingAlias}.installation_id AS integration_installation_id,
+          ${bindingAlias}.provider AS integration_provider,
+          ${bindingAlias}.ingress_kind AS integration_ingress_kind,
+          ${bindingAlias}.target_kind AS integration_target_kind,
+          ${bindingAlias}.target_id AS integration_target_id,
+          ${bindingAlias}.target_label AS integration_target_label,
+          ${bindingAlias}.webhook_endpoint_id AS integration_webhook_endpoint_id,
+          ${bindingAlias}.external_subscription_id AS integration_external_subscription_id`;
 }
 
 function targetEntityRef(entityKind: AutomationTargetEntityKind, entityId: string): AutomationTargetEntityRef {
@@ -962,17 +1006,20 @@ async function loadAutomationRulesByIds(workspaceId: string, ruleIds: string[]) 
               aes.provider_kind AS event_provider_kind,
               aes.provider_ref AS event_provider_ref,
               aes.webhook_endpoint_id AS event_webhook_endpoint_id,
-              aes.integration_installation_id AS event_integration_installation_id,
-              aes.integration_provider AS event_integration_provider,
-              aes.integration_ingress_kind AS event_integration_ingress_kind,
-              aes.integration_target_kind AS event_integration_target_kind,
-              aes.integration_target_id AS event_integration_target_id,
-              aes.integration_target_label AS event_integration_target_label,
-              aes.external_subscription_id AS event_external_subscription_id,
+              aes.integration_binding_id AS event_integration_binding_id,
+              aib.installation_id AS event_integration_installation_id,
+              aib.provider AS event_integration_provider,
+              aib.ingress_kind AS event_integration_ingress_kind,
+              aib.target_kind AS event_integration_target_kind,
+              aib.target_id AS event_integration_target_id,
+              aib.target_label AS event_integration_target_label,
+              aib.webhook_endpoint_id AS event_integration_webhook_endpoint_id,
+              aib.external_subscription_id AS event_external_subscription_id,
               aes.status AS event_source_status
        FROM automation_triggers
        at
        LEFT JOIN automation_event_sources aes ON aes.id = at.event_source_id
+       LEFT JOIN automation_integration_bindings aib ON aib.id = aes.integration_binding_id
        WHERE at.rule_id = ANY($1)`,
       [ruleIds],
     ),
@@ -1146,10 +1193,11 @@ async function pauseAutomationRulesForEventSource(
 
 export async function getAutomationEventSource(workspaceId: string, eventSourceId: string) {
   const result = await query<AutomationEventSourceRow>(
-    `SELECT *
-     FROM automation_event_sources
-     WHERE workspace_id = $1
-       AND id = $2
+    `SELECT ${automationEventSourceSelectClause('aes', 'aib')}
+     FROM automation_event_sources aes
+     ${automationEventSourceJoinClause('aes', 'aib')}
+     WHERE aes.workspace_id = $1
+       AND aes.id = $2
      LIMIT 1`,
     [workspaceId, eventSourceId],
   );
@@ -1166,30 +1214,31 @@ export async function listAutomationEventSources(
   },
 ) {
   const values: unknown[] = [workspaceId];
-  let where = 'workspace_id = $1';
+  let where = 'aes.workspace_id = $1';
 
   if (filters?.status) {
     values.push(filters.status);
-    where += ` AND status = $${values.length}`;
+    where += ` AND aes.status = $${values.length}`;
   }
   if (filters?.providerKind) {
     values.push(filters.providerKind);
-    where += ` AND provider_kind = $${values.length}`;
+    where += ` AND aes.provider_kind = $${values.length}`;
   }
   if (filters?.providerRef !== undefined) {
     values.push(filters.providerRef);
-    where += ` AND COALESCE(provider_ref, '') = COALESCE($${values.length}, '')`;
+    where += ` AND COALESCE(aes.provider_ref, '') = COALESCE($${values.length}, '')`;
   }
   if (filters?.sourceKey) {
     values.push(filters.sourceKey);
-    where += ` AND source_key = $${values.length}`;
+    where += ` AND aes.source_key = $${values.length}`;
   }
 
   const result = await query<AutomationEventSourceRow>(
-    `SELECT *
-     FROM automation_event_sources
+    `SELECT ${automationEventSourceSelectClause('aes', 'aib')}
+     FROM automation_event_sources aes
+     ${automationEventSourceJoinClause('aes', 'aib')}
      WHERE ${where}
-     ORDER BY created_at DESC`,
+     ORDER BY aes.created_at DESC`,
     values,
   );
   return result.rows.map(mapEventSourceRow);
@@ -1223,79 +1272,260 @@ async function updateWebhookEndpointStatus(endpointId: string, status: Automatio
   );
 }
 
-async function activateIntegrationEventSourceWebhook(
-  source: AutomationEventSource,
-): Promise<AutomationEventSource | null> {
-  if (
-    source.providerKind !== 'integration' ||
-    !source.integration ||
-    source.integration.ingressKind !== 'webhook' ||
-    !source.integration.endpointId ||
-    source.integration.externalSubscriptionId
-  ) {
+async function getAutomationIntegrationBinding(bindingId: string) {
+  const result = await query<AutomationIntegrationBindingRow>(
+    `SELECT *
+     FROM automation_integration_bindings
+     WHERE id = $1
+     LIMIT 1`,
+    [bindingId],
+  );
+  return result.rows[0] || null;
+}
+
+function integrationEndpointName(
+  provider: AutomationIntegrationProvider,
+  targetLabel: string,
+) {
+  return `${provider === 'github' ? 'GitHub' : 'GitLab'} ${targetLabel} Endpoint`;
+}
+
+function integrationWebhookName(
+  provider: AutomationIntegrationProvider,
+  targetLabel: string,
+) {
+  return `${provider === 'github' ? 'GitHub' : 'GitLab'} Events: ${targetLabel}`;
+}
+
+function mapIntegrationBindingToSourceIntegration(
+  binding: AutomationIntegrationBindingRow,
+): AutomationEventSourceIntegration {
+  return {
+    bindingId: binding.id,
+    installationId: binding.installation_id,
+    provider: binding.provider,
+    ingressKind: binding.ingress_kind,
+    targetKind: binding.target_kind,
+    targetId: binding.target_id,
+    targetLabel: binding.target_label,
+    endpointId: binding.webhook_endpoint_id || undefined,
+    externalSubscriptionId: binding.external_subscription_id || undefined,
+  };
+}
+
+async function ensureAutomationIntegrationBinding(params: {
+  workspaceId: string;
+  creator: AutomationCreatorInput;
+  installation: Awaited<ReturnType<typeof getIntegrationInstallation>>;
+  integration: AutomationEventSourceIntegrationInput;
+}) {
+  const ingressKind = params.integration.ingressKind || 'webhook';
+  const targetId = params.integration.targetId.trim();
+  const targetLabel = params.integration.targetLabel?.trim() || targetId;
+  const existingResult = await query<AutomationIntegrationBindingRow>(
+    `SELECT *
+     FROM automation_integration_bindings
+     WHERE workspace_id = $1
+       AND installation_id = $2
+       AND provider = $3
+       AND ingress_kind = $4
+       AND target_kind = $5
+       AND target_id = $6
+     LIMIT 1`,
+    [
+      params.workspaceId,
+      params.installation.id,
+      params.integration.provider,
+      ingressKind,
+      params.integration.targetKind,
+      targetId,
+    ],
+  );
+  const existing = existingResult.rows[0];
+  if (existing) {
+    if (existing.target_label !== targetLabel) {
+      await query(
+        `UPDATE automation_integration_bindings
+         SET target_label = $2,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [existing.id, targetLabel],
+      );
+      return getAutomationIntegrationBinding(existing.id);
+    }
+    return existing;
+  }
+
+  const bindingId = uuidv4();
+  const endpointId = ingressKind === 'webhook' ? uuidv4() : null;
+  const pathToken = ingressKind === 'webhook' ? crypto.randomBytes(18).toString('hex') : null;
+  const secret = ingressKind === 'webhook' ? generateSecret() : null;
+
+  await transaction(async (client) => {
+    if (endpointId && pathToken && secret) {
+      await client.query(
+        `INSERT INTO automation_webhook_endpoints
+           (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by, created_at, updated_at)
+         VALUES ($1, $2, $3, 'disabled', $4, $5, $6, $7, $8, NOW(), NOW())`,
+        [
+          endpointId,
+          params.workspaceId,
+          integrationEndpointName(params.integration.provider, targetLabel),
+          pathToken,
+          encrypt(secret),
+          secretHint(secret),
+          JSON.stringify({
+            managedBy: 'integration_binding',
+            integrationProvider: params.integration.provider,
+            integrationTargetKind: params.integration.targetKind,
+            integrationTargetId: targetId,
+            integrationTargetLabel: targetLabel,
+          }),
+          params.creator.userId || null,
+        ],
+      );
+    }
+
+    await client.query(
+      `INSERT INTO automation_integration_bindings
+         (id, workspace_id, installation_id, provider, ingress_kind, target_kind, target_id, target_label,
+          webhook_endpoint_id, external_subscription_id, metadata, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, NOW(), NOW())`,
+      [
+        bindingId,
+        params.workspaceId,
+        params.installation.id,
+        params.integration.provider,
+        ingressKind,
+        params.integration.targetKind,
+        targetId,
+        targetLabel,
+        endpointId,
+        JSON.stringify({
+          integrationProvider: params.integration.provider,
+          integrationTargetKind: params.integration.targetKind,
+        }),
+      ],
+    );
+  });
+
+  return getAutomationIntegrationBinding(bindingId);
+}
+
+async function listActiveIntegrationSourceKeysForBinding(bindingId: string) {
+  const result = await query<{ source_key: string }>(
+    `SELECT source_key
+     FROM automation_event_sources
+     WHERE provider_kind = 'integration'
+       AND integration_binding_id = $1
+       AND status IN ('active', 'deprecated')
+     ORDER BY source_key ASC`,
+    [bindingId],
+  );
+  return Array.from(new Set(result.rows.map((row) => row.source_key).filter(Boolean)));
+}
+
+async function reconcileIntegrationBindingWebhook(
+  bindingId: string,
+): Promise<AutomationIntegrationBindingRow | null> {
+  const binding = await getAutomationIntegrationBinding(bindingId);
+  if (!binding) {
     return null;
+  }
+  if (binding.ingress_kind !== 'webhook' || !binding.webhook_endpoint_id) {
+    return binding;
+  }
+
+  const sourceKeys = await listActiveIntegrationSourceKeysForBinding(binding.id);
+  const { endpoint, secret } = await loadAutomationWebhookEndpointSecret(binding.webhook_endpoint_id);
+  const integration = mapIntegrationBindingToSourceIntegration(binding);
+
+  if (sourceKeys.length === 0) {
+    if (binding.external_subscription_id) {
+      const installation = await getIntegrationInstallation(
+        binding.workspace_id,
+        binding.installation_id,
+        binding.provider,
+        { allowInactive: true },
+      );
+      await unregisterIntegrationWebhook({
+        installation,
+        integration,
+      });
+    }
+    await query(
+      `UPDATE automation_integration_bindings
+       SET external_subscription_id = NULL,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [binding.id],
+    );
+    await updateWebhookEndpointStatus(endpoint.id, 'disabled');
+    return getAutomationIntegrationBinding(binding.id);
   }
 
   const installation = await getIntegrationInstallation(
-    source.workspaceId,
-    source.integration.installationId,
-    source.integration.provider,
+    binding.workspace_id,
+    binding.installation_id,
+    binding.provider,
     { allowInactive: true },
   );
-  const { endpoint, secret } = await loadAutomationWebhookEndpointSecret(source.integration.endpointId);
-  const externalSubscriptionId = await registerIntegrationWebhook({
-    installation,
-    sourceKey: source.sourceKey,
-    targetKind: source.integration.targetKind,
-    targetId: source.integration.targetId,
-    targetLabel: source.integration.targetLabel,
-    callbackUrl: integrationWebhookCallbackUrl(endpoint.pathToken, source.sourceKey),
-    secret,
-    name: source.name,
-    description: source.description,
-  });
+  const callbackUrl = integrationWebhookCallbackUrl(endpoint.pathToken);
+  const name = integrationWebhookName(binding.provider, binding.target_label);
+  const description = `Managed ${binding.provider} automation webhook for ${binding.target_label}.`;
+  let externalSubscriptionId = binding.external_subscription_id || null;
+
+  if (externalSubscriptionId) {
+    try {
+      await updateIntegrationWebhook({
+        installation,
+        integration,
+        sourceKeys,
+        callbackUrl,
+        secret,
+        name,
+        description,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes('404')) {
+        throw error;
+      }
+      externalSubscriptionId = await registerIntegrationWebhook({
+        installation,
+        sourceKeys,
+        targetKind: binding.target_kind,
+        targetId: binding.target_id,
+        targetLabel: binding.target_label,
+        callbackUrl,
+        secret,
+        name,
+        description,
+      });
+    }
+  } else {
+    externalSubscriptionId = await registerIntegrationWebhook({
+      installation,
+      sourceKeys,
+      targetKind: binding.target_kind,
+      targetId: binding.target_id,
+      targetLabel: binding.target_label,
+      callbackUrl,
+      secret,
+      name,
+      description,
+    });
+  }
 
   await query(
-    `UPDATE automation_event_sources
+    `UPDATE automation_integration_bindings
      SET external_subscription_id = $2,
          updated_at = NOW()
      WHERE id = $1`,
-    [source.id, externalSubscriptionId],
+    [binding.id, externalSubscriptionId],
   );
   await updateWebhookEndpointStatus(endpoint.id, 'active');
-  return getAutomationEventSource(source.workspaceId, source.id);
-}
-
-async function deactivateIntegrationEventSourceWebhook(
-  source: AutomationEventSource,
-  endpointStatus: AutomationWebhookEndpoint['status'],
-) {
-  if (
-    source.providerKind !== 'integration' ||
-    !source.integration ||
-    source.integration.ingressKind !== 'webhook' ||
-    !source.integration.endpointId
-  ) {
-    return;
-  }
-
-  const installation = await getIntegrationInstallation(
-    source.workspaceId,
-    source.integration.installationId,
-    source.integration.provider,
-  );
-  await unregisterIntegrationWebhook({
-    installation,
-    integration: source.integration,
-  });
-  await query(
-    `UPDATE automation_event_sources
-     SET external_subscription_id = NULL,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [source.id],
-  );
-  await updateWebhookEndpointStatus(source.integration.endpointId, endpointStatus);
+  return getAutomationIntegrationBinding(binding.id);
 }
 
 async function createIntegrationAutomationEventSource(
@@ -1319,8 +1549,18 @@ async function createIntegrationAutomationEventSource(
     throw new Error('integration event sources require sourceKey');
   }
 
-  const targetId = integration.targetId.trim();
-  const targetLabel = integration.targetLabel?.trim() || targetId;
+  const binding = await ensureAutomationIntegrationBinding({
+    workspaceId,
+    creator,
+    installation,
+    integration,
+  });
+  if (!binding) {
+    throw new Error('Failed to resolve automation integration binding');
+  }
+
+  const targetId = binding.target_id;
+  const targetLabel = binding.target_label;
   const initialStatus = input.status || 'active';
   const template = buildIntegrationEventSourceTemplate({
     provider: integration.provider,
@@ -1335,24 +1575,19 @@ async function createIntegrationAutomationEventSource(
      FROM automation_event_sources
      WHERE workspace_id = $1
        AND provider_kind = 'integration'
-       AND integration_installation_id = $2
-       AND integration_provider = $3
-       AND integration_target_kind = $4
-       AND integration_target_id = $5
-       AND source_key = $6
+       AND integration_binding_id = $2
+       AND source_key = $3
      LIMIT 1`,
     [
       workspaceId,
-      installation.id,
-      integration.provider,
-      integration.targetKind,
-      targetId,
+      binding.id,
       normalizedSourceKey,
     ],
   );
   const existing = existingResult.rows[0];
 
   if (existing) {
+    const nextStatus = input.status || 'active';
     await query(
       `UPDATE automation_event_sources
        SET name = $3,
@@ -1382,12 +1617,16 @@ async function createIntegrationAutomationEventSource(
       ],
     );
 
-    let updated = await getAutomationEventSource(workspaceId, existing.id);
-    if (!updated) {
-      throw new Error(`Automation event source ${existing.id} was not found after reuse`);
-    }
-    if (updated.status === 'active' || updated.status === 'deprecated') {
-      updated = (await activateIntegrationEventSourceWebhook(updated)) || updated;
+    if (
+      binding.ingress_kind === 'webhook' &&
+      (
+        ((existing.status === 'disabled' || existing.status === 'archived') &&
+          (nextStatus === 'active' || nextStatus === 'deprecated')) ||
+        ((existing.status === 'active' || existing.status === 'deprecated') &&
+          (nextStatus === 'disabled' || nextStatus === 'archived'))
+      )
+    ) {
+      await reconcileIntegrationBindingWebhook(binding.id);
     }
 
     await query(
@@ -1401,144 +1640,98 @@ async function createIntegrationAutomationEventSource(
         JSON.stringify({
           providerKind: 'integration',
           sourceKey: normalizedSourceKey,
-          integration,
+          integration: {
+            bindingId: binding.id,
+            installationId: installation.id,
+            provider: integration.provider,
+            ingressKind,
+            targetKind: integration.targetKind,
+            targetId,
+            targetLabel,
+          },
           reusedExisting: true,
-          status: input.status || 'active',
+          status: nextStatus,
         }),
       ],
     );
+    const updated = await getAutomationEventSource(workspaceId, existing.id);
+    if (!updated) {
+      throw new Error(`Automation event source ${existing.id} was not found after reuse`);
+    }
     return updated;
   }
 
   const sourceId = uuidv4();
-  const endpointId = ingressKind === 'webhook' ? uuidv4() : null;
-  const pathToken = ingressKind === 'webhook' ? crypto.randomBytes(18).toString('hex') : null;
-  const secret = ingressKind === 'webhook' ? generateSecret() : null;
-  const externalSubscriptionId =
-    ingressKind === 'webhook' &&
-    endpointId &&
-    pathToken &&
-    secret &&
-    initialStatus !== 'disabled' &&
-    initialStatus !== 'archived'
-      ? await registerIntegrationWebhook({
-          installation,
+  await transaction(async (client) => {
+    await client.query(
+      `INSERT INTO automation_event_sources
+         (id, workspace_id, provider_kind, provider_ref, webhook_endpoint_id, integration_binding_id, source_key,
+          name, description, recommended_usage, payload_schema, example_payload, status, created_by_kind,
+          created_by_user_id, created_by_actor_id, created_by_session_id, metadata, created_at, updated_at)
+       VALUES ($1, $2, 'integration', NULL, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())`,
+      [
+        sourceId,
+        workspaceId,
+        binding.id,
+        normalizedSourceKey,
+        input.name?.trim() || template.name,
+        input.description?.trim() || template.description,
+        input.recommendedUsage?.trim() || template.recommendedUsage || '',
+        JSON.stringify(input.payloadSchema || template.payloadSchema || {}),
+        JSON.stringify(input.examplePayload || template.examplePayload || {}),
+        initialStatus,
+        creator.kind,
+        creator.userId || null,
+        creator.actorId || null,
+        creator.sessionId || null,
+        JSON.stringify({
+          ...(template.metadata || {}),
+          ...(input.metadata || {}),
+        }),
+      ],
+    );
+
+    await client.query(
+      `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
+       VALUES ($1, $2, $3, 'automation_event_source.create', 'automation_event_source', $4, $5)`,
+      [
+        workspaceId,
+        creator.userId || null,
+        creator.actorId || null,
+        sourceId,
+        JSON.stringify({
+          providerKind: 'integration',
           sourceKey: normalizedSourceKey,
-          targetKind: integration.targetKind,
-          targetId,
-          targetLabel,
-          callbackUrl: integrationWebhookCallbackUrl(pathToken, normalizedSourceKey),
-          secret,
-          name: input.name?.trim() || template.name,
-          description: input.description?.trim() || template.description,
-        })
-      : null;
+          integration: {
+            bindingId: binding.id,
+            installationId: installation.id,
+            provider: integration.provider,
+            ingressKind,
+            targetKind: integration.targetKind,
+            targetId,
+            targetLabel,
+          },
+          status: initialStatus,
+        }),
+      ],
+    );
+  });
 
   try {
-    await transaction(async (client) => {
-      if (endpointId && pathToken && secret) {
-        await client.query(
-          `INSERT INTO automation_webhook_endpoints
-             (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by, created_at, updated_at)
-           VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, NOW(), NOW())`,
-          [
-            endpointId,
-            workspaceId,
-            `${template.name} Endpoint`,
-            pathToken,
-            encrypt(secret),
-            secretHint(secret),
-            JSON.stringify({
-              managedBy: 'integration',
-              integrationProvider: integration.provider,
-              integrationTargetId: targetId,
-              integrationTargetLabel: targetLabel,
-            }),
-            creator.userId || null,
-          ],
-        );
-      }
-
-      await client.query(
-        `INSERT INTO automation_event_sources
-           (id, workspace_id, provider_kind, provider_ref, webhook_endpoint_id, integration_installation_id,
-            integration_provider, integration_ingress_kind, integration_target_kind, integration_target_id,
-            integration_target_label, external_subscription_id, source_key, name, description, recommended_usage,
-            payload_schema, example_payload, status, created_by_kind, created_by_user_id, created_by_actor_id,
-            created_by_session_id, metadata, created_at, updated_at)
-         VALUES ($1, $2, 'integration', NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                 $15, $16, $17, $18, $19, $20, $21, $22, NOW(), NOW())`,
-        [
-          sourceId,
-          workspaceId,
-          endpointId,
-          installation.id,
-          integration.provider,
-          ingressKind,
-          integration.targetKind,
-          targetId,
-          targetLabel,
-          externalSubscriptionId,
-          normalizedSourceKey,
-          input.name?.trim() || template.name,
-          input.description?.trim() || template.description,
-          input.recommendedUsage?.trim() || template.recommendedUsage || '',
-          JSON.stringify(input.payloadSchema || template.payloadSchema || {}),
-          JSON.stringify(input.examplePayload || template.examplePayload || {}),
-          initialStatus,
-          creator.kind,
-          creator.userId || null,
-          creator.actorId || null,
-          creator.sessionId || null,
-          JSON.stringify({
-            ...(template.metadata || {}),
-            ...(input.metadata || {}),
-          }),
-        ],
-      );
-
-      await client.query(
-        `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-         VALUES ($1, $2, $3, 'automation_event_source.create', 'automation_event_source', $4, $5)`,
-        [
-          workspaceId,
-          creator.userId || null,
-          creator.actorId || null,
-          sourceId,
-          JSON.stringify({
-            providerKind: 'integration',
-            sourceKey: normalizedSourceKey,
-            integration: {
-              installationId: installation.id,
-              provider: integration.provider,
-              ingressKind,
-              targetKind: integration.targetKind,
-              targetId,
-              targetLabel,
-              endpointId,
-              externalSubscriptionId,
-            },
-            status: initialStatus,
-          }),
-        ],
-      );
-    });
-  } catch (error) {
-    if (externalSubscriptionId) {
-      await unregisterIntegrationWebhook({
-        installation,
-        integration: {
-          installationId: installation.id,
-          provider: integration.provider,
-          ingressKind,
-          targetKind: integration.targetKind,
-          targetId,
-          targetLabel,
-          endpointId: endpointId || undefined,
-          externalSubscriptionId,
-        },
-      }).catch(() => undefined);
+    if (
+      binding.ingress_kind === 'webhook' &&
+      initialStatus !== 'disabled' &&
+      initialStatus !== 'archived'
+    ) {
+      await reconcileIntegrationBindingWebhook(binding.id);
     }
+  } catch (error) {
+    await query(
+      `DELETE FROM automation_event_sources
+       WHERE workspace_id = $1
+         AND id = $2`,
+      [workspaceId, sourceId],
+    ).catch(() => undefined);
     throw error;
   }
 
@@ -1714,7 +1907,7 @@ export async function updateAutomationEventSource(
   const providerBinding = existing.providerKind === 'integration'
     ? {
         providerRef: existing.providerRef || null,
-        webhookEndpointId: existing.integration?.endpointId || null,
+        webhookEndpointId: null,
       }
     : await validateAutomationEventSourceProvider(
         workspaceId,
@@ -1727,14 +1920,15 @@ export async function updateAutomationEventSource(
     `UPDATE automation_event_sources
      SET provider_ref = $3,
          webhook_endpoint_id = $4,
-         source_key = $5,
-         name = $6,
-         description = $7,
-         recommended_usage = $8,
-         payload_schema = $9,
-         example_payload = $10,
-         status = $11,
-         metadata = $12,
+         integration_binding_id = $5,
+         source_key = $6,
+         name = $7,
+         description = $8,
+         recommended_usage = $9,
+         payload_schema = $10,
+         example_payload = $11,
+         status = $12,
+         metadata = $13,
          updated_at = NOW()
      WHERE workspace_id = $1
        AND id = $2`,
@@ -1743,6 +1937,7 @@ export async function updateAutomationEventSource(
       eventSourceId,
       providerBinding.providerRef,
       providerBinding.webhookEndpointId,
+      existing.integration?.bindingId || null,
       existing.sourceKey,
       input.name?.trim() || existing.name,
       input.description !== undefined ? input.description.trim() : existing.description,
@@ -1754,13 +1949,20 @@ export async function updateAutomationEventSource(
     ],
   );
 
-  if (
+  const integrationStatusChanged =
     existing.providerKind === 'integration' &&
-    existing.integration?.ingressKind === 'webhook' &&
-    (nextStatus === 'disabled' || nextStatus === 'archived') &&
-    existing.status !== nextStatus
-  ) {
-    await deactivateIntegrationEventSourceWebhook(existing, nextStatus === 'archived' ? 'archived' : 'disabled');
+    existing.integration?.bindingId &&
+    existing.integration.ingressKind === 'webhook' &&
+    existing.status !== nextStatus &&
+    (
+      ((existing.status === 'active' || existing.status === 'deprecated') &&
+        (nextStatus === 'disabled' || nextStatus === 'archived')) ||
+      ((existing.status === 'disabled' || existing.status === 'archived') &&
+        (nextStatus === 'active' || nextStatus === 'deprecated'))
+    );
+
+  if (integrationStatusChanged) {
+    await reconcileIntegrationBindingWebhook(existing.integration!.bindingId!);
   }
 
   if ((nextStatus === 'disabled' || nextStatus === 'archived') && existing.status !== nextStatus) {
@@ -1793,14 +1995,6 @@ export async function updateAutomationEventSource(
   if (!updated) {
     throw new Error(`Automation event source ${eventSourceId} was not found after update`);
   }
-  if (
-    updated.providerKind === 'integration' &&
-    updated.integration?.ingressKind === 'webhook' &&
-    updated.status !== 'disabled' &&
-    updated.status !== 'archived'
-  ) {
-    updated = (await activateIntegrationEventSourceWebhook(updated)) || updated;
-  }
   return updated;
 }
 
@@ -1823,8 +2017,12 @@ export async function archiveAutomationEventSource(
     [workspaceId, eventSourceId],
   );
 
-  if (existing.providerKind === 'integration' && existing.integration?.ingressKind === 'webhook') {
-    await deactivateIntegrationEventSourceWebhook(existing, 'archived');
+  if (
+    existing.providerKind === 'integration' &&
+    existing.integration?.ingressKind === 'webhook' &&
+    existing.integration.bindingId
+  ) {
+    await reconcileIntegrationBindingWebhook(existing.integration.bindingId);
   }
 
   await pauseAutomationRulesForEventSource(
@@ -1857,13 +2055,41 @@ async function getAutomationEventSourceByWebhookPathToken(pathToken: string, sou
        ON awe.id = aes.webhook_endpoint_id
      WHERE awe.path_token = $1
        AND awe.status = 'active'
-       AND aes.provider_kind IN ('webhook', 'integration')
+       AND aes.provider_kind = 'webhook'
        AND aes.source_key = $2
        AND aes.status IN ('active', 'deprecated')
      LIMIT 1`,
     [pathToken, sourceKey],
   );
   return result.rows[0] || null;
+}
+
+async function listIntegrationEventSourcesByWebhookPathToken(pathToken: string) {
+  const result = await query<
+    AutomationEventSourceRow & {
+      endpoint_secret_ciphertext: string;
+      endpoint_name: string;
+      endpoint_id: string;
+    }
+  >(
+    `SELECT ${automationEventSourceSelectClause('aes', 'aib')},
+            awe.secret_ciphertext AS endpoint_secret_ciphertext,
+            awe.name AS endpoint_name,
+            awe.id AS endpoint_id
+     FROM automation_integration_bindings aib
+     JOIN automation_webhook_endpoints awe
+       ON awe.id = aib.webhook_endpoint_id
+     JOIN automation_event_sources aes
+       ON aes.integration_binding_id = aib.id
+     WHERE awe.path_token = $1
+       AND awe.status = 'active'
+       AND aib.ingress_kind = 'webhook'
+       AND aes.provider_kind = 'integration'
+       AND aes.status IN ('active', 'deprecated')
+     ORDER BY aes.created_at ASC`,
+    [pathToken],
+  );
+  return result.rows;
 }
 
 async function persistAutomationTargets(
@@ -2918,15 +3144,18 @@ export async function listAutomationOccurrences(
             aes.name AS event_source_name,
             aes.provider_ref AS event_provider_ref,
             aes.webhook_endpoint_id AS event_webhook_endpoint_id,
-            aes.integration_installation_id AS event_integration_installation_id,
-            aes.integration_provider AS event_integration_provider,
-            aes.integration_ingress_kind AS event_integration_ingress_kind,
-            aes.integration_target_kind AS event_integration_target_kind,
-            aes.integration_target_id AS event_integration_target_id,
-            aes.integration_target_label AS event_integration_target_label,
-            aes.external_subscription_id AS event_external_subscription_id
+            aes.integration_binding_id AS event_integration_binding_id,
+            aib.installation_id AS event_integration_installation_id,
+            aib.provider AS event_integration_provider,
+            aib.ingress_kind AS event_integration_ingress_kind,
+            aib.target_kind AS event_integration_target_kind,
+            aib.target_id AS event_integration_target_id,
+            aib.target_label AS event_integration_target_label,
+            aib.webhook_endpoint_id AS event_integration_webhook_endpoint_id,
+            aib.external_subscription_id AS event_external_subscription_id
      FROM automation_occurrences ao
      LEFT JOIN automation_event_sources aes ON aes.id = ao.event_source_id
+     LEFT JOIN automation_integration_bindings aib ON aib.id = aes.integration_binding_id
      WHERE ${where}
      ORDER BY ao.created_at DESC
      LIMIT $${values.length}`,
@@ -3105,32 +3334,8 @@ export async function ingestAutomationWebhookEvent(params: {
   let dedupeKey = params.dedupeKey;
   let occurredAt = params.occurredAt;
 
-  if (sourceRow.provider_kind === 'integration') {
-    const normalized = normalizeIntegrationWebhookIngress({
-      source: mapEventSourceRow(sourceRow),
-      secret: endpointSecret,
-      headers: params.headers || {},
-      rawBody: params.rawBody,
-      body: payload,
-    });
-    if (normalized.ignore) {
-      return {
-        ignored: true as const,
-        occurrence: null,
-        executions: [],
-      };
-    }
-    payload = normalized.payload;
-    sourceSnapshot = {
-      ...sourceSnapshot,
-      ...(normalized.sourceSnapshot || {}),
-    };
-    dedupeKey = dedupeKey || normalized.dedupeKey;
-    occurredAt = occurredAt || normalized.occurredAt;
-  } else {
-    if (!params.secret || !verifyPresentedSecret(params.secret, endpointSecret)) {
-      throw new Error('Invalid webhook secret');
-    }
+  if (!params.secret || !verifyPresentedSecret(params.secret, endpointSecret)) {
+    throw new Error('Invalid webhook secret');
   }
 
   await touchWebhookReceived(sourceRow.endpoint_id);
@@ -3143,6 +3348,85 @@ export async function ingestAutomationWebhookEvent(params: {
     dedupeKey,
     occurredAt,
   });
+}
+
+export async function ingestIntegrationAutomationWebhookEvent(params: {
+  pathToken: string;
+  headers?: Record<string, unknown>;
+  rawBody?: string;
+  payload?: Record<string, unknown>;
+}) {
+  const sourceRows = await listIntegrationEventSourcesByWebhookPathToken(params.pathToken);
+  const sourceRow = sourceRows[0];
+  if (!sourceRow) {
+    throw new Error('Integration webhook binding not found');
+  }
+  if (!sourceRow.endpoint_secret_ciphertext) {
+    throw new Error('Webhook endpoint secret is unavailable');
+  }
+
+  const endpointSecret = decrypt(sourceRow.endpoint_secret_ciphertext);
+  const source = mapEventSourceRow(sourceRow);
+  if (!source.integration) {
+    throw new Error('Integration webhook ingress requires integration metadata');
+  }
+
+  const normalized = normalizeIntegrationWebhookIngress({
+    integration: source.integration,
+    secret: endpointSecret,
+    headers: params.headers || {},
+    rawBody: params.rawBody,
+    body: params.payload || {},
+  });
+  if (normalized.ignore) {
+    return {
+      ignored: true as const,
+      occurrences: [],
+      executions: [],
+    };
+  }
+
+  await touchWebhookReceived(sourceRow.endpoint_id);
+  const matchingSourceKeys = listIntegrationSourceKeysForWebhookIngress({
+    provider: source.integration.provider,
+    headers: params.headers || {},
+    payload: normalized.payload,
+  });
+  const matchingRows = sourceRows.filter((row) => matchingSourceKeys.includes(row.source_key));
+  if (matchingRows.length === 0) {
+    return {
+      ignored: true as const,
+      occurrences: [],
+      executions: [],
+    };
+  }
+
+  const sharedSourceSnapshot: Record<string, unknown> = {
+    endpointId: sourceRow.endpoint_id,
+    endpointName: sourceRow.endpoint_name,
+    ...(normalized.sourceSnapshot || {}),
+  };
+  const occurrences: AutomationOccurrence[] = [];
+  const executions: AutomationExecution[] = [];
+
+  for (const row of matchingRows) {
+    const result = await ingestAutomationEvent({
+      workspaceId: row.workspace_id,
+      eventSourceId: row.id,
+      payload: normalized.payload,
+      sourceSnapshot: sharedSourceSnapshot,
+      dedupeKey: normalized.dedupeKey,
+      occurredAt: normalized.occurredAt,
+    });
+    occurrences.push(result.occurrence);
+    executions.push(...result.executions);
+  }
+
+  return {
+    ignored: false as const,
+    occurrences,
+    executions,
+  };
 }
 
 export async function scheduleDueAutomationExecutions(limit = MAX_SCHEDULER_BATCH_SIZE): Promise<ScheduleDueRulesResult> {
