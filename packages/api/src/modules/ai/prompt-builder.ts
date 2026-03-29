@@ -125,6 +125,86 @@ function buildRosterEntry(member: ConversationMemberInfo): string {
   return `- [actor] **${member.actor_name}**${version} — ${title}${actorIdNote}${summary ? ` — ${summary}` : ""}`;
 }
 
+function toolBaseName(toolName: string): string {
+  const parts = toolName.split("__");
+  return parts[parts.length - 1] || toolName;
+}
+
+function hasToolBaseName(
+  tools: ToolDefinition[] | undefined,
+  names: string[],
+): boolean {
+  if (!tools || tools.length === 0) return false;
+  const targetNames = new Set(names);
+  return tools.some((tool) => targetNames.has(toolBaseName(tool.name)));
+}
+
+function buildToolRoutingGuidance(
+  tools: ToolDefinition[] | undefined,
+): string {
+  if (!tools || tools.length === 0) return "";
+
+  const lines: string[] = [];
+
+  if (
+    hasToolBaseName(tools, [
+      "View",
+      "ViewMany",
+      "GetFile",
+      "GlobTool",
+      "GrepTool",
+      "SearchFiles",
+    ])
+  ) {
+    lines.push(
+      "- When relay filesystem tools are available, prefer `View` or `ViewMany` for inspection, `GetFile` for original bytes, `GlobTool` for filename or path discovery, `GrepTool` for regex content search, and `SearchFiles` for indexed broad discovery. Do not default to shell `cat`, `find`, or `grep`.",
+    );
+  }
+
+  if (hasToolBaseName(tools, ["bash_exec", "git_exec", "node_exec", "python_exec"])) {
+    lines.push(
+      "- Reserve `bash_exec` for shell-only tasks that dedicated tools cannot handle. Use `git_exec` for git operations, and use `node_exec` or `python_exec` only when you need custom runtime logic beyond the dedicated tools.",
+    );
+  }
+
+  if (
+    hasToolBaseName(tools, [
+      "desktop_capture_display",
+      "desktop_capture_overview",
+      "desktop_click",
+      "desktop_drag",
+      "desktop_move_pointer",
+      "desktop_scroll",
+      "desktop_type_text",
+    ])
+  ) {
+    lines.push(
+      "- For desktop automation, take a fresh display capture before coordinate-based actions and recapture if the UI or display layout changes. Recompute coordinates from the newest image instead of reusing stale ones.",
+    );
+  }
+
+  if (
+    hasToolBaseName(tools, [
+      "list_pages",
+      "select_page",
+      "take_snapshot",
+      "take_screenshot",
+      "navigate_page",
+      "click",
+      "navigate",
+      "screenshot",
+    ])
+  ) {
+    lines.push(
+      "- For browser automation, identify the target page with `list_pages` and `select_page` when available, prefer `take_snapshot` for structured page inspection, and use screenshots only when pixel-level visual inspection matters.",
+    );
+  }
+
+  if (lines.length === 0) return "";
+
+  return `# Tool Routing\n` + lines.join("\n");
+}
+
 /**
  * Build the system prompt for an actor in a conversation.
  * Structure:
@@ -202,6 +282,11 @@ export function buildActorPrompt(
           .map((skill) => `- \`${skill.slug}\`: ${skill.description}`)
           .join("\n"),
     );
+  }
+
+  const toolRoutingGuidance = buildToolRoutingGuidance(extraTools);
+  if (toolRoutingGuidance) {
+    parts.push(toolRoutingGuidance);
   }
 
   if (conversationMembers && conversationMembers.length > 0) {

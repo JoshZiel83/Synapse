@@ -23,7 +23,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "desktop_move_pointer",
-			Description: s.writeToolDescription("Move the pointer to a coordinate on the selected display."),
+			Description: s.coordinateActionDescription("Move the pointer to a coordinate on the selected display."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"display":    selectorSchema(),
 				"coordinate": s.coordinateSchema("Target pointer coordinate on the selected display."),
@@ -32,7 +32,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "desktop_click",
-			Description: s.writeToolDescription("Move to a coordinate on the selected display and click. Supports left, right, middle, double, and triple click behavior."),
+			Description: s.coordinateActionDescription("Move to a coordinate on the selected display and click. Supports left, right, middle, double, and triple click behavior."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"display":    selectorSchema(),
 				"coordinate": s.coordinateSchema("Target click coordinate on the selected display."),
@@ -46,7 +46,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "desktop_drag",
-			Description: s.writeToolDescription("Drag from one coordinate to another on the selected display."),
+			Description: s.coordinateActionDescription("Drag from one coordinate to another on the selected display."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"display":          selectorSchema(),
 				"start_coordinate": s.coordinateSchema("Drag start coordinate on the selected display."),
@@ -60,7 +60,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "desktop_scroll",
-			Description: s.writeToolDescription("Move to a coordinate on the selected display and scroll using line or pixel units."),
+			Description: s.coordinateActionDescription("Move to a coordinate on the selected display and scroll using line or pixel units."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"display":    selectorSchema(),
 				"coordinate": s.coordinateSchema("Pointer anchor coordinate on the selected display."),
@@ -79,7 +79,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "desktop_type_text",
-			Description: s.writeToolDescription("Type UTF-8 text into the active application. Optionally click a coordinate first."),
+			Description: s.writeToolDescription("Type UTF-8 text into the active application. Optionally click a coordinate first. Prefer desktop_press_keys for shortcuts and non-text keys. If you provide a coordinate, take a fresh screenshot first and use coordinates from the newest image."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"display":    selectorSchema(),
 				"coordinate": s.coordinateSchema("Optional focus coordinate on the selected display before typing."),
@@ -91,7 +91,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "desktop_press_keys",
-			Description: s.writeToolDescription(s.pressKeysDescription()),
+			Description: s.writeToolDescription(s.pressKeysDescription() + " Prefer this for shortcuts, navigation keys, and modifier combinations. Prefer desktop_type_text for ordinary text entry."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"keys": s.keyArraySchema("One key chord. Use multiple keys for modifiers plus the final key."),
 				"sequence": map[string]interface{}{
@@ -108,7 +108,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "desktop_wait",
-			Description: s.toolDescription("Sleep inside the server for a short duration, useful when automations need UI time to settle."),
+			Description: s.toolDescription("Sleep inside the server for a short duration while the UI settles. Prefer this over shell sleep when coordinating desktop actions."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"duration": numberSchema("Duration in seconds.", 0, 30),
 			}, []string{"duration"}),
@@ -161,6 +161,10 @@ func (s *Server) writeToolDescription(base string) string {
 	return description + " Read-only mode is enabled right now, so mutating calls return a user-approval error until the user disables read-only mode in the Synapse Relay client."
 }
 
+func (s *Server) coordinateActionDescription(base string) string {
+	return s.writeToolDescription(base + " Take a fresh screenshot first and use coordinates from the newest image. If the UI changes or a call reports a display change, capture again and recompute coordinates.")
+}
+
 func objectSchema(properties map[string]interface{}, required []string) map[string]interface{} {
 	if properties == nil {
 		properties = map[string]interface{}{}
@@ -195,7 +199,7 @@ func (s *Server) captureDisplayDescription() string {
 	base := s.defaultCoordinateBase()
 	image := s.captureImageInfo()
 	return fmt.Sprintf(
-		"Capture a screenshot of one display. The PNG is always resized to the configured image size %dx%d. The default coordinate base for follow-up actions is %s %dx%d.",
+		"Capture a screenshot of one display. The PNG is always resized to the configured image size %dx%d. The default coordinate base for follow-up actions is %s %dx%d. Take a fresh capture immediately before coordinate-based actions, and capture again if the UI or display layout changes.",
 		image.Width,
 		image.Height,
 		base.Space,
@@ -207,7 +211,7 @@ func (s *Server) captureDisplayDescription() string {
 func (s *Server) captureOverviewDescription() string {
 	image := s.captureImageInfo()
 	return fmt.Sprintf(
-		"Capture an annotated overview image containing all detected displays. The PNG is resized to the configured capture size %dx%d and is best used to choose a display before taking a targeted per-display screenshot.",
+		"Capture an annotated overview image containing all detected displays. The PNG is resized to the configured capture size %dx%d and is best used to choose a display before taking a fresh targeted per-display screenshot.",
 		image.Width,
 		image.Height,
 	)

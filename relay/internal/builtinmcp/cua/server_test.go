@@ -123,6 +123,12 @@ func TestListToolsHonorsOverviewFlag(t *testing.T) {
 			if _, exists := properties["height"]; exists {
 				t.Fatalf("expected capture display schema to omit height")
 			}
+			if !strings.Contains(tool.Description, "fresh capture") {
+				t.Fatalf("expected capture display description to recommend fresh screenshots, got %q", tool.Description)
+			}
+		}
+		if tool.Name == "desktop_click" && !strings.Contains(tool.Description, "fresh screenshot") {
+			t.Fatalf("expected click description to recommend a fresh screenshot, got %q", tool.Description)
 		}
 		if tool.Name == "desktop_press_keys" {
 			schema, ok := tool.InputSchema.(map[string]interface{})
@@ -166,6 +172,9 @@ func TestListToolsHonorsOverviewFlag(t *testing.T) {
 			}
 			if !containsString(sequenceEnumValues, "enter") || !containsString(sequenceEnumValues, "control") || !containsString(sequenceEnumValues, "win") {
 				t.Fatalf("expected sequence key enum to include DeskAct keys and accepted aliases, got %+v", sequenceEnumValues)
+			}
+			if !strings.Contains(tool.Description, "Prefer this for shortcuts") {
+				t.Fatalf("expected press keys description to explain shortcut usage, got %q", tool.Description)
 			}
 		}
 		if !strings.Contains(tool.Description, "Current system:") {

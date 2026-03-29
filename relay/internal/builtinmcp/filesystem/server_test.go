@@ -107,6 +107,20 @@ func TestListToolsExposesOnlyNormalizedFilesystemTools(t *testing.T) {
 			t.Fatalf("unexpected tool at %d: got %q want %q", index, names[index], name)
 		}
 	}
+
+	descriptions := make(map[string]string, len(tools))
+	for _, tool := range tools {
+		descriptions[tool.Name] = tool.Description
+	}
+	if !strings.Contains(descriptions["View"], "parsed PDFs") {
+		t.Fatalf("expected View description to mention extracted rich document support, got %q", descriptions["View"])
+	}
+	if !strings.Contains(descriptions["GetFile"], "original file bytes") {
+		t.Fatalf("expected GetFile description to explain raw-byte usage, got %q", descriptions["GetFile"])
+	}
+	if strings.Contains(descriptions["GlobTool"], "Agent tool") || strings.Contains(descriptions["GrepTool"], "Agent tool") {
+		t.Fatalf("filesystem tool descriptions should not reference a nonexistent Agent tool: Glob=%q Grep=%q", descriptions["GlobTool"], descriptions["GrepTool"])
+	}
 }
 
 func TestReadOnlyModeBlocksWriteTool(t *testing.T) {

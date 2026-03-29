@@ -6,12 +6,12 @@ func (s *Server) buildTools() []core.Tool {
 	return []core.Tool{
 		{
 			Name:        "ListAllowedDirectories",
-			Description: "Lists the directories this filesystem server can currently access, including effective read and write scope.",
+			Description: "Lists the directories this filesystem server can currently access, including effective read and write scope. Call this first when you need to understand which roots are available or which root IDs to pass to SearchFiles.",
 			InputSchema: objectSchema(nil, nil),
 		},
 		{
 			Name:        "View",
-			Description: "Reads UTF-8 text content from one file. file_path must be an absolute path. By default it returns up to 2000 lines from the start of the file. Use offset and limit for long files. Lines longer than 2000 characters are truncated.",
+			Description: "Reads extracted text from one file. Prefer this for inspection before editing. Supports ordinary text files plus parsed PDFs, Office documents, HTML, EPUB, RTF, SVG, and image OCR when enabled. file_path must be an absolute path. By default it returns up to 2000 lines from the start of the extracted text. Use offset and limit for long files. Lines longer than 2000 characters are truncated. Use GetFile when you need the original file bytes instead of extracted text.",
 			InputSchema: objectSchema(map[string]interface{}{
 				"file_path": stringSchema("The absolute path to the file to read."),
 				"offset": map[string]interface{}{
@@ -29,7 +29,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "ViewMany",
-			Description: "Reads UTF-8 text content from multiple files in one call. Every file_path must be an absolute path. Each item can optionally set offset and limit for long files. Use this when you need to inspect several related files together.",
+			Description: "Reads extracted text from multiple files in one call. Prefer this when you need to inspect several related files together before deciding what to edit or open fully. Supports the same extracted-text formats as View. Every file_path must be an absolute path. Each item can optionally set offset and limit for long files. Use GetFile when you need original file bytes instead of extracted text.",
 			InputSchema: objectSchema(map[string]interface{}{
 				"files": map[string]interface{}{
 					"type":        "array",
@@ -55,14 +55,14 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "GetFile",
-			Description: "Returns one regular file as a binary attachment. Use this for full-file reads. file_path must be an absolute path. The relay refuses files larger than the configured max_get_file_size_bytes limit.",
+			Description: "Returns one regular file as a binary attachment. Prefer View or ViewMany for text inspection and partial reads, and use GetFile when you need the original file bytes or a format that extracted text would lose. file_path must be an absolute path. The relay refuses files larger than the configured max_get_file_size_bytes limit.",
 			InputSchema: objectSchema(map[string]interface{}{
 				"file_path": stringSchema("The absolute path to the file to return."),
 			}, []string{"file_path"}),
 		},
 		{
 			Name:        "Replace",
-			Description: s.writeToolDescription("Writes UTF-8 text to a file, replacing the entire file contents. file_path must be an absolute path and the parent directory must already exist."),
+			Description: s.writeToolDescription("Writes UTF-8 text to a file, replacing the entire file contents. Prefer Edit for small targeted changes and Patch for coordinated multi-file edits. file_path must be an absolute path and the parent directory must already exist."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"file_path": stringSchema("The absolute path to the file to write."),
 				"content":   stringSchema("UTF-8 text content to write."),
@@ -70,7 +70,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "Edit",
-			Description: s.writeToolDescription("Replaces exactly one unique occurrence of old_string in a UTF-8 text file. file_path must be an absolute path. Use an empty old_string only when creating a brand new file in an existing directory."),
+			Description: s.writeToolDescription("Replaces exactly one unique occurrence of old_string in a UTF-8 text file. Prefer this for small surgical edits after reading the file. Include enough surrounding context to make old_string unique. file_path must be an absolute path. Use an empty old_string only when creating a brand new file in an existing directory."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"file_path":  stringSchema("The absolute path to the file to modify."),
 				"old_string": stringSchema("The exact text to replace. Must match exactly once unless the file is being created."),
@@ -79,7 +79,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "Patch",
-			Description: s.writeToolDescription("Applies a batch of exact text edits across one or more UTF-8 text files. All operations are validated before any file is written, so the patch fails atomically if any replacement is ambiguous or invalid."),
+			Description: s.writeToolDescription("Applies a batch of exact text edits across one or more UTF-8 text files. Prefer this when several related edits should succeed or fail together. All operations are validated before any file is written, so the patch fails atomically if any replacement is ambiguous or invalid."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"operations": map[string]interface{}{
 					"type":        "array",
@@ -96,7 +96,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "UpdateStructuredData",
-			Description: s.writeToolDescription("Updates structured documents such as JSON, YAML, or TOML using path-based set and delete operations. file_path must be an absolute path. Formatting, comments, and key ordering are not preserved."),
+			Description: s.writeToolDescription("Updates structured documents such as JSON, YAML, or TOML using path-based set and delete operations. Prefer this for value-level data edits when formatting, comments, and key ordering do not need to be preserved. file_path must be an absolute path. Formatting, comments, and key ordering are not preserved."),
 			InputSchema: objectSchema(map[string]interface{}{
 				"file_path": stringSchema("The absolute path to the structured data file to update."),
 				"format": map[string]interface{}{
@@ -132,7 +132,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "LS",
-			Description: "Lists files and directories in one directory. directory_path must be an absolute path. Supports paging, sorting, and filename filtering. Prefer GlobTool or GrepTool when you already know the pattern to search.",
+			Description: "Lists files and directories in one directory. Use this when you already know the directory you want to inspect. directory_path must be an absolute path. Supports paging, sorting, and filename filtering. Prefer GlobTool for filename or path pattern searches, GrepTool for regex content searches, and SearchFiles for indexed broad discovery.",
 			InputSchema: objectSchema(map[string]interface{}{
 				"directory_path": stringSchema("The absolute path to the directory to list."),
 				"offset": map[string]interface{}{
@@ -166,7 +166,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "DirectoryTree",
-			Description: "Returns a recursive directory tree rooted at one directory. directory_path must be an absolute path.",
+			Description: "Returns a recursive directory tree rooted at one directory. Use this for a quick structure overview before narrower reads or searches. directory_path must be an absolute path.",
 			InputSchema: objectSchema(map[string]interface{}{
 				"directory_path": stringSchema("The absolute path to the directory to expand."),
 				"max_depth": map[string]interface{}{
@@ -221,7 +221,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "GlobTool",
-			Description: "Finds files by glob pattern. Supports patterns like \"**/*.js\" or \"src/**/*.ts\" and returns matches sorted by modification time. Use this tool when you need to find files by name pattern. For open-ended multi-step investigation, prefer the Agent tool.",
+			Description: "Finds files by glob pattern. Prefer this over LS when you already know the filename or path pattern you want, and prefer it over shell find for filesystem discovery. Supports patterns like \"**/*.js\" or \"src/**/*.ts\" and returns matches sorted by modification time. Use GrepTool for content regex searches and SearchFiles for indexed broad discovery.",
 			InputSchema: objectSchema(map[string]interface{}{
 				"pattern": stringSchema("The glob pattern to match files against."),
 				"path":    stringSchema("The directory to search in. Defaults to the current working directory."),
@@ -234,7 +234,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "GrepTool",
-			Description: "Searches file contents with a regular expression and returns matching locations sorted by file modification time. Supports full regex syntax, optional include filtering such as \"*.js\" or \"*.{ts,tsx}\", and optional context lines around each hit. For open-ended multi-step investigation, prefer the Agent tool.",
+			Description: "Searches file contents with a regular expression and returns matching locations sorted by file modification time. Prefer this over shell grep when you need up-to-date regex search results. Supports full regex syntax, optional include filtering such as \"*.js\" or \"*.{ts,tsx}\", and optional context lines around each hit. Use GlobTool for filename or path searches and SearchFiles for indexed broad discovery.",
 			InputSchema: objectSchema(map[string]interface{}{
 				"pattern": stringSchema("The regular expression pattern to search for in file contents."),
 				"path":    stringSchema("The directory to search in. Defaults to the current working directory."),
@@ -266,7 +266,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "SearchFiles",
-			Description: "Searches indexed file paths and, when enabled, indexed text content. Supports path, content, or hybrid search with paging, sorting, and structured filters. SearchFiles uses a background index, so very recent filesystem changes might not appear immediately.",
+			Description: "Searches indexed file paths and, when enabled, indexed extracted text content. Prefer this for broad discovery across large roots when slight index lag is acceptable. Use GrepTool for exact up-to-date regex search and View or ViewMany to inspect chosen files. Supports path, content, or hybrid search with paging, sorting, and structured filters. SearchFiles uses a background index, so very recent filesystem changes might not appear immediately.",
 			InputSchema: objectSchema(map[string]interface{}{
 				"query": stringSchema("Search query text."),
 				"mode": map[string]interface{}{
