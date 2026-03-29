@@ -4,10 +4,54 @@ import (
 	"context"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestListToolsDescriptionsPreferDedicatedTools(t *testing.T) {
+	server := &Server{
+		cfg: Config{
+			MaxTimeout: 45 * time.Second,
+		},
+	}
+
+	tools := server.buildTools()
+	if len(tools) == 0 {
+		t.Skip("no commandline tools available in this environment")
+	}
+
+	descriptions := make(map[string]string, len(tools))
+	for _, tool := range tools {
+		descriptions[tool.Name] = tool.Description
+	}
+
+	if description, ok := descriptions["bash_exec"]; ok && !strings.Contains(description, "Prefer dedicated filesystem tools") {
+		t.Fatalf("expected bash_exec description to prefer dedicated tools, got %q", description)
+	}
+	if description, ok := descriptions["git_exec"]; ok && !strings.Contains(description, "Prefer this over bash_exec") {
+		t.Fatalf("expected git_exec description to prefer git_exec over bash_exec, got %q", description)
+	}
+	if description, ok := descriptions["node_exec"]; ok && !strings.Contains(description, "Returns stdout, stderr, exitCode") {
+		t.Fatalf("expected node_exec description to mention structured execution metadata, got %q", description)
+	}
+	if description, ok := descriptions["python_exec"]; ok && !strings.Contains(description, "Prefer dedicated filesystem tools") {
+		t.Fatalf("expected python_exec description to prefer dedicated filesystem tools, got %q", description)
+	}
+
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	if slices.Contains(names, "bash_exec") {
+		schema := server.shellSchema()
+		cwd := schema["properties"].(map[string]interface{})["cwd"].(map[string]interface{})
+		if !strings.Contains(cwd["description"].(string), "Shell state does not persist") {
+			t.Fatalf("expected shell cwd description to warn about shell state, got %q", cwd["description"])
+		}
+	}
+}
 
 func TestResolveTimeoutDefaultsToConfiguredMax(t *testing.T) {
 	server := &Server{
