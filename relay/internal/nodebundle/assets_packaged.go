@@ -1,4 +1,4 @@
-//go:build relay_installer_runtime
+//go:build relay_packaged_runtime
 
 package nodebundle
 
@@ -9,9 +9,9 @@ import (
 )
 
 func loadManifestBytes() ([]byte, error) {
-	data, err := runtimebundle.ReadInstalledManifest("node")
+	data, err := runtimebundle.ReadPackagedManifest("node")
 	if err != nil {
-		return nil, fmt.Errorf("read installed node bundle manifest: %w", err)
+		return nil, fmt.Errorf("read packaged node bundle manifest: %w", err)
 	}
 	return data, nil
 }

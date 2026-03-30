@@ -1,4 +1,4 @@
-//go:build relay_installer_runtime
+//go:build relay_packaged_runtime
 
 package chromemcpbundle
 
@@ -9,9 +9,9 @@ import (
 )
 
 func loadManifestBytes() ([]byte, error) {
-	data, err := runtimebundle.ReadInstalledManifest("chrome-devtools-mcp")
+	data, err := runtimebundle.ReadPackagedManifest("chrome-devtools-mcp")
 	if err != nil {
-		return nil, fmt.Errorf("read installed chrome-devtools bundle manifest: %w", err)
+		return nil, fmt.Errorf("read packaged chrome-devtools bundle manifest: %w", err)
 	}
 	return data, nil
 }

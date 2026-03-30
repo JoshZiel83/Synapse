@@ -53,3 +53,19 @@ func TestResolveRootFallsBackToUserRootWhenInstalledRuntimeMissing(t *testing.T)
 		t.Fatalf("expected user runtime %q, got %q", userRoot, root)
 	}
 }
+
+func TestPackagedRootUsesMacResourcesDirectory(t *testing.T) {
+	previousExecutablePath := executablePath
+	t.Cleanup(func() {
+		executablePath = previousExecutablePath
+	})
+
+	executablePath = func() (string, error) {
+		return filepath.Join("/", "Applications", "Synapse Relay.app", "Contents", "MacOS", "Synapse Relay"), nil
+	}
+
+	expected := filepath.Join("/", "Applications", "Synapse Relay.app", "Contents", "Resources", "runtime", "node", "bundle-v1")
+	if got := PackagedRoot("runtime", "node", "bundle-v1"); got != expected {
+		t.Fatalf("expected packaged mac root %q, got %q", expected, got)
+	}
+}

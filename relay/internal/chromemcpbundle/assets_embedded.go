@@ -1,4 +1,4 @@
-//go:build !relay_installer_runtime
+//go:build !relay_packaged_runtime
 
 package chromemcpbundle
 

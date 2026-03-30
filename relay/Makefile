@@ -17,8 +17,8 @@ gui:
 	cd cmd/synapse-relay-gui && wails build -tags desktop_cua -ldflags="$(LDFLAGS)"
 
 gui-windows-installer:
-	node scripts/prepare-gui-build-assets.mjs --goos=windows --runtime-mode=installer
-	cd cmd/synapse-relay-gui && wails build -nsis -tags desktop_cua,relay_installer_runtime -ldflags="$(LDFLAGS)"
+	node scripts/prepare-gui-build-assets.mjs --goos=windows --runtime-mode=packaged
+	cd cmd/synapse-relay-gui && wails build -nsis -tags desktop_cua,relay_packaged_runtime -ldflags="$(LDFLAGS)"
 
 # GUI dev mode with hot reload
 gui-dev:

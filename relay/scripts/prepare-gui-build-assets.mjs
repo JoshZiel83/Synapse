@@ -16,6 +16,7 @@ const packagingRoot = join(guiRoot, "packaging", "windows");
 const args = parseArgs(process.argv.slice(2));
 const goos = (args.goos ?? process.env.GOOS ?? "").trim().toLowerCase() || hostGoos();
 const runtimeMode = (args["runtime-mode"] ?? "portable").trim().toLowerCase();
+const runtimeOutput = args["runtime-output"] ? resolve(repoRoot, args["runtime-output"]) : "";
 
 await mkdir(buildRoot, { recursive: true });
 await mkdir(windowsInstallerRoot, { recursive: true });
@@ -23,8 +24,10 @@ await mkdir(windowsInstallerRoot, { recursive: true });
 await copyFile(join(repoRoot, "packages", "web-next", "public", "synapse.png"), join(buildRoot, "appicon.png"));
 await copyFile(join(packagingRoot, "installer", "project.nsi"), join(windowsInstallerRoot, "project.nsi"));
 
-if (goos === "windows" && runtimeMode === "installer") {
-  await stageWindowsRuntimeBundles();
+if (runtimeOutput) {
+  await stageRuntimeBundles(runtimeOutput);
+} else if (goos === "windows" && runtimeMode === "packaged") {
+  await stageRuntimeBundles(join(windowsBuildRoot, "runtime"));
 } else {
   await rm(join(windowsBuildRoot, "runtime"), { recursive: true, force: true });
 }
@@ -59,27 +62,26 @@ function hostGoos() {
   }
 }
 
-async function stageWindowsRuntimeBundles() {
-  const runtimeRoot = join(windowsBuildRoot, "runtime");
+async function stageRuntimeBundles(runtimeRoot) {
   await rm(runtimeRoot, { recursive: true, force: true });
 
   await stageRuntimeBundle({
     name: "node",
     sourceDir: join(relayRoot, "internal", "nodebundle", "assets"),
-  });
+  }, runtimeRoot);
   await stageRuntimeBundle({
     name: "commandline",
     sourceDir: join(relayRoot, "internal", "commandlinebundle", "assets"),
-  });
+  }, runtimeRoot);
   await stageRuntimeBundle({
     name: "chrome-devtools-mcp",
     sourceDir: join(relayRoot, "internal", "chromemcpbundle", "assets"),
-  });
+  }, runtimeRoot);
 }
 
-async function stageRuntimeBundle({ name, sourceDir }) {
+async function stageRuntimeBundle({ name, sourceDir }, runtimeRoot = join(windowsBuildRoot, "runtime")) {
   const manifest = await readPreparedManifest(sourceDir, name);
-  const bundleRoot = join(windowsBuildRoot, "runtime", name);
+  const bundleRoot = join(runtimeRoot, name);
   const targetDir = join(bundleRoot, manifest.assetVersion);
   await mkdir(bundleRoot, { recursive: true });
   await mkdir(targetDir, { recursive: true });
@@ -90,7 +92,7 @@ async function stageRuntimeBundle({ name, sourceDir }) {
 
   await writeFile(join(bundleRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   await writeFile(join(targetDir, ".ready"), manifest.assetVersion);
-  console.log(`Staged installer runtime ${name}@${manifest.assetVersion}`);
+  console.log(`Staged runtime payload ${name}@${manifest.assetVersion}`);
 }
 
 async function readPreparedManifest(sourceDir, name) {

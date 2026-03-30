@@ -360,71 +360,94 @@ jobs:
           tar -xzf relay-runtime-bundle-${{ matrix.suffix }}.tar.gz
 
       - name: Prepare GUI build assets
-        if: matrix.goos != 'windows'
-        run: node relay/scripts/prepare-gui-build-assets.mjs --goos=${{ matrix.goos }} --runtime-mode=portable
+        shell: bash
+        run: |
+          mode="portable"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            mode="packaged"
+          fi
+          node relay/scripts/prepare-gui-build-assets.mjs --goos=${{ matrix.goos }} --runtime-mode="$mode"
 
       - name: Build GUI binary
-        if: matrix.goos != 'windows'
+        shell: bash
         working-directory: relay/cmd/synapse-relay-gui
         env:
           CGO_LDFLAGS_ALLOW: ${{ matrix.cgo_ldflags_allow }}
-        run: wails build ${{ matrix.wails_extra_args }} -tags "${{ matrix.wails_tags }}" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
+        run: wails build ${{ matrix.wails_extra_args }} -tags "${{ matrix.wails_tags }},relay_packaged_runtime" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
 
       - name: Rename artifact
-        if: matrix.goos != 'windows'
         shell: bash
         run: |
-          if [ "${{ matrix.goos }}" = "darwin" ]; then
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f -print
+            main_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui.exe' -o -name 'synapse-relay-gui-windows-*.exe' \) ! -name '*-setup.exe' | head -n 1)"
+            setup_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui*-setup.exe' -o -name 'synapse-relay-gui*-installer.exe' -o -name 'Synapse Relay*-installer.exe' \) | head -n 1)"
+            test -n "$main_exe"
+            test -n "$setup_exe"
+
+            portable_root="synapse-relay-gui-${{ matrix.suffix }}-portable"
+            mkdir -p "$portable_root"
+            cp "$main_exe" "$portable_root/synapse-relay-gui.exe"
+            cp -R relay/cmd/synapse-relay-gui/build/windows/runtime "$portable_root/runtime"
+            7z a -tzip "synapse-relay-gui-${{ matrix.suffix }}-portable.zip" "$portable_root" >/dev/null
+
+            mv "$setup_exe" synapse-relay-gui-${{ matrix.suffix }}-setup.exe
+          elif [ "${{ matrix.goos }}" = "darwin" ]; then
             app_path="relay/cmd/synapse-relay-gui/build/bin/Synapse Relay.app"
             test -d "$app_path"
-            ditto -c -k --sequesterRsrc --keepParent "$app_path" "synapse-relay-gui-${{ matrix.suffix }}.zip"
-            hdiutil create -volname "Synapse Relay" -srcfolder "$app_path" -ov -format UDZO "synapse-relay-gui-${{ matrix.suffix }}.dmg"
+            node relay/scripts/prepare-gui-build-assets.mjs --runtime-output="$app_path/Contents/Resources/runtime"
+            ditto -c -k --sequesterRsrc --keepParent "$app_path" "synapse-relay-gui-${{ matrix.suffix }}-portable.zip"
+
+            dmg_root="$(mktemp -d)"
+            cp -R "$app_path" "$dmg_root/"
+            ln -s /Applications "$dmg_root/Applications"
+            hdiutil create -volname "Synapse Relay" -srcfolder "$dmg_root" -ov -format UDZO "synapse-relay-gui-${{ matrix.suffix }}.dmg"
           else
-            mv relay/cmd/synapse-relay-gui/build/bin/synapse-relay-gui synapse-relay-gui-${{ matrix.suffix }}
+            portable_root="synapse-relay-gui-${{ matrix.suffix }}-portable"
+            mkdir -p "$portable_root"
+            cp relay/cmd/synapse-relay-gui/build/bin/synapse-relay-gui "$portable_root/"
+            node relay/scripts/prepare-gui-build-assets.mjs --runtime-output="$portable_root/runtime"
+            tar -czf "synapse-relay-gui-${{ matrix.suffix }}-portable.tar.gz" "$portable_root"
+
+            deb_root="$(mktemp -d)"
+            install_root="$deb_root/opt/synapse-relay-gui"
+            mkdir -p "$install_root" "$deb_root/usr/bin" "$deb_root/usr/share/applications" "$deb_root/usr/share/icons/hicolor/256x256/apps" "$deb_root/DEBIAN"
+            cp relay/cmd/synapse-relay-gui/build/bin/synapse-relay-gui "$install_root/"
+            node relay/scripts/prepare-gui-build-assets.mjs --runtime-output="$install_root/runtime"
+            install -m 0644 packages/web-next/public/synapse.png "$deb_root/usr/share/icons/hicolor/256x256/apps/synapse-relay-gui.png"
+            ln -s /opt/synapse-relay-gui/synapse-relay-gui "$deb_root/usr/bin/synapse-relay-gui"
+
+            package_version="${{ steps.version.outputs.version }}"
+            package_version="${package_version#v}"
+            if [[ ! "$package_version" =~ ^[0-9] ]]; then
+              package_version="0.0.0+${package_version}"
+            fi
+            package_version="$(printf '%s' "$package_version" | sed 's/[^0-9A-Za-z.+:~-]/./g')"
+
+            cat >"$deb_root/usr/share/applications/synapse-relay-gui.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Synapse Relay
+Comment=Synapse Relay Desktop Client
+Exec=/opt/synapse-relay-gui/synapse-relay-gui
+Icon=synapse-relay-gui
+Categories=Development;Utility;
+Terminal=false
+EOF
+
+            cat >"$deb_root/DEBIAN/control" <<EOF
+Package: synapse-relay-gui
+Version: $package_version
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Synapse
+Depends: libgtk-3-0, libwebkit2gtk-4.1-0
+Description: Synapse Relay desktop client
+EOF
+
+            dpkg-deb --build "$deb_root" "synapse-relay-gui-${{ matrix.suffix }}.deb"
           fi
-
-      - name: Prepare Windows portable build assets
-        if: matrix.goos == 'windows'
-        run: node relay/scripts/prepare-gui-build-assets.mjs --goos=windows --runtime-mode=portable
-
-      - name: Build Windows portable GUI
-        if: matrix.goos == 'windows'
-        working-directory: relay/cmd/synapse-relay-gui
-        env:
-          CGO_LDFLAGS_ALLOW: ${{ matrix.cgo_ldflags_allow }}
-        run: wails build -tags "${{ matrix.wails_tags }}" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
-
-      - name: Collect Windows portable artifact
-        if: matrix.goos == 'windows'
-        shell: bash
-        run: |
-          find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f -print
-          main_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui.exe' -o -name 'synapse-relay-gui-windows-*.exe' \) ! -name '*-setup.exe' | head -n 1)"
-          test -n "$main_exe"
-          mv "$main_exe" synapse-relay-gui-${{ matrix.suffix }}.exe
-
-      - name: Prepare Windows installer build assets
-        if: matrix.goos == 'windows'
-        run: node relay/scripts/prepare-gui-build-assets.mjs --goos=windows --runtime-mode=installer
-
-      - name: Build Windows installer
-        if: matrix.goos == 'windows'
-        working-directory: relay/cmd/synapse-relay-gui
-        env:
-          CGO_LDFLAGS_ALLOW: ${{ matrix.cgo_ldflags_allow }}
-        run: wails build -nsis -tags "${{ matrix.wails_tags }},relay_installer_runtime" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
-
-      - name: Collect Windows installer artifact
-        if: matrix.goos == 'windows'
-        shell: bash
-        run: |
-          find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f -print
-          setup_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui*-setup.exe' -o -name 'synapse-relay-gui*-installer.exe' -o -name 'Synapse Relay*-installer.exe' \) | head -n 1)"
-          if [ -z "$setup_exe" ]; then
-            echo "Expected Windows installer was not generated in build/bin" >&2
-            exit 1
-          fi
-          mv "$setup_exe" synapse-relay-gui-${{ matrix.suffix }}-setup.exe
 
       - name: Upload artifacts to Tencent COS
         if: startsWith(github.ref, 'refs/tags/') || env.ENABLE_COS_UPLOAD == 'true'

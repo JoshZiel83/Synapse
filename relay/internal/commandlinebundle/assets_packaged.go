@@ -1,4 +1,4 @@
-//go:build relay_installer_runtime
+//go:build relay_packaged_runtime
 
 package commandlinebundle
 
@@ -9,9 +9,9 @@ import (
 )
 
 func loadManifestBytes() ([]byte, error) {
-	data, err := runtimebundle.ReadInstalledManifest("commandline")
+	data, err := runtimebundle.ReadPackagedManifest("commandline")
 	if err != nil {
-		return nil, fmt.Errorf("read installed commandline bundle manifest: %w", err)
+		return nil, fmt.Errorf("read packaged commandline bundle manifest: %w", err)
 	}
 	return data, nil
 }
