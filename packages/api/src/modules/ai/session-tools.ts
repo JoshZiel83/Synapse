@@ -4,6 +4,7 @@ import {
   describeAutomationDelivery,
   describeAutomationPolicy,
   describeAutomationTrigger,
+  isThreadConversationKind,
   isMultiMemberConversationKind,
   normalizeActorDocs,
   summarizeActorForRole,
@@ -126,11 +127,11 @@ function getToolContextConversationMembers(ctx: ToolResolveContext) {
   return ctx.conversationMembers;
 }
 
-function getMultiMemberConversationId(session: {
+function getThreadConversationId(session: {
   conversation_id?: string;
   conversation_kind?: string;
 } | null | undefined) {
-  return isMultiMemberConversationKind(session?.conversation_kind)
+  return isThreadConversationKind(session?.conversation_kind)
     ? session?.conversation_id || null
     : null;
 }
@@ -1028,10 +1029,10 @@ export function registerCallableToolPlugins(): void {
       }
 
       const session = await getSession(context.sessionId);
-      const conversationId = getMultiMemberConversationId(session);
+      const conversationId = getThreadConversationId(session);
       if (!session || !conversationId) {
         throwToolError(
-          "Current session is not attached to a multi-member conversation",
+          "Current session is not attached to a thread conversation",
         );
       }
 
@@ -1296,10 +1297,10 @@ export function registerCallableToolPlugins(): void {
       }
 
       const session = await getSession(context.sessionId);
-      const conversationId = getMultiMemberConversationId(session);
+      const conversationId = getThreadConversationId(session);
       if (!session || !conversationId) {
         throwToolError(
-          "Current session is not attached to a multi-member conversation",
+          "Current session is not attached to a thread conversation",
         );
       }
 
@@ -1582,10 +1583,10 @@ export function registerCallableToolPlugins(): void {
       }
 
       const session = await getSession(context.sessionId);
-      const conversationId = getMultiMemberConversationId(session);
+      const conversationId = getThreadConversationId(session);
       if (!session || !conversationId) {
         throwToolError(
-          "Current session is not attached to a multi-member conversation",
+          "Current session is not attached to a thread conversation",
         );
       }
 
@@ -1787,10 +1788,10 @@ export function registerCallableToolPlugins(): void {
       }
 
       const session = await getSession(context.sessionId);
-      const conversationId = getMultiMemberConversationId(session);
+      const conversationId = getThreadConversationId(session);
       if (!session || !conversationId) {
         throwToolError(
-          "Current session is not attached to a multi-member conversation",
+          "Current session is not attached to a thread conversation",
         );
       }
 
@@ -2322,10 +2323,10 @@ export function registerCallableToolPlugins(): void {
       }
 
       const session = await getSession(context.sessionId);
-      const conversationId = getMultiMemberConversationId(session);
+      const conversationId = getThreadConversationId(session);
       if (!session || !conversationId) {
         throwToolError(
-          "Current session is not attached to a multi-member conversation",
+          "Current session is not attached to a thread conversation",
         );
       }
 
