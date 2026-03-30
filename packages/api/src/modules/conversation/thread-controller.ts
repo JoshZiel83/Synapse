@@ -31,9 +31,15 @@ import {
   getInteractionRequestSummary,
   resolveInteractionRequest,
 } from "../interactions/service.js";
-import { getConversationRuntimeMap } from "../session/runtime.js";
+import {
+  enqueueSessionWakeup,
+  getConversationRuntimeMap,
+} from "../session/runtime.js";
+import { getSession } from "../session/service.js";
 import {
   getConversationMember,
+  getConversationFeedItemById,
+  isFeedItemVisibleToUser,
 } from "./service.js";
 import { enqueueRelayAuthorizationApply } from "../mcp-plugins/relay-manager.js";
 import { getConversationTransportBinding } from "../im/service.js";
@@ -69,6 +75,10 @@ const sendThreadMessageSchema = z
 
 const markReadWatermarkSchema = z.object({
   readUpToSequence: z.number().int().min(0),
+});
+
+const retryThreadMessageSchema = z.object({
+  itemId: z.string().uuid(),
 });
 
 const updateThreadSchema = z
@@ -538,6 +548,83 @@ export default async function threadController(app: FastifyInstance) {
       const body = markReadWatermarkSchema.parse(request.body);
       await markConversationRead(userId, thread.id, body.readUpToSequence);
       return reply.status(204).send();
+    },
+  );
+
+  app.post<{
+    Params: { threadId: string; itemId: string };
+  }>(
+    `${CONVERSATIONS_BASE_PATH}/:threadId/messages/:itemId/retry`,
+    async (request, reply) => {
+      const thread = await requireThreadPermission(
+        request,
+        reply,
+        "send",
+        "Not allowed to retry messages in this thread",
+      );
+      if (!thread) return;
+
+      const { itemId } = retryThreadMessageSchema.parse(request.params);
+      const userId = (request as any).user!.userId;
+      const item = await getConversationFeedItemById(itemId);
+
+      if (
+        !item ||
+        item.kind !== "message" ||
+        item.conversationId !== thread.id ||
+        item.messageType !== "model_error_notice" ||
+        !isFeedItemVisibleToUser(item, userId)
+      ) {
+        return reply.status(404).send({ error: "Retry target not found" });
+      }
+
+      const metadata =
+        item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+      const retrySessionId =
+        typeof metadata.retrySessionId === "string" && metadata.retrySessionId
+          ? metadata.retrySessionId
+          : item.sessionId;
+
+      if (!retrySessionId) {
+        return reply
+          .status(400)
+          .send({ error: "Retry target is missing its session binding" });
+      }
+
+      const session = await getSession(retrySessionId);
+      if (!session || session.conversation_id !== thread.id) {
+        return reply.status(404).send({ error: "Retry session not found" });
+      }
+
+      if (session.status === "closed") {
+        return reply
+          .status(400)
+          .send({ error: "Cannot retry a closed session" });
+      }
+
+      const wakeup = await enqueueSessionWakeup({
+        sessionId: session.id,
+        actorId: session.actor_id,
+        workspaceId: session.workspace_id,
+        sourceType: "retry",
+        sourceItemId: itemId,
+        sourceMemberType: "user",
+        sourceMemberId: userId,
+        summary: "Retry requested",
+        reasonText: "User requested a retry after a model error.",
+        trigger: "retry",
+        metadata: {
+          requestedByUserId: userId,
+          retryFromItemId: itemId,
+          source: "model_error_notice",
+        },
+      });
+
+      return reply.status(201).send({
+        wakeupId: wakeup.id,
+        status: "queued",
+        sessionId: session.id,
+      });
     },
   );
 

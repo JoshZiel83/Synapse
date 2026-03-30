@@ -840,14 +840,9 @@ class ApiClient {
   getSessionTree(wsId: string, sessionId: string) {
     return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/tree`)
   }
-  retryConversationActorLane(
-    wsId: string,
-    sessionId: string,
-    itemId?: string
-  ) {
-    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/retry`, {
+  retryConversationMessage(threadId: string, itemId: string) {
+    return this.fetch(`/conversations/${threadId}/messages/${itemId}/retry`, {
       method: "POST",
-      body: JSON.stringify(itemId ? { itemId } : {}),
     })
   }
   cancelSession(wsId: string, sessionId: string) {

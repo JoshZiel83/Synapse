@@ -179,6 +179,10 @@ export function conversationItemToContextItem(
     return null;
   }
 
+  if (item.item_type === "message" && item.subtype === "model_error_notice") {
+    return null;
+  }
+
   if (item.item_type === "event" || item.role === "system") {
     const contextPolicy = (item.event_context_policy || "shared") as
       | "none"

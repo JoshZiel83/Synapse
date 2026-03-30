@@ -495,13 +495,12 @@ export default function ConversationChat({
     setShowJumpButton(false)
   }
 
-  async function handleRetryModelError(sessionId: string, itemId: string) {
-    if (!workspaceId) return
+  async function handleRetryModelError(itemId: string) {
     setRetryingMessageIds((current) =>
       current.includes(itemId) ? current : [...current, itemId]
     )
     try {
-      await api.retryConversationActorLane(workspaceId, sessionId, itemId)
+      await api.retryConversationMessage(conversation.id, itemId)
       toast.success("已请求重试")
     } catch (error) {
       const message = error instanceof Error ? error.message : "重试失败"

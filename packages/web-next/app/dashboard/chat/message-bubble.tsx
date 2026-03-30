@@ -104,10 +104,7 @@ interface MessageBubbleProps {
   contactBasePath?: string
   retryPending?: boolean
   onParticipantClick?: (member: ConversationMember) => void
-  onRetryModelError?: (
-    sessionId: string,
-    itemId: string
-  ) => Promise<void> | void
+  onRetryModelError?: (itemId: string) => Promise<void> | void
   onResolveInteraction?: (
     interactionId: string,
     payload: {
@@ -2299,13 +2296,8 @@ export default function MessageBubble({
   const isDirectToViewer = Boolean(
     viewerParticipantId && targetParticipantIds?.includes(viewerParticipantId)
   )
-  const retrySessionId =
-    typeof metadata?.retrySessionId === "string"
-      ? metadata.retrySessionId
-      : undefined
   const canRetryModelError = Boolean(
     messageType === "model_error_notice" &&
-    retrySessionId &&
     viewerParticipantId &&
     targetParticipantIds?.includes(viewerParticipantId) &&
     onRetryModelError
@@ -2661,7 +2653,7 @@ export default function MessageBubble({
               })}
             </span>
           )}
-          {canRetryModelError && retrySessionId ? (
+          {canRetryModelError ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -2671,7 +2663,7 @@ export default function MessageBubble({
                   className="h-5 w-5 rounded-full text-muted-foreground/60 hover:text-foreground"
                   disabled={retryPending}
                   onClick={async () => {
-                    await onRetryModelError?.(retrySessionId, messageId)
+                    await onRetryModelError?.(messageId)
                   }}
                   aria-label="重试"
                 >
