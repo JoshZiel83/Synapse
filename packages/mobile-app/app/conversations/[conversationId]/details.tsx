@@ -34,7 +34,7 @@ export default function ConversationDetailScreen() {
 
   useEffect(() => {
     async function loadData() {
-      if (!workspaceId || !conversationId) {
+      if (!conversationId) {
         setLoading(false);
         return;
       }
@@ -42,16 +42,12 @@ export default function ConversationDetailScreen() {
       setLoading(true);
 
       try {
-        const [conversationsResponse, membersResponse] = await Promise.all([
-          api.getConversations(workspaceId),
-          api.getConversationMembers(workspaceId, conversationId),
+        const [threadResponse, membersResponse] = await Promise.all([
+          api.getThread(conversationId),
+          api.getConversationMembers(workspaceId || "", conversationId),
         ]);
 
-        setConversation(
-          conversationsResponse.conversations.find(
-            (item) => item.id === conversationId,
-          ) ?? null,
-        );
+        setConversation((threadResponse.thread as ConversationSummaryView | null) ?? null);
         setMembers(membersResponse.members);
         setError(null);
       } catch (nextError) {
@@ -77,9 +73,9 @@ export default function ConversationDetailScreen() {
         <Pressable onPress={() => router.back()} style={styles.headerButton}>
           <Feather name="chevron-left" size={20} color={theme.colors.text} />
         </Pressable>
-        <Text numberOfLines={1} style={styles.headerTitle}>
-          群聊详情
-        </Text>
+          <Text numberOfLines={1} style={styles.headerTitle}>
+          {conversation?.kind === "private" ? "私聊详情" : "群聊详情"}
+          </Text>
         <View style={styles.headerSpacer} />
       </View>
 
@@ -115,7 +111,11 @@ export default function ConversationDetailScreen() {
               />
               <View style={styles.heroBody}>
                 <Text style={styles.heroTitle}>{conversation.title}</Text>
-                <Text style={styles.heroSubtitle}>{activeCount} 位成员</Text>
+                <Text style={styles.heroSubtitle}>
+                  {`${conversation.domain === "social" ? "Social" : "Workspace"} · ${
+                    conversation.kind === "private" ? "私聊" : "群聊"
+                  } · ${activeCount} 位成员`}
+                </Text>
               </View>
               <Pill
                 label={conversation.status === "active" ? "进行中" : "已完成"}

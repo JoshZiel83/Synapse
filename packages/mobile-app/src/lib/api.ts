@@ -14,10 +14,12 @@ import type {
   AuthQrLoginResolveResponse,
   AuthQrLoginStatusResponse,
   AuthResponse,
+  ContactDiscoveryResponse,
   ConversationCollectionResponse,
   ConversationCreateResponse,
   ConversationMemberListResponse,
   ConversationSendResponse,
+  ScopedContactsResponse,
   UploadAssetInput,
   WorkspaceFeedPageResponse,
   WorkspaceChiefActorPreference,
@@ -125,11 +127,14 @@ function normalizeConversationCollectionResponse(
   if (data && typeof data === "object") {
     const objectData = data as {
       conversations?: unknown;
+      threads?: unknown;
       data?: unknown;
       runtimeMap?: unknown;
     };
     return {
-      conversations: asArray(objectData.conversations ?? objectData.data),
+      conversations: asArray(
+        objectData.conversations ?? objectData.threads ?? objectData.data,
+      ),
       runtimeMap:
         objectData.runtimeMap && typeof objectData.runtimeMap === "object"
           ? (objectData.runtimeMap as Record<string, unknown>)
@@ -138,6 +143,40 @@ function normalizeConversationCollectionResponse(
   }
 
   return { conversations: [] };
+}
+
+function normalizeScopedContactsResponse(data: unknown): ScopedContactsResponse {
+  if (data && typeof data === "object") {
+    return {
+      workspaceContacts: asArray(
+        (data as { workspaceContacts?: unknown }).workspaceContacts,
+      ),
+      personalContacts: asArray(
+        (data as { personalContacts?: unknown }).personalContacts,
+      ),
+    };
+  }
+
+  return {
+    workspaceContacts: [],
+    personalContacts: [],
+  };
+}
+
+function normalizeContactDiscoveryResponse(
+  data: unknown,
+): ContactDiscoveryResponse {
+  if (data && typeof data === "object") {
+    return {
+      actors: asArray((data as { actors?: unknown }).actors),
+      users: asArray((data as { users?: unknown }).users),
+    };
+  }
+
+  return {
+    actors: [],
+    users: [],
+  };
 }
 
 class ApiClient {
@@ -237,6 +276,78 @@ class ApiClient {
     );
   }
 
+  getScopedContacts(workspaceId: string): Promise<ScopedContactsResponse> {
+    return this.request<unknown>(`/workspaces/${workspaceId}/contacts`).then(
+      normalizeScopedContactsResponse,
+    );
+  }
+
+  discoverContacts(
+    workspaceId: string,
+    queryText = "",
+    limit = 20,
+  ): Promise<ContactDiscoveryResponse> {
+    const params = new URLSearchParams();
+    if (queryText.trim()) {
+      params.set("q", queryText.trim());
+    }
+    if (limit > 0) {
+      params.set("limit", String(limit));
+    }
+
+    return this.request<unknown>(
+      `/workspaces/${workspaceId}/contacts/discover${
+        params.size > 0 ? `?${params.toString()}` : ""
+      }`,
+    ).then(normalizeContactDiscoveryResponse);
+  }
+
+  createWorkspaceContact(
+    workspaceId: string,
+    input:
+      | {
+          targetType: "actor";
+          targetWorkspaceId: string;
+          targetActorId: string;
+        }
+      | {
+          targetType: "user";
+          targetWorkspaceId: string;
+          targetUserId: string;
+        },
+  ) {
+    return this.request<{ contact: unknown }>(
+      `/workspaces/${workspaceId}/contacts/workspace`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+  }
+
+  createPersonalContact(
+    workspaceId: string,
+    input:
+      | {
+          targetType: "actor";
+          targetWorkspaceId: string;
+          targetActorId: string;
+        }
+      | {
+          targetType: "user";
+          targetWorkspaceId: string;
+          targetUserId: string;
+        },
+  ) {
+    return this.request<{ contact: unknown }>(
+      `/workspaces/${workspaceId}/contacts/personal`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+  }
+
   getWorkspaceChiefActorPreference(
     workspaceId: string,
   ): Promise<WorkspaceChiefActorPreference> {
@@ -249,8 +360,33 @@ class ApiClient {
     workspaceId: string,
   ): Promise<ConversationCollectionResponse> {
     return this.request<unknown>(
-      `/workspaces/${workspaceId}/conversations`,
+      `/threads?${new URLSearchParams({ workspaceId }).toString()}`,
     ).then(normalizeConversationCollectionResponse);
+  }
+
+  getThread(threadId: string) {
+    return this.request<{ thread: unknown }>(`/threads/${threadId}`).then(
+      (data) => ({
+        thread: (data?.thread || null) as any,
+      }),
+    );
+  }
+
+  createThread(input: {
+    domain: "workspace" | "social";
+    kind: "private" | "group";
+    workspaceId?: string;
+    actorIds?: string[];
+    userIds?: string[];
+    title?: string;
+    content?: string;
+    contentBlocks?: CanonicalContentBlock[];
+    targetActorIds?: string[];
+  }): Promise<ConversationCreateResponse> {
+    return this.request<ConversationCreateResponse>("/threads", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
   }
 
   getWorkspaceFeed(
@@ -273,32 +409,15 @@ class ApiClient {
     targetActorIds?: string[],
     contentBlocks?: CanonicalContentBlock[],
   ): Promise<ConversationCreateResponse> {
-    return this.request<ConversationCreateResponse>(
-      `/workspaces/${workspaceId}/conversations`,
-      {
-        method: "POST",
-        body: JSON.stringify(
-          actorIds.length === 1
-            ? {
-                actorId: actorIds[0],
-                ...(content ? { content } : {}),
-                ...(contentBlocks?.length ? { contentBlocks } : {}),
-                ...(targetActorIds?.length ? { targetActorIds } : {}),
-              }
-            : {
-                actorIds,
-                ...(content ? { content } : {}),
-                ...(contentBlocks?.length ? { contentBlocks } : {}),
-                ...(targetActorIds?.length
-                  ? {
-                      targetActorIds,
-                      targetActorId: targetActorIds[0],
-                    }
-                  : {}),
-              },
-        ),
-      },
-    );
+    return this.createThread({
+      domain: "workspace",
+      kind: actorIds.length === 1 ? "private" : "group",
+      workspaceId,
+      actorIds,
+      ...(content ? { content } : {}),
+      ...(contentBlocks?.length ? { contentBlocks } : {}),
+      ...(targetActorIds?.length ? { targetActorIds } : {}),
+    });
   }
 
   getConversationMessages(
@@ -312,7 +431,7 @@ class ApiClient {
     if (before) params.set("before", before);
     const query = params.toString();
     return this.request<ConversationFeedPage>(
-      `/workspaces/${workspaceId}/conversations/${conversationId}/messages${query ? `?${query}` : ""}`,
+      `/threads/${conversationId}/messages${query ? `?${query}` : ""}`,
     );
   }
 
@@ -321,7 +440,7 @@ class ApiClient {
     conversationId: string,
   ): Promise<ConversationMemberListResponse> {
     return this.request<ConversationMemberListResponse>(
-      `/workspaces/${workspaceId}/conversations/${conversationId}/members`,
+      `/threads/${conversationId}/members`,
     );
   }
 
@@ -332,7 +451,7 @@ class ApiClient {
     clientMessageId: string,
   ): Promise<ConversationSendResponse> {
     return this.request<ConversationSendResponse>(
-      `/workspaces/${workspaceId}/conversations/${conversationId}/messages`,
+      `/threads/${conversationId}/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -362,7 +481,7 @@ class ApiClient {
 
   markConversationRead(workspaceId: string, conversationId: string) {
     return this.request<void>(
-      `/workspaces/${workspaceId}/conversations/${conversationId}/read`,
+      `/threads/${conversationId}/read`,
       {
         method: "POST",
         body: "{}",

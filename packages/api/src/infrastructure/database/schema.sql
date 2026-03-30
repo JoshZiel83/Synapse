@@ -149,18 +149,25 @@ CREATE TABLE workspace_invites (
 -- ============ Conversations ============
 CREATE TABLE conversations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  domain VARCHAR(30) NOT NULL
+    CHECK (domain IN ('workspace', 'social')),
   kind VARCHAR(30) NOT NULL
-    CHECK (kind IN ('group', 'direct', 'a2a_virtual')),
+    CHECK (kind IN ('group', 'private', 'virtual')),
   title VARCHAR(500),
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (
+    (domain = 'workspace' AND workspace_id IS NOT NULL) OR
+    (domain = 'social' AND workspace_id IS NULL)
+  )
 );
 
 CREATE INDEX idx_conversations_workspace ON conversations(workspace_id, created_at DESC);
 CREATE INDEX idx_conversations_workspace_kind ON conversations(workspace_id, kind);
+CREATE INDEX idx_conversations_domain_kind ON conversations(domain, kind, created_at DESC);
 
 -- ============ Blob Storage ============
 CREATE TABLE blobs (
@@ -483,6 +490,69 @@ CREATE TABLE actors (
 
 CREATE INDEX idx_actors_workspace ON actors(workspace_id, created_at DESC);
 CREATE INDEX idx_actors_parent ON actors(parent_id);
+
+-- ============ Scoped Contacts ============
+CREATE TABLE workspace_contacts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  target_type VARCHAR(20) NOT NULL
+    CHECK (target_type IN ('user', 'actor')),
+  target_workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  target_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  target_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (
+    (target_type = 'user' AND target_user_id IS NOT NULL AND target_actor_id IS NULL) OR
+    (target_type = 'actor' AND target_actor_id IS NOT NULL AND target_user_id IS NULL)
+  )
+);
+
+CREATE INDEX idx_workspace_contacts_workspace
+  ON workspace_contacts(workspace_id, created_at DESC);
+CREATE INDEX idx_workspace_contacts_target_workspace
+  ON workspace_contacts(target_workspace_id, created_at DESC);
+CREATE UNIQUE INDEX uq_workspace_contacts_user
+  ON workspace_contacts(workspace_id, target_user_id, target_workspace_id)
+  WHERE target_user_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_workspace_contacts_actor
+  ON workspace_contacts(workspace_id, target_actor_id)
+  WHERE target_actor_id IS NOT NULL;
+
+CREATE TABLE workspace_user_contacts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_type VARCHAR(20) NOT NULL
+    CHECK (target_type IN ('user', 'actor')),
+  target_workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  target_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  target_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (
+    (target_type = 'user' AND target_user_id IS NOT NULL AND target_actor_id IS NULL) OR
+    (target_type = 'actor' AND target_actor_id IS NOT NULL AND target_user_id IS NULL)
+  ),
+  FOREIGN KEY (workspace_id, owner_user_id)
+    REFERENCES workspace_members(workspace_id, user_id)
+    ON DELETE CASCADE
+);
+
+CREATE INDEX idx_workspace_user_contacts_owner
+  ON workspace_user_contacts(workspace_id, owner_user_id, created_at DESC);
+CREATE INDEX idx_workspace_user_contacts_target_workspace
+  ON workspace_user_contacts(target_workspace_id, created_at DESC);
+CREATE UNIQUE INDEX uq_workspace_user_contacts_user
+  ON workspace_user_contacts(workspace_id, owner_user_id, target_user_id, target_workspace_id)
+  WHERE target_user_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_workspace_user_contacts_actor
+  ON workspace_user_contacts(workspace_id, owner_user_id, target_actor_id)
+  WHERE target_actor_id IS NOT NULL;
 
 CREATE TABLE workspace_user_preferences (
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

@@ -21,7 +21,8 @@ import {
   renderConversationEventTimelineBlocks,
 } from "./event-registry.js";
 
-export type ConversationKind = "group" | "direct" | "a2a_virtual";
+export type ConversationDomain = "workspace" | "social";
+export type ConversationKind = "group" | "private" | "virtual";
 export type ItemScope = "shared" | "private";
 export type ItemSurface = "visible" | "internal";
 export type ItemType = "message" | "event" | "summary" | "control";
@@ -38,7 +39,7 @@ export interface ItemPartInput {
 }
 
 export interface CreateConversationItemParams {
-  workspaceId: string;
+  workspaceId?: string;
   conversationId: string;
   sessionId?: string;
   turnId?: string;
@@ -64,7 +65,7 @@ export interface CreateConversationItemParams {
 export interface CreateConversationEventParams<
   T extends ConversationFeedEventType = ConversationFeedEventType,
 > {
-  workspaceId: string;
+  workspaceId?: string;
   conversationId: string;
   sessionId?: string;
   turnId?: string;
@@ -79,19 +80,22 @@ export interface CreateConversationEventParams<
 }
 
 export async function createConversation(params: {
-  workspaceId: string;
+  workspaceId?: string;
+  domain?: ConversationDomain;
   kind: ConversationKind;
   title?: string;
   createdBy?: string;
   metadata?: Record<string, unknown>;
 }) {
+  const domain = params.domain || "workspace";
   const result = await query(
-    `INSERT INTO conversations (id, workspace_id, kind, title, created_by, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+    `INSERT INTO conversations (id, workspace_id, domain, kind, title, created_by, metadata, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
      RETURNING *`,
     [
       uuidv4(),
-      params.workspaceId,
+      params.workspaceId || null,
+      domain,
       params.kind,
       params.title || null,
       params.createdBy || null,
@@ -449,7 +453,11 @@ export async function createConversationItem(
 
     const item = itemResult.rows[0];
     let workspaceSequence: number | undefined;
-    if (params.scope === "shared" && params.surface === "visible") {
+    if (
+      params.workspaceId &&
+      params.scope === "shared" &&
+      params.surface === "visible"
+    ) {
       const feedResult = await client.query(
         `INSERT INTO realtime_feed_events
            (id, workspace_id, conversation_id, item_id, conversation_sequence, created_at)
@@ -1287,9 +1295,9 @@ export async function listUserMultiMemberConversations(
      JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $2 AND cm.state = 'active'
      LEFT JOIN conversation_reads cr ON cr.conversation_id = c.id AND cr.user_id = $2
      WHERE c.workspace_id = $1
-       AND c.kind = $3
+       AND c.domain = 'workspace'
      ORDER BY c.updated_at DESC, c.created_at DESC`,
-    [workspaceId, userId, MULTI_MEMBER_CONVERSATION_KIND],
+    [workspaceId, userId],
   );
 
   return result.rows;

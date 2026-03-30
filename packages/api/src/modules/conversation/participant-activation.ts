@@ -24,7 +24,8 @@ type ParticipantInitiator = {
   name?: string;
 };
 
-async function emitFeedItemCreated(workspaceId: string, itemId: string) {
+async function emitFeedItemCreated(workspaceId: string | undefined, itemId: string) {
+  if (!workspaceId) return;
   const item = await getConversationFeedItemById(itemId);
   if (!item || item.workspaceSequence === undefined) return;
 
@@ -116,7 +117,7 @@ async function hydrateMembershipInitiator(params: {
 }
 
 async function recordMembershipEvent(params: {
-  workspaceId: string;
+  workspaceId?: string;
   conversationId: string;
   subtype: "member_joined";
   authorMemberId?: string;
@@ -164,7 +165,7 @@ async function recordMembershipEvent(params: {
 }
 
 export async function activateConversationParticipant(params: {
-  workspaceId: string;
+  workspaceId?: string;
   conversationId: string;
   memberType: "actor" | "user" | "external" | "remote_agent" | "system";
   actorId?: string;

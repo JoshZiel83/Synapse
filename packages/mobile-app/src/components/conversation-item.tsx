@@ -32,6 +32,9 @@ export function ConversationItem({
     conversation.lastMessage?.content?.trim() || "打开会话继续沟通";
   const messageAt =
     conversation.lastMessage?.createdAt || conversation.createdAt;
+  const metaLabel = `${conversation.domain === "social" ? "Social" : "Workspace"} · ${
+    conversation.kind === "private" ? "私聊" : "群聊"
+  }`;
 
   return (
     <Pressable
@@ -49,6 +52,9 @@ export function ConversationItem({
           </Text>
           <Text style={styles.time}>{formatMessageTime(messageAt)}</Text>
         </View>
+        <Text numberOfLines={1} style={styles.meta}>
+          {metaLabel}
+        </Text>
         <View style={styles.previewRow}>
           <Text numberOfLines={1} style={styles.preview}>
             {preview}
@@ -114,6 +120,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+  },
+  meta: {
+    fontSize: 11,
+    color: theme.colors.textSoft,
   },
   preview: {
     flex: 1,

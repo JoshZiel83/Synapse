@@ -1,44 +1,57 @@
 import Feather from "@expo/vector-icons/Feather";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import {
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import {
   Avatar,
   Button,
   EmptyState,
   LoadingBlock,
+  Pill,
   ScreenScroll,
   SectionBlock,
   SectionTitleRow,
 } from "@/components/ui";
-import { actorSummary, titleCase } from "@/lib/contacts";
+import {
+  actorSummary,
+  scopedContactName,
+  scopedContactSubtitle,
+  scopedContactSummary,
+  titleCase,
+} from "@/lib/contacts";
 import { api } from "@/lib/api";
 import { useSession } from "@/providers/session-provider";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
-import type { WorkspaceMemberView } from "@/types/api";
+import type { ScopedContactView, WorkspaceMemberView } from "@/types/api";
 import type { Actor } from "@shared";
 
 export default function NewGroupConversationScreen() {
   const router = useRouter();
   const { user } = useSession();
   const { workspaceId } = useWorkspace();
-  const { actorId, userId } = useLocalSearchParams<{
+  const { actorId, userId, contactScope, contactId } = useLocalSearchParams<{
     actorId?: string;
     userId?: string;
+    contactScope?: "workspace" | "personal";
+    contactId?: string;
   }>();
   const [actors, setActors] = useState<Actor[]>([]);
   const [members, setMembers] = useState<WorkspaceMemberView[]>([]);
+  const [workspaceContacts, setWorkspaceContacts] = useState<
+    ScopedContactView[]
+  >([]);
+  const [personalContacts, setPersonalContacts] = useState<ScopedContactView[]>(
+    [],
+  );
   const [selectedActorIds, setSelectedActorIds] = useState<string[]>([]);
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+  const [selectedWorkspaceContactIds, setSelectedWorkspaceContactIds] =
+    useState<string[]>([]);
+  const [selectedPersonalContactIds, setSelectedPersonalContactIds] = useState<
+    string[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [search, setSearch] = useState("");
@@ -56,10 +69,12 @@ export default function NewGroupConversationScreen() {
 
       setLoading(true);
       try {
-        const [actorsResponse, membersResponse] = await Promise.all([
-          api.getActors(workspaceId),
-          api.getWorkspaceMembers(workspaceId),
-        ]);
+        const [actorsResponse, membersResponse, contactsResponse] =
+          await Promise.all([
+            api.getActors(workspaceId),
+            api.getWorkspaceMembers(workspaceId),
+            api.getScopedContacts(workspaceId),
+          ]);
 
         const nextActors = actorsResponse.actors.filter(
           (item) => item.isActive,
@@ -70,6 +85,8 @@ export default function NewGroupConversationScreen() {
 
         setActors(nextActors);
         setMembers(nextMembers);
+        setWorkspaceContacts(contactsResponse.workspaceContacts);
+        setPersonalContacts(contactsResponse.personalContacts);
         setSelectedActorIds(
           actorId && nextActors.some((item) => item.id === actorId)
             ? [actorId]
@@ -78,6 +95,20 @@ export default function NewGroupConversationScreen() {
         setSelectedUserIds(
           userId && nextMembers.some((item) => item.userId === userId)
             ? [userId]
+            : [],
+        );
+        setSelectedWorkspaceContactIds(
+          contactScope === "workspace" &&
+            contactId &&
+            contactsResponse.workspaceContacts.some((item) => item.id === contactId)
+            ? [contactId]
+            : [],
+        );
+        setSelectedPersonalContactIds(
+          contactScope === "personal" &&
+            contactId &&
+            contactsResponse.personalContacts.some((item) => item.id === contactId)
+            ? [contactId]
             : [],
         );
         setError(null);
@@ -93,7 +124,7 @@ export default function NewGroupConversationScreen() {
     }
 
     void loadData();
-  }, [actorId, user?.id, userId, workspaceId]);
+  }, [actorId, contactId, contactScope, user?.id, userId, workspaceId]);
 
   const visibleActors = useMemo(() => {
     if (!normalizedQuery) return actors;
@@ -120,6 +151,74 @@ export default function NewGroupConversationScreen() {
     );
   }, [members, normalizedQuery]);
 
+  const visibleWorkspaceContacts = useMemo(() => {
+    if (!normalizedQuery) return workspaceContacts;
+    return workspaceContacts.filter((contact) =>
+      [
+        scopedContactName(contact),
+        scopedContactSubtitle(contact),
+        scopedContactSummary(contact),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery),
+    );
+  }, [normalizedQuery, workspaceContacts]);
+
+  const visiblePersonalContacts = useMemo(() => {
+    if (!normalizedQuery) return personalContacts;
+    return personalContacts.filter((contact) =>
+      [
+        scopedContactName(contact),
+        scopedContactSubtitle(contact),
+        scopedContactSummary(contact),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery),
+    );
+  }, [normalizedQuery, personalContacts]);
+
+  const selectedRemoteContacts = useMemo(
+    () => [
+      ...workspaceContacts.filter((contact) =>
+        selectedWorkspaceContactIds.includes(contact.id),
+      ),
+      ...personalContacts.filter((contact) =>
+        selectedPersonalContactIds.includes(contact.id),
+      ),
+    ],
+    [
+      personalContacts,
+      selectedPersonalContactIds,
+      selectedWorkspaceContactIds,
+      workspaceContacts,
+    ],
+  );
+
+  const remoteActorIds = useMemo(
+    () =>
+      selectedRemoteContacts
+        .map((contact) => contact.actor?.id)
+        .filter((value): value is string => Boolean(value)),
+    [selectedRemoteContacts],
+  );
+  const remoteUserIds = useMemo(
+    () =>
+      selectedRemoteContacts
+        .map((contact) => contact.user?.id)
+        .filter((value): value is string => Boolean(value)),
+    [selectedRemoteContacts],
+  );
+
+  const hasRemoteSelection =
+    remoteActorIds.length > 0 || remoteUserIds.length > 0;
+  const selectedCount =
+    selectedActorIds.length +
+    selectedUserIds.length +
+    selectedWorkspaceContactIds.length +
+    selectedPersonalContactIds.length;
+
   function toggleActor(actorIdValue: string) {
     setSelectedActorIds((current) =>
       current.includes(actorIdValue)
@@ -136,25 +235,43 @@ export default function NewGroupConversationScreen() {
     );
   }
 
+  function toggleWorkspaceContact(contactIdValue: string) {
+    setSelectedWorkspaceContactIds((current) =>
+      current.includes(contactIdValue)
+        ? current.filter((id) => id !== contactIdValue)
+        : [...current, contactIdValue],
+    );
+  }
+
+  function togglePersonalContact(contactIdValue: string) {
+    setSelectedPersonalContactIds((current) =>
+      current.includes(contactIdValue)
+        ? current.filter((id) => id !== contactIdValue)
+        : [...current, contactIdValue],
+    );
+  }
+
   async function handleCreateConversation() {
-    if (!workspaceId || selectedActorIds.length === 0 || submitting) return;
+    if (!workspaceId || selectedCount === 0 || submitting) {
+      return;
+    }
 
     setSubmitting(true);
     try {
-      const created = await api.createConversation(
-        workspaceId,
-        selectedActorIds,
-      );
-      const conversationId = created.conversationId || created.id;
+      const created = await api.createThread({
+        domain: hasRemoteSelection ? "social" : "workspace",
+        kind: "group",
+        workspaceId: hasRemoteSelection ? undefined : workspaceId,
+        actorIds: Array.from(
+          new Set([...selectedActorIds, ...remoteActorIds]),
+        ),
+        userIds: Array.from(new Set([...selectedUserIds, ...remoteUserIds])),
+      });
+      const conversationId =
+        created.threadId || created.conversationId || created.id;
 
       if (!conversationId) {
         throw new Error("服务器没有返回 conversationId");
-      }
-
-      if (selectedUserIds.length > 0) {
-        await api.addConversationMembers(workspaceId, conversationId, {
-          userIds: selectedUserIds,
-        });
       }
 
       router.replace(`/chat/${conversationId}`);
@@ -181,14 +298,25 @@ export default function NewGroupConversationScreen() {
 
       <SectionBlock>
         <Text style={styles.tipText}>
-          当前版本创建会话时至少需要选择一个角色；如果你还勾选了成员，会在群聊创建后自动加入。
+          选择至少一个角色、成员或跨工作区联系人。当前工作区中的你会自动加入这个群聊。
         </Text>
+        <View style={styles.modeRow}>
+          <Pill
+            label={hasRemoteSelection ? "Social 群聊" : "Workspace 群聊"}
+            tone={hasRemoteSelection ? "accent" : "primary"}
+          />
+          <Text style={styles.modeCopy}>
+            {hasRemoteSelection
+              ? "已选择跨工作区联系人，创建后会走 social thread。"
+              : "当前只选择了本地成员，创建后会留在当前 workspace。"}
+          </Text>
+        </View>
         <View style={styles.searchShell}>
           <Feather name="search" size={16} color={theme.colors.textSoft} />
           <TextInput
             value={search}
             onChangeText={setSearch}
-            placeholder="搜索角色或成员"
+            placeholder="搜索角色、成员或远端联系人"
             placeholderTextColor={theme.colors.textSoft}
             style={styles.searchInput}
           />
@@ -211,7 +339,7 @@ export default function NewGroupConversationScreen() {
         <>
           <SectionBlock>
             <SectionTitleRow
-              title="选择角色"
+              title="选择本地角色"
               action={
                 <Text style={styles.countText}>
                   已选 {selectedActorIds.length} 个
@@ -265,7 +393,7 @@ export default function NewGroupConversationScreen() {
 
           <SectionBlock>
             <SectionTitleRow
-              title="选择成员"
+              title="选择本地成员"
               action={
                 <Text style={styles.countText}>
                   已选 {selectedUserIds.length} 人
@@ -317,21 +445,127 @@ export default function NewGroupConversationScreen() {
           </SectionBlock>
 
           <SectionBlock>
-            {selectedActorIds.length === 0 ? (
+            <Text style={styles.sectionHint}>
+              整个工作区都可见的跨工作区联系人
+            </Text>
+            <SectionTitleRow
+              title="选择共享联系人"
+              action={
+                <Text style={styles.countText}>
+                  已选 {selectedWorkspaceContactIds.length} 个
+                </Text>
+              }
+            />
+            {visibleWorkspaceContacts.length > 0 ? (
+              <View style={styles.listShell}>
+                {visibleWorkspaceContacts.map((contact) => (
+                  <SelectableScopedContactRow
+                    key={contact.id}
+                    contact={contact}
+                    selected={selectedWorkspaceContactIds.includes(contact.id)}
+                    onPress={() => toggleWorkspaceContact(contact.id)}
+                  />
+                ))}
+              </View>
+            ) : (
+              <EmptyState
+                icon="briefcase"
+                title="还没有共享联系人"
+                description="先去联系人页把远端用户或角色加入共享联系人簿。"
+              />
+            )}
+          </SectionBlock>
+
+          <SectionBlock>
+            <Text style={styles.sectionHint}>
+              只属于你自己的跨工作区联系人
+            </Text>
+            <SectionTitleRow
+              title="选择我的联系人"
+              action={
+                <Text style={styles.countText}>
+                  已选 {selectedPersonalContactIds.length} 个
+                </Text>
+              }
+            />
+            {visiblePersonalContacts.length > 0 ? (
+              <View style={styles.listShell}>
+                {visiblePersonalContacts.map((contact) => (
+                  <SelectableScopedContactRow
+                    key={contact.id}
+                    contact={contact}
+                    selected={selectedPersonalContactIds.includes(contact.id)}
+                    onPress={() => togglePersonalContact(contact.id)}
+                  />
+                ))}
+              </View>
+            ) : (
+              <EmptyState
+                icon="bookmark"
+                title="还没有个人联系人"
+                description="先去远端发现页保存一些个人联系人。"
+              />
+            )}
+          </SectionBlock>
+
+          <SectionBlock>
+            {selectedCount === 0 ? (
               <Text style={styles.warningText}>
-                至少选择一个角色，才能创建新的群聊。
+                至少选择一个角色、成员或联系人，才能创建新的群聊。
               </Text>
             ) : null}
             <Button
               label={submitting ? "创建中..." : "创建群聊"}
               icon="message-circle"
               onPress={() => void handleCreateConversation()}
-              disabled={selectedActorIds.length === 0 || submitting}
+              disabled={selectedCount === 0 || submitting}
             />
           </SectionBlock>
         </>
       )}
     </ScreenScroll>
+  );
+}
+
+function SelectableScopedContactRow({
+  contact,
+  selected,
+  onPress,
+}: {
+  contact: ScopedContactView;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const name = scopedContactName(contact);
+  const subtitle = scopedContactSubtitle(contact);
+  const copy = scopedContactSummary(contact);
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.rowCard, pressed && styles.rowCardPressed]}
+    >
+      <Avatar
+        name={name}
+        uri={contact.actor?.avatarUrl || contact.user?.avatarUrl || undefined}
+        icon={contact.targetType === "actor" ? "cpu" : "user"}
+        size={44}
+      />
+      <View style={styles.rowBody}>
+        <View style={styles.rowTitleLine}>
+          <Text style={styles.rowTitle}>{name}</Text>
+          <Pill
+            label={contact.scope === "workspace" ? "共享" : "我的"}
+            tone={contact.scope === "workspace" ? "primary" : "accent"}
+          />
+        </View>
+        <Text style={styles.rowSubtitle}>{subtitle}</Text>
+        <Text numberOfLines={2} style={styles.rowCopy}>
+          {copy}
+        </Text>
+      </View>
+      <CheckBadge selected={selected} />
+    </Pressable>
   );
 }
 
@@ -383,6 +617,13 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: theme.colors.textMuted,
   },
+  modeRow: {
+    gap: 8,
+  },
+  modeCopy: {
+    fontSize: 13,
+    color: theme.colors.textSoft,
+  },
   searchShell: {
     flexDirection: "row",
     alignItems: "center",
@@ -399,6 +640,10 @@ const styles = StyleSheet.create({
   },
   countText: {
     fontSize: 12,
+    color: theme.colors.textSoft,
+  },
+  sectionHint: {
+    fontSize: 13,
     color: theme.colors.textSoft,
   },
   listShell: {
@@ -424,7 +669,13 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 3,
   },
+  rowTitleLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   rowTitle: {
+    flexShrink: 1,
     fontSize: 15,
     fontWeight: "700",
     color: theme.colors.text,

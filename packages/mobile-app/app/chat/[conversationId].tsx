@@ -68,7 +68,7 @@ export default function ChatDetailScreen() {
 
   const loadConversation = useCallback(
     async (isRefreshing = false) => {
-      if (!workspaceId || !conversationId) {
+      if (!conversationId) {
         setLoading(false);
         return;
       }
@@ -80,24 +80,22 @@ export default function ChatDetailScreen() {
       }
 
       try {
-        const [messagesResponse, conversationsResponse, membersResponse] =
+        const [messagesResponse, threadResponse, membersResponse] =
           await Promise.all([
-            api.getConversationMessages(workspaceId, conversationId, 100),
-            api.getConversations(workspaceId),
-            api.getConversationMembers(workspaceId, conversationId),
+            api.getConversationMessages(workspaceId || "", conversationId, 100),
+            api.getThread(conversationId),
+            api.getConversationMembers(workspaceId || "", conversationId),
           ]);
 
-        const nextConversation =
-          conversationsResponse.conversations.find(
-            (item) => item.id === conversationId,
-          ) ?? null;
-
-        applyConversationMeta(nextConversation, membersResponse.members);
+        applyConversationMeta(
+          (threadResponse.thread as ConversationSummaryView | null) ?? null,
+          membersResponse.members,
+        );
         setMessages(sortConversationItems(messagesResponse.items));
         setError(null);
-        await api
-          .markConversationRead(workspaceId, conversationId)
-          .catch(() => undefined);
+        await api.markConversationRead(workspaceId || "", conversationId).catch(
+          () => undefined,
+        );
       } catch (nextError) {
         setError(
           nextError instanceof Error ? nextError.message : "聊天记录加载失败。",
@@ -189,7 +187,7 @@ export default function ChatDetailScreen() {
 
   useWorkspaceWebSocket({
     workspaceId: workspaceId ?? null,
-    enabled: Boolean(canRender),
+    enabled: Boolean(canRender && conversation?.domain !== "social"),
     onConnected: () => {
       void loadConversation(true);
     },
@@ -199,19 +197,31 @@ export default function ChatDetailScreen() {
     },
   });
 
+  useEffect(() => {
+    if (!conversationId || conversation?.domain !== "social") {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      void loadConversation(true);
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [conversation?.domain, conversationId, loadConversation]);
+
   async function handleSendMessage(contentBlocks: any[]) {
-    if (!workspaceId || !conversationId) return;
+    if (!conversationId) return;
 
     const clientMessageId = createId("message");
     const response = await api.sendConversationMessage(
-      workspaceId,
+      workspaceId || "",
       conversationId,
       contentBlocks,
       clientMessageId,
     );
     setMessages((current) => mergeConversationItem(current, response.item));
     await api
-      .markConversationRead(workspaceId, conversationId)
+      .markConversationRead(workspaceId || "", conversationId)
       .catch(() => undefined);
   }
 
@@ -255,7 +265,13 @@ export default function ChatDetailScreen() {
                 {conversation?.title || "聊天"}
               </Text>
               <Text style={styles.headerSubtitle}>
-                {members.length > 0 ? `${members.length} 位成员` : "实时同步中"}
+                {conversation
+                  ? `${conversation.domain === "social" ? "Social" : "Workspace"} · ${
+                      conversation.kind === "private" ? "私聊" : "群聊"
+                    }`
+                  : members.length > 0
+                    ? `${members.length} 位成员`
+                    : "实时同步中"}
               </Text>
             </View>
           </View>

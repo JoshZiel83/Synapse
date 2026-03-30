@@ -163,15 +163,16 @@ export async function createSession(params: {
 
   const resolvedUserId = userId || (typeof metadata.userId === 'string' ? metadata.userId as UUID : undefined);
   let resolvedConversationId = conversationId;
-  let directConversationCreated = false;
+  let privateConversationCreated = false;
   if (!resolvedConversationId) {
     const conversation = await createConversation({
       workspaceId,
-      kind: 'direct',
+      domain: 'workspace',
+      kind: 'private',
       metadata: { channelType, trigger },
     });
     resolvedConversationId = conversation.id;
-    directConversationCreated = true;
+    privateConversationCreated = true;
   } else {
     const conversation = await getConversation(resolvedConversationId);
     if (!conversation) {
@@ -187,7 +188,7 @@ export async function createSession(params: {
     actorJoinVersionId: await getActorJoinVersionId(actorId),
   });
 
-  if (directConversationCreated && resolvedUserId) {
+  if (privateConversationCreated && resolvedUserId) {
     await ensureConversationMember({
       conversationId: finalConversationId,
       memberType: 'user',
@@ -203,7 +204,7 @@ export async function createSession(params: {
     [id, workspaceId, actorId, finalConversationId, channelType, trigger, JSON.stringify(metadata)],
   );
 
-  if (directConversationCreated) {
+  if (privateConversationCreated) {
     const authzEntryIds = await enqueueAuthzRelationships(
       [
         touchRelation('conversation', finalConversationId, 'workspace', 'workspace', workspaceId),
@@ -217,14 +218,14 @@ export async function createSession(params: {
           : []),
       ],
       {
-        source: 'session.create_direct_conversation',
+        source: 'session.create_private_conversation',
         workspaceId,
         conversationId: finalConversationId,
         actorId,
         userId: resolvedUserId,
       },
     );
-    await flushQueuedAuthzEntries(authzEntryIds, 'session.create_direct_conversation');
+    await flushQueuedAuthzEntries(authzEntryIds, 'session.create_private_conversation');
   }
 
   return loadSession(result.rows[0].id);

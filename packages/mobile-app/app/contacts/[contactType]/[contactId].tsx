@@ -15,28 +15,52 @@ import {
   SectionTitleRow,
 } from "@/components/ui";
 import { api } from "@/lib/api";
-import { actorSummary, titleCase } from "@/lib/contacts";
+import {
+  actorSummary,
+  scopedContactName,
+  scopedContactSubtitle,
+  scopedContactSummary,
+  titleCase,
+} from "@/lib/contacts";
 import {
   conversationIncludesActor,
   conversationIncludesUser,
   findConversationForUser,
   findDirectConversationForActor,
+  findSocialConversationForActor,
+  findSocialConversationForUser,
   isGroupConversation,
 } from "@/lib/conversations";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
-import type { ConversationSummaryView, WorkspaceMemberView } from "@/types/api";
+import type {
+  ConversationSummaryView,
+  ScopedContactView,
+  WorkspaceMemberView,
+} from "@/types/api";
 import type { Actor } from "@shared";
+
+type ContactType =
+  | "actor"
+  | "member"
+  | "workspace-contact"
+  | "personal-contact";
 
 export default function ContactDetailScreen() {
   const router = useRouter();
   const { contactType, contactId } = useLocalSearchParams<{
-    contactType: "actor" | "member";
+    contactType: ContactType;
     contactId: string;
   }>();
   const { workspaceId } = useWorkspace();
   const [actors, setActors] = useState<Actor[]>([]);
   const [members, setMembers] = useState<WorkspaceMemberView[]>([]);
+  const [workspaceContacts, setWorkspaceContacts] = useState<
+    ScopedContactView[]
+  >([]);
+  const [personalContacts, setPersonalContacts] = useState<ScopedContactView[]>(
+    [],
+  );
   const [conversations, setConversations] = useState<ConversationSummaryView[]>(
     [],
   );
@@ -54,16 +78,23 @@ export default function ContactDetailScreen() {
       setLoading(true);
 
       try {
-        const [actorsResponse, membersResponse, conversationsResponse] =
-          await Promise.all([
-            api.getActors(workspaceId),
-            api.getWorkspaceMembers(workspaceId),
-            api.getConversations(workspaceId),
-          ]);
+        const [
+          actorsResponse,
+          membersResponse,
+          conversationsResponse,
+          contactsResponse,
+        ] = await Promise.all([
+          api.getActors(workspaceId),
+          api.getWorkspaceMembers(workspaceId),
+          api.getConversations(workspaceId),
+          api.getScopedContacts(workspaceId),
+        ]);
 
         setActors(actorsResponse.actors.filter((actor) => actor.isActive));
         setMembers(membersResponse.data ?? []);
         setConversations(conversationsResponse.conversations);
+        setWorkspaceContacts(contactsResponse.workspaceContacts);
+        setPersonalContacts(contactsResponse.personalContacts);
         setError(null);
       } catch (nextError) {
         setError(
@@ -87,32 +118,90 @@ export default function ContactDetailScreen() {
     contactType === "member"
       ? (members.find((item) => item.userId === contactId) ?? null)
       : null;
+  const workspaceContact =
+    contactType === "workspace-contact"
+      ? (workspaceContacts.find((item) => item.id === contactId) ?? null)
+      : null;
+  const personalContact =
+    contactType === "personal-contact"
+      ? (personalContacts.find((item) => item.id === contactId) ?? null)
+      : null;
+  const savedContact = workspaceContact || personalContact;
 
   const relatedGroups = useMemo(() => {
-    if (contactType === "actor" && actor) {
+    const targetActorId = actor?.id || savedContact?.actor?.id;
+    const targetUserId = member?.userId || savedContact?.user?.id;
+
+    if (targetActorId) {
       return conversations.filter(
         (conversation) =>
           isGroupConversation(conversation) &&
-          conversationIncludesActor(conversation, actor.id),
+          conversationIncludesActor(conversation, targetActorId),
       );
     }
 
-    if (contactType === "member" && member) {
+    if (targetUserId) {
       return conversations.filter(
         (conversation) =>
           isGroupConversation(conversation) &&
-          conversationIncludesUser(conversation, member.userId),
+          conversationIncludesUser(conversation, targetUserId),
       );
     }
 
     return [];
-  }, [actor, contactType, conversations, member]);
+  }, [actor, conversations, member, savedContact]);
 
   async function handleGoChat() {
     if (!workspaceId || submitting) return;
 
     setSubmitting(true);
     try {
+      if (savedContact?.actor) {
+        const existing = findSocialConversationForActor(
+          conversations,
+          savedContact.actor.id,
+        );
+        if (existing) {
+          router.push(`/chat/${existing.id}`);
+          return;
+        }
+
+        const created = await api.createThread({
+          domain: "social",
+          kind: "private",
+          actorIds: [savedContact.actor.id],
+        });
+        const conversationId =
+          created.threadId || created.conversationId || created.id;
+        if (conversationId) {
+          router.replace(`/chat/${conversationId}`);
+        }
+        return;
+      }
+
+      if (savedContact?.user) {
+        const existing = findSocialConversationForUser(
+          conversations,
+          savedContact.user.id,
+        );
+        if (existing) {
+          router.push(`/chat/${existing.id}`);
+          return;
+        }
+
+        const created = await api.createThread({
+          domain: "social",
+          kind: "private",
+          userIds: [savedContact.user.id],
+        });
+        const conversationId =
+          created.threadId || created.conversationId || created.id;
+        if (conversationId) {
+          router.replace(`/chat/${conversationId}`);
+        }
+        return;
+      }
+
       if (actor) {
         const existing = findDirectConversationForActor(
           conversations,
@@ -123,8 +212,14 @@ export default function ContactDetailScreen() {
           return;
         }
 
-        const created = await api.createConversation(workspaceId, [actor.id]);
-        const conversationId = created.conversationId || created.id;
+        const created = await api.createThread({
+          domain: "workspace",
+          kind: "private",
+          workspaceId,
+          actorIds: [actor.id],
+        });
+        const conversationId =
+          created.threadId || created.conversationId || created.id;
         if (conversationId) {
           router.replace(`/chat/${conversationId}`);
         }
@@ -138,20 +233,84 @@ export default function ContactDetailScreen() {
           return;
         }
 
-        router.push({
-          pathname: "/contacts/group/new",
-          params: { userId: member.userId },
+        const created = await api.createThread({
+          domain: "workspace",
+          kind: "private",
+          workspaceId,
+          userIds: [member.userId],
         });
+        const conversationId =
+          created.threadId || created.conversationId || created.id;
+        if (conversationId) {
+          router.replace(`/chat/${conversationId}`);
+        }
       }
     } finally {
       setSubmitting(false);
     }
   }
 
-  const title = actor?.definition.name || member?.userName || "联系人详情";
+  function handleStartGroup() {
+    if (actor) {
+      router.push({
+        pathname: "/contacts/group/new",
+        params: { actorId: actor.id },
+      });
+      return;
+    }
+
+    if (member) {
+      router.push({
+        pathname: "/contacts/group/new",
+        params: { userId: member.userId },
+      });
+      return;
+    }
+
+    if (savedContact) {
+      router.push({
+        pathname: "/contacts/group/new",
+        params: {
+          contactScope: savedContact.scope,
+          contactId: savedContact.id,
+        },
+      });
+    }
+  }
+
+  const title =
+    actor?.definition.name ||
+    member?.userName ||
+    (savedContact ? scopedContactName(savedContact) : "联系人详情");
   const subtitle = actor
     ? actor.definition.title || titleCase(actor.definition.role)
-    : member?.userEmail || "成员详情";
+    : member
+      ? member.userEmail || "成员详情"
+      : savedContact
+        ? scopedContactSubtitle(savedContact)
+        : "联系人详情";
+  const avatarUrl =
+    actor?.avatarUrl || member?.avatarUrl || savedContact?.actor?.avatarUrl || savedContact?.user?.avatarUrl;
+  const icon = actor || savedContact?.actor ? "cpu" : "user";
+  const chipLabel = actor
+    ? "本地角色"
+    : member
+      ? member.trustLevel || "本地成员"
+      : savedContact?.scope === "workspace"
+        ? "共享联系人"
+        : savedContact
+          ? "我的联系人"
+          : "联系人";
+  const profileCopy = actor
+    ? actorSummary(actor)
+    : member
+      ? `所在工作区权限级别：${member.trustLevel}`
+      : savedContact
+        ? scopedContactSummary(savedContact)
+        : null;
+  const scopeCopy = savedContact
+    ? `来源工作区：${savedContact.targetWorkspace.name}`
+    : null;
 
   return (
     <ScreenScroll topPadding={0} bottomPadding={56}>
@@ -177,7 +336,7 @@ export default function ContactDetailScreen() {
             description={error}
           />
         </SectionBlock>
-      ) : !actor && !member ? (
+      ) : !actor && !member && !savedContact ? (
         <SectionBlock>
           <EmptyState
             icon="user"
@@ -189,40 +348,36 @@ export default function ContactDetailScreen() {
         <>
           <SectionBlock>
             <View style={styles.profileRow}>
-              <Avatar
-                name={title}
-                uri={actor?.avatarUrl || member?.avatarUrl}
-                size={68}
-                icon={actor ? "cpu" : "user"}
-              />
+              <Avatar name={title} uri={avatarUrl} size={68} icon={icon} />
               <View style={styles.profileBody}>
                 <Text style={styles.profileName}>{title}</Text>
                 <Text style={styles.profileSubtitle}>{subtitle}</Text>
               </View>
               <Pill
-                label={actor ? "角色" : member?.trustLevel || "成员"}
-                tone="primary"
+                label={chipLabel}
+                tone={savedContact ? "accent" : "primary"}
               />
             </View>
-            {actor ? (
-              <Text style={styles.profileCopy}>{actorSummary(actor)}</Text>
-            ) : member ? (
-              <Text style={styles.profileCopy}>
-                所在工作区权限级别：{member.trustLevel}
-              </Text>
+            {profileCopy ? (
+              <Text style={styles.profileCopy}>{profileCopy}</Text>
             ) : null}
-            <Button
-              label={
-                submitting
-                  ? "处理中..."
-                  : member
-                    ? "去聊天"
-                    : `和 ${title} 聊天`
-              }
-              icon="message-circle"
-              onPress={() => void handleGoChat()}
-              disabled={submitting}
-            />
+            {scopeCopy ? <Text style={styles.scopeCopy}>{scopeCopy}</Text> : null}
+            <View style={styles.actionRow}>
+              <Button
+                label={submitting ? "处理中..." : "发起私聊"}
+                icon="message-circle"
+                onPress={() => void handleGoChat()}
+                disabled={submitting}
+                style={styles.actionButton}
+              />
+              <Button
+                label="拉个群"
+                icon="users"
+                variant="secondary"
+                onPress={handleStartGroup}
+                style={styles.actionButton}
+              />
+            </View>
           </SectionBlock>
 
           <SectionBlock>
@@ -245,8 +400,8 @@ export default function ContactDetailScreen() {
             ) : (
               <EmptyState
                 icon="users"
-                title="暂时还没有群聊"
-                description="等这个联系人进入更多群聊后，这里会显示它所在的会话。"
+                title="暂时还没有关联群聊"
+                description="等你把这个联系人拉进群聊后，这里会显示它所在的会话。"
               />
             )}
           </SectionBlock>
@@ -308,7 +463,18 @@ const styles = StyleSheet.create({
   profileCopy: {
     fontSize: 14,
     lineHeight: 21,
-    color: theme.colors.textMuted,
+    color: theme.colors.text,
+  },
+  scopeCopy: {
+    fontSize: 13,
+    color: theme.colors.textSoft,
+  },
+  actionRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  actionButton: {
+    flex: 1,
   },
   countText: {
     fontSize: 12,

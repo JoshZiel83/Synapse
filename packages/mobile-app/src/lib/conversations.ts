@@ -39,14 +39,36 @@ export function conversationIncludesUser(
 }
 
 export function isGroupConversation(conversation: ConversationSummaryView) {
-  const members = getActiveConversationMembers(conversation);
-  const actorCount = members.filter((member) => member.type === "actor").length;
-  const userCount = members.filter((member) => member.type === "user").length;
-  return (
-    members.length > 2 ||
-    actorCount > 1 ||
-    userCount > 1 ||
-    members.some((member) => member.type === "external")
+  return conversation.kind === "group";
+}
+
+function findPrivateConversationForActor(
+  conversations: ConversationSummaryView[],
+  actorId: string,
+  domain?: "workspace" | "social",
+) {
+  return conversations.find((conversation) => {
+    return (
+      conversation.kind === "private" &&
+      (!domain || conversation.domain === domain) &&
+      conversationIncludesActor(conversation, actorId) &&
+      !getActiveConversationMembers(conversation).some(
+        (member) => member.type === "external",
+      )
+    );
+  });
+}
+
+function findPrivateConversationForUser(
+  conversations: ConversationSummaryView[],
+  userId: string,
+  domain?: "workspace" | "social",
+) {
+  return conversations.find(
+    (conversation) =>
+      conversation.kind === "private" &&
+      (!domain || conversation.domain === domain) &&
+      conversationIncludesUser(conversation, userId),
   );
 }
 
@@ -54,28 +76,28 @@ export function findDirectConversationForActor(
   conversations: ConversationSummaryView[],
   actorId: string,
 ) {
-  return conversations.find((conversation) => {
-    const members = getActiveConversationMembers(conversation);
-    const actorCount = members.filter(
-      (member) => member.type === "actor",
-    ).length;
-    const userCount = members.filter((member) => member.type === "user").length;
-    return (
-      conversationIncludesActor(conversation, actorId) &&
-      actorCount === 1 &&
-      userCount === 1 &&
-      !members.some((member) => member.type === "external")
-    );
-  });
+  return findPrivateConversationForActor(conversations, actorId, "workspace");
+}
+
+export function findSocialConversationForActor(
+  conversations: ConversationSummaryView[],
+  actorId: string,
+) {
+  return findPrivateConversationForActor(conversations, actorId, "social");
 }
 
 export function findConversationForUser(
   conversations: ConversationSummaryView[],
   userId: string,
 ) {
-  return conversations.find((conversation) =>
-    conversationIncludesUser(conversation, userId),
-  );
+  return findPrivateConversationForUser(conversations, userId, "workspace");
+}
+
+export function findSocialConversationForUser(
+  conversations: ConversationSummaryView[],
+  userId: string,
+) {
+  return findPrivateConversationForUser(conversations, userId, "social");
 }
 
 export function conversationDisplayCount(

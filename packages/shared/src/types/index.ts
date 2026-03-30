@@ -847,7 +847,7 @@ export interface Session {
   workspaceId: UUID;
   actorId: UUID;
   conversationId?: UUID;
-  conversationKind?: "direct" | "group";
+  conversationKind?: "private" | "group" | "virtual";
   conversationTitle?: string;
   isMultiMemberConversation?: boolean;
   channelType: ChannelType;

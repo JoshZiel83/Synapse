@@ -30,8 +30,16 @@ export function nowISO(): string {
   return new Date().toISOString();
 }
 
-export const MULTI_MEMBER_CONVERSATION_KIND = 'group';
+export const GROUP_CONVERSATION_KIND = 'group';
+export const PRIVATE_CONVERSATION_KIND = 'private';
+export const VIRTUAL_CONVERSATION_KIND = 'virtual';
+
+export const MULTI_MEMBER_CONVERSATION_KIND = GROUP_CONVERSATION_KIND;
 
 export function isMultiMemberConversationKind(kind: string | null | undefined): boolean {
-  return kind === MULTI_MEMBER_CONVERSATION_KIND;
+  return kind === GROUP_CONVERSATION_KIND;
+}
+
+export function isPrivateConversationKind(kind: string | null | undefined): boolean {
+  return kind === PRIVATE_CONVERSATION_KIND;
 }

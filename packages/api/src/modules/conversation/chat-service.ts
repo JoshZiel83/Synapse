@@ -114,10 +114,7 @@ function avatarUrlFromConversationMetadata(value: unknown): string | undefined {
   return avatarFileId ? getFileUrlById(avatarFileId) : undefined;
 }
 
-async function loadActorJoinVersionRefs(
-  workspaceId: string,
-  actorIds: string[],
-) {
+async function loadActorJoinVersionRefs(actorIds: string[]) {
   const refs = new Map<string, string>();
   if (actorIds.length === 0) {
     return refs;
@@ -129,9 +126,8 @@ async function loadActorJoinVersionRefs(
      JOIN actor_versions current_version
        ON current_version.actor_id = a.id
       AND current_version.version = a.current_version
-     WHERE a.workspace_id = $1
-       AND a.id = ANY($2::uuid[])`,
-    [workspaceId, actorIds],
+     WHERE a.id = ANY($1::uuid[])`,
+    [actorIds],
   );
 
   for (const row of result.rows) {
@@ -367,7 +363,7 @@ async function getLatestActorSession(conversationId: string, actorId: string) {
 
 async function ensureActorSession(params: {
   conversationId: string;
-  workspaceId: string;
+  workspaceId?: string;
   actorId: string;
   trigger: string;
 }) {
@@ -377,8 +373,23 @@ async function ensureActorSession(params: {
   );
   if (existing) return existing;
 
+  let workspaceId = params.workspaceId;
+  if (!workspaceId) {
+    const actorResult = await query(
+      `SELECT workspace_id
+       FROM actors
+       WHERE id = $1
+       LIMIT 1`,
+      [params.actorId],
+    );
+    workspaceId = actorResult.rows[0]?.workspace_id as string | undefined;
+  }
+  if (!workspaceId) {
+    throw new Error(`Actor ${params.actorId} workspace not found`);
+  }
+
   return createSession({
-    workspaceId: params.workspaceId,
+    workspaceId,
     actorId: params.actorId,
     conversationId: params.conversationId,
     channelType: "web",
@@ -443,7 +454,7 @@ async function hydrateMembershipInitiator(params: {
 }
 
 async function recordMembershipEvent(params: {
-  workspaceId: string;
+  workspaceId?: string;
   conversationId: string;
   subtype: "member_joined" | "member_kicked" | "member_left";
   batchId: string;
@@ -504,7 +515,9 @@ async function recordMembershipEvent(params: {
     },
   });
 
-  await emitFeedItemCreated(params.workspaceId, created.item.id);
+  if (params.workspaceId) {
+    await emitFeedItemCreated(params.workspaceId, created.item.id);
+  }
   return created;
 }
 
@@ -707,10 +720,13 @@ async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
 // ============ Conversation CRUD ============
 
 export async function createConversation(params: {
-  workspaceId: string;
+  workspaceId?: string;
+  domain?: "workspace" | "social";
+  kind?: "group" | "private" | "virtual";
   createdBy: string;
   title?: string;
-  actorIds: string[];
+  actorIds?: string[];
+  userIds?: string[];
   initialMessage?: string;
   initialContentBlocks?: import("@synapse/shared").CanonicalContentBlock[];
   targetActorIds?: string[];
@@ -718,14 +734,41 @@ export async function createConversation(params: {
 }): Promise<{ conversation: any; members: any[]; message: any }> {
   const {
     workspaceId,
+    domain = "workspace",
+    kind: requestedKind,
     createdBy,
     title,
-    actorIds,
+    actorIds: rawActorIds = [],
+    userIds: rawUserIds = [],
     initialMessage,
     initialContentBlocks,
     targetActorIds = [],
     includeCreatorMember = true,
   } = params;
+  const actorIds = Array.from(new Set(rawActorIds.filter(Boolean)));
+  const userIds = Array.from(
+    new Set(rawUserIds.filter((userId) => Boolean(userId) && userId !== createdBy)),
+  );
+  const participantUserIds = includeCreatorMember
+    ? Array.from(new Set([createdBy, ...userIds]))
+    : userIds;
+  const participantCount = actorIds.length + participantUserIds.length;
+  const kind =
+    requestedKind || (participantCount === 2 ? "private" : "group");
+
+  if (domain === "workspace" && !workspaceId) {
+    throw new Error("workspaceId is required for workspace conversations");
+  }
+  if (kind === "private" && participantCount !== 2) {
+    throw new Error("Private thread must have exactly two active members");
+  }
+  if (kind === "group" && participantCount < 2) {
+    throw new Error("Group thread must have at least two active members");
+  }
+  if (kind === "virtual") {
+    throw new Error("Virtual conversations cannot be created through chat-service");
+  }
+
   const actorIdSet = new Set(actorIds);
   const initialTargetActorIds = Array.from(
     new Set(
@@ -736,48 +779,83 @@ export async function createConversation(params: {
   );
   const conversationId = uuidv4();
   const batchId = uuidv4();
-  const actorJoinVersionRefs = await loadActorJoinVersionRefs(
-    workspaceId,
-    actorIds,
-  );
+  const actorJoinVersionRefs = await loadActorJoinVersionRefs(actorIds);
 
   const result = await transaction(async (client) => {
     const actorRows =
       actorIds.length > 0
         ? (
             await client.query(
-              `SELECT id, name, title FROM actors WHERE id = ANY($1)`,
+              `SELECT id, name, title, workspace_id FROM actors WHERE id = ANY($1::uuid[])`,
               [actorIds],
             )
           ).rows
         : [];
-    const userRow = (
-      await client.query(
-        `SELECT name
-         FROM users
-         WHERE id = $1`,
-        [createdBy],
-      )
-    ).rows[0];
+    if (actorRows.length !== actorIds.length) {
+      throw new Error("One or more actors were not found");
+    }
+    if (
+      domain === "workspace" &&
+      actorRows.some((row: any) => row.workspace_id !== workspaceId)
+    ) {
+      throw new Error("Workspace thread actors must belong to the current workspace");
+    }
+
+    const userRows =
+      participantUserIds.length > 0
+        ? (
+            await client.query(
+              `SELECT u.id,
+                      u.name,
+                      wm.user_id AS workspace_member_user_id
+               FROM users u
+               LEFT JOIN workspace_members wm
+                 ON wm.user_id = u.id
+                AND wm.workspace_id = $1
+               WHERE u.id = ANY($2::uuid[])`,
+              [workspaceId || null, participantUserIds],
+            )
+          ).rows
+        : [];
+    if (userRows.length !== participantUserIds.length) {
+      throw new Error("One or more users were not found");
+    }
+    if (
+      domain === "workspace" &&
+      userRows.some((row: any) => !row.workspace_member_user_id)
+    ) {
+      throw new Error("Workspace thread users must be members of the current workspace");
+    }
+
     const actorMap = new Map<string, any>(
       actorRows.map((row: any) => [row.id, row]),
     );
+    const userMap = new Map<string, any>(
+      userRows.map((row: any) => [row.id, row]),
+    );
     const fallbackTitle =
       title?.trim() ||
-      actorRows
-        .map((row: any) => row.name)
-        .filter(Boolean)
-        .join(", ") ||
-      "Untitled conversation";
+      (kind === "group"
+        ? userRows
+            .map((row: any) => row.name)
+            .filter(Boolean)
+            .join(", ") ||
+          actorRows
+            .map((row: any) => row.name)
+            .filter(Boolean)
+            .join(", ") ||
+          "Untitled conversation"
+        : null);
 
     const conversationResult = await client.query(
-      `INSERT INTO conversations (id, workspace_id, kind, title, created_by, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, NOW(), NOW())
+      `INSERT INTO conversations (id, workspace_id, domain, kind, title, created_by, metadata, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, NOW(), NOW())
        RETURNING *`,
       [
         conversationId,
-        workspaceId,
-        MULTI_MEMBER_CONVERSATION_KIND,
+        domain === "workspace" ? workspaceId : null,
+        domain,
+        kind,
         fallbackTitle,
         createdBy,
       ],
@@ -795,32 +873,33 @@ export async function createConversation(params: {
       title?: string;
     }> = [];
 
-    let userMemberId: string | undefined;
-    if (includeCreatorMember) {
-      userMemberId = uuidv4();
+    for (const userId of participantUserIds) {
+      const userMemberId = uuidv4();
       await client.query(
         `INSERT INTO conversation_members
            (id, conversation_id, member_type, user_id, state, metadata, joined_at)
          VALUES ($1, $2, 'user', $3, 'active', '{}'::jsonb, NOW())`,
-        [userMemberId, conversationId, createdBy],
+        [userMemberId, conversationId, userId],
       );
 
+      const userInfo = userMap.get(userId);
       joinedMembers.push({
         participantId: userMemberId,
         memberId: userMemberId,
         memberType: "user" as const,
-        userId: createdBy,
-        name: userRow?.name || "User",
+        userId,
+        name: userInfo?.name || "User",
       });
     }
 
     for (const actorId of actorIds) {
+      const actorInfo = actorMap.get(actorId);
       const sessionId = uuidv4();
       await client.query(
         `INSERT INTO sessions
            (id, workspace_id, actor_id, conversation_id, channel_type, trigger, status, metadata, created_at, updated_at)
          VALUES ($1, $2, $3, $4, 'web', 'user_message', 'idle', '{}'::jsonb, NOW(), NOW())`,
-        [sessionId, workspaceId, actorId, conversationId],
+        [sessionId, actorInfo.workspace_id, actorId, conversationId],
       );
 
       const memberId = uuidv4();
@@ -832,7 +911,6 @@ export async function createConversation(params: {
       );
       members.push({ id: memberId, actorId, sessionId });
 
-      const actorInfo = actorMap.get(actorId);
       joinedMembers.push({
         participantId: memberId,
         memberId,
@@ -846,25 +924,21 @@ export async function createConversation(params: {
     const authzEntryIds = await queueAuthzRelationships(
       client,
       [
-        touchRelation(
-          "conversation",
-          conversationId,
-          "workspace",
-          "workspace",
-          workspaceId,
-        ),
-        touchRelation("conversation", conversationId, "admin", "user", createdBy),
-        ...(includeCreatorMember
+        ...(domain === "workspace" && workspaceId
           ? [
               touchRelation(
                 "conversation",
                 conversationId,
-                "participant",
-                "user",
-                createdBy,
+                "workspace",
+                "workspace",
+                workspaceId,
               ),
             ]
           : []),
+        touchRelation("conversation", conversationId, "admin", "user", createdBy),
+        ...participantUserIds.map((userId) =>
+          touchRelation("conversation", conversationId, "participant", "user", userId),
+        ),
         ...actorIds.flatMap((actorId) => [
           touchRelation(
             "conversation",
@@ -878,9 +952,11 @@ export async function createConversation(params: {
       ],
       {
         source: "conversation.create",
-        workspaceId,
+        workspaceId: workspaceId || null,
         conversationId,
         createdBy,
+        domain,
+        kind,
       },
     );
 
@@ -888,7 +964,7 @@ export async function createConversation(params: {
       conversation,
       members,
       joinedMembers,
-      creatorName: userRow?.name || "User",
+      creatorName: userMap.get(createdBy)?.name || "User",
       authzEntryIds,
     };
   });
@@ -900,7 +976,7 @@ export async function createConversation(params: {
       (member) => member.memberType === "user" && member.userId === createdBy,
     );
     await recordMembershipEvent({
-      workspaceId,
+      workspaceId: domain === "workspace" ? workspaceId : undefined,
       conversationId: conversationId,
       subtype: "member_joined",
       batchId,
@@ -919,12 +995,6 @@ export async function createConversation(params: {
     });
   }
 
-  await Promise.all(
-    result.members.map((member: any) =>
-      publishSessionRuntime(workspaceId, member.sessionId),
-    ),
-  );
-
   if (
     initialTargetActorIds.length > 0 &&
     (initialMessage ||
@@ -940,11 +1010,20 @@ export async function createConversation(params: {
     });
   }
 
-  await emitConversationUpdated({
-    workspaceId,
-    conversationId: conversationId,
-    action: "created",
-  });
+  for (const member of result.members) {
+    const session = await getSession(member.sessionId);
+    if (session?.workspace_id) {
+      await publishSessionRuntime(session.workspace_id, member.sessionId);
+    }
+  }
+
+  if (domain === "workspace" && workspaceId) {
+    await emitConversationUpdated({
+      workspaceId,
+      conversationId: conversationId,
+      action: "created",
+    });
+  }
 
   return {
     conversation: result.conversation,
@@ -955,8 +1034,8 @@ export async function createConversation(params: {
 
 export async function getConversation(conversationId: string): Promise<any | null> {
   const result = await query(
-    `SELECT * FROM conversations WHERE id = $1 AND kind = $2`,
-    [conversationId, MULTI_MEMBER_CONVERSATION_KIND],
+    `SELECT * FROM conversations WHERE id = $1`,
+    [conversationId],
   );
   return normalizeConversationRow(result.rows[0] ?? null);
 }
@@ -1026,7 +1105,7 @@ export async function getConversationsByWorkspace(
   const conversations = conversationIds
     ? conversationIds.length > 0
       ? (
-          await query(
+	          await query(
             `SELECT c.*,
                   transport_account.transport_kind,
                   cr.last_read_at,
@@ -1060,18 +1139,17 @@ export async function getConversationsByWorkspace(
            FROM conversations c
            LEFT JOIN conversation_transport_bindings ctb
              ON ctb.conversation_id = c.id
-           LEFT JOIN transport_accounts transport_account
-             ON transport_account.id = ctb.transport_account_id
-           LEFT JOIN conversation_reads cr ON cr.conversation_id = c.id AND cr.user_id = $2
-           WHERE c.workspace_id = $1
-             AND c.kind = $3
-             AND c.id = ANY($4)
-           ORDER BY c.updated_at DESC, c.created_at DESC`,
+	           LEFT JOIN transport_accounts transport_account
+	             ON transport_account.id = ctb.transport_account_id
+	           LEFT JOIN conversation_reads cr ON cr.conversation_id = c.id AND cr.user_id = $2
+	           WHERE c.workspace_id = $1
+	             AND c.domain = 'workspace'
+	             AND c.id = ANY($3::uuid[])
+	           ORDER BY c.updated_at DESC, c.created_at DESC`,
             [
               workspaceId,
               userId,
-              MULTI_MEMBER_CONVERSATION_KIND,
-              conversationIds,
+	              conversationIds,
             ],
           )
         ).rows
@@ -1174,6 +1252,167 @@ export async function getConversationsByWorkspace(
   });
 }
 
+export async function getThreadsForUser(params: {
+  userId: string;
+  workspaceId?: string;
+}): Promise<any[]> {
+  const queryParams: any[] = [params.userId];
+  const visibilityClause = params.workspaceId
+    ? `AND (
+         c.domain = 'social'
+         OR (c.domain = 'workspace' AND c.workspace_id = $2)
+       )`
+    : "";
+  if (params.workspaceId) {
+    queryParams.push(params.workspaceId);
+  }
+
+  const conversations = (
+    await query(
+      `SELECT c.*,
+              transport_account.transport_kind,
+              cr.last_read_at,
+              COALESCE(cr.last_read_sequence, 0) AS last_read_sequence,
+              (
+                SELECT COUNT(*)::int
+                FROM conversation_items ci
+                JOIN conversation_members cm_u
+                  ON cm_u.conversation_id = c.id
+                 AND cm_u.user_id = $1
+                WHERE ci.conversation_id = c.id
+                  AND ci.scope = 'shared'
+                  AND ci.surface = 'visible'
+                  AND (
+                    ci.subtype <> 'model_error_notice'
+                    OR NOT EXISTS (
+                      SELECT 1 FROM conversation_item_targets cit0
+                      WHERE cit0.item_id = ci.id
+                    )
+                    OR EXISTS (
+                      SELECT 1
+                      FROM conversation_item_targets cit
+                      JOIN conversation_members cm_target
+                        ON cm_target.id = cit.target_member_id
+                      WHERE cit.item_id = ci.id
+                        AND cm_target.user_id = $1
+                    )
+                  )
+                  AND ci.sequence > COALESCE(cr.last_read_sequence, 0)
+              ) AS unread_count
+       FROM conversations c
+       JOIN conversation_members cm
+         ON cm.conversation_id = c.id
+        AND cm.user_id = $1
+        AND cm.state = 'active'
+       LEFT JOIN conversation_transport_bindings ctb
+         ON ctb.conversation_id = c.id
+       LEFT JOIN transport_accounts transport_account
+         ON transport_account.id = ctb.transport_account_id
+       LEFT JOIN conversation_reads cr
+         ON cr.conversation_id = c.id
+        AND cr.user_id = $1
+       WHERE 1 = 1
+         ${visibilityClause}
+       ORDER BY c.updated_at DESC, c.created_at DESC`,
+      queryParams,
+    )
+  ).rows;
+
+  if (conversations.length === 0) return [];
+
+  const conversationIds = conversations.map((conversation: any) => conversation.id);
+  const activeCountsResult = await query(
+    `SELECT conversation_id, COUNT(*)::int AS active_count
+     FROM sessions
+     WHERE conversation_id = ANY($1::uuid[])
+       AND status <> 'closed'
+     GROUP BY conversation_id`,
+    [conversationIds],
+  );
+  const activeCountMap = new Map<string, number>(
+    activeCountsResult.rows.map((row: any) => [
+      row.conversation_id,
+      row.active_count,
+    ]),
+  );
+
+  const lastItemsResult = await query(
+    `SELECT DISTINCT ON (ci.conversation_id)
+            ci.conversation_id,
+            ci.id,
+            ci.role,
+            ci.item_type,
+            ci.created_at,
+            cm.member_type AS author_member_type,
+            COALESCE(a.name, u.name, cm.display_name) AS author_name
+     FROM conversation_items ci
+     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
+     LEFT JOIN actors a ON a.id = cm.actor_id
+     LEFT JOIN users u ON u.id = cm.user_id
+     WHERE ci.conversation_id = ANY($1::uuid[])
+       AND ci.scope = 'shared'
+       AND ci.surface = 'visible'
+       AND (
+         ci.subtype <> 'model_error_notice'
+         OR NOT EXISTS (
+           SELECT 1 FROM conversation_item_targets cit0
+           WHERE cit0.item_id = ci.id
+         )
+         OR EXISTS (
+           SELECT 1
+           FROM conversation_item_targets cit
+           JOIN conversation_members cm_target
+             ON cm_target.id = cit.target_member_id
+           WHERE cit.item_id = ci.id
+             AND cm_target.user_id = $2
+         )
+       )
+     ORDER BY ci.conversation_id, ci.sequence DESC`,
+    [conversationIds, params.userId],
+  );
+
+  const lastItemMap = new Map<string, any>(
+    lastItemsResult.rows.map((row: any) => [row.conversation_id, row]),
+  );
+  const itemIds = lastItemsResult.rows.map((row: any) => row.id);
+  const lastPartsResult =
+    itemIds.length > 0
+      ? await query(
+          `SELECT cip.*
+           FROM conversation_item_parts cip
+           WHERE cip.item_id = ANY($1::uuid[])
+           ORDER BY cip.item_id, cip.ordinal ASC`,
+          [itemIds],
+        )
+      : { rows: [] };
+  const partsByItem = new Map<string, any[]>();
+  for (const row of lastPartsResult.rows) {
+    if (!partsByItem.has(row.item_id)) partsByItem.set(row.item_id, []);
+    partsByItem.get(row.item_id)!.push(row);
+  }
+
+  return conversations.map((conversation: any) => {
+    const lastItem = lastItemMap.get(conversation.id);
+    const lastParts = lastItem ? partsByItem.get(lastItem.id) || [] : [];
+    const senderType = lastItem
+      ? senderTypeFromItem({
+          ...lastItem,
+          author_member_type: lastItem.author_member_type,
+        })
+      : null;
+
+    return {
+      ...normalizeConversationRow(conversation),
+      last_message: lastItem ? buildTextContentFromParts(lastParts) : null,
+      last_message_sender_type: senderType,
+      last_message_sender_name: lastItem?.author_name || "System",
+      last_message_at: lastItem?.created_at || null,
+      unread_count: conversation.unread_count || 0,
+      active_count: activeCountMap.get(conversation.id) || 0,
+    };
+  });
+}
+
 // ============ Member Management ============
 
 export async function addActorToConversation(
@@ -1184,9 +1423,7 @@ export async function addActorToConversation(
 ): Promise<{ member: any; session: any }> {
   const conversation = await getConversation(conversationId);
   if (!conversation) throw new Error("Conversation not found");
-  const actorJoinVersionId = (
-    await loadActorJoinVersionRefs(conversation.workspace_id, [actorId])
-  ).get(actorId);
+  const actorJoinVersionId = (await loadActorJoinVersionRefs([actorId])).get(actorId);
 
   const existing = await getConversationMember({
     conversationId: conversationId,
@@ -1197,7 +1434,7 @@ export async function addActorToConversation(
   }
 
   const actorResult = await query(
-    `SELECT name, title FROM actors WHERE id = $1`,
+    `SELECT name, title, workspace_id FROM actors WHERE id = $1`,
     [actorId],
   );
   const actorInfo = actorResult.rows[0];
@@ -1209,7 +1446,7 @@ export async function addActorToConversation(
       actorJoinVersionId,
     });
     const session = await createSession({
-      workspaceId: conversation.workspace_id,
+      workspaceId: actorInfo?.workspace_id || conversation.workspace_id,
       actorId,
       conversationId: conversationId,
       channelType: "web",
@@ -1234,11 +1471,16 @@ export async function addActorToConversation(
   });
 
   await flushQueuedAuthzEntries(result.authzEntryIds, "conversation.add_actor");
-  await publishSessionRuntime(conversation.workspace_id, result.session.id);
+  if (actorInfo?.workspace_id || conversation.workspace_id) {
+    await publishSessionRuntime(
+      actorInfo?.workspace_id || conversation.workspace_id,
+      result.session.id,
+    );
+  }
 
   const eventBatchId = batchId || uuidv4();
   await recordMembershipEvent({
-    workspaceId: conversation.workspace_id,
+    workspaceId: conversation.workspace_id || undefined,
     conversationId: conversationId,
     subtype: "member_joined",
     batchId: eventBatchId,
@@ -1327,10 +1569,7 @@ export async function addMembersToConversation(params: {
   const actorMap = new Map(
     actorResult.rows.map((row) => [row.id as string, row]),
   );
-  const actorJoinVersionRefs = await loadActorJoinVersionRefs(
-    params.workspaceId,
-    actorIds,
-  );
+  const actorJoinVersionRefs = await loadActorJoinVersionRefs(actorIds);
   const userMap = new Map(
     userResult.rows.map((row) => [row.id as string, row]),
   );
@@ -1771,16 +2010,12 @@ export async function sendConversationMessage(params: {
     senderType === "actor"
       ? (
           await activateConversationParticipant({
-            workspaceId: conversation.workspace_id,
+            workspaceId: conversation.workspace_id || undefined,
             conversationId: conversationId,
             memberType: "actor",
             actorId: senderActorId,
             actorJoinVersionId: senderActorId
-              ? (
-                  await loadActorJoinVersionRefs(conversation.workspace_id, [
-                    senderActorId,
-                  ])
-                ).get(senderActorId)
+              ? (await loadActorJoinVersionRefs([senderActorId])).get(senderActorId)
               : undefined,
             initiator: senderActorId
               ? {
@@ -1793,7 +2028,7 @@ export async function sendConversationMessage(params: {
         ).member
       : (
           await activateConversationParticipant({
-            workspaceId: conversation.workspace_id,
+            workspaceId: conversation.workspace_id || undefined,
             conversationId: conversationId,
             memberType: "user",
             userId: senderUserId,
@@ -1864,7 +2099,7 @@ export async function sendConversationMessage(params: {
     (actorId) => !actorIdsRepresentedByTargetMemberSet.has(actorId),
   );
   const transportBinding =
-    targetMemberIds.length > 0
+    conversation.workspace_id && targetMemberIds.length > 0
       ? await getConversationTransportBinding({
           workspaceId: conversation.workspace_id,
           conversationId: conversationId,
@@ -1935,7 +2170,7 @@ export async function sendConversationMessage(params: {
   let item: any;
   try {
     item = await createConversationItem({
-      workspaceId: conversation.workspace_id,
+      workspaceId: conversation.workspace_id || undefined,
       conversationId: conversationId,
       sessionId: senderSessionId,
       clientMessageId,
@@ -1963,8 +2198,10 @@ export async function sendConversationMessage(params: {
     throw error;
   }
 
-  await emitFeedItemCreated(conversation.workspace_id, item.id);
-  if (hasExplicitTransportTargets) {
+  if (conversation.workspace_id) {
+    await emitFeedItemCreated(conversation.workspace_id, item.id);
+  }
+  if (conversation.workspace_id && hasExplicitTransportTargets) {
     await queueConversationTransportProjection({
       workspaceId: conversation.workspace_id,
       conversationId: conversationId,
@@ -2103,7 +2340,7 @@ export async function wakeActor(params: {
 
   let session = await ensureActorSession({
     conversationId: params.conversationId,
-    workspaceId: conversation.workspace_id,
+    workspaceId: conversation.workspace_id || undefined,
     actorId: params.actorId,
     trigger: params.sourceType,
   });
@@ -2113,7 +2350,7 @@ export async function wakeActor(params: {
   await enqueueSessionWakeup({
     sessionId: session.id,
     actorId: params.actorId,
-    workspaceId: conversation.workspace_id,
+    workspaceId: session.workspace_id,
     sourceType: params.sourceType,
     sourceItemId: params.sourceItemId,
     sourceSessionId: params.sourceSessionId,

@@ -46,6 +46,74 @@ export interface ActorListResponse {
   actors: Actor[];
 }
 
+export interface ContactWorkspaceRef {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+export interface ScopedContactActorView {
+  id: string;
+  workspaceId: string;
+  name: string;
+  title?: string;
+  role?: string;
+  avatarUrl?: string | null;
+  avatarEmoji?: string;
+}
+
+export interface ScopedContactUserView {
+  id: string;
+  workspaceId: string;
+  name?: string;
+  email?: string;
+  avatarUrl?: string | null;
+}
+
+export interface ScopedContactView {
+  id: string;
+  scope: "workspace" | "personal";
+  targetType: "actor" | "user";
+  targetWorkspace: ContactWorkspaceRef;
+  actor: ScopedContactActorView | null;
+  user: ScopedContactUserView | null;
+  createdAt: string;
+}
+
+export interface ScopedContactsResponse {
+  workspaceContacts: ScopedContactView[];
+  personalContacts: ScopedContactView[];
+}
+
+export interface ContactDiscoveryActorView {
+  targetType: "actor";
+  actorId: string;
+  name: string;
+  title?: string;
+  role?: string;
+  avatarUrl?: string | null;
+  avatarEmoji?: string;
+  targetWorkspace: ContactWorkspaceRef;
+  alreadyInWorkspaceContacts: boolean;
+  alreadyInPersonalContacts: boolean;
+}
+
+export interface ContactDiscoveryUserView {
+  targetType: "user";
+  userId: string;
+  name?: string;
+  email?: string;
+  avatarUrl?: string | null;
+  targetWorkspace: ContactWorkspaceRef;
+  alreadyInWorkspaceContacts: boolean;
+  alreadyInPersonalContacts: boolean;
+}
+
+export interface ContactDiscoveryResponse {
+  actors: ContactDiscoveryActorView[];
+  users: ContactDiscoveryUserView[];
+}
+
 export interface ConversationParticipantView {
   memberId?: string;
   participantId?: string;
@@ -70,6 +138,8 @@ export interface ConversationMessagePreview {
 
 export interface ConversationSummaryView {
   id: string;
+  domain: "workspace" | "social";
+  kind: "private" | "group" | "virtual";
   status: "active" | "completed";
   transportKind?: string;
   participants: ConversationParticipantView[];
@@ -98,6 +168,7 @@ export interface ConversationMemberListResponse {
 export interface ConversationCreateResponse {
   id?: string;
   conversationId?: string;
+  threadId?: string;
 }
 
 export interface ConversationSendResponse {
