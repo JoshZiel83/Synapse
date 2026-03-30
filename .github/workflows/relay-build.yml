@@ -2,17 +2,8 @@ name: Build Relay CLI
 
 on:
   push:
-    branches:
-      - '**'
-    # paths:
-    #   - 'relay/**'
-    #   - '.github/workflows/relay-build.yml'
     tags:
       - 'relay-v*'
-  pull_request:
-    # paths:
-    #   - 'relay/**'
-    #   - '.github/workflows/relay-build.yml'
   workflow_dispatch:
     inputs:
       version:
@@ -34,6 +25,7 @@ env:
   BUNDLED_WINDOWS_GIT_VERSION: '2.49.0.windows.1'
   BUNDLED_FFMPEG_RELEASE_TAG: 'n7.1-2'
   COMMANDLINE_PACKAGE_PROFILE: 'default-data-v5'
+  ENABLE_COS_UPLOAD: ${{ vars.ENABLE_COS_UPLOAD || '' }}
 
 jobs:
   prepare-matrix:
@@ -119,6 +111,7 @@ jobs:
             -o ../synapse-relay-${{ matrix.suffix }}${{ matrix.ext }} ./cmd/synapse-relay
 
       - name: Upload artifacts to Tencent COS
+        if: startsWith(github.ref, 'refs/tags/') || env.ENABLE_COS_UPLOAD == 'true'
         continue-on-error: true
         env:
           ARTIFACT_PATH: synapse-relay-${{ matrix.suffix }}${{ matrix.ext }}
