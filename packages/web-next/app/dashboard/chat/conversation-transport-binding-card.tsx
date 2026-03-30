@@ -125,7 +125,7 @@ export default function ConversationTransportBindingCard({
     setError(null);
     try {
       const [bindingResult, actorsResult] = await Promise.all([
-        api.getConversationTransportBinding(workspaceId, conversation.id),
+        api.getThreadTransportBinding(conversation.id),
         api.getActors(workspaceId).catch((loadError) => {
           console.error('Failed to load actors for IM binding card:', loadError);
           return [];

@@ -136,7 +136,7 @@ export default function ConversationMemberPickerDialog({
         if (type === 'user') userIds.push(id);
       }
 
-      await api.addConversationMembers(workspaceId, conversationId, {
+      await api.addThreadMembers(conversationId, {
         actorIds,
         userIds,
       });

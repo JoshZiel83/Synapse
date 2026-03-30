@@ -44,7 +44,7 @@ export default function ConversationDetailScreen() {
       try {
         const [threadResponse, membersResponse] = await Promise.all([
           api.getThread(conversationId),
-          api.getConversationMembers(workspaceId || "", conversationId),
+          api.getThreadMembers(conversationId),
         ]);
 
         setConversation((threadResponse.thread as ConversationSummaryView | null) ?? null);

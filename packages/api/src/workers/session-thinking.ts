@@ -7,7 +7,7 @@ import {
   SESSION_LOCK_TTL,
   REDIS_CHANNELS,
   DEFAULT_MAX_CONCURRENT_SESSIONS,
-  isMultiMemberConversationKind,
+  isThreadConversationKind,
   nowISO,
   textBlocks,
 } from '@synapse/shared';
@@ -141,7 +141,7 @@ export function startSessionThinkingWorker() {
       let requeueAfterUnlock = false;
       let currentStatusText: string | undefined;
       let currentPhase: ThinkingPhase | 'error' = 'thinking';
-      let multiMemberConversationId: string | undefined;
+      let threadConversationId: string | undefined;
       let pendingWakeups: Awaited<ReturnType<typeof getPendingWakeups>> = [];
       let mcpTools: ResolvedMcpTools = {
         tools: [],
@@ -175,7 +175,7 @@ export function startSessionThinkingWorker() {
         const previousStatus = session.status;
         if (session.status !== 'running') {
           const conversationId =
-            isMultiMemberConversationKind(session.conversation_kind)
+            isThreadConversationKind(session.conversation_kind)
               ? session.conversation_id
               : undefined;
           await updateSessionStatus(sessionId, 'running', { errorMessage: null });
@@ -197,10 +197,10 @@ export function startSessionThinkingWorker() {
           }
         }
         const conversationId =
-          isMultiMemberConversationKind(session.conversation_kind)
+          isThreadConversationKind(session.conversation_kind)
             ? session.conversation_id
             : undefined;
-        multiMemberConversationId = conversationId;
+        threadConversationId = conversationId;
 
         await emitEvent({
           type: 'actor.thinking',
@@ -704,8 +704,8 @@ export function startSessionThinkingWorker() {
           workspaceId,
           payload: {
             conversationId:
-              multiMemberConversationId
-              || (isMultiMemberConversationKind(failedSession?.conversation_kind)
+              threadConversationId
+              || (isThreadConversationKind(failedSession?.conversation_kind)
                 ? failedSession.conversation_id
                 : undefined),
             sessionId,

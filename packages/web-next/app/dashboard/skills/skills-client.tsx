@@ -2458,7 +2458,7 @@ export function WorkspaceSkillCreationPage() {
 
     Promise.all([
       api.getActors(workspaceId),
-      api.getConversations(workspaceId),
+      api.getThreads(workspaceId, { domain: "workspace" }),
       api.getWorkspaceMembers(workspaceId),
     ])
       .then(([actorsResponse, conversationsResponse, membersResponse]) => {
@@ -2469,8 +2469,8 @@ export function WorkspaceSkillCreationPage() {
             : []
         )
         setConversations(
-          Array.isArray(conversationsResponse?.conversations)
-            ? conversationsResponse.conversations.map(
+          Array.isArray(conversationsResponse?.threads)
+            ? conversationsResponse.threads.map(
                 normalizeConversationOption
               )
             : []
@@ -3092,7 +3092,7 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
         await Promise.all([
           api.getSkillMarketplaceItem(skillId, workspaceId),
           api.getActors(workspaceId),
-          api.getConversations(workspaceId),
+          api.getThreads(workspaceId, { domain: "workspace" }),
           api.getWorkspaceMembers(workspaceId),
         ])
 
@@ -3100,9 +3100,9 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
         ? actorsResponse.map(normalizeActorOption)
         : []
       const nextConversations = Array.isArray(
-        conversationsResponse?.conversations
+        conversationsResponse?.threads
       )
-        ? conversationsResponse.conversations.map(normalizeConversationOption)
+        ? conversationsResponse.threads.map(normalizeConversationOption)
         : []
       const nextMembers = Array.isArray(membersResponse?.data)
         ? membersResponse.data.map(normalizeMemberOption)

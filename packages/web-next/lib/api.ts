@@ -857,68 +857,42 @@ class ApiClient {
     })
   }
 
-  // Conversations
-  getConversations(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/conversations`)
-  }
-  updateConversation(
+  // Threads
+  getThreads(
     wsId: string,
-    conversationId: string,
+    options?: { domain?: "workspace" | "social" }
+  ) {
+    const params = new URLSearchParams({ workspaceId: wsId })
+    if (options?.domain) params.set("domain", options.domain)
+    return this.fetch(`/threads?${params.toString()}`)
+  }
+  updateThread(
+    threadId: string,
     data: { title?: string; avatarFileId?: string | null }
   ) {
-    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}`, {
+    return this.fetch(`/threads/${threadId}`, {
       method: "PUT",
       body: JSON.stringify(data),
     })
   }
-  createConversation(
-    wsId: string,
-    actorIds: string[],
-    content?: string,
-    targetActorIdOrIds?: string | string[],
+  createThread(data: {
+    domain: "workspace" | "social"
+    kind: "private" | "group"
+    workspaceId?: string
+    actorIds?: string[]
+    userIds?: string[]
+    title?: string
+    content?: string
     contentBlocks?: CanonicalContentBlock[]
-  ) {
-    const targetActorIds = Array.isArray(targetActorIdOrIds)
-      ? targetActorIdOrIds.filter(Boolean)
-      : typeof targetActorIdOrIds === "string" && targetActorIdOrIds
-        ? [targetActorIdOrIds]
-        : []
-    const body: {
-      actorId?: string
-      actorIds?: string[]
-      content?: string
-      contentBlocks?: CanonicalContentBlock[]
-      targetActorIds?: string[]
-      targetActorId?: string
-    } =
-      actorIds.length === 1
-        ? {
-            actorId: actorIds[0],
-            ...(content && { content }),
-            ...(contentBlocks && contentBlocks.length > 0 && { contentBlocks }),
-            ...(targetActorIds.length > 0 && { targetActorIds }),
-          }
-        : {
-            actorIds,
-            ...(content && { content }),
-            ...(contentBlocks && contentBlocks.length > 0 && { contentBlocks }),
-            ...(targetActorIds.length > 0
-              ? {
-                  targetActorIds,
-                  targetActorId: targetActorIds[0],
-                }
-              : {
-                  targetActorId: actorIds[0],
-                }),
-          }
-    return this.fetch(`/workspaces/${wsId}/conversations`, {
+    targetActorIds?: string[]
+  }): Promise<{ threadId: string }> {
+    return this.fetch(`/threads`, {
       method: "POST",
-      body: JSON.stringify(body),
+      body: JSON.stringify(data),
     })
   }
-  getConversationMessages(
-    wsId: string,
-    conversationId: string,
+  getThreadMessages(
+    threadId: string,
     limit?: number,
     before?: string
   ): Promise<ConversationFeedPage> {
@@ -926,11 +900,9 @@ class ApiClient {
     if (limit) params.set("limit", String(limit))
     if (before) params.set("before", before)
     const qs = params.toString()
-    return this.fetch(
-      `/workspaces/${wsId}/conversations/${conversationId}/messages${qs ? "?" + qs : ""}`
-    )
+    return this.fetch(`/threads/${threadId}/messages${qs ? "?" + qs : ""}`)
   }
-  getConversationFeed(
+  getWorkspaceFeed(
     wsId: string,
     after?: number,
     limit?: number
@@ -943,31 +915,22 @@ class ApiClient {
       params.set("limit", String(limit))
     }
     const qs = params.toString()
-    return this.fetch(`/workspaces/${wsId}/conversations/feed${qs ? "?" + qs : ""}`)
+    return this.fetch(`/workspaces/${wsId}/threads/feed${qs ? "?" + qs : ""}`)
   }
-  getWorkspaceFeed(
-    wsId: string,
-    after?: number,
-    limit?: number
-  ): Promise<WorkspaceFeedPage> {
-    return this.getConversationFeed(wsId, after, limit)
+  getThreadMembers(threadId: string) {
+    return this.fetch(`/threads/${threadId}/members`)
   }
-  getConversationMembers(wsId: string, conversationId: string) {
-    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}/members`)
-  }
-  addConversationMembers(
-    wsId: string,
-    conversationId: string,
+  addThreadMembers(
+    threadId: string,
     data: { actorIds?: string[]; userIds?: string[] }
   ) {
-    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}/members`, {
+    return this.fetch(`/threads/${threadId}/members`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
-  sendConversationMessage(
-    wsId: string,
-    conversationId: string,
+  sendThreadMessage(
+    threadId: string,
     contentBlocks: CanonicalContentBlock[],
     clientMessageId: string,
     targetParticipantIds?: string[],
@@ -986,14 +949,13 @@ class ApiClient {
       body.targetParticipantIds = targetParticipantIds
     if (targetActorIds && targetActorIds.length > 0)
       body.targetActorIds = targetActorIds
-    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}/messages`, {
+    return this.fetch(`/threads/${threadId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
     })
   }
-  resolveConversationInteraction(
-    wsId: string,
-    conversationId: string,
+  resolveThreadInteraction(
+    threadId: string,
     interactionId: string,
     data: {
       answers?: {
@@ -1008,7 +970,7 @@ class ApiClient {
     }
   ): Promise<{ interaction: InteractionRequestSummary }> {
     return this.fetch(
-      `/workspaces/${wsId}/conversations/${conversationId}/interactions/${interactionId}/respond`,
+      `/threads/${threadId}/interactions/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(data),
@@ -1136,13 +1098,10 @@ class ApiClient {
       body: JSON.stringify(data),
     })
   }
-  getConversationTransportBinding(
-    wsId: string,
-    conversationId: string
+  getThreadTransportBinding(
+    threadId: string
   ): Promise<{ binding: ConversationTransportBindingSummary | null }> {
-    return this.fetch(
-      `/workspaces/${wsId}/conversations/${conversationId}/transport-binding`
-    )
+    return this.fetch(`/threads/${threadId}/transport-binding`)
   }
   updateTransportSessionSettings(
     wsId: string,
@@ -1167,14 +1126,14 @@ class ApiClient {
       }
     )
   }
-  markConversationRead(wsId: string, conversationId: string) {
-    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}/read`, {
+  markThreadRead(threadId: string) {
+    return this.fetch(`/threads/${threadId}/read`, {
       method: "POST",
       body: "{}",
     })
   }
-  cancelConversation(wsId: string, conversationId: string) {
-    return this.fetch(`/workspaces/${wsId}/conversations/${conversationId}`, {
+  cancelThread(threadId: string) {
+    return this.fetch(`/threads/${threadId}`, {
       method: "DELETE",
     })
   }

@@ -842,9 +842,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadConversations: async (workspaceId) => {
     set({ loadingConversations: true })
     try {
-      const res = await api.getConversations(workspaceId)
-      const incomingConversations = Array.isArray(res?.conversations)
-        ? (res.conversations as ConversationSummary[])
+      const res = await api.getThreads(workspaceId)
+      const incomingConversations = Array.isArray(res?.threads)
+        ? (res.threads as ConversationSummary[])
         : []
       const serverRuntime = (res?.runtimeMap || {}) as ConversationRuntimeMap
 
@@ -902,11 +902,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadMessages: async (workspaceId, conversationId) => {
     set({ loadingMessages: true })
     try {
-      const res = await api.getConversationMessages(
-        workspaceId,
-        conversationId,
-        100
-      )
+      const res = await api.getThreadMessages(conversationId, 100)
       const fetchedMessages = sortMessages(
         (res?.items || []).map(feedItemToMessage)
       )
@@ -1032,21 +1028,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
     targetActorIdOrIds,
     contentBlocks
   ) => {
-    const res = await api.createConversation(
+    const targetActorIds = Array.isArray(targetActorIdOrIds)
+      ? targetActorIdOrIds.filter(Boolean)
+      : typeof targetActorIdOrIds === "string" && targetActorIdOrIds
+        ? [targetActorIdOrIds]
+        : []
+    const res = await api.createThread({
+      domain: "workspace",
+      kind: actorIds.length === 1 ? "private" : "group",
       workspaceId,
       actorIds,
-      content,
-      targetActorIdOrIds,
-      contentBlocks
-    )
-    const conversationId = res.conversationId || res.id
+      ...(content ? { content } : {}),
+      ...(contentBlocks && contentBlocks.length > 0 ? { contentBlocks } : {}),
+      ...(targetActorIds.length > 0 ? { targetActorIds } : {}),
+    })
+    const conversationId = res.threadId
     await get().loadConversations(workspaceId)
     return conversationId
   },
 
   markConversationRead: async (workspaceId, conversationId) => {
     try {
-      await api.markConversationRead(workspaceId, conversationId)
+      await api.markThreadRead(conversationId)
       set((state) => {
         const conversations = state.conversations.map((conversation) =>
           conversation.id === conversationId
@@ -1305,8 +1308,7 @@ async function processOutboxEntry(clientMessageId: string) {
   })
 
   try {
-    const result = await api.sendConversationMessage(
-      entry.workspaceId,
+    const result = await api.sendThreadMessage(
       entry.conversationId,
       entry.contentBlocks,
       entry.clientMessageId,

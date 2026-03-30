@@ -156,8 +156,8 @@ export interface ConversationSummaryView {
   };
 }
 
-export interface ConversationCollectionResponse {
-  conversations: ConversationSummaryView[];
+export interface ThreadCollectionResponse {
+  threads: ConversationSummaryView[];
   runtimeMap?: Record<string, unknown>;
 }
 
@@ -165,10 +165,8 @@ export interface ConversationMemberListResponse {
   members: ConversationParticipantView[];
 }
 
-export interface ConversationCreateResponse {
-  id?: string;
-  conversationId?: string;
-  threadId?: string;
+export interface ThreadCreateResponse {
+  threadId: string;
 }
 
 export interface ConversationSendResponse {

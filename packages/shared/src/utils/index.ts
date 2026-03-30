@@ -33,6 +33,10 @@ export function nowISO(): string {
 export const GROUP_CONVERSATION_KIND = 'group';
 export const PRIVATE_CONVERSATION_KIND = 'private';
 export const VIRTUAL_CONVERSATION_KIND = 'virtual';
+export const THREAD_CONVERSATION_KINDS = [
+  GROUP_CONVERSATION_KIND,
+  PRIVATE_CONVERSATION_KIND,
+] as const;
 
 export const MULTI_MEMBER_CONVERSATION_KIND = GROUP_CONVERSATION_KIND;
 
@@ -42,4 +46,8 @@ export function isMultiMemberConversationKind(kind: string | null | undefined): 
 
 export function isPrivateConversationKind(kind: string | null | undefined): boolean {
   return kind === PRIVATE_CONVERSATION_KIND;
+}
+
+export function isThreadConversationKind(kind: string | null | undefined): boolean {
+  return kind === GROUP_CONVERSATION_KIND || kind === PRIVATE_CONVERSATION_KIND;
 }

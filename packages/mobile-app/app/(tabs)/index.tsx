@@ -80,7 +80,7 @@ export default function HomeTab() {
       const [actorsResponse, conversationsResponse, preferenceResponse] =
         await Promise.all([
           api.getActors(workspaceId),
-          api.getConversations(workspaceId),
+          api.getThreads(workspaceId),
           api.getWorkspaceChiefActorPreference(workspaceId).catch(() => null),
         ]);
 
@@ -88,7 +88,7 @@ export default function HomeTab() {
         (actor) => actor.isActive,
       );
       setActors(activeActors);
-      setConversations(sortConversations(conversationsResponse.conversations));
+      setConversations(sortConversations(conversationsResponse.threads));
       setPreference(preferenceResponse);
       setSelectedActorId(
         preferenceResponse?.chiefActorId || activeActors[0]?.id || null,
@@ -115,13 +115,15 @@ export default function HomeTab() {
     setError(null);
 
     try {
-      const response = await api.createConversation(
+      const response = await api.createThread({
+        domain: "workspace",
+        kind: "private",
         workspaceId,
-        [selectedActor.id],
-        draft.trim(),
-        [selectedActor.id],
-      );
-      const conversationId = response.conversationId || response.id;
+        actorIds: [selectedActor.id],
+        content: draft.trim(),
+        targetActorIds: [selectedActor.id],
+      });
+      const conversationId = response.threadId;
       setDraft("");
 
       if (conversationId) {

@@ -849,7 +849,8 @@ export interface Session {
   conversationId?: UUID;
   conversationKind?: "private" | "group" | "virtual";
   conversationTitle?: string;
-  isMultiMemberConversation?: boolean;
+  isGroupConversation?: boolean;
+  hasThreadContext?: boolean;
   channelType: ChannelType;
   trigger: string;
   status: SessionStatus;

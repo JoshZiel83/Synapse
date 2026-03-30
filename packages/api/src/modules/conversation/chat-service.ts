@@ -1255,17 +1255,31 @@ export async function getConversationsByWorkspace(
 export async function getThreadsForUser(params: {
   userId: string;
   workspaceId?: string;
+  domain?: "workspace" | "social";
 }): Promise<any[]> {
   const queryParams: any[] = [params.userId];
-  const visibilityClause = params.workspaceId
-    ? `AND (
-         c.domain = 'social'
-         OR (c.domain = 'workspace' AND c.workspace_id = $2)
-       )`
-    : "";
+  const filters: string[] = [];
+
   if (params.workspaceId) {
-    queryParams.push(params.workspaceId);
+    const workspaceIdIndex = queryParams.push(params.workspaceId);
+    if (params.domain === "workspace") {
+      filters.push(
+        `c.domain = 'workspace' AND c.workspace_id = $${workspaceIdIndex}`,
+      );
+    } else if (params.domain === "social") {
+      filters.push(`c.domain = 'social'`);
+    } else {
+      filters.push(
+        `(c.domain = 'social' OR (c.domain = 'workspace' AND c.workspace_id = $${workspaceIdIndex}))`,
+      );
+    }
+  } else if (params.domain) {
+    const domainIndex = queryParams.push(params.domain);
+    filters.push(`c.domain = $${domainIndex}`);
   }
+
+  const visibilityClause =
+    filters.length > 0 ? `AND (${filters.join(" AND ")})` : "";
 
   const conversations = (
     await query(

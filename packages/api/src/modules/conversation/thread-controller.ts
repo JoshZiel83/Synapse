@@ -7,22 +7,42 @@ import { getFileUrlById } from "../files/service.js";
 import { requireRequestAction } from "../access/guards.js";
 import {
   authorizeAction,
+  listAuthorizedResourceIds,
   userSubject,
 } from "../access/service.js";
 import {
+  addMembersToConversation,
+  cancelConversation,
   createConversation,
   getConversation,
   getConversationMembers,
   getConversationMessages,
   getThreadsForUser,
+  issueConversationGrant,
   markConversationRead,
+  listConversationGrants,
+  removeActorFromConversation,
+  revokeConversationGrant,
   sendConversationMessage,
+  updateConversationProfile,
 } from "./chat-service.js";
 import {
   enrichFeedItemInteractionsForUser,
+  enrichInteractionForUser,
+  getInteractionRequestSummary,
+  resolveInteractionRequest,
 } from "../interactions/service.js";
+import { getConversationRuntimeMap } from "../session/runtime.js";
+import {
+  getConversationMember,
+  isFeedItemVisibleToUser,
+  listWorkspaceFeedEventsPage,
+} from "./service.js";
+import { enqueueRelayAuthorizationApply } from "../mcp-plugins/relay-manager.js";
+import { getConversationTransportBinding } from "../im/service.js";
 
 const THREADS_BASE_PATH = "/api/v1/threads";
+const WORKSPACE_THREAD_FEED_PATH = "/api/v1/workspaces/:workspaceId/threads/feed";
 
 const createThreadSchema = z.object({
   domain: z.enum(["workspace", "social"]),
@@ -49,6 +69,77 @@ const sendThreadMessageSchema = z
       body.content.trim().length > 0 ||
       (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
     { message: "content or contentBlocks is required" },
+  );
+
+const updateThreadSchema = z
+  .object({
+    title: z.string().trim().min(1).max(255).optional(),
+    avatarFileId: z.string().uuid().nullable().optional(),
+  })
+  .refine(
+    (body) => body.title !== undefined || body.avatarFileId !== undefined,
+    {
+      message: "At least one of title or avatarFileId is required",
+    },
+  );
+
+const addThreadMembersSchema = z
+  .object({
+    actorIds: z.array(z.string().uuid()).optional().default([]),
+    userIds: z.array(z.string().uuid()).optional().default([]),
+  })
+  .refine((body) => body.actorIds.length > 0 || body.userIds.length > 0, {
+    message: "At least one actor or user is required",
+  });
+
+const threadGrantPermissionEnum = z.enum([
+  "send",
+  "moderate",
+  "manage",
+  "manage_members",
+  "attach_resources",
+]);
+
+const issueThreadGrantSchema = z
+  .object({
+    permission: threadGrantPermissionEnum,
+    userId: z.string().uuid().optional(),
+    actorId: z.string().uuid().optional(),
+    reason: z.string().max(1000).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if ((value.userId && value.actorId) || (!value.userId && !value.actorId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Exactly one of userId or actorId is required",
+      });
+    }
+  });
+
+const resolveThreadInteractionSchema = z
+  .object({
+    answers: z
+      .array(
+        z.object({
+          fieldId: z.string().min(1),
+          selectedOptionIds: z.array(z.string().min(1)).optional(),
+          otherText: z.string().trim().max(4000).optional(),
+          text: z.string().trim().max(4000).optional(),
+        }),
+      )
+      .max(50)
+      .optional(),
+    selectedOptionId: z.string().min(1).optional(),
+    decision: z.enum(["approve", "reject"]).optional(),
+    note: z.string().trim().max(2000).optional(),
+  })
+  .refine(
+    (body) =>
+      (Array.isArray(body.answers) && body.answers.length > 0) ||
+      typeof body.selectedOptionId === "string" ||
+      typeof body.decision === "string",
+    { message: "answers, selectedOptionId, or decision is required" },
   );
 
 function mapMember(row: any) {
@@ -211,11 +302,71 @@ async function requireThreadPermission(
   return thread;
 }
 
+function requireWorkspaceBackedThread(
+  reply: any,
+  thread: { workspace_id?: string | null } | null,
+  errorMessage: string,
+) {
+  if (!thread?.workspace_id) {
+    reply.status(400).send({ error: errorMessage });
+    return null;
+  }
+
+  return thread.workspace_id;
+}
+
 export default async function threadController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware);
 
   app.get<{
-    Querystring: { workspaceId?: string };
+    Params: { workspaceId: string };
+    Querystring: { after?: string; limit?: string };
+  }>(WORKSPACE_THREAD_FEED_PATH, async (request, reply) => {
+    const userId = (request as any).user!.userId;
+    const { workspaceId } = request.params;
+    const allowed = await requireRequestAction(
+      request,
+      reply,
+      "workspace.view",
+      workspaceId,
+      "Not allowed to access this workspace",
+    );
+    if (!allowed) return;
+
+    const authorizedThreadIds = await listAuthorizedResourceIds({
+      subject: userSubject(userId),
+      action: "conversation.view",
+    });
+    const afterSequence = Number.parseInt(request.query.after || "0", 10);
+    const limit = Number.parseInt(request.query.limit || "200", 10);
+    const page = await listWorkspaceFeedEventsPage({
+      workspaceId,
+      conversationIds: authorizedThreadIds,
+      afterSequence: Number.isFinite(afterSequence)
+        ? Math.max(0, afterSequence)
+        : 0,
+      limit: Number.isFinite(limit) ? limit : 200,
+    });
+    const visibleRecords = page.records.filter((record) =>
+      isFeedItemVisibleToUser(record.item, userId),
+    );
+
+    return reply.send({
+      ...page,
+      records: await Promise.all(
+        visibleRecords.map(async (record) => ({
+          ...record,
+          item: await enrichFeedItemInteractionsForUser(record.item, userId),
+        })),
+      ),
+    });
+  });
+
+  app.get<{
+    Querystring: {
+      workspaceId?: string;
+      domain?: "workspace" | "social";
+    };
   }>(THREADS_BASE_PATH, async (request, reply) => {
     const userId = (request as any).user!.userId;
     const threads = await getThreadsForUser({
@@ -224,12 +375,20 @@ export default async function threadController(app: FastifyInstance) {
         typeof request.query.workspaceId === "string"
           ? request.query.workspaceId
           : undefined,
+      domain:
+        request.query.domain === "workspace" || request.query.domain === "social"
+          ? request.query.domain
+          : undefined,
     });
+    const runtimeMap = await getConversationRuntimeMap(
+      threads.map((thread) => thread.id as string),
+    );
 
     return reply.send({
       threads: await Promise.all(
         threads.map((thread) => mapThreadSummary(thread, userId)),
       ),
+      runtimeMap,
     });
   });
 
@@ -272,7 +431,6 @@ export default async function threadController(app: FastifyInstance) {
     });
 
     return reply.status(201).send({
-      id: created.conversation.id,
       threadId: created.conversation.id,
     });
   });
@@ -348,6 +506,39 @@ export default async function threadController(app: FastifyInstance) {
   app.post<{
     Params: { threadId: string };
     Body: unknown;
+  }>(`${THREADS_BASE_PATH}/:threadId/members`, async (request, reply) => {
+    const thread = await requireThreadPermission(
+      request,
+      reply,
+      "manage_members",
+      "Not allowed to manage thread members",
+    );
+    if (!thread) return;
+
+    const workspaceId = requireWorkspaceBackedThread(
+      reply,
+      thread,
+      "Social threads do not support workspace member management",
+    );
+    if (!workspaceId) return;
+
+    const body = addThreadMembersSchema.parse(request.body);
+    const result = await addMembersToConversation({
+      conversationId: thread.id,
+      workspaceId,
+      actorIds: body.actorIds,
+      userIds: body.userIds,
+      initiator: {
+        memberType: "user",
+        userId: (request as any).user!.userId,
+      },
+    });
+    return reply.status(201).send(result);
+  });
+
+  app.post<{
+    Params: { threadId: string };
+    Body: unknown;
   }>(`${THREADS_BASE_PATH}/:threadId/messages`, async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
@@ -387,5 +578,234 @@ export default async function threadController(app: FastifyInstance) {
     const userId = (request as any).user!.userId;
     await markConversationRead(userId, thread.id);
     return reply.status(204).send();
+  });
+
+  app.put<{
+    Params: { threadId: string };
+    Body: unknown;
+  }>(`${THREADS_BASE_PATH}/:threadId`, async (request, reply) => {
+    const thread = await requireThreadPermission(
+      request,
+      reply,
+      "manage",
+      "Not allowed to manage this thread",
+    );
+    if (!thread) return;
+
+    const workspaceId = requireWorkspaceBackedThread(
+      reply,
+      thread,
+      "Social threads do not support workspace-scoped profile updates",
+    );
+    if (!workspaceId) return;
+
+    const body = updateThreadSchema.parse(request.body);
+    const updated = await updateConversationProfile({
+      conversationId: thread.id,
+      workspaceId,
+      updatedBy: (request as any).user!.userId,
+      title: body.title,
+      avatarFileId: body.avatarFileId,
+    });
+    return reply.send({ thread: updated });
+  });
+
+  app.delete<{
+    Params: { threadId: string };
+  }>(`${THREADS_BASE_PATH}/:threadId`, async (request, reply) => {
+    const thread = await requireThreadPermission(
+      request,
+      reply,
+      "manage",
+      "Not allowed to manage this thread",
+    );
+    if (!thread) return;
+
+    await cancelConversation(thread.id);
+    return reply.status(204).send();
+  });
+
+  app.delete<{
+    Params: { threadId: string; actorId: string };
+  }>(`${THREADS_BASE_PATH}/:threadId/members/:actorId`, async (request, reply) => {
+    const thread = await requireThreadPermission(
+      request,
+      reply,
+      "manage_members",
+      "Not allowed to manage thread members",
+    );
+    if (!thread) return;
+
+    const workspaceId = requireWorkspaceBackedThread(
+      reply,
+      thread,
+      "Social threads do not support workspace member management",
+    );
+    if (!workspaceId) return;
+
+    await removeActorFromConversation(thread.id, request.params.actorId);
+    return reply.status(204).send();
+  });
+
+  app.post<{
+    Params: { threadId: string; interactionId: string };
+    Body: unknown;
+  }>(
+    `${THREADS_BASE_PATH}/:threadId/interactions/:interactionId/respond`,
+    async (request, reply) => {
+      const thread = await requireThreadPermission(
+        request,
+        reply,
+        "view",
+        "Not allowed to view this thread",
+      );
+      if (!thread) return;
+
+      const userId = (request as any).user!.userId;
+      const interaction = await getInteractionRequestSummary(
+        request.params.interactionId,
+      );
+      if (!interaction || interaction.conversationId !== thread.id) {
+        return reply.status(404).send({ error: "Interaction not found" });
+      }
+
+      const resolverMember = await getConversationMember({
+        conversationId: thread.id,
+        userId,
+      });
+      if (!resolverMember) {
+        return reply
+          .status(403)
+          .send({ error: "You are not an active member of this thread" });
+      }
+
+      const body = resolveThreadInteractionSchema.parse(request.body);
+      const result = await resolveInteractionRequest({
+        interactionId: interaction.id,
+        resolverUserId: userId,
+        resolverMemberId: resolverMember.id,
+        answers: body.answers,
+        selectedOptionId: body.selectedOptionId,
+        decision: body.decision,
+        note: body.note,
+      });
+
+      if (result.relayApplyNeeded) {
+        await enqueueRelayAuthorizationApply(result.interaction.id);
+      }
+
+      return reply.send({
+        interaction: await enrichInteractionForUser(result.interaction, userId),
+      });
+    },
+  );
+
+  app.get<{
+    Params: { threadId: string };
+  }>(`${THREADS_BASE_PATH}/:threadId/grants`, async (request, reply) => {
+    const thread = await requireThreadPermission(
+      request,
+      reply,
+      "manage",
+      "Not allowed to manage thread permissions",
+    );
+    if (!thread) return;
+
+    const workspaceId = requireWorkspaceBackedThread(
+      reply,
+      thread,
+      "Social threads do not support workspace-scoped grants",
+    );
+    if (!workspaceId) return;
+
+    const grants = await listConversationGrants(thread.id, workspaceId);
+    return reply.send({ grants });
+  });
+
+  app.post<{
+    Params: { threadId: string };
+    Body: unknown;
+  }>(`${THREADS_BASE_PATH}/:threadId/grants`, async (request, reply) => {
+    const thread = await requireThreadPermission(
+      request,
+      reply,
+      "manage",
+      "Not allowed to manage thread permissions",
+    );
+    if (!thread) return;
+
+    const workspaceId = requireWorkspaceBackedThread(
+      reply,
+      thread,
+      "Social threads do not support workspace-scoped grants",
+    );
+    if (!workspaceId) return;
+
+    const body = issueThreadGrantSchema.parse(request.body);
+    const grant = await issueConversationGrant({
+      conversationId: thread.id,
+      workspaceId,
+      permission: body.permission,
+      userId: body.userId,
+      actorId: body.actorId,
+      grantedBy: (request as any).user!.userId,
+      reason: body.reason,
+      metadata: body.metadata,
+    });
+    return reply.status(201).send({ grant });
+  });
+
+  app.post<{
+    Params: { threadId: string; grantId: string };
+  }>(`${THREADS_BASE_PATH}/:threadId/grants/:grantId/revoke`, async (request, reply) => {
+    const thread = await requireThreadPermission(
+      request,
+      reply,
+      "manage",
+      "Not allowed to manage thread permissions",
+    );
+    if (!thread) return;
+
+    const workspaceId = requireWorkspaceBackedThread(
+      reply,
+      thread,
+      "Social threads do not support workspace-scoped grants",
+    );
+    if (!workspaceId) return;
+
+    const revoked = await revokeConversationGrant({
+      conversationId: thread.id,
+      workspaceId,
+      grantId: request.params.grantId,
+    });
+    if (!revoked) {
+      return reply.status(404).send({ error: "Thread grant not found" });
+    }
+    return reply.send({ grant: revoked });
+  });
+
+  app.get<{
+    Params: { threadId: string };
+  }>(`${THREADS_BASE_PATH}/:threadId/transport-binding`, async (request, reply) => {
+    const thread = await requireThreadPermission(
+      request,
+      reply,
+      "view",
+      "Not allowed to view this thread transport binding",
+    );
+    if (!thread) return;
+
+    const workspaceId = requireWorkspaceBackedThread(
+      reply,
+      thread,
+      "Social threads do not have transport bindings",
+    );
+    if (!workspaceId) return;
+
+    const binding = await getConversationTransportBinding({
+      workspaceId,
+      conversationId: thread.id,
+    });
+    return reply.send({ binding });
   });
 }

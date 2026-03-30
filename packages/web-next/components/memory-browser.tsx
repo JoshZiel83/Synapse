@@ -141,12 +141,12 @@ export default function MemoryBrowser() {
       const [memoryData, actorData, conversationData] = await Promise.all([
         api.getMemories(workspaceId),
         api.getActors(workspaceId),
-        api.getConversations(workspaceId),
+        api.getThreads(workspaceId, { domain: "workspace" }),
       ])
 
       setMemories(Array.isArray(memoryData) ? memoryData : memoryData?.memories || [])
       setActors((Array.isArray(actorData) ? actorData : []).map(normalizeActorOption))
-      setGroups((conversationData?.conversations || []).map(normalizeGroupOption))
+      setGroups((conversationData?.threads || []).map(normalizeGroupOption))
     } catch (error) {
       console.error("Failed to load memories:", error)
       toast.error(error instanceof Error ? error.message : "Failed to load memories")

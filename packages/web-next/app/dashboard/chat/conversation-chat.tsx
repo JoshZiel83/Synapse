@@ -549,7 +549,7 @@ export default function ConversationChat({
 
     setSavingTitle(true)
     try {
-      await api.updateConversation(workspaceId, conversation.id, {
+      await api.updateThread(conversation.id, {
         title: nextTitle,
       })
       await onRefreshConversation?.()
@@ -567,7 +567,7 @@ export default function ConversationChat({
     setAvatarUploading(true)
     try {
       const uploaded = await api.uploadFile(workspaceId, file)
-      await api.updateConversation(workspaceId, conversation.id, {
+      await api.updateThread(conversation.id, {
         avatarFileId: uploaded.id,
       })
       await onRefreshConversation?.()
@@ -598,8 +598,7 @@ export default function ConversationChat({
       )
     }
 
-    const result = await api.resolveConversationInteraction(
-      workspaceId,
+    const result = await api.resolveThreadInteraction(
       conversation.id,
       interactionId,
       data

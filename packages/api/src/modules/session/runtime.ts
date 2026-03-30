@@ -3,9 +3,9 @@ import { query } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { sessionThinkingQueue } from '../../workers/queues.js';
 import {
-  MULTI_MEMBER_CONVERSATION_KIND,
-  isMultiMemberConversationKind,
+  isThreadConversationKind,
   nowISO,
+  THREAD_CONVERSATION_KINDS,
   type ActorRuntimePhase,
   type ActorRuntimeState,
   type ActorRuntimeWakeup,
@@ -144,8 +144,8 @@ export async function getConversationRuntimeMap(conversationIds: string[]) {
      FROM sessions s
      JOIN conversations c ON c.id = s.conversation_id
      WHERE s.conversation_id = ANY($1)
-       AND c.kind = $2`,
-    [conversationIds, MULTI_MEMBER_CONVERSATION_KIND],
+       AND c.kind = ANY($2::text[])`,
+    [conversationIds, [...THREAD_CONVERSATION_KINDS]],
   );
 
   const missingSessions = sessionResult.rows.filter(
@@ -185,7 +185,7 @@ export async function buildSessionRuntimeSnapshot(
   overrides: Partial<Pick<ActorRuntimeState, 'laneState' | 'health' | 'phase' | 'statusText' | 'currentTurnId' | 'lastError'>> = {},
 ): Promise<ActorRuntimeState | null> {
   const session = await getSession(sessionId);
-  if (!session || !isMultiMemberConversationKind(session.conversation_kind)) return null;
+  if (!session || !isThreadConversationKind(session.conversation_kind)) return null;
 
   const rawWakeups = await loadRuntimeWakeups(sessionId, ['pending', 'attached']);
   const activeWakeups = dedupeRuntimeWakeups(rawWakeups);
@@ -256,7 +256,7 @@ export async function publishSessionRuntime(
 
 export async function removeSessionRuntime(sessionId: string) {
   const session = await getSession(sessionId);
-  if (!session || !isMultiMemberConversationKind(session.conversation_kind)) return;
+  if (!session || !isThreadConversationKind(session.conversation_kind)) return;
   await redis.hdel(runtimeHashKey(session.conversation_id), session.actor_id);
 }
 

@@ -74,12 +74,12 @@ export default function PluginAdvancedStep({
       try {
         const [actorData, conversationData] = await Promise.all([
           api.getActors(workspaceId),
-          api.getConversations(workspaceId),
+          api.getThreads(workspaceId, { domain: 'workspace' }),
         ]);
 
         if (cancelled) return;
         setActors((Array.isArray(actorData) ? actorData : []).map(normalizeActorOption));
-        setConversations((conversationData?.conversations || []).map(normalizeConversationOption));
+        setConversations((conversationData?.threads || []).map(normalizeConversationOption));
       } catch (error) {
         if (!cancelled) {
           console.error('Failed to load advanced plugin options:', error);

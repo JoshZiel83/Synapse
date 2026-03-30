@@ -267,11 +267,10 @@ export default function NewGroupConversationScreen() {
         ),
         userIds: Array.from(new Set([...selectedUserIds, ...remoteUserIds])),
       });
-      const conversationId =
-        created.threadId || created.conversationId || created.id;
+      const conversationId = created.threadId;
 
       if (!conversationId) {
-        throw new Error("服务器没有返回 conversationId");
+        throw new Error("服务器没有返回 threadId");
       }
 
       router.replace(`/chat/${conversationId}`);

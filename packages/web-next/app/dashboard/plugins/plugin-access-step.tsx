@@ -579,7 +579,7 @@ export default function PluginAccessStep({
     const [accessData, actorData, conversationData, memberData] = await Promise.all([
       accessAdapter.loadAccess(workspaceId, resolvedResourceId),
       api.getActors(workspaceId),
-      api.getConversations(workspaceId),
+      api.getThreads(workspaceId, { domain: 'workspace' }),
       api.getWorkspaceMembers(workspaceId),
     ]);
 
@@ -590,7 +590,7 @@ export default function PluginAccessStep({
       setGrantScope(suggestedGrantScope);
     }
     setActors(Array.isArray(actorData) ? actorData : actorData?.actors || []);
-    setConversations(conversationData?.conversations || []);
+    setConversations(conversationData?.threads || []);
     setMembers(memberData.data || []);
   };
 

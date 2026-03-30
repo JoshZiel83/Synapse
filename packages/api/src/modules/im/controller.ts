@@ -3,11 +3,9 @@ import { z } from "zod";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
 import { requireRequestAction } from "../access/guards.js";
-import { getConversation } from "../conversation/chat-service.js";
 import { listMembers } from "../workspace/service.js";
 import {
   createTransportAccount,
-  getConversationTransportBinding,
   getCurrentUserWeixinBinding,
   listTransportExternalUsers,
   listTransportSessions,
@@ -317,33 +315,6 @@ async function requireWorkspaceAction(
     workspaceId,
     errorMessage,
   );
-}
-
-async function requireConversationAction(
-  request: any,
-  reply: any,
-  action: "conversation.view" | "conversation.manage",
-  errorMessage: string,
-) {
-  const { workspaceId } = request.params as {
-    workspaceId: string;
-  };
-  const conversationId = request.params.conversationId;
-  const conversation = await getConversation(conversationId);
-  if (!conversation || conversation.workspace_id !== workspaceId) {
-    reply.status(404).send({ error: "Conversation not found" });
-    return null;
-  }
-
-  const allowed = await requireRequestAction(
-    request,
-    reply,
-    action,
-    conversationId,
-    errorMessage,
-  );
-  if (!allowed) return null;
-  return conversation;
 }
 
 async function refreshTransportRuntimeState() {
@@ -869,26 +840,4 @@ export default async function imController(app: FastifyInstance) {
       return reply.send({ account });
     },
   );
-
-  for (const path of [
-    "/api/v1/workspaces/:workspaceId/conversations/:conversationId/transport-binding",
-  ]) {
-    app.get<{
-      Params: { workspaceId: string; conversationId: string };
-    }>(path, async (request, reply) => {
-      const conversation = await requireConversationAction(
-        request,
-        reply,
-        "conversation.view",
-        "Not allowed to view this conversation transport binding",
-      );
-      if (!conversation) return;
-
-      const binding = await getConversationTransportBinding({
-        workspaceId: conversation.workspace_id,
-        conversationId: conversation.id,
-      });
-      return reply.send({ binding });
-    });
-  }
 }

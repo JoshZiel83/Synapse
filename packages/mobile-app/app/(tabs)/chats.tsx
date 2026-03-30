@@ -50,8 +50,8 @@ export default function ChatsTab() {
     }
 
     try {
-      const response = await api.getConversations(workspaceId);
-      setConversations(sortConversations(response.conversations));
+      const response = await api.getThreads(workspaceId);
+      setConversations(sortConversations(response.threads));
       setError(null);
     } catch (nextError) {
       setError(

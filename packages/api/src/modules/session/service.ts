@@ -21,7 +21,11 @@ import {
   itemPartsToCanonicalContentBlocks,
 } from '../conversation/message-content.js';
 import type { UUID } from '@synapse/shared';
-import { isMultiMemberConversationKind, nowISO } from '@synapse/shared';
+import {
+  isMultiMemberConversationKind,
+  isThreadConversationKind,
+  nowISO,
+} from '@synapse/shared';
 import { v4 as uuidv4 } from 'uuid';
 
 function normalizeSessionRow(row: any) {
@@ -31,7 +35,8 @@ function normalizeSessionRow(row: any) {
     conversationId: row.conversation_id,
     conversationKind: row.conversation_kind,
     conversationTitle: row.conversation_title,
-    isMultiMemberConversation: isMultiMemberConversationKind(row.conversation_kind),
+    isGroupConversation: isMultiMemberConversationKind(row.conversation_kind),
+    hasThreadContext: isThreadConversationKind(row.conversation_kind),
   };
 }
 

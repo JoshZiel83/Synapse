@@ -664,8 +664,8 @@ export default function InstallDialog({
       }).catch(() => {});
     }
     if ((selectedAttachmentType === 'conversation' || selectedAttachmentType === 'actor_conversation') && workspaceId) {
-      api.getConversations(workspaceId).then((res) => setConversations(
-        (res.conversations || []).map((conversation: AccessVisualConversation) => ({
+      api.getThreads(workspaceId, { domain: 'workspace' }).then((res) => setConversations(
+        (res.threads || []).map((conversation: AccessVisualConversation) => ({
           ...conversation,
           name: getConversationDisplayName(conversation),
         })),

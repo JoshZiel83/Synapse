@@ -82,9 +82,9 @@ export default function ChatDetailScreen() {
       try {
         const [messagesResponse, threadResponse, membersResponse] =
           await Promise.all([
-            api.getConversationMessages(workspaceId || "", conversationId, 100),
+            api.getThreadMessages(conversationId, 100),
             api.getThread(conversationId),
-            api.getConversationMembers(workspaceId || "", conversationId),
+            api.getThreadMembers(conversationId),
           ]);
 
         applyConversationMeta(
@@ -93,9 +93,7 @@ export default function ChatDetailScreen() {
         );
         setMessages(sortConversationItems(messagesResponse.items));
         setError(null);
-        await api.markConversationRead(workspaceId || "", conversationId).catch(
-          () => undefined,
-        );
+        await api.markThreadRead(conversationId).catch(() => undefined);
       } catch (nextError) {
         setError(
           nextError instanceof Error ? nextError.message : "聊天记录加载失败。",
@@ -138,9 +136,7 @@ export default function ChatDetailScreen() {
           setMessages((current) =>
             mergeConversationItem(current, payload.item),
           );
-          void api
-            .markConversationRead(workspaceId, conversationId)
-            .catch(() => undefined);
+          void api.markThreadRead(conversationId).catch(() => undefined);
           return;
         }
         case "conversation.updated": {
@@ -213,16 +209,13 @@ export default function ChatDetailScreen() {
     if (!conversationId) return;
 
     const clientMessageId = createId("message");
-    const response = await api.sendConversationMessage(
-      workspaceId || "",
+    const response = await api.sendThreadMessage(
       conversationId,
       contentBlocks,
       clientMessageId,
     );
     setMessages((current) => mergeConversationItem(current, response.item));
-    await api
-      .markConversationRead(workspaceId || "", conversationId)
-      .catch(() => undefined);
+    await api.markThreadRead(conversationId).catch(() => undefined);
   }
 
   const messageNodes = useMemo(
