@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 
 import { getWebSocketUrl } from "@/lib/config";
 import {
@@ -32,8 +32,11 @@ type HookSubscriber = {
   enabled: boolean;
   token?: string | null;
   subscriptions: WorkspaceSocketSubscription[];
-  onEvent?: (event: ChatSocketEvent | Record<string, unknown>) => void;
-  onConnected?: () => void;
+  onEventRef: MutableRefObject<
+    | ((event: ChatSocketEvent | Record<string, unknown>) => void)
+    | undefined
+  >;
+  onConnectedRef: MutableRefObject<(() => void) | undefined>;
 };
 
 const hookSubscribers = new Map<string, HookSubscriber>();
@@ -67,13 +70,13 @@ function getDesiredSubscriptions() {
 
 function dispatchEvent(event: ChatSocketEvent | Record<string, unknown>) {
   for (const subscriber of getActiveSubscribers()) {
-    subscriber.onEvent?.(event);
+    subscriber.onEventRef.current?.(event);
   }
 }
 
 function dispatchConnected() {
   for (const subscriber of getActiveSubscribers()) {
-    subscriber.onConnected?.();
+    subscriber.onConnectedRef.current?.();
   }
 }
 
@@ -241,6 +244,14 @@ export function useWorkspaceWebSocket({
 }: UseWorkspaceWebSocketOptions) {
   const { token } = useSession();
   const subscriberIdRef = useRef<string>(createSubscriberId());
+  const onEventRef = useRef(onEvent);
+  const onConnectedRef = useRef(onConnected);
+  const subscriptionsRef = useRef(subscriptions);
+  const subscriptionSignature = JSON.stringify(subscriptions);
+
+  onEventRef.current = onEvent;
+  onConnectedRef.current = onConnected;
+  subscriptionsRef.current = subscriptions;
 
   useEffect(() => {
     const subscriberId = subscriberIdRef.current;
@@ -248,9 +259,9 @@ export function useWorkspaceWebSocket({
       id: subscriberId,
       enabled,
       token,
-      subscriptions,
-      onEvent,
-      onConnected,
+      subscriptions: subscriptionsRef.current,
+      onEventRef,
+      onConnectedRef,
     });
     ensureSharedSocket();
     syncSharedSubscriptions();
@@ -260,5 +271,19 @@ export function useWorkspaceWebSocket({
       syncSharedSubscriptions();
       ensureSharedSocket();
     };
-  }, [enabled, onConnected, onEvent, subscriptions, token]);
+  }, []);
+
+  useEffect(() => {
+    const subscriberId = subscriberIdRef.current;
+    const subscriber = hookSubscribers.get(subscriberId);
+    if (!subscriber) {
+      return;
+    }
+
+    subscriber.enabled = enabled;
+    subscriber.token = token;
+    subscriber.subscriptions = subscriptionsRef.current;
+    ensureSharedSocket();
+    syncSharedSubscriptions();
+  }, [enabled, subscriptionSignature, token]);
 }

@@ -99,6 +99,7 @@ export default function ChatDetailScreen() {
   const { workspaceId } = useWorkspace();
   const scrollRef = useRef<ScrollView | null>(null);
   const lastReportedReadRef = useRef<string>("");
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [messages, setMessages] = useState<ConversationFeedItem[]>([]);
   const [pendingMessages, setPendingMessages] = useState<
     PendingConversationMessage[]
@@ -201,9 +202,30 @@ export default function ChatDetailScreen() {
     [applyConversationMeta, conversationId, workspaceId],
   );
 
+  const scheduleConversationRefresh = useCallback(() => {
+    if (refreshTimerRef.current) {
+      return;
+    }
+
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      void loadConversation(true);
+    }, 300);
+  }, [loadConversation]);
+
   useEffect(() => {
     void loadConversation();
   }, [loadConversation]);
+
+  useEffect(
+    () => () => {
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     void refreshPendingMessages();
@@ -313,19 +335,20 @@ export default function ChatDetailScreen() {
           );
           return;
         }
-        case "runtime.updated":
         case "interaction.updated": {
           const payload = event.payload as { conversationId: string };
           if (payload.conversationId === conversationId) {
-            void loadConversation(true);
+            scheduleConversationRefresh();
           }
           return;
         }
+        case "runtime.updated":
+          return;
         default:
           return;
       }
     },
-    [conversationId, loadConversation, workspaceId],
+    [conversationId, scheduleConversationRefresh, workspaceId],
   );
 
   useWorkspaceWebSocket({
