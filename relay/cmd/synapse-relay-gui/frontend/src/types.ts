@@ -167,6 +167,7 @@ export interface LogEntry {
   time: string
   type: string
   message: string
+  data?: Record<string, unknown>
 }
 
 export interface ImportServer {

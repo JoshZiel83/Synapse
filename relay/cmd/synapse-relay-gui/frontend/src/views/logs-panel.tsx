@@ -12,6 +12,18 @@ interface LogsPanelProps {
   logs: LogEntry[]
 }
 
+function formatLogData(data?: Record<string, unknown>) {
+  if (!data || Object.keys(data).length === 0) {
+    return ''
+  }
+
+  try {
+    return JSON.stringify(data, null, 2)
+  } catch {
+    return String(data)
+  }
+}
+
 export function LogsPanel({ logs }: LogsPanelProps) {
   return (
     <section className="flex flex-col gap-4">
@@ -36,7 +48,14 @@ export function LogsPanel({ logs }: LogsPanelProps) {
               <div key={`${log.time}-${index}`} className="flex gap-3 rounded-xl px-2 py-1.5 hover:bg-background/30">
                 <span className="shrink-0 text-muted-foreground">{log.time}</span>
                 <span className={`shrink-0 w-24 text-right ${logTone(log.type)}`}>[{log.type}]</span>
-                <span className="min-w-0 flex-1 break-all text-foreground/90">{log.message}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="break-all text-foreground/90">{log.message}</div>
+                  {formatLogData(log.data) ? (
+                    <pre className="mt-1 overflow-x-auto rounded-lg bg-background/60 px-2 py-2 text-[11px] whitespace-pre-wrap break-all text-muted-foreground">
+                      {formatLogData(log.data)}
+                    </pre>
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>

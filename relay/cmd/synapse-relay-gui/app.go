@@ -35,9 +35,10 @@ type StatusInfo struct {
 
 // LogEntry represents a log line for the GUI
 type LogEntry struct {
-	Time    string `json:"time"`
-	Type    string `json:"type"`
-	Message string `json:"message"`
+	Time    string                 `json:"time"`
+	Type    string                 `json:"type"`
+	Message string                 `json:"message"`
+	Data    map[string]interface{} `json:"data,omitempty"`
 }
 
 // GUISource represents a detected MCP config source (main-package mirror of importer.Source
@@ -469,6 +470,7 @@ func (a *App) StartRelay() error {
 			Time:    evt.Timestamp.Format("15:04:05"),
 			Type:    string(evt.Type),
 			Message: evt.Message,
+			Data:    evt.Data,
 		})
 		if len(a.logs) > 500 {
 			a.logs = a.logs[len(a.logs)-500:]
@@ -1088,6 +1090,7 @@ func (a *App) emitLocalLog(kind, message string) {
 		Time:    time.Now().Format("15:04:05"),
 		Type:    kind,
 		Message: message,
+		Data:    map[string]interface{}{},
 	}
 
 	a.logsMu.Lock()

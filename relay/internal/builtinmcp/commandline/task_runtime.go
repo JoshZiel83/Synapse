@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -35,21 +37,50 @@ type commandTask struct {
 	supportsCancel     bool
 	supportsOutputTail bool
 
-	mu             sync.RWMutex
-	status         core.TaskStatus
-	statusMessage  string
-	startedAt      time.Time
-	updatedAt      time.Time
-	completedAt    time.Time
-	lastOutputSeq  int64
-	output         []core.TaskOutputChunk
-	stdoutLines    []string
-	stderrLines    []string
-	result         *core.CallResult
-	cancelReason   string
+	mu              sync.RWMutex
+	status          core.TaskStatus
+	statusMessage   string
+	startedAt       time.Time
+	updatedAt       time.Time
+	completedAt     time.Time
+	lastOutputSeq   int64
+	output          []core.TaskOutputChunk
+	stdoutLines     []string
+	stderrLines     []string
+	result          *core.CallResult
+	cancelReason    string
 	cancelRequested bool
-	cancel         context.CancelFunc
-	cmd            *exec.Cmd
+	cancel          context.CancelFunc
+	cmd             *exec.Cmd
+}
+
+func previewTaskLogText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
+}
+
+func taskCommandPreview(binaryPath string, args []string) string {
+	parts := append([]string{binaryPath}, args...)
+	return strings.Join(parts, " ")
+}
+
+func taskEnvKeys(env map[string]string) []string {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func logCommandTaskf(taskID string, format string, args ...interface{}) {
+	log.Printf("[commandline-task] task=%s %s", taskID, fmt.Sprintf(format, args...))
 }
 
 func (s *Server) StartTask(
@@ -67,6 +98,7 @@ func (s *Server) StartTask(
 	if existing, ok := s.tasks[taskID]; ok {
 		snapshot := existing.snapshot()
 		s.taskMu.Unlock()
+		logCommandTaskf(taskID, "reusing existing task status=%s tool=%s", snapshot.Status, snapshot.ToolName)
 		return snapshot, nil
 	}
 
@@ -97,6 +129,17 @@ func (s *Server) StartTask(
 	s.tasks[taskID] = task
 	s.pruneFinishedTasksLocked()
 	s.taskMu.Unlock()
+
+	logCommandTaskf(
+		taskID,
+		"queued tool=%s runtime=%s cwd=%q timeout=%s envKeys=%v command=%q",
+		toolName,
+		invocation.runtimeName,
+		invocation.cwd,
+		invocation.timeout.Effective,
+		taskEnvKeys(invocation.env),
+		taskCommandPreview(invocation.binaryPath, invocation.args),
+	)
 
 	go s.runTask(taskCtx, task, invocation)
 
@@ -290,6 +333,20 @@ func (s *Server) runTask(ctx context.Context, task *commandTask, invocation comm
 	}
 
 	task.markStarted(invocation.runtimeName, cmd)
+	pid := -1
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+	logCommandTaskf(
+		task.id,
+		"started tool=%s runtime=%s pid=%d cwd=%q timeout=%s command=%q",
+		task.toolName,
+		invocation.runtimeName,
+		pid,
+		invocation.cwd,
+		invocation.timeout.Effective,
+		taskCommandPreview(invocation.binaryPath, invocation.args),
+	)
 
 	var readerWG sync.WaitGroup
 	readerWG.Add(2)
@@ -366,14 +423,23 @@ func (t *commandTask) captureOutput(wg *sync.WaitGroup, reader io.ReadCloser, st
 		if text == "" {
 			continue
 		}
-		t.appendOutput(stream, text)
+		chunk := t.appendOutput(stream, text)
+		logCommandTaskf(
+			t.id,
+			"output tool=%s stream=%s seq=%d text=%q",
+			t.toolName,
+			chunk.Stream,
+			chunk.Seq,
+			chunk.Text,
+		)
 	}
 	if err := scanner.Err(); err != nil {
 		t.appendOutput("system", fmt.Sprintf("%s reader error: %v", stream, err))
+		logCommandTaskf(t.id, "reader error tool=%s stream=%s err=%v", t.toolName, stream, err)
 	}
 }
 
-func (t *commandTask) appendOutput(stream, text string) {
+func (t *commandTask) appendOutput(stream, text string) core.TaskOutputChunk {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -396,6 +462,7 @@ func (t *commandTask) appendOutput(stream, text string) {
 		t.stderrLines = append(t.stderrLines, text)
 	}
 	t.updatedAt = now
+	return chunk
 }
 
 func (t *commandTask) requestCancel(reason string) {
@@ -413,6 +480,8 @@ func (t *commandTask) requestCancel(reason string) {
 	t.updatedAt = time.Now().UTC()
 	cancel := t.cancel
 	t.mu.Unlock()
+
+	logCommandTaskf(t.id, "cancel requested tool=%s reason=%q", t.toolName, t.cancelReason)
 
 	if cancel != nil {
 		cancel()
@@ -448,6 +517,22 @@ func (t *commandTask) complete(status core.TaskStatus, message string, result *c
 	t.completedAt = now
 	t.result = result
 	t.cmd = nil
+	resultError := false
+	if result != nil {
+		resultError = result.IsError
+	}
+	logCommandTaskf(
+		t.id,
+		"completed tool=%s status=%s resultError=%t outputSeq=%d message=%q stdoutLines=%d stderrLines=%d resultPreview=%q",
+		t.toolName,
+		status,
+		resultError,
+		t.lastOutputSeq,
+		message,
+		len(t.stdoutLines),
+		len(t.stderrLines),
+		previewTaskLogText(previewLogResult(result), 600),
+	)
 }
 
 func (t *commandTask) snapshot() core.TaskSnapshot {
@@ -511,6 +596,16 @@ func (t *commandTask) readOutput(afterSeq int64, limit int, stream string) []cor
 func pointerCallResult(value core.CallResult) *core.CallResult {
 	cloned := value
 	return &cloned
+}
+
+func previewLogResult(result *core.CallResult) string {
+	if result == nil {
+		return ""
+	}
+	if len(result.Content) > 0 {
+		return previewTaskLogText(fmt.Sprint(result.Content[0]), 600)
+	}
+	return previewTaskLogText(fmt.Sprint(result.StructuredContent), 600)
 }
 
 func buildTaskResult(

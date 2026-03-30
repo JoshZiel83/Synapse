@@ -230,6 +230,7 @@ export function useRelayDesktop() {
             time: evt.time,
             type: evt.type,
             message: evt.message,
+            data: evt.data || {},
           }])
         })
         void refreshStatus()

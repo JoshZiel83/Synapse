@@ -170,6 +170,95 @@ func (c *Client) emitError(msg string, data map[string]interface{}) {
 	c.emit("error", msg, data)
 }
 
+func previewLogText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
+}
+
+func previewLogJSON(value interface{}, limit int) string {
+	if value == nil {
+		return ""
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return previewLogText(string(raw), limit)
+}
+
+func dispatchLogData(dispatch RelayDispatchMessage) map[string]interface{} {
+	argumentKeys := make([]string, 0, len(dispatch.Payload.Arguments))
+	for key := range dispatch.Payload.Arguments {
+		argumentKeys = append(argumentKeys, key)
+	}
+	return map[string]interface{}{
+		"operationId":       dispatch.OperationID,
+		"deliveryId":        dispatch.DeliveryID,
+		"sessionId":         dispatch.SessionID,
+		"runtimeSessionId":  dispatch.Payload.RuntimeSessionID,
+		"exposureId":        dispatch.Payload.ExposureID,
+		"exposureStableKey": dispatch.Payload.ExposureStableKey,
+		"toolId":            dispatch.Payload.ToolID,
+		"toolRevisionId":    dispatch.Payload.ToolRevisionID,
+		"toolName":          dispatch.Payload.ToolName,
+		"responseMode":      dispatch.Payload.ResponseMode,
+		"inputHash":         dispatch.Payload.InputHash,
+		"expiresInMs":       dispatch.Payload.ExpiresInMs,
+		"argumentKeys":      argumentKeys,
+		"argumentsPreview":  previewLogJSON(dispatch.Payload.Arguments, 600),
+	}
+}
+
+func mergeLogData(base map[string]interface{}, extra map[string]interface{}) map[string]interface{} {
+	merged := make(map[string]interface{}, len(base)+len(extra))
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range extra {
+		merged[key] = value
+	}
+	return merged
+}
+
+func taskSnapshotLogData(snapshot core.TaskSnapshot) map[string]interface{} {
+	data := map[string]interface{}{
+		"taskId":             snapshot.TaskID,
+		"taskStatus":         string(snapshot.Status),
+		"taskStatusMessage":  snapshot.StatusMessage,
+		"supportsCancel":     snapshot.SupportsCancel,
+		"supportsOutputTail": snapshot.SupportsOutputTail,
+		"lastOutputSeq":      snapshot.LastOutputSeq,
+		"startedAt":          snapshot.StartedAt,
+		"updatedAt":          snapshot.UpdatedAt,
+		"completedAt":        snapshot.CompletedAt,
+	}
+	if snapshot.Result != nil {
+		data["resultIsError"] = snapshot.Result.IsError
+		data["resultPreview"] = previewLogJSON(callResultPayload(snapshot.Result), 600)
+	}
+	return data
+}
+
+func formatDispatchSummary(dispatch RelayDispatchMessage) string {
+	mode := strings.TrimSpace(dispatch.Payload.ResponseMode)
+	if mode == "" {
+		mode = "sync"
+	}
+	return fmt.Sprintf(
+		"op=%s delivery=%s tool=%s mode=%s",
+		dispatch.OperationID,
+		dispatch.DeliveryID,
+		dispatch.Payload.ToolName,
+		mode,
+	)
+}
+
 func asTrimmedString(value interface{}) string {
 	text, ok := value.(string)
 	if !ok {
@@ -630,6 +719,16 @@ func (c *Client) handleOperationDispatch(
 	connDone <-chan struct{},
 	dispatch RelayDispatchMessage,
 ) {
+	dispatchData := dispatchLogData(dispatch)
+	c.emitLog(
+		fmt.Sprintf(
+			"Task dispatch received %s runtimeSession=%s expiresInMs=%d",
+			formatDispatchSummary(dispatch),
+			dispatch.Payload.RuntimeSessionID,
+			dispatch.Payload.ExpiresInMs,
+		),
+		dispatchData,
+	)
 	c.emit("tool_call", dispatch.Payload.ToolName, map[string]interface{}{
 		"operationId":       dispatch.OperationID,
 		"exposureStableKey": dispatch.Payload.ExposureStableKey,
@@ -645,6 +744,16 @@ func (c *Client) handleOperationDispatch(
 
 	entry, exists := c.journal.Get(dispatch.OperationID)
 	if exists && entry.InputHash != "" && dispatch.Payload.InputHash != "" && entry.InputHash != dispatch.Payload.InputHash {
+		c.emitError(
+			fmt.Sprintf(
+				"Task dispatch rejected %s because the payload hash changed for an existing operation.",
+				formatDispatchSummary(dispatch),
+			),
+			mergeLogData(dispatchData, map[string]interface{}{
+				"journalStatus":    entry.Status,
+				"journalInputHash": entry.InputHash,
+			}),
+		)
 		c.sendOperationOutcome(conn, dispatch.OperationID, dispatch.DeliveryID, operationOutcome{
 			success: false,
 			err: &RelayOperationError{
@@ -657,6 +766,17 @@ func (c *Client) handleOperationDispatch(
 	}
 
 	if exists && (entry.Status == "completed" || entry.Status == "failed") {
+		c.emitLog(
+			fmt.Sprintf(
+				"Task dispatch replayed journal outcome %s status=%s.",
+				formatDispatchSummary(dispatch),
+				entry.Status,
+			),
+			mergeLogData(dispatchData, map[string]interface{}{
+				"journalStatus":    entry.Status,
+				"journalUpdatedAt": entry.UpdatedAt,
+			}),
+		)
 		c.sendJournalOutcome(conn, dispatch.OperationID, dispatch.DeliveryID, entry)
 		return
 	}
@@ -672,6 +792,13 @@ func (c *Client) handleOperationDispatch(
 	c.mu.Unlock()
 
 	if !isNewExecution {
+		c.emitLog(
+			fmt.Sprintf(
+				"Task dispatch attached to an existing in-flight execution %s.",
+				formatDispatchSummary(dispatch),
+			),
+			dispatchData,
+		)
 		if dispatch.Payload.ResponseMode == "async" {
 			if taskCaller, ok := c.caller.(TaskToolCaller); ok {
 				go c.mirrorAsyncTaskToConnection(conn, connDone, dispatch, taskCaller)
@@ -694,6 +821,10 @@ func (c *Client) handleOperationDispatch(
 	if dispatch.Payload.ResponseMode == "async" {
 		if taskCaller, ok := c.caller.(TaskToolCaller); ok {
 			callCtx := runtimeauth.ContextWithRuntimeSessionID(context.Background(), dispatch.Payload.RuntimeSessionID)
+			c.emitLog(
+				fmt.Sprintf("Task start requested %s.", formatDispatchSummary(dispatch)),
+				dispatchData,
+			)
 			snapshot, err := taskCaller.StartTask(
 				callCtx,
 				dispatch.Payload.ExposureStableKey,
@@ -707,6 +838,16 @@ func (c *Client) handleOperationDispatch(
 				c.journal.MarkFailed(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, opErr)
 				c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
 				c.sendOperationOutcome(conn, dispatch.OperationID, dispatch.DeliveryID, outcome)
+				c.emitError(
+					fmt.Sprintf(
+						"Task start failed %s: %s",
+						formatDispatchSummary(dispatch),
+						err.Error(),
+					),
+					mergeLogData(dispatchData, map[string]interface{}{
+						"taskStartError": err.Error(),
+					}),
+				)
 				c.emit("tool_result", fmt.Sprintf("%s failed: %s", dispatch.Payload.ToolName, err.Error()), map[string]interface{}{
 					"operationId":      dispatch.OperationID,
 					"runtimeSessionId": dispatch.Payload.RuntimeSessionID,
@@ -716,6 +857,15 @@ func (c *Client) handleOperationDispatch(
 			}
 
 			c.setTaskBinding(dispatch.OperationID, dispatch.Payload.ExposureStableKey, snapshot.TaskID)
+			c.emitLog(
+				fmt.Sprintf(
+					"Task bound %s task=%s status=%s.",
+					formatDispatchSummary(dispatch),
+					snapshot.TaskID,
+					snapshot.Status,
+				),
+				mergeLogData(dispatchData, taskSnapshotLogData(snapshot)),
+			)
 			go c.watchAsyncTask(dispatch, inflight, taskCaller)
 			go c.mirrorAsyncTaskToConnection(conn, connDone, dispatch, taskCaller)
 			c.waitAndSendRunningOutcome(ctx, conn, connDone, dispatch.OperationID, dispatch.DeliveryID, inflight)
@@ -730,6 +880,10 @@ func (c *Client) handleOperationDispatch(
 	}
 	defer cancel()
 	callCtx = runtimeauth.ContextWithRuntimeSessionID(callCtx, dispatch.Payload.RuntimeSessionID)
+	c.emitLog(
+		fmt.Sprintf("Task execution started %s.", formatDispatchSummary(dispatch)),
+		dispatchData,
+	)
 
 	result, err := c.caller.CallTool(callCtx, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, dispatch.Payload.Arguments)
 	if err != nil {
@@ -738,6 +892,16 @@ func (c *Client) handleOperationDispatch(
 		c.journal.MarkFailed(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, opErr)
 		c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
 		c.sendOperationOutcome(conn, dispatch.OperationID, dispatch.DeliveryID, outcome)
+		c.emitError(
+			fmt.Sprintf(
+				"Task execution failed %s: %s",
+				formatDispatchSummary(dispatch),
+				err.Error(),
+			),
+			mergeLogData(dispatchData, map[string]interface{}{
+				"executionError": err.Error(),
+			}),
+		)
 		c.emit("tool_result", fmt.Sprintf("%s failed: %s", dispatch.Payload.ToolName, err.Error()), map[string]interface{}{
 			"operationId":      dispatch.OperationID,
 			"runtimeSessionId": dispatch.Payload.RuntimeSessionID,
@@ -750,6 +914,12 @@ func (c *Client) handleOperationDispatch(
 	c.journal.MarkCompleted(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, result)
 	c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
 	c.sendOperationOutcome(conn, dispatch.OperationID, dispatch.DeliveryID, outcome)
+	c.emitLog(
+		fmt.Sprintf("Task execution completed %s.", formatDispatchSummary(dispatch)),
+		mergeLogData(dispatchData, map[string]interface{}{
+			"resultPreview": previewLogJSON(result, 600),
+		}),
+	)
 	c.emit("tool_result", fmt.Sprintf("%s completed", dispatch.Payload.ToolName), map[string]interface{}{
 		"operationId":      dispatch.OperationID,
 		"runtimeSessionId": dispatch.Payload.RuntimeSessionID,
@@ -1149,6 +1319,8 @@ func (c *Client) watchAsyncTask(
 ) {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
+	lastStatus := core.TaskStatus("")
+	lastStatusMessage := ""
 
 	for {
 		binding, ok := c.getTaskBinding(dispatch.OperationID)
@@ -1161,6 +1333,13 @@ func (c *Client) watchAsyncTask(
 					Retryable: false,
 				},
 			}
+			c.emitError(
+				fmt.Sprintf(
+					"Task binding disappeared before completion %s.",
+					formatDispatchSummary(dispatch),
+				),
+				dispatchLogData(dispatch),
+			)
 			c.journal.MarkFailed(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, outcome.err)
 			c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
 			return
@@ -1169,12 +1348,39 @@ func (c *Client) watchAsyncTask(
 		snapshot, err := taskCaller.GetTask(binding.exposureStableKey, binding.taskID)
 		if err != nil {
 			opErr := normalizeOperationError(err)
+			c.emitError(
+				fmt.Sprintf(
+					"Task poll failed %s task=%s: %s",
+					formatDispatchSummary(dispatch),
+					binding.taskID,
+					err.Error(),
+				),
+				mergeLogData(dispatchLogData(dispatch), map[string]interface{}{
+					"taskId":    binding.taskID,
+					"pollError": err.Error(),
+				}),
+			)
 			c.journal.MarkFailed(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, opErr)
 			c.completeRunningOperation(dispatch.OperationID, inflight, operationOutcome{
 				success: false,
 				err:     opErr,
 			})
 			return
+		}
+
+		if snapshot.Status != lastStatus || snapshot.StatusMessage != lastStatusMessage {
+			c.emitLog(
+				fmt.Sprintf(
+					"Task state %s task=%s status=%s: %s",
+					formatDispatchSummary(dispatch),
+					snapshot.TaskID,
+					snapshot.Status,
+					snapshot.StatusMessage,
+				),
+				mergeLogData(dispatchLogData(dispatch), taskSnapshotLogData(snapshot)),
+			)
+			lastStatus = snapshot.Status
+			lastStatusMessage = snapshot.StatusMessage
 		}
 
 		switch snapshot.Status {
@@ -1188,6 +1394,10 @@ func (c *Client) watchAsyncTask(
 					Retryable: false,
 				},
 			}
+			c.emit("tool_result", fmt.Sprintf("%s cancelled: %s", dispatch.Payload.ToolName, snapshot.StatusMessage), mergeLogData(
+				dispatchLogData(dispatch),
+				taskSnapshotLogData(snapshot),
+			))
 			c.journal.MarkFailed(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, outcome.err)
 			c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
 			return
@@ -1198,6 +1408,14 @@ func (c *Client) watchAsyncTask(
 					Message:   "Relay task completed without a final result payload",
 					Retryable: false,
 				}
+				c.emitError(
+					fmt.Sprintf(
+						"Task finished without a final result payload %s task=%s.",
+						formatDispatchSummary(dispatch),
+						snapshot.TaskID,
+					),
+					mergeLogData(dispatchLogData(dispatch), taskSnapshotLogData(snapshot)),
+				)
 				c.journal.MarkFailed(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, opErr)
 				c.completeRunningOperation(dispatch.OperationID, inflight, operationOutcome{
 					success: false,
@@ -1213,8 +1431,16 @@ func (c *Client) watchAsyncTask(
 			}
 			if snapshot.Status == core.TaskStatusCompleted {
 				c.journal.MarkCompleted(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, result)
+				c.emit("tool_result", fmt.Sprintf("%s completed", dispatch.Payload.ToolName), mergeLogData(
+					dispatchLogData(dispatch),
+					taskSnapshotLogData(snapshot),
+				))
 			} else {
 				c.journal.MarkCompleted(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, result)
+				c.emit("tool_result", fmt.Sprintf("%s completed with error", dispatch.Payload.ToolName), mergeLogData(
+					dispatchLogData(dispatch),
+					taskSnapshotLogData(snapshot),
+				))
 			}
 			c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
 			return
@@ -1244,6 +1470,23 @@ func (c *Client) mirrorAsyncTaskToConnection(
 		if err == nil {
 			for _, chunk := range chunks {
 				afterSeq = chunk.Seq
+				c.emitLog(
+					fmt.Sprintf(
+						"Task output %s task=%s %s#%d %s",
+						formatDispatchSummary(dispatch),
+						binding.taskID,
+						chunk.Stream,
+						chunk.Seq,
+						previewLogText(chunk.Text, 240),
+					),
+					mergeLogData(dispatchLogData(dispatch), map[string]interface{}{
+						"taskId":    binding.taskID,
+						"outputSeq": chunk.Seq,
+						"stream":    chunk.Stream,
+						"text":      chunk.Text,
+						"createdAt": chunk.CreatedAt,
+					}),
+				)
 				select {
 				case <-connDone:
 				default:
@@ -1293,10 +1536,39 @@ func (c *Client) handleOperationCancel(
 	binding, ok := c.getTaskBinding(cancelMsg.OperationID)
 	if !ok {
 		if entry, exists := c.journal.Get(cancelMsg.OperationID); exists && (entry.Status == "completed" || entry.Status == "failed") {
+			c.emitLog(
+				fmt.Sprintf(
+					"Task cancel replayed journal outcome op=%s delivery=%s status=%s.",
+					cancelMsg.OperationID,
+					cancelMsg.DeliveryID,
+					entry.Status,
+				),
+				map[string]interface{}{
+					"operationId":   cancelMsg.OperationID,
+					"deliveryId":    cancelMsg.DeliveryID,
+					"journalStatus": entry.Status,
+				},
+			)
 			c.sendJournalOutcome(conn, cancelMsg.OperationID, cancelMsg.DeliveryID, entry)
 		}
 		return
 	}
+
+	c.emitLog(
+		fmt.Sprintf(
+			"Task cancel requested op=%s delivery=%s task=%s reason=%s",
+			cancelMsg.OperationID,
+			cancelMsg.DeliveryID,
+			binding.taskID,
+			previewLogText(cancelMsg.Reason, 240),
+		),
+		map[string]interface{}{
+			"operationId": cancelMsg.OperationID,
+			"deliveryId":  cancelMsg.DeliveryID,
+			"taskId":      binding.taskID,
+			"reason":      cancelMsg.Reason,
+		},
+	)
 
 	taskCaller, ok := c.caller.(TaskToolCaller)
 	if !ok {
@@ -1312,11 +1584,41 @@ func (c *Client) handleOperationCancel(
 	}
 
 	if err := taskCaller.CancelTask(binding.exposureStableKey, binding.taskID, cancelMsg.Reason); err != nil && !errors.Is(err, core.ErrTaskNotFound) {
+		c.emitError(
+			fmt.Sprintf(
+				"Task cancel failed op=%s task=%s: %s",
+				cancelMsg.OperationID,
+				binding.taskID,
+				err.Error(),
+			),
+			map[string]interface{}{
+				"operationId": cancelMsg.OperationID,
+				"deliveryId":  cancelMsg.DeliveryID,
+				"taskId":      binding.taskID,
+				"reason":      cancelMsg.Reason,
+				"error":       err.Error(),
+			},
+		)
 		c.sendOperationOutcome(conn, cancelMsg.OperationID, cancelMsg.DeliveryID, operationOutcome{
 			success: false,
 			err:     normalizeOperationError(err),
 		})
+		return
 	}
+
+	c.emitLog(
+		fmt.Sprintf(
+			"Task cancel forwarded op=%s task=%s.",
+			cancelMsg.OperationID,
+			binding.taskID,
+		),
+		map[string]interface{}{
+			"operationId": cancelMsg.OperationID,
+			"deliveryId":  cancelMsg.DeliveryID,
+			"taskId":      binding.taskID,
+			"reason":      cancelMsg.Reason,
+		},
+	)
 }
 
 func (c *Client) SyncCatalog(ctx context.Context) error {
