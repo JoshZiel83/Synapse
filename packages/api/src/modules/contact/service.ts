@@ -6,6 +6,8 @@ type TimestampValue = string | Date | null | undefined;
 
 type ContactRecordRow = {
   id: string;
+  scope: ContactScope | string;
+  owner_user_id: string | null;
   target_type: string;
   target_workspace_id: string;
   target_user_id: string | null;
@@ -107,6 +109,7 @@ async function loadWorkspaceContactRecord(contactId: string) {
       .selectFrom("workspace_contacts")
       .selectAll()
       .where("id", "=", contactId)
+      .where("scope", "=", "workspace")
       .limit(1)
       .executeTakeFirst()) ?? null
   );
@@ -115,9 +118,10 @@ async function loadWorkspaceContactRecord(contactId: string) {
 async function loadWorkspaceUserContactRecord(contactId: string) {
   return (
     (await db
-      .selectFrom("workspace_user_contacts")
+      .selectFrom("workspace_contacts")
       .selectAll()
       .where("id", "=", contactId)
+      .where("scope", "=", "personal")
       .limit(1)
       .executeTakeFirst()) ?? null
   );
@@ -190,20 +194,31 @@ async function mapContactRecord(scope: ContactScope, row: ContactRecordRow) {
   };
 }
 
-async function findExistingWorkspaceContact(params: {
+async function findExistingContact(params: {
+  scope: ContactScope;
   workspaceId: string;
+  ownerUserId?: string;
   targetType: ContactTargetType;
   targetWorkspaceId: string;
   targetUserId?: string;
   targetActorId?: string;
 }) {
+  let baseQuery = db
+    .selectFrom("workspace_contacts")
+    .selectAll()
+    .where("workspace_id", "=", params.workspaceId)
+    .where("scope", "=", params.scope);
+
+  if (params.scope === "workspace") {
+    baseQuery = baseQuery.where("owner_user_id", "is", null);
+  } else {
+    baseQuery = baseQuery.where("owner_user_id", "=", params.ownerUserId || null);
+  }
+
   if (params.targetType === "actor") {
     if (!params.targetActorId) return null;
     return (
-      (await db
-        .selectFrom("workspace_contacts")
-        .selectAll()
-        .where("workspace_id", "=", params.workspaceId)
+      (await baseQuery
         .where("target_actor_id", "=", params.targetActorId)
         .limit(1)
         .executeTakeFirst()) ?? null
@@ -211,45 +226,7 @@ async function findExistingWorkspaceContact(params: {
   }
 
   return (
-    (await db
-      .selectFrom("workspace_contacts")
-      .selectAll()
-      .where("workspace_id", "=", params.workspaceId)
-      .where("target_user_id", "=", params.targetUserId || null)
-      .where("target_workspace_id", "=", params.targetWorkspaceId)
-      .limit(1)
-      .executeTakeFirst()) ?? null
-  );
-}
-
-async function findExistingWorkspaceUserContact(params: {
-  workspaceId: string;
-  ownerUserId: string;
-  targetType: ContactTargetType;
-  targetWorkspaceId: string;
-  targetUserId?: string;
-  targetActorId?: string;
-}) {
-  if (params.targetType === "actor") {
-    if (!params.targetActorId) return null;
-    return (
-      (await db
-        .selectFrom("workspace_user_contacts")
-        .selectAll()
-        .where("workspace_id", "=", params.workspaceId)
-        .where("owner_user_id", "=", params.ownerUserId)
-        .where("target_actor_id", "=", params.targetActorId)
-        .limit(1)
-        .executeTakeFirst()) ?? null
-    );
-  }
-
-  return (
-    (await db
-      .selectFrom("workspace_user_contacts")
-      .selectAll()
-      .where("workspace_id", "=", params.workspaceId)
-      .where("owner_user_id", "=", params.ownerUserId)
+    (await baseQuery
       .where("target_user_id", "=", params.targetUserId || null)
       .where("target_workspace_id", "=", params.targetWorkspaceId)
       .limit(1)
@@ -266,12 +243,14 @@ export async function listScopedContacts(params: {
       .selectFrom("workspace_contacts")
       .selectAll()
       .where("workspace_id", "=", params.workspaceId)
+      .where("scope", "=", "workspace")
       .orderBy("created_at", "desc")
       .execute(),
     db
-      .selectFrom("workspace_user_contacts")
+      .selectFrom("workspace_contacts")
       .selectAll()
       .where("workspace_id", "=", params.workspaceId)
+      .where("scope", "=", "personal")
       .where("owner_user_id", "=", params.userId)
       .orderBy("created_at", "desc")
       .execute(),
@@ -298,7 +277,8 @@ export async function createWorkspaceContact(params: {
   if (params.targetType === "actor") {
     const actor = await resolveActorTarget(params.targetActorId || "");
     if (!actor) throw new Error("Actor not found");
-    const existing = await findExistingWorkspaceContact({
+    const existing = await findExistingContact({
+      scope: "workspace",
       workspaceId: params.workspaceId,
       targetType: "actor",
       targetWorkspaceId: actor.workspace_id,
@@ -310,6 +290,8 @@ export async function createWorkspaceContact(params: {
       .insertInto("workspace_contacts")
       .values({
         workspace_id: params.workspaceId,
+        scope: "workspace",
+        owner_user_id: null,
         target_type: "actor",
         target_workspace_id: actor.workspace_id,
         target_actor_id: actor.id,
@@ -329,7 +311,8 @@ export async function createWorkspaceContact(params: {
   );
   if (!user) throw new Error("User not found in target workspace");
 
-  const existing = await findExistingWorkspaceContact({
+  const existing = await findExistingContact({
+    scope: "workspace",
     workspaceId: params.workspaceId,
     targetType: "user",
     targetWorkspaceId: params.targetWorkspaceId,
@@ -341,6 +324,8 @@ export async function createWorkspaceContact(params: {
     .insertInto("workspace_contacts")
     .values({
       workspace_id: params.workspaceId,
+      scope: "workspace",
+      owner_user_id: null,
       target_type: "user",
       target_workspace_id: params.targetWorkspaceId,
       target_user_id: params.targetUserId || null,
@@ -366,7 +351,8 @@ export async function createWorkspaceUserContact(params: {
   if (params.targetType === "actor") {
     const actor = await resolveActorTarget(params.targetActorId || "");
     if (!actor) throw new Error("Actor not found");
-    const existing = await findExistingWorkspaceUserContact({
+    const existing = await findExistingContact({
+      scope: "personal",
       workspaceId: params.workspaceId,
       ownerUserId: params.ownerUserId,
       targetType: "actor",
@@ -376,9 +362,10 @@ export async function createWorkspaceUserContact(params: {
     if (existing) return mapContactRecord("personal", existing as ContactRecordRow);
 
     const row = await db
-      .insertInto("workspace_user_contacts")
+      .insertInto("workspace_contacts")
       .values({
         workspace_id: params.workspaceId,
+        scope: "personal",
         owner_user_id: params.ownerUserId,
         target_type: "actor",
         target_workspace_id: actor.workspace_id,
@@ -399,7 +386,8 @@ export async function createWorkspaceUserContact(params: {
   );
   if (!user) throw new Error("User not found in target workspace");
 
-  const existing = await findExistingWorkspaceUserContact({
+  const existing = await findExistingContact({
+    scope: "personal",
     workspaceId: params.workspaceId,
     ownerUserId: params.ownerUserId,
     targetType: "user",
@@ -409,9 +397,10 @@ export async function createWorkspaceUserContact(params: {
   if (existing) return mapContactRecord("personal", existing as ContactRecordRow);
 
   const row = await db
-    .insertInto("workspace_user_contacts")
+    .insertInto("workspace_contacts")
     .values({
       workspace_id: params.workspaceId,
+      scope: "personal",
       owner_user_id: params.ownerUserId,
       target_type: "user",
       target_workspace_id: params.targetWorkspaceId,
@@ -497,22 +486,28 @@ export async function discoverContacts(params: {
     db
       .selectFrom("workspace_contacts")
       .select([
+        "scope",
+        "owner_user_id",
         "target_type",
         "target_user_id",
         "target_actor_id",
         "target_workspace_id",
       ])
       .where("workspace_id", "=", params.workspaceId)
+      .where("scope", "=", "workspace")
       .execute(),
     db
-      .selectFrom("workspace_user_contacts")
+      .selectFrom("workspace_contacts")
       .select([
+        "scope",
+        "owner_user_id",
         "target_type",
         "target_user_id",
         "target_actor_id",
         "target_workspace_id",
       ])
       .where("workspace_id", "=", params.workspaceId)
+      .where("scope", "=", "personal")
       .where("owner_user_id", "=", params.userId)
       .execute(),
   ]);

@@ -1,20 +1,56 @@
-import { executeSql } from "./kysely.js";
 import { readFileSync } from "fs";
-import { join, dirname, resolve } from "path";
+import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
+import { executeSql } from "./kysely.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const __filename = fileURLToPath(import.meta.url);
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8");
 
-async function countUserTables() {
+const CURRENT_SCHEMA_VERSION = "2026-03-30-01";
+const CURRENT_SCHEMA_DESCRIPTION =
+  "deduplicate contacts/default ownership semantics and drop deprecated tables";
+
+async function ensureSchemaMigrationsTable() {
+  await executeSql(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version VARCHAR(64) PRIMARY KEY,
+      description TEXT NOT NULL DEFAULT '',
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
+async function countBusinessTables() {
   const result = await executeSql<{ count: string }>(
     `SELECT COUNT(*) AS count
      FROM information_schema.tables
      WHERE table_schema = 'public'
-       AND table_type = 'BASE TABLE'`,
+       AND table_type = 'BASE TABLE'
+       AND table_name <> 'schema_migrations'`,
   );
   return Number.parseInt(result.rows[0]?.count || "0", 10);
+}
+
+async function hasCurrentSchemaVersion() {
+  const result = await executeSql<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM schema_migrations
+       WHERE version = $1
+     ) AS exists`,
+    [CURRENT_SCHEMA_VERSION],
+  );
+  return result.rows[0]?.exists === true;
+}
+
+async function recordCurrentSchemaVersion() {
+  await executeSql(
+    `INSERT INTO schema_migrations (version, description)
+     VALUES ($1, $2)
+     ON CONFLICT (version) DO NOTHING`,
+    [CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_DESCRIPTION],
+  );
 }
 
 async function applyBootstrapSchema() {
@@ -24,20 +60,33 @@ async function applyBootstrapSchema() {
 export async function bootstrapDatabaseSchema() {
   console.log("Checking database schema bootstrap state...");
 
-  const tableCount = await countUserTables();
-  if (tableCount > 0) {
+  await ensureSchemaMigrationsTable();
+
+  if (await hasCurrentSchemaVersion()) {
+    const tableCount = await countBusinessTables();
     console.log(
-      `Database already contains ${tableCount} public tables. Skipping schema bootstrap; db:bootstrap is non-destructive.`,
+      `Database schema is already at version ${CURRENT_SCHEMA_VERSION} (${tableCount} public tables).`,
     );
-    return { bootstrapped: false, tableCount };
+    return { bootstrapped: false, upgraded: false, tableCount };
   }
 
+  const tableCount = await countBusinessTables();
+
   try {
-    await applyBootstrapSchema();
-    console.log("Database schema bootstrap completed successfully");
-    return { bootstrapped: true, tableCount: 0 };
+    if (tableCount === 0) {
+      await applyBootstrapSchema();
+      console.log("Database schema bootstrap completed successfully");
+      await ensureSchemaMigrationsTable();
+      await recordCurrentSchemaVersion();
+      return { bootstrapped: true, upgraded: false, tableCount: 0 };
+    }
+
+    console.log(
+      `Database already contains ${tableCount} public tables. Skipping schema bootstrap; rebuild the database to apply the current schema.`,
+    );
+    return { bootstrapped: false, upgraded: false, tableCount };
   } catch (error) {
-    console.error("Database schema bootstrap failed:", error);
+    console.error("Database bootstrap/upgrade failed:", error);
     throw error;
   }
 }
@@ -54,6 +103,8 @@ export async function rebuildDatabaseSchema() {
 
   try {
     await applyBootstrapSchema();
+    await ensureSchemaMigrationsTable();
+    await recordCurrentSchemaVersion();
     console.log("Database schema rebuild completed successfully");
   } catch (error) {
     console.error("Database schema rebuild failed:", error);

@@ -38,6 +38,17 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "base workspace access",
   },
   {
+    table: "workspace_contacts",
+    requiredColumns: [
+      "workspace_id",
+      "scope",
+      "owner_user_id",
+      "target_type",
+      "target_workspace_id",
+    ],
+    reason: "unified workspace and personal contacts",
+  },
+  {
     table: "workspace_user_preferences",
     requiredColumns: ["workspace_id", "user_id", "chief_actor_id"],
     reason: "workspace-level chief actor preferences",
@@ -347,7 +358,7 @@ export async function assertRequiredSchema() {
     .join("; ");
 
   throw new Error(
-    `Database schema is not on the current access model. ${details}. Run \`npm run db:rebuild\` to rebuild the database.`,
+    `Database schema is not on the current access model. ${details}. Run \`npm run db:bootstrap\` to apply the current schema upgrade, or \`npm run db:rebuild\` to rebuild from scratch.`,
   );
 }
 

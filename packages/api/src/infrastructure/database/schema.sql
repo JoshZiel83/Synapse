@@ -76,21 +76,12 @@ CREATE TABLE workspaces (
   slug VARCHAR(255) UNIQUE NOT NULL,
   description TEXT,
   owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  default_model_group_id UUID,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_workspaces_owner ON workspaces(owner_id);
 CREATE INDEX idx_workspaces_slug ON workspaces(slug);
-
-CREATE TABLE platform_settings (
-  id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id = TRUE),
-  default_model_group_id UUID,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
 
 CREATE TABLE platform_access_bindings (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -110,7 +101,7 @@ CREATE TABLE workspace_members (
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   trust_level VARCHAR(20) NOT NULL DEFAULT 'member'
-    CHECK (trust_level IN ('owner', 'admin', 'member', 'guest')),
+    CHECK (trust_level IN ('admin', 'member', 'guest')),
   joined_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(workspace_id, user_id)
 );
@@ -168,27 +159,6 @@ CREATE TABLE conversations (
 CREATE INDEX idx_conversations_workspace ON conversations(workspace_id, created_at DESC);
 CREATE INDEX idx_conversations_workspace_kind ON conversations(workspace_id, kind);
 CREATE INDEX idx_conversations_domain_kind ON conversations(domain, kind, created_at DESC);
-
--- ============ Blob Storage ============
-CREATE TABLE blobs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  sha256 VARCHAR(64) NOT NULL,
-  media_type VARCHAR(255),
-  size_bytes INT NOT NULL DEFAULT 0,
-  storage_backend VARCHAR(30) NOT NULL DEFAULT 'database'
-    CHECK (storage_backend IN ('database', 'object_storage', 'filesystem')),
-  storage_key TEXT,
-  text_content TEXT,
-  binary_content BYTEA,
-  metadata JSONB DEFAULT '{}',
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (text_content IS NOT NULL OR binary_content IS NOT NULL OR storage_key IS NOT NULL)
-);
-
-CREATE INDEX idx_blobs_workspace ON blobs(workspace_id, created_at DESC);
-CREATE INDEX idx_blobs_sha256 ON blobs(sha256);
 
 -- ============ Audit Logs ============
 CREATE TABLE audit_logs (
@@ -396,20 +366,6 @@ ALTER TABLE catalog_items
   ADD CONSTRAINT fk_catalog_items_latest_version
   FOREIGN KEY (latest_version_id) REFERENCES catalog_versions(id) ON DELETE SET NULL;
 
-CREATE TABLE catalog_lineages (
-  downstream_item_id UUID PRIMARY KEY REFERENCES catalog_items(id) ON DELETE CASCADE,
-  upstream_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE RESTRICT,
-  upstream_version_id UUID REFERENCES catalog_versions(id) ON DELETE SET NULL,
-  lineage_kind VARCHAR(30) NOT NULL DEFAULT 'installed_copy'
-    CHECK (lineage_kind IN ('installed_copy', 'fork', 'share', 'relay_projection')),
-  sync_mode VARCHAR(30) NOT NULL DEFAULT 'manual_merge'
-    CHECK (sync_mode IN ('notify', 'manual_merge', 'follow_upstream', 'detached')),
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (downstream_item_id <> upstream_item_id)
-);
-
 CREATE TABLE catalog_version_files (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   catalog_version_id UUID NOT NULL REFERENCES catalog_versions(id) ON DELETE CASCADE,
@@ -417,15 +373,13 @@ CREATE TABLE catalog_version_files (
   file_role VARCHAR(20) NOT NULL
     CHECK (file_role IN ('document', 'reference', 'script', 'image', 'json', 'binary')),
   media_type VARCHAR(255),
-  blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
-  text_content TEXT,
+  text_content TEXT NOT NULL,
   content_blocks JSONB DEFAULT '[]',
   sha256 VARCHAR(64) NOT NULL,
   size_bytes INT NOT NULL DEFAULT 0,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(catalog_version_id, path),
-  CHECK (blob_id IS NOT NULL OR text_content IS NOT NULL)
+  UNIQUE(catalog_version_id, path)
 );
 
 CREATE INDEX idx_catalog_version_files_version ON catalog_version_files(catalog_version_id, path);
@@ -517,6 +471,9 @@ CREATE INDEX idx_actors_parent ON actors(parent_id);
 CREATE TABLE workspace_contacts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  scope VARCHAR(20) NOT NULL DEFAULT 'workspace'
+    CHECK (scope IN ('workspace', 'personal')),
+  owner_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   target_type VARCHAR(20) NOT NULL
     CHECK (target_type IN ('user', 'actor')),
   target_workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -526,55 +483,46 @@ CREATE TABLE workspace_contacts (
   metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (
-    (target_type = 'user' AND target_user_id IS NOT NULL AND target_actor_id IS NULL) OR
-    (target_type = 'actor' AND target_actor_id IS NOT NULL AND target_user_id IS NULL)
-  )
-);
-
-CREATE INDEX idx_workspace_contacts_workspace
-  ON workspace_contacts(workspace_id, created_at DESC);
-CREATE INDEX idx_workspace_contacts_target_workspace
-  ON workspace_contacts(target_workspace_id, created_at DESC);
-CREATE UNIQUE INDEX uq_workspace_contacts_user
-  ON workspace_contacts(workspace_id, target_user_id, target_workspace_id)
-  WHERE target_user_id IS NOT NULL;
-CREATE UNIQUE INDEX uq_workspace_contacts_actor
-  ON workspace_contacts(workspace_id, target_actor_id)
-  WHERE target_actor_id IS NOT NULL;
-
-CREATE TABLE workspace_user_contacts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  target_type VARCHAR(20) NOT NULL
-    CHECK (target_type IN ('user', 'actor')),
-  target_workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  target_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  target_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  FOREIGN KEY (workspace_id, owner_user_id)
+    REFERENCES workspace_members(workspace_id, user_id)
+    ON DELETE CASCADE,
   CHECK (
     (target_type = 'user' AND target_user_id IS NOT NULL AND target_actor_id IS NULL) OR
     (target_type = 'actor' AND target_actor_id IS NOT NULL AND target_user_id IS NULL)
   ),
-  FOREIGN KEY (workspace_id, owner_user_id)
-    REFERENCES workspace_members(workspace_id, user_id)
-    ON DELETE CASCADE
+  CHECK (
+    (scope = 'workspace' AND owner_user_id IS NULL) OR
+    (scope = 'personal' AND owner_user_id IS NOT NULL)
+  )
 );
 
-CREATE INDEX idx_workspace_user_contacts_owner
-  ON workspace_user_contacts(workspace_id, owner_user_id, created_at DESC);
-CREATE INDEX idx_workspace_user_contacts_target_workspace
-  ON workspace_user_contacts(target_workspace_id, created_at DESC);
-CREATE UNIQUE INDEX uq_workspace_user_contacts_user
-  ON workspace_user_contacts(workspace_id, owner_user_id, target_user_id, target_workspace_id)
-  WHERE target_user_id IS NOT NULL;
-CREATE UNIQUE INDEX uq_workspace_user_contacts_actor
-  ON workspace_user_contacts(workspace_id, owner_user_id, target_actor_id)
-  WHERE target_actor_id IS NOT NULL;
+CREATE INDEX idx_workspace_contacts_workspace
+  ON workspace_contacts(workspace_id, scope, created_at DESC);
+CREATE INDEX idx_workspace_contacts_owner
+  ON workspace_contacts(workspace_id, owner_user_id, created_at DESC)
+  WHERE owner_user_id IS NOT NULL;
+CREATE INDEX idx_workspace_contacts_target_workspace
+  ON workspace_contacts(target_workspace_id, created_at DESC);
+CREATE UNIQUE INDEX uq_workspace_contacts_user
+  ON workspace_contacts(workspace_id, target_user_id, target_workspace_id)
+  WHERE target_user_id IS NOT NULL
+    AND scope = 'workspace'
+    AND owner_user_id IS NULL;
+CREATE UNIQUE INDEX uq_workspace_contacts_actor
+  ON workspace_contacts(workspace_id, target_actor_id)
+  WHERE target_actor_id IS NOT NULL
+    AND scope = 'workspace'
+    AND owner_user_id IS NULL;
+CREATE UNIQUE INDEX uq_workspace_contacts_personal_user
+  ON workspace_contacts(workspace_id, owner_user_id, target_user_id, target_workspace_id)
+  WHERE target_user_id IS NOT NULL
+    AND scope = 'personal'
+    AND owner_user_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_workspace_contacts_personal_actor
+  ON workspace_contacts(workspace_id, owner_user_id, target_actor_id)
+  WHERE target_actor_id IS NOT NULL
+    AND scope = 'personal'
+    AND owner_user_id IS NOT NULL;
 
 CREATE TABLE workspace_user_preferences (
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -674,11 +622,6 @@ CREATE UNIQUE INDEX idx_model_groups_default_workspace
   ON model_groups (owner_workspace_id) WHERE owner_type = 'workspace' AND owner_workspace_id IS NOT NULL AND is_default = TRUE AND is_enabled = TRUE;
 CREATE UNIQUE INDEX idx_model_groups_default_user
   ON model_groups (owner_user_id) WHERE owner_type = 'user' AND owner_user_id IS NOT NULL AND is_default = TRUE AND is_enabled = TRUE;
-
-ALTER TABLE workspaces ADD CONSTRAINT fk_workspaces_default_model_group
-  FOREIGN KEY (default_model_group_id) REFERENCES model_groups(id) ON DELETE SET NULL;
-ALTER TABLE platform_settings ADD CONSTRAINT fk_platform_settings_default_model_group
-  FOREIGN KEY (default_model_group_id) REFERENCES model_groups(id) ON DELETE SET NULL;
 
 CREATE TABLE model_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2055,16 +1998,14 @@ CREATE TABLE skill_files (
   skill_version_id UUID NOT NULL REFERENCES skill_versions(id) ON DELETE CASCADE,
   path TEXT NOT NULL,
   media_type VARCHAR(255),
-  blob_id UUID REFERENCES blobs(id) ON DELETE SET NULL,
-  text_content TEXT,
+  text_content TEXT NOT NULL,
   content_blocks JSONB NOT NULL DEFAULT '[]',
   sha256 VARCHAR(64) NOT NULL,
   size_bytes INT NOT NULL DEFAULT 0,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(skill_version_id, path),
-  CHECK (blob_id IS NOT NULL OR text_content IS NOT NULL)
+  UNIQUE(skill_version_id, path)
 );
 
 CREATE TABLE skill_source_refs (
@@ -2197,27 +2138,6 @@ CREATE TABLE plugin_connections (
 
 CREATE INDEX idx_plugin_connections_installation ON plugin_connections(installation_id, created_at DESC);
 CREATE INDEX idx_plugin_connections_binding ON plugin_connections(binding_key, created_at DESC);
-
-CREATE TABLE plugin_runtime_leases (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  installation_id UUID NOT NULL REFERENCES plugin_installations(id) ON DELETE CASCADE,
-  access_binding_id UUID REFERENCES access_bindings(id) ON DELETE SET NULL,
-  reuse_scope VARCHAR(20) NOT NULL
-    CHECK (reuse_scope IN ('turn', 'workspace', 'conversation', 'actor', 'actor_conversation', 'user')),
-  owner_key VARCHAR(255) NOT NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'closing', 'closed', 'error')),
-  handshake_state VARCHAR(20) NOT NULL DEFAULT 'not_required'
-    CHECK (handshake_state IN ('pending', 'ready', 'error', 'not_required')),
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  last_used_at TIMESTAMPTZ DEFAULT NOW(),
-  expires_at TIMESTAMPTZ,
-  closed_at TIMESTAMPTZ
-);
-
-CREATE INDEX idx_plugin_runtime_leases_installation ON plugin_runtime_leases(installation_id, created_at DESC);
-CREATE INDEX idx_plugin_runtime_leases_owner ON plugin_runtime_leases(owner_key, created_at DESC);
 
 CREATE TABLE plugin_source_refs (
   installation_id UUID PRIMARY KEY REFERENCES plugin_installations(id) ON DELETE CASCADE,

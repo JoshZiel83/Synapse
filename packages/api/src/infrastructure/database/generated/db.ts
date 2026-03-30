@@ -386,21 +386,6 @@ export interface AutomationWebhookEndpoints {
   workspace_id: string;
 }
 
-export interface Blobs {
-  binary_content: Buffer | null;
-  created_at: Generated<Timestamp | null>;
-  created_by: string | null;
-  id: Generated<string>;
-  media_type: string | null;
-  metadata: Generated<Json | null>;
-  sha256: string;
-  size_bytes: Generated<number>;
-  storage_backend: Generated<string>;
-  storage_key: string | null;
-  text_content: string | null;
-  workspace_id: string | null;
-}
-
 export interface CatalogCategories {
   created_at: Generated<Timestamp | null>;
   description: Generated<string | null>;
@@ -441,19 +426,7 @@ export interface CatalogItems {
   workspace_id: string | null;
 }
 
-export interface CatalogLineages {
-  created_at: Generated<Timestamp | null>;
-  downstream_item_id: string;
-  lineage_kind: Generated<string>;
-  metadata: Generated<Json | null>;
-  sync_mode: Generated<string>;
-  updated_at: Generated<Timestamp | null>;
-  upstream_item_id: string;
-  upstream_version_id: string | null;
-}
-
 export interface CatalogVersionFiles {
-  blob_id: string | null;
   catalog_version_id: string;
   content_blocks: Generated<Json | null>;
   created_at: Generated<Timestamp | null>;
@@ -464,7 +437,7 @@ export interface CatalogVersionFiles {
   path: string;
   sha256: string;
   size_bytes: Generated<number>;
-  text_content: string | null;
+  text_content: string;
 }
 
 export interface CatalogVersions {
@@ -924,14 +897,6 @@ export interface PlatformAccessBindings {
   user_id: string;
 }
 
-export interface PlatformSettings {
-  created_at: Generated<Timestamp | null>;
-  default_model_group_id: string | null;
-  id: Generated<boolean>;
-  metadata: Generated<Json | null>;
-  updated_at: Generated<Timestamp | null>;
-}
-
 export interface PluginAuthSessions {
   binding_key: string;
   catalog_item_id: string;
@@ -1006,21 +971,6 @@ export interface PluginPackageVersionSpecs {
   requires_handshake: Generated<boolean>;
   tool_manifest: Generated<Json>;
   transport: string;
-}
-
-export interface PluginRuntimeLeases {
-  access_binding_id: string | null;
-  closed_at: Timestamp | null;
-  created_at: Generated<Timestamp | null>;
-  expires_at: Timestamp | null;
-  handshake_state: Generated<string>;
-  id: Generated<string>;
-  installation_id: string;
-  last_used_at: Generated<Timestamp | null>;
-  metadata: Generated<Json | null>;
-  owner_key: string;
-  reuse_scope: string;
-  status: Generated<string>;
 }
 
 export interface PluginSourceRefs {
@@ -1297,6 +1247,12 @@ export interface RuntimeEvents {
   workspace_id: string | null;
 }
 
+export interface SchemaMigrations {
+  applied_at: Generated<Timestamp>;
+  description: Generated<string>;
+  version: string;
+}
+
 export interface SessionContextStates {
   active_private_archive_point_id: string | null;
   session_id: string;
@@ -1367,7 +1323,6 @@ export interface SessionWakeups {
 }
 
 export interface SkillFiles {
-  blob_id: string | null;
   content_blocks: Generated<Json>;
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
@@ -1377,7 +1332,7 @@ export interface SkillFiles {
   sha256: string;
   size_bytes: Generated<number>;
   skill_version_id: string;
-  text_content: string | null;
+  text_content: string;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -1620,6 +1575,8 @@ export interface WorkspaceContacts {
   created_by: string | null;
   id: Generated<string>;
   metadata: Generated<Json>;
+  owner_user_id: string | null;
+  scope: Generated<string>;
   target_actor_id: string | null;
   target_type: string;
   target_user_id: string | null;
@@ -1652,27 +1609,12 @@ export interface WorkspaceMembers {
 
 export interface Workspaces {
   created_at: Generated<Timestamp | null>;
-  default_model_group_id: string | null;
   description: string | null;
   id: Generated<string>;
   name: string;
   owner_id: string;
   slug: string;
   updated_at: Generated<Timestamp | null>;
-}
-
-export interface WorkspaceUserContacts {
-  created_at: Generated<Timestamp | null>;
-  created_by: string | null;
-  id: Generated<string>;
-  metadata: Generated<Json>;
-  owner_user_id: string;
-  target_actor_id: string | null;
-  target_type: string;
-  target_user_id: string | null;
-  target_workspace_id: string;
-  updated_at: Generated<Timestamp | null>;
-  workspace_id: string;
 }
 
 export interface WorkspaceUserPreferences {
@@ -1707,11 +1649,9 @@ export interface DB {
   automation_rules: AutomationRules;
   automation_triggers: AutomationTriggers;
   automation_webhook_endpoints: AutomationWebhookEndpoints;
-  blobs: Blobs;
   catalog_categories: CatalogCategories;
   catalog_item_categories: CatalogItemCategories;
   catalog_items: CatalogItems;
-  catalog_lineages: CatalogLineages;
   catalog_version_files: CatalogVersionFiles;
   catalog_versions: CatalogVersions;
   context_archive_frame_parts: ContextArchiveFrameParts;
@@ -1748,12 +1688,10 @@ export interface DB {
   model_profiles: ModelProfiles;
   payload_blobs: PayloadBlobs;
   platform_access_bindings: PlatformAccessBindings;
-  platform_settings: PlatformSettings;
   plugin_auth_sessions: PluginAuthSessions;
   plugin_connections: PluginConnections;
   plugin_installations: PluginInstallations;
   plugin_package_version_specs: PluginPackageVersionSpecs;
-  plugin_runtime_leases: PluginRuntimeLeases;
   plugin_source_refs: PluginSourceRefs;
   plugin_version_runtime_permissions: PluginVersionRuntimePermissions;
   provider_steps: ProviderSteps;
@@ -1771,6 +1709,7 @@ export interface DB {
   relay_tool_revisions: RelayToolRevisions;
   relay_tools: RelayTools;
   runtime_events: RuntimeEvents;
+  schema_migrations: SchemaMigrations;
   session_context_states: SessionContextStates;
   session_engine_branches: SessionEngineBranches;
   session_interrupts: SessionInterrupts;
@@ -1796,7 +1735,6 @@ export interface DB {
   workspace_contacts: WorkspaceContacts;
   workspace_invites: WorkspaceInvites;
   workspace_members: WorkspaceMembers;
-  workspace_user_contacts: WorkspaceUserContacts;
   workspace_user_preferences: WorkspaceUserPreferences;
   workspaces: Workspaces;
 }

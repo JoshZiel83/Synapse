@@ -54,6 +54,17 @@ function workspaceRelationFromTrustLevel(
   return trustLevel;
 }
 
+function deriveWorkspaceTrustLevel(row: {
+  owner_id?: string | null;
+  user_id?: string | null;
+  trust_level?: string | null;
+}) {
+  if (row.owner_id && row.user_id && row.owner_id === row.user_id) {
+    return "owner";
+  }
+  return row.trust_level ?? null;
+}
+
 async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
   if (entryIds.length === 0) return;
 
@@ -342,7 +353,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       throw new Error("Failed to create workspace.");
     }
 
-    // 2. Add creator as owner member
+    // 2. Add creator as admin member; owner is derived from workspaces.owner_id.
     await executeCompiledQuery(
       runner,
       db
@@ -350,7 +361,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
         .values({
           workspace_id: String(workspace.id),
           user_id: input.userId,
-          trust_level: "owner",
+          trust_level: "admin",
         }),
     );
 
@@ -555,7 +566,7 @@ export async function listUserWorkspaces(userId: string) {
     .execute();
   return rows.map((row) => ({
     ...mapWorkspaceRow(row),
-    trustLevel: row.trust_level ?? null,
+    trustLevel: deriveWorkspaceTrustLevel(row),
   }));
 }
 
@@ -682,12 +693,16 @@ export async function updateWorkspace(
 
 export async function checkMembership(workspaceId: string, userId: string) {
   const row = await db
-    .selectFrom("workspace_members")
-    .select("trust_level")
-    .where("workspace_id", "=", workspaceId)
-    .where("user_id", "=", userId)
+    .selectFrom("workspaces as w")
+    .leftJoin("workspace_members as wm", (join) =>
+      join
+        .onRef("wm.workspace_id", "=", "w.id")
+        .on("wm.user_id", "=", userId),
+    )
+    .select(["w.owner_id", "wm.user_id", "wm.trust_level"])
+    .where("w.id", "=", workspaceId)
     .executeTakeFirst();
-  return row?.trust_level ?? null;
+  return row ? deriveWorkspaceTrustLevel(row) : null;
 }
 
 export async function addMember(input: AddMemberInput) {
@@ -762,6 +777,7 @@ export async function listMembers(workspaceId: string) {
 
   const rows = await db
     .selectFrom("workspace_members as wm")
+    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
     .innerJoin("users as u", "u.id", "wm.user_id")
     .leftJoin(accessMap, (join) =>
       join
@@ -773,6 +789,7 @@ export async function listMembers(workspaceId: string) {
       "wm.workspace_id",
       "wm.user_id",
       "wm.trust_level",
+      "w.owner_id",
       "wm.joined_at",
       "u.name as user_name",
       "u.email as user_email",
@@ -794,6 +811,7 @@ export async function listMembers(workspaceId: string) {
 export async function listWorkspaceAccessBindings(workspaceId: string) {
   const rows = await db
     .selectFrom("workspace_access_bindings as wab")
+    .innerJoin("workspaces as w", "w.id", "wab.workspace_id")
     .innerJoin("users as u", "u.id", "wab.user_id")
     .innerJoin("workspace_members as wm", (join) =>
       join
@@ -811,6 +829,7 @@ export async function listWorkspaceAccessBindings(workspaceId: string) {
       "u.name as user_name",
       "u.email as user_email",
       "u.avatar_file_id",
+      "w.owner_id",
       "wm.trust_level",
     ])
     .where("wab.workspace_id", "=", workspaceId)
@@ -826,7 +845,7 @@ export async function listWorkspaceAccessBindings(workspaceId: string) {
     metadata: row.metadata ?? {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    trustLevel: row.trust_level,
+    trustLevel: deriveWorkspaceTrustLevel(row),
     userName: row.user_name,
     userEmail: row.user_email,
     avatarUrl: row.avatar_file_id ? getFileUrlById(row.avatar_file_id) : null,
@@ -967,7 +986,7 @@ function mapMemberRow(row: any) {
     id: row.id,
     workspaceId: row.workspace_id,
     userId: row.user_id,
-    trustLevel: row.trust_level,
+    trustLevel: deriveWorkspaceTrustLevel(row),
     accessKeys: Array.isArray(row.access_keys) ? row.access_keys : [],
     joinedAt: toIsoString(row.joined_at),
   };

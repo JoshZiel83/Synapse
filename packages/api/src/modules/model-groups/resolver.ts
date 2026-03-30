@@ -185,14 +185,19 @@ async function listCandidateGroups(current: ResolveContext, authorizedGroupIds: 
       .orderBy('priority', 'asc')
       .execute(),
     db
-      .selectFrom('workspaces')
-      .select('default_model_group_id')
-      .where('id', '=', current.workspaceId)
+      .selectFrom('model_groups')
+      .select('id')
+      .where('owner_type', '=', 'workspace')
+      .where('owner_workspace_id', '=', current.workspaceId)
+      .where('is_default', '=', true)
+      .where('is_enabled', '=', true)
       .executeTakeFirst(),
     db
-      .selectFrom('platform_settings')
-      .select('default_model_group_id')
-      .where('id', '=', true)
+      .selectFrom('model_groups')
+      .select('id')
+      .where('owner_type', '=', 'platform')
+      .where('is_default', '=', true)
+      .where('is_enabled', '=', true)
       .executeTakeFirst(),
     current.userId
       ? db
@@ -211,8 +216,8 @@ async function listCandidateGroups(current: ResolveContext, authorizedGroupIds: 
     assignedPriority.set(row.group_id, row.priority);
   }
 
-  const workspaceDefaultGroupId = workspaceDefaultResult?.default_model_group_id || undefined;
-  const platformDefaultGroupId = platformDefaultResult?.default_model_group_id || undefined;
+  const workspaceDefaultGroupId = workspaceDefaultResult?.id || undefined;
+  const platformDefaultGroupId = platformDefaultResult?.id || undefined;
   const userDefaultGroupId = userDefaultResult?.id || undefined;
 
   return (groupsResult as GroupRow[]).sort((a, b) => {

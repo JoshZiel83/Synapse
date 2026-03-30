@@ -262,17 +262,6 @@ function mapGrantRow(row: ModelGroupGrantRow & { id: string; group_id: string })
   };
 }
 
-async function ensurePlatformSettingsRow() {
-  await db
-    .insertInto('platform_settings')
-    .values({
-      id: true,
-      metadata: {} as TableInsert<'platform_settings'>['metadata'],
-    })
-    .onConflict((oc) => oc.column('id').doNothing())
-    .execute();
-}
-
 async function clearExistingDefault(ownerType: ModelGroupOwnerType, ownerWorkspaceId?: string | null, ownerUserId?: string | null) {
   if (ownerType === 'platform') {
     await db
@@ -283,7 +272,6 @@ async function clearExistingDefault(ownerType: ModelGroupOwnerType, ownerWorkspa
       .where('owner_type', '=', 'platform')
       .where('is_default', '=', true)
       .execute();
-    await ensurePlatformSettingsRow();
     return;
   }
 
@@ -312,66 +300,9 @@ async function clearExistingDefault(ownerType: ModelGroupOwnerType, ownerWorkspa
       is_default: false,
     })
     .where('owner_type', '=', 'user')
-    .where('owner_user_id', '=', ownerUserId)
-    .where('is_default', '=', true)
-    .execute();
-}
-
-async function setDefaultGroup(groupId: string, ownerType: ModelGroupOwnerType, ownerWorkspaceId?: string | null) {
-  if (ownerType === 'platform') {
-    await ensurePlatformSettingsRow();
-    await db
-      .updateTable('platform_settings')
-      .set({
-        default_model_group_id: groupId,
-        updated_at: sql`NOW()`,
-      })
-      .where('id', '=', true)
+      .where('owner_user_id', '=', ownerUserId)
+      .where('is_default', '=', true)
       .execute();
-    return;
-  }
-
-  if (ownerType === 'workspace') {
-    if (!ownerWorkspaceId) {
-      throw new ModelGroupError(400, 'ownerWorkspaceId is required for workspace defaults');
-    }
-    await db
-      .updateTable('workspaces')
-      .set({
-        default_model_group_id: groupId,
-        updated_at: sql`NOW()`,
-      })
-      .where('id', '=', ownerWorkspaceId)
-      .execute();
-  }
-}
-
-async function clearDefaultGroupPointer(groupId: string, ownerType: ModelGroupOwnerType, ownerWorkspaceId?: string | null) {
-  if (ownerType === 'platform') {
-    await ensurePlatformSettingsRow();
-    await db
-      .updateTable('platform_settings')
-      .set({
-        default_model_group_id: null,
-        updated_at: sql`NOW()`,
-      })
-      .where('id', '=', true)
-      .where('default_model_group_id', '=', groupId)
-      .execute();
-    return;
-  }
-
-  if (ownerType === 'workspace' && ownerWorkspaceId) {
-    await db
-      .updateTable('workspaces')
-      .set({
-        default_model_group_id: null,
-        updated_at: sql`NOW()`,
-      })
-      .where('id', '=', ownerWorkspaceId)
-      .where('default_model_group_id', '=', groupId)
-      .execute();
-  }
 }
 
 async function getGroupRow(groupId: string) {
@@ -837,10 +768,6 @@ export async function createModelGroup(data: {
     data.createdBy || null,
   );
 
-  if (data.isDefault) {
-    await setDefaultGroup(row.id, row.owner_type, row.owner_workspace_id);
-  }
-
   const authzEntryIds = await enqueueAuthzRelationships(
     buildModelGroupAuthzRelations({
       id: row.id,
@@ -870,7 +797,7 @@ export async function updateModelGroup(groupId: string, data: {
 }) {
   const previousState = await loadGroupAuthzState(groupId);
 
-  if (data.isDefault === true) {
+  if (data.isDefault === true && data.isActive !== false) {
     await clearExistingDefault(
       previousState.owner_type,
       previousState.owner_workspace_id,
@@ -901,6 +828,9 @@ export async function updateModelGroup(groupId: string, data: {
   if (data.isActive !== undefined) {
     updateData.is_enabled = data.isActive;
   }
+  if (data.isActive === false) {
+    updateData.is_default = false;
+  }
 
   if (Object.keys(updateData).length === 1) {
     return getModelGroup(groupId);
@@ -915,16 +845,6 @@ export async function updateModelGroup(groupId: string, data: {
   if (!updatedRow) {
     throw new ModelGroupError(404, 'Model group not found');
   }
-  if (data.isDefault === true) {
-    if (updatedRow.is_enabled) {
-      await setDefaultGroup(updatedRow.id, updatedRow.owner_type, updatedRow.owner_workspace_id);
-    } else {
-      await clearDefaultGroupPointer(updatedRow.id, updatedRow.owner_type, updatedRow.owner_workspace_id);
-    }
-  } else if ((data.isDefault === false || data.isActive === false) && previousState.grants.length > 0) {
-    await clearDefaultGroupPointer(updatedRow.id, updatedRow.owner_type, updatedRow.owner_workspace_id);
-  }
-
   const nextState = await loadGroupAuthzState(groupId);
   const authzEntryIds = await enqueueAuthzRelationships(
     diffAuthzRelationships(
@@ -1001,7 +921,6 @@ export async function deleteModelGroup(groupId: string) {
     .deleteFrom('actor_model_group_assignments')
     .where('group_id', '=', groupId)
     .execute();
-  await clearDefaultGroupPointer(groupId, previousGroupState.owner_type, previousGroupState.owner_workspace_id);
 
   const nextGroupState = await loadGroupAuthzState(groupId);
   const nextProfileStates = await listProfileRelationStates(groupId);
@@ -1758,16 +1677,12 @@ export async function logAIRequest(data: {
 }
 
 export async function seedPlatformDefaultGroup() {
-  await ensurePlatformSettingsRow();
-
   const defaultGroupRow = await db
-    .selectFrom('platform_settings as ps')
-    .innerJoin('model_groups as mg', 'mg.id', 'ps.default_model_group_id')
-    .select('ps.default_model_group_id as group_id')
-    .where('ps.id', '=', true)
-    .where('ps.default_model_group_id', 'is not', null)
-    .where('mg.owner_type', '=', 'platform')
-    .where('mg.is_enabled', '=', true)
+    .selectFrom('model_groups')
+    .select('id as group_id')
+    .where('owner_type', '=', 'platform')
+    .where('is_default', '=', true)
+    .where('is_enabled', '=', true)
     .limit(1)
     .executeTakeFirst();
 
@@ -1796,7 +1711,6 @@ export async function seedPlatformDefaultGroup() {
         })
         .where('id', '=', groupId)
         .execute();
-      await setDefaultGroup(groupId, 'platform');
     }
   }
 

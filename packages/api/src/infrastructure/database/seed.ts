@@ -76,8 +76,8 @@ async function seedDemoWorkspace(userId: string) {
 
   await executeSql(
     `INSERT INTO workspace_members (workspace_id, user_id, trust_level)
-     VALUES ($1, $2, 'owner')
-     ON CONFLICT (workspace_id, user_id) DO UPDATE SET trust_level = 'owner'`,
+     VALUES ($1, $2, 'admin')
+     ON CONFLICT (workspace_id, user_id) DO UPDATE SET trust_level = 'admin'`,
     [workspaceId, userId],
   );
 
