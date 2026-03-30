@@ -48,7 +48,10 @@ import {
 } from "./tool-plugins.js";
 import { runWithToolContext } from "./session-tools.js";
 import { maybeAutoBridgeRelayApproval } from "./relay-approval-bridge.js";
-import { getMcpVersion } from "../mcp-plugins/instance-manager.js";
+import {
+  getMcpVersion,
+  type McpExecutionContext,
+} from "../mcp-plugins/instance-manager.js";
 import { ingestResponseMedia } from "./content-ingest.js";
 import {
   buildDefaultUserMention,
@@ -561,6 +564,7 @@ export async function actorThink(
     mcpExecutor?: (
       toolName: string,
       input: Record<string, unknown>,
+      executionContext?: McpExecutionContext,
     ) => Promise<NormalizedMcpToolResult>;
     mcpVersion?: number;
     mcpRefresh?: () => Promise<{
@@ -1129,7 +1133,19 @@ export async function actorThink(
                 })
               : null;
           const attemptStart = Date.now();
-          const [res] = await executeCallableTools([tc]);
+          const [res] = await runWithToolContext(
+            {
+              sessionId: options?.sessionId || "",
+              actorId: actor.id,
+              workspaceId: workspaceId || "",
+              userId: options?.userId,
+              turnId,
+              conversationId: options?.conversationId,
+              toolCallId: tc.callId,
+              toolName: tc.toolName,
+            },
+            () => executeCallableTools([tc]),
+          );
           callableResults.push(res);
 
           if (executionEnabled && callRow && attempt) {
@@ -1256,6 +1272,16 @@ export async function actorThink(
               const normalizedResult = await options.mcpExecutor(
                 tc.toolName,
                 tc.input,
+                {
+                  sessionId: options?.sessionId,
+                  conversationId: options?.conversationId,
+                  actorId: actor.id,
+                  userId: options?.userId,
+                  turnId,
+                  toolCallId: tc.callId,
+                  providerCallId: tc.providerCallId,
+                  namespacedToolName: tc.toolName,
+                },
               );
               let normalizedContent = normalizedResult.content;
               let metadata: Record<string, unknown> = {
@@ -1272,6 +1298,8 @@ export async function actorThink(
                   sessionId: options?.sessionId,
                   conversationId: options?.conversationId,
                   userId: options?.userId,
+                  turnId,
+                  sourceToolCallId: tc.callId,
                   relayToolName: tc.toolName,
                   toolInput: tc.input,
                   result: normalizedResult,

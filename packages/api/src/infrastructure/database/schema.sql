@@ -1108,6 +1108,85 @@ CREATE INDEX idx_tool_calls_turn ON tool_calls(turn_id, created_at);
 CREATE INDEX idx_tool_calls_bundle ON tool_calls(bundle_id);
 CREATE INDEX idx_tool_calls_provider_step ON tool_calls(provider_step_id);
 
+CREATE TABLE tool_call_tasks (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+  turn_id UUID REFERENCES turns(id) ON DELETE SET NULL,
+  source_tool_call_id UUID REFERENCES tool_calls(id) ON DELETE SET NULL,
+  source_tool_name VARCHAR(255) NOT NULL,
+  executor_kind VARCHAR(40) NOT NULL
+    CHECK (executor_kind IN ('interaction_question', 'interaction_form', 'relay_authorization', 'relay_mcp')),
+  delivery_policy VARCHAR(30) NOT NULL
+    CHECK (delivery_policy IN ('online_only', 'store_and_forward', 'human_interaction')),
+  status VARCHAR(20) NOT NULL DEFAULT 'working'
+    CHECK (
+      status IN (
+        'working',
+        'input_required',
+        'completed',
+        'failed',
+        'cancelled'
+      )
+    ),
+  status_message TEXT,
+  dispatch_status VARCHAR(20) NOT NULL DEFAULT 'accepted'
+    CHECK (
+      dispatch_status IN (
+        'accepted',
+        'queued',
+        'dispatched',
+        'received',
+        'started',
+        'input_requested',
+        'cancel_requested'
+      )
+    ),
+  supports_cancel BOOLEAN NOT NULL DEFAULT FALSE,
+  supports_output_tail BOOLEAN NOT NULL DEFAULT FALSE,
+  request_payload JSONB NOT NULL DEFAULT '{}',
+  immediate_result_payload JSONB NOT NULL DEFAULT '{}',
+  final_result_payload JSONB NOT NULL DEFAULT '{}',
+  final_error_payload JSONB NOT NULL DEFAULT '{}',
+  metadata JSONB NOT NULL DEFAULT '{}',
+  completion_item_id UUID UNIQUE REFERENCES conversation_items(id) ON DELETE SET NULL,
+  deadline_at TIMESTAMPTZ,
+  retention_ttl_ms INT,
+  retain_until TIMESTAMPTZ,
+  cancel_requested_at TIMESTAMPTZ,
+  cancel_reason TEXT,
+  last_output_seq BIGINT NOT NULL DEFAULT 0,
+  last_output_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_tool_call_tasks_session_status
+  ON tool_call_tasks(session_id, status, created_at DESC);
+CREATE INDEX idx_tool_call_tasks_source_tool_call
+  ON tool_call_tasks(source_tool_call_id)
+  WHERE source_tool_call_id IS NOT NULL;
+CREATE INDEX idx_tool_call_tasks_conversation_status
+  ON tool_call_tasks(conversation_id, status, created_at DESC);
+
+CREATE TABLE tool_call_task_output_chunks (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  task_id UUID NOT NULL REFERENCES tool_call_tasks(id) ON DELETE CASCADE,
+  seq BIGINT NOT NULL,
+  stream VARCHAR(20) NOT NULL
+    CHECK (stream IN ('stdout', 'stderr', 'system')),
+  text_value TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(task_id, seq)
+);
+
+CREATE INDEX idx_tool_call_task_output_chunks_task
+  ON tool_call_task_output_chunks(task_id, seq DESC);
+
 -- ============ Tool Execution Attempts ============
 CREATE TABLE tool_execution_attempts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2232,18 +2311,25 @@ CREATE TABLE relay_operations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  requested_by_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   requested_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   requested_by_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
   device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
   exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
   catalog_revision_id UUID NOT NULL REFERENCES relay_catalog_revisions(id) ON DELETE CASCADE,
   tool_id UUID NOT NULL REFERENCES relay_tools(id) ON DELETE CASCADE,
   tool_revision_id UUID NOT NULL REFERENCES relay_tool_revisions(id) ON DELETE CASCADE,
   visible_tool_name VARCHAR(255) NOT NULL,
+  runtime_session_id VARCHAR(255),
+  delivery_policy VARCHAR(30) NOT NULL DEFAULT 'online_only'
+    CHECK (delivery_policy IN ('online_only', 'store_and_forward')),
   status VARCHAR(20) NOT NULL DEFAULT 'created'
-    CHECK (status IN ('created', 'dispatched', 'received', 'started', 'completed', 'failed', 'aborted', 'expired')),
+    CHECK (status IN ('created', 'dispatched', 'received', 'started', 'cancel_requested', 'completed', 'failed', 'cancelled', 'aborted', 'expired')),
   input_payload JSONB NOT NULL DEFAULT '{}',
   input_hash VARCHAR(128) NOT NULL,
+  operation_timeout_ms INT,
+  expires_at TIMESTAMPTZ,
   result_hash VARCHAR(128),
   error_code VARCHAR(100),
   error_message TEXT,
@@ -2263,6 +2349,7 @@ CREATE TABLE relay_operation_deliveries (
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
+  sent_at TIMESTAMPTZ,
   acknowledged_at TIMESTAMPTZ,
   UNIQUE(operation_id, delivery_seq)
 );
@@ -2277,10 +2364,20 @@ CREATE TABLE relay_operation_results (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE INDEX idx_relay_operations_device_status
+  ON relay_operations(device_id, status, created_at DESC);
+CREATE INDEX idx_relay_operations_task
+  ON relay_operations(task_id)
+  WHERE task_id IS NOT NULL;
+CREATE INDEX idx_relay_operations_runtime_session
+  ON relay_operations(runtime_session_id)
+  WHERE runtime_session_id IS NOT NULL;
+
 CREATE TABLE interaction_requests (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  task_id UUID NOT NULL REFERENCES tool_call_tasks(id) ON DELETE CASCADE,
   conversation_item_id UUID UNIQUE REFERENCES conversation_items(id) ON DELETE SET NULL,
   requester_member_id UUID REFERENCES conversation_members(id) ON DELETE SET NULL,
   requester_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -2295,6 +2392,7 @@ CREATE TABLE interaction_requests (
         'approved_pending_apply',
         'applied',
         'rejected',
+        'cancelled',
         'expired',
         'apply_failed'
       )
@@ -2338,6 +2436,8 @@ CREATE TABLE interaction_relay_authorization_requests (
 
 CREATE INDEX idx_interaction_requests_conversation
   ON interaction_requests(conversation_id, created_at DESC);
+CREATE INDEX idx_interaction_requests_task
+  ON interaction_requests(task_id);
 CREATE INDEX idx_interaction_requests_target
   ON interaction_requests(target_user_id, status, created_at DESC);
 CREATE INDEX idx_interaction_relay_authorization_requests_device

@@ -7,6 +7,7 @@ import type {
   RelayVisibleToolDefinition,
 } from '@synapse/shared';
 import {
+  extractText,
   RELAY_AUTH_TIMEOUT,
   RELAY_DELIVERY_ACK_TIMEOUT_MS,
   RELAY_HEARTBEAT_INTERVAL,
@@ -15,6 +16,7 @@ import {
   RELAY_TOOL_CALL_TIMEOUT,
   relayDeviceOfflineEventDefinition,
   relayDeviceOnlineEventDefinition,
+  textBlocks,
 } from '@synapse/shared';
 import { query, transaction } from '../../infrastructure/database/index.js';
 import { incrementMcpVersion } from './instance-manager.js';
@@ -24,12 +26,27 @@ import { touchRelayExposureAuthzState } from './relay-access.js';
 import { ingestAutomationProviderEvent } from '../automation/service.js';
 import { enqueueAutomationExecutionJobs } from '../../workers/queues.js';
 import {
+  appendToolCallTaskOutput,
+  completeToolCallTask,
+  failToolCallTask,
+  getToolCallTask,
+  insertToolCallTask,
+  markToolCallTaskCancelRequested,
+  markToolCallTaskDispatched,
+  markToolCallTaskReceived,
+  markToolCallTaskStarted,
+  requestToolCallTaskCancel,
+  cancelToolCallTask,
+  type ToolCallTaskDeliveryPolicy,
+} from '../tool-call-tasks/service.js';
+import {
   getPendingRelayAuthorizationApplication,
   listPendingRelayAuthorizationApplicationsForDevice,
   markRelayAuthorizationInteractionApplied,
   markRelayAuthorizationInteractionApplyFailed,
   type PendingRelayAuthorizationApplication,
 } from '../interactions/service.js';
+import { normalizeMcpToolResult } from './result-normalizer.js';
 
 interface RelayToolRegistration {
   stableKey: string;
@@ -69,25 +86,47 @@ interface ConnectedRelayExposure {
 }
 
 interface PendingRelayOperation {
+  responseMode: 'sync' | 'async';
+  operationStatus:
+    | 'created'
+    | 'cancel_requested'
+    | 'dispatched'
+    | 'received'
+    | 'started'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'aborted'
+    | 'expired';
   operationId: string;
   deviceId: string;
   workspaceId: string;
+  conversationId: string | null;
+  sessionId: string | null;
+  actorId: string | null;
+  userId: string | null;
   exposureId: string;
   exposureStableKey: string;
   runtimeSessionId: string;
   visibleToolName: string;
+  sourceToolName: string;
   toolId: string;
   toolRevisionId: string;
   catalogRevisionId: string;
   args: Record<string, unknown>;
   inputHash: string;
+  taskId: string | null;
+  operationTimeoutMs: number;
+  expiresAt: string | null;
   timeoutTimer: NodeJS.Timeout;
   ackTimer: NodeJS.Timeout | null;
   relaySessionRowId: string | null;
   deliverySeq: number | null;
   deliveryId: string | null;
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
+  cancelRequested: boolean;
+  cancelReason: string | null;
+  resolve?: (value: unknown) => void;
+  reject?: (error: Error) => void;
 }
 
 interface PendingRelayAuthorizationApply {
@@ -132,6 +171,10 @@ interface RelayExposureCatalog {
 }
 
 interface RelayCallParams {
+  conversationId?: string;
+  sessionId?: string;
+  requestedByUserId?: string;
+  requestedByActorId?: string;
   deviceId: string;
   exposureId: string;
   visibleToolName: string;
@@ -139,6 +182,21 @@ interface RelayCallParams {
   args: Record<string, unknown>;
   runtimeSessionId: string;
 }
+
+interface RelayAsyncCallParams extends RelayCallParams {
+  workspaceId: string;
+  conversationId: string;
+  sessionId: string;
+  requestedByActorId: string;
+  sourceToolCallId: string;
+  sourceToolName: string;
+  turnId?: string;
+  requestedByUserId?: string;
+  deliveryPolicy: ToolCallTaskDeliveryPolicy;
+}
+
+type RelayOperationLifecycleStatus =
+  PendingRelayOperation['operationStatus'];
 
 type RelayAuthRow = {
   id: string;
@@ -407,6 +465,12 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
       return;
     }
 
+    if (msg.type === 'operation.output' && typeof msg.operationId === 'string') {
+      await appendOperationOutput(msg);
+      await markDeliveryAcknowledged(msg.operationId, typeof msg.deliveryId === 'string' ? msg.deliveryId : undefined);
+      return;
+    }
+
     if (msg.type === 'operation.result' && typeof msg.operationId === 'string') {
       await resolveOperationResult(connected, msg);
       return;
@@ -434,7 +498,46 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
   });
 }
 
-export async function callRelayTool(params: RelayCallParams): Promise<unknown> {
+function resolveRelayOperationTimeoutMs(
+  args: Record<string, unknown>,
+  fallbackMs: number,
+) {
+  const timeoutSec =
+    typeof args.timeout_sec === 'number' && Number.isFinite(args.timeout_sec)
+      ? Math.max(1, Math.trunc(Number(args.timeout_sec)))
+      : null;
+  if (!timeoutSec) {
+    return fallbackMs;
+  }
+  return Math.max(1_000, timeoutSec * 1_000 + 30_000);
+}
+
+function buildAsyncRelayBinaryMetadata(params: {
+  deviceId: string;
+  deviceDisplayName: string;
+  exposureId: string;
+  exposureStableKey: string;
+  exposureDisplayName: string;
+  runtimeSessionId: string;
+  visibleToolName: string;
+  namespacedToolName: string;
+}) {
+  return {
+    source: {
+      kind: 'relay_mcp',
+      deviceId: params.deviceId,
+      deviceDisplayName: params.deviceDisplayName,
+      exposureId: params.exposureId,
+      exposureStableKey: params.exposureStableKey,
+      exposureDisplayName: params.exposureDisplayName,
+      runtimeSessionId: params.runtimeSessionId,
+      visibleToolName: params.visibleToolName,
+      namespacedToolName: params.namespacedToolName,
+    },
+  };
+}
+
+async function validateRelayCallTarget(params: RelayCallParams) {
   if (!params.runtimeSessionId) {
     throw buildRelayExecutionError({
       code: 'delivery_rejected',
@@ -484,28 +587,141 @@ export async function callRelayTool(params: RelayCallParams): Promise<unknown> {
     });
   }
 
-  const operationId = crypto.randomUUID();
-  const inputHash = hashValue(params.args);
+  return {
+    connected,
+    exposure,
+    currentTool,
+  };
+}
 
+async function insertRelayOperation(params: {
+  operationId: string;
+  workspaceId: string;
+  conversationId?: string;
+  sessionId?: string;
+  requestedByUserId?: string;
+  requestedByActorId?: string;
+  taskId?: string;
+  deviceId: string;
+  exposureId: string;
+  catalogRevisionId: string;
+  toolId: string;
+  toolRevisionId: string;
+  visibleToolName: string;
+  runtimeSessionId?: string;
+  deliveryPolicy: 'online_only' | 'store_and_forward';
+  status?: RelayOperationLifecycleStatus;
+  inputPayload: Record<string, unknown>;
+  inputHash: string;
+  operationTimeoutMs: number;
+  expiresAt: string | null;
+}) {
   await query(
     `INSERT INTO relay_operations (
-       id, workspace_id, device_id, exposure_id, catalog_revision_id, tool_id, tool_revision_id,
-       visible_tool_name, status, input_payload, input_hash, created_at, updated_at
+       id,
+       workspace_id,
+       conversation_id,
+       requested_by_session_id,
+       requested_by_user_id,
+       requested_by_actor_id,
+       task_id,
+       device_id,
+       exposure_id,
+       catalog_revision_id,
+       tool_id,
+       tool_revision_id,
+       visible_tool_name,
+       runtime_session_id,
+       delivery_policy,
+       status,
+       input_payload,
+       input_hash,
+       operation_timeout_ms,
+       expires_at,
+       created_at,
+       updated_at
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'created', $9, $10, NOW(), NOW())`,
+     VALUES (
+       $1,
+       $2,
+       $3,
+       $4,
+       $5,
+       $6,
+       $7,
+       $8,
+       $9,
+       $10,
+       $11,
+       $12,
+       $13,
+       $14,
+       $15,
+       $16,
+       $17::jsonb,
+       $18,
+       $19,
+       $20,
+       NOW(),
+       NOW()
+     )`,
     [
-      operationId,
-      connected.workspaceId,
+      params.operationId,
+      params.workspaceId,
+      params.conversationId || null,
+      params.sessionId || null,
+      params.requestedByUserId || null,
+      params.requestedByActorId || null,
+      params.taskId || null,
       params.deviceId,
       params.exposureId,
-      params.binding.catalogRevisionId,
-      params.binding.toolId,
-      params.binding.toolRevisionId,
+      params.catalogRevisionId,
+      params.toolId,
+      params.toolRevisionId,
       params.visibleToolName,
-      JSON.stringify(params.args),
-      inputHash,
+      params.runtimeSessionId || null,
+      params.deliveryPolicy,
+      params.status || 'created',
+      JSON.stringify(params.inputPayload),
+      params.inputHash,
+      params.operationTimeoutMs,
+      params.expiresAt,
     ],
   );
+}
+
+export async function callRelayTool(params: RelayCallParams): Promise<unknown> {
+  const { connected, exposure, currentTool } =
+    await validateRelayCallTarget(params);
+
+  const operationId = crypto.randomUUID();
+  const inputHash = hashValue(params.args);
+  const operationTimeoutMs = Math.min(
+    RELAY_TOOL_CALL_TIMEOUT,
+    resolveRelayOperationTimeoutMs(params.args, RELAY_OPERATION_TTL_MS),
+  );
+  const expiresAt = new Date(Date.now() + operationTimeoutMs).toISOString();
+
+  await insertRelayOperation({
+    operationId,
+    workspaceId: connected.workspaceId,
+    conversationId: params.conversationId,
+    sessionId: params.sessionId,
+    requestedByUserId: params.requestedByUserId,
+    requestedByActorId: params.requestedByActorId,
+    deviceId: params.deviceId,
+    exposureId: params.exposureId,
+    catalogRevisionId: params.binding.catalogRevisionId,
+    toolId: params.binding.toolId,
+    toolRevisionId: params.binding.toolRevisionId,
+    visibleToolName: params.visibleToolName,
+    runtimeSessionId: params.runtimeSessionId,
+    deliveryPolicy: 'online_only',
+    inputPayload: params.args,
+    inputHash,
+    operationTimeoutMs,
+    expiresAt,
+  });
 
   return new Promise<unknown>((resolve, reject) => {
     const timeoutTimer = setTimeout(() => {
@@ -514,32 +730,44 @@ export async function callRelayTool(params: RelayCallParams): Promise<unknown> {
 
       clearPendingRelayOperation(pending);
       pendingRelayOperations.delete(operationId);
-      void failOperation(operationId, 'delivery_timed_out', `Relay operation timed out after ${RELAY_TOOL_CALL_TIMEOUT}ms`, true, false);
+      void failOperation(operationId, 'delivery_timed_out', `Relay operation timed out after ${operationTimeoutMs}ms`, true, false);
       reject(buildRelayExecutionError({
         code: 'delivery_timed_out',
-        message: `Relay operation timed out after ${RELAY_TOOL_CALL_TIMEOUT}ms`,
+        message: `Relay operation timed out after ${operationTimeoutMs}ms`,
         retryable: true,
       }));
-    }, Math.min(RELAY_TOOL_CALL_TIMEOUT, RELAY_OPERATION_TTL_MS));
+    }, operationTimeoutMs);
 
     const pending: PendingRelayOperation = {
+      responseMode: 'sync',
+      operationStatus: 'created',
       operationId,
       deviceId: connected.deviceId,
       workspaceId: connected.workspaceId,
+      conversationId: params.conversationId || null,
+      sessionId: params.sessionId || null,
+      actorId: params.requestedByActorId || null,
+      userId: params.requestedByUserId || null,
       exposureId: params.exposureId,
       exposureStableKey: exposure.stableKey,
       runtimeSessionId: params.runtimeSessionId,
       visibleToolName: currentTool.visible.name,
+      sourceToolName: params.visibleToolName,
       toolId: params.binding.toolId,
       toolRevisionId: params.binding.toolRevisionId,
       catalogRevisionId: params.binding.catalogRevisionId,
       args: params.args,
       inputHash,
+      taskId: null,
+      operationTimeoutMs,
+      expiresAt,
       timeoutTimer,
       ackTimer: null,
       relaySessionRowId: null,
       deliverySeq: null,
       deliveryId: null,
+      cancelRequested: false,
+      cancelReason: null,
       resolve,
       reject,
     };
@@ -549,12 +777,239 @@ export async function callRelayTool(params: RelayCallParams): Promise<unknown> {
   });
 }
 
+export async function enqueueRelayToolTask(
+  params: RelayAsyncCallParams,
+): Promise<{ operationId: string; taskId: string }> {
+  const { connected, exposure, currentTool } =
+    await validateRelayCallTarget(params);
+
+  const operationId = crypto.randomUUID();
+  const inputHash = hashValue(params.args);
+  const operationTimeoutMs = resolveRelayOperationTimeoutMs(
+    params.args,
+    RELAY_OPERATION_TTL_MS,
+  );
+  const expiresAt = new Date(Date.now() + operationTimeoutMs).toISOString();
+  const acceptedSummary = `Accepted async ${params.visibleToolName} request. The relay will execute it and wake you with the final result.`;
+
+  const created = await transaction(async (client) => {
+    const task = await insertToolCallTask(client, {
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      sessionId: params.sessionId,
+      actorId: params.requestedByActorId,
+      turnId: params.turnId,
+      sourceToolCallId: params.sourceToolCallId,
+      sourceToolName: params.sourceToolName,
+      executorKind: 'relay_mcp',
+      deliveryPolicy: params.deliveryPolicy,
+      status: 'working',
+      statusMessage: `Queued async ${params.visibleToolName} on the relay.`,
+      dispatchStatus: 'queued',
+      supportsCancel: true,
+      supportsOutputTail: true,
+      requestPayload: {
+        deviceId: params.deviceId,
+        exposureId: params.exposureId,
+        runtimeSessionId: params.runtimeSessionId,
+        visibleToolName: params.visibleToolName,
+        args: params.args,
+      },
+      immediateResultPayload: {
+        content: textBlocks(acceptedSummary),
+        structuredContent: {
+          deferred: true,
+          task: {
+            status: 'working',
+            dispatchStatus: 'queued',
+            statusMessage: `Queued async ${params.visibleToolName} on the relay.`,
+          },
+        },
+        isError: false,
+      },
+      deadlineAt: expiresAt,
+    });
+
+    if (!task) {
+      throw new Error('Failed to create relay task');
+    }
+
+    await client.query(
+      `INSERT INTO relay_operations (
+         id,
+         workspace_id,
+         conversation_id,
+         requested_by_session_id,
+         requested_by_user_id,
+         requested_by_actor_id,
+         task_id,
+         device_id,
+         exposure_id,
+         catalog_revision_id,
+         tool_id,
+         tool_revision_id,
+         visible_tool_name,
+         runtime_session_id,
+         delivery_policy,
+         status,
+         input_payload,
+         input_hash,
+         operation_timeout_ms,
+         expires_at,
+         created_at,
+         updated_at
+       )
+       VALUES (
+         $1,
+         $2,
+         $3,
+         $4,
+         $5,
+         $6,
+         $7,
+         $8,
+         $9,
+         $10,
+         $11,
+         $12,
+         $13,
+         $14,
+         $15,
+         'created',
+         $16::jsonb,
+         $17,
+         $18,
+         $19,
+         NOW(),
+         NOW()
+       )`,
+      [
+        operationId,
+        params.workspaceId,
+        params.conversationId,
+        params.sessionId,
+        params.requestedByUserId || null,
+        params.requestedByActorId,
+        task.id,
+        params.deviceId,
+        params.exposureId,
+        params.binding.catalogRevisionId,
+        params.binding.toolId,
+        params.binding.toolRevisionId,
+        params.visibleToolName,
+        params.runtimeSessionId,
+        params.deliveryPolicy,
+        JSON.stringify(params.args),
+        inputHash,
+        operationTimeoutMs,
+        expiresAt,
+      ],
+    );
+
+    return task;
+  });
+
+  const timeoutTimer = setTimeout(() => {
+    const pending = pendingRelayOperations.get(operationId);
+    if (!pending) return;
+
+    if (pending.cancelRequested) {
+      void finalizePendingRelayCancellation(
+        pending,
+        pending.cancelReason?.trim() ||
+          `Async ${pending.sourceToolName} was cancelled.`,
+      );
+      return;
+    }
+
+    clearPendingRelayOperation(pending);
+    pendingRelayOperations.delete(operationId);
+    void failOperation(
+      operationId,
+      'delivery_timed_out',
+      `Relay operation timed out after ${operationTimeoutMs}ms`,
+      true,
+      false,
+    );
+    if (pending.taskId) {
+      void failToolCallTask(pending.taskId, {
+        summary: `Async ${pending.sourceToolName} timed out before the relay returned a result.`,
+        finalResultPayload: {
+          content: textBlocks(
+            `Async ${pending.sourceToolName} timed out before the relay returned a result.`,
+          ),
+          isError: true,
+        },
+        finalErrorPayload: {
+          code: 'delivery_timed_out',
+          message: `Relay operation timed out after ${operationTimeoutMs}ms`,
+          operationId,
+        },
+      }).catch(() => {});
+    }
+  }, operationTimeoutMs);
+
+  const pending: PendingRelayOperation = {
+    responseMode: 'async',
+    operationStatus: 'created',
+    operationId,
+    deviceId: connected.deviceId,
+    workspaceId: connected.workspaceId,
+    conversationId: params.conversationId,
+    sessionId: params.sessionId,
+    actorId: params.requestedByActorId,
+    userId: params.requestedByUserId || null,
+    exposureId: params.exposureId,
+    exposureStableKey: exposure.stableKey,
+    runtimeSessionId: params.runtimeSessionId,
+    visibleToolName: currentTool.visible.name,
+    sourceToolName: params.sourceToolName,
+    toolId: params.binding.toolId,
+    toolRevisionId: params.binding.toolRevisionId,
+    catalogRevisionId: params.binding.catalogRevisionId,
+    args: params.args,
+    inputHash,
+    taskId: created.id,
+    operationTimeoutMs,
+    expiresAt,
+    timeoutTimer,
+    ackTimer: null,
+    relaySessionRowId: null,
+    deliverySeq: null,
+    deliveryId: null,
+    cancelRequested: false,
+    cancelReason: null,
+  };
+  pendingRelayOperations.set(operationId, pending);
+
+  void dispatchPendingRelayOperation(connected, pending);
+
+  return {
+    operationId,
+    taskId: created.id,
+  };
+}
+
 async function dispatchPendingRelayOperation(connected: ConnectedRelay, pending: PendingRelayOperation) {
   try {
     if (pendingRelayOperations.get(pending.operationId) !== pending) {
       return;
     }
     if (connected.ws.readyState !== 1) {
+      return;
+    }
+
+    if (pending.cancelRequested) {
+      const cancelMessage =
+        pending.cancelReason?.trim() ||
+        `Async ${pending.sourceToolName} was cancelled before completion.`;
+
+      if (pending.operationStatus === 'created') {
+        await finalizePendingRelayCancellation(pending, cancelMessage);
+        return;
+      }
+
+      sendRelayOperationCancel(connected, pending);
       return;
     }
 
@@ -619,9 +1074,10 @@ async function dispatchPendingRelayOperation(connected: ConnectedRelay, pending:
       toolId: pending.toolId,
       toolRevisionId: pending.toolRevisionId,
       toolName: pending.visibleToolName,
+      responseMode: pending.responseMode,
       inputHash: pending.inputHash,
       arguments: pending.args,
-      expiresInMs: RELAY_OPERATION_TTL_MS,
+      expiresInMs: pending.operationTimeoutMs,
     };
 
     try {
@@ -642,6 +1098,13 @@ async function dispatchPendingRelayOperation(connected: ConnectedRelay, pending:
       `UPDATE relay_operations SET status = 'dispatched', updated_at = NOW() WHERE id = $1`,
       [pending.operationId],
     ).catch(() => {});
+    pending.operationStatus = 'dispatched';
+    if (pending.taskId) {
+      void markToolCallTaskDispatched(
+        pending.taskId,
+        `Dispatched async ${pending.sourceToolName} to the relay client.`,
+      ).catch(() => {});
+    }
     await query(
       `UPDATE relay_operation_deliveries
        SET status = 'sent', sent_at = NOW(), updated_at = NOW()
@@ -698,7 +1161,23 @@ async function rejectPendingRelayOperation(pending: PendingRelayOperation, error
     Boolean(error.requiresReplan),
     error.currentToolRevisionId,
   );
-  pending.reject(buildRelayExecutionError(error));
+  if (pending.responseMode === 'async' && pending.taskId) {
+    await failToolCallTask(pending.taskId, {
+      summary: `Async ${pending.sourceToolName} failed before the relay could execute it.`,
+      finalResultPayload: {
+        content: textBlocks(
+          `Async ${pending.sourceToolName} failed before the relay could execute it.`,
+        ),
+        isError: true,
+      },
+      finalErrorPayload: {
+        operationId: pending.operationId,
+        ...error,
+      },
+    });
+    return;
+  }
+  pending.reject?.(buildRelayExecutionError(error));
 }
 
 function clearPendingRelayOperation(pending: PendingRelayOperation) {
@@ -707,6 +1186,115 @@ function clearPendingRelayOperation(pending: PendingRelayOperation) {
     clearTimeout(pending.ackTimer);
     pending.ackTimer = null;
   }
+}
+
+async function markRelayOperationCancelled(
+  operationId: string,
+  message: string,
+) {
+  await query(
+    `UPDATE relay_operations
+     SET status = 'cancelled',
+         error_code = 'operation_cancelled',
+         error_message = $2,
+         completed_at = NOW(),
+         updated_at = NOW()
+     WHERE id = $1`,
+    [operationId, message],
+  ).catch(() => {});
+
+  await query(
+    `UPDATE relay_operation_deliveries
+     SET status = CASE
+         WHEN status IN ('queued', 'sent', 'nacked') THEN 'cancelled'
+         ELSE status
+       END,
+       updated_at = NOW()
+     WHERE operation_id = $1`,
+    [operationId],
+  ).catch(() => {});
+
+  await query(
+    `INSERT INTO relay_operation_results (operation_id, output_payload, output_preview, result_hash)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (operation_id) DO UPDATE SET
+       output_payload = EXCLUDED.output_payload,
+       output_preview = EXCLUDED.output_preview,
+       result_hash = EXCLUDED.result_hash,
+       updated_at = NOW()`,
+    [
+      operationId,
+      JSON.stringify({
+        error: {
+          code: 'operation_cancelled',
+          message,
+          retryable: false,
+        },
+      }),
+      message,
+      hashValue({
+        code: 'operation_cancelled',
+        message,
+      }),
+    ],
+  ).catch(() => {});
+}
+
+function sendRelayOperationCancel(
+  connected: ConnectedRelay,
+  pending: PendingRelayOperation,
+) {
+  if (connected.ws.readyState !== 1) {
+    return false;
+  }
+
+  try {
+    connected.ws.send(JSON.stringify({
+      type: 'relay.operation.cancel',
+      protocolVersion: RELAY_PROTOCOL_VERSION,
+      sessionId: connected.sessionId,
+      operationId: pending.operationId,
+      deliveryId: crypto.randomUUID(),
+      reason:
+        pending.cancelReason?.trim() ||
+        `Cancellation requested for async ${pending.sourceToolName}.`,
+    }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function finalizePendingRelayCancellation(
+  pending: PendingRelayOperation,
+  reason: string,
+) {
+  if (pendingRelayOperations.get(pending.operationId) === pending) {
+    clearPendingRelayOperation(pending);
+    pendingRelayOperations.delete(pending.operationId);
+  }
+
+  await markRelayOperationCancelled(pending.operationId, reason);
+
+  if (!pending.taskId) {
+    return;
+  }
+
+  await cancelToolCallTask(pending.taskId, {
+    summary: reason,
+    finalResultPayload: {
+      content: textBlocks(reason),
+      isError: true,
+    },
+    finalErrorPayload: {
+      code: 'operation_cancelled',
+      message: reason,
+      operationId: pending.operationId,
+    },
+    metadata: {
+      operationId: pending.operationId,
+    },
+  }).catch(() => {});
 }
 
 export function getRelayExposureCatalog(deviceId: string, exposureId: string): RelayExposureCatalog | null {
@@ -992,7 +1580,24 @@ export async function shutdownAllRelays() {
 
   for (const pending of pendingRelayOperations.values()) {
     clearPendingRelayOperation(pending);
-    pending.reject(new Error('Server shutting down'));
+    if (pending.responseMode === 'async' && pending.taskId) {
+      void failToolCallTask(pending.taskId, {
+        summary: `Async ${pending.sourceToolName} was interrupted because the server is shutting down.`,
+        finalResultPayload: {
+          content: textBlocks(
+            `Async ${pending.sourceToolName} was interrupted because the server is shutting down.`,
+          ),
+          isError: true,
+        },
+        finalErrorPayload: {
+          code: 'delivery_rejected',
+          message: 'Server shutting down',
+          operationId: pending.operationId,
+        },
+      });
+    } else {
+      pending.reject?.(new Error('Server shutting down'));
+    }
     void failOperation(pending.operationId, 'delivery_rejected', 'Server shutting down', true, false);
   }
 
@@ -1816,19 +2421,461 @@ async function markMissingExposuresOffline(deviceId: string, activeExposureIds: 
   );
 }
 
+type RelayTaskOperationRecord = {
+  operation_id: string;
+  status: RelayOperationLifecycleStatus;
+  workspace_id: string;
+  conversation_id: string | null;
+  requested_by_session_id: string | null;
+  requested_by_user_id: string | null;
+  requested_by_actor_id: string | null;
+  task_id: string | null;
+  device_id: string;
+  device_display_name: string | null;
+  exposure_id: string;
+  exposure_stable_key: string | null;
+  exposure_display_name: string | null;
+  runtime_session_id: string | null;
+  visible_tool_name: string;
+  tool_id: string;
+  tool_revision_id: string;
+  catalog_revision_id: string;
+  input_payload: unknown;
+  input_hash: string;
+  operation_timeout_ms: number | null;
+  expires_at: string | null;
+  source_tool_name: string | null;
+  cancel_reason: string | null;
+};
+
+async function loadAsyncRelayOperationRecord(operationId: string) {
+  const result = await query<RelayTaskOperationRecord>(
+    `SELECT
+       ro.id AS operation_id,
+       ro.status,
+       ro.workspace_id,
+       ro.conversation_id,
+       ro.requested_by_session_id,
+       ro.requested_by_user_id,
+       ro.requested_by_actor_id,
+       ro.task_id,
+       ro.device_id,
+       device.display_name AS device_display_name,
+       ro.exposure_id,
+       exposure.stable_key AS exposure_stable_key,
+       exposure.display_name AS exposure_display_name,
+       ro.runtime_session_id,
+       ro.visible_tool_name,
+       ro.tool_id,
+       ro.tool_revision_id,
+       ro.catalog_revision_id,
+       ro.input_payload,
+       ro.input_hash,
+       ro.operation_timeout_ms,
+       ro.expires_at,
+       task.source_tool_name,
+       task.cancel_reason
+     FROM relay_operations ro
+     LEFT JOIN relay_devices device
+       ON device.id = ro.device_id
+     LEFT JOIN relay_exposures exposure
+       ON exposure.id = ro.exposure_id
+     LEFT JOIN tool_call_tasks task
+       ON task.id = ro.task_id
+     WHERE ro.id = $1
+     LIMIT 1`,
+    [operationId],
+  );
+
+  return result.rows[0] || null;
+}
+
+async function loadRelayOperationByTaskId(taskId: string) {
+  const result = await query<RelayTaskOperationRecord>(
+    `SELECT
+       ro.id AS operation_id,
+       ro.status,
+       ro.workspace_id,
+       ro.conversation_id,
+       ro.requested_by_session_id,
+       ro.requested_by_user_id,
+       ro.requested_by_actor_id,
+       ro.task_id,
+       ro.device_id,
+       device.display_name AS device_display_name,
+       ro.exposure_id,
+       exposure.stable_key AS exposure_stable_key,
+       exposure.display_name AS exposure_display_name,
+       ro.runtime_session_id,
+       ro.visible_tool_name,
+       ro.tool_id,
+       ro.tool_revision_id,
+       ro.catalog_revision_id,
+       ro.input_payload,
+       ro.input_hash,
+       ro.operation_timeout_ms,
+       ro.expires_at,
+       task.source_tool_name,
+       task.cancel_reason
+     FROM relay_operations ro
+     LEFT JOIN relay_devices device
+       ON device.id = ro.device_id
+     LEFT JOIN relay_exposures exposure
+       ON exposure.id = ro.exposure_id
+     LEFT JOIN tool_call_tasks task
+       ON task.id = ro.task_id
+     WHERE ro.task_id = $1
+     ORDER BY ro.created_at DESC
+     LIMIT 1`,
+    [taskId],
+  );
+
+  return result.rows[0] || null;
+}
+
+export async function cancelRelayToolTask(taskId: string, reason?: string) {
+  const task = await getToolCallTask(taskId);
+  if (!task) {
+    throw new Error(`Tool-call task ${taskId} not found`);
+  }
+  if (task.executorKind !== 'relay_mcp') {
+    throw new Error(`Tool-call task ${taskId} is not a relay task`);
+  }
+  if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+    return task;
+  }
+
+  const operation = await loadRelayOperationByTaskId(taskId);
+  if (!operation) {
+    throw new Error(`Relay operation for task ${taskId} not found`);
+  }
+
+  const cancelMessage =
+    reason?.trim() ||
+    task.cancelReason?.trim() ||
+    `Cancellation requested for async ${task.sourceToolName}.`;
+
+  if (operation.status === 'cancelled') {
+    return cancelToolCallTask(taskId, {
+      summary: cancelMessage,
+      finalResultPayload: {
+        content: textBlocks(cancelMessage),
+        isError: true,
+      },
+      finalErrorPayload: {
+        code: 'operation_cancelled',
+        message: cancelMessage,
+        operationId: operation.operation_id,
+      },
+      metadata: {
+        operationId: operation.operation_id,
+      },
+    });
+  }
+
+  if (
+    operation.status === 'completed' ||
+    operation.status === 'failed' ||
+    operation.status === 'aborted' ||
+    operation.status === 'expired'
+  ) {
+    return getToolCallTask(taskId);
+  }
+
+  if (operation.status === 'created') {
+    const pending = pendingRelayOperations.get(operation.operation_id);
+    if (pending) {
+      pending.cancelRequested = true;
+      pending.cancelReason = cancelMessage;
+      pending.operationStatus = 'created';
+      await requestToolCallTaskCancel(taskId, cancelMessage);
+      await finalizePendingRelayCancellation(pending, cancelMessage);
+      return getToolCallTask(taskId);
+    }
+
+    await requestToolCallTaskCancel(taskId, cancelMessage);
+    await markRelayOperationCancelled(operation.operation_id, cancelMessage);
+    return cancelToolCallTask(taskId, {
+      summary: cancelMessage,
+      finalResultPayload: {
+        content: textBlocks(cancelMessage),
+        isError: true,
+      },
+      finalErrorPayload: {
+        code: 'operation_cancelled',
+        message: cancelMessage,
+        operationId: operation.operation_id,
+      },
+      metadata: {
+        operationId: operation.operation_id,
+      },
+    });
+  }
+
+  await requestToolCallTaskCancel(taskId, cancelMessage);
+  await query(
+    `UPDATE relay_operations
+     SET status = 'cancel_requested',
+         updated_at = NOW()
+     WHERE id = $1
+       AND status IN ('dispatched', 'received', 'started', 'cancel_requested')`,
+    [operation.operation_id],
+  );
+
+  const pending = pendingRelayOperations.get(operation.operation_id);
+  if (pending) {
+    pending.cancelRequested = true;
+    pending.cancelReason = cancelMessage;
+    pending.operationStatus = 'cancel_requested';
+
+    const connected = connectedRelays.get(pending.deviceId);
+    if (connected) {
+      sendRelayOperationCancel(connected, pending);
+    }
+    return getToolCallTask(taskId);
+  }
+
+  const connected = connectedRelays.get(operation.device_id);
+  if (connected?.ws.readyState === 1) {
+    try {
+      connected.ws.send(JSON.stringify({
+        type: 'relay.operation.cancel',
+        protocolVersion: RELAY_PROTOCOL_VERSION,
+        sessionId: connected.sessionId,
+        operationId: operation.operation_id,
+        deliveryId: crypto.randomUUID(),
+        reason: cancelMessage,
+      }));
+    } catch {}
+  }
+
+  await markToolCallTaskCancelRequested(
+    taskId,
+    cancelMessage,
+    {
+      operationId: operation.operation_id,
+    },
+  ).catch(() => {});
+
+  return getToolCallTask(taskId);
+}
+
+async function appendOperationOutput(msg: Record<string, unknown>) {
+  const operationId = msg.operationId as string;
+  const operation = await loadAsyncRelayOperationRecord(operationId);
+  if (!operation?.task_id) {
+    return;
+  }
+
+  const seq = Number(msg.seq || 0);
+  const stream =
+    msg.stream === 'stderr' || msg.stream === 'system' ? msg.stream : 'stdout';
+  const text = typeof msg.text === 'string' ? msg.text : '';
+  if (!text.trim() || !Number.isFinite(seq) || seq <= 0) {
+    return;
+  }
+
+  await appendToolCallTaskOutput(operation.task_id, {
+    seq,
+    stream,
+    text,
+    createdAt:
+      typeof msg.createdAt === 'string' ? msg.createdAt : new Date().toISOString(),
+    metadata: {
+      operationId,
+    },
+  }).catch(() => {});
+}
+
+async function finalizeAsyncRelayOperation(
+  operation: RelayTaskOperationRecord,
+  msg: Record<string, unknown>,
+) {
+  const taskId = operation.task_id;
+  if (!taskId) {
+    return;
+  }
+
+  const namespacedToolName =
+    operation.source_tool_name || operation.visible_tool_name;
+  const isTransportError = msg.success === false || Boolean(msg.error);
+  if (isTransportError) {
+    const error = normalizeOperationError(msg.error);
+    const summary = `Async ${namespacedToolName} failed before the relay returned a usable result.`;
+    await failToolCallTask(taskId, {
+      summary,
+      finalResultPayload: {
+        content: textBlocks(summary),
+        isError: true,
+      },
+      finalErrorPayload: {
+        operationId: operation.operation_id,
+        ...error,
+      },
+      metadata: {
+        operationId: operation.operation_id,
+      },
+    });
+    return;
+  }
+
+  const normalizedResult = await normalizeMcpToolResult(msg.result, operation.workspace_id, {
+    binaryMetadata:
+      operation.runtime_session_id &&
+      operation.exposure_stable_key
+        ? buildAsyncRelayBinaryMetadata({
+            deviceId: operation.device_id,
+            deviceDisplayName: operation.device_display_name || 'Relay device',
+            exposureId: operation.exposure_id,
+            exposureStableKey: operation.exposure_stable_key,
+            exposureDisplayName:
+              operation.exposure_display_name || 'Relay exposure',
+            runtimeSessionId: operation.runtime_session_id,
+            visibleToolName: operation.visible_tool_name,
+            namespacedToolName,
+          })
+        : undefined,
+  });
+
+  if (normalizedResult.isError) {
+    await failToolCallTask(taskId, {
+      summary: `Async ${namespacedToolName} completed with an error.`,
+      messageBlocks: normalizedResult.content,
+      finalResultPayload: {
+        content: normalizedResult.content,
+        structuredContent:
+          normalizedResult.structuredContent &&
+          typeof normalizedResult.structuredContent === 'object'
+            ? normalizedResult.structuredContent
+            : undefined,
+        metadata:
+          normalizedResult.metadata && typeof normalizedResult.metadata === 'object'
+            ? normalizedResult.metadata
+            : undefined,
+        isError: true,
+      },
+      finalErrorPayload: {
+        operationId: operation.operation_id,
+        relayResult: msg.result ?? {},
+      },
+      metadata: {
+        operationId: operation.operation_id,
+      },
+    });
+    return;
+  }
+
+  await completeToolCallTask(taskId, {
+    summary: `Async ${namespacedToolName} completed.`,
+    messageBlocks: normalizedResult.content,
+    finalResultPayload: {
+      content: normalizedResult.content,
+      structuredContent:
+        normalizedResult.structuredContent &&
+        typeof normalizedResult.structuredContent === 'object'
+          ? normalizedResult.structuredContent
+          : undefined,
+      metadata:
+        normalizedResult.metadata && typeof normalizedResult.metadata === 'object'
+          ? normalizedResult.metadata
+          : undefined,
+      rawResult:
+        normalizedResult.rawResult && typeof normalizedResult.rawResult === 'object'
+          ? normalizedResult.rawResult
+          : undefined,
+      isError: false,
+    },
+    metadata: {
+      operationId: operation.operation_id,
+      preview: extractText(normalizedResult.content).slice(0, 280),
+    },
+  });
+}
+
 async function resolveOperationResult(connected: ConnectedRelay, msg: Record<string, unknown>) {
   const operationId = msg.operationId as string;
   const pending = pendingRelayOperations.get(operationId);
-  if (!pending || pending.deviceId !== connected.deviceId) return;
+  if (pending && pending.deviceId === connected.deviceId) {
+    clearPendingRelayOperation(pending);
+    pendingRelayOperations.delete(operationId);
+  }
 
-  clearPendingRelayOperation(pending);
-  pendingRelayOperations.delete(operationId);
+  const operation = await loadAsyncRelayOperationRecord(operationId);
+  if (!operation || operation.device_id !== connected.deviceId) {
+    return;
+  }
+
+  const namespacedToolName =
+    operation.source_tool_name || operation.visible_tool_name;
+  const cancellationMessage =
+    operation.cancel_reason?.trim() ||
+    `Async ${namespacedToolName} was cancelled.`;
+
+  if (operation.status === 'cancel_requested') {
+    await markRelayOperationCancelled(operationId, cancellationMessage);
+    if (pending?.responseMode === 'sync') {
+      pending.reject?.(buildRelayExecutionError({
+        code: 'operation_cancelled' as RelayOperationError['code'],
+        message: cancellationMessage,
+        retryable: false,
+      }));
+    }
+    if (operation.task_id) {
+      await cancelToolCallTask(operation.task_id, {
+        summary: cancellationMessage,
+        finalResultPayload: {
+          content: textBlocks(cancellationMessage),
+          isError: true,
+        },
+        finalErrorPayload: {
+          operationId,
+          code: 'operation_cancelled',
+          message: cancellationMessage,
+        },
+        metadata: {
+          operationId,
+          lateResultIgnored: true,
+        },
+      });
+    }
+    return;
+  }
 
   const isError = msg.success === false || Boolean(msg.error);
   if (isError) {
     const error = normalizeOperationError(msg.error);
+    if (String(error.code) === 'operation_cancelled') {
+      await markRelayOperationCancelled(operationId, error.message);
+      if (pending?.responseMode === 'sync') {
+        pending.reject?.(buildRelayExecutionError(error));
+      }
+      if (operation.task_id) {
+        await cancelToolCallTask(operation.task_id, {
+          summary: `Async ${namespacedToolName} was cancelled.`,
+          finalResultPayload: {
+            content: textBlocks(
+              `Async ${namespacedToolName} was cancelled.`,
+            ),
+            isError: true,
+          },
+          finalErrorPayload: {
+            operationId,
+            code: error.code,
+            message: error.message,
+          },
+          metadata: {
+            operationId,
+          },
+        });
+      }
+      return;
+    }
+
     await failOperation(operationId, error.code, error.message, error.retryable, Boolean(error.requiresReplan), error.currentToolRevisionId);
-    pending.reject(buildRelayExecutionError(error));
+    if (pending?.responseMode === 'sync') {
+      pending.reject?.(buildRelayExecutionError(error));
+    }
+    await finalizeAsyncRelayOperation(operation, msg);
     return;
   }
 
@@ -1869,17 +2916,44 @@ async function resolveOperationResult(connected: ConnectedRelay, msg: Record<str
     [operationId, typeof msg.deliveryId === 'string' ? msg.deliveryId : null],
   );
 
-  pending.resolve(msg.result);
+  if (pending?.responseMode === 'sync') {
+    pending.resolve?.(msg.result);
+  }
+  await finalizeAsyncRelayOperation(operation, msg);
 }
 
 async function markOperationStatus(operationId: string, status: 'received' | 'started') {
-  await query(
+  const result = await query<{ task_id: string | null; visible_tool_name: string }>(
     `UPDATE relay_operations
      SET status = $2, updated_at = NOW()
      WHERE id = $1
-       AND status NOT IN ('completed', 'failed', 'aborted', 'expired')`,
+       AND status NOT IN ('cancel_requested', 'completed', 'failed', 'cancelled', 'aborted', 'expired')
+     RETURNING task_id, visible_tool_name`,
     [operationId, status],
   );
+
+  const row = result.rows[0];
+  if (!row?.task_id) {
+    return;
+  }
+
+  const pending = pendingRelayOperations.get(operationId);
+  if (pending) {
+    pending.operationStatus = status;
+  }
+
+  if (status === 'received') {
+    await markToolCallTaskReceived(
+      row.task_id,
+      `Relay received async ${row.visible_tool_name}.`,
+    ).catch(() => {});
+    return;
+  }
+
+  await markToolCallTaskStarted(
+    row.task_id,
+      `Relay started executing async ${row.visible_tool_name}.`,
+    ).catch(() => {});
 }
 
 async function markDeliveryAcknowledged(operationId: string, deliveryId?: string) {
@@ -1934,6 +3008,176 @@ async function redrivePendingRelayOperations(connected: ConnectedRelay) {
       pending.ackTimer = null;
     }
     await dispatchPendingRelayOperation(connected, pending);
+  }
+
+  const expiredAsyncOperations = await query<{
+    operation_id: string;
+    task_id: string;
+    source_tool_name: string | null;
+  }>(
+    `SELECT
+       ro.id AS operation_id,
+       ro.task_id,
+       task.source_tool_name
+     FROM relay_operations ro
+     JOIN tool_call_tasks task
+       ON task.id = ro.task_id
+     WHERE ro.device_id = $1
+       AND ro.task_id IS NOT NULL
+       AND ro.status IN ('created', 'cancel_requested', 'dispatched', 'received', 'started')
+       AND ro.expires_at IS NOT NULL
+       AND ro.expires_at <= NOW()`,
+    [connected.deviceId],
+  );
+
+  for (const row of expiredAsyncOperations.rows) {
+    await query(
+      `UPDATE relay_operations
+       SET status = 'expired',
+           error_code = 'operation_expired',
+           error_message = 'Relay operation expired before delivery',
+           updated_at = NOW()
+       WHERE id = $1`,
+      [row.operation_id],
+    ).catch(() => {});
+    await failToolCallTask(row.task_id, {
+      summary: `Async ${row.source_tool_name || 'relay tool'} expired before the relay client could finish it.`,
+      finalResultPayload: {
+        content: textBlocks(
+          `Async ${row.source_tool_name || 'relay tool'} expired before the relay client could finish it.`,
+        ),
+        isError: true,
+      },
+      finalErrorPayload: {
+        code: 'operation_expired',
+        operationId: row.operation_id,
+      },
+    }).catch(() => {});
+  }
+
+  const persistedAsyncOperations = await query<RelayTaskOperationRecord>(
+    `SELECT
+       ro.id AS operation_id,
+       ro.status,
+       ro.workspace_id,
+       ro.conversation_id,
+       ro.requested_by_session_id,
+       ro.requested_by_user_id,
+       ro.requested_by_actor_id,
+       ro.task_id,
+       ro.device_id,
+       device.display_name AS device_display_name,
+       ro.exposure_id,
+       exposure.stable_key AS exposure_stable_key,
+       exposure.display_name AS exposure_display_name,
+       ro.runtime_session_id,
+       ro.visible_tool_name,
+       ro.tool_id,
+       ro.tool_revision_id,
+       ro.catalog_revision_id,
+       ro.input_payload,
+       ro.input_hash,
+       ro.operation_timeout_ms,
+       ro.expires_at,
+       task.source_tool_name,
+       task.cancel_reason
+     FROM relay_operations ro
+     JOIN tool_call_tasks task
+       ON task.id = ro.task_id
+     LEFT JOIN relay_devices device
+       ON device.id = ro.device_id
+     LEFT JOIN relay_exposures exposure
+       ON exposure.id = ro.exposure_id
+     WHERE ro.device_id = $1
+       AND ro.task_id IS NOT NULL
+       AND ro.status IN ('created', 'cancel_requested', 'dispatched', 'received', 'started')
+       AND (ro.expires_at IS NULL OR ro.expires_at > NOW())`,
+    [connected.deviceId],
+  );
+
+  for (const row of persistedAsyncOperations.rows) {
+    if (pendingRelayOperations.has(row.operation_id)) {
+      continue;
+    }
+
+    const timeoutMs = row.expires_at
+      ? Math.max(1_000, new Date(row.expires_at).getTime() - Date.now())
+      : row.operation_timeout_ms || RELAY_OPERATION_TTL_MS;
+    const timeoutTimer = setTimeout(() => {
+      const current = pendingRelayOperations.get(row.operation_id);
+      if (!current) return;
+
+      if (current.cancelRequested) {
+        void finalizePendingRelayCancellation(
+          current,
+          current.cancelReason?.trim() ||
+            `Async ${current.sourceToolName} was cancelled.`,
+        );
+        return;
+      }
+
+      clearPendingRelayOperation(current);
+      pendingRelayOperations.delete(row.operation_id);
+      void failOperation(
+        row.operation_id,
+        'delivery_timed_out',
+        `Relay operation timed out after ${current.operationTimeoutMs}ms`,
+        true,
+        false,
+      );
+      if (current.taskId) {
+        void failToolCallTask(current.taskId, {
+          summary: `Async ${current.sourceToolName} timed out before the relay returned a result.`,
+          finalResultPayload: {
+            content: textBlocks(
+              `Async ${current.sourceToolName} timed out before the relay returned a result.`,
+            ),
+            isError: true,
+          },
+          finalErrorPayload: {
+            code: 'delivery_timed_out',
+            operationId: row.operation_id,
+          },
+        }).catch(() => {});
+      }
+    }, timeoutMs);
+
+    pendingRelayOperations.set(row.operation_id, {
+      responseMode: 'async',
+      operationStatus: row.status,
+      operationId: row.operation_id,
+      deviceId: row.device_id,
+      workspaceId: row.workspace_id,
+      conversationId: row.conversation_id,
+      sessionId: row.requested_by_session_id,
+      actorId: row.requested_by_actor_id,
+      userId: row.requested_by_user_id,
+      exposureId: row.exposure_id,
+      exposureStableKey: row.exposure_stable_key || '',
+      runtimeSessionId: row.runtime_session_id || '',
+      visibleToolName: row.visible_tool_name,
+      sourceToolName: row.source_tool_name || row.visible_tool_name,
+      toolId: row.tool_id,
+      toolRevisionId: row.tool_revision_id,
+      catalogRevisionId: row.catalog_revision_id,
+      args: (row.input_payload as Record<string, unknown>) || {},
+      inputHash: row.input_hash,
+      taskId: row.task_id,
+      operationTimeoutMs: row.operation_timeout_ms || RELAY_OPERATION_TTL_MS,
+      expiresAt: row.expires_at,
+      timeoutTimer,
+      ackTimer: null,
+      relaySessionRowId: null,
+      deliverySeq: null,
+      deliveryId: null,
+      cancelRequested: row.status === 'cancel_requested',
+      cancelReason: row.cancel_reason || null,
+    });
+
+    await dispatchPendingRelayOperation(
+      connected,
+      pendingRelayOperations.get(row.operation_id)!,
+    );
   }
 }
 
@@ -2017,6 +3261,10 @@ async function dispatchPendingRelayAuthorizationApply(
         requestedScope: application.requestedEffect.requestedScope,
       },
     }));
+    await markToolCallTaskDispatched(
+      application.taskId,
+      `Dispatched relay authorization apply for ${application.requestedEffect.relayToolName}.`,
+    ).catch(() => {});
   } catch (error: any) {
     clearTimeout(timeoutTimer);
     pendingRelayAuthorizationApplies.delete(application.interactionId);

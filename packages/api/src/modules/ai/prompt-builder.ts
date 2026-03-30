@@ -165,6 +165,9 @@ function buildToolRoutingGuidance(
     lines.push(
       "- Reserve `bash_exec` for shell-only tasks that dedicated tools cannot handle. Use `git_exec` for git operations, and use `node_exec` or `python_exec` only when you need custom runtime logic beyond the dedicated tools.",
     );
+    lines.push(
+      "- Relay commandline tools accept `execution_mode`. Use `execution_mode: \"async\"` for long-running shell, git, node, or python jobs when you do not need the final output in the current reasoning step. Synapse will create a background task now and wake you later with the result.",
+    );
   }
 
   if (

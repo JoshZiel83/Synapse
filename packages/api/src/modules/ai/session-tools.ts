@@ -7,6 +7,7 @@ import {
   isMultiMemberConversationKind,
   normalizeActorDocs,
   summarizeActorForRole,
+  textBlocks,
   type ActorDoc,
   type ToolResolveContext,
   type RelayAuthorizationScope,
@@ -41,11 +42,22 @@ import {
 } from "../automation/service.js";
 import { actorSubject, authorizeAction } from "../access/service.js";
 import {
+  cancelToolCallTask,
+  createToolCallTask,
+  getToolCallTaskForSession,
+  getToolCallTaskOutput,
+  listToolCallTasksForSession,
+  type ToolCallTaskRecord,
+} from "../tool-call-tasks/service.js";
+import {
+  cancelInteractionRequestByTaskId,
   createQuestionInteractionRequest,
   createRelayAuthorizationInteractionRequest,
   findOpenRelayAuthorizationInteraction,
+  getInteractionRequestSummaryByTaskId,
 } from "../interactions/service.js";
 import { resolveRelayTargetForNamespacedTool } from "../mcp-plugins/tool-resolver.js";
+import { cancelRelayToolTask } from "../mcp-plugins/relay-manager.js";
 
 type InviteableActor = {
   id: string;
@@ -381,6 +393,121 @@ function resolveUserInteractionCandidate(
   };
 }
 
+async function createGovernedToolCallTask(params: {
+  context: NonNullable<ReturnType<typeof getToolExecutionContext>>;
+  executorKind:
+    | "interaction_question"
+    | "interaction_form"
+    | "relay_authorization";
+  deliveryPolicy: "human_interaction";
+  requestPayload: Record<string, unknown>;
+  summary: string;
+  expiresAt?: string;
+  supportsCancel?: boolean;
+}) {
+  const { context } = params;
+  if (!context.toolCallId || !context.toolName) {
+    throwToolError("No tool call context available for task governance");
+  }
+  if (!context.conversationId) {
+    throwToolError(
+      "Current tool call is not attached to a conversation that supports deferred follow-up",
+    );
+  }
+
+  try {
+    return await createToolCallTask({
+      workspaceId: context.workspaceId,
+      conversationId: context.conversationId,
+      sessionId: context.sessionId,
+      actorId: context.actorId,
+      turnId: context.turnId,
+      sourceToolCallId: context.toolCallId,
+      sourceToolName: context.toolName,
+      executorKind: params.executorKind,
+      deliveryPolicy: params.deliveryPolicy,
+      status: "input_required",
+      statusMessage: params.summary,
+      dispatchStatus: "input_requested",
+      supportsCancel: params.supportsCancel === true,
+      requestPayload: params.requestPayload,
+      deadlineAt: params.expiresAt,
+    });
+  } catch (error) {
+    throwToolError(
+      error instanceof Error ? error.message : "Failed to create tool-call task",
+    );
+  }
+}
+
+function serializeTaskSummary(task: ToolCallTaskRecord) {
+  return {
+    taskId: task.id,
+    toolName: task.sourceToolName,
+    executorKind: task.executorKind,
+    deliveryPolicy: task.deliveryPolicy,
+    status: task.status,
+    statusMessage: task.statusMessage,
+    dispatchStatus: task.dispatchStatus,
+    supportsCancel: task.supportsCancel,
+    supportsOutputTail: task.supportsOutputTail,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    completedAt: task.completedAt,
+    cancelRequestedAt: task.cancelRequestedAt,
+    cancelReason: task.cancelReason,
+    lastOutputSeq: task.lastOutputSeq,
+    lastOutputAt: task.lastOutputAt,
+  };
+}
+
+function serializeTaskDetails(task: ToolCallTaskRecord) {
+  return {
+    ...serializeTaskSummary(task),
+    requestPayload: task.requestPayload,
+    finalResultPayload: task.finalResultPayload,
+    finalErrorPayload: task.finalErrorPayload,
+    metadata: task.metadata,
+  };
+}
+
+async function loadSessionTaskOrThrow(
+  sessionId: string,
+  taskId: string,
+) {
+  const task = await getToolCallTaskForSession(sessionId, taskId);
+  if (!task) {
+    throwToolError(`Task "${taskId}" was not found in this session.`);
+  }
+  return task;
+}
+
+async function cancelHumanInteractionTask(task: ToolCallTaskRecord, reason?: string) {
+  const note = reason?.trim();
+  const interaction = await cancelInteractionRequestByTaskId(task.id, note);
+  const summary =
+    note ||
+    `Cancelled ${task.sourceToolName.replace(/_/g, " ")} before it completed.`;
+
+  return cancelToolCallTask(task.id, {
+    summary,
+    finalResultPayload: {
+      content: textBlocks(summary),
+      isError: true,
+    },
+    finalErrorPayload: {
+      code: "operation_cancelled",
+      message: summary,
+      interactionId: interaction?.id,
+    },
+    metadata: interaction?.id
+      ? {
+          interactionId: interaction.id,
+        }
+      : undefined,
+  });
+}
+
 function normalizeQuestionFieldType(
   value: unknown,
 ): InteractionQuestionFieldType | null {
@@ -483,6 +610,21 @@ function buildQuestionFieldDefinition(
 
   return { field };
 }
+
+const taskStatusFilterValues = [
+  "working",
+  "input_required",
+  "completed",
+  "failed",
+  "cancelled",
+] as const;
+
+const taskOutputStreamValues = [
+  "combined",
+  "stdout",
+  "stderr",
+  "system",
+] as const;
 
 function buildQuestionFieldDefinitions(rawFields: unknown): {
   fields: InteractionQuestionFieldDefinition[];
@@ -1259,21 +1401,50 @@ export function registerCallableToolPlugins(): void {
         );
       }
 
-      const interaction = await createQuestionInteractionRequest({
-        workspaceId: context.workspaceId,
-        conversationId,
-        requesterMemberId: requesterMember.id,
-        requesterActorId: context.actorId,
-        requesterUserId: context.userId,
-        targetMemberId: resolution.candidate.memberId,
-        targetUserId: resolution.candidate.userId,
-        prompt: question,
-        instructions: instructions || undefined,
-        fields: [field],
+      const task = await createGovernedToolCallTask({
+        context,
+        executorKind: "interaction_question",
+        deliveryPolicy: "human_interaction",
+        supportsCancel: true,
+        requestPayload: {
+          targetMemberId: resolution.candidate.memberId,
+          targetUserId: resolution.candidate.userId,
+          question,
+          instructions: instructions || undefined,
+          fields: [field],
+        },
+        summary: `Waiting for ${resolution.candidate.name} to answer "${question}".`,
       });
+
+      let interaction;
+      try {
+        interaction = await createQuestionInteractionRequest({
+          workspaceId: context.workspaceId,
+          conversationId,
+          taskId: task.id,
+          requesterMemberId: requesterMember.id,
+          requesterActorId: context.actorId,
+          requesterUserId: context.userId,
+          targetMemberId: resolution.candidate.memberId,
+          targetUserId: resolution.candidate.userId,
+          prompt: question,
+          instructions: instructions || undefined,
+          fields: [field],
+        });
+      } catch (error) {
+        await cancelToolCallTask(task.id, {
+          summary: `Question request for ${resolution.candidate.name} failed before dispatch.`,
+          finalErrorPayload: {
+            message: error instanceof Error ? error.message : String(error),
+          },
+          notifyActor: false,
+        });
+        throw error;
+      }
 
       return JSON.stringify({
         success: true,
+        taskId: task.id,
         interactionId: interaction.id,
         targetUser: resolution.candidate.name,
         message: `Question sent to ${resolution.candidate.name}. Only that user can answer it.`,
@@ -1460,21 +1631,50 @@ export function registerCallableToolPlugins(): void {
         throwToolError(error);
       }
 
-      const interaction = await createQuestionInteractionRequest({
-        workspaceId: context.workspaceId,
-        conversationId,
-        requesterMemberId: requesterMember.id,
-        requesterActorId: context.actorId,
-        requesterUserId: context.userId,
-        targetMemberId: resolution.candidate.memberId,
-        targetUserId: resolution.candidate.userId,
-        prompt: title,
-        instructions: instructions || undefined,
-        fields,
+      const task = await createGovernedToolCallTask({
+        context,
+        executorKind: "interaction_form",
+        deliveryPolicy: "human_interaction",
+        supportsCancel: true,
+        requestPayload: {
+          targetMemberId: resolution.candidate.memberId,
+          targetUserId: resolution.candidate.userId,
+          title,
+          instructions: instructions || undefined,
+          fields,
+        },
+        summary: `Waiting for ${resolution.candidate.name} to complete "${title}".`,
       });
+
+      let interaction;
+      try {
+        interaction = await createQuestionInteractionRequest({
+          workspaceId: context.workspaceId,
+          conversationId,
+          taskId: task.id,
+          requesterMemberId: requesterMember.id,
+          requesterActorId: context.actorId,
+          requesterUserId: context.userId,
+          targetMemberId: resolution.candidate.memberId,
+          targetUserId: resolution.candidate.userId,
+          prompt: title,
+          instructions: instructions || undefined,
+          fields,
+        });
+      } catch (error) {
+        await cancelToolCallTask(task.id, {
+          summary: `Form request for ${resolution.candidate.name} failed before dispatch.`,
+          finalErrorPayload: {
+            message: error instanceof Error ? error.message : String(error),
+          },
+          notifyActor: false,
+        });
+        throw error;
+      }
 
       return JSON.stringify({
         success: true,
+        taskId: task.id,
         interactionId: interaction.id,
         targetUser: resolution.candidate.name,
         message: `Form sent to ${resolution.candidate.name}. Only that user can answer it.`,
@@ -1739,23 +1939,54 @@ export function registerCallableToolPlugins(): void {
         );
       }
 
-      const interaction = await createRelayAuthorizationInteractionRequest({
-        workspaceId: context.workspaceId,
-        conversationId,
-        requesterMemberId: requesterMember.id,
-        requesterActorId: context.actorId,
-        requesterUserId: context.userId,
-        relayDeviceId: relayTarget.deviceId,
-        relayExposureId: relayTarget.exposureId,
-        runtimeSessionId: relayTarget.runtimeSessionId,
-        relayToolName,
-        reason,
-        duration,
-        requestedScope,
+      const task = await createGovernedToolCallTask({
+        context,
+        executorKind: "relay_authorization",
+        deliveryPolicy: "human_interaction",
+        supportsCancel: true,
+        requestPayload: {
+          relayDeviceId: relayTarget.deviceId,
+          relayExposureId: relayTarget.exposureId,
+          runtimeSessionId: relayTarget.runtimeSessionId,
+          relayToolName,
+          reason,
+          duration,
+          requestedScope,
+        },
+        summary: `Waiting for a user to approve relay access for ${relayTarget.deviceDisplayName}.`,
       });
+
+      let interaction;
+      try {
+        interaction = await createRelayAuthorizationInteractionRequest({
+          workspaceId: context.workspaceId,
+          conversationId,
+          taskId: task.id,
+          requesterMemberId: requesterMember.id,
+          requesterActorId: context.actorId,
+          requesterUserId: context.userId,
+          relayDeviceId: relayTarget.deviceId,
+          relayExposureId: relayTarget.exposureId,
+          runtimeSessionId: relayTarget.runtimeSessionId,
+          relayToolName,
+          reason,
+          duration,
+          requestedScope,
+        });
+      } catch (error) {
+        await cancelToolCallTask(task.id, {
+          summary: `Relay authorization request for ${relayTarget.deviceDisplayName} failed before dispatch.`,
+          finalErrorPayload: {
+            message: error instanceof Error ? error.message : String(error),
+          },
+          notifyActor: false,
+        });
+        throw error;
+      }
 
       return JSON.stringify({
         success: true,
+        taskId: task.id,
         interactionId: interaction.id,
         approverCount: availableAuthorizers.length,
         relayDevice: relayTarget.deviceDisplayName,
@@ -1764,6 +1995,276 @@ export function registerCallableToolPlugins(): void {
           availableAuthorizers.length === 1
             ? `Authorization request created. ${availableAuthorizers[0]!.name} can approve or reject it, and the relay will apply it locally if approved.`
             : `Authorization request created. ${availableAuthorizers.length} current conversation users can approve or reject it, and the relay will apply it locally if approved.`,
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: "list_tasks",
+    kind: "callable",
+    definition: {
+      name: "list_tasks",
+      description:
+        "List task-backed tool calls created in this session, including pending ask-user flows and async relay command execution.",
+      parameters: {
+        type: "object",
+        properties: {
+          statuses: {
+            type: "array",
+            description:
+              "Optional status filter. Omit it to list tasks of all statuses.",
+            items: {
+              type: "string",
+              enum: [...taskStatusFilterValues],
+            },
+          },
+          limit: {
+            type: "number",
+            description: "Optional maximum number of tasks to return.",
+          },
+        },
+        required: [],
+      },
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        throwToolError("No session context available");
+      }
+
+      const statuses = Array.isArray((input as any).statuses)
+        ? (input as any).statuses
+            .map((value: unknown) => String(value || "").trim())
+            .filter((value: string): value is (typeof taskStatusFilterValues)[number] =>
+              (taskStatusFilterValues as readonly string[]).includes(value),
+            )
+        : [];
+      const limit =
+        typeof (input as any).limit === "number" &&
+        Number.isFinite((input as any).limit)
+          ? Math.max(1, Math.trunc(Number((input as any).limit)))
+          : 20;
+
+      const tasks = await listToolCallTasksForSession({
+        sessionId: context.sessionId,
+        statuses: statuses.length > 0 ? statuses : undefined,
+        limit,
+      });
+
+      return JSON.stringify({
+        success: true,
+        tasks: tasks.map((task) => serializeTaskSummary(task)),
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: "get_task_status",
+    kind: "callable",
+    definition: {
+      name: "get_task_status",
+      description:
+        "Get the current status and final result metadata for one task in this session.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskId: {
+            type: "string",
+            description: "The exact task ID returned by a previous task-backed tool call.",
+          },
+        },
+        required: ["taskId"],
+      },
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        throwToolError("No session context available");
+      }
+
+      const taskId = String((input as any).taskId || "").trim();
+      if (!taskId) {
+        throwToolError("taskId is required");
+      }
+
+      const task = await loadSessionTaskOrThrow(context.sessionId, taskId);
+      const interaction =
+        task.executorKind === "interaction_question" ||
+        task.executorKind === "interaction_form" ||
+        task.executorKind === "relay_authorization"
+          ? await getInteractionRequestSummaryByTaskId(task.id)
+          : null;
+
+      return JSON.stringify({
+        success: true,
+        task: serializeTaskDetails(task),
+        interaction,
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: "cancel_task",
+    kind: "callable",
+    definition: {
+      name: "cancel_task",
+      description:
+        "Request cancellation for a task in this session. Human-interaction tasks cancel immediately; relay command tasks cancel best-effort.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskId: {
+            type: "string",
+            description: "The exact task ID returned by a previous task-backed tool call.",
+          },
+          reason: {
+            type: "string",
+            description: "Optional reason to record with the cancellation request.",
+          },
+        },
+        required: ["taskId"],
+      },
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        throwToolError("No session context available");
+      }
+
+      const taskId = String((input as any).taskId || "").trim();
+      if (!taskId) {
+        throwToolError("taskId is required");
+      }
+
+      const reason =
+        typeof (input as any).reason === "string"
+          ? String((input as any).reason).trim()
+          : undefined;
+      const task = await loadSessionTaskOrThrow(context.sessionId, taskId);
+
+      if (
+        task.status === "completed" ||
+        task.status === "failed" ||
+        task.status === "cancelled"
+      ) {
+        return JSON.stringify({
+          success: true,
+          alreadyTerminal: true,
+          task: serializeTaskDetails(task),
+        });
+      }
+
+      if (!task.supportsCancel) {
+        throwToolError(`Task "${task.id}" does not support cancellation.`);
+      }
+
+      const updated =
+        task.executorKind === "relay_mcp"
+          ? await cancelRelayToolTask(task.id, reason)
+          : await cancelHumanInteractionTask(task, reason);
+      const current = await loadSessionTaskOrThrow(context.sessionId, task.id);
+      const interaction =
+        current.executorKind === "interaction_question" ||
+        current.executorKind === "interaction_form" ||
+        current.executorKind === "relay_authorization"
+          ? await getInteractionRequestSummaryByTaskId(current.id)
+          : null;
+
+      return JSON.stringify({
+        success: true,
+        message:
+          updated?.status === "cancelled"
+            ? `Task ${task.id} was cancelled.`
+            : `Cancellation requested for task ${task.id}.`,
+        task: serializeTaskDetails(current),
+        interaction,
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: "tail_task_output",
+    kind: "callable",
+    definition: {
+      name: "tail_task_output",
+      description:
+        "Read the latest output chunks from a task-backed relay command execution in this session.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskId: {
+            type: "string",
+            description: "The exact task ID returned by a previous async relay command call.",
+          },
+          afterSeq: {
+            type: "number",
+            description: "Optional cursor. Only return output chunks with seq greater than this value.",
+          },
+          limit: {
+            type: "number",
+            description: "Optional maximum number of output chunks to return.",
+          },
+          stream: {
+            type: "string",
+            description: "Optional output stream filter.",
+            enum: [...taskOutputStreamValues],
+          },
+        },
+        required: ["taskId"],
+      },
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        throwToolError("No session context available");
+      }
+
+      const taskId = String((input as any).taskId || "").trim();
+      if (!taskId) {
+        throwToolError("taskId is required");
+      }
+
+      const task = await loadSessionTaskOrThrow(context.sessionId, taskId);
+      if (!task.supportsOutputTail) {
+        throwToolError(`Task "${task.id}" does not expose output tailing.`);
+      }
+
+      const afterSeq =
+        typeof (input as any).afterSeq === "number" &&
+        Number.isFinite((input as any).afterSeq)
+          ? Math.max(0, Math.trunc(Number((input as any).afterSeq)))
+          : 0;
+      const limit =
+        typeof (input as any).limit === "number" &&
+        Number.isFinite((input as any).limit)
+          ? Math.max(1, Math.trunc(Number((input as any).limit)))
+          : 20;
+      const stream =
+        typeof (input as any).stream === "string" &&
+        (taskOutputStreamValues as readonly string[]).includes(
+          String((input as any).stream).trim(),
+        )
+          ? (String((input as any).stream).trim() as
+              | "combined"
+              | "stdout"
+              | "stderr"
+              | "system")
+          : "combined";
+
+      const chunks = await getToolCallTaskOutput({
+        taskId: task.id,
+        afterSeq,
+        limit,
+        stream,
+      });
+
+      return JSON.stringify({
+        success: true,
+        task: serializeTaskSummary(task),
+        chunks,
+        combinedText: chunks.map((chunk) => chunk.text).join("\n"),
+        nextAfterSeq:
+          chunks.length > 0 ? chunks[chunks.length - 1]!.seq : afterSeq,
       });
     },
   });
@@ -2880,6 +3381,8 @@ interface ToolExecutionContext {
   userId?: string;
   turnId?: string;
   conversationId?: string;
+  toolCallId?: string;
+  toolName?: string;
 }
 
 const contextStorage = new AsyncLocalStorage<ToolExecutionContext>();

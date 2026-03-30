@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/config"
 	"github.com/PekingSpades/Synapse/relay/internal/deviceauth"
 	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
@@ -50,6 +51,23 @@ func (e *authFailureError) Is(target error) bool {
 
 type ToolCaller interface {
 	CallTool(ctx context.Context, exposureStableKey, toolName string, args map[string]interface{}) (interface{}, error)
+}
+
+type TaskToolCaller interface {
+	StartTask(
+		ctx context.Context,
+		exposureStableKey, toolName string,
+		args map[string]interface{},
+		requestedTaskID string,
+	) (core.TaskSnapshot, error)
+	GetTask(exposureStableKey, taskID string) (core.TaskSnapshot, error)
+	ReadTaskOutput(
+		exposureStableKey, taskID string,
+		afterSeq int64,
+		limit int,
+		stream string,
+	) ([]core.TaskOutputChunk, error)
+	CancelTask(exposureStableKey, taskID, reason string) error
 }
 
 type RuntimeAuthorizationApplication struct {
@@ -90,6 +108,11 @@ type runningOperation struct {
 	outcome operationOutcome
 }
 
+type taskBinding struct {
+	exposureStableKey string
+	taskID            string
+}
+
 type Client struct {
 	relay          config.RelayConfig
 	caller         ToolCaller
@@ -99,6 +122,7 @@ type Client struct {
 	exposures      interface{}
 	mu             sync.Mutex
 	inflight       map[string]*runningOperation
+	taskBindings   map[string]taskBinding
 	journal        *OperationJournal
 	clientVersion  string
 	conn           *websocket.Conn
@@ -121,6 +145,7 @@ func NewClient(
 		authApplier:    authApplier,
 		sessionManager: sessionManager,
 		inflight:       make(map[string]*runningOperation),
+		taskBindings:   make(map[string]taskBinding),
 		journal:        NewOperationJournal(""),
 	}
 }
@@ -559,6 +584,13 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 				continue
 			}
 			go c.handleOperationDispatch(ctx, conn, loopDone, dispatch)
+		case "relay.operation.cancel":
+			var cancelMsg RelayOperationCancelMessage
+			if err := json.Unmarshal(raw, &cancelMsg); err != nil {
+				log.Printf("Failed to parse relay operation cancel: %v", err)
+				continue
+			}
+			go c.handleOperationCancel(conn, cancelMsg)
 		case "relay.authorization.apply":
 			var apply RelayAuthorizationApplyMessage
 			if err := json.Unmarshal(raw, &apply); err != nil {
@@ -640,6 +672,11 @@ func (c *Client) handleOperationDispatch(
 	c.mu.Unlock()
 
 	if !isNewExecution {
+		if dispatch.Payload.ResponseMode == "async" {
+			if taskCaller, ok := c.caller.(TaskToolCaller); ok {
+				go c.mirrorAsyncTaskToConnection(conn, connDone, dispatch, taskCaller)
+			}
+		}
 		c.waitAndSendRunningOutcome(ctx, conn, connDone, dispatch.OperationID, dispatch.DeliveryID, inflight)
 		return
 	}
@@ -653,6 +690,38 @@ func (c *Client) handleOperationDispatch(
 	})
 
 	c.journal.UpsertPending(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, "started")
+
+	if dispatch.Payload.ResponseMode == "async" {
+		if taskCaller, ok := c.caller.(TaskToolCaller); ok {
+			callCtx := runtimeauth.ContextWithRuntimeSessionID(context.Background(), dispatch.Payload.RuntimeSessionID)
+			snapshot, err := taskCaller.StartTask(
+				callCtx,
+				dispatch.Payload.ExposureStableKey,
+				dispatch.Payload.ToolName,
+				dispatch.Payload.Arguments,
+				dispatch.OperationID,
+			)
+			if err != nil {
+				opErr := normalizeOperationError(err)
+				outcome := operationOutcome{success: false, err: opErr}
+				c.journal.MarkFailed(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, opErr)
+				c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
+				c.sendOperationOutcome(conn, dispatch.OperationID, dispatch.DeliveryID, outcome)
+				c.emit("tool_result", fmt.Sprintf("%s failed: %s", dispatch.Payload.ToolName, err.Error()), map[string]interface{}{
+					"operationId":      dispatch.OperationID,
+					"runtimeSessionId": dispatch.Payload.RuntimeSessionID,
+					"error":            true,
+				})
+				return
+			}
+
+			c.setTaskBinding(dispatch.OperationID, dispatch.Payload.ExposureStableKey, snapshot.TaskID)
+			go c.watchAsyncTask(dispatch, inflight, taskCaller)
+			go c.mirrorAsyncTaskToConnection(conn, connDone, dispatch, taskCaller)
+			c.waitAndSendRunningOutcome(ctx, conn, connDone, dispatch.OperationID, dispatch.DeliveryID, inflight)
+			return
+		}
+	}
 
 	callCtx := ctx
 	cancel := func() {}
@@ -1053,7 +1122,201 @@ func (c *Client) completeRunningOperation(operationID string, inflight *runningO
 
 	c.mu.Lock()
 	delete(c.inflight, operationID)
+	delete(c.taskBindings, operationID)
 	c.mu.Unlock()
+}
+
+func (c *Client) setTaskBinding(operationID, exposureStableKey, taskID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.taskBindings[operationID] = taskBinding{
+		exposureStableKey: exposureStableKey,
+		taskID:            taskID,
+	}
+}
+
+func (c *Client) getTaskBinding(operationID string) (taskBinding, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	binding, ok := c.taskBindings[operationID]
+	return binding, ok
+}
+
+func (c *Client) watchAsyncTask(
+	dispatch RelayDispatchMessage,
+	inflight *runningOperation,
+	taskCaller TaskToolCaller,
+) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		binding, ok := c.getTaskBinding(dispatch.OperationID)
+		if !ok {
+			outcome := operationOutcome{
+				success: false,
+				err: &RelayOperationError{
+					Code:      "delivery_rejected",
+					Message:   "Relay task binding was lost before completion",
+					Retryable: false,
+				},
+			}
+			c.journal.MarkFailed(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, outcome.err)
+			c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
+			return
+		}
+
+		snapshot, err := taskCaller.GetTask(binding.exposureStableKey, binding.taskID)
+		if err != nil {
+			opErr := normalizeOperationError(err)
+			c.journal.MarkFailed(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, opErr)
+			c.completeRunningOperation(dispatch.OperationID, inflight, operationOutcome{
+				success: false,
+				err:     opErr,
+			})
+			return
+		}
+
+		switch snapshot.Status {
+		case core.TaskStatusWorking:
+		case core.TaskStatusCancelled:
+			outcome := operationOutcome{
+				success: false,
+				err: &RelayOperationError{
+					Code:      "operation_cancelled",
+					Message:   snapshot.StatusMessage,
+					Retryable: false,
+				},
+			}
+			c.journal.MarkFailed(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, outcome.err)
+			c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
+			return
+		case core.TaskStatusCompleted, core.TaskStatusFailed:
+			if snapshot.Result == nil {
+				opErr := &RelayOperationError{
+					Code:      "execution_failed",
+					Message:   "Relay task completed without a final result payload",
+					Retryable: false,
+				}
+				c.journal.MarkFailed(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, opErr)
+				c.completeRunningOperation(dispatch.OperationID, inflight, operationOutcome{
+					success: false,
+					err:     opErr,
+				})
+				return
+			}
+
+			result := callResultPayload(snapshot.Result)
+			outcome := operationOutcome{
+				success: true,
+				result:  result,
+			}
+			if snapshot.Status == core.TaskStatusCompleted {
+				c.journal.MarkCompleted(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, result)
+			} else {
+				c.journal.MarkCompleted(dispatch.OperationID, dispatch.Payload.InputHash, dispatch.Payload.ExposureStableKey, dispatch.Payload.ToolName, result)
+			}
+			c.completeRunningOperation(dispatch.OperationID, inflight, outcome)
+			return
+		}
+
+		<-ticker.C
+	}
+}
+
+func (c *Client) mirrorAsyncTaskToConnection(
+	conn *websocket.Conn,
+	connDone <-chan struct{},
+	dispatch RelayDispatchMessage,
+	taskCaller TaskToolCaller,
+) {
+	var afterSeq int64
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		binding, ok := c.getTaskBinding(dispatch.OperationID)
+		if !ok {
+			return
+		}
+
+		chunks, err := taskCaller.ReadTaskOutput(binding.exposureStableKey, binding.taskID, afterSeq, 128, "")
+		if err == nil {
+			for _, chunk := range chunks {
+				afterSeq = chunk.Seq
+				select {
+				case <-connDone:
+				default:
+					_ = c.writeJSON(conn, OperationOutputMessage{
+						Type:        "operation.output",
+						OperationID: dispatch.OperationID,
+						DeliveryID:  dispatch.DeliveryID,
+						Seq:         chunk.Seq,
+						Stream:      chunk.Stream,
+						Text:        chunk.Text,
+						CreatedAt:   chunk.CreatedAt,
+					})
+				}
+			}
+		}
+
+		c.mu.Lock()
+		inflight := c.inflight[dispatch.OperationID]
+		c.mu.Unlock()
+		if inflight == nil {
+			return
+		}
+
+		select {
+		case <-inflight.done:
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func callResultPayload(result *core.CallResult) interface{} {
+	if result == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"content":           result.Content,
+		"structuredContent": result.StructuredContent,
+		"isError":           result.IsError,
+	}
+}
+
+func (c *Client) handleOperationCancel(
+	conn *websocket.Conn,
+	cancelMsg RelayOperationCancelMessage,
+) {
+	binding, ok := c.getTaskBinding(cancelMsg.OperationID)
+	if !ok {
+		if entry, exists := c.journal.Get(cancelMsg.OperationID); exists && (entry.Status == "completed" || entry.Status == "failed") {
+			c.sendJournalOutcome(conn, cancelMsg.OperationID, cancelMsg.DeliveryID, entry)
+		}
+		return
+	}
+
+	taskCaller, ok := c.caller.(TaskToolCaller)
+	if !ok {
+		c.sendOperationOutcome(conn, cancelMsg.OperationID, cancelMsg.DeliveryID, operationOutcome{
+			success: false,
+			err: &RelayOperationError{
+				Code:      "delivery_rejected",
+				Message:   "Relay tool does not support cancellation",
+				Retryable: false,
+			},
+		})
+		return
+	}
+
+	if err := taskCaller.CancelTask(binding.exposureStableKey, binding.taskID, cancelMsg.Reason); err != nil && !errors.Is(err, core.ErrTaskNotFound) {
+		c.sendOperationOutcome(conn, cancelMsg.OperationID, cancelMsg.DeliveryID, operationOutcome{
+			success: false,
+			err:     normalizeOperationError(err),
+		})
+	}
 }
 
 func (c *Client) SyncCatalog(ctx context.Context) error {

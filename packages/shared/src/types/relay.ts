@@ -67,11 +67,13 @@ export type RelayToolStatus =
 
 export type RelayOperationStatus =
   | 'created'
+  | 'cancel_requested'
   | 'dispatched'
   | 'received'
   | 'started'
   | 'completed'
   | 'failed'
+  | 'cancelled'
   | 'aborted'
   | 'expired';
 
@@ -90,6 +92,7 @@ export type RelayOperationErrorCode =
   | 'tool_execution_failed'
   | 'delivery_timed_out'
   | 'delivery_rejected'
+  | 'operation_cancelled'
   | 'operation_expired';
 
 export interface RelayVisibleToolDefinition {

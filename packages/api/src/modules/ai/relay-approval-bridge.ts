@@ -2,6 +2,10 @@ import path from 'node:path';
 import type { RelayAuthorizationScope } from '@synapse/shared';
 import type { NormalizedMcpToolResult } from '@synapse/shared/types';
 import { actorSubject, authorizeAction } from '../access/service.js';
+import {
+  cancelToolCallTask,
+  createToolCallTask,
+} from '../tool-call-tasks/service.js';
 import { getConversationMembers } from '../conversation/chat-service.js';
 import {
   createRelayAuthorizationInteractionRequest,
@@ -21,6 +25,8 @@ type AutoBridgeRelayApprovalParams = {
   sessionId?: string;
   conversationId?: string;
   userId?: string;
+  turnId?: string;
+  sourceToolCallId?: string;
   relayToolName: string;
   toolInput: Record<string, unknown>;
   result: NormalizedMcpToolResult;
@@ -346,23 +352,80 @@ export async function maybeAutoBridgeRelayApproval(
     };
   }
 
-  const interaction = await createRelayAuthorizationInteractionRequest({
-    workspaceId: params.workspaceId,
-    conversationId: params.conversationId,
-    requesterMemberId: requesterMember.id,
-    requesterActorId: params.actorId,
-    requesterUserId: params.userId,
-    relayDeviceId: relayTarget.deviceId,
-    relayExposureId: relayTarget.exposureId,
-    runtimeSessionId: relayTarget.runtimeSessionId,
-    relayToolName: params.relayToolName,
-    duration,
-    reason: buildAuthorizationReason({
-      visibleToolName: relayTarget.visibleToolName,
-      requestedScope,
-    }),
+  if (!params.sourceToolCallId) {
+    return {
+      status: 'missing_context',
+      note:
+        'This relay tool requires user approval, but no source tool call context is available to govern the deferred authorization flow.',
+    };
+  }
+
+  const reason = buildAuthorizationReason({
+    visibleToolName: relayTarget.visibleToolName,
     requestedScope,
   });
+
+  let task;
+  try {
+    task = await createToolCallTask({
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      sessionId: params.sessionId,
+      actorId: params.actorId,
+      turnId: params.turnId,
+      sourceToolCallId: params.sourceToolCallId,
+      sourceToolName: params.relayToolName,
+      executorKind: 'relay_authorization',
+      deliveryPolicy: 'human_interaction',
+      status: 'input_required',
+      statusMessage: `Waiting for a user to approve relay access for ${relayTarget.deviceDisplayName}.`,
+      dispatchStatus: 'input_requested',
+      requestPayload: {
+        relayDeviceId: relayTarget.deviceId,
+        relayExposureId: relayTarget.exposureId,
+        runtimeSessionId: relayTarget.runtimeSessionId,
+        relayToolName: params.relayToolName,
+        duration,
+        reason,
+        requestedScope,
+        autoBridge: true,
+      },
+    });
+  } catch (error: any) {
+    return {
+      status: 'missing_context',
+      note:
+        error?.message || 'This relay tool requires user approval, but the deferred approval flow could not be initialized.',
+    };
+  }
+
+  let interaction;
+  try {
+    interaction = await createRelayAuthorizationInteractionRequest({
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      taskId: task.id,
+      requesterMemberId: requesterMember.id,
+      requesterActorId: params.actorId,
+      requesterUserId: params.userId,
+      relayDeviceId: relayTarget.deviceId,
+      relayExposureId: relayTarget.exposureId,
+      runtimeSessionId: relayTarget.runtimeSessionId,
+      relayToolName: params.relayToolName,
+      duration,
+      reason,
+      requestedScope,
+    });
+  } catch (error) {
+    await cancelToolCallTask(task.id, {
+      summary: `Relay authorization request for ${relayTarget.deviceDisplayName} failed before dispatch.`,
+      finalErrorPayload: {
+        message: error instanceof Error ? error.message : String(error),
+      },
+      notifyActor: false,
+    });
+    throw error;
+  }
 
   const authorizerMessage =
     availableAuthorizers.length === 1

@@ -15,3 +15,10 @@ func applyPlatformProcessAttrs(cmd *exec.Cmd) {
 		CreationFlags: windows.CREATE_NO_WINDOW,
 	}
 }
+
+func terminateManagedProcess(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Kill()
+}

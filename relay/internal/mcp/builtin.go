@@ -192,6 +192,48 @@ func (b *builtinAdapter) Shutdown() {
 	b.inner.Shutdown()
 }
 
+func (b *builtinAdapter) StartTask(
+	ctx context.Context,
+	toolName string,
+	args map[string]interface{},
+	requestedTaskID string,
+) (core.TaskSnapshot, error) {
+	taskCapable, ok := b.inner.(core.TaskCapable)
+	if !ok {
+		return core.TaskSnapshot{}, core.ErrTaskNotSupported
+	}
+	return taskCapable.StartTask(ctx, toolName, args, requestedTaskID)
+}
+
+func (b *builtinAdapter) GetTask(taskID string) (core.TaskSnapshot, error) {
+	taskCapable, ok := b.inner.(core.TaskCapable)
+	if !ok {
+		return core.TaskSnapshot{}, core.ErrTaskNotSupported
+	}
+	return taskCapable.GetTask(taskID)
+}
+
+func (b *builtinAdapter) ReadTaskOutput(
+	taskID string,
+	afterSeq int64,
+	limit int,
+	stream string,
+) ([]core.TaskOutputChunk, error) {
+	taskCapable, ok := b.inner.(core.TaskCapable)
+	if !ok {
+		return nil, core.ErrTaskNotSupported
+	}
+	return taskCapable.ReadTaskOutput(taskID, afterSeq, limit, stream)
+}
+
+func (b *builtinAdapter) CancelTask(taskID string, reason string) error {
+	taskCapable, ok := b.inner.(core.TaskCapable)
+	if !ok {
+		return core.ErrTaskNotSupported
+	}
+	return taskCapable.CancelTask(taskID, reason)
+}
+
 func (b *builtinAdapter) CloseRuntimeSession(runtimeSessionID string) {
 	if aware, ok := b.inner.(core.RuntimeSessionAware); ok {
 		aware.CloseRuntimeSession(runtimeSessionID)

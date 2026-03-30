@@ -2616,6 +2616,7 @@ export type InteractionRequestStatus =
   | "approved_pending_apply"
   | "applied"
   | "rejected"
+  | "cancelled"
   | "expired"
   | "apply_failed";
 
@@ -2706,6 +2707,7 @@ export interface RelayAuthorizationInteractionSummary {
 
 export interface InteractionRequestSummary {
   id: UUID;
+  taskId?: UUID;
   workspaceId: UUID;
   conversationId: UUID;
   itemId?: UUID;
@@ -2724,6 +2726,17 @@ export interface InteractionRequestSummary {
   viewerCanResolve?: boolean;
 }
 
+export type TaskNoticeStatus = "completed" | "failed" | "cancelled";
+
+export interface TaskNoticeSummary {
+  taskId: UUID;
+  toolName: string;
+  status: TaskNoticeStatus;
+  summary: string;
+  message?: string;
+  messageBlocks?: CanonicalContentBlock[];
+}
+
 export type ConversationFeedEventType =
   | "member_joined"
   | "member_kicked"
@@ -2734,7 +2747,8 @@ export type ConversationFeedEventType =
   | "actor_avatar_changed"
   | "actor_version_changed"
   | "automation_notice"
-  | "interaction_requested";
+  | "interaction_requested"
+  | "task_notice";
 
 export interface ConversationFeedEventPayloadMap {
   member_joined: {
@@ -2816,6 +2830,7 @@ export interface ConversationFeedEventPayloadMap {
   interaction_requested: {
     interaction: InteractionRequestSummary;
   };
+  task_notice: TaskNoticeSummary;
 }
 
 export type ConversationFeedEventPayload<
@@ -2935,34 +2950,43 @@ function summarizeMembershipEvent(
 
 export function summarizeConversationEvent(
   eventType: ConversationFeedEventType | string,
-  payload: Record<string, unknown>,
+  payload: unknown,
 ) {
+  const eventPayload =
+    payload && typeof payload === "object"
+      ? (payload as Record<string, unknown>)
+      : {};
+
   if (eventType === "member_joined") {
     return summarizeMembershipEvent(
       "member_joined",
-      payload as ConversationFeedEventPayloadMap["member_joined"],
+      eventPayload as ConversationFeedEventPayloadMap["member_joined"],
     );
   }
 
   if (eventType === "member_kicked") {
     return summarizeMembershipEvent(
       "member_kicked",
-      payload as ConversationFeedEventPayloadMap["member_kicked"],
+      eventPayload as ConversationFeedEventPayloadMap["member_kicked"],
     );
   }
 
   if (eventType === "member_left") {
     return summarizeMembershipEvent(
       "member_left",
-      payload as ConversationFeedEventPayloadMap["member_left"],
+      eventPayload as ConversationFeedEventPayloadMap["member_left"],
     );
   }
 
   if (eventType === "memory_saved" || eventType === "memory_updated") {
     const textDigest =
-      typeof payload.textDigest === "string" ? payload.textDigest.trim() : "";
+      typeof eventPayload.textDigest === "string"
+        ? eventPayload.textDigest.trim()
+        : "";
     const scope =
-      typeof payload.memoryScope === "string" ? payload.memoryScope : "memory";
+      typeof eventPayload.memoryScope === "string"
+        ? eventPayload.memoryScope
+        : "memory";
     const actionLabel = eventType === "memory_updated" ? "updated" : "saved";
     const summary = textDigest || "durable memory saved";
     return `Memory ${actionLabel}: ${summary} (${scope})`;
@@ -2970,14 +2994,16 @@ export function summarizeConversationEvent(
 
   if (eventType === "actor_renamed") {
     const newName =
-      typeof payload.newName === "string" ? payload.newName.trim() : "Unknown";
+      typeof eventPayload.newName === "string"
+        ? eventPayload.newName.trim()
+        : "Unknown";
     return `Actor renamed: will now be called ${newName}.`;
   }
 
   if (eventType === "actor_avatar_changed") {
     const avatarEmoji =
-      typeof payload.newAvatarEmoji === "string"
-        ? payload.newAvatarEmoji.trim()
+      typeof eventPayload.newAvatarEmoji === "string"
+        ? eventPayload.newAvatarEmoji.trim()
         : "";
     if (avatarEmoji) {
       return `Actor avatar updated to ${avatarEmoji}.`;
@@ -2987,20 +3013,24 @@ export function summarizeConversationEvent(
 
   if (eventType === "actor_version_changed") {
     const actor =
-      payload.actor && typeof payload.actor === "object"
-        ? (payload.actor as { name?: string })
+      eventPayload.actor && typeof eventPayload.actor === "object"
+        ? (eventPayload.actor as { name?: string })
         : undefined;
     const actorName =
       typeof actor?.name === "string" ? actor.name.trim() : "An actor";
     const fromVersion =
-      typeof payload.fromVersion === "number" ? payload.fromVersion : null;
+      typeof eventPayload.fromVersion === "number"
+        ? eventPayload.fromVersion
+        : null;
     const toVersion =
-      typeof payload.toVersion === "number" ? payload.toVersion : null;
-    const changes = Array.isArray(payload.changes)
-      ? payload.changes
+      typeof eventPayload.toVersion === "number"
+        ? eventPayload.toVersion
+        : null;
+    const changes = Array.isArray(eventPayload.changes)
+      ? eventPayload.changes
           .filter(
             (
-              change,
+              change: unknown,
             ): change is {
               kind?: string;
               summaryText?: string;
@@ -3031,11 +3061,11 @@ export function summarizeConversationEvent(
             }
             return "";
           })
-          .filter((value): value is string => Boolean(value))
+          .filter((value: string): value is string => Boolean(value))
       : [];
     const source =
-      payload.source && typeof payload.source === "object"
-        ? (payload.source as { type?: string })
+      eventPayload.source && typeof eventPayload.source === "object"
+        ? (eventPayload.source as { type?: string })
         : undefined;
 
     const fragments: string[] = [];
@@ -3060,19 +3090,23 @@ export function summarizeConversationEvent(
   }
 
   if (eventType === "automation_notice") {
-    const messageBlocks = Array.isArray(payload.messageBlocks)
-      ? (payload.messageBlocks as CanonicalContentBlock[])
+    const messageBlocks = Array.isArray(eventPayload.messageBlocks)
+      ? (eventPayload.messageBlocks as CanonicalContentBlock[])
       : [];
     const messageFromBlocks = extractText(messageBlocks).trim();
     const message =
       messageFromBlocks ||
-      (typeof payload.message === "string" ? payload.message.trim() : "");
+      (typeof eventPayload.message === "string"
+        ? eventPayload.message.trim()
+        : "");
     if (message) return message;
     const sourceTitle =
-      typeof payload.sourceTitle === "string" ? payload.sourceTitle.trim() : "";
+      typeof eventPayload.sourceTitle === "string"
+        ? eventPayload.sourceTitle.trim()
+        : "";
     const sourceSummary =
-      typeof payload.sourceSummary === "string"
-        ? payload.sourceSummary.trim()
+      typeof eventPayload.sourceSummary === "string"
+        ? eventPayload.sourceSummary.trim()
         : "";
     if (sourceTitle && sourceSummary) {
       return `${sourceTitle}: ${sourceSummary}`;
@@ -3080,15 +3114,34 @@ export function summarizeConversationEvent(
     if (sourceTitle) return sourceTitle;
     if (sourceSummary) return sourceSummary;
     const sourceLabel =
-      typeof payload.sourceLabel === "string" ? payload.sourceLabel.trim() : "";
+      typeof eventPayload.sourceLabel === "string"
+        ? eventPayload.sourceLabel.trim()
+        : "";
     if (sourceLabel) return sourceLabel;
     return "Automation notice";
   }
 
+  if (eventType === "task_notice") {
+    const summary =
+      typeof eventPayload.summary === "string"
+        ? eventPayload.summary.trim()
+        : "";
+    if (summary) return summary;
+    const toolName =
+      typeof eventPayload.toolName === "string"
+        ? eventPayload.toolName.trim()
+        : "tool";
+    const status =
+      typeof eventPayload.status === "string"
+        ? eventPayload.status.trim()
+        : "completed";
+    return `${toolName} ${status}`;
+  }
+
   if (eventType === "interaction_requested") {
     const interaction =
-      payload.interaction && typeof payload.interaction === "object"
-        ? (payload.interaction as InteractionRequestSummary)
+      eventPayload.interaction && typeof eventPayload.interaction === "object"
+        ? (eventPayload.interaction as InteractionRequestSummary)
         : undefined;
     if (!interaction) {
       return "Interaction requested";
@@ -3096,12 +3149,18 @@ export function summarizeConversationEvent(
     if (interaction.kind === "question_choice") {
       const targetName = interaction.target?.name?.trim() || "a user";
       const prompt = interaction.question?.prompt?.trim() || "A question";
+      if (interaction.status === "cancelled") {
+        return `Question for ${targetName} was cancelled: ${prompt}`;
+      }
       return interaction.status === "answered"
         ? `${targetName} answered: ${prompt}`
         : `Question for ${targetName}: ${prompt}`;
     }
     const deviceName =
       interaction.relayAuthorization?.deviceDisplayName?.trim() || "relay";
+    if (interaction.status === "cancelled") {
+      return `Relay authorization request was cancelled for ${deviceName}`;
+    }
     if (interaction.status === "rejected") {
       const resolverName = interaction.resolvedBy?.name?.trim() || "A user";
       return `${resolverName} rejected relay access for ${deviceName}`;

@@ -1,4 +1,4 @@
-import { nowISO } from "@synapse/shared";
+import { nowISO, textBlocks } from "@synapse/shared";
 import { v4 as uuidv4 } from "uuid";
 import type {
   ConversationFeedItem,
@@ -15,18 +15,23 @@ import type {
 } from "@synapse/shared/types";
 import { emitEvent } from "../../infrastructure/events/index.js";
 import { query, transaction } from "../../infrastructure/database/index.js";
+import {
+  completeToolCallTask,
+  failToolCallTask,
+  markToolCallTaskQueued,
+} from "../tool-call-tasks/service.js";
 import { authorizeAction, userSubject } from "../access/service.js";
 import {
   createConversationEvent,
   getConversationFeedItemById,
 } from "../conversation/service.js";
 import { getFileUrlById } from "../files/service.js";
-import { wakeActor } from "../conversation/chat-service.js";
 
 type RawInteractionRow = {
   id: string;
   workspace_id: string;
   conversation_id: string;
+  task_id: string | null;
   conversation_item_id: string | null;
   kind: InteractionRequestKind;
   status: InteractionRequestStatus;
@@ -79,6 +84,7 @@ type Queryable = {
 export interface CreateQuestionInteractionParams {
   workspaceId: string;
   conversationId: string;
+  taskId: string;
   requesterMemberId: string;
   requesterActorId?: string;
   requesterUserId?: string;
@@ -93,6 +99,7 @@ export interface CreateQuestionInteractionParams {
 export interface CreateRelayAuthorizationInteractionParams {
   workspaceId: string;
   conversationId: string;
+  taskId: string;
   requesterMemberId: string;
   requesterActorId?: string;
   requesterUserId?: string;
@@ -123,6 +130,7 @@ export interface ResolveInteractionRequestResult {
 
 export interface PendingRelayAuthorizationApplication {
   interactionId: string;
+  taskId: string;
   workspaceId: string;
   conversationId: string;
   deviceId: string;
@@ -603,6 +611,7 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
 
   return {
     id: row.id,
+    taskId: row.task_id || undefined,
     workspaceId: row.workspace_id,
     conversationId: row.conversation_id,
     itemId: row.conversation_item_id || undefined,
@@ -729,47 +738,140 @@ async function syncInteractionEventPayload(interaction: InteractionRequestSummar
   );
 }
 
-async function wakeRequesterActor(interaction: InteractionRequestSummary) {
-  const requester = interaction.requester;
-  const requesterActorId = requester?.actorId;
-  const requesterMemberId = requester?.memberId;
-  if (!requesterActorId || !requesterMemberId) {
-    return;
-  }
-
-  let summary = "Interaction updated";
-  if (interaction.kind === "question_choice") {
-    const prompt = interaction.question?.prompt?.trim() || "Question";
-    const answer = summarizeQuestionAnswers(interaction.question);
-    summary = `${interaction.target?.name || "A user"} answered "${prompt}" with "${answer}".`;
-  } else if (interaction.status === "rejected") {
-    summary = `${interaction.resolvedBy?.name || "An authorized user"} rejected relay access.`;
-  } else if (interaction.status === "applied") {
-    summary = `${interaction.resolvedBy?.name || "An authorized user"} approved relay access and the relay applied it.`;
-  } else if (interaction.status === "apply_failed") {
-    summary = `Relay authorization approval failed to apply: ${interaction.relayAuthorization?.applyError || "unknown error"}.`;
-  }
-
-  const sourceRef =
-    interaction.kind === "question_choice"
-      ? interaction.target
-      : interaction.resolvedBy;
-
-  await wakeActor({
-    conversationId: interaction.conversationId,
-    actorId: requesterActorId,
-    sourceType: "system_interrupt",
-    sourceItemId: interaction.itemId,
-    sourceMemberType: "user",
-    sourceMemberId: sourceRef?.memberId,
-    sourceName: sourceRef?.name,
+function buildQuestionAsyncNotice(interaction: InteractionRequestSummary) {
+  const prompt = interaction.question?.prompt?.trim() || "Question";
+  const answer = summarizeQuestionAnswers(interaction.question);
+  const targetName = interaction.target?.name || "A user";
+  const resolutionNote = interaction.resolutionNote?.trim();
+  const summary = `${targetName} answered "${prompt}".`;
+  const lines = [
     summary,
+    `Answer: ${answer}.`,
+    resolutionNote ? `Note: ${resolutionNote}` : "",
+  ].filter(Boolean);
+  const messageBlocks = textBlocks(lines.join("\n"));
+
+  return {
+    summary,
+    messageBlocks,
+    finalResultPayload: {
+      content: messageBlocks,
+      structuredContent: {
+        interactionId: interaction.id,
+        interaction,
+      },
+      isError: false,
+    },
     metadata: {
       interactionId: interaction.id,
       interactionKind: interaction.kind,
       interactionStatus: interaction.status,
     },
-  });
+  };
+}
+
+function buildRelayRejectedAsyncNotice(interaction: InteractionRequestSummary) {
+  const resolverName = interaction.resolvedBy?.name || "An authorized user";
+  const deviceName =
+    interaction.relayAuthorization?.deviceDisplayName || "relay device";
+  const summary = `${resolverName} rejected relay access for ${deviceName}.`;
+  const lines = [
+    summary,
+    interaction.resolutionNote?.trim()
+      ? `Note: ${interaction.resolutionNote.trim()}`
+      : "",
+  ].filter(Boolean);
+  const messageBlocks = textBlocks(lines.join("\n"));
+
+  return {
+    summary,
+    messageBlocks,
+    finalResultPayload: {
+      content: messageBlocks,
+      structuredContent: {
+        interactionId: interaction.id,
+        interaction,
+      },
+      isError: true,
+    },
+    finalErrorPayload: {
+      interactionId: interaction.id,
+      reason: "rejected_by_user",
+    },
+    metadata: {
+      interactionId: interaction.id,
+      interactionKind: interaction.kind,
+      interactionStatus: interaction.status,
+    },
+  };
+}
+
+function buildRelayAppliedAsyncNotice(interaction: InteractionRequestSummary) {
+  const resolverName = interaction.resolvedBy?.name || "An authorized user";
+  const deviceName =
+    interaction.relayAuthorization?.deviceDisplayName || "relay device";
+  const summary = `${resolverName} approved relay access for ${deviceName}, and the relay applied it.`;
+  const lines = [
+    summary,
+    interaction.resolutionNote?.trim()
+      ? `Note: ${interaction.resolutionNote.trim()}`
+      : "",
+  ].filter(Boolean);
+  const messageBlocks = textBlocks(lines.join("\n"));
+
+  return {
+    summary,
+    messageBlocks,
+    finalResultPayload: {
+      content: messageBlocks,
+      structuredContent: {
+        interactionId: interaction.id,
+        interaction,
+      },
+      isError: false,
+    },
+    metadata: {
+      interactionId: interaction.id,
+      interactionKind: interaction.kind,
+      interactionStatus: interaction.status,
+    },
+  };
+}
+
+function buildRelayApplyFailedAsyncNotice(interaction: InteractionRequestSummary) {
+  const applyError =
+    interaction.relayAuthorization?.applyError || "unknown error";
+  const summary = `Relay authorization approval could not be applied: ${applyError}.`;
+  const messageBlocks = textBlocks(summary);
+
+  return {
+    summary,
+    messageBlocks,
+    finalResultPayload: {
+      content: messageBlocks,
+      structuredContent: {
+        interactionId: interaction.id,
+        interaction,
+      },
+      isError: true,
+    },
+    finalErrorPayload: {
+      interactionId: interaction.id,
+      applyError,
+    },
+    metadata: {
+      interactionId: interaction.id,
+      interactionKind: interaction.kind,
+      interactionStatus: interaction.status,
+    },
+  };
+}
+
+function buildRelayApplyPendingSummary(interaction: InteractionRequestSummary) {
+  const resolverName = interaction.resolvedBy?.name || "An authorized user";
+  const deviceName =
+    interaction.relayAuthorization?.deviceDisplayName || "relay device";
+  return `${resolverName} approved relay access for ${deviceName}. Waiting for the relay client to apply it.`;
 }
 
 async function insertInteractionRequest(
@@ -777,6 +879,7 @@ async function insertInteractionRequest(
   params: {
   workspaceId: string;
   conversationId: string;
+  taskId: string;
   requesterMemberId: string;
   requesterUserId?: string;
   requesterActorId?: string;
@@ -791,6 +894,7 @@ async function insertInteractionRequest(
        id,
        workspace_id,
        conversation_id,
+       task_id,
        requester_member_id,
        requester_user_id,
        requester_actor_id,
@@ -809,11 +913,12 @@ async function insertInteractionRequest(
        $4,
        $5,
        $6,
-      $7,
+       $7,
+       $8,
       'pending',
-      $8,
-       $9,
+      $9,
        $10,
+       $11,
        NOW(),
        NOW()
      )
@@ -822,6 +927,7 @@ async function insertInteractionRequest(
       interactionId,
       params.workspaceId,
       params.conversationId,
+      params.taskId,
       params.requesterMemberId,
       params.requesterUserId || null,
       params.requesterActorId || null,
@@ -896,6 +1002,7 @@ export async function createQuestionInteractionRequest(
     const id = await insertInteractionRequest(client, {
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
+      taskId: params.taskId,
       requesterMemberId: params.requesterMemberId,
       requesterActorId: params.requesterActorId,
       requesterUserId: params.requesterUserId,
@@ -961,6 +1068,7 @@ export async function createRelayAuthorizationInteractionRequest(
     const id = await insertInteractionRequest(client, {
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
+      taskId: params.taskId,
       requesterMemberId: params.requesterMemberId,
       requesterActorId: params.requesterActorId,
       requesterUserId: params.requesterUserId,
@@ -1062,6 +1170,97 @@ export async function findOpenRelayAuthorizationInteraction(
 export async function getInteractionRequestSummary(interactionId: string) {
   const row = await getInteractionRowById(interactionId);
   return row ? buildInteractionSummary(row) : null;
+}
+
+export async function getInteractionRequestSummaryByTaskId(taskId: string) {
+  const result = await query<{ id: string }>(
+    `SELECT id
+     FROM interaction_requests
+     WHERE task_id = $1
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [taskId],
+  );
+
+  const interactionId = result.rows[0]?.id;
+  if (!interactionId) {
+    return null;
+  }
+  return getInteractionRequestSummary(interactionId);
+}
+
+export async function cancelInteractionRequestByTaskId(
+  taskId: string,
+  note?: string,
+) {
+  const interaction = await getInteractionRequestSummaryByTaskId(taskId);
+  if (!interaction) {
+    return null;
+  }
+  return cancelInteractionRequest(interaction.id, note);
+}
+
+export async function cancelInteractionRequest(
+  interactionId: string,
+  note?: string,
+) {
+  const existing = await getInteractionRowById(interactionId);
+  if (!existing) {
+    throw new Error("Interaction request not found");
+  }
+
+  if (
+    existing.status !== "pending" &&
+    existing.status !== "approved_pending_apply"
+  ) {
+    const current = await getInteractionRequestSummary(interactionId);
+    if (!current) {
+      throw new Error("Failed to reload interaction request");
+    }
+    return current;
+  }
+
+  const resolutionPayload = parseJsonObject(existing.resolution_payload);
+  await transaction(async (client) => {
+    await client.query(
+      `UPDATE interaction_requests
+       SET status = 'cancelled',
+           resolved_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [interactionId],
+    );
+
+    const payload = {
+      ...resolutionPayload,
+      note: note?.trim() || resolutionPayload.note,
+      cancelled: true,
+    };
+
+    if (existing.kind === "question_choice") {
+      await client.query(
+        `UPDATE interaction_question_requests
+         SET resolution_payload = $2::jsonb
+         WHERE interaction_id = $1`,
+        [interactionId, JSON.stringify(payload)],
+      );
+    } else {
+      await client.query(
+        `UPDATE interaction_relay_authorization_requests
+         SET resolution_payload = $2::jsonb
+         WHERE interaction_id = $1`,
+        [interactionId, JSON.stringify(payload)],
+      );
+    }
+  });
+
+  const interaction = await getInteractionRequestSummary(interactionId);
+  if (!interaction) {
+    throw new Error("Failed to reload cancelled interaction");
+  }
+  await syncInteractionEventPayload(interaction);
+  await emitInteractionUpdated(interaction);
+  return interaction;
 }
 
 export async function canUserViewInteraction(params: {
@@ -1428,11 +1627,25 @@ export async function resolveInteractionRequest(
   await syncInteractionEventPayload(interaction);
   await emitInteractionUpdated(interaction);
 
-  if (
-    interaction.kind === "question_choice" ||
-    interaction.status === "rejected"
-  ) {
-    await wakeRequesterActor(interaction);
+  if (!interaction.taskId) {
+    throw new Error(`Interaction ${interaction.id} is missing task governance`);
+  }
+
+  if (interaction.kind === "question_choice") {
+    await completeToolCallTask(
+      interaction.taskId,
+      buildQuestionAsyncNotice(interaction),
+    );
+  } else if (interaction.status === "rejected") {
+    await failToolCallTask(
+      interaction.taskId,
+      buildRelayRejectedAsyncNotice(interaction),
+    );
+  } else {
+    await markToolCallTaskQueued(
+      interaction.taskId,
+      buildRelayApplyPendingSummary(interaction),
+    );
   }
 
   return {
@@ -1479,7 +1692,13 @@ export async function markRelayAuthorizationInteractionApplied(
   }
   await syncInteractionEventPayload(interaction);
   await emitInteractionUpdated(interaction);
-  await wakeRequesterActor(interaction);
+  if (!interaction.taskId) {
+    throw new Error(`Interaction ${interaction.id} is missing task governance`);
+  }
+  await completeToolCallTask(
+    interaction.taskId,
+    buildRelayAppliedAsyncNotice(interaction),
+  );
   return interaction;
 }
 
@@ -1520,7 +1739,13 @@ export async function markRelayAuthorizationInteractionApplyFailed(
   }
   await syncInteractionEventPayload(interaction);
   await emitInteractionUpdated(interaction);
-  await wakeRequesterActor(interaction);
+  if (!interaction.taskId) {
+    throw new Error(`Interaction ${interaction.id} is missing task governance`);
+  }
+  await failToolCallTask(
+    interaction.taskId,
+    buildRelayApplyFailedAsyncNotice(interaction),
+  );
   return interaction;
 }
 
@@ -1532,6 +1757,9 @@ export async function getPendingRelayAuthorizationApplication(
     return null;
   }
   if (row.status !== "approved_pending_apply") {
+    return null;
+  }
+  if (!row.task_id) {
     return null;
   }
   const requestedEffect = parseJsonObject(row.requested_effect);
@@ -1548,6 +1776,7 @@ export async function getPendingRelayAuthorizationApplication(
 
   return {
     interactionId: row.id,
+    taskId: row.task_id,
     workspaceId: row.workspace_id,
     conversationId: row.conversation_id,
     deviceId: row.relay_device_id,

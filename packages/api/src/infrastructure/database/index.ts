@@ -113,6 +113,30 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "question interaction subtype storage",
   },
   {
+    table: "tool_call_tasks",
+    requiredColumns: [
+      "session_id",
+      "source_tool_name",
+      "executor_kind",
+      "delivery_policy",
+      "status",
+      "dispatch_status",
+      "supports_cancel",
+      "supports_output_tail",
+    ],
+    reason: "tool-call task governance",
+  },
+  {
+    table: "tool_call_task_output_chunks",
+    requiredColumns: ["task_id", "seq", "stream", "text_value"],
+    reason: "task output tail persistence",
+  },
+  {
+    table: "interaction_requests",
+    requiredColumns: ["task_id", "conversation_id", "kind", "status"],
+    reason: "interaction requests linked to task governance",
+  },
+  {
     table: "interaction_relay_authorization_requests",
     requiredColumns: [
       "interaction_id",
@@ -122,6 +146,17 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
       "resolution_payload",
     ],
     reason: "relay authorization interaction subtype storage",
+  },
+  {
+    table: "relay_operations",
+    requiredColumns: [
+      "task_id",
+      "runtime_session_id",
+      "delivery_policy",
+      "operation_timeout_ms",
+      "expires_at",
+    ],
+    reason: "relay task operation persistence",
   },
 ];
 

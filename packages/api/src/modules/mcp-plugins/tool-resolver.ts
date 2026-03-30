@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import type { RelayHiddenToolBinding, ToolDefinition } from "@synapse/shared";
+import { textBlocks, type RelayHiddenToolBinding, type ToolDefinition } from "@synapse/shared";
 import type { NormalizedMcpToolResult } from "@synapse/shared/types";
 import {
   buildActorConversationContextId,
@@ -11,12 +11,14 @@ import { resolveInstallationConfig } from "./config-resolver.js";
 import {
   getMcpVersion,
   getOrCreateInstance,
+  type McpExecutionContext,
   type McpInstance,
 } from "./instance-manager.js";
 import { logToolCall } from "./audit.js";
 import {
   callRelayTool,
   closeRelayRuntimeSession,
+  enqueueRelayToolTask,
   getConnectedRelaySessionId,
   getRelayExposureCatalog,
   openRelayRuntimeSession,
@@ -24,10 +26,20 @@ import {
 import { normalizeMcpToolResult } from "./result-normalizer.js";
 
 const MCP_TOOL_NAMESPACE_SEPARATOR = "__";
+const RELAY_ASYNC_COMMANDLINE_TOOL_NAMES = new Set([
+  "bash_exec",
+  "git_exec",
+  "node_exec",
+  "python_exec",
+]);
 
 export interface ResolvedMcpTools {
   tools: ToolDefinition[];
-  executor: (toolName: string, input: Record<string, unknown>) => Promise<NormalizedMcpToolResult>;
+  executor: (
+    toolName: string,
+    input: Record<string, unknown>,
+    executionContext?: McpExecutionContext,
+  ) => Promise<NormalizedMcpToolResult>;
   mcpVersion: number;
   refresh: () => Promise<{ tools: ToolDefinition[]; mcpVersion: number }>;
   setTurnId: (turnId: string, round?: number) => void;
@@ -135,6 +147,16 @@ function buildRelayBinaryMetadata(
       namespacedToolName,
     },
   };
+}
+
+function wantsAsyncRelayCommandlineExecution(
+  toolName: string,
+  input: Record<string, unknown>,
+) {
+  return (
+    RELAY_ASYNC_COMMANDLINE_TOOL_NAMES.has(toolName) &&
+    input.execution_mode === "async"
+  );
 }
 
 function asArray<T>(value: unknown): T[] {
@@ -301,6 +323,75 @@ async function createRelayBaseInstance(params: {
     return runtimeSessionId;
   };
 
+  const executeRelayCall = async (
+    visibleToolName: string,
+    binding: RelayHiddenToolBinding,
+    input: Record<string, unknown>,
+    executionContext?: McpExecutionContext,
+  ) => {
+    const runtimeSession = await ensureRuntimeSession();
+
+    if (wantsAsyncRelayCommandlineExecution(visibleToolName, input)) {
+      if (
+        !executionContext?.sessionId ||
+        !executionContext.conversationId ||
+        !executionContext.actorId ||
+        !executionContext.toolCallId
+      ) {
+        throw new Error(
+          "Async relay commandline tool calls require a session-backed actor tool call",
+        );
+      }
+
+      const accepted = await enqueueRelayToolTask({
+        workspaceId: params.workspaceId,
+        conversationId: executionContext.conversationId,
+        sessionId: executionContext.sessionId,
+        requestedByActorId: executionContext.actorId,
+        requestedByUserId: executionContext.userId,
+        turnId: executionContext.turnId,
+        sourceToolCallId: executionContext.toolCallId,
+        sourceToolName: executionContext.namespacedToolName || visibleToolName,
+        deviceId: params.deviceId,
+        exposureId: params.exposureId,
+        visibleToolName,
+        binding,
+        args: input,
+        runtimeSessionId: runtimeSession,
+        deliveryPolicy: "online_only",
+      });
+
+      return {
+        content: textBlocks(
+          `Accepted async ${visibleToolName} request. The relay will execute it and wake you with the final result.`,
+        ),
+        structuredContent: {
+          deferred: true,
+          task: {
+            taskId: accepted.taskId,
+            status: "working",
+            dispatchStatus: "queued",
+            statusMessage: `Queued async ${visibleToolName} on the relay.`,
+          },
+          relayOperationId: accepted.operationId,
+        },
+      };
+    }
+
+    return callRelayTool({
+      conversationId: executionContext?.conversationId,
+      sessionId: executionContext?.sessionId,
+      requestedByUserId: executionContext?.userId,
+      requestedByActorId: executionContext?.actorId,
+      deviceId: params.deviceId,
+      exposureId: params.exposureId,
+      visibleToolName,
+      binding,
+      args: input,
+      runtimeSessionId: runtimeSession,
+    });
+  };
+
   return {
     pluginId: params.pluginId,
     installationId: params.installationId,
@@ -312,8 +403,7 @@ async function createRelayBaseInstance(params: {
     workspaceId: params.workspaceId,
     configHash: params.configHash,
     tools: [],
-    execute: async (toolName, input) => {
-      const runtimeSession = await ensureRuntimeSession();
+    execute: async (toolName, input, executionContext) => {
       const relayCatalog = getRelayExposureCatalog(
         params.deviceId,
         params.exposureId,
@@ -329,25 +419,20 @@ async function createRelayBaseInstance(params: {
       if (!toolBinding) {
         throw new Error(`Relay binding missing for tool ${toolName}`);
       }
-      return callRelayTool({
-        deviceId: params.deviceId,
-        exposureId: params.exposureId,
-        visibleToolName: toolBinding.visible.name,
-        binding: toolBinding.binding,
-        args: input,
-        runtimeSessionId: runtimeSession,
-      });
+      return executeRelayCall(
+        toolBinding.visible.name,
+        toolBinding.binding,
+        input,
+        executionContext,
+      );
     },
-    executeWithBinding: async (toolName, input, binding) => {
-      const runtimeSession = await ensureRuntimeSession();
-      return callRelayTool({
-        deviceId: params.deviceId,
-        exposureId: params.exposureId,
-        visibleToolName: toolName,
-        binding: binding as RelayHiddenToolBinding,
-        args: input,
-        runtimeSessionId: runtimeSession,
-      });
+    executeWithBinding: async (toolName, input, binding, executionContext) => {
+      return executeRelayCall(
+        toolName,
+        binding as RelayHiddenToolBinding,
+        input,
+        executionContext,
+      );
     },
     ensureRuntimeSession,
     getRuntimeSessionId: () => runtimeSessionId,
@@ -384,7 +469,7 @@ function buildRelayScopedInstance(params: {
   return {
     ...params.baseInstance,
     tools: params.tools,
-    execute: async (toolName, input) => {
+    execute: async (toolName, input, executionContext) => {
       const toolBinding = params.bindingMap.get(toolName);
       if (!toolBinding) {
         throw new Error(`Relay binding missing for tool ${toolName}`);
@@ -412,9 +497,10 @@ function buildRelayScopedInstance(params: {
           toolName,
           input,
           toolBinding.binding,
+          executionContext,
         );
       }
-      return params.baseInstance.execute(toolName, input);
+      return params.baseInstance.execute(toolName, input, executionContext);
     },
   };
 }
@@ -776,6 +862,7 @@ export async function resolveMcpToolsForActor(
   const executor = async (
     namespacedToolName: string,
     input: Record<string, unknown>,
+    executionContext?: McpExecutionContext,
   ): Promise<NormalizedMcpToolResult> => {
     const parts = namespacedToolName.split(MCP_TOOL_NAMESPACE_SEPARATOR);
     if (parts.length < 3) {
@@ -798,7 +885,7 @@ export async function resolveMcpToolsForActor(
     let errorMessage: string | undefined;
 
     try {
-      rawOutput = await instance.execute(toolName, input);
+      rawOutput = await instance.execute(toolName, input, executionContext);
       const relayContext =
         instance.transport === "relay"
           ? getRelayToolRuntimeContext(params.sessionId, namespacedToolName)

@@ -73,6 +73,7 @@ type RelayDispatchPayload struct {
 	ToolID            string                 `json:"toolId"`
 	ToolRevisionID    string                 `json:"toolRevisionId"`
 	ToolName          string                 `json:"toolName"`
+	ResponseMode      string                 `json:"responseMode,omitempty"`
 	InputHash         string                 `json:"inputHash"`
 	Arguments         map[string]interface{} `json:"arguments"`
 	ExpiresInMs       int                    `json:"expiresInMs"`
@@ -131,6 +132,16 @@ type OperationStartedMessage struct {
 	DeliveryID  string `json:"deliveryId,omitempty"`
 }
 
+type OperationOutputMessage struct {
+	Type        string `json:"type"`
+	OperationID string `json:"operationId"`
+	DeliveryID  string `json:"deliveryId,omitempty"`
+	Seq         int64  `json:"seq"`
+	Stream      string `json:"stream"`
+	Text        string `json:"text"`
+	CreatedAt   string `json:"createdAt,omitempty"`
+}
+
 type OperationResultMessage struct {
 	Type        string               `json:"type"`
 	OperationID string               `json:"operationId"`
@@ -138,6 +149,15 @@ type OperationResultMessage struct {
 	Success     bool                 `json:"success"`
 	Result      interface{}          `json:"result,omitempty"`
 	Error       *RelayOperationError `json:"error,omitempty"`
+}
+
+type RelayOperationCancelMessage struct {
+	Type            string `json:"type"`
+	ProtocolVersion int    `json:"protocolVersion"`
+	SessionID       string `json:"sessionId"`
+	OperationID     string `json:"operationId"`
+	DeliveryID      string `json:"deliveryId"`
+	Reason          string `json:"reason,omitempty"`
 }
 
 type AuthorizationResultMessage struct {

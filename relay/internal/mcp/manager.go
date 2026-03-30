@@ -247,6 +247,112 @@ func (m *Manager) CallTool(ctx context.Context, exposureStableKey, toolName stri
 	return nil, fmt.Errorf("relay exposure %q not found", exposureStableKey)
 }
 
+func (m *Manager) StartTask(
+	ctx context.Context,
+	exposureStableKey, toolName string,
+	args map[string]interface{},
+	requestedTaskID string,
+) (core.TaskSnapshot, error) {
+	m.mu.RLock()
+	var target interface {
+		StartTask(context.Context, string, map[string]interface{}, string) (core.TaskSnapshot, error)
+	}
+	for _, s := range m.servers {
+		if s.stableKey == exposureStableKey {
+			candidate, ok := s.server.(interface {
+				StartTask(context.Context, string, map[string]interface{}, string) (core.TaskSnapshot, error)
+			})
+			if ok {
+				target = candidate
+			}
+			break
+		}
+	}
+	m.mu.RUnlock()
+
+	if target == nil {
+		return core.TaskSnapshot{}, core.ErrTaskNotSupported
+	}
+	return target.StartTask(ctx, toolName, args, requestedTaskID)
+}
+
+func (m *Manager) GetTask(exposureStableKey, taskID string) (core.TaskSnapshot, error) {
+	m.mu.RLock()
+	var target interface {
+		GetTask(string) (core.TaskSnapshot, error)
+	}
+	for _, s := range m.servers {
+		if s.stableKey == exposureStableKey {
+			candidate, ok := s.server.(interface {
+				GetTask(string) (core.TaskSnapshot, error)
+			})
+			if ok {
+				target = candidate
+			}
+			break
+		}
+	}
+	m.mu.RUnlock()
+
+	if target == nil {
+		return core.TaskSnapshot{}, core.ErrTaskNotSupported
+	}
+	return target.GetTask(taskID)
+}
+
+func (m *Manager) ReadTaskOutput(
+	exposureStableKey, taskID string,
+	afterSeq int64,
+	limit int,
+	stream string,
+) ([]core.TaskOutputChunk, error) {
+	m.mu.RLock()
+	var target interface {
+		ReadTaskOutput(string, int64, int, string) ([]core.TaskOutputChunk, error)
+	}
+	for _, s := range m.servers {
+		if s.stableKey == exposureStableKey {
+			candidate, ok := s.server.(interface {
+				ReadTaskOutput(string, int64, int, string) ([]core.TaskOutputChunk, error)
+			})
+			if ok {
+				target = candidate
+			}
+			break
+		}
+	}
+	m.mu.RUnlock()
+
+	if target == nil {
+		return nil, core.ErrTaskNotSupported
+	}
+	return target.ReadTaskOutput(taskID, afterSeq, limit, stream)
+}
+
+func (m *Manager) CancelTask(exposureStableKey, taskID, reason string) error {
+	m.mu.RLock()
+	var target interface {
+		CancelTask(string, string) error
+	}
+	for _, s := range m.servers {
+		if s.stableKey == exposureStableKey {
+			candidate, ok := s.server.(interface {
+				CancelTask(string, string) error
+			})
+			if ok {
+				target = candidate
+			}
+			break
+		}
+	}
+	m.mu.RUnlock()
+
+	if target == nil {
+		return core.ErrTaskNotSupported
+	}
+	return target.CancelTask(taskID, reason)
+}
+
 func (m *Manager) OpenRuntimeSession(_ context.Context, request cloud.RuntimeSessionRequest) error {
 	if m.authStore == nil {
 		return fmt.Errorf("runtime authorization store is not initialized")

@@ -1,19 +1,19 @@
 "use client"
 
 import {
-  useEffect,
-  useRef,
+  useMemo,
   type HTMLAttributes,
   type ReactNode,
-  type RefObject,
 } from "react"
 import twemoji from "twemoji"
 
 import { TWEMOJI_ASSET_BASE } from "@/lib/twemoji"
 import { cn } from "@/lib/utils"
 
+type SupportedTag = "div" | "span" | "p"
+
 type TwemojiScopeProps = {
-  as?: "div" | "span" | "p"
+  as?: SupportedTag
   className?: string
   children: ReactNode
 } & Omit<
@@ -21,18 +21,57 @@ type TwemojiScopeProps = {
   "children" | "className"
 >
 
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;")
+}
+
+function isPlainTextChild(
+  children: ReactNode
+): children is string | number | bigint {
+  return (
+    typeof children === "string" ||
+    typeof children === "number" ||
+    typeof children === "bigint"
+  )
+}
+
+function renderWithTag(
+  tag: SupportedTag,
+  props: HTMLAttributes<
+    HTMLDivElement | HTMLSpanElement | HTMLParagraphElement
+  > & {
+    children?: ReactNode
+    dangerouslySetInnerHTML?: { __html: string | TrustedHTML }
+  }
+) {
+  if (tag === "span") {
+    return <span {...props} />
+  }
+
+  if (tag === "p") {
+    return <p {...props} />
+  }
+
+  return <div {...props} />
+}
+
 export function TwemojiScope({
-  as,
+  as = "div",
   className,
   children,
   ...props
 }: TwemojiScopeProps) {
-  const ref = useRef<HTMLElement | null>(null)
+  const parsedHtml = useMemo(() => {
+    if (!isPlainTextChild(children)) {
+      return null
+    }
 
-  useEffect(() => {
-    if (!ref.current) return
-
-    twemoji.parse(ref.current, {
+    return twemoji.parse(escapeHtml(String(children)), {
       base: TWEMOJI_ASSET_BASE,
       folder: "svg",
       ext: ".svg",
@@ -40,37 +79,17 @@ export function TwemojiScope({
     })
   }, [children])
 
-  if (as === "span") {
-    return (
-      <span
-        {...props}
-        ref={ref as RefObject<HTMLSpanElement>}
-        className={cn(className)}
-      >
-        {children}
-      </span>
-    )
+  if (parsedHtml !== null) {
+    return renderWithTag(as, {
+      ...props,
+      className: cn(className),
+      dangerouslySetInnerHTML: { __html: parsedHtml },
+    })
   }
 
-  if (as === "p") {
-    return (
-      <p
-        {...props}
-        ref={ref as RefObject<HTMLParagraphElement>}
-        className={cn(className)}
-      >
-        {children}
-      </p>
-    )
-  }
-
-  return (
-    <div
-      {...props}
-      ref={ref as RefObject<HTMLDivElement>}
-      className={cn(className)}
-    >
-      {children}
-    </div>
-  )
+  return renderWithTag(as, {
+    ...props,
+    className: cn(className),
+    children,
+  })
 }

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
@@ -22,6 +23,8 @@ type Server struct {
 	cfg          Config
 	installation *commandlinebundle.Installation
 	tools        []core.Tool
+	taskMu       sync.RWMutex
+	tasks        map[string]*commandTask
 }
 
 type resolvedTimeout struct {
@@ -33,7 +36,10 @@ type resolvedTimeout struct {
 }
 
 func New(cfg Config) (*Server, error) {
-	return &Server{cfg: cfg}, nil
+	return &Server{
+		cfg:   cfg,
+		tasks: make(map[string]*commandTask),
+	}, nil
 }
 
 func (s *Server) Start(ctx context.Context) error {

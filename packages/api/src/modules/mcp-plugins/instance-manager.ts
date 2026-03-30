@@ -13,6 +13,17 @@ import { McpStdioClient } from './mcp-stdio-client.js';
 import { getBuiltinHandler } from './builtin/index.js';
 import { logEvent } from './audit.js';
 
+export interface McpExecutionContext {
+  sessionId?: string;
+  conversationId?: string;
+  actorId?: string;
+  userId?: string;
+  turnId?: string;
+  toolCallId?: string;
+  providerCallId?: string;
+  namespacedToolName?: string;
+}
+
 export interface McpInstance {
   pluginId: string;
   installationId: string;
@@ -24,11 +35,16 @@ export interface McpInstance {
   workspaceId?: string;
   configHash: string;
   tools: ToolDefinition[];
-  execute: (toolName: string, input: Record<string, unknown>) => Promise<unknown>;
+  execute: (
+    toolName: string,
+    input: Record<string, unknown>,
+    executionContext?: McpExecutionContext,
+  ) => Promise<unknown>;
   executeWithBinding?: (
     toolName: string,
     input: Record<string, unknown>,
     binding: unknown,
+    executionContext?: McpExecutionContext,
   ) => Promise<unknown>;
   ensureRuntimeSession?: () => Promise<string>;
   getRuntimeSessionId?: () => string | undefined;

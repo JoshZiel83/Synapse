@@ -25,7 +25,10 @@ function noContext(): null {
   return null;
 }
 
-function automationNoticeBlocks(payload: Record<string, unknown>): CanonicalContentBlock[] {
+function noticeBlocks(
+  payload: Record<string, unknown>,
+  fallback: string,
+): CanonicalContentBlock[] {
   const messageBlocks = Array.isArray(payload.messageBlocks)
     ? payload.messageBlocks.filter((block): block is CanonicalContentBlock => Boolean(block) && typeof block === 'object')
     : [];
@@ -47,7 +50,7 @@ function automationNoticeBlocks(payload: Record<string, unknown>): CanonicalCont
     return textBlocks(sourceTitle);
   }
 
-  return textBlocks('Automation notice');
+  return textBlocks(fallback);
 }
 
 const EVENT_SPECS: Record<string, ConversationEventSpec> = {
@@ -102,14 +105,20 @@ const EVENT_SPECS: Record<string, ConversationEventSpec> = {
   automation_notice: {
     timelinePolicy: 'all_members',
     contextPolicy: 'shared',
-    renderTimeline: ({ payload }) => automationNoticeBlocks(payload),
-    renderContext: ({ payload }) => automationNoticeBlocks(payload),
+    renderTimeline: ({ payload }) => noticeBlocks(payload, 'Automation notice'),
+    renderContext: ({ payload }) => noticeBlocks(payload, 'Automation notice'),
   },
   interaction_requested: {
     timelinePolicy: 'targeted_members',
     contextPolicy: 'targeted_members',
     renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
     renderContext: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
+  },
+  task_notice: {
+    timelinePolicy: 'none',
+    contextPolicy: 'actor_private',
+    renderTimeline: ({ payload }) => noticeBlocks(payload, 'Task update'),
+    renderContext: ({ payload }) => noticeBlocks(payload, 'Task update'),
   },
 };
 

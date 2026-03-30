@@ -45,6 +45,7 @@ func (s *Server) buildTools() []core.Tool {
 func (s *Server) shellSchema() map[string]interface{} {
 	return objectSchema(map[string]interface{}{
 		"command":     stringSchema("One shell command string to execute. If subcommands depend on each other, chain them inside this command."),
+		"execution_mode": executionModeSchema(),
 		"cwd":         stringSchema("Optional working directory for this invocation only. Defaults to the builtin default_cwd when configured. Shell state does not persist across tool calls."),
 		"timeout_sec": s.timeoutSchema(),
 		"env":         envSchema(),
@@ -60,6 +61,7 @@ func (s *Server) gitSchema() map[string]interface{} {
 				"type": "string",
 			},
 		},
+		"execution_mode": executionModeSchema(),
 		"cwd":         stringSchema("Optional working directory for this invocation only. Defaults to the builtin default_cwd when configured."),
 		"timeout_sec": s.timeoutSchema(),
 		"env":         envSchema(),
@@ -69,6 +71,7 @@ func (s *Server) gitSchema() map[string]interface{} {
 func (s *Server) codeSchema(description string) map[string]interface{} {
 	return objectSchema(map[string]interface{}{
 		"code":        stringSchema(description),
+		"execution_mode": executionModeSchema(),
 		"cwd":         stringSchema("Optional working directory for this invocation only. Defaults to the builtin default_cwd when configured."),
 		"timeout_sec": s.timeoutSchema(),
 		"env":         envSchema(),
@@ -97,6 +100,14 @@ func envSchema() map[string]interface{} {
 		"additionalProperties": map[string]interface{}{
 			"type": "string",
 		},
+	}
+}
+
+func executionModeSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type":        "string",
+		"description": "Optional execution mode. Use `async` when the caller may return immediately and receive the final result later through Synapse's deferred tool-call flow.",
+		"enum":        []string{"sync", "async"},
 	}
 }
 
