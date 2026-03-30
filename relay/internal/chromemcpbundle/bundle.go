@@ -12,6 +12,7 @@ import (
 
 	"github.com/PekingSpades/Synapse/relay/internal/config"
 	"github.com/PekingSpades/Synapse/relay/internal/nodebundle"
+	"github.com/PekingSpades/Synapse/relay/internal/runtimebundle"
 )
 
 //go:embed all:assets
@@ -93,11 +94,8 @@ func ensureExtracted(rootDir string, manifest Manifest) error {
 		}
 	}
 
-	if err := os.RemoveAll(rootDir); err != nil {
+	if err := runtimebundle.PrepareDir(rootDir, 0755); err != nil {
 		return fmt.Errorf("reset chrome-devtools runtime dir: %w", err)
-	}
-	if err := os.MkdirAll(rootDir, 0755); err != nil {
-		return fmt.Errorf("create chrome-devtools runtime dir: %w", err)
 	}
 
 	if err := fs.WalkDir(embeddedAssets, "assets", func(path string, d fs.DirEntry, walkErr error) error {
@@ -118,10 +116,7 @@ func ensureExtracted(rootDir string, manifest Manifest) error {
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-			return err
-		}
-		return os.WriteFile(targetPath, data, 0644)
+		return runtimebundle.WriteFile(targetPath, data, 0644)
 	}); err != nil {
 		return fmt.Errorf("extract chrome-devtools runtime assets: %w", err)
 	}
