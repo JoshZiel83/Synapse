@@ -1,7 +1,7 @@
 VERSION ?= dev
 LDFLAGS = -s -w -X main.Version=$(VERSION)
 
-.PHONY: cli cli-desktop gui gui-dev clean test cli-all
+.PHONY: cli cli-desktop gui gui-dev gui-windows-installer clean test cli-all
 
 # CLI binary (no CGO, pure Go)
 cli:
@@ -13,7 +13,12 @@ cli-desktop:
 
 # GUI binary (requires Wails + WebView libs)
 gui:
+	node scripts/prepare-gui-build-assets.mjs --goos=$$(go env GOOS) --runtime-mode=portable
 	cd cmd/synapse-relay-gui && wails build -tags desktop_cua -ldflags="$(LDFLAGS)"
+
+gui-windows-installer:
+	node scripts/prepare-gui-build-assets.mjs --goos=windows --runtime-mode=installer
+	cd cmd/synapse-relay-gui && wails build -nsis -tags desktop_cua,relay_installer_runtime -ldflags="$(LDFLAGS)"
 
 # GUI dev mode with hot reload
 gui-dev:

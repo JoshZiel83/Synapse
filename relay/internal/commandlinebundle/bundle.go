@@ -1,10 +1,8 @@
 package commandlinebundle
 
 import (
-	"embed"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,9 +12,6 @@ import (
 	"github.com/PekingSpades/Synapse/relay/internal/nodebundle"
 	"github.com/PekingSpades/Synapse/relay/internal/runtimebundle"
 )
-
-//go:embed all:assets
-var embeddedAssets embed.FS
 
 type Manifest struct {
 	Prepared              bool     `json:"prepared"`
@@ -53,9 +48,9 @@ type Installation struct {
 }
 
 func LoadManifest() (Manifest, error) {
-	data, err := embeddedAssets.ReadFile("assets/manifest.json")
+	data, err := loadManifestBytes()
 	if err != nil {
-		return Manifest{}, fmt.Errorf("read commandline bundle manifest: %w", err)
+		return Manifest{}, err
 	}
 
 	var manifest Manifest
@@ -80,8 +75,17 @@ func EnsureInstalled() (*Installation, error) {
 	}
 
 	nodeInstallation, nodeErr := nodebundle.EnsureInstalled()
-	rootDir := filepath.Join(config.DefaultDir(), "runtime", "commandline", manifest.AssetVersion)
-	rootErr := ensureExtracted(rootDir, manifest)
+	userRootDir := filepath.Join(config.DefaultDir(), "runtime", "commandline", manifest.AssetVersion)
+	rootDir, installed := runtimebundle.ResolveRoot(userRootDir, func(dir string) bool {
+		return installationReady(dir, manifest)
+	}, "runtime", "commandline", manifest.AssetVersion)
+	rootErr := error(nil)
+	if !installed {
+		if !runtimeExtractionSupported() {
+			return nil, fmt.Errorf("commandline runtime is not installed alongside this application")
+		}
+		rootErr = ensureExtracted(rootDir, manifest)
+	}
 	if nodeErr != nil && !runtimebundle.IsPending(nodeErr) {
 		return nil, nodeErr
 	}
@@ -122,26 +126,7 @@ func ensureExtracted(rootDir string, manifest Manifest) error {
 			return installationReady(dir, manifest)
 		},
 		Install: func(stageDir string) error {
-			if err := fs.WalkDir(embeddedAssets, "assets", func(path string, d fs.DirEntry, walkErr error) error {
-				if walkErr != nil {
-					return walkErr
-				}
-				if path == "assets" {
-					return nil
-				}
-
-				relativePath := strings.TrimPrefix(path, "assets/")
-				targetPath := filepath.Join(stageDir, filepath.FromSlash(relativePath))
-				if d.IsDir() {
-					return os.MkdirAll(targetPath, 0755)
-				}
-
-				data, err := embeddedAssets.ReadFile(path)
-				if err != nil {
-					return err
-				}
-				return runtimebundle.WriteFile(targetPath, data, 0644)
-			}); err != nil {
+			if err := extractRuntimeAssets(stageDir); err != nil {
 				return fmt.Errorf("extract commandline runtime assets: %w", err)
 			}
 

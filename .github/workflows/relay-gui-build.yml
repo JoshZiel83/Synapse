@@ -102,27 +102,22 @@ jobs:
       - name: Prepare bundled command line runtime
         run: node relay/scripts/prepare-commandline-bundle.mjs --target-platform=${{ matrix.goos }}-${{ matrix.goarch }} --node-version=${{ env.BUNDLED_NODE_VERSION }} --python-version=${{ env.BUNDLED_PYTHON_VERSION }} --python-standalone-release=${{ env.BUNDLED_PYTHON_STANDALONE_RELEASE }} --windows-git-version=${{ env.BUNDLED_WINDOWS_GIT_VERSION }} --ffmpeg-release-tag=${{ env.BUNDLED_FFMPEG_RELEASE_TAG }} --package-profile=${{ env.COMMANDLINE_PACKAGE_PROFILE }}
 
+      - name: Prepare GUI build assets
+        if: matrix.goos != 'windows'
+        run: node relay/scripts/prepare-gui-build-assets.mjs --goos=${{ matrix.goos }} --runtime-mode=portable
+
       - name: Build GUI
+        if: matrix.goos != 'windows'
         working-directory: relay/cmd/synapse-relay-gui
         env:
           CGO_LDFLAGS_ALLOW: ${{ matrix.cgo_ldflags_allow }}
         run: wails build ${{ matrix.wails_extra_args }} -tags "${{ matrix.wails_tags }}" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
 
       - name: Rename artifact
+        if: matrix.goos != 'windows'
         shell: bash
         run: |
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f -print
-            main_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui.exe' -o -name 'synapse-relay-gui-windows-*.exe' \) ! -name '*-setup.exe' | head -n 1)"
-            setup_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui*-setup.exe' -o -name 'synapse-relay-gui*-installer.exe' -o -name 'Synapse Relay*-installer.exe' \) | head -n 1)"
-            test -n "$main_exe"
-            if [ -z "$setup_exe" ]; then
-              echo "Expected Windows installer was not generated in build/bin" >&2
-              exit 1
-            fi
-            mv "$main_exe" synapse-relay-gui-${{ matrix.suffix }}.exe
-            mv "$setup_exe" synapse-relay-gui-${{ matrix.suffix }}-setup.exe
-          elif [ "${{ matrix.goos }}" = "darwin" ]; then
+          if [ "${{ matrix.goos }}" = "darwin" ]; then
             app_path="relay/cmd/synapse-relay-gui/build/bin/Synapse Relay.app"
             test -d "$app_path"
             ditto -c -k --sequesterRsrc --keepParent "$app_path" "synapse-relay-gui-${{ matrix.suffix }}.zip"
@@ -130,6 +125,49 @@ jobs:
           else
             mv relay/cmd/synapse-relay-gui/build/bin/synapse-relay-gui synapse-relay-gui-${{ matrix.suffix }}
           fi
+
+      - name: Prepare Windows portable build assets
+        if: matrix.goos == 'windows'
+        run: node relay/scripts/prepare-gui-build-assets.mjs --goos=windows --runtime-mode=portable
+
+      - name: Build Windows portable GUI
+        if: matrix.goos == 'windows'
+        working-directory: relay/cmd/synapse-relay-gui
+        env:
+          CGO_LDFLAGS_ALLOW: ${{ matrix.cgo_ldflags_allow }}
+        run: wails build -tags "${{ matrix.wails_tags }}" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
+
+      - name: Collect Windows portable artifact
+        if: matrix.goos == 'windows'
+        shell: bash
+        run: |
+          find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f -print
+          main_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui.exe' -o -name 'synapse-relay-gui-windows-*.exe' \) ! -name '*-setup.exe' | head -n 1)"
+          test -n "$main_exe"
+          mv "$main_exe" synapse-relay-gui-${{ matrix.suffix }}.exe
+
+      - name: Prepare Windows installer build assets
+        if: matrix.goos == 'windows'
+        run: node relay/scripts/prepare-gui-build-assets.mjs --goos=windows --runtime-mode=installer
+
+      - name: Build Windows installer
+        if: matrix.goos == 'windows'
+        working-directory: relay/cmd/synapse-relay-gui
+        env:
+          CGO_LDFLAGS_ALLOW: ${{ matrix.cgo_ldflags_allow }}
+        run: wails build -nsis -tags "${{ matrix.wails_tags }},relay_installer_runtime" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
+
+      - name: Collect Windows installer artifact
+        if: matrix.goos == 'windows'
+        shell: bash
+        run: |
+          find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f -print
+          setup_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui*-setup.exe' -o -name 'synapse-relay-gui*-installer.exe' -o -name 'Synapse Relay*-installer.exe' \) | head -n 1)"
+          if [ -z "$setup_exe" ]; then
+            echo "Expected Windows installer was not generated in build/bin" >&2
+            exit 1
+          fi
+          mv "$setup_exe" synapse-relay-gui-${{ matrix.suffix }}-setup.exe
 
       - name: Upload artifacts to Tencent COS
         if: startsWith(github.ref, 'refs/tags/') || env.ENABLE_COS_UPLOAD == 'true'
