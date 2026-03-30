@@ -216,3 +216,12 @@ export interface RelayEventPayload {
   time: string
   data?: Record<string, unknown>
 }
+
+export interface CrashRecoveryNotice {
+  detected: boolean
+  summary?: string
+  previousStartedAt?: string
+  detectedAt?: string
+  logFile?: string
+  logsDir?: string
+}

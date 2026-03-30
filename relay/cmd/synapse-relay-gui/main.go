@@ -2,8 +2,11 @@ package main
 
 import (
 	"embed"
+	"log"
 	"os"
+	"runtime/debug"
 
+	"github.com/PekingSpades/Synapse/relay/internal/desktopdiag"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -16,10 +19,37 @@ var assets embed.FS
 var Version = "dev"
 
 func main() {
-	app := NewApp()
+	logging, err := desktopdiag.SetupLogging()
+	if err != nil {
+		println("Error:", err.Error())
+	}
+	if logging != nil {
+		defer logging.Close()
+	}
+
+	diagManager, crashReport, err := desktopdiag.Start(Version)
+	if err != nil {
+		log.Printf("Warning: failed to initialise desktop diagnostics: %v", err)
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if diagManager != nil {
+				_ = diagManager.RecordPanic("main", recovered, debug.Stack())
+			} else {
+				log.Printf("Fatal desktop panic recovered=%v\n%s", recovered, string(debug.Stack()))
+			}
+			if logging != nil {
+				_ = logging.Close()
+			}
+			os.Exit(1)
+		}
+	}()
+
+	app := NewApp(diagManager, crashReport)
 	startHidden := hasLaunchAtLoginArg(os.Args[1:])
 
-	err := wails.Run(&options.App{
+	err = wails.Run(&options.App{
 		Title:         "Synapse Relay",
 		Width:         1120,
 		Height:        720,
@@ -43,7 +73,10 @@ func main() {
 			app,
 		},
 	})
+	if diagManager != nil {
+		_ = diagManager.MarkClean("run_returned")
+	}
 	if err != nil {
-		println("Error:", err.Error())
+		log.Printf("Error: %v", err)
 	}
 }

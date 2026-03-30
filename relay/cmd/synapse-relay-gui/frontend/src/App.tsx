@@ -91,6 +91,7 @@ export default function App() {
     status,
     logs,
     sources,
+    crashRecovery,
     banner,
     setBanner,
     ready,
@@ -226,6 +227,14 @@ export default function App() {
       setBanner(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setCloseDialogBusy(false)
+    }
+  }
+
+  async function handleDismissCrashRecovery() {
+    try {
+      await actions.dismissCrashRecovery()
+    } catch (cause) {
+      setBanner(cause instanceof Error ? cause.message : String(cause))
     }
   }
 
@@ -388,6 +397,36 @@ export default function App() {
             </Button>
             <Button variant="destructive" onClick={() => void handleCloseDecision('quit')} disabled={closeDialogBusy}>
               Exit App
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(crashRecovery?.detected)} onOpenChange={() => {}}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Synapse Relay did not close cleanly</DialogTitle>
+            <DialogDescription>
+              {crashRecovery?.summary || 'The previous desktop session ended unexpectedly. You can review the local log before continuing.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {crashRecovery?.logFile ? (
+            <div className="mt-5 rounded-2xl border border-border/70 bg-background/35 px-4 py-3 text-sm text-muted-foreground">
+              <div className="font-medium text-foreground">Desktop log</div>
+              <div className="mt-1 break-all">{crashRecovery.logFile}</div>
+            </div>
+          ) : null}
+
+          <DialogFooter className="mt-6">
+            <Button variant="ghost" onClick={() => void handleDismissCrashRecovery()}>
+              Continue
+            </Button>
+            <Button variant="outline" onClick={() => void actions.openDesktopLogDir()}>
+              Open Log Folder
+            </Button>
+            <Button onClick={() => void actions.openDesktopLogFile()}>
+              Open Log File
             </Button>
           </DialogFooter>
         </DialogContent>

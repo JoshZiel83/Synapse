@@ -8,6 +8,7 @@ import {
 import { callGo } from '../lib/wails'
 import type {
   BuiltinFilesystemRootConfig,
+  CrashRecoveryNotice,
   ConfigChangeEvent,
   ConfigUpdatedEvent,
   ImportServer,
@@ -43,6 +44,7 @@ export function useRelayDesktop() {
   const [sources, setSources] = useState<ImportSource[]>([])
   const [banner, setBanner] = useState<string>('')
   const [ready, setReady] = useState(false)
+  const [crashRecovery, setCrashRecovery] = useState<CrashRecoveryNotice | null>(null)
 
   const loadConfig = useEffectEvent(async () => {
     try {
@@ -87,6 +89,14 @@ export function useRelayDesktop() {
 
   const refreshRuntime = useEffectEvent(async () => {
     await refreshStatus()
+  })
+
+  const loadCrashRecovery = useEffectEvent(async () => {
+    const nextNotice = await callGo<CrashRecoveryNotice | null>('GetCrashRecoveryStatus')
+    startTransition(() => {
+      setCrashRecovery(nextNotice || null)
+    })
+    return nextNotice
   })
 
   const saveConfig = useEffectEvent(async (nextConfig: RelayConfig) => {
@@ -213,8 +223,23 @@ export function useRelayDesktop() {
     await refreshStatus()
   })
 
+  const dismissCrashRecovery = useEffectEvent(async () => {
+    await callGo('DismissCrashRecoveryStatus')
+    startTransition(() => {
+      setCrashRecovery(null)
+    })
+  })
+
+  const openDesktopLogFile = useEffectEvent(async () => {
+    await callGo('OpenDesktopLogFile')
+  })
+
+  const openDesktopLogDir = useEffectEvent(async () => {
+    await callGo('OpenDesktopLogDir')
+  })
+
   useEffect(() => {
-    void Promise.all([loadConfig(), refreshStatus(), refreshLogs(), detectSources()])
+    void Promise.all([loadConfig(), refreshStatus(), refreshLogs(), detectSources(), loadCrashRecovery()])
       .finally(() => {
         setReady(true)
       })
@@ -275,13 +300,52 @@ export function useRelayDesktop() {
     return () => {
       window.clearInterval(poll)
     }
-  }, [detectSources, loadConfig, refreshLogs, refreshStatus])
+  }, [detectSources, loadConfig, loadCrashRecovery, refreshLogs, refreshStatus])
+
+  useEffect(() => {
+    function reportFrontendError(kind: string, message: string, stack = '', source = '') {
+      try {
+        const method = window.go?.main?.App?.ReportFrontendError
+        if (typeof method === 'function') {
+          void method(kind, message, stack, source)
+        }
+      } catch {
+        // Swallow diagnostics reporting errors to avoid recursive crashes.
+      }
+    }
+
+    function onWindowError(event: ErrorEvent) {
+      reportFrontendError(
+        'frontend_error',
+        event.message || 'Unhandled window error',
+        event.error?.stack || '',
+        event.filename || '',
+      )
+    }
+
+    function onUnhandledRejection(event: PromiseRejectionEvent) {
+      const reason = event.reason
+      if (reason instanceof Error) {
+        reportFrontendError('frontend_unhandled_rejection', reason.message, reason.stack || '')
+        return
+      }
+      reportFrontendError('frontend_unhandled_rejection', String(reason ?? 'Unhandled promise rejection'))
+    }
+
+    window.addEventListener('error', onWindowError)
+    window.addEventListener('unhandledrejection', onUnhandledRejection)
+    return () => {
+      window.removeEventListener('error', onWindowError)
+      window.removeEventListener('unhandledrejection', onUnhandledRejection)
+    }
+  }, [])
 
   return {
     config,
     status,
     logs,
     sources,
+    crashRecovery,
     banner,
     setBanner,
     ready,
@@ -304,6 +368,9 @@ export function useRelayDesktop() {
       startRelay,
       stopRelay,
       restartRelay,
+      dismissCrashRecovery,
+      openDesktopLogFile,
+      openDesktopLogDir,
     },
   }
 }

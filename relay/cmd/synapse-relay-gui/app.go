@@ -13,6 +13,7 @@ import (
 
 	"github.com/PekingSpades/Synapse/relay/internal/cloud"
 	"github.com/PekingSpades/Synapse/relay/internal/config"
+	"github.com/PekingSpades/Synapse/relay/internal/desktopdiag"
 	"github.com/PekingSpades/Synapse/relay/internal/importer"
 	"github.com/PekingSpades/Synapse/relay/internal/localapi"
 	"github.com/PekingSpades/Synapse/relay/internal/mcp"
@@ -39,6 +40,15 @@ type LogEntry struct {
 	Type    string                 `json:"type"`
 	Message string                 `json:"message"`
 	Data    map[string]interface{} `json:"data,omitempty"`
+}
+
+type CrashRecoveryNotice struct {
+	Detected          bool   `json:"detected"`
+	Summary           string `json:"summary,omitempty"`
+	PreviousStartedAt string `json:"previousStartedAt,omitempty"`
+	DetectedAt        string `json:"detectedAt,omitempty"`
+	LogFile           string `json:"logFile,omitempty"`
+	LogsDir           string `json:"logsDir,omitempty"`
 }
 
 // GUISource represents a detected MCP config source (main-package mirror of importer.Source
@@ -91,16 +101,34 @@ type App struct {
 	windowHidden         bool
 	allowQuit            bool
 	launchedAtLogin      bool
+	diagManager          *desktopdiag.Manager
+	crashRecovery        *CrashRecoveryNotice
+	stopShutdownSignals  func()
 }
 
 // NewApp creates a new App instance
-func NewApp() *App {
-	return &App{}
+func NewApp(diagManager *desktopdiag.Manager, crashReport *desktopdiag.CrashReport) *App {
+	return &App{
+		diagManager:   diagManager,
+		crashRecovery: crashRecoveryNotice(crashReport),
+	}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.launchedAtLogin = hasLaunchAtLoginArg(os.Args[1:])
+	a.stopShutdownSignals = watchShutdownSignals(ctx, func(signalName string) {
+		if a.diagManager != nil {
+			_ = a.diagManager.MarkClean("signal:" + signalName)
+		}
+		if signalName == "windows_session_end" || signalName == "windows_query_end_session" {
+			return
+		}
+		a.setAllowQuit(true)
+		if a.ctx != nil {
+			wailsRuntime.Quit(a.ctx)
+		}
+	})
 
 	// Load config
 	cfgPath := config.Resolve("")
@@ -149,12 +177,21 @@ func (a *App) startup(ctx context.Context) {
 	// Check for deep link URL in args (synapse-relay://pair?serverBaseUrl=...&code=...)
 	a.handleDeepLinkArgs()
 
+	if a.crashRecovery != nil {
+		a.emitLocalLog("crash_detected", a.crashRecovery.Summary)
+	}
+
 	if a.cfg.Startup.AutoConnect {
 		go a.autoConnectAfterLaunch()
 	}
 }
 
 func (a *App) domReady(ctx context.Context) {
+	if a.crashRecovery != nil && a.isWindowHidden() {
+		wailsRuntime.WindowShow(ctx)
+		a.setWindowHidden(false)
+		return
+	}
 	if !a.isWindowHidden() {
 		return
 	}
@@ -165,6 +202,10 @@ func (a *App) domReady(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.stopShutdownSignals != nil {
+		a.stopShutdownSignals()
+		a.stopShutdownSignals = nil
+	}
 	if a.watchCfgCancel != nil {
 		a.watchCfgCancel()
 	}
@@ -176,6 +217,9 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	if a.tray != nil {
 		_ = a.tray.Close()
+	}
+	if a.diagManager != nil {
+		_ = a.diagManager.MarkClean("shutdown")
 	}
 }
 
@@ -361,6 +405,62 @@ func (a *App) ConfirmWindowClose(action string, remember bool) error {
 func (a *App) GetSuggestedFilesystemRoots() []config.BuiltinFilesystemRootConfig {
 	xdg.Reload()
 	return suggestedFilesystemRootsFromUserDirs(xdg.UserDirs.Download, xdg.UserDirs.Desktop)
+}
+
+func (a *App) GetCrashRecoveryStatus() *CrashRecoveryNotice {
+	if a.crashRecovery == nil {
+		return nil
+	}
+	notice := *a.crashRecovery
+	return &notice
+}
+
+func (a *App) DismissCrashRecoveryStatus() error {
+	a.crashRecovery = nil
+	if a.diagManager == nil {
+		return nil
+	}
+	return a.diagManager.ClearCrashReport()
+}
+
+func (a *App) OpenDesktopLogFile() error {
+	if a.diagManager == nil || strings.TrimSpace(a.diagManager.LogFilePath()) == "" {
+		return fmt.Errorf("desktop log file is not available")
+	}
+	return openPath(a.diagManager.LogFilePath())
+}
+
+func (a *App) OpenDesktopLogDir() error {
+	if a.diagManager == nil || strings.TrimSpace(a.diagManager.LogsDirPath()) == "" {
+		return fmt.Errorf("desktop log directory is not available")
+	}
+	return openPath(a.diagManager.LogsDirPath())
+}
+
+func (a *App) ReportFrontendError(kind, message, stack, source string) error {
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		kind = "frontend_error"
+	}
+	message = strings.TrimSpace(message)
+	stack = strings.TrimSpace(stack)
+	source = strings.TrimSpace(source)
+
+	switch {
+	case stack != "" && source != "":
+		log.Printf("Frontend error kind=%s source=%s message=%s\n%s", kind, source, message, stack)
+	case stack != "":
+		log.Printf("Frontend error kind=%s message=%s\n%s", kind, message, stack)
+	case source != "":
+		log.Printf("Frontend error kind=%s source=%s message=%s", kind, source, message)
+	default:
+		log.Printf("Frontend error kind=%s message=%s", kind, message)
+	}
+
+	if message != "" {
+		a.emitLocalLog(kind, message)
+	}
+	return nil
 }
 
 func (a *App) ClaimPairing(serverBaseURL, pairingCode, displayName string) (string, error) {
@@ -1107,6 +1207,20 @@ func (a *App) emitLocalLog(kind, message string) {
 			"time":    entry.Time,
 			"data":    map[string]interface{}{},
 		})
+	}
+}
+
+func crashRecoveryNotice(report *desktopdiag.CrashReport) *CrashRecoveryNotice {
+	if report == nil {
+		return nil
+	}
+	return &CrashRecoveryNotice{
+		Detected:          true,
+		Summary:           report.Summary,
+		PreviousStartedAt: report.PreviousStartedAt,
+		DetectedAt:        report.DetectedAt,
+		LogFile:           report.LogFile,
+		LogsDir:           report.LogsDir,
 	}
 }
 
