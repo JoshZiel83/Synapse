@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/cloud"
@@ -45,6 +46,7 @@ type Server interface {
 }
 
 type serverEntry struct {
+	cfg           config.ServerConfig
 	stableKey     string
 	syncSourceKey string
 	name          string
@@ -54,6 +56,29 @@ type serverEntry struct {
 	tools         []Tool
 }
 
+type pendingServerEntry struct {
+	cfg         config.ServerConfig
+	lastPhase   string
+	lastErr     error
+	retryCount  int
+	nextRetryAt time.Time
+}
+
+type serverFactory func(config.ServerConfig, *runtimeauth.Store) (Server, error)
+
+type serverAttemptError struct {
+	phase     string
+	err       error
+	retryable bool
+}
+
+func (e *serverAttemptError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
 type toolListChangeNotifier interface {
 	SetToolsChangedHandler(handler func())
 }
@@ -61,7 +86,9 @@ type toolListChangeNotifier interface {
 type Manager struct {
 	configs   []config.ServerConfig
 	servers   []serverEntry
+	pending   map[string]*pendingServerEntry
 	authStore *runtimeauth.Store
+	newServer serverFactory
 	mu        sync.RWMutex
 	hints     chan struct{}
 
@@ -72,7 +99,9 @@ type Manager struct {
 func NewManager(configs []config.ServerConfig) *Manager {
 	return &Manager{
 		configs:   configs,
+		pending:   make(map[string]*pendingServerEntry),
 		authStore: runtimeauth.NewStore(""),
+		newServer: defaultServerFactory,
 		hints:     make(chan struct{}, 1),
 	}
 }
@@ -99,6 +128,60 @@ func shouldInitializeServer(cfg config.ServerConfig) bool {
 	}
 }
 
+func defaultServerFactory(cfg config.ServerConfig, authStore *runtimeauth.Store) (Server, error) {
+	switch cfg.Transport {
+	case "stdio":
+		return NewStdioServer(cfg.Command, cfg.Args, cfg.Env), nil
+	case "http":
+		return NewHTTPServer(cfg.Endpoint), nil
+	case "builtin":
+		return newBuiltinServer(cfg, authStore)
+	default:
+		return nil, fmt.Errorf("unsupported transport %q", cfg.Transport)
+	}
+}
+
+func isRetryableServerError(err error) bool {
+	type temporary interface {
+		Temporary() bool
+	}
+
+	var temp temporary
+	return errors.As(err, &temp) && temp.Temporary()
+}
+
+func pendingRetryDelay(attempt int) time.Duration {
+	if attempt <= 1 {
+		return 5 * time.Second
+	}
+
+	delay := 5 * time.Second
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+		if delay >= time.Minute {
+			return time.Minute
+		}
+	}
+	return delay
+}
+
+func pendingMessage(phase string) string {
+	switch phase {
+	case "builtin init":
+		return "builtin init"
+	case "start":
+		return "start"
+	case "initialize":
+		return "initialize"
+	case "tools/list":
+		return "tools/list"
+	case "restart":
+		return "restart"
+	default:
+		return "prepare"
+	}
+}
+
 // InitAll starts all configured MCP servers, initializes them, and discovers their tools
 func (m *Manager) InitAll(ctx context.Context) error {
 	for _, cfg := range m.configs {
@@ -110,92 +193,148 @@ func (m *Manager) InitAll(ctx context.Context) error {
 			continue
 		}
 
-		var srv Server
-
-		m.emit("server_init", fmt.Sprintf("Initializing server %s (%s)", cfg.Name, cfg.Transport), map[string]interface{}{"server": cfg.Name, "transport": cfg.Transport})
-
-		switch cfg.Transport {
-		case "stdio":
-			srv = NewStdioServer(cfg.Command, cfg.Args, cfg.Env)
-
-		case "http":
-			srv = NewHTTPServer(cfg.Endpoint)
-
-		case "builtin":
-			var err error
-			srv, err = newBuiltinServer(cfg, m.authStore)
-			if err != nil {
-				log.Printf("Warning: server %s builtin init failed: %v", cfg.Name, err)
-				m.emit("server_failed", fmt.Sprintf("Server %s builtin init failed: %v", cfg.Name, err), map[string]interface{}{
-					"server":    cfg.Name,
-					"stableKey": cfg.StableKey,
-				})
-				continue
-			}
-
-		default:
-			log.Printf("Warning: server %s has unsupported transport %q", cfg.Name, cfg.Transport)
-			m.emit("server_failed", fmt.Sprintf("Server %s has unsupported transport %q", cfg.Name, cfg.Transport), map[string]interface{}{
-				"server":    cfg.Name,
-				"stableKey": cfg.StableKey,
-			})
-			continue
-		}
-
-		serverName := cfg.Name
-		stableKey := cfg.StableKey
-		if notifier, ok := srv.(toolListChangeNotifier); ok {
-			notifier.SetToolsChangedHandler(func() {
-				m.notifyCatalogHint(serverName, stableKey)
-			})
-		}
-		if err := srv.Start(ctx); err != nil {
-			log.Printf("Warning: server %s start failed: %v", cfg.Name, err)
-			m.emit("server_failed", fmt.Sprintf("Server %s start failed: %v", cfg.Name, err), map[string]interface{}{
-				"server":    cfg.Name,
-				"stableKey": cfg.StableKey,
-			})
-			continue
-		}
-
-		// Initialize
-		if err := srv.Initialize(); err != nil {
-			log.Printf("Warning: server %s initialize failed: %v", cfg.Name, err)
-			m.emit("server_failed", fmt.Sprintf("Server %s initialize failed: %v", cfg.Name, err), map[string]interface{}{"server": cfg.Name})
-			srv.Shutdown()
-			continue
-		}
-
-		// Discover tools
-		tools, err := srv.ListTools()
+		entry, err := m.attemptServerStart(ctx, cfg)
 		if err != nil {
-			log.Printf("Warning: server %s tools/list failed: %v", cfg.Name, err)
-			m.emit("server_failed", fmt.Sprintf("Server %s tools/list failed: %v", cfg.Name, err), map[string]interface{}{"server": cfg.Name})
-			srv.Shutdown()
+			m.handleAttemptError(cfg, err)
 			continue
 		}
 
 		m.mu.Lock()
-		m.servers = append(m.servers, serverEntry{
-			stableKey:     cfg.StableKey,
-			syncSourceKey: cfg.SyncSourceKey,
-			name:          cfg.Name,
-			transport:     cfg.Transport,
-			metadata:      configCloneMetadata(cfg.Metadata),
-			server:        srv,
-			tools:         tools,
-		})
+		m.servers = append(m.servers, *entry)
 		m.mu.Unlock()
 	}
 
 	m.mu.RLock()
 	serverCount := len(m.servers)
+	pendingCount := len(m.pending)
 	m.mu.RUnlock()
-	if serverCount == 0 {
+	if serverCount == 0 && pendingCount == 0 {
 		return fmt.Errorf("no MCP servers initialized successfully")
 	}
 
 	return nil
+}
+
+func (m *Manager) PendingServerCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.pending)
+}
+
+func (m *Manager) attemptServerStart(ctx context.Context, cfg config.ServerConfig) (*serverEntry, *serverAttemptError) {
+	m.emit("server_init", fmt.Sprintf("Initializing server %s (%s)", cfg.Name, cfg.Transport), map[string]interface{}{
+		"server":    cfg.Name,
+		"stableKey": cfg.StableKey,
+		"transport": cfg.Transport,
+	})
+
+	srv, err := m.newServer(cfg, m.authStore)
+	if err != nil {
+		return nil, &serverAttemptError{
+			phase:     "builtin init",
+			err:       err,
+			retryable: isRetryableServerError(err),
+		}
+	}
+
+	serverName := cfg.Name
+	stableKey := cfg.StableKey
+	if notifier, ok := srv.(toolListChangeNotifier); ok {
+		notifier.SetToolsChangedHandler(func() {
+			m.notifyCatalogHint(serverName, stableKey)
+		})
+	}
+
+	if err := srv.Start(ctx); err != nil {
+		return nil, &serverAttemptError{
+			phase:     "start",
+			err:       err,
+			retryable: isRetryableServerError(err),
+		}
+	}
+
+	if err := srv.Initialize(); err != nil {
+		srv.Shutdown()
+		return nil, &serverAttemptError{
+			phase:     "initialize",
+			err:       err,
+			retryable: isRetryableServerError(err),
+		}
+	}
+
+	tools, err := srv.ListTools()
+	if err != nil {
+		srv.Shutdown()
+		return nil, &serverAttemptError{
+			phase:     "tools/list",
+			err:       err,
+			retryable: isRetryableServerError(err),
+		}
+	}
+
+	return &serverEntry{
+		cfg:           cfg,
+		stableKey:     cfg.StableKey,
+		syncSourceKey: cfg.SyncSourceKey,
+		name:          cfg.Name,
+		transport:     cfg.Transport,
+		metadata:      configCloneMetadata(cfg.Metadata),
+		server:        srv,
+		tools:         tools,
+	}, nil
+}
+
+func (m *Manager) handleAttemptError(cfg config.ServerConfig, attemptErr *serverAttemptError) {
+	if attemptErr == nil {
+		return
+	}
+
+	phase := pendingMessage(attemptErr.phase)
+	if attemptErr.retryable {
+		retryIn, retryCount := m.queuePendingServer(cfg, attemptErr.phase, attemptErr.err)
+		log.Printf("Info: server %s %s pending: %v", cfg.Name, phase, attemptErr.err)
+		m.emit("server_pending", fmt.Sprintf("Server %s %s pending: %v", cfg.Name, phase, attemptErr.err), map[string]interface{}{
+			"server":     cfg.Name,
+			"stableKey":  cfg.StableKey,
+			"phase":      attemptErr.phase,
+			"retryCount": retryCount,
+			"retryIn":    retryIn.String(),
+		})
+		return
+	}
+
+	log.Printf("Warning: server %s %s failed: %v", cfg.Name, phase, attemptErr.err)
+	m.emit("server_failed", fmt.Sprintf("Server %s %s failed: %v", cfg.Name, phase, attemptErr.err), map[string]interface{}{
+		"server":    cfg.Name,
+		"stableKey": cfg.StableKey,
+		"phase":     attemptErr.phase,
+	})
+}
+
+func (m *Manager) queuePendingServer(cfg config.ServerConfig, phase string, err error) (time.Duration, int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entry, ok := m.pending[cfg.StableKey]
+	if !ok {
+		entry = &pendingServerEntry{cfg: cfg}
+		m.pending[cfg.StableKey] = entry
+	}
+
+	entry.cfg = cfg
+	entry.lastPhase = phase
+	entry.lastErr = err
+	entry.retryCount++
+	retryIn := pendingRetryDelay(entry.retryCount)
+	entry.nextRetryAt = time.Now().Add(retryIn)
+
+	return retryIn, entry.retryCount
+}
+
+func (m *Manager) removePendingServer(stableKey string) {
+	m.mu.Lock()
+	delete(m.pending, stableKey)
+	m.mu.Unlock()
 }
 
 // GetServerInfo returns server metadata for registration with the cloud
@@ -473,13 +612,14 @@ func (m *Manager) CatalogHints() <-chan struct{} {
 	return m.hints
 }
 
-func (m *Manager) RefreshToolCatalogs() (bool, []ServerInfo, error) {
+func (m *Manager) RefreshToolCatalogs(ctx context.Context) (bool, []ServerInfo, error) {
+	changed := m.retryPendingServers(ctx)
+
 	m.mu.RLock()
 	servers := make([]serverEntry, len(m.servers))
 	copy(servers, m.servers)
 	m.mu.RUnlock()
 
-	changed := false
 	for index, current := range servers {
 		tools, err := current.server.ListTools()
 		if err != nil {
@@ -487,11 +627,18 @@ func (m *Manager) RefreshToolCatalogs() (bool, []ServerInfo, error) {
 				current.server.Shutdown()
 				if m.removeServerByStableKey(current.stableKey) {
 					changed = true
+					m.handleAttemptError(current.cfg, &serverAttemptError{
+						phase:     "restart",
+						err:       err,
+						retryable: true,
+					})
 				}
+				continue
 			}
 			m.emit("server_failed", fmt.Sprintf("Server %s tools/list refresh failed: %v", current.name, err), map[string]interface{}{
 				"server":    current.name,
 				"stableKey": current.stableKey,
+				"phase":     "tools/list",
 			})
 			continue
 		}
@@ -526,6 +673,45 @@ func (m *Manager) RefreshToolCatalogs() (bool, []ServerInfo, error) {
 	}
 
 	return true, m.GetServerInfo(), nil
+}
+
+func (m *Manager) retryPendingServers(ctx context.Context) bool {
+	now := time.Now()
+
+	m.mu.RLock()
+	pending := make([]pendingServerEntry, 0, len(m.pending))
+	for _, entry := range m.pending {
+		if !entry.nextRetryAt.IsZero() && now.Before(entry.nextRetryAt) {
+			continue
+		}
+		pending = append(pending, *entry)
+	}
+	m.mu.RUnlock()
+
+	changed := false
+	for _, current := range pending {
+		entry, err := m.attemptServerStart(ctx, current.cfg)
+		if err != nil {
+			m.handleAttemptError(current.cfg, err)
+			if !err.retryable {
+				m.removePendingServer(current.cfg.StableKey)
+			}
+			continue
+		}
+
+		m.mu.Lock()
+		delete(m.pending, current.cfg.StableKey)
+		m.servers = append(m.servers, *entry)
+		m.mu.Unlock()
+
+		changed = true
+		m.emit("server_ready", fmt.Sprintf("Server %s is ready", current.cfg.Name), map[string]interface{}{
+			"server":    current.cfg.Name,
+			"stableKey": current.cfg.StableKey,
+		})
+	}
+
+	return changed
 }
 
 func stableKeyForTool(name string) string {

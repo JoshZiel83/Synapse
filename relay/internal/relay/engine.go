@@ -135,7 +135,17 @@ func (e *Engine) run(ctx context.Context) {
 	e.mu.Unlock()
 
 	servers := mgr.GetServerInfo()
-	e.emit(NewEvent(EventServersReady, fmt.Sprintf("Discovered %d MCP servers", len(servers))))
+	pendingCount := mgr.PendingServerCount()
+	serversReadyMessage := fmt.Sprintf("Discovered %d MCP servers", len(servers))
+	if pendingCount > 0 {
+		serversReadyMessage = fmt.Sprintf("Discovered %d MCP servers, %d pending", len(servers), pendingCount)
+	}
+	serversReadyEvent := NewEvent(EventServersReady, serversReadyMessage)
+	serversReadyEvent.Data = map[string]interface{}{
+		"serverCount":  len(servers),
+		"pendingCount": pendingCount,
+	}
+	e.emit(serversReadyEvent)
 
 	for _, s := range servers {
 		log.Printf("  - %s (%s): %d tools", s.Name, s.Transport, len(s.Tools))
@@ -278,7 +288,7 @@ func (e *Engine) watchCatalog(ctx context.Context, mgr *mcp.Manager, client *clo
 }
 
 func (e *Engine) refreshCatalog(ctx context.Context, mgr *mcp.Manager, client *cloud.Client) {
-	changed, servers, err := mgr.RefreshToolCatalogs()
+	changed, servers, err := mgr.RefreshToolCatalogs(ctx)
 	if err != nil {
 		e.emit(NewEvent(EventError, fmt.Sprintf("Failed to refresh MCP catalog: %v", err)))
 		return

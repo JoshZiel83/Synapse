@@ -79,13 +79,20 @@ func EnsureInstalled() (*Installation, error) {
 		return nil, fmt.Errorf("bundled commandline runtime targets %s, but current platform is %s", manifest.Platform, currentPlatform)
 	}
 
+	nodeInstallation, nodeErr := nodebundle.EnsureInstalled()
 	rootDir := filepath.Join(config.DefaultDir(), "runtime", "commandline", manifest.AssetVersion)
-	if err := ensureExtracted(rootDir, manifest); err != nil {
-		return nil, err
+	rootErr := ensureExtracted(rootDir, manifest)
+	if nodeErr != nil && !runtimebundle.IsPending(nodeErr) {
+		return nil, nodeErr
 	}
-	nodeInstallation, err := nodebundle.EnsureInstalled()
-	if err != nil {
-		return nil, err
+	if rootErr != nil && !runtimebundle.IsPending(rootErr) {
+		return nil, rootErr
+	}
+	if nodeErr != nil {
+		return nil, nodeErr
+	}
+	if rootErr != nil {
+		return nil, rootErr
 	}
 	if manifest.NodeAssetVersion != "" && nodeInstallation.AssetVersion != manifest.NodeAssetVersion {
 		return nil, fmt.Errorf("shared node runtime version mismatch: commandline bundle expects %s, got %s", manifest.NodeAssetVersion, nodeInstallation.AssetVersion)
@@ -109,6 +116,58 @@ func EnsureInstalled() (*Installation, error) {
 }
 
 func ensureExtracted(rootDir string, manifest Manifest) error {
+	return runtimebundle.Ensure(runtimebundle.InstallOptions{
+		RootDir: rootDir,
+		Verify: func(dir string) bool {
+			return installationReady(dir, manifest)
+		},
+		Install: func(stageDir string) error {
+			if err := fs.WalkDir(embeddedAssets, "assets", func(path string, d fs.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if path == "assets" {
+					return nil
+				}
+
+				relativePath := strings.TrimPrefix(path, "assets/")
+				targetPath := filepath.Join(stageDir, filepath.FromSlash(relativePath))
+				if d.IsDir() {
+					return os.MkdirAll(targetPath, 0755)
+				}
+
+				data, err := embeddedAssets.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				return runtimebundle.WriteFile(targetPath, data, 0644)
+			}); err != nil {
+				return fmt.Errorf("extract commandline runtime assets: %w", err)
+			}
+
+			if runtime.GOOS != "windows" {
+				for _, executable := range manifest.Executables {
+					targetPath := joinIfNotEmpty(stageDir, executable)
+					if targetPath == "" || !statExists(targetPath) {
+						continue
+					}
+					if err := os.Chmod(targetPath, 0755); err != nil {
+						return fmt.Errorf("mark bundled executable %s: %w", executable, err)
+					}
+				}
+			}
+
+			readyMarker := filepath.Join(stageDir, ".ready")
+			if err := os.WriteFile(readyMarker, []byte(manifest.AssetVersion), 0644); err != nil {
+				return fmt.Errorf("write commandline runtime marker: %w", err)
+			}
+
+			return nil
+		},
+	})
+}
+
+func installationReady(rootDir string, manifest Manifest) bool {
 	readyMarker := filepath.Join(rootDir, ".ready")
 	if data, err := os.ReadFile(readyMarker); err == nil && strings.TrimSpace(string(data)) == manifest.AssetVersion {
 		markerTarget := firstNonEmpty(
@@ -120,54 +179,10 @@ func ensureExtracted(rootDir string, manifest Manifest) error {
 			joinIfNotEmpty(rootDir, manifest.BashBinary),
 		)
 		if markerTarget == "" || statExists(markerTarget) {
-			return nil
+			return true
 		}
 	}
-
-	if err := runtimebundle.PrepareDir(rootDir, 0755); err != nil {
-		return fmt.Errorf("reset commandline runtime dir: %w", err)
-	}
-
-	if err := fs.WalkDir(embeddedAssets, "assets", func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if path == "assets" {
-			return nil
-		}
-
-		relativePath := strings.TrimPrefix(path, "assets/")
-		targetPath := filepath.Join(rootDir, filepath.FromSlash(relativePath))
-		if d.IsDir() {
-			return os.MkdirAll(targetPath, 0755)
-		}
-
-		data, err := embeddedAssets.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return runtimebundle.WriteFile(targetPath, data, 0644)
-	}); err != nil {
-		return fmt.Errorf("extract commandline runtime assets: %w", err)
-	}
-
-	if runtime.GOOS != "windows" {
-		for _, executable := range manifest.Executables {
-			targetPath := joinIfNotEmpty(rootDir, executable)
-			if targetPath == "" || !statExists(targetPath) {
-				continue
-			}
-			if err := os.Chmod(targetPath, 0755); err != nil {
-				return fmt.Errorf("mark bundled executable %s: %w", executable, err)
-			}
-		}
-	}
-
-	if err := os.WriteFile(readyMarker, []byte(manifest.AssetVersion), 0644); err != nil {
-		return fmt.Errorf("write commandline runtime marker: %w", err)
-	}
-
-	return nil
+	return false
 }
 
 func joinIfNotEmpty(root, relative string) string {

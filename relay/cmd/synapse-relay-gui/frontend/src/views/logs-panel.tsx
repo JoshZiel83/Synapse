@@ -3,7 +3,8 @@ import type { LogEntry } from '../types'
 
 function logTone(type: string) {
   if (type === 'error' || type === 'auth_failed') return 'text-destructive'
-  if (type === 'connected' || type === 'servers_ready') return 'text-[color:var(--status-success-fg)]'
+  if (type === 'connected' || type === 'servers_ready' || type === 'server_ready') return 'text-[color:var(--status-success-fg)]'
+  if (type === 'server_pending') return 'text-primary'
   if (type === 'tool_call' || type === 'tool_result') return 'text-primary'
   return 'text-muted-foreground'
 }

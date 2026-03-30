@@ -64,13 +64,20 @@ func EnsureInstalled() (*Installation, error) {
 		return nil, fmt.Errorf("bundled chrome-devtools runtime targets %s, but current platform is %s", manifest.Platform, currentPlatform)
 	}
 
+	nodeInstallation, nodeErr := nodebundle.EnsureInstalled()
 	rootDir := filepath.Join(config.DefaultDir(), "runtime", "chrome-devtools-mcp", manifest.AssetVersion)
-	if err := ensureExtracted(rootDir, manifest); err != nil {
-		return nil, err
+	rootErr := ensureExtracted(rootDir, manifest)
+	if nodeErr != nil && !runtimebundle.IsPending(nodeErr) {
+		return nil, nodeErr
 	}
-	nodeInstallation, err := nodebundle.EnsureInstalled()
-	if err != nil {
-		return nil, err
+	if rootErr != nil && !runtimebundle.IsPending(rootErr) {
+		return nil, rootErr
+	}
+	if nodeErr != nil {
+		return nil, nodeErr
+	}
+	if rootErr != nil {
+		return nil, rootErr
 	}
 	if manifest.NodeAssetVersion != "" && nodeInstallation.AssetVersion != manifest.NodeAssetVersion {
 		return nil, fmt.Errorf("shared node runtime version mismatch: chrome bundle expects %s, got %s", manifest.NodeAssetVersion, nodeInstallation.AssetVersion)
@@ -87,43 +94,50 @@ func EnsureInstalled() (*Installation, error) {
 }
 
 func ensureExtracted(rootDir string, manifest Manifest) error {
+	return runtimebundle.Ensure(runtimebundle.InstallOptions{
+		RootDir: rootDir,
+		Verify: func(dir string) bool {
+			return installationReady(dir, manifest)
+		},
+		Install: func(stageDir string) error {
+			if err := fs.WalkDir(embeddedAssets, "assets", func(path string, d fs.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if path == "assets" {
+					return nil
+				}
+
+				relativePath := strings.TrimPrefix(path, "assets/")
+				targetPath := filepath.Join(stageDir, filepath.FromSlash(relativePath))
+				if d.IsDir() {
+					return os.MkdirAll(targetPath, 0755)
+				}
+
+				data, err := embeddedAssets.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				return runtimebundle.WriteFile(targetPath, data, 0644)
+			}); err != nil {
+				return fmt.Errorf("extract chrome-devtools runtime assets: %w", err)
+			}
+
+			readyMarker := filepath.Join(stageDir, ".ready")
+			if err := os.WriteFile(readyMarker, []byte(manifest.AssetVersion), 0644); err != nil {
+				return fmt.Errorf("write chrome-devtools runtime marker: %w", err)
+			}
+			return nil
+		},
+	})
+}
+
+func installationReady(rootDir string, manifest Manifest) bool {
 	readyMarker := filepath.Join(rootDir, ".ready")
 	if data, err := os.ReadFile(readyMarker); err == nil && strings.TrimSpace(string(data)) == manifest.AssetVersion {
 		if _, err := os.Stat(filepath.Join(rootDir, filepath.FromSlash(manifest.EntryScript))); err == nil {
-			return nil
+			return true
 		}
 	}
-
-	if err := runtimebundle.PrepareDir(rootDir, 0755); err != nil {
-		return fmt.Errorf("reset chrome-devtools runtime dir: %w", err)
-	}
-
-	if err := fs.WalkDir(embeddedAssets, "assets", func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if path == "assets" {
-			return nil
-		}
-
-		relativePath := strings.TrimPrefix(path, "assets/")
-		targetPath := filepath.Join(rootDir, filepath.FromSlash(relativePath))
-		if d.IsDir() {
-			return os.MkdirAll(targetPath, 0755)
-		}
-
-		data, err := embeddedAssets.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return runtimebundle.WriteFile(targetPath, data, 0644)
-	}); err != nil {
-		return fmt.Errorf("extract chrome-devtools runtime assets: %w", err)
-	}
-
-	if err := os.WriteFile(readyMarker, []byte(manifest.AssetVersion), 0644); err != nil {
-		return fmt.Errorf("write chrome-devtools runtime marker: %w", err)
-	}
-
-	return nil
+	return false
 }

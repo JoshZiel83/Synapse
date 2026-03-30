@@ -17,6 +17,8 @@ const (
 	EventLog            EventType = "log"
 	EventStateChanged   EventType = "state_changed"
 	EventServerInit     EventType = "server_init"
+	EventServerPending  EventType = "server_pending"
+	EventServerReady    EventType = "server_ready"
 	EventServerFailed   EventType = "server_failed"
 	EventCatalogHint    EventType = "catalog_hint"
 	EventCatalogChanged EventType = "catalog_changed"
