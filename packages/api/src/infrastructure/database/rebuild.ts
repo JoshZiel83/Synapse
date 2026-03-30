@@ -1,12 +1,12 @@
 import { closeAuthzClient, resetAuthzRelationships } from "../authz/index.js";
 import { closeDatabasePool } from "./index.js";
-import { resetDatabaseSchema } from "./migrate.js";
+import { rebuildDatabaseSchema } from "./bootstrap.js";
 import { seedDatabase } from "./seed.js";
 
-async function reset() {
-  console.log("Starting full environment reset...");
+async function rebuild() {
+  console.log("Starting full environment rebuild...");
 
-  await resetDatabaseSchema();
+  await rebuildDatabaseSchema();
 
   const authz = await resetAuthzRelationships();
   console.log(
@@ -17,13 +17,13 @@ async function reset() {
   console.log("Database seed completed");
 }
 
-reset()
+rebuild()
   .then(async () => {
     await Promise.all([closeAuthzClient(), closeDatabasePool()]);
     process.exit(0);
   })
   .catch(async (error) => {
-    console.error("Full environment reset failed:", error);
+    console.error("Full environment rebuild failed:", error);
     await Promise.allSettled([closeAuthzClient(), closeDatabasePool()]);
     process.exit(1);
   });

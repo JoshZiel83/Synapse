@@ -38,7 +38,8 @@ import {
   queueAuthzRelationships,
   touchRelation,
 } from "../../infrastructure/authz/index.js";
-import { query, transaction } from "../../infrastructure/database/index.js";
+import { transaction } from "../../infrastructure/database/index.js";
+import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
 import { createConversationEvent } from "../conversation/service.js";
 import { getFileUrlById } from "../files/service.js";
 import { listAuthorizedResourceIds, type AccessSubject } from "../access/service.js";
@@ -862,12 +863,12 @@ async function emitActorVersionChangedEvents(params: {
 }
 
 async function runQuery<T extends QueryRow>(text: string, params?: unknown[]) {
-  return query<T>(text, params);
+  return executeSql<T>(text, params);
 }
 
 function clientQuery(client: pg.PoolClient): QueryRunner {
   return async <T extends QueryRow>(text: string, params?: unknown[]) =>
-    client.query<T>(text, params as any[]);
+    executeSqlOn<T>(client, text, params);
 }
 
 async function loadActorDocsMap(
@@ -1130,7 +1131,7 @@ export async function createActor(input: {
     const runner = clientQuery(client);
     await ensureParentActor(input.workspaceId, input.parentId, undefined, runner);
 
-    const actorResult = await client.query<{ id: string }>(
+    const actorResult = await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO actors (
          workspace_id,
          name,
@@ -1163,7 +1164,7 @@ export async function createActor(input: {
     );
     const actorId = actorResult.rows[0]!.id;
 
-    const versionResult = await client.query<{ id: string }>(
+    const versionResult = await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO actor_versions (
          actor_id,
          version,
@@ -1199,7 +1200,7 @@ export async function createActor(input: {
     const actorVersionId = versionResult.rows[0]!.id;
 
     for (const doc of docs) {
-      await client.query(
+      await executeSqlOn(client, 
         `INSERT INTO actor_version_docs (
            actor_version_id,
            doc_key,
@@ -1351,7 +1352,7 @@ export async function updateActor(
       runner,
     );
 
-    const versionResult = await client.query<{ id: string }>(
+    const versionResult = await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO actor_versions (
          actor_id,
          version,
@@ -1400,7 +1401,7 @@ export async function updateActor(
     const actorVersionId = versionResult.rows[0]!.id;
 
     for (const doc of nextDefinition.docs) {
-      await client.query(
+      await executeSqlOn(client, 
         `INSERT INTO actor_version_docs (
            actor_version_id,
            doc_key,
@@ -1421,7 +1422,7 @@ export async function updateActor(
       );
     }
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE actors
       SET name = $2,
            role = $3,
@@ -1478,7 +1479,7 @@ export async function deleteActor(
   workspaceId: UUID,
 ): Promise<boolean> {
   const result = await transaction(async (client) => {
-    const existing = await client.query<{ id: string }>(
+    const existing = await executeSqlOn<{ id: string }>(client, 
       `SELECT id
        FROM actors
        WHERE id = $1
@@ -1490,7 +1491,7 @@ export async function deleteActor(
       return { deleted: false, authzEntryIds: [] as string[] };
     }
 
-    await client.query(
+    await executeSqlOn(client, 
       `DELETE FROM actors
        WHERE id = $1
          AND workspace_id = $2`,
@@ -1591,7 +1592,7 @@ export async function installActorPackage(input: {
     const runner = clientQuery(client);
     await ensureParentActor(input.workspaceId, input.parentId || null, undefined, runner);
 
-    const actorResult = await client.query<{ id: string }>(
+    const actorResult = await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO actors (
          workspace_id,
          name,
@@ -1624,7 +1625,7 @@ export async function installActorPackage(input: {
     );
     const actorId = actorResult.rows[0]!.id;
 
-    const versionResult = await client.query<{ id: string }>(
+    const versionResult = await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO actor_versions (
          actor_id,
          version,
@@ -1654,7 +1655,7 @@ export async function installActorPackage(input: {
     const actorVersionId = versionResult.rows[0]!.id;
 
     for (const doc of packageActor.docs) {
-      await client.query(
+      await executeSqlOn(client, 
         `INSERT INTO actor_version_docs (
            actor_version_id,
            doc_key,
@@ -1675,7 +1676,7 @@ export async function installActorPackage(input: {
       );
     }
 
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO actor_source_refs (
          actor_id,
          source_catalog_item_id,
@@ -1693,7 +1694,7 @@ export async function installActorPackage(input: {
       ],
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE catalog_items
        SET download_count = download_count + 1,
            updated_at = NOW()

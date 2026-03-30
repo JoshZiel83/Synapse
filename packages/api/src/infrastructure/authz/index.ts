@@ -3,8 +3,16 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type pg from "pg";
 import { v1 } from "@authzed/authzed-node";
+import { sql } from "kysely";
 import { config } from "../../config/index.js";
-import { query, transaction } from "../database/index.js";
+import { transaction } from "../database/index.js";
+import {
+  db,
+  executeCompiledQuery,
+  executeCompiledSql,
+  type TableInsert,
+  type TableRow,
+} from "../database/kysely.js";
 
 export const AUTHZ_PLATFORM_ID = "synapse";
 
@@ -73,16 +81,18 @@ const AUTHZ_RESOURCE_TYPES: AuthzObjectType[] = [
   "model_profile",
 ];
 
-interface AuthzOutboxRow {
-  id: string;
+type AuthzOutboxRow = Pick<
+  TableRow<"authz_outbox">,
+  | "id"
+  | "relation"
+  | "resource_id"
+  | "subject_id"
+  | "subject_relation"
+> & {
   operation: "touch" | "delete";
   resource_type: AuthzObjectType;
-  resource_id: string;
-  relation: string;
   subject_type: AuthzObjectType;
-  subject_id: string;
-  subject_relation: string | null;
-}
+};
 
 type Queryable = Pick<pg.PoolClient, "query">;
 
@@ -228,75 +238,89 @@ async function claimOutboxEntriesByIds(entryIds: string[]) {
   if (entryIds.length === 0) return [] as AuthzOutboxRow[];
 
   return transaction(async (client) => {
-    const result = await client.query(
-      `UPDATE authz_outbox
-       SET status = 'processing',
-           attempts = attempts + 1,
-           last_error = NULL,
-           updated_at = NOW()
-       WHERE id = ANY($1)
-         AND status IN ('pending', 'failed')
-       RETURNING id, operation, resource_type, resource_id, relation, subject_type, subject_id, subject_relation`,
-      [entryIds],
+    const result = await executeCompiledQuery<AuthzOutboxRow>(
+      client,
+      db
+        .updateTable("authz_outbox")
+        .set({
+          status: "processing",
+          attempts: sql`attempts + 1`,
+          last_error: null,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "in", entryIds)
+        .where("status", "in", ["pending", "failed"])
+        .returning([
+          "id",
+          "operation",
+          "resource_type",
+          "resource_id",
+          "relation",
+          "subject_type",
+          "subject_id",
+          "subject_relation",
+        ]),
     );
 
-    return result.rows as AuthzOutboxRow[];
+    return result.rows;
   });
 }
 
 async function claimPendingOutboxEntries(limit: number) {
   return transaction(async (client) => {
-    const result = await client.query(
-      `WITH claimed AS (
-         SELECT id
-         FROM authz_outbox
-         WHERE status IN ('pending', 'failed')
-         ORDER BY created_at ASC
-         LIMIT $1
-         FOR UPDATE SKIP LOCKED
-       )
-       UPDATE authz_outbox ao
-       SET status = 'processing',
-           attempts = attempts + 1,
-           last_error = NULL,
-           updated_at = NOW()
-       FROM claimed
-       WHERE ao.id = claimed.id
-       RETURNING ao.id, ao.operation, ao.resource_type, ao.resource_id, ao.relation, ao.subject_type, ao.subject_id, ao.subject_relation`,
-      [limit],
-    );
+    const compiled = sql<AuthzOutboxRow[]>`
+      WITH claimed AS (
+        SELECT id
+        FROM authz_outbox
+        WHERE status IN ('pending', 'failed')
+        ORDER BY created_at ASC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE authz_outbox ao
+      SET status = 'processing',
+          attempts = attempts + 1,
+          last_error = NULL,
+          updated_at = NOW()
+      FROM claimed
+      WHERE ao.id = claimed.id
+      RETURNING ao.id, ao.operation, ao.resource_type, ao.resource_id, ao.relation, ao.subject_type, ao.subject_id, ao.subject_relation
+    `.compile(db);
+    const result = await executeCompiledSql<AuthzOutboxRow>(client, compiled);
 
-    return result.rows as AuthzOutboxRow[];
+    return result.rows;
   });
 }
 
 async function markOutboxEntriesApplied(entryIds: string[], zedToken?: string) {
   if (entryIds.length === 0) return;
 
-  await query(
-    `UPDATE authz_outbox
-     SET status = 'applied',
-         zed_token = $2,
-         last_error = NULL,
-         applied_at = NOW(),
-         updated_at = NOW()
-     WHERE id = ANY($1)`,
-    [entryIds, zedToken || null],
-  );
+  await db
+    .updateTable("authz_outbox")
+    .set({
+      status: "applied",
+      zed_token: zedToken || null,
+      last_error: null,
+      applied_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "in", entryIds)
+    .execute();
 }
 
 async function markOutboxEntriesFailed(entryIds: string[], error: unknown) {
   if (entryIds.length === 0) return;
 
   const message = error instanceof Error ? error.message : String(error);
-  await query(
-    `UPDATE authz_outbox
-     SET status = 'failed',
-         last_error = $2,
-         updated_at = NOW()
-     WHERE id = ANY($1)`,
-    [entryIds, message],
-  );
+  await db
+    .updateTable("authz_outbox")
+    .set({
+      status: "failed",
+      last_error: message,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "in", entryIds)
+    .execute();
 }
 
 async function insertOutboxEntries(
@@ -309,32 +333,35 @@ async function insertOutboxEntries(
   }
 
   const ids: string[] = [];
-  const serializedMetadata = JSON.stringify(metadata || {});
 
   for (const entry of entries) {
-    const result = await queryable.query(
-      `INSERT INTO authz_outbox (
-         operation,
-         resource_type,
-         resource_id,
-         relation,
-         subject_type,
-         subject_id,
-         subject_relation,
-         metadata
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-       RETURNING id`,
-      [
-        entry.operation || "touch",
-        entry.resourceType,
-        entry.resourceId,
-        entry.relation,
-        entry.subjectType,
-        entry.subjectId,
-        entry.subjectRelation || null,
-        serializedMetadata,
-      ],
+    const row: Pick<
+      TableInsert<"authz_outbox">,
+      | "metadata"
+      | "operation"
+      | "relation"
+      | "resource_id"
+      | "resource_type"
+      | "subject_id"
+      | "subject_relation"
+      | "subject_type"
+    > = {
+      metadata:
+        (metadata || {}) as TableInsert<"authz_outbox">["metadata"],
+      operation: entry.operation || "touch",
+      relation: entry.relation,
+      resource_id: entry.resourceId,
+      resource_type: entry.resourceType,
+      subject_id: entry.subjectId,
+      subject_relation: entry.subjectRelation || null,
+      subject_type: entry.subjectType,
+    };
+    const result = await executeCompiledQuery<{ id: string }>(
+      queryable,
+      db
+        .insertInto("authz_outbox")
+        .values(row)
+        .returning("id"),
     );
     ids.push(result.rows[0].id);
   }

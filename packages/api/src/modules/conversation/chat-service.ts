@@ -1,5 +1,11 @@
 import { query, transaction } from "../../infrastructure/database/index.js";
 import {
+  db,
+  executeCompiledQuery,
+  executeTakeFirst,
+  type TableInsert,
+} from "../../infrastructure/database/kysely.js";
+import {
   buildActorConversationContextId,
   diffAuthzRelationships,
   deleteRelation,
@@ -20,6 +26,7 @@ import {
   nowISO,
 } from "@synapse/shared";
 import { v4 as uuidv4 } from "uuid";
+import { sql } from "kysely";
 import {
   conversationItemRowToFeedItem,
   createConversationEvent,
@@ -77,8 +84,8 @@ type ConversationGrantRow = {
   granted_by?: string | null;
   reason?: string | null;
   metadata?: Record<string, unknown> | string | null;
-  created_at?: string;
-  revoked_at?: string | null;
+  created_at?: string | Date | null;
+  revoked_at?: string | Date | null;
 };
 
 function normalizeConversationRow(row: any) {
@@ -124,18 +131,19 @@ async function loadActorJoinVersionRefs(actorIds: string[]) {
     return refs;
   }
 
-  const result = await query(
-    `SELECT a.id, current_version.id AS actor_version_id
-     FROM actors a
-     JOIN actor_versions current_version
-       ON current_version.actor_id = a.id
-      AND current_version.version = a.current_version
-     WHERE a.id = ANY($1::uuid[])`,
-    [actorIds],
-  );
+  const result = await db
+    .selectFrom("actors as a")
+    .innerJoin("actor_versions as current_version", (join) =>
+      join
+        .onRef("current_version.actor_id", "=", "a.id")
+        .onRef("current_version.version", "=", "a.current_version"),
+    )
+    .select(["a.id", "current_version.id as actor_version_id"])
+    .where("a.id", "in", actorIds)
+    .execute();
 
-  for (const row of result.rows) {
-    refs.set(row.id as string, row.actor_version_id as string);
+  for (const row of result) {
+    refs.set(row.id, row.actor_version_id);
   }
 
   return refs;
@@ -157,16 +165,13 @@ function buildWakeupSummary(sourceName: string | undefined, content: string) {
 }
 
 async function resolveWorkspaceImageFile(workspaceId: string, fileId: string) {
-  const result = await query(
-    `SELECT id, stored_name, mime_type
-     FROM files
-     WHERE id = $1
-       AND workspace_id = $2
-     LIMIT 1`,
-    [fileId, workspaceId],
-  );
-
-  const row = result.rows[0];
+  const row = await db
+    .selectFrom("files")
+    .select(["id", "stored_name", "mime_type"])
+    .where("id", "=", fileId)
+    .where("workspace_id", "=", workspaceId)
+    .limit(1)
+    .executeTakeFirst();
   if (!row) {
     throw new Error("Avatar file not found in this workspace");
   }
@@ -268,8 +273,8 @@ function mapConversationGrant(
   row: ConversationGrantRow & {
     id: string;
     conversation_id: string;
-    created_at: string;
-    revoked_at: string | null;
+    created_at: string | Date | null;
+    revoked_at: string | Date | null;
   },
 ) {
   return {
@@ -284,8 +289,10 @@ function mapConversationGrant(
     grantedBy: row.granted_by || undefined,
     reason: row.reason || undefined,
     metadata: parseJson(row.metadata),
-    createdAt: row.created_at,
-    revokedAt: row.revoked_at || undefined,
+    createdAt:
+      row.created_at instanceof Date ? row.created_at.toISOString() : (row.created_at || ""),
+    revokedAt:
+      row.revoked_at instanceof Date ? row.revoked_at.toISOString() : row.revoked_at || undefined,
   };
 }
 
@@ -298,6 +305,120 @@ function buildTextContentFromParts(parts: any[]) {
     .filter((part) => part.part_type === "json")
     .map((part) => JSON.stringify(part.json_value));
   return jsonParts.join("\n");
+}
+
+async function loadActiveConversationCounts(conversationIds: string[]) {
+  if (conversationIds.length === 0) {
+    return new Map<string, number>();
+  }
+
+  const rows = await db
+    .selectFrom("sessions")
+    .select([
+      "conversation_id",
+      ({ fn }) => fn.countAll<number>().as("active_count"),
+    ])
+    .where("conversation_id", "in", conversationIds)
+    .where("status", "<>", "closed")
+    .groupBy("conversation_id")
+    .execute();
+
+  return new Map<string, number>(
+    rows.map((row) => [row.conversation_id, Number(row.active_count)]),
+  );
+}
+
+async function loadLastVisibleConversationItems(
+  conversationIds: string[],
+  userId: string,
+) {
+  if (conversationIds.length === 0) {
+    return [] as any[];
+  }
+
+  return db
+    .selectFrom("conversation_items as ci")
+    .distinctOn("ci.conversation_id")
+    .leftJoin("conversation_members as cm", "cm.id", "ci.author_member_id")
+    .leftJoin("actors as a", "a.id", "cm.actor_id")
+    .leftJoin("users as u", "u.id", "cm.user_id")
+    .select([
+      "ci.conversation_id",
+      "ci.id",
+      "ci.role",
+      "ci.item_type",
+      "ci.created_at",
+      "cm.member_type as author_member_type",
+      sql<string | null>`COALESCE(a.name, u.name, cm.display_name)`.as(
+        "author_name",
+      ),
+    ])
+    .where("ci.conversation_id", "in", conversationIds)
+    .where("ci.scope", "=", "shared")
+    .where("ci.surface", "=", "visible")
+    .where((eb) =>
+      eb.or([
+        eb("ci.subtype", "<>", "model_error_notice"),
+        sql<boolean>`NOT EXISTS (
+          SELECT 1 FROM conversation_item_targets cit0
+          WHERE cit0.item_id = ci.id
+        )`,
+        sql<boolean>`EXISTS (
+          SELECT 1
+          FROM conversation_item_targets cit
+          JOIN conversation_members cm_target
+            ON cm_target.id = cit.target_member_id
+          WHERE cit.item_id = ci.id
+            AND cm_target.user_id = ${userId}
+        )`,
+      ]),
+    )
+    .orderBy("ci.conversation_id")
+    .orderBy("ci.sequence", "desc")
+    .execute();
+}
+
+async function loadConversationItemParts(itemIds: string[]) {
+  if (itemIds.length === 0) {
+    return [] as any[];
+  }
+
+  return db
+    .selectFrom("conversation_item_parts")
+    .selectAll()
+    .where("item_id", "in", itemIds)
+    .orderBy("item_id", "asc")
+    .orderBy("ordinal", "asc")
+    .execute();
+}
+
+function unreadCountSelection(userId: string) {
+  return sql<number>`(
+    SELECT COUNT(*)::int
+    FROM conversation_items ci
+    JOIN conversation_members cm_u
+      ON cm_u.conversation_id = c.id
+     AND cm_u.user_id = ${userId}
+    WHERE ci.conversation_id = c.id
+      AND ci.scope = 'shared'
+      AND ci.surface = 'visible'
+      AND (
+        ci.subtype <> 'model_error_notice'
+        OR NOT EXISTS (
+          SELECT 1 FROM conversation_item_targets cit0
+          WHERE cit0.item_id = ci.id
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM conversation_item_targets cit
+          JOIN conversation_members cm_target
+            ON cm_target.id = cit.target_member_id
+          WHERE cit.item_id = ci.id
+            AND cm_target.user_id = ${userId}
+        )
+      )
+      AND ci.sequence > COALESCE(cr.read_watermark_sequence, 0)
+  )`.as("unread_count");
 }
 
 async function queueConversationReadUpdated(params: {
@@ -347,29 +468,29 @@ async function findFeedItemByClientMessageId(params: {
   authorMemberId: string;
   clientMessageId: string;
 }) {
-  const result = await query(
-    `SELECT id
-     FROM conversation_items
-     WHERE conversation_id = $1
-       AND author_member_id = $2
-       AND client_message_id = $3
-     LIMIT 1`,
-    [params.conversationId, params.authorMemberId, params.clientMessageId],
-  );
-  const itemId = result.rows[0]?.id as string | undefined;
+  const row = await db
+    .selectFrom("conversation_items")
+    .select("id")
+    .where("conversation_id", "=", params.conversationId)
+    .where("author_member_id", "=", params.authorMemberId)
+    .where("client_message_id", "=", params.clientMessageId)
+    .limit(1)
+    .executeTakeFirst();
+  const itemId = row?.id;
   return itemId ? getConversationFeedItemById(itemId) : null;
 }
 
 async function getLatestActorSession(conversationId: string, actorId: string) {
-  const result = await query(
-    `SELECT *
-     FROM sessions
-     WHERE conversation_id = $1 AND actor_id = $2
-     ORDER BY created_at DESC
-     LIMIT 1`,
-    [conversationId, actorId],
+  return (
+    (await db
+      .selectFrom("sessions")
+      .selectAll()
+      .where("conversation_id", "=", conversationId)
+      .where("actor_id", "=", actorId)
+      .orderBy("created_at", "desc")
+      .limit(1)
+      .executeTakeFirst()) ?? null
   );
-  return result.rows[0] ?? null;
 }
 
 async function ensureActorSession(params: {
@@ -386,14 +507,13 @@ async function ensureActorSession(params: {
 
   let workspaceId = params.workspaceId;
   if (!workspaceId) {
-    const actorResult = await query(
-      `SELECT workspace_id
-       FROM actors
-       WHERE id = $1
-       LIMIT 1`,
-      [params.actorId],
-    );
-    workspaceId = actorResult.rows[0]?.workspace_id as string | undefined;
+    const actorRow = await db
+      .selectFrom("actors")
+      .select("workspace_id")
+      .where("id", "=", params.actorId)
+      .limit(1)
+      .executeTakeFirst();
+    workspaceId = actorRow?.workspace_id;
   }
   if (!workspaceId) {
     throw new Error(`Actor ${params.actorId} workspace not found`);
@@ -436,23 +556,21 @@ async function hydrateMembershipInitiator(params: {
 
   if (!name) {
     if (params.initiator.actorId) {
-      const actorResult = await query(
-        `SELECT name
-         FROM actors
-         WHERE id = $1
-         LIMIT 1`,
-        [params.initiator.actorId],
-      );
-      name = (actorResult.rows[0]?.name as string | undefined) || undefined;
+      const actorRow = await db
+        .selectFrom("actors")
+        .select("name")
+        .where("id", "=", params.initiator.actorId)
+        .limit(1)
+        .executeTakeFirst();
+      name = actorRow?.name || undefined;
     } else if (params.initiator.userId) {
-      const userResult = await query(
-        `SELECT name
-         FROM users
-         WHERE id = $1
-         LIMIT 1`,
-        [params.initiator.userId],
-      );
-      name = (userResult.rows[0]?.name as string | undefined) || undefined;
+      const userRow = await db
+        .selectFrom("users")
+        .select("name")
+        .where("id", "=", params.initiator.userId)
+        .limit(1)
+        .executeTakeFirst();
+      name = userRow?.name || undefined;
     }
   }
 
@@ -790,9 +908,17 @@ export async function createThread(params: {
     const actorRows =
       actorIds.length > 0
         ? (
-            await client.query(
-              `SELECT id, name, title, workspace_id FROM actors WHERE id = ANY($1::uuid[])`,
-              [actorIds],
+            await executeCompiledQuery<{
+              id: string;
+              name: string;
+              title: string;
+              workspace_id: string;
+            }>(
+              client,
+              db
+                .selectFrom("actors")
+                .select(["id", "name", "title", "workspace_id"])
+                .where("id", "in", actorIds),
             )
           ).rows
         : [];
@@ -809,16 +935,25 @@ export async function createThread(params: {
     const userRows =
       participantUserIds.length > 0
         ? (
-            await client.query(
-              `SELECT u.id,
-                      u.name,
-                      wm.user_id AS workspace_member_user_id
-               FROM users u
-               LEFT JOIN workspace_members wm
-                 ON wm.user_id = u.id
-                AND wm.workspace_id = $1
-               WHERE u.id = ANY($2::uuid[])`,
-              [workspaceId || null, participantUserIds],
+            await executeCompiledQuery<{
+              id: string;
+              name: string;
+              workspace_member_user_id: string | null;
+            }>(
+              client,
+              db
+                .selectFrom("users as u")
+                .leftJoin("workspace_members as wm", (join) =>
+                  join
+                    .onRef("wm.user_id", "=", "u.id")
+                    .on("wm.workspace_id", "=", workspaceId || null),
+                )
+                .select([
+                  "u.id",
+                  "u.name",
+                  "wm.user_id as workspace_member_user_id",
+                ])
+                .where("u.id", "in", participantUserIds),
             )
           ).rows
         : [];
@@ -852,20 +987,25 @@ export async function createThread(params: {
           "Untitled conversation"
         : null);
 
-    const conversationResult = await client.query(
-      `INSERT INTO conversations (id, workspace_id, domain, kind, title, created_by, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, NOW(), NOW())
-       RETURNING *`,
-      [
-        conversationId,
-        domain === "workspace" ? workspaceId : null,
-        domain,
-        kind,
-        fallbackTitle,
-        createdBy,
-      ],
+    const conversationRow = await executeTakeFirst(
+      client,
+      db
+        .insertInto("conversations")
+        .values({
+          id: conversationId,
+          workspace_id: domain === "workspace" ? workspaceId : null,
+          domain,
+          kind,
+          title: fallbackTitle,
+          created_by: createdBy,
+          metadata: {} as TableInsert<"conversations">["metadata"],
+        })
+        .returningAll(),
     );
-    const conversation = normalizeConversationRow(conversationResult.rows[0]);
+    if (!conversationRow) {
+      throw new Error("Failed to create conversation");
+    }
+    const conversation = normalizeConversationRow(conversationRow);
 
     if (domain === "workspace" && workspaceId) {
       await queueConversationUpdated({
@@ -889,11 +1029,16 @@ export async function createThread(params: {
 
     for (const userId of participantUserIds) {
       const userMemberId = uuidv4();
-      await client.query(
-        `INSERT INTO conversation_members
-           (id, conversation_id, member_type, user_id, state, metadata, joined_at)
-         VALUES ($1, $2, 'user', $3, 'active', '{}'::jsonb, NOW())`,
-        [userMemberId, conversationId, userId],
+      await executeCompiledQuery(
+        client,
+        db.insertInto("conversation_members").values({
+          id: userMemberId,
+          conversation_id: conversationId,
+          member_type: "user",
+          user_id: userId,
+          state: "active",
+          metadata: {} as TableInsert<"conversation_members">["metadata"],
+        }),
       );
 
       const userInfo = userMap.get(userId);
@@ -909,19 +1054,32 @@ export async function createThread(params: {
     for (const actorId of actorIds) {
       const actorInfo = actorMap.get(actorId);
       const sessionId = uuidv4();
-      await client.query(
-        `INSERT INTO sessions
-           (id, workspace_id, actor_id, conversation_id, channel_type, trigger, status, metadata, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, 'web', 'user_message', 'idle', '{}'::jsonb, NOW(), NOW())`,
-        [sessionId, actorInfo.workspace_id, actorId, conversationId],
+      await executeCompiledQuery(
+        client,
+        db.insertInto("sessions").values({
+          id: sessionId,
+          workspace_id: actorInfo.workspace_id,
+          actor_id: actorId,
+          conversation_id: conversationId,
+          channel_type: "web",
+          trigger: "user_message",
+          status: "idle",
+          metadata: {} as TableInsert<"sessions">["metadata"],
+        }),
       );
 
       const memberId = uuidv4();
-      await client.query(
-        `INSERT INTO conversation_members
-           (id, conversation_id, member_type, actor_id, actor_join_version_id, state, metadata, joined_at)
-         VALUES ($1, $2, 'actor', $3, $4, 'active', '{}'::jsonb, NOW())`,
-        [memberId, conversationId, actorId, actorJoinVersionRefs.get(actorId) || null],
+      await executeCompiledQuery(
+        client,
+        db.insertInto("conversation_members").values({
+          id: memberId,
+          conversation_id: conversationId,
+          member_type: "actor",
+          actor_id: actorId,
+          actor_join_version_id: actorJoinVersionRefs.get(actorId) || null,
+          state: "active",
+          metadata: {} as TableInsert<"conversation_members">["metadata"],
+        }),
       );
       members.push({ id: memberId, actorId, sessionId });
 
@@ -1039,11 +1197,12 @@ export async function createThread(params: {
 }
 
 export async function getConversation(conversationId: string): Promise<any | null> {
-  const result = await query(
-    `SELECT * FROM conversations WHERE id = $1`,
-    [conversationId],
-  );
-  return normalizeConversationRow(result.rows[0] ?? null);
+  const row = await db
+    .selectFrom("conversations")
+    .selectAll()
+    .where("id", "=", conversationId)
+    .executeTakeFirst();
+  return normalizeConversationRow(row ?? null);
 }
 
 export async function updateConversationProfile(params: {
@@ -1081,17 +1240,22 @@ export async function updateConversationProfile(params: {
     title === undefined ? conversation.title : title || conversation.title;
 
   const updated = await transaction(async (client) => {
-    const result = await client.query(
-      `UPDATE conversations
-       SET title = $2,
-           metadata = $3::jsonb,
-           updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
-      [params.conversationId, nextTitle, JSON.stringify(nextMetadata)],
+    const nextConversationRow = await executeTakeFirst(
+      client,
+      db
+        .updateTable("conversations")
+        .set({
+          title: nextTitle,
+          metadata: nextMetadata as TableInsert<"conversations">["metadata"],
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", params.conversationId)
+        .returningAll(),
     );
-
-    const nextConversation = normalizeConversationRow(result.rows[0]);
+    if (!nextConversationRow) {
+      throw new Error("Conversation not found");
+    }
+    const nextConversation = normalizeConversationRow(nextConversationRow);
     await queueConversationUpdated({
       queryable: client,
       workspaceId: params.workspaceId,
@@ -1114,55 +1278,38 @@ export async function getConversationsByWorkspace(
 ): Promise<any[]> {
   const conversations = conversationIds
     ? conversationIds.length > 0
-      ? (
-	          await query(
-            `SELECT c.*,
-                  transport_account.transport_kind,
-                  cr.last_read_at,
-                  COALESCE(cr.read_watermark_sequence, 0) AS read_watermark_sequence,
-                  (
-                    SELECT COUNT(*)::int
-                    FROM conversation_items ci
-                    JOIN conversation_members cm_u
-                      ON cm_u.conversation_id = c.id
-                     AND cm_u.user_id = $2
-                    WHERE ci.conversation_id = c.id
-                      AND ci.scope = 'shared'
-                      AND ci.surface = 'visible'
-                      AND (
-                        ci.subtype <> 'model_error_notice'
-                        OR NOT EXISTS (
-                          SELECT 1 FROM conversation_item_targets cit0
-                          WHERE cit0.item_id = ci.id
-                        )
-                        OR EXISTS (
-                          SELECT 1
-                          FROM conversation_item_targets cit
-                          JOIN conversation_members cm_target
-                            ON cm_target.id = cit.target_member_id
-                          WHERE cit.item_id = ci.id
-                            AND cm_target.user_id = $2
-                        )
-                      )
-                      AND ci.sequence > COALESCE(cr.read_watermark_sequence, 0)
-                  ) AS unread_count
-           FROM conversations c
-           LEFT JOIN conversation_transport_bindings ctb
-             ON ctb.conversation_id = c.id
-	           LEFT JOIN transport_accounts transport_account
-	             ON transport_account.id = ctb.transport_account_id
-	           LEFT JOIN conversation_user_states cr ON cr.conversation_id = c.id AND cr.user_id = $2
-	           WHERE c.workspace_id = $1
-	             AND c.domain = 'workspace'
-	             AND c.id = ANY($3::uuid[])
-	           ORDER BY c.updated_at DESC, c.created_at DESC`,
-            [
-              workspaceId,
-              userId,
-	              conversationIds,
-            ],
+      ? await db
+          .selectFrom("conversations as c")
+          .leftJoin(
+            "conversation_transport_bindings as ctb",
+            "ctb.conversation_id",
+            "c.id",
           )
-        ).rows
+          .leftJoin(
+            "transport_accounts as transport_account",
+            "transport_account.id",
+            "ctb.transport_account_id",
+          )
+          .leftJoin("conversation_user_states as cr", (join) =>
+            join
+              .onRef("cr.conversation_id", "=", "c.id")
+              .on("cr.user_id", "=", userId),
+          )
+          .selectAll("c")
+          .select([
+            "transport_account.transport_kind",
+            "cr.last_read_at",
+            sql<number>`COALESCE(cr.read_watermark_sequence, 0)`.as(
+              "read_watermark_sequence",
+            ),
+            unreadCountSelection(userId),
+          ])
+          .where("c.workspace_id", "=", workspaceId)
+          .where("c.domain", "=", "workspace")
+          .where("c.id", "in", conversationIds)
+          .orderBy("c.updated_at", "desc")
+          .orderBy("c.created_at", "desc")
+          .execute()
       : []
     : await listUserWorkspaceConversations(workspaceId, userId);
   if (conversations.length === 0) return [];
@@ -1170,72 +1317,21 @@ export async function getConversationsByWorkspace(
   const resolvedConversationIds = conversations.map(
     (conversation: any) => conversation.id,
   );
-  const activeCountsResult = await query(
-    `SELECT conversation_id, COUNT(*)::int AS active_count
-     FROM sessions
-     WHERE conversation_id = ANY($1)
-       AND status <> 'closed'
-     GROUP BY conversation_id`,
-    [resolvedConversationIds],
+  const activeCountMap = await loadActiveConversationCounts(
+    resolvedConversationIds,
   );
-  const activeCountMap = new Map<string, number>(
-    activeCountsResult.rows.map((row: any) => [
-      row.conversation_id,
-      row.active_count,
-    ]),
-  );
-
-  const lastItemsResult = await query(
-    `SELECT DISTINCT ON (ci.conversation_id)
-            ci.conversation_id,
-            ci.id,
-            ci.role,
-            ci.item_type,
-            ci.created_at,
-            cm.member_type AS author_member_type,
-            COALESCE(a.name, u.name, cm.display_name) AS author_name
-     FROM conversation_items ci
-     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     WHERE ci.conversation_id = ANY($1)
-       AND ci.scope = 'shared'
-       AND ci.surface = 'visible'
-       AND (
-         ci.subtype <> 'model_error_notice'
-         OR NOT EXISTS (
-           SELECT 1 FROM conversation_item_targets cit0
-           WHERE cit0.item_id = ci.id
-         )
-         OR EXISTS (
-           SELECT 1
-           FROM conversation_item_targets cit
-           JOIN conversation_members cm_target
-             ON cm_target.id = cit.target_member_id
-           WHERE cit.item_id = ci.id
-             AND cm_target.user_id = $2
-         )
-       )
-     ORDER BY ci.conversation_id, ci.sequence DESC`,
-    [resolvedConversationIds, userId],
+  const lastItems = await loadLastVisibleConversationItems(
+    resolvedConversationIds,
+    userId,
   );
 
   const lastItemMap = new Map<string, any>(
-    lastItemsResult.rows.map((row: any) => [row.conversation_id, row]),
+    lastItems.map((row: any) => [row.conversation_id, row]),
   );
-  const itemIds = lastItemsResult.rows.map((row: any) => row.id);
-  const lastPartsResult =
-    itemIds.length > 0
-      ? await query(
-          `SELECT cip.*
-         FROM conversation_item_parts cip
-         WHERE cip.item_id = ANY($1)
-         ORDER BY cip.item_id, cip.ordinal ASC`,
-          [itemIds],
-        )
-      : { rows: [] };
+  const itemIds = lastItems.map((row: any) => row.id);
+  const lastParts = await loadConversationItemParts(itemIds);
   const partsByItem = new Map<string, any[]>();
-  for (const row of lastPartsResult.rows) {
+  for (const row of lastParts) {
     if (!partsByItem.has(row.item_id)) partsByItem.set(row.item_id, []);
     partsByItem.get(row.item_id)!.push(row);
   }
@@ -1267,150 +1363,83 @@ export async function getThreadsForUser(params: {
   workspaceId?: string;
   domain?: "workspace" | "social";
 }): Promise<any[]> {
-  const queryParams: any[] = [params.userId];
-  const filters: string[] = [];
+  let statement = db
+    .selectFrom("conversations as c")
+    .innerJoin("conversation_members as cm", (join) =>
+      join
+        .onRef("cm.conversation_id", "=", "c.id")
+        .on("cm.user_id", "=", params.userId)
+        .on("cm.state", "=", "active"),
+    )
+    .leftJoin(
+      "conversation_transport_bindings as ctb",
+      "ctb.conversation_id",
+      "c.id",
+    )
+    .leftJoin(
+      "transport_accounts as transport_account",
+      "transport_account.id",
+      "ctb.transport_account_id",
+    )
+    .leftJoin("conversation_user_states as cr", (join) =>
+      join
+        .onRef("cr.conversation_id", "=", "c.id")
+        .on("cr.user_id", "=", params.userId),
+    )
+    .selectAll("c")
+    .select([
+      "transport_account.transport_kind",
+      "cr.last_read_at",
+      sql<number>`COALESCE(cr.read_watermark_sequence, 0)`.as(
+        "read_watermark_sequence",
+      ),
+      unreadCountSelection(params.userId),
+    ]);
 
   if (params.workspaceId) {
-    const workspaceIdIndex = queryParams.push(params.workspaceId);
+    const workspaceId = params.workspaceId;
     if (params.domain === "workspace") {
-      filters.push(
-        `c.domain = 'workspace' AND c.workspace_id = $${workspaceIdIndex}`,
-      );
+      statement = statement
+        .where("c.domain", "=", "workspace")
+        .where("c.workspace_id", "=", workspaceId);
     } else if (params.domain === "social") {
-      filters.push(`c.domain = 'social'`);
+      statement = statement.where("c.domain", "=", "social");
     } else {
-      filters.push(
-        `(c.domain = 'social' OR (c.domain = 'workspace' AND c.workspace_id = $${workspaceIdIndex}))`,
+      statement = statement.where((eb) =>
+        eb.or([
+          eb("c.domain", "=", "social"),
+          eb.and([
+            eb("c.domain", "=", "workspace"),
+            eb("c.workspace_id", "=", workspaceId),
+          ]),
+        ]),
       );
     }
   } else if (params.domain) {
-    const domainIndex = queryParams.push(params.domain);
-    filters.push(`c.domain = $${domainIndex}`);
+    statement = statement.where("c.domain", "=", params.domain);
   }
 
-  const visibilityClause =
-    filters.length > 0 ? `AND (${filters.join(" AND ")})` : "";
-
-  const conversations = (
-    await query(
-      `SELECT c.*,
-              transport_account.transport_kind,
-              cr.last_read_at,
-              COALESCE(cr.read_watermark_sequence, 0) AS read_watermark_sequence,
-              (
-                SELECT COUNT(*)::int
-                FROM conversation_items ci
-                JOIN conversation_members cm_u
-                  ON cm_u.conversation_id = c.id
-                 AND cm_u.user_id = $1
-                WHERE ci.conversation_id = c.id
-                  AND ci.scope = 'shared'
-                  AND ci.surface = 'visible'
-                  AND (
-                    ci.subtype <> 'model_error_notice'
-                    OR NOT EXISTS (
-                      SELECT 1 FROM conversation_item_targets cit0
-                      WHERE cit0.item_id = ci.id
-                    )
-                    OR EXISTS (
-                      SELECT 1
-                      FROM conversation_item_targets cit
-                      JOIN conversation_members cm_target
-                        ON cm_target.id = cit.target_member_id
-                      WHERE cit.item_id = ci.id
-                        AND cm_target.user_id = $1
-                    )
-                  )
-                  AND ci.sequence > COALESCE(cr.read_watermark_sequence, 0)
-              ) AS unread_count
-       FROM conversations c
-       JOIN conversation_members cm
-         ON cm.conversation_id = c.id
-        AND cm.user_id = $1
-        AND cm.state = 'active'
-       LEFT JOIN conversation_transport_bindings ctb
-         ON ctb.conversation_id = c.id
-       LEFT JOIN transport_accounts transport_account
-         ON transport_account.id = ctb.transport_account_id
-       LEFT JOIN conversation_user_states cr
-         ON cr.conversation_id = c.id
-        AND cr.user_id = $1
-       WHERE 1 = 1
-         ${visibilityClause}
-       ORDER BY c.updated_at DESC, c.created_at DESC`,
-      queryParams,
-    )
-  ).rows;
+  const conversations = await statement
+    .orderBy("c.updated_at", "desc")
+    .orderBy("c.created_at", "desc")
+    .execute();
 
   if (conversations.length === 0) return [];
 
   const conversationIds = conversations.map((conversation: any) => conversation.id);
-  const activeCountsResult = await query(
-    `SELECT conversation_id, COUNT(*)::int AS active_count
-     FROM sessions
-     WHERE conversation_id = ANY($1::uuid[])
-       AND status <> 'closed'
-     GROUP BY conversation_id`,
-    [conversationIds],
-  );
-  const activeCountMap = new Map<string, number>(
-    activeCountsResult.rows.map((row: any) => [
-      row.conversation_id,
-      row.active_count,
-    ]),
-  );
-
-  const lastItemsResult = await query(
-    `SELECT DISTINCT ON (ci.conversation_id)
-            ci.conversation_id,
-            ci.id,
-            ci.role,
-            ci.item_type,
-            ci.created_at,
-            cm.member_type AS author_member_type,
-            COALESCE(a.name, u.name, cm.display_name) AS author_name
-     FROM conversation_items ci
-     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     WHERE ci.conversation_id = ANY($1::uuid[])
-       AND ci.scope = 'shared'
-       AND ci.surface = 'visible'
-       AND (
-         ci.subtype <> 'model_error_notice'
-         OR NOT EXISTS (
-           SELECT 1 FROM conversation_item_targets cit0
-           WHERE cit0.item_id = ci.id
-         )
-         OR EXISTS (
-           SELECT 1
-           FROM conversation_item_targets cit
-           JOIN conversation_members cm_target
-             ON cm_target.id = cit.target_member_id
-           WHERE cit.item_id = ci.id
-             AND cm_target.user_id = $2
-         )
-       )
-     ORDER BY ci.conversation_id, ci.sequence DESC`,
-    [conversationIds, params.userId],
+  const activeCountMap = await loadActiveConversationCounts(conversationIds);
+  const lastItems = await loadLastVisibleConversationItems(
+    conversationIds,
+    params.userId,
   );
 
   const lastItemMap = new Map<string, any>(
-    lastItemsResult.rows.map((row: any) => [row.conversation_id, row]),
+    lastItems.map((row: any) => [row.conversation_id, row]),
   );
-  const itemIds = lastItemsResult.rows.map((row: any) => row.id);
-  const lastPartsResult =
-    itemIds.length > 0
-      ? await query(
-          `SELECT cip.*
-           FROM conversation_item_parts cip
-           WHERE cip.item_id = ANY($1::uuid[])
-           ORDER BY cip.item_id, cip.ordinal ASC`,
-          [itemIds],
-        )
-      : { rows: [] };
+  const itemIds = lastItems.map((row: any) => row.id);
+  const lastParts = await loadConversationItemParts(itemIds);
   const partsByItem = new Map<string, any[]>();
-  for (const row of lastPartsResult.rows) {
+  for (const row of lastParts) {
     if (!partsByItem.has(row.item_id)) partsByItem.set(row.item_id, []);
     partsByItem.get(row.item_id)!.push(row);
   }
@@ -1457,11 +1486,11 @@ export async function addActorToConversation(
     throw new Error("Actor already in conversation");
   }
 
-  const actorResult = await query(
-    `SELECT name, title, workspace_id FROM actors WHERE id = $1`,
-    [actorId],
-  );
-  const actorInfo = actorResult.rows[0];
+  const actorInfo = await db
+    .selectFrom("actors")
+    .select(["name", "title", "workspace_id"])
+    .where("id", "=", actorId)
+    .executeTakeFirst();
   const result = await transaction(async (client) => {
     const member = await ensureConversationMember({
       conversationId: conversationId,
@@ -1557,30 +1586,34 @@ export async function addMembersToConversation(params: {
 
   const actorResult =
     actorIds.length > 0
-      ? await query(
-          `SELECT a.id,
-                  a.name,
-                  a.title,
-                  a.role,
-                  a.avatar_emoji,
-                  avatar_file.stored_name AS avatar_stored_name
-         FROM actors a
-         LEFT JOIN files avatar_file ON avatar_file.id = a.avatar_file_id
-         WHERE a.workspace_id = $1
-           AND a.id = ANY($2)`,
-          [params.workspaceId, actorIds],
-        )
+      ? {
+          rows: await db
+            .selectFrom("actors as a")
+            .leftJoin("files as avatar_file", "avatar_file.id", "a.avatar_file_id")
+            .select([
+              "a.id",
+              "a.name",
+              "a.title",
+              "a.role",
+              "a.avatar_emoji",
+              "avatar_file.stored_name as avatar_stored_name",
+            ])
+            .where("a.workspace_id", "=", params.workspaceId)
+            .where("a.id", "in", actorIds)
+            .execute(),
+        }
       : { rows: [] as any[] };
   const userResult =
     userIds.length > 0
-      ? await query(
-          `SELECT u.id, u.name, u.avatar_file_id
-         FROM workspace_members wm
-         JOIN users u ON u.id = wm.user_id
-         WHERE wm.workspace_id = $1
-           AND u.id = ANY($2)`,
-          [params.workspaceId, userIds],
-        )
+      ? {
+          rows: await db
+            .selectFrom("workspace_members as wm")
+            .innerJoin("users as u", "u.id", "wm.user_id")
+            .select(["u.id", "u.name", "u.avatar_file_id"])
+            .where("wm.workspace_id", "=", params.workspaceId)
+            .where("u.id", "in", userIds)
+            .execute(),
+        }
       : { rows: [] as any[] };
 
   if (actorResult.rows.length !== actorIds.length) {
@@ -1771,24 +1804,33 @@ export async function removeActorFromConversation(
 
   const { authzEntryIds, closedSessionIds } = await transaction(
     async (client) => {
-      await client.query(
-        `UPDATE conversation_members
-       SET state = 'kicked', left_at = NOW()
-       WHERE id = $1`,
-        [member.id],
+      await executeCompiledQuery(
+        client,
+        db
+          .updateTable("conversation_members")
+          .set({
+            state: "kicked",
+            left_at: sql`NOW()`,
+          })
+          .where("id", "=", member.id),
       );
-      const closedSessions = await client.query(
-        `UPDATE sessions
-       SET status = 'closed', completed_at = NOW(), updated_at = NOW()
-       WHERE conversation_id = $1 AND actor_id = $2 AND status <> 'closed'
-       RETURNING id`,
-        [conversationId, actorId],
+      const closedSessions = await executeCompiledQuery<{ id: string }>(
+        client,
+        db
+          .updateTable("sessions")
+          .set({
+            status: "closed",
+            completed_at: sql`NOW()`,
+            updated_at: sql`NOW()`,
+          })
+          .where("conversation_id", "=", conversationId)
+          .where("actor_id", "=", actorId)
+          .where("status", "<>", "closed")
+          .returning("id"),
       );
 
       return {
-        closedSessionIds: closedSessions.rows.map(
-          (row: any) => row.id as string,
-        ),
+        closedSessionIds: closedSessions.rows.map((row) => row.id),
         authzEntryIds: await queueAuthzRelationships(
           client,
           [
@@ -1831,11 +1873,11 @@ export async function removeActorFromConversation(
     ),
   );
 
-  const actorResult = await query(
-    "SELECT name, title FROM actors WHERE id = $1",
-    [actorId],
-  );
-  const actorInfo = actorResult.rows[0];
+  const actorInfo = await db
+    .selectFrom("actors")
+    .select(["name", "title"])
+    .where("id", "=", actorId)
+    .executeTakeFirst();
   const eventBatchId = uuidv4();
   await recordMembershipEvent({
     workspaceId: conversation.workspace_id,
@@ -1885,11 +1927,11 @@ export async function getConversationMembers(
     ? "COALESCE(cm.actor_join_version_id, current_version.id)"
     : "current_version.id";
 
-  const result = await query(
-    `SELECT cm.*,
-            ${actorNameExpr} AS actor_name,
-            ${actorTitleExpr} AS actor_title,
-            ${actorRoleExpr} AS actor_role,
+  const compiled = sql<any[]>`
+    SELECT cm.*,
+            ${sql.raw(actorNameExpr)} AS actor_name,
+            ${sql.raw(actorTitleExpr)} AS actor_title,
+            ${sql.raw(actorRoleExpr)} AS actor_role,
             COALESCE(
               (
                 SELECT jsonb_agg(
@@ -1903,14 +1945,14 @@ export async function getConversationMembers(
                   ORDER BY avd.priority DESC, avd.created_at ASC
                 )
                 FROM actor_version_docs avd
-                WHERE avd.actor_version_id = ${actorDocVersionExpr}
+                WHERE avd.actor_version_id = ${sql.raw(actorDocVersionExpr)}
               ),
               '[]'::jsonb
             ) AS actor_docs,
-            ${actorCanRepresentExpr} AS actor_can_represent_user,
-            ${actorSpecialtiesExpr} AS actor_specialties,
-            ${actorConfigExpr} AS actor_config,
-            ${actorCurrentVersionExpr} AS actor_current_version,
+            ${sql.raw(actorCanRepresentExpr)} AS actor_can_represent_user,
+            ${sql.raw(actorSpecialtiesExpr)} AS actor_specialties,
+            ${sql.raw(actorConfigExpr)} AS actor_config,
+            ${sql.raw(actorCurrentVersionExpr)} AS actor_current_version,
             a.avatar_emoji AS actor_avatar_emoji,
             actor_avatar_file.stored_name AS actor_avatar_stored_name,
             u.name AS user_name,
@@ -1954,10 +1996,10 @@ export async function getConversationMembers(
        ORDER BY s.created_at DESC
        LIMIT 1
      ) ls ON TRUE
-     WHERE cm.conversation_id = $1
-     ORDER BY cm.joined_at ASC`,
-    [conversationId],
-  );
+     WHERE cm.conversation_id = ${conversationId}
+     ORDER BY cm.joined_at ASC
+  `.compile(db);
+  const result = await db.executeQuery(compiled);
   return result.rows.map((row: any) => ({
     ...row,
     conversation_id: conversationId,
@@ -2019,15 +2061,21 @@ export async function sendConversationMessage(params: {
 
   let senderName: string | undefined;
   if (senderActorId) {
-    const actorResult = await query("SELECT name FROM actors WHERE id = $1", [
-      senderActorId,
-    ]);
-    senderName = actorResult.rows[0]?.name;
+    senderName = (
+      await db
+        .selectFrom("actors")
+        .select("name")
+        .where("id", "=", senderActorId)
+        .executeTakeFirst()
+    )?.name;
   } else if (senderUserId) {
-    const userResult = await query("SELECT name FROM users WHERE id = $1", [
-      senderUserId,
-    ]);
-    senderName = userResult.rows[0]?.name;
+    senderName = (
+      await db
+        .selectFrom("users")
+        .select("name")
+        .where("id", "=", senderUserId)
+        .executeTakeFirst()
+    )?.name;
   }
 
   const authorMember =
@@ -2300,12 +2348,14 @@ export async function getConversationMessages(
 
   let beforeSequence: number | undefined;
   if (before) {
-    const itemResult = await query(
-      `SELECT sequence FROM conversation_items WHERE id = $1 AND conversation_id = $2`,
-      [before, conversationId],
-    );
-    if (itemResult.rows[0]) {
-      beforeSequence = itemResult.rows[0].sequence;
+    const itemRow = await db
+      .selectFrom("conversation_items")
+      .select("sequence")
+      .where("id", "=", before)
+      .where("conversation_id", "=", conversationId)
+      .executeTakeFirst();
+    if (itemRow) {
+      beforeSequence = Number(itemRow.sequence);
     } else if (!Number.isNaN(Number(before))) {
       beforeSequence = Number(before);
     }
@@ -2419,23 +2469,24 @@ export async function listConversationGrants(
   conversationId: string,
   workspaceId: string,
 ) {
-  const result = await query<
-    ConversationGrantRow & {
-      id: string;
-      conversation_id: string;
-      created_at: string;
-      revoked_at: string | null;
-    }
-  >(
-    `SELECT *
-     FROM conversation_grants
-     WHERE conversation_id = $1
-       AND workspace_id = $2
-     ORDER BY created_at DESC`,
-    [conversationId, workspaceId],
-  );
+  const rows = await db
+    .selectFrom("conversation_grants")
+    .selectAll()
+    .where("conversation_id", "=", conversationId)
+    .where("workspace_id", "=", workspaceId)
+    .orderBy("created_at", "desc")
+    .execute();
 
-  return result.rows.map(mapConversationGrant);
+  return rows.map((row) =>
+    mapConversationGrant(
+      row as unknown as ConversationGrantRow & {
+        id: string;
+        conversation_id: string;
+        created_at: string | Date | null;
+        revoked_at: string | Date | null;
+      },
+    ),
+  );
 }
 
 export async function issueConversationGrant(params: {
@@ -2467,17 +2518,19 @@ export async function issueConversationGrant(params: {
   }
 
   const result = await transaction(async (client) => {
-    const previousResult = await client.query<ConversationGrantRow>(
-      `SELECT *
-       FROM conversation_grants
-       WHERE conversation_id = $1
-         AND workspace_id = $2
-         AND status = 'active'`,
-      [params.conversationId, params.workspaceId],
-    );
-    const previous = previousResult.rows;
+    const previous = (
+      await executeCompiledQuery<ConversationGrantRow>(
+        client,
+        db
+          .selectFrom("conversation_grants")
+          .selectAll()
+          .where("conversation_id", "=", params.conversationId)
+          .where("workspace_id", "=", params.workspaceId)
+          .where("status", "=", "active"),
+      )
+    ).rows;
 
-    const existingResult = await client.query<
+    const existing = await executeTakeFirst<
       ConversationGrantRow & {
         id: string;
         conversation_id: string;
@@ -2485,31 +2538,25 @@ export async function issueConversationGrant(params: {
         revoked_at: string | null;
       }
     >(
-      `SELECT *
-       FROM conversation_grants
-       WHERE conversation_id = $1
-         AND workspace_id = $2
-         AND permission = $3
-         AND subject_type = $4
-         AND COALESCE(user_id::text, '') = COALESCE($5::text, '')
-         AND COALESCE(actor_id::text, '') = COALESCE($6::text, '')
-         AND status = 'active'
-       LIMIT 1`,
-      [
-        params.conversationId,
-        params.workspaceId,
-        params.permission,
-        subjectType,
-        params.userId ?? null,
-        params.actorId ?? null,
-      ],
+      client,
+      db
+        .selectFrom("conversation_grants")
+        .selectAll()
+        .where("conversation_id", "=", params.conversationId)
+        .where("workspace_id", "=", params.workspaceId)
+        .where("permission", "=", params.permission)
+        .where("subject_type", "=", subjectType)
+        .where(sql<boolean>`COALESCE(user_id::text, '') = COALESCE(${params.userId ?? null}::text, '')`)
+        .where(sql<boolean>`COALESCE(actor_id::text, '') = COALESCE(${params.actorId ?? null}::text, '')`)
+        .where("status", "=", "active")
+        .limit(1),
     );
 
-    if (existingResult.rows[0]) {
-      return { grant: existingResult.rows[0], authzEntryIds: [] as string[] };
+    if (existing) {
+      return { grant: existing, authzEntryIds: [] as string[] };
     }
 
-    const insertResult = await client.query<
+    const inserted = await executeTakeFirst<
       ConversationGrantRow & {
         id: string;
         conversation_id: string;
@@ -2517,34 +2564,29 @@ export async function issueConversationGrant(params: {
         revoked_at: string | null;
       }
     >(
-      `INSERT INTO conversation_grants (
-         conversation_id,
-         workspace_id,
-         permission,
-         subject_type,
-         user_id,
-         actor_id,
-         status,
-         granted_by,
-         reason,
-         metadata
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9::jsonb)
-       RETURNING *`,
-      [
-        params.conversationId,
-        params.workspaceId,
-        params.permission,
-        subjectType,
-        params.userId ?? null,
-        params.actorId ?? null,
-        params.grantedBy ?? null,
-        params.reason ?? null,
-        JSON.stringify(params.metadata ?? {}),
-      ],
+      client,
+      db
+        .insertInto("conversation_grants")
+        .values({
+          conversation_id: params.conversationId,
+          workspace_id: params.workspaceId,
+          permission: params.permission,
+          subject_type: subjectType,
+          user_id: params.userId ?? null,
+          actor_id: params.actorId ?? null,
+          status: "active",
+          granted_by: params.grantedBy ?? null,
+          reason: params.reason ?? null,
+          metadata:
+            (params.metadata ?? {}) as TableInsert<"conversation_grants">["metadata"],
+        })
+        .returningAll(),
     );
+    if (!inserted) {
+      throw new Error("Failed to issue conversation grant");
+    }
 
-    const next = [...previous, insertResult.rows[0]];
+    const next = [...previous, inserted];
     const authzEntryIds = await queueAuthzRelationships(
       client,
       diffAuthzRelationships(
@@ -2560,7 +2602,7 @@ export async function issueConversationGrant(params: {
     );
 
     return {
-      grant: insertResult.rows[0],
+      grant: inserted,
       authzEntryIds,
     };
   });
@@ -2578,19 +2620,19 @@ export async function revokeConversationGrant(params: {
   grantId: string;
 }) {
   const result = await transaction(async (client) => {
-    const previousResult = await client.query<
-      ConversationGrantRow & { id: string }
-    >(
-      `SELECT *
-       FROM conversation_grants
-       WHERE conversation_id = $1
-         AND workspace_id = $2
-         AND status = 'active'`,
-      [params.conversationId, params.workspaceId],
-    );
-    const previous = previousResult.rows;
+    const previous = (
+      await executeCompiledQuery<ConversationGrantRow & { id: string }>(
+        client,
+        db
+          .selectFrom("conversation_grants")
+          .selectAll()
+          .where("conversation_id", "=", params.conversationId)
+          .where("workspace_id", "=", params.workspaceId)
+          .where("status", "=", "active"),
+      )
+    ).rows;
 
-    const revokeResult = await client.query<
+    const revoked = await executeTakeFirst<
       ConversationGrantRow & {
         id: string;
         conversation_id: string;
@@ -2598,18 +2640,19 @@ export async function revokeConversationGrant(params: {
         revoked_at: string | null;
       }
     >(
-      `UPDATE conversation_grants
-       SET status = 'revoked',
-           revoked_at = NOW()
-       WHERE id = $1
-         AND conversation_id = $2
-         AND workspace_id = $3
-         AND status = 'active'
-       RETURNING *`,
-      [params.grantId, params.conversationId, params.workspaceId],
+      client,
+      db
+        .updateTable("conversation_grants")
+        .set({
+          status: "revoked",
+          revoked_at: sql`NOW()`,
+        })
+        .where("id", "=", params.grantId)
+        .where("conversation_id", "=", params.conversationId)
+        .where("workspace_id", "=", params.workspaceId)
+        .where("status", "=", "active")
+        .returningAll(),
     );
-
-    const revoked = revokeResult.rows[0];
     if (!revoked) {
       return null;
     }
@@ -2724,22 +2767,29 @@ export async function markConversationRead(
 
 export async function cancelConversation(conversationId: string): Promise<void> {
   const result = await transaction(async (client) => {
-    const closed = await client.query(
-      `UPDATE sessions
-       SET status = 'closed', completed_at = NOW(), updated_at = NOW()
-       WHERE conversation_id = $1 AND status <> 'closed'
-       RETURNING id`,
-      [conversationId],
+    const closed = await executeCompiledQuery<{ id: string }>(
+      client,
+      db
+        .updateTable("sessions")
+        .set({
+          status: "closed",
+          completed_at: sql`NOW()`,
+          updated_at: sql`NOW()`,
+        })
+        .where("conversation_id", "=", conversationId)
+        .where("status", "<>", "closed")
+        .returning("id"),
     );
-    const conversationResult = await client.query(
-      `SELECT workspace_id
-       FROM conversations
-       WHERE id = $1
-       LIMIT 1`,
-      [conversationId],
+    const conversationRow = await executeTakeFirst<{ workspace_id: string | null }>(
+      client,
+      db
+        .selectFrom("conversations")
+        .select("workspace_id")
+        .where("id", "=", conversationId)
+        .limit(1),
     );
     const workspaceId =
-      (conversationResult.rows[0]?.workspace_id as string | undefined) ||
+      (conversationRow?.workspace_id as string | undefined) ||
       undefined;
     if (workspaceId) {
       await queueConversationUpdated({
@@ -2750,7 +2800,7 @@ export async function cancelConversation(conversationId: string): Promise<void> 
       });
     }
     return {
-      sessionIds: closed.rows.map((row: any) => row.id as string),
+      sessionIds: closed.rows.map((row) => row.id),
     };
   });
 

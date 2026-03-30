@@ -18,6 +18,7 @@ import type {
   PluginReuseScopeV2,
   RuntimeBindingScope,
 } from "@synapse/shared";
+import { sql, type RawBuilder } from "kysely";
 import { encryptSensitiveFields, isEncrypted } from "../../infrastructure/crypto/index.js";
 import {
   deleteRelation,
@@ -27,6 +28,12 @@ import {
   type AuthzRelationMutation,
 } from "../../infrastructure/authz/index.js";
 import { query, transaction } from "../../infrastructure/database/index.js";
+import {
+  db,
+  executeCompiledQuery,
+  executeTakeFirst,
+  type TableInsert,
+} from "../../infrastructure/database/kysely.js";
 import { emitEvent } from "../../infrastructure/events/index.js";
 import { saveFromBuffer } from "../../infrastructure/storage/file-io.js";
 import { getFileUrlById } from "../files/service.js";
@@ -385,13 +392,13 @@ async function hasBuiltinPluginFilesTable() {
     return builtinPluginIconFilesTableAvailable;
   }
 
-  const result = await query<{ exists: boolean }>(
-    `SELECT EXISTS (
-       SELECT 1
-       FROM information_schema.tables
-       WHERE table_schema = 'public'
-         AND table_name = 'files'
-     ) AS exists`,
+  const result = await db.executeQuery(
+    sql<{ exists: boolean }>`SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_name = 'files'
+    ) AS exists`.compile(db),
   );
 
   builtinPluginIconFilesTableAvailable = result.rows[0]?.exists === true;
@@ -412,20 +419,19 @@ async function ensureBuiltinPluginIcon(
   const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
   const key = `${seedSlug}/${pluginSlug}`;
 
-  const existing = await query(
-    `SELECT id
-     FROM files
-     WHERE workspace_id IS NULL
-       AND category = 'plugin_asset'
-       AND metadata->>'builtin_plugin_icon_key' = $1
-       AND metadata->>'sha256' = $2
-     LIMIT 1`,
-    [key, sha256],
-  );
+  const existing = await db
+    .selectFrom("files")
+    .select("id")
+    .where("workspace_id", "is", null)
+    .where("category", "=", "plugin_asset")
+    .where(sql<boolean>`metadata->>'builtin_plugin_icon_key' = ${key}`)
+    .where(sql<boolean>`metadata->>'sha256' = ${sha256}`)
+    .limit(1)
+    .executeTakeFirst();
 
-  if (existing.rows.length > 0) {
+  if (existing) {
     return {
-      id: existing.rows[0].id,
+      id: existing.id,
     };
   }
 
@@ -857,13 +863,13 @@ async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
 }
 
 async function loadPluginCatalogRows(
-  whereSql: string,
-  params: unknown[],
+  whereClause: RawBuilder<unknown>,
 ) {
-  const result = await query<PluginCatalogRow>(
-    `${PLUGIN_CATALOG_SELECT}
-     ${whereSql}`,
-    params,
+  const result = await db.executeQuery(
+    sql<PluginCatalogRow>`
+      ${sql.raw(PLUGIN_CATALOG_SELECT)}
+      ${whereClause}
+    `.compile(db),
   );
   return result.rows;
 }
@@ -874,8 +880,7 @@ async function loadPluginCatalogMapByVersionIds(versionIds: string[]) {
   }
 
   const rows = await loadPluginCatalogRows(
-    `AND version.id = ANY($1::uuid[])`,
-    [versionIds],
+    sql`AND version.id = ANY(${versionIds}::uuid[])`,
   );
 
   return new Map(rows.map((row) => [row.version_id!, mapPluginView(row)]));
@@ -883,10 +888,9 @@ async function loadPluginCatalogMapByVersionIds(versionIds: string[]) {
 
 async function getPluginCatalogRowByItemId(itemId: string) {
   const rows = await loadPluginCatalogRows(
-    `AND item.id = $1
-     AND version.id = item.latest_version_id
-     LIMIT 1`,
-    [itemId],
+    sql`AND item.id = ${itemId}
+       AND version.id = item.latest_version_id
+       LIMIT 1`,
   );
 
   return rows[0] || null;
@@ -903,78 +907,73 @@ async function loadInstallationRows(
     installationId?: string;
   },
 ) {
-  const conditions = [`installation.workspace_id = $1`];
-  const values: unknown[] = [workspaceId];
-  let index = 2;
+  const conditions: RawBuilder<unknown>[] = [sql`installation.workspace_id = ${workspaceId}`];
 
   if (filters?.pluginId) {
-    conditions.push(`installation.catalog_item_id = $${index++}`);
-    values.push(filters.pluginId);
+    conditions.push(sql`installation.catalog_item_id = ${filters.pluginId}`);
   }
 
   if (filters?.installationId) {
-    conditions.push(`installation.id = $${index++}`);
-    values.push(filters.installationId);
+    conditions.push(sql`installation.id = ${filters.installationId}`);
   }
 
-  const result = await query<InstallationRow>(
-    `SELECT
-       installation.id AS installation_id,
-       installation.workspace_id,
-       installation.catalog_item_id,
-       installation.catalog_version_id,
-       installation.display_name AS installation_display_name,
-       installation.config_data,
-       installation.approved_runtime_permissions,
-       installation.reuse_scope,
-       installation.status AS installation_status,
-       installation.installed_by,
-       installation.metadata AS installation_metadata,
-       installation.created_at AS installation_created_at,
-       installation.updated_at AS installation_updated_at,
-       source_ref.source_catalog_item_id,
-       source_ref.source_catalog_version_id,
-       source_ref.sync_mode AS source_sync_mode,
-       primary_access.id AS primary_access_id,
-       primary_access.attachment_scope AS primary_attachment_scope,
-       primary_access.conversation_id AS primary_conversation_id,
-       primary_access.actor_id AS primary_actor_id,
-       primary_access.user_id AS primary_user_id,
-       primary_access.status AS primary_access_status,
-       primary_access.metadata AS primary_access_metadata,
-       primary_access.created_by AS primary_access_created_by,
-       primary_access.created_at AS primary_access_created_at
-     FROM plugin_installations installation
-     LEFT JOIN plugin_source_refs source_ref
-       ON source_ref.installation_id = installation.id
-     LEFT JOIN LATERAL (
-       SELECT
-         binding.id,
-         CASE
-           WHEN binding.relation = 'use_workspace' THEN 'workspace'
-           WHEN binding.relation = 'use_conversation' THEN 'conversation'
-           WHEN binding.relation = 'use_actor_conversation' THEN 'actor_conversation'
-           WHEN binding.relation = 'use_principal' AND binding.subject_type = 'actor' THEN 'actor'
-           ELSE 'user'
-         END AS attachment_scope,
-         NULLIF(binding.metadata->>'conversationId', '') AS conversation_id,
-         NULLIF(binding.metadata->>'actorId', '') AS actor_id,
-         NULLIF(binding.metadata->>'userId', '') AS user_id,
-         binding.status,
-         binding.metadata,
-         binding.created_by,
-         binding.created_at
-       FROM access_bindings binding
-       WHERE binding.resource_type = 'plugin_installation'
-         AND binding.resource_id = installation.id::text
-         AND binding.status = 'active'
-         AND COALESCE((binding.metadata->>'isPrimary')::boolean, FALSE) = TRUE
-       ORDER BY binding.created_at ASC
-       LIMIT 1
-     ) primary_access ON TRUE
-     WHERE ${conditions.join(" AND ")}
-     ORDER BY installation.created_at DESC`,
-    values,
+  const result = await db.executeQuery(
+    sql<InstallationRow>`SELECT
+        installation.id AS installation_id,
+        installation.workspace_id,
+        installation.catalog_item_id,
+        installation.catalog_version_id,
+        installation.display_name AS installation_display_name,
+        installation.config_data,
+        installation.approved_runtime_permissions,
+        installation.reuse_scope,
+        installation.status AS installation_status,
+        installation.installed_by,
+        installation.metadata AS installation_metadata,
+        installation.created_at AS installation_created_at,
+        installation.updated_at AS installation_updated_at,
+        source_ref.source_catalog_item_id,
+        source_ref.source_catalog_version_id,
+        source_ref.sync_mode AS source_sync_mode,
+        primary_access.id AS primary_access_id,
+        primary_access.attachment_scope AS primary_attachment_scope,
+        primary_access.conversation_id AS primary_conversation_id,
+        primary_access.actor_id AS primary_actor_id,
+        primary_access.user_id AS primary_user_id,
+        primary_access.status AS primary_access_status,
+        primary_access.metadata AS primary_access_metadata,
+        primary_access.created_by AS primary_access_created_by,
+        primary_access.created_at AS primary_access_created_at
+      FROM plugin_installations installation
+      LEFT JOIN plugin_source_refs source_ref
+        ON source_ref.installation_id = installation.id
+      LEFT JOIN LATERAL (
+        SELECT
+          binding.id,
+          CASE
+            WHEN binding.relation = 'use_workspace' THEN 'workspace'
+            WHEN binding.relation = 'use_conversation' THEN 'conversation'
+            WHEN binding.relation = 'use_actor_conversation' THEN 'actor_conversation'
+            WHEN binding.relation = 'use_principal' AND binding.subject_type = 'actor' THEN 'actor'
+            ELSE 'user'
+          END AS attachment_scope,
+          NULLIF(binding.metadata->>'conversationId', '') AS conversation_id,
+          NULLIF(binding.metadata->>'actorId', '') AS actor_id,
+          NULLIF(binding.metadata->>'userId', '') AS user_id,
+          binding.status,
+          binding.metadata,
+          binding.created_by,
+          binding.created_at
+        FROM access_bindings binding
+        WHERE binding.resource_type = 'plugin_installation'
+          AND binding.resource_id = installation.id::text
+          AND binding.status = 'active'
+          AND COALESCE((binding.metadata->>'isPrimary')::boolean, FALSE) = TRUE
+        ORDER BY binding.created_at ASC
+        LIMIT 1
+      ) primary_access ON TRUE
+      WHERE ${sql.join(conditions, sql` AND `)}
+      ORDER BY installation.created_at DESC`.compile(db),
   );
 
   return result.rows.filter((row) => {
@@ -998,30 +997,35 @@ async function loadInstallationRows(
 }
 
 async function listAccessRows(installationId: string, includeRevoked = false) {
-  const result = await query<AccessBindingRow>(
-    `SELECT
-       id,
-       workspace_id,
-       resource_type,
-       resource_id,
-       relation,
-       subject_type,
-       subject_id,
-       subject_relation,
-       status,
-       created_by,
-       reason,
-       metadata,
-       created_at,
-       revoked_at
-     FROM access_bindings
-     WHERE resource_type = 'plugin_installation'
-       AND resource_id = $1
-       ${includeRevoked ? "" : "AND status = 'active'"}
-     ORDER BY created_at ASC`,
-    [installationId],
+  let builder = db
+    .selectFrom("access_bindings")
+    .select([
+      "id",
+      "workspace_id",
+      "resource_type",
+      "resource_id",
+      "relation",
+      "subject_type",
+      "subject_id",
+      "subject_relation",
+      "status",
+      "created_by",
+      "reason",
+      "metadata",
+      "created_at",
+      "revoked_at",
+    ])
+    .where("resource_type", "=", "plugin_installation")
+    .where("resource_id", "=", installationId);
+
+  if (!includeRevoked) {
+    builder = builder.where("status", "=", "active");
+  }
+
+  const rows = await builder.orderBy("created_at", "asc").execute();
+  return rows.map((row) =>
+    buildInstallationAccessRow(row as unknown as AccessBindingRow),
   );
-  return result.rows.map(buildInstallationAccessRow);
 }
 
 function buildPluginGrantPlan(input: {
@@ -1486,88 +1490,83 @@ export async function createOrganization(data: {
   ownerUserId?: string;
 }) {
   const normalizedSlug = sanitizeSlug(data.slug);
-  const result = await query<PublisherRow>(
-    `INSERT INTO publishers (
-       slug,
-       display_name,
-       description,
-       logo_file_id,
-       owner_user_id,
-       workspace_id,
-       is_builtin,
-       is_verified,
-       metadata
-     )
-     VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8::jsonb)
-     ON CONFLICT (slug) DO UPDATE
-       SET display_name = EXCLUDED.display_name,
-           description = EXCLUDED.description,
-           logo_file_id = EXCLUDED.logo_file_id,
-           owner_user_id = COALESCE(publishers.owner_user_id, EXCLUDED.owner_user_id),
-           is_builtin = EXCLUDED.is_builtin,
-           is_verified = EXCLUDED.is_verified,
-           metadata = EXCLUDED.metadata,
-           updated_at = NOW()
-     RETURNING *`,
-    [
-      normalizedSlug,
-      data.displayName,
-      data.description || "",
-      data.logoFileId || null,
-      data.ownerUserId || null,
-      data.isBuiltin === true,
-      data.isVerified === true,
-      JSON.stringify({}),
-    ],
-  );
+  const row = await db
+    .insertInto("publishers")
+    .values({
+      slug: normalizedSlug,
+      display_name: data.displayName,
+      description: data.description || "",
+      logo_file_id: data.logoFileId || null,
+      owner_user_id: data.ownerUserId || null,
+      workspace_id: null,
+      is_builtin: data.isBuiltin === true,
+      is_verified: data.isVerified === true,
+      metadata: {} as TableInsert<"publishers">["metadata"],
+    })
+    .onConflict((oc) =>
+      oc.column("slug").doUpdateSet({
+        display_name: data.displayName,
+        description: data.description || "",
+        logo_file_id: data.logoFileId || null,
+        owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
+        is_builtin: data.isBuiltin === true,
+        is_verified: data.isVerified === true,
+        metadata: {} as TableInsert<"publishers">["metadata"],
+        updated_at: sql`NOW()`,
+      }),
+    )
+    .returningAll()
+    .executeTakeFirstOrThrow();
 
-  return mapPublisherView(result.rows[0]!);
+  return mapPublisherView(row as unknown as PublisherRow);
 }
 
 export async function listOrganizations() {
-  const result = await query<PublisherRow>(
-    `SELECT
-       publisher.*,
-       COUNT(item.id)::int AS plugin_count
-     FROM publishers publisher
-     LEFT JOIN catalog_items item
-       ON item.publisher_id = publisher.id
-      AND item.item_kind = 'plugin_package'
-      AND item.is_active = TRUE
-      AND item.workspace_id IS NULL
-     GROUP BY publisher.id
-     ORDER BY publisher.is_verified DESC, publisher.display_name ASC`,
-  );
+  const rows = await db
+    .selectFrom("publishers as publisher")
+    .leftJoin("catalog_items as item", (join) =>
+      join
+        .onRef("item.publisher_id", "=", "publisher.id")
+        .on("item.item_kind", "=", "plugin_package")
+        .on("item.is_active", "=", true)
+        .on("item.workspace_id", "is", null),
+    )
+    .selectAll("publisher")
+    .select(sql<number>`COUNT(item.id)::int`.as("plugin_count"))
+    .groupBy("publisher.id")
+    .orderBy("publisher.is_verified", "desc")
+    .orderBy("publisher.display_name", "asc")
+    .execute();
 
-  return result.rows.map(mapPublisherView);
+  return rows.map((row) => mapPublisherView(row as unknown as PublisherRow));
 }
 
 export async function getOrganization(id: string) {
-  const result = await query<PublisherRow>(
-    `SELECT *, 0::int AS plugin_count
-     FROM publishers
-     WHERE id = $1
-     LIMIT 1`,
-    [id],
-  );
+  const row = await db
+    .selectFrom("publishers")
+    .selectAll()
+    .select(sql<number>`0::int`.as("plugin_count"))
+    .where("id", "=", id)
+    .limit(1)
+    .executeTakeFirst();
 
-  if (result.rows.length === 0) {
+  if (!row) {
     throw new McpPluginError(404, "Publisher not found");
   }
 
-  return mapPublisherView(result.rows[0]!);
+  return mapPublisherView(row as unknown as PublisherRow);
 }
 
 export async function getOrganizationBySlug(slug: string) {
-  const result = await query<PublisherRow>(
-    `SELECT *, 0::int AS plugin_count
-     FROM publishers
-     WHERE slug = $1
-     LIMIT 1`,
-    [sanitizeSlug(slug)],
-  );
+  const row = await db
+    .selectFrom("publishers")
+    .selectAll()
+    .select(sql<number>`0::int`.as("plugin_count"))
+    .where("slug", "=", sanitizeSlug(slug))
+    .limit(1)
+    .executeTakeFirst();
 
-  return result.rows[0] ? mapPublisherView(result.rows[0]) : null;
+  return row ? mapPublisherView(row as unknown as PublisherRow) : null;
 }
 
 export async function createPlugin(data: {
@@ -1624,75 +1623,66 @@ export async function listPlugins(filters?: {
   tags?: string[];
   categorySlugs?: string[];
 }) {
-  const conditions = [
-    "version.id = item.latest_version_id",
-    "item.is_active = TRUE",
-    "item.workspace_id IS NULL",
+  const conditions: RawBuilder<unknown>[] = [
+    sql`version.id = item.latest_version_id`,
+    sql`item.is_active = TRUE`,
+    sql`item.workspace_id IS NULL`,
   ];
-  const values: unknown[] = [];
-  let index = 1;
 
   if (filters?.orgId) {
-    conditions.push(`item.publisher_id = $${index++}`);
-    values.push(filters.orgId);
+    conditions.push(sql`item.publisher_id = ${filters.orgId}`);
   }
 
   if (filters?.transport) {
-    conditions.push(`spec.transport = $${index++}`);
-    values.push(filters.transport);
+    conditions.push(sql`spec.transport = ${filters.transport}`);
   }
 
   if (filters?.search) {
     conditions.push(
-      `(item.display_name ILIKE $${index} OR item.summary ILIKE $${index} OR item.long_description ILIKE $${index} OR EXISTS (
+      sql`(item.display_name ILIKE ${`%${filters.search.trim()}%`} OR item.summary ILIKE ${`%${filters.search.trim()}%`} OR item.long_description ILIKE ${`%${filters.search.trim()}%`} OR EXISTS (
          SELECT 1
          FROM unnest(COALESCE(item.tags, ARRAY[]::text[])) tag
-         WHERE tag ILIKE $${index}
+         WHERE tag ILIKE ${`%${filters.search.trim()}%`}
        ))`,
     );
-    values.push(`%${filters.search.trim()}%`);
-    index += 1;
   }
 
   if (filters?.tags && filters.tags.length > 0) {
-    conditions.push(`item.tags && $${index++}::text[]`);
-    values.push(filters.tags);
+    conditions.push(sql`item.tags && ${filters.tags}::text[]`);
   }
 
   if (filters?.categorySlugs && filters.categorySlugs.length > 0) {
     conditions.push(
-      `EXISTS (
+      sql`EXISTS (
          SELECT 1
          FROM catalog_item_categories item_category
          JOIN catalog_categories category
            ON category.id = item_category.category_id
          WHERE item_category.catalog_item_id = item.id
            AND category.item_kind = 'plugin_package'
-           AND category.slug = ANY($${index}::text[])
+           AND category.slug = ANY(${filters.categorySlugs}::text[])
        )`,
     );
-    values.push(filters.categorySlugs);
-    index += 1;
   }
 
   const rows = await loadPluginCatalogRows(
-    `AND ${conditions.join(" AND ")}
-     ORDER BY item.download_count DESC, item.created_at DESC`,
-    values,
+    sql`AND ${sql.join(conditions, sql` AND `)}
+       ORDER BY item.download_count DESC, item.created_at DESC`,
   );
 
   return rows.map(mapPluginView);
 }
 
 export async function listPluginCategories() {
-  const result = await query<PluginCategoryRow>(
-    `SELECT *
-     FROM catalog_categories
-     WHERE item_kind = 'plugin_package'
-     ORDER BY sort_order ASC, display_name ASC`,
-  );
+  const rows = await db
+    .selectFrom("catalog_categories")
+    .selectAll()
+    .where("item_kind", "=", "plugin_package")
+    .orderBy("sort_order", "asc")
+    .orderBy("display_name", "asc")
+    .execute();
 
-  return result.rows.map((row) => {
+  return rows.map((row) => {
     const metadata = asObject(row.metadata);
     return {
       id: row.id,
@@ -1836,32 +1826,31 @@ export async function installPluginUnified(data: {
   }
 
   const result = await transaction(async (client) => {
-    const insertedInstallation = await client.query<{ id: string }>(
-      `INSERT INTO plugin_installations (
-         workspace_id,
-         catalog_item_id,
-         catalog_version_id,
-         display_name,
-         config_data,
-         approved_runtime_permissions,
-         reuse_scope,
-         status,
-         installed_by,
-         metadata
-       )
-       VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $6, 'active', $7, '{}'::jsonb)
-       RETURNING id`,
-      [
-        data.workspaceId,
-        plugin.id,
-        (await getPluginCatalogRowByItemId(plugin.id))!.version_id,
-        plugin.display_name,
-        approvedRuntimePermissions,
-        internalReuseScope(lifecycleScope),
-        data.installedBy || null,
-      ],
+    const catalogRow = await getPluginCatalogRowByItemId(plugin.id);
+    const catalogVersionId = catalogRow?.version_id;
+    if (!catalogVersionId) {
+      throw new McpPluginError(500, "Plugin catalog is missing its latest version");
+    }
+
+    const insertedInstallation = await executeTakeFirst<{ id: string }>(
+      client,
+      db
+        .insertInto("plugin_installations")
+        .values({
+          workspace_id: data.workspaceId,
+          catalog_item_id: plugin.id,
+          catalog_version_id: catalogVersionId,
+          display_name: plugin.display_name,
+          config_data: {} as TableInsert<"plugin_installations">["config_data"],
+          approved_runtime_permissions: approvedRuntimePermissions,
+          reuse_scope: internalReuseScope(lifecycleScope),
+          status: "active",
+          installed_by: data.installedBy || null,
+          metadata: {} as TableInsert<"plugin_installations">["metadata"],
+        })
+        .returning("id"),
     );
-    const installationId = insertedInstallation.rows[0]!.id;
+    const installationId = insertedInstallation!.id;
 
     const resolvedConfigBase = data.configData || {};
     const resolvedConfig = await attachAuthConnectionsToConfig({
@@ -1883,12 +1872,15 @@ export async function installPluginUnified(data: {
       plugin.config_schema || {},
     );
 
-    await client.query(
-      `UPDATE plugin_installations
-       SET config_data = $2::jsonb,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [installationId, JSON.stringify(encryptedConfig)],
+    await executeCompiledQuery(
+      client,
+      db
+        .updateTable("plugin_installations")
+        .set({
+          config_data: encryptedConfig as TableInsert<"plugin_installations">["config_data"],
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", installationId),
     );
 
     const primaryAccessTarget = resolveAccessGrantTarget({
@@ -1898,64 +1890,56 @@ export async function installPluginUnified(data: {
       conversationId: target.conversationId,
       userId: target.userId,
     });
-    const insertedAccess = await client.query<{ id: string }>(
-      `INSERT INTO access_bindings (
-         workspace_id,
-         resource_type,
-         resource_id,
-         relation,
-         subject_type,
-         subject_id,
-         metadata,
-         status,
-         created_by,
-         reason
-       )
-       VALUES ($1, 'plugin_installation', $2, $3, $4, $5, $6::jsonb, 'active', $7, $8)
-       RETURNING id`,
-      [
-        data.workspaceId,
-        installationId,
-        primaryAccessTarget.relation,
-        primaryAccessTarget.subjectType,
-        primaryAccessTarget.subjectId,
-        JSON.stringify({
-          isPrimary: true,
-          grantScope: data.attachmentType,
-          actorId: target.actorId,
-          conversationId: target.conversationId,
-          userId: target.userId,
-          requestedPermissions: approvedRuntimePermissions,
+    const insertedAccess = await executeTakeFirst<{ id: string }>(
+      client,
+      db
+        .insertInto("access_bindings")
+        .values({
+          workspace_id: data.workspaceId,
+          resource_type: "plugin_installation",
+          resource_id: installationId,
+          relation: primaryAccessTarget.relation,
+          subject_type: primaryAccessTarget.subjectType,
+          subject_id: primaryAccessTarget.subjectId,
+          metadata: {
+            isPrimary: true,
+            grantScope: data.attachmentType,
+            actorId: target.actorId,
+            conversationId: target.conversationId,
+            userId: target.userId,
+            requestedPermissions: approvedRuntimePermissions,
+            reason: plugin.authorization?.reason || null,
+          } as TableInsert<"access_bindings">["metadata"],
+          status: "active",
+          created_by: data.installedBy || null,
           reason: plugin.authorization?.reason || null,
+        })
+        .returning("id"),
+    );
+    const primaryAccessId = insertedAccess!.id;
+
+    await executeCompiledQuery(
+      client,
+      db
+        .insertInto("plugin_source_refs")
+        .values({
+          installation_id: installationId,
+          source_catalog_item_id: plugin.id,
+          source_catalog_version_id: catalogVersionId,
+          sync_mode: "manual_merge",
+          metadata: {} as TableInsert<"plugin_source_refs">["metadata"],
         }),
-        data.installedBy || null,
-        plugin.authorization?.reason || null,
-      ],
-    );
-    const primaryAccessId = insertedAccess.rows[0]!.id;
-
-    await client.query(
-      `INSERT INTO plugin_source_refs (
-         installation_id,
-         source_catalog_item_id,
-         source_catalog_version_id,
-         sync_mode,
-         metadata
-       )
-       VALUES ($1, $2, $3, 'manual_merge', '{}'::jsonb)`,
-      [
-        installationId,
-        plugin.id,
-        (await getPluginCatalogRowByItemId(plugin.id))!.version_id,
-      ],
     );
 
-    await client.query(
-      `UPDATE catalog_items
-       SET download_count = download_count + 1,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [plugin.id],
+    await executeCompiledQuery(
+      client,
+      db
+        .updateTable("catalog_items")
+        .set({
+          download_count: sql`download_count + 1`,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", plugin.id),
     );
 
     const authzEntryIds = await queueAuthzRelationships(
@@ -1996,25 +1980,20 @@ export async function installPluginUnified(data: {
 }
 
 export async function uninstallPluginUnified(installId: string) {
-  const rows = await query<{
-    installation_id: string;
-    workspace_id: string;
-    installed_by: string | null;
-  }>(
-    `SELECT
-       id AS installation_id,
-       workspace_id,
-       installed_by
-     FROM plugin_installations
-     WHERE id = $1
-     LIMIT 1`,
-    [installId],
-  );
-  if (rows.rows.length === 0) {
+  const installation = await db
+    .selectFrom("plugin_installations")
+    .select([
+      "id as installation_id",
+      "workspace_id",
+      "installed_by",
+    ])
+    .where("id", "=", installId)
+    .limit(1)
+    .executeTakeFirst();
+  if (!installation) {
     throw new McpPluginError(404, "Installation not found");
   }
 
-  const installation = rows.rows[0]!;
   const accessRows = await listAccessRows(installId, true);
 
   const authzEntryIds = await transaction(async (client) => {
@@ -2045,17 +2024,17 @@ export async function uninstallPluginUnified(installId: string) {
       },
     );
 
-    await client.query(
-      `DELETE FROM access_bindings
-       WHERE resource_type = 'plugin_installation'
-         AND resource_id = $1`,
-      [installId],
+    await executeCompiledQuery(
+      client,
+      db
+        .deleteFrom("access_bindings")
+        .where("resource_type", "=", "plugin_installation")
+        .where("resource_id", "=", installId),
     );
 
-    await client.query(
-      `DELETE FROM plugin_installations
-       WHERE id = $1`,
-      [installId],
+    await executeCompiledQuery(
+      client,
+      db.deleteFrom("plugin_installations").where("id", "=", installId),
     );
 
     return ids;
@@ -2112,18 +2091,17 @@ export async function updateInstallation(
     updatedBy?: string;
   },
 ) {
-  const currentRows = await query<{ workspace_id: string }>(
-    `SELECT workspace_id
-     FROM plugin_installations
-     WHERE id = $1
-     LIMIT 1`,
-    [installId],
-  );
-  if (currentRows.rows.length === 0) {
+  const currentRow = await db
+    .selectFrom("plugin_installations")
+    .select("workspace_id")
+    .where("id", "=", installId)
+    .limit(1)
+    .executeTakeFirst();
+  if (!currentRow) {
     throw new McpPluginError(404, "Installation not found");
   }
 
-  const workspaceId = currentRows.rows[0]!.workspace_id;
+  const workspaceId = currentRow.workspace_id;
   const { row, plugin } = await getInstallationPayload(workspaceId, installId);
   const accessRows = await listAccessRows(installId, true);
   const primaryAccess = accessRows.find((entry) => isPrimaryAccessBinding(entry));
@@ -2436,57 +2414,37 @@ export async function grantPluginInstallationAccess(input: {
   }
 
   const result = await transaction(async (client) => {
-    const inserted = await client.query<AccessBindingRow>(
-      `INSERT INTO access_bindings (
-         workspace_id,
-         resource_type,
-         resource_id,
-         relation,
-         subject_type,
-         subject_id,
-         metadata,
-         status,
-         created_by,
-         reason
-       )
-       VALUES ($1, 'plugin_installation', $2, $3, $4, $5, $6::jsonb, 'active', $7, $8)
-       RETURNING
-         id,
-         workspace_id,
-         resource_type,
-         resource_id,
-         relation,
-         subject_type,
-         subject_id,
-         subject_relation,
-         status,
-         created_by,
-         reason,
-         metadata,
-         created_at,
-         revoked_at`,
-      [
-        input.workspaceId,
-        input.installationId,
-        accessTarget.relation,
-        accessTarget.subjectType,
-        accessTarget.subjectId,
-        JSON.stringify({
-          ...(input.metadata || {}),
-          isPrimary: false,
-          grantScope,
-          actorId: target.actorId,
-          conversationId: target.conversationId,
-          userId: target.userId,
-          requestedPermissions: input.permissions || [],
+    const inserted = await executeTakeFirst(
+      client,
+      db
+        .insertInto("access_bindings")
+        .values({
+          workspace_id: input.workspaceId,
+          resource_type: "plugin_installation",
+          resource_id: input.installationId,
+          relation: accessTarget.relation,
+          subject_type: accessTarget.subjectType,
+          subject_id: accessTarget.subjectId,
+          metadata: {
+            ...(input.metadata || {}),
+            isPrimary: false,
+            grantScope,
+            actorId: target.actorId,
+            conversationId: target.conversationId,
+            userId: target.userId,
+            requestedPermissions: input.permissions || [],
+            reason: input.reason || plugin.authorization?.reason || null,
+          } as TableInsert<"access_bindings">["metadata"],
+          status: "active",
+          created_by: input.grantedBy || null,
           reason: input.reason || plugin.authorization?.reason || null,
-        }),
-        input.grantedBy || null,
-        input.reason || plugin.authorization?.reason || null,
-      ],
+        })
+        .returningAll(),
     );
 
-    const accessRow = buildInstallationAccessRow(inserted.rows[0]!);
+    const accessRow = buildInstallationAccessRow(
+      inserted as unknown as AccessBindingRow,
+    );
     const authzEntryIds = await queueAuthzRelationships(
       client,
       buildResourceAccessAuthzMutations({
@@ -2556,12 +2514,15 @@ export async function revokePluginInstallationAccess(input: {
       },
     );
 
-    await client.query(
-      `UPDATE access_bindings
-       SET status = 'revoked',
-           revoked_at = NOW()
-       WHERE id = $1`,
-      [accessRow.id],
+    await executeCompiledQuery(
+      client,
+      db
+        .updateTable("access_bindings")
+        .set({
+          status: "revoked",
+          revoked_at: sql`NOW()`,
+        })
+        .where("id", "=", accessRow.id),
     );
 
     return ids;
@@ -2742,28 +2703,15 @@ export async function seedBuiltinMcpPlugins() {
 export async function seedBuiltinPluginCategories() {
   for (const category of builtinCapabilityCategories) {
     if (category.targetKind !== "plugin") continue;
-    await query(
-      `INSERT INTO catalog_categories (
-         slug,
-         item_kind,
-         display_name,
-         description,
-         sort_order,
-         metadata
-       )
-       VALUES ($1, 'plugin_package', $2, $3, $4, $5::jsonb)
-       ON CONFLICT (item_kind, slug) DO UPDATE
-         SET display_name = EXCLUDED.display_name,
-             description = EXCLUDED.description,
-             sort_order = EXCLUDED.sort_order,
-             metadata = EXCLUDED.metadata,
-             updated_at = NOW()`,
-      [
-        category.slug,
-        category.displayName,
-        category.description || "",
-        category.sortOrder,
-        JSON.stringify({
+    await db
+      .insertInto("catalog_categories")
+      .values({
+        slug: category.slug,
+        item_kind: "plugin_package",
+        display_name: category.displayName,
+        description: category.description || "",
+        sort_order: category.sortOrder,
+        metadata: {
           displayNameI18n: category.displayNameI18n || {
             en: category.displayName,
           },
@@ -2771,8 +2719,25 @@ export async function seedBuiltinPluginCategories() {
             en: category.description || "",
           },
           defaultLocale: category.defaultLocale || "en",
+        } as TableInsert<"catalog_categories">["metadata"],
+      })
+      .onConflict((oc) =>
+        oc.columns(["item_kind", "slug"]).doUpdateSet({
+          display_name: category.displayName,
+          description: category.description || "",
+          sort_order: category.sortOrder,
+          metadata: {
+            displayNameI18n: category.displayNameI18n || {
+              en: category.displayName,
+            },
+            descriptionI18n: category.descriptionI18n || {
+              en: category.description || "",
+            },
+            defaultLocale: category.defaultLocale || "en",
+          } as TableInsert<"catalog_categories">["metadata"],
+          updated_at: sql`NOW()`,
         }),
-      ],
-    );
+      )
+      .execute();
   }
 }

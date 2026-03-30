@@ -17,7 +17,14 @@ import {
   enqueueTransactionalEvent,
   type Queryable,
 } from "../../infrastructure/events/index.js";
-import { query, transaction } from "../../infrastructure/database/index.js";
+import { transaction } from "../../infrastructure/database/index.js";
+import {
+  db,
+  executeCompiledQuery,
+  executeCompiledSql,
+  executeTakeFirst,
+  type TableInsert,
+} from "../../infrastructure/database/kysely.js";
 import {
   completeToolCallTask,
   failToolCallTask,
@@ -29,6 +36,7 @@ import {
   updateConversationItemEventPayload,
 } from "../conversation/service.js";
 import { getFileUrlById } from "../files/service.js";
+import { sql } from "kysely";
 
 type RawInteractionRow = {
   id: string;
@@ -41,10 +49,10 @@ type RawInteractionRow = {
   prompt_payload: unknown;
   requested_effect: unknown;
   resolution_payload: unknown;
-  resolved_at: string | null;
-  expires_at: string | null;
-  created_at: string;
-  updated_at: string;
+  resolved_at: string | Date | null;
+  expires_at: string | Date | null;
+  created_at: string | Date;
+  updated_at: string | Date;
   requester_member_id: string | null;
   requester_user_id: string | null;
   requester_actor_id: string | null;
@@ -79,6 +87,11 @@ type RawInteractionRow = {
   resolved_by_user_avatar_file_id: string | null;
   resolved_by_avatar_emoji: string | null;
 };
+
+function toIsoString(value: string | Date | null | undefined) {
+  if (!value) return undefined;
+  return value instanceof Date ? value.toISOString() : value;
+}
 
 export interface CreateQuestionInteractionParams {
   workspaceId: string;
@@ -625,10 +638,10 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
         : undefined,
     question,
     relayAuthorization,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    resolvedAt: row.resolved_at || undefined,
-    expiresAt: row.expires_at || undefined,
+    createdAt: toIsoString(row.created_at) || new Date().toISOString(),
+    updatedAt: toIsoString(row.updated_at) || new Date().toISOString(),
+    resolvedAt: toIsoString(row.resolved_at),
+    expiresAt: toIsoString(row.expires_at),
   };
 }
 
@@ -636,9 +649,8 @@ async function getInteractionRowById(
   interactionId: string,
   queryable?: Queryable,
 ) {
-  const runner = queryable || { query: (text: string, params?: any[]) => query(text, params) };
-  const result = await runner.query(
-    `SELECT ir.*,
+  const compiled = sql<RawInteractionRow>`
+    SELECT ir.*,
             question.prompt_payload AS prompt_payload,
             relay.requested_effect AS requested_effect,
             COALESCE(question.resolution_payload, relay.resolution_payload, '{}'::jsonb) AS resolution_payload,
@@ -695,10 +707,12 @@ async function getInteractionRowById(
        ON device.id = relay.relay_device_id
      LEFT JOIN relay_exposures exposure
        ON exposure.id = relay.relay_exposure_id
-     WHERE ir.id = $1
-    LIMIT 1`,
-    [interactionId],
-  );
+     WHERE ir.id = ${interactionId}
+     LIMIT 1
+  `.compile(db);
+  const result = queryable
+    ? await executeCompiledSql<RawInteractionRow>(queryable, compiled)
+    : await db.executeQuery(compiled);
   return result.rows[0] || null;
 }
 
@@ -879,55 +893,30 @@ async function insertInteractionRequest(
   expiresAt?: string;
 }) {
   const interactionId = uuidv4();
-  const result = await client.query(
-    `INSERT INTO interaction_requests (
-       id,
-       workspace_id,
-       conversation_id,
-       task_id,
-       requester_member_id,
-       requester_user_id,
-       requester_actor_id,
-       kind,
-       status,
-       target_member_id,
-       target_user_id,
-       expires_at,
-       created_at,
-       updated_at
-     )
-     VALUES (
-       $1,
-       $2,
-       $3,
-       $4,
-       $5,
-       $6,
-       $7,
-       $8,
-      'pending',
-      $9,
-       $10,
-       $11,
-       NOW(),
-       NOW()
-     )
-     RETURNING id`,
-    [
-      interactionId,
-      params.workspaceId,
-      params.conversationId,
-      params.taskId,
-      params.requesterMemberId,
-      params.requesterUserId || null,
-      params.requesterActorId || null,
-      params.kind,
-      params.targetMemberId || null,
-      params.targetUserId || null,
-      params.expiresAt || null,
-    ],
+  const created = await executeTakeFirst<{ id: string }>(
+    client,
+    db
+      .insertInto("interaction_requests")
+      .values({
+        id: interactionId,
+        workspace_id: params.workspaceId,
+        conversation_id: params.conversationId,
+        task_id: params.taskId,
+        requester_member_id: params.requesterMemberId,
+        requester_user_id: params.requesterUserId || null,
+        requester_actor_id: params.requesterActorId || null,
+        kind: params.kind,
+        status: "pending",
+        target_member_id: params.targetMemberId || null,
+        target_user_id: params.targetUserId || null,
+        expires_at: params.expiresAt || null,
+      })
+      .returning("id"),
   );
-  return result.rows[0]?.id as string;
+  if (!created?.id) {
+    throw new Error("Failed to create interaction request");
+  }
+  return created.id;
 }
 
 async function insertQuestionInteractionDetails(
@@ -937,18 +926,15 @@ async function insertQuestionInteractionDetails(
     promptPayload: Record<string, unknown>;
   },
 ) {
-  await client.query(
-    `INSERT INTO interaction_question_requests (
-       interaction_id,
-       prompt_payload,
-       resolution_payload
-     )
-     VALUES (
-       $1,
-       $2::jsonb,
-       '{}'::jsonb
-     )`,
-    [params.interactionId, JSON.stringify(params.promptPayload)],
+  await executeCompiledQuery(
+    client,
+    db.insertInto("interaction_question_requests").values({
+      interaction_id: params.interactionId,
+      prompt_payload:
+        params.promptPayload as TableInsert<"interaction_question_requests">["prompt_payload"],
+      resolution_payload:
+        {} as TableInsert<"interaction_question_requests">["resolution_payload"],
+    }),
   );
 }
 
@@ -961,27 +947,80 @@ async function insertRelayAuthorizationInteractionDetails(
     requestedEffect: Record<string, unknown>;
   },
 ) {
-  await client.query(
-    `INSERT INTO interaction_relay_authorization_requests (
-       interaction_id,
-       relay_device_id,
-       relay_exposure_id,
-       requested_effect,
-       resolution_payload
-     )
-     VALUES (
-       $1,
-       $2,
-       $3,
-       $4::jsonb,
-       '{}'::jsonb
-     )`,
-    [
-      params.interactionId,
-      params.relayDeviceId,
-      params.relayExposureId,
-      JSON.stringify(params.requestedEffect),
-    ],
+  await executeCompiledQuery(
+    client,
+    db.insertInto("interaction_relay_authorization_requests").values({
+      interaction_id: params.interactionId,
+      relay_device_id: params.relayDeviceId,
+      relay_exposure_id: params.relayExposureId,
+      requested_effect:
+        params.requestedEffect as TableInsert<"interaction_relay_authorization_requests">["requested_effect"],
+      resolution_payload:
+        {} as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
+    }),
+  );
+}
+
+async function updateInteractionConversationItemId(
+  client: Queryable,
+  interactionId: string,
+  conversationItemId: string,
+) {
+  await executeCompiledQuery(
+    client,
+    db
+      .updateTable("interaction_requests")
+      .set({
+        conversation_item_id: conversationItemId,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", interactionId),
+  );
+}
+
+async function updateInteractionRequestRow(
+  client: Queryable,
+  interactionId: string,
+  values: Record<string, unknown>,
+) {
+  await executeCompiledQuery(
+    client,
+    db
+      .updateTable("interaction_requests")
+      .set(values)
+      .where("id", "=", interactionId),
+  );
+}
+
+async function updateInteractionResolutionPayload(
+  client: Queryable,
+  interactionKind: InteractionRequestKind,
+  interactionId: string,
+  payload: Record<string, unknown>,
+) {
+  if (interactionKind === "question_choice") {
+    await executeCompiledQuery(
+      client,
+      db
+        .updateTable("interaction_question_requests")
+        .set({
+          resolution_payload:
+            payload as TableInsert<"interaction_question_requests">["resolution_payload"],
+        })
+        .where("interaction_id", "=", interactionId),
+    );
+    return;
+  }
+
+  await executeCompiledQuery(
+    client,
+    db
+      .updateTable("interaction_relay_authorization_requests")
+      .set({
+        resolution_payload:
+          payload as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
+      })
+      .where("interaction_id", "=", interactionId),
   );
 }
 
@@ -1029,12 +1068,10 @@ export async function createQuestionInteractionRequest(
       queryable: client,
     });
 
-    await client.query(
-      `UPDATE interaction_requests
-       SET conversation_item_id = $2,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [interactionId, created.item.id],
+    await updateInteractionConversationItemId(
+      client,
+      interactionId,
+      created.item.id,
     );
 
     interaction = await getInteractionRequestSummary(interactionId, client);
@@ -1090,12 +1127,10 @@ export async function createRelayAuthorizationInteractionRequest(
       queryable: client,
     });
 
-    await client.query(
-      `UPDATE interaction_requests
-       SET conversation_item_id = $2,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [interactionId, created.item.id],
+    await updateInteractionConversationItemId(
+      client,
+      interactionId,
+      created.item.id,
     );
 
     interaction = await getInteractionRequestSummary(interactionId, client);
@@ -1110,37 +1145,39 @@ export async function createRelayAuthorizationInteractionRequest(
 export async function findOpenRelayAuthorizationInteraction(
   params: FindOpenRelayAuthorizationInteractionParams,
 ) {
-  const result = await query<{ id: string }>(
-    `SELECT ir.id
-     FROM interaction_requests ir
-     INNER JOIN interaction_relay_authorization_requests relay
-       ON relay.interaction_id = ir.id
-     WHERE ir.workspace_id = $1
-       AND ir.conversation_id = $2
-       AND ir.requester_member_id = $3
-       AND ir.kind = 'relay_authorization'
-       AND ir.status IN ('pending', 'approved_pending_apply')
-       AND (ir.expires_at IS NULL OR ir.expires_at > NOW())
-       AND relay.relay_device_id = $4
-       AND relay.relay_exposure_id = $5
-       AND relay.requested_effect->>'runtimeSessionId' = $6
-       AND relay.requested_effect->>'duration' = $7
-       AND relay.requested_effect->'requestedScope' = $8::jsonb
-     ORDER BY ir.updated_at DESC
-     LIMIT 1`,
-    [
-      params.workspaceId,
-      params.conversationId,
-      params.requesterMemberId,
-      params.relayDeviceId,
-      params.relayExposureId,
-      params.runtimeSessionId,
-      params.duration,
-      JSON.stringify(params.requestedScope),
-    ],
-  );
+  const row = await db
+    .selectFrom("interaction_requests as ir")
+    .innerJoin(
+      "interaction_relay_authorization_requests as relay",
+      "relay.interaction_id",
+      "ir.id",
+    )
+    .select("ir.id")
+    .where("ir.workspace_id", "=", params.workspaceId)
+    .where("ir.conversation_id", "=", params.conversationId)
+    .where("ir.requester_member_id", "=", params.requesterMemberId)
+    .where("ir.kind", "=", "relay_authorization")
+    .where("ir.status", "in", ["pending", "approved_pending_apply"])
+    .where((eb) =>
+      eb.or([
+        eb("ir.expires_at", "is", null),
+        eb("ir.expires_at", ">", new Date()),
+      ]),
+    )
+    .where("relay.relay_device_id", "=", params.relayDeviceId)
+    .where("relay.relay_exposure_id", "=", params.relayExposureId)
+    .where(
+      sql<boolean>`relay.requested_effect->>'runtimeSessionId' = ${params.runtimeSessionId}`,
+    )
+    .where(sql<boolean>`relay.requested_effect->>'duration' = ${params.duration}`)
+    .where(
+      sql<boolean>`relay.requested_effect->'requestedScope' = ${JSON.stringify(params.requestedScope)}::jsonb`,
+    )
+    .orderBy("ir.updated_at", "desc")
+    .limit(1)
+    .executeTakeFirst();
 
-  const interactionId = result.rows[0]?.id;
+  const interactionId = row?.id;
   if (!interactionId) {
     return null;
   }
@@ -1156,16 +1193,15 @@ export async function getInteractionRequestSummary(
 }
 
 export async function getInteractionRequestSummaryByTaskId(taskId: string) {
-  const result = await query<{ id: string }>(
-    `SELECT id
-     FROM interaction_requests
-     WHERE task_id = $1
-     ORDER BY created_at DESC
-     LIMIT 1`,
-    [taskId],
-  );
+  const row = await db
+    .selectFrom("interaction_requests")
+    .select("id")
+    .where("task_id", "=", taskId)
+    .orderBy("created_at", "desc")
+    .limit(1)
+    .executeTakeFirst();
 
-  const interactionId = result.rows[0]?.id;
+  const interactionId = row?.id;
   if (!interactionId) {
     return null;
   }
@@ -1205,14 +1241,11 @@ export async function cancelInteractionRequest(
 
   const resolutionPayload = parseJsonObject(existing.resolution_payload);
   const interaction = await transaction(async (client) => {
-    await client.query(
-      `UPDATE interaction_requests
-       SET status = 'cancelled',
-           resolved_at = NOW(),
-           updated_at = NOW()
-       WHERE id = $1`,
-      [interactionId],
-    );
+    await updateInteractionRequestRow(client, interactionId, {
+      status: "cancelled",
+      resolved_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    });
 
     const payload = {
       ...resolutionPayload,
@@ -1220,21 +1253,12 @@ export async function cancelInteractionRequest(
       cancelled: true,
     };
 
-    if (existing.kind === "question_choice") {
-      await client.query(
-        `UPDATE interaction_question_requests
-         SET resolution_payload = $2::jsonb
-         WHERE interaction_id = $1`,
-        [interactionId, JSON.stringify(payload)],
-      );
-    } else {
-      await client.query(
-        `UPDATE interaction_relay_authorization_requests
-         SET resolution_payload = $2::jsonb
-         WHERE interaction_id = $1`,
-        [interactionId, JSON.stringify(payload)],
-      );
-    }
+    await updateInteractionResolutionPayload(
+      client,
+      existing.kind,
+      interactionId,
+      payload,
+    );
     const nextInteraction = await getInteractionRequestSummary(interactionId, client);
     if (!nextInteraction) {
       throw new Error("Failed to reload cancelled interaction");
@@ -1251,28 +1275,32 @@ export async function canUserViewInteraction(params: {
   interactionId: string;
   userId: string;
 }) {
-  const result = await query(
-    `SELECT 1
-     FROM interaction_requests ir
-     WHERE ir.id = $1
-       AND (
-         ir.requester_user_id = $2
-         OR (ir.kind = 'question_choice' AND ir.target_user_id = $2)
-         OR (
-           ir.kind = 'relay_authorization'
-           AND EXISTS (
-             SELECT 1
-             FROM conversation_members cm
-             WHERE cm.conversation_id = ir.conversation_id
-               AND cm.user_id = $2
-               AND cm.state = 'active'
-           )
-         )
-       )
-     LIMIT 1`,
-    [params.interactionId, params.userId],
-  );
-  return (result.rowCount || 0) > 0;
+  const row = await db
+    .selectFrom("interaction_requests as ir")
+    .select("ir.id")
+    .where("ir.id", "=", params.interactionId)
+    .where((eb) =>
+      eb.or([
+        eb("ir.requester_user_id", "=", params.userId),
+        eb.and([
+          eb("ir.kind", "=", "question_choice"),
+          eb("ir.target_user_id", "=", params.userId),
+        ]),
+        eb.and([
+          eb("ir.kind", "=", "relay_authorization"),
+          sql<boolean>`EXISTS (
+            SELECT 1
+            FROM conversation_members cm
+            WHERE cm.conversation_id = ir.conversation_id
+              AND cm.user_id = ${params.userId}
+              AND cm.state = 'active'
+          )`,
+        ]),
+      ]),
+    )
+    .limit(1)
+    .executeTakeFirst();
+  return Boolean(row);
 }
 
 export async function canUserResolveInteraction(params: {
@@ -1569,37 +1597,20 @@ export async function resolveInteractionRequest(
   }
 
   const interaction = await transaction(async (client) => {
-    await client.query(
-      `UPDATE interaction_requests
-       SET status = $2,
-           resolved_by_member_id = $3,
-           resolved_by_user_id = $4,
-           resolved_at = NOW(),
-           updated_at = NOW()
-       WHERE id = $1`,
-      [
-        params.interactionId,
-        nextStatus,
-        params.resolverMemberId,
-        params.resolverUserId,
-      ],
-    );
+    await updateInteractionRequestRow(client, params.interactionId, {
+      status: nextStatus,
+      resolved_by_member_id: params.resolverMemberId,
+      resolved_by_user_id: params.resolverUserId,
+      resolved_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    });
 
-    if (existing.kind === "question_choice") {
-      await client.query(
-        `UPDATE interaction_question_requests
-         SET resolution_payload = $2::jsonb
-         WHERE interaction_id = $1`,
-        [params.interactionId, JSON.stringify(resolutionPayload)],
-      );
-    } else {
-      await client.query(
-        `UPDATE interaction_relay_authorization_requests
-         SET resolution_payload = $2::jsonb
-         WHERE interaction_id = $1`,
-        [params.interactionId, JSON.stringify(resolutionPayload)],
-      );
-    }
+    await updateInteractionResolutionPayload(
+      client,
+      existing.kind,
+      params.interactionId,
+      resolutionPayload,
+    );
 
     const nextInteraction = await getInteractionRequestSummary(
       params.interactionId,
@@ -1652,24 +1663,18 @@ export async function markRelayAuthorizationInteractionApplied(
   }
   const resolutionPayload = parseJsonObject(existing.resolution_payload);
   const interaction = await transaction(async (client) => {
-    await client.query(
-      `UPDATE interaction_requests
-       SET status = 'applied',
-           updated_at = NOW()
-       WHERE id = $1`,
-      [interactionId],
-    );
-    await client.query(
-      `UPDATE interaction_relay_authorization_requests
-       SET resolution_payload = $2::jsonb
-       WHERE interaction_id = $1`,
-      [
-        interactionId,
-        JSON.stringify({
-          ...resolutionPayload,
-          applyError: undefined,
-        }),
-      ],
+    await updateInteractionRequestRow(client, interactionId, {
+      status: "applied",
+      updated_at: sql`NOW()`,
+    });
+    await updateInteractionResolutionPayload(
+      client,
+      "relay_authorization",
+      interactionId,
+      {
+        ...resolutionPayload,
+        applyError: undefined,
+      },
     );
     const nextInteraction = await getInteractionRequestSummary(interactionId, client);
     if (!nextInteraction) {
@@ -1699,24 +1704,18 @@ export async function markRelayAuthorizationInteractionApplyFailed(
   }
   const resolutionPayload = parseJsonObject(existing.resolution_payload);
   const interaction = await transaction(async (client) => {
-    await client.query(
-      `UPDATE interaction_requests
-       SET status = 'apply_failed',
-           updated_at = NOW()
-       WHERE id = $1`,
-      [interactionId],
-    );
-    await client.query(
-      `UPDATE interaction_relay_authorization_requests
-       SET resolution_payload = $2::jsonb
-       WHERE interaction_id = $1`,
-      [
-        interactionId,
-        JSON.stringify({
-          ...resolutionPayload,
-          applyError,
-        }),
-      ],
+    await updateInteractionRequestRow(client, interactionId, {
+      status: "apply_failed",
+      updated_at: sql`NOW()`,
+    });
+    await updateInteractionResolutionPayload(
+      client,
+      "relay_authorization",
+      interactionId,
+      {
+        ...resolutionPayload,
+        applyError,
+      },
     );
     const nextInteraction = await getInteractionRequestSummary(interactionId, client);
     if (!nextInteraction) {
@@ -1783,20 +1782,22 @@ export async function getPendingRelayAuthorizationApplication(
 export async function listPendingRelayAuthorizationApplicationsForDevice(
   deviceId: string,
 ): Promise<PendingRelayAuthorizationApplication[]> {
-  const result = await query<{ id: string }>(
-    `SELECT ir.id
-     FROM interaction_requests ir
-     INNER JOIN interaction_relay_authorization_requests relay
-       ON relay.interaction_id = ir.id
-     WHERE relay.relay_device_id = $1
-       AND ir.kind = 'relay_authorization'
-       AND ir.status = 'approved_pending_apply'
-     ORDER BY ir.updated_at ASC`,
-    [deviceId],
-  );
+  const result = await db
+    .selectFrom("interaction_requests as ir")
+    .innerJoin(
+      "interaction_relay_authorization_requests as relay",
+      "relay.interaction_id",
+      "ir.id",
+    )
+    .select("ir.id")
+    .where("relay.relay_device_id", "=", deviceId)
+    .where("ir.kind", "=", "relay_authorization")
+    .where("ir.status", "=", "approved_pending_apply")
+    .orderBy("ir.updated_at", "asc")
+    .execute();
 
   const applications = await Promise.all(
-    result.rows.map((row) => getPendingRelayAuthorizationApplication(row.id)),
+    result.map((row) => getPendingRelayAuthorizationApplication(row.id)),
   );
   return applications.filter(
     (application): application is PendingRelayAuthorizationApplication =>

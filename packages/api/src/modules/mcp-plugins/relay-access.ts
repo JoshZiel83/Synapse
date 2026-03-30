@@ -9,7 +9,8 @@ import {
   touchRelation,
   type AuthzRelationMutation,
 } from "../../infrastructure/authz/index.js";
-import { query, transaction } from "../../infrastructure/database/index.js";
+import { transaction } from "../../infrastructure/database/index.js";
+import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
 import { incrementMcpVersion } from "./instance-manager.js";
 
 type Queryable = Pick<pg.PoolClient, "query">;
@@ -235,7 +236,7 @@ export async function ensureRelayExposureDefaultAccess(params: {
   exposureId: string;
 }) {
   const authzEntryIds = await transaction(async (client) => {
-    const existing = await client.query<{ id: string }>(
+    const existing = await executeSqlOn<{ id: string }>(client, 
       `SELECT id
        FROM access_bindings
        WHERE resource_type = 'relay_exposure'
@@ -248,7 +249,7 @@ export async function ensureRelayExposureDefaultAccess(params: {
       return [] as string[];
     }
 
-    const inserted = await client.query<AccessBindingRow>(
+    const inserted = await executeSqlOn<AccessBindingRow>(client, 
       `INSERT INTO access_bindings (
          workspace_id,
          resource_type,
@@ -355,7 +356,7 @@ export async function listRelayExposureAccessState(
   workspaceId: string,
   exposureId: string,
 ) {
-  const result = await query<AccessBindingRow>(
+  const result = await executeSql<AccessBindingRow>(
     `SELECT *
      FROM access_bindings
      WHERE workspace_id = $1
@@ -401,7 +402,7 @@ export async function grantRelayExposureAccess(input: {
     throw new Error(`Unsupported relay exposure grant scope: ${grantScope}`);
   }
 
-  const existing = await query<AccessBindingRow>(
+  const existing = await executeSql<AccessBindingRow>(
     `SELECT *
      FROM access_bindings
      WHERE workspace_id = $1
@@ -426,7 +427,7 @@ export async function grantRelayExposureAccess(input: {
   }
 
   const inserted = await transaction(async (client) => {
-    const binding = await client.query<AccessBindingRow>(
+    const binding = await executeSqlOn<AccessBindingRow>(client, 
       `INSERT INTO access_bindings (
          workspace_id,
          resource_type,
@@ -497,7 +498,7 @@ export async function revokeRelayExposureAccess(input: {
   exposureId: string;
   bindingId: string;
 }) {
-  const result = await query<AccessBindingRow>(
+  const result = await executeSql<AccessBindingRow>(
     `SELECT *
      FROM access_bindings
      WHERE id = $1
@@ -542,7 +543,7 @@ export async function revokeRelayExposureAccess(input: {
       },
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE access_bindings
        SET status = 'revoked',
            revoked_at = NOW()
@@ -564,7 +565,7 @@ export async function revokeRelayDeviceAuthzState(input: {
   exposureIds: string[];
 }) {
   const activeBindings = input.exposureIds.length > 0
-    ? await query<AccessBindingRow>(
+    ? await executeSql<AccessBindingRow>(
         `SELECT *
          FROM access_bindings
          WHERE workspace_id = $1
@@ -618,7 +619,7 @@ export async function revokeRelayDeviceAuthzState(input: {
     );
 
     if (activeBindings.rows.length > 0) {
-      await client.query(
+      await executeSqlOn(client, 
         `UPDATE access_bindings
          SET status = 'revoked',
              revoked_at = NOW()

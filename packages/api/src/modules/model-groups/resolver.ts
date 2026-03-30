@@ -7,7 +7,7 @@ import type {
 } from '@synapse/shared';
 import { resolveModelEngineKind } from '@synapse/shared';
 import { redis } from '../../infrastructure/redis/index.js';
-import { query } from '../../infrastructure/database/index.js';
+import { db } from '../../infrastructure/database/kysely.js';
 import { config } from '../../config/index.js';
 import { actorSubject, listAuthorizedResourceIds, userSubject } from '../access/service.js';
 import { DEFAULT_MODEL_ATTEMPT_POLICY } from './defaults.js';
@@ -22,8 +22,8 @@ type GroupRow = {
   attempt_policy: Record<string, unknown> | null;
   is_default: boolean;
   is_enabled: boolean;
-  created_at: string;
-  updated_at: string;
+  created_at: string | Date;
+  updated_at: string | Date;
 };
 
 type GroupItemRow = {
@@ -171,59 +171,51 @@ async function listAuthorizedModelGroupIds(current: ResolveContext) {
 async function listCandidateGroups(current: ResolveContext, authorizedGroupIds: Set<string>) {
   const [groupsResult, assignmentsResult, workspaceDefaultResult, platformDefaultResult, userDefaultResult] = await Promise.all([
     authorizedGroupIds.size > 0
-      ? query<GroupRow>(
-          `SELECT *
-           FROM model_groups
-           WHERE is_enabled = TRUE
-             AND id = ANY($1)`,
-          [Array.from(authorizedGroupIds)],
-        )
-      : Promise.resolve({ rows: [] as GroupRow[] }),
-    query(
-      `SELECT group_id, priority
-       FROM actor_model_group_assignments
-       WHERE actor_id = $1
-       ORDER BY priority ASC`,
-      [current.actorId],
-    ),
-    query(
-      `SELECT default_model_group_id
-       FROM workspaces
-       WHERE id = $1
-       LIMIT 1`,
-      [current.workspaceId],
-    ),
-    query(
-      `SELECT default_model_group_id
-       FROM platform_settings
-       WHERE id = TRUE
-       LIMIT 1`,
-      [],
-    ),
+      ? db
+          .selectFrom('model_groups')
+          .selectAll()
+          .where('is_enabled', '=', true)
+          .where('id', 'in', Array.from(authorizedGroupIds))
+          .execute()
+      : Promise.resolve([] as GroupRow[]),
+    db
+      .selectFrom('actor_model_group_assignments')
+      .select(['group_id', 'priority'])
+      .where('actor_id', '=', current.actorId)
+      .orderBy('priority', 'asc')
+      .execute(),
+    db
+      .selectFrom('workspaces')
+      .select('default_model_group_id')
+      .where('id', '=', current.workspaceId)
+      .executeTakeFirst(),
+    db
+      .selectFrom('platform_settings')
+      .select('default_model_group_id')
+      .where('id', '=', true)
+      .executeTakeFirst(),
     current.userId
-      ? query(
-          `SELECT id
-           FROM model_groups
-           WHERE owner_type = 'user'
-             AND owner_user_id = $1
-             AND is_default = TRUE
-             AND is_enabled = TRUE
-           LIMIT 1`,
-          [current.userId],
-        )
-      : Promise.resolve({ rows: [] as Array<{ id: string }> }),
+      ? db
+          .selectFrom('model_groups')
+          .select('id')
+          .where('owner_type', '=', 'user')
+          .where('owner_user_id', '=', current.userId)
+          .where('is_default', '=', true)
+          .where('is_enabled', '=', true)
+          .executeTakeFirst()
+      : Promise.resolve(undefined),
   ]);
 
   const assignedPriority = new Map<string, number>();
-  for (const row of assignmentsResult.rows as Array<{ group_id: string; priority: number }>) {
+  for (const row of assignmentsResult as Array<{ group_id: string; priority: number }>) {
     assignedPriority.set(row.group_id, row.priority);
   }
 
-  const workspaceDefaultGroupId = workspaceDefaultResult.rows[0]?.default_model_group_id as string | undefined;
-  const platformDefaultGroupId = platformDefaultResult.rows[0]?.default_model_group_id as string | undefined;
-  const userDefaultGroupId = userDefaultResult.rows[0]?.id as string | undefined;
+  const workspaceDefaultGroupId = workspaceDefaultResult?.default_model_group_id || undefined;
+  const platformDefaultGroupId = platformDefaultResult?.default_model_group_id || undefined;
+  const userDefaultGroupId = userDefaultResult?.id || undefined;
 
-  return groupsResult.rows.sort((a, b) => {
+  return (groupsResult as GroupRow[]).sort((a, b) => {
     const aAssigned = assignedPriority.has(a.id);
     const bAssigned = assignedPriority.has(b.id);
     if (aAssigned && bAssigned) {
@@ -253,39 +245,39 @@ async function listCandidateGroups(current: ResolveContext, authorizedGroupIds: 
 }
 
 async function listGroupItems(groupId: string) {
-  const result = await query(
-    `SELECT
-        mg.id AS group_id,
-        mg.name AS group_name,
-        mg.routing_strategy,
-        mg.attempt_policy,
-        mgp.id AS item_id,
-        mgp.priority,
-        mgp.weight,
-        mgp.is_enabled AS item_enabled,
-        mp.id AS profile_id,
-        mp.display_name,
-        mp.current_revision_id,
-        r.provider_type,
-        r.api_key,
-        r.base_url,
-        r.model_name,
-        r.max_tokens,
-        r.capability_tags,
-        r.extra_config,
-        r.request_timeout_ms,
-        r.max_retries
-     FROM model_group_profiles mgp
-     JOIN model_groups mg ON mg.id = mgp.group_id
-     JOIN model_profiles mp ON mp.id = mgp.profile_id
-     LEFT JOIN model_profile_revisions r ON r.id = mp.current_revision_id
-     WHERE mgp.group_id = $1
-       AND mgp.is_enabled = TRUE
-       AND mp.is_enabled = TRUE
-       AND mp.current_revision_id IS NOT NULL`,
-    [groupId],
-  );
-  return result.rows as GroupItemRow[];
+  const result = await db
+    .selectFrom('model_group_profiles as mgp')
+    .innerJoin('model_groups as mg', 'mg.id', 'mgp.group_id')
+    .innerJoin('model_profiles as mp', 'mp.id', 'mgp.profile_id')
+    .leftJoin('model_profile_revisions as r', 'r.id', 'mp.current_revision_id')
+    .select([
+      'mg.id as group_id',
+      'mg.name as group_name',
+      'mg.routing_strategy',
+      'mg.attempt_policy',
+      'mgp.id as item_id',
+      'mgp.priority',
+      'mgp.weight',
+      'mgp.is_enabled as item_enabled',
+      'mp.id as profile_id',
+      'mp.display_name',
+      'mp.current_revision_id',
+      'r.provider_type',
+      'r.api_key',
+      'r.base_url',
+      'r.model_name',
+      'r.max_tokens',
+      'r.capability_tags',
+      'r.extra_config',
+      'r.request_timeout_ms',
+      'r.max_retries',
+    ])
+    .where('mgp.group_id', '=', groupId)
+    .where('mgp.is_enabled', '=', true)
+    .where('mp.is_enabled', '=', true)
+    .where('mp.current_revision_id', 'is not', null)
+    .execute();
+  return result as GroupItemRow[];
 }
 
 function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {

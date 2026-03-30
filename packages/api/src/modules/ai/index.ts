@@ -1117,6 +1117,9 @@ export async function actorThink(
               toolName: tc.toolName,
               normalizedInput: tc.input,
             });
+            if (!row) {
+              throw new Error(`Failed to create tool call for ${tc.toolName}`);
+            }
             toolCallRows.set(tc.callId, row);
             await updateToolCallStatus(row.id, "running");
           }
@@ -1547,6 +1550,9 @@ export async function actorThink(
                 toolName: tc.toolName,
                 normalizedInput: tc.input,
               });
+              if (!actionRow) {
+                throw new Error(`Failed to create action tool call for ${tc.toolName}`);
+              }
               await createToolResult({
                 toolCallId: actionRow.id,
                 parts: [{ type: "json", json: tc.input }],
@@ -1754,6 +1760,9 @@ export async function actorThink(
               toolName: tc.toolName,
               normalizedInput: tc.input,
             });
+            if (!actionRow) {
+              throw new Error(`Failed to create action tool call for ${tc.toolName}`);
+            }
             await createToolResult({
               toolCallId: actionRow.id,
               parts: [{ type: "json", json: tc.input }],

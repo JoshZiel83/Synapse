@@ -1,5 +1,9 @@
 import { redis } from '../../infrastructure/redis/index.js';
 import { query } from '../../infrastructure/database/index.js';
+import {
+  db,
+  type TableInsert,
+} from '../../infrastructure/database/kysely.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { sessionThinkingQueue } from '../../workers/queues.js';
 import {
@@ -12,6 +16,7 @@ import {
   type SessionWakeupSourceType,
   type SessionWakeupStatus,
 } from '@synapse/shared';
+import { sql } from 'kysely';
 import { getSession, updateSessionStatus } from './service.js';
 
 function runtimeHashKey(conversationId: string) {
@@ -100,16 +105,15 @@ function dedupeRuntimeWakeups(wakeups: ActorRuntimeWakeup[]) {
 }
 
 async function loadRuntimeWakeups(sessionId: string, statuses: SessionWakeupStatus[] = ['pending', 'attached']) {
-  const result = await query(
-    `SELECT *
-     FROM session_wakeups
-     WHERE session_id = $1
-       AND status = ANY($2)
-     ORDER BY created_at ASC`,
-    [sessionId, statuses],
-  );
+  const rows = await db
+    .selectFrom('session_wakeups')
+    .selectAll()
+    .where('session_id', '=', sessionId)
+    .where('status', 'in', statuses)
+    .orderBy('created_at', 'asc')
+    .execute();
 
-  return result.rows.map(mapWakeupRow);
+  return rows.map(mapWakeupRow);
 }
 
 export async function getConversationRuntimeMap(conversationIds: string[]) {
@@ -139,16 +143,15 @@ export async function getConversationRuntimeMap(conversationIds: string[]) {
     runtimeMap[conversationId] = parsed;
   }
 
-  const sessionResult = await query(
-    `SELECT s.id, s.actor_id, s.conversation_id
-     FROM sessions s
-     JOIN conversations c ON c.id = s.conversation_id
-     WHERE s.conversation_id = ANY($1)
-       AND c.kind = ANY($2::text[])`,
-    [conversationIds, [...THREAD_CONVERSATION_KINDS]],
-  );
+  const sessionResult = await db
+    .selectFrom('sessions as s')
+    .innerJoin('conversations as c', 'c.id', 's.conversation_id')
+    .select(['s.id', 's.actor_id', 's.conversation_id'])
+    .where('s.conversation_id', 'in', conversationIds)
+    .where('c.kind', 'in', [...THREAD_CONVERSATION_KINDS])
+    .execute();
 
-  const missingSessions = sessionResult.rows.filter(
+  const missingSessions = sessionResult.filter(
     (row) => !runtimeMap[row.conversation_id]?.[row.actor_id],
   );
   if (missingSessions.length === 0) {
@@ -285,28 +288,29 @@ export async function enqueueSessionWakeup(params: {
     throw new Error(`Session ${params.sessionId} is closed`);
   }
 
-  const result = await query(
-    `INSERT INTO session_wakeups
-       (id, session_id, source_type, source_item_id, source_session_id, source_member_type, source_member_id,
-        source_name, summary, reason_text, automation_execution_id, automation_occurrence_id, status, metadata, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', $13, NOW())
-     RETURNING *`,
-    [
-      crypto.randomUUID(),
-      params.sessionId,
-      params.sourceType,
-      params.sourceItemId || null,
-      params.sourceSessionId || null,
-      params.sourceMemberType || null,
-      params.sourceMemberId || null,
-      params.sourceName || null,
-      params.summary,
-      params.reasonText || null,
-      params.automationExecutionId || null,
-      params.automationOccurrenceId || null,
-      JSON.stringify(params.metadata || {}),
-    ],
-  );
+  const created = await db
+    .insertInto('session_wakeups')
+    .values({
+      id: crypto.randomUUID(),
+      session_id: params.sessionId,
+      source_type: params.sourceType,
+      source_item_id: params.sourceItemId || null,
+      source_session_id: params.sourceSessionId || null,
+      source_member_type: params.sourceMemberType || null,
+      source_member_id: params.sourceMemberId || null,
+      source_name: params.sourceName || null,
+      summary: params.summary,
+      reason_text: params.reasonText || null,
+      automation_execution_id: params.automationExecutionId || null,
+      automation_occurrence_id: params.automationOccurrenceId || null,
+      status: 'pending',
+      metadata: (params.metadata || {}) as TableInsert<'session_wakeups'>['metadata'],
+    })
+    .returningAll()
+    .executeTakeFirst();
+  if (!created) {
+    throw new Error('Failed to enqueue session wakeup');
+  }
 
   if (session.status === 'idle' || session.status === 'blocked') {
     await updateSessionStatus(params.sessionId, 'queued', { errorMessage: null });
@@ -326,67 +330,68 @@ export async function enqueueSessionWakeup(params: {
     });
   }
 
-  return result.rows[0];
+  return created;
 }
 
 export async function attachPendingWakeupsToTurn(sessionId: string, turnId: string) {
-  const result = await query(
-    `UPDATE session_wakeups
-     SET status = 'attached',
-         turn_id = $2,
-         attached_at = NOW()
-     WHERE session_id = $1
-       AND status = 'pending'
-     RETURNING *`,
-    [sessionId, turnId],
-  );
+  const rows = await db
+    .updateTable('session_wakeups')
+    .set({
+      status: 'attached',
+      turn_id: turnId,
+      attached_at: sql`NOW()`,
+    })
+    .where('session_id', '=', sessionId)
+    .where('status', '=', 'pending')
+    .returningAll()
+    .execute();
 
-  return result.rows.map(mapWakeupRow);
+  return rows.map(mapWakeupRow);
 }
 
 export async function markTurnWakeupsProcessed(turnId: string) {
-  await query(
-    `UPDATE session_wakeups
-     SET status = 'processed',
-         processed_at = NOW()
-     WHERE turn_id = $1
-       AND status = 'attached'`,
-    [turnId],
-  );
+  await db
+    .updateTable('session_wakeups')
+    .set({
+      status: 'processed',
+      processed_at: sql`NOW()`,
+    })
+    .where('turn_id', '=', turnId)
+    .where('status', '=', 'attached')
+    .execute();
 }
 
 export async function markTurnWakeupsDropped(turnId: string) {
-  await query(
-    `UPDATE session_wakeups
-     SET status = 'dropped',
-         processed_at = NOW()
-     WHERE turn_id = $1
-       AND status = 'attached'`,
-    [turnId],
-  );
+  await db
+    .updateTable('session_wakeups')
+    .set({
+      status: 'dropped',
+      processed_at: sql`NOW()`,
+    })
+    .where('turn_id', '=', turnId)
+    .where('status', '=', 'attached')
+    .execute();
 }
 
 export async function getPendingWakeupCount(sessionId: string) {
-  const result = await query(
-    `SELECT COUNT(*)::int AS count
-     FROM session_wakeups
-     WHERE session_id = $1
-       AND status = 'pending'`,
-    [sessionId],
-  );
+  const row = await db
+    .selectFrom('session_wakeups')
+    .select(({ fn }) => fn.count<number>('id').as('count'))
+    .where('session_id', '=', sessionId)
+    .where('status', '=', 'pending')
+    .executeTakeFirst();
 
-  return result.rows[0]?.count || 0;
+  return Number(row?.count || 0);
 }
 
 export async function getPendingWakeups(sessionId: string) {
-  const result = await query(
-    `SELECT *
-     FROM session_wakeups
-     WHERE session_id = $1
-       AND status = 'pending'
-     ORDER BY created_at ASC`,
-    [sessionId],
-  );
+  const rows = await db
+    .selectFrom('session_wakeups')
+    .selectAll()
+    .where('session_id', '=', sessionId)
+    .where('status', '=', 'pending')
+    .orderBy('created_at', 'asc')
+    .execute();
 
-  return result.rows.map(mapWakeupRow);
+  return rows.map(mapWakeupRow);
 }

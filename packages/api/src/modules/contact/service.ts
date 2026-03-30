@@ -1,10 +1,48 @@
-import { query } from "../../infrastructure/database/index.js";
+import { db } from "../../infrastructure/database/kysely.js";
 
 type ContactScope = "workspace" | "personal";
 type ContactTargetType = "user" | "actor";
+type TimestampValue = string | Date | null | undefined;
+
+type ContactRecordRow = {
+  id: string;
+  target_type: string;
+  target_workspace_id: string;
+  target_user_id: string | null;
+  target_actor_id: string | null;
+  created_at: TimestampValue;
+};
+
+type ActorTargetRow = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  title: string;
+  role: string;
+  avatar_emoji: string | null;
+  avatar_stored_name: string | null;
+  workspace_name: string;
+  workspace_slug: string;
+};
+
+type UserTargetRow = {
+  id: string;
+  name: string;
+  email: string;
+  avatar_file_id: string | null;
+  workspace_id: string;
+  workspace_name: string;
+  workspace_slug: string;
+};
+
+function toIsoString(value: TimestampValue) {
+  if (typeof value === "string") return value;
+  if (value instanceof Date) return value.toISOString();
+  return new Date(0).toISOString();
+}
 
 function targetKey(row: {
-  target_type: ContactTargetType;
+  target_type: ContactTargetType | string;
   target_workspace_id: string;
   target_user_id?: string | null;
   target_actor_id?: string | null;
@@ -14,85 +52,92 @@ function targetKey(row: {
     : `user:${row.target_user_id}:${row.target_workspace_id}`;
 }
 
-async function resolveActorTarget(actorId: string) {
-  const result = await query(
-    `SELECT a.id,
-            a.workspace_id,
-            a.name,
-            a.title,
-            a.role,
-            a.avatar_emoji,
-            avatar_file.stored_name AS avatar_stored_name,
-            w.name AS workspace_name,
-            w.slug AS workspace_slug
-     FROM actors a
-     JOIN workspaces w ON w.id = a.workspace_id
-     LEFT JOIN files avatar_file ON avatar_file.id = a.avatar_file_id
-     WHERE a.id = $1
-       AND a.is_active = TRUE
-     LIMIT 1`,
-    [actorId],
-  );
-  return result.rows[0] ?? null;
+async function resolveActorTarget(actorId: string): Promise<ActorTargetRow | null> {
+  return (
+    (await db
+      .selectFrom("actors as a")
+      .innerJoin("workspaces as w", "w.id", "a.workspace_id")
+      .leftJoin("files as avatar_file", "avatar_file.id", "a.avatar_file_id")
+      .select([
+        "a.id",
+        "a.workspace_id",
+        "a.name",
+        "a.title",
+        "a.role",
+        "a.avatar_emoji",
+        "avatar_file.stored_name as avatar_stored_name",
+        "w.name as workspace_name",
+        "w.slug as workspace_slug",
+      ])
+      .where("a.id", "=", actorId)
+      .where("a.is_active", "=", true)
+      .limit(1)
+      .executeTakeFirst()) ?? null
+  ) as ActorTargetRow | null;
 }
 
-async function resolveUserTarget(userId: string, targetWorkspaceId: string) {
-  const result = await query(
-    `SELECT u.id,
-            u.name,
-            u.email,
-            u.avatar_file_id,
-            wm.workspace_id,
-            w.name AS workspace_name,
-            w.slug AS workspace_slug
-     FROM workspace_members wm
-     JOIN users u ON u.id = wm.user_id
-     JOIN workspaces w ON w.id = wm.workspace_id
-     WHERE wm.workspace_id = $1
-       AND wm.user_id = $2
-     LIMIT 1`,
-    [targetWorkspaceId, userId],
-  );
-  return result.rows[0] ?? null;
+async function resolveUserTarget(
+  userId: string,
+  targetWorkspaceId: string,
+): Promise<UserTargetRow | null> {
+  return (
+    (await db
+      .selectFrom("workspace_members as wm")
+      .innerJoin("users as u", "u.id", "wm.user_id")
+      .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
+      .select([
+        "u.id",
+        "u.name",
+        "u.email",
+        "u.avatar_file_id",
+        "wm.workspace_id",
+        "w.name as workspace_name",
+        "w.slug as workspace_slug",
+      ])
+      .where("wm.workspace_id", "=", targetWorkspaceId)
+      .where("wm.user_id", "=", userId)
+      .limit(1)
+      .executeTakeFirst()) ?? null
+  ) as UserTargetRow | null;
 }
 
 async function loadWorkspaceContactRecord(contactId: string) {
-  const result = await query(
-    `SELECT *
-     FROM workspace_contacts
-     WHERE id = $1
-     LIMIT 1`,
-    [contactId],
+  return (
+    (await db
+      .selectFrom("workspace_contacts")
+      .selectAll()
+      .where("id", "=", contactId)
+      .limit(1)
+      .executeTakeFirst()) ?? null
   );
-  return result.rows[0] ?? null;
 }
 
 async function loadWorkspaceUserContactRecord(contactId: string) {
-  const result = await query(
-    `SELECT *
-     FROM workspace_user_contacts
-     WHERE id = $1
-     LIMIT 1`,
-    [contactId],
+  return (
+    (await db
+      .selectFrom("workspace_user_contacts")
+      .selectAll()
+      .where("id", "=", contactId)
+      .limit(1)
+      .executeTakeFirst()) ?? null
   );
-  return result.rows[0] ?? null;
 }
 
 async function loadTargetWorkspace(workspaceId: string) {
-  const result = await query(
-    `SELECT id, name, slug
-     FROM workspaces
-     WHERE id = $1
-     LIMIT 1`,
-    [workspaceId],
+  return (
+    (await db
+      .selectFrom("workspaces")
+      .select(["id", "name", "slug"])
+      .where("id", "=", workspaceId)
+      .limit(1)
+      .executeTakeFirst()) ?? null
   );
-  return result.rows[0] ?? null;
 }
 
-async function mapContactRecord(scope: ContactScope, row: any) {
+async function mapContactRecord(scope: ContactScope, row: ContactRecordRow) {
   const targetWorkspace = await loadTargetWorkspace(row.target_workspace_id);
 
-  if (row.target_type === "actor") {
+  if (row.target_type === "actor" && row.target_actor_id) {
     const actor = await resolveActorTarget(row.target_actor_id);
     return {
       id: row.id,
@@ -115,11 +160,13 @@ async function mapContactRecord(scope: ContactScope, row: any) {
           }
         : null,
       user: null,
-      createdAt: row.created_at,
+      createdAt: toIsoString(row.created_at),
     };
   }
 
-  const user = await resolveUserTarget(row.target_user_id, row.target_workspace_id);
+  const user = row.target_user_id
+    ? await resolveUserTarget(row.target_user_id, row.target_workspace_id)
+    : null;
   return {
     id: row.id,
     scope,
@@ -139,7 +186,7 @@ async function mapContactRecord(scope: ContactScope, row: any) {
           avatarFileId: user.avatar_file_id || undefined,
         }
       : null,
-    createdAt: row.created_at,
+    createdAt: toIsoString(row.created_at),
   };
 }
 
@@ -151,27 +198,28 @@ async function findExistingWorkspaceContact(params: {
   targetActorId?: string;
 }) {
   if (params.targetType === "actor") {
-    const result = await query(
-      `SELECT *
-       FROM workspace_contacts
-       WHERE workspace_id = $1
-         AND target_actor_id = $2
-       LIMIT 1`,
-      [params.workspaceId, params.targetActorId || null],
+    if (!params.targetActorId) return null;
+    return (
+      (await db
+        .selectFrom("workspace_contacts")
+        .selectAll()
+        .where("workspace_id", "=", params.workspaceId)
+        .where("target_actor_id", "=", params.targetActorId)
+        .limit(1)
+        .executeTakeFirst()) ?? null
     );
-    return result.rows[0] ?? null;
   }
 
-  const result = await query(
-    `SELECT *
-     FROM workspace_contacts
-     WHERE workspace_id = $1
-       AND target_user_id = $2
-       AND target_workspace_id = $3
-     LIMIT 1`,
-    [params.workspaceId, params.targetUserId || null, params.targetWorkspaceId],
+  return (
+    (await db
+      .selectFrom("workspace_contacts")
+      .selectAll()
+      .where("workspace_id", "=", params.workspaceId)
+      .where("target_user_id", "=", params.targetUserId || null)
+      .where("target_workspace_id", "=", params.targetWorkspaceId)
+      .limit(1)
+      .executeTakeFirst()) ?? null
   );
-  return result.rows[0] ?? null;
 }
 
 async function findExistingWorkspaceUserContact(params: {
@@ -183,34 +231,30 @@ async function findExistingWorkspaceUserContact(params: {
   targetActorId?: string;
 }) {
   if (params.targetType === "actor") {
-    const result = await query(
-      `SELECT *
-       FROM workspace_user_contacts
-       WHERE workspace_id = $1
-         AND owner_user_id = $2
-         AND target_actor_id = $3
-       LIMIT 1`,
-      [params.workspaceId, params.ownerUserId, params.targetActorId || null],
+    if (!params.targetActorId) return null;
+    return (
+      (await db
+        .selectFrom("workspace_user_contacts")
+        .selectAll()
+        .where("workspace_id", "=", params.workspaceId)
+        .where("owner_user_id", "=", params.ownerUserId)
+        .where("target_actor_id", "=", params.targetActorId)
+        .limit(1)
+        .executeTakeFirst()) ?? null
     );
-    return result.rows[0] ?? null;
   }
 
-  const result = await query(
-    `SELECT *
-     FROM workspace_user_contacts
-     WHERE workspace_id = $1
-       AND owner_user_id = $2
-       AND target_user_id = $3
-       AND target_workspace_id = $4
-     LIMIT 1`,
-    [
-      params.workspaceId,
-      params.ownerUserId,
-      params.targetUserId || null,
-      params.targetWorkspaceId,
-    ],
+  return (
+    (await db
+      .selectFrom("workspace_user_contacts")
+      .selectAll()
+      .where("workspace_id", "=", params.workspaceId)
+      .where("owner_user_id", "=", params.ownerUserId)
+      .where("target_user_id", "=", params.targetUserId || null)
+      .where("target_workspace_id", "=", params.targetWorkspaceId)
+      .limit(1)
+      .executeTakeFirst()) ?? null
   );
-  return result.rows[0] ?? null;
 }
 
 export async function listScopedContacts(params: {
@@ -218,29 +262,27 @@ export async function listScopedContacts(params: {
   userId: string;
 }) {
   const [workspaceRows, personalRows] = await Promise.all([
-    query(
-      `SELECT *
-       FROM workspace_contacts
-       WHERE workspace_id = $1
-       ORDER BY created_at DESC`,
-      [params.workspaceId],
-    ),
-    query(
-      `SELECT *
-       FROM workspace_user_contacts
-       WHERE workspace_id = $1
-         AND owner_user_id = $2
-       ORDER BY created_at DESC`,
-      [params.workspaceId, params.userId],
-    ),
+    db
+      .selectFrom("workspace_contacts")
+      .selectAll()
+      .where("workspace_id", "=", params.workspaceId)
+      .orderBy("created_at", "desc")
+      .execute(),
+    db
+      .selectFrom("workspace_user_contacts")
+      .selectAll()
+      .where("workspace_id", "=", params.workspaceId)
+      .where("owner_user_id", "=", params.userId)
+      .orderBy("created_at", "desc")
+      .execute(),
   ]);
 
   return {
     workspaceContacts: await Promise.all(
-      workspaceRows.rows.map((row) => mapContactRecord("workspace", row)),
+      workspaceRows.map((row) => mapContactRecord("workspace", row as ContactRecordRow)),
     ),
     personalContacts: await Promise.all(
-      personalRows.rows.map((row) => mapContactRecord("personal", row)),
+      personalRows.map((row) => mapContactRecord("personal", row as ContactRecordRow)),
     ),
   };
 }
@@ -262,16 +304,23 @@ export async function createWorkspaceContact(params: {
       targetWorkspaceId: actor.workspace_id,
       targetActorId: actor.id,
     });
-    if (existing) return mapContactRecord("workspace", existing);
+    if (existing) return mapContactRecord("workspace", existing as ContactRecordRow);
 
-    const result = await query(
-      `INSERT INTO workspace_contacts
-         (id, workspace_id, target_type, target_workspace_id, target_actor_id, created_by, metadata, created_at, updated_at)
-       VALUES (uuid_generate_v4(), $1, 'actor', $2, $3, $4, '{}'::jsonb, NOW(), NOW())
-       RETURNING *`,
-      [params.workspaceId, actor.workspace_id, actor.id, params.createdBy],
-    );
-    return mapContactRecord("workspace", result.rows[0]);
+    const row = await db
+      .insertInto("workspace_contacts")
+      .values({
+        workspace_id: params.workspaceId,
+        target_type: "actor",
+        target_workspace_id: actor.workspace_id,
+        target_actor_id: actor.id,
+        created_by: params.createdBy,
+      })
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new Error("Failed to create workspace contact");
+    }
+    return mapContactRecord("workspace", row as ContactRecordRow);
   }
 
   const user = await resolveUserTarget(
@@ -286,21 +335,23 @@ export async function createWorkspaceContact(params: {
     targetWorkspaceId: params.targetWorkspaceId,
     targetUserId: params.targetUserId,
   });
-  if (existing) return mapContactRecord("workspace", existing);
+  if (existing) return mapContactRecord("workspace", existing as ContactRecordRow);
 
-  const result = await query(
-    `INSERT INTO workspace_contacts
-       (id, workspace_id, target_type, target_workspace_id, target_user_id, created_by, metadata, created_at, updated_at)
-     VALUES (uuid_generate_v4(), $1, 'user', $2, $3, $4, '{}'::jsonb, NOW(), NOW())
-     RETURNING *`,
-    [
-      params.workspaceId,
-      params.targetWorkspaceId,
-      params.targetUserId || null,
-      params.createdBy,
-    ],
-  );
-  return mapContactRecord("workspace", result.rows[0]);
+  const row = await db
+    .insertInto("workspace_contacts")
+    .values({
+      workspace_id: params.workspaceId,
+      target_type: "user",
+      target_workspace_id: params.targetWorkspaceId,
+      target_user_id: params.targetUserId || null,
+      created_by: params.createdBy,
+    })
+    .returningAll()
+    .executeTakeFirst();
+  if (!row) {
+    throw new Error("Failed to create workspace contact");
+  }
+  return mapContactRecord("workspace", row as ContactRecordRow);
 }
 
 export async function createWorkspaceUserContact(params: {
@@ -322,22 +373,24 @@ export async function createWorkspaceUserContact(params: {
       targetWorkspaceId: actor.workspace_id,
       targetActorId: actor.id,
     });
-    if (existing) return mapContactRecord("personal", existing);
+    if (existing) return mapContactRecord("personal", existing as ContactRecordRow);
 
-    const result = await query(
-      `INSERT INTO workspace_user_contacts
-         (id, workspace_id, owner_user_id, target_type, target_workspace_id, target_actor_id, created_by, metadata, created_at, updated_at)
-       VALUES (uuid_generate_v4(), $1, $2, 'actor', $3, $4, $5, '{}'::jsonb, NOW(), NOW())
-       RETURNING *`,
-      [
-        params.workspaceId,
-        params.ownerUserId,
-        actor.workspace_id,
-        actor.id,
-        params.createdBy,
-      ],
-    );
-    return mapContactRecord("personal", result.rows[0]);
+    const row = await db
+      .insertInto("workspace_user_contacts")
+      .values({
+        workspace_id: params.workspaceId,
+        owner_user_id: params.ownerUserId,
+        target_type: "actor",
+        target_workspace_id: actor.workspace_id,
+        target_actor_id: actor.id,
+        created_by: params.createdBy,
+      })
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new Error("Failed to create personal contact");
+    }
+    return mapContactRecord("personal", row as ContactRecordRow);
   }
 
   const user = await resolveUserTarget(
@@ -353,22 +406,24 @@ export async function createWorkspaceUserContact(params: {
     targetWorkspaceId: params.targetWorkspaceId,
     targetUserId: params.targetUserId,
   });
-  if (existing) return mapContactRecord("personal", existing);
+  if (existing) return mapContactRecord("personal", existing as ContactRecordRow);
 
-  const result = await query(
-    `INSERT INTO workspace_user_contacts
-       (id, workspace_id, owner_user_id, target_type, target_workspace_id, target_user_id, created_by, metadata, created_at, updated_at)
-     VALUES (uuid_generate_v4(), $1, $2, 'user', $3, $4, $5, '{}'::jsonb, NOW(), NOW())
-     RETURNING *`,
-    [
-      params.workspaceId,
-      params.ownerUserId,
-      params.targetWorkspaceId,
-      params.targetUserId || null,
-      params.createdBy,
-    ],
-  );
-  return mapContactRecord("personal", result.rows[0]);
+  const row = await db
+    .insertInto("workspace_user_contacts")
+    .values({
+      workspace_id: params.workspaceId,
+      owner_user_id: params.ownerUserId,
+      target_type: "user",
+      target_workspace_id: params.targetWorkspaceId,
+      target_user_id: params.targetUserId || null,
+      created_by: params.createdBy,
+    })
+    .returningAll()
+    .executeTakeFirst();
+  if (!row) {
+    throw new Error("Failed to create personal contact");
+  }
+  return mapContactRecord("personal", row as ContactRecordRow);
 }
 
 export async function discoverContacts(params: {
@@ -381,80 +436,96 @@ export async function discoverContacts(params: {
   const rawQuery = (params.queryText || "").trim();
   const pattern = `%${rawQuery}%`;
 
+  let actorQuery = db
+    .selectFrom("actors as a")
+    .innerJoin("workspaces as w", "w.id", "a.workspace_id")
+    .leftJoin("files as avatar_file", "avatar_file.id", "a.avatar_file_id")
+    .select([
+      "a.id",
+      "a.workspace_id",
+      "a.name",
+      "a.title",
+      "a.role",
+      "a.avatar_emoji",
+      "avatar_file.stored_name as avatar_stored_name",
+      "w.name as workspace_name",
+      "w.slug as workspace_slug",
+    ])
+    .where("a.is_active", "=", true)
+    .where("a.workspace_id", "<>", params.workspaceId);
+
+  if (rawQuery) {
+    actorQuery = actorQuery.where((eb) =>
+      eb.or([
+        eb("a.name", "ilike", pattern),
+        eb("a.title", "ilike", pattern),
+        eb("a.role", "ilike", pattern),
+        eb("w.name", "ilike", pattern),
+      ]),
+    );
+  }
+
+  let userQuery = db
+    .selectFrom("workspace_members as wm")
+    .innerJoin("users as u", "u.id", "wm.user_id")
+    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
+    .select([
+      "u.id as user_id",
+      "u.name",
+      "u.email",
+      "u.avatar_file_id",
+      "wm.workspace_id",
+      "w.name as workspace_name",
+      "w.slug as workspace_slug",
+    ])
+    .where("wm.workspace_id", "<>", params.workspaceId)
+    .where("u.id", "<>", params.userId);
+
+  if (rawQuery) {
+    userQuery = userQuery.where((eb) =>
+      eb.or([
+        eb("u.name", "ilike", pattern),
+        eb("u.email", "ilike", pattern),
+        eb("w.name", "ilike", pattern),
+      ]),
+    );
+  }
+
   const [actorsResult, usersResult, workspaceRows, personalRows] = await Promise.all([
-    query(
-      `SELECT a.id,
-              a.workspace_id,
-              a.name,
-              a.title,
-              a.role,
-              a.avatar_emoji,
-              avatar_file.stored_name AS avatar_stored_name,
-              w.name AS workspace_name,
-              w.slug AS workspace_slug
-       FROM actors a
-       JOIN workspaces w ON w.id = a.workspace_id
-       LEFT JOIN files avatar_file ON avatar_file.id = a.avatar_file_id
-       WHERE a.is_active = TRUE
-         AND a.workspace_id <> $1
-         AND (
-           $2 = ''
-           OR a.name ILIKE $3
-           OR a.title ILIKE $3
-           OR a.role ILIKE $3
-           OR w.name ILIKE $3
-         )
-       ORDER BY a.updated_at DESC
-       LIMIT $4`,
-      [params.workspaceId, rawQuery, pattern, limit],
-    ),
-    query(
-      `SELECT u.id AS user_id,
-              u.name,
-              u.email,
-              u.avatar_file_id,
-              wm.workspace_id,
-              w.name AS workspace_name,
-              w.slug AS workspace_slug
-       FROM workspace_members wm
-       JOIN users u ON u.id = wm.user_id
-       JOIN workspaces w ON w.id = wm.workspace_id
-       WHERE wm.workspace_id <> $1
-         AND u.id <> $2
-         AND (
-           $3 = ''
-           OR u.name ILIKE $4
-           OR u.email ILIKE $4
-           OR w.name ILIKE $4
-         )
-       ORDER BY wm.joined_at DESC
-       LIMIT $5`,
-      [params.workspaceId, params.userId, rawQuery, pattern, limit],
-    ),
-    query(
-      `SELECT target_type, target_user_id, target_actor_id, target_workspace_id
-       FROM workspace_contacts
-       WHERE workspace_id = $1`,
-      [params.workspaceId],
-    ),
-    query(
-      `SELECT target_type, target_user_id, target_actor_id, target_workspace_id
-       FROM workspace_user_contacts
-       WHERE workspace_id = $1
-         AND owner_user_id = $2`,
-      [params.workspaceId, params.userId],
-    ),
+    actorQuery.orderBy("a.updated_at", "desc").limit(limit).execute(),
+    userQuery.orderBy("wm.joined_at", "desc").limit(limit).execute(),
+    db
+      .selectFrom("workspace_contacts")
+      .select([
+        "target_type",
+        "target_user_id",
+        "target_actor_id",
+        "target_workspace_id",
+      ])
+      .where("workspace_id", "=", params.workspaceId)
+      .execute(),
+    db
+      .selectFrom("workspace_user_contacts")
+      .select([
+        "target_type",
+        "target_user_id",
+        "target_actor_id",
+        "target_workspace_id",
+      ])
+      .where("workspace_id", "=", params.workspaceId)
+      .where("owner_user_id", "=", params.userId)
+      .execute(),
   ]);
 
   const workspaceContactKeys = new Set(
-    workspaceRows.rows.map((row) => targetKey(row)),
+    workspaceRows.map((row) => targetKey(row)),
   );
   const personalContactKeys = new Set(
-    personalRows.rows.map((row) => targetKey(row)),
+    personalRows.map((row) => targetKey(row)),
   );
 
   return {
-    actors: actorsResult.rows.map((row) => {
+    actors: actorsResult.map((row) => {
       const key = targetKey({
         target_type: "actor",
         target_actor_id: row.id,
@@ -477,7 +548,7 @@ export async function discoverContacts(params: {
         alreadyInPersonalContacts: personalContactKeys.has(key),
       };
     }),
-    users: usersResult.rows.map((row) => {
+    users: usersResult.map((row) => {
       const key = targetKey({
         target_type: "user",
         target_user_id: row.user_id,
@@ -503,10 +574,10 @@ export async function discoverContacts(params: {
 
 export async function getWorkspaceContactById(contactId: string) {
   const row = await loadWorkspaceContactRecord(contactId);
-  return row ? mapContactRecord("workspace", row) : null;
+  return row ? mapContactRecord("workspace", row as ContactRecordRow) : null;
 }
 
 export async function getWorkspaceUserContactById(contactId: string) {
   const row = await loadWorkspaceUserContactRecord(contactId);
-  return row ? mapContactRecord("personal", row) : null;
+  return row ? mapContactRecord("personal", row as ContactRecordRow) : null;
 }

@@ -18,7 +18,8 @@ import {
   relayDeviceOnlineEventDefinition,
   textBlocks,
 } from '@synapse/shared';
-import { query, transaction } from '../../infrastructure/database/index.js';
+import { transaction } from '../../infrastructure/database/index.js';
+import { executeSql, executeSqlOn } from '../../infrastructure/database/kysely.js';
 import { incrementMcpVersion } from './instance-manager.js';
 import { logEvent } from './audit.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
@@ -342,7 +343,7 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
         }
 
         const sessionId = crypto.randomUUID();
-        const sessionResult = await query(
+        const sessionResult = await executeSql(
           `INSERT INTO relay_device_sessions (
              device_id, protocol_version, client_version, status, transport, remote_addr, last_heartbeat_at, metadata
            )
@@ -427,7 +428,7 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
         clearTimeout(connected.pongTimer);
         connected.pongTimer = null;
       }
-      void query(
+      void executeSql(
         `UPDATE relay_device_sessions SET last_heartbeat_at = NOW() WHERE id = $1`,
         [connected.sessionRowId],
       ).catch(() => {});
@@ -616,7 +617,7 @@ async function insertRelayOperation(params: {
   operationTimeoutMs: number;
   expiresAt: string | null;
 }) {
-  await query(
+  await executeSql(
     `INSERT INTO relay_operations (
        id,
        workspace_id,
@@ -834,7 +835,7 @@ export async function enqueueRelayToolTask(
       throw new Error('Failed to create relay task');
     }
 
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO relay_operations (
          id,
          workspace_id,
@@ -1054,7 +1055,7 @@ async function dispatchPendingRelayOperation(connected: ConnectedRelay, pending:
     pending.deliverySeq = deliverySeq;
     pending.relaySessionRowId = connected.sessionRowId;
 
-    await query(
+    await executeSql(
       `INSERT INTO relay_operation_deliveries (
          operation_id, relay_session_id, delivery_seq, status, metadata
        )
@@ -1094,7 +1095,7 @@ async function dispatchPendingRelayOperation(connected: ConnectedRelay, pending:
       return;
     }
 
-    void query(
+    void executeSql(
       `UPDATE relay_operations SET status = 'dispatched', updated_at = NOW() WHERE id = $1`,
       [pending.operationId],
     ).catch(() => {});
@@ -1105,7 +1106,7 @@ async function dispatchPendingRelayOperation(connected: ConnectedRelay, pending:
         `Dispatched async ${pending.sourceToolName} to the relay client.`,
       ).catch(() => {});
     }
-    await query(
+    await executeSql(
       `UPDATE relay_operation_deliveries
        SET status = 'sent', sent_at = NOW(), updated_at = NOW()
        WHERE operation_id = $1 AND delivery_seq = $2`,
@@ -1192,7 +1193,7 @@ async function markRelayOperationCancelled(
   operationId: string,
   message: string,
 ) {
-  await query(
+  await executeSql(
     `UPDATE relay_operations
      SET status = 'cancelled',
          error_code = 'operation_cancelled',
@@ -1203,7 +1204,7 @@ async function markRelayOperationCancelled(
     [operationId, message],
   ).catch(() => {});
 
-  await query(
+  await executeSql(
     `UPDATE relay_operation_deliveries
      SET status = CASE
          WHEN status IN ('queued', 'sent', 'nacked') THEN 'cancelled'
@@ -1214,7 +1215,7 @@ async function markRelayOperationCancelled(
     [operationId],
   ).catch(() => {});
 
-  await query(
+  await executeSql(
     `INSERT INTO relay_operation_results (operation_id, output_payload, output_preview, result_hash)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (operation_id) DO UPDATE SET
@@ -1513,7 +1514,7 @@ export function isRelayConnected(relayId: string): boolean {
 }
 
 export async function initRelayManager() {
-  await query(
+  await executeSql(
     `UPDATE relay_device_sessions
      SET status = 'closed',
          ended_at = COALESCE(ended_at, NOW()),
@@ -1521,13 +1522,13 @@ export async function initRelayManager() {
          updated_at = NOW()
      WHERE status IN ('connecting', 'active', 'closing')`,
   );
-  await query(
+  await executeSql(
     `UPDATE relay_exposures
      SET runtime_status = 'offline',
          updated_at = NOW()
      WHERE runtime_status IN ('starting', 'healthy', 'degraded')`,
   );
-  await query(
+  await executeSql(
     `UPDATE relay_devices
      SET automation_lifecycle_grace_until = COALESCE(
            automation_lifecycle_grace_until,
@@ -1617,7 +1618,7 @@ export async function shutdownAllRelays() {
   pendingRelayRuntimeSessionRequests.clear();
 
   if (deviceIds.length > 0) {
-    await query(
+    await executeSql(
       `UPDATE relay_devices
        SET last_seen_at = NOW(),
            automation_lifecycle_grace_until = COALESCE(
@@ -1628,7 +1629,7 @@ export async function shutdownAllRelays() {
        WHERE id = ANY($1::uuid[])`,
       [deviceIds],
     ).catch(() => {});
-    await query(
+    await executeSql(
       `UPDATE relay_exposures
        SET runtime_status = 'offline', updated_at = NOW()
        WHERE device_id = ANY($1::uuid[])`,
@@ -1640,7 +1641,7 @@ export async function shutdownAllRelays() {
 async function authenticateRelayDevice(deviceId: unknown): Promise<RelayAuthRow | null> {
   if (typeof deviceId !== 'string' || deviceId.trim().length === 0) return null;
 
-  const result = await query<RelayAuthRow>(
+  const result = await executeSql<RelayAuthRow>(
     `SELECT id, workspace_id, owner_user_id, display_name, public_key, public_key_fingerprint, trust_status
      FROM relay_devices
      WHERE id = $1
@@ -1663,7 +1664,7 @@ async function markRelayLifecycleConnected(params: {
   displayName: string;
 }) {
   return transaction(async (client) => {
-    const result = await client.query<RelayLifecycleRow>(
+    const result = await executeSqlOn<RelayLifecycleRow>(client, 
       `SELECT id, workspace_id, display_name, automation_lifecycle_state, automation_lifecycle_grace_until
        FROM relay_devices
        WHERE id = $1
@@ -1674,7 +1675,7 @@ async function markRelayLifecycleConnected(params: {
     if (!row) return null;
 
     const shouldEmit = row.automation_lifecycle_state !== 'online';
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE relay_devices
        SET last_seen_at = NOW(),
            last_connected_at = NOW(),
@@ -1698,7 +1699,7 @@ async function markRelayLifecycleDisconnectPending(params: {
   deviceId: string;
 }) {
   return transaction(async (client) => {
-    const result = await client.query<RelayLifecycleRow>(
+    const result = await executeSqlOn<RelayLifecycleRow>(client, 
       `SELECT id, workspace_id, display_name, automation_lifecycle_state
        FROM relay_devices
        WHERE id = $1
@@ -1708,7 +1709,7 @@ async function markRelayLifecycleDisconnectPending(params: {
     const row = result.rows[0];
     if (!row) return null;
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE relay_devices
        SET last_seen_at = NOW(),
            automation_lifecycle_grace_until = NOW() + ($2 * INTERVAL '1 millisecond'),
@@ -1726,7 +1727,7 @@ async function markRelayLifecycleDisconnectPending(params: {
 
 async function flushRelayOfflineLifecycleEvent(deviceId: string) {
   if (connectedRelays.has(deviceId)) {
-    await query(
+    await executeSql(
       `UPDATE relay_devices
        SET automation_lifecycle_grace_until = NULL,
            updated_at = NOW()
@@ -1737,7 +1738,7 @@ async function flushRelayOfflineLifecycleEvent(deviceId: string) {
   }
 
   return transaction(async (client) => {
-    const result = await client.query<RelayLifecycleRow>(
+    const result = await executeSqlOn<RelayLifecycleRow>(client, 
       `SELECT id, workspace_id, display_name, automation_lifecycle_state, automation_lifecycle_grace_until
        FROM relay_devices
        WHERE id = $1
@@ -1747,7 +1748,7 @@ async function flushRelayOfflineLifecycleEvent(deviceId: string) {
     const row = result.rows[0];
     if (!row) return null;
     if (connectedRelays.has(deviceId)) {
-      await client.query(
+      await executeSqlOn(client, 
         `UPDATE relay_devices
          SET automation_lifecycle_grace_until = NULL,
              updated_at = NOW()
@@ -1764,7 +1765,7 @@ async function flushRelayOfflineLifecycleEvent(deviceId: string) {
       return null;
     }
     if (row.automation_lifecycle_state === 'offline') {
-      await client.query(
+      await executeSqlOn(client, 
         `UPDATE relay_devices
          SET automation_lifecycle_grace_until = NULL,
              updated_at = NOW()
@@ -1774,7 +1775,7 @@ async function flushRelayOfflineLifecycleEvent(deviceId: string) {
       return null;
     }
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE relay_devices
        SET automation_lifecycle_state = 'offline',
            automation_lifecycle_grace_until = NULL,
@@ -1792,7 +1793,7 @@ async function flushRelayOfflineLifecycleEvent(deviceId: string) {
 }
 
 async function processDueRelayOfflineLifecycleEvents() {
-  const result = await query<{ id: string }>(
+  const result = await executeSql<{ id: string }>(
     `SELECT id
      FROM relay_devices
      WHERE automation_lifecycle_grace_until IS NOT NULL
@@ -2110,7 +2111,7 @@ async function syncDeviceCatalog(
 }
 
 async function upsertExposure(deviceId: string, exposure: RelayExposureRegistration, syncSourceId: string | null) {
-  const result = await query(
+  const result = await executeSql(
      `INSERT INTO relay_exposures (
        device_id, sync_source_id, stable_key, display_name, transport, runtime_status,
        last_seen_at, last_healthy_at, metadata
@@ -2150,7 +2151,7 @@ async function syncRelaySyncSources(deviceId: string, syncSources: RelaySyncSour
     const lastSyncedAt = typeof source.lastSyncedAt === 'string' && source.lastSyncedAt.trim().length > 0
       ? source.lastSyncedAt.trim()
       : null;
-    const result = await query(
+    const result = await executeSql(
       `INSERT INTO relay_sync_sources (
          device_id, source_kind, source_key, config_path, sync_mode, status,
          last_synced_at, last_error, metadata
@@ -2188,14 +2189,14 @@ async function syncRelaySyncSources(deviceId: string, syncSources: RelaySyncSour
 
   const activeKeys = syncSources.map((source) => source.sourceKey);
   if (activeKeys.length > 0) {
-    await query(
+    await executeSql(
       `DELETE FROM relay_sync_sources
        WHERE device_id = $1
          AND source_key != ALL($2)`,
       [deviceId, activeKeys],
     );
   } else {
-    await query(
+    await executeSql(
       `DELETE FROM relay_sync_sources
        WHERE device_id = $1`,
       [deviceId],
@@ -2213,7 +2214,7 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
     annotations: tool.annotations,
   })));
 
-  const activeCatalogResult = await query(
+  const activeCatalogResult = await executeSql(
     `SELECT id, revision_seq, schema_hash
      FROM relay_catalog_revisions
      WHERE exposure_id = $1 AND status = 'active'
@@ -2229,7 +2230,7 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
   if (!activeCatalog || activeCatalog.schema_hash !== schemaHash) {
     const nextSeq = revisionSeq + 1;
     if (activeCatalog) {
-      await query(
+      await executeSql(
         `UPDATE relay_catalog_revisions
          SET status = 'superseded', invalidated_at = NOW(), updated_at = NOW()
          WHERE id = $1`,
@@ -2237,7 +2238,7 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
       );
     }
 
-    const catalogInsert = await query(
+    const catalogInsert = await executeSql(
       `INSERT INTO relay_catalog_revisions (exposure_id, revision_seq, schema_hash, status, metadata)
        VALUES ($1, $2, $3, 'active', $4)
        RETURNING id`,
@@ -2252,7 +2253,7 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
     revisionSeq = nextSeq;
     catalogRevisionId = catalogInsert.rows[0].id;
 
-    const existingTools = await query(
+    const existingTools = await executeSql(
       `SELECT id, stable_key
        FROM relay_tools
        WHERE exposure_id = $1`,
@@ -2261,7 +2262,7 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
     const existingToolIds = new Map(existingTools.rows.map((row) => [row.stable_key as string, row.id as string]));
 
     for (const tool of normalizedTools) {
-      const toolResult = await query(
+      const toolResult = await executeSql(
         `INSERT INTO relay_tools (
            exposure_id, stable_key, current_name, status, first_seen_at, last_seen_at, metadata
          )
@@ -2281,7 +2282,7 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
         ],
       );
       const toolId = toolResult.rows[0]?.id || existingToolIds.get(tool.stableKey);
-      const toolRevisionResult = await query(
+      const toolRevisionResult = await executeSql(
         `INSERT INTO relay_tool_revisions (
            tool_id, catalog_revision_id, tool_name, description, input_schema, annotations, definition_hash
          )
@@ -2300,7 +2301,7 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
           }),
         ],
       );
-      await query(
+      await executeSql(
         `UPDATE relay_tools
          SET latest_revision_id = $2,
              current_name = $3,
@@ -2314,7 +2315,7 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
 
     const activeStableKeys = normalizedTools.map((tool) => tool.stableKey);
     if (activeStableKeys.length > 0) {
-      await query(
+      await executeSql(
         `UPDATE relay_tools
          SET status = 'removed', updated_at = NOW()
          WHERE exposure_id = $1
@@ -2322,7 +2323,7 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
         [exposureId, activeStableKeys],
       );
     } else {
-      await query(
+      await executeSql(
         `UPDATE relay_tools
          SET status = 'removed', updated_at = NOW()
          WHERE exposure_id = $1`,
@@ -2330,7 +2331,7 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
       );
     }
 
-    await query(
+    await executeSql(
       `UPDATE relay_devices
        SET last_catalog_changed_at = NOW(), updated_at = NOW()
        WHERE id = $1`,
@@ -2342,7 +2343,7 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
 }
 
 async function loadExposureCatalog(exposureId: string): Promise<ConnectedRelayExposure | null> {
-  const result = await query(
+  const result = await executeSql(
     `SELECT
         e.id AS exposure_id,
         e.stable_key AS exposure_stable_key,
@@ -2401,7 +2402,7 @@ async function loadExposureCatalog(exposureId: string): Promise<ConnectedRelayEx
 async function markMissingExposuresOffline(deviceId: string, activeExposureIds: Set<string>) {
   const ids = [...activeExposureIds];
   if (ids.length > 0) {
-    await query(
+    await executeSql(
       `UPDATE relay_exposures
        SET runtime_status = 'offline',
            updated_at = NOW()
@@ -2412,7 +2413,7 @@ async function markMissingExposuresOffline(deviceId: string, activeExposureIds: 
     return;
   }
 
-  await query(
+  await executeSql(
     `UPDATE relay_exposures
      SET runtime_status = 'offline',
          updated_at = NOW()
@@ -2449,7 +2450,7 @@ type RelayTaskOperationRecord = {
 };
 
 async function loadAsyncRelayOperationRecord(operationId: string) {
-  const result = await query<RelayTaskOperationRecord>(
+  const result = await executeSql<RelayTaskOperationRecord>(
     `SELECT
        ro.id AS operation_id,
        ro.status,
@@ -2491,7 +2492,7 @@ async function loadAsyncRelayOperationRecord(operationId: string) {
 }
 
 async function loadRelayOperationByTaskId(taskId: string) {
-  const result = await query<RelayTaskOperationRecord>(
+  const result = await executeSql<RelayTaskOperationRecord>(
     `SELECT
        ro.id AS operation_id,
        ro.status,
@@ -2613,7 +2614,7 @@ export async function cancelRelayToolTask(taskId: string, reason?: string) {
   }
 
   await requestToolCallTaskCancel(taskId, cancelMessage);
-  await query(
+  await executeSql(
     `UPDATE relay_operations
      SET status = 'cancel_requested',
          updated_at = NOW()
@@ -2879,7 +2880,7 @@ async function resolveOperationResult(connected: ConnectedRelay, msg: Record<str
     return;
   }
 
-  await query(
+  await executeSql(
     `UPDATE relay_operations
      SET status = 'completed',
          completed_at = NOW(),
@@ -2892,7 +2893,7 @@ async function resolveOperationResult(connected: ConnectedRelay, msg: Record<str
     ],
   );
 
-  await query(
+  await executeSql(
     `INSERT INTO relay_operation_results (operation_id, output_payload, output_preview, result_hash)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (operation_id) DO UPDATE SET
@@ -2908,7 +2909,7 @@ async function resolveOperationResult(connected: ConnectedRelay, msg: Record<str
     ],
   );
 
-  await query(
+  await executeSql(
     `UPDATE relay_operation_deliveries
      SET status = 'acked', acknowledged_at = NOW(), updated_at = NOW()
      WHERE operation_id = $1
@@ -2923,7 +2924,7 @@ async function resolveOperationResult(connected: ConnectedRelay, msg: Record<str
 }
 
 async function markOperationStatus(operationId: string, status: 'received' | 'started') {
-  const result = await query<{ task_id: string | null; visible_tool_name: string }>(
+  const result = await executeSql<{ task_id: string | null; visible_tool_name: string }>(
     `UPDATE relay_operations
      SET status = $2, updated_at = NOW()
      WHERE id = $1
@@ -2957,7 +2958,7 @@ async function markOperationStatus(operationId: string, status: 'received' | 'st
 }
 
 async function markDeliveryAcknowledged(operationId: string, deliveryId?: string) {
-  await query(
+  await executeSql(
     `UPDATE relay_operation_deliveries
      SET status = 'acked', acknowledged_at = NOW(), updated_at = NOW()
      WHERE operation_id = $1
@@ -2982,7 +2983,7 @@ async function markDeliveryStatus(
   deliverySeq: number,
   status: 'queued' | 'sent' | 'acked' | 'nacked' | 'timed_out' | 'cancelled',
 ) {
-  await query(
+  await executeSql(
     `UPDATE relay_operation_deliveries
      SET status = $3,
          updated_at = NOW(),
@@ -3010,7 +3011,7 @@ async function redrivePendingRelayOperations(connected: ConnectedRelay) {
     await dispatchPendingRelayOperation(connected, pending);
   }
 
-  const expiredAsyncOperations = await query<{
+  const expiredAsyncOperations = await executeSql<{
     operation_id: string;
     task_id: string;
     source_tool_name: string | null;
@@ -3031,7 +3032,7 @@ async function redrivePendingRelayOperations(connected: ConnectedRelay) {
   );
 
   for (const row of expiredAsyncOperations.rows) {
-    await query(
+    await executeSql(
       `UPDATE relay_operations
        SET status = 'expired',
            error_code = 'operation_expired',
@@ -3055,7 +3056,7 @@ async function redrivePendingRelayOperations(connected: ConnectedRelay) {
     }).catch(() => {});
   }
 
-  const persistedAsyncOperations = await query<RelayTaskOperationRecord>(
+  const persistedAsyncOperations = await executeSql<RelayTaskOperationRecord>(
     `SELECT
        ro.id AS operation_id,
        ro.status,
@@ -3336,7 +3337,7 @@ async function failOperation(
   requiresReplan: boolean,
   currentToolRevisionId?: string,
 ) {
-  await query(
+  await executeSql(
     `UPDATE relay_operations
      SET status = 'failed',
          error_code = $2,
@@ -3347,7 +3348,7 @@ async function failOperation(
     [operationId, code, message, requiresReplan],
   ).catch(() => {});
 
-  await query(
+  await executeSql(
     `UPDATE relay_operation_deliveries
      SET status = CASE
          WHEN status = 'queued' THEN 'cancelled'
@@ -3359,7 +3360,7 @@ async function failOperation(
     [operationId],
   ).catch(() => {});
 
-  await query(
+  await executeSql(
     `INSERT INTO relay_operation_results (operation_id, output_payload, output_preview, result_hash)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (operation_id) DO UPDATE SET
@@ -3426,7 +3427,7 @@ function cleanupRelay(deviceId: string) {
     );
   }
 
-  void query(
+  void executeSql(
     `UPDATE relay_device_sessions
      SET status = 'closed',
          ended_at = COALESCE(ended_at, NOW()),
@@ -3440,7 +3441,7 @@ function cleanupRelay(deviceId: string) {
     deviceId,
   }).catch(() => {});
 
-  void query(
+  void executeSql(
     `UPDATE relay_exposures
      SET runtime_status = 'offline', updated_at = NOW()
      WHERE device_id = $1`,

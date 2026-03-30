@@ -18,7 +18,8 @@ import {
 import { config } from '../../config/index.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
-import { query, transaction } from '../../infrastructure/database/index.js';
+import { transaction } from '../../infrastructure/database/index.js';
+import { executeSql, executeSqlOn } from '../../infrastructure/database/kysely.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { disconnectRelay } from './relay-manager.js';
 import { incrementMcpVersion } from './instance-manager.js';
@@ -220,6 +221,11 @@ type ReleaseVersion = {
   patch: number;
   prerelease: string;
 };
+
+function clientRunner(client: { query: (text: string, params?: any[]) => Promise<any> }) {
+  return <T = any>(text: string, params?: unknown[]) =>
+    executeSqlOn<T>(client, text, params);
+}
 
 function handleError(reply: FastifyReply, error: unknown) {
   if (error instanceof z.ZodError) {
@@ -616,7 +622,7 @@ function buildRelayWebSocketUrl(serverBaseUrl: string) {
 
 async function expireRelayPairings(workspaceId?: string) {
   if (workspaceId) {
-    await query(
+    await executeSql(
       `UPDATE relay_pairing_sessions
        SET status = 'expired',
            updated_at = NOW()
@@ -628,7 +634,7 @@ async function expireRelayPairings(workspaceId?: string) {
     return;
   }
 
-  await query(
+  await executeSql(
     `UPDATE relay_pairing_sessions
      SET status = 'expired',
          updated_at = NOW()
@@ -638,7 +644,7 @@ async function expireRelayPairings(workspaceId?: string) {
 }
 
 async function listRelayDeviceSummaries(workspaceId: string) {
-  const result = await query<RelayDeviceSummaryRow>(
+  const result = await executeSql<RelayDeviceSummaryRow>(
     `SELECT
         d.id,
         d.workspace_id,
@@ -707,7 +713,7 @@ async function listRelayDeviceSummaries(workspaceId: string) {
 }
 
 async function listPendingRelayPairings(workspaceId: string) {
-  const result = await query<RelayPairingRow>(
+  const result = await executeSql<RelayPairingRow>(
     `SELECT *
      FROM relay_pairing_sessions
      WHERE workspace_id = $1
@@ -719,7 +725,7 @@ async function listPendingRelayPairings(workspaceId: string) {
 }
 
 async function getRelayDeviceSummary(workspaceId: string, deviceId: string) {
-  const result = await query<RelayDeviceSummaryRow>(
+  const result = await executeSql<RelayDeviceSummaryRow>(
     `SELECT
         d.id,
         d.workspace_id,
@@ -793,7 +799,7 @@ async function getRelayDeviceSummary(workspaceId: string, deviceId: string) {
 }
 
 async function getRelayPairingSession(workspaceId: string, pairingId: string) {
-  const result = await query<RelayPairingRow>(
+  const result = await executeSql<RelayPairingRow>(
     `SELECT *
      FROM relay_pairing_sessions
      WHERE id = $1
@@ -814,7 +820,7 @@ async function assertRelayExposureInWorkspaceDevice(
   deviceId: string,
   exposureId: string,
 ) {
-  const result = await query<{ id: string }>(
+  const result = await executeSql<{ id: string }>(
     `SELECT e.id
      FROM relay_exposures e
      INNER JOIN relay_devices d
@@ -834,7 +840,7 @@ async function assertRelayExposureInWorkspaceDevice(
 async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Promise<RelayDeviceDetailView> {
   const [device, pairingsResult, syncSourcesResult, exposuresResult] = await Promise.all([
     getRelayDeviceSummary(workspaceId, deviceId),
-    query<RelayPairingRow>(
+    executeSql<RelayPairingRow>(
       `SELECT *
        FROM relay_pairing_sessions
        WHERE workspace_id = $1
@@ -843,14 +849,14 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
        LIMIT 20`,
       [workspaceId, deviceId],
     ),
-    query<RelaySyncSourceRow>(
+    executeSql<RelaySyncSourceRow>(
       `SELECT *
        FROM relay_sync_sources
        WHERE device_id = $1
        ORDER BY created_at DESC`,
       [deviceId],
     ),
-    query<RelayExposureToolRow>(
+    executeSql<RelayExposureToolRow>(
       `SELECT
           e.id AS exposure_id,
           e.stable_key AS exposure_stable_key,
@@ -924,7 +930,7 @@ async function createRelayPairingSession(params: {
     const pairingCode = generatePairingCode();
 
     try {
-      const result = await query<RelayPairingRow>(
+      const result = await executeSql<RelayPairingRow>(
         `INSERT INTO relay_pairing_sessions (
            workspace_id,
            requested_by,
@@ -955,7 +961,7 @@ async function createRelayPairingSession(params: {
       const verificationUri = buildVerificationUri(params.serverBaseUrl, inserted.id);
       const verificationUriComplete = buildVerificationUriComplete(params.serverBaseUrl, inserted.id, pairingCode);
 
-      const updated = await query<RelayPairingRow>(
+      const updated = await executeSql<RelayPairingRow>(
         `UPDATE relay_pairing_sessions
          SET verification_uri = $2,
              verification_uri_complete = $3,
@@ -1055,7 +1061,7 @@ async function ensureRelayLifecycleAutomationSourcesForDeviceTx(
 
 async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema>) {
   return transaction(async (client) => {
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE relay_pairing_sessions
        SET status = 'expired',
            updated_at = NOW()
@@ -1063,7 +1069,7 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
          AND expires_at <= NOW()`,
     );
 
-    const pairingResult = await client.query<RelayPairingRow>(
+    const pairingResult = await executeSqlOn<RelayPairingRow>(client, 
       `SELECT *
        FROM relay_pairing_sessions
        WHERE pairing_code = $1
@@ -1085,7 +1091,7 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
       throw error;
     }
     if (new Date(pairing.expires_at).getTime() <= Date.now()) {
-      await client.query(
+      await executeSqlOn(client, 
         `UPDATE relay_pairing_sessions
          SET status = 'expired',
              updated_at = NOW()
@@ -1109,7 +1115,7 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
       throw error;
     }
 
-    const existingFingerprint = await client.query(
+    const existingFingerprint = await executeSqlOn(client, 
       `SELECT id
        FROM relay_devices
        WHERE public_key_fingerprint = $1
@@ -1122,7 +1128,7 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
       throw error;
     }
 
-    const deviceResult = await client.query(
+    const deviceResult = await executeSqlOn(client, 
       `INSERT INTO relay_devices (
          workspace_id,
          owner_user_id,
@@ -1149,7 +1155,7 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
     );
 
     const device = deviceResult.rows[0];
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE relay_pairing_sessions
        SET device_id = $2,
            confirmed_at = NOW(),
@@ -1160,7 +1166,7 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
       [pairing.id, device.id],
     );
 
-    await ensureRelayLifecycleAutomationSourcesForDeviceTx(client.query.bind(client), {
+    await ensureRelayLifecycleAutomationSourcesForDeviceTx(clientRunner(client), {
       workspaceId: device.workspace_id as string,
       deviceId: device.id as string,
       displayName: device.display_name as string,
@@ -1297,7 +1303,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       if (!allowed) return;
 
       const { workspaceId, pairingId } = request.params as PairingParams;
-      const result = await query<RelayPairingRow>(
+      const result = await executeSql<RelayPairingRow>(
         `UPDATE relay_pairing_sessions
          SET status = 'cancelled',
              updated_at = NOW()
@@ -1455,7 +1461,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
 
       const { workspaceId, id } = request.params as RelayParams;
       const body = updateRelayDeviceSchema.parse(request.body);
-      const result = await query(
+      const result = await executeSql(
         `UPDATE relay_devices
          SET display_name = $3,
              metadata = CASE
@@ -1474,7 +1480,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       }
 
       await ensureRelayLifecycleAutomationSourcesForDeviceTx(
-        query,
+        executeSql,
         {
           workspaceId,
           deviceId: id,
@@ -1537,7 +1543,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const body = updateRelayTrustSchema.parse(request.body);
       await getRelayDeviceSummary(workspaceId, id);
 
-      const result = await query<RelayDeviceSummaryRow>(
+      const result = await executeSql<RelayDeviceSummaryRow>(
         `UPDATE relay_devices
          SET trust_status = $3,
              updated_at = NOW()
@@ -1656,7 +1662,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
 
       const { workspaceId, id } = request.params as RelayParams;
       const device = await getRelayDeviceSummary(workspaceId, id);
-      const exposuresResult = await query<{ id: string }>(
+      const exposuresResult = await executeSql<{ id: string }>(
         `SELECT id
          FROM relay_exposures
          WHERE device_id = $1`,
@@ -1672,7 +1678,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
         exposureIds: exposuresResult.rows.map((row) => row.id),
       });
 
-      await query(
+      await executeSql(
         `DELETE FROM relay_devices
          WHERE id = $1
            AND workspace_id = $2`,

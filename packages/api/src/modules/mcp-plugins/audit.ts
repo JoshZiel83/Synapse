@@ -1,4 +1,5 @@
-import { query } from '../../infrastructure/database/index.js';
+import { db } from '../../infrastructure/database/kysely.js';
+import { sql } from 'kysely';
 import { logRuntimeEvent } from '../execution/service.js';
 
 /**
@@ -82,39 +83,30 @@ export async function getToolCallLogs(workspaceId: string, filters?: {
   limit?: number;
   before?: string;
 }) {
-  let where = `workspace_id = $1 AND event_type = 'tool.call.legacy'`;
-  const values: unknown[] = [workspaceId];
-  let idx = 2;
+  const limit = Math.min(filters?.limit || 50, 200);
+  let statement = db
+    .selectFrom('runtime_events')
+    .selectAll()
+    .where('workspace_id', '=', workspaceId)
+    .where('event_type', '=', 'tool.call.legacy');
 
   if (filters?.sessionId) {
-    where += ` AND session_id = $${idx++}`;
-    values.push(filters.sessionId);
+    statement = statement.where('session_id', '=', filters.sessionId);
   }
   if (filters?.actorId) {
-    where += ` AND actor_id = $${idx++}`;
-    values.push(filters.actorId);
+    statement = statement.where('actor_id', '=', filters.actorId);
   }
   if (filters?.pluginId) {
-    where += ` AND payload->>'pluginId' = $${idx++}`;
-    values.push(filters.pluginId);
+    statement = statement.where(sql<boolean>`payload->>'pluginId' = ${filters.pluginId}`);
   }
   if (filters?.before) {
-    where += ` AND created_at < $${idx++}`;
-    values.push(filters.before);
+    statement = statement.where('created_at', '<', new Date(filters.before));
   }
 
-  const limit = Math.min(filters?.limit || 50, 200);
-  values.push(limit);
-
-  const result = await query(
-    `SELECT *
-     FROM runtime_events
-     WHERE ${where}
-     ORDER BY created_at DESC
-     LIMIT $${idx}`,
-    values,
-  );
-  return result.rows;
+  return statement
+    .orderBy('created_at', 'desc')
+    .limit(limit)
+    .execute();
 }
 
 export async function getEventLogs(workspaceId: string, filters?: {
@@ -123,35 +115,26 @@ export async function getEventLogs(workspaceId: string, filters?: {
   limit?: number;
   before?: string;
 }) {
-  let where = 'workspace_id = $1';
-  const values: unknown[] = [workspaceId];
-  let idx = 2;
+  const limit = Math.min(filters?.limit || 50, 200);
+  let statement = db
+    .selectFrom('runtime_events')
+    .selectAll()
+    .where('workspace_id', '=', workspaceId);
 
   if (filters?.eventType) {
-    where += ` AND event_type = $${idx++}`;
-    values.push(filters.eventType);
+    statement = statement.where('event_type', '=', filters.eventType);
   }
   if (filters?.pluginId) {
-    where += ` AND payload->>'pluginId' = $${idx++}`;
-    values.push(filters.pluginId);
+    statement = statement.where(sql<boolean>`payload->>'pluginId' = ${filters.pluginId}`);
   }
   if (filters?.before) {
-    where += ` AND created_at < $${idx++}`;
-    values.push(filters.before);
+    statement = statement.where('created_at', '<', new Date(filters.before));
   }
 
-  const limit = Math.min(filters?.limit || 50, 200);
-  values.push(limit);
-
-  const result = await query(
-    `SELECT *
-     FROM runtime_events
-     WHERE ${where}
-     ORDER BY created_at DESC
-     LIMIT $${idx}`,
-    values,
-  );
-  return result.rows;
+  return statement
+    .orderBy('created_at', 'desc')
+    .limit(limit)
+    .execute();
 }
 
 function sanitizeInput(input: Record<string, unknown>): Record<string, unknown> {

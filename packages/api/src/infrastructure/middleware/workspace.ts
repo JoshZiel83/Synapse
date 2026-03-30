@@ -1,6 +1,6 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { requireRequestAction } from '../../modules/access/guards.js';
-import { query } from '../database/index.js';
+import { db } from '../database/kysely.js';
 
 export async function workspaceMiddleware(request: FastifyRequest, reply: FastifyReply) {
   const workspaceId = (request.params as any).workspaceId;
@@ -13,10 +13,12 @@ export async function workspaceMiddleware(request: FastifyRequest, reply: Fastif
     return reply.status(401).send({ error: 'Authentication required' });
   }
 
-  const result = await query(
-    'SELECT trust_level FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
-    [workspaceId, user.userId]
-  );
+  const member = await db
+    .selectFrom('workspace_members')
+    .select('trust_level')
+    .where('workspace_id', '=', workspaceId)
+    .where('user_id', '=', user.userId)
+    .executeTakeFirst();
 
   const allowed = await requireRequestAction(
     request,
@@ -29,5 +31,5 @@ export async function workspaceMiddleware(request: FastifyRequest, reply: Fastif
     return;
   }
 
-  (request as any).workspaceMember = result.rows[0] ?? null;
+  (request as any).workspaceMember = member ?? null;
 }

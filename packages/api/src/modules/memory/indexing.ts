@@ -1,7 +1,11 @@
 import { extractText, type CanonicalContentBlock } from '@synapse/shared';
-import { query } from '../../infrastructure/database/index.js';
+import {
+  db,
+  type TableInsert,
+} from '../../infrastructure/database/kysely.js';
 import { config } from '../../config/index.js';
 import { itemPartsToCanonicalContentBlocks } from '../conversation/message-content.js';
+import { sql } from 'kysely';
 
 const MEMORY_VECTOR_DIMENSIONS = 1536;
 let hasWarnedAboutEmbeddingDimensions = false;
@@ -127,30 +131,38 @@ async function embedTexts(texts: string[]) {
 }
 
 async function loadMemoryEntryIndexSource(memoryEntryId: string) {
-  const entryResult = await query(
-    `SELECT me.*
-     FROM memory_entries me
-     WHERE me.id = $1
-     LIMIT 1`,
-    [memoryEntryId],
-  );
-  const entry = entryResult.rows[0];
+  const entry = await db
+    .selectFrom('memory_entries as me')
+    .selectAll('me')
+    .where('me.id', '=', memoryEntryId)
+    .limit(1)
+    .executeTakeFirst();
   if (!entry) return null;
 
-  const partsResult = await query(
-    `SELECT mep.*,
-            f.original_name,
-            f.stored_name,
-            f.mime_type AS file_mime_type,
-            f.size_bytes
-     FROM memory_entry_parts mep
-     LEFT JOIN files f ON f.id = mep.file_id
-     WHERE mep.memory_entry_id = $1
-     ORDER BY mep.ordinal ASC`,
-    [memoryEntryId],
-  );
+  const partsResult = await db
+    .selectFrom('memory_entry_parts as mep')
+    .leftJoin('files as f', 'f.id', 'mep.file_id')
+    .select([
+      'mep.id',
+      'mep.memory_entry_id',
+      'mep.ordinal',
+      'mep.part_type',
+      'mep.text_value',
+      'mep.file_id',
+      'mep.json_value',
+      'mep.mime_type',
+      'mep.name',
+      'mep.metadata',
+      'f.original_name',
+      'f.stored_name',
+      'f.mime_type as file_mime_type',
+      'f.size_bytes',
+    ])
+    .where('mep.memory_entry_id', '=', memoryEntryId)
+    .orderBy('mep.ordinal', 'asc')
+    .execute();
 
-  const contentBlocks = itemPartsToCanonicalContentBlocks(partsResult.rows);
+  const contentBlocks = itemPartsToCanonicalContentBlocks(partsResult);
   return { entry, contentBlocks };
 }
 
@@ -167,31 +179,36 @@ export async function reindexMemoryEntry(memoryEntryId: string) {
   const chunks = chunkMemorySearchText(searchText);
   const embeddings = await embedTexts(chunks);
 
-  await query('DELETE FROM memory_index_chunks WHERE memory_entry_id = $1', [memoryEntryId]);
+  await db
+    .deleteFrom('memory_index_chunks')
+    .where('memory_entry_id', '=', memoryEntryId)
+    .execute();
 
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
-    await query(
-      `INSERT INTO memory_index_chunks
-         (id, memory_entry_id, workspace_id, owner_scope, owner_actor_id, owner_conversation_id, owner_user_id, chunk_index, search_text, embedding, token_count, metadata, created_at, updated_at)
-       VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5, $6, $7, $8, $9::vector, $10, $11, NOW(), NOW())`,
-      [
-        memoryEntryId,
-        source.entry.workspace_id,
-        source.entry.owner_scope,
-        source.entry.owner_actor_id,
-        source.entry.owner_conversation_id,
-        source.entry.owner_user_id,
-        index,
-        chunk,
-        embeddings?.[index] ? formatEmbeddingVector(embeddings[index]) : null,
-        Math.ceil(chunk.length / 4),
-        JSON.stringify({
+    await db
+      .insertInto('memory_index_chunks')
+      .values({
+        memory_entry_id: memoryEntryId,
+        workspace_id: source.entry.workspace_id,
+        owner_scope: source.entry.owner_scope,
+        owner_actor_id: source.entry.owner_actor_id,
+        owner_conversation_id: source.entry.owner_conversation_id,
+        owner_user_id: source.entry.owner_user_id,
+        chunk_index: index,
+        search_text: chunk,
+        embedding: embeddings?.[index]
+          ? sql`${formatEmbeddingVector(embeddings[index])}::vector`
+          : null,
+        token_count: Math.ceil(chunk.length / 4),
+        metadata: {
           textDigest: source.entry.text_digest,
           status: source.entry.status,
           stability: source.entry.stability,
-        }),
-      ],
-    );
+        } as TableInsert<'memory_index_chunks'>['metadata'],
+        created_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .execute();
   }
 }

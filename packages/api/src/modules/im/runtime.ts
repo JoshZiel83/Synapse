@@ -1,12 +1,12 @@
 import crypto from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { db } from "../../infrastructure/database/kysely.js";
 import type {
   ConversationTransportBindingSummary,
   TransportAccountSummary,
   TransportEndpointType,
 } from "@synapse/shared/types";
 import { emitEvent } from "../../infrastructure/events/index.js";
-import { query } from "../../infrastructure/database/index.js";
 import { redis } from "../../infrastructure/redis/index.js";
 import {
   createConversationItem,
@@ -430,14 +430,13 @@ function buildWeixinBodyText(itemList?: WeixinMessageItem[]) {
 }
 
 async function getWorkspaceOwnerId(workspaceId: string) {
-  const result = await query(
-    `SELECT owner_id
-     FROM workspaces
-     WHERE id = $1
-     LIMIT $2`,
-    [workspaceId, 1],
-  );
-  const ownerId = result.rows[0]?.owner_id as string | undefined;
+  const row = await db
+    .selectFrom("workspaces")
+    .select("owner_id")
+    .where("id", "=", workspaceId)
+    .limit(1)
+    .executeTakeFirst();
+  const ownerId = row?.owner_id;
   if (!ownerId) {
     throw new Error(`Workspace ${workspaceId} not found`);
   }
@@ -565,8 +564,11 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
     displayName: params.senderDisplayName,
     metadata: params.senderMetadata,
   });
+  if (!senderAddress) {
+    throw new Error("Failed to create sender transport address");
+  }
   let linkedUserId =
-    typeof senderAddress?.user_id === "string" && senderAddress.user_id.trim()
+    typeof senderAddress.user_id === "string" && senderAddress.user_id.trim()
       ? senderAddress.user_id
       : undefined;
   if (!linkedUserId) {
@@ -598,7 +600,7 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
     displayName:
       params.senderDisplayName || params.senderExternalId || "External user",
   });
-  if (params.senderMetadata && senderAddress?.id) {
+  if (params.senderMetadata) {
     await updateTransportAddressMetadata({
       transportAddressId: senderAddress.id,
       metadata: params.senderMetadata,

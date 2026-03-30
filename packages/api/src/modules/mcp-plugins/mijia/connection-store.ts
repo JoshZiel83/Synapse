@@ -1,5 +1,9 @@
 import { encrypt } from "../../../infrastructure/crypto/index.js";
-import { query } from "../../../infrastructure/database/index.js";
+import {
+  db,
+  type TableInsert,
+} from "../../../infrastructure/database/kysely.js";
+import { sql } from "kysely";
 import type { MijiaAuthState } from "./types.js";
 
 function encryptDeep(value: unknown): unknown {
@@ -23,29 +27,28 @@ export async function persistMijiaConnectionState(
   connectionId: string,
   authState: MijiaAuthState,
 ) {
-  await query(
-    `UPDATE plugin_connections
-     SET secret_payload = $2::jsonb,
-         expires_at = $3,
-         status = 'active',
-         updated_at = NOW()
-     WHERE id = $1`,
-    [
-      connectionId,
-      JSON.stringify(encryptDeep(authState)),
-      typeof authState.expireTime === "number"
-        ? new Date(authState.expireTime).toISOString()
-        : null,
-    ],
-  );
+  await db
+    .updateTable("plugin_connections")
+    .set({
+      secret_payload: encryptDeep(authState) as TableInsert<'plugin_connections'>['secret_payload'],
+      expires_at:
+        typeof authState.expireTime === "number"
+          ? new Date(authState.expireTime).toISOString()
+          : null,
+      status: "active",
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", connectionId)
+    .execute();
 }
 
 export async function markMijiaConnectionExpired(connectionId: string) {
-  await query(
-    `UPDATE plugin_connections
-     SET status = 'expired',
-         updated_at = NOW()
-     WHERE id = $1`,
-    [connectionId],
-  );
+  await db
+    .updateTable("plugin_connections")
+    .set({
+      status: "expired",
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", connectionId)
+    .execute();
 }

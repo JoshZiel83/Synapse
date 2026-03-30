@@ -1,4 +1,4 @@
-import { query } from '../database/index.js';
+import { executeSql } from '../database/kysely.js';
 import {
   saveBuffer,
   getFileUrl,
@@ -32,7 +32,7 @@ async function insertFileRow(
   category: string = 'general',
   metadata: Record<string, unknown> = {},
 ): Promise<FileRecord> {
-  const result = await query(
+  const result = await executeSql<{ id: string }>(
     `INSERT INTO files (workspace_id, uploader_user_id, original_name, stored_name, mime_type, size_bytes, category, metadata)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id`,

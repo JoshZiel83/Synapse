@@ -1,5 +1,5 @@
 import type { FastifyRequest, FastifyReply, FastifyInstance } from 'fastify';
-import { query } from '../database/index.js';
+import { db, type TableInsert } from '../database/kysely.js';
 
 export function auditMiddleware(app: FastifyInstance) {
   app.addHook('onResponse', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -10,19 +10,22 @@ export function auditMiddleware(app: FastifyInstance) {
     if (!action) return;
 
     try {
-      await query(
-        `INSERT INTO audit_logs (workspace_id, user_id, action, resource_type, resource_id, details, ip_address)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          (request.params as any)?.workspaceId || null,
-          (request as any).user?.userId || null,
+      await db
+        .insertInto('audit_logs')
+        .values({
+          workspace_id: (request.params as any)?.workspaceId || null,
+          user_id: (request as any).user?.userId || null,
           action,
-          deriveResourceType(request.url),
-          (request.params as any)?.id || null,
-          JSON.stringify({ method: request.method, url: request.url, statusCode: reply.statusCode }),
-          request.ip,
-        ]
-      );
+          resource_type: deriveResourceType(request.url),
+          resource_id: (request.params as any)?.id || null,
+          details: {
+            method: request.method,
+            url: request.url,
+            statusCode: reply.statusCode,
+          } as TableInsert<'audit_logs'>['details'],
+          ip_address: request.ip,
+        })
+        .execute();
     } catch (err) {
       console.error('Audit log insert failed:', (err as Error).message);
     }

@@ -1,6 +1,6 @@
 import { Worker } from 'bullmq';
 import { redis } from '../infrastructure/redis/index.js';
-import { query } from '../infrastructure/database/index.js';
+import { db, type TableInsert } from '../infrastructure/database/kysely.js';
 import { emitEvent } from '../infrastructure/events/index.js';
 import {
   QUEUE_NAMES,
@@ -56,6 +56,7 @@ import { buildMemoryRecallQuery, recallMemories } from '../modules/memory/servic
 import { listVisibleSkills } from '../modules/skills/service.js';
 import { sessionThinkingQueue } from './queues.js';
 import { registerWorker } from './registry.js';
+import { sql } from 'kysely';
 
 type ThinkingPhase = 'thinking' | 'tool';
 
@@ -374,12 +375,16 @@ export function startSessionThinkingWorker() {
           ];
         }
         if (recallType === 'bootstrap' && !session.metadata?.memoryBootstrapCompleted) {
-          await query(
-            `UPDATE sessions
-             SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb
-             WHERE id = $2`,
-            [JSON.stringify({ memoryBootstrapCompleted: true }), sessionId],
-          );
+          await db
+            .updateTable('sessions')
+            .set({
+              metadata:
+                sql`COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify({
+                  memoryBootstrapCompleted: true,
+                })}::jsonb`,
+            })
+            .where('id', '=', sessionId)
+            .execute();
         }
 
         const resolvedModelPlan = await resolveModelPlan(actorId, workspaceId, {
@@ -617,17 +622,23 @@ export function startSessionThinkingWorker() {
         await markTurnWakeupsProcessed(turn.id);
         await updateTurnStatus(turn.id, 'completed');
 
-        await query(
-          `INSERT INTO audit_logs (workspace_id, actor_id, action, resource_type, resource_id, details)
-           VALUES ($1, $2, 'ai.think', 'session', $3, $4)`,
-          [workspaceId, actorId, sessionId, JSON.stringify({
-            trigger,
-            tokensUsed: result.tokensUsed,
-            actionsCount: result.actions.length,
-            reasoning: result.reasoning,
-            turnId: turn.id,
-          })],
-        );
+        await db
+          .insertInto('audit_logs')
+          .values({
+            workspace_id: workspaceId,
+            actor_id: actorId,
+            action: 'ai.think',
+            resource_type: 'session',
+            resource_id: sessionId,
+            details: {
+              trigger,
+              tokensUsed: result.tokensUsed,
+              actionsCount: result.actions.length,
+              reasoning: result.reasoning,
+              turnId: turn.id,
+            } as TableInsert<'audit_logs'>['details'],
+          })
+          .execute();
 
         await emitEvent({
           type: 'actor.action',
@@ -739,15 +750,15 @@ export function startSessionThinkingWorker() {
                   });
                 }
 
-                const result = await query(
-                  `SELECT *
-                   FROM conversation_members
-                   WHERE conversation_id = $1
-                     AND id = $2
-                   LIMIT 1`,
-                  [failedSession.conversation_id, wakeup.sourceMemberId],
+                return (
+                  (await db
+                    .selectFrom('conversation_members')
+                    .selectAll()
+                    .where('conversation_id', '=', failedSession.conversation_id)
+                    .where('id', '=', wakeup.sourceMemberId as string)
+                    .limit(1)
+                    .executeTakeFirst()) ?? null
                 );
-                return result.rows[0] ?? null;
               }),
             );
             const targetMemberIds = [...new Set(
@@ -812,15 +823,16 @@ export function startSessionThinkingWorker() {
 }
 
 async function getActorMaxSessions(actorId: string): Promise<number> {
-  const result = await query(
-    `SELECT CASE
-         WHEN COALESCE(config->>'maxConcurrentSessions', '') ~ '^[0-9]+$'
-           THEN GREATEST((config->>'maxConcurrentSessions')::int, 1)
-         ELSE $2
-       END AS max_concurrent_sessions
-     FROM actors
-     WHERE id = $1`,
-    [actorId, DEFAULT_MAX_CONCURRENT_SESSIONS],
-  );
-  return result.rows[0]?.max_concurrent_sessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS;
+  const row = await db
+    .selectFrom('actors')
+    .select(
+      sql<number>`CASE
+        WHEN COALESCE(config->>'maxConcurrentSessions', '') ~ '^[0-9]+$'
+          THEN GREATEST((config->>'maxConcurrentSessions')::int, 1)
+        ELSE ${DEFAULT_MAX_CONCURRENT_SESSIONS}
+      END`.as('max_concurrent_sessions'),
+    )
+    .where('id', '=', actorId)
+    .executeTakeFirst();
+  return row?.max_concurrent_sessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS;
 }

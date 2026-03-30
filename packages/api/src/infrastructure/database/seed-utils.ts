@@ -1,7 +1,7 @@
-import { query } from "./index.js";
+import { executeSqlOn } from "./kysely.js";
 
 export async function ensurePublisher(
-  client: { query: typeof query },
+  client: { query: (text: string, params?: any[]) => Promise<any> },
   input: {
     slug: string;
     displayName: string;
@@ -12,7 +12,8 @@ export async function ensurePublisher(
     metadata?: Record<string, unknown>;
   },
 ) {
-  const result = await client.query<{ id: string }>(
+  const result = await executeSqlOn<{ id: string }>(
+    client,
     `INSERT INTO publishers (
        slug, display_name, description, owner_user_id, workspace_id, is_builtin, is_verified, metadata
      )

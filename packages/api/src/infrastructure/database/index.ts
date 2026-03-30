@@ -1,5 +1,6 @@
 import pg from "pg";
 import { config } from "../../config/index.js";
+import type { DatabaseTable } from "./db-types.js";
 
 const { Pool } = pg;
 
@@ -9,7 +10,7 @@ export const pool = new Pool({
 });
 
 type RequiredSchemaSpec = {
-  table: string;
+  table: DatabaseTable;
   requiredColumns: string[];
   reason: string;
 };
@@ -346,7 +347,7 @@ export async function assertRequiredSchema() {
     .join("; ");
 
   throw new Error(
-    `Database schema is not on the current access model. ${details}. Run the required upgrade script or \`npm run db:reset\` to rebuild the database.`,
+    `Database schema is not on the current access model. ${details}. Run \`npm run db:rebuild\` to rebuild the database.`,
   );
 }
 

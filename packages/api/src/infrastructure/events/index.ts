@@ -1,7 +1,15 @@
 import type { EventType, SystemEvent } from '@synapse/shared';
+import { sql } from "kysely";
 import { REDIS_CHANNELS } from '@synapse/shared';
 import { config } from '../../config/index.js';
-import { query, transaction } from '../database/index.js';
+import { transaction } from '../database/index.js';
+import {
+  db,
+  executeCompiledQuery,
+  executeCompiledSql,
+  type TableInsert,
+  type TableRow,
+} from "../database/kysely.js";
 import { redisPub, redisSub } from '../redis/index.js';
 
 export type Queryable = {
@@ -23,12 +31,11 @@ type TransactionalRealtimeEvent = SystemEvent & {
 
 type EventHandler = (event: SystemEvent) => void | Promise<void>;
 
-type RealtimeEventOutboxRow = {
-  id: string;
+type RealtimeEventOutboxRow = Pick<
+  TableRow<"realtime_event_outbox">,
+  "id" | "event_timestamp" | "payload" | "workspace_id"
+> & {
   event_type: TransactionalRealtimeEventType;
-  workspace_id: string;
-  payload: unknown;
-  event_timestamp: string | Date;
 };
 
 const handlers: Map<string, Set<EventHandler>> = new Map();
@@ -82,26 +89,29 @@ async function wait(ms: number) {
 
 async function claimPendingRealtimeOutboxEntries(limit: number) {
   return transaction(async (client) => {
-    const result = await client.query<RealtimeEventOutboxRow>(
-      `WITH claimed AS (
-       SELECT id
-         FROM realtime_event_outbox
-         WHERE status IN ('pending', 'failed')
-           AND available_at <= NOW()
-         ORDER BY created_at ASC, id ASC
-         LIMIT $1
-         FOR UPDATE SKIP LOCKED
-       )
-       UPDATE realtime_event_outbox reo
-       SET status = 'processing',
-           attempts = attempts + 1,
-           last_error = NULL,
-           processing_started_at = NOW(),
-           updated_at = NOW()
-       FROM claimed
-       WHERE reo.id = claimed.id
-       RETURNING reo.id, reo.event_type, reo.workspace_id, reo.payload, reo.event_timestamp`,
-      [limit],
+    const compiled = sql<RealtimeEventOutboxRow[]>`
+      WITH claimed AS (
+        SELECT id
+        FROM realtime_event_outbox
+        WHERE status IN ('pending', 'failed')
+          AND available_at <= NOW()
+        ORDER BY created_at ASC, id ASC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE realtime_event_outbox reo
+      SET status = 'processing',
+          attempts = attempts + 1,
+          last_error = NULL,
+          processing_started_at = NOW(),
+          updated_at = NOW()
+      FROM claimed
+      WHERE reo.id = claimed.id
+      RETURNING reo.id, reo.event_type, reo.workspace_id, reo.payload, reo.event_timestamp
+    `.compile(db);
+    const result = await executeCompiledSql<RealtimeEventOutboxRow>(
+      client,
+      compiled,
     );
 
     return result.rows;
@@ -109,28 +119,30 @@ async function claimPendingRealtimeOutboxEntries(limit: number) {
 }
 
 async function markRealtimeOutboxEntryDispatched(id: string) {
-  await query(
-    `UPDATE realtime_event_outbox
-     SET status = 'dispatched',
-         last_error = NULL,
-         dispatched_at = NOW(),
-         updated_at = NOW()
-     WHERE id = $1`,
-    [id],
-  );
+  await db
+    .updateTable("realtime_event_outbox")
+    .set({
+      status: "dispatched",
+      last_error: null,
+      dispatched_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", id)
+    .execute();
 }
 
 async function markRealtimeOutboxEntryFailed(id: string, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  await query(
-    `UPDATE realtime_event_outbox
-     SET status = 'failed',
-         last_error = $2,
-         available_at = NOW() + (LEAST(attempts, 6) * INTERVAL '5 seconds'),
-         updated_at = NOW()
-     WHERE id = $1`,
-    [id, message],
-  );
+  await db
+    .updateTable("realtime_event_outbox")
+    .set({
+      status: "failed",
+      last_error: message,
+      available_at: sql`NOW() + (LEAST(attempts, 6) * INTERVAL '5 seconds')`,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", id)
+    .execute();
 }
 
 async function materializeRealtimeOutboxEvent(
@@ -228,21 +240,21 @@ export async function enqueueTransactionalEvent(
     throw new Error(`Event type ${event.type} does not support transactional outbox`);
   }
 
-  await queryable.query(
-    `INSERT INTO realtime_event_outbox (
-       event_type,
-       workspace_id,
-       payload,
-       event_timestamp,
-       available_at
-     )
-     VALUES ($1, $2, $3::jsonb, $4::timestamptz, NOW())`,
-    [
-      event.type,
-      event.workspaceId,
-      JSON.stringify(event.payload || {}),
-      event.timestamp,
-    ],
+  const row: Pick<
+    TableInsert<"realtime_event_outbox">,
+    "available_at" | "event_timestamp" | "event_type" | "payload" | "workspace_id"
+  > = {
+    available_at: new Date(),
+    event_timestamp: event.timestamp,
+    event_type: event.type,
+    payload:
+      (event.payload || {}) as TableInsert<"realtime_event_outbox">["payload"],
+    workspace_id: event.workspaceId,
+  };
+
+  await executeCompiledQuery(
+    queryable,
+    db.insertInto("realtime_event_outbox").values(row),
   );
 }
 

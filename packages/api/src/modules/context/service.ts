@@ -9,8 +9,10 @@ import type {
   CanonicalArchivePoint,
   ProviderContextWindow,
 } from "@synapse/shared";
+import { db } from "../../infrastructure/database/kysely.js";
 import { itemPartsToCanonicalBlocks } from "../ai/context-builder.js";
 import { compileContextItemsToConversationMessages } from "../ai/context-compiler.js";
+import { sql } from "kysely";
 
 const MIN_COMPACTION_ITEMS = 12;
 const SHARED_ARCHIVE_TAIL_TARGET = 24;
@@ -51,21 +53,25 @@ function parseJsonArray<T>(value: unknown): T[] | undefined {
 }
 
 async function ensureConversationContextState(conversationId: string) {
-  await query(
-    `INSERT INTO conversation_context_states (conversation_id, updated_at)
-     VALUES ($1, NOW())
-     ON CONFLICT (conversation_id) DO NOTHING`,
-    [conversationId],
-  );
+  await db
+    .insertInto("conversation_context_states")
+    .values({
+      conversation_id: conversationId,
+      updated_at: sql`NOW()`,
+    })
+    .onConflict((oc) => oc.columns(["conversation_id"]).doNothing())
+    .execute();
 }
 
 async function ensureSessionContextState(sessionId: string) {
-  await query(
-    `INSERT INTO session_context_states (session_id, updated_at)
-     VALUES ($1, NOW())
-     ON CONFLICT (session_id) DO NOTHING`,
-    [sessionId],
-  );
+  await db
+    .insertInto("session_context_states")
+    .values({
+      session_id: sessionId,
+      updated_at: sql`NOW()`,
+    })
+    .onConflict((oc) => oc.columns(["session_id"]).doNothing())
+    .execute();
 }
 
 async function loadArchivePoint(
@@ -520,13 +526,12 @@ async function loadActiveSharedArchivePoint(
   conversationId: string,
 ): Promise<CanonicalArchivePoint | null> {
   await ensureConversationContextState(conversationId);
-  const result = await query(
-    `SELECT active_shared_archive_point_id
-     FROM conversation_context_states
-     WHERE conversation_id = $1`,
-    [conversationId],
-  );
-  const archivePointId = result.rows[0]?.active_shared_archive_point_id;
+  const row = await db
+    .selectFrom("conversation_context_states")
+    .select("active_shared_archive_point_id")
+    .where("conversation_id", "=", conversationId)
+    .executeTakeFirst();
+  const archivePointId = row?.active_shared_archive_point_id;
   return archivePointId ? loadArchivePoint(archivePointId) : null;
 }
 
@@ -535,13 +540,12 @@ async function loadActivePrivateArchivePoint(
 ): Promise<CanonicalArchivePoint | null> {
   if (!sessionId) return null;
   await ensureSessionContextState(sessionId);
-  const result = await query(
-    `SELECT active_private_archive_point_id
-     FROM session_context_states
-     WHERE session_id = $1`,
-    [sessionId],
-  );
-  const archivePointId = result.rows[0]?.active_private_archive_point_id;
+  const row = await db
+    .selectFrom("session_context_states")
+    .select("active_private_archive_point_id")
+    .where("session_id", "=", sessionId)
+    .executeTakeFirst();
+  const archivePointId = row?.active_private_archive_point_id;
   return archivePointId ? loadArchivePoint(archivePointId) : null;
 }
 

@@ -25,7 +25,8 @@ import {
   throwToolError,
 } from "./tool-errors.js";
 import { registerToolPlugin } from "./tool-plugins.js";
-import { query } from "../../infrastructure/database/index.js";
+import { db } from "../../infrastructure/database/kysely.js";
+import { sql } from "kysely";
 import { getSession } from "../session/service.js";
 import {
   sendConversationMessage,
@@ -756,47 +757,51 @@ async function listInviteableActors(params: {
   conversationId: string;
   actorId: string;
 }): Promise<InviteableActor[]> {
-  const result = await query(
-    `SELECT a.id,
-            a.name,
-            a.title,
-            a.role,
-            COALESCE(
-              (
-                SELECT jsonb_agg(
-                  jsonb_build_object(
-                    'key', avd.doc_key,
-                    'title', avd.title,
-                    'visibility', avd.visibility,
-                    'priority', avd.priority,
-                    'content', avd.content_blocks
-                  )
-                  ORDER BY avd.priority DESC, avd.created_at ASC
-                )
-                FROM actor_version_docs avd
-                WHERE avd.actor_version_id = current_version.id
-              ),
-              '[]'::jsonb
-            ) AS actor_docs
-     FROM actors a
-     LEFT JOIN actor_versions current_version
-       ON current_version.actor_id = a.id
-      AND current_version.version = a.current_version
-     WHERE a.workspace_id = $1
-       AND a.is_active = true
-       AND a.id <> $3
-       AND NOT EXISTS (
-         SELECT 1
-         FROM conversation_members cm
-         WHERE cm.conversation_id = $2
-           AND cm.actor_id = a.id
-           AND cm.state = 'active'
-       )
-     ORDER BY a.name ASC, a.id ASC`,
-    [params.workspaceId, params.conversationId, params.actorId],
-  );
+  const result = await db
+    .selectFrom("actors as a")
+    .leftJoin("actor_versions as current_version", (join) =>
+      join
+        .onRef("current_version.actor_id", "=", "a.id")
+        .onRef("current_version.version", "=", "a.current_version"),
+    )
+    .select([
+      "a.id",
+      "a.name",
+      "a.title",
+      "a.role",
+      sql`COALESCE(
+        (
+          SELECT jsonb_agg(
+            jsonb_build_object(
+              'key', avd.doc_key,
+              'title', avd.title,
+              'visibility', avd.visibility,
+              'priority', avd.priority,
+              'content', avd.content_blocks
+            )
+            ORDER BY avd.priority DESC, avd.created_at ASC
+          )
+          FROM actor_version_docs avd
+          WHERE avd.actor_version_id = current_version.id
+        ),
+        '[]'::jsonb
+      )`.as("actor_docs"),
+    ])
+    .where("a.workspace_id", "=", params.workspaceId)
+    .where("a.is_active", "=", true)
+    .where("a.id", "<>", params.actorId)
+    .where(sql<boolean>`NOT EXISTS (
+      SELECT 1
+      FROM conversation_members cm
+      WHERE cm.conversation_id = ${params.conversationId}
+        AND cm.actor_id = a.id
+        AND cm.state = 'active'
+    )`)
+    .orderBy("a.name", "asc")
+    .orderBy("a.id", "asc")
+    .execute();
 
-  return result.rows.map((row) => ({
+  return result.map((row) => ({
     id: row.id as string,
     name: row.name as string,
     title: (row.title as string | null) || undefined,

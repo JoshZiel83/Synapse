@@ -1,6 +1,12 @@
 import crypto from "node:crypto";
 import type pg from "pg";
 import { query, transaction } from "../../infrastructure/database/index.js";
+import {
+  db,
+  executeCompiledQuery,
+  executeTakeFirst,
+  type TableInsert,
+} from "../../infrastructure/database/kysely.js";
 import { DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG } from "../../infrastructure/database/seeds/actors/index.js";
 import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
@@ -18,6 +24,7 @@ import {
   type ActorRole,
   type WorkspaceChiefActorPreference,
 } from "@synapse/shared";
+import { sql } from "kysely";
 import { listAuthorizedResourceIds, userSubject } from "../access/service.js";
 
 export interface CreateWorkspaceInput {
@@ -70,6 +77,12 @@ function generateSlug(name: string): string {
     .replace(/^-|-$/g, "");
   const suffix = crypto.randomBytes(4).toString("hex");
   return `${base}-${suffix}`;
+}
+
+function toIsoString(value: string | Date | null | undefined) {
+  if (typeof value === "string") return value;
+  if (value instanceof Date) return value.toISOString();
+  return undefined;
 }
 
 const OFFICIAL_ACTOR_PUBLISHER_SLUG = "synapse-official";
@@ -142,38 +155,32 @@ async function findOfficialChiefActorId(
   client: pg.PoolClient,
   workspaceId: string,
 ) {
-  const result = await client.query<{ id: string }>(
-    `SELECT a.id
-     FROM actors a
-     LEFT JOIN actor_source_refs source_ref
-       ON source_ref.actor_id = a.id
-     LEFT JOIN catalog_items item
-       ON item.id = source_ref.source_catalog_item_id
-     WHERE a.workspace_id = $1
-       AND a.is_active = TRUE
-       AND (
-         a.config @> $2::jsonb
-         OR (
-           item.workspace_id IS NULL
-           AND item.item_kind = 'actor_template'
-           AND item.slug = $3
-         )
-       )
-     ORDER BY
-       CASE
-         WHEN a.config @> $2::jsonb THEN 0
-         ELSE 1
-       END,
-       a.created_at ASC
-     LIMIT 1`,
-    [
-      workspaceId,
-      OFFICIAL_CHIEF_ACTOR_CONFIG_JSON,
-      DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG,
-    ],
+  const runner = { query: client.query.bind(client) as typeof query };
+  const result = await executeTakeFirst<{ id: string }>(
+    runner,
+    db
+      .selectFrom("actors as a")
+      .leftJoin("actor_source_refs as source_ref", "source_ref.actor_id", "a.id")
+      .leftJoin("catalog_items as item", "item.id", "source_ref.source_catalog_item_id")
+      .select("a.id")
+      .where("a.workspace_id", "=", workspaceId)
+      .where("a.is_active", "=", true)
+      .where((eb) =>
+        eb.or([
+          sql<boolean>`a.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb`,
+          eb.and([
+            eb("item.workspace_id", "is", null),
+            eb("item.item_kind", "=", "actor_template"),
+            eb("item.slug", "=", DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG),
+          ]),
+        ]),
+      )
+      .orderBy(sql`case when a.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb then 0 else 1 end`)
+      .orderBy("a.created_at", "asc")
+      .limit(1),
   );
 
-  return result.rows[0]?.id ?? null;
+  return result?.id ?? null;
 }
 
 export async function assignOfficialChiefActorPreference(
@@ -191,15 +198,24 @@ export async function assignOfficialChiefActorPreference(
     return null;
   }
 
-  await client.query(
-    `INSERT INTO workspace_user_preferences
-       (workspace_id, user_id, chief_actor_id, created_at, updated_at)
-     VALUES ($1, $2, $3, NOW(), NOW())
-     ON CONFLICT (workspace_id, user_id)
-     DO UPDATE SET
-       chief_actor_id = EXCLUDED.chief_actor_id,
-       updated_at = NOW()`,
-    [workspaceId, userId, chiefActorId],
+  const runner = { query: client.query.bind(client) as typeof query };
+  await executeCompiledQuery(
+    runner,
+    db
+      .insertInto("workspace_user_preferences")
+      .values({
+        workspace_id: workspaceId,
+        user_id: userId,
+        chief_actor_id: chiefActorId,
+        created_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .onConflict((oc) =>
+        oc.columns(["workspace_id", "user_id"]).doUpdateSet({
+          chief_actor_id: chiefActorId,
+          updated_at: sql`NOW()`,
+        }),
+      ),
   );
 
   return chiefActorId;
@@ -223,43 +239,41 @@ function isOfficialChiefTemplate(row: Pick<OfficialActorTemplateRow, "package_sl
 async function loadOfficialActorTemplates(
   client: pg.PoolClient,
 ): Promise<LoadedOfficialActorTemplate[]> {
-  const result = await client.query<OfficialActorTemplateRow>(
-    `SELECT
-       item.id AS package_id,
-       item.slug AS package_slug,
-       version.id AS version_id,
-       spec.role AS actor_role,
-       spec.name AS actor_name,
-       spec.avatar_file_id AS actor_avatar_file_id,
-       spec.avatar_emoji AS actor_avatar_emoji,
-       spec.title AS actor_title,
-       spec.can_represent_user AS actor_can_represent_user,
-       spec.docs AS actor_docs,
-       spec.specialties AS actor_specialties,
-       spec.config AS actor_config
-     FROM catalog_items item
-     JOIN publishers publisher
-       ON publisher.id = item.publisher_id
-     JOIN catalog_versions version
-       ON version.id = item.latest_version_id
-     JOIN actor_template_version_specs spec
-       ON spec.catalog_version_id = version.id
-     WHERE publisher.slug = $1
-       AND item.workspace_id IS NULL
-       AND item.item_kind = 'actor_template'
-       AND item.is_active = TRUE
-     ORDER BY
-       CASE
-         WHEN spec.config @> $2::jsonb OR item.slug = $3 THEN 0
-         ELSE 1
-       END,
-       item.created_at ASC,
-       item.slug ASC`,
-    [
-      OFFICIAL_ACTOR_PUBLISHER_SLUG,
-      OFFICIAL_CHIEF_ACTOR_CONFIG_JSON,
-      DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG,
-    ],
+  const runner = { query: client.query.bind(client) as typeof query };
+  const result = await executeCompiledQuery<OfficialActorTemplateRow>(
+    runner,
+    db
+      .selectFrom("catalog_items as item")
+      .innerJoin("publishers as publisher", "publisher.id", "item.publisher_id")
+      .innerJoin("catalog_versions as version", "version.id", "item.latest_version_id")
+      .innerJoin(
+        "actor_template_version_specs as spec",
+        "spec.catalog_version_id",
+        "version.id",
+      )
+      .select([
+        "item.id as package_id",
+        "item.slug as package_slug",
+        "version.id as version_id",
+        "spec.role as actor_role",
+        "spec.name as actor_name",
+        "spec.avatar_file_id as actor_avatar_file_id",
+        "spec.avatar_emoji as actor_avatar_emoji",
+        "spec.title as actor_title",
+        "spec.can_represent_user as actor_can_represent_user",
+        "spec.docs as actor_docs",
+        "spec.specialties as actor_specialties",
+        "spec.config as actor_config",
+      ])
+      .where("publisher.slug", "=", OFFICIAL_ACTOR_PUBLISHER_SLUG)
+      .where("item.workspace_id", "is", null)
+      .where("item.item_kind", "=", "actor_template")
+      .where("item.is_active", "=", true)
+      .orderBy(
+        sql`case when spec.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb or item.slug = ${DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG} then 0 else 1 end`,
+      )
+      .orderBy("item.created_at", "asc")
+      .orderBy("item.slug", "asc"),
   );
 
   if (result.rows.length === 0) {
@@ -310,20 +324,34 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
   const slug = generateSlug(input.name);
 
   const result = await transaction(async (client: pg.PoolClient) => {
+    const runner = { query: client.query.bind(client) as typeof query };
     // 1. Create workspace
-    const wsResult = await client.query(
-      `INSERT INTO workspaces (name, slug, description, owner_id)
-       VALUES ($1, $2, $3, $4)
-       RETURNING *`,
-      [input.name, slug, input.description ?? null, input.userId],
+    const workspace = await executeTakeFirst<Record<string, unknown>>(
+      runner,
+      db
+        .insertInto("workspaces")
+        .values({
+          name: input.name,
+          slug,
+          description: input.description ?? null,
+          owner_id: input.userId,
+        })
+        .returningAll(),
     );
-    const workspace = wsResult.rows[0];
+    if (!workspace) {
+      throw new Error("Failed to create workspace.");
+    }
 
     // 2. Add creator as owner member
-    await client.query(
-      `INSERT INTO workspace_members (workspace_id, user_id, trust_level)
-       VALUES ($1, $2, 'owner')`,
-      [workspace.id, input.userId],
+    await executeCompiledQuery(
+      runner,
+      db
+        .insertInto("workspace_members")
+        .values({
+          workspace_id: String(workspace.id),
+          user_id: input.userId,
+          trust_level: "owner",
+        }),
     );
 
     const officialActorTemplates = await loadOfficialActorTemplates(client);
@@ -333,99 +361,81 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     }> = [];
 
     for (const template of officialActorTemplates) {
-      const actorResult = await client.query(
-        `INSERT INTO actors (
-           workspace_id,
-           name,
-           role,
-           title,
-           avatar_file_id,
-           avatar_emoji,
-           parent_id,
-           can_represent_user,
-           specialties,
-           config,
-           current_version,
-           created_by
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9::jsonb, 1, $10)
-         RETURNING *`,
-        [
-          workspace.id,
-          template.actorName,
-          template.actorRole,
-          template.actorTitle,
-          template.actorAvatarFileId || null,
-          template.actorAvatarEmoji || null,
-          template.canRepresentUser,
-          template.actorSpecialties,
-          JSON.stringify(template.actorConfig),
-          input.userId,
-        ],
+      const actorRow = await executeTakeFirst<Record<string, unknown>>(
+        runner,
+        db
+          .insertInto("actors")
+          .values({
+            workspace_id: String(workspace.id),
+            name: template.actorName,
+            role: template.actorRole,
+            title: template.actorTitle,
+            avatar_file_id: template.actorAvatarFileId || null,
+            avatar_emoji: template.actorAvatarEmoji || null,
+            parent_id: null,
+            can_represent_user: template.canRepresentUser,
+            specialties: template.actorSpecialties,
+            config: template.actorConfig as TableInsert<'actors'>['config'],
+            current_version: 1,
+            created_by: input.userId,
+          })
+          .returningAll(),
       );
-      const actorRow = actorResult.rows[0];
+      if (!actorRow) {
+        throw new Error(`Failed to install actor ${template.actorName}`);
+      }
 
-      const actorVersionResult = await client.query<{ id: string }>(
-        `INSERT INTO actor_versions (
-           actor_id,
-           version,
-           name,
-           role,
-           title,
-           parent_id,
-           can_represent_user,
-           specialties,
-           config,
-           created_by
-         )
-         VALUES ($1, 1, $2, $3, $4, NULL, $5, $6, $7::jsonb, $8)
-         RETURNING id`,
-        [
-          actorRow.id,
-          template.actorName,
-          template.actorRole,
-          template.actorTitle,
-          template.canRepresentUser,
-          template.actorSpecialties,
-          JSON.stringify(template.actorConfig),
-          input.userId,
-        ],
+      const actorVersionResult = await executeTakeFirst<{ id: string }>(
+        runner,
+        db
+          .insertInto("actor_versions")
+          .values({
+            actor_id: String(actorRow.id),
+            version: 1,
+            name: template.actorName,
+            role: template.actorRole,
+            title: template.actorTitle,
+            parent_id: null,
+            can_represent_user: template.canRepresentUser,
+            specialties: template.actorSpecialties,
+            config: template.actorConfig as TableInsert<'actor_versions'>['config'],
+            created_by: input.userId,
+          })
+          .returning("id"),
       );
-      const actorVersionId = actorVersionResult.rows[0]!.id;
+      if (!actorVersionResult) {
+        throw new Error(`Failed to create actor version for ${template.actorName}`);
+      }
+      const actorVersionId = actorVersionResult.id;
 
       for (const doc of template.actorDocs) {
-        await client.query(
-          `INSERT INTO actor_version_docs (
-             actor_version_id,
-             doc_key,
-             title,
-             visibility,
-             priority,
-             content_blocks
-           )
-           VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-          [
-            actorVersionId,
-            doc.key,
-            doc.title,
-            doc.visibility,
-            doc.priority,
-            JSON.stringify(doc.content),
-          ],
+        await executeCompiledQuery(
+          runner,
+          db
+            .insertInto("actor_version_docs")
+            .values({
+              actor_version_id: actorVersionId,
+              doc_key: doc.key,
+              title: doc.title,
+              visibility: doc.visibility,
+              priority: doc.priority,
+              content_blocks: doc.content as unknown as TableInsert<'actor_version_docs'>['content_blocks'],
+            }),
         );
       }
 
-      await client.query(
-        `INSERT INTO actor_source_refs (
-           actor_id,
-           source_catalog_item_id,
-           source_catalog_version_id,
-           sync_mode,
-           baseline_actor_version,
-           metadata
-         )
-         VALUES ($1, $2, $3, 'notify', 1, '{}'::jsonb)`,
-        [actorRow.id, template.packageId, template.versionId],
+      await executeCompiledQuery(
+        runner,
+        db
+          .insertInto("actor_source_refs")
+          .values({
+            actor_id: String(actorRow.id),
+            source_catalog_item_id: template.packageId,
+            source_catalog_version_id: template.versionId,
+            sync_mode: "notify",
+            baseline_actor_version: 1,
+            metadata: {} as TableInsert<'actor_source_refs'>['metadata'],
+          }),
       );
 
       installedActors.push({
@@ -438,12 +448,19 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       throw new Error("Failed to install official actors for workspace.");
     }
 
-    await client.query(
-      `UPDATE catalog_items
-       SET download_count = download_count + 1,
-           updated_at = NOW()
-       WHERE id = ANY($1::uuid[])`,
-      [officialActorTemplates.map((template) => template.packageId)],
+    await executeCompiledQuery(
+      runner,
+      db
+        .updateTable("catalog_items")
+        .set({
+          download_count: sql`download_count + 1`,
+          updated_at: sql`NOW()`,
+        })
+        .where(
+          "id",
+          "in",
+          officialActorTemplates.map((template) => template.packageId),
+        ),
     );
 
     const chiefActor =
@@ -452,7 +469,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
 
     await assignOfficialChiefActorPreference(
       client,
-      workspace.id,
+      String(workspace.id),
       input.userId,
       String(chiefActor.actorRow.id),
     );
@@ -465,25 +482,25 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
           AUTHZ_PLATFORM_ID,
           "workspace",
           "workspace",
-          workspace.id,
+          String(workspace.id),
         ),
         touchRelation(
           "workspace",
-          workspace.id,
+          String(workspace.id),
           "platform",
           "platform",
           AUTHZ_PLATFORM_ID,
         ),
         touchRelation(
           "workspace",
-          workspace.id,
+          String(workspace.id),
           workspaceRelationFromTrustLevel("owner"),
           "user",
           input.userId,
         ),
         ...installedActors.flatMap(({ actorRow }) =>
           buildWorkspaceActorAuthzRelations(
-            workspace.id,
+            String(workspace.id),
             String(actorRow.id),
             input.userId,
           ),
@@ -491,7 +508,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       ],
       {
         source: "workspace.create",
-        workspaceId: workspace.id,
+        workspaceId: String(workspace.id),
         userId: input.userId,
       },
     );
@@ -524,58 +541,61 @@ export async function listUserWorkspaces(userId: string) {
     return [];
   }
 
-  const result = await query(
-    `SELECT w.*, wm.trust_level
-     FROM workspaces w
-     LEFT JOIN workspace_members wm
-       ON wm.workspace_id = w.id
-      AND wm.user_id = $1
-     WHERE w.id = ANY($2)
-     ORDER BY w.created_at DESC`,
-    [userId, workspaceIds],
-  );
-  return result.rows.map((row) => ({
+  const rows = await db
+    .selectFrom("workspaces as w")
+    .leftJoin("workspace_members as wm", (join) =>
+      join
+        .onRef("wm.workspace_id", "=", "w.id")
+        .on("wm.user_id", "=", userId),
+    )
+    .selectAll("w")
+    .select("wm.trust_level")
+    .where("w.id", "in", workspaceIds)
+    .orderBy("w.created_at", "desc")
+    .execute();
+  return rows.map((row) => ({
     ...mapWorkspaceRow(row),
     trustLevel: row.trust_level ?? null,
   }));
 }
 
 export async function getWorkspaceById(workspaceId: string) {
-  const result = await query("SELECT * FROM workspaces WHERE id = $1", [
-    workspaceId,
-  ]);
-  return result.rows.length > 0 ? mapWorkspaceRow(result.rows[0]) : null;
+  const row = await db
+    .selectFrom("workspaces")
+    .selectAll()
+    .where("id", "=", workspaceId)
+    .executeTakeFirst();
+  return row ? mapWorkspaceRow(row) : null;
 }
 
 export async function getWorkspaceChiefActorPreference(
   workspaceId: string,
   userId: string,
 ): Promise<WorkspaceChiefActorPreference> {
-  const result = await query(
-    `SELECT
-        pref.workspace_id,
-        pref.user_id,
-        pref.chief_actor_id,
-        pref.created_at,
-        pref.updated_at,
-        a.name AS chief_actor_name,
-        a.role AS chief_actor_role,
-        a.title AS chief_actor_title,
-        avatar_file.stored_name AS chief_actor_avatar_stored_name
-     FROM workspace_user_preferences pref
-     LEFT JOIN actors a
-       ON a.id = pref.chief_actor_id
-      AND a.workspace_id = pref.workspace_id
-      AND a.is_active = TRUE
-     LEFT JOIN files avatar_file
-       ON avatar_file.id = a.avatar_file_id
-     WHERE pref.workspace_id = $1
-       AND pref.user_id = $2
-     LIMIT 1`,
-    [workspaceId, userId],
-  );
-
-  const row = result.rows[0];
+  const row = await db
+    .selectFrom("workspace_user_preferences as pref")
+    .leftJoin("actors as a", (join) =>
+      join
+        .onRef("a.id", "=", "pref.chief_actor_id")
+        .onRef("a.workspace_id", "=", "pref.workspace_id")
+        .on("a.is_active", "=", true),
+    )
+    .leftJoin("files as avatar_file", "avatar_file.id", "a.avatar_file_id")
+    .select([
+      "pref.workspace_id",
+      "pref.user_id",
+      "pref.chief_actor_id",
+      "pref.created_at",
+      "pref.updated_at",
+      "a.name as chief_actor_name",
+      "a.role as chief_actor_role",
+      "a.title as chief_actor_title",
+      "avatar_file.stored_name as chief_actor_avatar_stored_name",
+    ])
+    .where("pref.workspace_id", "=", workspaceId)
+    .where("pref.user_id", "=", userId)
+    .limit(1)
+    .executeTakeFirst();
   if (!row) {
     return {
       workspaceId,
@@ -592,12 +612,11 @@ export async function updateWorkspaceChiefActorPreference(
   chiefActorId?: string | null,
 ): Promise<WorkspaceChiefActorPreference> {
   if (!chiefActorId) {
-    await query(
-      `DELETE FROM workspace_user_preferences
-       WHERE workspace_id = $1
-         AND user_id = $2`,
-      [workspaceId, userId],
-    );
+    await db
+      .deleteFrom("workspace_user_preferences")
+      .where("workspace_id", "=", workspaceId)
+      .where("user_id", "=", userId)
+      .execute();
 
     return {
       workspaceId,
@@ -605,30 +624,35 @@ export async function updateWorkspaceChiefActorPreference(
     };
   }
 
-  const actorResult = await query(
-    `SELECT id
-     FROM actors
-     WHERE id = $1
-       AND workspace_id = $2
-       AND is_active = TRUE
-     LIMIT 1`,
-    [chiefActorId, workspaceId],
-  );
+  const actorRow = await db
+    .selectFrom("actors")
+    .select("id")
+    .where("id", "=", chiefActorId)
+    .where("workspace_id", "=", workspaceId)
+    .where("is_active", "=", true)
+    .limit(1)
+    .executeTakeFirst();
 
-  if (actorResult.rows.length === 0) {
+  if (!actorRow) {
     throw new Error("Chief actor is not available in this workspace");
   }
 
-  await query(
-    `INSERT INTO workspace_user_preferences
-       (workspace_id, user_id, chief_actor_id, created_at, updated_at)
-     VALUES ($1, $2, $3, NOW(), NOW())
-     ON CONFLICT (workspace_id, user_id)
-     DO UPDATE SET
-       chief_actor_id = EXCLUDED.chief_actor_id,
-       updated_at = NOW()`,
-    [workspaceId, userId, chiefActorId],
-  );
+  await db
+    .insertInto("workspace_user_preferences")
+    .values({
+      workspace_id: workspaceId,
+      user_id: userId,
+      chief_actor_id: chiefActorId,
+      created_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .onConflict((oc) =>
+      oc.columns(["workspace_id", "user_id"]).doUpdateSet({
+        chief_actor_id: chiefActorId,
+        updated_at: sql`NOW()`,
+      }),
+    )
+    .execute();
 
   return getWorkspaceChiefActorPreference(workspaceId, userId);
 }
@@ -637,50 +661,52 @@ export async function updateWorkspace(
   workspaceId: string,
   updates: { name?: string; description?: string },
 ) {
-  const fields: string[] = [];
-  const values: any[] = [];
-  let idx = 1;
-
-  if (updates.name !== undefined) {
-    fields.push(`name = $${idx++}`);
-    values.push(updates.name);
-  }
-  if (updates.description !== undefined) {
-    fields.push(`description = $${idx++}`);
-    values.push(updates.description);
-  }
-
-  if (fields.length === 0) {
+  if (updates.name === undefined && updates.description === undefined) {
     return getWorkspaceById(workspaceId);
   }
 
-  values.push(workspaceId);
-  const result = await query(
-    `UPDATE workspaces SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
-    values,
-  );
-  return result.rows.length > 0 ? mapWorkspaceRow(result.rows[0]) : null;
+  const row = await db
+    .updateTable("workspaces")
+    .set({
+      ...(updates.name !== undefined ? { name: updates.name } : {}),
+      ...(updates.description !== undefined
+        ? { description: updates.description }
+        : {}),
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", workspaceId)
+    .returningAll()
+    .executeTakeFirst();
+  return row ? mapWorkspaceRow(row) : null;
 }
 
 export async function checkMembership(workspaceId: string, userId: string) {
-  const result = await query(
-    "SELECT trust_level FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
-    [workspaceId, userId],
-  );
-  return result.rows.length > 0 ? (result.rows[0].trust_level as string) : null;
+  const row = await db
+    .selectFrom("workspace_members")
+    .select("trust_level")
+    .where("workspace_id", "=", workspaceId)
+    .where("user_id", "=", userId)
+    .executeTakeFirst();
+  return row?.trust_level ?? null;
 }
 
 export async function addMember(input: AddMemberInput) {
   const result = await transaction(async (client: pg.PoolClient) => {
-    const memberResult = await client.query(
-      `INSERT INTO workspace_members (workspace_id, user_id, trust_level)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (workspace_id, user_id) DO NOTHING
-       RETURNING *`,
-      [input.workspaceId, input.userId, input.trustLevel],
+    const runner = { query: client.query.bind(client) as typeof query };
+    const memberRow = await executeTakeFirst(
+      runner,
+      db
+        .insertInto("workspace_members")
+        .values({
+          workspace_id: input.workspaceId,
+          user_id: input.userId,
+          trust_level: input.trustLevel,
+        })
+        .onConflict((oc) => oc.columns(["workspace_id", "user_id"]).doNothing())
+        .returningAll(),
     );
 
-    if (memberResult.rows.length === 0) {
+    if (!memberRow) {
       return null;
     }
 
@@ -710,7 +736,7 @@ export async function addMember(input: AddMemberInput) {
     );
 
     return {
-      member: mapMemberRow(memberResult.rows[0]),
+      member: mapMemberRow(memberRow),
       authzEntryIds,
     };
   });
@@ -724,27 +750,39 @@ export async function addMember(input: AddMemberInput) {
 }
 
 export async function listMembers(workspaceId: string) {
-  const result = await query(
-    `SELECT
-        wm.*,
-        u.name AS user_name,
-        u.email AS user_email,
-        u.avatar_file_id,
-        COALESCE(access_map.access_keys, '{}'::text[]) AS access_keys
-     FROM workspace_members wm
-     INNER JOIN users u ON u.id = wm.user_id
-     LEFT JOIN (
-       SELECT workspace_id, user_id, ARRAY_AGG(access_key ORDER BY access_key) AS access_keys
-       FROM workspace_access_bindings
-       GROUP BY workspace_id, user_id
-     ) access_map
-       ON access_map.workspace_id = wm.workspace_id
-      AND access_map.user_id = wm.user_id
-     WHERE wm.workspace_id = $1
-     ORDER BY wm.joined_at ASC`,
-    [workspaceId],
-  );
-  return result.rows.map((row) => ({
+  const accessMap = db
+    .selectFrom("workspace_access_bindings")
+    .select([
+      "workspace_id",
+      "user_id",
+      sql<string[]>`array_agg(access_key order by access_key)`.as("access_keys"),
+    ])
+    .groupBy(["workspace_id", "user_id"])
+    .as("access_map");
+
+  const rows = await db
+    .selectFrom("workspace_members as wm")
+    .innerJoin("users as u", "u.id", "wm.user_id")
+    .leftJoin(accessMap, (join) =>
+      join
+        .onRef("access_map.workspace_id", "=", "wm.workspace_id")
+        .onRef("access_map.user_id", "=", "wm.user_id"),
+    )
+    .select([
+      "wm.id",
+      "wm.workspace_id",
+      "wm.user_id",
+      "wm.trust_level",
+      "wm.joined_at",
+      "u.name as user_name",
+      "u.email as user_email",
+      "u.avatar_file_id",
+      sql<string[]>`COALESCE(access_map.access_keys, '{}'::text[])`.as("access_keys"),
+    ])
+    .where("wm.workspace_id", "=", workspaceId)
+    .orderBy("wm.joined_at", "asc")
+    .execute();
+  return rows.map((row) => ({
     ...mapMemberRow(row),
     userName: row.user_name,
     userEmail: row.user_email,
@@ -754,30 +792,33 @@ export async function listMembers(workspaceId: string) {
 }
 
 export async function listWorkspaceAccessBindings(workspaceId: string) {
-  const result = await query(
-    `SELECT
-        wab.workspace_id,
-        wab.user_id,
-        wab.access_key,
-        wab.assigned_by,
-        wab.metadata,
-        wab.created_at,
-        wab.updated_at,
-        u.name AS user_name,
-        u.email AS user_email,
-        u.avatar_file_id,
-        wm.trust_level
-     FROM workspace_access_bindings wab
-     JOIN users u ON u.id = wab.user_id
-     JOIN workspace_members wm
-       ON wm.workspace_id = wab.workspace_id
-      AND wm.user_id = wab.user_id
-     WHERE wab.workspace_id = $1
-     ORDER BY wab.access_key ASC, wab.created_at ASC`,
-    [workspaceId],
-  );
+  const rows = await db
+    .selectFrom("workspace_access_bindings as wab")
+    .innerJoin("users as u", "u.id", "wab.user_id")
+    .innerJoin("workspace_members as wm", (join) =>
+      join
+        .onRef("wm.workspace_id", "=", "wab.workspace_id")
+        .onRef("wm.user_id", "=", "wab.user_id"),
+    )
+    .select([
+      "wab.workspace_id",
+      "wab.user_id",
+      "wab.access_key",
+      "wab.assigned_by",
+      "wab.metadata",
+      "wab.created_at",
+      "wab.updated_at",
+      "u.name as user_name",
+      "u.email as user_email",
+      "u.avatar_file_id",
+      "wm.trust_level",
+    ])
+    .where("wab.workspace_id", "=", workspaceId)
+    .orderBy("wab.access_key", "asc")
+    .orderBy("wab.created_at", "asc")
+    .execute();
 
-  return result.rows.map((row) => ({
+  return rows.map((row) => ({
     workspaceId: row.workspace_id,
     userId: row.user_id,
     accessKey: row.access_key as WorkspaceAccessKey,
@@ -799,34 +840,34 @@ export async function grantWorkspaceAccess(input: {
   assignedBy: string;
   metadata?: Record<string, unknown>;
 }) {
-  const membership = await query(
-    `SELECT 1
-     FROM workspace_members
-     WHERE workspace_id = $1
-       AND user_id = $2
-     LIMIT 1`,
-    [input.workspaceId, input.userId],
-  );
+  const membership = await db
+    .selectFrom("workspace_members")
+    .select("id")
+    .where("workspace_id", "=", input.workspaceId)
+    .where("user_id", "=", input.userId)
+    .limit(1)
+    .executeTakeFirst();
 
-  if (membership.rows.length === 0) {
+  if (!membership) {
     throw new Error("User is not a member of this workspace");
   }
 
-  const result = await query(
-    `INSERT INTO workspace_access_bindings (workspace_id, user_id, access_key, assigned_by, metadata)
-     VALUES ($1, $2, $3, $4, $5::jsonb)
-     ON CONFLICT (workspace_id, user_id, access_key) DO NOTHING
-     RETURNING *`,
-    [
-      input.workspaceId,
-      input.userId,
-      input.accessKey,
-      input.assignedBy,
-      JSON.stringify(input.metadata || {}),
-    ],
-  );
+  const row = await db
+    .insertInto("workspace_access_bindings")
+    .values({
+      workspace_id: input.workspaceId,
+      user_id: input.userId,
+      access_key: input.accessKey,
+      assigned_by: input.assignedBy,
+      metadata: (input.metadata || {}) as TableInsert<'workspace_access_bindings'>['metadata'],
+    })
+    .onConflict((oc) =>
+      oc.columns(["workspace_id", "user_id", "access_key"]).doNothing(),
+    )
+    .returningAll()
+    .executeTakeFirst();
 
-  if (result.rows.length === 0) {
+  if (!row) {
     throw new Error("Access already granted");
   }
 
@@ -844,13 +885,13 @@ export async function grantWorkspaceAccess(input: {
   await flushQueuedAuthzEntries(authzEntryIds, "workspace.access.grant");
 
   return {
-    workspaceId: result.rows[0].workspace_id,
-    userId: result.rows[0].user_id,
-    accessKey: result.rows[0].access_key as WorkspaceAccessKey,
-    assignedBy: result.rows[0].assigned_by ?? null,
-    metadata: result.rows[0].metadata ?? {},
-    createdAt: result.rows[0].created_at,
-    updatedAt: result.rows[0].updated_at,
+    workspaceId: row.workspace_id,
+    userId: row.user_id,
+    accessKey: row.access_key as WorkspaceAccessKey,
+    assignedBy: row.assigned_by ?? null,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -859,16 +900,15 @@ export async function revokeWorkspaceAccess(
   userId: string,
   accessKey: WorkspaceAccessKey,
 ) {
-  const result = await query(
-    `DELETE FROM workspace_access_bindings
-     WHERE workspace_id = $1
-       AND user_id = $2
-       AND access_key = $3
-     RETURNING workspace_id, user_id, access_key`,
-    [workspaceId, userId, accessKey],
-  );
+  const row = await db
+    .deleteFrom("workspace_access_bindings")
+    .where("workspace_id", "=", workspaceId)
+    .where("user_id", "=", userId)
+    .where("access_key", "=", accessKey)
+    .returning(["workspace_id", "user_id", "access_key"])
+    .executeTakeFirst();
 
-  if (result.rows.length === 0) {
+  if (!row) {
     throw new Error("Access grant not found");
   }
 
@@ -891,8 +931,8 @@ function mapWorkspaceRow(row: any) {
     slug: row.slug,
     description: row.description ?? null,
     ownerId: row.owner_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at),
   };
 }
 
@@ -917,8 +957,8 @@ function mapActorRow(row: any, docs: ActorDoc[]) {
     },
     currentVersion: Number(row.current_version || 1),
     isActive: row.is_active,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at),
   };
 }
 
@@ -929,7 +969,7 @@ function mapMemberRow(row: any) {
     userId: row.user_id,
     trustLevel: row.trust_level,
     accessKeys: Array.isArray(row.access_keys) ? row.access_keys : [],
-    joinedAt: row.joined_at,
+    joinedAt: toIsoString(row.joined_at),
   };
 }
 
@@ -955,8 +995,8 @@ function mapWorkspaceChiefActorPreferenceRow(
               : undefined,
           }
         : undefined,
-    createdAt: row.created_at || undefined,
-    updatedAt: row.updated_at || undefined,
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at),
   };
 }
 

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { query } from '../../infrastructure/database/index.js';
+import { db } from '../../infrastructure/database/kysely.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import { requireRequestAction } from '../access/guards.js';
@@ -31,55 +31,55 @@ export default async function auditModule(app: FastifyInstance) {
 
     const qs = querySchema.parse(request.query);
 
-    const conditions = ['workspace_id = $1'];
-    const params: any[] = [workspaceId];
-    let paramIdx = 2;
+    const offset = (qs.page - 1) * qs.pageSize;
+    let countQuery = db
+      .selectFrom('audit_logs as al')
+      .select(({ fn }) => fn.countAll<string>().as('count'))
+      .where('al.workspace_id', '=', workspaceId);
+    let dataQuery = db
+      .selectFrom('audit_logs as al')
+      .leftJoin('users as u', 'u.id', 'al.user_id')
+      .leftJoin('actors as a', 'a.id', 'al.actor_id')
+      .select([
+        'al.id',
+        'al.action',
+        'al.resource_type as resourceType',
+        'al.resource_id as resourceId',
+        'al.user_id as userId',
+        'al.actor_id as actorId',
+        'al.details',
+        'al.ip_address as ipAddress',
+        'al.created_at as createdAt',
+        'u.email as userName',
+        'a.name as actorName',
+      ])
+      .where('al.workspace_id', '=', workspaceId);
 
     if (qs.action) {
-      conditions.push(`action = $${paramIdx}`);
-      params.push(qs.action);
-      paramIdx++;
+      countQuery = countQuery.where('al.action', '=', qs.action);
+      dataQuery = dataQuery.where('al.action', '=', qs.action);
     }
     if (qs.resourceType) {
-      conditions.push(`resource_type = $${paramIdx}`);
-      params.push(qs.resourceType);
-      paramIdx++;
+      countQuery = countQuery.where('al.resource_type', '=', qs.resourceType);
+      dataQuery = dataQuery.where('al.resource_type', '=', qs.resourceType);
     }
     if (qs.resourceId) {
-      conditions.push(`resource_id = $${paramIdx}`);
-      params.push(qs.resourceId);
-      paramIdx++;
+      countQuery = countQuery.where('al.resource_id', '=', qs.resourceId);
+      dataQuery = dataQuery.where('al.resource_id', '=', qs.resourceId);
     }
 
-    const where = conditions.join(' AND ');
-    const offset = (qs.page - 1) * qs.pageSize;
-
-    const [countResult, dataResult] = await Promise.all([
-      query(`SELECT count(*) FROM audit_logs WHERE ${where}`, params),
-      query(
-        `SELECT al.id, al.action,
-                al.resource_type AS "resourceType",
-                al.resource_id AS "resourceId",
-                al.user_id AS "userId",
-                al.actor_id AS "actorId",
-                al.details,
-                al.ip_address AS "ipAddress",
-                al.created_at AS "createdAt",
-                u.email AS "userName",
-                a.name AS "actorName"
-         FROM audit_logs al
-         LEFT JOIN users u ON u.id = al.user_id
-         LEFT JOIN actors a ON a.id = al.actor_id
-         WHERE ${where.replace(/\b(workspace_id|action|resource_type|resource_id)\b/g, 'al.$&')}
-         ORDER BY al.created_at DESC
-         LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
-        [...params, qs.pageSize, offset]
-      ),
+    const [countResult, items] = await Promise.all([
+      countQuery.executeTakeFirst(),
+      dataQuery
+        .orderBy('al.created_at', 'desc')
+        .limit(qs.pageSize)
+        .offset(offset)
+        .execute(),
     ]);
 
     return {
-      items: dataResult.rows,
-      total: parseInt(countResult.rows[0].count),
+      items,
+      total: parseInt(countResult?.count || '0', 10),
       page: qs.page,
       pageSize: qs.pageSize,
     };

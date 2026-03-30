@@ -12,8 +12,14 @@ import type {
   MemoryStatus,
   UUID,
 } from '@synapse/shared';
+import { sql, type RawBuilder } from 'kysely';
 import { extractText, normalizeCanonicalContentBlocks, textBlocks } from '@synapse/shared';
-import { query, transaction } from '../../infrastructure/database/index.js';
+import { transaction } from '../../infrastructure/database/index.js';
+import {
+  db,
+  executeCompiledQuery,
+  type TableInsert,
+} from '../../infrastructure/database/kysely.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { config } from '../../config/index.js';
 import {
@@ -57,8 +63,8 @@ type MemoryRow = {
   source_turn_id: string | null;
   supersedes_memory_id: string | null;
   metadata: Record<string, unknown> | string | null;
-  created_at: string;
-  updated_at: string;
+  created_at: string | Date;
+  updated_at: string | Date;
   actor_name?: string | null;
   conversation_title?: string | null;
   user_name?: string | null;
@@ -113,6 +119,11 @@ function parseJsonObject(value: unknown): Record<string, unknown> {
     }
   }
   return value as Record<string, unknown>;
+}
+
+function toIsoString(value: string | Date | null | undefined) {
+  if (!value) return undefined;
+  return value instanceof Date ? value.toISOString() : value;
 }
 
 function formatEmbeddingVector(values: number[]) {
@@ -263,7 +274,7 @@ function computeFinalScore(
     importanceScore * 0.12 +
     confidenceScore * 0.08 +
     deriveScopeBoost(memory, target) +
-    deriveRecencyBoost(row.updated_at)
+    deriveRecencyBoost(toIsoString(row.updated_at)!)
   );
 }
 
@@ -289,8 +300,8 @@ function mapMemoryRow(row: MemoryRow, contentBlocks: CanonicalContentBlock[]): M
     sourceTurnId: row.source_turn_id ?? undefined,
     supersedesMemoryId: row.supersedes_memory_id ?? undefined,
     metadata: parseJsonObject(row.metadata),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: toIsoString(row.created_at)!,
+    updatedAt: toIsoString(row.updated_at)!,
     actorName: row.actor_name ?? undefined,
     conversationTitle: row.conversation_title ?? undefined,
     userName: row.user_name ?? undefined,
@@ -302,21 +313,30 @@ async function loadMemoryEntriesFromRows(rows: MemoryRow[]) {
 
   const memoryIds = rows.map((row) => row.id);
 
-  const partsResult = await query<MemoryPartRow>(
-    `SELECT mep.*,
-            f.original_name,
-            f.stored_name,
-            f.mime_type AS file_mime_type,
-            f.size_bytes
-     FROM memory_entry_parts mep
-     LEFT JOIN files f ON f.id = mep.file_id
-     WHERE mep.memory_entry_id = ANY($1)
-     ORDER BY mep.memory_entry_id, mep.ordinal ASC`,
-    [memoryIds],
-  );
+  const partsResult = await db
+    .selectFrom('memory_entry_parts as mep')
+    .leftJoin('files as f', 'f.id', 'mep.file_id')
+    .select([
+      'mep.memory_entry_id',
+      'mep.part_type',
+      'mep.text_value',
+      'mep.file_id',
+      'mep.json_value',
+      'mep.mime_type',
+      'mep.name',
+      'mep.metadata',
+      'f.original_name',
+      'f.stored_name',
+      'f.mime_type as file_mime_type',
+      'f.size_bytes',
+    ])
+    .where('mep.memory_entry_id', 'in', memoryIds)
+    .orderBy('mep.memory_entry_id', 'asc')
+    .orderBy('mep.ordinal', 'asc')
+    .execute();
 
   const partsByMemoryId = new Map<string, MemoryPartRow[]>();
-  for (const row of partsResult.rows) {
+  for (const row of partsResult as MemoryPartRow[]) {
     if (!partsByMemoryId.has(row.memory_entry_id)) {
       partsByMemoryId.set(row.memory_entry_id, []);
     }
@@ -327,20 +347,22 @@ async function loadMemoryEntriesFromRows(rows: MemoryRow[]) {
 }
 
 async function getMemoryRow(workspaceId: string, memoryId: string) {
-  const result = await query<MemoryRow>(
-    `SELECT me.*,
-            a.name AS actor_name,
-            c.title AS conversation_title,
-            u.name AS user_name
-     FROM memory_entries me
-     LEFT JOIN actors a ON a.id = me.owner_actor_id
-     LEFT JOIN conversations c ON c.id = me.owner_conversation_id
-     LEFT JOIN users u ON u.id = me.owner_user_id
-     WHERE me.workspace_id = $1 AND me.id = $2
-     LIMIT 1`,
-    [workspaceId, memoryId],
-  );
-  return result.rows[0] ?? null;
+  const row = await db
+    .selectFrom('memory_entries as me')
+    .leftJoin('actors as a', 'a.id', 'me.owner_actor_id')
+    .leftJoin('conversations as c', 'c.id', 'me.owner_conversation_id')
+    .leftJoin('users as u', 'u.id', 'me.owner_user_id')
+    .selectAll('me')
+    .select([
+      'a.name as actor_name',
+      'c.title as conversation_title',
+      'u.name as user_name',
+    ])
+    .where('me.workspace_id', '=', workspaceId)
+    .where('me.id', '=', memoryId)
+    .limit(1)
+    .executeTakeFirst();
+  return (row as MemoryRow | undefined) ?? null;
 }
 
 function validateMemoryOwnerBinding(input: {
@@ -443,58 +465,54 @@ function buildMemoryAuthzRelations(params: {
 }
 
 async function assertUserExists(userId: string) {
-  const result = await query(
-    `SELECT 1
-     FROM users
-     WHERE id = $1
-     LIMIT 1`,
-    [userId],
-  );
-  if (result.rows.length === 0) {
+  const row = await db
+    .selectFrom('users')
+    .select('id')
+    .where('id', '=', userId)
+    .limit(1)
+    .executeTakeFirst();
+  if (!row) {
     throw new MemoryError('User not found', 404);
   }
 }
 
 async function assertActorInWorkspace(workspaceId: string, actorId: string) {
-  const result = await query(
-    `SELECT 1
-     FROM actors
-     WHERE id = $1
-       AND workspace_id = $2
-       AND is_active = true
-     LIMIT 1`,
-    [actorId, workspaceId],
-  );
-  if (result.rows.length === 0) {
+  const row = await db
+    .selectFrom('actors')
+    .select('id')
+    .where('id', '=', actorId)
+    .where('workspace_id', '=', workspaceId)
+    .where('is_active', '=', true)
+    .limit(1)
+    .executeTakeFirst();
+  if (!row) {
     throw new MemoryError('Actor not found in this workspace', 404);
   }
 }
 
 async function assertConversationInWorkspace(workspaceId: string, conversationId: string) {
-  const result = await query(
-    `SELECT 1
-     FROM conversations
-     WHERE id = $1
-       AND workspace_id = $2
-     LIMIT 1`,
-    [conversationId, workspaceId],
-  );
-  if (result.rows.length === 0) {
+  const row = await db
+    .selectFrom('conversations')
+    .select('id')
+    .where('id', '=', conversationId)
+    .where('workspace_id', '=', workspaceId)
+    .limit(1)
+    .executeTakeFirst();
+  if (!row) {
     throw new MemoryError('Conversation not found in this workspace', 404);
   }
 }
 
 async function assertActorInConversation(conversationId: string, actorId: string) {
-  const result = await query(
-    `SELECT 1
-     FROM conversation_members
-     WHERE conversation_id = $1
-       AND actor_id = $2
-       AND state = 'active'
-     LIMIT 1`,
-    [conversationId, actorId],
-  );
-  if (result.rows.length === 0) {
+  const row = await db
+    .selectFrom('conversation_members')
+    .select('id')
+    .where('conversation_id', '=', conversationId)
+    .where('actor_id', '=', actorId)
+    .where('state', '=', 'active')
+    .limit(1)
+    .executeTakeFirst();
+  if (!row) {
     throw new MemoryError('Actor is not an active member of this conversation', 400);
   }
 }
@@ -569,36 +587,49 @@ async function normalizeMemoryContent(input: {
   };
 }
 
-async function insertMemoryParts(client: { query: (...args: any[]) => Promise<any> }, memoryId: string, parts: DraftConversationPart[]) {
+async function insertMemoryParts(
+  client: { query: (...args: any[]) => Promise<any> },
+  memoryId: string,
+  parts: DraftConversationPart[],
+) {
   for (let ordinal = 0; ordinal < parts.length; ordinal += 1) {
     const part = parts[ordinal];
-    await client.query(
-      `INSERT INTO memory_entry_parts
-         (id, memory_entry_id, ordinal, part_type, text_value, file_id, json_value, mime_type, name, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [
-        uuidv4(),
-        memoryId,
-        ordinal,
-        part.type,
-        part.type === 'text' ? part.text || '' : null,
-        part.type === 'file_ref' ? part.fileId || null : null,
-        part.type === 'json' ? JSON.stringify(part.json ?? {}) : null,
-        part.mimeType || null,
-        part.name || null,
-        JSON.stringify(part.metadata || {}),
-      ],
+    await executeCompiledQuery(
+      client,
+      db
+        .insertInto('memory_entry_parts')
+        .values({
+          id: uuidv4(),
+          memory_entry_id: memoryId,
+          ordinal,
+          part_type: part.type,
+          text_value: part.type === 'text' ? part.text || '' : null,
+          file_id: part.type === 'file_ref' ? part.fileId || null : null,
+          json_value:
+            part.type === 'json'
+              ? ((part.json ?? {}) as TableInsert<'memory_entry_parts'>['json_value'])
+              : null,
+          mime_type: part.mimeType || null,
+          name: part.name || null,
+          metadata: (part.metadata || {}) as TableInsert<'memory_entry_parts'>['metadata'],
+        }),
     );
   }
 }
 
-async function maybeMarkSuperseded(client: { query: (...args: any[]) => Promise<any> }, memoryId?: string) {
+async function maybeMarkSuperseded(
+  client: { query: (...args: any[]) => Promise<any> },
+  memoryId?: string,
+) {
   if (!memoryId) return;
-  await client.query(
-    `UPDATE memory_entries
-     SET status = 'superseded'
-     WHERE id = $1`,
-    [memoryId],
+  await executeCompiledQuery(
+    client,
+    db
+      .updateTable('memory_entries')
+      .set({
+        status: 'superseded',
+      })
+      .where('id', '=', memoryId),
   );
 }
 
@@ -670,121 +701,89 @@ export interface RecallMemoriesInput extends SearchMemoriesInput {
   queryBlocks?: CanonicalContentBlockInput[];
 }
 
-function buildVisibilityClause(target: MemoryAccessTarget, startIndex: number, alias = 'me') {
-  const ownerClauses = [`${alias}.owner_scope = 'workspace'`];
-  const params: unknown[] = [];
-  let index = startIndex;
+function buildVisibilityClause(target: MemoryAccessTarget, alias = 'me') {
+  const table = sql.raw(alias);
+  const ownerClauses: RawBuilder<unknown>[] = [
+    sql`${table}.owner_scope = 'workspace'`,
+  ];
 
   if (target.conversationId) {
-    ownerClauses.push(`(${alias}.owner_scope = 'conversation' AND ${alias}.owner_conversation_id = $${index})`);
-    params.push(target.conversationId);
-    index += 1;
+    ownerClauses.push(
+      sql`(${table}.owner_scope = 'conversation' AND ${table}.owner_conversation_id = ${target.conversationId})`,
+    );
   }
 
   if (target.actorId) {
-    ownerClauses.push(`(${alias}.owner_scope = 'actor_global' AND ${alias}.owner_actor_id = $${index})`);
-    params.push(target.actorId);
-    index += 1;
+    ownerClauses.push(
+      sql`(${table}.owner_scope = 'actor_global' AND ${table}.owner_actor_id = ${target.actorId})`,
+    );
   }
 
   if (target.actorId && target.conversationId) {
     ownerClauses.push(
-      `(${alias}.owner_scope = 'actor_conversation' AND ${alias}.owner_actor_id = $${index} AND ${alias}.owner_conversation_id = $${index + 1})`,
+      sql`(${table}.owner_scope = 'actor_conversation' AND ${table}.owner_actor_id = ${target.actorId} AND ${table}.owner_conversation_id = ${target.conversationId})`,
     );
-    params.push(target.actorId, target.conversationId);
-    index += 2;
   }
 
   if (target.userId) {
     ownerClauses.push(
-      `(${alias}.owner_scope = 'user' AND ${alias}.owner_user_id = $${index})`,
+      sql`(${table}.owner_scope = 'user' AND ${table}.owner_user_id = ${target.userId})`,
     );
-    params.push(target.userId);
-    index += 1;
   }
 
-  const clause = `(${ownerClauses.join(' OR ')})`;
-
-  return { clause, params, nextIndex: index };
+  return sql`(${sql.join(ownerClauses, sql` OR `)})`;
 }
 
 function buildListWhereClause(workspaceId: string, input: ListMemoriesInput) {
-  const conditions = ['me.workspace_id = $1'];
-  const params: unknown[] = [workspaceId];
-  let index = 2;
+  const conditions: RawBuilder<unknown>[] = [sql`me.workspace_id = ${workspaceId}`];
 
   if (input.actorId || input.conversationId || input.userId) {
-    const visibility = buildVisibilityClause(input, index);
-    conditions.push(visibility.clause);
-    params.push(...visibility.params);
-    index = visibility.nextIndex;
+    conditions.push(buildVisibilityClause(input));
   }
 
   if (input.ownerScope) {
-    conditions.push(`me.owner_scope = $${index}`);
-    params.push(input.ownerScope);
-    index += 1;
+    conditions.push(sql`me.owner_scope = ${input.ownerScope}`);
   }
   if (input.category) {
-    conditions.push(`me.category = $${index}`);
-    params.push(input.category);
-    index += 1;
+    conditions.push(sql`me.category = ${input.category}`);
   }
   if (input.status) {
-    conditions.push(`me.status = $${index}`);
-    params.push(input.status);
-    index += 1;
+    conditions.push(sql`me.status = ${input.status}`);
   }
   if (input.stability) {
-    conditions.push(`me.stability = $${index}`);
-    params.push(input.stability);
-    index += 1;
+    conditions.push(sql`me.stability = ${input.stability}`);
   }
   if (input.tags && input.tags.length > 0) {
-    conditions.push(`me.tags && $${index}`);
-    params.push(input.tags);
-    index += 1;
+    conditions.push(sql`me.tags && ${input.tags}`);
   }
 
-  return { whereClause: conditions.join(' AND '), params, nextIndex: index };
+  return sql`${sql.join(conditions, sql` AND `)}`;
 }
 
 function buildSearchFilters(workspaceId: string, input: SearchMemoriesInput, alias = 'me') {
-  const conditions = [`${alias}.workspace_id = $1`];
-  const params: unknown[] = [workspaceId];
-  let index = 2;
+  const table = sql.raw(alias);
+  const conditions: RawBuilder<unknown>[] = [sql`${table}.workspace_id = ${workspaceId}`];
 
   if (input.actorId || input.conversationId || input.userId) {
-    const visibility = buildVisibilityClause(input, index, alias);
-    conditions.push(visibility.clause);
-    params.push(...visibility.params);
-    index = visibility.nextIndex;
+    conditions.push(buildVisibilityClause(input, alias));
   }
 
   const scopes = input.scopes && input.scopes.length > 0 ? input.scopes : undefined;
   if (scopes) {
-    conditions.push(`${alias}.owner_scope = ANY($${index}::text[])`);
-    params.push(scopes);
-    index += 1;
+    conditions.push(sql`${table}.owner_scope = ANY(${scopes}::text[])`);
   }
 
   if (input.categories && input.categories.length > 0) {
-    conditions.push(`${alias}.category = ANY($${index}::text[])`);
-    params.push(input.categories);
-    index += 1;
+    conditions.push(sql`${table}.category = ANY(${input.categories}::text[])`);
   }
 
   const statuses = input.statuses && input.statuses.length > 0 ? input.statuses : ['established'];
-  conditions.push(`${alias}.status = ANY($${index}::text[])`);
-  params.push(statuses);
-  index += 1;
+  conditions.push(sql`${table}.status = ANY(${statuses}::text[])`);
 
   const stabilities = input.stabilities && input.stabilities.length > 0 ? input.stabilities : ['durable'];
-  conditions.push(`${alias}.stability = ANY($${index}::text[])`);
-  params.push(stabilities);
-  index += 1;
+  conditions.push(sql`${table}.stability = ANY(${stabilities}::text[])`);
 
-  return { whereClause: conditions.join(' AND '), params, nextIndex: index };
+  return sql`${sql.join(conditions, sql` AND `)}`;
 }
 
 async function generateSearchEmbedding(queryText: string) {
@@ -823,91 +822,89 @@ async function generateSearchEmbedding(queryText: string) {
 }
 
 async function searchLexicalCandidates(workspaceId: string, input: SearchMemoriesInput, candidateLimit: number) {
-  const { whereClause, params, nextIndex } = buildSearchFilters(workspaceId, input);
+  const whereClause = buildSearchFilters(workspaceId, input);
   const queryText = buildLexicalSearchQuery(input.queryText);
   if (!queryText) return [];
-  const result = await query<SearchCandidateRow>(
-    `SELECT me.*,
-            a.name AS actor_name,
-            c.title AS conversation_title,
-            u.name AS user_name,
-            mic.id AS matched_chunk_id,
-            mic.search_text AS chunk_search_text,
-            ts_rank_cd(to_tsvector('simple', mic.search_text), websearch_to_tsquery('simple', $${nextIndex})) AS text_score,
-            similarity(mic.search_text, $${nextIndex}) AS similarity_score,
-            NULL::real AS vector_score
-     FROM memory_index_chunks mic
-     JOIN memory_entries me ON me.id = mic.memory_entry_id
-     LEFT JOIN actors a ON a.id = me.owner_actor_id
-     LEFT JOIN conversations c ON c.id = me.owner_conversation_id
-     LEFT JOIN users u ON u.id = me.owner_user_id
-     WHERE ${whereClause}
-       AND (
-         to_tsvector('simple', mic.search_text) @@ websearch_to_tsquery('simple', $${nextIndex})
-         OR similarity(mic.search_text, $${nextIndex}) > 0.08
-       )
-     ORDER BY text_score DESC, similarity_score DESC, me.importance DESC, me.updated_at DESC
-     LIMIT $${nextIndex + 1}`,
-    [...params, queryText, candidateLimit],
+  const result = await db.executeQuery(
+    sql<SearchCandidateRow>`SELECT me.*,
+        a.name AS actor_name,
+        c.title AS conversation_title,
+        u.name AS user_name,
+        mic.id AS matched_chunk_id,
+        mic.search_text AS chunk_search_text,
+        ts_rank_cd(to_tsvector('simple', mic.search_text), websearch_to_tsquery('simple', ${queryText})) AS text_score,
+        similarity(mic.search_text, ${queryText}) AS similarity_score,
+        NULL::real AS vector_score
+      FROM memory_index_chunks mic
+      JOIN memory_entries me ON me.id = mic.memory_entry_id
+      LEFT JOIN actors a ON a.id = me.owner_actor_id
+      LEFT JOIN conversations c ON c.id = me.owner_conversation_id
+      LEFT JOIN users u ON u.id = me.owner_user_id
+      WHERE ${whereClause}
+        AND (
+          to_tsvector('simple', mic.search_text) @@ websearch_to_tsquery('simple', ${queryText})
+          OR similarity(mic.search_text, ${queryText}) > 0.08
+        )
+      ORDER BY text_score DESC, similarity_score DESC, me.importance DESC, me.updated_at DESC
+      LIMIT ${candidateLimit}`.compile(db),
   );
 
   return result.rows;
 }
 
 async function searchFallbackCandidates(workspaceId: string, input: SearchMemoriesInput, candidateLimit: number) {
-  const { whereClause, params, nextIndex } = buildSearchFilters(workspaceId, input);
-  const result = await query<SearchCandidateRow>(
-    `SELECT me.*,
-            a.name AS actor_name,
-            c.title AS conversation_title,
-            u.name AS user_name,
-            mic.id AS matched_chunk_id,
-            COALESCE(mic.search_text, me.search_text) AS chunk_search_text,
-            NULL::real AS text_score,
-            NULL::real AS similarity_score,
-            NULL::real AS vector_score
-     FROM memory_entries me
-     LEFT JOIN actors a ON a.id = me.owner_actor_id
-     LEFT JOIN conversations c ON c.id = me.owner_conversation_id
-     LEFT JOIN users u ON u.id = me.owner_user_id
-     LEFT JOIN LATERAL (
-       SELECT id, search_text
-       FROM memory_index_chunks
-       WHERE memory_entry_id = me.id
-       ORDER BY chunk_index ASC
-       LIMIT 1
-     ) mic ON TRUE
-     WHERE ${whereClause}
-     ORDER BY me.importance DESC, me.confidence DESC, me.updated_at DESC
-     LIMIT $${nextIndex}`,
-    [...params, candidateLimit],
+  const whereClause = buildSearchFilters(workspaceId, input);
+  const result = await db.executeQuery(
+    sql<SearchCandidateRow>`SELECT me.*,
+        a.name AS actor_name,
+        c.title AS conversation_title,
+        u.name AS user_name,
+        mic.id AS matched_chunk_id,
+        COALESCE(mic.search_text, me.search_text) AS chunk_search_text,
+        NULL::real AS text_score,
+        NULL::real AS similarity_score,
+        NULL::real AS vector_score
+      FROM memory_entries me
+      LEFT JOIN actors a ON a.id = me.owner_actor_id
+      LEFT JOIN conversations c ON c.id = me.owner_conversation_id
+      LEFT JOIN users u ON u.id = me.owner_user_id
+      LEFT JOIN LATERAL (
+        SELECT id, search_text
+        FROM memory_index_chunks
+        WHERE memory_entry_id = me.id
+        ORDER BY chunk_index ASC
+        LIMIT 1
+      ) mic ON TRUE
+      WHERE ${whereClause}
+      ORDER BY me.importance DESC, me.confidence DESC, me.updated_at DESC
+      LIMIT ${candidateLimit}`.compile(db),
   );
 
   return result.rows;
 }
 
 async function searchVectorCandidates(workspaceId: string, input: SearchMemoriesInput, embedding: number[], candidateLimit: number) {
-  const { whereClause, params, nextIndex } = buildSearchFilters(workspaceId, input);
-  const result = await query<SearchCandidateRow>(
-    `SELECT me.*,
-            a.name AS actor_name,
-            c.title AS conversation_title,
-            u.name AS user_name,
-            mic.id AS matched_chunk_id,
-            mic.search_text AS chunk_search_text,
-            NULL::real AS text_score,
-            NULL::real AS similarity_score,
-            (1 - (mic.embedding <=> $${nextIndex}::vector))::real AS vector_score
-     FROM memory_index_chunks mic
-     JOIN memory_entries me ON me.id = mic.memory_entry_id
-     LEFT JOIN actors a ON a.id = me.owner_actor_id
-     LEFT JOIN conversations c ON c.id = me.owner_conversation_id
-     LEFT JOIN users u ON u.id = me.owner_user_id
-     WHERE ${whereClause}
-       AND mic.embedding IS NOT NULL
-     ORDER BY mic.embedding <=> $${nextIndex}::vector ASC
-     LIMIT $${nextIndex + 1}`,
-    [...params, formatEmbeddingVector(embedding), candidateLimit],
+  const whereClause = buildSearchFilters(workspaceId, input);
+  const formattedEmbedding = formatEmbeddingVector(embedding);
+  const result = await db.executeQuery(
+    sql<SearchCandidateRow>`SELECT me.*,
+        a.name AS actor_name,
+        c.title AS conversation_title,
+        u.name AS user_name,
+        mic.id AS matched_chunk_id,
+        mic.search_text AS chunk_search_text,
+        NULL::real AS text_score,
+        NULL::real AS similarity_score,
+        (1 - (mic.embedding <=> ${formattedEmbedding}::vector))::real AS vector_score
+      FROM memory_index_chunks mic
+      JOIN memory_entries me ON me.id = mic.memory_entry_id
+      LEFT JOIN actors a ON a.id = me.owner_actor_id
+      LEFT JOIN conversations c ON c.id = me.owner_conversation_id
+      LEFT JOIN users u ON u.id = me.owner_user_id
+      WHERE ${whereClause}
+        AND mic.embedding IS NOT NULL
+      ORDER BY mic.embedding <=> ${formattedEmbedding}::vector ASC
+      LIMIT ${candidateLimit}`.compile(db),
   );
 
   return result.rows;
@@ -964,45 +961,47 @@ async function recordMemoryRecallRun(params: {
   const normalizedQueryBlocks = normalizeCanonicalContentBlocks(params.queryBlocks || []);
   const runId = uuidv4();
   await transaction(async (client) => {
-    await client.query(
-      `INSERT INTO memory_recall_runs
-         (id, workspace_id, actor_id, conversation_id, user_id, recall_type, query_text, query_blocks, metadata, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
-      [
-        runId,
-        params.workspaceId,
-        params.actorId || null,
-        params.conversationId || null,
-        params.userId || null,
-        params.recallType,
-        params.queryText,
-        JSON.stringify(normalizedQueryBlocks),
-        JSON.stringify(params.metadata || {}),
-      ],
+    await executeCompiledQuery(
+      client,
+      db
+        .insertInto('memory_recall_runs')
+        .values({
+          id: runId,
+          workspace_id: params.workspaceId,
+          actor_id: params.actorId || null,
+          conversation_id: params.conversationId || null,
+          user_id: params.userId || null,
+          recall_type: params.recallType,
+          query_text: params.queryText,
+          query_blocks: normalizedQueryBlocks as unknown as TableInsert<'memory_recall_runs'>['query_blocks'],
+          metadata: (params.metadata || {}) as TableInsert<'memory_recall_runs'>['metadata'],
+          created_at: sql`NOW()`,
+        }),
     );
 
     for (const result of params.results) {
-      await client.query(
-        `INSERT INTO memory_recall_run_results
-           (id, run_id, memory_entry_id, matched_chunk_id, rank, final_score, vector_score, text_score, similarity_score, matched_terms, recall_reason, metadata, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
-        [
-          uuidv4(),
-          runId,
-          result.id,
-          result.matchedChunkId || null,
-          result.rank,
-          result.finalScore,
-          result.vectorScore ?? null,
-          result.textScore ?? null,
-          result.similarityScore ?? null,
-          result.matchedTerms ?? [],
-          result.recallReason || null,
-          JSON.stringify({
-            ownerScope: result.ownerScope,
-            category: result.category,
+      await executeCompiledQuery(
+        client,
+        db
+          .insertInto('memory_recall_run_results')
+          .values({
+            id: uuidv4(),
+            run_id: runId,
+            memory_entry_id: result.id,
+            matched_chunk_id: result.matchedChunkId || null,
+            rank: result.rank,
+            final_score: result.finalScore,
+            vector_score: result.vectorScore ?? null,
+            text_score: result.textScore ?? null,
+            similarity_score: result.similarityScore ?? null,
+            matched_terms: (result.matchedTerms ?? []) as TableInsert<'memory_recall_run_results'>['matched_terms'],
+            recall_reason: result.recallReason || null,
+            metadata: {
+              ownerScope: result.ownerScope,
+              category: result.category,
+            } as TableInsert<'memory_recall_run_results'>['metadata'],
+            created_at: sql`NOW()`,
           }),
-        ],
       );
     }
   });
@@ -1059,33 +1058,33 @@ export async function createMemory(workspaceId: UUID, input: CreateMemoryInput) 
   const memoryId = uuidv4();
 
   const authzEntryIds = await transaction(async (client) => {
-    await client.query(
-      `INSERT INTO memory_entries
-         (id, workspace_id, owner_scope, owner_actor_id, owner_conversation_id, owner_user_id, category, status, stability, importance, confidence,
-          tags, text_digest, search_text, source_item_id, source_tool_call_id, source_turn_id, supersedes_memory_id, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-               $12, $13, $14, $15, $16, $17, $18, $19, NOW(), NOW())`,
-      [
-        memoryId,
-        workspaceId,
-        input.ownerScope,
-        input.ownerActorId || null,
-        input.ownerConversationId || null,
-        input.ownerUserId || null,
-        input.category,
-        input.status || 'established',
-        input.stability || 'durable',
-        input.importance ?? 0.5,
-        input.confidence ?? 0.8,
-        input.tags || [],
-        normalizedContent.textDigest,
-        normalizedContent.searchText,
-        input.sourceItemId || null,
-        input.sourceToolCallId || null,
-        input.sourceTurnId || null,
-        input.supersedesMemoryId || null,
-        JSON.stringify(input.metadata || {}),
-      ],
+    await executeCompiledQuery(
+      client,
+      db
+        .insertInto('memory_entries')
+        .values({
+          id: memoryId,
+          workspace_id: workspaceId,
+          owner_scope: input.ownerScope,
+          owner_actor_id: input.ownerActorId || null,
+          owner_conversation_id: input.ownerConversationId || null,
+          owner_user_id: input.ownerUserId || null,
+          category: input.category,
+          status: input.status || 'established',
+          stability: input.stability || 'durable',
+          importance: input.importance ?? 0.5,
+          confidence: input.confidence ?? 0.8,
+          tags: input.tags || [],
+          text_digest: normalizedContent.textDigest,
+          search_text: normalizedContent.searchText,
+          source_item_id: input.sourceItemId || null,
+          source_tool_call_id: input.sourceToolCallId || null,
+          source_turn_id: input.sourceTurnId || null,
+          supersedes_memory_id: input.supersedesMemoryId || null,
+          metadata: (input.metadata || {}) as TableInsert<'memory_entries'>['metadata'],
+          created_at: sql`NOW()`,
+          updated_at: sql`NOW()`,
+        }),
     );
     await insertMemoryParts(client, memoryId, normalizedContent.parts);
     await maybeMarkSuperseded(client, input.supersedesMemoryId);
@@ -1169,51 +1168,38 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
   });
 
   const authzEntryIds = await transaction(async (client) => {
-    await client.query(
-      `UPDATE memory_entries
-       SET owner_scope = $3,
-           owner_actor_id = $4,
-           owner_conversation_id = $5,
-           owner_user_id = $6,
-           category = $7,
-           status = $8,
-           stability = $9,
-           importance = $10,
-           confidence = $11,
-           tags = $12,
-           text_digest = $13,
-           search_text = $14,
-           source_item_id = $15,
-           source_tool_call_id = $16,
-           source_turn_id = $17,
-           supersedes_memory_id = $18,
-           metadata = $19,
-           updated_at = NOW()
-       WHERE id = $1 AND workspace_id = $2`,
-      [
-        memoryId,
-        workspaceId,
-        ownerScope,
-        ownerActorId || null,
-        ownerConversationId || null,
-        ownerUserId || null,
-        input.category || existing.category,
-        input.status || existing.status,
-        input.stability || existing.stability,
-        input.importance ?? existing.importance,
-        input.confidence ?? existing.confidence,
-        input.tags || existing.tags,
-        normalizedContent.textDigest,
-        normalizedContent.searchText,
-        input.sourceItemId !== undefined ? input.sourceItemId : existing.sourceItemId || null,
-        input.sourceToolCallId !== undefined ? input.sourceToolCallId : existing.sourceToolCallId || null,
-        input.sourceTurnId !== undefined ? input.sourceTurnId : existing.sourceTurnId || null,
-        input.supersedesMemoryId !== undefined ? input.supersedesMemoryId : existing.supersedesMemoryId || null,
-        JSON.stringify(input.metadata || existing.metadata || {}),
-      ],
+    await executeCompiledQuery(
+      client,
+      db
+        .updateTable('memory_entries')
+        .set({
+          owner_scope: ownerScope,
+          owner_actor_id: ownerActorId || null,
+          owner_conversation_id: ownerConversationId || null,
+          owner_user_id: ownerUserId || null,
+          category: input.category || existing.category,
+          status: input.status || existing.status,
+          stability: input.stability || existing.stability,
+          importance: input.importance ?? existing.importance,
+          confidence: input.confidence ?? existing.confidence,
+          tags: input.tags || existing.tags,
+          text_digest: normalizedContent.textDigest,
+          search_text: normalizedContent.searchText,
+          source_item_id: input.sourceItemId !== undefined ? input.sourceItemId : existing.sourceItemId || null,
+          source_tool_call_id: input.sourceToolCallId !== undefined ? input.sourceToolCallId : existing.sourceToolCallId || null,
+          source_turn_id: input.sourceTurnId !== undefined ? input.sourceTurnId : existing.sourceTurnId || null,
+          supersedes_memory_id: input.supersedesMemoryId !== undefined ? input.supersedesMemoryId : existing.supersedesMemoryId || null,
+          metadata: (input.metadata || existing.metadata || {}) as TableInsert<'memory_entries'>['metadata'],
+          updated_at: sql`NOW()`,
+        })
+        .where('id', '=', memoryId)
+        .where('workspace_id', '=', workspaceId),
     );
 
-    await client.query('DELETE FROM memory_entry_parts WHERE memory_entry_id = $1', [memoryId]);
+    await executeCompiledQuery(
+      client,
+      db.deleteFrom('memory_entry_parts').where('memory_entry_id', '=', memoryId),
+    );
     await insertMemoryParts(client, memoryId, normalizedContent.parts);
     await maybeMarkSuperseded(client, input.supersedesMemoryId);
     return queueAuthzRelationships(
@@ -1253,9 +1239,12 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
 export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
   const existing = await getMemory(workspaceId, memoryId);
   const result = await transaction(async (client) => {
-    const deleted = await client.query(
-      `DELETE FROM memory_entries WHERE workspace_id = $1 AND id = $2`,
-      [workspaceId, memoryId],
+    const deleted = await executeCompiledQuery(
+      client,
+      db
+        .deleteFrom('memory_entries')
+        .where('workspace_id', '=', workspaceId)
+        .where('id', '=', memoryId),
     );
     if ((deleted.rowCount ?? 0) === 0) {
       return null;
@@ -1292,21 +1281,20 @@ export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
 }
 
 export async function listMemories(workspaceId: UUID, input: ListMemoriesInput) {
-  const { whereClause, params, nextIndex } = buildListWhereClause(workspaceId, input);
+  const whereClause = buildListWhereClause(workspaceId, input);
   const limit = Math.max(1, Math.min(200, input.limit ?? 200));
-  const result = await query<MemoryRow>(
-    `SELECT me.*,
-            a.name AS actor_name,
-            c.title AS conversation_title,
-            u.name AS user_name
-     FROM memory_entries me
-     LEFT JOIN actors a ON a.id = me.owner_actor_id
-     LEFT JOIN conversations c ON c.id = me.owner_conversation_id
-     LEFT JOIN users u ON u.id = me.owner_user_id
-     WHERE ${whereClause}
-     ORDER BY me.updated_at DESC, me.created_at DESC
-     LIMIT $${nextIndex}`,
-    [...params, limit],
+  const result = await db.executeQuery(
+    sql<MemoryRow>`SELECT me.*,
+        a.name AS actor_name,
+        c.title AS conversation_title,
+        u.name AS user_name
+      FROM memory_entries me
+      LEFT JOIN actors a ON a.id = me.owner_actor_id
+      LEFT JOIN conversations c ON c.id = me.owner_conversation_id
+      LEFT JOIN users u ON u.id = me.owner_user_id
+      WHERE ${whereClause}
+      ORDER BY me.updated_at DESC, me.created_at DESC
+      LIMIT ${limit}`.compile(db),
   );
   return loadMemoryEntriesFromRows(result.rows);
 }

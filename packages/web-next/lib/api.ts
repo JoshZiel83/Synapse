@@ -557,23 +557,6 @@ class ApiClient {
     })
   }
 
-  // Work Items
-  getWorkItems(wsId: string, params?: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/work-items${params ? "?" + params : ""}`
-    )
-  }
-  getWorkItem(wsId: string, id: string) {
-    return this.fetch(`/workspaces/${wsId}/work-items/${id}`)
-  }
-
-  // Messages
-  getMessages(wsId: string, params?: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/messages${params ? "?" + params : ""}`
-    )
-  }
-
   // Memories
   getMemories(wsId: string, params?: string) {
     return this.fetch(
@@ -1555,44 +1538,6 @@ class ApiClient {
     return this.fetch(`/files/${fileId}/info`)
   }
 
-  // A2A Apps
-  getA2AApps(wsId: string) {
-    return this.fetch(`/workspaces/${wsId}/a2a/apps`)
-  }
-  createA2AApp(
-    wsId: string,
-    data: {
-      name: string
-      description?: string
-      actorIds: string[]
-      rateLimitRpm?: number
-    }
-  ) {
-    return this.fetch(`/workspaces/${wsId}/a2a/apps`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
-  }
-  getA2AApp(wsId: string, appId: string) {
-    return this.fetch(`/workspaces/${wsId}/a2a/apps/${appId}`)
-  }
-  updateA2AApp(wsId: string, appId: string, data: any) {
-    return this.fetch(`/workspaces/${wsId}/a2a/apps/${appId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
-  }
-  deleteA2AApp(wsId: string, appId: string) {
-    return this.fetch(`/workspaces/${wsId}/a2a/apps/${appId}`, {
-      method: "DELETE",
-    })
-  }
-  regenerateA2AAppKey(wsId: string, appId: string) {
-    return this.fetch(`/workspaces/${wsId}/a2a/apps/${appId}/regenerate-key`, {
-      method: "POST",
-      body: "{}",
-    })
-  }
 }
 
 export const api = new ApiClient()

@@ -8,13 +8,12 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "db:migrate": "tsx src/infrastructure/database/migrate.ts",
-    "db:upgrade:auth-qr-login": "tsx src/infrastructure/database/upgrade-auth-qr-login.ts",
-    "db:upgrade:interactions": "tsx src/infrastructure/database/upgrade-interactions.ts",
-    "db:upgrade:transport-account-owners": "tsx src/infrastructure/database/upgrade-transport-account-owners.ts",
+    "db:bootstrap": "tsx src/infrastructure/database/bootstrap.ts && npm run db:codegen",
     "db:seed": "tsx src/infrastructure/database/seed.ts",
     "db:seed:builtin-mcp": "tsx src/infrastructure/database/seed-builtin-mcp-plugins.ts",
-    "db:reset": "tsx src/infrastructure/database/reset.ts"
+    "db:rebuild": "tsx src/infrastructure/database/rebuild.ts && npm run db:codegen",
+    "db:codegen": "kysely-codegen --config-file .kysely-codegenrc.json",
+    "db:codegen:verify": "npm run db:codegen -- --verify"
   },
   "dependencies": {
     "@authzed/authzed-node": "^1.6.1",
@@ -33,6 +32,7 @@
     "dotenv": "^16.4.0",
     "fastify": "^4.28.0",
     "ioredis": "^5.4.0",
+    "kysely": "^0.28.14",
     "node-av": "^5.2.2",
     "pg": "^8.12.0",
     "pino": "^9.0.0",
@@ -46,6 +46,7 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^25.1.0",
     "@types/pg": "^8.11.0",
+    "kysely-codegen": "^0.20.0",
     "tsx": "^4.16.0",
     "typescript": "^5.4.0"
   }

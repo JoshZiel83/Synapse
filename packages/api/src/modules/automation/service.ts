@@ -36,7 +36,8 @@ import {
   validateAutomationRuleCreatePayload,
 } from '@synapse/shared/automation';
 import { decrypt, encrypt } from '../../infrastructure/crypto/index.js';
-import { query, transaction } from '../../infrastructure/database/index.js';
+import { transaction } from '../../infrastructure/database/index.js';
+import { executeSql, executeSqlOn } from '../../infrastructure/database/kysely.js';
 import { createConversationEvent, getConversation, listConversationMembers } from '../conversation/service.js';
 import { buildNormalizedMessageContent } from '../conversation/message-content.js';
 import {
@@ -273,9 +274,33 @@ type AutomationValidationError = Error & {
   statusCode: 400;
 };
 
+type SqlRunner = <T = any>(
+  text: string,
+  params?: unknown[],
+) => Promise<{ rows: T[]; rowCount?: number | null }>;
+
 type QueryRunner = {
-  query: typeof query;
+  run: SqlRunner;
 };
+
+type QueryClient = { query: (text: string, params?: any[]) => Promise<any> };
+type QueryRunnerLike = QueryRunner | QueryClient;
+
+function resolveQueryRunner(
+  client?: QueryRunnerLike,
+): QueryRunner {
+  if (client && 'run' in client) {
+    return client;
+  }
+  return client
+    ? {
+        run: <T = any>(text: string, params?: unknown[]) =>
+          executeSqlOn<T>(client, text, params),
+      }
+    : {
+        run: executeSql,
+      };
+}
 
 function createAutomationValidationError(
   issues: { path: string; message: string }[],
@@ -972,7 +997,7 @@ async function loadAutomationTargets(
   if (ruleIds.length === 0) {
     return new Map<string, AutomationTargetEntityRef[]>();
   }
-  const result = await query<TargetEntityRow>(
+  const result = await executeSql<TargetEntityRow>(
     `SELECT rule_id, entity_kind, entity_id
      FROM ${tableName}
      WHERE rule_id = ANY($1)
@@ -991,7 +1016,7 @@ async function loadAutomationTargets(
 async function loadAutomationRulesByIds(workspaceId: string, ruleIds: string[]) {
   if (ruleIds.length === 0) return [] as AutomationRule[];
   const [rulesResult, triggersResult, policiesResult, deliveriesResult, participantsByRule, recipientsByRule] = await Promise.all([
-    query<AutomationRuleRow>(
+    executeSql<AutomationRuleRow>(
       `SELECT *
        FROM automation_rules
        WHERE workspace_id = $1
@@ -999,7 +1024,7 @@ async function loadAutomationRulesByIds(workspaceId: string, ruleIds: string[]) 
        ORDER BY created_at DESC`,
       [workspaceId, ruleIds],
     ),
-    query<AutomationTriggerRow>(
+    executeSql<AutomationTriggerRow>(
       `SELECT at.*,
               aes.source_key AS event_source_key,
               aes.name AS event_source_name,
@@ -1023,13 +1048,13 @@ async function loadAutomationRulesByIds(workspaceId: string, ruleIds: string[]) 
        WHERE at.rule_id = ANY($1)`,
       [ruleIds],
     ),
-    query<AutomationPolicyRow>(
+    executeSql<AutomationPolicyRow>(
       `SELECT *
        FROM automation_policies
        WHERE rule_id = ANY($1)`,
       [ruleIds],
     ),
-    query<AutomationDeliveryRow>(
+    executeSql<AutomationDeliveryRow>(
       `SELECT *
        FROM automation_deliveries
        WHERE rule_id = ANY($1)`,
@@ -1073,7 +1098,7 @@ async function validateAutomationEventSourceProvider(
     if (!normalizedRef) {
       throw new Error('webhook event sources require providerRef');
     }
-    const endpointResult = await query<{ id: string }>(
+    const endpointResult = await executeSql<{ id: string }>(
       `SELECT id
        FROM automation_webhook_endpoints
        WHERE id = $1
@@ -1135,7 +1160,7 @@ async function allocateAutomationEventSourceKey(params: {
     const candidate = attempt === 0
       ? baseKey
       : `${baseKey}.${crypto.randomBytes(2).toString('hex')}`;
-    const existing = await query<{ id: string }>(
+    const existing = await executeSql<{ id: string }>(
       `SELECT id
        FROM automation_event_sources
        WHERE workspace_id = $1
@@ -1158,7 +1183,7 @@ async function pauseAutomationRulesForEventSource(
   actorOrUser: { userId?: string; actorId?: string },
   reason: string,
 ) {
-  const affected = await query<{ id: string; workspace_id: string }>(
+  const affected = await executeSql<{ id: string; workspace_id: string }>(
     `UPDATE automation_rules ar
      SET status = 'paused',
          last_error_at = NOW(),
@@ -1174,7 +1199,7 @@ async function pauseAutomationRulesForEventSource(
   );
 
   for (const row of affected.rows) {
-    await query(
+    await executeSql(
       `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
        VALUES ($1, $2, $3, 'automation_rule.pause', 'automation_rule', $4, $5)`,
       [
@@ -1192,7 +1217,7 @@ async function pauseAutomationRulesForEventSource(
 }
 
 export async function getAutomationEventSource(workspaceId: string, eventSourceId: string) {
-  const result = await query<AutomationEventSourceRow>(
+  const result = await executeSql<AutomationEventSourceRow>(
     `SELECT ${automationEventSourceSelectClause('aes', 'aib')}
      FROM automation_event_sources aes
      ${automationEventSourceJoinClause('aes', 'aib')}
@@ -1233,7 +1258,7 @@ export async function listAutomationEventSources(
     where += ` AND aes.source_key = $${values.length}`;
   }
 
-  const result = await query<AutomationEventSourceRow>(
+  const result = await executeSql<AutomationEventSourceRow>(
     `SELECT ${automationEventSourceSelectClause('aes', 'aib')}
      FROM automation_event_sources aes
      ${automationEventSourceJoinClause('aes', 'aib')}
@@ -1245,7 +1270,7 @@ export async function listAutomationEventSources(
 }
 
 async function loadAutomationWebhookEndpointSecret(endpointId: string) {
-  const result = await query<AutomationWebhookEndpointRow>(
+  const result = await executeSql<AutomationWebhookEndpointRow>(
     `SELECT *
      FROM automation_webhook_endpoints
      WHERE id = $1
@@ -1263,7 +1288,7 @@ async function loadAutomationWebhookEndpointSecret(endpointId: string) {
 }
 
 async function updateWebhookEndpointStatus(endpointId: string, status: AutomationWebhookEndpoint['status']) {
-  await query(
+  await executeSql(
     `UPDATE automation_webhook_endpoints
      SET status = $2,
          updated_at = NOW()
@@ -1273,7 +1298,7 @@ async function updateWebhookEndpointStatus(endpointId: string, status: Automatio
 }
 
 async function getAutomationIntegrationBinding(bindingId: string) {
-  const result = await query<AutomationIntegrationBindingRow>(
+  const result = await executeSql<AutomationIntegrationBindingRow>(
     `SELECT *
      FROM automation_integration_bindings
      WHERE id = $1
@@ -1322,7 +1347,7 @@ async function ensureAutomationIntegrationBinding(params: {
   const ingressKind = params.integration.ingressKind || 'webhook';
   const targetId = params.integration.targetId.trim();
   const targetLabel = params.integration.targetLabel?.trim() || targetId;
-  const existingResult = await query<AutomationIntegrationBindingRow>(
+  const existingResult = await executeSql<AutomationIntegrationBindingRow>(
     `SELECT *
      FROM automation_integration_bindings
      WHERE workspace_id = $1
@@ -1344,7 +1369,7 @@ async function ensureAutomationIntegrationBinding(params: {
   const existing = existingResult.rows[0];
   if (existing) {
     if (existing.target_label !== targetLabel) {
-      await query(
+      await executeSql(
         `UPDATE automation_integration_bindings
          SET target_label = $2,
              updated_at = NOW()
@@ -1363,7 +1388,7 @@ async function ensureAutomationIntegrationBinding(params: {
 
   await transaction(async (client) => {
     if (endpointId && pathToken && secret) {
-      await client.query(
+      await executeSqlOn(client, 
         `INSERT INTO automation_webhook_endpoints
            (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by, created_at, updated_at)
          VALUES ($1, $2, $3, 'disabled', $4, $5, $6, $7, $8, NOW(), NOW())`,
@@ -1386,7 +1411,7 @@ async function ensureAutomationIntegrationBinding(params: {
       );
     }
 
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO automation_integration_bindings
          (id, workspace_id, installation_id, provider, ingress_kind, target_kind, target_id, target_label,
           webhook_endpoint_id, external_subscription_id, metadata, created_at, updated_at)
@@ -1413,7 +1438,7 @@ async function ensureAutomationIntegrationBinding(params: {
 }
 
 async function listActiveIntegrationSourceKeysForBinding(bindingId: string) {
-  const result = await query<{ source_key: string }>(
+  const result = await executeSql<{ source_key: string }>(
     `SELECT source_key
      FROM automation_event_sources
      WHERE provider_kind = 'integration'
@@ -1453,7 +1478,7 @@ async function reconcileIntegrationBindingWebhook(
         integration,
       });
     }
-    await query(
+    await executeSql(
       `UPDATE automation_integration_bindings
        SET external_subscription_id = NULL,
            updated_at = NOW()
@@ -1517,7 +1542,7 @@ async function reconcileIntegrationBindingWebhook(
     });
   }
 
-  await query(
+  await executeSql(
     `UPDATE automation_integration_bindings
      SET external_subscription_id = $2,
          updated_at = NOW()
@@ -1570,7 +1595,7 @@ async function createIntegrationAutomationEventSource(
     targetLabel,
   });
 
-  const existingResult = await query<AutomationEventSourceRow>(
+  const existingResult = await executeSql<AutomationEventSourceRow>(
     `SELECT *
      FROM automation_event_sources
      WHERE workspace_id = $1
@@ -1588,7 +1613,7 @@ async function createIntegrationAutomationEventSource(
 
   if (existing) {
     const nextStatus = input.status || 'active';
-    await query(
+    await executeSql(
       `UPDATE automation_event_sources
        SET name = $3,
            description = $4,
@@ -1629,7 +1654,7 @@ async function createIntegrationAutomationEventSource(
       await reconcileIntegrationBindingWebhook(binding.id);
     }
 
-    await query(
+    await executeSql(
       `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
        VALUES ($1, $2, $3, 'automation_event_source.update', 'automation_event_source', $4, $5)`,
       [
@@ -1663,7 +1688,7 @@ async function createIntegrationAutomationEventSource(
 
   const sourceId = uuidv4();
   await transaction(async (client) => {
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO automation_event_sources
          (id, workspace_id, provider_kind, provider_ref, webhook_endpoint_id, integration_binding_id, source_key,
           name, description, recommended_usage, payload_schema, example_payload, status, created_by_kind,
@@ -1691,7 +1716,7 @@ async function createIntegrationAutomationEventSource(
       ],
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
        VALUES ($1, $2, $3, 'automation_event_source.create', 'automation_event_source', $4, $5)`,
       [
@@ -1726,7 +1751,7 @@ async function createIntegrationAutomationEventSource(
       await reconcileIntegrationBindingWebhook(binding.id);
     }
   } catch (error) {
-    await query(
+    await executeSql(
       `DELETE FROM automation_event_sources
        WHERE workspace_id = $1
          AND id = $2`,
@@ -1767,7 +1792,7 @@ export async function createAutomationEventSource(
     name: input.name,
     explicitKey: input.sourceKey,
   });
-  const existingResult = await query<AutomationEventSourceRow>(
+  const existingResult = await executeSql<AutomationEventSourceRow>(
     `SELECT *
      FROM automation_event_sources
      WHERE workspace_id = $1
@@ -1780,7 +1805,7 @@ export async function createAutomationEventSource(
   const existing = existingResult.rows[0];
 
   if (existing) {
-    await query(
+    await executeSql(
       `UPDATE automation_event_sources
        SET provider_ref = $3,
            webhook_endpoint_id = $4,
@@ -1809,7 +1834,7 @@ export async function createAutomationEventSource(
       ],
     );
 
-    await query(
+    await executeSql(
       `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
        VALUES ($1, $2, $3, 'automation_event_source.update', 'automation_event_source', $4, $5)`,
       [
@@ -1837,7 +1862,7 @@ export async function createAutomationEventSource(
 
   const sourceId = uuidv4();
 
-  await query(
+  await executeSql(
     `INSERT INTO automation_event_sources
        (id, workspace_id, provider_kind, provider_ref, webhook_endpoint_id, source_key, name, description, recommended_usage,
         payload_schema, example_payload, status, created_by_kind, created_by_user_id, created_by_actor_id,
@@ -1864,7 +1889,7 @@ export async function createAutomationEventSource(
     ],
   );
 
-  await query(
+  await executeSql(
     `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
      VALUES ($1, $2, $3, 'automation_event_source.create', 'automation_event_source', $4, $5)`,
     [
@@ -1916,7 +1941,7 @@ export async function updateAutomationEventSource(
       );
   const nextStatus = input.status || existing.status;
 
-  await query(
+  await executeSql(
     `UPDATE automation_event_sources
      SET provider_ref = $3,
          webhook_endpoint_id = $4,
@@ -1973,7 +1998,7 @@ export async function updateAutomationEventSource(
     );
   }
 
-  await query(
+  await executeSql(
     `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
      VALUES ($1, $2, $3, 'automation_event_source.update', 'automation_event_source', $4, $5)`,
     [
@@ -2008,7 +2033,7 @@ export async function archiveAutomationEventSource(
     throw new Error('Automation event source not found');
   }
 
-  await query(
+  await executeSql(
     `UPDATE automation_event_sources
      SET status = 'archived',
          updated_at = NOW()
@@ -2031,7 +2056,7 @@ export async function archiveAutomationEventSource(
     `Event source ${eventSourceId} was archived`,
   );
 
-  await query(
+  await executeSql(
     `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
      VALUES ($1, $2, $3, 'automation_event_source.archive', 'automation_event_source', $4, $5)`,
     [
@@ -2045,7 +2070,7 @@ export async function archiveAutomationEventSource(
 }
 
 async function getAutomationEventSourceByWebhookPathToken(pathToken: string, sourceKey: string) {
-  const result = await query<AutomationEventSourceRow & { endpoint_secret_ciphertext: string; endpoint_name: string; endpoint_id: string }>(
+  const result = await executeSql<AutomationEventSourceRow & { endpoint_secret_ciphertext: string; endpoint_name: string; endpoint_id: string }>(
     `SELECT aes.*,
             awe.secret_ciphertext AS endpoint_secret_ciphertext,
             awe.name AS endpoint_name,
@@ -2065,7 +2090,7 @@ async function getAutomationEventSourceByWebhookPathToken(pathToken: string, sou
 }
 
 async function listIntegrationEventSourcesByWebhookPathToken(pathToken: string) {
-  const result = await query<
+  const result = await executeSql<
     AutomationEventSourceRow & {
       endpoint_secret_ciphertext: string;
       endpoint_name: string;
@@ -2098,9 +2123,9 @@ async function persistAutomationTargets(
   ruleId: string,
   values: AutomationTargetEntityRef[],
 ) {
-  await client.query(`DELETE FROM ${tableName} WHERE rule_id = $1`, [ruleId]);
+  await executeSqlOn(client, `DELETE FROM ${tableName} WHERE rule_id = $1`, [ruleId]);
   for (const value of values) {
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO ${tableName} (id, rule_id, entity_kind, entity_id, created_at)
        VALUES ($1, $2, $3, $4, NOW())`,
       [uuidv4(), ruleId, value.entityKind, value.entityId],
@@ -2109,7 +2134,7 @@ async function persistAutomationTargets(
 }
 
 async function updateRuleError(ruleId: string, errorMessage: string | null) {
-  await query(
+  await executeSql(
     `UPDATE automation_rules
      SET last_error_at = $2,
          last_error_message = $3,
@@ -2122,13 +2147,11 @@ async function updateRuleError(ruleId: string, errorMessage: string | null) {
 async function expireAutomationRules(params: {
   referenceTime?: string;
   workspaceId?: string;
-  client?: QueryRunner;
+  client?: QueryRunnerLike;
 }) {
-  const runner: QueryRunner = params.client
-    ? { query: params.client.query.bind(params.client) as typeof query }
-    : { query };
+  const runner = resolveQueryRunner(params.client);
   const referenceTime = params.referenceTime || nowISO();
-  const result = await runner.query<{ id: string; workspace_id: string }>(
+  const result = await runner.run<{ id: string; workspace_id: string }>(
     `UPDATE automation_rules ar
      SET status = 'expired',
          updated_at = NOW()
@@ -2144,7 +2167,7 @@ async function expireAutomationRules(params: {
 
   await Promise.all(
     result.rows.map((row) =>
-      runner.query(
+      runner.run(
         `UPDATE automation_policies
          SET completed_at = COALESCE(completed_at, $2),
              updated_at = NOW()
@@ -2156,7 +2179,7 @@ async function expireAutomationRules(params: {
 
   await Promise.all(
     result.rows.map((row) =>
-      runner.query(
+      runner.run(
         `INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
          VALUES ($1, 'automation_rule.expire', 'automation_rule', $2, $3)`,
         [
@@ -2178,12 +2201,10 @@ async function applyAutomationPolicyAfterTrigger(params: {
   executionId: string;
   completeNow?: boolean;
   completionReason: 'max_trigger_count' | 'schedule_exhausted';
-  client?: QueryRunner;
+  client?: QueryRunnerLike;
 }) {
-  const runner: QueryRunner = params.client
-    ? { query: params.client.query.bind(params.client) as typeof query }
-    : { query };
-  const policyResult = await runner.query<AutomationPolicyRow>(
+  const runner = resolveQueryRunner(params.client);
+  const policyResult = await runner.run<AutomationPolicyRow>(
     `UPDATE automation_policies
      SET trigger_count = trigger_count + 1,
          updated_at = NOW()
@@ -2204,21 +2225,21 @@ async function applyAutomationPolicyAfterTrigger(params: {
     return;
   }
 
-  await runner.query(
+  await runner.run(
     `UPDATE automation_rules
      SET status = $2,
          updated_at = NOW()
      WHERE id = $1`,
     [params.ruleId, policy.completion_status],
   );
-  await runner.query(
+  await runner.run(
     `UPDATE automation_policies
      SET completed_at = COALESCE(completed_at, NOW()),
          updated_at = NOW()
      WHERE rule_id = $1`,
     [params.ruleId],
   );
-  await runner.query(
+  await runner.run(
     `INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
      VALUES ($1, 'automation_rule.complete', 'automation_rule', $2, $3)`,
     [
@@ -2237,7 +2258,7 @@ async function applyAutomationPolicyAfterTrigger(params: {
 }
 
 async function touchWebhookReceived(endpointId: string) {
-  await query(
+  await executeSql(
     `UPDATE automation_webhook_endpoints
      SET last_received_at = NOW(),
          updated_at = NOW()
@@ -2247,7 +2268,7 @@ async function touchWebhookReceived(endpointId: string) {
 }
 
 async function touchAutomationEventSourceTriggered(eventSourceId: string) {
-  await query(
+  await executeSql(
     `UPDATE automation_event_sources
      SET last_triggered_at = NOW(),
          updated_at = NOW()
@@ -2262,7 +2283,7 @@ async function resolveAutomationRulesForEvent(params: {
   payload: Record<string, unknown>;
   occurredAt: string;
 }) {
-  const result = await query<AutomationRuleRow & AutomationTriggerRow>(
+  const result = await executeSql<AutomationRuleRow & AutomationTriggerRow>(
     `SELECT ar.*, at.rule_id, at.trigger_kind, at.source_kind, at.event_source_id, at.source_locator, at.match_key, at.matcher,
             at.schedule_kind, at.schedule_expr, at.schedule_timezone, at.interval_seconds, at.starts_at,
             at.next_fire_at, at.last_fired_at, at.metadata AS trigger_metadata
@@ -2299,16 +2320,14 @@ async function createAutomationOccurrence(params: {
   sourceSnapshot?: Record<string, unknown>;
   payload?: Record<string, unknown>;
   occurredAt?: string;
-  client?: QueryRunner;
+  client?: QueryRunnerLike;
 }) {
-  const runner: QueryRunner = params.client
-    ? { query: params.client.query.bind(params.client) as typeof query }
-    : { query };
+  const runner = resolveQueryRunner(params.client);
   const occurredAt = params.occurredAt || nowISO();
   const dedupeKey = params.dedupeKey?.trim() || null;
 
   if (dedupeKey) {
-    const existing = await runner.query(
+    const existing = await runner.run(
       `SELECT *
        FROM automation_occurrences
        WHERE workspace_id = $1
@@ -2322,7 +2341,7 @@ async function createAutomationOccurrence(params: {
     }
   }
 
-  const result = await runner.query(
+  const result = await runner.run(
     `INSERT INTO automation_occurrences
        (id, workspace_id, source_kind, event_source_id, source_locator, match_key, dedupe_key, source_snapshot, payload, occurred_at, created_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
@@ -2348,12 +2367,10 @@ async function createAutomationExecution(params: {
   workspaceId: string;
   ruleId: string;
   occurrenceId: string;
-  client?: QueryRunner;
+  client?: QueryRunnerLike;
 }) {
-  const runner: QueryRunner = params.client
-    ? { query: params.client.query.bind(params.client) as typeof query }
-    : { query };
-  const existing = await runner.query(
+  const runner = resolveQueryRunner(params.client);
+  const existing = await runner.run(
     `SELECT *
      FROM automation_executions
      WHERE rule_id = $1
@@ -2368,7 +2385,7 @@ async function createAutomationExecution(params: {
     };
   }
 
-  const result = await runner.query(
+  const result = await runner.run(
     `INSERT INTO automation_executions
        (id, workspace_id, rule_id, occurrence_id, status, attempt_count, created_at, updated_at)
      VALUES ($1, $2, $3, $4, 'pending', 0, NOW(), NOW())
@@ -2392,7 +2409,7 @@ async function recordExecutionTarget(params: {
   status: AutomationExecutionStatus;
   metadata?: Record<string, unknown>;
 }) {
-  const result = await query<AutomationTargetRow>(
+  const result = await executeSql<AutomationTargetRow>(
     `INSERT INTO automation_execution_targets
        (id, execution_id, conversation_id, session_id, target_actor_id, target_user_id, created_item_id, wakeup_id,
         status, metadata, created_at, updated_at)
@@ -2452,7 +2469,7 @@ async function resolveOperatorUserId(rule: AutomationRule) {
     if (firstUser?.user_id) return firstUser.user_id as string;
   }
 
-  const result = await query<{ owner_id: string }>(
+  const result = await executeSql<{ owner_id: string }>(
     `SELECT owner_id
      FROM workspaces
      WHERE id = $1
@@ -2544,7 +2561,7 @@ async function resolveExistingConversationId(rule: AutomationRule) {
   }
 
   if (rule.delivery.deliveryMode === 'create_conversation_once') {
-    await query(
+    await executeSql(
       `UPDATE automation_deliveries
        SET reused_conversation_id = $2,
            updated_at = NOW()
@@ -2745,7 +2762,7 @@ export async function createAutomationRule(
   const normalizedDelivery = await normalizeDeliveryInput(input.delivery);
 
   await transaction(async (client) => {
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO automation_rules
          (id, workspace_id, category, status, name, description, created_by_kind, created_by_user_id, created_by_actor_id,
           created_by_session_id, owner_conversation_id, owner_session_id, metadata, created_at, updated_at)
@@ -2767,7 +2784,7 @@ export async function createAutomationRule(
       ],
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO automation_policies
          (rule_id, active_from, active_until, max_trigger_count, trigger_count, completion_status, completed_at,
           metadata, created_at, updated_at)
@@ -2784,7 +2801,7 @@ export async function createAutomationRule(
       ],
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO automation_triggers
          (rule_id, trigger_kind, source_kind, event_source_id, source_locator, match_key, matcher, schedule_kind, schedule_expr,
           schedule_timezone, interval_seconds, starts_at, next_fire_at, last_fired_at, metadata, created_at, updated_at)
@@ -2808,7 +2825,7 @@ export async function createAutomationRule(
       ],
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO automation_deliveries
          (rule_id, delivery_mode, conversation_id, session_id, reused_conversation_id, conversation_title,
           message_text, wake_reason_text, message_blocks, target_policy, metadata, created_at, updated_at)
@@ -2831,7 +2848,7 @@ export async function createAutomationRule(
     await persistAutomationTargets(client, 'automation_delivery_participants', ruleId, normalizedDelivery.participants);
     await persistAutomationTargets(client, 'automation_delivery_recipients', ruleId, normalizedDelivery.recipients);
 
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
        VALUES ($1, $2, $3, 'automation_rule.create', 'automation_rule', $4, $5)`,
       [
@@ -2886,7 +2903,7 @@ export async function listAutomationRules(workspaceId: string, filters?: {
     where += ` AND category = $${values.length}`;
   }
 
-  const result = await query<{ id: string }>(
+  const result = await executeSql<{ id: string }>(
     `SELECT id
      FROM automation_rules
      WHERE ${where}
@@ -2924,7 +2941,7 @@ export async function updateAutomationRule(
   const normalizedDelivery = await normalizeDeliveryInput(mergedInput.delivery);
 
   await transaction(async (client) => {
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE automation_rules
        SET status = $2,
            name = $3,
@@ -2945,7 +2962,7 @@ export async function updateAutomationRule(
       ],
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE automation_policies
        SET active_from = $2,
            active_until = $3,
@@ -2966,7 +2983,7 @@ export async function updateAutomationRule(
       ],
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE automation_triggers
        SET trigger_kind = $2,
            source_kind = $3,
@@ -3001,7 +3018,7 @@ export async function updateAutomationRule(
       ],
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE automation_deliveries
        SET delivery_mode = $2,
            conversation_id = $3,
@@ -3031,7 +3048,7 @@ export async function updateAutomationRule(
     await persistAutomationTargets(client, 'automation_delivery_participants', ruleId, normalizedDelivery.participants);
     await persistAutomationTargets(client, 'automation_delivery_recipients', ruleId, normalizedDelivery.recipients);
 
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
        VALUES ($1, $2, $3, 'automation_rule.update', 'automation_rule', $4, $5)`,
       [
@@ -3067,12 +3084,12 @@ export async function deleteAutomationRule(
   ruleId: string,
   actorOrUser: { userId?: string; actorId?: string },
 ) {
-  await query(
+  await executeSql(
     `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
      VALUES ($1, $2, $3, 'automation_rule.delete', 'automation_rule', $4, $5)`,
     [workspaceId, actorOrUser.userId || null, actorOrUser.actorId || null, ruleId, JSON.stringify({ deleted: true })],
   );
-  await query(
+  await executeSql(
     `DELETE FROM automation_rules
      WHERE id = $1
        AND workspace_id = $2`,
@@ -3089,7 +3106,7 @@ export async function createAutomationWebhookEndpoint(
   },
 ): Promise<AutomationWebhookEndpointCreateResult> {
   const secret = generateSecret();
-  const result = await query<AutomationWebhookEndpointRow>(
+  const result = await executeSql<AutomationWebhookEndpointRow>(
     `INSERT INTO automation_webhook_endpoints
        (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by, created_at, updated_at)
      VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, NOW(), NOW())
@@ -3113,7 +3130,7 @@ export async function createAutomationWebhookEndpoint(
 }
 
 export async function listAutomationWebhookEndpoints(workspaceId: string) {
-  const result = await query<AutomationWebhookEndpointRow>(
+  const result = await executeSql<AutomationWebhookEndpointRow>(
     `SELECT *
      FROM automation_webhook_endpoints
      WHERE workspace_id = $1
@@ -3139,7 +3156,7 @@ export async function listAutomationOccurrences(
   }
 
   values.push(Math.max(1, Math.min(filters?.limit || 50, 200)));
-  const result = await query<AutomationOccurrenceRow>(
+  const result = await executeSql<AutomationOccurrenceRow>(
     `SELECT ao.*,
             aes.source_key AS event_source_key,
             aes.name AS event_source_name,
@@ -3176,7 +3193,7 @@ export async function ingestAutomationProviderEvent(params: {
   dedupeKey?: string;
   occurredAt?: string;
 }) {
-  const result = await query<AutomationEventSourceRow>(
+  const result = await executeSql<AutomationEventSourceRow>(
     `SELECT *
      FROM automation_event_sources
      WHERE workspace_id = $1
@@ -3286,7 +3303,7 @@ export async function ingestAutomationEvent(input: AutomationEventEnvelope) {
   }
 
   await touchAutomationEventSourceTriggered(eventSource.id);
-  await query(
+  await executeSql(
     `INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
      VALUES ($1, 'automation_event_source.trigger', 'automation_event_source', $2, $3)`,
     [
@@ -3437,7 +3454,7 @@ export async function scheduleDueAutomationExecutions(limit = MAX_SCHEDULER_BATC
   await transaction(async (client) => {
     await expireAutomationRules({ client });
 
-    const dueResult = await client.query<{
+    const dueResult = await executeSqlOn<{
       rule_id: string;
       rule_name: string;
       workspace_id: string;
@@ -3450,7 +3467,7 @@ export async function scheduleDueAutomationExecutions(limit = MAX_SCHEDULER_BATC
       active_until: string | null;
       next_fire_at: string;
       last_fired_at: string | null;
-    }>(
+    }>(client, 
       `SELECT at.rule_id, ar.name AS rule_name, ar.workspace_id, at.schedule_kind, at.schedule_expr, at.schedule_timezone,
               at.interval_seconds, at.starts_at, ap.active_from, ap.active_until, at.next_fire_at, at.last_fired_at
        FROM automation_triggers at
@@ -3511,7 +3528,7 @@ export async function scheduleDueAutomationExecutions(limit = MAX_SCHEDULER_BATC
         lastFiredAt: row.next_fire_at,
       });
 
-      await client.query(
+      await executeSqlOn(client, 
         `UPDATE automation_triggers
          SET last_fired_at = $2,
              next_fire_at = $3,
@@ -3538,7 +3555,7 @@ export async function scheduleDueAutomationExecutions(limit = MAX_SCHEDULER_BATC
 }
 
 export async function processAutomationExecution(executionId: string): Promise<ProcessAutomationExecutionResult> {
-  const executionResult = await query<AutomationExecutionRow>(
+  const executionResult = await executeSql<AutomationExecutionRow>(
     `UPDATE automation_executions
      SET status = 'running',
          attempt_count = attempt_count + 1,
@@ -3551,7 +3568,7 @@ export async function processAutomationExecution(executionId: string): Promise<P
   );
   const executionRow = executionResult.rows[0];
   if (!executionRow) {
-    const existingResult = await query<AutomationExecutionRow>(
+    const existingResult = await executeSql<AutomationExecutionRow>(
       `SELECT *
        FROM automation_executions
        WHERE id = $1
@@ -3568,7 +3585,7 @@ export async function processAutomationExecution(executionId: string): Promise<P
   }
 
   const execution = mapExecutionRow(executionRow);
-  const occurrenceResult = await query<AutomationOccurrenceRow>(
+  const occurrenceResult = await executeSql<AutomationOccurrenceRow>(
     `SELECT ao.*,
             aes.source_key AS event_source_key,
             aes.name AS event_source_name,
@@ -3610,7 +3627,7 @@ export async function processAutomationExecution(executionId: string): Promise<P
       actorRecipientIds,
     });
 
-    await query(
+    await executeSql(
       `UPDATE automation_executions
        SET status = 'completed',
            error_message = NULL,
@@ -3619,7 +3636,7 @@ export async function processAutomationExecution(executionId: string): Promise<P
        WHERE id = $1`,
       [executionId],
     );
-    await query(
+    await executeSql(
       `UPDATE automation_rules
        SET last_triggered_at = NOW(),
            last_error_at = NULL,
@@ -3628,7 +3645,7 @@ export async function processAutomationExecution(executionId: string): Promise<P
        WHERE id = $1`,
       [rule.id],
     );
-    await query(
+    await executeSql(
       `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
        VALUES ($1, $2, $3, 'automation_rule.trigger', 'automation_rule', $4, $5)`,
       [
@@ -3654,7 +3671,7 @@ export async function processAutomationExecution(executionId: string): Promise<P
     };
   } catch (error: any) {
     const message = error instanceof Error ? error.message : String(error);
-    await query(
+    await executeSql(
       `UPDATE automation_executions
        SET status = 'failed',
            error_message = $2,
@@ -3669,7 +3686,7 @@ export async function processAutomationExecution(executionId: string): Promise<P
 }
 
 export async function listAutomationExecutions(workspaceId: string, ruleId: string, limit = 50) {
-  const result = await query<AutomationExecutionRow>(
+  const result = await executeSql<AutomationExecutionRow>(
     `SELECT ae.*,
             ar.name AS execution_rule_name,
             ao.occurred_at AS occurrence_occurred_at,

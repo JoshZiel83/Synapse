@@ -22,7 +22,8 @@ import {
   type AuthzRelationMutation,
   type AuthzSubject,
 } from "../../infrastructure/authz/index.js";
-import { query, transaction } from "../../infrastructure/database/index.js";
+import { transaction } from "../../infrastructure/database/index.js";
+import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
 import {
   accessBindingMetadata,
   buildResourceAccessAuthzMutations,
@@ -45,6 +46,13 @@ type QueryRunner = <T extends QueryRow>(
   text: string,
   params?: unknown[],
 ) => Promise<QueryResultLike<T>>;
+
+const runQuery: QueryRunner = executeSql;
+
+function clientRunner(client: pg.PoolClient): QueryRunner {
+  return async <T extends QueryRow>(text: string, params?: unknown[]) =>
+    executeSqlOn<T>(client, text, params);
+}
 
 type JsonObject = Record<string, unknown>;
 const REQUIRED_SKILL_FILE_PATH = "Skill.md";
@@ -946,7 +954,7 @@ async function insertSkillFiles(
 async function loadCatalogVersionFilesMap(versionIds: string[]) {
   if (versionIds.length === 0) return new Map<string, SkillAttachmentFile[]>();
 
-  const result = await query<CatalogFileRow>(
+  const result = await runQuery<CatalogFileRow>(
     `SELECT id, catalog_version_id, path, content_blocks, created_at
      FROM catalog_version_files
      WHERE catalog_version_id = ANY($1::uuid[])
@@ -968,7 +976,7 @@ async function loadSkillFilesMap(skillVersionIds: string[]) {
   if (skillVersionIds.length === 0)
     return new Map<string, SkillAttachmentFile[]>();
 
-  const result = await query<SkillFileRow>(
+  const result = await runQuery<SkillFileRow>(
     `SELECT id, skill_version_id, path, content_blocks, created_at, updated_at
      FROM skill_files
      WHERE skill_version_id = ANY($1::uuid[])
@@ -987,7 +995,7 @@ async function loadSkillFilesMap(skillVersionIds: string[]) {
 }
 
 async function buildMarketplaceInstallationMap(workspaceId: string) {
-  const result = await query<{
+  const result = await runQuery<{
     source_catalog_item_id: string;
     skill_id: string;
     installed_count: string;
@@ -1018,7 +1026,7 @@ async function buildMarketplaceInstallationMap(workspaceId: string) {
 
 async function getMarketplaceRowById(
   skillId: string,
-  run: QueryRunner = query,
+  run: QueryRunner = runQuery,
 ) {
   const result = await run<SkillPackageRow>(
     `${MARKETPLACE_SKILL_SELECT}
@@ -1064,7 +1072,7 @@ async function loadInstalledSkillRows(params: {
     conditions.push(`source_ref.source_catalog_item_id = $${values.length}`);
   }
 
-  const result = await query<InstalledSkillRow>(
+  const result = await runQuery<InstalledSkillRow>(
     `${INSTALLED_SKILL_SELECT}
      WHERE ${conditions.join(" AND ")}
      ORDER BY skill.updated_at DESC`,
@@ -1092,7 +1100,7 @@ async function loadAccessBindingsBySkillIds(
 ) {
   if (skillIds.length === 0) return new Map<string, SkillAccessRow[]>();
 
-  const result = await query<AccessBindingRow>(
+  const result = await runQuery<AccessBindingRow>(
     `SELECT
        id,
        workspace_id,
@@ -1237,7 +1245,7 @@ async function findSkillIdsByBindingFilter(params: {
     }
   }
 
-  const result = await query<{ skill_id: string }>(
+  const result = await runQuery<{ skill_id: string }>(
     `SELECT DISTINCT resource_id AS skill_id
      FROM access_bindings
      WHERE ${conditions.join(" AND ")}`,
@@ -1250,7 +1258,7 @@ async function findSkillIdsByBindingFilter(params: {
 async function findInstalledSkillBySource(
   workspaceId: string,
   sourceCatalogItemId: string,
-  run: QueryRunner = query,
+  run: QueryRunner = runQuery,
 ) {
   const result = await run<{ id: string }>(
     `SELECT skill.id
@@ -1431,7 +1439,7 @@ export async function listMarketplaceSkills(filters?: {
     conditions.push(`item.tags && $${values.length}::text[]`);
   }
 
-  const result = await query<SkillPackageRow>(
+  const result = await runQuery<SkillPackageRow>(
     `${MARKETPLACE_SKILL_SELECT}
      ${conditions.length > 0 ? ` AND ${conditions.join(" AND ")}` : ""}
      ORDER BY item.updated_at DESC, item.created_at DESC`,
@@ -1522,15 +1530,15 @@ export async function publishMarketplaceSkill(input: {
 
   const result = await transaction(async (client) => {
     const publisherId = await ensureMarketplacePublisher(
-      client.query.bind(client),
+      clientRunner(client),
       input.authorUserId,
     );
     const existing = input.skillId
-      ? await getMarketplaceRowById(input.skillId, client.query.bind(client))
+      ? await getMarketplaceRowById(input.skillId, clientRunner(client))
       : await getMarketplaceRowBySlug(
           publisherId,
           canonicalSlug,
-          client.query.bind(client),
+          clientRunner(client),
         );
 
     let itemId = existing?.item_id || null;
@@ -1554,7 +1562,7 @@ export async function publishMarketplaceSkill(input: {
           : null;
 
     if (existing) {
-      await client.query(
+      await executeSqlOn(client, 
         `UPDATE catalog_items
          SET slug = $2,
              display_name = $3,
@@ -1579,7 +1587,7 @@ export async function publishMarketplaceSkill(input: {
       );
       itemId = existing.item_id;
     } else {
-      const inserted = await client.query<{ id: string }>(
+      const inserted = await executeSqlOn<{ id: string }>(client, 
         `INSERT INTO catalog_items (
            publisher_id,
            workspace_id,
@@ -1625,7 +1633,7 @@ export async function publishMarketplaceSkill(input: {
       itemId = inserted.rows[0]!.id;
     }
 
-    const existingVersion = await client.query<{ id: string }>(
+    const existingVersion = await executeSqlOn<{ id: string }>(client, 
       `SELECT id
        FROM catalog_versions
        WHERE catalog_item_id = $1
@@ -1638,7 +1646,7 @@ export async function publishMarketplaceSkill(input: {
     const versionId =
       existingVersion.rows[0]?.id ||
       (
-        await client.query<{ id: string }>(
+        await executeSqlOn<{ id: string }>(client, 
           `INSERT INTO catalog_versions (
              catalog_item_id,
              version,
@@ -1660,7 +1668,7 @@ export async function publishMarketplaceSkill(input: {
       ).rows[0]!.id;
 
     if (existingVersion.rows[0]) {
-      await client.query(
+      await executeSqlOn(client, 
         `UPDATE catalog_versions
          SET status = 'active',
              changelog = $2,
@@ -1677,7 +1685,7 @@ export async function publishMarketplaceSkill(input: {
       );
     }
 
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO skill_package_version_specs (
          catalog_version_id,
          canonical_slug,
@@ -1704,12 +1712,12 @@ export async function publishMarketplaceSkill(input: {
     );
 
     await upsertCatalogVersionFiles(
-      client.query.bind(client),
+      clientRunner(client),
       versionId,
       attachmentFiles,
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE catalog_items
        SET latest_version_id = $2,
            updated_at = NOW()
@@ -1761,7 +1769,7 @@ export async function createWorkspaceSkill(input: {
   const result = await transaction(async (client) => {
     const skillId = crypto.randomUUID();
 
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO installed_skills (
          id,
          workspace_id,
@@ -1785,7 +1793,7 @@ export async function createWorkspaceSkill(input: {
       ],
     );
 
-    const insertedVersion = await client.query<{ id: string }>(
+    const insertedVersion = await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO skill_versions (
          skill_id,
          version,
@@ -1809,7 +1817,7 @@ export async function createWorkspaceSkill(input: {
     const skillVersionId = insertedVersion.rows[0]!.id;
 
     await insertSkillFiles(
-      client.query.bind(client),
+      clientRunner(client),
       skillVersionId,
       attachmentFiles,
     );
@@ -1829,7 +1837,7 @@ export async function createWorkspaceSkill(input: {
       },
     );
 
-    const bindingResult = await ensureSkillBinding(client.query.bind(client), {
+    const bindingResult = await ensureSkillBinding(clientRunner(client), {
       skillId,
       workspaceId: input.workspaceId,
       target,
@@ -1986,7 +1994,7 @@ export async function grantInstalledSkillAccess(input: {
   }
 
   const result = await transaction(async (client) => {
-    const inserted = await client.query<AccessBindingRow>(
+    const inserted = await executeSqlOn<AccessBindingRow>(client, 
       `INSERT INTO access_bindings (
          workspace_id,
          resource_type,
@@ -2100,7 +2108,7 @@ export async function revokeInstalledSkillAccess(input: {
       },
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE access_bindings
        SET status = 'revoked',
            revoked_at = NOW()
@@ -2146,12 +2154,12 @@ export async function installMarketplaceSkill(input: {
     const existingSkillId = await findInstalledSkillBySource(
       input.workspaceId,
       input.marketSkillId,
-      client.query.bind(client),
+      clientRunner(client),
     );
 
     if (existingSkillId) {
       const bindingResult = await ensureSkillBinding(
-        client.query.bind(client),
+        clientRunner(client),
         {
           skillId: existingSkillId,
           workspaceId: input.workspaceId,
@@ -2168,14 +2176,14 @@ export async function installMarketplaceSkill(input: {
     }
 
     const installedSlug = await allocateInstalledSkillSlug(
-      client.query.bind(client),
+      clientRunner(client),
       input.workspaceId,
       sanitizeSlug(
         marketplaceSkill.spec_canonical_slug || marketplaceSkill.item_slug,
       ),
     );
 
-    const insertedSkill = await client.query<{ id: string }>(
+    const insertedSkill = await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO installed_skills (
          workspace_id,
          slug,
@@ -2202,7 +2210,7 @@ export async function installMarketplaceSkill(input: {
     const descriptionBlocks = normalizeStoredBlocks(
       marketplaceSkill.spec_description_blocks,
     );
-    const insertedVersion = await client.query<{ id: string }>(
+    const insertedVersion = await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO skill_versions (
          skill_id,
          version,
@@ -2227,7 +2235,7 @@ export async function installMarketplaceSkill(input: {
     const skillVersionId = insertedVersion.rows[0]!.id;
 
     await insertSkillFiles(
-      client.query.bind(client),
+      clientRunner(client),
       skillVersionId,
       sourceFiles.map((file) => ({
         path: file.path,
@@ -2235,7 +2243,7 @@ export async function installMarketplaceSkill(input: {
       })),
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `INSERT INTO skill_source_refs (
          skill_id,
          source_catalog_item_id,
@@ -2248,7 +2256,7 @@ export async function installMarketplaceSkill(input: {
       [skillId, marketplaceSkill.item_id, marketplaceSkill.latest_version_id],
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE catalog_items
        SET download_count = download_count + 1,
            updated_at = NOW()
@@ -2272,7 +2280,7 @@ export async function installMarketplaceSkill(input: {
       },
     );
 
-    const bindingResult = await ensureSkillBinding(client.query.bind(client), {
+    const bindingResult = await ensureSkillBinding(clientRunner(client), {
       skillId,
       workspaceId: input.workspaceId,
       target,
@@ -2357,7 +2365,7 @@ export async function updateInstalledSkill(input: {
           }));
       assertRequiredSkillFile(attachmentFiles);
 
-      const versionInsert = await client.query<{ id: string }>(
+      const versionInsert = await executeSqlOn<{ id: string }>(client, 
         `INSERT INTO skill_versions (
            skill_id,
            version,
@@ -2381,12 +2389,12 @@ export async function updateInstalledSkill(input: {
       );
 
       await insertSkillFiles(
-        client.query.bind(client),
+        clientRunner(client),
         versionInsert.rows[0]!.id,
         attachmentFiles,
       );
 
-      await client.query(
+      await executeSqlOn(client, 
         `UPDATE installed_skills
          SET name = $2,
              icon_file_id = $3,
@@ -2406,7 +2414,7 @@ export async function updateInstalledSkill(input: {
       );
 
       if (existing.source_catalog_item_id) {
-        await client.query(
+        await executeSqlOn(client, 
           `UPDATE skill_source_refs
            SET is_customized = TRUE,
                updated_at = NOW()
@@ -2419,7 +2427,7 @@ export async function updateInstalledSkill(input: {
     }
 
     if (input.isEnabled !== undefined) {
-      await client.query(
+      await executeSqlOn(client, 
         `UPDATE installed_skills
          SET is_active = $2,
              updated_at = NOW()
@@ -2471,7 +2479,7 @@ export async function upgradeInstalledSkill(input: {
     const descriptionBlocks = normalizeStoredBlocks(
       marketplaceSkill.spec_description_blocks,
     );
-    const versionInsert = await client.query<{ id: string }>(
+    const versionInsert = await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO skill_versions (
          skill_id,
          version,
@@ -2496,7 +2504,7 @@ export async function upgradeInstalledSkill(input: {
     );
 
     await insertSkillFiles(
-      client.query.bind(client),
+      clientRunner(client),
       versionInsert.rows[0]!.id,
       sourceFiles.map((file) => ({
         path: file.path,
@@ -2504,7 +2512,7 @@ export async function upgradeInstalledSkill(input: {
       })),
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE installed_skills
        SET name = $2,
            icon_file_id = $3,
@@ -2521,7 +2529,7 @@ export async function upgradeInstalledSkill(input: {
       ],
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `UPDATE skill_source_refs
        SET source_catalog_version_id = $2,
            is_customized = FALSE,
@@ -2539,7 +2547,7 @@ export async function uninstallInstalledSkill(
   installedSkillId: string,
 ) {
   const result = await transaction(async (client) => {
-    const existing = await client.query<InstalledSkillRow>(
+    const existing = await executeSqlOn<InstalledSkillRow>(client, 
       `${INSTALLED_SKILL_SELECT}
        WHERE skill.workspace_id = $1
          AND skill.id = $2
@@ -2554,7 +2562,7 @@ export async function uninstallInstalledSkill(
       };
     }
 
-    const bindings = await client.query<AccessBindingRow>(
+    const bindings = await executeSqlOn<AccessBindingRow>(client, 
       `SELECT
          id,
          workspace_id,
@@ -2576,7 +2584,7 @@ export async function uninstallInstalledSkill(
       [installedSkillId],
     );
 
-    await client.query(
+    await executeSqlOn(client, 
       `DELETE FROM installed_skills
        WHERE id = $1
          AND workspace_id = $2`,
@@ -2602,7 +2610,7 @@ export async function uninstallInstalledSkill(
         ),
     ];
 
-    await client.query(
+    await executeSqlOn(client, 
       `DELETE FROM access_bindings
        WHERE resource_type = 'installed_skill'
          AND resource_id = $1`,
@@ -2745,7 +2753,7 @@ export async function listVisibleSkills(input: {
   }
 
   const [rows, bindingsBySkillId] = await Promise.all([
-    query<VisibleSkillRow>(
+    runQuery<VisibleSkillRow>(
       `SELECT
          skill.id AS skill_id,
          skill.slug,
@@ -2859,7 +2867,7 @@ export async function readVisibleSkill(input: {
   }
 
   const targetPath = normalizePath(input.assetPath);
-  const result = await query<SkillFileRow>(
+  const result = await runQuery<SkillFileRow>(
     `SELECT id, skill_version_id, path, content_blocks, created_at, updated_at
      FROM skill_files
      WHERE skill_version_id = $1

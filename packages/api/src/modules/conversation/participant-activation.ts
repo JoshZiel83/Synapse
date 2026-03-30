@@ -1,4 +1,5 @@
-import { query, transaction } from "../../infrastructure/database/index.js";
+import { transaction } from "../../infrastructure/database/index.js";
+import { db } from "../../infrastructure/database/kysely.js";
 import {
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
@@ -35,29 +36,27 @@ async function loadParticipantDisplay(params: {
   }
 
   if (params.memberType === "actor" && params.actorId) {
-    const result = await query(
-      `SELECT name, title
-       FROM actors
-       WHERE id = $1
-       LIMIT 1`,
-      [params.actorId],
-    );
+    const result = await db
+      .selectFrom('actors')
+      .select(['name', 'title'])
+      .where('id', '=', params.actorId)
+      .limit(1)
+      .executeTakeFirst();
     return {
-      name: (result.rows[0]?.name as string | undefined) || "Actor",
-      title: (result.rows[0]?.title as string | undefined) || undefined,
+      name: result?.name || "Actor",
+      title: result?.title || undefined,
     };
   }
 
   if (params.memberType === "user" && params.userId) {
-    const result = await query(
-      `SELECT name
-       FROM users
-       WHERE id = $1
-       LIMIT 1`,
-      [params.userId],
-    );
+    const result = await db
+      .selectFrom('users')
+      .select('name')
+      .where('id', '=', params.userId)
+      .limit(1)
+      .executeTakeFirst();
     return {
-      name: (result.rows[0]?.name as string | undefined) || "User",
+      name: result?.name || "User",
       title: undefined as string | undefined,
     };
   }

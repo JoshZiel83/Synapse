@@ -233,8 +233,15 @@ async function deliverViaWeixin(params: {
     externalId: endpointExternalId,
     addressType: "user",
   });
+  const endpointAddressMetadata =
+    endpointAddress &&
+    endpointAddress.metadata &&
+    typeof endpointAddress.metadata === "object" &&
+    !Array.isArray(endpointAddress.metadata)
+      ? (endpointAddress.metadata as Record<string, unknown>)
+      : {};
   const contextToken =
-    nonEmptyString(endpointAddress?.metadata?.contextToken) ||
+    nonEmptyString(endpointAddressMetadata.contextToken) ||
     nonEmptyString(params.endpoint.metadata.contextToken);
   if (!contextToken) {
     throw new Error(

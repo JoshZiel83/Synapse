@@ -11,7 +11,7 @@ import type {
   AutomationIntegrationTargetKind,
 } from "@synapse/shared";
 import { config } from "../../config/index.js";
-import { query } from "../../infrastructure/database/index.js";
+import { db } from "../../infrastructure/database/kysely.js";
 import { decryptSensitiveFields } from "../../infrastructure/crypto/index.js";
 
 type IntegrationInstallationRow = {
@@ -359,26 +359,29 @@ export async function getIntegrationInstallation(
   expectedProvider?: AutomationIntegrationProvider,
   options?: { allowInactive?: boolean },
 ): Promise<ResolvedIntegrationInstallation> {
-  const result = await query<IntegrationInstallationRow>(
-    `SELECT
-       installation.id AS installation_id,
-       installation.workspace_id,
-       installation.status AS installation_status,
-       installation.config_data,
-       publisher.slug AS org_slug,
-       item.slug AS item_slug,
-       spec.metadata AS spec_metadata
-     FROM plugin_installations installation
-     JOIN catalog_items item ON item.id = installation.catalog_item_id
-     JOIN publishers publisher ON publisher.id = item.publisher_id
-     JOIN plugin_package_version_specs spec ON spec.catalog_version_id = installation.catalog_version_id
-     WHERE installation.id = $1
-       AND installation.workspace_id = $2
-     LIMIT 1`,
-    [installationId, workspaceId],
-  );
+  const row = await db
+    .selectFrom("plugin_installations as installation")
+    .innerJoin("catalog_items as item", "item.id", "installation.catalog_item_id")
+    .innerJoin("publishers as publisher", "publisher.id", "item.publisher_id")
+    .innerJoin(
+      "plugin_package_version_specs as spec",
+      "spec.catalog_version_id",
+      "installation.catalog_version_id",
+    )
+    .select([
+      "installation.id as installation_id",
+      "installation.workspace_id",
+      "installation.status as installation_status",
+      "installation.config_data",
+      "publisher.slug as org_slug",
+      "item.slug as item_slug",
+      "spec.metadata as spec_metadata",
+    ])
+    .where("installation.id", "=", installationId)
+    .where("installation.workspace_id", "=", workspaceId)
+    .limit(1)
+    .executeTakeFirst() as IntegrationInstallationRow | undefined;
 
-  const row = result.rows[0];
   if (!row) {
     throw new Error(`Integration installation ${installationId} was not found`);
   }

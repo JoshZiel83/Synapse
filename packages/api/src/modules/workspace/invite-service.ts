@@ -7,6 +7,12 @@ import {
   queueAuthzRelationships,
   touchRelation,
 } from '../../infrastructure/authz/index.js';
+import {
+  db,
+  executeCompiledQuery,
+  executeTakeFirst,
+} from '../../infrastructure/database/kysely.js';
+import { sql } from 'kysely';
 import { assignOfficialChiefActorPreference } from './service.js';
 
 // ── Token generation ──
@@ -44,50 +50,55 @@ export async function createInvite(input: {
   expiresAt?: string;
 }) {
   const token = generateInviteToken();
-  const result = await query(
-    `INSERT INTO workspace_invites (workspace_id, token, created_by, trust_level, max_uses, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
-    [
-      input.workspaceId,
+  const row = await db
+    .insertInto('workspace_invites')
+    .values({
+      workspace_id: input.workspaceId,
       token,
-      input.createdBy,
-      input.trustLevel || 'member',
-      input.maxUses ?? null,
-      input.expiresAt ?? null,
-    ]
-  );
-  return mapInviteRow(result.rows[0]);
+      created_by: input.createdBy,
+      trust_level: input.trustLevel || 'member',
+      max_uses: input.maxUses ?? null,
+      expires_at: input.expiresAt ?? null,
+    })
+    .returningAll()
+    .executeTakeFirst();
+  return mapInviteRow(row);
 }
 
 export async function getInviteByToken(token: string) {
-  const result = await query(
-    `SELECT wi.*, w.name AS workspace_name
-     FROM workspace_invites wi
-     JOIN workspaces w ON w.id = wi.workspace_id
-     WHERE wi.token = $1`,
-    [token]
-  );
-  return result.rows.length > 0 ? mapInviteRow(result.rows[0]) : null;
+  const row = await db
+    .selectFrom('workspace_invites as wi')
+    .innerJoin('workspaces as w', 'w.id', 'wi.workspace_id')
+    .selectAll('wi')
+    .select('w.name as workspace_name')
+    .where('wi.token', '=', token)
+    .executeTakeFirst();
+  return row ? mapInviteRow(row) : null;
 }
 
 export async function redeemInvite(token: string, userId: string) {
   const result = await transaction(async (client: pg.PoolClient) => {
+    const runner = { query: client.query.bind(client) as typeof query };
     // Lock the invite row
-    const inviteRes = await client.query(
-      `SELECT wi.*, w.name AS workspace_name
-       FROM workspace_invites wi
-       JOIN workspaces w ON w.id = wi.workspace_id
-       WHERE wi.token = $1
-       FOR UPDATE OF wi`,
-      [token]
+    const invite = await executeTakeFirst<any>(
+      runner,
+      db
+        .selectFrom('workspace_invites')
+        .selectAll()
+        .where('token', '=', token)
+        .forUpdate(),
     );
-
-    if (inviteRes.rows.length === 0) {
+    if (!invite) {
       throw new Error('Invite not found');
     }
 
-    const invite = inviteRes.rows[0];
+    const workspace = await executeTakeFirst<{ name: string }>(
+      runner,
+      db
+        .selectFrom('workspaces')
+        .select('name')
+        .where('id', '=', invite.workspace_id),
+    );
 
     if (invite.is_revoked) {
       throw new Error('Invite has been revoked');
@@ -100,19 +111,28 @@ export async function redeemInvite(token: string, userId: string) {
     }
 
     // Check if already a member
-    const memberCheck = await client.query(
-      'SELECT id FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
-      [invite.workspace_id, userId]
+    const memberCheck = await executeTakeFirst<{ id: string }>(
+      runner,
+      db
+        .selectFrom('workspace_members')
+        .select('id')
+        .where('workspace_id', '=', invite.workspace_id)
+        .where('user_id', '=', userId),
     );
-    if (memberCheck.rows.length > 0) {
+    if (memberCheck) {
       throw new Error('Already a member of this workspace');
     }
 
     // Add as member
-    await client.query(
-      `INSERT INTO workspace_members (workspace_id, user_id, trust_level)
-       VALUES ($1, $2, $3)`,
-      [invite.workspace_id, userId, invite.trust_level]
+    await executeCompiledQuery(
+      runner,
+      db
+        .insertInto('workspace_members')
+        .values({
+          workspace_id: invite.workspace_id,
+          user_id: userId,
+          trust_level: invite.trust_level,
+        }),
     );
 
     await assignOfficialChiefActorPreference(
@@ -122,9 +142,14 @@ export async function redeemInvite(token: string, userId: string) {
     );
 
     // Increment use count
-    await client.query(
-      'UPDATE workspace_invites SET use_count = use_count + 1 WHERE id = $1',
-      [invite.id]
+    await executeCompiledQuery(
+      runner,
+      db
+        .updateTable('workspace_invites')
+        .set({
+          use_count: sql`use_count + 1`,
+        })
+        .where('id', '=', invite.id),
     );
 
     const authzEntryIds = await queueAuthzRelationships(
@@ -142,7 +167,7 @@ export async function redeemInvite(token: string, userId: string) {
 
     return {
       workspaceId: invite.workspace_id,
-      workspaceName: invite.workspace_name,
+      workspaceName: workspace?.name,
       trustLevel: invite.trust_level,
       authzEntryIds,
     };
@@ -164,22 +189,26 @@ export async function redeemInvite(token: string, userId: string) {
 }
 
 export async function listWorkspaceInvites(workspaceId: string) {
-  const result = await query(
-    `SELECT * FROM workspace_invites
-     WHERE workspace_id = $1 AND is_revoked = FALSE
-     ORDER BY created_at DESC`,
-    [workspaceId]
-  );
-  return result.rows.map(mapInviteRow);
+  const rows = await db
+    .selectFrom('workspace_invites')
+    .selectAll()
+    .where('workspace_id', '=', workspaceId)
+    .where('is_revoked', '=', false)
+    .orderBy('created_at', 'desc')
+    .execute();
+  return rows.map(mapInviteRow);
 }
 
 export async function revokeInvite(inviteId: string, workspaceId: string) {
-  const result = await query(
-    `UPDATE workspace_invites
-     SET is_revoked = TRUE
-     WHERE id = $1 AND workspace_id = $2
-     RETURNING *`,
-    [inviteId, workspaceId]
-  );
-  return result.rows.length > 0 ? mapInviteRow(result.rows[0]) : null;
+  const row = await db
+    .updateTable('workspace_invites')
+    .set({
+      is_revoked: true,
+      updated_at: sql`NOW()`,
+    })
+    .where('id', '=', inviteId)
+    .where('workspace_id', '=', workspaceId)
+    .returningAll()
+    .executeTakeFirst();
+  return row ? mapInviteRow(row) : null;
 }

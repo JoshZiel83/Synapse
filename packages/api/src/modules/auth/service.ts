@@ -21,6 +21,13 @@ import type {
 } from '@synapse/shared';
 import { query, transaction } from '../../infrastructure/database/index.js';
 import {
+  db,
+  executeCompiledQuery,
+  executeTakeFirst,
+  type QueryExecutor,
+  type TableInsert,
+} from '../../infrastructure/database/kysely.js';
+import {
   disconnectSocketsForSession,
   disconnectSocketsForUser,
 } from '../../infrastructure/websocket/auth-session-registry.js';
@@ -31,6 +38,7 @@ import {
 } from '../files/service.js';
 import { createGeneratedUserAvatarFile } from '../avatar/service.js';
 import { ensureConfiguredPlatformAdminForUser } from '../platform/admin-service.js';
+import { sql } from 'kysely';
 
 const SALT_ROUNDS = 10;
 
@@ -40,29 +48,29 @@ interface UserRow {
   name: string;
   avatar_file_id: string | null;
   password_hash: string;
-  created_at: string;
-  updated_at: string;
+  created_at: string | Date | null;
+  updated_at: string | Date | null;
 }
 
 interface AuthenticatedSessionRow {
   session_id: string;
   session_user_id: string;
-  session_client_type: AuthClientType;
-  session_transport: AuthTransport;
+  session_client_type: AuthClientType | string;
+  session_transport: AuthTransport | string;
   session_device_name: string | null;
   session_platform: string | null;
-  session_created_at: string;
-  session_updated_at: string;
-  session_last_seen_at: string;
-  session_expires_at: string;
-  session_revoked_at: string | null;
+  session_created_at: string | Date | null;
+  session_updated_at: string | Date | null;
+  session_last_seen_at: string | Date | null;
+  session_expires_at: string | Date | null;
+  session_revoked_at: string | Date | null;
   session_revoke_reason: string | null;
   id: string;
   email: string;
   name: string;
   avatar_file_id: string | null;
-  created_at: string;
-  updated_at: string;
+  created_at: string | Date | null;
+  updated_at: string | Date | null;
 }
 
 export interface SessionContextInput {
@@ -87,26 +95,35 @@ export interface AuthServiceResult {
   sessionPersistence: AuthSessionPersistence;
 }
 
-interface DatabaseExecutor {
-  query: typeof query;
-}
+type DatabaseExecutor = QueryExecutor;
 
 interface AuthQrLoginRequestRow {
   id: string;
-  status: AuthQrLoginStatus;
+  status: AuthQrLoginStatus | string;
   browser_ip_address: string | null;
   browser_user_agent: string | null;
   browser_label: string;
-  approved_session_persistence: AuthSessionPersistence | null;
+  approved_session_persistence: AuthSessionPersistence | string | null;
   resolver_user_id: string | null;
   approved_by_user_id: string | null;
-  scanned_at: string | null;
-  approved_at: string | null;
-  rejected_at: string | null;
-  consumed_at: string | null;
-  expires_at: string;
-  created_at: string;
-  updated_at: string;
+  scanned_at: string | Date | null;
+  approved_at: string | Date | null;
+  rejected_at: string | Date | null;
+  consumed_at: string | Date | null;
+  expires_at: string | Date | null;
+  created_at: string | Date | null;
+  updated_at: string | Date | null;
+}
+
+function toIsoString(value: string | Date | null | undefined): string {
+  if (typeof value === 'string') return value;
+  if (value instanceof Date) return value.toISOString();
+  return new Date(0).toISOString();
+}
+
+function toOptionalIsoString(value: string | Date | null | undefined): string | undefined {
+  if (value == null) return undefined;
+  return toIsoString(value);
 }
 
 function mapUserRow(row: Pick<UserRow, 'id' | 'email' | 'name' | 'avatar_file_id' | 'created_at' | 'updated_at'>): User {
@@ -115,23 +132,23 @@ function mapUserRow(row: Pick<UserRow, 'id' | 'email' | 'name' | 'avatar_file_id
     email: row.email,
     name: row.name,
     avatarUrl: row.avatar_file_id ? getFileUrlById(row.avatar_file_id) : undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at),
   };
 }
 
 function mapAuthenticatedSessionRow(row: AuthenticatedSessionRow, current = true): AuthSessionSummary {
   return {
     id: row.session_id,
-    clientType: row.session_client_type,
-    transport: row.session_transport,
+    clientType: row.session_client_type as AuthClientType,
+    transport: row.session_transport as AuthTransport,
     deviceName: row.session_device_name ?? undefined,
     platform: row.session_platform ?? undefined,
     current,
-    createdAt: row.session_created_at,
-    lastSeenAt: row.session_last_seen_at,
-    expiresAt: row.session_expires_at,
-    revokedAt: row.session_revoked_at ?? undefined,
+    createdAt: toIsoString(row.session_created_at),
+    lastSeenAt: toIsoString(row.session_last_seen_at),
+    expiresAt: toIsoString(row.session_expires_at),
+    revokedAt: toOptionalIsoString(row.session_revoked_at),
   };
 }
 
@@ -192,6 +209,46 @@ function getDatabaseExecutor(executor?: DatabaseExecutor): DatabaseExecutor {
   return executor ?? { query };
 }
 
+const userSelection = [
+  'id',
+  'email',
+  'name',
+  'avatar_file_id',
+  'password_hash',
+  'created_at',
+  'updated_at',
+] as const;
+
+const authSessionReturning = [
+  'id',
+  'client_type',
+  'transport',
+  'device_name',
+  'platform',
+  'created_at',
+  'last_seen_at',
+  'expires_at',
+  'revoked_at',
+] as const;
+
+const authQrLoginRequestSelection = [
+  'id',
+  'status',
+  'browser_ip_address',
+  'browser_user_agent',
+  'browser_label',
+  'approved_session_persistence',
+  'resolver_user_id',
+  'approved_by_user_id',
+  'scanned_at',
+  'approved_at',
+  'rejected_at',
+  'consumed_at',
+  'expires_at',
+  'created_at',
+  'updated_at',
+] as const;
+
 function getBrowserName(userAgent?: string) {
   const value = userAgent?.toLowerCase() ?? '';
 
@@ -232,24 +289,25 @@ function describeBrowserSession(userAgent?: string) {
 function mapAuthQrLoginRequestRow(row: AuthQrLoginRequestRow): AuthQrLoginRequestSummary {
   return {
     id: row.id,
-    status: row.status,
+    status: row.status as AuthQrLoginStatus,
     browserLabel: row.browser_label,
-    approvedSessionPersistence: row.approved_session_persistence ?? undefined,
-    createdAt: row.created_at,
-    expiresAt: row.expires_at,
-    scannedAt: row.scanned_at ?? undefined,
-    approvedAt: row.approved_at ?? undefined,
-    rejectedAt: row.rejected_at ?? undefined,
-    consumedAt: row.consumed_at ?? undefined,
+    approvedSessionPersistence: (row.approved_session_persistence as AuthSessionPersistence | null) ?? undefined,
+    createdAt: toIsoString(row.created_at),
+    expiresAt: toIsoString(row.expires_at),
+    scannedAt: toOptionalIsoString(row.scanned_at),
+    approvedAt: toOptionalIsoString(row.approved_at),
+    rejectedAt: toOptionalIsoString(row.rejected_at),
+    consumedAt: toOptionalIsoString(row.consumed_at),
   };
 }
 
-function isExpiredTimestamp(timestamp: string) {
+function isExpiredTimestamp(timestamp: string | Date | null) {
+  if (!timestamp) return false;
   const expiresAt = new Date(timestamp).getTime();
   return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 }
 
-function isQrLoginExpiredStatus(status: AuthQrLoginStatus) {
+function isQrLoginExpiredStatus(status: AuthQrLoginStatus | string) {
   return status !== 'rejected' && status !== 'expired' && status !== 'consumed';
 }
 
@@ -261,35 +319,23 @@ async function expireQrLoginRequestIfNeeded(
     return row;
   }
 
-  const db = getDatabaseExecutor(executor);
-  const result = await db.query<AuthQrLoginRequestRow>(
-    `UPDATE auth_qr_login_requests
-        SET status = 'expired',
-            updated_at = NOW()
-      WHERE id = $1
-        AND status <> 'expired'
-        AND status <> 'rejected'
-        AND status <> 'consumed'
-      RETURNING
-        id,
-        status,
-        browser_ip_address,
-        browser_user_agent,
-        browser_label,
-        approved_session_persistence,
-        resolver_user_id,
-        approved_by_user_id,
-        scanned_at,
-        approved_at,
-        rejected_at,
-        consumed_at,
-        expires_at,
-        created_at,
-        updated_at`,
-    [row.id],
+  const runner = getDatabaseExecutor(executor);
+  const updated = await executeTakeFirst<AuthQrLoginRequestRow>(
+    runner,
+    db
+      .updateTable('auth_qr_login_requests')
+      .set({
+        status: 'expired',
+        updated_at: sql`NOW()`,
+      })
+      .where('id', '=', row.id)
+      .where('status', '<>', 'expired')
+      .where('status', '<>', 'rejected')
+      .where('status', '<>', 'consumed')
+      .returning(authQrLoginRequestSelection),
   );
 
-  return result.rows[0] ?? { ...row, status: 'expired' };
+  return updated ?? { ...row, status: 'expired' };
 }
 
 async function insertSession(
@@ -301,7 +347,7 @@ async function insertSession(
   sessionToken: string;
   sessionPersistence: AuthSessionPersistence;
 }> {
-  const db = getDatabaseExecutor(executor);
+  const runner = getDatabaseExecutor(executor);
   const sessionToken = generateSessionToken();
   const tokenHash = getTokenHash(sessionToken);
   const expiresAt = getSessionExpiryDate().toISOString();
@@ -317,7 +363,7 @@ async function insertSession(
     sessionPersistence,
   };
 
-  const result = await db.query<{
+  const row = await executeTakeFirst<{
     id: string;
     client_type: AuthClientType;
     transport: AuthTransport;
@@ -328,37 +374,27 @@ async function insertSession(
     expires_at: string;
     revoked_at: string | null;
   }>(
-    `INSERT INTO auth_sessions (
-       user_id,
-       client_type,
-       transport,
-       device_name,
-       platform,
-       token_hash,
-       token_hint,
-       ip_address,
-       user_agent,
-       metadata,
-       expires_at
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
-     RETURNING id, client_type, transport, device_name, platform, created_at, last_seen_at, expires_at, revoked_at`,
-    [
-      user.id,
-      clientType,
-      transport,
-      deviceName,
-      platform,
-      tokenHash,
-      getTokenHint(sessionToken),
-      ipAddress,
-      userAgent,
-      JSON.stringify(metadata),
-      expiresAt,
-    ],
+    runner,
+    db
+      .insertInto('auth_sessions')
+      .values({
+        user_id: user.id,
+        client_type: clientType,
+        transport,
+        device_name: deviceName,
+        platform,
+        token_hash: tokenHash,
+        token_hint: getTokenHint(sessionToken),
+        ip_address: ipAddress,
+        user_agent: userAgent,
+        metadata: metadata as TableInsert<'auth_sessions'>['metadata'],
+        expires_at: expiresAt,
+      })
+      .returning(authSessionReturning),
   );
-
-  const row = result.rows[0];
+  if (!row) {
+    throw new Error('Failed to create auth session');
+  }
 
   return {
     sessionToken,
@@ -379,78 +415,78 @@ async function insertSession(
 }
 
 async function getUserByEmail(email: string, executor?: DatabaseExecutor): Promise<UserRow | null> {
-  const db = getDatabaseExecutor(executor);
-  const result = await db.query<UserRow>(
-    `SELECT id, email, name, avatar_file_id, password_hash, created_at, updated_at
-       FROM users
-      WHERE email = $1`,
-    [email.toLowerCase()],
+  const runner = getDatabaseExecutor(executor);
+  return executeTakeFirst<UserRow>(
+    runner,
+    db
+      .selectFrom('users')
+      .select(userSelection)
+      .where('email', '=', email.toLowerCase()),
   );
-
-  return result.rows[0] ?? null;
 }
 
 async function getUserById(userId: string, executor?: DatabaseExecutor): Promise<UserRow | null> {
-  const db = getDatabaseExecutor(executor);
-  const result = await db.query<UserRow>(
-    `SELECT id, email, name, avatar_file_id, password_hash, created_at, updated_at
-       FROM users
-      WHERE id = $1`,
-    [userId],
+  const runner = getDatabaseExecutor(executor);
+  return executeTakeFirst<UserRow>(
+    runner,
+    db
+      .selectFrom('users')
+      .select(userSelection)
+      .where('id', '=', userId),
   );
-
-  return result.rows[0] ?? null;
 }
 
 async function touchSessionIfNeeded(row: AuthenticatedSessionRow, request: FastifyRequest) {
+  if (!row.session_last_seen_at) return;
   const lastSeenAtMs = new Date(row.session_last_seen_at).getTime();
   if (!Number.isFinite(lastSeenAtMs)) return;
   if (Date.now() - lastSeenAtMs < AUTH_SESSION_TOUCH_INTERVAL_SECONDS * 1000) return;
 
-  await query(
-    `UPDATE auth_sessions
-        SET last_seen_at = NOW(),
-            updated_at = NOW(),
-            ip_address = $2,
-            user_agent = $3
-      WHERE id = $1`,
-    [row.session_id, extractIpAddress(request) ?? null, extractUserAgent(request) ?? null],
-  );
+  await db
+    .updateTable('auth_sessions')
+    .set({
+      last_seen_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+      ip_address: extractIpAddress(request) ?? null,
+      user_agent: extractUserAgent(request) ?? null,
+    })
+    .where('id', '=', row.session_id)
+    .execute();
 }
 
 async function findAuthenticatedSession(token: string): Promise<AuthenticatedSessionRow | null> {
   const tokenHash = getTokenHash(token);
 
-  const result = await query<AuthenticatedSessionRow>(
-    `SELECT
-        s.id AS session_id,
-        s.user_id AS session_user_id,
-        s.client_type AS session_client_type,
-        s.transport AS session_transport,
-        s.device_name AS session_device_name,
-        s.platform AS session_platform,
-        s.created_at AS session_created_at,
-        s.updated_at AS session_updated_at,
-        s.last_seen_at AS session_last_seen_at,
-        s.expires_at AS session_expires_at,
-        s.revoked_at AS session_revoked_at,
-        s.revoke_reason AS session_revoke_reason,
-        u.id,
-        u.email,
-        u.name,
-        u.avatar_file_id,
-        u.created_at,
-        u.updated_at
-       FROM auth_sessions s
-       JOIN users u ON u.id = s.user_id
-      WHERE s.token_hash = $1
-        AND s.revoked_at IS NULL
-        AND s.expires_at > NOW()
-      LIMIT 1`,
-    [tokenHash],
-  );
-
-  return result.rows[0] ?? null;
+  return (
+    (await db
+      .selectFrom('auth_sessions as s')
+      .innerJoin('users as u', 'u.id', 's.user_id')
+      .select([
+        's.id as session_id',
+        's.user_id as session_user_id',
+        's.client_type as session_client_type',
+        's.transport as session_transport',
+        's.device_name as session_device_name',
+        's.platform as session_platform',
+        's.created_at as session_created_at',
+        's.updated_at as session_updated_at',
+        's.last_seen_at as session_last_seen_at',
+        's.expires_at as session_expires_at',
+        's.revoked_at as session_revoked_at',
+        's.revoke_reason as session_revoke_reason',
+        'u.id',
+        'u.email',
+        'u.name',
+        'u.avatar_file_id',
+        'u.created_at',
+        'u.updated_at',
+      ])
+      .where('s.token_hash', '=', tokenHash)
+      .where('s.revoked_at', 'is', null)
+      .where(sql<boolean>`s.expires_at > NOW()`)
+      .limit(1)
+      .executeTakeFirst()) ?? null
+  ) as AuthenticatedSessionRow | null;
 }
 
 async function getQrLoginRequestById(
@@ -459,32 +495,17 @@ async function getQrLoginRequestById(
   executor?: DatabaseExecutor,
   forUpdate = false,
 ): Promise<AuthQrLoginRequestRow | null> {
-  const db = getDatabaseExecutor(executor);
-  const result = await db.query<AuthQrLoginRequestRow>(
-    `SELECT
-        id,
-        status,
-        browser_ip_address,
-        browser_user_agent,
-        browser_label,
-        approved_session_persistence,
-        resolver_user_id,
-        approved_by_user_id,
-        scanned_at,
-        approved_at,
-        rejected_at,
-        consumed_at,
-        expires_at,
-        created_at,
-        updated_at
-       FROM auth_qr_login_requests
-      WHERE id = $1
-        AND browser_token_hash = $2
-      ${forUpdate ? 'FOR UPDATE' : ''}`,
-    [requestId, getTokenHash(browserToken)],
-  );
+  const runner = getDatabaseExecutor(executor);
+  let statement = db
+    .selectFrom('auth_qr_login_requests')
+    .select(authQrLoginRequestSelection)
+    .where('id', '=', requestId)
+    .where('browser_token_hash', '=', getTokenHash(browserToken));
+  if (forUpdate) {
+    statement = statement.forUpdate();
+  }
 
-  return result.rows[0] ?? null;
+  return executeTakeFirst<AuthQrLoginRequestRow>(runner, statement);
 }
 
 async function getQrLoginRequestByScanToken(
@@ -492,31 +513,16 @@ async function getQrLoginRequestByScanToken(
   executor?: DatabaseExecutor,
   forUpdate = false,
 ): Promise<AuthQrLoginRequestRow | null> {
-  const db = getDatabaseExecutor(executor);
-  const result = await db.query<AuthQrLoginRequestRow>(
-    `SELECT
-        id,
-        status,
-        browser_ip_address,
-        browser_user_agent,
-        browser_label,
-        approved_session_persistence,
-        resolver_user_id,
-        approved_by_user_id,
-        scanned_at,
-        approved_at,
-        rejected_at,
-        consumed_at,
-        expires_at,
-        created_at,
-        updated_at
-       FROM auth_qr_login_requests
-      WHERE scan_token_hash = $1
-      ${forUpdate ? 'FOR UPDATE' : ''}`,
-    [getTokenHash(scanToken)],
-  );
+  const runner = getDatabaseExecutor(executor);
+  let statement = db
+    .selectFrom('auth_qr_login_requests')
+    .select(authQrLoginRequestSelection)
+    .where('scan_token_hash', '=', getTokenHash(scanToken));
+  if (forUpdate) {
+    statement = statement.forUpdate();
+  }
 
-  return result.rows[0] ?? null;
+  return executeTakeFirst<AuthQrLoginRequestRow>(runner, statement);
 }
 
 export function extractSessionTokenFromRequest(request: FastifyRequest): string | null {
@@ -558,36 +564,34 @@ export async function authenticateRequestSession(request: FastifyRequest): Promi
 }
 
 async function revokeSessionById(sessionId: string, reason: string) {
-  await query(
-    `UPDATE auth_sessions
-        SET revoked_at = NOW(),
-            revoke_reason = $2,
-            updated_at = NOW()
-      WHERE id = $1
-        AND revoked_at IS NULL`,
-    [sessionId, reason],
-  );
+  await db
+    .updateTable('auth_sessions')
+    .set({
+      revoked_at: sql`NOW()`,
+      revoke_reason: reason,
+      updated_at: sql`NOW()`,
+    })
+    .where('id', '=', sessionId)
+    .where('revoked_at', 'is', null)
+    .execute();
 }
 
 async function revokeAllSessionsForUser(userId: string, reason: string, exceptSessionId?: string) {
-  const params: any[] = [userId, reason];
-  let filter = '';
+  let statement = db
+    .updateTable('auth_sessions')
+    .set({
+      revoked_at: sql`NOW()`,
+      revoke_reason: reason,
+      updated_at: sql`NOW()`,
+    })
+    .where('user_id', '=', userId)
+    .where('revoked_at', 'is', null);
 
   if (exceptSessionId) {
-    params.push(exceptSessionId);
-    filter = 'AND id <> $3';
+    statement = statement.where('id', '<>', exceptSessionId);
   }
 
-  await query(
-    `UPDATE auth_sessions
-        SET revoked_at = NOW(),
-            revoke_reason = $2,
-            updated_at = NOW()
-      WHERE user_id = $1
-        AND revoked_at IS NULL
-        ${filter}`,
-    params,
-  );
+  await statement.execute();
 }
 
 async function disconnectSocketsBestEffort(action: Promise<unknown>, context: string) {
@@ -613,30 +617,44 @@ export function createAuthService(_app: FastifyInstance) {
 
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
     const userRow = await transaction(async (client) => {
-      const createdUser = await client.query<UserRow>(
-        `INSERT INTO users (email, password_hash, name)
-         VALUES ($1, $2, $3)
-         RETURNING id, email, name, avatar_file_id, password_hash, created_at, updated_at`,
-        [normalizedEmail, passwordHash, name.trim()],
+      const runner = { query: client.query.bind(client) as typeof query };
+      const row = await executeTakeFirst<UserRow>(
+        runner,
+        db
+          .insertInto('users')
+          .values({
+            email: normalizedEmail,
+            password_hash: passwordHash,
+            name: name.trim(),
+          })
+          .returning(userSelection),
       );
+      if (!row) {
+        throw new Error('Failed to create user');
+      }
 
-      const row = createdUser.rows[0]!;
       const avatarFile = await createGeneratedUserAvatarFile(client, {
         userId: row.id,
         name: row.name,
         email: row.email,
       });
 
-      const updatedUser = await client.query<UserRow>(
-        `UPDATE users
-         SET avatar_file_id = $2,
-             updated_at = NOW()
-         WHERE id = $1
-         RETURNING id, email, name, avatar_file_id, password_hash, created_at, updated_at`,
-        [row.id, avatarFile.fileId],
+      const updatedUser = await executeTakeFirst<UserRow>(
+        runner,
+        db
+          .updateTable('users')
+          .set({
+            avatar_file_id: avatarFile.fileId,
+            updated_at: sql`NOW()`,
+          })
+          .where('id', '=', row.id)
+          .returning(userSelection),
       );
+      if (!updatedUser) {
+        throw new Error('Failed to update user avatar');
+      }
 
-      return updatedUser.rows[0]!;
+      return updatedUser;
     });
 
     const user = mapUserRow(userRow);
@@ -674,45 +692,26 @@ export function createAuthService(_app: FastifyInstance) {
     const browserToken = generateSessionToken();
     const browserUserAgent = extractUserAgent(request);
     const expiresAt = getQrLoginExpiryDate().toISOString();
-    const result = await query<AuthQrLoginRequestRow>(
-      `INSERT INTO auth_qr_login_requests (
-         scan_token_hash,
-         browser_token_hash,
-         status,
-         browser_ip_address,
-         browser_user_agent,
-         browser_label,
-         expires_at
-       )
-       VALUES ($1, $2, 'pending_scan', $3, $4, $5, $6)
-       RETURNING
-         id,
-         status,
-         browser_ip_address,
-         browser_user_agent,
-         browser_label,
-         approved_session_persistence,
-         resolver_user_id,
-         approved_by_user_id,
-         scanned_at,
-         approved_at,
-         rejected_at,
-         consumed_at,
-         expires_at,
-         created_at,
-         updated_at`,
-      [
-        getTokenHash(scanToken),
-        getTokenHash(browserToken),
-        extractIpAddress(request) ?? null,
-        browserUserAgent ?? null,
-        describeBrowserSession(browserUserAgent),
-        expiresAt,
-      ],
-    );
+    const row = await db
+      .insertInto('auth_qr_login_requests')
+      .values({
+        scan_token_hash: getTokenHash(scanToken),
+        browser_token_hash: getTokenHash(browserToken),
+        status: 'pending_scan',
+        browser_ip_address: extractIpAddress(request) ?? null,
+        browser_user_agent: browserUserAgent ?? null,
+        browser_label: describeBrowserSession(browserUserAgent),
+        expires_at: expiresAt,
+      })
+      .returning(authQrLoginRequestSelection)
+      .executeTakeFirst();
+
+    if (!row) {
+      throw new Error('Failed to create QR login request');
+    }
 
     return {
-      request: mapAuthQrLoginRequestRow(result.rows[0]),
+      request: mapAuthQrLoginRequestRow(row),
       scanToken,
       browserToken,
     };
@@ -736,13 +735,13 @@ export function createAuthService(_app: FastifyInstance) {
     userId: string,
   ): Promise<AuthQrLoginResolveResponse> {
     return transaction(async (client) => {
-      const db = { query: client.query.bind(client) as typeof query };
-      let row = await getQrLoginRequestByScanToken(scanToken, db, true);
+      const runner = { query: client.query.bind(client) as typeof query };
+      let row = await getQrLoginRequestByScanToken(scanToken, runner, true);
       if (!row) {
         throw new AuthError('QR login request not found', 404, 'QR_LOGIN_REQUEST_NOT_FOUND');
       }
 
-      row = await expireQrLoginRequestIfNeeded(row, db);
+      row = await expireQrLoginRequestIfNeeded(row, runner);
 
       if (row.status === 'expired') {
         throw new AuthError('QR login request expired', 410, 'QR_LOGIN_REQUEST_EXPIRED');
@@ -765,40 +764,27 @@ export function createAuthService(_app: FastifyInstance) {
       }
 
       if (row.status === 'pending_scan') {
-        const updated = await db.query<AuthQrLoginRequestRow>(
-          `UPDATE auth_qr_login_requests
-              SET status = 'pending_confirm',
-                  resolver_user_id = $2,
-                  scanned_at = COALESCE(scanned_at, NOW()),
-                  updated_at = NOW()
-            WHERE id = $1
-            RETURNING
-              id,
-              status,
-              browser_ip_address,
-              browser_user_agent,
-              browser_label,
-              approved_session_persistence,
-              resolver_user_id,
-              approved_by_user_id,
-              scanned_at,
-              approved_at,
-              rejected_at,
-              consumed_at,
-              expires_at,
-              created_at,
-              updated_at`,
-          [row.id, userId],
-        );
-        row = updated.rows[0] ?? row;
+        row = (await executeTakeFirst<AuthQrLoginRequestRow>(
+          runner,
+          db
+            .updateTable('auth_qr_login_requests')
+            .set({
+              status: 'pending_confirm',
+              resolver_user_id: userId,
+              scanned_at: sql`COALESCE(scanned_at, NOW())`,
+              updated_at: sql`NOW()`,
+            })
+            .where('id', '=', row.id)
+            .returning(authQrLoginRequestSelection),
+        )) ?? row;
       }
 
       return {
         request: mapAuthQrLoginRequestRow(row),
         confirmation: {
           browserLabel: row.browser_label,
-          requestedAt: row.created_at,
-          expiresAt: row.expires_at,
+          requestedAt: toIsoString(row.created_at),
+          expiresAt: toIsoString(row.expires_at),
         },
       };
     });
@@ -810,13 +796,13 @@ export function createAuthService(_app: FastifyInstance) {
     sessionPersistence: AuthSessionPersistence,
   ): Promise<AuthQrLoginStatusResponse> {
     return transaction(async (client) => {
-      const db = { query: client.query.bind(client) as typeof query };
-      let row = await getQrLoginRequestByScanToken(scanToken, db, true);
+      const runner = { query: client.query.bind(client) as typeof query };
+      let row = await getQrLoginRequestByScanToken(scanToken, runner, true);
       if (!row) {
         throw new AuthError('QR login request not found', 404, 'QR_LOGIN_REQUEST_NOT_FOUND');
       }
 
-      row = await expireQrLoginRequestIfNeeded(row, db);
+      row = await expireQrLoginRequestIfNeeded(row, runner);
 
       if (row.status === 'expired') {
         throw new AuthError('QR login request expired', 410, 'QR_LOGIN_REQUEST_EXPIRED');
@@ -839,35 +825,22 @@ export function createAuthService(_app: FastifyInstance) {
       }
 
       if (row.status !== 'approved') {
-        const updated = await db.query<AuthQrLoginRequestRow>(
-          `UPDATE auth_qr_login_requests
-              SET status = 'approved',
-                  resolver_user_id = COALESCE(resolver_user_id, $2),
-                  approved_by_user_id = $2,
-                  approved_session_persistence = $3,
-                  scanned_at = COALESCE(scanned_at, NOW()),
-                  approved_at = NOW(),
-                  updated_at = NOW()
-            WHERE id = $1
-            RETURNING
-              id,
-              status,
-              browser_ip_address,
-              browser_user_agent,
-              browser_label,
-              approved_session_persistence,
-              resolver_user_id,
-              approved_by_user_id,
-              scanned_at,
-              approved_at,
-              rejected_at,
-              consumed_at,
-              expires_at,
-              created_at,
-              updated_at`,
-          [row.id, userId, sessionPersistence],
-        );
-        row = updated.rows[0] ?? row;
+        row = (await executeTakeFirst<AuthQrLoginRequestRow>(
+          runner,
+          db
+            .updateTable('auth_qr_login_requests')
+            .set({
+              status: 'approved',
+              resolver_user_id: sql`COALESCE(resolver_user_id, ${userId})`,
+              approved_by_user_id: userId,
+              approved_session_persistence: sessionPersistence,
+              scanned_at: sql`COALESCE(scanned_at, NOW())`,
+              approved_at: sql`NOW()`,
+              updated_at: sql`NOW()`,
+            })
+            .where('id', '=', row.id)
+            .returning(authQrLoginRequestSelection),
+        )) ?? row;
       }
 
       return { request: mapAuthQrLoginRequestRow(row) };
@@ -879,13 +852,13 @@ export function createAuthService(_app: FastifyInstance) {
     userId: string,
   ): Promise<AuthQrLoginStatusResponse> {
     return transaction(async (client) => {
-      const db = { query: client.query.bind(client) as typeof query };
-      let row = await getQrLoginRequestByScanToken(scanToken, db, true);
+      const runner = { query: client.query.bind(client) as typeof query };
+      let row = await getQrLoginRequestByScanToken(scanToken, runner, true);
       if (!row) {
         throw new AuthError('QR login request not found', 404, 'QR_LOGIN_REQUEST_NOT_FOUND');
       }
 
-      row = await expireQrLoginRequestIfNeeded(row, db);
+      row = await expireQrLoginRequestIfNeeded(row, runner);
 
       if (row.status === 'expired') {
         throw new AuthError('QR login request expired', 410, 'QR_LOGIN_REQUEST_EXPIRED');
@@ -908,33 +881,20 @@ export function createAuthService(_app: FastifyInstance) {
       }
 
       if (row.status !== 'rejected') {
-        const updated = await db.query<AuthQrLoginRequestRow>(
-          `UPDATE auth_qr_login_requests
-              SET status = 'rejected',
-                  resolver_user_id = COALESCE(resolver_user_id, $2),
-                  scanned_at = COALESCE(scanned_at, NOW()),
-                  rejected_at = NOW(),
-                  updated_at = NOW()
-            WHERE id = $1
-            RETURNING
-              id,
-              status,
-              browser_ip_address,
-              browser_user_agent,
-              browser_label,
-              approved_session_persistence,
-              resolver_user_id,
-              approved_by_user_id,
-              scanned_at,
-              approved_at,
-              rejected_at,
-              consumed_at,
-              expires_at,
-              created_at,
-              updated_at`,
-          [row.id, userId],
-        );
-        row = updated.rows[0] ?? row;
+        row = (await executeTakeFirst<AuthQrLoginRequestRow>(
+          runner,
+          db
+            .updateTable('auth_qr_login_requests')
+            .set({
+              status: 'rejected',
+              resolver_user_id: sql`COALESCE(resolver_user_id, ${userId})`,
+              scanned_at: sql`COALESCE(scanned_at, NOW())`,
+              rejected_at: sql`NOW()`,
+              updated_at: sql`NOW()`,
+            })
+            .where('id', '=', row.id)
+            .returning(authQrLoginRequestSelection),
+        )) ?? row;
       }
 
       return { request: mapAuthQrLoginRequestRow(row) };
@@ -947,13 +907,13 @@ export function createAuthService(_app: FastifyInstance) {
     request: FastifyRequest,
   ): Promise<AuthServiceResult> {
     return transaction(async (client) => {
-      const db = { query: client.query.bind(client) as typeof query };
-      let row = await getQrLoginRequestById(requestId, browserToken, db, true);
+      const runner = { query: client.query.bind(client) as typeof query };
+      let row = await getQrLoginRequestById(requestId, browserToken, runner, true);
       if (!row) {
         throw new AuthError('QR login request not found', 404, 'QR_LOGIN_REQUEST_NOT_FOUND');
       }
 
-      row = await expireQrLoginRequestIfNeeded(row, db);
+      row = await expireQrLoginRequestIfNeeded(row, runner);
 
       if (row.status === 'expired') {
         throw new AuthError('QR login request expired', 410, 'QR_LOGIN_REQUEST_EXPIRED');
@@ -971,14 +931,16 @@ export function createAuthService(_app: FastifyInstance) {
         throw new AuthError('QR login request is not approved yet', 409, 'QR_LOGIN_REQUEST_NOT_READY');
       }
 
-      const userRow = await getUserById(row.approved_by_user_id, db);
+      const userRow = await getUserById(row.approved_by_user_id, runner);
       if (!userRow) {
         throw new AuthError('User not found', 404, 'USER_NOT_FOUND');
       }
 
       const user = mapUserRow(userRow);
       const sessionPersistence = getSessionPersistence(
-        row.approved_session_persistence ?? undefined,
+        row.approved_session_persistence
+          ? (row.approved_session_persistence as AuthSessionPersistence)
+          : undefined,
       );
       await ensureConfiguredPlatformAdminForUser({ id: user.id, email: user.email });
       const { session, sessionToken } = await insertSession(
@@ -993,16 +955,19 @@ export function createAuthService(_app: FastifyInstance) {
             qrLoginRequestId: row.id,
           },
         },
-        db,
+        runner,
       );
 
-      await db.query(
-        `UPDATE auth_qr_login_requests
-            SET status = 'consumed',
-                consumed_at = NOW(),
-                updated_at = NOW()
-          WHERE id = $1`,
-        [row.id],
+      await executeCompiledQuery(
+        runner,
+        db
+          .updateTable('auth_qr_login_requests')
+          .set({
+            status: 'consumed',
+            consumed_at: sql`NOW()`,
+            updated_at: sql`NOW()`,
+          })
+          .where('id', '=', row.id),
       );
 
       return { user, session, sessionToken, sessionPersistence };
@@ -1042,21 +1007,22 @@ export function createAuthService(_app: FastifyInstance) {
       }
     }
 
-    const result = await query<UserRow>(
-      `UPDATE users
-          SET name = $2,
-              avatar_file_id = $3,
-              updated_at = NOW()
-        WHERE id = $1
-        RETURNING id, email, name, avatar_file_id, password_hash, created_at, updated_at`,
-      [userId, nextName, nextAvatarFileId ?? null],
-    );
+    const row = await db
+      .updateTable('users')
+      .set({
+        name: nextName,
+        avatar_file_id: nextAvatarFileId ?? null,
+        updated_at: sql`NOW()`,
+      })
+      .where('id', '=', userId)
+      .returning(userSelection)
+      .executeTakeFirst();
 
-    if (!result.rowCount) {
+    if (!row) {
       throw new AuthError('User not found', 404, 'USER_NOT_FOUND');
     }
 
-    return mapUserRow(result.rows[0]);
+    return mapUserRow(row);
   }
 
   async function getCurrentSession(request: FastifyRequest): Promise<AuthenticatedRequestSession> {
@@ -1069,35 +1035,24 @@ export function createAuthService(_app: FastifyInstance) {
   }
 
   async function listSessions(userId: string, currentSessionId?: string): Promise<AuthSessionSummary[]> {
-    const result = await query<{
-      id: string;
-      client_type: AuthClientType;
-      transport: AuthTransport;
-      device_name: string | null;
-      platform: string | null;
-      created_at: string;
-      last_seen_at: string;
-      expires_at: string;
-      revoked_at: string | null;
-    }>(
-      `SELECT id, client_type, transport, device_name, platform, created_at, last_seen_at, expires_at, revoked_at
-         FROM auth_sessions
-        WHERE user_id = $1
-        ORDER BY created_at DESC`,
-      [userId],
-    );
+    const rows = await db
+      .selectFrom('auth_sessions')
+      .select(authSessionReturning)
+      .where('user_id', '=', userId)
+      .orderBy('created_at', 'desc')
+      .execute();
 
-    return result.rows.map((row) => ({
+    return rows.map((row) => ({
       id: row.id,
-      clientType: row.client_type,
-      transport: row.transport,
+      clientType: row.client_type as AuthClientType,
+      transport: row.transport as AuthTransport,
       deviceName: row.device_name ?? undefined,
       platform: row.platform ?? undefined,
       current: row.id === currentSessionId,
-      createdAt: row.created_at,
-      lastSeenAt: row.last_seen_at,
-      expiresAt: row.expires_at,
-      revokedAt: row.revoked_at ?? undefined,
+      createdAt: toIsoString(row.created_at),
+      lastSeenAt: toIsoString(row.last_seen_at),
+      expiresAt: toIsoString(row.expires_at),
+      revokedAt: toOptionalIsoString(row.revoked_at),
     }));
   }
 
@@ -1118,16 +1073,15 @@ export function createAuthService(_app: FastifyInstance) {
   }
 
   async function revokeSessionForUser(userId: string, sessionId: string) {
-    const result = await query<{ id: string }>(
-      `SELECT id
-         FROM auth_sessions
-        WHERE id = $1
-          AND user_id = $2
-        LIMIT 1`,
-      [sessionId, userId],
-    );
+    const row = await db
+      .selectFrom('auth_sessions')
+      .select('id')
+      .where('id', '=', sessionId)
+      .where('user_id', '=', userId)
+      .limit(1)
+      .executeTakeFirst();
 
-    if (!result.rowCount) {
+    if (!row) {
       throw new AuthError('Session not found', 404, 'SESSION_NOT_FOUND');
     }
 

@@ -15,7 +15,8 @@ import {
   touchRelation,
 } from "../authz/index.js";
 import { ensureStorageDir } from "../storage/index.js";
-import { query, transaction } from "./index.js";
+import { transaction } from "./index.js";
+import { executeSql, executeSqlOn } from "./kysely.js";
 import { ensurePublisher } from "./seed-utils.js";
 import {
   seedOfficialActorCatalog,
@@ -62,7 +63,7 @@ type ImportedSkillPackage = {
 };
 
 async function seedDemoWorkspace(userId: string) {
-  const result = await query<{ id: string }>(
+  const result = await executeSql<{ id: string }>(
     `INSERT INTO workspaces (name, slug, description, owner_id)
      VALUES ('Demo Workspace', 'demo-workspace', 'Refactored workspace seed', $1)
      ON CONFLICT (slug) DO UPDATE SET
@@ -73,7 +74,7 @@ async function seedDemoWorkspace(userId: string) {
   );
   const workspaceId = result.rows[0]!.id;
 
-  await query(
+  await executeSql(
     `INSERT INTO workspace_members (workspace_id, user_id, trust_level)
      VALUES ($1, $2, 'owner')
      ON CONFLICT (workspace_id, user_id) DO UPDATE SET trust_level = 'owner'`,
@@ -487,7 +488,8 @@ async function seedOfficialSkills(userId: string) {
         sourcePublishedAt: skill.publishedAt || null,
       };
 
-      const insertedItem = await client.query<{ id: string }>(
+      const insertedItem = await executeSqlOn<{ id: string }>(
+        client,
         `INSERT INTO catalog_items (
            publisher_id,
            workspace_id,
@@ -544,7 +546,8 @@ async function seedOfficialSkills(userId: string) {
         importedFileCount: skill.files.length,
       };
 
-      const upsertedVersion = await client.query<{ id: string }>(
+      const upsertedVersion = await executeSqlOn<{ id: string }>(
+        client,
         `INSERT INTO catalog_versions (
            catalog_item_id,
            version,
@@ -568,7 +571,7 @@ async function seedOfficialSkills(userId: string) {
       );
       const versionId = upsertedVersion.rows[0]!.id;
 
-      await client.query(
+      await executeSqlOn(client, 
         `INSERT INTO skill_package_version_specs (
            catalog_version_id,
            canonical_slug,
@@ -594,14 +597,14 @@ async function seedOfficialSkills(userId: string) {
         ],
       );
 
-      await client.query(
+      await executeSqlOn(client, 
         `DELETE FROM catalog_version_files
          WHERE catalog_version_id = $1`,
         [versionId],
       );
 
       for (const file of skill.files) {
-        await client.query(
+        await executeSqlOn(client, 
           `INSERT INTO catalog_version_files (
              catalog_version_id,
              path,
@@ -640,7 +643,7 @@ async function seedOfficialSkills(userId: string) {
         );
       }
 
-      await client.query(
+      await executeSqlOn(client, 
         `UPDATE catalog_items
          SET latest_version_id = $2,
              updated_at = NOW()
@@ -656,7 +659,7 @@ async function seedOfficialSkills(userId: string) {
 async function countCatalogItems(
   itemKind: "actor_template" | "skill_package" | "plugin_package",
 ) {
-  const result = await query<{ count: string }>(
+  const result = await executeSql<{ count: string }>(
     `SELECT COUNT(*)::text AS count
      FROM catalog_items
      WHERE item_kind = $1
@@ -672,7 +675,7 @@ export async function seedDatabase() {
   await ensureStorageDir();
 
   const passwordHash = await hash("demo1234", 10);
-  const userResult = await query<{ id: string }>(
+  const userResult = await executeSql<{ id: string }>(
     `INSERT INTO users (email, name, password_hash)
      VALUES ('demo@synapse.dev', 'Demo User', $1)
      ON CONFLICT (email) DO UPDATE SET
@@ -684,12 +687,12 @@ export async function seedDatabase() {
   );
   const userId = userResult.rows[0]!.id;
 
-  const demoUserAvatar = await createGeneratedUserAvatarFile({ query }, {
+  const demoUserAvatar = await createGeneratedUserAvatarFile({ query: executeSql }, {
     userId,
     name: "Demo User",
     email: "demo@synapse.dev",
   });
-  await query(
+  await executeSql(
     `UPDATE users
      SET avatar_file_id = $2,
          updated_at = NOW()
@@ -712,7 +715,7 @@ export async function seedDatabase() {
     userId,
     actorCatalog.actorRefs,
   );
-  await query(
+  await executeSql(
     `INSERT INTO workspace_user_preferences
        (workspace_id, user_id, chief_actor_id, created_at, updated_at)
      VALUES ($1, $2, $3, NOW(), NOW())

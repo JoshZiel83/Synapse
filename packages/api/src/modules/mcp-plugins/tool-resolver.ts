@@ -6,7 +6,7 @@ import {
   lookupResources,
   type AuthzSubject,
 } from "../../infrastructure/authz/index.js";
-import { query } from "../../infrastructure/database/index.js";
+import { db } from "../../infrastructure/database/kysely.js";
 import { resolveInstallationConfig } from "./config-resolver.js";
 import {
   getMcpVersion,
@@ -80,7 +80,7 @@ type VisibleRelayExposureRow = {
   exposure_id: string;
   exposure_stable_key: string;
   exposure_display_name: string;
-  exposure_updated_at: string;
+  exposure_updated_at: string | Date | null;
   device_id: string;
   device_display_name: string;
 };
@@ -529,31 +529,31 @@ async function loadVisiblePlugins(params: ResolveParams) {
     return [] as VisiblePluginRow[];
   }
 
-  const result = await query<VisiblePluginRow>(
-    `SELECT
-       installation.id AS installation_id,
-       installation.status AS installation_status,
-       installation.catalog_item_id,
-       item.slug AS item_slug,
-       publisher.slug AS publisher_slug,
-       spec.transport,
-       spec.entry_point,
-       spec.tool_manifest,
-       installation.reuse_scope
-     FROM plugin_installations installation
-     JOIN catalog_items item
-       ON item.id = installation.catalog_item_id
-     JOIN publishers publisher
-       ON publisher.id = item.publisher_id
-     JOIN plugin_package_version_specs spec
-       ON spec.catalog_version_id = installation.catalog_version_id
-     WHERE installation.id = ANY($1::uuid[])
-       AND installation.workspace_id = $2
-       AND installation.status = 'active'
-     ORDER BY installation.updated_at DESC`,
-    [Array.from(visibleInstallationIds), params.workspaceId],
-  );
-  return result.rows;
+  return db
+    .selectFrom("plugin_installations as installation")
+    .innerJoin("catalog_items as item", "item.id", "installation.catalog_item_id")
+    .innerJoin("publishers as publisher", "publisher.id", "item.publisher_id")
+    .innerJoin(
+      "plugin_package_version_specs as spec",
+      "spec.catalog_version_id",
+      "installation.catalog_version_id",
+    )
+    .select([
+      "installation.id as installation_id",
+      "installation.status as installation_status",
+      "installation.catalog_item_id",
+      "item.slug as item_slug",
+      "publisher.slug as publisher_slug",
+      "spec.transport",
+      "spec.entry_point",
+      "spec.tool_manifest",
+      "installation.reuse_scope",
+    ])
+    .where("installation.id", "in", Array.from(visibleInstallationIds))
+    .where("installation.workspace_id", "=", params.workspaceId)
+    .where("installation.status", "=", "active")
+    .orderBy("installation.updated_at", "desc")
+    .execute() as Promise<VisiblePluginRow[]>;
 }
 
 async function loadVisibleRelayExposures(params: ResolveParams) {
@@ -580,24 +580,21 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
     return [] as VisibleRelayExposureRow[];
   }
 
-  const result = await query<VisibleRelayExposureRow>(
-    `SELECT
-       exposure.id AS exposure_id,
-       exposure.stable_key AS exposure_stable_key,
-       exposure.display_name AS exposure_display_name,
-       exposure.updated_at AS exposure_updated_at,
-       device.id AS device_id,
-       device.display_name AS device_display_name
-     FROM relay_exposures exposure
-     INNER JOIN relay_devices device
-       ON device.id = exposure.device_id
-     WHERE exposure.id = ANY($1::uuid[])
-       AND device.workspace_id = $2
-     ORDER BY exposure.updated_at DESC`,
-    [Array.from(visibleExposureIds), params.workspaceId],
-  );
-
-  return result.rows;
+  return db
+    .selectFrom("relay_exposures as exposure")
+    .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
+    .select([
+      "exposure.id as exposure_id",
+      "exposure.stable_key as exposure_stable_key",
+      "exposure.display_name as exposure_display_name",
+      "exposure.updated_at as exposure_updated_at",
+      "device.id as device_id",
+      "device.display_name as device_display_name",
+    ])
+    .where("exposure.id", "in", Array.from(visibleExposureIds))
+    .where("device.workspace_id", "=", params.workspaceId)
+    .orderBy("exposure.updated_at", "desc")
+    .execute() as Promise<VisibleRelayExposureRow[]>;
 }
 
 async function resolveTools(

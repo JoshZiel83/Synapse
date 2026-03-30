@@ -9,6 +9,13 @@ import type {
 } from '@synapse/shared';
 import { getModelBranchStateMode } from '@synapse/shared';
 import { query, transaction } from '../../infrastructure/database/index.js';
+import {
+  db,
+  executeCompiledQuery,
+  executeTakeFirst,
+  type TableInsert,
+} from '../../infrastructure/database/kysely.js';
+import { sql } from 'kysely';
 
 const MAX_APPLIED_ITEM_IDS = 512;
 
@@ -319,17 +326,16 @@ export async function getEngineBranchState(
   resolved: ResolvedModelConfig,
 ): Promise<EngineBranchState | undefined> {
   if (!sessionId) return undefined;
-  const result = await query(
-    `SELECT *
-     FROM session_engine_branches
-     WHERE session_id = $1
-       AND binding_key = $2
-       AND status = 'active'
-     LIMIT 1`,
-    [sessionId, createEngineBindingKey(resolved)],
-  );
+  const result = await db
+    .selectFrom('session_engine_branches')
+    .selectAll()
+    .where('session_id', '=', sessionId)
+    .where('binding_key', '=', createEngineBindingKey(resolved))
+    .where('status', '=', 'active')
+    .limit(1)
+    .executeTakeFirst();
 
-  return result.rows[0] ? rowToBranchState(result.rows[0] as Record<string, unknown>) : undefined;
+  return result ? rowToBranchState(result as Record<string, unknown>) : undefined;
 }
 
 export async function saveEngineBranchState(
@@ -341,60 +347,68 @@ export async function saveEngineBranchState(
   if (!branch) return undefined;
 
   return transaction(async (client) => {
-    const branchResult = await client.query(
-      `INSERT INTO session_engine_branches
-         (id, session_id, conversation_id, provider_type, engine_kind, binding_key,
-          last_shared_sequence, last_private_sequence, applied_item_keys, native_state, metadata, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', NOW(), NOW())
-       ON CONFLICT (session_id, binding_key)
-       DO UPDATE SET
-         conversation_id = EXCLUDED.conversation_id,
-         provider_type = EXCLUDED.provider_type,
-         engine_kind = EXCLUDED.engine_kind,
-         last_shared_sequence = EXCLUDED.last_shared_sequence,
-         last_private_sequence = EXCLUDED.last_private_sequence,
-         applied_item_keys = EXCLUDED.applied_item_keys,
-         native_state = EXCLUDED.native_state,
-         metadata = EXCLUDED.metadata,
-         status = 'active',
-         updated_at = NOW()
-       RETURNING *`,
-      [
-        branch.branchId,
-        branch.sessionId,
-        branch.conversationId || null,
-        branch.providerType,
-        branch.engineKind,
-        branch.bindingKey,
-        branch.cursor.sharedSequence || 0,
-        branch.cursor.privateSequence || 0,
-        branch.cursor.appliedItemIds || [],
-        JSON.stringify(branch.nativeState || {}),
-        JSON.stringify(branch.metadata || {}),
-      ],
+    const runner = { query: client.query.bind(client) as typeof query };
+    const branchResult = await executeTakeFirst(
+      runner,
+      db
+        .insertInto('session_engine_branches')
+        .values({
+          id: branch.branchId,
+          session_id: branch.sessionId,
+          conversation_id: branch.conversationId || null,
+          provider_type: branch.providerType,
+          engine_kind: branch.engineKind,
+          binding_key: branch.bindingKey,
+          last_shared_sequence: branch.cursor.sharedSequence || 0,
+          last_private_sequence: branch.cursor.privateSequence || 0,
+          applied_item_keys: branch.cursor.appliedItemIds || [],
+          native_state: (branch.nativeState || {}) as TableInsert<'session_engine_branches'>['native_state'],
+          metadata: (branch.metadata || {}) as TableInsert<'session_engine_branches'>['metadata'],
+          status: 'active',
+          created_at: sql`NOW()`,
+          updated_at: sql`NOW()`,
+        })
+        .onConflict((oc) =>
+          oc.columns(['session_id', 'binding_key']).doUpdateSet({
+            conversation_id: branch.conversationId || null,
+            provider_type: branch.providerType,
+            engine_kind: branch.engineKind,
+            last_shared_sequence: branch.cursor.sharedSequence || 0,
+            last_private_sequence: branch.cursor.privateSequence || 0,
+            applied_item_keys: branch.cursor.appliedItemIds || [],
+            native_state: (branch.nativeState || {}) as TableInsert<'session_engine_branches'>['native_state'],
+            metadata: (branch.metadata || {}) as TableInsert<'session_engine_branches'>['metadata'],
+            status: 'active',
+            updated_at: sql`NOW()`,
+          }),
+        )
+        .returningAll(),
     );
+    if (!branchResult) {
+      throw new Error('Failed to persist engine branch');
+    }
 
-    const persisted = rowToBranchState(branchResult.rows[0] as Record<string, unknown>);
+    const persisted = rowToBranchState(branchResult as Record<string, unknown>);
 
-    await client.query(
-      `INSERT INTO engine_branch_checkpoints
-         (branch_id, session_id, conversation_id, provider_type, engine_kind, binding_key,
-          checkpoint_kind, shared_sequence, private_sequence, applied_item_keys, native_state, metadata, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
-      [
-        persisted.branchId,
-        persisted.sessionId,
-        persisted.conversationId || null,
-        persisted.providerType,
-        persisted.engineKind,
-        persisted.bindingKey,
-        options.checkpointKind || 'snapshot',
-        persisted.cursor.sharedSequence || 0,
-        persisted.cursor.privateSequence || 0,
-        persisted.cursor.appliedItemIds || [],
-        JSON.stringify(persisted.nativeState || {}),
-        JSON.stringify(persisted.metadata || {}),
-      ],
+    await executeCompiledQuery(
+      runner,
+      db
+        .insertInto('engine_branch_checkpoints')
+        .values({
+          branch_id: persisted.branchId,
+          session_id: persisted.sessionId,
+          conversation_id: persisted.conversationId || null,
+          provider_type: persisted.providerType,
+          engine_kind: persisted.engineKind,
+          binding_key: persisted.bindingKey,
+          checkpoint_kind: options.checkpointKind || 'snapshot',
+          shared_sequence: persisted.cursor.sharedSequence || 0,
+          private_sequence: persisted.cursor.privateSequence || 0,
+          applied_item_keys: persisted.cursor.appliedItemIds || [],
+          native_state: (persisted.nativeState || {}) as TableInsert<'engine_branch_checkpoints'>['native_state'],
+          metadata: (persisted.metadata || {}) as TableInsert<'engine_branch_checkpoints'>['metadata'],
+          created_at: sql`NOW()`,
+        }),
     );
 
     return persisted;

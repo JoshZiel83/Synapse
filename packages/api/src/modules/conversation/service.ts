@@ -1,9 +1,17 @@
-import { query, transaction } from "../../infrastructure/database/index.js";
+import { pool, transaction } from "../../infrastructure/database/index.js";
+import {
+  db,
+  executeCompiledQuery,
+  executeTakeFirst,
+  type TableInsert,
+  type TableRow,
+} from "../../infrastructure/database/kysely.js";
 import {
   enqueueTransactionalEvent,
   type Queryable,
 } from "../../infrastructure/events/index.js";
 import { v4 as uuidv4 } from "uuid";
+import { sql } from "kysely";
 import type {
   ConversationEntityRef,
   ConversationFeedEventItem,
@@ -86,9 +94,7 @@ export interface CreateConversationEventParams<
 }
 
 function getDefaultQueryable(): Queryable {
-  return {
-    query: (text: string, params?: any[]) => query(text, params),
-  };
+  return pool;
 }
 
 async function insertConversationItem(
@@ -96,64 +102,72 @@ async function insertConversationItem(
   params: CreateConversationItemParams,
 ) {
   const itemId = uuidv4();
-  const itemResult = await queryable.query(
-    `INSERT INTO conversation_items
-       (id, conversation_id, session_id, turn_id, client_message_id, scope, surface, item_type, subtype, role,
-        author_member_id, bundle_id, reply_to_item_id, caused_by_item_id, event_payload,
-        event_timeline_policy, event_context_policy, metadata, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
-     RETURNING *`,
-    [
-      itemId,
-      params.conversationId,
-      params.sessionId || null,
-      params.turnId || null,
-      params.clientMessageId || null,
-      params.scope,
-      params.surface,
-      params.itemType,
-      params.subtype,
-      params.role,
-      params.authorMemberId || null,
-      params.bundleId || null,
-      params.replyToItemId || null,
-      params.causedByItemId || null,
-      JSON.stringify(params.eventPayload || {}),
-      params.eventTimelinePolicy || null,
-      params.eventContextPolicy || null,
-      JSON.stringify(params.metadata || {}),
-    ],
+  const item = await executeTakeFirst<TableRow<"conversation_items">>(
+    queryable,
+    db
+      .insertInto("conversation_items")
+      .values({
+        id: itemId,
+        conversation_id: params.conversationId,
+        session_id: params.sessionId || null,
+        turn_id: params.turnId || null,
+        client_message_id: params.clientMessageId || null,
+        scope: params.scope,
+        surface: params.surface,
+        item_type: params.itemType,
+        subtype: params.subtype,
+        role: params.role,
+        author_member_id: params.authorMemberId || null,
+        bundle_id: params.bundleId || null,
+        reply_to_item_id: params.replyToItemId || null,
+        caused_by_item_id: params.causedByItemId || null,
+        event_payload:
+          (params.eventPayload || {}) as TableInsert<"conversation_items">["event_payload"],
+        event_timeline_policy: params.eventTimelinePolicy || null,
+        event_context_policy: params.eventContextPolicy || null,
+        metadata:
+          (params.metadata || {}) as TableInsert<"conversation_items">["metadata"],
+      })
+      .returningAll(),
   );
+  if (!item) {
+    throw new Error("Failed to create conversation item");
+  }
 
   if (params.parts && params.parts.length > 0) {
     let ordinal = 0;
     for (const part of params.parts) {
-      await queryable.query(
-        `INSERT INTO conversation_item_parts
-           (id, item_id, ordinal, part_type, text_value, file_id, json_value, mime_type, name, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [
-          uuidv4(),
-          itemId,
-          ordinal++,
-          part.type,
-          part.type === "text" ? part.text || "" : null,
-          part.type === "file_ref" ? part.fileId || null : null,
-          part.type === "json" ? JSON.stringify(part.json ?? {}) : null,
-          part.mimeType || null,
-          part.name || null,
-          JSON.stringify(part.metadata || {}),
-        ],
+      await executeCompiledQuery(
+        queryable,
+        db.insertInto("conversation_item_parts").values({
+          id: uuidv4(),
+          item_id: itemId,
+          ordinal: ordinal++,
+          part_type: part.type,
+          text_value: part.type === "text" ? part.text || "" : null,
+          file_id: part.type === "file_ref" ? part.fileId || null : null,
+          json_value:
+            part.type === "json"
+              ? ((part.json ?? {}) as TableInsert<"conversation_item_parts">["json_value"])
+              : null,
+          mime_type: part.mimeType || null,
+          name: part.name || null,
+          metadata:
+            (part.metadata || {}) as TableInsert<"conversation_item_parts">["metadata"],
+        }),
       );
     }
   }
 
   if (params.targetMemberIds && params.targetMemberIds.length > 0) {
     for (const targetMemberId of params.targetMemberIds) {
-      await queryable.query(
-        `INSERT INTO conversation_item_targets (item_id, target_member_id, target_kind)
-         VALUES ($1, $2, 'to')`,
-        [itemId, targetMemberId],
+      await executeCompiledQuery(
+        queryable,
+        db.insertInto("conversation_item_targets").values({
+          item_id: itemId,
+          target_member_id: targetMemberId,
+          target_kind: "to",
+        }),
       );
     }
   }
@@ -163,17 +177,24 @@ async function insertConversationItem(
     params.contextTargetMemberIds.length > 0
   ) {
     for (const targetMemberId of params.contextTargetMemberIds) {
-      await queryable.query(
-        `INSERT INTO conversation_item_context_targets (item_id, target_member_id)
-         VALUES ($1, $2)`,
-        [itemId, targetMemberId],
+      await executeCompiledQuery(
+        queryable,
+        db.insertInto("conversation_item_context_targets").values({
+          item_id: itemId,
+          target_member_id: targetMemberId,
+        }),
       );
     }
   }
 
-  await queryable.query(
-    `UPDATE conversations SET updated_at = NOW() WHERE id = $1`,
-    [params.conversationId],
+  await executeCompiledQuery(
+    queryable,
+    db
+      .updateTable("conversations")
+      .set({
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", params.conversationId),
   );
 
   if (
@@ -191,7 +212,7 @@ async function insertConversationItem(
     });
   }
 
-  return itemResult.rows[0];
+  return item;
 }
 
 export async function createConversation(params: {
@@ -203,29 +224,36 @@ export async function createConversation(params: {
   metadata?: Record<string, unknown>;
 }) {
   const domain = params.domain || "workspace";
-  const result = await query(
-    `INSERT INTO conversations (id, workspace_id, domain, kind, title, created_by, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-     RETURNING *`,
-    [
-      uuidv4(),
-      params.workspaceId || null,
+  const created = await db
+    .insertInto("conversations")
+    .values({
+      id: uuidv4(),
+      workspace_id: params.workspaceId || null,
       domain,
-      params.kind,
-      params.title || null,
-      params.createdBy || null,
-      JSON.stringify(params.metadata || {}),
-    ],
-  );
+      kind: params.kind,
+      title: params.title || null,
+      created_by: params.createdBy || null,
+      metadata:
+        (params.metadata || {}) as TableInsert<"conversations">["metadata"],
+    })
+    .returningAll()
+    .executeTakeFirst();
 
-  return result.rows[0];
+  if (!created) {
+    throw new Error("Failed to create conversation");
+  }
+
+  return created;
 }
 
 export async function getConversation(conversationId: string) {
-  const result = await query(`SELECT * FROM conversations WHERE id = $1`, [
-    conversationId,
-  ]);
-  return result.rows[0] ?? null;
+  return (
+    (await db
+      .selectFrom("conversations")
+      .selectAll()
+      .where("id", "=", conversationId)
+      .executeTakeFirst()) ?? null
+  );
 }
 
 export async function ensureConversationMember(params: {
@@ -267,94 +295,106 @@ export async function ensureConversationMemberActivation(params: {
   let existing;
 
   if (memberType === "actor") {
-    existing = await query(
-      `SELECT * FROM conversation_members
-       WHERE conversation_id = $1 AND actor_id = $2
-       LIMIT 1`,
-      [conversationId, actorId || null],
-    );
+    let actorLookup = db
+      .selectFrom("conversation_members")
+      .selectAll()
+      .where("conversation_id", "=", conversationId);
+    actorLookup = actorId
+      ? actorLookup.where("actor_id", "=", actorId)
+      : actorLookup.where("actor_id", "is", null);
+    existing = await actorLookup.limit(1).executeTakeFirst();
   } else if (memberType === "user") {
-    existing = await query(
-      `SELECT * FROM conversation_members
-       WHERE conversation_id = $1 AND user_id = $2
-       LIMIT 1`,
-      [conversationId, userId || null],
-    );
+    let userLookup = db
+      .selectFrom("conversation_members")
+      .selectAll()
+      .where("conversation_id", "=", conversationId);
+    userLookup = userId
+      ? userLookup.where("user_id", "=", userId)
+      : userLookup.where("user_id", "is", null);
+    existing = await userLookup.limit(1).executeTakeFirst();
   } else if (
     memberType === "external" &&
     typeof metadata.externalUserKey === "string" &&
     metadata.externalUserKey.trim()
   ) {
-    existing = await query(
-      `SELECT *
-       FROM conversation_members
-       WHERE conversation_id = $1
-         AND member_type = 'external'
-         AND metadata->>'externalUserKey' = $2
-       LIMIT 1`,
-      [conversationId, metadata.externalUserKey.trim()],
-    );
+    existing = await db
+      .selectFrom("conversation_members")
+      .selectAll()
+      .where("conversation_id", "=", conversationId)
+      .where("member_type", "=", "external")
+      .where(
+        sql<boolean>`metadata->>'externalUserKey' = ${metadata.externalUserKey.trim()}`,
+      )
+      .limit(1)
+      .executeTakeFirst();
   } else {
-    existing = await query(
-      `SELECT * FROM conversation_members
-       WHERE conversation_id = $1
-         AND member_type = $2
-         AND COALESCE(display_name, '') = COALESCE($3, '')
-       LIMIT 1`,
-      [conversationId, memberType, displayName || null],
-    );
+    existing = await db
+      .selectFrom("conversation_members")
+      .selectAll()
+      .where("conversation_id", "=", conversationId)
+      .where("member_type", "=", memberType)
+      .where(
+        sql<boolean>`COALESCE(display_name, '') = COALESCE(${displayName || null}, '')`,
+      )
+      .limit(1)
+      .executeTakeFirst();
   }
 
-  if (existing.rows[0]) {
-    if (existing.rows[0].state !== "active") {
-      const revived = await query(
-        `UPDATE conversation_members
-         SET state = 'active',
-             left_at = NULL,
-             actor_join_version_id = COALESCE($3, actor_join_version_id),
-             metadata = metadata || $2::jsonb
-         WHERE id = $1
-         RETURNING *`,
-        [
-          existing.rows[0].id,
-          JSON.stringify(metadata),
-          actorJoinVersionId || null,
-        ],
-      );
+  if (existing) {
+    if (existing.state !== "active") {
+      const revived = await db
+        .updateTable("conversation_members")
+        .set({
+          state: "active",
+          left_at: null,
+          ...(actorJoinVersionId
+            ? { actor_join_version_id: actorJoinVersionId }
+            : {}),
+          metadata: sql`COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify(metadata)}::jsonb`,
+        })
+        .where("id", "=", existing.id)
+        .returningAll()
+        .executeTakeFirst();
+      if (!revived) {
+        throw new Error("Failed to reactivate conversation member");
+      }
       return {
-        member: revived.rows[0],
+        member: revived,
         activated: true,
         created: false,
         revived: true,
       };
     }
     return {
-      member: existing.rows[0],
+      member: existing,
       activated: false,
       created: false,
       revived: false,
     };
   }
 
-  const result = await query(
-    `INSERT INTO conversation_members
-       (id, conversation_id, member_type, actor_id, user_id, actor_join_version_id, display_name, state, metadata, joined_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, NOW())
-     RETURNING *`,
-    [
-      uuidv4(),
-      conversationId,
-      memberType,
-      actorId || null,
-      userId || null,
-      actorJoinVersionId || null,
-      displayName || null,
-      JSON.stringify(metadata),
-    ],
-  );
+  const created = await db
+    .insertInto("conversation_members")
+    .values({
+      id: uuidv4(),
+      conversation_id: conversationId,
+      member_type: memberType,
+      actor_id: actorId || null,
+      user_id: userId || null,
+      actor_join_version_id: actorJoinVersionId || null,
+      display_name: displayName || null,
+      state: "active",
+      metadata:
+        (metadata || {}) as TableInsert<"conversation_members">["metadata"],
+    })
+    .returningAll()
+    .executeTakeFirst();
+  if (!created) {
+    throw new Error("Failed to create conversation member");
+  }
 
   return {
-    member: result.rows[0],
+    member: created,
     activated: true,
     created: true,
     revived: false,
@@ -367,42 +407,44 @@ export async function getConversationMember(params: {
   userId?: string;
 }) {
   const { conversationId, actorId, userId } = params;
-  let result;
   if (actorId) {
-    result = await query(
-      `SELECT * FROM conversation_members
-       WHERE conversation_id = $1 AND actor_id = $2
-       LIMIT 1`,
-      [conversationId, actorId],
+    return (
+      (await db
+        .selectFrom("conversation_members")
+        .selectAll()
+        .where("conversation_id", "=", conversationId)
+        .where("actor_id", "=", actorId)
+        .executeTakeFirst()) ?? null
     );
   } else if (userId) {
-    result = await query(
-      `SELECT * FROM conversation_members
-       WHERE conversation_id = $1 AND user_id = $2
-       LIMIT 1`,
-      [conversationId, userId],
+    return (
+      (await db
+        .selectFrom("conversation_members")
+        .selectAll()
+        .where("conversation_id", "=", conversationId)
+        .where("user_id", "=", userId)
+        .executeTakeFirst()) ?? null
     );
   } else {
     return null;
   }
-  return result.rows[0] ?? null;
 }
 
 export async function listConversationMembers(conversationId: string) {
-  const result = await query(
-    `SELECT cm.*,
-            a.name AS actor_name,
-            a.title AS actor_title,
-            a.role AS actor_role,
-            u.name AS user_name
-     FROM conversation_members cm
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     WHERE cm.conversation_id = $1
-     ORDER BY cm.joined_at ASC`,
-    [conversationId],
-  );
-  return result.rows;
+  return db
+    .selectFrom("conversation_members as cm")
+    .leftJoin("actors as a", "a.id", "cm.actor_id")
+    .leftJoin("users as u", "u.id", "cm.user_id")
+    .selectAll("cm")
+    .select([
+      "a.name as actor_name",
+      "a.title as actor_title",
+      "a.role as actor_role",
+      "u.name as user_name",
+    ])
+    .where("cm.conversation_id", "=", conversationId)
+    .orderBy("cm.joined_at", "asc")
+    .execute();
 }
 
 function uniqueIds(ids: string[]) {
@@ -560,15 +602,25 @@ export async function markConversationRead(
   queryable?: Queryable,
 ) {
   const runner = queryable || getDefaultQueryable();
-  await runner.query(
-    `INSERT INTO conversation_user_states (user_id, conversation_id, read_watermark_sequence, last_read_at, updated_at)
-     VALUES ($1, $2, $3, NOW(), NOW())
-     ON CONFLICT (user_id, conversation_id)
-     DO UPDATE SET
-       read_watermark_sequence = GREATEST(conversation_user_states.read_watermark_sequence, EXCLUDED.read_watermark_sequence),
-       last_read_at = NOW(),
-       updated_at = NOW()`,
-    [userId, conversationId, Math.max(0, Number(lastReadSequence || 0))],
+  await executeCompiledQuery(
+    runner,
+    db
+      .insertInto("conversation_user_states")
+      .values({
+        user_id: userId,
+        conversation_id: conversationId,
+        read_watermark_sequence: Math.max(0, Number(lastReadSequence || 0)),
+        last_read_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .onConflict((oc) =>
+        oc.columns(["user_id", "conversation_id"]).doUpdateSet({
+          read_watermark_sequence:
+            sql`GREATEST(conversation_user_states.read_watermark_sequence, excluded.read_watermark_sequence)`,
+          last_read_at: sql`NOW()`,
+          updated_at: sql`NOW()`,
+        }),
+      ),
   );
 }
 
@@ -578,15 +630,18 @@ export async function getConversationReadState(
   queryable?: Queryable,
 ) {
   const runner = queryable || getDefaultQueryable();
-  const result = await runner.query(
-    `SELECT read_watermark_sequence, last_read_at
-     FROM conversation_user_states
-     WHERE user_id = $1
-       AND conversation_id = $2
-     LIMIT $3`,
-    [userId, conversationId, 1],
+  const row = await executeTakeFirst<{
+    read_watermark_sequence: string | number | null;
+    last_read_at: string | Date | null;
+  }>(
+    runner,
+    db
+      .selectFrom("conversation_user_states")
+      .select(["read_watermark_sequence", "last_read_at"])
+      .where("user_id", "=", userId)
+      .where("conversation_id", "=", conversationId)
+      .limit(1),
   );
-  const row = result.rows[0];
   return {
     readWatermarkSequence: row?.read_watermark_sequence
       ? Number(row.read_watermark_sequence)
@@ -601,11 +656,15 @@ export async function updateConversationItemEventPayload(
   queryable?: Queryable,
 ) {
   const runner = queryable || getDefaultQueryable();
-  await runner.query(
-    `UPDATE conversation_items
-     SET event_payload = $2::jsonb
-     WHERE id = $1`,
-    [itemId, JSON.stringify(payload)],
+  await executeCompiledQuery(
+    runner,
+    db
+      .updateTable("conversation_items")
+      .set({
+        event_payload:
+          payload as TableInsert<"conversation_items">["event_payload"],
+      })
+      .where("id", "=", itemId),
   );
 }
 
@@ -614,52 +673,55 @@ export async function resolveReadableConversationSequenceForUser(params: {
   userId: string;
   maxSequence?: number;
 }) {
-  const values: Array<string | number> = [
-    params.conversationId,
-    params.userId,
-    GROUP_CONVERSATION_KIND,
-  ];
-  let maxSequenceFilter = "";
+  let statement = db
+    .selectFrom("conversation_items as ci")
+    .innerJoin("conversations as c", "c.id", "ci.conversation_id")
+    .innerJoin("conversation_members as cm_u", (join) =>
+      join
+        .onRef("cm_u.conversation_id", "=", "c.id")
+        .on("cm_u.user_id", "=", params.userId)
+        .on("cm_u.state", "=", "active"),
+    )
+    .select(({ fn }) => fn.max("ci.sequence").as("sequence"))
+    .where("ci.conversation_id", "=", params.conversationId)
+    .where("ci.scope", "=", "shared")
+    .where("ci.surface", "=", "visible")
+    .where((eb) =>
+      eb.or([
+        eb.and([
+          eb("c.kind", "=", GROUP_CONVERSATION_KIND),
+          eb("ci.item_type", "=", "message"),
+          eb("ci.subtype", "<>", "model_error_notice"),
+        ]),
+        sql<boolean>`ci.author_member_id = cm_u.id`,
+        sql<boolean>`NOT EXISTS (
+          SELECT 1
+          FROM conversation_item_targets cit0
+          WHERE cit0.item_id = ci.id
+        )`,
+        sql<boolean>`EXISTS (
+          SELECT 1
+          FROM conversation_item_targets cit
+          WHERE cit.item_id = ci.id
+            AND cit.target_member_id = cm_u.id
+        )`,
+      ]),
+    );
+
   if (
     typeof params.maxSequence === "number" &&
     Number.isFinite(params.maxSequence) &&
     params.maxSequence > 0
   ) {
-    values.push(Math.floor(params.maxSequence));
-    maxSequenceFilter = `AND ci.sequence <= $${values.length}`;
+    statement = statement.where(
+      "ci.sequence",
+      "<=",
+      String(Math.floor(params.maxSequence)),
+    );
   }
 
-  const result = await query(
-    `SELECT MAX(ci.sequence) AS sequence
-     FROM conversation_items ci
-     JOIN conversations c ON c.id = ci.conversation_id
-     JOIN conversation_members cm_u
-       ON cm_u.conversation_id = c.id
-      AND cm_u.user_id = $2
-      AND cm_u.state = 'active'
-     WHERE ci.conversation_id = $1
-       AND ci.scope = 'shared'
-       AND ci.surface = 'visible'
-       AND (
-         (c.kind = $3 AND ci.item_type = 'message' AND ci.subtype <> 'model_error_notice')
-         OR ci.author_member_id = cm_u.id
-         OR NOT EXISTS (
-           SELECT 1
-           FROM conversation_item_targets cit0
-           WHERE cit0.item_id = ci.id
-         )
-         OR EXISTS (
-           SELECT 1
-           FROM conversation_item_targets cit
-           WHERE cit.item_id = ci.id
-             AND cit.target_member_id = cm_u.id
-         )
-       )
-       ${maxSequenceFilter}`,
-    values,
-  );
-
-  const sequence = result.rows[0]?.sequence;
+  const result = await statement.executeTakeFirst();
+  const sequence = result?.sequence;
   return sequence ? Number(sequence) : 0;
 }
 
@@ -667,76 +729,100 @@ async function loadItemsWithRelations(itemRows: any[]) {
   if (itemRows.length === 0) return [];
 
   const itemIds = itemRows.map((row) => row.id);
-  const partsResult = await query(
-    `SELECT cip.*,
-            f.original_name,
-            f.stored_name,
-            f.mime_type AS file_mime_type,
-            f.size_bytes
-     FROM conversation_item_parts cip
-     LEFT JOIN files f ON f.id = cip.file_id
-     WHERE cip.item_id = ANY($1)
-     ORDER BY cip.item_id, cip.ordinal ASC`,
-    [itemIds],
-  );
-
-  const targetsResult = await query(
-    `SELECT cit.item_id,
-            cit.target_kind,
-            ${buildEntitySelect({
-              memberAlias: "cm",
-              actorAlias: "a",
-              userAlias: "u",
-              addressAlias: "primary_address",
-            })}
-     FROM conversation_item_targets cit
-     JOIN conversation_members cm ON cm.id = cit.target_member_id
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     ${buildPrimaryTransportAddressJoin("cm", "primary_address")}
-     WHERE cit.item_id = ANY($1)
-     ORDER BY cit.item_id`,
-    [itemIds],
-  );
-
-  const contextTargetsResult = await query(
-    `SELECT cict.item_id,
-            ${buildEntitySelect({
-              memberAlias: "cm",
-              actorAlias: "a",
-              userAlias: "u",
-              addressAlias: "primary_address",
-            })}
-     FROM conversation_item_context_targets cict
-     JOIN conversation_members cm ON cm.id = cict.target_member_id
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     ${buildPrimaryTransportAddressJoin("cm", "primary_address")}
-     WHERE cict.item_id = ANY($1)
-     ORDER BY cict.item_id`,
-    [itemIds],
-  );
-  const transportDeliveriesResult = await query(
-    `SELECT tml.item_id,
-            tml.id AS link_id,
-            tml.transport_kind,
-            tml.direction,
-            tml.delivery_status,
-            tml.external_message_id,
-            tml.metadata,
-            tml.delivered_at,
-            te.endpoint_type,
-            te.external_id AS endpoint_external_id,
-            te.display_name AS endpoint_display_name
-     FROM transport_message_links tml
-     JOIN transport_endpoints te ON te.id = tml.transport_endpoint_id
-     WHERE tml.item_id = ANY($1)
-     ORDER BY tml.item_id, tml.created_at ASC`,
-    [itemIds],
-  );
+  const [partsResult, targetsResult, contextTargetsResult, transportDeliveriesResult] =
+    await Promise.all([
+      db
+        .selectFrom("conversation_item_parts as cip")
+        .leftJoin("files as f", "f.id", "cip.file_id")
+        .select([
+          "cip.id",
+          "cip.item_id",
+          "cip.ordinal",
+          "cip.part_type",
+          "cip.text_value",
+          "cip.file_id",
+          "cip.json_value",
+          "cip.mime_type",
+          "cip.name",
+          "cip.metadata",
+          "f.original_name",
+          "f.stored_name",
+          "f.mime_type as file_mime_type",
+          "f.size_bytes",
+        ])
+        .where("cip.item_id", "in", itemIds)
+        .orderBy("cip.item_id", "asc")
+        .orderBy("cip.ordinal", "asc")
+        .execute(),
+      db.executeQuery(
+        sql<any>`
+          SELECT cit.item_id,
+                 cit.target_kind,
+                 ${sql.raw(
+                   buildEntitySelect({
+                     memberAlias: "cm",
+                     actorAlias: "a",
+                     userAlias: "u",
+                     addressAlias: "primary_address",
+                   }),
+                 )}
+          FROM conversation_item_targets cit
+          JOIN conversation_members cm ON cm.id = cit.target_member_id
+          LEFT JOIN actors a ON a.id = cm.actor_id
+          LEFT JOIN users u ON u.id = cm.user_id
+          ${sql.raw(buildPrimaryTransportAddressJoin("cm", "primary_address"))}
+          WHERE cit.item_id = ANY(${itemIds}::uuid[])
+          ORDER BY cit.item_id
+        `.compile(db),
+      ),
+      db.executeQuery(
+        sql<any>`
+          SELECT cict.item_id,
+                 ${sql.raw(
+                   buildEntitySelect({
+                     memberAlias: "cm",
+                     actorAlias: "a",
+                     userAlias: "u",
+                     addressAlias: "primary_address",
+                   }),
+                 )}
+          FROM conversation_item_context_targets cict
+          JOIN conversation_members cm ON cm.id = cict.target_member_id
+          LEFT JOIN actors a ON a.id = cm.actor_id
+          LEFT JOIN users u ON u.id = cm.user_id
+          ${sql.raw(buildPrimaryTransportAddressJoin("cm", "primary_address"))}
+          WHERE cict.item_id = ANY(${itemIds}::uuid[])
+          ORDER BY cict.item_id
+        `.compile(db),
+      ),
+      db
+        .selectFrom("transport_message_links as tml")
+        .innerJoin(
+          "transport_endpoints as te",
+          "te.id",
+          "tml.transport_endpoint_id",
+        )
+        .select([
+          "tml.item_id",
+          "tml.id as link_id",
+          "tml.transport_kind",
+          "tml.direction",
+          "tml.delivery_status",
+          "tml.external_message_id",
+          "tml.metadata",
+          "tml.delivered_at",
+          "te.endpoint_type",
+          "te.external_id as endpoint_external_id",
+          "te.display_name as endpoint_display_name",
+        ])
+        .where("tml.item_id", "in", itemIds)
+        .orderBy("tml.item_id", "asc")
+        .orderBy("tml.created_at", "asc")
+        .execute(),
+    ]);
 
   const partsByItem = new Map<string, any[]>();
-  for (const row of partsResult.rows) {
+  for (const row of partsResult) {
     if (!partsByItem.has(row.item_id)) partsByItem.set(row.item_id, []);
     partsByItem.get(row.item_id)!.push(row);
   }
@@ -755,7 +841,7 @@ async function loadItemsWithRelations(itemRows: any[]) {
   }
 
   const transportDeliveriesByItem = new Map<string, any[]>();
-  for (const row of transportDeliveriesResult.rows) {
+  for (const row of transportDeliveriesResult) {
     if (!transportDeliveriesByItem.has(row.item_id)) {
       transportDeliveriesByItem.set(row.item_id, []);
     }
@@ -764,10 +850,20 @@ async function loadItemsWithRelations(itemRows: any[]) {
 
   return itemRows.map((row) => ({
     ...row,
+    created_at:
+      row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
     parts: partsByItem.get(row.id) || [],
     targets: targetsByItem.get(row.id) || [],
     context_targets: contextTargetsByItem.get(row.id) || [],
-    transport_deliveries: transportDeliveriesByItem.get(row.id) || [],
+    transport_deliveries: (transportDeliveriesByItem.get(row.id) || []).map(
+      (delivery) => ({
+        ...delivery,
+        delivered_at:
+          delivery.delivered_at instanceof Date
+            ? delivery.delivered_at.toISOString()
+            : delivery.delivered_at,
+      }),
+    ),
   }));
 }
 
@@ -1031,23 +1127,26 @@ export function isFeedItemVisibleToUser(
 }
 
 export async function getConversationFeedItemById(itemId: string) {
-  const result = await query(
-    `SELECT ci.*,
-            ${buildEntitySelect({
-              memberAlias: "cm",
-              actorAlias: "a",
-              userAlias: "u",
-              addressAlias: "author_primary_address",
-              prefix: "author_",
-            })}
-     FROM conversation_items ci
-     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
-     WHERE ci.id = $1
-     LIMIT 1`,
-    [itemId],
+  const result = await db.executeQuery(
+    sql<any>`
+      SELECT ci.*,
+             ${sql.raw(
+               buildEntitySelect({
+                 memberAlias: "cm",
+                 actorAlias: "a",
+                 userAlias: "u",
+                 addressAlias: "author_primary_address",
+                 prefix: "author_",
+               }),
+             )}
+      FROM conversation_items ci
+      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
+      LEFT JOIN actors a ON a.id = cm.actor_id
+      LEFT JOIN users u ON u.id = cm.user_id
+      ${sql.raw(buildPrimaryTransportAddressJoin("cm", "author_primary_address"))}
+      WHERE ci.id = ${itemId}
+      LIMIT 1
+    `.compile(db),
   );
   const [item] = await loadItemsWithRelations(result.rows);
   return item ? conversationItemRowToFeedItem(item) : null;
@@ -1060,50 +1159,46 @@ export async function getVisibleConversationItemsForMember(params: {
   limit?: number;
 }) {
   const { conversationId, memberId, beforeSequence, limit = 200 } = params;
-  const values: any[] = [
-    conversationId,
-    memberId,
-    GROUP_CONVERSATION_KIND,
-  ];
-  let extra = "";
-  if (beforeSequence !== undefined) {
-    values.push(beforeSequence);
-    extra += ` AND ci.sequence < $${values.length}`;
-  }
-  values.push(limit);
+  const beforeClause =
+    beforeSequence !== undefined
+      ? sql`AND ci.sequence < ${beforeSequence}`
+      : sql``;
 
-  const items = await query(
-    `SELECT ci.*,
-            c.kind AS conversation_kind,
-            ${buildEntitySelect({
-              memberAlias: "cm",
-              actorAlias: "a",
-              userAlias: "u",
-              addressAlias: "author_primary_address",
-              prefix: "author_",
-            })}
-     FROM conversation_items ci
-     JOIN conversations c ON c.id = ci.conversation_id
-     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
-     WHERE ci.conversation_id = $1
-       AND ci.scope = 'shared'
-       AND ci.surface = 'visible'
-       AND (
-         (c.kind = $3 AND ci.item_type = 'message' AND ci.subtype <> 'model_error_notice')
-         OR ci.author_member_id = $2
-         OR NOT EXISTS (SELECT 1 FROM conversation_item_targets cit0 WHERE cit0.item_id = ci.id)
-         OR EXISTS (
-           SELECT 1 FROM conversation_item_targets cit
-           WHERE cit.item_id = ci.id AND cit.target_member_id = $2
-         )
-       )
-       ${extra}
-     ORDER BY ci.sequence DESC
-     LIMIT $${values.length}`,
-    values,
+  const items = await db.executeQuery(
+    sql<any>`
+      SELECT ci.*,
+             c.kind AS conversation_kind,
+             ${sql.raw(
+               buildEntitySelect({
+                 memberAlias: "cm",
+                 actorAlias: "a",
+                 userAlias: "u",
+                 addressAlias: "author_primary_address",
+                 prefix: "author_",
+               }),
+             )}
+      FROM conversation_items ci
+      JOIN conversations c ON c.id = ci.conversation_id
+      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
+      LEFT JOIN actors a ON a.id = cm.actor_id
+      LEFT JOIN users u ON u.id = cm.user_id
+      ${sql.raw(buildPrimaryTransportAddressJoin("cm", "author_primary_address"))}
+      WHERE ci.conversation_id = ${conversationId}
+        AND ci.scope = 'shared'
+        AND ci.surface = 'visible'
+        AND (
+          (c.kind = ${GROUP_CONVERSATION_KIND} AND ci.item_type = 'message' AND ci.subtype <> 'model_error_notice')
+          OR ci.author_member_id = ${memberId}
+          OR NOT EXISTS (SELECT 1 FROM conversation_item_targets cit0 WHERE cit0.item_id = ci.id)
+          OR EXISTS (
+            SELECT 1 FROM conversation_item_targets cit
+            WHERE cit.item_id = ci.id AND cit.target_member_id = ${memberId}
+          )
+        )
+        ${beforeClause}
+      ORDER BY ci.sequence DESC
+      LIMIT ${limit}
+    `.compile(db),
   );
 
   const loaded = await loadItemsWithRelations(items.rows);
@@ -1116,37 +1211,37 @@ export async function getSharedVisibleConversationItems(params: {
   limit?: number;
 }) {
   const { conversationId, beforeSequence, limit = 200 } = params;
-  const values: any[] = [conversationId];
-  let extra = "";
-  if (beforeSequence !== undefined) {
-    values.push(beforeSequence);
-    extra += ` AND ci.sequence < $${values.length}`;
-  }
-  values.push(limit);
+  const beforeClause =
+    beforeSequence !== undefined
+      ? sql`AND ci.sequence < ${beforeSequence}`
+      : sql``;
 
-  const items = await query(
-    `SELECT ci.*,
-            c.kind AS conversation_kind,
-            ${buildEntitySelect({
-              memberAlias: "cm",
-              actorAlias: "a",
-              userAlias: "u",
-              addressAlias: "author_primary_address",
-              prefix: "author_",
-            })}
-     FROM conversation_items ci
-     JOIN conversations c ON c.id = ci.conversation_id
-     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
-     WHERE ci.conversation_id = $1
-       AND ci.scope = 'shared'
-       AND ci.surface = 'visible'
-       ${extra}
-     ORDER BY ci.sequence DESC
-     LIMIT $${values.length}`,
-    values,
+  const items = await db.executeQuery(
+    sql<any>`
+      SELECT ci.*,
+             c.kind AS conversation_kind,
+             ${sql.raw(
+               buildEntitySelect({
+                 memberAlias: "cm",
+                 actorAlias: "a",
+                 userAlias: "u",
+                 addressAlias: "author_primary_address",
+                 prefix: "author_",
+               }),
+             )}
+      FROM conversation_items ci
+      JOIN conversations c ON c.id = ci.conversation_id
+      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
+      LEFT JOIN actors a ON a.id = cm.actor_id
+      LEFT JOIN users u ON u.id = cm.user_id
+      ${sql.raw(buildPrimaryTransportAddressJoin("cm", "author_primary_address"))}
+      WHERE ci.conversation_id = ${conversationId}
+        AND ci.scope = 'shared'
+        AND ci.surface = 'visible'
+        ${beforeClause}
+      ORDER BY ci.sequence DESC
+      LIMIT ${limit}
+    `.compile(db),
   );
 
   const loaded = await loadItemsWithRelations(items.rows);
@@ -1160,58 +1255,54 @@ export async function getContextConversationItemsForMember(params: {
   limit?: number;
 }) {
   const { conversationId, memberId, beforeSequence, limit = 200 } = params;
-  const values: any[] = [
-    conversationId,
-    memberId,
-    GROUP_CONVERSATION_KIND,
-  ];
-  let extra = "";
-  if (beforeSequence !== undefined) {
-    values.push(beforeSequence);
-    extra += ` AND ci.sequence < $${values.length}`;
-  }
-  values.push(limit);
+  const beforeClause =
+    beforeSequence !== undefined
+      ? sql`AND ci.sequence < ${beforeSequence}`
+      : sql``;
 
-  const items = await query(
-    `SELECT ci.*,
-            c.kind AS conversation_kind,
-            ${buildEntitySelect({
-              memberAlias: "cm",
-              actorAlias: "a",
-              userAlias: "u",
-              addressAlias: "author_primary_address",
-              prefix: "author_",
-            })}
-     FROM conversation_items ci
-     JOIN conversations c ON c.id = ci.conversation_id
-     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
-     WHERE ci.conversation_id = $1
-      AND ci.scope = 'shared'
-       AND (
-         (
-           ci.surface = 'visible'
-           AND (
-             (c.kind = $3 AND ci.item_type = 'message' AND ci.subtype <> 'model_error_notice')
-             OR ci.author_member_id = $2
-             OR NOT EXISTS (SELECT 1 FROM conversation_item_targets cit0 WHERE cit0.item_id = ci.id)
-             OR EXISTS (
-               SELECT 1 FROM conversation_item_targets cit
-               WHERE cit.item_id = ci.id AND cit.target_member_id = $2
-             )
-           )
-         )
-         OR EXISTS (
-           SELECT 1 FROM conversation_item_context_targets cict
-           WHERE cict.item_id = ci.id AND cict.target_member_id = $2
-         )
-       )
-       ${extra}
-     ORDER BY ci.sequence DESC
-     LIMIT $${values.length}`,
-    values,
+  const items = await db.executeQuery(
+    sql<any>`
+      SELECT ci.*,
+             c.kind AS conversation_kind,
+             ${sql.raw(
+               buildEntitySelect({
+                 memberAlias: "cm",
+                 actorAlias: "a",
+                 userAlias: "u",
+                 addressAlias: "author_primary_address",
+                 prefix: "author_",
+               }),
+             )}
+      FROM conversation_items ci
+      JOIN conversations c ON c.id = ci.conversation_id
+      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
+      LEFT JOIN actors a ON a.id = cm.actor_id
+      LEFT JOIN users u ON u.id = cm.user_id
+      ${sql.raw(buildPrimaryTransportAddressJoin("cm", "author_primary_address"))}
+      WHERE ci.conversation_id = ${conversationId}
+        AND ci.scope = 'shared'
+        AND (
+          (
+            ci.surface = 'visible'
+            AND (
+              (c.kind = ${GROUP_CONVERSATION_KIND} AND ci.item_type = 'message' AND ci.subtype <> 'model_error_notice')
+              OR ci.author_member_id = ${memberId}
+              OR NOT EXISTS (SELECT 1 FROM conversation_item_targets cit0 WHERE cit0.item_id = ci.id)
+              OR EXISTS (
+                SELECT 1 FROM conversation_item_targets cit
+                WHERE cit.item_id = ci.id AND cit.target_member_id = ${memberId}
+              )
+            )
+          )
+          OR EXISTS (
+            SELECT 1 FROM conversation_item_context_targets cict
+            WHERE cict.item_id = ci.id AND cict.target_member_id = ${memberId}
+          )
+        )
+        ${beforeClause}
+      ORDER BY ci.sequence DESC
+      LIMIT ${limit}
+    `.compile(db),
   );
 
   const loaded = await loadItemsWithRelations(items.rows);
@@ -1219,50 +1310,56 @@ export async function getContextConversationItemsForMember(params: {
 }
 
 export async function getPrivateSessionItems(sessionId: string) {
-  const items = await query(
-    `SELECT ci.*,
-            ${buildEntitySelect({
-              memberAlias: "cm",
-              actorAlias: "a",
-              userAlias: "u",
-              addressAlias: "author_primary_address",
-              prefix: "author_",
-            })}
-     FROM conversation_items ci
-     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
-     WHERE ci.session_id = $1
-       AND ci.scope = 'private'
-     ORDER BY ci.created_at ASC, ci.sequence ASC`,
-    [sessionId],
+  const items = await db.executeQuery(
+    sql<any>`
+      SELECT ci.*,
+             ${sql.raw(
+               buildEntitySelect({
+                 memberAlias: "cm",
+                 actorAlias: "a",
+                 userAlias: "u",
+                 addressAlias: "author_primary_address",
+                 prefix: "author_",
+               }),
+             )}
+      FROM conversation_items ci
+      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
+      LEFT JOIN actors a ON a.id = cm.actor_id
+      LEFT JOIN users u ON u.id = cm.user_id
+      ${sql.raw(buildPrimaryTransportAddressJoin("cm", "author_primary_address"))}
+      WHERE ci.session_id = ${sessionId}
+        AND ci.scope = 'private'
+      ORDER BY ci.created_at ASC, ci.sequence ASC
+    `.compile(db),
   );
 
   return loadItemsWithRelations(items.rows);
 }
 
 export async function getLastVisibleConversationItem(conversationId: string) {
-  const items = await query(
-    `SELECT ci.*,
-            ${buildEntitySelect({
-              memberAlias: "cm",
-              actorAlias: "a",
-              userAlias: "u",
-              addressAlias: "author_primary_address",
-              prefix: "author_",
-            })}
-     FROM conversation_items ci
-     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
-     WHERE ci.conversation_id = $1
-       AND ci.scope = 'shared'
-       AND ci.surface = 'visible'
-     ORDER BY ci.sequence DESC
-     LIMIT 1`,
-    [conversationId],
+  const items = await db.executeQuery(
+    sql<any>`
+      SELECT ci.*,
+             ${sql.raw(
+               buildEntitySelect({
+                 memberAlias: "cm",
+                 actorAlias: "a",
+                 userAlias: "u",
+                 addressAlias: "author_primary_address",
+                 prefix: "author_",
+               }),
+             )}
+      FROM conversation_items ci
+      LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
+      LEFT JOIN actors a ON a.id = cm.actor_id
+      LEFT JOIN users u ON u.id = cm.user_id
+      ${sql.raw(buildPrimaryTransportAddressJoin("cm", "author_primary_address"))}
+      WHERE ci.conversation_id = ${conversationId}
+        AND ci.scope = 'shared'
+        AND ci.surface = 'visible'
+      ORDER BY ci.sequence DESC
+      LIMIT 1
+    `.compile(db),
   );
 
   const [item] = await loadItemsWithRelations(items.rows);
@@ -1273,46 +1370,52 @@ export async function listUserWorkspaceConversations(
   workspaceId: string,
   userId: string,
 ) {
-  const result = await query(
-    `SELECT c.*,
-            transport_account.transport_kind,
-            cr.last_read_at,
-            COALESCE(cr.read_watermark_sequence, 0) AS read_watermark_sequence,
-            (
-              SELECT COUNT(*)::int
-              FROM conversation_items ci
-              JOIN conversation_members cm_u ON cm_u.conversation_id = c.id AND cm_u.user_id = $2
-              WHERE ci.conversation_id = c.id
-                AND ci.scope = 'shared'
-                AND ci.surface = 'visible'
-                AND (
-                  ci.subtype <> 'model_error_notice'
-                  OR NOT EXISTS (
-                    SELECT 1 FROM conversation_item_targets cit0
-                    WHERE cit0.item_id = ci.id
-                  )
-                  OR EXISTS (
-                    SELECT 1
-                    FROM conversation_item_targets cit
-                    JOIN conversation_members cm_target
-                      ON cm_target.id = cit.target_member_id
-                    WHERE cit.item_id = ci.id
-                      AND cm_target.user_id = $2
-                  )
-                )
-                AND ci.sequence > COALESCE(cr.read_watermark_sequence, 0)
-            ) AS unread_count
-     FROM conversations c
-     LEFT JOIN conversation_transport_bindings ctb
-       ON ctb.conversation_id = c.id
-     LEFT JOIN transport_accounts transport_account
-       ON transport_account.id = ctb.transport_account_id
-     JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $2 AND cm.state = 'active'
-     LEFT JOIN conversation_user_states cr ON cr.conversation_id = c.id AND cr.user_id = $2
-     WHERE c.workspace_id = $1
-       AND c.domain = 'workspace'
-     ORDER BY c.updated_at DESC, c.created_at DESC`,
-    [workspaceId, userId],
+  const result = await db.executeQuery(
+    sql<any>`
+      SELECT c.*,
+             transport_account.transport_kind,
+             cr.last_read_at,
+             COALESCE(cr.read_watermark_sequence, 0) AS read_watermark_sequence,
+             (
+               SELECT COUNT(*)::int
+               FROM conversation_items ci
+               JOIN conversation_members cm_u ON cm_u.conversation_id = c.id AND cm_u.user_id = ${userId}
+               WHERE ci.conversation_id = c.id
+                 AND ci.scope = 'shared'
+                 AND ci.surface = 'visible'
+                 AND (
+                   ci.subtype <> 'model_error_notice'
+                   OR NOT EXISTS (
+                     SELECT 1 FROM conversation_item_targets cit0
+                     WHERE cit0.item_id = ci.id
+                   )
+                   OR EXISTS (
+                     SELECT 1
+                     FROM conversation_item_targets cit
+                     JOIN conversation_members cm_target
+                       ON cm_target.id = cit.target_member_id
+                     WHERE cit.item_id = ci.id
+                       AND cm_target.user_id = ${userId}
+                   )
+                 )
+                 AND ci.sequence > COALESCE(cr.read_watermark_sequence, 0)
+             ) AS unread_count
+      FROM conversations c
+      LEFT JOIN conversation_transport_bindings ctb
+        ON ctb.conversation_id = c.id
+      LEFT JOIN transport_accounts transport_account
+        ON transport_account.id = ctb.transport_account_id
+      JOIN conversation_members cm
+        ON cm.conversation_id = c.id
+       AND cm.user_id = ${userId}
+       AND cm.state = 'active'
+      LEFT JOIN conversation_user_states cr
+        ON cr.conversation_id = c.id
+       AND cr.user_id = ${userId}
+      WHERE c.workspace_id = ${workspaceId}
+        AND c.domain = 'workspace'
+      ORDER BY c.updated_at DESC, c.created_at DESC
+    `.compile(db),
   );
 
   return result.rows;

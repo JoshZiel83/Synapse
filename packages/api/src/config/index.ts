@@ -1,10 +1,21 @@
-import 'dotenv/config';
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { config as loadEnv } from "dotenv";
 import {
   getDefaultModelBaseUrl,
   getDefaultModelEngineKind,
   getDefaultModelName,
   getModelProviderDefinition,
 } from '@synapse/shared';
+
+for (const candidate of [
+  resolve(process.cwd(), ".env"),
+  resolve(process.cwd(), "../../.env"),
+]) {
+  if (!existsSync(candidate)) continue;
+  loadEnv({ path: candidate });
+  break;
+}
 
 const authzEnabled = process.env.AUTHZ_ENABLED !== 'false';
 

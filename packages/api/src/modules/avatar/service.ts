@@ -1,6 +1,11 @@
 import { createAvatar } from "@dicebear/core";
 import { pixelArt } from "@dicebear/collection";
-import { query } from "../../infrastructure/database/index.js";
+import {
+  db,
+  executeTakeFirst,
+  type QueryExecutor,
+  type TableInsert,
+} from "../../infrastructure/database/kysely.js";
 import {
   getFileUrl,
   getFullUrl,
@@ -8,9 +13,7 @@ import {
   saveBuffer,
 } from "../../infrastructure/storage/index.js";
 
-type DatabaseExecutor = {
-  query: typeof query;
-};
+type DatabaseExecutor = QueryExecutor;
 
 export type PixelArtAvatarTheme = {
   accessories?: string[];
@@ -273,32 +276,28 @@ async function saveSvgAvatarFile(
     SVG_MIME_TYPE,
   );
 
-  const result = await executor.query<{ id: string }>(
-    `INSERT INTO files (
-       workspace_id,
-       uploader_user_id,
-       original_name,
-       stored_name,
-       mime_type,
-       size_bytes,
-       category,
-       metadata
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, 'general', $7::jsonb)
-     RETURNING id`,
-    [
-      params.workspaceId,
-      params.uploaderUserId,
-      normalizedOriginalName,
-      storedName,
-      SVG_MIME_TYPE,
-      sizeBytes,
-      JSON.stringify(params.metadata || {}),
-    ],
+  const row = await executeTakeFirst<{ id: string }>(
+    executor,
+    db
+      .insertInto('files')
+      .values({
+        workspace_id: params.workspaceId,
+        uploader_user_id: params.uploaderUserId,
+        original_name: normalizedOriginalName,
+        stored_name: storedName,
+        mime_type: SVG_MIME_TYPE,
+        size_bytes: sizeBytes,
+        category: 'general',
+        metadata: (params.metadata || {}) as TableInsert<'files'>['metadata'],
+      })
+      .returning('id'),
   );
+  if (!row) {
+    throw new Error("Failed to persist avatar file");
+  }
 
   return {
-    fileId: result.rows[0]!.id,
+    fileId: row.id,
     url: getFileUrl(storedName),
     fullUrl: getFullUrl(storedName),
     storedName,

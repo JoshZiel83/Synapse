@@ -1,7 +1,18 @@
 import { query } from '../../infrastructure/database/index.js';
+import { db } from '../../infrastructure/database/kysely.js';
 import { saveFromBuffer, type FileRecord } from '../../infrastructure/storage/file-io.js';
 import { getFileUrl, getFullUrl, readAsBuffer } from '../../infrastructure/storage/index.js';
 import type { FileRecordView } from '@synapse/shared/types';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function toIsoString(value: string | Date | null | undefined): string {
+  if (typeof value === 'string') return value;
+  if (value instanceof Date) return value.toISOString();
+  return new Date(0).toISOString();
+}
 
 export function getFileUrlById(fileId: string): string {
   return `/files/${fileId}`;
@@ -54,14 +65,12 @@ export async function uploadFile(
  * Get a file record by ID.
  */
 export async function getFileRecord(fileId: string): Promise<FileRecord | null> {
-  const result = await query(
-    `SELECT id, stored_name, original_name, mime_type, size_bytes, metadata
-     FROM files WHERE id = $1`,
-    [fileId],
-  );
-  if (result.rows.length === 0) return null;
-
-  const row = result.rows[0];
+  const row = await db
+    .selectFrom('files')
+    .select(['id', 'stored_name', 'original_name', 'mime_type', 'size_bytes', 'metadata'])
+    .where('id', '=', fileId)
+    .executeTakeFirst();
+  if (!row) return null;
   return {
     id: row.id,
     url: getFileUrl(row.stored_name),
@@ -70,20 +79,27 @@ export async function getFileRecord(fileId: string): Promise<FileRecord | null> 
     originalName: row.original_name,
     mimeType: row.mime_type,
     sizeBytes: Number(row.size_bytes),
-    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : undefined,
+    metadata: isRecord(row.metadata) ? row.metadata : undefined,
   };
 }
 
 export async function getFileDetail(fileId: string): Promise<FileRecordView | null> {
-  const result = await query(
-    `SELECT id, workspace_id, uploader_user_id, stored_name, original_name, mime_type, size_bytes, metadata, created_at
-     FROM files
-     WHERE id = $1`,
-    [fileId],
-  );
-  if (result.rows.length === 0) return null;
-
-  const row = result.rows[0];
+  const row = await db
+    .selectFrom('files')
+    .select([
+      'id',
+      'workspace_id',
+      'uploader_user_id',
+      'stored_name',
+      'original_name',
+      'mime_type',
+      'size_bytes',
+      'metadata',
+      'created_at',
+    ])
+    .where('id', '=', fileId)
+    .executeTakeFirst();
+  if (!row) return null;
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -94,8 +110,8 @@ export async function getFileDetail(fileId: string): Promise<FileRecordView | nu
     fullUrl: getFullUrl(row.stored_name),
     mimeType: row.mime_type,
     sizeBytes: Number(row.size_bytes),
-    createdAt: new Date(row.created_at).toISOString(),
-    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : undefined,
+    createdAt: toIsoString(row.created_at),
+    metadata: isRecord(row.metadata) ? row.metadata : undefined,
   };
 }
 
@@ -103,16 +119,23 @@ export async function getWorkspaceFileDetail(
   fileId: string,
   workspaceId: string,
 ): Promise<FileRecordView | null> {
-  const result = await query(
-    `SELECT id, workspace_id, uploader_user_id, stored_name, original_name, mime_type, size_bytes, metadata, created_at
-     FROM files
-     WHERE id = $1
-       AND workspace_id = $2`,
-    [fileId, workspaceId],
-  );
-  if (result.rows.length === 0) return null;
-
-  const row = result.rows[0];
+  const row = await db
+    .selectFrom('files')
+    .select([
+      'id',
+      'workspace_id',
+      'uploader_user_id',
+      'stored_name',
+      'original_name',
+      'mime_type',
+      'size_bytes',
+      'metadata',
+      'created_at',
+    ])
+    .where('id', '=', fileId)
+    .where('workspace_id', '=', workspaceId)
+    .executeTakeFirst();
+  if (!row) return null;
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -123,8 +146,8 @@ export async function getWorkspaceFileDetail(
     fullUrl: getFullUrl(row.stored_name),
     mimeType: row.mime_type,
     sizeBytes: Number(row.size_bytes),
-    createdAt: new Date(row.created_at).toISOString(),
-    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : undefined,
+    createdAt: toIsoString(row.created_at),
+    metadata: isRecord(row.metadata) ? row.metadata : undefined,
   };
 }
 
@@ -139,18 +162,17 @@ export async function getFileAccessInfo(
   originalName: string;
   workspaceId: string | null;
 } | null> {
-  const result = await query(
-    `SELECT stored_name, mime_type, original_name, workspace_id
-     FROM files
-     WHERE id = $1`,
-    [fileId],
-  );
-  if (result.rows.length === 0) return null;
+  const row = await db
+    .selectFrom('files')
+    .select(['stored_name', 'mime_type', 'original_name', 'workspace_id'])
+    .where('id', '=', fileId)
+    .executeTakeFirst();
+  if (!row) return null;
   return {
-    storedName: result.rows[0].stored_name,
-    mimeType: result.rows[0].mime_type,
-    originalName: result.rows[0].original_name,
-    workspaceId: result.rows[0].workspace_id,
+    storedName: row.stored_name,
+    mimeType: row.mime_type,
+    originalName: row.original_name,
+    workspaceId: row.workspace_id,
   };
 }
 
@@ -188,18 +210,17 @@ export async function getStoredFileAccessInfo(
   originalName: string;
   workspaceId: string | null;
 } | null> {
-  const result = await query(
-    `SELECT stored_name, mime_type, original_name, workspace_id
-     FROM files
-     WHERE stored_name = $1`,
-    [storedName],
-  );
-  if (result.rows.length === 0) return null;
+  const row = await db
+    .selectFrom('files')
+    .select(['stored_name', 'mime_type', 'original_name', 'workspace_id'])
+    .where('stored_name', '=', storedName)
+    .executeTakeFirst();
+  if (!row) return null;
   return {
-    storedName: result.rows[0].stored_name,
-    mimeType: result.rows[0].mime_type,
-    originalName: result.rows[0].original_name,
-    workspaceId: result.rows[0].workspace_id,
+    storedName: row.stored_name,
+    mimeType: row.mime_type,
+    originalName: row.original_name,
+    workspaceId: row.workspace_id,
   };
 }
 
@@ -209,17 +230,23 @@ export async function canUserAccessFileWorkspace(
 ): Promise<boolean> {
   if (!workspaceId) return true;
 
-  const result = await query(
-    `SELECT 1
-     FROM workspaces w
-     LEFT JOIN workspace_members wm
-       ON wm.workspace_id = w.id
-      AND wm.user_id = $2
-     WHERE w.id = $1
-       AND (w.owner_id = $2 OR wm.user_id IS NOT NULL)
-     LIMIT 1`,
-    [workspaceId, userId],
-  );
+  const row = await db
+    .selectFrom('workspaces as w')
+    .leftJoin('workspace_members as wm', (join) =>
+      join
+        .onRef('wm.workspace_id', '=', 'w.id')
+        .on('wm.user_id', '=', userId),
+    )
+    .select('w.id')
+    .where('w.id', '=', workspaceId)
+    .where((eb) =>
+      eb.or([
+        eb('w.owner_id', '=', userId),
+        eb('wm.user_id', 'is not', null),
+      ]),
+    )
+    .limit(1)
+    .executeTakeFirst();
 
-  return result.rows.length > 0;
+  return Boolean(row);
 }

@@ -14,7 +14,14 @@ import type {
   TransportKind,
   TransportSessionSummary,
 } from "@synapse/shared/types";
-import { query, transaction } from "../../infrastructure/database/index.js";
+import { sql } from "kysely";
+import { transaction } from "../../infrastructure/database/index.js";
+import {
+  db,
+  executeCompiledQuery,
+  executeTakeFirst,
+  type TableInsert,
+} from "../../infrastructure/database/kysely.js";
 import { v4 as uuidv4 } from "uuid";
 import { enqueueTransportDeliveryJobs } from "../../workers/queues.js";
 import { ensureConversationMember } from "../conversation/service.js";
@@ -114,6 +121,11 @@ function assertTransportAccountConfiguration(params: {
   }
 }
 
+function toIsoString(value: string | Date | null | undefined) {
+  if (!value) return undefined;
+  return value instanceof Date ? value.toISOString() : value;
+}
+
 function normalizeAccountRow(row: any): TransportAccountSummary {
   return {
     id: row.id,
@@ -137,8 +149,8 @@ function normalizeAccountRow(row: any): TransportAccountSummary {
     credentials: parseJsonObject(row.credentials),
     config: parseJsonObject(row.config),
     metadata: parseJsonObject(row.metadata),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: toIsoString(row.created_at)!,
+    updatedAt: toIsoString(row.updated_at)!,
   };
 }
 
@@ -155,8 +167,8 @@ function normalizeEndpointRow(
     parentExternalId: row.parent_external_id || undefined,
     displayName: row.endpoint_display_name || row.display_name || undefined,
     metadata: parseJsonObject(row.endpoint_metadata || row.metadata),
-    createdAt: row.endpoint_created_at || row.created_at,
-    updatedAt: row.endpoint_updated_at || row.updated_at,
+    createdAt: toIsoString(row.endpoint_created_at || row.created_at)!,
+    updatedAt: toIsoString(row.endpoint_updated_at || row.updated_at)!,
   };
 }
 
@@ -173,8 +185,8 @@ function normalizeBindingRow(row: any): ConversationTransportBindingSummary {
       "inherit_account",
     inboundActorId: row.inbound_actor_id || undefined,
     metadata: parseJsonObject(row.binding_metadata || row.metadata),
-    createdAt: row.binding_created_at || row.created_at,
-    updatedAt: row.binding_updated_at || row.updated_at,
+    createdAt: toIsoString(row.binding_created_at || row.created_at)!,
+    updatedAt: toIsoString(row.binding_updated_at || row.updated_at)!,
     account,
     endpoint: normalizeEndpointRow(row, row.transport_kind),
   };
@@ -198,14 +210,16 @@ function normalizeTransportSessionRow(row: any): TransportSessionSummary {
     metadata: parseJsonObject(
       row.binding_metadata || row.endpoint_metadata || row.metadata,
     ),
-    createdAt:
+    createdAt: toIsoString(
       row.binding_created_at || row.endpoint_created_at || row.created_at,
-    updatedAt:
+    )!,
+    updatedAt: toIsoString(
       row.binding_updated_at || row.endpoint_updated_at || row.updated_at,
+    )!,
     conversationId: row.conversation_id || undefined,
     conversationTitle: readTrimmedString(row, "conversation_title"),
-    lastInboundAt: row.last_inbound_at || undefined,
-    lastOutboundAt: row.last_outbound_at || undefined,
+    lastInboundAt: toIsoString(row.last_inbound_at),
+    lastOutboundAt: toIsoString(row.last_outbound_at),
     account,
     endpoint: normalizeEndpointRow(row, row.transport_kind),
   };
@@ -225,9 +239,9 @@ function normalizeTransportExternalUserRow(
     linkedUserId: row.linked_user_id || undefined,
     linkedUserName: row.linked_user_name || undefined,
     metadata: parseJsonObject(row.metadata),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    lastSeenAt: row.last_seen_at || undefined,
+    createdAt: toIsoString(row.created_at)!,
+    updatedAt: toIsoString(row.updated_at)!,
+    lastSeenAt: toIsoString(row.last_seen_at),
     sessions: parseJsonArray<TransportExternalUserSessionRef>(row.sessions),
   };
 }
@@ -260,16 +274,15 @@ async function assertWorkspaceActor(params: {
     throw new Error(`${params.label} is required`);
   }
 
-  const result = await query(
-    `SELECT id
-     FROM actors
-     WHERE id = $1
-       AND workspace_id = $2
-       AND is_active = TRUE
-     LIMIT $3`,
-    [actorId, params.workspaceId, 1],
-  );
-  if (!result.rows[0]?.id) {
+  const actor = await db
+    .selectFrom("actors")
+    .select("id")
+    .where("id", "=", actorId)
+    .where("workspace_id", "=", params.workspaceId)
+    .where("is_active", "=", true)
+    .limit(1)
+    .executeTakeFirst();
+  if (!actor?.id) {
     throw new Error(`${params.label} is not available in this workspace`);
   }
   return actorId;
@@ -349,15 +362,13 @@ async function assertConversationInboundActor(params: {
 }
 
 async function loadTransportAccountRow(workspaceId: string, accountId: string) {
-  const result = await query(
-    `SELECT *
-     FROM transport_accounts
-     WHERE workspace_id = $1
-       AND id = $2
-     LIMIT $3`,
-    [workspaceId, accountId, 1],
-  );
-  return result.rows[0] ?? null;
+  return db
+    .selectFrom("transport_accounts")
+    .selectAll()
+    .where("workspace_id", "=", workspaceId)
+    .where("id", "=", accountId)
+    .limit(1)
+    .executeTakeFirst();
 }
 
 async function loadTransportAccountRowByWorkspaceKey(params: {
@@ -365,27 +376,23 @@ async function loadTransportAccountRowByWorkspaceKey(params: {
   transportKind: TransportKind;
   accountKey: string;
 }) {
-  const result = await query(
-    `SELECT *
-     FROM transport_accounts
-     WHERE workspace_id = $1
-       AND transport_kind = $2
-       AND account_key = $3
-     LIMIT $4`,
-    [params.workspaceId, params.transportKind, params.accountKey.trim(), 1],
-  );
-  return result.rows[0] ?? null;
+  return db
+    .selectFrom("transport_accounts")
+    .selectAll()
+    .where("workspace_id", "=", params.workspaceId)
+    .where("transport_kind", "=", params.transportKind)
+    .where("account_key", "=", params.accountKey.trim())
+    .limit(1)
+    .executeTakeFirst();
 }
 
 async function loadTransportAccountRowById(accountId: string) {
-  const result = await query(
-    `SELECT *
-     FROM transport_accounts
-     WHERE id = $1
-     LIMIT $2`,
-    [accountId, 1],
-  );
-  return result.rows[0] ?? null;
+  return db
+    .selectFrom("transport_accounts")
+    .selectAll()
+    .where("id", "=", accountId)
+    .limit(1)
+    .executeTakeFirst();
 }
 
 async function loadWorkspaceUserTransportAccountRow(params: {
@@ -393,40 +400,39 @@ async function loadWorkspaceUserTransportAccountRow(params: {
   userId: string;
   transportKind: TransportKind;
 }) {
-  const result = await query(
-    `SELECT *
-     FROM transport_accounts
-     WHERE workspace_id = $1
-       AND transport_kind = $2
-       AND owner_scope = 'workspace_user'
-       AND owner_user_id = $3
-     ORDER BY CASE
-                WHEN status = 'active' THEN 0
-                WHEN status = 'error' THEN 1
-                ELSE 2
-              END,
-              updated_at DESC,
-              created_at DESC
-     LIMIT $4`,
-    [params.workspaceId, params.transportKind, params.userId, 1],
-  );
-  return result.rows[0] ?? null;
+  return db
+    .selectFrom("transport_accounts")
+    .selectAll()
+    .where("workspace_id", "=", params.workspaceId)
+    .where("transport_kind", "=", params.transportKind)
+    .where("owner_scope", "=", "workspace_user")
+    .where("owner_user_id", "=", params.userId)
+    .orderBy(
+      sql<number>`CASE
+        WHEN status = 'active' THEN 0
+        WHEN status = 'error' THEN 1
+        ELSE 2
+      END`,
+    )
+    .orderBy("updated_at", "desc")
+    .orderBy("created_at", "desc")
+    .limit(1)
+    .executeTakeFirst();
 }
 
 async function loadWorkspaceMemberDisplayName(params: {
   workspaceId: string;
   userId: string;
 }) {
-  const result = await query(
-    `SELECT u.name
-     FROM workspace_members wm
-     JOIN users u ON u.id = wm.user_id
-     WHERE wm.workspace_id = $1
-       AND wm.user_id = $2
-     LIMIT $3`,
-    [params.workspaceId, params.userId, 1],
-  );
-  return readTrimmedString(result.rows[0] || {}, "name");
+  const row = await db
+    .selectFrom("workspace_members as wm")
+    .innerJoin("users as u", "u.id", "wm.user_id")
+    .select("u.name as name")
+    .where("wm.workspace_id", "=", params.workspaceId)
+    .where("wm.user_id", "=", params.userId)
+    .limit(1)
+    .executeTakeFirst();
+  return readTrimmedString((row || {}) as Record<string, unknown>, "name");
 }
 
 async function assertConversationMembers(params: {
@@ -434,14 +440,13 @@ async function assertConversationMembers(params: {
   memberIds: string[];
 }) {
   if (params.memberIds.length === 0) return;
-  const result = await query(
-    `SELECT id
-     FROM conversation_members
-     WHERE conversation_id = $1
-       AND id = ANY($2::uuid[])`,
-    [params.conversationId, params.memberIds],
-  );
-  const existing = new Set(result.rows.map((row) => row.id as string));
+  const rows = await db
+    .selectFrom("conversation_members")
+    .select("id")
+    .where("conversation_id", "=", params.conversationId)
+    .where("id", "in", params.memberIds)
+    .execute();
+  const existing = new Set(rows.map((row) => row.id as string));
   const missing = params.memberIds.filter(
     (memberId) => !existing.has(memberId),
   );
@@ -460,15 +465,14 @@ async function assertConversationMemberType(params: {
 }) {
   if (!params.memberId) return;
 
-  const result = await query(
-    `SELECT member_type
-     FROM conversation_members
-     WHERE conversation_id = $1
-       AND id = $2
-     LIMIT $3`,
-    [params.conversationId, params.memberId, 1],
-  );
-  const memberType = result.rows[0]?.member_type as
+  const row = await db
+    .selectFrom("conversation_members")
+    .select("member_type")
+    .where("conversation_id", "=", params.conversationId)
+    .where("id", "=", params.memberId)
+    .limit(1)
+    .executeTakeFirst();
+  const memberType = row?.member_type as
     | "actor"
     | "user"
     | "external"
@@ -496,23 +500,22 @@ function normalizeTransportMessageLinkRow(row: any) {
     deliveryStatus: row.delivery_status as TransportDeliveryStatus,
     externalMessageId: row.external_message_id || undefined,
     metadata: parseJsonObject(row.metadata),
-    deliveredAt: row.delivered_at || undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    deliveredAt: toIsoString(row.delivered_at),
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at),
   };
 }
 
 export async function listTransportAccounts(
   workspaceId: string,
 ): Promise<TransportAccountSummary[]> {
-  const result = await query(
-    `SELECT *
-     FROM transport_accounts
-     WHERE workspace_id = $1
-     ORDER BY created_at DESC`,
-    [workspaceId],
-  );
-  return result.rows.map(normalizeAccountRow);
+  const rows = await db
+    .selectFrom("transport_accounts")
+    .selectAll()
+    .where("workspace_id", "=", workspaceId)
+    .orderBy("created_at", "desc")
+    .execute();
+  return rows.map(normalizeAccountRow);
 }
 
 export async function getTransportAccountById(accountId: string) {
@@ -524,15 +527,14 @@ export async function getTransportAccountByKindAndId(params: {
   accountId: string;
   transportKind: TransportKind;
 }) {
-  const result = await query(
-    `SELECT *
-     FROM transport_accounts
-     WHERE id = $1
-       AND transport_kind = $2
-     LIMIT $3`,
-    [params.accountId, params.transportKind, 1],
-  );
-  return result.rows[0] ? normalizeAccountRow(result.rows[0]) : null;
+  const row = await db
+    .selectFrom("transport_accounts")
+    .selectAll()
+    .where("id", "=", params.accountId)
+    .where("transport_kind", "=", params.transportKind)
+    .limit(1)
+    .executeTakeFirst();
+  return row ? normalizeAccountRow(row) : null;
 }
 
 export async function getTransportAccountByWorkspaceKindAndKey(params: {
@@ -733,160 +735,200 @@ export async function listActiveTransportAccounts(params?: {
   connectionMode?: TransportConnectionMode;
   transportKind?: TransportKind;
 }) {
-  const values: any[] = ["active"];
-  const filters = [`status = $1`];
+  let builder = db
+    .selectFrom("transport_accounts")
+    .selectAll()
+    .where("status", "=", "active");
+
   if (params?.connectionMode) {
-    values.push(params.connectionMode);
-    filters.push(`connection_mode = $${values.length}`);
+    builder = builder.where("connection_mode", "=", params.connectionMode);
   }
   if (params?.transportKind) {
-    values.push(params.transportKind);
-    filters.push(`transport_kind = $${values.length}`);
+    builder = builder.where("transport_kind", "=", params.transportKind);
   }
-  const result = await query(
-    `SELECT *
-     FROM transport_accounts
-     WHERE ${filters.join(" AND ")}
-     ORDER BY created_at ASC`,
-    values,
-  );
-  return result.rows.map(normalizeAccountRow);
+
+  const rows = await builder.orderBy("created_at", "asc").execute();
+  return rows.map(normalizeAccountRow);
 }
 
 export async function listTransportSessions(
   workspaceId: string,
 ): Promise<TransportSessionSummary[]> {
-  const result = await query(
-    `SELECT ctb.id AS binding_id,
-            ctb.workspace_id,
-            ctb.conversation_id,
-            ctb.outbound_enabled,
-            ctb.inbound_actor_mode,
-            ctb.inbound_actor_id,
-            ctb.metadata AS binding_metadata,
-            ctb.created_at AS binding_created_at,
-            ctb.updated_at AS binding_updated_at,
-            c.title AS conversation_title,
-            ta.id,
-            ta.workspace_id AS account_workspace_id,
-            ta.account_key,
-            ta.display_name,
-            ta.transport_kind,
-            ta.owner_scope,
-            ta.owner_user_id,
-            ta.inbound_actor_mode AS account_inbound_actor_mode,
-            ta.inbound_actor_id AS account_inbound_actor_id,
-            ta.connection_mode,
-            ta.status,
-            ta.credentials,
-            ta.config,
-            ta.metadata,
-            ta.created_at,
-            ta.updated_at,
-            te.id AS endpoint_id,
-            te.transport_account_id,
-            te.endpoint_type,
-            te.external_id AS endpoint_external_id,
-            te.parent_external_id,
-            te.display_name AS endpoint_display_name,
-            te.metadata AS endpoint_metadata,
-            te.created_at AS endpoint_created_at,
-            te.updated_at AS endpoint_updated_at,
-            inbound_activity.last_inbound_at,
-            outbound_activity.last_outbound_at
-     FROM transport_endpoints te
-     JOIN transport_accounts ta ON ta.id = te.transport_account_id
-     LEFT JOIN conversation_transport_bindings ctb
-       ON ctb.transport_endpoint_id = te.id
-     LEFT JOIN conversations c ON c.id = ctb.conversation_id
-     LEFT JOIN LATERAL (
-       SELECT MAX(created_at) AS last_inbound_at
-       FROM transport_message_links
-       WHERE transport_endpoint_id = te.id
-         AND direction = 'inbound'
-     ) inbound_activity ON TRUE
-     LEFT JOIN LATERAL (
-       SELECT MAX(created_at) AS last_outbound_at
-       FROM transport_message_links
-       WHERE transport_endpoint_id = te.id
-         AND direction = 'outbound'
-     ) outbound_activity ON TRUE
-     WHERE ta.workspace_id = $1
-     ORDER BY COALESCE(inbound_activity.last_inbound_at, outbound_activity.last_outbound_at, te.updated_at) DESC,
-              te.created_at DESC`,
-    [workspaceId],
-  );
-  return result.rows.map(normalizeTransportSessionRow);
+  const inboundActivity = db
+    .selectFrom("transport_message_links")
+    .select("transport_endpoint_id")
+    .select(sql<Date | null>`MAX(created_at)`.as("last_inbound_at"))
+    .where("direction", "=", "inbound")
+    .groupBy("transport_endpoint_id")
+    .as("inbound_activity");
+
+  const outboundActivity = db
+    .selectFrom("transport_message_links")
+    .select("transport_endpoint_id")
+    .select(sql<Date | null>`MAX(created_at)`.as("last_outbound_at"))
+    .where("direction", "=", "outbound")
+    .groupBy("transport_endpoint_id")
+    .as("outbound_activity");
+
+  const rows = await db
+    .selectFrom("transport_endpoints as te")
+    .innerJoin("transport_accounts as ta", "ta.id", "te.transport_account_id")
+    .leftJoin(
+      "conversation_transport_bindings as ctb",
+      "ctb.transport_endpoint_id",
+      "te.id",
+    )
+    .leftJoin("conversations as c", "c.id", "ctb.conversation_id")
+    .leftJoin(inboundActivity, "inbound_activity.transport_endpoint_id", "te.id")
+    .leftJoin(
+      outboundActivity,
+      "outbound_activity.transport_endpoint_id",
+      "te.id",
+    )
+    .select([
+      "ctb.id as binding_id",
+      "ctb.workspace_id",
+      "ctb.conversation_id",
+      "ctb.outbound_enabled",
+      "ctb.inbound_actor_mode",
+      "ctb.inbound_actor_id",
+      "ctb.metadata as binding_metadata",
+      "ctb.created_at as binding_created_at",
+      "ctb.updated_at as binding_updated_at",
+      "c.title as conversation_title",
+      "ta.id",
+      "ta.workspace_id as account_workspace_id",
+      "ta.account_key",
+      "ta.display_name",
+      "ta.transport_kind",
+      "ta.owner_scope",
+      "ta.owner_user_id",
+      "ta.inbound_actor_mode as account_inbound_actor_mode",
+      "ta.inbound_actor_id as account_inbound_actor_id",
+      "ta.connection_mode",
+      "ta.status",
+      "ta.credentials",
+      "ta.config",
+      "ta.metadata",
+      "ta.created_at",
+      "ta.updated_at",
+      "te.id as endpoint_id",
+      "te.transport_account_id",
+      "te.endpoint_type",
+      "te.external_id as endpoint_external_id",
+      "te.parent_external_id",
+      "te.display_name as endpoint_display_name",
+      "te.metadata as endpoint_metadata",
+      "te.created_at as endpoint_created_at",
+      "te.updated_at as endpoint_updated_at",
+      "inbound_activity.last_inbound_at as last_inbound_at",
+      "outbound_activity.last_outbound_at as last_outbound_at",
+    ])
+    .where("ta.workspace_id", "=", workspaceId)
+    .orderBy(
+      sql`COALESCE(inbound_activity.last_inbound_at, outbound_activity.last_outbound_at, te.updated_at)`,
+      "desc",
+    )
+    .orderBy("te.created_at", "desc")
+    .execute();
+
+  return rows.map(normalizeTransportSessionRow);
 }
 
 export async function listTransportExternalUsers(params: {
   workspaceId: string;
   transportAccountId?: string;
 }): Promise<TransportExternalUserSummary[]> {
-  const values: any[] = [params.workspaceId, "user"];
-  const filters = [`ta.workspace_id = $1`, `ta.address_type = $2`];
+  const activity = db
+    .selectFrom("conversation_participant_addresses as cpa_activity")
+    .innerJoin(
+      "conversation_members as cm_activity",
+      "cm_activity.id",
+      "cpa_activity.conversation_member_id",
+    )
+    .innerJoin(
+      "transport_message_links as tml",
+      "tml.conversation_id",
+      "cm_activity.conversation_id",
+    )
+    .select("cpa_activity.transport_address_id")
+    .select(sql<Date | null>`MAX(tml.created_at)`.as("last_seen_at"))
+    .groupBy("cpa_activity.transport_address_id")
+    .as("activity");
+
+  let builder = db
+    .selectFrom("transport_addresses as ta")
+    .innerJoin("transport_accounts as account", "account.id", "ta.transport_account_id")
+    .leftJoin("users as linked_user", "linked_user.id", "ta.user_id")
+    .leftJoin(
+      "conversation_participant_addresses as cpa",
+      "cpa.transport_address_id",
+      "ta.id",
+    )
+    .leftJoin("conversation_members as cm", "cm.id", "cpa.conversation_member_id")
+    .leftJoin("conversations as c", "c.id", "cm.conversation_id")
+    .leftJoin(
+      "conversation_transport_bindings as ctb",
+      "ctb.conversation_id",
+      "c.id",
+    )
+    .leftJoin("transport_endpoints as te", "te.id", "ctb.transport_endpoint_id")
+    .leftJoin(activity, "activity.transport_address_id", "ta.id")
+    .select([
+      "ta.id",
+      "ta.workspace_id",
+      "ta.transport_account_id",
+      "ta.transport_kind",
+      "ta.external_id",
+      "ta.display_name",
+      "ta.metadata",
+      "ta.created_at",
+      "ta.updated_at",
+      "account.display_name as account_display_name",
+      "linked_user.id as linked_user_id",
+      "linked_user.name as linked_user_name",
+      "activity.last_seen_at as last_seen_at",
+      sql<any>`COALESCE(
+        jsonb_agg(
+          DISTINCT jsonb_build_object(
+            'conversationId', c.id,
+            'conversationTitle', c.title,
+            'endpointId', te.id,
+            'endpointType', te.endpoint_type,
+            'endpointExternalId', te.external_id,
+            'endpointDisplayName', te.display_name
+          )
+        ) FILTER (WHERE te.id IS NOT NULL),
+        '[]'::jsonb
+      )`.as("sessions"),
+    ])
+    .where("ta.workspace_id", "=", params.workspaceId)
+    .where("ta.address_type", "=", "user");
+
   if (params.transportAccountId) {
-    values.push(params.transportAccountId);
-    filters.push(`ta.transport_account_id = $${values.length}`);
+    builder = builder.where(
+      "ta.transport_account_id",
+      "=",
+      params.transportAccountId,
+    );
   }
 
-  const result = await query(
-    `SELECT ta.id,
-            ta.workspace_id,
-            ta.transport_account_id,
-            ta.transport_kind,
-            ta.external_id,
-            ta.display_name,
-            ta.metadata,
-            ta.created_at,
-            ta.updated_at,
-            account.display_name AS account_display_name,
-            linked_user.id AS linked_user_id,
-            linked_user.name AS linked_user_name,
-            activity.last_seen_at,
-            COALESCE(
-              jsonb_agg(
-                DISTINCT jsonb_build_object(
-                  'conversationId', c.id,
-                  'conversationTitle', c.title,
-                  'endpointId', te.id,
-                  'endpointType', te.endpoint_type,
-                  'endpointExternalId', te.external_id,
-                  'endpointDisplayName', te.display_name
-                )
-              ) FILTER (WHERE te.id IS NOT NULL),
-              '[]'::jsonb
-            ) AS sessions
-     FROM transport_addresses ta
-     JOIN transport_accounts account ON account.id = ta.transport_account_id
-     LEFT JOIN users linked_user ON linked_user.id = ta.user_id
-     LEFT JOIN conversation_participant_addresses cpa
-       ON cpa.transport_address_id = ta.id
-     LEFT JOIN conversation_members cm ON cm.id = cpa.conversation_member_id
-     LEFT JOIN conversations c ON c.id = cm.conversation_id
-     LEFT JOIN conversation_transport_bindings ctb
-       ON ctb.conversation_id = c.id
-     LEFT JOIN transport_endpoints te ON te.id = ctb.transport_endpoint_id
-     LEFT JOIN LATERAL (
-       SELECT MAX(tml.created_at) AS last_seen_at
-       FROM conversation_participant_addresses cpa_activity
-       JOIN conversation_members cm_activity
-         ON cm_activity.id = cpa_activity.conversation_member_id
-       JOIN transport_message_links tml
-         ON tml.conversation_id = cm_activity.conversation_id
-       WHERE cpa_activity.transport_address_id = ta.id
-     ) activity ON TRUE
-     WHERE ${filters.join(" AND ")}
-     GROUP BY ta.id,
-              account.display_name,
-              linked_user.id,
-              linked_user.name,
-              activity.last_seen_at
-     ORDER BY COALESCE(activity.last_seen_at, ta.updated_at, ta.created_at) DESC,
-              ta.created_at DESC`,
-    values,
-  );
-  return result.rows.map(normalizeTransportExternalUserRow);
+  const rows = await builder
+    .groupBy([
+      "ta.id",
+      "account.display_name",
+      "linked_user.id",
+      "linked_user.name",
+      "activity.last_seen_at",
+    ])
+    .orderBy(
+      sql`COALESCE(activity.last_seen_at, ta.updated_at, ta.created_at)`,
+      "desc",
+    )
+    .orderBy("ta.created_at", "desc")
+    .execute();
+
+  return rows.map(normalizeTransportExternalUserRow);
 }
 
 export async function createTransportAccount(params: {
@@ -927,30 +969,30 @@ export async function createTransportAccount(params: {
     inboundActorId: params.inboundActorId,
   });
 
-  const result = await query(
-    `INSERT INTO transport_accounts
-       (id, workspace_id, transport_kind, account_key, display_name, owner_scope, owner_user_id, inbound_actor_mode, inbound_actor_id, connection_mode, status, credentials, config, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
-     RETURNING *`,
-    [
-      uuidv4(),
-      params.workspaceId,
-      params.transportKind,
-      params.accountKey.trim(),
-      params.displayName.trim(),
-      ownerScope,
-      ownerUserId,
-      inboundActorMode,
-      inboundActorId,
-      params.connectionMode,
-      nextStatus,
-      JSON.stringify(params.credentials || {}),
-      JSON.stringify(params.config || {}),
-      JSON.stringify(params.metadata || {}),
-    ],
-  );
+  const row = await db
+    .insertInto("transport_accounts")
+    .values({
+      id: uuidv4(),
+      workspace_id: params.workspaceId,
+      transport_kind: params.transportKind,
+      account_key: params.accountKey.trim(),
+      display_name: params.displayName.trim(),
+      owner_scope: ownerScope,
+      owner_user_id: ownerUserId,
+      inbound_actor_mode: inboundActorMode,
+      inbound_actor_id: inboundActorId,
+      connection_mode: params.connectionMode,
+      status: nextStatus,
+      credentials: (params.credentials || {}) as TableInsert<"transport_accounts">["credentials"],
+      config: (params.config || {}) as TableInsert<"transport_accounts">["config"],
+      metadata: (params.metadata || {}) as TableInsert<"transport_accounts">["metadata"],
+      created_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
 
-  return normalizeAccountRow(result.rows[0]);
+  return normalizeAccountRow(row);
 }
 
 export async function updateTransportAccount(params: {
@@ -978,7 +1020,10 @@ export async function updateTransportAccount(params: {
   const nextConnectionMode =
     params.connectionMode ||
     (existing.connection_mode as TransportConnectionMode);
-  assertSupportedConnectionMode(existing.transport_kind, nextConnectionMode);
+  assertSupportedConnectionMode(
+    existing.transport_kind as TransportKind,
+    nextConnectionMode,
+  );
   const nextStatus =
     params.status || (existing.status as "active" | "disabled" | "error");
   const nextCredentials = params.credentials
@@ -1022,90 +1067,82 @@ export async function updateTransportAccount(params: {
     inboundActorMode: nextInboundActorMode,
     inboundActorId: nextInboundActorId,
   });
+  const row = await db
+    .updateTable("transport_accounts")
+    .set({
+      display_name: params.displayName?.trim() || existing.display_name,
+      owner_scope: nextOwnerScope,
+      owner_user_id: resolvedOwnerUserId,
+      inbound_actor_mode: nextInboundActorMode,
+      inbound_actor_id: resolvedInboundActorId,
+      connection_mode: nextConnectionMode,
+      status: nextStatus,
+      credentials: nextCredentials as TableInsert<"transport_accounts">["credentials"],
+      config: (params.config !== undefined
+        ? params.config
+        : parseJsonObject(existing.config)) as TableInsert<"transport_accounts">["config"],
+      metadata: (params.metadata !== undefined
+        ? params.metadata
+        : parseJsonObject(existing.metadata)) as TableInsert<"transport_accounts">["metadata"],
+      updated_at: sql`NOW()`,
+    })
+    .where("workspace_id", "=", params.workspaceId)
+    .where("id", "=", params.accountId)
+    .returningAll()
+    .executeTakeFirstOrThrow();
 
-  const result = await query(
-    `UPDATE transport_accounts
-     SET display_name = COALESCE($3, display_name),
-         owner_scope = $4,
-         owner_user_id = $5,
-         inbound_actor_mode = $6,
-         inbound_actor_id = $7,
-         connection_mode = $8,
-         status = COALESCE($9, status),
-         credentials = CASE WHEN $10::jsonb IS NULL THEN credentials ELSE $10::jsonb END,
-         config = CASE WHEN $11::jsonb IS NULL THEN config ELSE $11::jsonb END,
-         metadata = CASE WHEN $12::jsonb IS NULL THEN metadata ELSE $12::jsonb END,
-         updated_at = NOW()
-     WHERE workspace_id = $1
-       AND id = $2
-     RETURNING *`,
-    [
-      params.workspaceId,
-      params.accountId,
-      params.displayName?.trim() || null,
-      nextOwnerScope,
-      resolvedOwnerUserId,
-      nextInboundActorMode,
-      resolvedInboundActorId,
-      nextConnectionMode,
-      params.status || null,
-      params.credentials ? JSON.stringify(params.credentials) : null,
-      params.config ? JSON.stringify(params.config) : null,
-      params.metadata ? JSON.stringify(params.metadata) : null,
-    ],
-  );
-
-  return normalizeAccountRow(result.rows[0]);
+  return normalizeAccountRow(row);
 }
 
 export async function getConversationTransportBinding(params: {
   workspaceId: string;
   conversationId: string;
 }) {
-  const result = await query(
-    `SELECT ctb.id AS binding_id,
-            ctb.workspace_id,
-            ctb.conversation_id,
-            ctb.outbound_enabled,
-            ctb.inbound_actor_mode,
-            ctb.inbound_actor_id,
-            ctb.metadata AS binding_metadata,
-            ctb.created_at AS binding_created_at,
-            ctb.updated_at AS binding_updated_at,
-            ta.id,
-            ta.account_key,
-            ta.display_name,
-            ta.transport_kind,
-            ta.owner_scope,
-            ta.owner_user_id,
-            ta.inbound_actor_mode AS account_inbound_actor_mode,
-            ta.inbound_actor_id AS account_inbound_actor_id,
-            ta.connection_mode,
-            ta.status,
-            ta.credentials,
-            ta.config,
-            ta.metadata,
-            ta.created_at,
-            ta.updated_at,
-            te.id AS endpoint_id,
-            te.transport_account_id,
-            te.endpoint_type,
-            te.external_id AS endpoint_external_id,
-            te.parent_external_id,
-            te.display_name AS endpoint_display_name,
-            te.metadata AS endpoint_metadata,
-            te.created_at AS endpoint_created_at,
-            te.updated_at AS endpoint_updated_at
-     FROM conversation_transport_bindings ctb
-     JOIN transport_accounts ta ON ta.id = ctb.transport_account_id
-     JOIN transport_endpoints te ON te.id = ctb.transport_endpoint_id
-     WHERE ctb.workspace_id = $1
-       AND ctb.conversation_id = $2
-     LIMIT $3`,
-    [params.workspaceId, params.conversationId, 1],
-  );
+  const row = await db
+    .selectFrom("conversation_transport_bindings as ctb")
+    .innerJoin("transport_accounts as ta", "ta.id", "ctb.transport_account_id")
+    .innerJoin("transport_endpoints as te", "te.id", "ctb.transport_endpoint_id")
+    .select([
+      "ctb.id as binding_id",
+      "ctb.workspace_id",
+      "ctb.conversation_id",
+      "ctb.outbound_enabled",
+      "ctb.inbound_actor_mode",
+      "ctb.inbound_actor_id",
+      "ctb.metadata as binding_metadata",
+      "ctb.created_at as binding_created_at",
+      "ctb.updated_at as binding_updated_at",
+      "ta.id",
+      "ta.account_key",
+      "ta.display_name",
+      "ta.transport_kind",
+      "ta.owner_scope",
+      "ta.owner_user_id",
+      "ta.inbound_actor_mode as account_inbound_actor_mode",
+      "ta.inbound_actor_id as account_inbound_actor_id",
+      "ta.connection_mode",
+      "ta.status",
+      "ta.credentials",
+      "ta.config",
+      "ta.metadata",
+      "ta.created_at",
+      "ta.updated_at",
+      "te.id as endpoint_id",
+      "te.transport_account_id",
+      "te.endpoint_type",
+      "te.external_id as endpoint_external_id",
+      "te.parent_external_id",
+      "te.display_name as endpoint_display_name",
+      "te.metadata as endpoint_metadata",
+      "te.created_at as endpoint_created_at",
+      "te.updated_at as endpoint_updated_at",
+    ])
+    .where("ctb.workspace_id", "=", params.workspaceId)
+    .where("ctb.conversation_id", "=", params.conversationId)
+    .limit(1)
+    .executeTakeFirst();
 
-  return result.rows[0] ? normalizeBindingRow(result.rows[0]) : null;
+  return row ? normalizeBindingRow(row) : null;
 }
 
 export async function findConversationTransportBindingByEndpoint(params: {
@@ -1113,56 +1150,52 @@ export async function findConversationTransportBindingByEndpoint(params: {
   endpointType: TransportEndpointType;
   endpointExternalId: string;
 }) {
-  const result = await query(
-    `SELECT ctb.id AS binding_id,
-            ctb.workspace_id,
-            ctb.conversation_id,
-            ctb.outbound_enabled,
-            ctb.inbound_actor_mode,
-            ctb.inbound_actor_id,
-            ctb.metadata AS binding_metadata,
-            ctb.created_at AS binding_created_at,
-            ctb.updated_at AS binding_updated_at,
-            ta.id,
-            ta.account_key,
-            ta.display_name,
-            ta.transport_kind,
-            ta.owner_scope,
-            ta.owner_user_id,
-            ta.inbound_actor_mode AS account_inbound_actor_mode,
-            ta.inbound_actor_id AS account_inbound_actor_id,
-            ta.connection_mode,
-            ta.status,
-            ta.credentials,
-            ta.config,
-            ta.metadata,
-            ta.created_at,
-            ta.updated_at,
-            te.id AS endpoint_id,
-            te.transport_account_id,
-            te.endpoint_type,
-            te.external_id AS endpoint_external_id,
-            te.parent_external_id,
-            te.display_name AS endpoint_display_name,
-            te.metadata AS endpoint_metadata,
-            te.created_at AS endpoint_created_at,
-            te.updated_at AS endpoint_updated_at
-     FROM conversation_transport_bindings ctb
-     JOIN transport_accounts ta ON ta.id = ctb.transport_account_id
-     JOIN transport_endpoints te ON te.id = ctb.transport_endpoint_id
-     WHERE ctb.transport_account_id = $1
-       AND te.endpoint_type = $2
-       AND te.external_id = $3
-     LIMIT $4`,
-    [
-      params.transportAccountId,
-      params.endpointType,
-      params.endpointExternalId.trim(),
-      1,
-    ],
-  );
+  const row = await db
+    .selectFrom("conversation_transport_bindings as ctb")
+    .innerJoin("transport_accounts as ta", "ta.id", "ctb.transport_account_id")
+    .innerJoin("transport_endpoints as te", "te.id", "ctb.transport_endpoint_id")
+    .select([
+      "ctb.id as binding_id",
+      "ctb.workspace_id",
+      "ctb.conversation_id",
+      "ctb.outbound_enabled",
+      "ctb.inbound_actor_mode",
+      "ctb.inbound_actor_id",
+      "ctb.metadata as binding_metadata",
+      "ctb.created_at as binding_created_at",
+      "ctb.updated_at as binding_updated_at",
+      "ta.id",
+      "ta.account_key",
+      "ta.display_name",
+      "ta.transport_kind",
+      "ta.owner_scope",
+      "ta.owner_user_id",
+      "ta.inbound_actor_mode as account_inbound_actor_mode",
+      "ta.inbound_actor_id as account_inbound_actor_id",
+      "ta.connection_mode",
+      "ta.status",
+      "ta.credentials",
+      "ta.config",
+      "ta.metadata",
+      "ta.created_at",
+      "ta.updated_at",
+      "te.id as endpoint_id",
+      "te.transport_account_id",
+      "te.endpoint_type",
+      "te.external_id as endpoint_external_id",
+      "te.parent_external_id",
+      "te.display_name as endpoint_display_name",
+      "te.metadata as endpoint_metadata",
+      "te.created_at as endpoint_created_at",
+      "te.updated_at as endpoint_updated_at",
+    ])
+    .where("ctb.transport_account_id", "=", params.transportAccountId)
+    .where("te.endpoint_type", "=", params.endpointType)
+    .where("te.external_id", "=", params.endpointExternalId.trim())
+    .limit(1)
+    .executeTakeFirst();
 
-  return result.rows[0] ? normalizeBindingRow(result.rows[0]) : null;
+  return row ? normalizeBindingRow(row) : null;
 }
 
 export async function upsertConversationTransportBinding(params: {
@@ -1186,7 +1219,10 @@ export async function upsertConversationTransportBinding(params: {
     throw new Error("Transport account not found");
   }
 
-  assertSupportedEndpointType(account.transport_kind, params.endpointType);
+  assertSupportedEndpointType(
+    account.transport_kind as TransportKind,
+    params.endpointType,
+  );
   const inboundActorMode = params.inboundActorMode || "inherit_account";
   const inboundActorId = await assertConversationInboundActor({
     workspaceId: params.workspaceId,
@@ -1195,53 +1231,66 @@ export async function upsertConversationTransportBinding(params: {
   });
 
   await transaction(async (client) => {
-    const endpointResult = await client.query(
-      `INSERT INTO transport_endpoints
-         (id, transport_account_id, endpoint_type, external_id, parent_external_id, display_name, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-       ON CONFLICT (transport_account_id, endpoint_type, external_id)
-       DO UPDATE SET
-         parent_external_id = EXCLUDED.parent_external_id,
-         display_name = COALESCE(EXCLUDED.display_name, transport_endpoints.display_name),
-         metadata = transport_endpoints.metadata || EXCLUDED.metadata,
-         updated_at = NOW()
-       RETURNING id`,
-      [
-        uuidv4(),
-        params.transportAccountId,
-        params.endpointType,
-        params.endpointExternalId.trim(),
-        params.parentExternalId?.trim() || null,
-        params.endpointDisplayName?.trim() || null,
-        JSON.stringify(params.metadata || {}),
-      ],
+    const endpointRow = await executeTakeFirst<{ id: string }>(
+      client,
+      db
+        .insertInto("transport_endpoints")
+        .values({
+          id: uuidv4(),
+          transport_account_id: params.transportAccountId,
+          endpoint_type: params.endpointType,
+          external_id: params.endpointExternalId.trim(),
+          parent_external_id: params.parentExternalId?.trim() || null,
+          display_name: params.endpointDisplayName?.trim() || null,
+          metadata: (params.metadata || {}) as TableInsert<"transport_endpoints">["metadata"],
+          created_at: sql`NOW()`,
+          updated_at: sql`NOW()`,
+        })
+        .onConflict((oc) =>
+          oc
+            .columns(["transport_account_id", "endpoint_type", "external_id"])
+            .doUpdateSet({
+              parent_external_id: sql`excluded.parent_external_id`,
+              display_name: sql`COALESCE(excluded.display_name, transport_endpoints.display_name)`,
+              metadata: sql`transport_endpoints.metadata || excluded.metadata`,
+              updated_at: sql`NOW()`,
+            }),
+        )
+        .returning("id"),
     );
-    const endpointId = endpointResult.rows[0]?.id as string;
+    const endpointId = endpointRow?.id;
+    if (!endpointId) {
+      throw new Error("Failed to upsert transport endpoint");
+    }
 
-    await client.query(
-      `INSERT INTO conversation_transport_bindings
-         (id, workspace_id, conversation_id, transport_account_id, transport_endpoint_id, outbound_enabled, inbound_actor_mode, inbound_actor_id, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-       ON CONFLICT (conversation_id)
-       DO UPDATE SET
-         transport_account_id = EXCLUDED.transport_account_id,
-         transport_endpoint_id = EXCLUDED.transport_endpoint_id,
-         outbound_enabled = EXCLUDED.outbound_enabled,
-         inbound_actor_mode = EXCLUDED.inbound_actor_mode,
-         inbound_actor_id = EXCLUDED.inbound_actor_id,
-         metadata = EXCLUDED.metadata,
-         updated_at = NOW()`,
-      [
-        uuidv4(),
-        params.workspaceId,
-        params.conversationId,
-        params.transportAccountId,
-        endpointId,
-        params.outboundEnabled ?? true,
-        inboundActorMode,
-        inboundActorId,
-        JSON.stringify(params.metadata || {}),
-      ],
+    await executeCompiledQuery(
+      client,
+      db
+        .insertInto("conversation_transport_bindings")
+        .values({
+          id: uuidv4(),
+          workspace_id: params.workspaceId,
+          conversation_id: params.conversationId,
+          transport_account_id: params.transportAccountId,
+          transport_endpoint_id: endpointId,
+          outbound_enabled: params.outboundEnabled ?? true,
+          inbound_actor_mode: inboundActorMode,
+          inbound_actor_id: inboundActorId,
+          metadata: (params.metadata || {}) as TableInsert<"conversation_transport_bindings">["metadata"],
+          created_at: sql`NOW()`,
+          updated_at: sql`NOW()`,
+        })
+        .onConflict((oc) =>
+          oc.column("conversation_id").doUpdateSet({
+            transport_account_id: sql`excluded.transport_account_id`,
+            transport_endpoint_id: sql`excluded.transport_endpoint_id`,
+            outbound_enabled: sql`excluded.outbound_enabled`,
+            inbound_actor_mode: sql`excluded.inbound_actor_mode`,
+            inbound_actor_id: sql`excluded.inbound_actor_id`,
+            metadata: sql`excluded.metadata`,
+            updated_at: sql`NOW()`,
+          }),
+        ),
     );
   });
 
@@ -1281,36 +1330,32 @@ export async function updateConversationTransportSettings(params: {
     inboundActorId: nextInboundActorId,
   });
 
-  await query(
-    `UPDATE conversation_transport_bindings
-     SET outbound_enabled = CASE WHEN $3 THEN $4 ELSE outbound_enabled END,
-         inbound_actor_mode = CASE
-           WHEN $5 THEN $6::varchar
-           ELSE inbound_actor_mode
-         END,
-         inbound_actor_id = CASE
-           WHEN $5 THEN $7::uuid
-           ELSE inbound_actor_id
-         END,
-         metadata = CASE
-           WHEN $8 THEN metadata || $9::jsonb
-           ELSE metadata
-         END,
-         updated_at = NOW()
-     WHERE workspace_id = $1
-       AND conversation_id = $2`,
-    [
-      params.workspaceId,
-      params.conversationId,
-      params.outboundEnabled !== undefined,
-      params.outboundEnabled ?? false,
-      params.inboundActorMode !== undefined || params.inboundActorId !== undefined,
-      nextInboundActorMode,
-      resolvedInboundActorId,
-      params.metadata !== undefined,
-      JSON.stringify(params.metadata || {}),
-    ],
-  );
+  const updates: Record<string, unknown> = {
+    updated_at: sql`NOW()`,
+  };
+  if (params.outboundEnabled !== undefined) {
+    updates.outbound_enabled = params.outboundEnabled;
+  }
+  if (
+    params.inboundActorMode !== undefined ||
+    params.inboundActorId !== undefined
+  ) {
+    updates.inbound_actor_mode = nextInboundActorMode;
+    updates.inbound_actor_id = resolvedInboundActorId;
+  }
+  if (params.metadata !== undefined) {
+    updates.metadata = {
+      ...parseJsonObject(existing.metadata),
+      ...(params.metadata || {}),
+    } as TableInsert<"conversation_transport_bindings">["metadata"];
+  }
+
+  await db
+    .updateTable("conversation_transport_bindings")
+    .set(updates)
+    .where("workspace_id", "=", params.workspaceId)
+    .where("conversation_id", "=", params.conversationId)
+    .execute();
 
   return getConversationTransportBinding({
     workspaceId: params.workspaceId,
@@ -1326,15 +1371,14 @@ export async function updateTransportSessionSettings(params: {
   inboundActorId?: string | null;
   metadata?: Record<string, unknown>;
 }) {
-  const result = await query(
-    `SELECT conversation_id
-     FROM conversation_transport_bindings
-     WHERE workspace_id = $1
-       AND transport_endpoint_id = $2
-     LIMIT $3`,
-    [params.workspaceId, params.transportEndpointId, 1],
-  );
-  const conversationId = result.rows[0]?.conversation_id as string | undefined;
+  const row = await db
+    .selectFrom("conversation_transport_bindings")
+    .select("conversation_id")
+    .where("workspace_id", "=", params.workspaceId)
+    .where("transport_endpoint_id", "=", params.transportEndpointId)
+    .limit(1)
+    .executeTakeFirst();
+  const conversationId = row?.conversation_id as string | undefined;
   if (!conversationId) {
     throw new Error("Transport session not found");
   }
@@ -1360,14 +1404,13 @@ export async function deleteConversationTransportBinding(params: {
   workspaceId: string;
   conversationId: string;
 }) {
-  const result = await query(
-    `DELETE FROM conversation_transport_bindings
-     WHERE workspace_id = $1
-       AND conversation_id = $2
-     RETURNING id`,
-    [params.workspaceId, params.conversationId],
-  );
-  return Boolean(result.rows[0]);
+  const row = await db
+    .deleteFrom("conversation_transport_bindings")
+    .where("workspace_id", "=", params.workspaceId)
+    .where("conversation_id", "=", params.conversationId)
+    .returning("id")
+    .executeTakeFirst();
+  return Boolean(row);
 }
 
 export async function ensureTransportAddress(params: {
@@ -1380,30 +1423,33 @@ export async function ensureTransportAddress(params: {
   userId?: string;
   metadata?: Record<string, unknown>;
 }) {
-  const result = await query(
-    `INSERT INTO transport_addresses
-       (id, workspace_id, transport_account_id, transport_kind, address_type, external_id, display_name, user_id, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-     ON CONFLICT (transport_account_id, address_type, external_id)
-     DO UPDATE SET
-       display_name = COALESCE(EXCLUDED.display_name, transport_addresses.display_name),
-       user_id = COALESCE(EXCLUDED.user_id, transport_addresses.user_id),
-       metadata = transport_addresses.metadata || EXCLUDED.metadata,
-       updated_at = NOW()
-     RETURNING *`,
-    [
-      uuidv4(),
-      params.workspaceId,
-      params.transportAccountId,
-      params.transportKind,
-      params.addressType || "user",
-      params.externalId.trim(),
-      params.displayName?.trim() || null,
-      params.userId || null,
-      JSON.stringify(params.metadata || {}),
-    ],
-  );
-  return result.rows[0] ?? null;
+  return db
+    .insertInto("transport_addresses")
+    .values({
+      id: uuidv4(),
+      workspace_id: params.workspaceId,
+      transport_account_id: params.transportAccountId,
+      transport_kind: params.transportKind,
+      address_type: params.addressType || "user",
+      external_id: params.externalId.trim(),
+      display_name: params.displayName?.trim() || null,
+      user_id: params.userId || null,
+      metadata: (params.metadata || {}) as TableInsert<"transport_addresses">["metadata"],
+      created_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .onConflict((oc) =>
+      oc
+        .columns(["transport_account_id", "address_type", "external_id"])
+        .doUpdateSet({
+          display_name: sql`COALESCE(excluded.display_name, transport_addresses.display_name)`,
+          user_id: sql`COALESCE(excluded.user_id, transport_addresses.user_id)`,
+          metadata: sql`transport_addresses.metadata || excluded.metadata`,
+          updated_at: sql`NOW()`,
+        }),
+    )
+    .returningAll()
+    .executeTakeFirstOrThrow();
 }
 
 export async function getTransportAddressByExternalId(params: {
@@ -1411,93 +1457,84 @@ export async function getTransportAddressByExternalId(params: {
   externalId: string;
   addressType?: "user" | "bot" | "system";
 }) {
-  const result = await query(
-    `SELECT *
-     FROM transport_addresses
-     WHERE transport_account_id = $1
-       AND address_type = $2
-       AND external_id = $3
-     LIMIT $4`,
-    [
-      params.transportAccountId,
-      params.addressType || "user",
-      params.externalId.trim(),
-      1,
-    ],
-  );
-  return result.rows[0] ?? null;
+  return db
+    .selectFrom("transport_addresses")
+    .selectAll()
+    .where("transport_account_id", "=", params.transportAccountId)
+    .where("address_type", "=", params.addressType || "user")
+    .where("external_id", "=", params.externalId.trim())
+    .limit(1)
+    .executeTakeFirst();
 }
 
 export async function getTransportAddressById(transportAddressId: string) {
-  const result = await query(
-    `SELECT *
-     FROM transport_addresses
-     WHERE id = $1
-     LIMIT $2`,
-    [transportAddressId, 1],
-  );
-  return result.rows[0] ?? null;
+  return db
+    .selectFrom("transport_addresses")
+    .selectAll()
+    .where("id", "=", transportAddressId)
+    .limit(1)
+    .executeTakeFirst();
 }
 
 export async function getPrimaryTransportAddressForParticipant(params: {
   conversationMemberId: string;
   transportAccountId?: string;
 }) {
-  const values: any[] = [params.conversationMemberId];
-  let extra = "";
+  let builder = db
+    .selectFrom("conversation_participant_addresses as cpa")
+    .innerJoin("transport_addresses as ta", "ta.id", "cpa.transport_address_id")
+    .selectAll("ta")
+    .where("cpa.conversation_member_id", "=", params.conversationMemberId);
+
   if (params.transportAccountId) {
-    values.push(params.transportAccountId);
-    extra = `AND ta.transport_account_id = $${values.length}`;
+    builder = builder.where(
+      "ta.transport_account_id",
+      "=",
+      params.transportAccountId,
+    );
   }
-  values.push(1);
-  const result = await query(
-    `SELECT ta.*
-     FROM conversation_participant_addresses cpa
-     JOIN transport_addresses ta ON ta.id = cpa.transport_address_id
-     WHERE cpa.conversation_member_id = $1
-       ${extra}
-     ORDER BY cpa.is_primary DESC, cpa.created_at ASC
-     LIMIT $${values.length}`,
-    values,
-  );
-  return result.rows[0] ?? null;
+
+  return builder
+    .orderBy("cpa.is_primary", "desc")
+    .orderBy("cpa.created_at", "asc")
+    .limit(1)
+    .executeTakeFirst();
 }
 
 export async function getReachableTransportAddressForParticipant(params: {
   conversationMemberId: string;
   transportAccountId: string;
 }) {
-  const result = await query(
-    `SELECT candidate.*
-     FROM (
-       SELECT ta.*,
-              TRUE AS is_attached,
-              cpa.is_primary,
-              cpa.created_at AS binding_created_at
-       FROM conversation_participant_addresses cpa
-       JOIN transport_addresses ta ON ta.id = cpa.transport_address_id
-       WHERE cpa.conversation_member_id = $1
-         AND ta.transport_account_id = $2
+  const result = await db.executeQuery(
+    sql<any>`SELECT candidate.*
+      FROM (
+        SELECT ta.*,
+               TRUE AS is_attached,
+               cpa.is_primary,
+               cpa.created_at AS binding_created_at
+        FROM conversation_participant_addresses cpa
+        JOIN transport_addresses ta ON ta.id = cpa.transport_address_id
+        WHERE cpa.conversation_member_id = ${params.conversationMemberId}
+          AND ta.transport_account_id = ${params.transportAccountId}
 
-       UNION ALL
+        UNION ALL
 
-       SELECT ta.*,
-              FALSE AS is_attached,
-              FALSE AS is_primary,
-              ta.created_at AS binding_created_at
-       FROM conversation_members cm
-       JOIN transport_addresses ta
-         ON ta.user_id = cm.user_id
-        AND ta.address_type = 'user'
-       WHERE cm.id = $1
-         AND cm.user_id IS NOT NULL
-         AND ta.transport_account_id = $2
-     ) candidate
-     ORDER BY candidate.is_attached DESC,
-              candidate.is_primary DESC,
-              candidate.binding_created_at ASC
-     LIMIT $3`,
-    [params.conversationMemberId, params.transportAccountId, 1],
+        SELECT ta.*,
+               FALSE AS is_attached,
+               FALSE AS is_primary,
+               ta.created_at AS binding_created_at
+        FROM conversation_members cm
+        JOIN transport_addresses ta
+          ON ta.user_id = cm.user_id
+         AND ta.address_type = 'user'
+        WHERE cm.id = ${params.conversationMemberId}
+          AND cm.user_id IS NOT NULL
+          AND ta.transport_account_id = ${params.transportAccountId}
+      ) candidate
+      ORDER BY candidate.is_attached DESC,
+               candidate.is_primary DESC,
+               candidate.binding_created_at ASC
+      LIMIT 1`.compile(db),
   );
   return result.rows[0] ?? null;
 }
@@ -1506,31 +1543,30 @@ async function removeConversationParticipantTransportAddress(params: {
   conversationMemberId: string;
   transportAddressId: string;
 }) {
-  await query(
-    `DELETE FROM conversation_participant_addresses
-     WHERE conversation_member_id = $1
-       AND transport_address_id = $2`,
-    [params.conversationMemberId, params.transportAddressId],
-  );
+  await db
+    .deleteFrom("conversation_participant_addresses")
+    .where("conversation_member_id", "=", params.conversationMemberId)
+    .where("transport_address_id", "=", params.transportAddressId)
+    .execute();
 }
 
 async function archiveConversationMemberIfOrphaned(
   conversationMemberId: string,
 ) {
-  const result = await query(
-    `SELECT cm.member_type,
-            cm.state,
-            EXISTS (
-              SELECT 1
-              FROM conversation_participant_addresses cpa
-              WHERE cpa.conversation_member_id = cm.id
-            ) AS has_addresses
-     FROM conversation_members cm
-     WHERE cm.id = $1
-     LIMIT $2`,
-    [conversationMemberId, 1],
-  );
-  const row = result.rows[0];
+  const row = await db
+    .selectFrom("conversation_members as cm")
+    .select([
+      "cm.member_type",
+      "cm.state",
+      sql<boolean>`EXISTS (
+        SELECT 1
+        FROM conversation_participant_addresses cpa
+        WHERE cpa.conversation_member_id = cm.id
+      )`.as("has_addresses"),
+    ])
+    .where("cm.id", "=", conversationMemberId)
+    .limit(1)
+    .executeTakeFirst();
   if (!row) return;
   if (
     row.member_type !== "external" ||
@@ -1540,14 +1576,15 @@ async function archiveConversationMemberIfOrphaned(
     return;
   }
 
-  await query(
-    `UPDATE conversation_members
-     SET state = 'left',
-         left_at = COALESCE(left_at, NOW()),
-         metadata = metadata || $2::jsonb
-     WHERE id = $1`,
-    [conversationMemberId, JSON.stringify({ retiredByTransportLink: true })],
-  );
+  await db
+    .updateTable("conversation_members")
+    .set({
+      state: "left",
+      left_at: sql`COALESCE(left_at, NOW())`,
+      metadata: sql`COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify({ retiredByTransportLink: true })}::jsonb`,
+    })
+    .where("id", "=", conversationMemberId)
+    .execute();
 }
 
 export async function syncTransportAddressConversationMember(params: {
@@ -1595,17 +1632,16 @@ export async function syncTransportAddressConversationMember(params: {
     isPrimary: true,
   });
 
-  const attachedMembers = await query(
-    `SELECT cm.id, cm.member_type
-     FROM conversation_participant_addresses cpa
-     JOIN conversation_members cm ON cm.id = cpa.conversation_member_id
-     WHERE cpa.transport_address_id = $1
-       AND cm.conversation_id = $2
-       AND cm.id <> $3`,
-    [address.id, params.conversationId, desiredMember.id],
-  );
+  const attachedMembers = await db
+    .selectFrom("conversation_participant_addresses as cpa")
+    .innerJoin("conversation_members as cm", "cm.id", "cpa.conversation_member_id")
+    .select(["cm.id", "cm.member_type"])
+    .where("cpa.transport_address_id", "=", address.id)
+    .where("cm.conversation_id", "=", params.conversationId)
+    .where("cm.id", "<>", desiredMember.id)
+    .execute();
 
-  for (const row of attachedMembers.rows) {
+  for (const row of attachedMembers) {
     await removeConversationParticipantTransportAddress({
       conversationMemberId: row.id,
       transportAddressId: address.id,
@@ -1619,14 +1655,14 @@ export async function syncTransportAddressConversationMember(params: {
 async function listConversationIdsForTransportAddress(
   transportAddressId: string,
 ) {
-  const result = await query(
-    `SELECT DISTINCT cm.conversation_id
-     FROM conversation_participant_addresses cpa
-     JOIN conversation_members cm ON cm.id = cpa.conversation_member_id
-     WHERE cpa.transport_address_id = $1`,
-    [transportAddressId],
-  );
-  return result.rows
+  const rows = await db
+    .selectFrom("conversation_participant_addresses as cpa")
+    .innerJoin("conversation_members as cm", "cm.id", "cpa.conversation_member_id")
+    .select("cm.conversation_id")
+    .distinct()
+    .where("cpa.transport_address_id", "=", transportAddressId)
+    .execute();
+  return rows
     .map((row) => row.conversation_id as string)
     .filter(Boolean);
 }
@@ -1653,42 +1689,41 @@ async function loadConversationExternalMemberPrimaryAddress(params: {
   conversationId: string;
   conversationMemberId: string;
 }) {
-  const result = await query(
-    `SELECT cm.id AS conversation_member_id,
-            primary_address.id AS transport_address_id
-     FROM conversation_members cm
-     JOIN conversations c ON c.id = cm.conversation_id
-     LEFT JOIN LATERAL (
-       SELECT ta.id
-       FROM conversation_participant_addresses cpa
-       JOIN transport_addresses ta ON ta.id = cpa.transport_address_id
-       WHERE cpa.conversation_member_id = cm.id
-       ORDER BY cpa.is_primary DESC, cpa.created_at ASC
-       LIMIT 1
-     ) primary_address ON TRUE
-     WHERE c.workspace_id = $1
-       AND cm.conversation_id = $2
-       AND cm.id = $3
-       AND cm.member_type = 'external'
-     LIMIT $4`,
-    [params.workspaceId, params.conversationId, params.conversationMemberId, 1],
-  );
-  return result.rows[0] ?? null;
+  return db
+    .selectFrom("conversation_members as cm")
+    .innerJoin("conversations as c", "c.id", "cm.conversation_id")
+    .leftJoin(
+      "conversation_participant_addresses as cpa",
+      "cpa.conversation_member_id",
+      "cm.id",
+    )
+    .leftJoin("transport_addresses as ta", "ta.id", "cpa.transport_address_id")
+    .select([
+      "cm.id as conversation_member_id",
+      "ta.id as transport_address_id",
+    ])
+    .where("c.workspace_id", "=", params.workspaceId)
+    .where("cm.conversation_id", "=", params.conversationId)
+    .where("cm.id", "=", params.conversationMemberId)
+    .where("cm.member_type", "=", "external")
+    .orderBy("cpa.is_primary", "desc")
+    .orderBy("cpa.created_at", "asc")
+    .limit(1)
+    .executeTakeFirst();
 }
 
 async function assertWorkspaceMember(params: {
   workspaceId: string;
   userId: string;
 }) {
-  const result = await query(
-    `SELECT 1
-     FROM workspace_members
-     WHERE workspace_id = $1
-       AND user_id = $2
-     LIMIT $3`,
-    [params.workspaceId, params.userId, 1],
-  );
-  return Boolean(result.rows[0]);
+  const row = await db
+    .selectFrom("workspace_members")
+    .select("workspace_id")
+    .where("workspace_id", "=", params.workspaceId)
+    .where("user_id", "=", params.userId)
+    .limit(1)
+    .executeTakeFirst();
+  return Boolean(row);
 }
 
 export async function setConversationExternalMemberLinkedUser(params: {
@@ -1732,17 +1767,18 @@ export async function setTransportAddressLinkedUser(params: {
     }
   }
 
-  const result = await query(
-    `UPDATE transport_addresses
-     SET user_id = $3,
-         updated_at = NOW()
-     WHERE workspace_id = $1
-       AND id = $2
-       AND address_type = 'user'
-     RETURNING *`,
-    [params.workspaceId, params.transportAddressId, nextUserId],
-  );
-  if (!result.rows[0]) {
+  const row = await db
+    .updateTable("transport_addresses")
+    .set({
+      user_id: nextUserId,
+      updated_at: sql`NOW()`,
+    })
+    .where("workspace_id", "=", params.workspaceId)
+    .where("id", "=", params.transportAddressId)
+    .where("address_type", "=", "user")
+    .returningAll()
+    .executeTakeFirst();
+  if (!row) {
     throw new Error("Transport external user not found");
   }
 
@@ -1751,7 +1787,7 @@ export async function setTransportAddressLinkedUser(params: {
     userId: nextUserId,
   });
 
-  return result.rows[0] ?? null;
+  return row;
 }
 
 export async function ensureConversationParticipantTransportAddress(params: {
@@ -1761,66 +1797,70 @@ export async function ensureConversationParticipantTransportAddress(params: {
   metadata?: Record<string, unknown>;
 }) {
   if (params.isPrimary) {
-    await query(
-      `UPDATE conversation_participant_addresses
-       SET is_primary = FALSE,
-           updated_at = NOW()
-       WHERE conversation_member_id = $1`,
-      [params.conversationMemberId],
-    );
+    await db
+      .updateTable("conversation_participant_addresses")
+      .set({
+        is_primary: false,
+        updated_at: sql`NOW()`,
+      })
+      .where("conversation_member_id", "=", params.conversationMemberId)
+      .execute();
   }
 
-  const result = await query(
-    `INSERT INTO conversation_participant_addresses
-       (conversation_member_id, transport_address_id, is_primary, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, NOW(), NOW())
-     ON CONFLICT (conversation_member_id, transport_address_id)
-     DO UPDATE SET
-       is_primary = CASE
-         WHEN EXCLUDED.is_primary THEN TRUE
-         ELSE conversation_participant_addresses.is_primary
-       END,
-       metadata = conversation_participant_addresses.metadata || EXCLUDED.metadata,
-       updated_at = NOW()
-     RETURNING *`,
-    [
-      params.conversationMemberId,
-      params.transportAddressId,
-      params.isPrimary ?? false,
-      JSON.stringify(params.metadata || {}),
-    ],
-  );
-  return result.rows[0] ?? null;
+  return db
+    .insertInto("conversation_participant_addresses")
+    .values({
+      conversation_member_id: params.conversationMemberId,
+      transport_address_id: params.transportAddressId,
+      is_primary: params.isPrimary ?? false,
+      metadata: (params.metadata || {}) as TableInsert<"conversation_participant_addresses">["metadata"],
+      created_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .onConflict((oc) =>
+      oc
+        .columns(["conversation_member_id", "transport_address_id"])
+        .doUpdateSet({
+          is_primary: sql`CASE
+            WHEN excluded.is_primary THEN TRUE
+            ELSE conversation_participant_addresses.is_primary
+          END`,
+          metadata: sql`conversation_participant_addresses.metadata || excluded.metadata`,
+          updated_at: sql`NOW()`,
+        }),
+    )
+    .returningAll()
+    .executeTakeFirst();
 }
 
 export async function updateTransportAddressMetadata(params: {
   transportAddressId: string;
   metadata: Record<string, unknown>;
 }) {
-  const result = await query(
-    `UPDATE transport_addresses
-     SET metadata = metadata || $2::jsonb,
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [params.transportAddressId, JSON.stringify(params.metadata || {})],
-  );
-  return result.rows[0] ?? null;
+  return db
+    .updateTable("transport_addresses")
+    .set({
+      metadata: sql`transport_addresses.metadata || ${JSON.stringify(params.metadata || {})}::jsonb`,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", params.transportAddressId)
+    .returningAll()
+    .executeTakeFirst();
 }
 
 export async function updateTransportEndpointMetadata(params: {
   endpointId: string;
   metadata: Record<string, unknown>;
 }) {
-  const result = await query(
-    `UPDATE transport_endpoints
-     SET metadata = metadata || $2::jsonb,
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [params.endpointId, JSON.stringify(params.metadata || {})],
-  );
-  return result.rows[0] ?? null;
+  return db
+    .updateTable("transport_endpoints")
+    .set({
+      metadata: sql`transport_endpoints.metadata || ${JSON.stringify(params.metadata || {})}::jsonb`,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", params.endpointId)
+    .returningAll()
+    .executeTakeFirst();
 }
 
 export async function queueConversationTransportProjection(params: {
@@ -1846,36 +1886,39 @@ export async function queueConversationTransportProjection(params: {
     return null;
   }
 
-  const result = await query(
-    `INSERT INTO transport_message_links
-       (id, workspace_id, conversation_id, item_id, transport_account_id, transport_endpoint_id, transport_kind, direction, delivery_status, external_message_id, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $10, NOW(), NOW())
-     ON CONFLICT (item_id, transport_endpoint_id, direction)
-     DO UPDATE SET
-       external_message_id = COALESCE(EXCLUDED.external_message_id, transport_message_links.external_message_id),
-       metadata = transport_message_links.metadata || EXCLUDED.metadata,
-       updated_at = NOW()
-     RETURNING *`,
-    [
-      uuidv4(),
-      params.workspaceId,
-      params.conversationId,
-      params.itemId,
-      binding.account.id,
-      binding.endpoint.id,
-      binding.transportKind,
+  const link = await db
+    .insertInto("transport_message_links")
+    .values({
+      id: uuidv4(),
+      workspace_id: params.workspaceId,
+      conversation_id: params.conversationId,
+      item_id: params.itemId,
+      transport_account_id: binding.account.id,
+      transport_endpoint_id: binding.endpoint.id,
+      transport_kind: binding.transportKind,
       direction,
-      params.externalMessageId || null,
-      JSON.stringify({
+      delivery_status: "pending",
+      external_message_id: params.externalMessageId || null,
+      metadata: {
         bindingId: binding.id,
         endpointType: binding.endpoint.endpointType,
         endpointExternalId: binding.endpoint.externalId,
         ...(params.metadata || {}),
-      }),
-    ],
-  );
-
-  const link = result.rows[0] ?? null;
+      } as TableInsert<"transport_message_links">["metadata"],
+      created_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .onConflict((oc) =>
+      oc
+        .columns(["item_id", "transport_endpoint_id", "direction"])
+        .doUpdateSet({
+          external_message_id: sql`COALESCE(excluded.external_message_id, transport_message_links.external_message_id)`,
+          metadata: sql`transport_message_links.metadata || excluded.metadata`,
+          updated_at: sql`NOW()`,
+        }),
+    )
+    .returningAll()
+    .executeTakeFirst();
   if (link && direction === "outbound") {
     await enqueueTransportDeliveryJobs([link.id]).catch((error) => {
       console.error(
@@ -1894,30 +1937,23 @@ export async function findTransportMessageLinkByExternalMessage(params: {
   externalMessageId: string;
   direction: "inbound" | "outbound";
 }) {
-  const values: any[] = [
-    params.transportAccountId,
-    params.externalMessageId.trim(),
-    params.direction,
-  ];
-  const endpointFilter = params.transportEndpointId
-    ? `AND transport_endpoint_id = $4`
-    : "";
+  let builder = db
+    .selectFrom("transport_message_links")
+    .selectAll()
+    .where("transport_account_id", "=", params.transportAccountId)
+    .where("external_message_id", "=", params.externalMessageId.trim())
+    .where("direction", "=", params.direction);
+
   if (params.transportEndpointId) {
-    values.push(params.transportEndpointId);
+    builder = builder.where(
+      "transport_endpoint_id",
+      "=",
+      params.transportEndpointId,
+    );
   }
-  const result = await query(
-    `SELECT *
-     FROM transport_message_links
-     WHERE transport_account_id = $1
-       AND external_message_id = $2
-       AND direction = $3
-       ${endpointFilter}
-     LIMIT 1`,
-    values,
-  );
-  return result.rows[0]
-    ? normalizeTransportMessageLinkRow(result.rows[0])
-    : null;
+
+  const row = await builder.limit(1).executeTakeFirst();
+  return row ? normalizeTransportMessageLinkRow(row) : null;
 }
 
 export async function updateTransportMessageLinkStatus(params: {
@@ -1927,65 +1963,74 @@ export async function updateTransportMessageLinkStatus(params: {
   metadata?: Record<string, unknown>;
   error?: string;
 }) {
-  const result = await query(
-    `UPDATE transport_message_links
-     SET delivery_status = $2::varchar,
-         external_message_id = COALESCE($3, external_message_id),
-         metadata = metadata || $4::jsonb,
-         delivered_at = CASE
-           WHEN $2::varchar = 'sent' THEN COALESCE(delivered_at, NOW())
-           ELSE delivered_at
-         END,
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [
-      params.linkId,
-      params.status,
-      params.externalMessageId || null,
-      JSON.stringify({
-        ...(params.metadata || {}),
-        ...(params.error ? { lastError: params.error } : {}),
-      }),
-    ],
-  );
-  return result.rows[0]
-    ? normalizeTransportMessageLinkRow(result.rows[0])
-    : null;
+  const extraMetadata = {
+    ...(params.metadata || {}),
+    ...(params.error ? { lastError: params.error } : {}),
+  };
+  const row = await db
+    .updateTable("transport_message_links")
+    .set({
+      delivery_status: params.status,
+      ...(params.externalMessageId
+        ? { external_message_id: params.externalMessageId }
+        : {}),
+      metadata: sql`transport_message_links.metadata || ${JSON.stringify(extraMetadata)}::jsonb`,
+      ...(params.status === "sent"
+        ? { delivered_at: sql`COALESCE(delivered_at, NOW())` }
+        : {}),
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", params.linkId)
+    .returningAll()
+    .executeTakeFirst();
+  return row ? normalizeTransportMessageLinkRow(row) : null;
 }
 
 export async function loadTransportMessageLinkForDelivery(linkId: string) {
-  const result = await query(
-    `SELECT tml.*,
-            ta.workspace_id AS account_workspace_id,
-            ta.account_key,
-            ta.display_name AS account_display_name,
-            ta.owner_scope,
-            ta.owner_user_id,
-            ta.connection_mode,
-            ta.status AS account_status,
-            ta.credentials,
-            ta.config,
-            ta.metadata AS account_metadata,
-            ta.created_at AS account_created_at,
-            ta.updated_at AS account_updated_at,
-            te.endpoint_type,
-            te.external_id AS endpoint_external_id,
-            te.parent_external_id,
-            te.display_name AS endpoint_display_name,
-            te.metadata AS endpoint_metadata,
-            te.created_at AS endpoint_created_at,
-            te.updated_at AS endpoint_updated_at,
-            ci.metadata AS item_metadata
-     FROM transport_message_links tml
-     JOIN transport_accounts ta ON ta.id = tml.transport_account_id
-     JOIN transport_endpoints te ON te.id = tml.transport_endpoint_id
-     JOIN conversation_items ci ON ci.id = tml.item_id
-     WHERE tml.id = $1
-     LIMIT $2`,
-    [linkId, 1],
-  );
-  const row = result.rows[0];
+  const row = await db
+    .selectFrom("transport_message_links as tml")
+    .innerJoin("transport_accounts as ta", "ta.id", "tml.transport_account_id")
+    .innerJoin("transport_endpoints as te", "te.id", "tml.transport_endpoint_id")
+    .innerJoin("conversation_items as ci", "ci.id", "tml.item_id")
+    .select([
+      "tml.id",
+      "tml.workspace_id",
+      "tml.conversation_id",
+      "tml.item_id",
+      "tml.transport_account_id",
+      "tml.transport_endpoint_id",
+      "tml.transport_kind",
+      "tml.direction",
+      "tml.delivery_status",
+      "tml.external_message_id",
+      "tml.metadata",
+      "tml.delivered_at",
+      "tml.created_at",
+      "tml.updated_at",
+      "ta.workspace_id as account_workspace_id",
+      "ta.account_key",
+      "ta.display_name as account_display_name",
+      "ta.owner_scope",
+      "ta.owner_user_id",
+      "ta.connection_mode",
+      "ta.status as account_status",
+      "ta.credentials",
+      "ta.config",
+      "ta.metadata as account_metadata",
+      "ta.created_at as account_created_at",
+      "ta.updated_at as account_updated_at",
+      "te.endpoint_type",
+      "te.external_id as endpoint_external_id",
+      "te.parent_external_id",
+      "te.display_name as endpoint_display_name",
+      "te.metadata as endpoint_metadata",
+      "te.created_at as endpoint_created_at",
+      "te.updated_at as endpoint_updated_at",
+      "ci.metadata as item_metadata",
+    ])
+    .where("tml.id", "=", linkId)
+    .limit(1)
+    .executeTakeFirst();
   if (!row) return null;
 
   return {
@@ -2018,7 +2063,7 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
         endpoint_created_at: row.endpoint_created_at,
         endpoint_updated_at: row.endpoint_updated_at,
       },
-      row.transport_kind,
+      row.transport_kind as TransportKind,
     ),
     itemMetadata: parseJsonObject(row.item_metadata),
   };

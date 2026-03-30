@@ -7,6 +7,10 @@ import {
 } from '../../infrastructure/authz/index.js';
 import { query } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
+import {
+  db,
+  type TableInsert,
+} from '../../infrastructure/database/kysely.js';
 import { shutdownSessionInstances } from '../mcp-plugins/instance-manager.js';
 import { queueConversationTransportProjection } from '../im/service.js';
 import {
@@ -25,6 +29,7 @@ import {
   isThreadConversationKind,
   nowISO,
 } from '@synapse/shared';
+import { sql } from 'kysely';
 import { v4 as uuidv4 } from 'uuid';
 
 function normalizeSessionRow(row: any) {
@@ -40,32 +45,34 @@ function normalizeSessionRow(row: any) {
 }
 
 async function getActorJoinVersionId(actorId: UUID) {
-  const result = await query(
-    `SELECT current_version.id AS actor_version_id
-     FROM actors a
-     JOIN actor_versions current_version
-       ON current_version.actor_id = a.id
-      AND current_version.version = a.current_version
-     WHERE a.id = $1
-     LIMIT 1`,
-    [actorId],
-  );
-  return (result.rows[0]?.actor_version_id as string | undefined) || undefined;
+  const row = await db
+    .selectFrom('actors as a')
+    .innerJoin('actor_versions as current_version', (join) =>
+      join
+        .onRef('current_version.actor_id', '=', 'a.id')
+        .onRef('current_version.version', '=', 'a.current_version'),
+    )
+    .select('current_version.id as actor_version_id')
+    .where('a.id', '=', actorId)
+    .limit(1)
+    .executeTakeFirst();
+  return row?.actor_version_id || undefined;
 }
 
 async function loadSession(sessionId: UUID): Promise<any | null> {
-  const result = await query(
-    `SELECT s.*,
-            a.name AS actor_name,
-            c.kind AS conversation_kind,
-            c.title AS conversation_title
-     FROM sessions s
-     JOIN actors a ON a.id = s.actor_id
-     JOIN conversations c ON c.id = s.conversation_id
-     WHERE s.id = $1`,
-    [sessionId],
-  );
-  return normalizeSessionRow(result.rows[0] ?? null);
+  const row = await db
+    .selectFrom('sessions as s')
+    .innerJoin('actors as a', 'a.id', 's.actor_id')
+    .innerJoin('conversations as c', 'c.id', 's.conversation_id')
+    .selectAll('s')
+    .select([
+      'a.name as actor_name',
+      'c.kind as conversation_kind',
+      'c.title as conversation_title',
+    ])
+    .where('s.id', '=', sessionId)
+    .executeTakeFirst();
+  return normalizeSessionRow(row ?? null);
 }
 
 async function resolveSessionMessageAuthor(params: {
@@ -186,12 +193,23 @@ export async function createSession(params: {
   }
 
   const id = uuidv4();
-  const result = await query(
-    `INSERT INTO sessions (id, workspace_id, actor_id, conversation_id, channel_type, trigger, status, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'idle', $7, NOW(), NOW())
-     RETURNING *`,
-    [id, workspaceId, actorId, finalConversationId, channelType, trigger, JSON.stringify(metadata)],
-  );
+  const created = await db
+    .insertInto('sessions')
+    .values({
+      id,
+      workspace_id: workspaceId,
+      actor_id: actorId,
+      conversation_id: finalConversationId,
+      channel_type: channelType,
+      trigger,
+      status: 'idle',
+      metadata: metadata as TableInsert<'sessions'>['metadata'],
+    })
+    .returning('id')
+    .executeTakeFirst();
+  if (!created) {
+    throw new Error('Failed to create session');
+  }
 
   if (privateConversationCreated) {
     const authzEntryIds = await enqueueAuthzRelationships(
@@ -217,7 +235,7 @@ export async function createSession(params: {
     await flushQueuedAuthzEntries(authzEntryIds, 'session.create_private_conversation');
   }
 
-  return loadSession(result.rows[0].id);
+  return loadSession(created.id);
 }
 
 export async function getSession(sessionId: UUID): Promise<any | null> {
@@ -229,25 +247,26 @@ export async function getSessionsByActor(
   actorId: UUID,
   status?: string,
 ): Promise<any[]> {
-  const params: any[] = [workspaceId, actorId];
-  let where = 's.workspace_id = $1 AND s.actor_id = $2';
+  let sessionsQuery = db
+    .selectFrom('sessions as s')
+    .innerJoin('conversations as c', 'c.id', 's.conversation_id')
+    .selectAll('s')
+    .select([
+      'c.kind as conversation_kind',
+      'c.title as conversation_title',
+    ])
+    .where('s.workspace_id', '=', workspaceId)
+    .where('s.actor_id', '=', actorId);
+
   if (status) {
-    params.push(status);
-    where += ` AND s.status = $${params.length}`;
+    sessionsQuery = sessionsQuery.where('s.status', '=', status);
   }
 
-  const result = await query(
-    `SELECT s.*,
-            c.kind AS conversation_kind,
-            c.title AS conversation_title
-     FROM sessions s
-     JOIN conversations c ON c.id = s.conversation_id
-     WHERE ${where}
-     ORDER BY s.created_at DESC`,
-    params,
-  );
+  const sessions = await sessionsQuery
+    .orderBy('s.created_at', 'desc')
+    .execute();
 
-  return result.rows.map(normalizeSessionRow);
+  return sessions.map(normalizeSessionRow);
 }
 
 export async function updateSessionStatus(
@@ -255,25 +274,18 @@ export async function updateSessionStatus(
   status: string,
   extra?: { errorMessage?: string | null },
 ): Promise<void> {
-  const sets = ['status = $2', 'updated_at = NOW()'];
-  const params: any[] = [sessionId, status];
-  let idx = 3;
-
-  if (status === 'closed') {
-    sets.push('completed_at = NOW()');
-  } else {
-    sets.push('completed_at = NULL');
-  }
-  if (extra?.errorMessage !== undefined) {
-    sets.push(`error_message = $${idx}`);
-    params.push(extra.errorMessage);
-    idx++;
-  }
-
-  await query(
-    `UPDATE sessions SET ${sets.join(', ')} WHERE id = $1`,
-    params,
-  );
+  await db
+    .updateTable('sessions')
+    .set({
+      status,
+      updated_at: sql`NOW()`,
+      completed_at: status === 'closed' ? sql`NOW()` : null,
+      ...(extra?.errorMessage !== undefined
+        ? { error_message: extra.errorMessage }
+        : {}),
+    })
+    .where('id', '=', sessionId)
+    .execute();
 }
 
 // ============ Session Messages ============
@@ -365,8 +377,13 @@ export async function addSessionMessage(params: {
   if (!isGroupConversationKind(session.conversation_kind) && (role === 'user' || role === 'assistant')) {
     let actorName: string | undefined;
     if (fromActorId) {
-      const actorResult = await query('SELECT name FROM actors WHERE id = $1', [fromActorId]);
-      actorName = actorResult.rows[0]?.name;
+      actorName = (
+        await db
+          .selectFrom('actors')
+          .select('name')
+          .where('id', '=', fromActorId)
+          .executeTakeFirst()
+      )?.name;
     }
     await emitEvent({
       type: 'session.message.new',
@@ -402,45 +419,68 @@ export async function addSessionMessage(params: {
 }
 
 export async function getSessionMessages(sessionId: UUID): Promise<any[]> {
-  const result = await query(
-    `SELECT ci.*,
-            s.workspace_id,
-            cm.actor_id AS from_actor_id,
-            cm.user_id AS from_user_id,
-            COALESCE(a.name, u.name, cm.display_name) AS author_name
-     FROM conversation_items ci
-     JOIN sessions s ON s.id = ci.session_id
-     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     WHERE ci.session_id = $1
-     ORDER BY ci.created_at ASC, ci.sequence ASC`,
-    [sessionId],
-  );
+  const items = await db
+    .selectFrom("conversation_items as ci")
+    .innerJoin("sessions as s", "s.id", "ci.session_id")
+    .leftJoin("conversation_members as cm", "cm.id", "ci.author_member_id")
+    .leftJoin("actors as a", "a.id", "cm.actor_id")
+    .leftJoin("users as u", "u.id", "cm.user_id")
+    .select([
+      "ci.id",
+      "ci.session_id",
+      "ci.conversation_id",
+      "ci.sequence",
+      "ci.role",
+      "ci.subtype",
+      "ci.metadata",
+      "ci.event_payload",
+      "ci.author_member_id",
+      "ci.created_at",
+      "s.workspace_id",
+      "cm.actor_id as from_actor_id",
+      "cm.user_id as from_user_id",
+      sql<string | null>`COALESCE(a.name, u.name, cm.display_name)`.as(
+        "author_name",
+      ),
+    ])
+    .where("ci.session_id", "=", sessionId)
+    .orderBy("ci.created_at", "asc")
+    .orderBy("ci.sequence", "asc")
+    .execute();
 
-  if (result.rows.length === 0) return [];
+  if (items.length === 0) return [];
 
-  const itemIds = result.rows.map((row: any) => row.id);
-  const partsResult = await query(
-    `SELECT cip.*,
-            f.original_name,
-            f.stored_name,
-            f.mime_type AS file_mime_type,
-            f.size_bytes
-     FROM conversation_item_parts cip
-     LEFT JOIN files f ON f.id = cip.file_id
-     WHERE cip.item_id = ANY($1)
-     ORDER BY cip.item_id, cip.ordinal ASC`,
-    [itemIds],
-  );
+  const itemIds = items.map((row) => row.id);
+  const partRows = await db
+    .selectFrom("conversation_item_parts as cip")
+    .leftJoin("files as f", "f.id", "cip.file_id")
+    .select([
+      "cip.id",
+      "cip.item_id",
+      "cip.ordinal",
+      "cip.part_type",
+      "cip.mime_type",
+      "cip.text_value",
+      "cip.json_value",
+      "cip.file_id",
+      "cip.name",
+      "f.original_name",
+      "f.stored_name",
+      "f.mime_type as file_mime_type",
+      "f.size_bytes",
+    ])
+    .where("cip.item_id", "in", itemIds)
+    .orderBy("cip.item_id", "asc")
+    .orderBy("cip.ordinal", "asc")
+    .execute();
 
   const partsByItem = new Map<string, any[]>();
-  for (const row of partsResult.rows) {
+  for (const row of partRows) {
     if (!partsByItem.has(row.item_id)) partsByItem.set(row.item_id, []);
     partsByItem.get(row.item_id)!.push(row);
   }
 
-  return result.rows.map((row: any) => {
+  return items.map((row: any) => {
     const item = { ...row, parts: partsByItem.get(row.id) || [] };
     return {
       id: row.id,
@@ -462,13 +502,15 @@ export async function getSessionMessages(sessionId: UUID): Promise<any[]> {
 // ============ Session Interrupts ============
 
 export async function consumeInterrupts(sessionId: UUID): Promise<any[]> {
-  const result = await query(
-    `UPDATE session_interrupts SET is_consumed = TRUE
-     WHERE target_session_id = $1 AND is_consumed = FALSE
-     RETURNING *`,
-    [sessionId],
-  );
-  return result.rows;
+  return db
+    .updateTable('session_interrupts')
+    .set({
+      is_consumed: true,
+    })
+    .where('target_session_id', '=', sessionId)
+    .where('is_consumed', '=', false)
+    .returningAll()
+    .execute();
 }
 
 export async function createInterrupt(params: {
@@ -477,11 +519,16 @@ export async function createInterrupt(params: {
   content: string;
   fromSessionId?: UUID;
 }): Promise<void> {
-  await query(
-    `INSERT INTO session_interrupts (id, target_session_id, type, content, from_session_id, created_at)
-     VALUES ($1, $2, $3, $4, $5, NOW())`,
-    [uuidv4(), params.targetSessionId, params.type, params.content, params.fromSessionId || null],
-  );
+  await db
+    .insertInto('session_interrupts')
+    .values({
+      id: uuidv4(),
+      target_session_id: params.targetSessionId,
+      type: params.type,
+      content: params.content,
+      from_session_id: params.fromSessionId || null,
+    })
+    .execute();
 }
 
 // ============ Cancel Session ============
@@ -500,23 +547,26 @@ export async function cancelSession(sessionId: UUID): Promise<void> {
 // ============ Actor concurrent session count ============
 
 export async function getActiveSessionCount(actorId: UUID): Promise<number> {
-  const result = await query(
-    `SELECT COUNT(*) as count FROM sessions WHERE actor_id = $1 AND status = 'running'`,
-    [actorId],
-  );
-  return parseInt(result.rows[0].count, 10);
+  const row = await db
+    .selectFrom('sessions')
+    .select(({ fn }) => fn.count<string>('id').as('count'))
+    .where('actor_id', '=', actorId)
+    .where('status', '=', 'running')
+    .executeTakeFirst();
+  return parseInt(row?.count || '0', 10);
 }
 
 export async function getMaxConcurrentSessions(actorId: UUID): Promise<number> {
-  const result = await query(
-    `SELECT CASE
-         WHEN COALESCE(config->>'maxConcurrentSessions', '') ~ '^[0-9]+$'
-           THEN GREATEST((config->>'maxConcurrentSessions')::int, 1)
-         ELSE 3
-       END AS max_concurrent_sessions
-     FROM actors
-     WHERE id = $1`,
-    [actorId],
-  );
-  return result.rows[0]?.max_concurrent_sessions ?? 3;
+  const row = await db
+    .selectFrom("actors")
+    .select(
+      sql<number>`CASE
+        WHEN COALESCE(config->>'maxConcurrentSessions', '') ~ '^[0-9]+$'
+          THEN GREATEST((config->>'maxConcurrentSessions')::int, 1)
+        ELSE 3
+      END`.as("max_concurrent_sessions"),
+    )
+    .where("id", "=", actorId)
+    .executeTakeFirst();
+  return row?.max_concurrent_sessions ?? 3;
 }
