@@ -22,7 +22,7 @@ import {
 } from '../conversation/message-content.js';
 import type { UUID } from '@synapse/shared';
 import {
-  isMultiMemberConversationKind,
+  isGroupConversationKind,
   isThreadConversationKind,
   nowISO,
 } from '@synapse/shared';
@@ -35,7 +35,7 @@ function normalizeSessionRow(row: any) {
     conversationId: row.conversation_id,
     conversationKind: row.conversation_kind,
     conversationTitle: row.conversation_title,
-    isGroupConversation: isMultiMemberConversationKind(row.conversation_kind),
+    isGroupConversation: isGroupConversationKind(row.conversation_kind),
     hasThreadContext: isThreadConversationKind(row.conversation_kind),
   };
 }
@@ -111,7 +111,7 @@ async function resolveSessionMessageAuthor(params: {
 }
 
 function getSurfaceForSessionMessage(conversationKind: string, role: string) {
-  if (isMultiMemberConversationKind(conversationKind)) {
+  if (isGroupConversationKind(conversationKind)) {
     return { scope: 'private' as const, surface: 'internal' as const };
   }
 
@@ -382,7 +382,7 @@ export async function addSessionMessage(params: {
     });
   }
 
-  if (!isMultiMemberConversationKind(session.conversation_kind) && (role === 'user' || role === 'assistant')) {
+  if (!isGroupConversationKind(session.conversation_kind) && (role === 'user' || role === 'assistant')) {
     let actorName: string | undefined;
     if (fromActorId) {
       const actorResult = await query('SELECT name FROM actors WHERE id = $1', [fromActorId]);

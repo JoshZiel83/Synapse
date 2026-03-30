@@ -13,7 +13,6 @@ import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
 import {
   extractText,
-  MULTI_MEMBER_CONVERSATION_KIND,
   nowISO,
 } from "@synapse/shared";
 import { v4 as uuidv4 } from "uuid";
@@ -28,7 +27,7 @@ import {
   getSharedVisibleConversationItems,
   getVisibleConversationItemsForMember,
   listConversationMembers,
-  listUserMultiMemberConversations,
+  listUserWorkspaceConversations,
   markConversationRead as markConversationCursorRead,
 } from "./service.js";
 import { activateConversationParticipant } from "./participant-activation.js";
@@ -719,10 +718,10 @@ async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
 
 // ============ Conversation CRUD ============
 
-export async function createConversation(params: {
+export async function createThread(params: {
   workspaceId?: string;
   domain?: "workspace" | "social";
-  kind?: "group" | "private" | "virtual";
+  kind: "group" | "private" | "virtual";
   createdBy: string;
   title?: string;
   actorIds?: string[];
@@ -735,7 +734,7 @@ export async function createConversation(params: {
   const {
     workspaceId,
     domain = "workspace",
-    kind: requestedKind,
+    kind,
     createdBy,
     title,
     actorIds: rawActorIds = [],
@@ -753,8 +752,6 @@ export async function createConversation(params: {
     ? Array.from(new Set([createdBy, ...userIds]))
     : userIds;
   const participantCount = actorIds.length + participantUserIds.length;
-  const kind =
-    requestedKind || (participantCount === 2 ? "private" : "group");
 
   if (domain === "workspace" && !workspaceId) {
     throw new Error("workspaceId is required for workspace conversations");
@@ -765,8 +762,8 @@ export async function createConversation(params: {
   if (kind === "group" && participantCount < 2) {
     throw new Error("Group thread must have at least two active members");
   }
-  if (kind === "virtual") {
-    throw new Error("Virtual conversations cannot be created through chat-service");
+  if (kind === "virtual" && participantCount !== 0) {
+    throw new Error("Virtual conversations cannot be created with active members");
   }
 
   const actorIdSet = new Set(actorIds);
@@ -1154,7 +1151,7 @@ export async function getConversationsByWorkspace(
           )
         ).rows
       : []
-    : await listUserMultiMemberConversations(workspaceId, userId);
+    : await listUserWorkspaceConversations(workspaceId, userId);
   if (conversations.length === 0) return [];
 
   const resolvedConversationIds = conversations.map(

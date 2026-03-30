@@ -27,6 +27,7 @@ import {
   formatMentionText,
   getDefaultModelEngineKind,
   normalizeCanonicalContentBlocks,
+  resolveThreadSemantics,
   textBlock,
   textBlocks,
 } from "@synapse/shared";
@@ -421,13 +422,14 @@ function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
 }
 
 function buildSleepWithoutSendToReminder(params: {
-  participantCount: number;
+  semantics: ReturnType<typeof resolveThreadSemantics>;
   otherMembers: ConversationMemberEntry[];
   allowConfirmSleepWithoutReply: boolean;
 }): CanonicalContextItem {
-  const otherMemberName = params.otherMembers[0]?.name || "the other member";
+  const otherMemberName =
+    params.otherMembers[0]?.name || "the other participant";
 
-  if (params.participantCount === 2) {
+  if (params.semantics.addressingMode === "implicit_peer") {
     return {
       kind: "system_notice",
       noticeType: "task_instruction",
@@ -435,7 +437,7 @@ function buildSleepWithoutSendToReminder(params: {
       surface: "internal",
       parts: textBlocks(
         `You called \`sleep\` before using \`send_to\` in this wakeup. Your reasoning and tool calls are invisible to everyone else. ` +
-          `This conversation currently has only you and ${otherMemberName}, so you must call \`send_to\` to ${otherMemberName} before sleeping. ` +
+          `This is a private thread, so \`send_to\` goes directly to ${otherMemberName}. ` +
           `Send a visible result, handoff, clarification, or explicit "no action needed" message with the correct \`intent\` and \`summary\`, then call \`sleep\` again.`,
       ),
     };
@@ -556,6 +558,7 @@ export async function actorThink(
     sessionId?: string;
     turnId?: string;
     conversationId?: string;
+    conversationKind?: "private" | "group" | "virtual";
     conversationMembers?: ConversationMemberEntry[];
     userId?: string;
     availableSkills?: AvailableSkillSummary[];
@@ -639,11 +642,17 @@ export async function actorThink(
   let mcpToolDefs = options?.mcpTools || [];
   let mcpToolNames = new Set(mcpToolDefs.map((t) => t.name));
   let currentToolConversationMembers = options?.conversationMembers;
+  const getThreadSemantics = () =>
+    resolveThreadSemantics({
+      kind: options?.conversationKind,
+      otherParticipantCount: currentToolConversationMembers?.length || 0,
+    });
   const buildResolveCtx = (): ToolResolveContext => ({
     sessionId: options?.sessionId || "",
     actorId: actor.id,
     workspaceId: workspaceId || "",
     conversationId: options?.conversationId,
+    conversationKind: options?.conversationKind,
     conversationMembers: currentToolConversationMembers,
     userId: options?.userId,
     availableSkills: options?.availableSkills,
@@ -690,11 +699,6 @@ export async function actorThink(
   let finalDraftProvider: AIProvider | null = null;
   let sendToCalledThisTurn = false;
   let sleepWithoutSendToReminderCount = 0;
-  const participantCount = options?.conversationId
-    ? (options?.conversationMembers?.length || 0) + 1
-    : 0;
-  const enforceVisibleReplyBeforeSleep =
-    !!options?.sessionId && !!options?.conversationId && participantCount > 1;
 
   // Common fields for logAIRequest
   const logCommon = {
@@ -1582,19 +1586,26 @@ export async function actorThink(
           (tc: any) => tc.toolName === "sleep",
         );
         if (!mcpReplanRequired && sleepCalled) {
+          const threadSemantics = getThreadSemantics();
+          const enforceVisibleReplyBeforeSleep =
+            !!options?.sessionId &&
+            !!options?.conversationId &&
+            threadSemantics.requiresVisibleReplyBeforeSleep;
           const allowSleepWithoutVisibleReply =
             !enforceVisibleReplyBeforeSleep ||
             sendToCalledThisTurn ||
-            participantCount <= 1 ||
-            (participantCount > 2 && sleepWithoutSendToReminderCount > 0);
+            !threadSemantics.hasAddressablePeer ||
+            (threadSemantics.allowsSleepWithoutReplyConfirmation &&
+              sleepWithoutSendToReminderCount > 0);
 
           if (!allowSleepWithoutVisibleReply) {
             sleepWithoutSendToReminderCount += 1;
             appendPrivateTailItems([
               buildSleepWithoutSendToReminder({
-                participantCount,
-                otherMembers: options?.conversationMembers || [],
-                allowConfirmSleepWithoutReply: participantCount > 2,
+                semantics: threadSemantics,
+                otherMembers: currentToolConversationMembers || [],
+                allowConfirmSleepWithoutReply:
+                  threadSemantics.allowsSleepWithoutReplyConfirmation,
               }),
             ]);
 

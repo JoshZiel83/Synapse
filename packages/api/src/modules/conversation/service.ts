@@ -12,7 +12,7 @@ import type {
   ConversationEventContextPolicy,
   ConversationEventTimelinePolicy,
 } from "@synapse/shared/types";
-import { extractText, MULTI_MEMBER_CONVERSATION_KIND } from "@synapse/shared";
+import { extractText, GROUP_CONVERSATION_KIND } from "@synapse/shared";
 import { buildNormalizedMessageContent } from "./message-content.js";
 import { itemPartsToCanonicalContentBlocks } from "./message-content.js";
 import { getFileUrlById } from "../files/service.js";
@@ -1048,7 +1048,7 @@ export async function getVisibleConversationItemsForMember(params: {
   const values: any[] = [
     conversationId,
     memberId,
-    MULTI_MEMBER_CONVERSATION_KIND,
+    GROUP_CONVERSATION_KIND,
   ];
   let extra = "";
   if (beforeSequence !== undefined) {
@@ -1148,7 +1148,7 @@ export async function getContextConversationItemsForMember(params: {
   const values: any[] = [
     conversationId,
     memberId,
-    MULTI_MEMBER_CONVERSATION_KIND,
+    GROUP_CONVERSATION_KIND,
   ];
   let extra = "";
   if (beforeSequence !== undefined) {
@@ -1254,7 +1254,7 @@ export async function getLastVisibleConversationItem(conversationId: string) {
   return item || null;
 }
 
-export async function listUserMultiMemberConversations(
+export async function listUserWorkspaceConversations(
   workspaceId: string,
   userId: string,
 ) {

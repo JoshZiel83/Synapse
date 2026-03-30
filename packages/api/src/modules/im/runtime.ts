@@ -13,7 +13,7 @@ import {
   ensureConversationMember,
   getConversationFeedItemById,
 } from "../conversation/service.js";
-import { createConversation, wakeActor } from "../conversation/chat-service.js";
+import { createThread, wakeActor } from "../conversation/chat-service.js";
 import { getWorkspaceChiefActorPreference } from "../workspace/service.js";
 import {
   consumeTransportAccountAutoLink,
@@ -421,8 +421,9 @@ async function ensureTransportConversationBinding(params: {
   }
 
   const ownerId = await getWorkspaceOwnerId(params.account.workspaceId);
-  const created = await createConversation({
+  const created = await createThread({
     workspaceId: params.account.workspaceId,
+    kind: "virtual",
     createdBy: ownerId,
     title:
       params.endpointDisplayName ||

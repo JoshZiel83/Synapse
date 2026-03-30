@@ -474,6 +474,7 @@ export function startSessionThinkingWorker() {
           undefined,
           mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
           promptConversationMembers || conversationMembers,
+          session.conversation_kind,
           availableSkills,
         );
 
@@ -521,6 +522,7 @@ export function startSessionThinkingWorker() {
               sessionId,
               turnId: turn.id,
               conversationId: session.conversation_id,
+              conversationKind: session.conversation_kind,
               conversationMembers: memberEntries,
               userId: conversationUserId || userId,
               availableSkills,

@@ -13,7 +13,7 @@ import {
 import {
   addMembersToConversation,
   cancelConversation,
-  createConversation,
+  createThread,
   getConversation,
   getConversationMembers,
   getConversationMessages,
@@ -414,7 +414,7 @@ export default async function threadController(app: FastifyInstance) {
       if (!allowed) return;
     }
 
-    const created = await createConversation({
+    const created = await createThread({
       workspaceId: body.domain === "workspace" ? body.workspaceId : undefined,
       domain: body.domain,
       kind: body.kind,

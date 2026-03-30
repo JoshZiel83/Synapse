@@ -5,15 +5,17 @@ import {
   describeAutomationPolicy,
   describeAutomationTrigger,
   isThreadConversationKind,
-  isMultiMemberConversationKind,
   normalizeActorDocs,
+  resolveThreadSemantics,
   summarizeActorForRole,
   textBlocks,
   type ActorDoc,
+  type ToolDefinition,
   type ToolResolveContext,
   type RelayAuthorizationScope,
 } from "@synapse/shared";
 import type {
+  ConversationMemberEntry,
   ConversationEntityRef,
   InteractionQuestionFieldDefinition,
   InteractionQuestionFieldType,
@@ -107,7 +109,7 @@ type ToolQuestionFieldInput = {
 const sendToIntentSchema = z.enum(["reply", "request"]);
 const sendToInputSchema = z
   .object({
-    recipients: z.array(z.string().trim().min(1)).min(1),
+    recipients: z.array(z.string().trim().min(1)).min(1).optional(),
     message: z.string().trim().min(1).max(12000),
     intent: sendToIntentSchema,
     summary: z.string().trim().min(1).max(240),
@@ -121,6 +123,10 @@ const currentTimeInputSchema = z
 
 function getToolContextConversationId(ctx: ToolResolveContext) {
   return ctx.conversationId;
+}
+
+function getToolContextConversationKind(ctx: ToolResolveContext) {
+  return ctx.conversationKind;
 }
 
 function getToolContextConversationMembers(ctx: ToolResolveContext) {
@@ -152,6 +158,92 @@ function normalizeRawSendToInput(input: Record<string, unknown>) {
 
 function formatUtcTimestamp(date: Date) {
   return `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+}
+
+function buildSendToDefinition(params: {
+  conversationKind?: string;
+  otherMembers: ConversationMemberEntry[];
+}): ToolDefinition {
+  const recipientNames = Array.from(
+    new Set(params.otherMembers.map((member) => member.name)),
+  );
+  const rosterDesc = params.otherMembers
+    .map((member) =>
+      member.type === "user"
+        ? `"${member.name}" (user)`
+        : member.type === "external"
+          ? `"${member.name}" (external${member.linkedUserName ? `, linked to workspace user ${member.linkedUserName}` : ""})`
+          : `"${member.name}" (actor${member.title ? ", " + member.title : ""})`,
+    )
+    .join(", ");
+  const semantics = resolveThreadSemantics({
+    kind: params.conversationKind,
+    otherParticipantCount: params.otherMembers.length,
+  });
+
+  if (
+    semantics.addressingMode === "implicit_peer" &&
+    params.otherMembers.length === 1
+  ) {
+    const peerName = params.otherMembers[0]!.name;
+    return {
+      name: "send_to",
+      description: `Send a visible message to the other participant in this private thread. The recipient is implicit, so do not supply a recipients list unless you need to disambiguate a malformed roster. Current peer: ${rosterDesc}.`,
+      parameters: {
+        type: "object",
+        properties: {
+          intent: {
+            type: "string",
+            description: "Why you are sending this message.",
+            enum: ["reply", "request"],
+          },
+          summary: {
+            type: "string",
+            description:
+              "A concise structured summary. For reply, summarize what you are replying with. For request, summarize what you want the other participant to do or answer.",
+          },
+          message: {
+            type: "string",
+            description:
+              `The visible message content sent directly to ${peerName}. To render a member reference clearly in the UI, use <Mention name="${peerName}"/> or an explicit id form like <Mention type="actor" id="..."/> whenever the sentence explicitly points to that person, such as ownership, responsibility, follow-up, or who to contact. Mention does not decide who the message is sent to. If a name is ambiguous, you must disambiguate with type+id or an explicit id attribute.`,
+          },
+        },
+        required: ["intent", "summary", "message"],
+      },
+    };
+  }
+
+  return {
+    name: "send_to",
+    description: `Send a visible conversation message to one or more members in the current conversation. Mark whether it is a reply or a request, and provide a short summary for UI rendering. Recipients are the addressees. Inline mentions are rich body references for UI rendering and sentence clarity: use them when the message text explicitly points to a member, but do not add them mechanically just because someone is a recipient. Available recipients: ${rosterDesc}.`,
+    parameters: {
+      type: "object",
+      properties: {
+        recipients: {
+          type: "array",
+          description: "One or more member names to send the message to.",
+          items: { type: "string", enum: recipientNames },
+        },
+        intent: {
+          type: "string",
+          description:
+            'Use "reply" when you are replying back with information or a result. Use "request" when you are delegating, asking, or requesting action.',
+          enum: ["reply", "request"],
+        },
+        summary: {
+          type: "string",
+          description:
+            "A concise structured summary for the UI. For request, state the requested action or question. For reply, state the substantive reply.",
+        },
+        message: {
+          type: "string",
+          description:
+            'The visible message content. To render a member reference clearly in the UI, use <Mention name="Alice"/> with the exact roster display name, or use an explicit id form like <Mention type="actor" id="..."/> whenever the sentence explicitly points to that person, such as ownership, responsibility, follow-up, or who to contact. Mention does not decide who the message is sent to, so do not add a mention only to mirror the recipient list. If a name matches multiple members, you must disambiguate with type+id or an explicit id attribute.',
+        },
+      },
+      required: ["recipients", "intent", "summary", "message"],
+    },
+  };
 }
 
 function formatDateTimeInZone(date: Date, timeZone: string) {
@@ -920,13 +1012,14 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "send_to",
       description:
-        "Send a visible conversation message to one or more members by name. You must specify whether this is a reply or a request, and include a short structured summary for UI rendering. Recipients are the addressees. Inline mentions are rich body references for UI rendering and sentence clarity: use them when the message text explicitly points to a member, but do not add them mechanically just because someone is a recipient.",
+        "Send a visible conversation message in the current thread. In private threads the recipient is implicit; in group threads you must specify recipients. Always include whether this is a reply or a request, and include a short structured summary for UI rendering.",
       parameters: {
         type: "object",
         properties: {
           recipients: {
             type: "array",
-            description: "Member names to send to.",
+            description:
+              "Optional in private threads. Required in group threads. Member names to send to.",
             items: { type: "string" },
           },
           intent: {
@@ -960,51 +1053,12 @@ export function registerCallableToolPlugins(): void {
       if (otherMembers.length === 0) {
         return { active: false, definition: null as any };
       }
-      const recipientNames = Array.from(
-        new Set(otherMembers.map((m) => m.name)),
-      );
-      const rosterDesc = otherMembers
-        .map((m) =>
-          m.type === "user"
-            ? `"${m.name}" (user)`
-            : m.type === "external"
-              ? `"${m.name}" (external${m.linkedUserName ? `, linked to workspace user ${m.linkedUserName}` : ""})`
-              : `"${m.name}" (actor${m.title ? ", " + m.title : ""})`,
-        )
-        .join(", ");
       return {
         active: true,
-        definition: {
-          name: "send_to",
-          description: `Send a visible conversation message to one or more members in the current conversation. Mark whether it is a reply or a request, and provide a short summary for UI rendering. Recipients are the addressees. Inline mentions are rich body references for UI rendering and sentence clarity: use them when the message text explicitly points to a member, but do not add them mechanically just because someone is a recipient. Available recipients: ${rosterDesc}.`,
-          parameters: {
-            type: "object",
-            properties: {
-              recipients: {
-                type: "array",
-                description: "One or more member names to send the message to.",
-                items: { type: "string", enum: recipientNames },
-              },
-              intent: {
-                type: "string",
-                description:
-                  'Use "reply" when you are replying back with information or a result. Use "request" when you are delegating, asking, or requesting action.',
-                enum: ["reply", "request"],
-              },
-              summary: {
-                type: "string",
-                description:
-                  "A concise structured summary for the UI. For request, state the requested action or question. For reply, state the substantive reply.",
-              },
-              message: {
-                type: "string",
-                description:
-                  'The visible message content. To render a member reference clearly in the UI, use <Mention name="Alice"/> with the exact roster display name, or use an explicit id form like <Mention type="actor" id="..."/> whenever the sentence explicitly points to that person, such as ownership, responsibility, follow-up, or who to contact. Mention does not decide who the message is sent to, so do not add a mention only to mirror the recipient list. If a name matches multiple members, you must disambiguate with type+id or an explicit id attribute.',
-              },
-            },
-            required: ["recipients", "intent", "summary", "message"],
-          },
-        },
+        definition: buildSendToDefinition({
+          conversationKind: getToolContextConversationKind(ctx),
+          otherMembers,
+        }),
       };
     },
     execute: async (input) => {
@@ -1017,7 +1071,6 @@ export function registerCallableToolPlugins(): void {
         });
       }
       const {
-        recipients: recipientNames,
         intent,
         summary,
         message,
@@ -1038,6 +1091,10 @@ export function registerCallableToolPlugins(): void {
 
       const allMembers = await getConversationMembers(conversationId);
       const candidates = buildSendToCandidates(allMembers, context.actorId);
+      const threadSemantics = resolveThreadSemantics({
+        kind: session.conversation_kind,
+        otherParticipantCount: candidates.length,
+      });
       const aliasMap = new Map<string, SendToCandidate[]>();
       for (const candidate of candidates) {
         for (const alias of candidate.aliases) {
@@ -1053,6 +1110,37 @@ export function registerCallableToolPlugins(): void {
       const resolved: string[] = [];
       const errors: string[] = [];
       let hasNonActorRecipients = false;
+      const parsedRecipientNames = parsed.data.recipients ?? [];
+      const recipientNames =
+        threadSemantics.addressingMode === "implicit_peer" &&
+        candidates.length === 1 &&
+        parsedRecipientNames.length === 0
+          ? [candidates[0]!.name]
+          : parsedRecipientNames;
+
+      if (
+        threadSemantics.addressingMode === "explicit_recipients" &&
+        recipientNames.length === 0
+      ) {
+        throwToolError("send_to requires recipients in a group thread.");
+      }
+      if (
+        threadSemantics.addressingMode === "implicit_peer" &&
+        recipientNames.length > 1
+      ) {
+        throwToolError(
+          "A private thread can only send to the other current participant.",
+        );
+      }
+      if (
+        threadSemantics.addressingMode === "implicit_peer" &&
+        candidates.length > 1 &&
+        recipientNames.length === 0
+      ) {
+        throwToolError(
+          "This private thread roster is ambiguous. Specify the recipient explicitly.",
+        );
+      }
 
       for (const name of recipientNames) {
         const normalizedName = normalizeRecipientAlias(name);

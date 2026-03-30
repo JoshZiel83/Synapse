@@ -1605,6 +1605,7 @@ export interface ToolResolveContext {
   actorId: string;
   workspaceId: string;
   conversationId?: string;
+  conversationKind?: "private" | "group" | "virtual";
   conversationMembers?: ConversationMemberEntry[];
   userId?: string;
   availableSkills?: AvailableSkillSummary[];

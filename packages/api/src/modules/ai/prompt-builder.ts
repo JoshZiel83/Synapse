@@ -3,6 +3,7 @@ import {
   extractText,
   formatMentionText,
   normalizeActorDocs,
+  resolveThreadSemantics,
 } from "@synapse/shared";
 import type { ActorDoc, ToolDefinition } from "@synapse/shared";
 
@@ -223,11 +224,16 @@ export function buildActorPrompt(
   _sessionContext?: any,
   extraTools?: ToolDefinition[],
   conversationMembers?: ConversationMemberInfo[],
+  conversationKind?: "private" | "group" | "virtual",
   availableSkills?: AvailableSkillSummary[],
 ): { system: string } {
   const parts: string[] = [];
+  const threadSemantics = resolveThreadSemantics({
+    kind: conversationKind,
+    otherParticipantCount: conversationMembers?.length || 0,
+  });
   const mode: "direct_conversation" | "multi_member_conversation" =
-    conversationMembers && conversationMembers.length > 0
+    threadSemantics.isGroupConversation
       ? "multi_member_conversation"
       : "direct_conversation";
   const source = actorSource(actor);
@@ -293,6 +299,7 @@ export function buildActorPrompt(
   }
 
   if (conversationMembers && conversationMembers.length > 0) {
+    const isPrivateThread = threadSemantics.isPrivateConversation;
     const exampleRecipient =
       conversationMembers.find((member) => member.user_id)?.user_name ||
       conversationMembers.find(
@@ -307,7 +314,9 @@ export function buildActorPrompt(
     const roster = [
       "# Conversation Members",
       "",
-      "You are in a conversation with the following members:",
+      isPrivateThread
+        ? "You are in a private thread with the following other members:"
+        : "You are in a group thread with the following other members:",
       "",
       ...conversationMembers.flatMap((member) => {
         if (member.user_id) {
@@ -346,27 +355,51 @@ export function buildActorPrompt(
 
     parts.push(roster);
 
+    const communicationOverview = isPrivateThread
+      ? `All visible communication uses the \`send_to\` tool. Conversation messages are shared with the other current participant. This is a private thread, so \`send_to\` goes directly to the other participant instead of taking an explicit recipient list.`
+      : `All visible communication uses the \`send_to\` tool. Conversation messages are shared with all members. Recipient labels indicate who you are addressing, not private visibility. Every visible reply must target a specific recipient.`;
+    const sendToGuide = isPrivateThread
+      ? `Send a visible message to the other current participant.\n` +
+          `Parameters:\n` +
+          `- \`intent\`: \`reply\` when you are replying with information or a result; \`request\` when you are delegating, asking, or requesting action\n` +
+          `- \`summary\`: a short structured summary of what you replied with or what you want the other participant to do; this is used for UI rendering\n` +
+          `- \`message\`: your visible message content\n` +
+          `- The recipient is implicit. In this private thread, \`send_to\` goes directly to ${exampleRecipient} or whoever is currently the other participant.\n` +
+          `- To mention a member inside \`message\`, use either \`<Mention name="${exampleRecipient}"/>\` or an explicit id form such as \`<Mention type="actor" id="..."/>\`.\n` +
+          `- Name matching is convenient but may be ambiguous when multiple members share the same display name. If that happens, use \`type="actor|user|external"\` plus \`id="..."\`, or use an explicit id attribute such as \`actorId\`, \`userId\`, \`participantId\`, \`memberId\`, or \`externalUserKey\`.\n` +
+          `- The conversation roster above includes the ids you need for disambiguation.\n` +
+          `- Inline \`<Mention .../>\` is only a rich body reference for UI rendering and sentence clarity. Mention is not the same thing as choosing the visible recipient.\n` +
+          `- Do not mechanically mention the other participant at the start of every message. Use inline mention only when the sentence explicitly points to that person.`
+      : `Send a message to one or more members by name.\n` +
+          `Parameters:\n` +
+          `- \`recipients\`: array of member names (for example ["${exampleRecipient}"] or ["Actor1", "Actor2"])\n` +
+          `- \`intent\`: \`reply\` when you are replying with information or a result; \`request\` when you are delegating, asking, or requesting action\n` +
+          `- \`summary\`: a short structured summary of what you replied with or what you want the recipient(s) to do; this is used for UI rendering\n` +
+          `- \`message\`: your visible message content\n` +
+          `- To mention a member inside \`message\`, use either \`<Mention name="${exampleRecipient}"/>\` or an explicit id form such as \`<Mention type="actor" id="..."/>\`.\n` +
+          `- Name matching is convenient but may be ambiguous when multiple members share the same display name. If that happens, use \`type="actor|user|external"\` plus \`id="..."\`, or use an explicit id attribute such as \`actorId\`, \`userId\`, \`participantId\`, \`memberId\`, or \`externalUserKey\`.\n` +
+          `- The conversation roster above includes the ids you need for disambiguation.\n` +
+          `- \`recipients\` and inline \`<Mention .../>\` mean different things: \`recipients\` decides who the visible message is addressed to, while \`<Mention .../>\` renders an inline member reference inside the sentence body for better UI presentation and clearer wording.\n` +
+          `- Do not mechanically mention the recipient at the start of every message. If the body does not need an explicit inline person reference, do not add a mention.\n` +
+          `- When the sentence is explicitly pointing to someone, use inline mention. Typical cases: naming an owner, saying who is responsible, saying who should handle a task, saying who to contact, calling out a subset in a multi-person message, or referring to a third party.\n` +
+          `- Mention does not send the message to that person by itself. It is a display and reference mechanism inside the message body.`;
+    const sleepGuidance = isPrivateThread
+      ? `- In a private thread, you must use \`send_to\` before \`sleep\`.\n`
+      : `- In a group thread, you may sleep without \`send_to\` only when the wakeup is truly unrelated to you and the intended assignee already received the message, so your own visible reply would add no value.\n`;
+    const recipientGuidance = isPrivateThread
+      ? `- In a private thread, \`send_to\` already targets the other participant. Use \`<Mention .../>\` only when the sentence itself needs an inline body reference.\n`
+      : `- A \`send_to\` recipient indicates who should read or act on the message first; it does not make the message private.\n` +
+          `- A \`send_to\` recipient already tells the UI who the message is for. Do not duplicate that with a leading \`<Mention .../>\` unless the sentence itself needs an inline reference.\n`;
+
     parts.push(
       `# Message Format\n\n` +
         `Messages in this conversation use this format:\n` +
         `- \`[YYYY-MM-DD HH:mm UTC | SenderName → RecipientName]: message\` — a visible conversation message addressed to a specific recipient at that exact time\n` +
         `- \`[System]: event description\` — a system event (member joined/left, profile updated)\n\n` +
         `# Communication\n\n` +
-        `All visible communication uses the \`send_to\` tool. Conversation messages are shared with all members. Recipient labels indicate who you are addressing, not private visibility. Every visible reply must target a specific recipient.\n\n` +
+        `${communicationOverview}\n\n` +
         `## send_to\n` +
-        `Send a message to one or more members by name.\n` +
-        `Parameters:\n` +
-        `- \`recipients\`: array of member names (for example ["${exampleRecipient}"] or ["Actor1", "Actor2"])\n` +
-        `- \`intent\`: \`reply\` when you are replying with information or a result; \`request\` when you are delegating, asking, or requesting action\n` +
-        `- \`summary\`: a short structured summary of what you replied with or what you want the recipient(s) to do; this is used for UI rendering\n` +
-        `- \`message\`: your visible message content\n` +
-        `- To mention a member inside \`message\`, use either \`<Mention name="${exampleRecipient}"/>\` or an explicit id form such as \`<Mention type="actor" id="..."/>\`.\n` +
-        `- Name matching is convenient but may be ambiguous when multiple members share the same display name. If that happens, use \`type="actor|user|external"\` plus \`id="..."\`, or use an explicit id attribute such as \`actorId\`, \`userId\`, \`participantId\`, \`memberId\`, or \`externalUserKey\`.\n` +
-        `- The conversation roster above includes the ids you need for disambiguation.\n` +
-        `- \`recipients\` and inline \`<Mention .../>\` mean different things: \`recipients\` decides who the visible message is addressed to, while \`<Mention .../>\` renders an inline member reference inside the sentence body for better UI presentation and clearer wording.\n` +
-        `- Do not mechanically mention the recipient at the start of every message. If the body does not need an explicit inline person reference, do not add a mention.\n` +
-        `- When the sentence is explicitly pointing to someone, use inline mention. Typical cases: naming an owner, saying who is responsible, saying who should handle a task, saying who to contact, calling out a subset in a multi-person message, or referring to a third party.\n` +
-        `- Mention does not send the message to that person by itself. It is a display and reference mechanism inside the message body.\n\n` +
+        `${sendToGuide}\n\n` +
         `## Other tools\n` +
         `- \`get_current_time\`: Get the current wall-clock time when timing matters or you need to reference "now"\n` +
         `- \`invite_actor\`: Invite one or more currently listed candidate actors into this conversation when the current roster lacks a needed skill\n` +
@@ -386,11 +419,9 @@ export function buildActorPrompt(
         `- Only \`send_to\` produces visible messages.\n` +
         `- Do not call \`sleep\` until you have decided whether the conversation needs a visible message from you.\n` +
         `- If this wakeup leads to a result, handoff, clarification, or explicit "no action needed" decision that others should know, use \`send_to\` first and only then call \`sleep\`.\n` +
-        `- In a two-member conversation, you must use \`send_to\` before \`sleep\`.\n` +
-        `- In larger multi-member conversations, you may sleep without \`send_to\` only when the wakeup is truly unrelated to you and the intended assignee already received the message, so your own visible reply would add no value.\n` +
+        `${sleepGuidance}` +
         `- All visible conversation messages are shared with the whole conversation.\n` +
-        `- A \`send_to\` recipient indicates who should read or act on the message first; it does not make the message private.\n` +
-        `- A \`send_to\` recipient already tells the UI who the message is for. Do not duplicate that with a leading \`<Mention .../>\` unless the sentence itself needs an inline reference.\n` +
+        `${recipientGuidance}` +
         `- If a public message is not addressed to you, treat it as shared context unless you are explicitly asked to respond or need to step in to unblock the work.\n` +
         `- Use \`<Mention name="..."/>\` when you want the UI to render an actual member mention inside the message body, especially when the sentence is identifying who owns something or who should take action. Mention is not the same as target.\n` +
         `- Never rely on outdated roster assumptions. The system may insert profile-version events when another actor changes.`,

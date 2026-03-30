@@ -53,7 +53,7 @@ import { enqueueSessionWakeup } from '../session/runtime.js';
 import { getSession } from '../session/service.js';
 import {
   addMembersToConversation,
-  createConversation,
+  createThread,
   getConversationMembers,
 } from '../conversation/chat-service.js';
 
@@ -2523,8 +2523,9 @@ async function resolveExistingConversationId(rule: AutomationRule) {
     }
   }
 
-  const created = await createConversation({
+  const created = await createThread({
     workspaceId: rule.workspaceId,
+    kind: 'group',
     createdBy: operatorUserId,
     title: rule.delivery.conversationTitle || rule.name,
     actorIds: participantActorIds,

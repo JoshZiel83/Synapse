@@ -38,9 +38,23 @@ export const THREAD_CONVERSATION_KINDS = [
   PRIVATE_CONVERSATION_KIND,
 ] as const;
 
-export const MULTI_MEMBER_CONVERSATION_KIND = GROUP_CONVERSATION_KIND;
+export type ThreadAddressingMode =
+  | 'none'
+  | 'implicit_peer'
+  | 'explicit_recipients';
 
-export function isMultiMemberConversationKind(kind: string | null | undefined): boolean {
+export interface ThreadSemantics {
+  hasThreadContext: boolean;
+  isPrivateConversation: boolean;
+  isGroupConversation: boolean;
+  otherParticipantCount: number;
+  hasAddressablePeer: boolean;
+  addressingMode: ThreadAddressingMode;
+  requiresVisibleReplyBeforeSleep: boolean;
+  allowsSleepWithoutReplyConfirmation: boolean;
+}
+
+export function isGroupConversationKind(kind: string | null | undefined): boolean {
   return kind === GROUP_CONVERSATION_KIND;
 }
 
@@ -50,4 +64,36 @@ export function isPrivateConversationKind(kind: string | null | undefined): bool
 
 export function isThreadConversationKind(kind: string | null | undefined): boolean {
   return kind === GROUP_CONVERSATION_KIND || kind === PRIVATE_CONVERSATION_KIND;
+}
+
+export function resolveThreadSemantics(params: {
+  kind?: string | null;
+  otherParticipantCount?: number;
+}): ThreadSemantics {
+  const otherParticipantCount = Math.max(
+    0,
+    Math.trunc(params.otherParticipantCount ?? 0),
+  );
+  const isPrivateConversation = isPrivateConversationKind(params.kind);
+  const isGroupConversation = isGroupConversationKind(params.kind);
+  const hasThreadContext = isThreadConversationKind(params.kind);
+  const hasAddressablePeer = hasThreadContext && otherParticipantCount > 0;
+
+  let addressingMode: ThreadAddressingMode = 'none';
+  if (isPrivateConversation) {
+    addressingMode = 'implicit_peer';
+  } else if (isGroupConversation) {
+    addressingMode = 'explicit_recipients';
+  }
+
+  return {
+    hasThreadContext,
+    isPrivateConversation,
+    isGroupConversation,
+    otherParticipantCount,
+    hasAddressablePeer,
+    addressingMode,
+    requiresVisibleReplyBeforeSleep: hasAddressablePeer,
+    allowsSleepWithoutReplyConfirmation: isGroupConversation && hasAddressablePeer,
+  };
 }
