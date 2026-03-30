@@ -73,6 +73,17 @@ function deriveThinkingPhase(status: string): ThinkingPhase {
   return 'thinking';
 }
 
+async function runCleanupStep(label: string, operation: () => Promise<unknown>) {
+  try {
+    await operation();
+  } catch (err: any) {
+    console.error(
+      `[session-thinking] Cleanup step failed for ${label}:`,
+      err?.message || String(err),
+    );
+  }
+}
+
 async function loadNewContextItems(params: {
   conversationId: string;
   memberId: string;
@@ -130,6 +141,7 @@ export function startSessionThinkingWorker() {
       let requeueAfterUnlock = false;
       let currentStatusText: string | undefined;
       let currentPhase: ThinkingPhase | 'error' = 'thinking';
+      let multiMemberConversationId: string | undefined;
       let pendingWakeups: Awaited<ReturnType<typeof getPendingWakeups>> = [];
       let mcpTools: ResolvedMcpTools = {
         tools: [],
@@ -188,6 +200,7 @@ export function startSessionThinkingWorker() {
           isMultiMemberConversationKind(session.conversation_kind)
             ? session.conversation_id
             : undefined;
+        multiMemberConversationId = conversationId;
 
         await emitEvent({
           type: 'actor.thinking',
@@ -657,8 +670,56 @@ export function startSessionThinkingWorker() {
         await mcpTools.shutdown().catch(() => {});
         return { success: true, actions: result.actions.length, requeued: requeueAfterUnlock };
       } catch (err: any) {
-        console.error(`[session-thinking] Session ${sessionId} failed:`, err.message);
+        const errorMessage = err?.message || 'Unknown error';
+        console.error(`[session-thinking] Session ${sessionId} failed:`, errorMessage);
         const failedSession = await getSession(sessionId).catch(() => null);
+
+        if (turn?.id) {
+          await runCleanupStep(`drop wakeups for turn ${turn.id}`, () => markTurnWakeupsDropped(turn.id));
+          await runCleanupStep(`mark turn ${turn.id} failed`, () => updateTurnStatus(
+            turn.id,
+            'failed',
+            { metadata: { errorMessage } },
+          ));
+        }
+
+        await runCleanupStep(`mark session ${sessionId} blocked`, () => updateSessionStatus(
+          sessionId,
+          'blocked',
+          { errorMessage },
+        ));
+        await runCleanupStep(`publish blocked runtime for session ${sessionId}`, () => publishSessionRuntime(workspaceId, sessionId, {
+          laneState: 'blocked',
+          health: 'error',
+          phase: 'error',
+          statusText: errorMessage,
+          currentTurnId: turn?.id,
+          lastError: {
+            message: errorMessage,
+            at: nowISO(),
+          },
+        }));
+        await runCleanupStep(`emit blocked event for session ${sessionId}`, () => emitEvent({
+          type: 'session.status.changed',
+          workspaceId,
+          payload: {
+            conversationId:
+              multiMemberConversationId
+              || (isMultiMemberConversationKind(failedSession?.conversation_kind)
+                ? failedSession.conversation_id
+                : undefined),
+            sessionId,
+            actorId,
+            actorName: thinkingActorName,
+            status: 'blocked',
+            phase: 'error',
+            errorMessage,
+          },
+          timestamp: nowISO(),
+        }));
+        await runCleanupStep(`shutdown MCP tools for session ${sessionId}`, () => mcpTools.shutdown());
+        await runCleanupStep(`shutdown MCP instances for session ${sessionId}`, () => shutdownSessionInstances(sessionId));
+
         const wakeupTargets = pendingWakeups.filter(
           (wakeup) =>
             (wakeup.sourceMemberType === 'user' || wakeup.sourceMemberType === 'external') &&
@@ -666,33 +727,37 @@ export function startSessionThinkingWorker() {
         );
 
         if (failedSession?.conversation_id && wakeupTargets.length > 0) {
-          const targetMembers = await Promise.all(
-            wakeupTargets.map(async (wakeup) => {
-              if (wakeup.sourceMemberType === 'user') {
-                return getConversationMember({
-                  conversationId: failedSession.conversation_id,
-                  userId: wakeup.sourceMemberId as string,
-                });
-              }
+          await runCleanupStep(`publish model error notice for session ${sessionId}`, async () => {
+            const targetMembers = await Promise.all(
+              wakeupTargets.map(async (wakeup) => {
+                if (wakeup.sourceMemberType === 'user') {
+                  return getConversationMember({
+                    conversationId: failedSession.conversation_id,
+                    userId: wakeup.sourceMemberId as string,
+                  });
+                }
 
-              const result = await query(
-                `SELECT *
-                 FROM conversation_members
-                 WHERE conversation_id = $1
-                   AND id = $2
-                 LIMIT 1`,
-                [failedSession.conversation_id, wakeup.sourceMemberId],
-              );
-              return result.rows[0] ?? null;
-            }),
-          ).catch(() => []);
-          const targetMemberIds = [...new Set(
-            targetMembers
-              .map((member: any) => member?.id as string | undefined)
-              .filter((memberId): memberId is string => Boolean(memberId)),
-          )];
+                const result = await query(
+                  `SELECT *
+                   FROM conversation_members
+                   WHERE conversation_id = $1
+                     AND id = $2
+                   LIMIT 1`,
+                  [failedSession.conversation_id, wakeup.sourceMemberId],
+                );
+                return result.rows[0] ?? null;
+              }),
+            );
+            const targetMemberIds = [...new Set(
+              targetMembers
+                .map((member: any) => member?.id as string | undefined)
+                .filter((memberId): memberId is string => Boolean(memberId)),
+            )];
 
-          if (targetMemberIds.length > 0) {
+            if (targetMemberIds.length === 0) {
+              return;
+            }
+
             await addSessionMessage({
               sessionId,
               workspaceId,
@@ -708,51 +773,11 @@ export function startSessionThinkingWorker() {
                 retrySessionId: sessionId,
                 retryTurnId: turn?.id,
                 notificationType: 'model_error',
-                errorMessage: err.message || 'Unknown error',
+                errorMessage,
               },
-            }).catch((messageError) => {
-              console.error(`[session-thinking] Failed to publish model error notice for session ${sessionId}:`, messageError);
             });
-          }
+          });
         }
-
-        if (turn?.id) {
-          await markTurnWakeupsDropped(turn.id).catch(() => {});
-          await updateTurnStatus(turn.id, 'failed', { metadata: { errorMessage: err.message } }).catch(() => {});
-        }
-
-        await mcpTools.shutdown().catch(() => {});
-        await shutdownSessionInstances(sessionId).catch(() => {});
-        await updateSessionStatus(sessionId, 'blocked', { errorMessage: err.message });
-        await publishSessionRuntime(workspaceId, sessionId, {
-          laneState: 'blocked',
-          health: 'error',
-          phase: 'error',
-          statusText: err.message || 'Unknown error',
-          currentTurnId: turn?.id,
-          lastError: {
-            message: err.message || 'Unknown error',
-            at: nowISO(),
-          },
-        }).catch(() => {});
-
-        await emitEvent({
-          type: 'session.status.changed',
-          workspaceId,
-          payload: {
-            conversationId:
-              isMultiMemberConversationKind(failedSession?.conversation_kind)
-                ? failedSession.conversation_id
-                : undefined,
-            sessionId,
-            actorId,
-            actorName: thinkingActorName,
-            status: 'blocked',
-            phase: 'error',
-            errorMessage: err.message || 'Unknown error',
-          },
-          timestamp: nowISO(),
-        });
 
         throw err;
       } finally {

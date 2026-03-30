@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../../infrastructure/database/index.js';
 import { updateSessionStatus } from '../session/service.js';
-import { publishSessionRuntime } from '../session/runtime.js';
+import { markTurnWakeupsDropped, publishSessionRuntime } from '../session/runtime.js';
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -494,6 +494,7 @@ export async function recoverInterruptedExecutions(params?: {
 
   const sessionsById = new Map<string, { workspaceId: string | null; turnId: string }>();
   for (const row of interruptedTurns.rows) {
+    await markTurnWakeupsDropped(row.id).catch(() => {});
     await updateTurnStatus(row.id, 'failed', {
       metadata: { errorMessage, interruptedByRecovery: true },
     });
