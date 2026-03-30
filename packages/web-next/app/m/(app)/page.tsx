@@ -171,10 +171,12 @@ export default function MobileHomePage() {
     try {
       const conversationId = await createWorkspaceThread(
         workspaceId,
-        "private",
+        "group",
         [actor.id],
         message,
-        actor.id
+        actor.id,
+        undefined,
+        actor.name
       )
       writeStoredMobileLaunchActor(workspaceId, actor)
 

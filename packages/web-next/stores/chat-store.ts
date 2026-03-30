@@ -166,7 +166,8 @@ interface ChatState {
     actorIds: string[],
     content?: string,
     targetActorIdOrIds?: string | string[],
-    contentBlocks?: CanonicalContentBlock[]
+    contentBlocks?: CanonicalContentBlock[],
+    title?: string
   ) => Promise<string>
   markConversationRead: (
     workspaceId: string,
@@ -1028,7 +1029,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     actorIds,
     content,
     targetActorIdOrIds,
-    contentBlocks
+    contentBlocks,
+    title
   ) => {
     const targetActorIds = Array.isArray(targetActorIdOrIds)
       ? targetActorIdOrIds.filter(Boolean)
@@ -1040,6 +1042,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       kind,
       workspaceId,
       actorIds,
+      ...(title ? { title } : {}),
       ...(content ? { content } : {}),
       ...(contentBlocks && contentBlocks.length > 0 ? { contentBlocks } : {}),
       ...(targetActorIds.length > 0 ? { targetActorIds } : {}),

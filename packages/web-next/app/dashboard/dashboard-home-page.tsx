@@ -268,6 +268,10 @@ export default function DashboardHomePage() {
     const actorIds = Array.from(
       new Set(groupedActors.map((actor) => actor.id).filter(Boolean))
     )
+    const threadTitle = groupedActors
+      .map((actor) => actor.name.trim())
+      .filter(Boolean)
+      .join(", ")
 
     if (!launchPayload || launchPayload.contentBlocks.length === 0) {
       setErrorMessage("Enter a first message to start a conversation.")
@@ -287,11 +291,12 @@ export default function DashboardHomePage() {
       Promise.allSettled([
         createWorkspaceThread(
           workspaceId,
-          actorIds.length > 1 ? "group" : "private",
+          "group",
           actorIds,
           message || undefined,
           actorIds,
-          launchPayload.contentBlocks
+          launchPayload.contentBlocks,
+          threadTitle || undefined
         ),
         saveAsDefault && primaryActor
           ? api.updateWorkspaceChiefActorPreference(workspaceId, {
