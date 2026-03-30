@@ -560,6 +560,7 @@ export default function ChatDetailScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    minHeight: 0,
   },
   header: {
     flexDirection: "row",
@@ -608,6 +609,7 @@ const styles = StyleSheet.create({
   },
   messages: {
     flex: 1,
+    minHeight: 0,
     backgroundColor: theme.colors.backgroundAlt,
   },
   messagesContent: {

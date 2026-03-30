@@ -354,13 +354,17 @@ export function LoadingBlock({ label }: { label?: string }) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
+    minHeight: 0,
     backgroundColor: theme.colors.background,
   },
   fill: {
     flex: 1,
+    minHeight: 0,
   },
   screen: {
     flex: 1,
+    minHeight: 0,
+    overflow: "hidden",
     backgroundColor: theme.colors.background,
   },
   scrollContent: {
