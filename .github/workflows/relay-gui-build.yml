@@ -98,7 +98,8 @@ jobs:
           fi
 
       - name: Show selected platforms
-        run: echo "Selected GUI platforms: ${{ needs.prepare-matrix.outputs.selected_platforms }}"
+        run: |
+          echo "Selected GUI platforms: ${{ needs.prepare-matrix.outputs.selected_platforms }}"
 
       - name: Prepare shared Node runtime
         run: node relay/scripts/prepare-node-bundle.mjs --target-platform=${{ matrix.goos }}-${{ matrix.goarch }} --node-version=${{ env.BUNDLED_NODE_VERSION }}
