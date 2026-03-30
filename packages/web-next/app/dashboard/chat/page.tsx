@@ -32,7 +32,7 @@ export default function ChatPage() {
     selectConversation,
     loadMessages,
     sendMessage,
-    createConversation,
+    createWorkspaceThread,
     markConversationRead,
   } = useChatStore()
 
@@ -90,7 +90,11 @@ export default function ChatPage() {
   async function handleCreateConversation(actorIds: string[]) {
     if (!workspaceId) return
     try {
-      const conversationId = await createConversation(workspaceId, actorIds)
+      const conversationId = await createWorkspaceThread(
+        workspaceId,
+        "group",
+        actorIds
+      )
       updateConversationRoute(conversationId)
     } catch (err) {
       console.error("Failed to create conversation:", err)

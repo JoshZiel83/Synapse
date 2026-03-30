@@ -75,7 +75,7 @@ const SEND_BUTTON_ANIMATION_MS = 1280
 export default function DashboardHomePage() {
   const router = useRouter()
   const { workspaceId, workspaceName } = useWorkspace()
-  const { createConversation, selectConversation } = useChatStore()
+  const { createWorkspaceThread, selectConversation } = useChatStore()
   const sendAnimationTimerRef = useRef<number | null>(null)
 
   const [pendingLaunchPayload, setPendingLaunchPayload] =
@@ -285,8 +285,9 @@ export default function DashboardHomePage() {
 
     const [[groupResult, preferenceResult]] = await Promise.all([
       Promise.allSettled([
-        createConversation(
+        createWorkspaceThread(
           workspaceId,
+          actorIds.length > 1 ? "group" : "private",
           actorIds,
           message || undefined,
           actorIds,

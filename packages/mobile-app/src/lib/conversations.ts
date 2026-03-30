@@ -72,28 +72,28 @@ function findPrivateConversationForUser(
   );
 }
 
-export function findDirectConversationForActor(
+export function findPrivateWorkspaceConversationForActor(
   conversations: ConversationSummaryView[],
   actorId: string,
 ) {
   return findPrivateConversationForActor(conversations, actorId, "workspace");
 }
 
-export function findSocialConversationForActor(
+export function findPrivateSocialConversationForActor(
   conversations: ConversationSummaryView[],
   actorId: string,
 ) {
   return findPrivateConversationForActor(conversations, actorId, "social");
 }
 
-export function findConversationForUser(
+export function findPrivateWorkspaceConversationForUser(
   conversations: ConversationSummaryView[],
   userId: string,
 ) {
   return findPrivateConversationForUser(conversations, userId, "workspace");
 }
 
-export function findSocialConversationForUser(
+export function findPrivateSocialConversationForUser(
   conversations: ConversationSummaryView[],
   userId: string,
 ) {

@@ -50,7 +50,9 @@ export default function MobileContactsPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { workspaceId } = useWorkspace()
-  const createConversation = useChatStore((state) => state.createConversation)
+  const createWorkspaceThread = useChatStore(
+    (state) => state.createWorkspaceThread
+  )
   const selectConversation = useChatStore((state) => state.selectConversation)
 
   const [mode, setMode] = useState<DirectoryMode>("actors")
@@ -169,7 +171,11 @@ export default function MobileContactsPage() {
     if (!workspaceId || launchingActorId) return
     setLaunchingActorId(actor.id)
     try {
-      const conversationId = await createConversation(workspaceId, [actor.id])
+      const conversationId = await createWorkspaceThread(
+        workspaceId,
+        "private",
+        [actor.id]
+      )
       selectConversation(conversationId)
       startTransition(() => {
         router.push(`/m/chat/${conversationId}`)

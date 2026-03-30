@@ -25,10 +25,10 @@ import {
 import {
   conversationIncludesActor,
   conversationIncludesUser,
-  findConversationForUser,
-  findDirectConversationForActor,
-  findSocialConversationForActor,
-  findSocialConversationForUser,
+  findPrivateSocialConversationForActor,
+  findPrivateSocialConversationForUser,
+  findPrivateWorkspaceConversationForActor,
+  findPrivateWorkspaceConversationForUser,
   isGroupConversation,
 } from "@/lib/conversations";
 import { useWorkspace } from "@/providers/workspace-provider";
@@ -157,7 +157,7 @@ export default function ContactDetailScreen() {
     setSubmitting(true);
     try {
       if (savedContact?.actor) {
-        const existing = findSocialConversationForActor(
+        const existing = findPrivateSocialConversationForActor(
           conversations,
           savedContact.actor.id,
         );
@@ -179,7 +179,7 @@ export default function ContactDetailScreen() {
       }
 
       if (savedContact?.user) {
-        const existing = findSocialConversationForUser(
+        const existing = findPrivateSocialConversationForUser(
           conversations,
           savedContact.user.id,
         );
@@ -201,7 +201,7 @@ export default function ContactDetailScreen() {
       }
 
       if (actor) {
-        const existing = findDirectConversationForActor(
+        const existing = findPrivateWorkspaceConversationForActor(
           conversations,
           actor.id,
         );
@@ -224,7 +224,10 @@ export default function ContactDetailScreen() {
       }
 
       if (member) {
-        const existing = findConversationForUser(conversations, member.userId);
+        const existing = findPrivateWorkspaceConversationForUser(
+          conversations,
+          member.userId,
+        );
         if (existing) {
           router.push(`/chat/${existing.id}`);
           return;

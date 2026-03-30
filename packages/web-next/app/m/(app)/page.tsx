@@ -65,7 +65,9 @@ export default function MobileHomePage() {
   const loadingConversations = useChatStore(
     (state) => state.loadingConversations
   )
-  const createConversation = useChatStore((state) => state.createConversation)
+  const createWorkspaceThread = useChatStore(
+    (state) => state.createWorkspaceThread
+  )
   const selectConversation = useChatStore((state) => state.selectConversation)
 
   const [draft, setDraft] = useState("")
@@ -167,8 +169,9 @@ export default function MobileHomePage() {
     setErrorMessage(null)
 
     try {
-      const conversationId = await createConversation(
+      const conversationId = await createWorkspaceThread(
         workspaceId,
+        "private",
         [actor.id],
         message,
         actor.id

@@ -160,8 +160,9 @@ interface ChatState {
   ) => Promise<void>
   hydrateOutbox: (workspaceId: string) => void
   flushOutbox: (workspaceId: string) => void
-  createConversation: (
+  createWorkspaceThread: (
     workspaceId: string,
+    kind: "private" | "group",
     actorIds: string[],
     content?: string,
     targetActorIdOrIds?: string | string[],
@@ -1021,8 +1022,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  createConversation: async (
+  createWorkspaceThread: async (
     workspaceId,
+    kind,
     actorIds,
     content,
     targetActorIdOrIds,
@@ -1035,7 +1037,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         : []
     const res = await api.createThread({
       domain: "workspace",
-      kind: actorIds.length === 1 ? "private" : "group",
+      kind,
       workspaceId,
       actorIds,
       ...(content ? { content } : {}),

@@ -19,7 +19,9 @@ export default function MobileChatListPage() {
     (state) => state.selectedConversationId
   )
   const runtimeMap = useChatStore((state) => state.runtimeMap)
-  const createConversation = useChatStore((state) => state.createConversation)
+  const createWorkspaceThread = useChatStore(
+    (state) => state.createWorkspaceThread
+  )
   const selectConversation = useChatStore((state) => state.selectConversation)
 
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -27,7 +29,11 @@ export default function MobileChatListPage() {
   async function handleCreateConversation(actorIds: string[]) {
     if (!workspaceId) return
     try {
-      const conversationId = await createConversation(workspaceId, actorIds)
+      const conversationId = await createWorkspaceThread(
+        workspaceId,
+        "group",
+        actorIds
+      )
       selectConversation(conversationId)
       startTransition(() => {
         router.push(`/m/chat/${conversationId}`)
