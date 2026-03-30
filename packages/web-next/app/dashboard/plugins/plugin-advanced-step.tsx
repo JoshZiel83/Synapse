@@ -79,7 +79,7 @@ export default function PluginAdvancedStep({
 
         if (cancelled) return;
         setActors((Array.isArray(actorData) ? actorData : []).map(normalizeActorOption));
-        setConversations((conversationData?.threads || []).map(normalizeConversationOption));
+        setConversations((conversationData?.conversations || []).map(normalizeConversationOption));
       } catch (error) {
         if (!cancelled) {
           console.error('Failed to load advanced plugin options:', error);

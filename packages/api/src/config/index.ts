@@ -27,6 +27,14 @@ export const config = {
   redis: {
     url: process.env.REDIS_URL || 'redis://localhost:6379',
   },
+  realtime: {
+    outboxBatchSize: parseInt(process.env.REALTIME_OUTBOX_BATCH_SIZE || '100'),
+    outboxPollMs: parseInt(process.env.REALTIME_OUTBOX_POLL_MS || '500'),
+  },
+  im: {
+    runtimeManagerEnabled:
+      process.env.IM_RUNTIME_MANAGER_ENABLED !== 'false',
+  },
   relay: {
     updateCosBaseUrl:
       process.env.RELAY_UPDATE_COS_BASE_URL ||

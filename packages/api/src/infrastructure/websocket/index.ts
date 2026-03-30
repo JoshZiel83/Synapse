@@ -1,21 +1,20 @@
 import type { FastifyInstance } from "fastify";
-import { AUTH_SESSION_COOKIE_NAME } from "@synapse/shared";
+import {
+  AUTH_SESSION_COOKIE_NAME,
+  WS_AUTH_TIMEOUT,
+  WS_HEARTBEAT_INTERVAL,
+} from "@synapse/shared";
 import type {
   ChatSocketEvent,
   ChatSocketEventPayloadMap,
+  ConversationFeedItem,
   SystemEvent,
-  WorkspaceFeedEventRecord,
 } from "@synapse/shared";
-import { WS_AUTH_TIMEOUT, WS_HEARTBEAT_INTERVAL } from "@synapse/shared";
 import { onEvent } from "../events/index.js";
-import { query } from "../database/index.js";
 import { handleRelayConnection } from "../../modules/mcp-plugins/relay-manager.js";
 import { isShuttingDown } from "../shutdown/state.js";
 import { authenticateSessionToken } from "../../modules/auth/service.js";
-import {
-  isFeedItemVisibleToUser,
-  listWorkspaceFeedEventsAfter,
-} from "../../modules/conversation/service.js";
+import { isFeedItemVisibleToUser } from "../../modules/conversation/service.js";
 import {
   canUserViewInteraction,
   enrichFeedItemInteractionsForUser,
@@ -28,18 +27,29 @@ import {
 } from "./auth-session-registry.js";
 import {
   authorizePermission,
-  listAuthorizedResourceIds,
   userSubject,
 } from "../../modules/access/service.js";
+
+type InboxSubscription = {
+  key: string;
+  topic: "inbox";
+  workspaceId?: string;
+};
+
+type ConversationSubscription = {
+  key: string;
+  topic: "conversation";
+  conversationId: string;
+};
+
+type WSSubscription = InboxSubscription | ConversationSubscription;
 
 interface WSClient {
   ws: any;
   userId: string;
   sessionId?: string;
-  workspaceId?: string;
   authenticated: boolean;
-  syncState: "authenticating" | "syncing" | "live";
-  bufferedFeedRecords: WorkspaceFeedEventRecord[];
+  subscriptions: Map<string, WSSubscription>;
   authTimer?: ReturnType<typeof setTimeout>;
   heartbeatTimer?: ReturnType<typeof setInterval>;
   pongTimer?: ReturnType<typeof setTimeout>;
@@ -71,26 +81,6 @@ async function canUserAccessWorkspace(workspaceId: string, userId: string) {
   });
 }
 
-async function getVisibleConversationIdsForUser(
-  workspaceId: string,
-  userId: string,
-) {
-  const conversationIds = await listAuthorizedResourceIds({
-    subject: userSubject(userId),
-    action: "conversation.view",
-  });
-  if (conversationIds.length === 0) return [];
-
-  const result = await query(
-    `SELECT id
-     FROM conversations
-     WHERE workspace_id = $1
-       AND id = ANY($2)`,
-    [workspaceId, conversationIds],
-  );
-  return result.rows.map((row: any) => row.id as string);
-}
-
 async function canUserAccessConversation(
   conversationId: string,
   userId: string,
@@ -109,8 +99,14 @@ function mapInternalEventToSocketEvent(
   switch (event.type) {
     case "feed.item.created":
       return {
-        type: "feed.item.created",
-        payload: event.payload as unknown as WorkspaceFeedEventRecord,
+        type: "conversation.item.created",
+        payload: event.payload as unknown as ConversationFeedItem,
+      };
+    case "conversation.read.updated":
+      return {
+        type: "conversation.read.updated",
+        payload:
+          event.payload as ChatSocketEventPayloadMap["conversation.read.updated"],
       };
     case "runtime.updated":
       return {
@@ -143,8 +139,9 @@ function getConversationIdFromSocketEvent(
   event: ChatSocketEvent | SystemEvent,
 ) {
   switch (event.type) {
-    case "feed.item.created":
-      return (event.payload as WorkspaceFeedEventRecord).item.conversationId;
+    case "conversation.item.created":
+      return (event.payload as ConversationFeedItem).conversationId;
+    case "conversation.read.updated":
     case "runtime.updated":
     case "conversation.updated":
     case "interaction.updated":
@@ -195,105 +192,82 @@ function safeSendSocketEvent(
   }
 }
 
-function bufferFeedRecord(client: WSClient, record: WorkspaceFeedEventRecord) {
-  if (
-    client.bufferedFeedRecords.some(
-      (entry) => entry.workspaceSequence === record.workspaceSequence,
-    )
-  ) {
-    return;
-  }
-  client.bufferedFeedRecords.push(record);
-}
-
-function drainBufferedFeedRecords(client: WSClient, afterSequence: number) {
-  const nextRecords = client.bufferedFeedRecords
-    .filter((record) => record.workspaceSequence > afterSequence)
-    .sort((left, right) => left.workspaceSequence - right.workspaceSequence);
-
-  client.bufferedFeedRecords = [];
-  return nextRecords;
-}
-
-async function replayWorkspaceFeed(clientId: string, afterSequence: number) {
-  const client = clients.get(clientId);
-  if (!client?.workspaceId || !client.userId || client.ws.readyState !== 1) {
-    return;
-  }
-
-  const visibleConversationIds = await getVisibleConversationIdsForUser(
-    client.workspaceId,
-    client.userId,
+function getMatchingInboxSubscriptions(client: WSClient, workspaceId: string) {
+  return [...client.subscriptions.values()].filter(
+    (subscription): subscription is InboxSubscription =>
+      subscription.topic === "inbox" &&
+      (!subscription.workspaceId || subscription.workspaceId === workspaceId),
   );
-  let cursor = afterSequence;
-  const pageSize = 200;
+}
 
-  while (true) {
-    const page = await listWorkspaceFeedEventsAfter({
-      workspaceId: client.workspaceId,
-      conversationIds: visibleConversationIds,
-      afterSequence: cursor,
-      limit: pageSize,
+function hasConversationSubscription(client: WSClient, conversationId: string) {
+  return [...client.subscriptions.values()].some(
+    (subscription) =>
+      subscription.topic === "conversation" &&
+      subscription.conversationId === conversationId,
+  );
+}
+
+async function handleSubscribe(clientId: string, msg: Record<string, unknown>) {
+  const client = clients.get(clientId);
+  if (!client || !client.authenticated) {
+    closeClient(clientId, "Authenticate first");
+    return;
+  }
+
+  const key =
+    typeof msg.key === "string" && msg.key.trim() ? msg.key.trim() : "";
+  const topic =
+    typeof msg.topic === "string" && msg.topic.trim() ? msg.topic.trim() : "";
+  if (!key || !topic) {
+    return;
+  }
+
+  if (topic === "inbox") {
+    const workspaceId =
+      typeof msg.workspaceId === "string" && msg.workspaceId.trim()
+        ? msg.workspaceId.trim()
+        : undefined;
+    if (
+      workspaceId &&
+      !(await canUserAccessWorkspace(workspaceId, client.userId))
+    ) {
+      return;
+    }
+    client.subscriptions.set(key, {
+      key,
+      topic: "inbox",
+      workspaceId,
     });
-    if (page.length === 0) {
-      break;
-    }
-
-    for (const record of page) {
-      const enrichedRecord = {
-        ...record,
-        item: await enrichFeedItemInteractionsForUser(
-          record.item,
-          client.userId,
-        ),
-      };
-      if (!isFeedItemVisibleToUser(enrichedRecord.item, client.userId)) {
-        cursor = enrichedRecord.workspaceSequence;
-        continue;
-      }
-      if (
-        !safeSendSocketEvent(clientId, {
-          type: "feed.item.created",
-          payload: enrichedRecord,
-        })
-      ) {
-        return;
-      }
-      cursor = enrichedRecord.workspaceSequence;
-    }
+    return;
   }
 
-  while (true) {
-    const current = clients.get(clientId);
-    if (!current || current.ws.readyState !== 1) {
+  if (topic === "conversation") {
+    const conversationId =
+      typeof msg.conversationId === "string" && msg.conversationId.trim()
+        ? msg.conversationId.trim()
+        : "";
+    if (!conversationId) {
       return;
     }
-
-    const buffered = drainBufferedFeedRecords(current, cursor);
-    if (buffered.length === 0) {
-      current.syncState = "live";
+    if (!(await canUserAccessConversation(conversationId, client.userId))) {
       return;
     }
-
-    for (const record of buffered) {
-      const enrichedRecord = {
-        ...record,
-        item: await enrichFeedItemInteractionsForUser(
-          record.item,
-          current.userId,
-        ),
-      };
-      if (
-        !safeSendSocketEvent(clientId, {
-          type: "feed.item.created",
-          payload: enrichedRecord,
-        })
-      ) {
-        return;
-      }
-      cursor = enrichedRecord.workspaceSequence;
-    }
+    client.subscriptions.set(key, {
+      key,
+      topic: "conversation",
+      conversationId,
+    });
   }
+}
+
+function handleUnsubscribe(clientId: string, msg: Record<string, unknown>) {
+  const client = clients.get(clientId);
+  if (!client) return;
+  const key =
+    typeof msg.key === "string" && msg.key.trim() ? msg.key.trim() : "";
+  if (!key) return;
+  client.subscriptions.delete(key);
 }
 
 export function setupWebSocket(app: FastifyInstance) {
@@ -313,7 +287,6 @@ export function setupWebSocket(app: FastifyInstance) {
     }
   });
 
-  // Relay agent WebSocket endpoint
   app.get("/ws/relay", { websocket: true }, (socket: any, req: any) => {
     if (isShuttingDown()) {
       try {
@@ -351,17 +324,14 @@ export function setupWebSocket(app: FastifyInstance) {
     }
 
     const clientId = crypto.randomUUID();
-
     const client: WSClient = {
       ws: socket,
       userId: "",
       authenticated: false,
-      syncState: "authenticating",
-      bufferedFeedRecords: [],
+      subscriptions: new Map(),
     };
     clients.set(clientId, client);
 
-    // Auth timeout - must authenticate within WS_AUTH_TIMEOUT
     client.authTimer = setTimeout(() => {
       if (!client.authenticated) {
         closeClient(clientId, "Authentication timeout");
@@ -374,15 +344,9 @@ export function setupWebSocket(app: FastifyInstance) {
 
     socket.on("message", async (raw: any) => {
       try {
-        const msg = JSON.parse(raw.toString());
+        const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
 
         if (msg.type === "auth") {
-          const workspaceId =
-            typeof msg.workspaceId === "string" ? msg.workspaceId : "";
-          const lastWorkspaceSequence =
-            typeof msg.lastWorkspaceSequence === "number"
-              ? Math.max(0, Math.floor(msg.lastWorkspaceSequence))
-              : 0;
           const token =
             typeof msg.token === "string" && msg.token.trim().length > 0
               ? msg.token.trim()
@@ -393,92 +357,71 @@ export function setupWebSocket(app: FastifyInstance) {
             return;
           }
 
-          if (!workspaceId) {
-            closeClient(clientId, "No workspace selected");
-            return;
-          }
-
           const authenticated = await authenticateSessionToken(token);
           if (!authenticated) {
             closeClient(clientId, "Invalid or expired session");
             return;
           }
 
-          const canAccessWorkspace = await canUserAccessWorkspace(
-            workspaceId,
-            authenticated.user.id,
-          );
-          if (!canAccessWorkspace) {
-            closeClient(clientId, "Not allowed to access this workspace");
-            return;
+          client.userId = authenticated.user.id;
+          client.sessionId = authenticated.session.id;
+          client.authenticated = true;
+
+          registerAuthenticatedSocket({
+            clientId,
+            sessionId: authenticated.session.id,
+            userId: authenticated.user.id,
+            disconnect: (reason) => closeClient(clientId, reason),
+          });
+
+          if (client.authTimer) {
+            clearTimeout(client.authTimer);
+            client.authTimer = undefined;
           }
 
-          try {
-            client.userId = authenticated.user.id;
-            client.sessionId = authenticated.session.id;
-            client.workspaceId = workspaceId;
-            client.authenticated = true;
-            client.syncState = "syncing";
-            client.bufferedFeedRecords = [];
+          safeSendSocketEvent(clientId, {
+            type: "auth.ok",
+            payload: {
+              connectionId: clientId,
+              heartbeatMs: WS_HEARTBEAT_INTERVAL,
+            },
+          });
 
-            registerAuthenticatedSocket({
-              clientId,
-              sessionId: authenticated.session.id,
-              userId: authenticated.user.id,
-              disconnect: (reason) => closeClient(clientId, reason),
-            });
-
-            // Clear auth timeout
-            if (client.authTimer) {
-              clearTimeout(client.authTimer);
-              client.authTimer = undefined;
+          client.heartbeatTimer = setInterval(() => {
+            if (socket.readyState === 1) {
+              safeSendSocketEvent(clientId, {
+                type: "ping",
+                payload: { at: new Date().toISOString() },
+              });
+              client.pongTimer = setTimeout(() => {
+                try {
+                  socket.close();
+                } catch {}
+                cleanup(clientId);
+              }, 10000);
             }
+          }, WS_HEARTBEAT_INTERVAL);
+          return;
+        }
 
-            safeSendSocketEvent(clientId, {
-              type: "auth.ok",
-              payload: {
-                connectionId: clientId,
-                heartbeatMs: WS_HEARTBEAT_INTERVAL,
-                workspaceId,
-                lastWorkspaceSequence,
-              },
-            });
+        if (msg.type === "subscribe") {
+          await handleSubscribe(clientId, msg);
+          return;
+        }
 
-            await replayWorkspaceFeed(clientId, lastWorkspaceSequence);
-
-            // Start heartbeat
-            client.heartbeatTimer = setInterval(() => {
-              if (socket.readyState === 1) {
-                safeSendSocketEvent(clientId, {
-                  type: "ping",
-                  payload: { at: new Date().toISOString() },
-                });
-                // Expect pong within 10s
-                client.pongTimer = setTimeout(() => {
-                  // No pong received, close dead connection
-                  try {
-                    socket.close();
-                  } catch {}
-                  cleanup(clientId);
-                }, 10000);
-              }
-            }, WS_HEARTBEAT_INTERVAL);
-          } catch (err: any) {
-            closeClient(clientId, "Session authentication failed");
-          }
+        if (msg.type === "unsubscribe") {
+          handleUnsubscribe(clientId, msg);
           return;
         }
 
         if (msg.type === "pong") {
-          // Clear pong timeout
           if (client.pongTimer) {
             clearTimeout(client.pongTimer);
             client.pongTimer = undefined;
           }
-          return;
         }
       } catch {
-        // ignore parse errors
+        // Ignore malformed websocket frames.
       }
     });
 
@@ -491,34 +434,73 @@ export function setupWebSocket(app: FastifyInstance) {
     });
   });
 
-  // Forward events to relevant WebSocket clients
   onEvent("*", async (event: SystemEvent) => {
     const outbound = mapInternalEventToSocketEvent(event);
     if (!outbound) return;
 
     const conversationId = getConversationIdFromSocketEvent(outbound);
-    const isFeedItem = outbound.type === "feed.item.created";
 
     for (const [clientId, client] of clients) {
-      if (
-        !client.authenticated ||
-        client.workspaceId !== event.workspaceId ||
-        client.ws.readyState !== 1
-      ) {
+      if (!client.authenticated || client.ws.readyState !== 1) {
         continue;
       }
 
-      if (conversationId) {
-        const allowed = await canUserAccessConversation(
-          conversationId,
-          client.userId,
-        );
-        if (!allowed) {
+      const inboxSubscriptions = getMatchingInboxSubscriptions(
+        client,
+        event.workspaceId,
+      );
+      const hasConversationTopic = conversationId
+        ? hasConversationSubscription(client, conversationId)
+        : false;
+
+      if (inboxSubscriptions.length === 0 && !hasConversationTopic) {
+        continue;
+      }
+
+      const isConversationAllowed = conversationId
+        ? await canUserAccessConversation(conversationId, client.userId)
+        : false;
+
+      if (outbound.type === "conversation.read.updated") {
+        const payload =
+          outbound.payload as ChatSocketEventPayloadMap["conversation.read.updated"];
+        if (payload.userId !== client.userId) {
           continue;
         }
+        if (
+          (inboxSubscriptions.length > 0 && payload.conversationId) ||
+          hasConversationTopic
+        ) {
+          safeSendSocketEvent(clientId, outbound);
+        }
+        continue;
+      }
+
+      if (outbound.type === "conversation.item.created") {
+        if (!isConversationAllowed || !conversationId) {
+          continue;
+        }
+
+        const item = await enrichFeedItemInteractionsForUser(
+          outbound.payload as ConversationFeedItem,
+          client.userId,
+        );
+        if (!isFeedItemVisibleToUser(item, client.userId)) {
+          continue;
+        }
+        if (inboxSubscriptions.length > 0 || hasConversationTopic) {
+          safeSendSocketEvent(clientId, {
+            type: "conversation.item.created",
+            payload: item,
+          });
+        }
+        continue;
       }
 
       if (outbound.type === "interaction.updated") {
+        if (!conversationId || !hasConversationTopic || !isConversationAllowed) {
+          continue;
+        }
         const payload =
           outbound.payload as ChatSocketEventPayloadMap["interaction.updated"];
         const canView = await canUserViewInteraction({
@@ -526,9 +508,6 @@ export function setupWebSocket(app: FastifyInstance) {
           userId: client.userId,
         });
         if (!canView) {
-          continue;
-        }
-        if (client.syncState !== "live") {
           continue;
         }
         safeSendSocketEvent(clientId, {
@@ -544,51 +523,22 @@ export function setupWebSocket(app: FastifyInstance) {
         continue;
       }
 
-      if (isFeedItem && client.syncState !== "live") {
-        const rawRecord =
-          (outbound as ChatSocketEvent<"feed.item.created">).payload;
-        const record = {
-          ...rawRecord,
-          item: await enrichFeedItemInteractionsForUser(
-            rawRecord.item,
-            client.userId,
-          ),
-        };
-        if (!isFeedItemVisibleToUser(record.item, client.userId)) {
-          continue;
+      if (outbound.type === "runtime.updated") {
+        if (conversationId && hasConversationTopic && isConversationAllowed) {
+          safeSendSocketEvent(clientId, outbound);
         }
-        bufferFeedRecord(
-          client,
-          record,
-        );
         continue;
       }
 
-      if (!isFeedItem && client.syncState !== "live") {
-        continue;
-      }
-
-      if (isFeedItem) {
-        const rawRecord =
-          (outbound as ChatSocketEvent<"feed.item.created">).payload;
-        const record = {
-          ...rawRecord,
-          item: await enrichFeedItemInteractionsForUser(
-            rawRecord.item,
-            client.userId,
-          ),
-        };
-        if (!isFeedItemVisibleToUser(record.item, client.userId)) {
-          continue;
+      if (outbound.type === "conversation.updated") {
+        if (
+          conversationId &&
+          ((hasConversationTopic && isConversationAllowed) ||
+            (inboxSubscriptions.length > 0 && isConversationAllowed))
+        ) {
+          safeSendSocketEvent(clientId, outbound);
         }
-        safeSendSocketEvent(clientId, {
-          type: "feed.item.created",
-          payload: record,
-        });
-        continue;
       }
-
-      safeSendSocketEvent(clientId, outbound);
     }
   });
 }
@@ -607,10 +557,11 @@ function cleanup(clientId: string) {
 export function broadcastToWorkspace(workspaceId: string, data: unknown) {
   const msg = JSON.stringify(data);
   for (const [, client] of clients) {
+    const inboxSubscriptions = getMatchingInboxSubscriptions(client, workspaceId);
     if (
       client.authenticated &&
-      client.workspaceId === workspaceId &&
-      client.ws.readyState === 1
+      client.ws.readyState === 1 &&
+      inboxSubscriptions.length > 0
     ) {
       client.ws.send(msg);
     }

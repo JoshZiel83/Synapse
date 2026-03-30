@@ -2,6 +2,10 @@
 
 import { create } from "zustand"
 import { api } from "@/lib/api"
+import {
+  clearPendingConversationRead,
+  queuePendingConversationRead,
+} from "@/lib/read-watermark-queue"
 import type {
   ActorRuntimeState,
   CanonicalContentBlock,
@@ -13,7 +17,6 @@ import type {
   ConversationMessageTransportDelivery,
   InteractionRequestSummary,
   TransportKind,
-  WorkspaceFeedEventRecord,
 } from "@synapse/shared"
 import {
   extractText,
@@ -85,7 +88,6 @@ export interface FeedMessage {
   kind: "message" | "event"
   conversationId: string
   sequence: number
-  workspaceSequence?: number
   sessionId: string
   role: string
   messageType?: string
@@ -170,11 +172,11 @@ interface ChatState {
     title?: string
   ) => Promise<string>
   markConversationRead: (
-    workspaceId: string,
-    conversationId: string
+    conversationId: string,
+    readUpToSequence: number
   ) => Promise<void>
 
-  handleFeedItemCreated: (record: WorkspaceFeedEventRecord) => void
+  handleConversationItemCreated: (item: ConversationFeedItem) => void
   handleRuntimeUpdated: (payload: {
     conversationId: string
     runtimeSeq: number
@@ -403,7 +405,6 @@ function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
       kind: "event",
       conversationId: item.conversationId,
       sequence: item.sequence,
-      workspaceSequence: item.workspaceSequence,
       sessionId: item.sessionId || "",
       role: "system",
       content,
@@ -444,7 +445,6 @@ function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
     kind: "message",
     conversationId: item.conversationId,
     sequence: item.sequence,
-    workspaceSequence: item.workspaceSequence,
     sessionId: item.sessionId || "",
     role: item.role,
     messageType: item.messageType,
@@ -845,8 +845,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ loadingConversations: true })
     try {
       const res = await api.getThreads(workspaceId)
-      const incomingConversations = Array.isArray(res?.threads)
-        ? (res.threads as ConversationSummary[])
+      const incomingConversations = Array.isArray(res?.conversations)
+        ? (res.conversations as ConversationSummary[])
         : []
       const serverRuntime = (res?.runtimeMap || {}) as ConversationRuntimeMap
 
@@ -1047,34 +1047,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ...(contentBlocks && contentBlocks.length > 0 ? { contentBlocks } : {}),
       ...(targetActorIds.length > 0 ? { targetActorIds } : {}),
     })
-    const conversationId = res.threadId
+    const conversationId = res.conversationId
     await get().loadConversations(workspaceId)
     return conversationId
   },
 
-  markConversationRead: async (workspaceId, conversationId) => {
+  markConversationRead: async (conversationId, readUpToSequence) => {
+    set((state) => {
+      const conversations = state.conversations.map((conversation) =>
+        conversation.id === conversationId
+          ? { ...conversation, unreadCount: 0 }
+          : conversation
+      )
+      return {
+        conversations,
+        totalUnread: sumConversationUnread(conversations),
+      }
+    })
+
     try {
-      await api.markThreadRead(conversationId)
-      set((state) => {
-        const conversations = state.conversations.map((conversation) =>
-          conversation.id === conversationId
-            ? { ...conversation, unreadCount: 0 }
-            : conversation
-        )
-        return {
-          conversations,
-          totalUnread: sumConversationUnread(conversations),
-        }
-      })
+      await api.markThreadRead(conversationId, readUpToSequence)
+      clearPendingConversationRead(conversationId, readUpToSequence)
     } catch (err) {
+      queuePendingConversationRead(conversationId, readUpToSequence)
       console.error("Failed to mark read:", err)
     }
   },
 
-  handleFeedItemCreated: (record) => {
-    const item = record.item.workspaceSequence
-      ? record.item
-      : { ...record.item, workspaceSequence: record.workspaceSequence }
+  handleConversationItemCreated: (item) => {
     const message = feedItemToMessage(item)
 
     set((state) => {
@@ -1322,10 +1322,7 @@ async function processOutboxEntry(clientMessageId: string) {
     )
 
     if (result?.item) {
-      useChatStore.getState().handleFeedItemCreated({
-        workspaceSequence: result.item.workspaceSequence || 0,
-        item: result.item,
-      })
+      useChatStore.getState().handleConversationItemCreated(result.item)
       return
     }
 

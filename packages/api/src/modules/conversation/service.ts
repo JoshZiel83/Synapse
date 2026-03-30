@@ -1,4 +1,8 @@
 import { query, transaction } from "../../infrastructure/database/index.js";
+import {
+  enqueueTransactionalEvent,
+  type Queryable,
+} from "../../infrastructure/events/index.js";
 import { v4 as uuidv4 } from "uuid";
 import type {
   ConversationEntityRef,
@@ -60,6 +64,7 @@ export interface CreateConversationItemParams {
   parts?: ItemPartInput[];
   targetMemberIds?: string[];
   contextTargetMemberIds?: string[];
+  queryable?: Queryable;
 }
 
 export interface CreateConversationEventParams<
@@ -77,6 +82,116 @@ export interface CreateConversationEventParams<
   contextPolicy?: ConversationEventContextPolicy;
   targetMemberIds?: string[];
   contextTargetMemberIds?: string[];
+  queryable?: Queryable;
+}
+
+function getDefaultQueryable(): Queryable {
+  return {
+    query: (text: string, params?: any[]) => query(text, params),
+  };
+}
+
+async function insertConversationItem(
+  queryable: Queryable,
+  params: CreateConversationItemParams,
+) {
+  const itemId = uuidv4();
+  const itemResult = await queryable.query(
+    `INSERT INTO conversation_items
+       (id, conversation_id, session_id, turn_id, client_message_id, scope, surface, item_type, subtype, role,
+        author_member_id, bundle_id, reply_to_item_id, caused_by_item_id, event_payload,
+        event_timeline_policy, event_context_policy, metadata, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
+     RETURNING *`,
+    [
+      itemId,
+      params.conversationId,
+      params.sessionId || null,
+      params.turnId || null,
+      params.clientMessageId || null,
+      params.scope,
+      params.surface,
+      params.itemType,
+      params.subtype,
+      params.role,
+      params.authorMemberId || null,
+      params.bundleId || null,
+      params.replyToItemId || null,
+      params.causedByItemId || null,
+      JSON.stringify(params.eventPayload || {}),
+      params.eventTimelinePolicy || null,
+      params.eventContextPolicy || null,
+      JSON.stringify(params.metadata || {}),
+    ],
+  );
+
+  if (params.parts && params.parts.length > 0) {
+    let ordinal = 0;
+    for (const part of params.parts) {
+      await queryable.query(
+        `INSERT INTO conversation_item_parts
+           (id, item_id, ordinal, part_type, text_value, file_id, json_value, mime_type, name, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          uuidv4(),
+          itemId,
+          ordinal++,
+          part.type,
+          part.type === "text" ? part.text || "" : null,
+          part.type === "file_ref" ? part.fileId || null : null,
+          part.type === "json" ? JSON.stringify(part.json ?? {}) : null,
+          part.mimeType || null,
+          part.name || null,
+          JSON.stringify(part.metadata || {}),
+        ],
+      );
+    }
+  }
+
+  if (params.targetMemberIds && params.targetMemberIds.length > 0) {
+    for (const targetMemberId of params.targetMemberIds) {
+      await queryable.query(
+        `INSERT INTO conversation_item_targets (item_id, target_member_id, target_kind)
+         VALUES ($1, $2, 'to')`,
+        [itemId, targetMemberId],
+      );
+    }
+  }
+
+  if (
+    params.contextTargetMemberIds &&
+    params.contextTargetMemberIds.length > 0
+  ) {
+    for (const targetMemberId of params.contextTargetMemberIds) {
+      await queryable.query(
+        `INSERT INTO conversation_item_context_targets (item_id, target_member_id)
+         VALUES ($1, $2)`,
+        [itemId, targetMemberId],
+      );
+    }
+  }
+
+  await queryable.query(
+    `UPDATE conversations SET updated_at = NOW() WHERE id = $1`,
+    [params.conversationId],
+  );
+
+  if (
+    params.workspaceId &&
+    params.scope === "shared" &&
+    params.surface === "visible"
+  ) {
+    await enqueueTransactionalEvent(queryable, {
+      type: "feed.item.created",
+      workspaceId: params.workspaceId,
+      payload: {
+        itemId,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  return itemResult.rows[0];
 }
 
 export async function createConversation(params: {
@@ -369,116 +484,11 @@ async function resolveEventContextTargets(params: {
 export async function createConversationItem(
   params: CreateConversationItemParams,
 ) {
-  return transaction(async (client) => {
-    const itemId = uuidv4();
-    const itemResult = await client.query(
-      `INSERT INTO conversation_items
-         (id, conversation_id, session_id, turn_id, client_message_id, scope, surface, item_type, subtype, role,
-          author_member_id, bundle_id, reply_to_item_id, caused_by_item_id, event_payload,
-          event_timeline_policy, event_context_policy, metadata, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
-       RETURNING *`,
-      [
-        itemId,
-        params.conversationId,
-        params.sessionId || null,
-        params.turnId || null,
-        params.clientMessageId || null,
-        params.scope,
-        params.surface,
-        params.itemType,
-        params.subtype,
-        params.role,
-        params.authorMemberId || null,
-        params.bundleId || null,
-        params.replyToItemId || null,
-        params.causedByItemId || null,
-        JSON.stringify(params.eventPayload || {}),
-        params.eventTimelinePolicy || null,
-        params.eventContextPolicy || null,
-        JSON.stringify(params.metadata || {}),
-      ],
-    );
+  if (params.queryable) {
+    return insertConversationItem(params.queryable, params);
+  }
 
-    if (params.parts && params.parts.length > 0) {
-      let ordinal = 0;
-      for (const part of params.parts) {
-        await client.query(
-          `INSERT INTO conversation_item_parts
-             (id, item_id, ordinal, part_type, text_value, file_id, json_value, mime_type, name, metadata)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-          [
-            uuidv4(),
-            itemId,
-            ordinal++,
-            part.type,
-            part.type === "text" ? part.text || "" : null,
-            part.type === "file_ref" ? part.fileId || null : null,
-            part.type === "json" ? JSON.stringify(part.json ?? {}) : null,
-            part.mimeType || null,
-            part.name || null,
-            JSON.stringify(part.metadata || {}),
-          ],
-        );
-      }
-    }
-
-    if (params.targetMemberIds && params.targetMemberIds.length > 0) {
-      for (const targetMemberId of params.targetMemberIds) {
-        await client.query(
-          `INSERT INTO conversation_item_targets (item_id, target_member_id, target_kind)
-           VALUES ($1, $2, 'to')`,
-          [itemId, targetMemberId],
-        );
-      }
-    }
-
-    if (
-      params.contextTargetMemberIds &&
-      params.contextTargetMemberIds.length > 0
-    ) {
-      for (const targetMemberId of params.contextTargetMemberIds) {
-        await client.query(
-          `INSERT INTO conversation_item_context_targets (item_id, target_member_id)
-           VALUES ($1, $2)`,
-          [itemId, targetMemberId],
-        );
-      }
-    }
-
-    await client.query(
-      `UPDATE conversations SET updated_at = NOW() WHERE id = $1`,
-      [params.conversationId],
-    );
-
-    const item = itemResult.rows[0];
-    let workspaceSequence: number | undefined;
-    if (
-      params.workspaceId &&
-      params.scope === "shared" &&
-      params.surface === "visible"
-    ) {
-      const feedResult = await client.query(
-        `INSERT INTO realtime_feed_events
-           (id, workspace_id, conversation_id, item_id, conversation_sequence, created_at)
-         VALUES ($1, $2, $3, $4, $5, NOW())
-         RETURNING workspace_sequence`,
-        [
-          uuidv4(),
-          params.workspaceId,
-          params.conversationId,
-          itemId,
-          item.sequence,
-        ],
-      );
-      workspaceSequence = Number(feedResult.rows[0]?.workspace_sequence);
-    }
-
-    return {
-      ...item,
-      workspace_sequence: workspaceSequence,
-    };
-  });
+  return transaction(async (client) => insertConversationItem(client, params));
 }
 
 export async function createConversationEvent(
@@ -527,6 +537,7 @@ export async function createConversationEvent(
     parts: normalizedTimeline.parts,
     targetMemberIds: timelineTargetMemberIds,
     contextTargetMemberIds,
+    queryable: params.queryable,
   });
 
   return {
@@ -546,28 +557,116 @@ export async function markConversationRead(
   userId: string,
   conversationId: string,
   lastReadSequence?: number,
+  queryable?: Queryable,
 ) {
-  await query(
-    `INSERT INTO conversation_reads (user_id, conversation_id, last_read_sequence, last_read_at)
-     VALUES ($1, $2, $3, NOW())
+  const runner = queryable || getDefaultQueryable();
+  await runner.query(
+    `INSERT INTO conversation_user_states (user_id, conversation_id, read_watermark_sequence, last_read_at, updated_at)
+     VALUES ($1, $2, $3, NOW(), NOW())
      ON CONFLICT (user_id, conversation_id)
      DO UPDATE SET
-       last_read_sequence = GREATEST(conversation_reads.last_read_sequence, EXCLUDED.last_read_sequence),
-       last_read_at = NOW()`,
+       read_watermark_sequence = GREATEST(conversation_user_states.read_watermark_sequence, EXCLUDED.read_watermark_sequence),
+       last_read_at = NOW(),
+       updated_at = NOW()`,
     [userId, conversationId, Math.max(0, Number(lastReadSequence || 0))],
   );
+}
+
+export async function getConversationReadState(
+  userId: string,
+  conversationId: string,
+  queryable?: Queryable,
+) {
+  const runner = queryable || getDefaultQueryable();
+  const result = await runner.query(
+    `SELECT read_watermark_sequence, last_read_at
+     FROM conversation_user_states
+     WHERE user_id = $1
+       AND conversation_id = $2
+     LIMIT $3`,
+    [userId, conversationId, 1],
+  );
+  const row = result.rows[0];
+  return {
+    readWatermarkSequence: row?.read_watermark_sequence
+      ? Number(row.read_watermark_sequence)
+      : 0,
+    lastReadAt: (row?.last_read_at as string | null | undefined) || undefined,
+  };
+}
+
+export async function updateConversationItemEventPayload(
+  itemId: string,
+  payload: Record<string, unknown>,
+  queryable?: Queryable,
+) {
+  const runner = queryable || getDefaultQueryable();
+  await runner.query(
+    `UPDATE conversation_items
+     SET event_payload = $2::jsonb
+     WHERE id = $1`,
+    [itemId, JSON.stringify(payload)],
+  );
+}
+
+export async function resolveReadableConversationSequenceForUser(params: {
+  conversationId: string;
+  userId: string;
+  maxSequence?: number;
+}) {
+  const values: Array<string | number> = [
+    params.conversationId,
+    params.userId,
+    GROUP_CONVERSATION_KIND,
+  ];
+  let maxSequenceFilter = "";
+  if (
+    typeof params.maxSequence === "number" &&
+    Number.isFinite(params.maxSequence) &&
+    params.maxSequence > 0
+  ) {
+    values.push(Math.floor(params.maxSequence));
+    maxSequenceFilter = `AND ci.sequence <= $${values.length}`;
+  }
+
+  const result = await query(
+    `SELECT MAX(ci.sequence) AS sequence
+     FROM conversation_items ci
+     JOIN conversations c ON c.id = ci.conversation_id
+     JOIN conversation_members cm_u
+       ON cm_u.conversation_id = c.id
+      AND cm_u.user_id = $2
+      AND cm_u.state = 'active'
+     WHERE ci.conversation_id = $1
+       AND ci.scope = 'shared'
+       AND ci.surface = 'visible'
+       AND (
+         (c.kind = $3 AND ci.item_type = 'message' AND ci.subtype <> 'model_error_notice')
+         OR ci.author_member_id = cm_u.id
+         OR NOT EXISTS (
+           SELECT 1
+           FROM conversation_item_targets cit0
+           WHERE cit0.item_id = ci.id
+         )
+         OR EXISTS (
+           SELECT 1
+           FROM conversation_item_targets cit
+           WHERE cit.item_id = ci.id
+             AND cit.target_member_id = cm_u.id
+         )
+       )
+       ${maxSequenceFilter}`,
+    values,
+  );
+
+  const sequence = result.rows[0]?.sequence;
+  return sequence ? Number(sequence) : 0;
 }
 
 async function loadItemsWithRelations(itemRows: any[]) {
   if (itemRows.length === 0) return [];
 
   const itemIds = itemRows.map((row) => row.id);
-  const feedEventsResult = await query(
-    `SELECT item_id, workspace_sequence
-     FROM realtime_feed_events
-     WHERE item_id = ANY($1)`,
-    [itemIds],
-  );
   const partsResult = await query(
     `SELECT cip.*,
             f.original_name,
@@ -663,14 +762,8 @@ async function loadItemsWithRelations(itemRows: any[]) {
     transportDeliveriesByItem.get(row.item_id)!.push(row);
   }
 
-  const feedEventByItem = new Map<string, number>();
-  for (const row of feedEventsResult.rows) {
-    feedEventByItem.set(row.item_id, Number(row.workspace_sequence));
-  }
-
   return itemRows.map((row) => ({
     ...row,
-    workspace_sequence: feedEventByItem.get(row.id),
     parts: partsByItem.get(row.id) || [],
     targets: targetsByItem.get(row.id) || [],
     context_targets: contextTargetsByItem.get(row.id) || [],
@@ -871,9 +964,6 @@ export function conversationItemRowToFeedItem(row: any): ConversationFeedItem {
     itemId: row.id,
     conversationId: row.conversation_id,
     sequence: Number(row.sequence),
-    workspaceSequence: row.workspace_sequence
-      ? Number(row.workspace_sequence)
-      : undefined,
     sessionId: row.session_id || undefined,
     turnId: row.turn_id || undefined,
     author,
@@ -961,81 +1051,6 @@ export async function getConversationFeedItemById(itemId: string) {
   );
   const [item] = await loadItemsWithRelations(result.rows);
   return item ? conversationItemRowToFeedItem(item) : null;
-}
-
-export async function listWorkspaceFeedEventsAfter(params: {
-  workspaceId: string;
-  conversationIds: string[];
-  afterSequence: number;
-  limit?: number;
-}) {
-  if (params.conversationIds.length === 0) {
-    return [] as Array<{
-      workspaceSequence: number;
-      item: ConversationFeedItem;
-    }>;
-  }
-
-  const result = await query(
-    `SELECT rfe.workspace_sequence,
-            ci.*,
-            ${buildEntitySelect({
-              memberAlias: "cm",
-              actorAlias: "a",
-              userAlias: "u",
-              addressAlias: "author_primary_address",
-              prefix: "author_",
-            })}
-     FROM realtime_feed_events rfe
-     JOIN conversation_items ci ON ci.id = rfe.item_id
-     LEFT JOIN conversation_members cm ON cm.id = ci.author_member_id
-     LEFT JOIN actors a ON a.id = cm.actor_id
-     LEFT JOIN users u ON u.id = cm.user_id
-     ${buildPrimaryTransportAddressJoin("cm", "author_primary_address")}
-     WHERE rfe.workspace_id = $1
-       AND rfe.conversation_id = ANY($2)
-       AND rfe.workspace_sequence > $3
-     ORDER BY rfe.workspace_sequence ASC
-     LIMIT $4`,
-    [
-      params.workspaceId,
-      params.conversationIds,
-      params.afterSequence,
-      params.limit || 500,
-    ],
-  );
-
-  const items = await loadItemsWithRelations(result.rows);
-  return items.map((item) => ({
-    workspaceSequence: Number(item.workspace_sequence || 0),
-    item: conversationItemRowToFeedItem(item),
-  }));
-}
-
-export async function listWorkspaceFeedEventsPage(params: {
-  workspaceId: string;
-  conversationIds: string[];
-  afterSequence: number;
-  limit?: number;
-}) {
-  const pageSize = Math.max(1, Math.min(params.limit || 200, 500));
-  const records = await listWorkspaceFeedEventsAfter({
-    workspaceId: params.workspaceId,
-    conversationIds: params.conversationIds,
-    afterSequence: params.afterSequence,
-    limit: pageSize + 1,
-  });
-  const hasMore = records.length > pageSize;
-  const pageRecords = hasMore ? records.slice(0, pageSize) : records;
-
-  return {
-    records: pageRecords,
-    hasMore,
-    nextAfterSequence:
-      pageRecords.length > 0
-        ? pageRecords[pageRecords.length - 1]!.workspaceSequence
-        : undefined,
-  };
 }
 
 export async function getVisibleConversationItemsForMember(params: {
@@ -1262,7 +1277,7 @@ export async function listUserWorkspaceConversations(
     `SELECT c.*,
             transport_account.transport_kind,
             cr.last_read_at,
-            COALESCE(cr.last_read_sequence, 0) AS last_read_sequence,
+            COALESCE(cr.read_watermark_sequence, 0) AS read_watermark_sequence,
             (
               SELECT COUNT(*)::int
               FROM conversation_items ci
@@ -1285,7 +1300,7 @@ export async function listUserWorkspaceConversations(
                       AND cm_target.user_id = $2
                   )
                 )
-                AND ci.sequence > COALESCE(cr.last_read_sequence, 0)
+                AND ci.sequence > COALESCE(cr.read_watermark_sequence, 0)
             ) AS unread_count
      FROM conversations c
      LEFT JOIN conversation_transport_bindings ctb
@@ -1293,7 +1308,7 @@ export async function listUserWorkspaceConversations(
      LEFT JOIN transport_accounts transport_account
        ON transport_account.id = ctb.transport_account_id
      JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $2 AND cm.state = 'active'
-     LEFT JOIN conversation_reads cr ON cr.conversation_id = c.id AND cr.user_id = $2
+     LEFT JOIN conversation_user_states cr ON cr.conversation_id = c.id AND cr.user_id = $2
      WHERE c.workspace_id = $1
        AND c.domain = 'workspace'
      ORDER BY c.updated_at DESC, c.created_at DESC`,

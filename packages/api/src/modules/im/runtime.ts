@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { nowISO } from "@synapse/shared";
 import type {
   ConversationTransportBindingSummary,
   TransportAccountSummary,
@@ -8,10 +7,10 @@ import type {
 } from "@synapse/shared/types";
 import { emitEvent } from "../../infrastructure/events/index.js";
 import { query } from "../../infrastructure/database/index.js";
+import { redis } from "../../infrastructure/redis/index.js";
 import {
   createConversationItem,
   ensureConversationMember,
-  getConversationFeedItemById,
 } from "../conversation/service.js";
 import { createThread, wakeActor } from "../conversation/chat-service.js";
 import { getWorkspaceChiefActorPreference } from "../workspace/service.js";
@@ -34,6 +33,7 @@ import {
 type RuntimeHandle = {
   accountId: string;
   fingerprint: string;
+  leaseToken: string;
   stop: () => Promise<void>;
 };
 
@@ -101,6 +101,8 @@ type GenericInboundMessage = {
 const DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com";
 const WEIXIN_LONG_POLL_TIMEOUT_MS = 35_000;
 const RUNTIME_RECONCILE_INTERVAL_MS = 15_000;
+const RUNTIME_LEASE_TTL_MS = 30_000;
+const RUNTIME_MANAGER_INSTANCE_ID = `${process.pid}:${crypto.randomUUID()}`;
 const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 const weixinSyncBufStore = new Map<string, string>();
 const runtimeHandles = new Map<string, RuntimeHandle>();
@@ -143,6 +145,58 @@ function accountFingerprint(account: TransportAccountSummary) {
     config: account.config || {},
     metadata: account.metadata || {},
   });
+}
+
+function transportRuntimeLeaseKey(accountId: string) {
+  return `im:transport-runtime-lease:${accountId}`;
+}
+
+async function acquireTransportRuntimeLease(accountId: string) {
+  const leaseToken = `${RUNTIME_MANAGER_INSTANCE_ID}:${accountId}:${crypto.randomUUID()}`;
+  const result = await redis.set(
+    transportRuntimeLeaseKey(accountId),
+    leaseToken,
+    "PX",
+    RUNTIME_LEASE_TTL_MS,
+    "NX",
+  );
+  return result === "OK" ? leaseToken : null;
+}
+
+async function renewTransportRuntimeLease(
+  accountId: string,
+  leaseToken: string,
+) {
+  const result = await redis.eval(
+    `if redis.call("GET", KEYS[1]) == ARGV[1]
+       then
+         return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+       else
+         return 0
+       end`,
+    1,
+    transportRuntimeLeaseKey(accountId),
+    leaseToken,
+    String(RUNTIME_LEASE_TTL_MS),
+  );
+  return Number(result) === 1;
+}
+
+async function releaseTransportRuntimeLease(
+  accountId: string,
+  leaseToken: string,
+) {
+  await redis.eval(
+    `if redis.call("GET", KEYS[1]) == ARGV[1]
+       then
+         return redis.call("DEL", KEYS[1])
+       else
+         return 0
+       end`,
+    1,
+    transportRuntimeLeaseKey(accountId),
+    leaseToken,
+  );
 }
 
 function waitForAbort(signal: AbortSignal) {
@@ -375,21 +429,6 @@ function buildWeixinBodyText(itemList?: WeixinMessageItem[]) {
   return "";
 }
 
-async function emitFeedItemCreated(workspaceId: string, itemId: string) {
-  const item = await getConversationFeedItemById(itemId);
-  if (!item || item.workspaceSequence === undefined) return;
-
-  await emitEvent({
-    type: "feed.item.created",
-    workspaceId,
-    payload: {
-      workspaceSequence: item.workspaceSequence,
-      item,
-    },
-    timestamp: nowISO(),
-  });
-}
-
 async function getWorkspaceOwnerId(workspaceId: string) {
   const result = await query(
     `SELECT owner_id
@@ -606,7 +645,6 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
     targetMemberIds: wakeTarget ? [wakeTarget.participantId] : [],
   });
 
-  await emitFeedItemCreated(binding.workspaceId, item.id);
   const link = await queueConversationTransportProjection({
     workspaceId: binding.workspaceId,
     conversationId: binding.conversationId,
@@ -831,7 +869,10 @@ async function handleWeixinInboundMessage(
   });
 }
 
-async function startRuntimeForAccount(account: TransportAccountSummary) {
+async function startRuntimeForAccount(
+  account: TransportAccountSummary,
+  leaseToken: string,
+) {
   const abortController = new AbortController();
   const fingerprint = accountFingerprint(account);
 
@@ -877,9 +918,11 @@ async function startRuntimeForAccount(account: TransportAccountSummary) {
   runtimeHandles.set(account.id, {
     accountId: account.id,
     fingerprint,
+    leaseToken,
     stop: async () => {
       abortController.abort();
       await promise;
+      await releaseTransportRuntimeLease(account.id, leaseToken).catch(() => undefined);
     },
   });
 }
@@ -894,7 +937,11 @@ async function reconcileTransportRuntimesOnce() {
 
   for (const [accountId, handle] of runtimeHandles.entries()) {
     const desired = desiredById.get(accountId);
-    if (!desired || handle.fingerprint !== accountFingerprint(desired)) {
+    const shouldStop =
+      !desired ||
+      handle.fingerprint !== accountFingerprint(desired) ||
+      !(await renewTransportRuntimeLease(accountId, handle.leaseToken));
+    if (shouldStop) {
       await handle.stop().catch((error) => {
         console.error(`[im] Failed to stop runtime for account ${accountId}:`, error);
       });
@@ -903,7 +950,9 @@ async function reconcileTransportRuntimesOnce() {
 
   for (const account of desiredAccounts) {
     if (runtimeHandles.has(account.id)) continue;
-    await startRuntimeForAccount(account);
+    const leaseToken = await acquireTransportRuntimeLease(account.id);
+    if (!leaseToken) continue;
+    await startRuntimeForAccount(account, leaseToken);
   }
 }
 

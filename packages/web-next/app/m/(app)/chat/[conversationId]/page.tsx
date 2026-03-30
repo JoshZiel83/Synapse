@@ -1,6 +1,6 @@
 "use client"
 
-import { startTransition, useEffect } from "react"
+import { startTransition, useEffect, useRef } from "react"
 import { MessageSquare } from "lucide-react"
 import { useParams, useRouter } from "next/navigation"
 import { type CanonicalContentBlock } from "@synapse/shared"
@@ -34,6 +34,7 @@ export default function MobileChatDetailPage() {
   const markConversationRead = useChatStore(
     (state) => state.markConversationRead
   )
+  const lastReportedReadRef = useRef<string>("")
 
   useEffect(() => {
     if (!conversationId) return
@@ -43,8 +44,22 @@ export default function MobileChatDetailPage() {
   useEffect(() => {
     if (!workspaceId || !conversationId) return
     void loadMessages(workspaceId, conversationId)
-    void markConversationRead(workspaceId, conversationId)
-  }, [conversationId, loadMessages, markConversationRead, workspaceId])
+  }, [conversationId, loadMessages, workspaceId])
+
+  useEffect(() => {
+    if (!conversationId || loadingMessages || messages.length === 0) return
+
+    const maxSequence = messages.reduce(
+      (max, message) => Math.max(max, message.sequence),
+      0
+    )
+    if (maxSequence <= 0) return
+
+    const nextKey = `${conversationId}:${maxSequence}`
+    if (lastReportedReadRef.current === nextKey) return
+    lastReportedReadRef.current = nextKey
+    void markConversationRead(conversationId, maxSequence)
+  }, [conversationId, loadingMessages, markConversationRead, messages])
 
   const selectedConversation = conversations.find(
     (conversation) => conversation.id === conversationId

@@ -1,19 +1,28 @@
 "use client"
-import { useEffect, useRef, useState, useCallback } from "react"
+
+import { useCallback, useEffect, useRef, useState } from "react"
 import type { ChatSocketEvent } from "@synapse/shared"
-import { api } from "@/lib/api"
+
+export type WebSocketSubscription =
+  | {
+      key: string
+      topic: "inbox"
+      workspaceId?: string | null
+    }
+  | {
+      key: string
+      topic: "conversation"
+      conversationId: string
+    }
 
 interface UseWebSocketOptions {
-  workspaceId: string | null
+  subscriptions: WebSocketSubscription[]
   onEvent?: (event: ChatSocketEvent | Record<string, unknown>) => void
-  onConnected?: (payload: {
-    workspaceId: string
-    lastWorkspaceSequence: number
-  }) => void
+  onConnected?: () => void
 }
 
 export function useWebSocket({
-  workspaceId,
+  subscriptions,
   onEvent,
   onConnected,
 }: UseWebSocketOptions) {
@@ -25,9 +34,9 @@ export function useWebSocket({
   const reconnectAttempts = useRef(0)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pingCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const workspaceSequenceRef = useRef(0)
-  const resyncingRef = useRef(false)
-  const droppedLiveEventsDuringResyncRef = useRef(false)
+  const authenticatedRef = useRef(false)
+  const subscriptionsRef = useRef<WebSocketSubscription[]>(subscriptions)
+  const sentSubscriptionsRef = useRef(new Map<string, string>())
   const maxReconnectAttempts = 20
   const mountedRef = useRef(true)
 
@@ -55,30 +64,6 @@ export function useWebSocket({
     return "ws://localhost:3001/ws"
   }, [])
 
-  const cursorStorageKey = useCallback(
-    (id: string) => `chat-ws-cursor:${id}`,
-    []
-  )
-
-  const loadWorkspaceSequence = useCallback(
-    (id: string) => {
-      if (typeof window === "undefined") return 0
-      const raw = window.sessionStorage.getItem(cursorStorageKey(id))
-      const parsed = raw ? Number(raw) : 0
-      return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
-    },
-    [cursorStorageKey]
-  )
-
-  const saveWorkspaceSequence = useCallback(
-    (id: string, sequence: number) => {
-      if (typeof window === "undefined") return
-      window.sessionStorage.setItem(cursorStorageKey(id), String(sequence))
-    },
-    [cursorStorageKey]
-  )
-
-  // Keep onEvent ref updated without causing reconnects
   useEffect(() => {
     onEventRef.current = onEvent
   }, [onEvent])
@@ -104,72 +89,65 @@ export function useWebSocket({
       ws.current.close()
       ws.current = null
     }
+    authenticatedRef.current = false
+    sentSubscriptionsRef.current.clear()
   }, [])
 
-  const applyFeedRecord = useCallback(
-    (workspaceIdValue: string, event: ChatSocketEvent<"feed.item.created">) => {
-      const payload = event.payload
-      const nextSequence = Number(payload.workspaceSequence || 0)
-      const currentSequence = workspaceSequenceRef.current
-      if (!Number.isFinite(nextSequence) || nextSequence <= currentSequence) {
-        return
+  const resetPingWatchdog = useCallback(() => {
+    if (pingCheckTimer.current) {
+      clearTimeout(pingCheckTimer.current)
+    }
+    pingCheckTimer.current = setTimeout(() => {
+      ws.current?.close()
+    }, 45000)
+  }, [])
+
+  const syncSubscriptions = useCallback(() => {
+    const socket = ws.current
+    if (!socket || socket.readyState !== WebSocket.OPEN || !authenticatedRef.current) {
+      return
+    }
+
+    const desired = new Map(
+      subscriptionsRef.current.map((subscription) => [
+        subscription.key,
+        JSON.stringify(subscription),
+      ])
+    )
+
+    for (const [key] of sentSubscriptionsRef.current) {
+      if (desired.has(key)) continue
+      socket.send(
+        JSON.stringify({
+          type: "unsubscribe",
+          key,
+        })
+      )
+      sentSubscriptionsRef.current.delete(key)
+    }
+
+    for (const subscription of subscriptionsRef.current) {
+      const serialized = JSON.stringify(subscription)
+      if (sentSubscriptionsRef.current.get(subscription.key) === serialized) {
+        continue
       }
+      socket.send(
+        JSON.stringify({
+          type: "subscribe",
+          ...subscription,
+        })
+      )
+      sentSubscriptionsRef.current.set(subscription.key, serialized)
+    }
+  }, [])
 
-      onEventRef.current?.(event)
-      workspaceSequenceRef.current = nextSequence
-      saveWorkspaceSequence(workspaceIdValue, nextSequence)
-    },
-    [saveWorkspaceSequence]
-  )
-
-  const resyncWorkspaceFeed = useCallback(
-    async (workspaceIdValue: string) => {
-      if (resyncingRef.current) return
-      resyncingRef.current = true
-      droppedLiveEventsDuringResyncRef.current = false
-
-      try {
-        let afterSequence = workspaceSequenceRef.current
-        while (mountedRef.current) {
-          const page = await api.getWorkspaceFeed(
-            workspaceIdValue,
-            afterSequence,
-            200
-          )
-          const records = Array.isArray(page?.records) ? page.records : []
-          if (records.length === 0) {
-            break
-          }
-
-          for (const record of records) {
-            applyFeedRecord(workspaceIdValue, {
-              type: "feed.item.created",
-              payload: record,
-            })
-            afterSequence = record.workspaceSequence
-          }
-
-          if (!page?.hasMore) {
-            break
-          }
-        }
-      } catch {
-        if (mountedRef.current) {
-          ws.current?.close()
-        }
-      } finally {
-        if (droppedLiveEventsDuringResyncRef.current && mountedRef.current) {
-          droppedLiveEventsDuringResyncRef.current = false
-          ws.current?.close()
-        }
-        resyncingRef.current = false
-      }
-    },
-    [applyFeedRecord]
-  )
+  useEffect(() => {
+    subscriptionsRef.current = subscriptions
+    syncSubscriptions()
+  }, [subscriptions, syncSubscriptions])
 
   const connect = useCallback(() => {
-    if (!workspaceId || !mountedRef.current) return
+    if (!mountedRef.current) return
 
     cleanup()
     setConnecting(true)
@@ -179,14 +157,7 @@ export function useWebSocket({
     ws.current = socket
 
     socket.onopen = () => {
-      workspaceSequenceRef.current = loadWorkspaceSequence(workspaceId)
-      socket.send(
-        JSON.stringify({
-          type: "auth",
-          workspaceId,
-          lastWorkspaceSequence: workspaceSequenceRef.current,
-        })
-      )
+      socket.send(JSON.stringify({ type: "auth" }))
     }
 
     socket.onmessage = (e) => {
@@ -207,30 +178,18 @@ export function useWebSocket({
         } as ChatSocketEvent | Record<string, unknown>
 
         if (normalizedType === "auth.ok") {
+          authenticatedRef.current = true
           setConnected(true)
           setConnecting(false)
           reconnectAttempts.current = 0
-          resyncingRef.current = false
-          droppedLiveEventsDuringResyncRef.current = false
-
-          const payload = (normalizedMessage as ChatSocketEvent<"auth.ok">)
-            .payload
-          const nextSequence = Number(
-            payload.lastWorkspaceSequence || workspaceSequenceRef.current || 0
-          )
-          workspaceSequenceRef.current = nextSequence
-          saveWorkspaceSequence(workspaceId, nextSequence)
-          onConnectedRef.current?.({
-            workspaceId,
-            lastWorkspaceSequence: nextSequence,
-          })
-
-          // Start ping watchdog — expect a ping within 45s
+          syncSubscriptions()
+          onConnectedRef.current?.()
           resetPingWatchdog()
           return
         }
 
         if (normalizedType === "auth.error") {
+          authenticatedRef.current = false
           setConnecting(false)
           reconnectAttempts.current = maxReconnectAttempts
           socket.close()
@@ -243,99 +202,42 @@ export function useWebSocket({
           return
         }
 
-        if (normalizedType === "feed.item.created" && workspaceId) {
-          const payload = (
-            normalizedMessage as ChatSocketEvent<"feed.item.created">
-          ).payload
-          const nextSequence = Number(payload.workspaceSequence || 0)
-          const currentSequence = workspaceSequenceRef.current
-          if (
-            !Number.isFinite(nextSequence) ||
-            nextSequence <= currentSequence
-          ) {
-            return
-          }
-
-          if (resyncingRef.current) {
-            droppedLiveEventsDuringResyncRef.current = true
-            return
-          }
-
-          if (nextSequence > currentSequence + 1) {
-            void resyncWorkspaceFeed(workspaceId)
-            return
-          }
-
-          applyFeedRecord(
-            workspaceId,
-            normalizedMessage as ChatSocketEvent<"feed.item.created">
-          )
-          return
-        }
-
-        // Forward all other events to the handler
         onEventRef.current?.(normalizedMessage)
       } catch {
-        // ignore parse errors
+        // Ignore malformed websocket frames.
       }
     }
 
     socket.onclose = () => {
+      authenticatedRef.current = false
+      sentSubscriptionsRef.current.clear()
       setConnected(false)
-      setConnecting(false)
-      if (pingCheckTimer.current) {
-        clearTimeout(pingCheckTimer.current)
-        pingCheckTimer.current = null
+      if (!mountedRef.current) {
+        return
       }
 
-      // Reconnect with exponential backoff
-      if (
-        mountedRef.current &&
-        reconnectAttempts.current < maxReconnectAttempts
-      ) {
-        const retrySchedule = [250, 500, 1000, 2000, 3000, 5000]
-        const delay =
-          retrySchedule[
-            Math.min(reconnectAttempts.current, retrySchedule.length - 1)
-          ] || 5000
-        const jitter = Math.random() * 250
-        reconnectAttempts.current++
-        reconnectTimer.current = setTimeout(() => {
-          if (mountedRef.current) connect()
-        }, delay + jitter)
-      }
+      reconnectAttempts.current += 1
+      const delay = Math.min(5000, 1000 * reconnectAttempts.current)
+      reconnectTimer.current = setTimeout(() => {
+        reconnectTimer.current = null
+        connect()
+      }, delay)
     }
 
     socket.onerror = () => {
-      // onclose will fire after this
+      // Let the close handler schedule reconnects.
     }
-
-    function resetPingWatchdog() {
-      if (pingCheckTimer.current) clearTimeout(pingCheckTimer.current)
-      pingCheckTimer.current = setTimeout(() => {
-        // No ping for 45s, force reconnect
-        if (mountedRef.current) {
-          socket.close()
-        }
-      }, 45000)
-    }
-  }, [
-    workspaceId,
-    cleanup,
-    saveWorkspaceSequence,
-    applyFeedRecord,
-    resyncWorkspaceFeed,
-    resolveWebSocketUrl,
-  ])
+  }, [cleanup, maxReconnectAttempts, resetPingWatchdog, resolveWebSocketUrl, syncSubscriptions])
 
   useEffect(() => {
     mountedRef.current = true
     connect()
+
     return () => {
       mountedRef.current = false
       cleanup()
     }
-  }, [connect, cleanup])
+  }, [cleanup, connect])
 
   return { connected, connecting }
 }

@@ -283,6 +283,28 @@ CREATE TABLE authz_outbox (
 CREATE INDEX idx_authz_outbox_status ON authz_outbox(status, created_at);
 CREATE INDEX idx_authz_outbox_resource ON authz_outbox(resource_type, resource_id, created_at DESC);
 
+CREATE TABLE realtime_event_outbox (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  event_type VARCHAR(100) NOT NULL,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  payload JSONB NOT NULL DEFAULT '{}',
+  event_timestamp TIMESTAMPTZ NOT NULL,
+  available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'processing', 'dispatched', 'failed')),
+  attempts INT NOT NULL DEFAULT 0,
+  last_error TEXT,
+  processing_started_at TIMESTAMPTZ,
+  dispatched_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_realtime_event_outbox_status
+  ON realtime_event_outbox(status, available_at, created_at);
+CREATE INDEX idx_realtime_event_outbox_workspace
+  ON realtime_event_outbox(workspace_id, event_timestamp DESC, created_at DESC);
+
 -- ============ Catalog Core ============
 CREATE TABLE publishers (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1029,31 +1051,18 @@ CREATE TABLE conversation_item_context_targets (
 CREATE INDEX idx_conversation_item_context_targets_member
   ON conversation_item_context_targets(target_member_id, item_id);
 
-CREATE TABLE conversation_reads (
+CREATE TABLE conversation_user_states (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  last_read_sequence BIGINT NOT NULL DEFAULT 0,
-  last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  read_watermark_sequence BIGINT NOT NULL DEFAULT 0,
+  last_read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, conversation_id)
 );
 
-CREATE TABLE realtime_feed_events (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  item_id UUID NOT NULL REFERENCES conversation_items(id) ON DELETE CASCADE,
-  workspace_sequence BIGINT GENERATED ALWAYS AS IDENTITY,
-  conversation_sequence BIGINT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX idx_realtime_feed_events_item_unique ON realtime_feed_events(item_id);
-CREATE UNIQUE INDEX idx_realtime_feed_events_workspace_sequence_unique
-  ON realtime_feed_events(workspace_id, workspace_sequence);
-CREATE INDEX idx_realtime_feed_events_workspace_created
-  ON realtime_feed_events(workspace_id, workspace_sequence DESC);
-CREATE INDEX idx_realtime_feed_events_conversation_created
-  ON realtime_feed_events(conversation_id, conversation_sequence DESC);
+CREATE INDEX idx_conversation_user_states_conversation
+  ON conversation_user_states(conversation_id, updated_at DESC);
 
 CREATE TABLE transport_message_links (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

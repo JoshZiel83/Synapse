@@ -146,7 +146,7 @@ export default function MemoryBrowser() {
 
       setMemories(Array.isArray(memoryData) ? memoryData : memoryData?.memories || [])
       setActors((Array.isArray(actorData) ? actorData : []).map(normalizeActorOption))
-      setGroups((conversationData?.threads || []).map(normalizeGroupOption))
+      setGroups((conversationData?.conversations || []).map(normalizeGroupOption))
     } catch (error) {
       console.error("Failed to load memories:", error)
       toast.error(error instanceof Error ? error.message : "Failed to load memories")

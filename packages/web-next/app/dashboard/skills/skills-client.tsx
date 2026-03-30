@@ -2469,8 +2469,8 @@ export function WorkspaceSkillCreationPage() {
             : []
         )
         setConversations(
-          Array.isArray(conversationsResponse?.threads)
-            ? conversationsResponse.threads.map(
+          Array.isArray(conversationsResponse?.conversations)
+            ? conversationsResponse.conversations.map(
                 normalizeConversationOption
               )
             : []
@@ -3100,9 +3100,9 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
         ? actorsResponse.map(normalizeActorOption)
         : []
       const nextConversations = Array.isArray(
-        conversationsResponse?.threads
+        conversationsResponse?.conversations
       )
-        ? conversationsResponse.threads.map(normalizeConversationOption)
+        ? conversationsResponse.conversations.map(normalizeConversationOption)
         : []
       const nextMembers = Array.isArray(membersResponse?.data)
         ? membersResponse.data.map(normalizeMemberOption)

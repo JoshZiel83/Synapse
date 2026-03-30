@@ -88,6 +88,18 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "SpiceDB relationship outbox",
   },
   {
+    table: "realtime_event_outbox",
+    requiredColumns: [
+      "event_type",
+      "workspace_id",
+      "payload",
+      "event_timestamp",
+      "available_at",
+      "status",
+    ],
+    reason: "transactional realtime event outbox",
+  },
+  {
     table: "session_engine_branches",
     requiredColumns: [
       "session_id",

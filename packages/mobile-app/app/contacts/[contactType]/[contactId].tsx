@@ -92,7 +92,7 @@ export default function ContactDetailScreen() {
 
         setActors(actorsResponse.actors.filter((actor) => actor.isActive));
         setMembers(membersResponse.data ?? []);
-        setConversations(conversationsResponse.threads);
+        setConversations(conversationsResponse.conversations);
         setWorkspaceContacts(contactsResponse.workspaceContacts);
         setPersonalContacts(contactsResponse.personalContacts);
         setError(null);
@@ -171,7 +171,7 @@ export default function ContactDetailScreen() {
           kind: "private",
           actorIds: [savedContact.actor.id],
         });
-        const conversationId = created.threadId;
+        const conversationId = created.conversationId;
         if (conversationId) {
           router.replace(`/chat/${conversationId}`);
         }
@@ -193,7 +193,7 @@ export default function ContactDetailScreen() {
           kind: "private",
           userIds: [savedContact.user.id],
         });
-        const conversationId = created.threadId;
+        const conversationId = created.conversationId;
         if (conversationId) {
           router.replace(`/chat/${conversationId}`);
         }
@@ -216,7 +216,7 @@ export default function ContactDetailScreen() {
           workspaceId,
           actorIds: [actor.id],
         });
-        const conversationId = created.threadId;
+        const conversationId = created.conversationId;
         if (conversationId) {
           router.replace(`/chat/${conversationId}`);
         }
@@ -239,7 +239,7 @@ export default function ContactDetailScreen() {
           workspaceId,
           userIds: [member.userId],
         });
-        const conversationId = created.threadId;
+        const conversationId = created.conversationId;
         if (conversationId) {
           router.replace(`/chat/${conversationId}`);
         }

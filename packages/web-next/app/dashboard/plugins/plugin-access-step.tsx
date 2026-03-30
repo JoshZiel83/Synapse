@@ -590,7 +590,7 @@ export default function PluginAccessStep({
       setGrantScope(suggestedGrantScope);
     }
     setActors(Array.isArray(actorData) ? actorData : actorData?.actors || []);
-    setConversations(conversationData?.threads || []);
+    setConversations(conversationData?.conversations || []);
     setMembers(memberData.data || []);
   };
 

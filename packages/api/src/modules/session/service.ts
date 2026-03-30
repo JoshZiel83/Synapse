@@ -13,7 +13,6 @@ import {
   createConversation,
   createConversationItem,
   ensureConversationMember,
-  getConversationFeedItemById,
   getConversation,
 } from '../conversation/service.js';
 import {
@@ -38,21 +37,6 @@ function normalizeSessionRow(row: any) {
     isGroupConversation: isGroupConversationKind(row.conversation_kind),
     hasThreadContext: isThreadConversationKind(row.conversation_kind),
   };
-}
-
-async function emitFeedItemCreated(workspaceId: string, itemId: string) {
-  const item = await getConversationFeedItemById(itemId);
-  if (!item || item.workspaceSequence === undefined) return;
-
-  await emitEvent({
-    type: 'feed.item.created',
-    workspaceId,
-    payload: {
-      workspaceSequence: item.workspaceSequence,
-      item,
-    },
-    timestamp: nowISO(),
-  });
 }
 
 async function getActorJoinVersionId(actorId: UUID) {
@@ -351,10 +335,6 @@ export async function addSessionMessage(params: {
     parts: normalizedMessage.parts,
     targetMemberIds,
   });
-
-  if (scope === 'shared' && surface === 'visible' && (role === 'user' || role === 'assistant' || role === 'system')) {
-    await emitFeedItemCreated(workspaceId, item.id);
-  }
 
   if (
     projectTransportOutbound &&

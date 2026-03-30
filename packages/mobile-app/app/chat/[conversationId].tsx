@@ -17,6 +17,17 @@ import { MessageItem } from "@/components/message-item";
 import { Avatar, EmptyState, LoadingBlock, ScreenView } from "@/components/ui";
 import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket";
 import { api } from "@/lib/api";
+import {
+  clearPendingConversationMessage,
+  clearPendingConversationRead,
+  flushPendingConversationMessages,
+  flushPendingConversationReads,
+  listPendingConversationMessages,
+  pendingConversationMessageToFeedItem,
+  queuePendingConversationMessage,
+  queuePendingConversationRead,
+  type PendingConversationMessage,
+} from "@/lib/chat-sync";
 import { sortConversationItems } from "@/lib/conversations";
 import { createId } from "@/lib/ids";
 import { useWorkspace } from "@/providers/workspace-provider";
@@ -32,10 +43,54 @@ function mergeConversationItem(
   items: ConversationFeedItem[],
   incoming: ConversationFeedItem,
 ) {
-  if (items.some((item) => item.itemId === incoming.itemId)) {
-    return items;
+  const sameItemIndex = items.findIndex((item) => item.itemId === incoming.itemId);
+  if (sameItemIndex >= 0) {
+    const next = [...items];
+    next[sameItemIndex] = incoming;
+    return sortConversationItems(next);
   }
+
+  if (incoming.kind === "message" && incoming.clientMessageId) {
+    const sameClientMessageIndex = items.findIndex(
+      (item) =>
+        item.kind === "message" &&
+        item.clientMessageId === incoming.clientMessageId,
+    );
+    if (sameClientMessageIndex >= 0) {
+      const existing = items[sameClientMessageIndex];
+      const existingIsTemp = String(existing.itemId).startsWith("temp:");
+      const incomingIsTemp = String(incoming.itemId).startsWith("temp:");
+      if (!existingIsTemp && incomingIsTemp) {
+        return items;
+      }
+      const next = [...items];
+      next[sameClientMessageIndex] = incoming;
+      return sortConversationItems(next);
+    }
+  }
+
   return sortConversationItems([...items, incoming]);
+}
+
+function mergePendingMessages(
+  items: ConversationFeedItem[],
+  pendingMessages: PendingConversationMessage[],
+) {
+  return pendingMessages.reduce(
+    (current, entry) =>
+      mergeConversationItem(current, pendingConversationMessageToFeedItem(entry)),
+    items,
+  );
+}
+
+function applyDeliveredItems(
+  items: ConversationFeedItem[],
+  deliveredItems: ConversationFeedItem[],
+) {
+  return deliveredItems.reduce(
+    (current, item) => mergeConversationItem(current, item),
+    items,
+  );
 }
 
 export default function ChatDetailScreen() {
@@ -43,7 +98,11 @@ export default function ChatDetailScreen() {
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
   const { workspaceId } = useWorkspace();
   const scrollRef = useRef<ScrollView | null>(null);
+  const lastReportedReadRef = useRef<string>("");
   const [messages, setMessages] = useState<ConversationFeedItem[]>([]);
+  const [pendingMessages, setPendingMessages] = useState<
+    PendingConversationMessage[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [conversation, setConversation] =
@@ -52,6 +111,19 @@ export default function ChatDetailScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const canRender = workspaceId && conversationId;
+
+  const refreshPendingMessages = useCallback(async () => {
+    if (!conversationId) {
+      setPendingMessages([]);
+      return [];
+    }
+
+    const nextPendingMessages = await listPendingConversationMessages(
+      conversationId,
+    );
+    setPendingMessages(nextPendingMessages);
+    return nextPendingMessages;
+  }, [conversationId]);
 
   const applyConversationMeta = useCallback(
     (
@@ -80,6 +152,9 @@ export default function ChatDetailScreen() {
       }
 
       try {
+        const nextPendingMessages = await listPendingConversationMessages(
+          conversationId,
+        );
         const [messagesResponse, threadResponse, membersResponse] =
           await Promise.all([
             api.getThreadMessages(conversationId, 100),
@@ -88,12 +163,32 @@ export default function ChatDetailScreen() {
           ]);
 
         applyConversationMeta(
-          (threadResponse.thread as ConversationSummaryView | null) ?? null,
+          (threadResponse.conversation as ConversationSummaryView | null) ??
+            null,
           membersResponse.members,
         );
-        setMessages(sortConversationItems(messagesResponse.items));
+        setPendingMessages(nextPendingMessages);
+        setMessages(
+          mergePendingMessages(
+            sortConversationItems(messagesResponse.items),
+            nextPendingMessages,
+          ),
+        );
         setError(null);
-        await api.markThreadRead(conversationId).catch(() => undefined);
+        void flushPendingConversationReads();
+        void flushPendingConversationMessages({ conversationId }).then(
+          (deliveredItems) => {
+            const deliveredForConversation = deliveredItems.filter(
+              (item) => item.conversationId === conversationId,
+            );
+            if (deliveredForConversation.length > 0) {
+              setMessages((current) =>
+                applyDeliveredItems(current, deliveredForConversation),
+              );
+            }
+            void refreshPendingMessages();
+          },
+        );
       } catch (nextError) {
         setError(
           nextError instanceof Error ? nextError.message : "聊天记录加载失败。",
@@ -111,12 +206,64 @@ export default function ChatDetailScreen() {
   }, [loadConversation]);
 
   useEffect(() => {
+    void refreshPendingMessages();
+  }, [refreshPendingMessages]);
+
+  useEffect(() => {
     if (!loading) {
       requestAnimationFrame(() => {
         scrollRef.current?.scrollToEnd({ animated: false });
       });
     }
   }, [loading, messages.length]);
+
+  useEffect(() => {
+    if (!conversationId || loading || messages.length === 0) {
+      return;
+    }
+
+    const maxSequence = messages.reduce(
+      (max, item) => Math.max(max, Number(item.sequence || 0)),
+      0,
+    );
+    if (maxSequence <= 0) {
+      return;
+    }
+
+    const nextKey = `${conversationId}:${maxSequence}`;
+    if (lastReportedReadRef.current === nextKey) {
+      return;
+    }
+    lastReportedReadRef.current = nextKey;
+    void api
+      .markThreadRead(conversationId, maxSequence)
+      .then(() => clearPendingConversationRead(conversationId, maxSequence))
+      .catch(() => queuePendingConversationRead(conversationId, maxSequence));
+  }, [conversationId, loading, messages]);
+
+  useEffect(() => {
+    if (!conversationId || pendingMessages.length === 0) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      void flushPendingConversationMessages({ conversationId }).then(
+        (deliveredItems) => {
+          const deliveredForConversation = deliveredItems.filter(
+            (item) => item.conversationId === conversationId,
+          );
+          if (deliveredForConversation.length > 0) {
+            setMessages((current) =>
+              applyDeliveredItems(current, deliveredForConversation),
+            );
+          }
+          void refreshPendingMessages();
+        },
+      );
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [conversationId, pendingMessages.length, refreshPendingMessages]);
 
   const handleSocketEvent = useCallback(
     (event: Record<string, unknown>) => {
@@ -125,18 +272,18 @@ export default function ChatDetailScreen() {
       }
 
       switch (event.type) {
-        case "feed.item.created": {
-          const payload = event.payload as {
-            item: ConversationFeedItem;
-          };
-          if (payload.item.conversationId !== conversationId) {
+        case "conversation.item.created": {
+          const payload = event.payload as ConversationFeedItem;
+          if (payload.conversationId !== conversationId) {
             return;
           }
 
-          setMessages((current) =>
-            mergeConversationItem(current, payload.item),
-          );
-          void api.markThreadRead(conversationId).catch(() => undefined);
+          setMessages((current) => mergeConversationItem(current, payload));
+          if (payload.kind === "message" && payload.clientMessageId) {
+            void clearPendingConversationMessage(payload.clientMessageId).then(
+              refreshPendingMessages,
+            );
+          }
           return;
         }
         case "conversation.updated": {
@@ -182,15 +329,35 @@ export default function ChatDetailScreen() {
   );
 
   useWorkspaceWebSocket({
-    workspaceId: workspaceId ?? null,
     enabled: Boolean(canRender && conversation?.domain !== "social"),
+    subscriptions:
+      canRender && conversation?.domain !== "social"
+        ? [
+            {
+              key: `conversation:${conversationId}`,
+              topic: "conversation" as const,
+              conversationId,
+            },
+          ]
+        : [],
     onConnected: () => {
+      void flushPendingConversationReads();
+      void flushPendingConversationMessages({ conversationId }).then(
+        (deliveredItems) => {
+          const deliveredForConversation = deliveredItems.filter(
+            (item) => item.conversationId === conversationId,
+          );
+          if (deliveredForConversation.length > 0) {
+            setMessages((current) =>
+              applyDeliveredItems(current, deliveredForConversation),
+            );
+          }
+          void refreshPendingMessages();
+        },
+      );
       void loadConversation(true);
     },
     onEvent: handleSocketEvent,
-    onGap: () => {
-      void loadConversation(true);
-    },
   });
 
   useEffect(() => {
@@ -209,13 +376,47 @@ export default function ChatDetailScreen() {
     if (!conversationId) return;
 
     const clientMessageId = createId("message");
-    const response = await api.sendThreadMessage(
+    const optimisticSequence =
+      Math.max(
+        Date.now() * 1000,
+        ...messages.map((item) => Number(item.sequence || 0)),
+        ...pendingMessages.map((item) => Number(item.optimisticSequence || 0)),
+      ) + 1;
+    const pendingMessage: PendingConversationMessage = {
+      clientMessageId,
       conversationId,
       contentBlocks,
-      clientMessageId,
+      createdAt: new Date().toISOString(),
+      optimisticSequence,
+      status: "sending",
+      attemptCount: 0,
+    };
+
+    await queuePendingConversationMessage(pendingMessage);
+    setPendingMessages((current) =>
+      [...current, pendingMessage].sort(
+        (left, right) => left.optimisticSequence - right.optimisticSequence,
+      ),
     );
-    setMessages((current) => mergeConversationItem(current, response.item));
-    await api.markThreadRead(conversationId).catch(() => undefined);
+    setMessages((current) =>
+      mergeConversationItem(
+        current,
+        pendingConversationMessageToFeedItem(pendingMessage),
+      ),
+    );
+    void flushPendingConversationMessages({ conversationId }).then(
+      (deliveredItems) => {
+        const deliveredForConversation = deliveredItems.filter(
+          (item) => item.conversationId === conversationId,
+        );
+        if (deliveredForConversation.length > 0) {
+          setMessages((current) =>
+            applyDeliveredItems(current, deliveredForConversation),
+          );
+        }
+        void refreshPendingMessages();
+      },
+    );
   }
 
   const messageNodes = useMemo(

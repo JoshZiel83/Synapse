@@ -779,6 +779,7 @@ export type EventType =
   | "session.status.changed"
   | "session.thinking"
   | "feed.item.created"
+  | "conversation.read.updated"
   | "runtime.updated"
   | "conversation.updated"
   | "interaction.updated"
@@ -2844,7 +2845,6 @@ export interface ConversationFeedMessageItem {
   itemId: UUID;
   conversationId: UUID;
   sequence: number;
-  workspaceSequence?: number;
   sessionId?: UUID;
   turnId?: UUID;
   role: "user" | "assistant" | "system";
@@ -2867,7 +2867,6 @@ export interface ConversationFeedEventItem<
   itemId: UUID;
   conversationId: UUID;
   sequence: number;
-  workspaceSequence?: number;
   sessionId?: UUID;
   turnId?: UUID;
   author?: ConversationEntityRef;
@@ -3207,17 +3206,7 @@ export interface ConversationFeedPage {
   items: ConversationFeedItem[];
   hasMore: boolean;
   nextBeforeSequence?: number;
-}
-
-export interface WorkspaceFeedEventRecord {
-  workspaceSequence: number;
-  item: ConversationFeedItem;
-}
-
-export interface WorkspaceFeedPage {
-  records: WorkspaceFeedEventRecord[];
-  hasMore: boolean;
-  nextAfterSequence?: number;
+  readWatermarkSequence?: number;
 }
 
 export type ChatSocketEventType =
@@ -3225,18 +3214,16 @@ export type ChatSocketEventType =
   | "auth.error"
   | "ping"
   | "server.shutdown"
-  | "feed.item.created"
+  | "conversation.item.created"
+  | "conversation.read.updated"
   | "runtime.updated"
   | "conversation.updated"
-  | "interaction.updated"
-  | "feed.resync.required";
+  | "interaction.updated";
 
 export interface ChatSocketEventPayloadMap {
   "auth.ok": {
     connectionId: UUID;
     heartbeatMs: number;
-    workspaceId: UUID;
-    lastWorkspaceSequence: number;
   };
   "auth.error": {
     message: string;
@@ -3248,7 +3235,13 @@ export interface ChatSocketEventPayloadMap {
     message: string;
     retryable: boolean;
   };
-  "feed.item.created": WorkspaceFeedEventRecord;
+  "conversation.item.created": ConversationFeedItem;
+  "conversation.read.updated": {
+    conversationId: UUID;
+    userId: UUID;
+    readWatermarkSequence: number;
+    lastReadAt: Timestamp;
+  };
   "runtime.updated": {
     conversationId: UUID;
     runtimeSeq: number;
@@ -3265,10 +3258,6 @@ export interface ChatSocketEventPayloadMap {
     interactionId: UUID;
     itemId?: UUID;
     interaction: InteractionRequestSummary;
-  };
-  "feed.resync.required": {
-    expectedWorkspaceSequence: number;
-    actualWorkspaceSequence: number;
   };
 }
 

@@ -1,4 +1,3 @@
-import { nowISO } from "@synapse/shared";
 import { query, transaction } from "../../infrastructure/database/index.js";
 import {
   flushAuthzOutboxEntries,
@@ -6,12 +5,10 @@ import {
   touchActorConversationContext,
   touchRelation,
 } from "../../infrastructure/authz/index.js";
-import { emitEvent } from "../../infrastructure/events/index.js";
 import { v4 as uuidv4 } from "uuid";
 import {
   createConversationEvent,
   ensureConversationMemberActivation,
-  getConversationFeedItemById,
   getConversationMember,
 } from "./service.js";
 
@@ -23,22 +20,6 @@ type ParticipantInitiator = {
   userId?: string;
   name?: string;
 };
-
-async function emitFeedItemCreated(workspaceId: string | undefined, itemId: string) {
-  if (!workspaceId) return;
-  const item = await getConversationFeedItemById(itemId);
-  if (!item || item.workspaceSequence === undefined) return;
-
-  await emitEvent({
-    type: "feed.item.created",
-    workspaceId,
-    payload: {
-      workspaceSequence: item.workspaceSequence,
-      item,
-    },
-    timestamp: nowISO(),
-  });
-}
 
 async function loadParticipantDisplay(params: {
   memberType: "actor" | "user" | "external" | "remote_agent" | "system";
@@ -137,7 +118,7 @@ async function recordMembershipEvent(params: {
     initiator: params.initiator,
   });
   const batchId = uuidv4();
-  const created = await createConversationEvent({
+  await createConversationEvent({
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
     eventType: params.subtype,
@@ -160,8 +141,6 @@ async function recordMembershipEvent(params: {
         : undefined,
     },
   });
-
-  await emitFeedItemCreated(params.workspaceId, created.item.id);
 }
 
 export async function activateConversationParticipant(params: {

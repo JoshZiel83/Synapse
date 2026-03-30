@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { type CanonicalContentBlock } from "@synapse/shared"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useWorkspace } from "../workspace-provider"
@@ -37,6 +37,7 @@ export default function ChatPage() {
   } = useChatStore()
 
   const [dialogOpen, setDialogOpen] = useState(false)
+  const lastReportedReadRef = useRef<string>("")
   useChatRealtimeSync({ workspaceId, selectedConversationId })
 
   useEffect(() => {
@@ -48,14 +49,33 @@ export default function ChatPage() {
   useEffect(() => {
     if (workspaceId && selectedConversationId) {
       loadMessages(workspaceId, selectedConversationId)
-      markConversationRead(workspaceId, selectedConversationId)
     }
   }, [
     workspaceId,
     selectedConversationId,
     loadMessages,
-    markConversationRead,
   ])
+
+  useEffect(() => {
+    if (!selectedConversationId || loadingMessages || messages.length === 0) {
+      return
+    }
+
+    const maxSequence = messages.reduce(
+      (max, message) => Math.max(max, message.sequence),
+      0
+    )
+    if (maxSequence <= 0) {
+      return
+    }
+
+    const nextKey = `${selectedConversationId}:${maxSequence}`
+    if (lastReportedReadRef.current === nextKey) {
+      return
+    }
+    lastReportedReadRef.current = nextKey
+    void markConversationRead(selectedConversationId, maxSequence)
+  }, [loadingMessages, markConversationRead, messages, selectedConversationId])
 
   const selectedConversation = conversations.find(
     (conversation) => conversation.id === selectedConversationId

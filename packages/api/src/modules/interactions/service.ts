@@ -1,4 +1,4 @@
-import { nowISO, textBlocks } from "@synapse/shared";
+import { textBlocks } from "@synapse/shared";
 import { v4 as uuidv4 } from "uuid";
 import type {
   ConversationFeedItem,
@@ -13,7 +13,10 @@ import type {
   RelayAuthorizationInteractionSummary,
   RelayAuthorizationScope,
 } from "@synapse/shared/types";
-import { emitEvent } from "../../infrastructure/events/index.js";
+import {
+  enqueueTransactionalEvent,
+  type Queryable,
+} from "../../infrastructure/events/index.js";
 import { query, transaction } from "../../infrastructure/database/index.js";
 import {
   completeToolCallTask,
@@ -23,7 +26,7 @@ import {
 import { authorizeAction, userSubject } from "../access/service.js";
 import {
   createConversationEvent,
-  getConversationFeedItemById,
+  updateConversationItemEventPayload,
 } from "../conversation/service.js";
 import { getFileUrlById } from "../files/service.js";
 
@@ -75,10 +78,6 @@ type RawInteractionRow = {
   resolved_by_actor_avatar_file_id: string | null;
   resolved_by_user_avatar_file_id: string | null;
   resolved_by_avatar_emoji: string | null;
-};
-
-type Queryable = {
-  query: (text: string, params?: any[]) => Promise<{ rows: any[]; rowCount?: number | null }>;
 };
 
 export interface CreateQuestionInteractionParams {
@@ -633,8 +632,12 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
   };
 }
 
-async function getInteractionRowById(interactionId: string) {
-  const result = await query<RawInteractionRow>(
+async function getInteractionRowById(
+  interactionId: string,
+  queryable?: Queryable,
+) {
+  const runner = queryable || { query: (text: string, params?: any[]) => query(text, params) };
+  const result = await runner.query(
     `SELECT ir.*,
             question.prompt_payload AS prompt_payload,
             relay.requested_effect AS requested_effect,
@@ -693,48 +696,35 @@ async function getInteractionRowById(interactionId: string) {
      LEFT JOIN relay_exposures exposure
        ON exposure.id = relay.relay_exposure_id
      WHERE ir.id = $1
-     LIMIT 1`,
+    LIMIT 1`,
     [interactionId],
   );
   return result.rows[0] || null;
 }
 
-async function emitFeedItemCreated(workspaceId: string, itemId: string) {
-  const item = await getConversationFeedItemById(itemId);
-  if (!item || item.workspaceSequence === undefined) return;
-
-  await emitEvent({
-    type: "feed.item.created",
-    workspaceId,
-    payload: {
-      workspaceSequence: item.workspaceSequence,
-      item,
-    },
-    timestamp: nowISO(),
-  });
-}
-
-async function emitInteractionUpdated(interaction: InteractionRequestSummary) {
-  await emitEvent({
+async function queueInteractionUpdatedEvent(
+  queryable: Queryable,
+  interaction: InteractionRequestSummary,
+) {
+  await enqueueTransactionalEvent(queryable, {
     type: "interaction.updated",
     workspaceId: interaction.workspaceId,
     payload: {
-      conversationId: interaction.conversationId,
       interactionId: interaction.id,
-      itemId: interaction.itemId,
-      interaction,
     },
-    timestamp: nowISO(),
+    timestamp: interaction.updatedAt,
   });
 }
 
-async function syncInteractionEventPayload(interaction: InteractionRequestSummary) {
+async function syncInteractionEventPayload(
+  interaction: InteractionRequestSummary,
+  queryable?: Queryable,
+) {
   if (!interaction.itemId) return;
-  await query(
-    `UPDATE conversation_items
-     SET event_payload = $2::jsonb
-     WHERE id = $1`,
-    [interaction.itemId, JSON.stringify({ interaction })],
+  await updateConversationItemEventPayload(
+    interaction.itemId,
+    { interaction },
+    queryable,
   );
 }
 
@@ -998,8 +988,8 @@ async function insertRelayAuthorizationInteractionDetails(
 export async function createQuestionInteractionRequest(
   params: CreateQuestionInteractionParams,
 ) {
-  const interactionId = await transaction(async (client) => {
-    const id = await insertInteractionRequest(client, {
+  return transaction(async (client) => {
+    const interactionId = await insertInteractionRequest(client, {
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       taskId: params.taskId,
@@ -1013,7 +1003,7 @@ export async function createQuestionInteractionRequest(
     });
 
     await insertQuestionInteractionDetails(client, {
-      interactionId: id,
+      interactionId,
       promptPayload: {
         prompt: params.prompt,
         instructions: params.instructions,
@@ -1021,51 +1011,46 @@ export async function createQuestionInteractionRequest(
       },
     });
 
-    return id;
+    let interaction = await getInteractionRequestSummary(interactionId, client);
+    if (!interaction) {
+      throw new Error("Failed to load created interaction request");
+    }
+
+    const created = await createConversationEvent({
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      eventType: "interaction_requested",
+      authorMemberId: params.requesterMemberId,
+      eventPayload: { interaction },
+      timelinePolicy: "targeted_members",
+      contextPolicy: "targeted_members",
+      targetMemberIds: [params.targetMemberId],
+      contextTargetMemberIds: [params.targetMemberId],
+      queryable: client,
+    });
+
+    await client.query(
+      `UPDATE interaction_requests
+       SET conversation_item_id = $2,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [interactionId, created.item.id],
+    );
+
+    interaction = await getInteractionRequestSummary(interactionId, client);
+    if (!interaction) {
+      throw new Error("Failed to reload created interaction request");
+    }
+    await syncInteractionEventPayload(interaction, client);
+    return interaction;
   });
-
-  let interaction = await getInteractionRequestSummary(interactionId);
-  if (!interaction) {
-    throw new Error("Failed to load created interaction request");
-  }
-
-  const created = await createConversationEvent({
-    workspaceId: params.workspaceId,
-    conversationId: params.conversationId,
-    eventType: "interaction_requested",
-    authorMemberId: params.requesterMemberId,
-    eventPayload: { interaction },
-    timelinePolicy: "targeted_members",
-    contextPolicy: "targeted_members",
-    targetMemberIds: [params.targetMemberId],
-    contextTargetMemberIds: [params.targetMemberId],
-  });
-
-  await query(
-    `UPDATE interaction_requests
-     SET conversation_item_id = $2,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [interactionId, created.item.id],
-  );
-
-  interaction = await getInteractionRequestSummary(interactionId);
-  if (!interaction) {
-    throw new Error("Failed to reload created interaction request");
-  }
-  await syncInteractionEventPayload(interaction);
-  if (interaction.itemId) {
-    await emitFeedItemCreated(params.workspaceId, interaction.itemId);
-  }
-
-  return interaction;
 }
 
 export async function createRelayAuthorizationInteractionRequest(
   params: CreateRelayAuthorizationInteractionParams,
 ) {
-  const interactionId = await transaction(async (client) => {
-    const id = await insertInteractionRequest(client, {
+  return transaction(async (client) => {
+    const interactionId = await insertInteractionRequest(client, {
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       taskId: params.taskId,
@@ -1077,7 +1062,7 @@ export async function createRelayAuthorizationInteractionRequest(
     });
 
     await insertRelayAuthorizationInteractionDetails(client, {
-      interactionId: id,
+      interactionId,
       relayDeviceId: params.relayDeviceId,
       relayExposureId: params.relayExposureId,
       requestedEffect: {
@@ -1089,42 +1074,37 @@ export async function createRelayAuthorizationInteractionRequest(
       },
     });
 
-    return id;
+    let interaction = await getInteractionRequestSummary(interactionId, client);
+    if (!interaction) {
+      throw new Error("Failed to load created interaction request");
+    }
+
+    const created = await createConversationEvent({
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      eventType: "interaction_requested",
+      authorMemberId: params.requesterMemberId,
+      eventPayload: { interaction },
+      timelinePolicy: "all_members",
+      contextPolicy: "shared",
+      queryable: client,
+    });
+
+    await client.query(
+      `UPDATE interaction_requests
+       SET conversation_item_id = $2,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [interactionId, created.item.id],
+    );
+
+    interaction = await getInteractionRequestSummary(interactionId, client);
+    if (!interaction) {
+      throw new Error("Failed to reload created interaction request");
+    }
+    await syncInteractionEventPayload(interaction, client);
+    return interaction;
   });
-
-  let interaction = await getInteractionRequestSummary(interactionId);
-  if (!interaction) {
-    throw new Error("Failed to load created interaction request");
-  }
-
-  const created = await createConversationEvent({
-    workspaceId: params.workspaceId,
-    conversationId: params.conversationId,
-    eventType: "interaction_requested",
-    authorMemberId: params.requesterMemberId,
-    eventPayload: { interaction },
-    timelinePolicy: "all_members",
-    contextPolicy: "shared",
-  });
-
-  await query(
-    `UPDATE interaction_requests
-     SET conversation_item_id = $2,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [interactionId, created.item.id],
-  );
-
-  interaction = await getInteractionRequestSummary(interactionId);
-  if (!interaction) {
-    throw new Error("Failed to reload created interaction request");
-  }
-  await syncInteractionEventPayload(interaction);
-  if (interaction.itemId) {
-    await emitFeedItemCreated(params.workspaceId, interaction.itemId);
-  }
-
-  return interaction;
 }
 
 export async function findOpenRelayAuthorizationInteraction(
@@ -1167,8 +1147,11 @@ export async function findOpenRelayAuthorizationInteraction(
   return getInteractionRequestSummary(interactionId);
 }
 
-export async function getInteractionRequestSummary(interactionId: string) {
-  const row = await getInteractionRowById(interactionId);
+export async function getInteractionRequestSummary(
+  interactionId: string,
+  queryable?: Queryable,
+) {
+  const row = await getInteractionRowById(interactionId, queryable);
   return row ? buildInteractionSummary(row) : null;
 }
 
@@ -1221,7 +1204,7 @@ export async function cancelInteractionRequest(
   }
 
   const resolutionPayload = parseJsonObject(existing.resolution_payload);
-  await transaction(async (client) => {
+  const interaction = await transaction(async (client) => {
     await client.query(
       `UPDATE interaction_requests
        SET status = 'cancelled',
@@ -1252,14 +1235,15 @@ export async function cancelInteractionRequest(
         [interactionId, JSON.stringify(payload)],
       );
     }
+    const nextInteraction = await getInteractionRequestSummary(interactionId, client);
+    if (!nextInteraction) {
+      throw new Error("Failed to reload cancelled interaction");
+    }
+    await syncInteractionEventPayload(nextInteraction, client);
+    await queueInteractionUpdatedEvent(client, nextInteraction);
+    return nextInteraction;
   });
 
-  const interaction = await getInteractionRequestSummary(interactionId);
-  if (!interaction) {
-    throw new Error("Failed to reload cancelled interaction");
-  }
-  await syncInteractionEventPayload(interaction);
-  await emitInteractionUpdated(interaction);
   return interaction;
 }
 
@@ -1584,7 +1568,7 @@ export async function resolveInteractionRequest(
     };
   }
 
-  await transaction(async (client) => {
+  const interaction = await transaction(async (client) => {
     await client.query(
       `UPDATE interaction_requests
        SET status = $2,
@@ -1608,24 +1592,27 @@ export async function resolveInteractionRequest(
          WHERE interaction_id = $1`,
         [params.interactionId, JSON.stringify(resolutionPayload)],
       );
-      return;
+    } else {
+      await client.query(
+        `UPDATE interaction_relay_authorization_requests
+         SET resolution_payload = $2::jsonb
+         WHERE interaction_id = $1`,
+        [params.interactionId, JSON.stringify(resolutionPayload)],
+      );
     }
 
-    await client.query(
-      `UPDATE interaction_relay_authorization_requests
-       SET resolution_payload = $2::jsonb
-       WHERE interaction_id = $1`,
-      [params.interactionId, JSON.stringify(resolutionPayload)],
+    const nextInteraction = await getInteractionRequestSummary(
+      params.interactionId,
+      client,
     );
+    if (!nextInteraction) {
+      throw new Error("Failed to reload resolved interaction");
+    }
+
+    await syncInteractionEventPayload(nextInteraction, client);
+    await queueInteractionUpdatedEvent(client, nextInteraction);
+    return nextInteraction;
   });
-
-  const interaction = await getInteractionRequestSummary(params.interactionId);
-  if (!interaction) {
-    throw new Error("Failed to reload resolved interaction");
-  }
-
-  await syncInteractionEventPayload(interaction);
-  await emitInteractionUpdated(interaction);
 
   if (!interaction.taskId) {
     throw new Error(`Interaction ${interaction.id} is missing task governance`);
@@ -1664,7 +1651,7 @@ export async function markRelayAuthorizationInteractionApplied(
     throw new Error("Interaction request not found");
   }
   const resolutionPayload = parseJsonObject(existing.resolution_payload);
-  await transaction(async (client) => {
+  const interaction = await transaction(async (client) => {
     await client.query(
       `UPDATE interaction_requests
        SET status = 'applied',
@@ -1684,14 +1671,14 @@ export async function markRelayAuthorizationInteractionApplied(
         }),
       ],
     );
+    const nextInteraction = await getInteractionRequestSummary(interactionId, client);
+    if (!nextInteraction) {
+      throw new Error("Failed to reload applied interaction");
+    }
+    await syncInteractionEventPayload(nextInteraction, client);
+    await queueInteractionUpdatedEvent(client, nextInteraction);
+    return nextInteraction;
   });
-
-  const interaction = await getInteractionRequestSummary(interactionId);
-  if (!interaction) {
-    throw new Error("Failed to reload applied interaction");
-  }
-  await syncInteractionEventPayload(interaction);
-  await emitInteractionUpdated(interaction);
   if (!interaction.taskId) {
     throw new Error(`Interaction ${interaction.id} is missing task governance`);
   }
@@ -1711,7 +1698,7 @@ export async function markRelayAuthorizationInteractionApplyFailed(
     throw new Error("Interaction request not found");
   }
   const resolutionPayload = parseJsonObject(existing.resolution_payload);
-  await transaction(async (client) => {
+  const interaction = await transaction(async (client) => {
     await client.query(
       `UPDATE interaction_requests
        SET status = 'apply_failed',
@@ -1731,14 +1718,14 @@ export async function markRelayAuthorizationInteractionApplyFailed(
         }),
       ],
     );
+    const nextInteraction = await getInteractionRequestSummary(interactionId, client);
+    if (!nextInteraction) {
+      throw new Error("Failed to reload failed interaction");
+    }
+    await syncInteractionEventPayload(nextInteraction, client);
+    await queueInteractionUpdatedEvent(client, nextInteraction);
+    return nextInteraction;
   });
-
-  const interaction = await getInteractionRequestSummary(interactionId);
-  if (!interaction) {
-    throw new Error("Failed to reload failed interaction");
-  }
-  await syncInteractionEventPayload(interaction);
-  await emitInteractionUpdated(interaction);
   if (!interaction.taskId) {
     throw new Error(`Interaction ${interaction.id} is missing task governance`);
   }

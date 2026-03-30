@@ -16,6 +16,7 @@ import {
 } from "./infrastructure/redis/index.js";
 import {
   initEventBus,
+  startRealtimeEventOutboxDispatcher,
   shutdownEventBus,
 } from "./infrastructure/events/index.js";
 import { auditMiddleware } from "./infrastructure/middleware/audit.js";
@@ -113,6 +114,8 @@ async function main() {
     console.error("Database schema preflight failed:", err);
     process.exit(1);
   }
+
+  await startRealtimeEventOutboxDispatcher();
 
   // Initialize SpiceDB schema and replay pending relationship writes
   try {
@@ -214,7 +217,11 @@ async function main() {
   startAutomationExecutionWorker();
   startSessionThinkingWorker();
   startImTransportDeliveryWorker();
-  await startTransportRuntimeManager();
+  if (config.im.runtimeManagerEnabled) {
+    await startTransportRuntimeManager();
+  } else {
+    console.log("[im] Transport runtime manager disabled on this instance");
+  }
 
   const waitWithTimeout = async (
     label: string,

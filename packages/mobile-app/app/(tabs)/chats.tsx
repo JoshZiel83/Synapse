@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { RefreshControl, StyleSheet, Text, View } from "react-native";
 
 import { ConversationItem } from "@/components/conversation-item";
@@ -12,10 +12,13 @@ import {
   SectionBlock,
   SectionTitleRow,
 } from "@/components/ui";
+import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket";
 import { api } from "@/lib/api";
+import { listPendingConversationReads } from "@/lib/chat-sync";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
 import type { ConversationSummaryView } from "@/types/api";
+import type { ChatSocketEvent, ConversationFeedItem } from "@shared";
 
 function sortConversations(conversations: ConversationSummaryView[]) {
   return [...conversations].sort((left, right) => {
@@ -23,6 +26,21 @@ function sortConversations(conversations: ConversationSummaryView[]) {
     const rightAt = right.lastMessage?.createdAt || right.createdAt;
     return new Date(rightAt).getTime() - new Date(leftAt).getTime();
   });
+}
+
+async function applyLocalReadState(
+  conversations: ConversationSummaryView[],
+) {
+  const pendingReads = await listPendingConversationReads();
+  const pendingConversationIds = new Set(
+    pendingReads.map((entry) => entry.conversationId),
+  );
+
+  return conversations.map((conversation) =>
+    pendingConversationIds.has(conversation.id)
+      ? { ...conversation, unreadCount: 0 }
+      : conversation,
+  );
 }
 
 export default function ChatsTab() {
@@ -35,37 +53,86 @@ export default function ChatsTab() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadConversations(isRefreshing = false) {
-    if (!workspaceId) {
-      setConversations([]);
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
+  const loadConversations = useCallback(
+    async (isRefreshing = false) => {
+      if (!workspaceId) {
+        setConversations([]);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
 
-    if (isRefreshing) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
+      if (isRefreshing) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
 
-    try {
-      const response = await api.getThreads(workspaceId);
-      setConversations(sortConversations(response.threads));
-      setError(null);
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : "加载聊天列表失败。",
-      );
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }
+      try {
+        const response = await api.getThreads(workspaceId);
+        const syncedConversations = await applyLocalReadState(
+          response.conversations,
+        );
+        setConversations(sortConversations(syncedConversations));
+        setError(null);
+      } catch (nextError) {
+        setError(
+          nextError instanceof Error ? nextError.message : "加载聊天列表失败。",
+        );
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [workspaceId],
+  );
 
   useEffect(() => {
     void loadConversations();
-  }, [workspaceId]);
+  }, [loadConversations]);
+
+  const handleSocketEvent = useCallback(
+    (event: ChatSocketEvent | Record<string, unknown>) => {
+      if (!workspaceId || typeof event.type !== "string") {
+        return;
+      }
+
+      switch (event.type) {
+        case "conversation.item.created": {
+          const payload = (event as ChatSocketEvent<"conversation.item.created">)
+            .payload as ConversationFeedItem;
+          if (payload.conversationId) {
+            void loadConversations(true);
+          }
+          return;
+        }
+        case "conversation.updated":
+        case "conversation.read.updated":
+          void loadConversations(true);
+          return;
+        default:
+          return;
+      }
+    },
+    [loadConversations, workspaceId],
+  );
+
+  useWorkspaceWebSocket({
+    enabled: Boolean(workspaceId),
+    subscriptions: workspaceId
+      ? [
+          {
+            key: `inbox:${workspaceId}`,
+            topic: "inbox",
+            workspaceId,
+          },
+        ]
+      : [],
+    onConnected: () => {
+      void loadConversations(true);
+    },
+    onEvent: handleSocketEvent,
+  });
 
   return (
     <ScreenScroll

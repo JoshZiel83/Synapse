@@ -9,6 +9,10 @@ import {
 } from 'react';
 
 import { ApiError, api, setApiAuthToken } from '@/lib/api';
+import {
+  flushPendingConversationMessages,
+  flushPendingConversationReads,
+} from '@/lib/chat-sync';
 import { deleteStoredValue, readStoredValue, writeStoredValue } from '@/lib/storage';
 import type { AuthMeResponse } from '@/types/api';
 import type { AuthSessionSummary, User } from '@shared';
@@ -110,6 +114,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshSession();
   }, [refreshSession]);
+
+  useEffect(() => {
+    if (state.status !== 'authenticated' || !state.token) {
+      return;
+    }
+
+    void flushPendingConversationReads();
+    void flushPendingConversationMessages();
+  }, [state.status, state.token]);
 
   const signIn = useCallback(async (email: string, password: string) => {
     const response = await api.login(email, password);

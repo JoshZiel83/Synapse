@@ -22,6 +22,7 @@ import {
   SectionTitleRow,
 } from "@/components/ui";
 import { api } from "@/lib/api";
+import { listPendingConversationReads } from "@/lib/chat-sync";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
 import type { ConversationSummaryView } from "@/types/api";
@@ -35,6 +36,21 @@ function sortConversations<
     const rightAt = right.lastMessage?.createdAt || right.createdAt;
     return new Date(rightAt).getTime() - new Date(leftAt).getTime();
   });
+}
+
+async function applyLocalReadState(
+  conversations: ConversationSummaryView[],
+) {
+  const pendingReads = await listPendingConversationReads();
+  const pendingConversationIds = new Set(
+    pendingReads.map((entry) => entry.conversationId),
+  );
+
+  return conversations.map((conversation) =>
+    pendingConversationIds.has(conversation.id)
+      ? { ...conversation, unreadCount: 0 }
+      : conversation,
+  );
 }
 
 export default function HomeTab() {
@@ -88,7 +104,11 @@ export default function HomeTab() {
         (actor) => actor.isActive,
       );
       setActors(activeActors);
-      setConversations(sortConversations(conversationsResponse.threads));
+      setConversations(
+        sortConversations(
+          await applyLocalReadState(conversationsResponse.conversations),
+        ),
+      );
       setPreference(preferenceResponse);
       setSelectedActorId(
         preferenceResponse?.chiefActorId || activeActors[0]?.id || null,
@@ -124,7 +144,7 @@ export default function HomeTab() {
         content: draft.trim(),
         targetActorIds: [selectedActor.id],
       });
-      const conversationId = response.threadId;
+      const conversationId = response.conversationId;
       setDraft("");
 
       if (conversationId) {

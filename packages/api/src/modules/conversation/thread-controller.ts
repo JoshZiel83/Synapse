@@ -7,7 +7,6 @@ import { getFileUrlById } from "../files/service.js";
 import { requireRequestAction } from "../access/guards.js";
 import {
   authorizeAction,
-  listAuthorizedResourceIds,
   userSubject,
 } from "../access/service.js";
 import {
@@ -35,14 +34,11 @@ import {
 import { getConversationRuntimeMap } from "../session/runtime.js";
 import {
   getConversationMember,
-  isFeedItemVisibleToUser,
-  listWorkspaceFeedEventsPage,
 } from "./service.js";
 import { enqueueRelayAuthorizationApply } from "../mcp-plugins/relay-manager.js";
 import { getConversationTransportBinding } from "../im/service.js";
 
-const THREADS_BASE_PATH = "/api/v1/threads";
-const WORKSPACE_THREAD_FEED_PATH = "/api/v1/workspaces/:workspaceId/threads/feed";
+const CONVERSATIONS_BASE_PATH = "/api/v1/conversations";
 
 const createThreadSchema = z.object({
   domain: z.enum(["workspace", "social"]),
@@ -70,6 +66,10 @@ const sendThreadMessageSchema = z
       (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
     { message: "content or contentBlocks is required" },
   );
+
+const markReadWatermarkSchema = z.object({
+  readUpToSequence: z.number().int().min(0),
+});
 
 const updateThreadSchema = z
   .object({
@@ -319,55 +319,11 @@ export default async function threadController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware);
 
   app.get<{
-    Params: { workspaceId: string };
-    Querystring: { after?: string; limit?: string };
-  }>(WORKSPACE_THREAD_FEED_PATH, async (request, reply) => {
-    const userId = (request as any).user!.userId;
-    const { workspaceId } = request.params;
-    const allowed = await requireRequestAction(
-      request,
-      reply,
-      "workspace.view",
-      workspaceId,
-      "Not allowed to access this workspace",
-    );
-    if (!allowed) return;
-
-    const authorizedThreadIds = await listAuthorizedResourceIds({
-      subject: userSubject(userId),
-      action: "conversation.view",
-    });
-    const afterSequence = Number.parseInt(request.query.after || "0", 10);
-    const limit = Number.parseInt(request.query.limit || "200", 10);
-    const page = await listWorkspaceFeedEventsPage({
-      workspaceId,
-      conversationIds: authorizedThreadIds,
-      afterSequence: Number.isFinite(afterSequence)
-        ? Math.max(0, afterSequence)
-        : 0,
-      limit: Number.isFinite(limit) ? limit : 200,
-    });
-    const visibleRecords = page.records.filter((record) =>
-      isFeedItemVisibleToUser(record.item, userId),
-    );
-
-    return reply.send({
-      ...page,
-      records: await Promise.all(
-        visibleRecords.map(async (record) => ({
-          ...record,
-          item: await enrichFeedItemInteractionsForUser(record.item, userId),
-        })),
-      ),
-    });
-  });
-
-  app.get<{
     Querystring: {
       workspaceId?: string;
       domain?: "workspace" | "social";
     };
-  }>(THREADS_BASE_PATH, async (request, reply) => {
+  }>(CONVERSATIONS_BASE_PATH, async (request, reply) => {
     const userId = (request as any).user!.userId;
     const threads = await getThreadsForUser({
       userId,
@@ -385,7 +341,7 @@ export default async function threadController(app: FastifyInstance) {
     );
 
     return reply.send({
-      threads: await Promise.all(
+      conversations: await Promise.all(
         threads.map((thread) => mapThreadSummary(thread, userId)),
       ),
       runtimeMap,
@@ -394,7 +350,7 @@ export default async function threadController(app: FastifyInstance) {
 
   app.post<{
     Body: unknown;
-  }>(THREADS_BASE_PATH, async (request, reply) => {
+  }>(CONVERSATIONS_BASE_PATH, async (request, reply) => {
     const body = createThreadSchema.parse(request.body);
     const userId = (request as any).user!.userId;
 
@@ -431,13 +387,13 @@ export default async function threadController(app: FastifyInstance) {
     });
 
     return reply.status(201).send({
-      threadId: created.conversation.id,
+      conversationId: created.conversation.id,
     });
   });
 
   app.get<{
     Params: { threadId: string };
-  }>(`${THREADS_BASE_PATH}/:threadId`, async (request, reply) => {
+  }>(`${CONVERSATIONS_BASE_PATH}/:threadId`, async (request, reply) => {
     const userId = (request as any).user!.userId;
     const thread = await requireThreadPermission(
       request,
@@ -454,14 +410,14 @@ export default async function threadController(app: FastifyInstance) {
     }
 
     return reply.send({
-      thread: await mapThreadSummary(summary, userId),
+      conversation: await mapThreadSummary(summary, userId),
     });
   });
 
   app.get<{
     Params: { threadId: string };
     Querystring: { limit?: string; before?: string };
-  }>(`${THREADS_BASE_PATH}/:threadId/messages`, async (request, reply) => {
+  }>(`${CONVERSATIONS_BASE_PATH}/:threadId/messages`, async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
       reply,
@@ -488,7 +444,7 @@ export default async function threadController(app: FastifyInstance) {
 
   app.get<{
     Params: { threadId: string };
-  }>(`${THREADS_BASE_PATH}/:threadId/members`, async (request, reply) => {
+  }>(`${CONVERSATIONS_BASE_PATH}/:threadId/members`, async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
       reply,
@@ -506,7 +462,7 @@ export default async function threadController(app: FastifyInstance) {
   app.post<{
     Params: { threadId: string };
     Body: unknown;
-  }>(`${THREADS_BASE_PATH}/:threadId/members`, async (request, reply) => {
+  }>(`${CONVERSATIONS_BASE_PATH}/:threadId/members`, async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
       reply,
@@ -539,7 +495,7 @@ export default async function threadController(app: FastifyInstance) {
   app.post<{
     Params: { threadId: string };
     Body: unknown;
-  }>(`${THREADS_BASE_PATH}/:threadId/messages`, async (request, reply) => {
+  }>(`${CONVERSATIONS_BASE_PATH}/:threadId/messages`, async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
       reply,
@@ -566,7 +522,10 @@ export default async function threadController(app: FastifyInstance) {
 
   app.post<{
     Params: { threadId: string };
-  }>(`${THREADS_BASE_PATH}/:threadId/read`, async (request, reply) => {
+    Body: unknown;
+  }>(
+    `${CONVERSATIONS_BASE_PATH}/:threadId/read-watermark`,
+    async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
       reply,
@@ -575,15 +534,17 @@ export default async function threadController(app: FastifyInstance) {
     );
     if (!thread) return;
 
-    const userId = (request as any).user!.userId;
-    await markConversationRead(userId, thread.id);
-    return reply.status(204).send();
-  });
+      const userId = (request as any).user!.userId;
+      const body = markReadWatermarkSchema.parse(request.body);
+      await markConversationRead(userId, thread.id, body.readUpToSequence);
+      return reply.status(204).send();
+    },
+  );
 
   app.put<{
     Params: { threadId: string };
     Body: unknown;
-  }>(`${THREADS_BASE_PATH}/:threadId`, async (request, reply) => {
+  }>(`${CONVERSATIONS_BASE_PATH}/:threadId`, async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
       reply,
@@ -612,7 +573,7 @@ export default async function threadController(app: FastifyInstance) {
 
   app.delete<{
     Params: { threadId: string };
-  }>(`${THREADS_BASE_PATH}/:threadId`, async (request, reply) => {
+  }>(`${CONVERSATIONS_BASE_PATH}/:threadId`, async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
       reply,
@@ -627,7 +588,7 @@ export default async function threadController(app: FastifyInstance) {
 
   app.delete<{
     Params: { threadId: string; actorId: string };
-  }>(`${THREADS_BASE_PATH}/:threadId/members/:actorId`, async (request, reply) => {
+  }>(`${CONVERSATIONS_BASE_PATH}/:threadId/members/:actorId`, async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
       reply,
@@ -651,7 +612,7 @@ export default async function threadController(app: FastifyInstance) {
     Params: { threadId: string; interactionId: string };
     Body: unknown;
   }>(
-    `${THREADS_BASE_PATH}/:threadId/interactions/:interactionId/respond`,
+    `${CONVERSATIONS_BASE_PATH}/:threadId/interactions/:interactionId/respond`,
     async (request, reply) => {
       const thread = await requireThreadPermission(
         request,
@@ -702,7 +663,7 @@ export default async function threadController(app: FastifyInstance) {
 
   app.get<{
     Params: { threadId: string };
-  }>(`${THREADS_BASE_PATH}/:threadId/grants`, async (request, reply) => {
+  }>(`${CONVERSATIONS_BASE_PATH}/:threadId/grants`, async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
       reply,
@@ -725,7 +686,7 @@ export default async function threadController(app: FastifyInstance) {
   app.post<{
     Params: { threadId: string };
     Body: unknown;
-  }>(`${THREADS_BASE_PATH}/:threadId/grants`, async (request, reply) => {
+  }>(`${CONVERSATIONS_BASE_PATH}/:threadId/grants`, async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
       reply,
@@ -757,7 +718,7 @@ export default async function threadController(app: FastifyInstance) {
 
   app.post<{
     Params: { threadId: string; grantId: string };
-  }>(`${THREADS_BASE_PATH}/:threadId/grants/:grantId/revoke`, async (request, reply) => {
+  }>(`${CONVERSATIONS_BASE_PATH}/:threadId/grants/:grantId/revoke`, async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
       reply,
@@ -786,7 +747,7 @@ export default async function threadController(app: FastifyInstance) {
 
   app.get<{
     Params: { threadId: string };
-  }>(`${THREADS_BASE_PATH}/:threadId/transport-binding`, async (request, reply) => {
+  }>(`${CONVERSATIONS_BASE_PATH}/:threadId/transport-binding`, async (request, reply) => {
     const thread = await requireThreadPermission(
       request,
       reply,

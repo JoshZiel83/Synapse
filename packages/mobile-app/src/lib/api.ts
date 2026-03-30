@@ -15,13 +15,12 @@ import type {
   AuthQrLoginStatusResponse,
   AuthResponse,
   ContactDiscoveryResponse,
+  ConversationCollectionResponse,
+  ConversationCreateResponse,
   ConversationMemberListResponse,
   ConversationSendResponse,
   ScopedContactsResponse,
-  ThreadCollectionResponse,
-  ThreadCreateResponse,
   UploadAssetInput,
-  WorkspaceFeedPageResponse,
   WorkspaceChiefActorPreference,
   WorkspaceListResponse,
   WorkspaceMemberListResponse,
@@ -117,18 +116,20 @@ function normalizeActorListResponse(data: unknown): ActorListResponse {
   return { actors: [] };
 }
 
-function normalizeThreadCollectionResponse(data: unknown): ThreadCollectionResponse {
+function normalizeConversationCollectionResponse(
+  data: unknown,
+): ConversationCollectionResponse {
   if (Array.isArray(data)) {
-    return { threads: data };
+    return { conversations: data };
   }
 
   if (data && typeof data === "object") {
     const objectData = data as {
-      threads?: unknown;
+      conversations?: unknown;
       runtimeMap?: unknown;
     };
     return {
-      threads: asArray(objectData.threads),
+      conversations: asArray(objectData.conversations),
       runtimeMap:
         objectData.runtimeMap && typeof objectData.runtimeMap === "object"
           ? (objectData.runtimeMap as Record<string, unknown>)
@@ -136,7 +137,7 @@ function normalizeThreadCollectionResponse(data: unknown): ThreadCollectionRespo
     };
   }
 
-  return { threads: [] };
+  return { conversations: [] };
 }
 
 function normalizeScopedContactsResponse(data: unknown): ScopedContactsResponse {
@@ -350,16 +351,18 @@ class ApiClient {
     );
   }
 
-  getThreads(workspaceId: string): Promise<ThreadCollectionResponse> {
+  getThreads(workspaceId: string): Promise<ConversationCollectionResponse> {
     return this.request<unknown>(
-      `/threads?${new URLSearchParams({ workspaceId }).toString()}`,
-    ).then(normalizeThreadCollectionResponse);
+      `/conversations?${new URLSearchParams({ workspaceId }).toString()}`,
+    ).then(normalizeConversationCollectionResponse);
   }
 
   getThread(threadId: string) {
-    return this.request<{ thread: unknown }>(`/threads/${threadId}`).then(
+    return this.request<{ conversation: unknown }>(
+      `/conversations/${threadId}`,
+    ).then(
       (data) => ({
-        thread: (data?.thread || null) as any,
+        conversation: (data?.conversation || null) as any,
       }),
     );
   }
@@ -374,24 +377,11 @@ class ApiClient {
     content?: string;
     contentBlocks?: CanonicalContentBlock[];
     targetActorIds?: string[];
-  }): Promise<ThreadCreateResponse> {
-    return this.request<ThreadCreateResponse>("/threads", {
+  }): Promise<ConversationCreateResponse> {
+    return this.request<ConversationCreateResponse>("/conversations", {
       method: "POST",
       body: JSON.stringify(input),
     });
-  }
-
-  getWorkspaceFeed(
-    workspaceId: string,
-    after = 0,
-    limit = 200,
-  ): Promise<WorkspaceFeedPageResponse> {
-    const params = new URLSearchParams();
-    params.set("after", String(Math.max(0, after)));
-    params.set("limit", String(limit));
-    return this.request<WorkspaceFeedPageResponse>(
-      `/workspaces/${workspaceId}/threads/feed?${params.toString()}`,
-    );
   }
 
   getThreadMessages(
@@ -404,13 +394,13 @@ class ApiClient {
     if (before) params.set("before", before);
     const query = params.toString();
     return this.request<ConversationFeedPage>(
-      `/threads/${threadId}/messages${query ? `?${query}` : ""}`,
+      `/conversations/${threadId}/messages${query ? `?${query}` : ""}`,
     );
   }
 
   getThreadMembers(threadId: string): Promise<ConversationMemberListResponse> {
     return this.request<ConversationMemberListResponse>(
-      `/threads/${threadId}/members`,
+      `/conversations/${threadId}/members`,
     );
   }
 
@@ -420,7 +410,7 @@ class ApiClient {
     clientMessageId: string,
   ): Promise<ConversationSendResponse> {
     return this.request<ConversationSendResponse>(
-      `/threads/${threadId}/messages`,
+      `/conversations/${threadId}/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -436,7 +426,7 @@ class ApiClient {
     input: { actorIds?: string[]; userIds?: string[] },
   ): Promise<ConversationMemberListResponse> {
     return this.request<ConversationMemberListResponse>(
-      `/threads/${threadId}/members`,
+      `/conversations/${threadId}/members`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -447,10 +437,10 @@ class ApiClient {
     );
   }
 
-  markThreadRead(threadId: string) {
-    return this.request<void>(`/threads/${threadId}/read`, {
+  markThreadRead(threadId: string, readUpToSequence: number) {
+    return this.request<void>(`/conversations/${threadId}/read-watermark`, {
       method: "POST",
-      body: "{}",
+      body: JSON.stringify({ readUpToSequence }),
     });
   }
 

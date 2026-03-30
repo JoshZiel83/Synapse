@@ -47,7 +47,10 @@ export default function ConversationDetailScreen() {
           api.getThreadMembers(conversationId),
         ]);
 
-        setConversation((threadResponse.thread as ConversationSummaryView | null) ?? null);
+        setConversation(
+          (threadResponse.conversation as ConversationSummaryView | null) ??
+            null,
+        );
         setMembers(membersResponse.members);
         setError(null);
       } catch (nextError) {

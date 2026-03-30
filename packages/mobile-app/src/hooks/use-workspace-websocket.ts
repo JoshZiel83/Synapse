@@ -1,207 +1,264 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { getWebSocketUrl } from "@/lib/config";
+import {
+  flushPendingConversationMessages,
+  flushPendingConversationReads,
+} from "@/lib/chat-sync";
 import { useSession } from "@/providers/session-provider";
 import type { ChatSocketEvent } from "@shared";
 
+export type WorkspaceSocketSubscription =
+  | {
+      key: string;
+      topic: "inbox";
+      workspaceId?: string | null;
+    }
+  | {
+      key: string;
+      topic: "conversation";
+      conversationId: string;
+    };
+
 interface UseWorkspaceWebSocketOptions {
-  workspaceId: string | null;
   enabled?: boolean;
+  subscriptions: WorkspaceSocketSubscription[];
   onEvent?: (event: ChatSocketEvent | Record<string, unknown>) => void;
-  onConnected?: (payload: {
-    workspaceId: string;
-    lastWorkspaceSequence: number;
-  }) => void;
-  onGap?: (payload?: {
-    expectedWorkspaceSequence?: number;
-    actualWorkspaceSequence?: number;
-  }) => void;
+  onConnected?: () => void;
 }
 
-export function useWorkspaceWebSocket({
-  workspaceId,
-  enabled = true,
-  onEvent,
-  onConnected,
-  onGap,
-}: UseWorkspaceWebSocketOptions) {
-  const socketRef = useRef<WebSocket | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reconnectAttemptsRef = useRef(0);
-  const mountedRef = useRef(true);
-  const manuallyClosedRef = useRef(false);
-  const workspaceSequenceRef = useRef(0);
-  const { token } = useSession();
-  const onEventRef = useRef(onEvent);
-  const onConnectedRef = useRef(onConnected);
-  const onGapRef = useRef(onGap);
+type HookSubscriber = {
+  id: string;
+  enabled: boolean;
+  token?: string | null;
+  subscriptions: WorkspaceSocketSubscription[];
+  onEvent?: (event: ChatSocketEvent | Record<string, unknown>) => void;
+  onConnected?: () => void;
+};
 
-  useEffect(() => {
-    onEventRef.current = onEvent;
-  }, [onEvent]);
+const hookSubscribers = new Map<string, HookSubscriber>();
 
-  useEffect(() => {
-    onConnectedRef.current = onConnected;
-  }, [onConnected]);
+let sharedSocket: WebSocket | null = null;
+let sharedReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let sharedReconnectAttempts = 0;
+let sharedAuthenticated = false;
+let sharedSentSubscriptions = new Map<string, string>();
+let sharedActiveToken: string | null = null;
 
-  useEffect(() => {
-    onGapRef.current = onGap;
-  }, [onGap]);
+function getActiveSubscribers() {
+  return [...hookSubscribers.values()].filter(
+    (subscriber) => subscriber.enabled && subscriber.token,
+  );
+}
 
-  const cleanup = useCallback(() => {
-    if (reconnectTimerRef.current) {
-      clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
+function getSharedToken() {
+  return getActiveSubscribers()[0]?.token || null;
+}
+
+function getDesiredSubscriptions() {
+  const subscriptions = new Map<string, string>();
+  for (const subscriber of getActiveSubscribers()) {
+    for (const subscription of subscriber.subscriptions) {
+      subscriptions.set(subscription.key, JSON.stringify(subscription));
     }
+  }
+  return subscriptions;
+}
 
-    if (socketRef.current) {
-      socketRef.current.onopen = null;
-      socketRef.current.onmessage = null;
-      socketRef.current.onclose = null;
-      socketRef.current.onerror = null;
-      socketRef.current.close();
-      socketRef.current = null;
-    }
-  }, []);
+function dispatchEvent(event: ChatSocketEvent | Record<string, unknown>) {
+  for (const subscriber of getActiveSubscribers()) {
+    subscriber.onEvent?.(event);
+  }
+}
 
-  const connect = useCallback(() => {
-    if (!mountedRef.current || !enabled || !workspaceId || !token) return;
+function dispatchConnected() {
+  for (const subscriber of getActiveSubscribers()) {
+    subscriber.onConnected?.();
+  }
+}
 
-    manuallyClosedRef.current = false;
-    cleanup();
+function clearSharedReconnectTimer() {
+  if (sharedReconnectTimer) {
+    clearTimeout(sharedReconnectTimer);
+    sharedReconnectTimer = null;
+  }
+}
 
-    const socket = new WebSocket(getWebSocketUrl());
-    socketRef.current = socket;
+function closeSharedSocket() {
+  clearSharedReconnectTimer();
+  sharedAuthenticated = false;
+  sharedSentSubscriptions.clear();
+  if (sharedSocket) {
+    sharedSocket.onopen = null;
+    sharedSocket.onmessage = null;
+    sharedSocket.onclose = null;
+    sharedSocket.onerror = null;
+    sharedSocket.close();
+    sharedSocket = null;
+  }
+}
 
-    socket.onopen = () => {
-      reconnectAttemptsRef.current = 0;
-      socket.send(
-        JSON.stringify({
-          type: "auth",
-          workspaceId,
-          token,
-          lastWorkspaceSequence: workspaceSequenceRef.current,
-        }),
-      );
-    };
+function syncSharedSubscriptions() {
+  if (
+    !sharedSocket ||
+    sharedSocket.readyState !== WebSocket.OPEN ||
+    !sharedAuthenticated
+  ) {
+    return;
+  }
 
-    socket.onmessage = (event) => {
-      try {
-        const parsed = JSON.parse(event.data) as Record<string, unknown>;
-        const rawType = typeof parsed.type === "string" ? parsed.type : "";
-        const normalizedType =
-          rawType === "auth_ok"
-            ? "auth.ok"
-            : rawType === "auth_error"
-              ? "auth.error"
-              : rawType === "server_shutdown"
-                ? "server.shutdown"
-                : rawType;
+  const desired = getDesiredSubscriptions();
+  for (const [key] of sharedSentSubscriptions) {
+    if (desired.has(key)) continue;
+    sharedSocket.send(
+      JSON.stringify({
+        type: "unsubscribe",
+        key,
+      }),
+    );
+    sharedSentSubscriptions.delete(key);
+  }
 
-        const normalized = {
-          ...parsed,
-          type: normalizedType,
-        } as ChatSocketEvent | Record<string, unknown>;
+  for (const [key, serialized] of desired) {
+    if (sharedSentSubscriptions.get(key) === serialized) continue;
+    sharedSocket.send(
+      JSON.stringify({
+        type: "subscribe",
+        ...JSON.parse(serialized),
+      }),
+    );
+    sharedSentSubscriptions.set(key, serialized);
+  }
+}
 
-        if (normalizedType === "auth.ok") {
-          const payload = (normalized as ChatSocketEvent<"auth.ok">).payload;
-          workspaceSequenceRef.current = Number(
-            payload.lastWorkspaceSequence || workspaceSequenceRef.current || 0,
-          );
-          onConnectedRef.current?.({
-            workspaceId,
-            lastWorkspaceSequence: workspaceSequenceRef.current,
-          });
-          return;
-        }
+function ensureSharedSocket() {
+  const token = getSharedToken();
+  if (!token) {
+    sharedActiveToken = null;
+    closeSharedSocket();
+    return;
+  }
 
-        if (normalizedType === "auth.error") {
-          manuallyClosedRef.current = true;
-          cleanup();
-          return;
-        }
+  if (sharedActiveToken && sharedActiveToken !== token) {
+    sharedActiveToken = token;
+    closeSharedSocket();
+  }
 
-        if (normalizedType === "ping") {
-          socket.send(JSON.stringify({ type: "pong" }));
-          return;
-        }
+  if (sharedSocket) {
+    syncSharedSubscriptions();
+    return;
+  }
 
-        if (normalizedType === "feed.resync.required") {
-          const payload = (
-            normalized as ChatSocketEvent<"feed.resync.required">
-          ).payload;
-          onGapRef.current?.({
-            expectedWorkspaceSequence: payload.expectedWorkspaceSequence,
-            actualWorkspaceSequence: payload.actualWorkspaceSequence,
-          });
-          return;
-        }
+  sharedActiveToken = token;
+  const socket = new WebSocket(getWebSocketUrl());
+  sharedSocket = socket;
 
-        if (normalizedType === "feed.item.created") {
-          const payload = (normalized as ChatSocketEvent<"feed.item.created">)
-            .payload;
-          const nextSequence = Number(payload.workspaceSequence || 0);
-          const currentSequence = workspaceSequenceRef.current;
+  socket.onopen = () => {
+    sharedReconnectAttempts = 0;
+    socket.send(
+      JSON.stringify({
+        type: "auth",
+        token,
+      }),
+    );
+  };
 
-          if (
-            !Number.isFinite(nextSequence) ||
-            nextSequence <= currentSequence
-          ) {
-            return;
-          }
+  socket.onmessage = (event) => {
+    try {
+      const parsed = JSON.parse(event.data) as Record<string, unknown>;
+      const rawType = typeof parsed.type === "string" ? parsed.type : "";
+      const normalizedType =
+        rawType === "auth_ok"
+          ? "auth.ok"
+          : rawType === "auth_error"
+            ? "auth.error"
+            : rawType === "server_shutdown"
+              ? "server.shutdown"
+              : rawType;
 
-          if (nextSequence > currentSequence + 1) {
-            workspaceSequenceRef.current = nextSequence;
-            onGapRef.current?.({
-              expectedWorkspaceSequence: currentSequence + 1,
-              actualWorkspaceSequence: nextSequence,
-            });
-            return;
-          }
+      const normalized = {
+        ...parsed,
+        type: normalizedType,
+      } as ChatSocketEvent | Record<string, unknown>;
 
-          workspaceSequenceRef.current = nextSequence;
-          onEventRef.current?.(
-            normalized as ChatSocketEvent<"feed.item.created">,
-          );
-          return;
-        }
-
-        onEventRef.current?.(normalized);
-      } catch {
-        // Ignore malformed websocket frames.
-      }
-    };
-
-    socket.onclose = () => {
-      if (!mountedRef.current || manuallyClosedRef.current) {
+      if (normalizedType === "auth.ok") {
+        sharedAuthenticated = true;
+        syncSharedSubscriptions();
+        void flushPendingConversationReads();
+        void flushPendingConversationMessages();
+        dispatchConnected();
         return;
       }
 
-      reconnectAttemptsRef.current += 1;
-      const delay = Math.min(5000, 1000 * reconnectAttemptsRef.current);
-      reconnectTimerRef.current = setTimeout(() => {
-        reconnectTimerRef.current = null;
-        connect();
-      }, delay);
-    };
+      if (normalizedType === "auth.error") {
+        closeSharedSocket();
+        return;
+      }
 
-    socket.onerror = () => {
-      // Let the close handler schedule reconnects.
-    };
-  }, [cleanup, enabled, token, workspaceId]);
+      if (normalizedType === "ping") {
+        socket.send(JSON.stringify({ type: "pong" }));
+        return;
+      }
 
-  useEffect(() => {
-    mountedRef.current = true;
-    workspaceSequenceRef.current = 0;
+      dispatchEvent(normalized);
+    } catch {
+      // Ignore malformed websocket frames.
+    }
+  };
 
-    if (enabled && workspaceId && token) {
-      connect();
+  socket.onclose = () => {
+    sharedAuthenticated = false;
+    sharedSentSubscriptions.clear();
+    sharedSocket = null;
+
+    if (!getSharedToken()) {
+      return;
     }
 
+    sharedReconnectAttempts += 1;
+    const delay = Math.min(5000, 1000 * sharedReconnectAttempts);
+    clearSharedReconnectTimer();
+    sharedReconnectTimer = setTimeout(() => {
+      sharedReconnectTimer = null;
+      ensureSharedSocket();
+    }, delay);
+  };
+
+  socket.onerror = () => {
+    // Let onclose drive reconnect.
+  };
+}
+
+function createSubscriberId() {
+  return `ws-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export function useWorkspaceWebSocket({
+  enabled = true,
+  subscriptions,
+  onEvent,
+  onConnected,
+}: UseWorkspaceWebSocketOptions) {
+  const { token } = useSession();
+  const subscriberIdRef = useRef<string>(createSubscriberId());
+
+  useEffect(() => {
+    const subscriberId = subscriberIdRef.current;
+    hookSubscribers.set(subscriberId, {
+      id: subscriberId,
+      enabled,
+      token,
+      subscriptions,
+      onEvent,
+      onConnected,
+    });
+    ensureSharedSocket();
+    syncSharedSubscriptions();
+
     return () => {
-      mountedRef.current = false;
-      manuallyClosedRef.current = true;
-      cleanup();
+      hookSubscribers.delete(subscriberId);
+      syncSharedSubscriptions();
+      ensureSharedSocket();
     };
-  }, [cleanup, connect, enabled, token, workspaceId]);
+  }, [enabled, onConnected, onEvent, subscriptions, token]);
 }

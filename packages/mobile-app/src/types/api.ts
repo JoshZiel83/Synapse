@@ -8,7 +8,6 @@ import type {
   ConversationFeedPage,
   FileRecordView,
   User,
-  WorkspaceFeedEventRecord,
   WorkspaceChiefActorPreference,
 } from "@shared";
 
@@ -156,8 +155,8 @@ export interface ConversationSummaryView {
   };
 }
 
-export interface ThreadCollectionResponse {
-  threads: ConversationSummaryView[];
+export interface ConversationCollectionResponse {
+  conversations: ConversationSummaryView[];
   runtimeMap?: Record<string, unknown>;
 }
 
@@ -165,8 +164,8 @@ export interface ConversationMemberListResponse {
   members: ConversationParticipantView[];
 }
 
-export interface ThreadCreateResponse {
-  threadId: string;
+export interface ConversationCreateResponse {
+  conversationId: string;
 }
 
 export interface ConversationSendResponse {
@@ -177,14 +176,6 @@ export interface UploadAssetInput {
   uri: string;
   name: string;
   mimeType: string;
-}
-
-export interface WorkspaceFeedPageResponse {
-  records: WorkspaceFeedEventRecord[];
-  hasMore: boolean;
-  nextAfter?: number;
-  after?: number;
-  limit?: number;
 }
 
 export type {

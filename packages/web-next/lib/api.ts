@@ -27,7 +27,6 @@ import type {
   TransportExternalUserSummary,
   TransportSessionSummary,
   WeixinQrLoginSessionSummary,
-  WorkspaceFeedPage,
   WorkspaceChiefActorPreference,
   RelayDashboardView,
   RelayDeviceDetailView,
@@ -861,16 +860,19 @@ class ApiClient {
   getThreads(
     wsId: string,
     options?: { domain?: "workspace" | "social" }
-  ) {
+  ): Promise<{
+    conversations: unknown[]
+    runtimeMap?: Record<string, unknown>
+  }> {
     const params = new URLSearchParams({ workspaceId: wsId })
     if (options?.domain) params.set("domain", options.domain)
-    return this.fetch(`/threads?${params.toString()}`)
+    return this.fetch(`/conversations?${params.toString()}`)
   }
   updateThread(
     threadId: string,
     data: { title?: string; avatarFileId?: string | null }
   ) {
-    return this.fetch(`/threads/${threadId}`, {
+    return this.fetch(`/conversations/${threadId}`, {
       method: "PUT",
       body: JSON.stringify(data),
     })
@@ -885,8 +887,8 @@ class ApiClient {
     content?: string
     contentBlocks?: CanonicalContentBlock[]
     targetActorIds?: string[]
-  }): Promise<{ threadId: string }> {
-    return this.fetch(`/threads`, {
+  }): Promise<{ conversationId: string }> {
+    return this.fetch(`/conversations`, {
       method: "POST",
       body: JSON.stringify(data),
     })
@@ -900,31 +902,16 @@ class ApiClient {
     if (limit) params.set("limit", String(limit))
     if (before) params.set("before", before)
     const qs = params.toString()
-    return this.fetch(`/threads/${threadId}/messages${qs ? "?" + qs : ""}`)
-  }
-  getWorkspaceFeed(
-    wsId: string,
-    after?: number,
-    limit?: number
-  ): Promise<WorkspaceFeedPage> {
-    const params = new URLSearchParams()
-    if (typeof after === "number" && Number.isFinite(after) && after > 0) {
-      params.set("after", String(after))
-    }
-    if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
-      params.set("limit", String(limit))
-    }
-    const qs = params.toString()
-    return this.fetch(`/workspaces/${wsId}/threads/feed${qs ? "?" + qs : ""}`)
+    return this.fetch(`/conversations/${threadId}/messages${qs ? "?" + qs : ""}`)
   }
   getThreadMembers(threadId: string) {
-    return this.fetch(`/threads/${threadId}/members`)
+    return this.fetch(`/conversations/${threadId}/members`)
   }
   addThreadMembers(
     threadId: string,
     data: { actorIds?: string[]; userIds?: string[] }
   ) {
-    return this.fetch(`/threads/${threadId}/members`, {
+    return this.fetch(`/conversations/${threadId}/members`, {
       method: "POST",
       body: JSON.stringify(data),
     })
@@ -949,7 +936,7 @@ class ApiClient {
       body.targetParticipantIds = targetParticipantIds
     if (targetActorIds && targetActorIds.length > 0)
       body.targetActorIds = targetActorIds
-    return this.fetch(`/threads/${threadId}/messages`, {
+    return this.fetch(`/conversations/${threadId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
     })
@@ -970,7 +957,7 @@ class ApiClient {
     }
   ): Promise<{ interaction: InteractionRequestSummary }> {
     return this.fetch(
-      `/threads/${threadId}/interactions/${interactionId}/respond`,
+      `/conversations/${threadId}/interactions/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(data),
@@ -1101,7 +1088,7 @@ class ApiClient {
   getThreadTransportBinding(
     threadId: string
   ): Promise<{ binding: ConversationTransportBindingSummary | null }> {
-    return this.fetch(`/threads/${threadId}/transport-binding`)
+    return this.fetch(`/conversations/${threadId}/transport-binding`)
   }
   updateTransportSessionSettings(
     wsId: string,
@@ -1126,14 +1113,14 @@ class ApiClient {
       }
     )
   }
-  markThreadRead(threadId: string) {
-    return this.fetch(`/threads/${threadId}/read`, {
+  markThreadRead(threadId: string, readUpToSequence: number) {
+    return this.fetch(`/conversations/${threadId}/read-watermark`, {
       method: "POST",
-      body: "{}",
+      body: JSON.stringify({ readUpToSequence }),
     })
   }
   cancelThread(threadId: string) {
-    return this.fetch(`/threads/${threadId}`, {
+    return this.fetch(`/conversations/${threadId}`, {
       method: "DELETE",
     })
   }

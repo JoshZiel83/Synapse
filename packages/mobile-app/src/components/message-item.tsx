@@ -146,6 +146,10 @@ export function MessageItem({ item }: { item: ConversationFeedItem }) {
   }
 
   const mine = isUserMessage(item);
+  const localDeliveryStatus =
+    typeof item.metadata?.localDeliveryStatus === "string"
+      ? item.metadata.localDeliveryStatus
+      : undefined;
 
   return (
     <View style={[styles.messageRow, mine ? styles.messageRowMine : styles.messageRowOther]}>
@@ -162,9 +166,16 @@ export function MessageItem({ item }: { item: ConversationFeedItem }) {
         <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}>
           <MessageBlocks item={item} mine={mine} />
         </View>
-        <Text style={[styles.timestamp, mine && styles.timestampMine]}>
-          {formatTimestamp(item.createdAt)}
-        </Text>
+        <View style={[styles.metaRow, mine && styles.metaRowMine]}>
+          {localDeliveryStatus ? (
+            <Text style={[styles.deliveryStatus, mine && styles.deliveryStatusMine]}>
+              {localDeliveryStatus === "retrying" ? "待重试" : "发送中"}
+            </Text>
+          ) : null}
+          <Text style={[styles.timestamp, mine && styles.timestampMine]}>
+            {formatTimestamp(item.createdAt)}
+          </Text>
+        </View>
       </View>
     </View>
   );
@@ -241,6 +252,22 @@ const styles = StyleSheet.create({
   },
   timestampMine: {
     textAlign: 'right',
+  },
+  metaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  metaRowMine: {
+    justifyContent: "flex-end",
+  },
+  deliveryStatus: {
+    fontSize: 11,
+    color: theme.colors.textSoft,
+    fontWeight: "700",
+  },
+  deliveryStatusMine: {
+    color: theme.colors.primary,
   },
   imageAttachment: {
     width: 220,

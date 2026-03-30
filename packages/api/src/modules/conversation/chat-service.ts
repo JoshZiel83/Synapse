@@ -8,7 +8,11 @@ import {
   touchActorConversationContext,
   touchRelation,
 } from "../../infrastructure/authz/index.js";
-import { emitEvent } from "../../infrastructure/events/index.js";
+import {
+  emitEvent,
+  enqueueTransactionalEvent,
+  type Queryable,
+} from "../../infrastructure/events/index.js";
 import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
 import {
@@ -19,16 +23,17 @@ import { v4 as uuidv4 } from "uuid";
 import {
   conversationItemRowToFeedItem,
   createConversationEvent,
-  getConversationFeedItemById,
   createConversationItem,
   ensureConversationMember,
+  getConversationFeedItemById,
   getConversationMember,
-  getLastVisibleConversationItem,
+  getConversationReadState,
   getSharedVisibleConversationItems,
   getVisibleConversationItemsForMember,
   listConversationMembers,
   listUserWorkspaceConversations,
   markConversationRead as markConversationCursorRead,
+  resolveReadableConversationSequenceForUser,
 } from "./service.js";
 import { activateConversationParticipant } from "./participant-activation.js";
 import {
@@ -295,29 +300,36 @@ function buildTextContentFromParts(parts: any[]) {
   return jsonParts.join("\n");
 }
 
-async function emitFeedItemCreated(workspaceId: string, itemId: string) {
-  const item = await getConversationFeedItemById(itemId);
-  if (!item || item.workspaceSequence === undefined) return;
-
-  await emitEvent({
-    type: "feed.item.created",
-    workspaceId,
+async function queueConversationReadUpdated(params: {
+  queryable: Queryable;
+  workspaceId: string;
+  conversationId: string;
+  userId: string;
+  readWatermarkSequence: number;
+  lastReadAt?: string;
+}) {
+  await enqueueTransactionalEvent(params.queryable, {
+    type: "conversation.read.updated",
+    workspaceId: params.workspaceId,
     payload: {
-      workspaceSequence: item.workspaceSequence,
-      item,
+      conversationId: params.conversationId,
+      userId: params.userId,
+      readWatermarkSequence: params.readWatermarkSequence,
+      lastReadAt: params.lastReadAt || nowISO(),
     },
     timestamp: nowISO(),
   });
 }
 
-async function emitConversationUpdated(params: {
+async function queueConversationUpdated(params: {
+  queryable: Queryable;
   workspaceId: string;
   conversationId: string;
   action: "created" | "profile_updated" | "cancelled";
   title?: string | null;
   avatarUrl?: string | null;
 }) {
-  await emitEvent({
+  await enqueueTransactionalEvent(params.queryable, {
     type: "conversation.updated",
     workspaceId: params.workspaceId,
     payload: {
@@ -513,10 +525,6 @@ async function recordMembershipEvent(params: {
       })),
     },
   });
-
-  if (params.workspaceId) {
-    await emitFeedItemCreated(params.workspaceId, created.item.id);
-  }
   return created;
 }
 
@@ -859,6 +867,15 @@ export async function createThread(params: {
     );
     const conversation = normalizeConversationRow(conversationResult.rows[0]);
 
+    if (domain === "workspace" && workspaceId) {
+      await queueConversationUpdated({
+        queryable: client,
+        workspaceId,
+        conversationId,
+        action: "created",
+      });
+    }
+
     const members: any[] = [];
     const joinedMembers: Array<{
       participantId: string;
@@ -1014,14 +1031,6 @@ export async function createThread(params: {
     }
   }
 
-  if (domain === "workspace" && workspaceId) {
-    await emitConversationUpdated({
-      workspaceId,
-      conversationId: conversationId,
-      action: "created",
-    });
-  }
-
   return {
     conversation: result.conversation,
     members: result.members,
@@ -1071,24 +1080,28 @@ export async function updateConversationProfile(params: {
   const nextTitle =
     title === undefined ? conversation.title : title || conversation.title;
 
-  const result = await query(
-    `UPDATE conversations
-     SET title = $2,
-         metadata = $3::jsonb,
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [params.conversationId, nextTitle, JSON.stringify(nextMetadata)],
-  );
+  const updated = await transaction(async (client) => {
+    const result = await client.query(
+      `UPDATE conversations
+       SET title = $2,
+           metadata = $3::jsonb,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [params.conversationId, nextTitle, JSON.stringify(nextMetadata)],
+    );
 
-  const updated = normalizeConversationRow(result.rows[0]);
+    const nextConversation = normalizeConversationRow(result.rows[0]);
+    await queueConversationUpdated({
+      queryable: client,
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      action: "profile_updated",
+      title: nextConversation.title,
+      avatarUrl: nextConversation.avatar_url || null,
+    });
 
-  await emitConversationUpdated({
-    workspaceId: params.workspaceId,
-    conversationId: params.conversationId,
-    action: "profile_updated",
-    title: updated.title,
-    avatarUrl: updated.avatar_url || null,
+    return nextConversation;
   });
 
   return updated;
@@ -1106,7 +1119,7 @@ export async function getConversationsByWorkspace(
             `SELECT c.*,
                   transport_account.transport_kind,
                   cr.last_read_at,
-                  COALESCE(cr.last_read_sequence, 0) AS last_read_sequence,
+                  COALESCE(cr.read_watermark_sequence, 0) AS read_watermark_sequence,
                   (
                     SELECT COUNT(*)::int
                     FROM conversation_items ci
@@ -1131,14 +1144,14 @@ export async function getConversationsByWorkspace(
                             AND cm_target.user_id = $2
                         )
                       )
-                      AND ci.sequence > COALESCE(cr.last_read_sequence, 0)
+                      AND ci.sequence > COALESCE(cr.read_watermark_sequence, 0)
                   ) AS unread_count
            FROM conversations c
            LEFT JOIN conversation_transport_bindings ctb
              ON ctb.conversation_id = c.id
 	           LEFT JOIN transport_accounts transport_account
 	             ON transport_account.id = ctb.transport_account_id
-	           LEFT JOIN conversation_reads cr ON cr.conversation_id = c.id AND cr.user_id = $2
+	           LEFT JOIN conversation_user_states cr ON cr.conversation_id = c.id AND cr.user_id = $2
 	           WHERE c.workspace_id = $1
 	             AND c.domain = 'workspace'
 	             AND c.id = ANY($3::uuid[])
@@ -1283,7 +1296,7 @@ export async function getThreadsForUser(params: {
       `SELECT c.*,
               transport_account.transport_kind,
               cr.last_read_at,
-              COALESCE(cr.last_read_sequence, 0) AS last_read_sequence,
+              COALESCE(cr.read_watermark_sequence, 0) AS read_watermark_sequence,
               (
                 SELECT COUNT(*)::int
                 FROM conversation_items ci
@@ -1308,7 +1321,7 @@ export async function getThreadsForUser(params: {
                         AND cm_target.user_id = $1
                     )
                   )
-                  AND ci.sequence > COALESCE(cr.last_read_sequence, 0)
+                  AND ci.sequence > COALESCE(cr.read_watermark_sequence, 0)
               ) AS unread_count
        FROM conversations c
        JOIN conversation_members cm
@@ -1319,7 +1332,7 @@ export async function getThreadsForUser(params: {
          ON ctb.conversation_id = c.id
        LEFT JOIN transport_accounts transport_account
          ON transport_account.id = ctb.transport_account_id
-       LEFT JOIN conversation_reads cr
+       LEFT JOIN conversation_user_states cr
          ON cr.conversation_id = c.id
         AND cr.user_id = $1
        WHERE 1 = 1
@@ -2209,9 +2222,6 @@ export async function sendConversationMessage(params: {
     throw error;
   }
 
-  if (conversation.workspace_id) {
-    await emitFeedItemCreated(conversation.workspace_id, item.id);
-  }
   if (conversation.workspace_id && hasExplicitTransportTargets) {
     await queueConversationTransportProjection({
       workspaceId: conversation.workspace_id,
@@ -2322,6 +2332,13 @@ export async function getConversationMessages(
     nextBeforeSequence: pageItems[0]?.sequence
       ? Number(pageItems[0].sequence)
       : undefined,
+    ...(viewer.userId
+      ? {
+          readWatermarkSequence: (
+            await getConversationReadState(viewer.userId, conversationId)
+          ).readWatermarkSequence,
+        }
+      : {}),
   };
 }
 
@@ -2660,35 +2677,82 @@ async function assertActiveConversationActorMember(
 export async function markConversationRead(
   userId: string,
   conversationId: string,
+  requestedSequence?: number,
 ): Promise<void> {
-  const lastItem = await getLastVisibleConversationItem(conversationId);
-  await markConversationCursorRead(
-    userId,
-    conversationId,
-    lastItem?.sequence ? Number(lastItem.sequence) : 0,
-  );
+  const conversation = await getConversation(conversationId);
+  if (!conversation) {
+    return;
+  }
+
+  const resolvedSequence =
+    typeof requestedSequence === "number" && Number.isFinite(requestedSequence)
+      ? await resolveReadableConversationSequenceForUser({
+          conversationId,
+          userId,
+          maxSequence: requestedSequence,
+        })
+      : await resolveReadableConversationSequenceForUser({
+          conversationId,
+          userId,
+        });
+
+  await transaction(async (client) => {
+    await markConversationCursorRead(
+      userId,
+      conversationId,
+      resolvedSequence,
+      client,
+    );
+
+    if (!conversation.workspace_id) {
+      return;
+    }
+
+    const state = await getConversationReadState(userId, conversationId, client);
+    await queueConversationReadUpdated({
+      queryable: client,
+      workspaceId: conversation.workspace_id,
+      conversationId,
+      userId,
+      readWatermarkSequence: state.readWatermarkSequence,
+      lastReadAt: state.lastReadAt,
+    });
+  });
 }
 
 // ============ Cancel Conversation ============
 
 export async function cancelConversation(conversationId: string): Promise<void> {
-  const closed = await query(
-    `UPDATE sessions
-     SET status = 'closed', completed_at = NOW(), updated_at = NOW()
-     WHERE conversation_id = $1 AND status <> 'closed'
-     RETURNING id`,
-    [conversationId],
-  );
-  await Promise.all(
-    closed.rows.map((row: any) => removeSessionRuntime(row.id)),
-  );
+  const result = await transaction(async (client) => {
+    const closed = await client.query(
+      `UPDATE sessions
+       SET status = 'closed', completed_at = NOW(), updated_at = NOW()
+       WHERE conversation_id = $1 AND status <> 'closed'
+       RETURNING id`,
+      [conversationId],
+    );
+    const conversationResult = await client.query(
+      `SELECT workspace_id
+       FROM conversations
+       WHERE id = $1
+       LIMIT 1`,
+      [conversationId],
+    );
+    const workspaceId =
+      (conversationResult.rows[0]?.workspace_id as string | undefined) ||
+      undefined;
+    if (workspaceId) {
+      await queueConversationUpdated({
+        queryable: client,
+        workspaceId,
+        conversationId,
+        action: "cancelled",
+      });
+    }
+    return {
+      sessionIds: closed.rows.map((row: any) => row.id as string),
+    };
+  });
 
-  const conversation = await getConversation(conversationId);
-  if (conversation) {
-    await emitConversationUpdated({
-      workspaceId: conversation.workspace_id,
-      conversationId: conversationId,
-      action: "cancelled",
-    });
-  }
+  await Promise.all(result.sessionIds.map((sessionId) => removeSessionRuntime(sessionId)));
 }

@@ -5,7 +5,7 @@ import { createMemory } from '../memory/service.js';
 import { createGeneratedActorPixelArtAvatarFile, type PixelArtAvatarOptionsInput } from '../avatar/service.js';
 import { getActor, updateActor, type ActorUpdateSourceInput } from '../organization/service.js';
 import { getSession } from '../session/service.js';
-import { createConversationEvent, getConversationFeedItemById, listConversationMembers } from '../conversation/service.js';
+import { createConversationEvent, listConversationMembers } from '../conversation/service.js';
 
 const ACTOR_MEMORY_SCOPES = new Set(['actor_conversation', 'conversation', 'actor_global']);
 const PIXEL_ART_OPTION_KEYS = [
@@ -65,21 +65,6 @@ function parsePixelArtAvatarOptions(value: unknown): PixelArtAvatarOptionsInput 
   return options as PixelArtAvatarOptionsInput;
 }
 
-async function emitFeedItemCreated(workspaceId: UUID, itemId: UUID) {
-  const item = await getConversationFeedItemById(itemId);
-  if (!item || item.workspaceSequence === undefined) return;
-
-  await emitEvent({
-    type: 'feed.item.created',
-    workspaceId,
-    payload: {
-      workspaceSequence: item.workspaceSequence,
-      item,
-    },
-    timestamp: new Date().toISOString(),
-  });
-}
-
 async function emitUserVisibleSystemNotice<T extends 'memory_saved' | 'memory_updated' | 'actor_renamed' | 'actor_avatar_changed'>(params: {
   workspaceId: UUID;
   actorId: UUID;
@@ -97,7 +82,7 @@ async function emitUserVisibleSystemNotice<T extends 'memory_saved' | 'memory_up
   const targetUserMembers = members.filter((member: any) => member.state === 'active' && member.user_id);
   if (targetUserMembers.length === 0) return;
 
-  const created = await createConversationEvent({
+  await createConversationEvent({
     workspaceId: params.workspaceId,
     conversationId: session.conversation_id,
     sessionId: params.sessionId,
@@ -110,7 +95,6 @@ async function emitUserVisibleSystemNotice<T extends 'memory_saved' | 'memory_up
     eventPayload: params.eventPayload,
     targetMemberIds: targetUserMembers.map((member: any) => member.id),
   });
-  await emitFeedItemCreated(params.workspaceId, created.item.id);
 }
 
 export async function executeActorActions(
