@@ -8,6 +8,9 @@ import (
 )
 
 var executablePath = os.Executable
+var lookupEnv = os.LookupEnv
+
+const packagedRootEnv = "SYNAPSE_RELAY_PACKAGED_ROOT"
 
 func ResolveRoot(userRoot string, verify func(string) bool, packagedParts ...string) (string, bool) {
 	if verify != nil {
@@ -19,6 +22,28 @@ func ResolveRoot(userRoot string, verify func(string) bool, packagedParts ...str
 }
 
 func PackagedRoot(parts ...string) string {
+	baseDir := packagedBaseDir()
+	if baseDir == "" {
+		return ""
+	}
+
+	allParts := make([]string, 0, len(parts)+1)
+	allParts = append(allParts, baseDir)
+	allParts = append(allParts, parts...)
+	return filepath.Join(allParts...)
+}
+
+func packagedBaseDir() string {
+	if override, ok := lookupEnv(packagedRootEnv); ok {
+		override = strings.TrimSpace(override)
+		if override != "" {
+			if resolved, err := filepath.EvalSymlinks(override); err == nil {
+				override = resolved
+			}
+			return filepath.Clean(override)
+		}
+	}
+
 	path, err := executablePath()
 	if err != nil {
 		return ""
@@ -31,11 +56,7 @@ func PackagedRoot(parts ...string) string {
 	if strings.EqualFold(filepath.Base(baseDir), "MacOS") && strings.EqualFold(filepath.Base(filepath.Dir(baseDir)), "Contents") {
 		baseDir = filepath.Join(filepath.Dir(baseDir), "Resources")
 	}
-
-	allParts := make([]string, 0, len(parts)+1)
-	allParts = append(allParts, baseDir)
-	allParts = append(allParts, parts...)
-	return filepath.Join(allParts...)
+	return baseDir
 }
 
 func ReadPackagedManifest(bundleName string) ([]byte, error) {

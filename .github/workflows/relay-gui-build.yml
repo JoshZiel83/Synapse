@@ -41,7 +41,7 @@ jobs:
         env:
           MATRIX_JSON: >-
             [
-              {"runner":"ubuntu-latest","goos":"linux","goarch":"amd64","suffix":"linux-amd64","wails_tags":"desktop_cua,webkit2_41","cgo_ldflags_allow":"","wails_extra_args":"","setup":"sudo apt-get update -qq\nsudo apt-get install -y -qq libgtk-3-dev libwebkit2gtk-4.1-dev"},
+              {"runner":"ubuntu-latest","goos":"linux","goarch":"amd64","suffix":"linux-amd64","wails_tags":"desktop_cua,webkit2_41","cgo_ldflags_allow":"","wails_extra_args":"","setup":"sudo apt-get update -qq\nsudo apt-get install -y -qq libgtk-3-dev libwebkit2gtk-4.1-dev desktop-file-utils patchelf squashfs-tools"},
               {"runner":"macos-15","goos":"darwin","goarch":"arm64","suffix":"darwin-arm64","wails_tags":"desktop_cua","cgo_ldflags_allow":"^(-weak_framework|ScreenCaptureKit)$","wails_extra_args":"","setup":""},
               {"runner":"macos-15-intel","goos":"darwin","goarch":"amd64","suffix":"darwin-amd64","wails_tags":"desktop_cua","cgo_ldflags_allow":"^(-weak_framework|ScreenCaptureKit)$","wails_extra_args":"","setup":""},
               {"runner":"windows-latest","goos":"windows","goarch":"amd64","suffix":"windows-amd64","ext":".exe","wails_tags":"desktop_cua","cgo_ldflags_allow":"","wails_extra_args":"-nsis","setup":"choco install nsis -y\nchoco install 7zip -y\n$nsisCandidates = @(\n  (Join-Path ${env:ProgramFiles(x86)} 'NSIS'),\n  (Join-Path $env:ChocolateyInstall 'bin')\n)\n$nsisDir = $nsisCandidates | Where-Object { Test-Path (Join-Path $_ 'makensis.exe') } | Select-Object -First 1\nif (-not $nsisDir) {\n  throw 'makensis.exe not found after installing NSIS'\n}\n$nsisDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append\n& (Join-Path $nsisDir 'makensis.exe') /VERSION"}
@@ -138,58 +138,12 @@ jobs:
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
             app_path="relay/cmd/synapse-relay-gui/build/bin/Synapse Relay.app"
             test -d "$app_path"
-            node relay/scripts/prepare-gui-build-assets.mjs --runtime-output="$app_path/Contents/Resources/runtime"
-            ditto -c -k --sequesterRsrc --keepParent "$app_path" "synapse-relay-gui-${{ matrix.suffix }}-portable.zip"
-
-            dmg_root="$(mktemp -d)"
-            cp -R "$app_path" "$dmg_root/"
-            ln -s /Applications "$dmg_root/Applications"
-            hdiutil create -volname "Synapse Relay" -srcfolder "$dmg_root" -ov -format UDZO "synapse-relay-gui-${{ matrix.suffix }}.dmg"
+            bash relay/scripts/package-gui-macos.sh --app-path="$app_path" --suffix="${{ matrix.suffix }}"
           else
-            portable_root="synapse-relay-gui-${{ matrix.suffix }}-portable"
-            mkdir -p "$portable_root"
-            cp relay/cmd/synapse-relay-gui/build/bin/synapse-relay-gui "$portable_root/"
-            node relay/scripts/prepare-gui-build-assets.mjs --runtime-output="$portable_root/runtime"
-            tar -czf "synapse-relay-gui-${{ matrix.suffix }}-portable.tar.gz" "$portable_root"
-
-            deb_root="$(mktemp -d)"
-            install_root="$deb_root/opt/synapse-relay-gui"
-            mkdir -p "$install_root" "$deb_root/usr/bin" "$deb_root/usr/share/applications" "$deb_root/usr/share/icons/hicolor/256x256/apps" "$deb_root/DEBIAN"
-            cp relay/cmd/synapse-relay-gui/build/bin/synapse-relay-gui "$install_root/"
-            node relay/scripts/prepare-gui-build-assets.mjs --runtime-output="$install_root/runtime"
-            install -m 0644 packages/web-next/public/synapse.png "$deb_root/usr/share/icons/hicolor/256x256/apps/synapse-relay-gui.png"
-            ln -s /opt/synapse-relay-gui/synapse-relay-gui "$deb_root/usr/bin/synapse-relay-gui"
-
-            package_version="${{ steps.version.outputs.version }}"
-            package_version="${package_version#v}"
-            if [[ ! "$package_version" =~ ^[0-9] ]]; then
-              package_version="0.0.0+${package_version}"
-            fi
-            package_version="$(printf '%s' "$package_version" | sed 's/[^0-9A-Za-z.+:~-]/./g')"
-
-            cat >"$deb_root/usr/share/applications/synapse-relay-gui.desktop" <<'EOF'
-[Desktop Entry]
-Type=Application
-Name=Synapse Relay
-Comment=Synapse Relay Desktop Client
-Exec=/opt/synapse-relay-gui/synapse-relay-gui
-Icon=synapse-relay-gui
-Categories=Development;Utility;
-Terminal=false
-EOF
-
-            cat >"$deb_root/DEBIAN/control" <<EOF
-Package: synapse-relay-gui
-Version: $package_version
-Section: utils
-Priority: optional
-Architecture: amd64
-Maintainer: Synapse
-Depends: libgtk-3-0, libwebkit2gtk-4.1-0
-Description: Synapse Relay desktop client
-EOF
-
-            dpkg-deb --build "$deb_root" "synapse-relay-gui-${{ matrix.suffix }}.deb"
+            bash relay/scripts/package-gui-linux.sh \
+              --binary-path="relay/cmd/synapse-relay-gui/build/bin/synapse-relay-gui" \
+              --suffix="${{ matrix.suffix }}" \
+              --version="${{ steps.version.outputs.version }}"
           fi
 
       - name: Upload artifacts to Tencent COS

@@ -1,16 +1,20 @@
 package runtimebundle
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
 
 func TestResolveRootPrefersInstalledRuntimeWhenReady(t *testing.T) {
 	previousExecutablePath := executablePath
+	previousLookupEnv := lookupEnv
 	t.Cleanup(func() {
 		executablePath = previousExecutablePath
+		lookupEnv = previousLookupEnv
 	})
 
+	lookupEnv = os.LookupEnv
 	executablePath = func() (string, error) {
 		return filepath.Join("C:\\", "Program Files", "Synapse", "Synapse Relay", "synapse-relay-gui.exe"), nil
 	}
@@ -32,10 +36,13 @@ func TestResolveRootPrefersInstalledRuntimeWhenReady(t *testing.T) {
 
 func TestResolveRootFallsBackToUserRootWhenInstalledRuntimeMissing(t *testing.T) {
 	previousExecutablePath := executablePath
+	previousLookupEnv := lookupEnv
 	t.Cleanup(func() {
 		executablePath = previousExecutablePath
+		lookupEnv = previousLookupEnv
 	})
 
+	lookupEnv = os.LookupEnv
 	executablePath = func() (string, error) {
 		return filepath.Join("C:\\", "Program Files", "Synapse", "Synapse Relay", "synapse-relay-gui.exe"), nil
 	}
@@ -56,10 +63,13 @@ func TestResolveRootFallsBackToUserRootWhenInstalledRuntimeMissing(t *testing.T)
 
 func TestPackagedRootUsesMacResourcesDirectory(t *testing.T) {
 	previousExecutablePath := executablePath
+	previousLookupEnv := lookupEnv
 	t.Cleanup(func() {
 		executablePath = previousExecutablePath
+		lookupEnv = previousLookupEnv
 	})
 
+	lookupEnv = os.LookupEnv
 	executablePath = func() (string, error) {
 		return filepath.Join("/", "Applications", "Synapse Relay.app", "Contents", "MacOS", "Synapse Relay"), nil
 	}
@@ -67,5 +77,30 @@ func TestPackagedRootUsesMacResourcesDirectory(t *testing.T) {
 	expected := filepath.Join("/", "Applications", "Synapse Relay.app", "Contents", "Resources", "runtime", "node", "bundle-v1")
 	if got := PackagedRoot("runtime", "node", "bundle-v1"); got != expected {
 		t.Fatalf("expected packaged mac root %q, got %q", expected, got)
+	}
+}
+
+func TestPackagedRootUsesOverrideEnv(t *testing.T) {
+	previousExecutablePath := executablePath
+	previousLookupEnv := lookupEnv
+	t.Cleanup(func() {
+		executablePath = previousExecutablePath
+		lookupEnv = previousLookupEnv
+	})
+
+	executablePath = func() (string, error) {
+		return filepath.Join("/", "Applications", "Synapse Relay.app", "Contents", "MacOS", "Synapse Relay"), nil
+	}
+	overrideRoot := filepath.Join("/", "tmp", "SynapseRelay.AppDir", "usr", "lib", "synapse-relay-gui")
+	lookupEnv = func(key string) (string, bool) {
+		if key == packagedRootEnv {
+			return overrideRoot, true
+		}
+		return "", false
+	}
+
+	expected := filepath.Join(overrideRoot, "runtime", "commandline", "bundle-v3")
+	if got := PackagedRoot("runtime", "commandline", "bundle-v3"); got != expected {
+		t.Fatalf("expected packaged override root %q, got %q", expected, got)
 	}
 }
