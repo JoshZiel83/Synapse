@@ -426,6 +426,9 @@ export function buildSessionContextItems(
 
   for (const msg of sessionMessages) {
     const meta = parseMetadata(msg.metadata);
+    if (meta.excludeFromContext === true) {
+      continue;
+    }
     switch (msg.role) {
       case "user": {
         items.push({

@@ -603,10 +603,15 @@ export function startSessionThinkingWorker() {
             sessionId,
             workspaceId,
             role: 'assistant',
+            visibility: 'private_internal',
             content: result.reasoning,
             contentBlocks: result.contentBlocks,
             fromActorId: actorId,
-            metadata: { ...hasMeta, reasoningOnly: true },
+            metadata: {
+              ...hasMeta,
+              reasoningOnly: true,
+              excludeFromContext: true,
+            },
           });
         } else if (result.actions.length > 0) {
           const actionNames = result.actions.map((action: ActorAction) => action.type).join(', ');

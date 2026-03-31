@@ -303,7 +303,7 @@ export async function addSessionMessage(params: {
   fromActorId?: UUID;
   fromUserId?: UUID;
   subtype?: string;
-  visibility?: 'default' | 'shared_visible';
+  visibility?: 'default' | 'shared_visible' | 'private_internal';
   metadata?: Record<string, unknown>;
   targetMemberIds?: UUID[];
   projectTransportOutbound?: boolean;
@@ -331,9 +331,12 @@ export async function addSessionMessage(params: {
     fromActorId,
     fromUserId,
   });
-  const { scope, surface } = visibility === 'shared_visible'
-    ? { scope: 'shared' as const, surface: 'visible' as const }
-    : getSurfaceForSessionMessage(session.conversation_kind, role);
+  const { scope, surface } =
+    visibility === 'shared_visible'
+      ? { scope: 'shared' as const, surface: 'visible' as const }
+      : visibility === 'private_internal'
+        ? { scope: 'private' as const, surface: 'internal' as const }
+        : getSurfaceForSessionMessage(session.conversation_kind, role);
   const itemType = role === 'tool_result' ? 'control' : 'message';
   const resolvedSubtype = subtype || role;
 
@@ -378,7 +381,12 @@ export async function addSessionMessage(params: {
     });
   }
 
-  if (!isGroupConversationKind(session.conversation_kind) && (role === 'user' || role === 'assistant')) {
+  if (
+    scope === 'shared' &&
+    surface === 'visible' &&
+    !isGroupConversationKind(session.conversation_kind) &&
+    (role === 'user' || role === 'assistant')
+  ) {
     let actorName: string | undefined;
     if (fromActorId) {
       actorName = (
