@@ -11,8 +11,6 @@ export type ActorSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_m
 
 export type ActorsRole = "archivist" | "assistant" | "manager" | "receptionist" | "reviewer" | "secretary" | "specialist";
 
-export type ActorTemplateVersionSpecsRole = "archivist" | "assistant" | "manager" | "receptionist" | "reviewer" | "secretary" | "specialist";
-
 export type ActorVersionDocsVisibility = "always" | "direct_only" | "internal_only" | "multi_member_only";
 
 export type ActorVersionsSourceType = "actor" | "sync" | "system" | "user";
@@ -377,7 +375,7 @@ export interface ActorTemplateVersionSpecs {
   docs: Generated<Json>;
   metadata: Generated<Json | null>;
   name: string;
-  role: ActorTemplateVersionSpecsRole;
+  role: ActorsRole;
   specialties: Generated<string[] | null>;
   title: string;
 }
@@ -404,7 +402,7 @@ export interface ActorVersions {
   name: string;
   parent_id: string | null;
   previous_version_id: string | null;
-  role: string;
+  role: ActorsRole;
   source_actor_id: string | null;
   source_conversation_id: string | null;
   source_reason: string | null;

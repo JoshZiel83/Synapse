@@ -1923,8 +1923,8 @@ export async function getConversationMembers(
     ? "COALESCE(joined_version.title, a.title)"
     : "a.title";
   const actorRoleExpr = options?.useProfileSnapshot
-    ? "COALESCE(joined_version.role, a.role)"
-    : "a.role";
+    ? "COALESCE(joined_version.role::text, a.role::text)"
+    : "a.role::text";
   const actorCanRepresentExpr = options?.useProfileSnapshot
     ? "COALESCE(joined_version.can_represent_user, a.can_represent_user)"
     : "a.can_represent_user";

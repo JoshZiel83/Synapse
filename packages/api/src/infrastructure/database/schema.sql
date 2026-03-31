@@ -25,7 +25,6 @@ CREATE TYPE catalog_items_source_kind AS ENUM ('builtin', 'official', 'workspace
 CREATE TYPE catalog_items_visibility AS ENUM ('public', 'workspace', 'private');
 CREATE TYPE catalog_versions_status AS ENUM ('draft', 'active', 'deprecated', 'archived');
 CREATE TYPE catalog_version_files_file_role AS ENUM ('document', 'reference', 'script', 'image', 'json', 'binary');
-CREATE TYPE actor_template_version_specs_role AS ENUM ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant');
 CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 'http', 'relay');
 CREATE TYPE plugin_package_version_specs_default_mount_scope AS ENUM ('workspace', 'conversation', 'actor', 'actor_conversation', 'user');
 CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'workspace', 'conversation', 'actor', 'actor_conversation', 'user');
@@ -511,7 +510,7 @@ CREATE INDEX idx_catalog_version_files_version ON catalog_version_files(catalog_
 -- ============ Catalog Specs ============
 CREATE TABLE actor_template_version_specs (
   catalog_version_id UUID PRIMARY KEY REFERENCES catalog_versions(id) ON DELETE CASCADE,
-  role actor_template_version_specs_role NOT NULL,
+  role actors_role NOT NULL,
   name VARCHAR(255) NOT NULL,
   avatar_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
   avatar_emoji VARCHAR(32),
@@ -659,7 +658,7 @@ CREATE TABLE actor_versions (
   version INT NOT NULL,
   previous_version_id UUID REFERENCES actor_versions(id) ON DELETE SET NULL,
   name VARCHAR(255) NOT NULL,
-  role VARCHAR(50) NOT NULL,
+  role actors_role NOT NULL,
   title VARCHAR(255) NOT NULL,
   parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
