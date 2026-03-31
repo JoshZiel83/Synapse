@@ -211,6 +211,8 @@ export type RelationshipApprovalMode = "auto" | "manual";
 
 export type RelationshipRequestStatus = "approved" | "pending" | "rejected";
 
+export type RelationshipTargetType = "actor" | "user";
+
 export type RelayCatalogRevisionsStatus = "active" | "superseded";
 
 export type RelayDevicesAutomationLifecycleState = "offline" | "online";
@@ -308,10 +310,6 @@ export type TransportMessageLinksTransportKind = "feishu" | "weixin";
 export type TurnsStatus = "cancelled" | "completed" | "failed" | "running";
 
 export type WorkspaceAccessBindingsAccessKey = "actor_admin" | "conversation_admin" | "memory_admin" | "model_admin" | "plugin_admin" | "relay_admin" | "skill_admin";
-
-export type WorkspaceContactsScope = "personal" | "workspace";
-
-export type WorkspaceContactsTargetType = "actor" | "user";
 
 export type WorkspaceInvitesTrustLevel = "admin" | "guest" | "member";
 
@@ -952,11 +950,11 @@ export interface DirectConversationBindings {
   id: Generated<string>;
   metadata: Generated<Json>;
   participant_one_actor_id: string | null;
-  participant_one_kind: WorkspaceContactsTargetType;
+  participant_one_kind: RelationshipTargetType;
   participant_one_user_id: string | null;
   participant_one_workspace_id: string | null;
   participant_two_actor_id: string | null;
-  participant_two_kind: WorkspaceContactsTargetType;
+  participant_two_kind: RelationshipTargetType;
   participant_two_user_id: string | null;
   participant_two_workspace_id: string | null;
 }
@@ -1893,28 +1891,13 @@ export interface WorkspaceAccessBindings {
   workspace_id: string;
 }
 
-export interface WorkspaceContacts {
-  created_at: Generated<Timestamp | null>;
-  created_by: string | null;
-  id: Generated<string>;
-  metadata: Generated<Json>;
-  owner_user_id: string | null;
-  scope: Generated<WorkspaceContactsScope>;
-  target_actor_id: string | null;
-  target_type: WorkspaceContactsTargetType;
-  target_user_id: string | null;
-  target_workspace_id: string;
-  updated_at: Generated<Timestamp | null>;
-  workspace_id: string;
-}
-
 export interface WorkspaceFriendEntries {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
   metadata: Generated<Json>;
   owner_user_id: string;
   peer_actor_id: string | null;
-  peer_type: WorkspaceContactsTargetType;
+  peer_type: RelationshipTargetType;
   peer_user_id: string | null;
   peer_workspace_id: string;
   source_request_id: string | null;
@@ -1933,7 +1916,7 @@ export interface WorkspaceFriendRequests {
   resolved_by_user_id: string | null;
   status: Generated<RelationshipRequestStatus>;
   target_actor_id: string | null;
-  target_subject_type: WorkspaceContactsTargetType;
+  target_subject_type: RelationshipTargetType;
   target_user_id: string | null;
   target_workspace_id: string;
   updated_at: Generated<Timestamp | null>;
@@ -1968,7 +1951,7 @@ export interface WorkspaceRelationshipProfiles {
   id: Generated<string>;
   qr_token: string;
   subject_actor_id: string | null;
-  subject_type: WorkspaceContactsTargetType;
+  subject_type: RelationshipTargetType;
   subject_user_id: string | null;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
@@ -2101,7 +2084,6 @@ export interface DB {
   turns: Turns;
   users: Users;
   workspace_access_bindings: WorkspaceAccessBindings;
-  workspace_contacts: WorkspaceContacts;
   workspace_friend_entries: WorkspaceFriendEntries;
   workspace_friend_requests: WorkspaceFriendRequests;
   workspace_invites: WorkspaceInvites;

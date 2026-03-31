@@ -46,7 +46,6 @@ import {
   AUTOMATION_TRIGGER_KINDS,
   AUTOMATION_TRIGGER_SOURCE_KINDS,
   CONVERSATION_DOMAINS,
-  CONTACT_SCOPES,
   CONTACT_TARGET_TYPES,
   CONVERSATION_GRANT_PERMISSIONS,
   MODEL_GROUP_GRANT_SCOPES,
@@ -83,8 +82,6 @@ import type {
   AuthSessionsTransport,
   ConversationGrantsPermission,
   ConversationsDomain,
-  WorkspaceContactsScope,
-  WorkspaceContactsTargetType,
   InteractionRequestsStatus,
   MemoryEntriesCategory,
   MemoryEntriesOwnerScope,
@@ -98,6 +95,7 @@ import type {
   PluginConnectionsOwnerScope,
   PluginConnectionsStatus,
   RelayCatalogRevisionsStatus,
+  RelationshipTargetType,
   RelayDeviceSessionsStatus,
   RelayDevicesTrustStatus,
   RelayExposuresRuntimeStatus,
@@ -152,7 +150,6 @@ type _ModelGroupGrantScopeMatchesDb = Assert<
 >;
 type _ActorRoleMatchesDb = Assert<IsEqual<ActorRole, ActorsRole>>;
 type _ActorDocVisibilityMatchesDb = Assert<IsEqual<ActorDocVisibility, ActorVersionDocsVisibility>>;
-type _ContactScopeMatchesDb = Assert<IsEqual<(typeof CONTACT_SCOPES)[number], WorkspaceContactsScope>>;
 type _ResourceScopeMatchesMemoryScopeDb = Assert<
   IsEqual<(typeof RESOURCE_SCOPES)[number], MemoryEntriesOwnerScope>
 >;
@@ -160,7 +157,7 @@ type _ConversationDomainMatchesDb = Assert<
   IsEqual<(typeof CONVERSATION_DOMAINS)[number], ConversationsDomain>
 >;
 type _ContactTargetTypeMatchesDb = Assert<
-  IsEqual<(typeof CONTACT_TARGET_TYPES)[number], WorkspaceContactsTargetType>
+  IsEqual<(typeof CONTACT_TARGET_TYPES)[number], RelationshipTargetType>
 >;
 type _ConversationGrantPermissionMatchesDb = Assert<
   IsEqual<(typeof CONVERSATION_GRANT_PERMISSIONS)[number], ConversationGrantsPermission>

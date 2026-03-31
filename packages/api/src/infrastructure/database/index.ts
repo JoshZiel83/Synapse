@@ -44,17 +44,6 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "base workspace access",
   },
   {
-    table: "workspace_contacts",
-    requiredColumns: [
-      "workspace_id",
-      "scope",
-      "owner_user_id",
-      "target_type",
-      "target_workspace_id",
-    ],
-    reason: "unified workspace and personal contacts",
-  },
-  {
     table: "workspace_relationship_profiles",
     requiredColumns: [
       "workspace_id",

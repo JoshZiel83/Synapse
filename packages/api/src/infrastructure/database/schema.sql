@@ -29,8 +29,7 @@ CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 
 CREATE TYPE plugin_package_version_specs_default_mount_scope AS ENUM ('workspace', 'conversation', 'actor', 'actor_conversation', 'user');
 CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'workspace', 'conversation', 'actor', 'actor_conversation', 'user');
 CREATE TYPE actors_role AS ENUM ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant');
-CREATE TYPE workspace_contacts_scope AS ENUM ('workspace', 'personal');
-CREATE TYPE workspace_contacts_target_type AS ENUM ('user', 'actor');
+CREATE TYPE relationship_target_type AS ENUM ('user', 'actor');
 CREATE TYPE actor_access_policy AS ENUM ('workspace_open', 'approval_required');
 CREATE TYPE relationship_approval_mode AS ENUM ('auto', 'manual');
 CREATE TYPE relationship_request_status AS ENUM ('pending', 'approved', 'rejected');
@@ -596,7 +595,7 @@ CREATE INDEX idx_actors_parent ON actors(parent_id);
 CREATE TABLE workspace_relationship_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  subject_type workspace_contacts_target_type NOT NULL,
+  subject_type relationship_target_type NOT NULL,
   subject_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   subject_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   approval_mode relationship_approval_mode NOT NULL DEFAULT 'manual',
@@ -625,7 +624,7 @@ CREATE TABLE workspace_friend_requests (
   requester_workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   requester_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   target_workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  target_subject_type workspace_contacts_target_type NOT NULL,
+  target_subject_type relationship_target_type NOT NULL,
   target_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   target_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   requested_via_profile_id UUID REFERENCES workspace_relationship_profiles(id) ON DELETE SET NULL,
@@ -676,7 +675,7 @@ CREATE TABLE workspace_friend_entries (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  peer_type workspace_contacts_target_type NOT NULL,
+  peer_type relationship_target_type NOT NULL,
   peer_workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   peer_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   peer_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
@@ -732,11 +731,11 @@ CREATE INDEX idx_actor_access_requests_requester
 CREATE TABLE direct_conversation_bindings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
-  participant_one_kind workspace_contacts_target_type NOT NULL,
+  participant_one_kind relationship_target_type NOT NULL,
   participant_one_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   participant_one_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   participant_one_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  participant_two_kind workspace_contacts_target_type NOT NULL,
+  participant_two_kind relationship_target_type NOT NULL,
   participant_two_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   participant_two_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   participant_two_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
@@ -777,61 +776,6 @@ CREATE INDEX idx_direct_conversation_bindings_participant_two
     participant_two_user_id,
     participant_two_actor_id
   );
-
--- ============ Scoped Contacts ============
-CREATE TABLE workspace_contacts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  scope workspace_contacts_scope NOT NULL DEFAULT 'workspace',
-  owner_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  target_type workspace_contacts_target_type NOT NULL,
-  target_workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  target_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  target_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  FOREIGN KEY (workspace_id, owner_user_id)
-    REFERENCES workspace_members(workspace_id, user_id)
-    ON DELETE CASCADE,
-  CHECK (
-    (target_type = 'user' AND target_user_id IS NOT NULL AND target_actor_id IS NULL) OR
-    (target_type = 'actor' AND target_actor_id IS NOT NULL AND target_user_id IS NULL)
-  ),
-  CHECK (
-    (scope = 'workspace' AND owner_user_id IS NULL) OR
-    (scope = 'personal' AND owner_user_id IS NOT NULL)
-  )
-);
-
-CREATE INDEX idx_workspace_contacts_workspace
-  ON workspace_contacts(workspace_id, scope, created_at DESC);
-CREATE INDEX idx_workspace_contacts_owner
-  ON workspace_contacts(workspace_id, owner_user_id, created_at DESC)
-  WHERE owner_user_id IS NOT NULL;
-CREATE INDEX idx_workspace_contacts_target_workspace
-  ON workspace_contacts(target_workspace_id, created_at DESC);
-CREATE UNIQUE INDEX uq_workspace_contacts_user
-  ON workspace_contacts(workspace_id, target_user_id, target_workspace_id)
-  WHERE target_user_id IS NOT NULL
-    AND scope = 'workspace'
-    AND owner_user_id IS NULL;
-CREATE UNIQUE INDEX uq_workspace_contacts_actor
-  ON workspace_contacts(workspace_id, target_actor_id)
-  WHERE target_actor_id IS NOT NULL
-    AND scope = 'workspace'
-    AND owner_user_id IS NULL;
-CREATE UNIQUE INDEX uq_workspace_contacts_personal_user
-  ON workspace_contacts(workspace_id, owner_user_id, target_user_id, target_workspace_id)
-  WHERE target_user_id IS NOT NULL
-    AND scope = 'personal'
-    AND owner_user_id IS NOT NULL;
-CREATE UNIQUE INDEX uq_workspace_contacts_personal_actor
-  ON workspace_contacts(workspace_id, owner_user_id, target_actor_id)
-  WHERE target_actor_id IS NOT NULL
-    AND scope = 'personal'
-    AND owner_user_id IS NOT NULL;
 
 CREATE TABLE workspace_user_preferences (
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
