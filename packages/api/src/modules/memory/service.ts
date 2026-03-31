@@ -973,7 +973,7 @@ async function recordMemoryRecallRun(params: {
           user_id: params.userId || null,
           recall_type: params.recallType,
           query_text: params.queryText,
-          query_blocks: normalizedQueryBlocks as unknown as TableInsert<'memory_recall_runs'>['query_blocks'],
+          query_blocks: sql`${JSON.stringify(normalizedQueryBlocks)}::jsonb`,
           metadata: (params.metadata || {}) as TableInsert<'memory_recall_runs'>['metadata'],
           created_at: sql`NOW()`,
         }),

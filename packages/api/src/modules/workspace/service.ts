@@ -428,7 +428,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
               title: doc.title,
               visibility: doc.visibility,
               priority: doc.priority,
-              content_blocks: doc.content as unknown as TableInsert<'actor_version_docs'>['content_blocks'],
+              content_blocks: sql`${JSON.stringify(doc.content)}::jsonb`,
             }),
         );
       }
