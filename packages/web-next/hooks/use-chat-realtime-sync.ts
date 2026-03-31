@@ -68,13 +68,13 @@ export function useChatRealtimeSync({
             .payload
           handleConversationUpdated(payload)
           if (workspaceId && payload.action === "created") {
-            void loadConversations(workspaceId)
+            void loadConversations(workspaceId, { silent: true })
           }
           break
         }
         case "conversation.read.updated":
           if (workspaceId) {
-            void loadConversations(workspaceId)
+            void loadConversations(workspaceId, { silent: true })
           }
           break
         case "interaction.updated":
@@ -84,7 +84,7 @@ export function useChatRealtimeSync({
           break
         case "actor.action":
           if (workspaceId) {
-            void loadConversations(workspaceId)
+            void loadConversations(workspaceId, { silent: true })
           }
           break
         default:
@@ -125,7 +125,7 @@ export function useChatRealtimeSync({
     if (!workspaceId) return
     void (async () => {
       await flushPendingConversationReads()
-      void loadConversations(workspaceId)
+      void loadConversations(workspaceId, { silent: true })
       if (selectedConversationId) {
         void loadMessages(workspaceId, selectedConversationId)
       }

@@ -150,7 +150,10 @@ interface ChatState {
   runtimeSeqMap: Record<string, number>
   totalUnread: number
 
-  loadConversations: (workspaceId: string) => Promise<void>
+  loadConversations: (
+    workspaceId: string,
+    options?: { silent?: boolean }
+  ) => Promise<void>
   selectConversation: (conversationId: string | null) => void
   loadMessages: (workspaceId: string, conversationId: string) => Promise<void>
   sendMessage: (
@@ -841,8 +844,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   runtimeSeqMap: {},
   totalUnread: 0,
 
-  loadConversations: async (workspaceId) => {
-    set({ loadingConversations: true })
+  loadConversations: async (workspaceId, options) => {
+    const shouldShowLoading =
+      !options?.silent || get().conversations.length === 0
+    if (shouldShowLoading) {
+      set({ loadingConversations: true })
+    }
     try {
       const res = await api.getThreads(workspaceId)
       const incomingConversations = Array.isArray(res?.conversations)
