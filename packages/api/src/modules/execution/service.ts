@@ -359,9 +359,10 @@ export async function createToolResult(params: {
           part_type: part.type,
           text_value: part.type === 'text' ? part.text || '' : null,
           file_id: part.type === 'file_ref' ? part.fileId || null : null,
-          json_value: (
-            part.type === 'json' ? (part.json ?? {}) : null
-          ) as TableInsert<'tool_result_parts'>['json_value'],
+          json_value:
+            part.type === 'json'
+              ? sql`${JSON.stringify(part.json ?? {})}::jsonb`
+              : null,
           mime_type: part.mimeType || null,
           name: part.name || null,
           metadata: (part.metadata || {}) as TableInsert<'tool_result_parts'>['metadata'],

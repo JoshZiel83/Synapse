@@ -607,7 +607,7 @@ async function insertMemoryParts(
           file_id: part.type === 'file_ref' ? part.fileId || null : null,
           json_value:
             part.type === 'json'
-              ? ((part.json ?? {}) as TableInsert<'memory_entry_parts'>['json_value'])
+              ? sql`${JSON.stringify(part.json ?? {})}::jsonb`
               : null,
           mime_type: part.mimeType || null,
           name: part.name || null,
