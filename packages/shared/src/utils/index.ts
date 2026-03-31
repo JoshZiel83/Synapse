@@ -54,6 +54,11 @@ export interface ThreadSemantics {
   allowsSleepWithoutReplyConfirmation: boolean;
 }
 
+export type ParsedSynapseQrPayload =
+  | { kind: 'login'; token: string }
+  | { kind: 'relationship'; token: string }
+  | { kind: 'token'; token: string };
+
 export function isGroupConversationKind(kind: string | null | undefined): boolean {
   return kind === GROUP_CONVERSATION_KIND;
 }
@@ -96,4 +101,71 @@ export function resolveThreadSemantics(params: {
     requiresVisibleReplyBeforeSleep: hasAddressablePeer,
     allowsSleepWithoutReplyConfirmation: isGroupConversation && hasAddressablePeer,
   };
+}
+
+export function parseSynapseQrPayload(
+  input: string,
+): ParsedSynapseQrPayload | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  const classifyToken = (
+    kind: string | null | undefined,
+    token: string | null | undefined,
+    pathname?: string,
+    hostname?: string,
+  ): ParsedSynapseQrPayload | null => {
+    const normalizedToken = token?.trim();
+    if (!normalizedToken) return null;
+    const normalizedKind = kind?.trim().toLowerCase();
+    const normalizedPathname = pathname?.replace(/\/+$/, '').toLowerCase() || '';
+    const normalizedHostname = hostname?.trim().toLowerCase() || '';
+
+    if (
+      normalizedKind === 'login' ||
+      normalizedPathname.endsWith('/m/qr-login') ||
+      normalizedPathname.endsWith('/qr-login')
+    ) {
+      return { kind: 'login', token: normalizedToken };
+    }
+
+    if (
+      normalizedKind === 'relationship' ||
+      normalizedHostname === 'relationship-qr' ||
+      normalizedPathname.endsWith('/relationship-qr')
+    ) {
+      return { kind: 'relationship', token: normalizedToken };
+    }
+
+    return /^[A-Za-z0-9_-]{16,255}$/.test(normalizedToken)
+      ? { kind: 'token', token: normalizedToken }
+      : null;
+  };
+
+  try {
+    const url = new URL(trimmed);
+    return classifyToken(
+      url.searchParams.get('kind'),
+      url.searchParams.get('token'),
+      url.pathname,
+      url.hostname,
+    );
+  } catch {
+    // Ignore malformed URLs and fallback to raw token parsing.
+  }
+
+  return /^[A-Za-z0-9_-]{16,255}$/.test(trimmed)
+    ? { kind: 'token', token: trimmed }
+    : null;
+}
+
+export function buildMobileScanUrl(params: {
+  origin: string;
+  kind: 'login' | 'relationship';
+  token: string;
+}) {
+  const url = new URL('/m/scan', params.origin);
+  url.searchParams.set('kind', params.kind);
+  url.searchParams.set('token', params.token);
+  return url.toString();
 }

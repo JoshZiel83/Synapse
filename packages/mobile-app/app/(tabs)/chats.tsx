@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { RefreshControl, StyleSheet, Text, View } from "react-native";
 
 import { ConversationItem } from "@/components/conversation-item";
+import { MobileHeaderActions } from "@/components/mobile-header-actions";
 import {
   Button,
   EmptyState,
@@ -144,7 +145,17 @@ export default function ChatsTab() {
         />
       }
     >
-      <MobilePageHeader title="聊天" />
+      <MobilePageHeader
+        title="聊天"
+        action={
+          <MobileHeaderActions
+            onSearch={() => router.push("/search")}
+            onStartGroup={() => router.push("/contacts/group/new")}
+            onAddFriend={() => router.push("/contacts/add")}
+            onScan={() => router.push("/scan?intent=relationship")}
+          />
+        }
+      />
 
       <SectionBlock>
         <SectionTitleRow title="会话列表" />

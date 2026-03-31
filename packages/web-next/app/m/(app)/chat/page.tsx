@@ -1,11 +1,11 @@
 "use client"
 
-import { startTransition, useState } from "react"
+import { startTransition } from "react"
 import { useRouter } from "next/navigation"
 
 import ConversationList from "@/app/dashboard/chat/conversation-list"
-import NewConversationDialog from "@/app/dashboard/chat/new-conversation-dialog"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
+import { MobileHeaderActions } from "@/components/mobile-header-actions"
 import { useChatStore } from "@/stores/chat-store"
 
 export default function MobileChatListPage() {
@@ -19,29 +19,7 @@ export default function MobileChatListPage() {
     (state) => state.selectedConversationId
   )
   const runtimeMap = useChatStore((state) => state.runtimeMap)
-  const createWorkspaceThread = useChatStore(
-    (state) => state.createWorkspaceThread
-  )
   const selectConversation = useChatStore((state) => state.selectConversation)
-
-  const [dialogOpen, setDialogOpen] = useState(false)
-
-  async function handleCreateConversation(actorIds: string[]) {
-    if (!workspaceId) return
-    try {
-      const conversationId = await createWorkspaceThread(
-        workspaceId,
-        "group",
-        actorIds
-      )
-      selectConversation(conversationId)
-      startTransition(() => {
-        router.push(`/m/chat/${conversationId}`)
-      })
-    } catch (error) {
-      console.error("Failed to create conversation:", error)
-    }
-  }
 
   if (!workspaceId) {
     return (
@@ -67,19 +45,21 @@ export default function MobileChatListPage() {
               router.push(`/m/chat/${conversationId}`)
             })
           }}
-          onNewConversation={() => setDialogOpen(true)}
+          onNewConversation={() => router.push("/m/contacts/group/new")}
           className="border-r-0 bg-background"
           headerVariant="mobile"
           title="Messages"
+          headerAction={
+            <MobileHeaderActions
+              onSearch={() => router.push("/m/search")}
+              onStartGroup={() => router.push("/m/contacts/group/new")}
+              onAddFriend={() => router.push("/m/contacts/add")}
+              onScan={() => router.push("/m/scan?intent=relationship")}
+            />
+          }
+          showSearchInput={false}
         />
       </div>
-
-      <NewConversationDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        workspaceId={workspaceId}
-        onCreateConversation={handleCreateConversation}
-      />
     </>
   )
 }

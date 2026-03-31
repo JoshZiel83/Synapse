@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { ConversationItem } from "@/components/conversation-item";
+import { MobileHeaderActions } from "@/components/mobile-header-actions";
 import {
   Button,
   EmptyState,
@@ -186,15 +187,12 @@ export default function HomeTab() {
       <MobilePageHeader
         title={workspaceName || "Synapse"}
         action={
-          <Pressable
-            onPress={() => router.push("/scan-login")}
-            style={({ pressed }) => [
-              styles.headerAction,
-              pressed && styles.headerActionPressed,
-            ]}
-          >
-            <Feather name="maximize-2" size={17} color={theme.colors.text} />
-          </Pressable>
+          <MobileHeaderActions
+            onSearch={() => router.push("/search")}
+            onStartGroup={() => router.push("/contacts/group/new")}
+            onAddFriend={() => router.push("/contacts/add")}
+            onScan={() => router.push("/scan?intent=relationship")}
+          />
         }
       />
 
@@ -223,15 +221,7 @@ export default function HomeTab() {
                 value={String(conversations.length)}
                 icon="message-circle"
               />
-              <View style={styles.summaryDivider} />
-              <StatCard label="扫码" value="Web" icon="smartphone" />
             </View>
-            <Button
-              label="扫码登录桌面端"
-              icon="maximize-2"
-              variant="secondary"
-              onPress={() => router.push("/scan-login")}
-            />
           </SectionBlock>
 
           <SectionBlock>
@@ -344,19 +334,6 @@ function StatCard({
 }
 
 const styles = StyleSheet.create({
-  headerAction: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerActionPressed: {
-    opacity: 0.86,
-  },
   summaryRow: {
     flexDirection: "row",
     alignItems: "stretch",

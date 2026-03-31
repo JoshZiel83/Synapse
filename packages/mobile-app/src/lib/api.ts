@@ -9,16 +9,25 @@ import {
   resolveApiUrl,
 } from "@/lib/config";
 import type {
+  ActorAccessRequestListResponse,
   ActorListResponse,
   AuthMeResponse,
   AuthQrLoginResolveResponse,
   AuthQrLoginStatusResponse,
   AuthResponse,
+  ContactHubDetailResponse,
+  ContactHubResponse,
   ContactDiscoveryResponse,
   ConversationCollectionResponse,
   ConversationCreateResponse,
   ConversationMemberListResponse,
   ConversationSendResponse,
+  DirectConversationOpenResponse,
+  FriendIdProfileView,
+  FriendIdSearchResponse,
+  FriendRequestListResponse,
+  RelationshipProfileView,
+  RelationshipScanResponse,
   ScopedContactsResponse,
   UploadAssetInput,
   WorkspaceChiefActorPreference,
@@ -268,6 +277,194 @@ class ApiClient {
   getActors(workspaceId: string): Promise<ActorListResponse> {
     return this.request<unknown>(`/workspaces/${workspaceId}/actors`).then(
       normalizeActorListResponse,
+    );
+  }
+
+  getMyRelationshipProfile(
+    workspaceId: string,
+  ): Promise<RelationshipProfileView> {
+    return this.request<RelationshipProfileView>(
+      `/workspaces/${workspaceId}/me/friend-profile`,
+    );
+  }
+
+  getMyFriendIdProfile(workspaceId: string): Promise<FriendIdProfileView> {
+    return this.request<FriendIdProfileView>(
+      `/workspaces/${workspaceId}/me/friend-id`,
+    );
+  }
+
+  updateMyFriendIdProfile(
+    workspaceId: string,
+    input: {
+      friendId?: string;
+      searchByIdEnabled?: boolean;
+    },
+  ): Promise<FriendIdProfileView> {
+    return this.request<FriendIdProfileView>(
+      `/workspaces/${workspaceId}/me/friend-id`,
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      },
+    );
+  }
+
+  updateMyRelationshipProfile(
+    workspaceId: string,
+    input: { approvalMode: "auto" | "manual" },
+  ): Promise<RelationshipProfileView> {
+    return this.request<RelationshipProfileView>(
+      `/workspaces/${workspaceId}/me/friend-profile`,
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      },
+    );
+  }
+
+  getActorRelationshipProfile(
+    workspaceId: string,
+    actorId: string,
+  ): Promise<RelationshipProfileView> {
+    return this.request<RelationshipProfileView>(
+      `/workspaces/${workspaceId}/actors/${actorId}/friend-profile`,
+    );
+  }
+
+  updateActorRelationshipProfile(
+    workspaceId: string,
+    actorId: string,
+    input: {
+      approvalMode: "auto" | "manual";
+      accessPolicy?: "workspace_open" | "approval_required";
+    },
+  ): Promise<RelationshipProfileView> {
+    return this.request<RelationshipProfileView>(
+      `/workspaces/${workspaceId}/actors/${actorId}/friend-profile`,
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      },
+    );
+  }
+
+  scanRelationshipQr(
+    workspaceId: string,
+    token: string,
+  ): Promise<RelationshipScanResponse> {
+    return this.request<RelationshipScanResponse>(
+      `/workspaces/${workspaceId}/relationship-qr/scan`,
+      {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      },
+    );
+  }
+
+  searchFriendId(
+    workspaceId: string,
+    query: string,
+  ): Promise<FriendIdSearchResponse> {
+    const params = new URLSearchParams();
+    if (query.trim()) {
+      params.set("q", query.trim());
+    }
+    return this.request<FriendIdSearchResponse>(
+      `/workspaces/${workspaceId}/friend-id-search${
+        params.size > 0 ? `?${params.toString()}` : ""
+      }`,
+    );
+  }
+
+  requestFriendBySearchProfile(
+    workspaceId: string,
+    profileId: string,
+  ): Promise<RelationshipScanResponse> {
+    return this.request<RelationshipScanResponse>(
+      `/workspaces/${workspaceId}/friend-id-search/request`,
+      {
+        method: "POST",
+        body: JSON.stringify({ profileId }),
+      },
+    );
+  }
+
+  getContactHub(workspaceId: string): Promise<ContactHubResponse> {
+    return this.request<ContactHubResponse>(
+      `/workspaces/${workspaceId}/contact-hub`,
+    );
+  }
+
+  getContactHubDetail(
+    workspaceId: string,
+    contactKind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user",
+    contactId: string,
+  ): Promise<ContactHubDetailResponse> {
+    return this.request<ContactHubDetailResponse>(
+      `/workspaces/${workspaceId}/contact-hub/${contactKind}/${contactId}`,
+    );
+  }
+
+  getFriendRequests(workspaceId: string): Promise<FriendRequestListResponse> {
+    return this.request<FriendRequestListResponse>(
+      `/workspaces/${workspaceId}/friend-requests`,
+    );
+  }
+
+  approveFriendRequest(workspaceId: string, requestId: string) {
+    return this.request<{ request: unknown }>(
+      `/workspaces/${workspaceId}/friend-requests/${requestId}/approve`,
+      { method: "POST", body: "{}" },
+    );
+  }
+
+  rejectFriendRequest(workspaceId: string, requestId: string) {
+    return this.request<{ request: unknown }>(
+      `/workspaces/${workspaceId}/friend-requests/${requestId}/reject`,
+      { method: "POST", body: "{}" },
+    );
+  }
+
+  getActorAccessRequests(
+    workspaceId: string,
+  ): Promise<ActorAccessRequestListResponse> {
+    return this.request<ActorAccessRequestListResponse>(
+      `/workspaces/${workspaceId}/actor-access-requests`,
+    );
+  }
+
+  approveActorAccessRequest(workspaceId: string, requestId: string) {
+    return this.request<{ request: unknown }>(
+      `/workspaces/${workspaceId}/actor-access-requests/${requestId}/approve`,
+      { method: "POST", body: "{}" },
+    );
+  }
+
+  rejectActorAccessRequest(workspaceId: string, requestId: string) {
+    return this.request<{ request: unknown }>(
+      `/workspaces/${workspaceId}/actor-access-requests/${requestId}/reject`,
+      { method: "POST", body: "{}" },
+    );
+  }
+
+  openDirectConversation(
+    workspaceId: string,
+    input: {
+      contactKind:
+        | "workspace-actor"
+        | "workspace-user"
+        | "friend-actor"
+        | "friend-user";
+      contactId: string;
+    },
+  ): Promise<DirectConversationOpenResponse> {
+    return this.request<DirectConversationOpenResponse>(
+      `/workspaces/${workspaceId}/direct-conversations/open`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
     );
   }
 

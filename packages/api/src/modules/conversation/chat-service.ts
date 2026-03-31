@@ -70,6 +70,11 @@ import {
   getReachableTransportAddressForParticipant,
   queueConversationTransportProjection,
 } from "../im/service.js";
+import type { DirectConversationIdentity } from "./direct-binding.js";
+import {
+  canonicalizeDirectConversationPair,
+  directConversationBindingValues,
+} from "./direct-binding.js";
 
 type ConversationGrantPermission = ConversationGrantsPermission;
 
@@ -870,6 +875,10 @@ export async function createThread(params: {
   initialContentBlocks?: import("@synapse/shared").CanonicalContentBlock[];
   targetActorIds?: string[];
   includeCreatorMember?: boolean;
+  directBindingPair?: {
+    participantOne: DirectConversationIdentity;
+    participantTwo: DirectConversationIdentity;
+  };
 }): Promise<{ conversation: any; members: any[]; message: any }> {
   const {
     workspaceId,
@@ -883,6 +892,7 @@ export async function createThread(params: {
     initialContentBlocks,
     targetActorIds = [],
     includeCreatorMember = true,
+    directBindingPair,
   } = params;
   const actorIds = Array.from(new Set(rawActorIds.filter(Boolean)));
   const userIds = Array.from(
@@ -1020,6 +1030,22 @@ export async function createThread(params: {
       throw new Error("Failed to create conversation");
     }
     const conversation = normalizeConversationRow(conversationRow);
+
+    if (directBindingPair) {
+      const pair = canonicalizeDirectConversationPair(
+        directBindingPair.participantOne,
+        directBindingPair.participantTwo,
+      );
+      await executeCompiledQuery(
+        client,
+        db.insertInto("direct_conversation_bindings").values({
+          conversation_id: conversationId,
+          ...directConversationBindingValues(pair),
+          metadata:
+            {} as TableInsert<"direct_conversation_bindings">["metadata"],
+        }),
+      );
+    }
 
     if (domain === "workspace" && workspaceId) {
       await queueConversationUpdated({
@@ -1412,16 +1438,39 @@ export async function getThreadsForUser(params: {
 
   if (params.workspaceId) {
     const workspaceId = params.workspaceId;
+    const socialVisibilityFilter = (eb: any) =>
+      eb.or([
+        eb("c.kind", "<>", "private"),
+        sql<boolean>`exists (
+          select 1
+          from direct_conversation_bindings dcb
+          where dcb.conversation_id = c.id
+            and (
+              (
+                dcb.participant_one_kind = 'user'
+                and dcb.participant_one_workspace_id = ${workspaceId}
+                and dcb.participant_one_user_id = ${params.userId}
+              )
+              or (
+                dcb.participant_two_kind = 'user'
+                and dcb.participant_two_workspace_id = ${workspaceId}
+                and dcb.participant_two_user_id = ${params.userId}
+              )
+            )
+        )`,
+      ]);
     if (params.domain === "workspace") {
       statement = statement
         .where("c.domain", "=", "workspace")
         .where("c.workspace_id", "=", workspaceId);
     } else if (params.domain === "social") {
-      statement = statement.where("c.domain", "=", "social");
+      statement = statement
+        .where("c.domain", "=", "social")
+        .where(socialVisibilityFilter);
     } else {
       statement = statement.where((eb) =>
         eb.or([
-          eb("c.domain", "=", "social"),
+          eb.and([eb("c.domain", "=", "social"), socialVisibilityFilter(eb)]),
           eb.and([
             eb("c.domain", "=", "workspace"),
             eb("c.workspace_id", "=", workspaceId),
@@ -1596,6 +1645,9 @@ export async function addMembersToConversation(params: {
   const conversation = await getConversation(params.conversationId);
   if (!conversation || conversation.workspace_id !== params.workspaceId) {
     throw new Error("Conversation not found");
+  }
+  if (conversation.kind === "private") {
+    throw new Error("Direct conversations do not support member management");
   }
 
   const actorResult =
@@ -1809,6 +1861,9 @@ export async function removeActorFromConversation(
 ): Promise<void> {
   const conversation = await getConversation(conversationId);
   if (!conversation) throw new Error("Conversation not found");
+  if (conversation.kind === "private") {
+    throw new Error("Direct conversations do not support member management");
+  }
 
   const member = await getConversationMember({
     conversationId: conversationId,

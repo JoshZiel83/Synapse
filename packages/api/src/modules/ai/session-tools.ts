@@ -5,6 +5,7 @@ import {
   describeAutomationPolicy,
   describeAutomationTrigger,
   INTERACTION_QUESTION_FIELD_TYPES,
+  isGroupConversationKind,
   isThreadConversationKind,
   normalizeActorDocs,
   resolveThreadSemantics,
@@ -2397,7 +2398,10 @@ export function registerCallableToolPlugins(): void {
     },
     resolve: async (ctx): Promise<{ active: boolean; definition: any }> => {
       const conversationId = getToolContextConversationId(ctx);
-      if (!conversationId) {
+      if (
+        !conversationId ||
+        !isGroupConversationKind(getToolContextConversationKind(ctx))
+      ) {
         return { active: false, definition: null as any };
       }
 
@@ -2427,6 +2431,11 @@ export function registerCallableToolPlugins(): void {
       if (!session || !conversationId) {
         throwToolError(
           "Current session is not attached to a thread conversation",
+        );
+      }
+      if (!isGroupConversationKind(session.conversation_kind)) {
+        throwToolError(
+          "invite_actor is only available in group conversations.",
         );
       }
 

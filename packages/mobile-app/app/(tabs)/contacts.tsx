@@ -1,70 +1,189 @@
-import Feather from "@expo/vector-icons/Feather";
 import { useRouter } from "expo-router";
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import {
+  Modal,
+  PanResponder,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
+import Feather from "@expo/vector-icons/Feather";
 
+import { MobileHeaderActions } from "@/components/mobile-header-actions";
 import {
   Avatar,
   Button,
   EmptyState,
   LoadingBlock,
-  MobilePageHeader,
   Pill,
-  ScreenScroll,
+  ScreenView,
+  MobilePageHeader,
   SectionBlock,
-  SectionTitleRow,
 } from "@/components/ui";
-import {
-  actorSummary,
-  scopedContactName,
-  scopedContactSubtitle,
-  scopedContactSummary,
-  titleCase,
-} from "@/lib/contacts";
 import { api } from "@/lib/api";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
-import type {
-  ScopedContactView,
-  WorkspaceMemberView,
-} from "@/types/api";
-import type { Actor } from "@shared";
+import type { ContactHubEntryView, ContactHubResponse } from "@/types/api";
 
-type DirectoryMode = "actors" | "people";
+type ContactFilter = "all" | "friend" | "actor" | "workspace-user";
+
+type ContactSection = {
+  letter: string;
+  items: ContactHubEntryView[];
+};
+
+const FILTER_OPTIONS: Array<{ value: ContactFilter; label: string }> = [
+  { value: "all", label: "默认" },
+  { value: "friend", label: "好友" },
+  { value: "actor", label: "Actor" },
+  { value: "workspace-user", label: "Workspace User" },
+];
+
+const LETTER_RAIL = [
+  ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+  "#",
+];
+
+const PINYIN_INITIAL_BOUNDARIES: Array<{ letter: string; boundary: string }> = [
+  { letter: "A", boundary: "阿" },
+  { letter: "B", boundary: "八" },
+  { letter: "C", boundary: "嚓" },
+  { letter: "D", boundary: "哒" },
+  { letter: "E", boundary: "妸" },
+  { letter: "F", boundary: "发" },
+  { letter: "G", boundary: "旮" },
+  { letter: "H", boundary: "哈" },
+  { letter: "J", boundary: "击" },
+  { letter: "K", boundary: "喀" },
+  { letter: "L", boundary: "垃" },
+  { letter: "M", boundary: "妈" },
+  { letter: "N", boundary: "拿" },
+  { letter: "O", boundary: "哦" },
+  { letter: "P", boundary: "啪" },
+  { letter: "Q", boundary: "期" },
+  { letter: "R", boundary: "然" },
+  { letter: "S", boundary: "撒" },
+  { letter: "T", boundary: "塌" },
+  { letter: "W", boundary: "挖" },
+  { letter: "X", boundary: "昔" },
+  { letter: "Y", boundary: "压" },
+  { letter: "Z", boundary: "匝" },
+];
+
+function compareText(left: string, right: string) {
+  try {
+    return left.localeCompare(right, "zh-Hans-u-co-pinyin", {
+      sensitivity: "base",
+    });
+  } catch {
+    return left.localeCompare(right, undefined, {
+      sensitivity: "base",
+    });
+  }
+}
+
+function getInitialLetter(value: string) {
+  const first = value.trim().charAt(0);
+  if (!first) return "#";
+
+  const upper = first.toUpperCase();
+  if (/^[A-Z]$/.test(upper)) return upper;
+
+  if (/^[\u4E00-\u9FFF]$/.test(first)) {
+    for (let index = PINYIN_INITIAL_BOUNDARIES.length - 1; index >= 0; index -= 1) {
+      const current = PINYIN_INITIAL_BOUNDARIES[index];
+      if (current && compareText(first, current.boundary) >= 0) {
+        return current.letter;
+      }
+    }
+    return "A";
+  }
+
+  return "#";
+}
+
+function getEntryBucket(entry: ContactHubEntryView) {
+  return getInitialLetter(entry.title);
+}
+
+function compareEntries(left: ContactHubEntryView, right: ContactHubEntryView) {
+  const titleCompare = compareText(left.title, right.title);
+  if (titleCompare !== 0) return titleCompare;
+  return compareText(left.subtitle || "", right.subtitle || "");
+}
+
+function isFriendEntry(entry: ContactHubEntryView) {
+  return entry.kind.startsWith("friend");
+}
+
+function formatPendingCount(count: number) {
+  return count > 99 ? "99+" : String(count);
+}
+
+function ContactRow({
+  entry,
+  onPress,
+}: {
+  entry: ContactHubEntryView;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.rowCard,
+        pressed && styles.rowCardPressed,
+      ]}
+    >
+      <View style={styles.avatarShell}>
+        <Avatar
+          name={entry.title}
+          uri={entry.avatarUrl}
+          icon={entry.targetType === "actor" ? "cpu" : "user"}
+          size={40}
+        />
+        {entry.targetType === "actor" ? (
+          <View style={styles.actorBadge}>
+            <MaterialCommunityIcons
+              name="robot-outline"
+              size={11}
+              color={theme.colors.white}
+            />
+          </View>
+        ) : null}
+      </View>
+      <View style={styles.rowBody}>
+        <Text style={styles.rowTitle}>{entry.title}</Text>
+        <Text numberOfLines={2} style={styles.rowSubtitle}>
+          {entry.subtitle || entry.workspace.name}
+        </Text>
+      </View>
+      {isFriendEntry(entry) ? <Pill label="好友" tone="primary" /> : null}
+    </Pressable>
+  );
+}
 
 export default function ContactsTab() {
   const router = useRouter();
   const { workspaceId } = useWorkspace();
-  const [mode, setMode] = useState<DirectoryMode>("actors");
-  const [actors, setActors] = useState<Actor[]>([]);
-  const [members, setMembers] = useState<WorkspaceMemberView[]>([]);
-  const [workspaceContacts, setWorkspaceContacts] = useState<
-    ScopedContactView[]
-  >([]);
-  const [personalContacts, setPersonalContacts] = useState<ScopedContactView[]>(
-    [],
-  );
+  const scrollRef = useRef<ScrollView | null>(null);
+  const letterOffsetsRef = useRef<Record<string, number>>({});
+  const [hub, setHub] = useState<ContactHubResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<ContactFilter>("all");
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const [railHeight, setRailHeight] = useState(0);
+  const [activeLetter, setActiveLetter] = useState<string | null>(null);
 
-  const deferredSearch = useDeferredValue(search);
-  const normalizedQuery = deferredSearch.trim().toLowerCase();
-
-  async function loadDirectory(isRefreshing = false) {
+  async function loadHub(isRefreshing = false) {
     if (!workspaceId) {
-      setActors([]);
-      setMembers([]);
-      setWorkspaceContacts([]);
-      setPersonalContacts([]);
+      setHub(null);
       setLoading(false);
       setRefreshing(false);
       return;
@@ -77,17 +196,7 @@ export default function ContactsTab() {
     }
 
     try {
-      const [membersResponse, actorsResponse, contactsResponse] =
-        await Promise.all([
-          api.getWorkspaceMembers(workspaceId),
-          api.getActors(workspaceId),
-          api.getScopedContacts(workspaceId),
-        ]);
-
-      setMembers(membersResponse.data ?? []);
-      setActors(actorsResponse.actors.filter((actor) => actor.isActive));
-      setWorkspaceContacts(contactsResponse.workspaceContacts);
-      setPersonalContacts(contactsResponse.personalContacts);
+      setHub(await api.getContactHub(workspaceId));
       setError(null);
     } catch (nextError) {
       setError(
@@ -100,481 +209,310 @@ export default function ContactsTab() {
   }
 
   useEffect(() => {
-    void loadDirectory();
+    void loadHub();
   }, [workspaceId]);
 
-  const visibleActors = useMemo(() => {
-    if (!normalizedQuery) return actors;
-    return actors.filter((actor) => {
-      const haystack = [
-        actor.definition.name,
-        actor.definition.title,
-        actor.definition.role,
-        actorSummary(actor),
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(normalizedQuery);
-    });
-  }, [actors, normalizedQuery]);
+  const filteredEntries = useMemo(() => {
+    const all = [
+      ...(hub?.workspaceActors || []),
+      ...(hub?.workspaceUsers || []),
+      ...(hub?.friends || []),
+    ];
 
-  const visibleMembers = useMemo(() => {
-    if (!normalizedQuery) return members;
-    return members.filter((member) =>
-      [member.userName || "", member.userEmail || "", member.trustLevel || ""]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalizedQuery),
-    );
-  }, [members, normalizedQuery]);
+    if (filter === "friend") {
+      return [...(hub?.friends || [])].sort(compareEntries);
+    }
+    if (filter === "actor") {
+      return [...(hub?.workspaceActors || [])].sort(compareEntries);
+    }
+    if (filter === "workspace-user") {
+      return [...(hub?.workspaceUsers || [])].sort(compareEntries);
+    }
+    return [...all].sort(compareEntries);
+  }, [filter, hub?.friends, hub?.workspaceActors, hub?.workspaceUsers]);
 
-  const visibleWorkspaceContacts = useMemo(() => {
-    if (!normalizedQuery) return workspaceContacts;
-    return workspaceContacts.filter((contact) =>
-      [
-        scopedContactName(contact),
-        scopedContactSubtitle(contact),
-        scopedContactSummary(contact),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalizedQuery),
-    );
-  }, [normalizedQuery, workspaceContacts]);
+  const sections = useMemo<ContactSection[]>(() => {
+    const grouped = new Map<string, ContactHubEntryView[]>();
+    for (const entry of filteredEntries) {
+      const letter = getEntryBucket(entry);
+      if (!grouped.has(letter)) {
+        grouped.set(letter, []);
+      }
+      grouped.get(letter)!.push(entry);
+    }
 
-  const visiblePersonalContacts = useMemo(() => {
-    if (!normalizedQuery) return personalContacts;
-    return personalContacts.filter((contact) =>
-      [
-        scopedContactName(contact),
-        scopedContactSubtitle(contact),
-        scopedContactSummary(contact),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalizedQuery),
+    return LETTER_RAIL.filter((letter) => grouped.has(letter)).map((letter) => ({
+      letter,
+      items: grouped.get(letter) || [],
+    }));
+  }, [filteredEntries]);
+
+  const filterLabel =
+    FILTER_OPTIONS.find((option) => option.value === filter)?.label || "默认";
+  const pendingRequestCount = hub?.requestSummary.totalPendingCount || 0;
+
+  function scrollToLetter(letter: string) {
+    const offset = letterOffsetsRef.current[letter];
+    if (typeof offset !== "number") return;
+    setActiveLetter(letter);
+    scrollRef.current?.scrollTo({ y: Math.max(offset - 10, 0), animated: false });
+  }
+
+  function activateRailByLocation(locationY: number) {
+    if (!railHeight) return;
+    const index = Math.min(
+      LETTER_RAIL.length - 1,
+      Math.max(0, Math.floor((locationY / railHeight) * LETTER_RAIL.length)),
     );
-  }, [normalizedQuery, personalContacts]);
+    const letter = LETTER_RAIL[index]!;
+    scrollToLetter(letter);
+  }
+
+  const railResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (event) => {
+          activateRailByLocation(event.nativeEvent.locationY);
+        },
+        onPanResponderMove: (event) => {
+          activateRailByLocation(event.nativeEvent.locationY);
+        },
+      }),
+    [railHeight],
+  );
 
   return (
-    <ScreenScroll
-      topPadding={0}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => void loadDirectory(true)}
-        />
-      }
-    >
-      <MobilePageHeader
-        title="联系人"
-        action={
-          <View style={styles.headerActions}>
-            <Pressable
-              onPress={() => router.push("/contacts/discover")}
-              style={({ pressed }) => [
-                styles.headerAction,
-                pressed && styles.headerActionPressed,
-              ]}
-            >
-              <Feather
-                name="compass"
-                size={18}
-                color={theme.colors.text}
-              />
-            </Pressable>
-            <Pressable
-              onPress={() => router.push("/contacts/group/new")}
-              style={({ pressed }) => [
-                styles.headerAction,
-                pressed && styles.headerActionPressed,
-              ]}
-            >
-              <Feather name="plus" size={18} color={theme.colors.text} />
-            </Pressable>
-          </View>
-        }
-      />
-
-      <SectionBlock>
-        <Text style={styles.tipText}>
-          这里会同时展示当前工作区目录，以及你保存的跨工作区联系人。
-        </Text>
-        <View style={styles.searchShell}>
-          <Feather name="search" size={16} color={theme.colors.textSoft} />
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="搜索联系人、工作区、邮箱或角色说明"
-            placeholderTextColor={theme.colors.textSoft}
-            style={styles.searchInput}
-          />
-        </View>
-        <View style={styles.segment}>
-          <SegmentButton
-            label="角色目录"
-            active={mode === "actors"}
-            onPress={() => setMode("actors")}
-          />
-          <SegmentButton
-            label="成员目录"
-            active={mode === "people"}
-            onPress={() => setMode("people")}
-          />
-        </View>
-      </SectionBlock>
-
-      {loading ? (
-        <SectionBlock>
-          <LoadingBlock label="正在加载联系人..." />
-        </SectionBlock>
-      ) : error ? (
-        <SectionBlock>
-          <EmptyState
-            icon="alert-circle"
-            title="联系人加载失败"
-            description={error}
+    <ScreenView>
+      <View style={styles.pageShell}>
+        <View style={styles.headerGutter}>
+          <MobilePageHeader
+            title="联系人"
             action={
-              <View style={styles.retryAction}>
-                <Button
-                  label="重试"
-                  icon="refresh-cw"
-                  onPress={() => void loadDirectory()}
-                />
-              </View>
+              <MobileHeaderActions
+                onSearch={() => router.push("/search")}
+                onStartGroup={() => router.push("/contacts/group/new")}
+                onAddFriend={() => router.push("/contacts/add")}
+                onScan={() => router.push("/scan?intent=relationship")}
+                extraAction={
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="好友申请"
+                    onPress={() => router.push("/contacts/requests")}
+                    style={({ pressed }) => [
+                      styles.headerRequestTrigger,
+                      pressed && styles.filterTriggerPressed,
+                    ]}
+                  >
+                    <Feather
+                      name="bell"
+                      size={20}
+                      color={theme.colors.text}
+                    />
+                    {pendingRequestCount > 0 ? (
+                      <View style={styles.headerRequestBadge}>
+                        <Text style={styles.headerRequestBadgeText}>
+                          {formatPendingCount(pendingRequestCount)}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </Pressable>
+                }
+              />
             }
           />
-        </SectionBlock>
-      ) : (
-        <>
-          <SectionBlock>
-            <Text style={styles.sectionHint}>
-              整个工作区共用的跨工作区联系人簿
-            </Text>
-            <SectionTitleRow
-              title="工作区共享联系人"
-              action={
-                <Text style={styles.countText}>
-                  {visibleWorkspaceContacts.length} 个
-                </Text>
-              }
-            />
-            {visibleWorkspaceContacts.length > 0 ? (
-              <View style={styles.listShell}>
-                {visibleWorkspaceContacts.map((contact) => (
-                  <ScopedContactRow
-                    key={contact.id}
-                    contact={contact}
-                    onPress={() =>
-                      router.push({
-                        pathname: "/contacts/[contactType]/[contactId]",
-                        params: {
-                          contactType: "workspace-contact",
-                          contactId: contact.id,
-                        },
-                      })
-                    }
-                  />
-                ))}
-              </View>
-            ) : (
-              <EmptyState
-                icon="briefcase"
-                title="还没有共享联系人"
-                description="去远端发现页把别的工作区用户或角色加入这个工作区的联系人簿。"
-              />
-            )}
-          </SectionBlock>
+        </View>
 
-          <SectionBlock>
-            <Text style={styles.sectionHint}>
-              只属于你自己的跨工作区联系人
-            </Text>
-            <SectionTitleRow
-              title="我的联系人"
-              action={
-                <Text style={styles.countText}>
-                  {visiblePersonalContacts.length} 个
-                </Text>
-              }
+        <ScrollView
+          ref={scrollRef}
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => void loadHub(true)}
             />
-            {visiblePersonalContacts.length > 0 ? (
-              <View style={styles.listShell}>
-                {visiblePersonalContacts.map((contact) => (
-                  <ScopedContactRow
-                    key={contact.id}
-                    contact={contact}
-                    onPress={() =>
-                      router.push({
-                        pathname: "/contacts/[contactType]/[contactId]",
-                        params: {
-                          contactType: "personal-contact",
-                          contactId: contact.id,
-                        },
-                      })
-                    }
-                  />
-                ))}
-              </View>
-            ) : (
-              <EmptyState
-                icon="bookmark"
-                title="还没有个人联系人"
-                description="你可以把远端用户或角色先收藏为个人联系人，再单独发起私聊或拉群。"
-              />
-            )}
-          </SectionBlock>
-
-          {mode === "actors" ? (
+          }
+        >
+          {loading ? (
             <SectionBlock>
-              <SectionTitleRow
-                title="当前工作区角色目录"
+              <LoadingBlock label="正在加载联系人..." />
+            </SectionBlock>
+          ) : error ? (
+            <SectionBlock>
+              <EmptyState
+                icon="alert-circle"
+                title="联系人加载失败"
+                description={error}
                 action={
-                  <Text style={styles.countText}>
-                    {visibleActors.length} 个角色
-                  </Text>
+                  <View style={styles.retryAction}>
+                    <Button
+                      label="重试"
+                      icon="refresh-cw"
+                      onPress={() => void loadHub()}
+                    />
+                  </View>
                 }
               />
-              {visibleActors.length > 0 ? (
-                <View style={styles.listShell}>
-                  {visibleActors.map((actor) => (
-                    <Pressable
-                      key={actor.id}
-                      onPress={() =>
-                        router.push({
-                          pathname: "/contacts/[contactType]/[contactId]",
-                          params: {
-                            contactType: "actor",
-                            contactId: actor.id,
-                          },
-                        })
-                      }
-                      style={({ pressed }) => [
-                        styles.rowCard,
-                        pressed && styles.rowCardPressed,
-                      ]}
-                    >
-                      <Avatar
-                        name={actor.definition.name}
-                        uri={actor.avatarUrl}
-                        icon="cpu"
-                        size={46}
-                      />
-                      <View style={styles.rowBody}>
-                        <Text style={styles.rowTitle}>
-                          {actor.definition.name}
-                        </Text>
-                        <Text style={styles.rowSubtitle}>
-                          {actor.definition.title ||
-                            titleCase(actor.definition.role)}
-                        </Text>
-                        <Text numberOfLines={2} style={styles.rowCopy}>
-                          {actorSummary(actor)}
-                        </Text>
-                      </View>
-                      <Feather
-                        name="chevron-right"
-                        size={18}
-                        color={theme.colors.textSoft}
-                      />
-                    </Pressable>
-                  ))}
-                </View>
-              ) : (
-                <EmptyState
-                  icon="cpu"
-                  title="没有匹配到角色"
-                  description="换个关键词试试，或者先在 Web 端创建并启用数字员工。"
-                />
-              )}
             </SectionBlock>
           ) : (
-            <SectionBlock>
-              <SectionTitleRow
-                title="当前工作区成员目录"
-                action={
-                  <Text style={styles.countText}>{visibleMembers.length} 人</Text>
-                }
-              />
-              {visibleMembers.length > 0 ? (
-                <View style={styles.listShell}>
-                  {visibleMembers.map((member) => (
-                    <Pressable
-                      key={member.id}
-                      onPress={() =>
-                        router.push({
-                          pathname: "/contacts/[contactType]/[contactId]",
-                          params: {
-                            contactType: "member",
-                            contactId: member.userId,
-                          },
-                        })
-                      }
-                      style={({ pressed }) => [
-                        styles.rowCard,
-                        pressed && styles.rowCardPressed,
-                      ]}
+            <View style={styles.listSection}>
+              <View style={styles.filterRow}>
+                <Pressable
+                  onPress={() => setFilterMenuOpen(true)}
+                  style={({ pressed }) => [
+                    styles.filterTrigger,
+                    pressed && styles.filterTriggerPressed,
+                  ]}
+                >
+                  <Text style={styles.filterLabel}>{filterLabel}</Text>
+                  <Feather
+                    name="chevron-down"
+                    size={16}
+                    color={theme.colors.textSoft}
+                  />
+                </Pressable>
+                <Text style={styles.countText}>{filteredEntries.length} 人</Text>
+              </View>
+
+              {filteredEntries.length > 0 ? (
+                <View style={styles.listCard}>
+                  {sections.map((section) => (
+                    <View
+                      key={section.letter}
+                      onLayout={(event) => {
+                        letterOffsetsRef.current[section.letter] =
+                          event.nativeEvent.layout.y;
+                      }}
                     >
-                      <Avatar
-                        name={member.userName || member.userEmail}
-                        uri={member.avatarUrl}
-                        icon="user"
-                        size={46}
-                      />
-                      <View style={styles.rowBody}>
-                        <Text style={styles.rowTitle}>
-                          {member.userName || "未命名成员"}
-                        </Text>
-                        <Text style={styles.rowSubtitle}>
-                          {member.userEmail || "暂无邮箱信息"}
-                        </Text>
-                        <Text style={styles.rowCopy}>
-                          权限级别：{member.trustLevel}
-                        </Text>
+                      <View style={styles.letterHeader}>
+                        <Text style={styles.letterHeaderText}>{section.letter}</Text>
                       </View>
-                      <Feather
-                        name="chevron-right"
-                        size={18}
-                        color={theme.colors.textSoft}
-                      />
-                    </Pressable>
+                      {section.items.map((entry) => (
+                        <ContactRow
+                          key={`${entry.kind}:${entry.id}`}
+                          entry={entry}
+                          onPress={() =>
+                            router.push({
+                              pathname: "/contacts/[contactType]/[contactId]",
+                              params: {
+                                contactType: entry.kind,
+                                contactId: entry.id,
+                              },
+                            })
+                          }
+                        />
+                      ))}
+                    </View>
                   ))}
                 </View>
               ) : (
                 <EmptyState
                   icon="users"
-                  title="没有匹配到成员"
-                  description="当前工作区成员较少，或者这个关键词没有结果。"
+                  title="当前分类下没有联系人"
+                  description="切换分类，或者通过右上角 + 添加好友。"
                 />
               )}
-            </SectionBlock>
+            </View>
           )}
-        </>
-      )}
-    </ScreenScroll>
-  );
-}
+        </ScrollView>
 
-function SegmentButton({
-  label,
-  active,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[styles.segmentButton, active && styles.segmentButtonActive]}
-    >
-      <Text style={[styles.segmentLabel, active && styles.segmentLabelActive]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
-function ScopedContactRow({
-  contact,
-  onPress,
-}: {
-  contact: ScopedContactView;
-  onPress: () => void;
-}) {
-  const name = scopedContactName(contact);
-  const subtitle = scopedContactSubtitle(contact);
-  const copy = scopedContactSummary(contact);
-  const icon = contact.targetType === "actor" ? "cpu" : "user";
-  const avatarUri = contact.actor?.avatarUrl || contact.user?.avatarUrl;
-
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.rowCard, pressed && styles.rowCardPressed]}
-    >
-      <Avatar name={name} uri={avatarUri || undefined} icon={icon} size={46} />
-      <View style={styles.rowBody}>
-        <View style={styles.rowTitleLine}>
-          <Text style={styles.rowTitle}>{name}</Text>
-          <Pill
-            label={contact.scope === "workspace" ? "共享" : "我的"}
-            tone={contact.scope === "workspace" ? "primary" : "accent"}
-          />
-        </View>
-        <Text style={styles.rowSubtitle}>{subtitle}</Text>
-        <Text style={styles.rowCopy}>{copy}</Text>
+        {!loading && !error && sections.length > 0 ? (
+          <View
+            style={styles.letterRail}
+            onLayout={(event) => setRailHeight(event.nativeEvent.layout.height)}
+            {...railResponder.panHandlers}
+          >
+            {LETTER_RAIL.map((letter) => {
+              const enabled = sections.some((section) => section.letter === letter);
+              return (
+                <Pressable
+                  key={letter}
+                  onPress={() => scrollToLetter(letter)}
+                  disabled={!enabled}
+                  style={styles.letterRailItem}
+                >
+                  <Text
+                    style={[
+                      styles.letterRailText,
+                      !enabled && styles.letterRailTextMuted,
+                      activeLetter === letter && styles.letterRailTextActive,
+                    ]}
+                  >
+                    {letter}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
       </View>
-      <Feather
-        name="chevron-right"
-        size={18}
-        color={theme.colors.textSoft}
-      />
-    </Pressable>
+
+      <Modal
+        visible={filterMenuOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFilterMenuOpen(false)}
+      >
+        <View style={styles.modalRoot}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setFilterMenuOpen(false)}
+          />
+          <View style={styles.filterMenu}>
+            {FILTER_OPTIONS.map((option) => (
+              <Pressable
+                key={option.value}
+                onPress={() => {
+                  setFilter(option.value);
+                  setFilterMenuOpen(false);
+                }}
+                style={({ pressed }) => [
+                  styles.filterOption,
+                  pressed && styles.filterOptionPressed,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.filterOptionText,
+                    filter === option.value && styles.filterOptionTextActive,
+                  ]}
+                >
+                  {option.label}
+                </Text>
+                {filter === option.value ? (
+                  <Feather
+                    name="check"
+                    size={16}
+                    color={theme.colors.primary}
+                  />
+                ) : null}
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      </Modal>
+    </ScreenView>
   );
 }
 
 const styles = StyleSheet.create({
-  headerActions: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  headerAction: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerActionPressed: {
-    opacity: 0.86,
-  },
-  tipText: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: theme.colors.textMuted,
-  },
-  segment: {
-    flexDirection: "row",
-    gap: 6,
-    padding: 4,
-    borderRadius: theme.radii.pill,
-    backgroundColor: theme.colors.surfaceMuted,
-  },
-  segmentButton: {
+  pageShell: {
     flex: 1,
-    borderRadius: theme.radii.pill,
-    paddingVertical: 10,
-    alignItems: "center",
+    position: "relative",
   },
-  segmentButtonActive: {
-    backgroundColor: theme.colors.surface,
+  headerGutter: {
+    paddingHorizontal: 18,
   },
-  segmentLabel: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: theme.colors.textSoft,
-  },
-  segmentLabelActive: {
-    color: theme.colors.text,
-  },
-  searchShell: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    borderRadius: 16,
-    backgroundColor: theme.colors.surfaceMuted,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  searchInput: {
+  scroll: {
     flex: 1,
-    fontSize: 15,
-    color: theme.colors.text,
+  },
+  scrollContent: {
+    paddingTop: 16,
+    paddingBottom: 120,
+    paddingHorizontal: 18,
   },
   retryAction: {
     marginTop: 10,
@@ -582,53 +520,176 @@ const styles = StyleSheet.create({
   },
   countText: {
     fontSize: 12,
+    fontWeight: "700",
     color: theme.colors.textSoft,
   },
-  sectionHint: {
-    fontSize: 13,
-    color: theme.colors.textSoft,
+  listSection: {
+    paddingBottom: 8,
   },
-  listShell: {
-    marginTop: 2,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
+  headerRequestTrigger: {
+    paddingVertical: 2,
+    paddingHorizontal: 2,
+  },
+  headerRequestBadge: {
+    position: "absolute",
+    top: -4,
+    right: -8,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 3,
+    borderRadius: 999,
+    backgroundColor: theme.colors.danger,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerRequestBadgeText: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: theme.colors.white,
+  },
+  filterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  filterTrigger: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 2,
+  },
+  filterTriggerPressed: {
+    opacity: 0.72,
+  },
+  filterLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: theme.colors.text,
+  },
+  listCard: {
+    backgroundColor: theme.colors.surface,
+  },
+  letterHeader: {
+    marginHorizontal: -18,
+    paddingHorizontal: 18,
+    paddingVertical: 7,
+    backgroundColor: theme.colors.backgroundAlt,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  letterHeaderText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: theme.colors.textSoft,
+    letterSpacing: 1.2,
   },
   rowCard: {
     marginHorizontal: -18,
     paddingHorizontal: 18,
-    paddingVertical: 14,
+    paddingVertical: 11,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 10,
+    backgroundColor: theme.colors.surface,
   },
   rowCardPressed: {
-    backgroundColor: theme.colors.surfaceMuted,
+    backgroundColor: theme.colors.backgroundAlt,
   },
   rowBody: {
     flex: 1,
-    gap: 3,
+    gap: 4,
   },
-  rowTitleLine: {
-    flexDirection: "row",
+  avatarShell: {
+    position: "relative",
+    width: 40,
+    height: 40,
+  },
+  actorBadge: {
+    position: "absolute",
+    right: -3,
+    bottom: -3,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: theme.colors.surface,
+    backgroundColor: theme.colors.primary,
     alignItems: "center",
-    gap: 8,
+    justifyContent: "center",
   },
   rowTitle: {
-    flexShrink: 1,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: "700",
     color: theme.colors.text,
   },
   rowSubtitle: {
-    fontSize: 13,
+    fontSize: 12,
+    lineHeight: 17,
     color: theme.colors.textMuted,
   },
-  rowCopy: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: theme.colors.textSoft,
+  letterRail: {
+    position: "absolute",
+    right: 4,
+    top: 150,
+    bottom: 30,
+    width: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 1,
+  },
+  letterRailItem: {
+    width: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 1,
+  },
+  letterRailText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: theme.colors.primary,
+  },
+  letterRailTextMuted: {
+    color: theme.colors.borderStrong,
+  },
+  letterRailTextActive: {
+    color: theme.colors.accent,
+  },
+  modalRoot: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.12)",
+    justifyContent: "flex-start",
+    paddingTop: 120,
+    paddingHorizontal: 18,
+  },
+  filterMenu: {
+    width: 210,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    overflow: "hidden",
+  },
+  filterOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  filterOptionPressed: {
+    backgroundColor: theme.colors.backgroundAlt,
+  },
+  filterOptionText: {
+    fontSize: 15,
+    color: theme.colors.text,
+  },
+  filterOptionTextActive: {
+    fontWeight: "700",
+    color: theme.colors.primary,
   },
 });

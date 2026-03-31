@@ -390,6 +390,25 @@ export function buildActorPrompt(
       ? `- In a private thread, \`send_to\` already targets the other participant. Use \`<Mention .../>\` only when the sentence itself needs an inline body reference.\n`
       : `- A \`send_to\` recipient indicates who should read or act on the message first; it does not make the message private.\n` +
           `- A \`send_to\` recipient already tells the UI who the message is for. Do not duplicate that with a leading \`<Mention .../>\` unless the sentence itself needs an inline reference.\n`;
+    const otherToolLines = [
+      `- \`get_current_time\`: Get the current wall-clock time when timing matters or you need to reference "now"`,
+      ...(threadSemantics.isGroupConversation
+        ? [
+            `- \`invite_actor\` (when available): Invite one or more currently listed candidate actors into this conversation when the current roster lacks a needed skill`,
+          ]
+        : []),
+      `- \`sleep\`: When you have finished your work, call sleep. You will be automatically woken when someone sends you a message`,
+      `- \`memory_search\`: Search durable memories when recalled context is insufficient`,
+      `- \`create_memory\`: Save a durable established fact for future reference`,
+      ...(availableSkills && availableSkills.length > 0
+        ? [
+            "- `read_skill`: Load an installed skill package on demand when a listed skill clearly applies",
+          ]
+        : []),
+    ].join("\n");
+    const workflowStepFour = isPrivateThread
+      ? `4. This is a direct conversation with a fixed participant set. Do not suggest inviting members, pulling people into a group, or treating it like a group chat`
+      : `4. If you need help from another actor and \`invite_actor\` is available, use \`send_to\` for current members or \`invite_actor\` for listed non-members`;
 
     parts.push(
       `# Message Format\n\n` +
@@ -401,17 +420,12 @@ export function buildActorPrompt(
         `## send_to\n` +
         `${sendToGuide}\n\n` +
         `## Other tools\n` +
-        `- \`get_current_time\`: Get the current wall-clock time when timing matters or you need to reference "now"\n` +
-        `- \`invite_actor\`: Invite one or more currently listed candidate actors into this conversation when the current roster lacks a needed skill\n` +
-        `- \`sleep\`: When you have finished your work, call sleep. You will be automatically woken when someone sends you a message\n` +
-        `- \`memory_search\`: Search durable memories when recalled context is insufficient\n` +
-        `- \`create_memory\`: Save a durable established fact for future reference\n` +
-        `${availableSkills && availableSkills.length > 0 ? "- `read_skill`: Load an installed skill package on demand when a listed skill clearly applies\n" : ""}\n` +
+        `${otherToolLines}\n\n` +
         `## Workflow\n` +
         `1. Read the current shared conversation context and identify whether someone is asking you to act\n` +
         `2. Do the work using your tools and profile\n` +
         `3. Use \`send_to\` to reply to whoever sent you the message (user or actor), and set \`intent\` plus \`summary\` correctly\n` +
-        `4. If you need help from another actor, use \`send_to\` for current members or \`invite_actor\` for listed non-members\n` +
+        `${workflowStepFour}\n` +
         `5. When done, call \`sleep\` so you can be woken only when needed\n\n` +
         `## Important\n` +
         `- **You MUST use \`send_to\` to reply.** Plain text output is internal reasoning only.\n` +
@@ -421,6 +435,7 @@ export function buildActorPrompt(
         `- If this wakeup leads to a result, handoff, clarification, or explicit "no action needed" decision that others should know, use \`send_to\` first and only then call \`sleep\`.\n` +
         `${sleepGuidance}` +
         `- All visible conversation messages are shared with the whole conversation.\n` +
+        `${isPrivateThread ? "- This is a direct conversation, not a group chat. Do not suggest adding members, removing members, or renaming it like a group.\n" : ""}` +
         `${recipientGuidance}` +
         `- If a public message is not addressed to you, treat it as shared context unless you are explicitly asked to respond or need to step in to unblock the work.\n` +
         `- Use \`<Mention name="..."/>\` when you want the UI to render an actual member mention inside the message body, especially when the sentence is identifying who owns something or who should take action. Mention is not the same as target.\n` +

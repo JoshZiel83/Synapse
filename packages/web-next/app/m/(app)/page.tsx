@@ -7,7 +7,6 @@ import {
   Bot,
   ChevronRight,
   MessageSquareText,
-  ScanLine,
   Send,
 } from "lucide-react"
 import { useRouter } from "next/navigation"
@@ -22,6 +21,7 @@ import {
 } from "@/app/m/mobile-launcher-state"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { MobileActorPickerDialog } from "@/components/mobile-actor-picker-dialog"
+import { MobileHeaderActions } from "@/components/mobile-header-actions"
 import { MobilePageHeader } from "@/components/mobile-page-header"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -271,20 +271,12 @@ export default function MobileHomePage() {
         <MobilePageHeader
           title={APP_NAME}
           action={
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-8 shrink-0 rounded-full"
-              asChild
-            >
-              <Link
-                href="/m/scan-login"
-                aria-label="Scan QR code to log in on Web"
-              >
-                <ScanLine className="size-5" />
-              </Link>
-            </Button>
+            <MobileHeaderActions
+              onSearch={() => router.push("/m/search")}
+              onStartGroup={() => router.push("/m/contacts/group/new")}
+              onAddFriend={() => router.push("/m/contacts/add")}
+              onScan={() => router.push("/m/scan?intent=relationship")}
+            />
           }
         />
         <div className="flex-1 overflow-y-auto px-4 pt-3 pb-[calc(var(--mobile-tab-bar-clearance,0px)+1.5rem)]">

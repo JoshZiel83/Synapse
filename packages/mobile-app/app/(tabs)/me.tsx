@@ -1,5 +1,4 @@
 import Feather from "@expo/vector-icons/Feather";
-import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
@@ -14,13 +13,14 @@ import {
   SectionBlock,
   SectionTitleRow,
 } from "@/components/ui";
+import { api } from "@/lib/api";
 import { API_BASE } from "@/lib/config";
 import { useSession } from "@/providers/session-provider";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
+import type { FriendIdProfileView } from "@/types/api";
 
 export default function MeTab() {
-  const router = useRouter();
   const { user, signOut, updateProfile } = useSession();
   const {
     workspaceId,
@@ -32,10 +32,40 @@ export default function MeTab() {
   const [name, setName] = useState(user?.name || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [friendIdProfile, setFriendIdProfile] =
+    useState<FriendIdProfileView | null>(null);
+  const [friendIdDraft, setFriendIdDraft] = useState("");
+  const [friendIdSaving, setFriendIdSaving] = useState(false);
+  const [friendIdMessage, setFriendIdMessage] = useState<string | null>(null);
 
   useEffect(() => {
     setName(user?.name || "");
   }, [user?.name]);
+
+  useEffect(() => {
+    if (!workspaceId) {
+      setFriendIdProfile(null);
+      setFriendIdDraft("");
+      return;
+    }
+
+    let active = true;
+    void api
+      .getMyFriendIdProfile(workspaceId)
+      .then((profile) => {
+        if (!active) return;
+        setFriendIdProfile(profile);
+        setFriendIdDraft(profile.friendId);
+      })
+      .catch(() => {
+        if (!active) return;
+        setFriendIdProfile(null);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [workspaceId]);
 
   async function handleSaveProfile() {
     if (!name.trim()) {
@@ -54,6 +84,54 @@ export default function MeTab() {
       );
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSaveFriendId() {
+    if (!workspaceId) return;
+
+    setFriendIdSaving(true);
+    setFriendIdMessage(null);
+    try {
+      const nextProfile = await api.updateMyFriendIdProfile(workspaceId, {
+        friendId: friendIdDraft,
+        searchByIdEnabled: friendIdProfile?.searchByIdEnabled,
+      });
+      setFriendIdProfile(nextProfile);
+      setFriendIdDraft(nextProfile.friendId);
+      setFriendIdMessage(`好友 ID 已更新为 ${nextProfile.friendId}`);
+    } catch (nextError) {
+      setFriendIdMessage(
+        nextError instanceof Error ? nextError.message : "保存好友 ID 失败。",
+      );
+    } finally {
+      setFriendIdSaving(false);
+    }
+  }
+
+  async function handleToggleFriendIdSearch() {
+    if (!workspaceId || !friendIdProfile) return;
+
+    setFriendIdSaving(true);
+    setFriendIdMessage(null);
+    try {
+      const nextProfile = await api.updateMyFriendIdProfile(workspaceId, {
+        friendId: friendIdProfile.friendId,
+        searchByIdEnabled: !friendIdProfile.searchByIdEnabled,
+      });
+      setFriendIdProfile(nextProfile);
+      setFriendIdDraft(nextProfile.friendId);
+      setFriendIdMessage(
+        nextProfile.searchByIdEnabled
+          ? "已开启通过好友 ID 搜索。"
+          : "已关闭通过好友 ID 搜索。",
+      );
+    } catch (nextError) {
+      setFriendIdMessage(
+        nextError instanceof Error ? nextError.message : "更新搜索开关失败。",
+      );
+    } finally {
+      setFriendIdSaving(false);
     }
   }
 
@@ -92,6 +170,42 @@ export default function MeTab() {
           onPress={() => void handleSaveProfile()}
           disabled={saving}
         />
+      </SectionBlock>
+
+      <SectionBlock>
+        <SectionTitleRow title="好友 ID" />
+        <Field
+          label="唯一 ID"
+          value={friendIdDraft}
+          onChangeText={setFriendIdDraft}
+          placeholder="输入你的好友 ID"
+          autoCapitalize="none"
+          autoCorrect={false}
+          hint="好友 ID 整个平台唯一，默认关闭被搜索。"
+        />
+        {friendIdMessage ? (
+          <Text style={styles.workspaceMeta}>{friendIdMessage}</Text>
+        ) : null}
+        <View style={styles.friendIdActions}>
+          <Button
+            label={friendIdSaving ? "保存中..." : "保存 ID"}
+            icon="save"
+            variant="secondary"
+            onPress={() => void handleSaveFriendId()}
+            disabled={friendIdSaving || !friendIdDraft.trim()}
+            style={styles.friendIdButton}
+          />
+          <Button
+            label={
+              friendIdProfile?.searchByIdEnabled ? "关闭搜索" : "开启搜索"
+            }
+            icon={friendIdProfile?.searchByIdEnabled ? "eye-off" : "eye"}
+            variant="secondary"
+            onPress={() => void handleToggleFriendIdSearch()}
+            disabled={friendIdSaving || !friendIdProfile}
+            style={styles.friendIdButton}
+          />
+        </View>
       </SectionBlock>
 
       <SectionBlock>
@@ -166,11 +280,6 @@ export default function MeTab() {
         <SectionTitleRow title="设备操作" />
         <View style={styles.listShell}>
           <ActionRow
-            label="扫码登录桌面端"
-            icon="maximize-2"
-            onPress={() => router.push("/scan-login")}
-          />
-          <ActionRow
             label="退出登录"
             icon="log-out"
             danger
@@ -243,6 +352,13 @@ const styles = StyleSheet.create({
   workspaceMeta: {
     fontSize: 12,
     color: theme.colors.textSoft,
+  },
+  friendIdActions: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  friendIdButton: {
+    flex: 1,
   },
   listShell: {
     marginTop: 2,

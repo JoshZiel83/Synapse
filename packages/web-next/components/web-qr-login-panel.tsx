@@ -3,7 +3,11 @@
 import Image from "next/image"
 import QRCode from "qrcode"
 import { startTransition, useEffect, useRef, useState } from "react"
-import type { AuthQrLoginCreateResponse, AuthQrLoginStatus } from "@synapse/shared"
+import {
+  buildMobileScanUrl,
+  type AuthQrLoginCreateResponse,
+  type AuthQrLoginStatus,
+} from "@synapse/shared"
 import { LoaderCircle, RefreshCcw } from "lucide-react"
 import { useRouter } from "next/navigation"
 
@@ -50,10 +54,13 @@ export function WebQrLoginPanel({ redirect }: { redirect: string | null }) {
 
     try {
       const created = await api.createQrLoginRequest()
-      const qrTarget = new URL("/m/qr-login", window.location.origin)
-      qrTarget.searchParams.set("token", created.scanToken)
+      const qrTarget = buildMobileScanUrl({
+        origin: window.location.origin,
+        kind: "login",
+        token: created.scanToken,
+      })
 
-      const imageUrl = await QRCode.toDataURL(qrTarget.toString(), {
+      const imageUrl = await QRCode.toDataURL(qrTarget, {
         width: 220,
         margin: 1,
         color: {

@@ -1,190 +1,258 @@
 "use client"
 
-import { startTransition, useDeferredValue, useEffect, useState } from "react"
-import { extractText, type Actor } from "@synapse/shared"
-import { Bot, Mail, Search, Sparkles, Users } from "lucide-react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { Bell, Bot, ChevronDown, Check } from "lucide-react"
+import { useRouter } from "next/navigation"
 
-import ChatAvatar from "@/app/dashboard/chat/chat-avatar"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
+import { MobileHeaderActions } from "@/components/mobile-header-actions"
 import { MobilePageHeader } from "@/components/mobile-page-header"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
-import { cn, resolveFileUrl } from "@/lib/utils"
+import type { ContactHubEntryView, ContactHubResponse } from "@/lib/api"
 import { api } from "@/lib/api"
-import { useChatStore } from "@/stores/chat-store"
+import { resolveFileUrl } from "@/lib/utils"
 
-type WorkspaceMember = {
-  id: string
-  userId: string
-  userName?: string
-  userEmail?: string
-  avatarUrl?: string | null
-  trustLevel: string
-  joinedAt: string
+type ContactFilter = "all" | "friend" | "actor" | "workspace-user"
+
+type ContactSection = {
+  letter: string
+  items: ContactHubEntryView[]
 }
 
-type DirectoryMode = "actors" | "people"
+const FILTER_OPTIONS: Array<{ value: ContactFilter; label: string }> = [
+  { value: "all", label: "默认" },
+  { value: "friend", label: "好友" },
+  { value: "actor", label: "Actor" },
+  { value: "workspace-user", label: "Workspace User" },
+]
 
-function titleCase(input: string) {
-  return input
-    .split("_")
-    .join(" ")
-    .replace(/\b\w/g, (char) => char.toUpperCase())
+const LETTER_RAIL = [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ", "#"]
+
+const PINYIN_INITIAL_BOUNDARIES: Array<{ letter: string; boundary: string }> = [
+  { letter: "A", boundary: "阿" },
+  { letter: "B", boundary: "八" },
+  { letter: "C", boundary: "嚓" },
+  { letter: "D", boundary: "哒" },
+  { letter: "E", boundary: "妸" },
+  { letter: "F", boundary: "发" },
+  { letter: "G", boundary: "旮" },
+  { letter: "H", boundary: "哈" },
+  { letter: "J", boundary: "击" },
+  { letter: "K", boundary: "喀" },
+  { letter: "L", boundary: "垃" },
+  { letter: "M", boundary: "妈" },
+  { letter: "N", boundary: "拿" },
+  { letter: "O", boundary: "哦" },
+  { letter: "P", boundary: "啪" },
+  { letter: "Q", boundary: "期" },
+  { letter: "R", boundary: "然" },
+  { letter: "S", boundary: "撒" },
+  { letter: "T", boundary: "塌" },
+  { letter: "W", boundary: "挖" },
+  { letter: "X", boundary: "昔" },
+  { letter: "Y", boundary: "压" },
+  { letter: "Z", boundary: "匝" },
+]
+
+function compareText(left: string, right: string) {
+  try {
+    return left.localeCompare(right, "zh-Hans-u-co-pinyin", {
+      sensitivity: "base",
+    })
+  } catch {
+    return left.localeCompare(right, undefined, {
+      sensitivity: "base",
+    })
+  }
 }
 
-function actorSummary(actor: Actor) {
-  const docs = [...actor.definition.docs].sort(
-    (left, right) => right.priority - left.priority
+function getInitialLetter(value: string) {
+  const first = value.trim().charAt(0)
+  if (!first) return "#"
+
+  const upper = first.toUpperCase()
+  if (/^[A-Z]$/.test(upper)) return upper
+
+  if (/^[\u4E00-\u9FFF]$/.test(first)) {
+    for (let index = PINYIN_INITIAL_BOUNDARIES.length - 1; index >= 0; index -= 1) {
+      const current = PINYIN_INITIAL_BOUNDARIES[index]
+      if (current && compareText(first, current.boundary) >= 0) {
+        return current.letter
+      }
+    }
+    return "A"
+  }
+
+  return "#"
+}
+
+function isFriendEntry(entry: ContactHubEntryView) {
+  return entry.kind.startsWith("friend")
+}
+
+function formatPendingCount(count: number) {
+  return count > 99 ? "99+" : String(count)
+}
+
+function getEntryBucket(entry: ContactHubEntryView) {
+  return getInitialLetter(entry.title)
+}
+
+function compareEntries(left: ContactHubEntryView, right: ContactHubEntryView) {
+  const titleCompare = compareText(left.title, right.title)
+  if (titleCompare !== 0) return titleCompare
+  return compareText(left.subtitle || "", right.subtitle || "")
+}
+
+function EntryCard({
+  entry,
+  onPress,
+}: {
+  entry: ContactHubEntryView
+  onPress: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onPress}
+      className="flex w-full items-center gap-2.5 border-b border-border/70 bg-background px-3 py-2.5 text-left last:border-b-0"
+    >
+      <div className="relative shrink-0">
+        <Avatar className="size-9 rounded-2xl">
+          <AvatarImage src={resolveFileUrl(entry.avatarUrl) || undefined} alt={entry.title} />
+          <AvatarFallback className="rounded-2xl">
+            {entry.title.slice(0, 1).toUpperCase()}
+          </AvatarFallback>
+        </Avatar>
+        {entry.targetType === "actor" ? (
+          <span className="absolute -right-1 -bottom-1 flex size-[18px] items-center justify-center rounded-full border-2 border-background bg-primary text-primary-foreground">
+            <Bot className="size-3" />
+          </span>
+        ) : null}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-medium text-foreground">
+          {entry.title}
+        </div>
+        <div className="truncate text-xs text-muted-foreground">
+          {entry.subtitle || entry.workspace.name}
+        </div>
+      </div>
+      {isFriendEntry(entry) ? <Badge variant="secondary">好友</Badge> : null}
+    </button>
   )
-  const summary = docs
-    .map((doc) => extractText(doc.content).replace(/\s+/g, " ").trim())
-    .find(Boolean)
-
-  return summary || actor.definition.title || titleCase(actor.definition.role)
 }
 
 export default function MobileContactsPage() {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const { workspaceId } = useWorkspace()
-  const createWorkspaceThread = useChatStore(
-    (state) => state.createWorkspaceThread
-  )
-  const selectConversation = useChatStore((state) => state.selectConversation)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const railRef = useRef<HTMLDivElement | null>(null)
+  const draggingRailRef = useRef(false)
 
-  const [mode, setMode] = useState<DirectoryMode>("actors")
-  const [members, setMembers] = useState<WorkspaceMember[]>([])
-  const [actors, setActors] = useState<Actor[]>([])
-  const [search, setSearch] = useState("")
+  const [hub, setHub] = useState<ContactHubResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [launchingActorId, setLaunchingActorId] = useState<string | null>(null)
-
-  const deferredSearch = useDeferredValue(search)
-  const normalizedQuery = deferredSearch.trim().toLowerCase()
-  const focusedKind = searchParams.get("kind")
-  const focusedId = searchParams.get("id")
+  const [error, setError] = useState<string | null>(null)
+  const [filter, setFilter] = useState<ContactFilter>("all")
+  const [activeLetter, setActiveLetter] = useState<string | null>(null)
 
   useEffect(() => {
     if (!workspaceId) return
 
-    let cancelled = false
+    let active = true
     setLoading(true)
-
-    void Promise.all([
-      api.getWorkspaceMembers(workspaceId),
-      api.getActors(workspaceId),
-    ])
-      .then(([memberResponse, actorResponse]) => {
-        if (cancelled) return
-        const nextMembers = Array.isArray(memberResponse)
-          ? memberResponse
-          : memberResponse?.data || []
-        const nextActors = Array.isArray(actorResponse)
-          ? actorResponse
-          : actorResponse?.actors || []
-
-        setMembers(nextMembers)
-        setActors(nextActors.filter((actor: Actor) => actor.isActive))
+    setError(null)
+    void api
+      .getContactHub(workspaceId)
+      .then((result) => {
+        if (!active) return
+        setHub(result)
       })
-      .catch((error) => {
-        if (cancelled) return
-        console.error("Failed to load contacts:", error)
-        setMembers([])
-        setActors([])
+      .catch((nextError) => {
+        if (!active) return
+        setError(nextError instanceof Error ? nextError.message : "联系人加载失败。")
       })
       .finally(() => {
-        if (!cancelled) {
+        if (active) {
           setLoading(false)
         }
       })
 
     return () => {
-      cancelled = true
+      active = false
     }
   }, [workspaceId])
 
-  useEffect(() => {
-    if (focusedKind === "user") {
-      setMode("people")
-    } else if (focusedKind === "actor") {
-      setMode("actors")
-    }
-  }, [focusedKind])
+  const filteredEntries = useMemo(() => {
+    const all = [
+      ...(hub?.workspaceActors || []),
+      ...(hub?.workspaceUsers || []),
+      ...(hub?.friends || []),
+    ]
 
-  function prioritizeFocused<T>(
-    items: T[],
-    getId: (item: T) => string,
-    isMatch: boolean
-  ) {
-    if (!isMatch || !focusedId) return items
-    const focusedItems: T[] = []
-    const otherItems: T[] = []
-    for (const item of items) {
-      if (getId(item) === focusedId) {
-        focusedItems.push(item)
-      } else {
-        otherItems.push(item)
-      }
+    if (filter === "friend") {
+      return [...(hub?.friends || [])].sort(compareEntries)
     }
-    return [...focusedItems, ...otherItems]
+    if (filter === "actor") {
+      return [...(hub?.workspaceActors || [])].sort(compareEntries)
+    }
+    if (filter === "workspace-user") {
+      return [...(hub?.workspaceUsers || [])].sort(compareEntries)
+    }
+    return [...all].sort(compareEntries)
+  }, [filter, hub?.friends, hub?.workspaceActors, hub?.workspaceUsers])
+
+  const sections = useMemo<ContactSection[]>(() => {
+    const grouped = new Map<string, ContactHubEntryView[]>()
+    for (const entry of filteredEntries) {
+      const letter = getEntryBucket(entry)
+      if (!grouped.has(letter)) {
+        grouped.set(letter, [])
+      }
+      grouped.get(letter)!.push(entry)
+    }
+
+    return LETTER_RAIL.filter((letter) => grouped.has(letter)).map((letter) => ({
+      letter,
+      items: grouped.get(letter) || [],
+    }))
+  }, [filteredEntries])
+
+  const filterLabel =
+    FILTER_OPTIONS.find((option) => option.value === filter)?.label || "默认"
+  const pendingRequestCount = hub?.requestSummary.totalPendingCount || 0
+
+  function scrollToLetter(letter: string) {
+    const target = sectionRefs.current[letter]
+    const container = containerRef.current
+    if (!target || !container) return
+    setActiveLetter(letter)
+    container.scrollTo({
+      top: Math.max(target.offsetTop - 62, 0),
+      behavior: "auto",
+    })
   }
 
-  const visibleActors = prioritizeFocused(
-    normalizedQuery
-      ? actors.filter((actor) => {
-          const haystack = [
-            actor.definition.name,
-            actor.definition.title,
-            actor.definition.role,
-            actorSummary(actor),
-          ]
-            .join(" ")
-            .toLowerCase()
-          return haystack.includes(normalizedQuery)
-        })
-      : actors,
-    (actor) => actor.id,
-    focusedKind === "actor"
-  )
-
-  const visibleMembers = prioritizeFocused(
-    normalizedQuery
-      ? members.filter((member) => {
-          const haystack = [
-            member.userName || "",
-            member.userEmail || "",
-            member.trustLevel || "",
-          ]
-            .join(" ")
-            .toLowerCase()
-          return haystack.includes(normalizedQuery)
-        })
-      : members,
-    (member) => member.userId,
-    focusedKind === "user"
-  )
-
-  async function handleStartActorChat(actor: Actor) {
-    if (!workspaceId || launchingActorId) return
-    setLaunchingActorId(actor.id)
-    try {
-      const conversationId = await createWorkspaceThread(
-        workspaceId,
-        "private",
-        [actor.id]
-      )
-      selectConversation(conversationId)
-      startTransition(() => {
-        router.push(`/m/chat/${conversationId}`)
-      })
-    } catch (error) {
-      console.error("Failed to start actor chat:", error)
-    } finally {
-      setLaunchingActorId(null)
-    }
+  function activateRail(clientY: number) {
+    const rail = railRef.current
+    if (!rail) return
+    const rect = rail.getBoundingClientRect()
+    const ratio = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height))
+    const index = Math.min(
+      LETTER_RAIL.length - 1,
+      Math.max(0, Math.floor(ratio * LETTER_RAIL.length))
+    )
+    scrollToLetter(LETTER_RAIL[index]!)
   }
 
   if (!workspaceId) {
@@ -198,186 +266,176 @@ export default function MobileContactsPage() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <MobilePageHeader title="Contacts" />
-      <div className="flex-1 overflow-y-auto px-4 pt-3 pb-[calc(var(--mobile-tab-bar-clearance,0px)+1.5rem)]">
+    <div className="relative flex min-h-0 flex-1 flex-col bg-background">
+      <MobilePageHeader
+        title="联系人"
+        action={
+          <MobileHeaderActions
+            onSearch={() => router.push("/m/search")}
+            onStartGroup={() => router.push("/m/contacts/group/new")}
+            onAddFriend={() => router.push("/m/contacts/add")}
+            onScan={() => router.push("/m/scan?intent=relationship")}
+            extraAction={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="relative size-7 rounded-none px-0 text-foreground hover:bg-transparent"
+                aria-label="好友申请"
+                onClick={() => router.push("/m/contacts/requests")}
+              >
+                <Bell className="size-[18px]" />
+                {pendingRequestCount > 0 ? (
+                  <span className="absolute -top-1.5 -right-1.5 flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold leading-4 text-white">
+                    {formatPendingCount(pendingRequestCount)}
+                  </span>
+                ) : null}
+              </Button>
+            }
+          />
+        }
+      />
+
+      <div
+        ref={containerRef}
+        className="flex-1 overflow-y-auto px-4 pt-3 pb-[calc(var(--mobile-tab-bar-clearance,0px)+1.5rem)]"
+      >
         <div className="space-y-4">
-          <div className="-mx-4 space-y-3 border-b border-border bg-background px-4 py-3">
-            <div className="grid grid-cols-2 gap-2 rounded-2xl bg-muted/60 p-1">
-              <button
-                type="button"
-                className={cn(
-                  "flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-colors",
-                  mode === "actors"
-                    ? "bg-background text-foreground"
-                    : "text-muted-foreground"
-                )}
-                onClick={() => setMode("actors")}
-              >
-                <Sparkles className="size-4" />
-                Actors
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-colors",
-                  mode === "people"
-                    ? "bg-background text-foreground"
-                    : "text-muted-foreground"
-                )}
-                onClick={() => setMode("people")}
-              >
-                <Users className="size-4" />
-                People
-              </button>
+          {loading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-14 rounded-xl" />
+              <Skeleton className="h-48 rounded-xl" />
             </div>
-
-            <div className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder={
-                  mode === "actors" ? "Search actors…" : "Search people…"
-                }
-                className="h-10 rounded-2xl border-border/70 bg-muted/35 pl-9 shadow-none"
-              />
+          ) : error ? (
+            <div className="-mx-4 bg-background px-4 py-10 text-center">
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">{error}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  onClick={() => window.location.reload()}
+                >
+                  重试
+                </Button>
+              </div>
             </div>
-          </div>
-
-          <div className="space-y-3">
-            {loading ? (
-              <>
-                <Skeleton className="h-20 rounded-2xl" />
-                <Skeleton className="h-20 rounded-2xl" />
-                <Skeleton className="h-20 rounded-2xl" />
-              </>
-            ) : mode === "actors" ? (
-              visibleActors.length > 0 ? (
-                <div className="-mx-4 divide-y divide-border/70 border-y border-border/70 bg-background">
-                  {visibleActors.map((actor) => {
-                    const isFocused =
-                      focusedKind === "actor" && focusedId === actor.id
-
-                    return (
-                      <div
-                        key={actor.id}
-                        className={cn("px-4 py-4", isFocused && "bg-accent/60")}
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 text-sm font-semibold text-foreground"
+                    >
+                      {filterLabel}
+                      <ChevronDown className="size-4 text-muted-foreground" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="rounded-2xl">
+                    {FILTER_OPTIONS.map((option) => (
+                      <DropdownMenuItem
+                        key={option.value}
+                        onSelect={() => setFilter(option.value)}
+                        className="rounded-xl"
                       >
-                        <div className="flex items-start gap-3">
-                          <ChatAvatar
-                            name={actor.definition.name}
-                            avatarUrl={actor.avatarUrl}
-                            emoji={actor.definition.avatarEmoji}
-                            entityType="actor"
-                            size="lg"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <div className="truncate text-sm font-medium text-foreground">
-                                {actor.definition.name}
-                              </div>
-                              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                                {actor.definition.title ||
-                                  titleCase(actor.definition.role)}
-                              </span>
-                              {isFocused ? (
-                                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
-                                  From chat
-                                </span>
-                              ) : null}
-                            </div>
-                            <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                              {actorSummary(actor)}
-                            </p>
-                            <Button
-                              size="sm"
-                              className="mt-3 rounded-full"
-                              onClick={() => void handleStartActorChat(actor)}
-                              disabled={launchingActorId === actor.id}
-                            >
-                              <Bot className="mr-2 size-4" />
-                              {launchingActorId === actor.id
-                                ? "Starting..."
-                                : "Chat"}
-                            </Button>
-                          </div>
-                        </div>
+                        {filter === option.value ? (
+                          <Check className="mr-2 size-4 text-primary" />
+                        ) : (
+                          <span className="mr-2 inline-block size-4" />
+                        )}
+                        {option.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <span className="text-sm font-semibold text-muted-foreground">
+                  {filteredEntries.length} 人
+                </span>
+              </div>
+
+              {filteredEntries.length > 0 ? (
+                <div className="-mx-4 bg-background">
+                  {sections.map((section) => (
+                    <div
+                      key={section.letter}
+                      ref={(node) => {
+                        sectionRefs.current[section.letter] = node
+                      }}
+                    >
+                      <div className="bg-muted/30 px-4 py-2 text-[11px] font-semibold tracking-[0.18em] text-muted-foreground">
+                        {section.letter}
                       </div>
-                    )
-                  })}
+                      {section.items.map((entry) => (
+                        <EntryCard
+                          key={`${entry.kind}:${entry.id}`}
+                          entry={entry}
+                          onPress={() => router.push(`/m/contacts/${entry.kind}/${entry.id}`)}
+                        />
+                      ))}
+                    </div>
+                  ))}
                 </div>
               ) : (
-                <div className="-mx-4 border-y border-dashed border-border bg-background px-4 py-8 text-center">
-                  <p className="text-sm font-medium text-foreground">
-                    No actors found
-                  </p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Try a different search query.
-                  </p>
-                </div>
-              )
-            ) : visibleMembers.length > 0 ? (
-              <div className="-mx-4 divide-y divide-border/70 border-y border-border/70 bg-background">
-                {visibleMembers.map((member) => {
-                  const displayName = member.userName || "Unknown user"
-                  const isFocused =
-                    focusedKind === "user" && focusedId === member.userId
-
-                  return (
-                    <div
-                      key={member.userId}
-                      className={cn("px-4 py-4", isFocused && "bg-accent/60")}
-                    >
-                      <div className="flex items-start gap-3">
-                        <Avatar className="size-12">
-                          <AvatarImage
-                            src={resolveFileUrl(member.avatarUrl) || undefined}
-                            alt={displayName}
-                          />
-                          <AvatarFallback>
-                            {displayName.charAt(0).toUpperCase()}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <div className="truncate text-sm font-medium text-foreground">
-                              {displayName}
-                            </div>
-                            {isFocused ? (
-                              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
-                                From chat
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-                            <Mail className="size-4" />
-                            <span className="truncate">
-                              {member.userEmail || "No email available"}
-                            </span>
-                          </div>
-                          <div className="mt-2 text-xs tracking-[0.16em] text-muted-foreground uppercase">
-                            {titleCase(member.trustLevel)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <div className="-mx-4 border-y border-dashed border-border bg-background px-4 py-8 text-center">
-                <p className="text-sm font-medium text-foreground">
-                  No people found
+                <p className="py-8 text-center text-sm text-muted-foreground">
+                  当前分类下没有联系人。
                 </p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Try a different search query.
-                </p>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </div>
+
       </div>
+
+      {!loading && !error && sections.length > 0 ? (
+        <div
+          ref={railRef}
+          className="absolute top-28 right-1 z-10 flex h-[calc(100%-10rem-var(--mobile-tab-bar-clearance,0px))] w-5 flex-col items-center justify-center gap-0.5 select-none"
+          onMouseDown={(event) => {
+            draggingRailRef.current = true
+            activateRail(event.clientY)
+          }}
+          onMouseMove={(event) => {
+            if (!draggingRailRef.current) return
+            activateRail(event.clientY)
+          }}
+          onMouseUp={() => {
+            draggingRailRef.current = false
+          }}
+          onMouseLeave={() => {
+            draggingRailRef.current = false
+          }}
+          onTouchStart={(event) => {
+            activateRail(event.touches[0]!.clientY)
+          }}
+          onTouchMove={(event) => {
+            activateRail(event.touches[0]!.clientY)
+          }}
+          style={{ touchAction: "none" }}
+        >
+          {LETTER_RAIL.map((letter) => {
+            const enabled = sections.some((section) => section.letter === letter)
+            return (
+              <button
+                key={letter}
+                type="button"
+                disabled={!enabled}
+                onClick={() => scrollToLetter(letter)}
+                className={`w-full text-[10px] leading-none ${
+                  activeLetter === letter
+                    ? "font-bold text-primary"
+                    : enabled
+                      ? "font-semibold text-primary/80"
+                      : "text-border"
+                }`}
+              >
+                {letter}
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
     </div>
   )
 }

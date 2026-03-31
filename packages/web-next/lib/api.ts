@@ -59,6 +59,135 @@ export interface AuthMutationOptions {
   platform?: string
 }
 
+export interface WorkspaceListResponse {
+  data: Array<{
+    id: string
+    name: string
+    slug: string
+    trustLevel?: string
+  }>
+}
+
+export interface RelationshipProfileView {
+  subjectType: "user" | "actor"
+  approvalMode: "auto" | "manual"
+  qrToken: string
+  qrUrl: string
+  accessPolicy?: "workspace_open" | "approval_required"
+}
+
+export interface FriendIdProfileView {
+  friendId: string
+  searchByIdEnabled: boolean
+}
+
+export interface ContactHubEntryView {
+  kind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user"
+  id: string
+  targetType: "user" | "actor"
+  title: string
+  subtitle?: string
+  avatarUrl?: string
+  avatarEmoji?: string
+  workspace: {
+    id: string
+    name: string
+    slug: string
+  }
+  userId?: string
+  actorId?: string
+  relationLabel: string
+  directState: {
+    status:
+      | "existing"
+      | "available"
+      | "approval_required"
+      | "pending_approval"
+    conversationId?: string
+  }
+}
+
+export interface ContactHubResponse {
+  requestSummary: {
+    friendPendingCount: number
+    actorAccessPendingCount: number
+    totalPendingCount: number
+  }
+  workspaceActors: ContactHubEntryView[]
+  workspaceUsers: ContactHubEntryView[]
+  friends: ContactHubEntryView[]
+  groups: unknown[]
+}
+
+export interface FriendIdSearchMatchView {
+  profileId: string
+  title: string
+  subtitle?: string
+  avatarUrl?: string
+  workspace: {
+    id: string
+    name: string
+    slug: string
+  }
+  userId: string
+  state:
+    | "same_workspace_user"
+    | "friend"
+    | "pending_request"
+    | "requestable"
+  contact?: {
+    kind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user"
+    id: string
+  }
+  conversationId?: string
+  requestId?: string
+}
+
+export interface FriendIdSearchResponse {
+  query: string
+  outcome: "empty" | "invalid" | "self" | "not_found" | "found"
+  matches: FriendIdSearchMatchView[]
+}
+
+export interface ContactHubDetailResponse {
+  contact: ContactHubEntryView
+  groups: unknown[]
+}
+
+export interface FriendRequestListResponse {
+  incoming: any[]
+  outgoing: any[]
+}
+
+export interface ActorAccessRequestListResponse {
+  incoming: any[]
+  outgoing: any[]
+}
+
+export interface RelationshipScanResponse {
+  outcome:
+    | "self_scan"
+    | "same_workspace_user"
+    | "friend_active"
+    | "friend_request_created"
+    | "friend_request_pending"
+    | "actor_access_granted"
+    | "actor_access_request_created"
+    | "actor_access_pending"
+  requestId?: string
+  contact?: {
+    kind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user"
+    id: string
+  }
+}
+
+export interface DirectConversationOpenResponse {
+  status: "ready" | "pending_approval"
+  created?: boolean
+  conversationId?: string
+  requestId?: string
+}
+
 class ApiClient {
   private async fetch(path: string, options: RequestInit = {}) {
     const body = options.body
@@ -192,7 +321,7 @@ class ApiClient {
   }
 
   // Workspaces
-  getWorkspaces() {
+  getWorkspaces(): Promise<WorkspaceListResponse> {
     return this.fetch("/workspaces")
   }
   createWorkspace(name: string, description?: string) {
@@ -789,6 +918,136 @@ class ApiClient {
     return this.fetch(`/workspaces/${wsId}/actors/${actorId}/model-groups`, {
       method: "PUT",
       body: JSON.stringify({ groups }),
+    })
+  }
+
+  getMyRelationshipProfile(wsId: string): Promise<RelationshipProfileView> {
+    return this.fetch(`/workspaces/${wsId}/me/friend-profile`)
+  }
+  getMyFriendIdProfile(wsId: string): Promise<FriendIdProfileView> {
+    return this.fetch(`/workspaces/${wsId}/me/friend-id`)
+  }
+  updateMyFriendIdProfile(
+    wsId: string,
+    input: { friendId?: string; searchByIdEnabled?: boolean }
+  ): Promise<FriendIdProfileView> {
+    return this.fetch(`/workspaces/${wsId}/me/friend-id`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    })
+  }
+  updateMyRelationshipProfile(
+    wsId: string,
+    input: { approvalMode: "auto" | "manual" }
+  ): Promise<RelationshipProfileView> {
+    return this.fetch(`/workspaces/${wsId}/me/friend-profile`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    })
+  }
+  getActorRelationshipProfile(
+    wsId: string,
+    actorId: string
+  ): Promise<RelationshipProfileView> {
+    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/friend-profile`)
+  }
+  updateActorRelationshipProfile(
+    wsId: string,
+    actorId: string,
+    input: {
+      approvalMode: "auto" | "manual"
+      accessPolicy?: "workspace_open" | "approval_required"
+    }
+  ): Promise<RelationshipProfileView> {
+    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/friend-profile`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    })
+  }
+  scanRelationshipQr(
+    wsId: string,
+    token: string
+  ): Promise<RelationshipScanResponse> {
+    return this.fetch(`/workspaces/${wsId}/relationship-qr/scan`, {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    })
+  }
+  searchFriendId(
+    wsId: string,
+    query: string
+  ): Promise<FriendIdSearchResponse> {
+    const params = new URLSearchParams()
+    if (query.trim()) {
+      params.set("q", query.trim())
+    }
+    return this.fetch(
+      `/workspaces/${wsId}/friend-id-search${
+        params.size > 0 ? `?${params.toString()}` : ""
+      }`
+    )
+  }
+  requestFriendBySearchProfile(
+    wsId: string,
+    profileId: string
+  ): Promise<RelationshipScanResponse> {
+    return this.fetch(`/workspaces/${wsId}/friend-id-search/request`, {
+      method: "POST",
+      body: JSON.stringify({ profileId }),
+    })
+  }
+  getContactHub(wsId: string): Promise<ContactHubResponse> {
+    return this.fetch(`/workspaces/${wsId}/contact-hub`)
+  }
+  getContactHubDetail(
+    wsId: string,
+    contactKind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user",
+    contactId: string
+  ): Promise<ContactHubDetailResponse> {
+    return this.fetch(`/workspaces/${wsId}/contact-hub/${contactKind}/${contactId}`)
+  }
+  getFriendRequests(wsId: string): Promise<FriendRequestListResponse> {
+    return this.fetch(`/workspaces/${wsId}/friend-requests`)
+  }
+  approveFriendRequest(wsId: string, requestId: string) {
+    return this.fetch(`/workspaces/${wsId}/friend-requests/${requestId}/approve`, {
+      method: "POST",
+      body: "{}",
+    })
+  }
+  rejectFriendRequest(wsId: string, requestId: string) {
+    return this.fetch(`/workspaces/${wsId}/friend-requests/${requestId}/reject`, {
+      method: "POST",
+      body: "{}",
+    })
+  }
+  getActorAccessRequests(
+    wsId: string
+  ): Promise<ActorAccessRequestListResponse> {
+    return this.fetch(`/workspaces/${wsId}/actor-access-requests`)
+  }
+  approveActorAccessRequest(wsId: string, requestId: string) {
+    return this.fetch(`/workspaces/${wsId}/actor-access-requests/${requestId}/approve`, {
+      method: "POST",
+      body: "{}",
+    })
+  }
+  rejectActorAccessRequest(wsId: string, requestId: string) {
+    return this.fetch(`/workspaces/${wsId}/actor-access-requests/${requestId}/reject`, {
+      method: "POST",
+      body: "{}",
+    })
+  }
+  openDirectConversation(
+    wsId: string,
+    input: {
+      contactKind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user"
+      contactId: string
+    }
+  ): Promise<DirectConversationOpenResponse> {
+    return this.fetch(`/workspaces/${wsId}/direct-conversations/open`, {
+      method: "POST",
+      body: JSON.stringify(input),
     })
   }
 

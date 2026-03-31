@@ -24,8 +24,14 @@ type RequiredSchemaIssue = {
 const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
   {
     table: "users",
-    requiredColumns: ["id", "email", "password_hash"],
-    reason: "auth and seed users",
+    requiredColumns: [
+      "id",
+      "email",
+      "password_hash",
+      "friend_search_id",
+      "friend_search_enabled",
+    ],
+    reason: "auth, seed users, and friend search identity",
   },
   {
     table: "workspaces",
@@ -47,6 +53,51 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
       "target_workspace_id",
     ],
     reason: "unified workspace and personal contacts",
+  },
+  {
+    table: "workspace_relationship_profiles",
+    requiredColumns: [
+      "workspace_id",
+      "subject_type",
+      "approval_mode",
+      "qr_token",
+    ],
+    reason: "workspace-scoped QR relationship profiles",
+  },
+  {
+    table: "workspace_friend_requests",
+    requiredColumns: [
+      "requester_workspace_id",
+      "requester_user_id",
+      "target_workspace_id",
+      "target_subject_type",
+      "status",
+    ],
+    reason: "workspace-scoped friend requests",
+  },
+  {
+    table: "workspace_friend_entries",
+    requiredColumns: [
+      "workspace_id",
+      "owner_user_id",
+      "peer_type",
+      "peer_workspace_id",
+    ],
+    reason: "workspace-scoped friend entries",
+  },
+  {
+    table: "actor_access_requests",
+    requiredColumns: ["workspace_id", "actor_id", "requester_user_id", "status"],
+    reason: "workspace actor access approval flow",
+  },
+  {
+    table: "direct_conversation_bindings",
+    requiredColumns: [
+      "conversation_id",
+      "participant_one_kind",
+      "participant_two_kind",
+    ],
+    reason: "authoritative direct-conversation uniqueness",
   },
   {
     table: "workspace_user_preferences",

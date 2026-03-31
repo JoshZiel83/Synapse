@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { type ReactNode, useState } from "react"
 import { APP_NAME, type ActorRuntimeState } from "@synapse/shared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -40,6 +40,8 @@ interface ConversationListProps {
   headerVariant?: "default" | "mobile"
   title?: string
   loading?: boolean
+  headerAction?: ReactNode
+  showSearchInput?: boolean
 }
 
 function getRuntimePriority(runtime: ActorRuntimeState) {
@@ -129,6 +131,8 @@ export default function ConversationList({
   headerVariant = "default",
   title,
   loading = false,
+  headerAction,
+  showSearchInput = true,
 }: ConversationListProps) {
   const [search, setSearch] = useState("")
   const headerTitle =
@@ -160,29 +164,33 @@ export default function ConversationList({
           <MobilePageHeader
             title={headerTitle}
             action={
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8 shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                onClick={onNewConversation}
-                title="New Conversation"
-              >
-                <Plus className="size-5" />
-              </Button>
+              headerAction ?? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  onClick={onNewConversation}
+                  title="New Conversation"
+                >
+                  <Plus className="size-5" />
+                </Button>
+              )
             }
           />
-          <div className="border-b border-border bg-background px-4 py-3">
-            <div className="relative">
-              <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search conversations…"
-                className="h-10 rounded-2xl border-border/70 bg-muted/35 pl-9 shadow-none"
-              />
+          {showSearchInput ? (
+            <div className="border-b border-border bg-background px-4 py-3">
+              <div className="relative">
+                <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search conversations…"
+                  className="h-10 rounded-2xl border-border/70 bg-muted/35 pl-9 shadow-none"
+                />
+              </div>
             </div>
-          </div>
+          ) : null}
         </>
       ) : (
         <div className="border-b border-border px-4 py-4">

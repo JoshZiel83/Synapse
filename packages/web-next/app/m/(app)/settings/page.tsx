@@ -16,8 +16,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
+import { api } from "@/lib/api"
 import { resolveFileUrl } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
+import { useEffect } from "react"
+import type { FriendIdProfileView } from "@/lib/api"
 
 export default function MobileSettingsPage() {
   const router = useRouter()
@@ -27,6 +31,11 @@ export default function MobileSettingsPage() {
   const { theme, setTheme } = useTheme()
 
   const [loggingOut, setLoggingOut] = useState(false)
+  const [friendIdProfile, setFriendIdProfile] =
+    useState<FriendIdProfileView | null>(null)
+  const [friendIdDraft, setFriendIdDraft] = useState("")
+  const [friendIdSaving, setFriendIdSaving] = useState(false)
+  const [friendIdMessage, setFriendIdMessage] = useState<string | null>(null)
 
   const initials = user?.name
     ? user.name
@@ -46,6 +55,73 @@ export default function MobileSettingsPage() {
       })
     } finally {
       setLoggingOut(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!workspaceId) {
+      setFriendIdProfile(null)
+      setFriendIdDraft("")
+      return
+    }
+
+    let active = true
+    void api
+      .getMyFriendIdProfile(workspaceId)
+      .then((profile) => {
+        if (!active) return
+        setFriendIdProfile(profile)
+        setFriendIdDraft(profile.friendId)
+      })
+      .catch(() => {
+        if (!active) return
+        setFriendIdProfile(null)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [workspaceId])
+
+  async function handleSaveFriendId() {
+    if (!workspaceId) return
+    setFriendIdSaving(true)
+    setFriendIdMessage(null)
+    try {
+      const nextProfile = await api.updateMyFriendIdProfile(workspaceId, {
+        friendId: friendIdDraft,
+        searchByIdEnabled: friendIdProfile?.searchByIdEnabled,
+      })
+      setFriendIdProfile(nextProfile)
+      setFriendIdDraft(nextProfile.friendId)
+      setFriendIdMessage(`好友 ID 已更新为 ${nextProfile.friendId}`)
+    } catch (error) {
+      setFriendIdMessage(error instanceof Error ? error.message : "保存好友 ID 失败。")
+    } finally {
+      setFriendIdSaving(false)
+    }
+  }
+
+  async function handleToggleFriendIdSearch() {
+    if (!workspaceId || !friendIdProfile) return
+    setFriendIdSaving(true)
+    setFriendIdMessage(null)
+    try {
+      const nextProfile = await api.updateMyFriendIdProfile(workspaceId, {
+        friendId: friendIdProfile.friendId,
+        searchByIdEnabled: !friendIdProfile.searchByIdEnabled,
+      })
+      setFriendIdProfile(nextProfile)
+      setFriendIdDraft(nextProfile.friendId)
+      setFriendIdMessage(
+        nextProfile.searchByIdEnabled
+          ? "已开启通过好友 ID 搜索。"
+          : "已关闭通过好友 ID 搜索。"
+      )
+    } catch (error) {
+      setFriendIdMessage(error instanceof Error ? error.message : "更新搜索开关失败。")
+    } finally {
+      setFriendIdSaving(false)
     }
   }
 
@@ -139,6 +215,48 @@ export default function MobileSettingsPage() {
                 <Monitor className="mr-2 size-4" />
                 Auto
               </Button>
+            </div>
+          </section>
+
+          <section className="-mx-4 border-y border-border/70 bg-background px-4 py-4">
+            <div className="mb-3">
+              <h2 className="text-sm font-semibold text-foreground">好友 ID</h2>
+              <p className="text-sm text-muted-foreground">
+                好友 ID 整个平台唯一，默认关闭被搜索。
+              </p>
+            </div>
+            <div className="space-y-3">
+              <Input
+                value={friendIdDraft}
+                onChange={(event) => setFriendIdDraft(event.target.value)}
+                autoCapitalize="none"
+                autoCorrect="off"
+                placeholder="输入你的好友 ID"
+                className="rounded-2xl"
+              />
+              {friendIdMessage ? (
+                <p className="text-sm text-muted-foreground">{friendIdMessage}</p>
+              ) : null}
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  onClick={() => void handleSaveFriendId()}
+                  disabled={friendIdSaving || !friendIdDraft.trim()}
+                >
+                  {friendIdSaving ? "保存中..." : "保存 ID"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  onClick={() => void handleToggleFriendIdSearch()}
+                  disabled={friendIdSaving || !friendIdProfile}
+                >
+                  {friendIdProfile?.searchByIdEnabled ? "关闭搜索" : "开启搜索"}
+                </Button>
+              </div>
             </div>
           </section>
 

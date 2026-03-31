@@ -111,6 +111,8 @@ function ProtectedNavigation() {
     >
       <Stack.Screen name="login" />
       <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="search" />
+      <Stack.Screen name="scan" />
       <Stack.Screen name="scan-login" />
       <Stack.Screen name="qr-login" />
       <Stack.Screen name="chat/[conversationId]" />

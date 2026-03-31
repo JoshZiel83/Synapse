@@ -31,6 +31,9 @@ CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'w
 CREATE TYPE actors_role AS ENUM ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant');
 CREATE TYPE workspace_contacts_scope AS ENUM ('workspace', 'personal');
 CREATE TYPE workspace_contacts_target_type AS ENUM ('user', 'actor');
+CREATE TYPE actor_access_policy AS ENUM ('workspace_open', 'approval_required');
+CREATE TYPE relationship_approval_mode AS ENUM ('auto', 'manual');
+CREATE TYPE relationship_request_status AS ENUM ('pending', 'approved', 'rejected');
 CREATE TYPE actor_versions_source_type AS ENUM ('user', 'actor', 'system', 'sync');
 CREATE TYPE actor_version_docs_visibility AS ENUM ('always', 'direct_only', 'multi_member_only', 'internal_only');
 CREATE TYPE actor_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'follow_upstream', 'detached');
@@ -154,11 +157,15 @@ CREATE TABLE users (
   name VARCHAR(255) NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
   avatar_file_id UUID,
+  friend_search_id VARCHAR(32) NOT NULL UNIQUE
+    DEFAULT lower('id_' || substr(replace(uuid_generate_v4()::text, '-', ''), 1, 12)),
+  friend_search_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_friend_search_enabled ON users(friend_search_enabled);
 
 -- ============ Auth Sessions ============
 CREATE TABLE auth_sessions (
@@ -573,6 +580,7 @@ CREATE TABLE actors (
   parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
   specialties TEXT[] DEFAULT '{}',
+  access_policy actor_access_policy NOT NULL DEFAULT 'workspace_open',
   config JSONB DEFAULT '{}',
   current_version INT NOT NULL DEFAULT 1,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -584,6 +592,191 @@ CREATE TABLE actors (
 
 CREATE INDEX idx_actors_workspace ON actors(workspace_id, created_at DESC);
 CREATE INDEX idx_actors_parent ON actors(parent_id);
+
+CREATE TABLE workspace_relationship_profiles (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  subject_type workspace_contacts_target_type NOT NULL,
+  subject_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  subject_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  approval_mode relationship_approval_mode NOT NULL DEFAULT 'manual',
+  qr_token VARCHAR(128) NOT NULL UNIQUE,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  FOREIGN KEY (workspace_id, subject_user_id)
+    REFERENCES workspace_members(workspace_id, user_id)
+    ON DELETE CASCADE,
+  CHECK (
+    (subject_type = 'user' AND subject_user_id IS NOT NULL AND subject_actor_id IS NULL) OR
+    (subject_type = 'actor' AND subject_actor_id IS NOT NULL AND subject_user_id IS NULL)
+  )
+);
+
+CREATE UNIQUE INDEX uq_workspace_relationship_profiles_user
+  ON workspace_relationship_profiles(workspace_id, subject_user_id)
+  WHERE subject_type = 'user' AND subject_user_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_workspace_relationship_profiles_actor
+  ON workspace_relationship_profiles(workspace_id, subject_actor_id)
+  WHERE subject_type = 'actor' AND subject_actor_id IS NOT NULL;
+
+CREATE TABLE workspace_friend_requests (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  requester_workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  requester_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  target_subject_type workspace_contacts_target_type NOT NULL,
+  target_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  target_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  requested_via_profile_id UUID REFERENCES workspace_relationship_profiles(id) ON DELETE SET NULL,
+  status relationship_request_status NOT NULL DEFAULT 'pending',
+  resolved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  resolved_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  FOREIGN KEY (requester_workspace_id, requester_user_id)
+    REFERENCES workspace_members(workspace_id, user_id)
+    ON DELETE CASCADE,
+  FOREIGN KEY (target_workspace_id, target_user_id)
+    REFERENCES workspace_members(workspace_id, user_id)
+    ON DELETE CASCADE,
+  CHECK (
+    (target_subject_type = 'user' AND target_user_id IS NOT NULL AND target_actor_id IS NULL) OR
+    (target_subject_type = 'actor' AND target_actor_id IS NOT NULL AND target_user_id IS NULL)
+  )
+);
+
+CREATE UNIQUE INDEX uq_workspace_friend_requests_pending_user
+  ON workspace_friend_requests(
+    requester_workspace_id,
+    requester_user_id,
+    target_workspace_id,
+    target_user_id
+  )
+  WHERE status = 'pending' AND target_subject_type = 'user' AND target_user_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_workspace_friend_requests_pending_actor
+  ON workspace_friend_requests(
+    requester_workspace_id,
+    requester_user_id,
+    target_workspace_id,
+    target_actor_id
+  )
+  WHERE status = 'pending' AND target_subject_type = 'actor' AND target_actor_id IS NOT NULL;
+CREATE INDEX idx_workspace_friend_requests_target_user
+  ON workspace_friend_requests(target_workspace_id, target_user_id, created_at DESC)
+  WHERE target_user_id IS NOT NULL;
+CREATE INDEX idx_workspace_friend_requests_target_actor
+  ON workspace_friend_requests(target_workspace_id, target_actor_id, created_at DESC)
+  WHERE target_actor_id IS NOT NULL;
+CREATE INDEX idx_workspace_friend_requests_requester
+  ON workspace_friend_requests(requester_workspace_id, requester_user_id, created_at DESC);
+
+CREATE TABLE workspace_friend_entries (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  peer_type workspace_contacts_target_type NOT NULL,
+  peer_workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  peer_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  peer_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  source_request_id UUID REFERENCES workspace_friend_requests(id) ON DELETE SET NULL,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  FOREIGN KEY (workspace_id, owner_user_id)
+    REFERENCES workspace_members(workspace_id, user_id)
+    ON DELETE CASCADE,
+  FOREIGN KEY (peer_workspace_id, peer_user_id)
+    REFERENCES workspace_members(workspace_id, user_id)
+    ON DELETE CASCADE,
+  CHECK (
+    (peer_type = 'user' AND peer_user_id IS NOT NULL AND peer_actor_id IS NULL) OR
+    (peer_type = 'actor' AND peer_actor_id IS NOT NULL AND peer_user_id IS NULL)
+  )
+);
+
+CREATE UNIQUE INDEX uq_workspace_friend_entries_user
+  ON workspace_friend_entries(workspace_id, owner_user_id, peer_workspace_id, peer_user_id)
+  WHERE peer_type = 'user' AND peer_user_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_workspace_friend_entries_actor
+  ON workspace_friend_entries(workspace_id, owner_user_id, peer_actor_id)
+  WHERE peer_type = 'actor' AND peer_actor_id IS NOT NULL;
+CREATE INDEX idx_workspace_friend_entries_owner
+  ON workspace_friend_entries(workspace_id, owner_user_id, created_at DESC);
+
+CREATE TABLE actor_access_requests (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+  requester_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status relationship_request_status NOT NULL DEFAULT 'pending',
+  resolved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  resolved_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  FOREIGN KEY (workspace_id, requester_user_id)
+    REFERENCES workspace_members(workspace_id, user_id)
+    ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX uq_actor_access_requests_pending
+  ON actor_access_requests(workspace_id, actor_id, requester_user_id)
+  WHERE status = 'pending';
+CREATE INDEX idx_actor_access_requests_actor
+  ON actor_access_requests(workspace_id, actor_id, created_at DESC);
+CREATE INDEX idx_actor_access_requests_requester
+  ON actor_access_requests(workspace_id, requester_user_id, created_at DESC);
+
+CREATE TABLE direct_conversation_bindings (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  conversation_id UUID NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
+  participant_one_kind workspace_contacts_target_type NOT NULL,
+  participant_one_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  participant_one_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  participant_one_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  participant_two_kind workspace_contacts_target_type NOT NULL,
+  participant_two_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  participant_two_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  participant_two_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (
+    (participant_one_kind = 'user' AND participant_one_workspace_id IS NOT NULL AND participant_one_user_id IS NOT NULL AND participant_one_actor_id IS NULL) OR
+    (participant_one_kind = 'actor' AND participant_one_workspace_id IS NULL AND participant_one_user_id IS NULL AND participant_one_actor_id IS NOT NULL)
+  ),
+  CHECK (
+    (participant_two_kind = 'user' AND participant_two_workspace_id IS NOT NULL AND participant_two_user_id IS NOT NULL AND participant_two_actor_id IS NULL) OR
+    (participant_two_kind = 'actor' AND participant_two_workspace_id IS NULL AND participant_two_user_id IS NULL AND participant_two_actor_id IS NOT NULL)
+  )
+);
+
+CREATE UNIQUE INDEX uq_direct_conversation_bindings_pair
+  ON direct_conversation_bindings(
+    participant_one_kind,
+    COALESCE(participant_one_workspace_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE(participant_one_user_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE(participant_one_actor_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    participant_two_kind,
+    COALESCE(participant_two_workspace_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE(participant_two_user_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE(participant_two_actor_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  );
+CREATE INDEX idx_direct_conversation_bindings_participant_one
+  ON direct_conversation_bindings(
+    participant_one_kind,
+    participant_one_workspace_id,
+    participant_one_user_id,
+    participant_one_actor_id
+  );
+CREATE INDEX idx_direct_conversation_bindings_participant_two
+  ON direct_conversation_bindings(
+    participant_two_kind,
+    participant_two_workspace_id,
+    participant_two_user_id,
+    participant_two_actor_id
+  );
 
 -- ============ Scoped Contacts ============
 CREATE TABLE workspace_contacts (

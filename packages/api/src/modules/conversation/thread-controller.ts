@@ -8,13 +8,7 @@ import {
   type CanonicalContentBlock,
 } from "@synapse/shared";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
-import { getFileUrl } from "../../infrastructure/storage/index.js";
-import { getFileUrlById } from "../files/service.js";
 import { requireRequestAction } from "../access/guards.js";
-import {
-  authorizeAction,
-  userSubject,
-} from "../access/service.js";
 import {
   addMembersToConversation,
   cancelConversation,
@@ -49,6 +43,10 @@ import {
 } from "./service.js";
 import { enqueueRelayAuthorizationApply } from "../mcp-plugins/relay-manager.js";
 import { getConversationTransportBinding } from "../im/service.js";
+import {
+  mapConversationMember,
+  mapConversationSummaryView,
+} from "./summary-view.js";
 
 const CONVERSATIONS_BASE_PATH = "/api/v1/conversations";
 
@@ -152,129 +150,6 @@ const resolveThreadInteractionSchema = z
     { message: "answers, selectedOptionId, or decision is required" },
   );
 
-function mapMember(row: any) {
-  if (row.actor_id) {
-    return {
-      memberId: row.id,
-      participantId: row.id,
-      type: "actor",
-      actorId: row.actor_id,
-      id: row.actor_id,
-      name: row.actor_name || "Unknown",
-      title: row.actor_title || undefined,
-      role: row.actor_role || "specialist",
-      emoji: row.actor_avatar_emoji || undefined,
-      avatarUrl: row.actor_avatar_stored_name
-        ? getFileUrl(row.actor_avatar_stored_name)
-        : undefined,
-      state: row.state,
-    };
-  }
-
-  if (row.member_type === "external") {
-    return {
-      memberId: row.id,
-      participantId: row.id,
-      type: "external",
-      id: row.id,
-      name:
-        row.transport_display_name ||
-        row.display_name ||
-        "External participant",
-      state: row.state,
-    };
-  }
-
-  return {
-    memberId: row.id,
-    participantId: row.id,
-    type: "user",
-    userId: row.user_id,
-    id: row.user_id,
-    name: row.user_name || "User",
-    avatarUrl: row.user_avatar_file_id
-      ? getFileUrlById(row.user_avatar_file_id)
-      : undefined,
-    state: row.state,
-  };
-}
-
-async function mapThreadSummary(row: any, userId: string) {
-  const members = (await getConversationMembers(row.id)).filter(
-    (member: any) => member.state === "active",
-  );
-  const mappedMembers = members.map(mapMember);
-  const participants = mappedMembers.filter(
-    (member: any) => member.type === "actor",
-  );
-  const hasOpenLane = members.some(
-    (member: any) => member.actor_id && member.session_status !== "closed",
-  );
-  const directPeerNames =
-    row.kind === "private"
-      ? mappedMembers
-          .filter(
-            (member: any) =>
-              !(member.type === "user" && member.userId === userId) &&
-              member.state !== "removed",
-          )
-          .map((member: any) => member.name)
-          .filter(Boolean)
-      : [];
-  const derivedName =
-    row.kind === "private" && directPeerNames.length > 0
-      ? directPeerNames.join(", ")
-      : row.title ||
-        mappedMembers
-          .map((member: any) => member.name)
-          .filter(Boolean)
-          .join(", ") ||
-        row.last_message?.substring(0, 100) ||
-        "Untitled thread";
-  const [canManage, canManageMembers] = await Promise.all([
-    authorizeAction({
-      subject: userSubject(userId),
-      action: "conversation.manage",
-      resourceId: row.id,
-    }),
-    authorizeAction({
-      subject: userSubject(userId),
-      action: "conversation.manage_members",
-      resourceId: row.id,
-    }),
-  ]);
-
-  return {
-    id: row.id,
-    domain: row.domain,
-    kind: row.kind,
-    status: hasOpenLane ? "active" : "completed",
-    transportKind: row.transport_kind || undefined,
-    participants,
-    members: mappedMembers,
-    lastMessage: row.last_message
-      ? {
-          content: row.last_message,
-          role:
-            row.last_message_sender_type === "user"
-              ? "user"
-              : "assistant",
-          actorName: row.last_message_sender_name,
-          createdAt: row.last_message_at,
-        }
-      : undefined,
-    unreadCount: row.unread_count || 0,
-    createdAt: row.created_at,
-    title: derivedName,
-    name: derivedName,
-    avatarUrl: row.avatar_url || undefined,
-    permissions: {
-      canManage,
-      canManageMembers,
-    },
-  };
-}
-
 async function requireThreadPermission(
   request: any,
   reply: any,
@@ -352,7 +227,7 @@ export default async function threadController(app: FastifyInstance) {
 
     return reply.send({
       conversations: await Promise.all(
-        threads.map((thread) => mapThreadSummary(thread, userId)),
+        threads.map((thread) => mapConversationSummaryView(thread, userId)),
       ),
       runtimeMap,
     });
@@ -420,7 +295,7 @@ export default async function threadController(app: FastifyInstance) {
     }
 
     return reply.send({
-      conversation: await mapThreadSummary(summary, userId),
+      conversation: await mapConversationSummaryView(summary, userId),
     });
   });
 
@@ -465,7 +340,7 @@ export default async function threadController(app: FastifyInstance) {
 
     const members = (await getConversationMembers(thread.id))
       .filter((member: any) => member.state === "active")
-      .map(mapMember);
+      .map(mapConversationMember);
     return reply.send({ members });
   });
 
@@ -480,6 +355,11 @@ export default async function threadController(app: FastifyInstance) {
       "Not allowed to manage thread members",
     );
     if (!thread) return;
+    if (thread.kind === "private") {
+      return reply
+        .status(400)
+        .send({ error: "Direct conversations do not support member management" });
+    }
 
     const workspaceId = requireWorkspaceBackedThread(
       reply,
@@ -639,6 +519,11 @@ export default async function threadController(app: FastifyInstance) {
       "Not allowed to manage this thread",
     );
     if (!thread) return;
+    if (thread.kind === "private") {
+      return reply
+        .status(400)
+        .send({ error: "Direct conversations do not support profile updates" });
+    }
 
     const workspaceId = requireWorkspaceBackedThread(
       reply,
@@ -683,6 +568,11 @@ export default async function threadController(app: FastifyInstance) {
       "Not allowed to manage thread members",
     );
     if (!thread) return;
+    if (thread.kind === "private") {
+      return reply
+        .status(400)
+        .send({ error: "Direct conversations do not support member management" });
+    }
 
     const workspaceId = requireWorkspaceBackedThread(
       reply,

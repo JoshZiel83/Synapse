@@ -1,9 +1,8 @@
 import Feather from "@expo/vector-icons/Feather";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { ConversationItem } from "@/components/conversation-item";
 import {
   Avatar,
   Button,
@@ -15,36 +14,31 @@ import {
   SectionTitleRow,
 } from "@/components/ui";
 import { api } from "@/lib/api";
-import {
-  actorSummary,
-  scopedContactName,
-  scopedContactSubtitle,
-  scopedContactSummary,
-  titleCase,
-} from "@/lib/contacts";
-import {
-  conversationIncludesActor,
-  conversationIncludesUser,
-  findPrivateSocialConversationForActor,
-  findPrivateSocialConversationForUser,
-  findPrivateWorkspaceConversationForActor,
-  findPrivateWorkspaceConversationForUser,
-  isGroupConversation,
-} from "@/lib/conversations";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
 import type {
-  ConversationSummaryView,
-  ScopedContactView,
-  WorkspaceMemberView,
+  ContactHubDetailResponse,
+  ContactHubEntryView,
 } from "@/types/api";
-import type { Actor } from "@shared";
 
 type ContactType =
-  | "actor"
-  | "member"
-  | "workspace-contact"
-  | "personal-contact";
+  | "workspace-actor"
+  | "workspace-user"
+  | "friend-actor"
+  | "friend-user";
+
+function directButtonLabel(entry: ContactHubEntryView) {
+  switch (entry.directState.status) {
+    case "existing":
+      return "进入已有私聊";
+    case "pending_approval":
+      return "等待批准";
+    case "approval_required":
+      return "申请访问并发起私聊";
+    default:
+      return "发起私聊";
+  }
+}
 
 export default function ContactDetailScreen() {
   const router = useRouter();
@@ -53,48 +47,27 @@ export default function ContactDetailScreen() {
     contactId: string;
   }>();
   const { workspaceId } = useWorkspace();
-  const [actors, setActors] = useState<Actor[]>([]);
-  const [members, setMembers] = useState<WorkspaceMemberView[]>([]);
-  const [workspaceContacts, setWorkspaceContacts] = useState<
-    ScopedContactView[]
-  >([]);
-  const [personalContacts, setPersonalContacts] = useState<ScopedContactView[]>(
-    [],
-  );
-  const [conversations, setConversations] = useState<ConversationSummaryView[]>(
-    [],
-  );
+  const [detail, setDetail] = useState<ContactHubDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    async function loadData() {
-      if (!workspaceId) {
+    async function loadDetail() {
+      if (!workspaceId || !contactType || !contactId) {
         setLoading(false);
         return;
       }
 
       setLoading(true);
-
       try {
-        const [
-          actorsResponse,
-          membersResponse,
-          conversationsResponse,
-          contactsResponse,
-        ] = await Promise.all([
-          api.getActors(workspaceId),
-          api.getWorkspaceMembers(workspaceId),
-          api.getThreads(workspaceId),
-          api.getScopedContacts(workspaceId),
-        ]);
-
-        setActors(actorsResponse.actors.filter((actor) => actor.isActive));
-        setMembers(membersResponse.data ?? []);
-        setConversations(conversationsResponse.conversations);
-        setWorkspaceContacts(contactsResponse.workspaceContacts);
-        setPersonalContacts(contactsResponse.personalContacts);
+        const nextDetail = await api.getContactHubDetail(
+          workspaceId,
+          contactType,
+          contactId,
+        );
+        setDetail(nextDetail);
         setError(null);
       } catch (nextError) {
         setError(
@@ -107,209 +80,44 @@ export default function ContactDetailScreen() {
       }
     }
 
-    void loadData();
-  }, [workspaceId]);
+    void loadDetail();
+  }, [contactId, contactType, workspaceId]);
 
-  const actor =
-    contactType === "actor"
-      ? (actors.find((item) => item.id === contactId) ?? null)
-      : null;
-  const member =
-    contactType === "member"
-      ? (members.find((item) => item.userId === contactId) ?? null)
-      : null;
-  const workspaceContact =
-    contactType === "workspace-contact"
-      ? (workspaceContacts.find((item) => item.id === contactId) ?? null)
-      : null;
-  const personalContact =
-    contactType === "personal-contact"
-      ? (personalContacts.find((item) => item.id === contactId) ?? null)
-      : null;
-  const savedContact = workspaceContact || personalContact;
+  async function handleOpenDirect() {
+    if (!workspaceId || !detail?.contact || submitting) return;
 
-  const relatedGroups = useMemo(() => {
-    const targetActorId = actor?.id || savedContact?.actor?.id;
-    const targetUserId = member?.userId || savedContact?.user?.id;
-
-    if (targetActorId) {
-      return conversations.filter(
-        (conversation) =>
-          isGroupConversation(conversation) &&
-          conversationIncludesActor(conversation, targetActorId),
-      );
+    if (
+      detail.contact.directState.status === "existing" &&
+      detail.contact.directState.conversationId
+    ) {
+      router.push(`/chat/${detail.contact.directState.conversationId}`);
+      return;
     }
-
-    if (targetUserId) {
-      return conversations.filter(
-        (conversation) =>
-          isGroupConversation(conversation) &&
-          conversationIncludesUser(conversation, targetUserId),
-      );
-    }
-
-    return [];
-  }, [actor, conversations, member, savedContact]);
-
-  async function handleGoChat() {
-    if (!workspaceId || submitting) return;
 
     setSubmitting(true);
+    setActionMessage(null);
     try {
-      if (savedContact?.actor) {
-        const existing = findPrivateSocialConversationForActor(
-          conversations,
-          savedContact.actor.id,
-        );
-        if (existing) {
-          router.push(`/chat/${existing.id}`);
-          return;
-        }
+      const result = await api.openDirectConversation(workspaceId, {
+        contactKind: detail.contact.kind,
+        contactId: detail.contact.id,
+      });
 
-        const created = await api.createThread({
-          domain: "social",
-          kind: "private",
-          actorIds: [savedContact.actor.id],
-        });
-        const conversationId = created.conversationId;
-        if (conversationId) {
-          router.replace(`/chat/${conversationId}`);
-        }
+      if (result.status === "pending_approval") {
+        setActionMessage("已提交申请，等待对方批准后才能发起私聊。");
         return;
       }
 
-      if (savedContact?.user) {
-        const existing = findPrivateSocialConversationForUser(
-          conversations,
-          savedContact.user.id,
-        );
-        if (existing) {
-          router.push(`/chat/${existing.id}`);
-          return;
-        }
-
-        const created = await api.createThread({
-          domain: "social",
-          kind: "private",
-          userIds: [savedContact.user.id],
-        });
-        const conversationId = created.conversationId;
-        if (conversationId) {
-          router.replace(`/chat/${conversationId}`);
-        }
-        return;
+      if (result.conversationId) {
+        router.replace(`/chat/${result.conversationId}`);
       }
-
-      if (actor) {
-        const existing = findPrivateWorkspaceConversationForActor(
-          conversations,
-          actor.id,
-        );
-        if (existing) {
-          router.push(`/chat/${existing.id}`);
-          return;
-        }
-
-        const created = await api.createThread({
-          domain: "workspace",
-          kind: "private",
-          workspaceId,
-          actorIds: [actor.id],
-        });
-        const conversationId = created.conversationId;
-        if (conversationId) {
-          router.replace(`/chat/${conversationId}`);
-        }
-        return;
-      }
-
-      if (member) {
-        const existing = findPrivateWorkspaceConversationForUser(
-          conversations,
-          member.userId,
-        );
-        if (existing) {
-          router.push(`/chat/${existing.id}`);
-          return;
-        }
-
-        const created = await api.createThread({
-          domain: "workspace",
-          kind: "private",
-          workspaceId,
-          userIds: [member.userId],
-        });
-        const conversationId = created.conversationId;
-        if (conversationId) {
-          router.replace(`/chat/${conversationId}`);
-        }
-      }
+    } catch (nextError) {
+      setActionMessage(
+        nextError instanceof Error ? nextError.message : "发起私聊失败。",
+      );
     } finally {
       setSubmitting(false);
     }
   }
-
-  function handleStartGroup() {
-    if (actor) {
-      router.push({
-        pathname: "/contacts/group/new",
-        params: { actorId: actor.id },
-      });
-      return;
-    }
-
-    if (member) {
-      router.push({
-        pathname: "/contacts/group/new",
-        params: { userId: member.userId },
-      });
-      return;
-    }
-
-    if (savedContact) {
-      router.push({
-        pathname: "/contacts/group/new",
-        params: {
-          contactScope: savedContact.scope,
-          contactId: savedContact.id,
-        },
-      });
-    }
-  }
-
-  const title =
-    actor?.definition.name ||
-    member?.userName ||
-    (savedContact ? scopedContactName(savedContact) : "联系人详情");
-  const subtitle = actor
-    ? actor.definition.title || titleCase(actor.definition.role)
-    : member
-      ? member.userEmail || "成员详情"
-      : savedContact
-        ? scopedContactSubtitle(savedContact)
-        : "联系人详情";
-  const avatarUrl =
-    actor?.avatarUrl || member?.avatarUrl || savedContact?.actor?.avatarUrl || savedContact?.user?.avatarUrl;
-  const icon = actor || savedContact?.actor ? "cpu" : "user";
-  const chipLabel = actor
-    ? "本地角色"
-    : member
-      ? member.trustLevel || "本地成员"
-      : savedContact?.scope === "workspace"
-        ? "共享联系人"
-        : savedContact
-          ? "我的联系人"
-          : "联系人";
-  const profileCopy = actor
-    ? actorSummary(actor)
-    : member
-      ? `所在工作区权限级别：${member.trustLevel}`
-      : savedContact
-        ? scopedContactSummary(savedContact)
-        : null;
-  const scopeCopy = savedContact
-    ? `来源工作区：${savedContact.targetWorkspace.name}`
-    : null;
 
   return (
     <ScreenScroll topPadding={0} bottomPadding={56}>
@@ -335,72 +143,117 @@ export default function ContactDetailScreen() {
             description={error}
           />
         </SectionBlock>
-      ) : !actor && !member && !savedContact ? (
+      ) : !detail?.contact ? (
         <SectionBlock>
           <EmptyState
-            icon="user"
+            icon="users"
             title="没有找到这个联系人"
-            description="这个联系人可能已经被移除，或者当前工作区里不存在。"
+            description="这个联系人可能已经不存在，或者你当前没有访问权限。"
           />
         </SectionBlock>
       ) : (
         <>
           <SectionBlock>
-            <View style={styles.profileRow}>
-              <Avatar name={title} uri={avatarUrl} size={68} icon={icon} />
-              <View style={styles.profileBody}>
-                <Text style={styles.profileName}>{title}</Text>
-                <Text style={styles.profileSubtitle}>{subtitle}</Text>
+            <View style={styles.heroRow}>
+              <Avatar
+                name={detail.contact.title}
+                uri={detail.contact.avatarUrl}
+                size={68}
+                icon={detail.contact.targetType === "actor" ? "cpu" : "user"}
+              />
+              <View style={styles.heroBody}>
+                <Text style={styles.heroTitle}>{detail.contact.title}</Text>
+                <Text style={styles.heroSubtitle}>
+                  {detail.contact.subtitle || detail.contact.workspace.name}
+                </Text>
               </View>
-              <Pill
-                label={chipLabel}
-                tone={savedContact ? "accent" : "primary"}
-              />
+              <Pill label={detail.contact.relationLabel} />
             </View>
-            {profileCopy ? (
-              <Text style={styles.profileCopy}>{profileCopy}</Text>
+            <Button
+              label={directButtonLabel(detail.contact)}
+              icon="message-circle"
+              onPress={() => void handleOpenDirect()}
+              disabled={submitting}
+            />
+            {actionMessage ? (
+              <Text style={styles.actionMessage}>{actionMessage}</Text>
             ) : null}
-            {scopeCopy ? <Text style={styles.scopeCopy}>{scopeCopy}</Text> : null}
-            <View style={styles.actionRow}>
-              <Button
-                label={submitting ? "处理中..." : "发起私聊"}
-                icon="message-circle"
-                onPress={() => void handleGoChat()}
-                disabled={submitting}
-                style={styles.actionButton}
-              />
-              <Button
-                label="拉个群"
-                icon="users"
-                variant="secondary"
-                onPress={handleStartGroup}
-                style={styles.actionButton}
-              />
+          </SectionBlock>
+
+          <SectionBlock>
+            <SectionTitleRow title="关系与范围" />
+            <View style={styles.metaCard}>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>类型</Text>
+                <Text style={styles.metaValue}>
+                  {detail.contact.targetType === "actor" ? "Actor" : "用户"}
+                </Text>
+              </View>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>来源工作区</Text>
+                <Text style={styles.metaValue}>
+                  {detail.contact.workspace.name}
+                </Text>
+              </View>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>私聊状态</Text>
+                <Text style={styles.metaValue}>
+                  {detail.contact.directState.status === "existing"
+                    ? "已有单聊"
+                    : detail.contact.directState.status === "pending_approval"
+                      ? "等待批准"
+                      : detail.contact.directState.status === "approval_required"
+                        ? "需要申请"
+                        : "可直接发起"}
+                </Text>
+              </View>
             </View>
           </SectionBlock>
 
           <SectionBlock>
             <SectionTitleRow
-              title="所在群聊"
+              title="共同所在群聊"
               action={
-                <Text style={styles.countText}>{relatedGroups.length} 个</Text>
+                <Text style={styles.countText}>{detail.groups.length} 个</Text>
               }
             />
-            {relatedGroups.length > 0 ? (
+            {detail.groups.length > 0 ? (
               <View style={styles.listShell}>
-                {relatedGroups.map((conversation) => (
-                  <ConversationItem
+                {detail.groups.map((conversation) => (
+                  <Pressable
                     key={conversation.id}
-                    conversation={conversation}
                     onPress={() => router.push(`/chat/${conversation.id}`)}
-                  />
+                    style={({ pressed }) => [
+                      styles.groupRow,
+                      pressed && styles.groupRowPressed,
+                    ]}
+                  >
+                    <Avatar
+                      name={conversation.presentation?.title || conversation.title}
+                      uri={
+                        conversation.presentation?.avatarUrl || conversation.avatarUrl
+                      }
+                      icon="message-circle"
+                      size={42}
+                    />
+                    <View style={styles.groupBody}>
+                      <Text style={styles.rowTitle}>
+                        {conversation.presentation?.title || conversation.title}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.rowSubtitle}>
+                        {conversation.lastMessage?.content?.trim() ||
+                          "打开群聊查看消息"}
+                      </Text>
+                    </View>
+                    <Pill label="群聊" />
+                  </Pressable>
                 ))}
               </View>
             ) : (
               <EmptyState
-                icon="users"
-                title="暂时还没有关联群聊"
-                description="等你把这个联系人拉进群聊后，这里会显示它所在的会话。"
+                icon="message-circle"
+                title="暂时没有共同群聊"
+                description="你可以直接发起私聊，或者先创建一个群聊。"
               />
             )}
           </SectionBlock>
@@ -441,39 +294,52 @@ const styles = StyleSheet.create({
   headerSpacer: {
     width: 38,
   },
-  profileRow: {
+  heroRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 14,
   },
-  profileBody: {
+  heroBody: {
     flex: 1,
     gap: 4,
   },
-  profileName: {
+  heroTitle: {
     fontSize: 20,
     fontWeight: "800",
     color: theme.colors.text,
   },
-  profileSubtitle: {
+  heroSubtitle: {
     fontSize: 13,
     color: theme.colors.textMuted,
   },
-  profileCopy: {
-    fontSize: 14,
-    lineHeight: 21,
-    color: theme.colors.text,
+  actionMessage: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: theme.colors.textMuted,
   },
-  scopeCopy: {
+  metaCard: {
+    gap: 12,
+    padding: 16,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  metaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  metaLabel: {
     fontSize: 13,
     color: theme.colors.textSoft,
   },
-  actionRow: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  actionButton: {
+  metaValue: {
     flex: 1,
+    textAlign: "right",
+    fontSize: 14,
+    fontWeight: "600",
+    color: theme.colors.text,
   },
   countText: {
     fontSize: 12,
@@ -483,5 +349,32 @@ const styles = StyleSheet.create({
     marginTop: 2,
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,
+  },
+  groupRow: {
+    marginHorizontal: -18,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  groupRowPressed: {
+    backgroundColor: theme.colors.surfaceMuted,
+  },
+  groupBody: {
+    flex: 1,
+    gap: 3,
+  },
+  rowTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: theme.colors.text,
+  },
+  rowSubtitle: {
+    fontSize: 13,
+    color: theme.colors.textMuted,
   },
 });

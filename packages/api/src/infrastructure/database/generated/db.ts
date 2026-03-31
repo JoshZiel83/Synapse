@@ -7,6 +7,8 @@ import type { ColumnType } from "kysely";
 
 export type AccessBindingsStatus = "active" | "revoked";
 
+export type ActorAccessPolicy = "approval_required" | "workspace_open";
+
 export type ActorSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
 
 export type ActorsRole = "archivist" | "assistant" | "manager" | "receptionist" | "reviewer" | "secretary" | "specialist";
@@ -205,6 +207,10 @@ export type ProviderStepsStatus = "error" | "success" | "timeout";
 
 export type RealtimeEventOutboxStatus = "dispatched" | "failed" | "pending" | "processing";
 
+export type RelationshipApprovalMode = "auto" | "manual";
+
+export type RelationshipRequestStatus = "approved" | "pending" | "rejected";
+
 export type RelayCatalogRevisionsStatus = "active" | "superseded";
 
 export type RelayDevicesAutomationLifecycleState = "offline" | "online";
@@ -328,6 +334,19 @@ export interface AccessBindings {
   workspace_id: string | null;
 }
 
+export interface ActorAccessRequests {
+  actor_id: string;
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  metadata: Generated<Json>;
+  requester_user_id: string;
+  resolved_at: Timestamp | null;
+  resolved_by_user_id: string | null;
+  status: Generated<RelationshipRequestStatus>;
+  updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
+}
+
 export interface ActorModelGroupAssignments {
   actor_id: string;
   created_at: Generated<Timestamp | null>;
@@ -336,6 +355,7 @@ export interface ActorModelGroupAssignments {
 }
 
 export interface Actors {
+  access_policy: Generated<ActorAccessPolicy>;
   avatar_emoji: string | null;
   avatar_file_id: string | null;
   can_represent_user: Generated<boolean>;
@@ -924,6 +944,21 @@ export interface ConversationUserStates {
   read_watermark_sequence: Generated<Int8>;
   updated_at: Generated<Timestamp>;
   user_id: string;
+}
+
+export interface DirectConversationBindings {
+  conversation_id: string;
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  metadata: Generated<Json>;
+  participant_one_actor_id: string | null;
+  participant_one_kind: WorkspaceContactsTargetType;
+  participant_one_user_id: string | null;
+  participant_one_workspace_id: string | null;
+  participant_two_actor_id: string | null;
+  participant_two_kind: WorkspaceContactsTargetType;
+  participant_two_user_id: string | null;
+  participant_two_workspace_id: string | null;
 }
 
 export interface EngineBranchCheckpoints {
@@ -1840,6 +1875,8 @@ export interface Users {
   avatar_file_id: string | null;
   created_at: Generated<Timestamp | null>;
   email: string;
+  friend_search_enabled: Generated<boolean>;
+  friend_search_id: Generated<string>;
   id: Generated<string>;
   name: string;
   password_hash: string;
@@ -1871,6 +1908,37 @@ export interface WorkspaceContacts {
   workspace_id: string;
 }
 
+export interface WorkspaceFriendEntries {
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  metadata: Generated<Json>;
+  owner_user_id: string;
+  peer_actor_id: string | null;
+  peer_type: WorkspaceContactsTargetType;
+  peer_user_id: string | null;
+  peer_workspace_id: string;
+  source_request_id: string | null;
+  updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
+}
+
+export interface WorkspaceFriendRequests {
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  metadata: Generated<Json>;
+  requested_via_profile_id: string | null;
+  requester_user_id: string;
+  requester_workspace_id: string;
+  resolved_at: Timestamp | null;
+  resolved_by_user_id: string | null;
+  status: Generated<RelationshipRequestStatus>;
+  target_actor_id: string | null;
+  target_subject_type: WorkspaceContactsTargetType;
+  target_user_id: string | null;
+  target_workspace_id: string;
+  updated_at: Generated<Timestamp | null>;
+}
+
 export interface WorkspaceInvites {
   created_at: Generated<Timestamp | null>;
   created_by: string;
@@ -1890,6 +1958,19 @@ export interface WorkspaceMembers {
   joined_at: Generated<Timestamp | null>;
   trust_level: Generated<WorkspaceMembersTrustLevel>;
   user_id: string;
+  workspace_id: string;
+}
+
+export interface WorkspaceRelationshipProfiles {
+  approval_mode: Generated<RelationshipApprovalMode>;
+  created_at: Generated<Timestamp | null>;
+  created_by: string | null;
+  id: Generated<string>;
+  qr_token: string;
+  subject_actor_id: string | null;
+  subject_type: WorkspaceContactsTargetType;
+  subject_user_id: string | null;
+  updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
 
@@ -1913,6 +1994,7 @@ export interface WorkspaceUserPreferences {
 
 export interface DB {
   access_bindings: AccessBindings;
+  actor_access_requests: ActorAccessRequests;
   actor_model_group_assignments: ActorModelGroupAssignments;
   actor_source_refs: ActorSourceRefs;
   actor_template_version_specs: ActorTemplateVersionSpecs;
@@ -1956,6 +2038,7 @@ export interface DB {
   conversation_transport_bindings: ConversationTransportBindings;
   conversation_user_states: ConversationUserStates;
   conversations: Conversations;
+  direct_conversation_bindings: DirectConversationBindings;
   engine_branch_checkpoints: EngineBranchCheckpoints;
   files: Files;
   installed_skills: InstalledSkills;
@@ -2019,8 +2102,11 @@ export interface DB {
   users: Users;
   workspace_access_bindings: WorkspaceAccessBindings;
   workspace_contacts: WorkspaceContacts;
+  workspace_friend_entries: WorkspaceFriendEntries;
+  workspace_friend_requests: WorkspaceFriendRequests;
   workspace_invites: WorkspaceInvites;
   workspace_members: WorkspaceMembers;
+  workspace_relationship_profiles: WorkspaceRelationshipProfiles;
   workspace_user_preferences: WorkspaceUserPreferences;
   workspaces: Workspaces;
 }
