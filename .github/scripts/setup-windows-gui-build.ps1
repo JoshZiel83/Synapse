@@ -81,7 +81,7 @@ foreach ($url in $downloadUrls) {
             Write-Warning "Downloaded file from $url is not a valid NSIS zip archive"
             Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
         } catch {
-            Write-Warning "NSIS download failed from $url on attempt $attempt: $($_.Exception.Message)"
+            Write-Warning ("NSIS download failed from {0} on attempt {1}: {2}" -f $url, $attempt, $_.Exception.Message)
             if ($attempt -lt 3) {
                 Start-Sleep -Seconds (2 * $attempt)
             }
