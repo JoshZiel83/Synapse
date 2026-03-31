@@ -151,6 +151,7 @@ export interface ConversationPresentationView {
 export interface ConversationSummaryView {
   id: string;
   kind: "private" | "group" | "virtual";
+  boundary: "internal" | "external";
   status: "active" | "completed";
   transportKind?: string;
   participants: ConversationParticipantView[];

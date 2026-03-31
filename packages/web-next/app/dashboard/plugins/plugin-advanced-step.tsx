@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { AttachmentScope, ReuseScope } from '@synapse/shared';
+import type { AttachmentTargetType, ReuseScope } from '@synapse/shared';
 import { Layers3, Save } from 'lucide-react';
 
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
@@ -13,19 +13,17 @@ import {
 } from '@/app/dashboard/access/attachment-visuals';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { useAuthStore } from '@/stores/auth-store';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
 
-type PluginAttachmentType = Exclude<AttachmentScope, 'platform'>;
-type PluginReuseScope = Exclude<ReuseScope, 'platform'>;
+type PluginAttachmentType = AttachmentTargetType;
+type PluginReuseScope = ReuseScope;
 
 const allowedAttachmentTypes: PluginAttachmentType[] = [
   'workspace',
   'conversation',
-  'actor_global',
-  'actor_conversation',
-  'user',
+  'actor',
+  'workspace_user',
 ];
 
 function normalizeActorOption(actor: any) {
@@ -53,8 +51,6 @@ export default function PluginAdvancedStep({
   onSaved?: (installation: any) => void | Promise<void>;
 }) {
   const { workspaceId } = useWorkspace();
-  const { user } = useAuthStore();
-  const currentUserId = user?.id || '';
 
   const [actors, setActors] = useState<any[]>([]);
   const [conversations, setConversations] = useState<any[]>([]);
@@ -96,15 +92,17 @@ export default function PluginAdvancedStep({
   useEffect(() => {
     if (!installation) return;
 
-    setSelectedAttachmentType((installation.attachment_type || 'workspace') as PluginAttachmentType);
-    setSelectedActorId(installation.attachment_actor_id || '');
-    setSelectedConversationId(installation.attachment_conversation_id || '');
+    setSelectedAttachmentType(
+      (installation.attachment_target?.type || 'workspace') as PluginAttachmentType,
+    );
+    setSelectedActorId(installation.attachment_target?.actorId || '');
+    setSelectedConversationId(installation.attachment_target?.conversationId || '');
     setLifecycleScope((installation.lifecycle_scope || 'turn') as PluginReuseScope);
     setScopeError('');
   }, [installation]);
 
   const allowedReuseScopes = useMemo(
-    () => getAllowedReuseScopes(selectedAttachmentType).filter((scope) => scope !== 'platform') as PluginReuseScope[],
+    () => getAllowedReuseScopes(selectedAttachmentType) as PluginReuseScope[],
     [selectedAttachmentType],
   );
 
@@ -116,18 +114,13 @@ export default function PluginAdvancedStep({
   async function saveAdvancedSettings() {
     if (!workspaceId || !installation?.id) return;
 
-    if ((selectedAttachmentType === 'actor_global' || selectedAttachmentType === 'actor_conversation') && !selectedActorId) {
+    if (selectedAttachmentType === 'actor' && !selectedActorId) {
       setScopeError('Please select an actor.');
       return;
     }
 
-    if ((selectedAttachmentType === 'conversation' || selectedAttachmentType === 'actor_conversation') && !selectedConversationId) {
+    if (selectedAttachmentType === 'conversation' && !selectedConversationId) {
       setScopeError('Please select a conversation.');
-      return;
-    }
-
-    if (selectedAttachmentType === 'user' && !currentUserId) {
-      setScopeError('Current user is unavailable. Please refresh and try again.');
       return;
     }
 
@@ -135,10 +128,12 @@ export default function PluginAdvancedStep({
     setSaving(true);
     try {
       const result = await api.updateInstallation(workspaceId, installation.id, {
-        attachmentType: selectedAttachmentType,
-        actorId: selectedAttachmentType === 'actor_global' || selectedAttachmentType === 'actor_conversation' ? selectedActorId : null,
-        conversationId: selectedAttachmentType === 'conversation' || selectedAttachmentType === 'actor_conversation' ? selectedConversationId : null,
-        userId: selectedAttachmentType === 'user' ? currentUserId : null,
+        attachmentTarget: {
+          type: selectedAttachmentType,
+          actorId: selectedAttachmentType === 'actor' ? selectedActorId : undefined,
+          conversationId:
+            selectedAttachmentType === 'conversation' ? selectedConversationId : undefined,
+        },
         lifecycleScope,
       });
       const savedInstallation = result?.installation || result;

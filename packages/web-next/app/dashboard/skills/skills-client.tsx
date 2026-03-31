@@ -1,13 +1,14 @@
 "use client"
 
 import {
+  type CapabilityAccessTarget,
+  type CapabilityAccessTargetType,
   createCanonicalContentBlockId,
   extractText,
   textBlocks,
   type CanonicalContentBlock,
   type InstalledSkill,
   type SkillMarketplaceEntry,
-  type SkillUseScope,
 } from "@synapse/shared"
 import {
   useCallback,
@@ -114,6 +115,8 @@ type ScopeDraft = {
   userId: string | null
 }
 
+type SkillUseScope = CapabilityAccessTargetType
+
 type UploadedFile = {
   id: string
   url?: string
@@ -127,10 +130,7 @@ const skillAccessAdapter = {
     workspaceId: string,
     resourceId: string,
     payload: {
-      grantScope?: SkillUseScope
-      actorId?: string
-      conversationId?: string
-      userId?: string
+      accessTarget?: CapabilityAccessTarget
       permissions?: string[]
     }
   ) => api.grantInstalledSkillAccess(workspaceId, resourceId, payload),
@@ -180,12 +180,13 @@ const scopeOptions: Array<{
       "Every conversation and actor in this workspace can use the skill.",
   },
   {
-    value: "conversation",
-    label: "One conversation",
-    description: "Only one conversation can see and use this skill.",
+    value: "conversation_workspace",
+    label: "One conversation workspace",
+    description:
+      "Only this workspace side of one conversation can see and use the skill.",
   },
   {
-    value: "actor_global",
+    value: "actor",
     label: "One actor",
     description: "One actor can use this skill across its conversations.",
   },
@@ -193,11 +194,6 @@ const scopeOptions: Array<{
     value: "actor_conversation",
     label: "Actor in conversation",
     description: "One actor can use this skill inside one conversation.",
-  },
-  {
-    value: "user",
-    label: "One user",
-    description: "Only one user can use this skill personally.",
   },
 ]
 
@@ -402,15 +398,16 @@ function resolveScopeTarget(
   conversations: ConversationOption[],
   members: MemberOption[]
 ) {
+  void members
   switch (draft.useScope) {
     case "workspace":
       return "Entire workspace"
-    case "conversation":
+    case "conversation_workspace":
       return (
         conversations.find((item) => item.id === draft.conversationId)?.title ||
         "Choose one conversation"
       )
-    case "actor_global":
+    case "actor":
       return (
         actors.find((item) => item.id === draft.actorId)?.name ||
         "Choose one actor"
@@ -423,11 +420,6 @@ function resolveScopeTarget(
         "choose conversation"
       return `${actorName} in ${conversationName}`
     }
-    case "user":
-      return (
-        members.find((item) => item.id === draft.userId)?.name ||
-        "Choose one user"
-      )
     default:
       return "Not configured"
   }
@@ -439,6 +431,23 @@ function createScopeDraft(): ScopeDraft {
     actorId: null,
     conversationId: null,
     userId: null,
+  }
+}
+
+function buildAccessTargetFromScopeDraft(
+  draft: Pick<ScopeDraft, "useScope" | "actorId" | "conversationId" | "userId">
+): CapabilityAccessTarget {
+  return {
+    type: draft.useScope,
+    actorId:
+      draft.useScope === "actor" || draft.useScope === "actor_conversation"
+        ? draft.actorId || undefined
+        : undefined,
+    conversationId:
+      draft.useScope === "conversation_workspace" ||
+      draft.useScope === "actor_conversation"
+        ? draft.conversationId || undefined
+        : undefined,
   }
 }
 
@@ -654,6 +663,7 @@ function ScopeFields({
   conversations: ConversationOption[]
   members: MemberOption[]
 }) {
+  void members
   return (
     <FieldGroup>
       <Field>
@@ -664,16 +674,16 @@ function ScopeFields({
             onChange({
               useScope: nextValue,
               actorId:
-                nextValue === "actor_global" ||
+                nextValue === "actor" ||
                 nextValue === "actor_conversation"
                   ? value.actorId
                   : null,
               conversationId:
-                nextValue === "conversation" ||
+                nextValue === "conversation_workspace" ||
                 nextValue === "actor_conversation"
                   ? value.conversationId
                   : null,
-              userId: nextValue === "user" ? value.userId : null,
+              userId: null,
             })
           }
         >
@@ -693,7 +703,7 @@ function ScopeFields({
         <FieldDescription>{scopeDescription(value.useScope)}</FieldDescription>
       </Field>
 
-      {value.useScope === "conversation" ||
+      {value.useScope === "conversation_workspace" ||
       value.useScope === "actor_conversation" ? (
         <Field>
           <FieldLabel>Conversation</FieldLabel>
@@ -719,7 +729,7 @@ function ScopeFields({
         </Field>
       ) : null}
 
-      {value.useScope === "actor_global" ||
+      {value.useScope === "actor" ||
       value.useScope === "actor_conversation" ? (
         <Field>
           <FieldLabel>Actor</FieldLabel>
@@ -745,30 +755,6 @@ function ScopeFields({
         </Field>
       ) : null}
 
-      {value.useScope === "user" ? (
-        <Field>
-          <FieldLabel>User</FieldLabel>
-          <Select
-            value={value.userId || undefined}
-            onValueChange={(nextValue) =>
-              onChange({ ...value, userId: nextValue })
-            }
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Choose user" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {members.map((member) => (
-                  <SelectItem key={member.id} value={member.id}>
-                    {member.name}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
-      ) : null}
     </FieldGroup>
   )
 }
@@ -986,21 +972,7 @@ function SkillEditorDialog({
           iconFileId: draft.iconFileId || undefined,
           tags: parseTags(draft.tagsText),
           attachmentFiles,
-          grantScope: scopeDraft.useScope,
-          actorId:
-            scopeDraft.useScope === "actor_global" ||
-            scopeDraft.useScope === "actor_conversation"
-              ? scopeDraft.actorId || undefined
-              : undefined,
-          conversationId:
-            scopeDraft.useScope === "conversation" ||
-            scopeDraft.useScope === "actor_conversation"
-              ? scopeDraft.conversationId || undefined
-              : undefined,
-          userId:
-            scopeDraft.useScope === "user"
-              ? scopeDraft.userId || undefined
-              : undefined,
+          accessTarget: buildAccessTargetFromScopeDraft(scopeDraft),
         })
         toast.success("Workspace skill created")
         onOpenChange(false)
@@ -1414,21 +1386,7 @@ function InstallSkillDialog({
     try {
       const result = await api.installSkill(workspaceId, {
         marketSkillId: skill.id,
-        grantScope: scopeDraft.useScope,
-        actorId:
-          scopeDraft.useScope === "actor_global" ||
-          scopeDraft.useScope === "actor_conversation"
-            ? scopeDraft.actorId || undefined
-            : undefined,
-        conversationId:
-          scopeDraft.useScope === "conversation" ||
-          scopeDraft.useScope === "actor_conversation"
-            ? scopeDraft.conversationId || undefined
-            : undefined,
-        userId:
-          scopeDraft.useScope === "user"
-            ? scopeDraft.userId || undefined
-            : undefined,
+        accessTarget: buildAccessTargetFromScopeDraft(scopeDraft),
       })
       toast.success("Skill installed")
       onOpenChange(false)
@@ -2644,21 +2602,7 @@ export function WorkspaceSkillCreationPage() {
         iconFileId: draft.iconFileId || undefined,
         tags: parseTags(draft.tagsText),
         attachmentFiles,
-        grantScope: scopeDraft.useScope,
-        actorId:
-          scopeDraft.useScope === "actor_global" ||
-          scopeDraft.useScope === "actor_conversation"
-            ? scopeDraft.actorId || undefined
-            : undefined,
-        conversationId:
-          scopeDraft.useScope === "conversation" ||
-          scopeDraft.useScope === "actor_conversation"
-            ? scopeDraft.conversationId || undefined
-            : undefined,
-        userId:
-          scopeDraft.useScope === "user"
-            ? scopeDraft.userId || undefined
-            : undefined,
+        accessTarget: buildAccessTargetFromScopeDraft(scopeDraft),
       })
       toast.success("Workspace skill created")
       router.push(`/dashboard/skills/installed/${result.skill.id}`)

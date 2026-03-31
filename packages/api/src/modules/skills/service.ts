@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type pg from "pg";
 import {
   type AvailableSkillSummary,
+  type CapabilityAccessTarget,
   type InstalledSkill,
   normalizeCanonicalContentBlocks,
   type CanonicalContentBlock,
@@ -10,10 +11,10 @@ import {
   type SkillAttachmentFile,
   type SkillMarketplaceEntry,
   type SkillMarketplaceVersion,
-  type SkillUseScope,
 } from "@synapse/shared";
 import {
   buildActorConversationContextId,
+  buildConversationWorkspaceContextId,
   deleteRelation,
   flushAuthzOutboxEntries,
   lookupResources,
@@ -39,6 +40,8 @@ import {
   getFileAccessInfo,
   getFileUrlById,
 } from "../files/service.js";
+
+type SkillUseScope = CapabilityAccessTarget["type"];
 
 type QueryRow = pg.QueryResultRow;
 type QueryResultLike<T extends QueryRow> = { rows: T[] };
@@ -67,7 +70,6 @@ type SkillScopeTarget = {
   useScope: SkillUseScope;
   actorId: string | null;
   conversationId: string | null;
-  userId: string | null;
 };
 
 type SkillPackageRow = {
@@ -349,7 +351,6 @@ function normalizeScopeTarget(input: {
   useScope: SkillUseScope;
   actorId?: string | null;
   conversationId?: string | null;
-  userId?: string | null;
 }): SkillScopeTarget {
   switch (input.useScope) {
     case "workspace":
@@ -358,32 +359,29 @@ function normalizeScopeTarget(input: {
         useScope: "workspace",
         actorId: null,
         conversationId: null,
-        userId: null,
       };
-    case "conversation":
+    case "conversation_workspace":
       if (!input.conversationId) {
         throw new SkillError(
           400,
-          "conversationId is required for conversation scope",
+          "conversationId is required for conversation_workspace scope",
         );
       }
       return {
-        bindScope: "conversation",
-        useScope: "conversation",
+        bindScope: "conversation_workspace",
+        useScope: "conversation_workspace",
         actorId: null,
         conversationId: input.conversationId,
-        userId: null,
       };
-    case "actor_global":
+    case "actor":
       if (!input.actorId) {
-        throw new SkillError(400, "actorId is required for actor_global scope");
+        throw new SkillError(400, "actorId is required for actor scope");
       }
       return {
         bindScope: "actor",
-        useScope: "actor_global",
+        useScope: "actor",
         actorId: input.actorId,
         conversationId: null,
-        userId: null,
       };
     case "actor_conversation":
       if (!input.actorId || !input.conversationId) {
@@ -397,18 +395,6 @@ function normalizeScopeTarget(input: {
         useScope: "actor_conversation",
         actorId: input.actorId,
         conversationId: input.conversationId,
-        userId: null,
-      };
-    case "user":
-      if (!input.userId) {
-        throw new SkillError(400, "userId is required for user scope");
-      }
-      return {
-        bindScope: "user",
-        useScope: "user",
-        actorId: null,
-        conversationId: null,
-        userId: input.userId,
       };
     default:
       throw new SkillError(
@@ -570,13 +556,16 @@ function buildSkillAttachmentFromSkillFile(
 
 function resolvePublicUseScope(bindScope: RuntimeBindingScope): SkillUseScope {
   switch (bindScope) {
-    case "actor":
-      return "actor_global";
     case "workspace":
-    case "conversation":
+    case "conversation_workspace":
+    case "actor":
     case "actor_conversation":
-    case "user":
       return bindScope;
+    case "workspace_user":
+      throw new SkillError(
+        500,
+        "workspace_user is not a valid skill access scope",
+      );
   }
 }
 
@@ -588,9 +577,9 @@ function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
   const scopeOrder: Record<RuntimeBindingScope, number> = {
     actor_conversation: 0,
     actor: 1,
-    conversation: 2,
-    user: 3,
-    workspace: 4,
+    conversation_workspace: 2,
+    workspace_user: 99,
+    workspace: 3,
   };
 
   if (statusOrder[left.status] !== statusOrder[right.status]) {
@@ -618,9 +607,9 @@ function compareVisibleBindingPriority(
   const scopeOrder: Record<RuntimeBindingScope, number> = {
     actor_conversation: 0,
     actor: 1,
-    conversation: 2,
-    user: 3,
-    workspace: 4,
+    conversation_workspace: 2,
+    workspace_user: 99,
+    workspace: 3,
   };
 
   if (statusOrder[left.status] !== statusOrder[right.status]) {
@@ -647,8 +636,7 @@ function matchesScopeTarget(
   return (
     binding.bind_scope === filter.bindScope &&
     binding.actor_id === filter.actorId &&
-    binding.conversation_id === filter.conversationId &&
-    binding.user_id === filter.userId
+    binding.conversation_id === filter.conversationId
   );
 }
 
@@ -703,7 +691,7 @@ function buildInstalledSkillPayload(
   attachmentFiles?: SkillAttachmentFile[],
 ): InstalledSkill {
   const chosenBinding = binding;
-  const useScope = chosenBinding
+  const accessTargetType = chosenBinding
     ? resolvePublicUseScope(chosenBinding.bind_scope)
     : ("workspace" as SkillUseScope);
 
@@ -715,10 +703,11 @@ function buildInstalledSkillPayload(
     description: descriptionBlockFromStored(row.version_description_blocks),
     iconUrl: row.icon_file_id ? getFileUrlById(row.icon_file_id) : undefined,
     tags: row.tags || [],
-    useScope,
-    actorId: chosenBinding?.actor_id || undefined,
-    conversationId: chosenBinding?.conversation_id || undefined,
-    userId: chosenBinding?.user_id || undefined,
+    accessTarget: {
+      type: accessTargetType,
+      actorId: chosenBinding?.actor_id || undefined,
+      conversationId: chosenBinding?.conversation_id || undefined,
+    },
     isEnabled: Boolean(row.is_active),
     isCustomized: Boolean(
       row.source_catalog_item_id && row.source_is_customized,
@@ -754,10 +743,11 @@ function buildAvailableSkillPayload(
     name: row.name,
     description,
     version: row.source_version_value || `local-${row.current_version}`,
-    attachmentType: resolvePublicUseScope(row.access_bind_scope),
-    actorId: row.actor_id || undefined,
-    conversationId: row.conversation_id || undefined,
-    userId: row.user_id || undefined,
+    accessTarget: {
+      type: resolvePublicUseScope(row.access_bind_scope),
+      actorId: row.actor_id || undefined,
+      conversationId: row.conversation_id || undefined,
+    },
   };
 }
 
@@ -1106,14 +1096,18 @@ async function loadAccessBindingsBySkillIds(
        workspace_id,
        resource_type,
        resource_id,
+       target_type,
        relation,
        subject_type,
        subject_id,
        subject_relation,
+       actor_id,
+       conversation_id,
+       user_id,
        status,
        created_by,
        reason,
-       metadata,
+        metadata,
        created_at,
        revoked_at
      FROM access_bindings
@@ -1157,19 +1151,17 @@ async function loadInstalledSkillForUpdate(
 async function chooseBindingMap(
   skillIds: string[],
   filters?: {
-    useScope?: SkillUseScope;
+    accessTargetType?: SkillUseScope;
     actorId?: string;
     conversationId?: string;
-    userId?: string;
   },
 ) {
   const bindingsBySkillId = await loadAccessBindingsBySkillIds(skillIds);
-  const preferredTarget = filters?.useScope
+  const preferredTarget = filters?.accessTargetType
     ? normalizeScopeTarget({
-        useScope: filters.useScope,
+        useScope: filters.accessTargetType,
         actorId: filters.actorId,
         conversationId: filters.conversationId,
-        userId: filters.userId,
       })
     : undefined;
 
@@ -1192,27 +1184,22 @@ async function chooseBindingMap(
 
 async function findSkillIdsByBindingFilter(params: {
   workspaceId: string;
-  useScope?: SkillUseScope;
+  accessTargetType?: SkillUseScope;
   actorId?: string;
   conversationId?: string;
-  userId?: string;
 }) {
-  if (
-    !params.useScope &&
-    !params.actorId &&
-    !params.conversationId &&
-    !params.userId
-  ) {
+  if (!params.accessTargetType && !params.actorId && !params.conversationId) {
     return null;
   }
 
-  const target = params.useScope
+  const target = params.accessTargetType
     ? resolveAccessGrantTarget({
         workspaceId: params.workspaceId,
-        grantScope: params.useScope,
-        actorId: params.actorId,
-        conversationId: params.conversationId,
-        userId: params.userId,
+        target: {
+          type: params.accessTargetType,
+          actorId: params.actorId,
+          conversationId: params.conversationId,
+        },
       })
     : null;
 
@@ -1224,6 +1211,8 @@ async function findSkillIdsByBindingFilter(params: {
   ];
 
   if (target) {
+    values.push(target.targetType);
+    conditions.push(`target_type = $${values.length}`);
     values.push(target.relation);
     conditions.push(`relation = $${values.length}`);
     values.push(target.subjectType);
@@ -1233,15 +1222,11 @@ async function findSkillIdsByBindingFilter(params: {
   } else {
     if (params.actorId) {
       values.push(params.actorId);
-      conditions.push(`metadata->>'actorId' = $${values.length}`);
+      conditions.push(`actor_id = $${values.length}`);
     }
     if (params.conversationId) {
       values.push(params.conversationId);
-      conditions.push(`metadata->>'conversationId' = $${values.length}`);
-    }
-    if (params.userId) {
-      values.push(params.userId);
-      conditions.push(`metadata->>'userId' = $${values.length}`);
+      conditions.push(`conversation_id = $${values.length}`);
     }
   }
 
@@ -1287,10 +1272,11 @@ async function ensureSkillBinding(
 ) {
   const grantTarget = resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
-    grantScope: input.target.useScope,
-    actorId: input.target.actorId,
-    conversationId: input.target.conversationId,
-    userId: input.target.userId,
+    target: {
+      type: input.target.useScope,
+      actorId: input.target.actorId || undefined,
+      conversationId: input.target.conversationId || undefined,
+    },
   });
 
   const existing = await run<AccessBindingRow>(
@@ -1299,10 +1285,14 @@ async function ensureSkillBinding(
        workspace_id,
        resource_type,
        resource_id,
+       target_type,
        relation,
        subject_type,
        subject_id,
        subject_relation,
+       actor_id,
+       conversation_id,
+       user_id,
        status,
        created_by,
        reason,
@@ -1341,26 +1331,45 @@ async function ensureSkillBinding(
        workspace_id,
        resource_type,
        resource_id,
+       target_type,
        relation,
        subject_type,
        subject_id,
+       actor_id,
+       conversation_id,
+       user_id,
        metadata,
        status,
        created_by
      )
-     VALUES ($1, 'installed_skill', $2, $3, $4, $5, $6::jsonb, 'active', $7)
+     VALUES (
+       $1,
+       'installed_skill',
+       $2,
+       $3,
+       $4,
+       $5,
+       $6,
+       $7,
+       $8,
+       $9,
+       $10::jsonb,
+       'active',
+       $11
+     )
      RETURNING id`,
     [
       input.workspaceId,
       input.skillId,
+      grantTarget.targetType,
       grantTarget.relation,
       grantTarget.subjectType,
       grantTarget.subjectId,
+      grantTarget.actorId,
+      grantTarget.conversationId,
+      grantTarget.userId,
       JSON.stringify({
-        grantScope: input.target.useScope,
-        actorId: input.target.actorId,
-        conversationId: input.target.conversationId,
-        userId: input.target.userId,
+        accessTargetType: input.target.useScope,
         isPrimary: input.isPrimary === true,
       }),
       input.createdBy || null,
@@ -1738,10 +1747,7 @@ export async function createWorkspaceSkill(input: {
   iconFileId?: string;
   tags?: string[];
   attachmentFiles?: SkillAttachmentInput[];
-  useScope: SkillUseScope;
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
+  accessTarget: CapabilityAccessTarget;
   installedBy?: string;
 }) {
   const name = input.name.trim();
@@ -1760,10 +1766,9 @@ export async function createWorkspaceSkill(input: {
       )
     : null;
   const target = normalizeScopeTarget({
-    useScope: input.useScope,
-    actorId: input.actorId,
-    conversationId: input.conversationId,
-    userId: input.userId,
+    useScope: input.accessTarget.type,
+    actorId: input.accessTarget.actorId,
+    conversationId: input.accessTarget.conversationId,
   });
 
   const result = await transaction(async (client) => {
@@ -1861,19 +1866,17 @@ export async function createWorkspaceSkill(input: {
 export async function listInstalledSkills(
   workspaceId: string,
   filters?: {
-    useScope?: SkillUseScope;
+    accessTargetType?: SkillUseScope;
     actorId?: string;
     conversationId?: string;
-    userId?: string;
     sourceSkillId?: string;
   },
 ) {
   const filteredSkillIds = await findSkillIdsByBindingFilter({
     workspaceId,
-    useScope: filters?.useScope,
+    accessTargetType: filters?.accessTargetType,
     actorId: filters?.actorId,
     conversationId: filters?.conversationId,
-    userId: filters?.userId,
   });
   if (filteredSkillIds && filteredSkillIds.length === 0) {
     return [];
@@ -1889,10 +1892,9 @@ export async function listInstalledSkills(
   const skillIds = rows.map((row) => row.skill_id);
   const [bindingMap, fileMap] = await Promise.all([
     chooseBindingMap(skillIds, {
-      useScope: filters?.useScope,
+      accessTargetType: filters?.accessTargetType,
       actorId: filters?.actorId,
       conversationId: filters?.conversationId,
-      userId: filters?.userId,
     }),
     loadSkillFilesMap(rows.map((row) => row.current_skill_version_id)),
   ]);
@@ -1936,7 +1938,7 @@ export async function getInstalledSkillAccessState(
     grants,
     summary: {
       requiredPermissions: ["use"],
-      suggestedGrantScope,
+      suggestedAccessTargetType: suggestedGrantScope,
       reason: "Choose who can use this installed skill.",
       effectivePermissions: grants.length > 0 ? ["use"] : [],
       isVisible: grants.length > 0,
@@ -1949,10 +1951,7 @@ export async function getInstalledSkillAccessState(
 export async function grantInstalledSkillAccess(input: {
   workspaceId: string;
   installedSkillId: string;
-  grantScope?: SkillUseScope;
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
+  accessTarget?: CapabilityAccessTarget;
   permissions?: string[];
   grantedBy?: string;
   reason?: string;
@@ -1968,26 +1967,30 @@ export async function grantInstalledSkillAccess(input: {
 
   const accessRows = await listSkillAccessRows(input.installedSkillId);
   const primaryAccess = accessRows.find((row) => isPrimaryAccessBinding(row));
-  const grantScope =
-    input.grantScope ||
+  const accessTargetInput =
+    input.accessTarget ||
     (primaryAccess
-      ? resolvePublicUseScope(primaryAccess.bind_scope)
-      : ("workspace" as SkillUseScope));
+      ? {
+          type: resolvePublicUseScope(primaryAccess.bind_scope),
+          actorId: primaryAccess.actor_id || undefined,
+          conversationId: primaryAccess.conversation_id || undefined,
+        }
+      : ({
+          type: "workspace",
+        } satisfies CapabilityAccessTarget));
 
   const accessTarget = resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
-    grantScope,
-    actorId: input.actorId,
-    conversationId: input.conversationId,
-    userId: input.userId,
+    target: accessTargetInput,
   });
 
   const existing = accessRows.find(
     (row) =>
       row.status === "active" &&
-      row.relation === accessTarget.relation &&
-      row.subject_type === accessTarget.subjectType &&
-      row.subject_id === accessTarget.subjectId,
+      row.target_type === accessTarget.targetType &&
+      row.actor_id === accessTarget.actorId &&
+      row.conversation_id === accessTarget.conversationId &&
+      row.user_id === accessTarget.userId,
   );
   if (existing) {
     return mapSkillAccessRowToGrant(existing);
@@ -1999,24 +2002,47 @@ export async function grantInstalledSkillAccess(input: {
          workspace_id,
          resource_type,
          resource_id,
+         target_type,
          relation,
          subject_type,
          subject_id,
+         actor_id,
+         conversation_id,
+         user_id,
          metadata,
          status,
          created_by,
          reason
        )
-       VALUES ($1, 'installed_skill', $2, $3, $4, $5, $6::jsonb, 'active', $7, $8)
+       VALUES (
+         $1,
+         'installed_skill',
+         $2,
+         $3,
+         $4,
+         $5,
+         $6,
+         $7,
+         $8,
+         $9,
+         $10::jsonb,
+         'active',
+         $11,
+         $12
+       )
        RETURNING
          id,
          workspace_id,
          resource_type,
          resource_id,
+         target_type,
          relation,
          subject_type,
          subject_id,
          subject_relation,
+         actor_id,
+         conversation_id,
+         user_id,
          status,
          created_by,
          reason,
@@ -2026,13 +2052,17 @@ export async function grantInstalledSkillAccess(input: {
       [
         input.workspaceId,
         input.installedSkillId,
+        accessTarget.targetType,
         accessTarget.relation,
         accessTarget.subjectType,
         accessTarget.subjectId,
+        accessTarget.actorId,
+        accessTarget.conversationId,
+        accessTarget.userId,
         JSON.stringify({
           ...(input.metadata || {}),
           isPrimary: false,
-          grantScope,
+          accessTargetType: accessTarget.targetType,
           actorId: accessTarget.actorId,
           conversationId: accessTarget.conversationId,
           userId: accessTarget.userId,
@@ -2126,17 +2156,13 @@ export async function revokeInstalledSkillAccess(input: {
 export async function installMarketplaceSkill(input: {
   workspaceId: string;
   marketSkillId: string;
-  useScope: SkillUseScope;
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
+  accessTarget: CapabilityAccessTarget;
   installedBy?: string;
 }) {
   const target = normalizeScopeTarget({
-    useScope: input.useScope,
-    actorId: input.actorId,
-    conversationId: input.conversationId,
-    userId: input.userId,
+    useScope: input.accessTarget.type,
+    actorId: input.accessTarget.actorId,
+    conversationId: input.accessTarget.conversationId,
   });
 
   const marketplaceSkill = await getMarketplaceRowById(input.marketSkillId);
@@ -2568,10 +2594,14 @@ export async function uninstallInstalledSkill(
          workspace_id,
          resource_type,
          resource_id,
+         target_type,
          relation,
          subject_type,
          subject_id,
          subject_relation,
+         actor_id,
+         conversation_id,
+         user_id,
          status,
          created_by,
          reason,
@@ -2638,11 +2668,17 @@ export async function uninstallInstalledSkill(
 }
 
 function buildVisibilitySubjects(input: {
+  workspaceId: string;
   actorId?: string;
   conversationId?: string;
   userId?: string;
 }) {
-  const subjects: AuthzSubject[] = [];
+  const subjects: AuthzSubject[] = [
+    {
+      type: "workspace",
+      id: input.workspaceId,
+    },
+  ];
 
   if (input.actorId) {
     subjects.push({
@@ -2651,10 +2687,13 @@ function buildVisibilitySubjects(input: {
     });
   }
 
-  if (input.userId) {
+  if (input.conversationId) {
     subjects.push({
-      type: "user",
-      id: input.userId,
+      type: "conversation_workspace",
+      id: buildConversationWorkspaceContextId(
+        input.workspaceId,
+        input.conversationId,
+      ),
     });
   }
 
@@ -2679,7 +2718,7 @@ function accessMatchesVisibilityContext(
   switch (binding.bind_scope) {
     case "workspace":
       return true;
-    case "conversation":
+    case "conversation_workspace":
       return binding.conversation_id === input.conversationId;
     case "actor":
       return binding.actor_id === input.actorId;
@@ -2688,8 +2727,8 @@ function accessMatchesVisibilityContext(
         binding.actor_id === input.actorId &&
         binding.conversation_id === input.conversationId
       );
-    case "user":
-      return binding.user_id === input.userId;
+    case "workspace_user":
+      return false;
   }
 }
 
@@ -2697,15 +2736,28 @@ function visibleRowToAccessRow(
   row: VisibleSkillRow,
   workspaceId: string,
 ): SkillAccessRow {
+  const target = resolveAccessGrantTarget({
+    workspaceId,
+    target: {
+      type: resolvePublicUseScope(row.access_bind_scope),
+      actorId: row.actor_id || undefined,
+      conversationId: row.conversation_id || undefined,
+    },
+  });
+
   return {
     id: row.access_binding_id,
     workspace_id: workspaceId,
     resource_type: "installed_skill",
     resource_id: row.skill_id,
-    relation: "use_workspace",
-    subject_type: "workspace",
-    subject_id: workspaceId,
+    target_type: target.targetType,
+    relation: target.relation,
+    subject_type: target.subjectType,
+    subject_id: target.subjectId,
     subject_relation: null,
+    actor_id: row.actor_id,
+    conversation_id: row.conversation_id,
+    user_id: row.user_id,
     status: "active",
     created_by: null,
     reason: null,
@@ -2714,9 +2766,6 @@ function visibleRowToAccessRow(
     revoked_at: null,
     skill_id: row.skill_id,
     bind_scope: row.access_bind_scope,
-    conversation_id: row.conversation_id,
-    actor_id: row.actor_id,
-    user_id: row.user_id,
   };
 }
 

@@ -1,5 +1,7 @@
 import type {
   ActorPackageInstallResult,
+  CapabilityAccessTarget,
+  AttachmentTarget,
   AuthClientType,
   AuthQrLoginCreateResponse,
   AuthQrLoginResolveResponse,
@@ -33,7 +35,6 @@ import type {
   RelayDeviceSummaryView,
   RelayPairingSessionView,
   SkillMarketplaceEntry,
-  SkillUseScope,
 } from "@synapse/shared"
 import type { FileRecordView } from "@synapse/shared/types"
 
@@ -486,10 +487,7 @@ class ApiClient {
         path: string
         contentBlocks: CanonicalContentBlock[]
       }>
-      grantScope: SkillUseScope
-      actorId?: string
-      conversationId?: string
-      userId?: string
+      accessTarget: CapabilityAccessTarget
     }
   ): Promise<{ skill: InstalledSkill }> {
     return this.fetch(`/workspaces/${wsId}/skills/custom`, {
@@ -515,10 +513,7 @@ class ApiClient {
     wsId: string,
     data: {
       marketSkillId: string
-      grantScope: SkillUseScope
-      actorId?: string
-      conversationId?: string
-      userId?: string
+      accessTarget: CapabilityAccessTarget
     }
   ): Promise<{ skill: InstalledSkill }> {
     return this.fetch(`/workspaces/${wsId}/skills`, {
@@ -570,15 +565,7 @@ class ApiClient {
     wsId: string,
     installedSkillId: string,
     data: {
-      grantScope?:
-        | "workspace"
-        | "conversation"
-        | "actor_global"
-        | "actor_conversation"
-        | "user"
-      conversationId?: string
-      actorId?: string
-      userId?: string
+      accessTarget?: CapabilityAccessTarget
       permissions?: string[]
       reason?: string
       metadata?: Record<string, unknown>
@@ -1402,22 +1389,14 @@ class ApiClient {
     wsId: string,
     data: {
       pluginId: string
-      attachmentType:
-        | "workspace"
-        | "conversation"
-        | "actor_global"
-        | "actor_conversation"
-        | "user"
-      actorId?: string
-      conversationId?: string
-      userId?: string
+      attachmentTarget: AttachmentTarget
       lifecycleScope?:
         | "turn"
         | "workspace"
         | "conversation"
-        | "actor_global"
+        | "actor"
         | "actor_conversation"
-        | "user"
+        | "workspace_user"
       configData?: Record<string, unknown>
       authSessionIds?: Record<string, string>
     }
@@ -1471,15 +1450,7 @@ class ApiClient {
     wsId: string,
     installId: string,
     data: {
-      grantScope?:
-        | "workspace"
-        | "conversation"
-        | "actor_global"
-        | "actor_conversation"
-        | "user"
-      conversationId?: string
-      actorId?: string
-      userId?: string
+      accessTarget?: CapabilityAccessTarget
       permissions?: string[]
       reason?: string
       metadata?: Record<string, unknown>
@@ -1578,15 +1549,7 @@ class ApiClient {
     relayId: string,
     exposureId: string,
     data: {
-      grantScope?:
-        | "workspace"
-        | "conversation"
-        | "actor_global"
-        | "actor_conversation"
-        | "user"
-      actorId?: string
-      conversationId?: string
-      userId?: string
+      accessTarget?: CapabilityAccessTarget
       permissions?: string[]
       reason?: string
       metadata?: Record<string, unknown>

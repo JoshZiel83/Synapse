@@ -161,7 +161,7 @@ export const amapSeed: BuiltinOrgSeed = {
       },
       authorization: {
         requiredPermissions: ["network:outbound"],
-        defaultGrantScope: "workspace",
+        defaultAccessTargetType: "workspace",
         reason: "AMap Web Service APIs require outbound network access for geocoding, search, and routing requests.",
       },
     },

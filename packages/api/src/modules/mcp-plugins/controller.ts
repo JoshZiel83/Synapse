@@ -1,8 +1,9 @@
 import { z } from "zod";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
-  MCP_LIFECYCLE_SCOPES,
-  RESOURCE_SCOPES,
+  ATTACHMENT_TARGET_TYPES,
+  CAPABILITY_ACCESS_TARGET_TYPES,
+  REUSE_SCOPES,
 } from "@synapse/shared/constants";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
@@ -34,15 +35,24 @@ import {
 } from "./auth-service.js";
 import { getEventLogs, getToolCallLogs } from "./audit.js";
 
-const attachmentScopeSchema = z.enum(RESOURCE_SCOPES);
-const lifecycleScopeSchema = z.enum(MCP_LIFECYCLE_SCOPES);
-
-const installSchema = z.object({
-  pluginId: z.string().uuid(),
-  attachmentType: attachmentScopeSchema,
+const attachmentTargetTypeSchema = z.enum(ATTACHMENT_TARGET_TYPES);
+const accessTargetTypeSchema = z.enum(CAPABILITY_ACCESS_TARGET_TYPES);
+const lifecycleScopeSchema = z.enum(REUSE_SCOPES);
+const attachmentTargetSchema = z.object({
+  type: attachmentTargetTypeSchema,
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
+});
+const accessTargetSchema = z.object({
+  type: accessTargetTypeSchema,
+  actorId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+});
+
+const installSchema = z.object({
+  pluginId: z.string().uuid(),
+  attachmentTarget: attachmentTargetSchema,
   lifecycleScope: lifecycleScopeSchema.optional(),
   configData: z.record(z.unknown()).optional(),
   authSessionIds: z.record(z.string().uuid()).optional(),
@@ -52,18 +62,12 @@ const updateInstallSchema = z.object({
   isEnabled: z.boolean().optional(),
   configData: z.record(z.unknown()).optional(),
   lifecycleScope: lifecycleScopeSchema.optional(),
-  attachmentType: attachmentScopeSchema.optional(),
-  actorId: z.string().uuid().nullable().optional(),
-  conversationId: z.string().uuid().nullable().optional(),
-  userId: z.string().uuid().nullable().optional(),
+  attachmentTarget: attachmentTargetSchema.optional(),
   authSessionIds: z.record(z.string().uuid()).optional(),
 });
 
 const installPlanSchema = z.object({
-  attachmentType: attachmentScopeSchema,
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  userId: z.string().uuid().optional(),
+  attachmentTarget: attachmentTargetSchema,
 });
 
 const startAuthSchema = z.object({
@@ -73,10 +77,7 @@ const startAuthSchema = z.object({
 });
 
 const accessGrantSchema = z.object({
-  grantScope: attachmentScopeSchema.optional(),
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  userId: z.string().uuid().optional(),
+  accessTarget: accessTargetSchema.optional(),
   permissions: z.array(z.string()).optional(),
   reason: z.string().trim().min(1).optional(),
   metadata: z.record(z.unknown()).optional(),
@@ -192,10 +193,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         const plan = await createPluginInstallPlan({
           workspaceId,
           pluginId,
-          attachmentType: body.attachmentType,
-          actorId: body.actorId,
-          conversationId: body.conversationId,
-          userId: body.userId,
+          attachmentTarget: body.attachmentTarget,
         });
         reply.send({ plan });
       } catch (error) {
@@ -336,7 +334,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
       const { workspaceId } = request.params as { workspaceId: string };
       const { attachmentType, conversationId, actorId, userId, pluginId } = request.query as {
-        attachmentType?: "workspace" | "conversation" | "actor_global" | "actor_conversation" | "user";
+        attachmentType?: "workspace" | "conversation" | "actor" | "workspace_user";
         conversationId?: string;
         actorId?: string;
         userId?: string;
@@ -409,10 +407,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const installation = await installPluginUnified({
         workspaceId,
         pluginId: body.pluginId,
-        attachmentType: body.attachmentType,
-        actorId: body.actorId,
-        conversationId: body.conversationId,
-        userId: body.userId,
+        attachmentTarget: body.attachmentTarget,
         lifecycleScope: body.lifecycleScope,
         configData: body.configData,
         authSessionIds: body.authSessionIds,
@@ -524,10 +519,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       const grant = await grantPluginInstallationAccess({
         workspaceId,
         installationId: installId,
-        grantScope: body.grantScope,
-        actorId: body.actorId,
-        conversationId: body.conversationId,
-        userId: body.userId,
+        accessTarget: body.accessTarget,
         permissions: body.permissions,
         reason: body.reason,
         metadata: body.metadata,

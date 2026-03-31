@@ -4,7 +4,7 @@ import QRCode from 'qrcode';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ExclamationCircleIcon } from '@heroicons/react/16/solid';
 import type {
-  AttachmentScope,
+  AttachmentTargetType,
   AutomationIntegrationProvider,
   PluginAuthBindingDefinition,
   PluginAuthSession,
@@ -66,8 +66,8 @@ interface Props {
   closeLabel?: string;
 }
 
-type PluginAttachmentType = Exclude<AttachmentScope, 'platform'>;
-type PluginReuseScope = Exclude<ReuseScope, 'platform'>;
+type PluginAttachmentType = AttachmentTargetType;
+type PluginReuseScope = ReuseScope;
 type AccessStep = {
   id: 'access';
   kind: 'access';
@@ -146,11 +146,10 @@ function normalizeActorOption(actor: any) {
 }
 
 const installLifecycleOptionMap: Record<PluginAttachmentType, PluginReuseScope[]> = {
-  workspace: ['workspace', 'conversation', 'actor_global', 'user', 'turn'],
+  workspace: ['workspace', 'conversation', 'actor', 'actor_conversation', 'workspace_user', 'turn'],
   conversation: ['conversation', 'actor_conversation', 'turn'],
-  actor_global: ['actor_global', 'turn'],
-  actor_conversation: ['actor_conversation', 'turn'],
-  user: ['user', 'conversation', 'actor_conversation', 'turn'],
+  actor: ['actor', 'turn'],
+  workspace_user: ['workspace_user', 'turn'],
 };
 
 function getInstallAllowedReuseScopes(attachmentType: PluginAttachmentType) {
@@ -539,16 +538,16 @@ export default function InstallDialog({
   const authBindings = useMemo<PluginAuthBindingDefinition[]>(() => plugin.auth_bindings || [], [plugin.auth_bindings]);
   const authBindingMap = useMemo(() => new Map(authBindings.map((binding) => [binding.key, binding])), [authBindings]);
   const allowedAttachmentTypes = useMemo<PluginAttachmentType[]>(
-    () => ['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user'],
+    () => ['workspace', 'conversation', 'actor', 'workspace_user'],
     [],
   );
-  const initialAttachmentType = initialInstallation?.attachment_type as PluginAttachmentType | undefined;
-  const initialAttachmentActorId = initialInstallation?.attachment_actor_id || '';
-  const initialAttachmentConversationId = initialInstallation?.attachment_conversation_id || '';
+  const initialAttachmentType = initialInstallation?.attachment_target?.type as PluginAttachmentType | undefined;
+  const initialAttachmentActorId = initialInstallation?.attachment_target?.actorId || '';
+  const initialAttachmentConversationId = initialInstallation?.attachment_target?.conversationId || '';
 
   const [selectedAttachmentType, setSelectedAttachmentType] = useState<PluginAttachmentType>(
     initialAttachmentType ||
-    (defaultAttachmentType || (defaultActorId ? 'actor_global' : (plugin.default_instance_scope || 'workspace')) as PluginAttachmentType),
+    (defaultAttachmentType || (defaultActorId ? 'actor' : (plugin.default_instance_scope || 'workspace')) as PluginAttachmentType),
   );
   const [lifecycleScope, setLifecycleScope] = useState<PluginReuseScope>(
     ((initialInstallation?.lifecycle_scope as PluginReuseScope | undefined) ||
@@ -657,13 +656,13 @@ export default function InstallDialog({
   const autoStartedAuthStepRef = useRef('');
 
   useEffect(() => {
-    if ((selectedAttachmentType === 'actor_global' || selectedAttachmentType === 'actor_conversation') && workspaceId) {
+    if (selectedAttachmentType === 'actor' && workspaceId) {
       api.getActors(workspaceId).then((result) => {
         const actorList = result?.actors ?? result ?? [];
         setActors(Array.isArray(actorList) ? actorList.map(normalizeActorOption) : []);
       }).catch(() => {});
     }
-    if ((selectedAttachmentType === 'conversation' || selectedAttachmentType === 'actor_conversation') && workspaceId) {
+    if (selectedAttachmentType === 'conversation' && workspaceId) {
       api.getThreads(workspaceId).then((res) => setConversations(
         ((res.conversations || []) as AccessVisualConversation[]).map((conversation) => ({
           ...conversation,
@@ -912,13 +911,13 @@ export default function InstallDialog({
   const validateCurrentState = (fieldKeys?: string[]) => {
     const errors = runClientValidation(configData, authFields, validationRules, configFields, fieldKeys);
 
-    if ((selectedAttachmentType === 'actor_global' || selectedAttachmentType === 'actor_conversation') && !selectedActorId) {
+    if (selectedAttachmentType === 'actor' && !selectedActorId) {
       errors.__scope = 'Please select an actor.';
     }
-    if ((selectedAttachmentType === 'conversation' || selectedAttachmentType === 'actor_conversation') && !selectedConversationId) {
+    if (selectedAttachmentType === 'conversation' && !selectedConversationId) {
       errors.__scope = 'Please select a conversation.';
     }
-    if (selectedAttachmentType === 'user' && !currentUserId) {
+    if (selectedAttachmentType === 'workspace_user' && !currentUserId) {
       errors.__scope = 'Current user is unavailable. Please refresh and try again.';
     }
     return errors;
@@ -963,10 +962,14 @@ export default function InstallDialog({
 
       if (installationId) {
         installation = await updateInstallation(workspaceId, installationId, {
-          attachmentType: selectedAttachmentType,
-          actorId: selectedAttachmentType === 'actor_global' || selectedAttachmentType === 'actor_conversation' ? selectedActorId : null,
-          conversationId: selectedAttachmentType === 'conversation' || selectedAttachmentType === 'actor_conversation' ? selectedConversationId : null,
-          userId: selectedAttachmentType === 'user' ? currentUserId : null,
+          attachmentTarget: {
+            type: selectedAttachmentType,
+            actorId: selectedAttachmentType === 'actor' ? selectedActorId : undefined,
+            conversationId:
+              selectedAttachmentType === 'conversation' ? selectedConversationId : undefined,
+            userId:
+              selectedAttachmentType === 'workspace_user' ? currentUserId : undefined,
+          },
           lifecycleScope,
           configData,
           authSessionIds: Object.keys(authSessionIds).length > 0 ? authSessionIds : undefined,
@@ -974,17 +977,21 @@ export default function InstallDialog({
       } else {
         installation = await installPlugin(workspaceId, {
           pluginId: plugin.id,
-          attachmentType: selectedAttachmentType,
-          actorId: selectedAttachmentType === 'actor_global' || selectedAttachmentType === 'actor_conversation' ? selectedActorId : undefined,
-          conversationId: selectedAttachmentType === 'conversation' || selectedAttachmentType === 'actor_conversation' ? selectedConversationId : undefined,
-          userId: selectedAttachmentType === 'user' ? currentUserId : undefined,
+          attachmentTarget: {
+            type: selectedAttachmentType,
+            actorId: selectedAttachmentType === 'actor' ? selectedActorId : undefined,
+            conversationId:
+              selectedAttachmentType === 'conversation' ? selectedConversationId : undefined,
+            userId:
+              selectedAttachmentType === 'workspace_user' ? currentUserId : undefined,
+          },
           lifecycleScope,
           configData,
           authSessionIds: Object.keys(authSessionIds).length > 0 ? authSessionIds : undefined,
         });
         if (createDefaultWorkspaceAccess) {
           await api.grantPluginInstallationAccess(workspaceId, installation.id, {
-            grantScope: 'workspace',
+            accessTarget: { type: 'workspace' },
             permissions: installation.authorization?.requiredPermissions || installation.revision?.authorization?.requiredPermissions || ['use'],
           });
         }

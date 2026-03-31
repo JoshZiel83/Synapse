@@ -1,12 +1,15 @@
 import {
   ACTOR_DOC_VISIBILITIES,
   ACTOR_ROLES,
-  ATTACHMENT_SCOPES,
+  ACCESS_TARGET_TYPES,
+  CAPABILITY_ACCESS_TARGET_TYPES,
+  ATTACHMENT_TARGET_TYPES,
   AUTH_CLIENT_TYPES,
   AUTH_QR_LOGIN_STATUSES,
   AUTH_SESSION_PERSISTENCES,
   AUTH_TRANSPORTS,
   CANONICAL_FILE_CATEGORIES,
+  CONVERSATION_BOUNDARIES,
   INVITE_TRUST_LEVELS,
   INTERACTION_DECISIONS,
   INTERACTION_QUESTION_FIELD_TYPES,
@@ -1630,9 +1633,12 @@ export type PluginTransport =
   | "http"
   | "relay"
   | "filesystem";
-export type AttachmentScope = typeof ATTACHMENT_SCOPES[number];
+export type ConversationBoundary = typeof CONVERSATION_BOUNDARIES[number];
+export type AttachmentTargetType = typeof ATTACHMENT_TARGET_TYPES[number];
+export type AccessTargetType = typeof ACCESS_TARGET_TYPES[number];
+export type CapabilityAccessTargetType =
+  typeof CAPABILITY_ACCESS_TARGET_TYPES[number];
 export type ReuseScope = typeof REUSE_SCOPES[number];
-export type AccessGrantScope = AttachmentScope;
 export type MarketplaceSourceType =
   | "builtin"
   | "official"
@@ -1715,6 +1721,26 @@ export type PluginAuthSessionPhase =
   | "pending_confirm"
   | "finalizing";
 export type PluginAuthChallengeKind = "redirect" | "qr_code" | "none";
+
+export interface AttachmentTarget {
+  type: AttachmentTargetType;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+}
+
+export interface AccessTarget {
+  type: AccessTargetType;
+  actorId?: string;
+  conversationId?: string;
+  userId?: string;
+}
+
+export interface CapabilityAccessTarget {
+  type: CapabilityAccessTargetType;
+  actorId?: string;
+  conversationId?: string;
+}
 
 export interface PluginAuthValueSource {
   source: "config" | "env" | "literal" | "derived";
@@ -1815,7 +1841,7 @@ export interface PluginConfigFieldState {
 
 export interface AccessPolicy {
   requiredPermissions: string[];
-  defaultGrantScope?: AccessGrantScope;
+  defaultAccessTargetType?: CapabilityAccessTargetType;
   reason?: string;
 }
 
@@ -1924,7 +1950,7 @@ export interface MarketplaceItem {
   isBuiltin: boolean;
   downloadCount: number;
   latestRevisionId?: string;
-  defaultInstanceScope?: AttachmentScope;
+  defaultInstanceScope?: AttachmentTargetType;
   defaultReuseScope?: ReuseScope;
   defaultIdleTtlMs?: number;
   defaultMaxAgeMs?: number;
@@ -1943,14 +1969,8 @@ export interface PluginInstallationView {
   workspaceId: string;
   packageId: string;
   revisionId: string;
-  attachmentType: AttachmentScope;
-  attachmentId?: string;
-  attachmentConversationId?: string;
-  attachmentActorId?: string;
-  attachmentUserId?: string;
-  conversationId?: string;
-  actorId?: string;
-  userId?: string;
+  attachmentTarget: AttachmentTarget;
+  accessTarget: CapabilityAccessTarget;
   installMode: PluginInstallationMode;
   reuseScope: ReuseScope;
   idleTtlMs?: number;
@@ -1971,10 +1991,7 @@ export interface AccessGrant {
   id: string;
   resourceId: string;
   workspaceId: string;
-  grantScope: AccessGrantScope;
-  conversationId?: string;
-  actorId?: string;
-  userId?: string;
+  target: CapabilityAccessTarget;
   permissions: string[];
   status: AccessGrantStatus;
   grantedBy?: string;
@@ -2034,7 +2051,7 @@ export interface MarketplaceRequirement {
   targetPublisherSlug?: string;
   targetPackageSlug?: string;
   targetTag?: string;
-  acceptableInstanceScopes: AttachmentScope[];
+  acceptableInstanceScopes: AttachmentTargetType[];
   acceptableReuseScopes: ReuseScope[];
   description: string;
   configPredicate: Record<string, unknown>;
@@ -2057,15 +2074,13 @@ export interface PluginInstallPlan {
   packageId: string;
   revisionId: string;
   workspaceId: string;
-  attachmentType: AttachmentScope;
-  conversationId?: string;
-  actorId?: string;
-  userId?: string;
+  attachmentTarget: AttachmentTarget;
+  defaultAccessTarget: CapabilityAccessTarget;
   checks: MarketplaceRequirementCheck[];
   grantPlan?: {
     requiresGrant: boolean;
     requiredPermissions: string[];
-    suggestedGrantScope?: AccessGrantScope;
+    suggestedAccessTargetType?: CapabilityAccessTargetType;
     reason?: string;
   };
 }
@@ -2092,7 +2107,7 @@ export interface ActorPackageDependency {
   targetPackageKind: ActorPackageTargetKind;
   targetPublisherSlug?: string;
   targetPackageSlug: string;
-  acceptableInstanceScopes: AttachmentScope[];
+  acceptableInstanceScopes: AttachmentTargetType[];
   acceptableReuseScopes: ReuseScope[];
   description: string;
   notes: CanonicalContentBlock[];
@@ -2147,19 +2162,11 @@ export interface AvailableSkillSummary {
   name: string;
   description: string;
   version: string;
-  attachmentType: AttachmentScope;
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
+  accessTarget: CapabilityAccessTarget;
   entryPoint?: string;
 }
 
-export type SkillUseScope =
-  | "workspace"
-  | "conversation"
-  | "actor_global"
-  | "actor_conversation"
-  | "user";
+export type SkillAccessTargetType = CapabilityAccessTargetType;
 
 export interface SkillAttachmentFile {
   id: string;
@@ -2212,10 +2219,7 @@ export interface InstalledSkill {
   description: CanonicalContentBlock;
   iconUrl?: string;
   tags: string[];
-  useScope: SkillUseScope;
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
+  accessTarget: CapabilityAccessTarget;
   isEnabled: boolean;
   isCustomized: boolean;
   installedBy?: string;
@@ -2231,7 +2235,7 @@ export interface InstalledSkill {
 
 export type McpTransport = Exclude<PluginTransport, "filesystem">;
 export type McpLifecycleScope = ReuseScope;
-export type McpAttachmentType = AttachmentScope;
+export type McpAttachmentTargetType = AttachmentTargetType;
 
 export type McpOrganization = MarketplacePublisher;
 export type McpPluginTool = MarketplaceTool;
@@ -2242,8 +2246,6 @@ export interface McpPlugin extends MarketplaceItem {
 
 export interface McpInstallation extends PluginInstallationView {
   pluginId: string;
-  attachmentType: McpAttachmentType;
-  attachmentId: string;
   lifecycleScope: McpLifecycleScope;
   plugin?: McpPlugin;
 }
@@ -3762,23 +3764,19 @@ export type CatalogFileRole =
   | "image"
   | "json"
   | "binary";
-export type RuntimeBindingScope =
-  | "workspace"
-  | "conversation"
-  | "actor"
-  | "actor_conversation"
-  | "user";
+export type RuntimeBindingScope = AccessTargetType;
 export type PluginReuseScopeV2 =
   | "turn"
   | "workspace"
   | "conversation"
   | "actor"
   | "actor_conversation"
-  | "user";
+  | "workspace_user";
 export type AccessBindingStatus = "active" | "revoked";
 export type AccessResourceType =
   | "workspace"
   | "conversation"
+  | "conversation_workspace"
   | "actor"
   | "installed_skill"
   | "plugin_installation"
@@ -3788,6 +3786,7 @@ export type AccessSubjectType =
   | "platform"
   | "workspace"
   | "conversation"
+  | "conversation_workspace"
   | "user"
   | "actor"
   | "workspace_user"

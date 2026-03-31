@@ -30,10 +30,18 @@ export function buildWorkspaceUserContextId(
   return `${workspaceId}|${userId}`;
 }
 
+export function buildConversationWorkspaceContextId(
+  workspaceId: string,
+  conversationId: string,
+) {
+  return `${workspaceId}|${conversationId}`;
+}
+
 export type AuthzObjectType =
   | "platform"
   | "workspace"
   | "workspace_user"
+  | "conversation_workspace"
   | "user"
   | "actor"
   | "installed_skill"
@@ -67,6 +75,7 @@ const AUTHZ_RESOURCE_TYPES: AuthzObjectType[] = [
   "platform",
   "workspace",
   "workspace_user",
+  "conversation_workspace",
   "user",
   "actor",
   "installed_skill",
@@ -458,6 +467,32 @@ export function touchWorkspaceUserContext(
       workspaceId,
     ),
     touchRelation("workspace_user", contextId, "user", "user", userId),
+  ];
+}
+
+export function touchConversationWorkspaceContext(
+  workspaceId: string,
+  conversationId: string,
+): AuthzRelationMutation[] {
+  const contextId = buildConversationWorkspaceContextId(
+    workspaceId,
+    conversationId,
+  );
+  return [
+    touchRelation(
+      "conversation_workspace",
+      contextId,
+      "workspace",
+      "workspace",
+      workspaceId,
+    ),
+    touchRelation(
+      "conversation_workspace",
+      contextId,
+      "conversation",
+      "conversation",
+      conversationId,
+    ),
   ];
 }
 

@@ -28,7 +28,10 @@ import {
   queuePendingConversationRead,
   type PendingConversationMessage,
 } from "@/lib/chat-sync";
-import { sortConversationItems } from "@/lib/conversations";
+import {
+  conversationScopeLabel,
+  sortConversationItems,
+} from "@/lib/conversations";
 import { createId } from "@/lib/ids";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
@@ -479,9 +482,7 @@ export default function ChatDetailScreen() {
               </Text>
               <Text style={styles.headerSubtitle}>
                 {conversation
-                  ? conversation.kind === "private"
-                    ? "私聊"
-                    : "群聊"
+                  ? conversationScopeLabel(conversation)
                   : members.length > 0
                     ? `${members.length} 位成员`
                     : "实时同步中"}

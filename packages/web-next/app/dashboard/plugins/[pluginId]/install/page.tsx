@@ -90,7 +90,7 @@ export default function PluginInstallPage() {
             pageChrome="tab"
             includePlacementSteps={!isBuiltinInitialInstall}
             includeAccessStep={false}
-            defaultAttachmentType={isBuiltinInitialInstall ? 'user' : undefined}
+            defaultAttachmentType={isBuiltinInitialInstall ? 'workspace_user' : undefined}
             createDefaultWorkspaceAccess={isBuiltinInitialInstall}
             onClose={() => router.push(installation ? `/dashboard/plugins/installations/${installation.id}` : `/dashboard/plugins/${plugin.id}`)}
             onSuccess={(savedInstallation) => router.push(`/dashboard/plugins/installations/${savedInstallation.id}`)}

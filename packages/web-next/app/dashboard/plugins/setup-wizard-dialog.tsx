@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import type { AttachmentTargetType, ReuseScope } from '@synapse/shared';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,8 +12,7 @@ import { usePluginStore } from '@/stores/plugin-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 
-type AttachmentType = 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-type ReuseScope = 'turn' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+type AttachmentType = AttachmentTargetType;
 
 interface SetupStep {
   id: string;
@@ -110,10 +110,12 @@ export default function SetupWizardDialog({
 
         await installPlugin(workspaceId!, {
           pluginId: plugin.id,
-          attachmentType,
-          actorId,
-          conversationId,
-          userId: attachmentType === 'user' ? userId || currentUserId : undefined,
+          attachmentTarget: {
+            type: attachmentType,
+            actorId: attachmentType === 'actor' ? actorId : undefined,
+            conversationId: attachmentType === 'conversation' ? conversationId : undefined,
+            userId: attachmentType === 'workspace_user' ? userId || currentUserId : undefined,
+          },
           lifecycleScope,
           configData: Object.keys(allConfig).length > 0 ? allConfig : undefined,
         });
@@ -131,13 +133,15 @@ export default function SetupWizardDialog({
 
   const handleSkip = () => {
     if (isLastStep) {
-      setSaving(true);
+        setSaving(true);
       installPlugin(workspaceId!, {
         pluginId: plugin.id,
-        attachmentType,
-        actorId,
-        conversationId,
-        userId: attachmentType === 'user' ? userId || currentUserId : undefined,
+        attachmentTarget: {
+          type: attachmentType,
+          actorId: attachmentType === 'actor' ? actorId : undefined,
+          conversationId: attachmentType === 'conversation' ? conversationId : undefined,
+          userId: attachmentType === 'workspace_user' ? userId || currentUserId : undefined,
+        },
         lifecycleScope,
       })
         .then(() => onComplete())

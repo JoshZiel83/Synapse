@@ -4,10 +4,12 @@ import type pg from "pg";
 import { nowISO } from "@synapse/shared";
 import type {
   AccessGrant,
-  AccessGrantScope,
+  AttachmentTarget,
+  AttachmentTargetType,
+  CapabilityAccessTarget,
+  CapabilityAccessTargetType,
 } from "@synapse/shared/types";
 import type {
-  AttachmentScope,
   PluginAuthBindingDefinition,
   PluginConfigFieldDefinition,
   PluginConfigFieldState,
@@ -97,7 +99,7 @@ type PluginCatalogRow = {
   spec_default_config: unknown;
   spec_install_flow: unknown;
   spec_auth_bindings: unknown;
-  spec_default_mount_scope: RuntimeBindingScope | null;
+  spec_default_mount_scope: AttachmentTargetType | null;
   spec_default_reuse_scope: PluginReuseScopeV2 | null;
   spec_requires_handshake: boolean | null;
   spec_metadata: unknown;
@@ -146,6 +148,10 @@ type InstallationRow = {
   catalog_item_id: string;
   catalog_version_id: string;
   installation_display_name: string;
+  attachment_target_type: AttachmentTargetType;
+  attachment_conversation_id: string | null;
+  attachment_actor_id: string | null;
+  attachment_user_id: string | null;
   config_data: unknown;
   approved_runtime_permissions: string[] | null;
   reuse_scope: PluginReuseScopeV2;
@@ -158,7 +164,7 @@ type InstallationRow = {
   source_catalog_version_id: string | null;
   source_sync_mode: "notify" | "manual_merge" | "follow_upstream" | "detached" | null;
   primary_access_id: string | null;
-  primary_attachment_scope: RuntimeBindingScope | null;
+  primary_access_target_type: RuntimeBindingScope | null;
   primary_conversation_id: string | null;
   primary_actor_id: string | null;
   primary_user_id: string | null;
@@ -170,7 +176,7 @@ type InstallationRow = {
 
 type InstallationAccessRow = AccessBindingRow & {
   installation_id: string;
-  attachment_scope: RuntimeBindingScope;
+  access_target_type: RuntimeBindingScope;
   conversation_id: string | null;
   actor_id: string | null;
   user_id: string | null;
@@ -332,48 +338,27 @@ function parseBoolean(value: unknown, fallback = false) {
 }
 
 function publicAttachmentScope(
-  scope: RuntimeBindingScope | null | undefined,
-): Exclude<AttachmentScope, "platform"> {
-  switch (scope) {
-    case "actor":
-      return "actor_global";
-    case "workspace":
-    case "conversation":
-    case "actor_conversation":
-    case "user":
-      return scope;
-    default:
-      return "workspace";
-  }
+  scope: AttachmentTargetType | null | undefined,
+): AttachmentTargetType {
+  return scope || "workspace";
 }
 
 function internalAttachmentScope(
-  scope: Exclude<AttachmentScope, "platform">,
-): RuntimeBindingScope {
-  return scope === "actor_global" ? "actor" : scope;
+  scope: AttachmentTargetType,
+): AttachmentTargetType {
+  return scope;
 }
 
 function publicReuseScope(
   scope: PluginReuseScopeV2 | null | undefined,
-): Exclude<ReuseScope, "platform"> {
-  switch (scope) {
-    case "actor":
-      return "actor_global";
-    case "turn":
-    case "workspace":
-    case "conversation":
-    case "actor_conversation":
-    case "user":
-      return scope;
-    default:
-      return "conversation";
-  }
+): ReuseScope {
+  return scope || "conversation";
 }
 
 function internalReuseScope(
-  scope: Exclude<ReuseScope, "platform">,
+  scope: ReuseScope,
 ): PluginReuseScopeV2 {
-  return scope === "actor_global" ? "actor" : scope;
+  return scope;
 }
 
 function inferMimeTypeForAsset(assetPath: string) {
@@ -457,20 +442,30 @@ async function ensureBuiltinPluginIcon(
 
 function authorizationFromRuntimePermissions(
   runtimePermissions: unknown,
-  defaultScope: Exclude<AttachmentScope, "platform">,
+  defaultScope: AttachmentTargetType,
   specMetadata: JsonObject,
 ) {
   const rows = asArray<JsonObject>(runtimePermissions);
   const metadataAuthorization = asObject(specMetadata.authorization);
+  const rawDefaultAccessTargetType =
+    (metadataAuthorization.defaultAccessTargetType as
+      | CapabilityAccessTargetType
+      | "conversation"
+      | undefined) ||
+    defaultAccessTargetForAttachment({
+      type: defaultScope,
+    }).type;
+  const defaultAccessTargetType =
+    rawDefaultAccessTargetType === "conversation"
+      ? "conversation_workspace"
+      : rawDefaultAccessTargetType;
 
   return {
     requiredPermissions: rows
       .filter((row) => row.isRequired !== false)
       .map((row) => String(row.permissionKey || ""))
       .filter(Boolean),
-    defaultGrantScope:
-      (metadataAuthorization.defaultGrantScope as AccessGrantScope | undefined) ||
-      defaultScope,
+    defaultAccessTargetType,
     reason:
       typeof metadataAuthorization.reason === "string"
         ? metadataAuthorization.reason
@@ -727,12 +722,9 @@ function mergeConfigForUpdate(
 }
 
 function normalizeAttachmentTarget(input: {
-  attachmentType: Exclude<AttachmentScope, "platform">;
-  actorId?: string | null;
-  conversationId?: string | null;
-  userId?: string | null;
+  attachmentTarget: AttachmentTarget;
 }) {
-  switch (input.attachmentType) {
+  switch (input.attachmentTarget.type) {
     case "workspace":
       return {
         mountScope: "workspace" as const,
@@ -741,71 +733,49 @@ function normalizeAttachmentTarget(input: {
         userId: null,
       };
     case "conversation":
-      if (!input.conversationId) {
-        throw new McpPluginError(400, "conversationId is required for conversation scope");
+      if (!input.attachmentTarget.conversationId) {
+        throw new McpPluginError(
+          400,
+          "conversationId is required for conversation attachment",
+        );
       }
       return {
         mountScope: "conversation" as const,
         actorId: null,
-        conversationId: input.conversationId,
+        conversationId: input.attachmentTarget.conversationId,
         userId: null,
       };
-    case "actor_global":
-      if (!input.actorId) {
-        throw new McpPluginError(400, "actorId is required for actor scope");
-      }
-      return {
-        mountScope: "actor" as const,
-        actorId: input.actorId,
-        conversationId: null,
-        userId: null,
-      };
-    case "actor_conversation":
-      if (!input.actorId || !input.conversationId) {
+    case "actor":
+      if (!input.attachmentTarget.actorId) {
         throw new McpPluginError(
           400,
-          "actorId and conversationId are required for actor_conversation scope",
+          "actorId is required for actor attachment",
         );
       }
       return {
-        mountScope: "actor_conversation" as const,
-        actorId: input.actorId,
-        conversationId: input.conversationId,
+        mountScope: "actor" as const,
+        actorId: input.attachmentTarget.actorId,
+        conversationId: null,
         userId: null,
       };
-    case "user":
-      if (!input.userId) {
-        throw new McpPluginError(400, "userId is required for user scope");
+    case "workspace_user":
+      if (!input.attachmentTarget.userId) {
+        throw new McpPluginError(
+          400,
+          "userId is required for workspace_user attachment",
+        );
       }
       return {
-        mountScope: "user" as const,
+        mountScope: "workspace_user" as const,
         actorId: null,
         conversationId: null,
-        userId: input.userId,
+        userId: input.attachmentTarget.userId,
       };
     default:
-      throw new McpPluginError(400, `Unsupported attachment type: ${String(input.attachmentType)}`);
-  }
-}
-
-function attachmentIdForTarget(target: {
-  workspace_id: string;
-  attachment_scope: RuntimeBindingScope;
-  actor_id: string | null;
-  conversation_id: string | null;
-  user_id: string | null;
-}) {
-  switch (target.attachment_scope) {
-    case "workspace":
-      return target.workspace_id;
-    case "conversation":
-      return target.conversation_id;
-    case "actor":
-      return target.actor_id;
-    case "actor_conversation":
-      return `${target.actor_id || ""}:${target.conversation_id || ""}`;
-    case "user":
-      return target.user_id;
+      throw new McpPluginError(
+        400,
+        `Unsupported attachment type: ${String(input.attachmentTarget.type)}`,
+      );
   }
 }
 
@@ -846,7 +816,7 @@ function buildInstallationAccessRow(row: AccessBindingRow): InstallationAccessRo
   return {
     ...row,
     installation_id: row.resource_id,
-    attachment_scope: target.bindScope,
+    access_target_type: target.bindScope,
     actor_id: target.actorId,
     conversation_id: target.conversationId,
     user_id: target.userId,
@@ -899,7 +869,7 @@ async function getPluginCatalogRowByItemId(itemId: string) {
 async function loadInstallationRows(
   workspaceId: string,
   filters?: {
-    attachmentType?: Exclude<AttachmentScope, "platform">;
+    attachmentType?: AttachmentTargetType;
     conversationId?: string;
     actorId?: string;
     userId?: string;
@@ -924,6 +894,10 @@ async function loadInstallationRows(
         installation.catalog_item_id,
         installation.catalog_version_id,
         installation.display_name AS installation_display_name,
+        installation.attachment_target_type,
+        installation.attachment_conversation_id,
+        installation.attachment_actor_id,
+        installation.attachment_user_id,
         installation.config_data,
         installation.approved_runtime_permissions,
         installation.reuse_scope,
@@ -936,7 +910,7 @@ async function loadInstallationRows(
         source_ref.source_catalog_version_id,
         source_ref.sync_mode AS source_sync_mode,
         primary_access.id AS primary_access_id,
-        primary_access.attachment_scope AS primary_attachment_scope,
+        primary_access.target_type AS primary_access_target_type,
         primary_access.conversation_id AS primary_conversation_id,
         primary_access.actor_id AS primary_actor_id,
         primary_access.user_id AS primary_user_id,
@@ -950,16 +924,10 @@ async function loadInstallationRows(
       LEFT JOIN LATERAL (
         SELECT
           binding.id,
-          CASE
-            WHEN binding.relation = 'use_workspace' THEN 'workspace'
-            WHEN binding.relation = 'use_conversation' THEN 'conversation'
-            WHEN binding.relation = 'use_actor_conversation' THEN 'actor_conversation'
-            WHEN binding.relation = 'use_principal' AND binding.subject_type = 'actor' THEN 'actor'
-            ELSE 'user'
-          END AS attachment_scope,
-          NULLIF(binding.metadata->>'conversationId', '') AS conversation_id,
-          NULLIF(binding.metadata->>'actorId', '') AS actor_id,
-          NULLIF(binding.metadata->>'userId', '') AS user_id,
+          binding.target_type,
+          binding.conversation_id,
+          binding.actor_id,
+          binding.user_id,
           binding.status,
           binding.metadata,
           binding.created_by,
@@ -977,19 +945,22 @@ async function loadInstallationRows(
   );
 
   return result.rows.filter((row) => {
-    const attachmentScope = publicAttachmentScope(
-      row.primary_attachment_scope || "workspace",
+    const attachmentTargetType = publicAttachmentScope(
+      row.attachment_target_type || "workspace",
     );
-    if (filters?.attachmentType && attachmentScope !== filters.attachmentType) {
+    if (filters?.attachmentType && attachmentTargetType !== filters.attachmentType) {
       return false;
     }
-    if (filters?.conversationId && row.primary_conversation_id !== filters.conversationId) {
+    if (
+      filters?.conversationId &&
+      row.attachment_conversation_id !== filters.conversationId
+    ) {
       return false;
     }
-    if (filters?.actorId && row.primary_actor_id !== filters.actorId) {
+    if (filters?.actorId && row.attachment_actor_id !== filters.actorId) {
       return false;
     }
-    if (filters?.userId && row.primary_user_id !== filters.userId) {
+    if (filters?.userId && row.attachment_user_id !== filters.userId) {
       return false;
     }
     return true;
@@ -1004,10 +975,14 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
       "workspace_id",
       "resource_type",
       "resource_id",
+      "target_type",
       "relation",
       "subject_type",
       "subject_id",
       "subject_relation",
+      "actor_id",
+      "conversation_id",
+      "user_id",
       "status",
       "created_by",
       "reason",
@@ -1031,13 +1006,10 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
 function buildPluginGrantPlan(input: {
   authorization: {
     requiredPermissions: string[];
-    defaultGrantScope?: AccessGrantScope;
+    defaultAccessTargetType?: CapabilityAccessTargetType;
     reason?: string;
   };
-  attachmentType: Exclude<AttachmentScope, "platform">;
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
+  attachmentTarget: AttachmentTarget;
 }) {
   const requiredPermissions = input.authorization.requiredPermissions || [];
   if (requiredPermissions.length === 0) {
@@ -1047,37 +1019,69 @@ function buildPluginGrantPlan(input: {
     };
   }
 
-  let suggestedGrantScope =
-    input.authorization.defaultGrantScope || input.attachmentType;
-
-  if (
-    suggestedGrantScope === "conversation" &&
-    !input.conversationId
-  ) {
-    suggestedGrantScope = input.attachmentType;
-  }
-  if (
-    suggestedGrantScope === "actor_global" &&
-    !input.actorId
-  ) {
-    suggestedGrantScope = input.attachmentType;
-  }
-  if (
-    suggestedGrantScope === "actor_conversation" &&
-    (!input.actorId || !input.conversationId)
-  ) {
-    suggestedGrantScope = input.attachmentType;
-  }
-  if (suggestedGrantScope === "user" && !input.userId) {
-    suggestedGrantScope = input.attachmentType;
-  }
+  const suggestedAccessTargetType =
+    input.authorization.defaultAccessTargetType ||
+    defaultAccessTargetForAttachment(input.attachmentTarget).type;
 
   return {
     requiresGrant: true,
     requiredPermissions,
-    suggestedGrantScope,
+    suggestedAccessTargetType,
     reason: input.authorization.reason,
   };
+}
+
+function defaultAccessTargetForAttachment(
+  attachmentTarget: AttachmentTarget,
+): CapabilityAccessTarget {
+  switch (attachmentTarget.type) {
+    case "workspace":
+      return { type: "workspace" };
+    case "conversation":
+      return {
+        type: "conversation_workspace",
+        conversationId: attachmentTarget.conversationId,
+      };
+    case "actor":
+      return {
+        type: "actor",
+        actorId: attachmentTarget.actorId,
+      };
+    case "workspace_user":
+      return { type: "workspace" };
+  }
+}
+
+function capabilityAccessTargetFromStored(input: {
+  targetType: RuntimeBindingScope | null | undefined;
+  actorId?: string | null;
+  conversationId?: string | null;
+}): CapabilityAccessTarget {
+  switch (input.targetType || "workspace") {
+    case "workspace":
+      return { type: "workspace" };
+    case "actor":
+      return {
+        type: "actor",
+        actorId: input.actorId || undefined,
+      };
+    case "conversation_workspace":
+      return {
+        type: "conversation_workspace",
+        conversationId: input.conversationId || undefined,
+      };
+    case "actor_conversation":
+      return {
+        type: "actor_conversation",
+        actorId: input.actorId || undefined,
+        conversationId: input.conversationId || undefined,
+      };
+    case "workspace_user":
+      throw new McpPluginError(
+        500,
+        "workspace_user is not a valid plugin access target",
+      );
+  }
 }
 
 function mapAccessRowToGrant(
@@ -1092,13 +1096,6 @@ function buildInstallationPayload(
   row: InstallationRow,
   plugin: ReturnType<typeof mapPluginView>,
 ) {
-  const primaryAccess = {
-    workspace_id: row.workspace_id,
-    attachment_scope: row.primary_attachment_scope || "workspace",
-    actor_id: row.primary_actor_id,
-    conversation_id: row.primary_conversation_id,
-    user_id: row.primary_user_id,
-  };
   const { sanitizedConfig, configState } = sanitizeInstallationConfig(
     {
       config_data: row.config_data,
@@ -1109,17 +1106,24 @@ function buildInstallationPayload(
     plugin.auth_bindings || [],
   );
 
-  const attachmentType = publicAttachmentScope(row.primary_attachment_scope || "workspace");
+  const attachmentTarget: AttachmentTarget = {
+    type: publicAttachmentScope(row.attachment_target_type),
+    actorId: row.attachment_actor_id || undefined,
+    conversationId: row.attachment_conversation_id || undefined,
+    userId: row.attachment_user_id || undefined,
+  };
+  const accessTarget = capabilityAccessTargetFromStored({
+    targetType: row.primary_access_target_type,
+    actorId: row.primary_actor_id,
+    conversationId: row.primary_conversation_id,
+  });
 
   return {
     id: row.installation_id,
     workspace_id: row.workspace_id,
     plugin_id: row.catalog_item_id,
-    attachment_type: attachmentType,
-    attachment_id: attachmentIdForTarget(primaryAccess),
-    attachment_actor_id: row.primary_actor_id,
-    attachment_conversation_id: row.primary_conversation_id,
-    attachment_user_id: row.primary_user_id,
+    attachment_target: attachmentTarget,
+    access_target: accessTarget,
     lifecycle_scope: publicReuseScope(row.reuse_scope),
     is_enabled:
       row.installation_status === "active" &&
@@ -1317,7 +1321,7 @@ async function upsertPluginVersion(
     transport: string;
     entryPoint?: string;
     lifecycleScope?: ReuseScope;
-    defaultInstanceScope?: AttachmentScope;
+    defaultInstanceScope?: AttachmentTargetType;
     requiresHandshake?: boolean;
     toolsManifest?: unknown[];
     configSchema?: Record<string, unknown>;
@@ -1329,7 +1333,7 @@ async function upsertPluginVersion(
     setupSteps?: McpSetupStep[];
     authorization?: {
       requiredPermissions?: string[];
-      defaultGrantScope?: AttachmentScope;
+      defaultAccessTargetType?: CapabilityAccessTargetType;
       reason?: string;
     };
   },
@@ -1356,7 +1360,8 @@ async function upsertPluginVersion(
     validationRules: input.validationRules || [],
     setupSteps: input.setupSteps || [],
     authorization: {
-      defaultGrantScope: input.authorization?.defaultGrantScope || undefined,
+      defaultAccessTargetType:
+        input.authorization?.defaultAccessTargetType || undefined,
       reason: input.authorization?.reason || undefined,
     },
   };
@@ -1401,18 +1406,8 @@ async function upsertPluginVersion(
       JSON.stringify(input.defaultConfig || {}),
       JSON.stringify(input.installFlow || { steps: input.setupSteps || [] }),
       JSON.stringify(input.authBindings || []),
-      internalAttachmentScope(
-        ((input.defaultInstanceScope || "workspace") as Exclude<
-          AttachmentScope,
-          "platform"
-        >),
-      ),
-      internalReuseScope(
-        ((input.lifecycleScope || "conversation") as Exclude<
-          ReuseScope,
-          "platform"
-        >),
-      ),
+      internalAttachmentScope(input.defaultInstanceScope || "workspace"),
+      internalReuseScope(input.lifecycleScope || "conversation"),
       input.requiresHandshake ?? input.transport !== "builtin",
       JSON.stringify(metadata),
     ],
@@ -1597,11 +1592,11 @@ export async function createPlugin(data: {
   longDescriptionI18n?: Record<string, string>;
   summaryI18n?: Record<string, string>;
   defaultLocale?: string;
-  defaultInstanceScope?: AttachmentScope;
+  defaultInstanceScope?: AttachmentTargetType;
   requiresHandshake?: boolean;
   authorization?: {
     requiredPermissions?: string[];
-    defaultGrantScope?: AttachmentScope;
+    defaultAccessTargetType?: CapabilityAccessTargetType;
     reason?: string;
   };
 }) {
@@ -1710,7 +1705,7 @@ export async function getPlugin(id: string) {
 }
 
 export function validateLifecycleHierarchy(
-  attachmentType: AttachmentScope,
+  attachmentType: AttachmentTargetType,
   lifecycleScope: ReuseScope,
 ) {
   switch (attachmentType) {
@@ -1718,26 +1713,17 @@ export function validateLifecycleHierarchy(
       return [
         "workspace",
         "conversation",
-        "actor_global",
+        "actor",
         "actor_conversation",
-        "user",
+        "workspace_user",
         "turn",
       ].includes(lifecycleScope);
     case "conversation":
       return ["conversation", "actor_conversation", "turn"].includes(lifecycleScope);
-    case "actor_global":
-      return ["actor_global", "turn"].includes(lifecycleScope);
-    case "actor_conversation":
-      return ["actor_conversation", "turn"].includes(lifecycleScope);
-    case "user":
-      return [
-        "workspace",
-        "conversation",
-        "actor_global",
-        "actor_conversation",
-        "user",
-        "turn",
-      ].includes(lifecycleScope);
+    case "actor":
+      return ["actor", "turn"].includes(lifecycleScope);
+    case "workspace_user":
+      return ["workspace_user", "turn"].includes(lifecycleScope);
     default:
       return false;
   }
@@ -1746,30 +1732,22 @@ export function validateLifecycleHierarchy(
 export async function installPluginUnified(data: {
   workspaceId: string;
   pluginId: string;
-  attachmentType: Exclude<AttachmentScope, "platform">;
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
-  lifecycleScope?: Exclude<ReuseScope, "platform">;
+  attachmentTarget: AttachmentTarget;
+  lifecycleScope?: ReuseScope;
   configData?: Record<string, unknown>;
   authSessionIds?: Record<string, string>;
   installedBy?: string;
 }) {
   const lifecycleScope = data.lifecycleScope || "conversation";
-  if (!validateLifecycleHierarchy(data.attachmentType, lifecycleScope)) {
+  if (!validateLifecycleHierarchy(data.attachmentTarget.type, lifecycleScope)) {
     throw new McpPluginError(
       400,
-      `Reuse scope '${lifecycleScope}' is not valid for attachment '${data.attachmentType}'`,
+      `Reuse scope '${lifecycleScope}' is not valid for attachment '${data.attachmentTarget.type}'`,
     );
   }
 
   const plugin = await getPlugin(data.pluginId);
-  const target = normalizeAttachmentTarget({
-    attachmentType: data.attachmentType,
-    actorId: data.actorId,
-    conversationId: data.conversationId,
-    userId: data.userId,
-  });
+  const target = normalizeAttachmentTarget({ attachmentTarget: data.attachmentTarget });
   const approvedRuntimePermissions =
     plugin.authorization?.requiredPermissions || [];
 
@@ -1841,6 +1819,10 @@ export async function installPluginUnified(data: {
           catalog_item_id: plugin.id,
           catalog_version_id: catalogVersionId,
           display_name: plugin.display_name,
+          attachment_target_type: target.mountScope,
+          attachment_actor_id: target.actorId,
+          attachment_conversation_id: target.conversationId,
+          attachment_user_id: target.userId,
           config_data: {} as TableInsert<"plugin_installations">["config_data"],
           approved_runtime_permissions: approvedRuntimePermissions,
           reuse_scope: internalReuseScope(lifecycleScope),
@@ -1856,7 +1838,7 @@ export async function installPluginUnified(data: {
     const resolvedConfig = await attachAuthConnectionsToConfig({
       installationId,
       workspaceId: data.workspaceId,
-      userId: data.installedBy || data.userId || "",
+      userId: data.installedBy || data.attachmentTarget.userId || "",
       configFields: plugin.config_fields || [],
       authBindings: plugin.auth_bindings || [],
       configData: resolvedConfigBase,
@@ -1885,10 +1867,7 @@ export async function installPluginUnified(data: {
 
     const primaryAccessTarget = resolveAccessGrantTarget({
       workspaceId: data.workspaceId,
-      grantScope: data.attachmentType,
-      actorId: target.actorId,
-      conversationId: target.conversationId,
-      userId: target.userId,
+      target: defaultAccessTargetForAttachment(data.attachmentTarget),
     });
     const insertedAccess = await executeTakeFirst<{ id: string }>(
       client,
@@ -1898,15 +1877,16 @@ export async function installPluginUnified(data: {
           workspace_id: data.workspaceId,
           resource_type: "plugin_installation",
           resource_id: installationId,
+          target_type: primaryAccessTarget.targetType,
           relation: primaryAccessTarget.relation,
           subject_type: primaryAccessTarget.subjectType,
           subject_id: primaryAccessTarget.subjectId,
+          actor_id: primaryAccessTarget.actorId,
+          conversation_id: primaryAccessTarget.conversationId,
+          user_id: primaryAccessTarget.userId,
           metadata: {
             isPrimary: true,
-            grantScope: data.attachmentType,
-            actorId: target.actorId,
-            conversationId: target.conversationId,
-            userId: target.userId,
+            accessTargetType: primaryAccessTarget.targetType,
             requestedPermissions: approvedRuntimePermissions,
             reason: plugin.authorization?.reason || null,
           } as TableInsert<"access_bindings">["metadata"],
@@ -1952,11 +1932,12 @@ export async function installPluginUnified(data: {
           operation: "touch",
         }),
         ...buildResourceAccessAuthzMutations({
-          resourceType: "plugin_installation",
-          resourceId: installationId,
-          target: primaryAccessTarget,
-          operation: "touch",
-        }),
+            resourceType: "plugin_installation",
+            resourceId: installationId,
+            workspaceId: data.workspaceId,
+            target: primaryAccessTarget,
+            operation: "touch",
+          }),
       ],
       {
         source: "plugin.install",
@@ -2052,7 +2033,7 @@ export async function uninstallPluginUnified(installId: string) {
 export async function getInstallations(
   workspaceId: string,
   filters?: {
-    attachmentType?: Exclude<AttachmentScope, "platform">;
+    attachmentType?: AttachmentTargetType;
     conversationId?: string;
     actorId?: string;
     userId?: string;
@@ -2083,11 +2064,8 @@ export async function updateInstallation(
     isEnabled?: boolean;
     configData?: Record<string, unknown>;
     authSessionIds?: Record<string, string>;
-    lifecycleScope?: Exclude<ReuseScope, "platform">;
-    attachmentType?: Exclude<AttachmentScope, "platform">;
-    actorId?: string | null;
-    conversationId?: string | null;
-    userId?: string | null;
+    lifecycleScope?: ReuseScope;
+    attachmentTarget?: AttachmentTarget;
     updatedBy?: string;
   },
 ) {
@@ -2110,7 +2088,7 @@ export async function updateInstallation(
   }
 
   const nextAttachmentType =
-    data.attachmentType || publicAttachmentScope(primaryAccess.attachment_scope);
+    data.attachmentTarget?.type || publicAttachmentScope(row.attachment_target_type);
   const nextLifecycleScope =
     data.lifecycleScope || publicReuseScope(row.reuse_scope);
 
@@ -2122,21 +2100,24 @@ export async function updateInstallation(
   }
 
   const target = normalizeAttachmentTarget({
-    attachmentType: nextAttachmentType,
-    actorId:
-      data.actorId !== undefined ? data.actorId : primaryAccess.actor_id,
-    conversationId:
-      data.conversationId !== undefined
-        ? data.conversationId
-        : primaryAccess.conversation_id,
-    userId: data.userId !== undefined ? data.userId : primaryAccess.user_id,
+    attachmentTarget:
+      data.attachmentTarget || {
+        type: nextAttachmentType,
+        actorId: row.attachment_actor_id || undefined,
+        conversationId: row.attachment_conversation_id || undefined,
+        userId: row.attachment_user_id || undefined,
+      },
   });
   const nextPrimaryAccessTarget = resolveAccessGrantTarget({
     workspaceId,
-    grantScope: nextAttachmentType,
-    actorId: target.actorId,
-    conversationId: target.conversationId,
-    userId: target.userId,
+    target: defaultAccessTargetForAttachment(
+      data.attachmentTarget || {
+        type: nextAttachmentType,
+        actorId: target.actorId || undefined,
+        conversationId: target.conversationId || undefined,
+        userId: target.userId || undefined,
+      },
+    ),
   });
 
   const mergedConfig = data.configData
@@ -2207,7 +2188,11 @@ export async function updateInstallation(
         ? await attachAuthConnectionsToConfig({
             installationId: installId,
             workspaceId,
-            userId: data.updatedBy || data.userId || "",
+            userId:
+              data.updatedBy ||
+              data.attachmentTarget?.userId ||
+              row.attachment_user_id ||
+              "",
             configFields: plugin.config_fields || [],
             authBindings: plugin.auth_bindings || [],
             configData: mergedConfig,
@@ -2254,26 +2239,48 @@ export async function updateInstallation(
       );
     }
 
-    if (data.attachmentType) {
+    if (data.attachmentTarget) {
+      await run(
+        `UPDATE plugin_installations
+         SET attachment_target_type = $2,
+             attachment_actor_id = $3,
+             attachment_conversation_id = $4,
+             attachment_user_id = $5,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [
+          installId,
+          target.mountScope,
+          target.actorId,
+          target.conversationId,
+          target.userId,
+        ],
+      );
+
       await run(
         `UPDATE access_bindings
-         SET relation = $2,
-             subject_type = $3,
-             subject_id = $4,
-             metadata = $5::jsonb
+         SET target_type = $2,
+             relation = $3,
+             subject_type = $4,
+             subject_id = $5,
+             actor_id = $6,
+             conversation_id = $7,
+             user_id = $8,
+             metadata = $9::jsonb
          WHERE id = $1`,
         [
           primaryAccess.id,
+          nextPrimaryAccessTarget.targetType,
           nextPrimaryAccessTarget.relation,
           nextPrimaryAccessTarget.subjectType,
           nextPrimaryAccessTarget.subjectId,
+          nextPrimaryAccessTarget.actorId,
+          nextPrimaryAccessTarget.conversationId,
+          nextPrimaryAccessTarget.userId,
           JSON.stringify({
             ...asObject(primaryAccess.metadata),
             isPrimary: true,
-            grantScope: nextAttachmentType,
-            actorId: target.actorId,
-            conversationId: target.conversationId,
-            userId: target.userId,
+            accessTargetType: nextPrimaryAccessTarget.targetType,
           }),
         ],
       );
@@ -2343,8 +2350,9 @@ export async function getPluginInstallationAccessState(
     grants,
     summary: {
       requiredPermissions: plugin.authorization?.requiredPermissions || [],
-      suggestedGrantScope:
-        plugin.authorization?.defaultGrantScope || installation.attachment_type,
+      suggestedAccessTargetType:
+        plugin.authorization?.defaultAccessTargetType ||
+        installation.access_target.type,
       reason: plugin.authorization?.reason,
       effectivePermissions:
         grants.length > 0 ? plugin.authorization?.requiredPermissions || [] : [],
@@ -2358,10 +2366,7 @@ export async function getPluginInstallationAccessState(
 export async function grantPluginInstallationAccess(input: {
   workspaceId: string;
   installationId: string;
-  grantScope?: Exclude<AccessGrantScope, "platform">;
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
+  accessTarget?: CapabilityAccessTarget;
   permissions?: string[];
   grantedBy?: string;
   reason?: string;
@@ -2377,33 +2382,30 @@ export async function grantPluginInstallationAccess(input: {
     throw new McpPluginError(500, "Installation is missing its primary access grant");
   }
 
-  const grantScope =
-    input.grantScope ||
-    (plugin.authorization?.defaultGrantScope === "platform"
-      ? undefined
-      : plugin.authorization?.defaultGrantScope) ||
-    publicAttachmentScope(primaryAccess.attachment_scope);
-  const target = normalizeAttachmentTarget({
-    attachmentType: grantScope,
-    actorId: input.actorId,
-    conversationId: input.conversationId,
-    userId: input.userId,
-  });
+  const resolvedAccessTarget =
+    input.accessTarget ||
+    (plugin.authorization?.defaultAccessTargetType
+      ? {
+          type: plugin.authorization.defaultAccessTargetType,
+        }
+      : undefined) ||
+    capabilityAccessTargetFromStored({
+      targetType: primaryAccess.access_target_type,
+      actorId: primaryAccess.actor_id,
+      conversationId: primaryAccess.conversation_id,
+    });
   const accessTarget = resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
-    grantScope,
-    actorId: target.actorId,
-    conversationId: target.conversationId,
-    userId: target.userId,
+    target: resolvedAccessTarget,
   });
 
   const existing = accessRows.find(
     (entry) =>
       entry.status === "active" &&
-      entry.attachment_scope === target.mountScope &&
-      entry.actor_id === target.actorId &&
-      entry.conversation_id === target.conversationId &&
-      entry.user_id === target.userId,
+      entry.access_target_type === accessTarget.targetType &&
+      entry.actor_id === accessTarget.actorId &&
+      entry.conversation_id === accessTarget.conversationId &&
+      entry.user_id === accessTarget.userId,
   );
   if (existing) {
     return mapAccessRowToGrant(
@@ -2422,16 +2424,17 @@ export async function grantPluginInstallationAccess(input: {
           workspace_id: input.workspaceId,
           resource_type: "plugin_installation",
           resource_id: input.installationId,
+          target_type: accessTarget.targetType,
           relation: accessTarget.relation,
           subject_type: accessTarget.subjectType,
           subject_id: accessTarget.subjectId,
+          actor_id: accessTarget.actorId,
+          conversation_id: accessTarget.conversationId,
+          user_id: accessTarget.userId,
           metadata: {
             ...(input.metadata || {}),
             isPrimary: false,
-            grantScope,
-            actorId: target.actorId,
-            conversationId: target.conversationId,
-            userId: target.userId,
+            accessTargetType: accessTarget.targetType,
             requestedPermissions: input.permissions || [],
             reason: input.reason || plugin.authorization?.reason || null,
           } as TableInsert<"access_bindings">["metadata"],
@@ -2540,29 +2543,24 @@ export async function revokePluginInstallationAccess(input: {
 export async function createPluginInstallPlan(input: {
   workspaceId: string;
   pluginId: string;
-  attachmentType: Exclude<AttachmentScope, "platform">;
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
+  attachmentTarget: AttachmentTarget;
 }) {
   const plugin = await getPlugin(input.pluginId);
+  const defaultAccessTarget = defaultAccessTargetForAttachment(
+    input.attachmentTarget,
+  );
   return {
     packageId: plugin.id,
     revisionId: (
       await getPluginCatalogRowByItemId(plugin.id)
     )!.version_id,
     workspaceId: input.workspaceId,
-    attachmentType: input.attachmentType,
-    actorId: input.actorId,
-    conversationId: input.conversationId,
-    userId: input.userId,
+    attachmentTarget: input.attachmentTarget,
+    defaultAccessTarget,
     checks: [],
     grantPlan: buildPluginGrantPlan({
       authorization: plugin.authorization,
-      attachmentType: input.attachmentType,
-      actorId: input.actorId,
-      conversationId: input.conversationId,
-      userId: input.userId,
+      attachmentTarget: input.attachmentTarget,
     }),
   };
 }

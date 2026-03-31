@@ -112,10 +112,11 @@ export default function RelayDevicePage() {
         targetWorkspaceId: string,
         targetExposureId: string,
         payload: {
-          grantScope?: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-          actorId?: string;
-          conversationId?: string;
-          userId?: string;
+          accessTarget?: {
+            type: 'workspace' | 'conversation_workspace' | 'actor' | 'actor_conversation';
+            actorId?: string;
+            conversationId?: string;
+          };
           permissions?: string[];
         },
       ) => api.grantRelayExposureAccess(targetWorkspaceId, relayId, targetExposureId, payload),

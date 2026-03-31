@@ -100,6 +100,50 @@ function getDefaultQueryable(): Queryable {
   return pool;
 }
 
+function parseConversationMetadata(
+  value: unknown,
+): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+async function resolveInternalConversationWorkspaceId(
+  conversationId: string,
+  metadata: unknown,
+) {
+  const parsed = parseConversationMetadata(metadata);
+  if (typeof parsed.internalWorkspaceId === "string") {
+    return parsed.internalWorkspaceId;
+  }
+
+  const member = await db
+    .selectFrom("conversation_members as cm")
+    .leftJoin("workspace_members as wm", "wm.id", "cm.workspace_member_id")
+    .leftJoin("actors as a", "a.id", "cm.actor_id")
+    .select([
+      "wm.workspace_id as user_workspace_id",
+      "a.workspace_id as actor_workspace_id",
+    ])
+    .where("cm.conversation_id", "=", conversationId)
+    .where("cm.state", "=", "active")
+    .limit(1)
+    .executeTakeFirst();
+
+  return member?.user_workspace_id || member?.actor_workspace_id || null;
+}
+
 async function resolveWorkspaceMemberBinding(params: {
   workspaceId?: string;
   workspaceMemberId?: string;
@@ -265,15 +309,18 @@ async function insertConversationItem(
 
 export async function createConversation(params: {
   kind: ConversationKind;
+  boundary?: "internal" | "external";
   title?: string;
   createdBy?: string;
   metadata?: Record<string, unknown>;
 }) {
+  const boundary = params.boundary || "internal";
   const created = await db
     .insertInto("conversations")
     .values({
       id: uuidv4(),
       kind: params.kind,
+      boundary,
       title: params.title || null,
       created_by: params.createdBy || null,
       metadata:
@@ -356,10 +403,54 @@ export async function ensureConversationMemberActivation(params: {
     memberType === "user" ? resolvedUserMember?.workspaceMemberId || null : null;
   const resolvedUserId =
     memberType === "user" ? resolvedUserMember?.userId || userId || null : null;
+  const conversation = await getConversation(conversationId);
+
+  if (!conversation) {
+    throw new Error("Conversation not found");
+  }
 
   if (memberType === "user" && (!resolvedWorkspaceMemberId || !resolvedUserId)) {
     throw new Error("Workspace member identity is required for user participants");
   }
+
+  if (conversation.boundary === "internal") {
+    if (
+      memberType === "external" ||
+      memberType === "remote_agent"
+    ) {
+      throw new Error(
+        "Internal conversations do not allow external participants",
+      );
+    }
+
+    const internalWorkspaceId = await resolveInternalConversationWorkspaceId(
+      conversationId,
+      conversation.metadata,
+    );
+    let participantWorkspaceId: string | null = null;
+
+    if (memberType === "user") {
+      participantWorkspaceId = resolvedUserMember?.workspaceId || null;
+    } else if (memberType === "actor" && actorId) {
+      const actor = await db
+        .selectFrom("actors")
+        .select(["workspace_id"])
+        .where("id", "=", actorId)
+        .executeTakeFirst();
+      participantWorkspaceId = actor?.workspace_id || null;
+    }
+
+    if (
+      internalWorkspaceId &&
+      participantWorkspaceId &&
+      participantWorkspaceId !== internalWorkspaceId
+    ) {
+      throw new Error(
+        "Internal conversations only allow participants from the internal workspace",
+      );
+    }
+  }
+
   let existing;
 
   if (memberType === "actor") {

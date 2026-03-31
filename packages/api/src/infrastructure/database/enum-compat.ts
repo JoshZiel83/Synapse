@@ -47,11 +47,11 @@ import {
   AUTOMATION_TRIGGER_SOURCE_KINDS,
   CONTACT_TARGET_TYPES,
   CONVERSATION_GRANT_PERMISSIONS,
+  MEMORY_SCOPES,
   MODEL_GROUP_GRANT_SCOPES,
   MODEL_GROUP_ROUTING_STRATEGIES,
   PLATFORM_ACCESS_KEYS,
   RELAY_MANAGEABLE_TRUST_STATUSES,
-  RESOURCE_SCOPES,
   TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
   TRANSPORT_ACCOUNT_OWNER_SCOPES,
   TRANSPORT_ACCOUNT_STATUSES,
@@ -149,7 +149,7 @@ type _ModelGroupGrantScopeMatchesDb = Assert<
 type _ActorRoleMatchesDb = Assert<IsEqual<ActorRole, ActorsRole>>;
 type _ActorDocVisibilityMatchesDb = Assert<IsEqual<ActorDocVisibility, ActorVersionDocsVisibility>>;
 type _ResourceScopeMatchesMemoryScopeDb = Assert<
-  IsEqual<(typeof RESOURCE_SCOPES)[number], MemoryEntriesOwnerScope>
+  IsEqual<(typeof MEMORY_SCOPES)[number], MemoryEntriesOwnerScope>
 >;
 type _ContactTargetTypeMatchesDb = Assert<
   IsEqual<(typeof CONTACT_TARGET_TYPES)[number], RelationshipTargetType>

@@ -17,21 +17,19 @@ export function translate(text: Record<string, string> | undefined, locale: stri
 }
 
 export const attachmentTypeLabels: Record<string, string> = {
-  platform: 'Platform',
   workspace: 'Workspace',
   conversation: 'Conversation',
-  actor_global: 'Actor',
+  actor: 'Actor',
   actor_conversation: 'Actor in Conversation',
-  user: 'Personal',
+  workspace_user: 'Workspace User',
 };
 
 export const attachmentTypeColors: Record<string, string> = {
-  platform: 'border-violet-500/30 text-violet-500 dark:text-violet-300',
   workspace: 'border-blue-500/30 text-blue-500 dark:text-blue-300',
   conversation: 'border-orange-500/30 text-orange-500 dark:text-orange-300',
-  actor_global: 'border-green-500/30 text-green-500 dark:text-green-300',
+  actor: 'border-green-500/30 text-green-500 dark:text-green-300',
   actor_conversation: 'border-amber-500/30 text-amber-500 dark:text-amber-300',
-  user: 'border-fuchsia-500/30 text-fuchsia-500 dark:text-fuchsia-300',
+  workspace_user: 'border-fuchsia-500/30 text-fuchsia-500 dark:text-fuchsia-300',
 };
 
 export const transportLabels: Record<string, string> = {
@@ -42,7 +40,9 @@ export const transportLabels: Record<string, string> = {
 };
 
 type PluginInstallationSummaryShape = {
-  attachment_type?: string | null;
+  attachment_target?: {
+    type?: string | null;
+  } | null;
   lifecycle_scope?: string | null;
   is_enabled?: boolean | null;
 };
@@ -50,46 +50,45 @@ type PluginInstallationSummaryShape = {
 const ownershipSummaryByAttachmentType: Record<string, string> = {
   workspace: 'Owned by this workspace',
   conversation: 'Owned by one conversation',
-  actor_global: 'Owned by one actor',
+  actor: 'Owned by one actor',
   actor_conversation: 'Owned by one actor in one conversation',
-  user: 'Owned by you',
-  platform: 'Owned by the platform',
+  workspace_user: 'Owned by one workspace user',
 };
 
 const lifecycleSummaryByScope: Record<string, string> = {
   turn: 'fresh for every run',
-  user: 'reused per user',
+  workspace_user: 'reused per workspace user',
   workspace: 'reused across the workspace',
   conversation: 'reused per conversation',
-  actor_global: 'reused per actor',
+  actor: 'reused per actor',
   actor_conversation: 'reused per actor in each conversation',
-  platform: 'reused platform-wide',
 };
 
 export function getPluginInstallationTitle(installation: PluginInstallationSummaryShape) {
-  const attachmentType = installation.attachment_type;
+  const attachmentType = installation.attachment_target?.type;
   if (attachmentType === 'workspace') {
     return 'Workspace configuration';
   }
   if (attachmentType === 'conversation') {
     return 'Conversation configuration';
   }
-  if (attachmentType === 'actor_global') {
+  if (attachmentType === 'actor') {
     return 'Actor configuration';
   }
   if (attachmentType === 'actor_conversation') {
     return 'Actor + conversation configuration';
   }
-  if (attachmentType === 'user') {
-    return 'Personal configuration';
+  if (attachmentType === 'workspace_user') {
+    return 'Workspace user configuration';
   }
   return `${attachmentTypeLabels[attachmentType || ''] || attachmentType || 'Plugin'} configuration`;
 }
 
 export function getPluginInstallationDetails(installation: PluginInstallationSummaryShape) {
+  const attachmentType = installation.attachment_target?.type || '';
   const ownershipSummary =
-    ownershipSummaryByAttachmentType[installation.attachment_type || ''] ||
-    `Owned by ${attachmentTypeLabels[installation.attachment_type || ''] || installation.attachment_type || 'this scope'}`;
+    ownershipSummaryByAttachmentType[attachmentType] ||
+    `Owned by ${attachmentTypeLabels[attachmentType] || attachmentType || 'this scope'}`;
   const lifecycleSummary =
     lifecycleSummaryByScope[installation.lifecycle_scope || ''] ||
     `reuse: ${installation.lifecycle_scope || 'turn'}`;

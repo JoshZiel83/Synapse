@@ -129,7 +129,7 @@ export const gitlabSeed: BuiltinOrgSeed = {
       },
       authorization: {
         requiredPermissions: ["network:outbound"],
-        defaultGrantScope: "workspace",
+        defaultAccessTargetType: "workspace",
         reason: "GitLab official MCP and GitLab webhook management require outbound network access.",
       },
     },

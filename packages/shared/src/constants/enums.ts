@@ -31,29 +31,33 @@ export const WORKSPACE_ACCESS_KEYS = [
 
 export const CONTACT_TARGET_TYPES = ['user', 'actor'] as const;
 export const CANONICAL_FILE_CATEGORIES = ['image', 'audio', 'video', 'document'] as const;
-export const ATTACHMENT_SCOPES = [
-  'platform',
+export const CONVERSATION_BOUNDARIES = ['internal', 'external'] as const;
+export const ATTACHMENT_TARGET_TYPES = [
   'workspace',
   'conversation',
-  'actor_global',
-  'actor_conversation',
-  'user',
+  'actor',
+  'workspace_user',
 ] as const;
-export const RESOURCE_SCOPES = [
+export const ACCESS_TARGET_TYPES = [
   'workspace',
-  'conversation',
-  'actor_global',
+  'actor',
+  'workspace_user',
+  'conversation_workspace',
   'actor_conversation',
-  'user',
 ] as const;
-export const REUSE_SCOPES = ['turn', ...ATTACHMENT_SCOPES] as const;
-export const MCP_LIFECYCLE_SCOPES = [
+export const CAPABILITY_ACCESS_TARGET_TYPES = [
+  'workspace',
+  'actor',
+  'conversation_workspace',
+  'actor_conversation',
+] as const;
+export const REUSE_SCOPES = [
   'turn',
   'workspace',
   'conversation',
-  'actor_global',
+  'actor',
   'actor_conversation',
-  'user',
+  'workspace_user',
 ] as const;
 export const CONVERSATION_GRANT_PERMISSIONS = [
   'send',

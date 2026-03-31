@@ -803,7 +803,7 @@ export async function listMembers(workspaceId: string) {
       "u.name as user_name",
       "u.email as user_email",
       "u.avatar_file_id",
-      sql<string[]>`COALESCE(access_map.access_keys, '{}'::text[])`.as("access_keys"),
+      sql<string[]>`COALESCE(access_map.access_keys, ARRAY[]::workspace_access_bindings_access_key[])`.as("access_keys"),
     ])
     .where("wm.workspace_id", "=", workspaceId)
     .orderBy("wm.joined_at", "asc")

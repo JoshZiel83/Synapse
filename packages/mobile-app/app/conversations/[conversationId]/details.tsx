@@ -14,7 +14,10 @@ import {
   SectionTitleRow,
 } from "@/components/ui";
 import { api } from "@/lib/api";
-import { conversationDisplayCount } from "@/lib/conversations";
+import {
+  conversationDisplayCount,
+  conversationScopeLabel,
+} from "@/lib/conversations";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
 import type {
@@ -76,9 +79,9 @@ export default function ConversationDetailScreen() {
         <Pressable onPress={() => router.back()} style={styles.headerButton}>
           <Feather name="chevron-left" size={20} color={theme.colors.text} />
         </Pressable>
-          <Text numberOfLines={1} style={styles.headerTitle}>
-          {conversation?.kind === "private" ? "私聊详情" : "群聊详情"}
-          </Text>
+        <Text numberOfLines={1} style={styles.headerTitle}>
+          {conversation ? `${conversationScopeLabel(conversation)}详情` : "会话详情"}
+        </Text>
         <View style={styles.headerSpacer} />
       </View>
 
@@ -115,7 +118,7 @@ export default function ConversationDetailScreen() {
               <View style={styles.heroBody}>
                 <Text style={styles.heroTitle}>{conversation.title}</Text>
                 <Text style={styles.heroSubtitle}>
-                  {`${conversation.kind === "private" ? "私聊" : "群聊"} · ${activeCount} 位成员`}
+                  {`${conversationScopeLabel(conversation)} · ${activeCount} 位成员`}
                 </Text>
               </View>
               <Pill

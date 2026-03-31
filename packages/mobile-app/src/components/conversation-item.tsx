@@ -2,6 +2,7 @@ import Feather from "@expo/vector-icons/Feather";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Avatar } from "@/components/ui";
+import { conversationScopeLabel } from "@/lib/conversations";
 import { theme } from "@/theme/tokens";
 import type { ConversationSummaryView } from "@/types/api";
 
@@ -32,7 +33,7 @@ export function ConversationItem({
     conversation.lastMessage?.content?.trim() || "打开会话继续沟通";
   const messageAt =
     conversation.lastMessage?.createdAt || conversation.createdAt;
-  const metaLabel = conversation.kind === "private" ? "私聊" : "群聊";
+  const metaLabel = conversationScopeLabel(conversation);
 
   return (
     <Pressable

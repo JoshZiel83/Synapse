@@ -119,6 +119,14 @@ definition actor_conversation {
     permission memory_delete = actor->memory_delete & conversation->memory_delete
 }
 
+definition conversation_workspace {
+    relation conversation: conversation
+    relation workspace: workspace
+    relation participant: workspace_user | actor
+
+    permission principal = participant + participant->principal
+}
+
 definition conversation {
     relation participant: workspace_user | actor
     relation moderator: workspace_user | actor
@@ -176,12 +184,13 @@ definition mcp_relay {
     relation workspace: workspace
     relation owner: user | actor
     relation operator: user | actor
-    relation use_principal: user | actor
+    relation use_actor: actor
+    relation use_workspace_user: workspace_user
     relation use_actor_conversation: actor_conversation
-    relation use_conversation: conversation
+    relation use_conversation_workspace: conversation_workspace
     relation use_workspace: workspace
 
-    permission invoke = owner + operator + workspace->manage_relays + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal
+    permission invoke = owner + operator + workspace->manage_relays + use_actor + use_workspace_user->principal + use_actor_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
     permission view = invoke + workspace->manage_relays
     permission edit = owner + operator + workspace->manage_relays
     permission grant = edit
@@ -240,12 +249,13 @@ definition installed_skill {
     relation workspace: workspace
     relation owner: user | actor
     relation editor: user | actor
-    relation use_principal: user | actor
+    relation use_actor: actor
+    relation use_workspace_user: workspace_user
     relation use_actor_conversation: actor_conversation
-    relation use_conversation: conversation
+    relation use_conversation_workspace: conversation_workspace
     relation use_workspace: workspace
 
-    permission use = owner + editor + workspace->manage_skills + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal
+    permission use = owner + editor + workspace->manage_skills + use_actor + use_workspace_user->principal + use_actor_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
     permission view = use
     permission edit = owner + editor + workspace->manage_skills
     permission grant = edit
@@ -256,12 +266,13 @@ definition plugin_installation {
     relation workspace: workspace
     relation owner: user | actor
     relation editor: user | actor
-    relation use_principal: user | actor
+    relation use_actor: actor
+    relation use_workspace_user: workspace_user
     relation use_actor_conversation: actor_conversation
-    relation use_conversation: conversation
+    relation use_conversation_workspace: conversation_workspace
     relation use_workspace: workspace
 
-    permission use = owner + editor + workspace->manage_plugins + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal
+    permission use = owner + editor + workspace->manage_plugins + use_actor + use_workspace_user->principal + use_actor_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
     permission view = use
     permission edit = owner + editor + workspace->manage_plugins
     permission grant = edit
@@ -287,13 +298,14 @@ definition relay_exposure {
     relation device: relay_device
     relation owner: user | actor
     relation operator: user | actor
-    relation use_principal: user | actor
+    relation use_actor: actor
+    relation use_workspace_user: workspace_user
     relation use_actor_conversation: actor_conversation
-    relation use_conversation: conversation
+    relation use_conversation_workspace: conversation_workspace
     relation use_workspace: workspace
 
     permission view = device->view + owner + operator + workspace->manage_relays
-    permission invoke = device->invoke + owner + operator + workspace->manage_relays + use_principal + use_actor_conversation->principal + use_conversation->principal + use_workspace->principal
+    permission invoke = device->invoke + owner + operator + workspace->manage_relays + use_actor + use_workspace_user->principal + use_actor_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
     permission request_authorization = invoke
     permission edit = owner + operator + workspace->manage_relays
     permission grant = edit

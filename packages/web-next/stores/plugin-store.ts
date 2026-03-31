@@ -1,5 +1,6 @@
 'use client';
 import { create } from 'zustand';
+import type { AttachmentTarget, ReuseScope } from '@synapse/shared';
 import { api } from '@/lib/api';
 
 interface PluginState {
@@ -18,11 +19,8 @@ interface PluginState {
     wsId: string,
     data: {
       pluginId: string;
-      attachmentType: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-      actorId?: string;
-      conversationId?: string;
-      userId?: string;
-      lifecycleScope?: 'turn' | 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+      attachmentTarget: AttachmentTarget;
+      lifecycleScope?: ReuseScope;
       configData?: Record<string, unknown>;
       authSessionIds?: Record<string, string>;
     },

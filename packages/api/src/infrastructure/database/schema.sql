@@ -13,8 +13,10 @@ CREATE TYPE workspace_members_trust_level AS ENUM ('admin', 'member', 'guest');
 CREATE TYPE workspace_access_bindings_access_key AS ENUM ('model_admin', 'actor_admin', 'skill_admin', 'plugin_admin', 'memory_admin', 'relay_admin', 'conversation_admin');
 CREATE TYPE workspace_invites_trust_level AS ENUM ('admin', 'member', 'guest');
 CREATE TYPE conversations_kind AS ENUM ('group', 'private', 'virtual');
+CREATE TYPE conversations_boundary AS ENUM ('internal', 'external');
 CREATE TYPE files_category AS ENUM ('general', 'chat_attachment', 'plugin_output', 'plugin_asset');
 CREATE TYPE access_bindings_status AS ENUM ('active', 'revoked');
+CREATE TYPE access_bindings_target_type AS ENUM ('workspace', 'actor', 'workspace_user', 'conversation_workspace', 'actor_conversation');
 CREATE TYPE authz_outbox_operation AS ENUM ('touch', 'delete');
 CREATE TYPE authz_outbox_status AS ENUM ('pending', 'processing', 'applied', 'failed');
 CREATE TYPE realtime_event_outbox_status AS ENUM ('pending', 'processing', 'dispatched', 'failed');
@@ -25,8 +27,8 @@ CREATE TYPE catalog_items_visibility AS ENUM ('public', 'workspace', 'private');
 CREATE TYPE catalog_versions_status AS ENUM ('draft', 'active', 'deprecated', 'archived');
 CREATE TYPE catalog_version_files_file_role AS ENUM ('document', 'reference', 'script', 'image', 'json', 'binary');
 CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 'http', 'relay');
-CREATE TYPE plugin_package_version_specs_default_mount_scope AS ENUM ('workspace', 'conversation', 'actor', 'actor_conversation', 'user');
-CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'workspace', 'conversation', 'actor', 'actor_conversation', 'user');
+CREATE TYPE plugin_package_version_specs_default_mount_scope AS ENUM ('workspace', 'conversation', 'actor', 'workspace_user');
+CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'workspace', 'conversation', 'actor', 'actor_conversation', 'workspace_user');
 CREATE TYPE actors_role AS ENUM ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant');
 CREATE TYPE relationship_target_type AS ENUM ('user', 'actor');
 CREATE TYPE actor_access_policy AS ENUM ('workspace_open', 'approval_required');
@@ -122,7 +124,8 @@ CREATE TYPE session_interrupts_type AS ENUM ('progress_check', 'priority_overrid
 CREATE TYPE runtime_events_source AS ENUM ('conversation', 'provider', 'tool', 'relay', 'a2a', 'system');
 CREATE TYPE runtime_events_level AS ENUM ('debug', 'info', 'warn', 'error');
 CREATE TYPE skill_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'follow_upstream', 'detached');
-CREATE TYPE plugin_installations_reuse_scope AS ENUM ('turn', 'workspace', 'conversation', 'actor', 'actor_conversation', 'user');
+CREATE TYPE plugin_installations_attachment_target_type AS ENUM ('workspace', 'conversation', 'actor', 'workspace_user');
+CREATE TYPE plugin_installations_reuse_scope AS ENUM ('turn', 'workspace', 'conversation', 'actor', 'actor_conversation', 'workspace_user');
 CREATE TYPE plugin_installations_status AS ENUM ('active', 'disabled', 'error', 'archived');
 CREATE TYPE automation_integration_bindings_provider AS ENUM ('github', 'gitlab');
 CREATE TYPE automation_integration_bindings_ingress_kind AS ENUM ('webhook', 'polling');
@@ -282,6 +285,7 @@ CREATE TABLE workspace_invites (
 CREATE TABLE conversations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   kind conversations_kind NOT NULL,
+  boundary conversations_boundary NOT NULL,
   title VARCHAR(500),
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
@@ -290,6 +294,7 @@ CREATE TABLE conversations (
 );
 
 CREATE INDEX idx_conversations_kind ON conversations(kind, created_at DESC);
+CREATE INDEX idx_conversations_boundary ON conversations(boundary, created_at DESC);
 
 -- ============ Audit Logs ============
 CREATE TABLE audit_logs (
@@ -336,16 +341,27 @@ CREATE TABLE access_bindings (
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   resource_type VARCHAR(60) NOT NULL,
   resource_id TEXT NOT NULL,
+  target_type access_bindings_target_type NOT NULL,
   relation VARCHAR(60) NOT NULL,
   subject_type VARCHAR(60) NOT NULL,
   subject_id TEXT NOT NULL,
   subject_relation VARCHAR(60),
+  actor_id UUID,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   status access_bindings_status NOT NULL DEFAULT 'active',
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   reason TEXT,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ
+  revoked_at TIMESTAMPTZ,
+  CONSTRAINT chk_access_bindings_target CHECK (
+    (target_type = 'workspace' AND actor_id IS NULL AND conversation_id IS NULL AND user_id IS NULL) OR
+    (target_type = 'actor' AND actor_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL) OR
+    (target_type = 'workspace_user' AND actor_id IS NULL AND conversation_id IS NULL AND user_id IS NOT NULL) OR
+    (target_type = 'conversation_workspace' AND actor_id IS NULL AND conversation_id IS NOT NULL AND user_id IS NULL) OR
+    (target_type = 'actor_conversation' AND actor_id IS NOT NULL AND conversation_id IS NOT NULL AND user_id IS NULL)
+  )
 );
 
 CREATE UNIQUE INDEX uq_access_bindings_active
@@ -354,6 +370,8 @@ CREATE UNIQUE INDEX uq_access_bindings_active
 CREATE INDEX idx_access_bindings_workspace ON access_bindings(workspace_id, created_at DESC);
 CREATE INDEX idx_access_bindings_resource ON access_bindings(resource_type, resource_id, created_at DESC);
 CREATE INDEX idx_access_bindings_subject ON access_bindings(subject_type, subject_id, created_at DESC);
+CREATE INDEX idx_access_bindings_target_lookup
+  ON access_bindings(target_type, conversation_id, actor_id, user_id, created_at DESC);
 CREATE INDEX idx_access_bindings_primary_resource
   ON access_bindings(resource_type, resource_id, created_at DESC)
   WHERE status = 'active'
@@ -586,6 +604,10 @@ CREATE TABLE actors (
 
 CREATE INDEX idx_actors_workspace ON actors(workspace_id, created_at DESC);
 CREATE INDEX idx_actors_parent ON actors(parent_id);
+
+ALTER TABLE access_bindings
+  ADD CONSTRAINT access_bindings_actor_id_fkey
+  FOREIGN KEY (actor_id) REFERENCES actors(id) ON DELETE CASCADE;
 
 CREATE TABLE workspace_relationship_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2187,6 +2209,10 @@ CREATE TABLE plugin_installations (
   catalog_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE RESTRICT,
   catalog_version_id UUID NOT NULL REFERENCES catalog_versions(id) ON DELETE RESTRICT,
   display_name VARCHAR(255) NOT NULL,
+  attachment_target_type plugin_installations_attachment_target_type NOT NULL,
+  attachment_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  attachment_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  attachment_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   config_data JSONB NOT NULL DEFAULT '{}',
   approved_runtime_permissions TEXT[] DEFAULT '{}',
   reuse_scope plugin_installations_reuse_scope NOT NULL DEFAULT 'conversation',
@@ -2194,7 +2220,13 @@ CREATE TABLE plugin_installations (
   installed_by UUID REFERENCES users(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (
+    (attachment_target_type = 'workspace' AND attachment_actor_id IS NULL AND attachment_conversation_id IS NULL AND attachment_user_id IS NULL) OR
+    (attachment_target_type = 'conversation' AND attachment_conversation_id IS NOT NULL AND attachment_actor_id IS NULL AND attachment_user_id IS NULL) OR
+    (attachment_target_type = 'actor' AND attachment_actor_id IS NOT NULL AND attachment_conversation_id IS NULL AND attachment_user_id IS NULL) OR
+    (attachment_target_type = 'workspace_user' AND attachment_user_id IS NOT NULL AND attachment_actor_id IS NULL AND attachment_conversation_id IS NULL)
+  )
 );
 
 CREATE INDEX idx_plugin_installations_workspace ON plugin_installations(workspace_id, created_at DESC);

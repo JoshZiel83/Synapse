@@ -173,6 +173,7 @@ export async function createSession(params: {
   if (!resolvedConversationId) {
     const conversation = await createConversation({
       kind: 'private',
+      boundary: 'internal',
       metadata: { channelType, trigger },
     });
     resolvedConversationId = conversation.id;

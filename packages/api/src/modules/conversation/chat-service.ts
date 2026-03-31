@@ -18,6 +18,7 @@ import {
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
   touchActorConversationContext,
+  touchConversationWorkspaceContext,
   touchRelation,
 } from "../../infrastructure/authz/index.js";
 import {
@@ -139,6 +140,46 @@ function normalizeConversationRow(row: any) {
     conversation_id: row.id,
     avatar_url:
       row.avatar_url || avatarUrlFromConversationMetadata(row.metadata),
+  };
+}
+
+function inferConversationBoundary(params: {
+  workspaceId?: string;
+  humanParticipants: Array<{ workspaceId: string }>;
+  actorRows: Array<{ workspace_id: string }>;
+  hasExternalParticipants?: boolean;
+}) {
+  const workspaceIds = new Set<string>();
+  for (const participant of params.humanParticipants) {
+    if (participant.workspaceId) {
+      workspaceIds.add(participant.workspaceId);
+    }
+  }
+  for (const actor of params.actorRows) {
+    if (actor.workspace_id) {
+      workspaceIds.add(actor.workspace_id);
+    }
+  }
+
+  if (
+    params.hasExternalParticipants ||
+    workspaceIds.size > 1 ||
+    (workspaceIds.size === 1 &&
+      params.workspaceId &&
+      !workspaceIds.has(params.workspaceId))
+  ) {
+    return {
+      boundary: "external" as const,
+      internalWorkspaceId: null,
+    };
+  }
+
+  return {
+    boundary: "internal" as const,
+    internalWorkspaceId:
+      params.workspaceId ||
+      Array.from(workspaceIds)[0] ||
+      null,
   };
 }
 
@@ -1117,6 +1158,12 @@ export async function createThread(params: {
     const actorMap = new Map<string, any>(
       actorRows.map((row: any) => [row.id, row]),
     );
+    const boundaryInfo = inferConversationBoundary({
+      workspaceId,
+      humanParticipants,
+      actorRows,
+    });
+    const conversationBoundary = boundaryInfo.boundary || "internal";
     const creatorIdentity =
       createdByWorkspaceMemberId
         ? participantWorkspaceMembers.get(createdByWorkspaceMemberId)
@@ -1146,9 +1193,16 @@ export async function createThread(params: {
         .values({
           id: conversationId,
           kind,
+          boundary: conversationBoundary,
           title: fallbackTitle,
           created_by: creatorUserId || null,
-          metadata: {} as TableInsert<"conversations">["metadata"],
+          metadata: {
+            ...(conversationBoundary === "internal" && boundaryInfo.internalWorkspaceId
+              ? {
+                  internalWorkspaceId: boundaryInfo.internalWorkspaceId,
+                }
+              : {}),
+          } as TableInsert<"conversations">["metadata"],
         })
         .returningAll(),
     );
@@ -1286,26 +1340,53 @@ export async function createThread(params: {
             ]
           : []),
         ...humanParticipants.map((participant) =>
-          touchRelation(
-            "conversation",
-            conversationId,
-            "participant",
-            "workspace_user",
-            buildWorkspaceUserContextId(
+          [
+            ...touchConversationWorkspaceContext(
               participant.workspaceId,
-              participant.userId,
+              conversationId,
             ),
+            touchRelation(
+              "conversation_workspace",
+              `${participant.workspaceId}|${conversationId}`,
+              "participant",
+              "workspace_user",
+              buildWorkspaceUserContextId(
+                participant.workspaceId,
+                participant.userId,
+              ),
+            ),
+            touchRelation(
+              "conversation",
+              conversationId,
+              "participant",
+              "workspace_user",
+              buildWorkspaceUserContextId(
+                participant.workspaceId,
+                participant.userId,
+              ),
+            ),
+          ],
+        ).flat(),
+        ...actorRows.flatMap((actor) => [
+          ...touchConversationWorkspaceContext(
+            actor.workspace_id,
+            conversationId,
           ),
-        ),
-        ...actorIds.flatMap((actorId) => [
+          touchRelation(
+            "conversation_workspace",
+            `${actor.workspace_id}|${conversationId}`,
+            "participant",
+            "actor",
+            actor.id,
+          ),
           touchRelation(
             "conversation",
             conversationId,
             "participant",
             "actor",
-            actorId,
+            actor.id,
           ),
-          ...touchActorConversationContext(actorId, conversationId),
+          ...touchActorConversationContext(actor.id, conversationId),
         ]),
       ],
       {
@@ -1832,10 +1913,10 @@ export async function addMembersToConversation(params: {
               "a.name",
               "a.title",
               "a.role",
+              "a.workspace_id",
               "a.avatar_emoji",
               "avatar_file.stored_name as avatar_stored_name",
             ])
-            .where("a.workspace_id", "=", params.workspaceId)
             .where("a.id", "in", actorIds)
             .execute(),
         }
@@ -1873,6 +1954,28 @@ export async function addMembersToConversation(params: {
     userResult.rows.map((row) => [row.workspace_member_id as string, row]),
   );
   const batchId = uuidv4();
+  const conversationMetadata = parseConversationMetadata(conversation.metadata);
+  const internalWorkspaceId =
+    typeof conversationMetadata.internalWorkspaceId === "string"
+      ? conversationMetadata.internalWorkspaceId
+      : params.workspaceId;
+
+  if (conversation.boundary === "internal") {
+    for (const actor of actorResult.rows) {
+      if (actor.workspace_id !== internalWorkspaceId) {
+        throw new Error(
+          "Internal conversations only allow actors from the internal workspace",
+        );
+      }
+    }
+    for (const user of userResult.rows) {
+      if (user.workspace_id !== internalWorkspaceId) {
+        throw new Error(
+          "Internal conversations only allow members from the internal workspace",
+        );
+      }
+    }
+  }
 
   const result = await transaction(async (client) => {
     const relationships = [];
@@ -1912,6 +2015,17 @@ export async function addMembersToConversation(params: {
 
       const actorInfo = actorMap.get(actorId)!;
       relationships.push(
+        ...touchConversationWorkspaceContext(
+          actorInfo.workspace_id,
+          params.conversationId,
+        ),
+        touchRelation(
+          "conversation_workspace",
+          `${actorInfo.workspace_id}|${params.conversationId}`,
+          "participant",
+          "actor",
+          actorId,
+        ),
         touchRelation(
           "conversation",
           params.conversationId,
@@ -1971,6 +2085,20 @@ export async function addMembersToConversation(params: {
         userId: userInfo.user_id,
       });
       relationships.push(
+        ...touchConversationWorkspaceContext(
+          userInfo.workspace_id,
+          params.conversationId,
+        ),
+        touchRelation(
+          "conversation_workspace",
+          `${userInfo.workspace_id}|${params.conversationId}`,
+          "participant",
+          "workspace_user",
+          buildWorkspaceUserContextId(
+            userInfo.workspace_id,
+            userInfo.user_id,
+          ),
+        ),
         touchRelation(
           "conversation",
           params.conversationId,
@@ -2066,6 +2194,11 @@ export async function removeActorFromConversation(
     actorId,
   });
   if (!member) return;
+  const actorWorkspace = await db
+    .selectFrom("actors")
+    .select(["workspace_id"])
+    .where("id", "=", actorId)
+    .executeTakeFirst();
 
   const { authzEntryIds, closedSessionIds } = await transaction(
     async (client) => {
@@ -2099,6 +2232,17 @@ export async function removeActorFromConversation(
         authzEntryIds: await queueAuthzRelationships(
           client,
           [
+            ...(actorWorkspace?.workspace_id
+              ? [
+                  deleteRelation(
+                    "conversation_workspace",
+                    `${actorWorkspace.workspace_id}|${conversationId}`,
+                    "participant",
+                    "actor",
+                    actorId,
+                  ),
+                ]
+              : []),
             deleteRelation(
               "conversation",
               conversationId,

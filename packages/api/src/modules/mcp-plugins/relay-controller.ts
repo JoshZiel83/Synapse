@@ -11,10 +11,10 @@ import type {
   RelayToolView,
 } from '@synapse/shared';
 import {
+  CAPABILITY_ACCESS_TARGET_TYPES,
   RELAY_MANAGEABLE_TRUST_STATUSES,
   RELAY_PAIRING_TTL_MS,
   RELAY_PROTOCOL_VERSION,
-  RESOURCE_SCOPES,
   relayLifecycleEventDefinitions,
 } from '@synapse/shared';
 import { config } from '../../config/index.js';
@@ -55,13 +55,15 @@ const updateRelayTrustSchema = z.object({
   trustStatus: z.enum(RELAY_MANAGEABLE_TRUST_STATUSES),
 });
 
-const attachmentScopeSchema = z.enum(RESOURCE_SCOPES);
-
-const accessGrantSchema = z.object({
-  grantScope: attachmentScopeSchema.optional(),
+const accessTargetTypeSchema = z.enum(CAPABILITY_ACCESS_TARGET_TYPES);
+const accessTargetSchema = z.object({
+  type: accessTargetTypeSchema,
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
-  userId: z.string().uuid().optional(),
+});
+
+const accessGrantSchema = z.object({
+  accessTarget: accessTargetSchema.optional(),
   permissions: z.array(z.string()).optional(),
   reason: z.string().trim().min(1).optional(),
   metadata: z.record(z.unknown()).optional(),
@@ -1407,10 +1409,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const grant = await grantRelayExposureAccess({
         workspaceId,
         exposureId,
-        grantScope: body.grantScope,
-        actorId: body.actorId,
-        conversationId: body.conversationId,
-        userId: body.userId,
+        accessTarget: body.accessTarget,
         reason: body.reason,
         metadata: body.metadata,
         grantedBy: user.id || user.userId,

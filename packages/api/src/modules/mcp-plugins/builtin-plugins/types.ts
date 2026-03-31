@@ -1,7 +1,8 @@
 import type {
-  AccessGrantScope,
+  CapabilityAccessTargetType,
 } from '@synapse/shared/types';
 import type {
+  AttachmentTargetType,
   PluginAuthBindingDefinition,
   PluginConfigFieldDefinition,
   PluginInstallFlow,
@@ -23,7 +24,7 @@ export interface BuiltinPluginSeed {
   defaultLocale?: string;
   transport: string;
   entryPoint: string;
-  defaultInstanceScope: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
+  defaultInstanceScope: AttachmentTargetType;
   defaultReuseScope: ReuseScope;
   requiresHandshake?: boolean;
   tags: string[];
@@ -39,7 +40,7 @@ export interface BuiltinPluginSeed {
   authBindings?: PluginAuthBindingDefinition[];
   authorization?: {
     requiredPermissions?: string[];
-    defaultGrantScope?: AccessGrantScope;
+    defaultAccessTargetType?: CapabilityAccessTargetType;
     reason?: string;
   };
 }

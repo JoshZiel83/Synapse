@@ -42,6 +42,31 @@ export function isGroupConversation(conversation: ConversationSummaryView) {
   return conversation.kind === "group";
 }
 
+export function conversationBoundaryLabel(
+  conversation: Pick<ConversationSummaryView, "boundary">,
+) {
+  return conversation.boundary === "external" ? "外部" : "内部";
+}
+
+export function conversationKindLabel(
+  conversation: Pick<ConversationSummaryView, "kind">,
+) {
+  switch (conversation.kind) {
+    case "private":
+      return "单聊";
+    case "group":
+      return "群聊";
+    default:
+      return "会话";
+  }
+}
+
+export function conversationScopeLabel(
+  conversation: Pick<ConversationSummaryView, "boundary" | "kind">,
+) {
+  return `${conversationBoundaryLabel(conversation)}${conversationKindLabel(conversation)}`;
+}
+
 function findPrivateConversationForActor(
   conversations: ConversationSummaryView[],
   actorId: string,
@@ -79,7 +104,12 @@ export function findPrivateSocialConversationForActor(
   conversations: ConversationSummaryView[],
   actorId: string,
 ) {
-  return findPrivateConversationForActor(conversations, actorId);
+  return conversations.find(
+    (conversation) =>
+      conversation.boundary === "external" &&
+      conversation.kind === "private" &&
+      conversationIncludesActor(conversation, actorId),
+  );
 }
 
 export function findPrivateWorkspaceConversationForUser(
@@ -93,7 +123,12 @@ export function findPrivateSocialConversationForUser(
   conversations: ConversationSummaryView[],
   userId: string,
 ) {
-  return findPrivateConversationForUser(conversations, userId);
+  return conversations.find(
+    (conversation) =>
+      conversation.boundary === "external" &&
+      conversation.kind === "private" &&
+      conversationIncludesUser(conversation, userId),
+  );
 }
 
 export function conversationDisplayCount(

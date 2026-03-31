@@ -114,6 +114,7 @@ function buildConversationPresentation(params: {
       : row.kind === "group"
         ? "group"
         : "virtual";
+  const boundaryLabel = row.boundary === "external" ? "External" : "Internal";
   const canRename = row.kind !== "private" && canManageConversation;
   const canManageConversationMembers = row.kind !== "private" && canManageMembers;
 
@@ -126,8 +127,8 @@ function buildConversationPresentation(params: {
         : row.avatar_url || undefined,
     subtitle:
       row.kind === "private"
-        ? "Direct chat"
-        : "Group chat",
+        ? `${boundaryLabel} direct chat`
+        : `${boundaryLabel} group chat`,
     peer,
     canRename,
     canManageMembers: canManageConversationMembers,
@@ -186,6 +187,7 @@ export async function mapConversationSummaryView(
   return {
     id: row.id,
     kind: row.kind,
+    boundary: row.boundary,
     status: hasOpenLane ? "active" : "completed",
     transportKind: row.transport_kind || undefined,
     participants,

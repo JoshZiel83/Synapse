@@ -1,156 +1,30 @@
 import type pg from "pg";
-import type { AccessGrant, AccessGrantScope } from "@synapse/shared/types";
+import type { CapabilityAccessTarget } from "@synapse/shared/types";
 import {
-  buildActorConversationContextId,
   deleteRelation,
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
-  touchActorConversationContext,
   touchRelation,
   type AuthzRelationMutation,
 } from "../../infrastructure/authz/index.js";
 import { transaction } from "../../infrastructure/database/index.js";
 import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
+import {
+  buildResourceAccessAuthzMutations,
+  mapAccessBindingToGrant,
+  readAccessBindingTarget,
+  resolveAccessGrantTarget,
+  type AccessBindingRow,
+} from "../access/bindings.js";
 import { incrementMcpVersion } from "./instance-manager.js";
 
 type Queryable = Pick<pg.PoolClient, "query">;
 
-type AccessBindingRow = {
-  id: string;
-  workspace_id: string | null;
-  resource_type: string;
-  resource_id: string;
-  relation: string;
-  subject_type: string;
-  subject_id: string;
-  subject_relation: string | null;
-  status: "active" | "revoked";
-  created_by: string | null;
-  reason: string | null;
-  metadata: unknown;
-  created_at: string;
-  revoked_at: string | null;
-};
-
 const RELAY_EXPOSURE_PERMISSION_SUMMARY = {
   requiredPermissions: ["invoke"],
-  suggestedGrantScope: "workspace" as const,
+  suggestedAccessTargetType: "workspace" as const,
   reason: "Relay exposure access controls who can invoke tools from this relay exposure.",
 };
-
-function asObject(value: unknown) {
-  if (!value) return {} as Record<string, unknown>;
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
-  return typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function normalizeGrantTarget(input: {
-  grantScope: Exclude<AccessGrantScope, "platform">;
-  actorId?: string | null;
-  conversationId?: string | null;
-  userId?: string | null;
-}) {
-  switch (input.grantScope) {
-    case "workspace":
-      return {
-        relation: "use_workspace",
-        subjectType: "workspace",
-        subjectId: null,
-        actorId: null,
-        conversationId: null,
-        userId: null,
-      } as const;
-    case "conversation":
-      if (!input.conversationId) {
-        throw new Error("conversationId is required for conversation scope");
-      }
-      return {
-        relation: "use_conversation",
-        subjectType: "conversation",
-        subjectId: input.conversationId,
-        actorId: null,
-        conversationId: input.conversationId,
-        userId: null,
-      } as const;
-    case "actor_global":
-      if (!input.actorId) {
-        throw new Error("actorId is required for actor scope");
-      }
-      return {
-        relation: "use_principal",
-        subjectType: "actor",
-        subjectId: input.actorId,
-        actorId: input.actorId,
-        conversationId: null,
-        userId: null,
-      } as const;
-    case "actor_conversation":
-      if (!input.actorId || !input.conversationId) {
-        throw new Error("actorId and conversationId are required for actor_conversation scope");
-      }
-      return {
-        relation: "use_actor_conversation",
-        subjectType: "actor_conversation",
-        subjectId: buildActorConversationContextId(input.actorId, input.conversationId),
-        actorId: input.actorId,
-        conversationId: input.conversationId,
-        userId: null,
-      } as const;
-    case "user":
-      if (!input.userId) {
-        throw new Error("userId is required for user scope");
-      }
-      return {
-        relation: "use_principal",
-        subjectType: "user",
-        subjectId: input.userId,
-        actorId: null,
-        conversationId: null,
-        userId: input.userId,
-      } as const;
-  }
-}
-
-function inferGrantScope(row: AccessBindingRow): Exclude<AccessGrantScope, "platform"> {
-  if (row.relation === "use_workspace") return "workspace";
-  if (row.relation === "use_conversation") return "conversation";
-  if (row.relation === "use_actor_conversation") return "actor_conversation";
-  if (row.relation === "use_principal" && row.subject_type === "actor") {
-    return "actor_global";
-  }
-  return "user";
-}
-
-function mapAccessBindingToGrant(row: AccessBindingRow): AccessGrant {
-  const metadata = asObject(row.metadata);
-  return {
-    id: row.id,
-    resourceId: row.resource_id,
-    workspaceId: row.workspace_id || "",
-    grantScope: inferGrantScope(row),
-    conversationId:
-      typeof metadata.conversationId === "string" ? metadata.conversationId : undefined,
-    actorId:
-      typeof metadata.actorId === "string" ? metadata.actorId : undefined,
-    userId:
-      typeof metadata.userId === "string" ? metadata.userId : undefined,
-    permissions: ["invoke"],
-    status: row.status,
-    grantedBy: row.created_by || undefined,
-    reason: row.reason || undefined,
-    metadata,
-    createdAt: row.created_at,
-    revokedAt: row.revoked_at || undefined,
-  };
-}
 
 export function buildRelayDeviceAuthzMutations(params: {
   deviceId: string;
@@ -185,43 +59,6 @@ export function buildRelayExposureBaseAuthzMutations(params: {
   ] satisfies AuthzRelationMutation[];
 }
 
-function buildRelayExposureAccessAuthzMutations(params: {
-  exposureId: string;
-  workspaceId: string;
-  relation: string;
-  subjectType: string;
-  subjectId: string;
-  operation: "touch" | "delete";
-  actorId?: string | null;
-  conversationId?: string | null;
-}) {
-  const mutate = params.operation === "delete" ? deleteRelation : touchRelation;
-  const relations: AuthzRelationMutation[] = [];
-
-  if (
-    params.operation === "touch" &&
-    params.subjectType === "actor_conversation" &&
-    params.actorId &&
-    params.conversationId
-  ) {
-    relations.push(
-      ...touchActorConversationContext(params.actorId, params.conversationId),
-    );
-  }
-
-  relations.push(
-    mutate(
-      "relay_exposure",
-      params.exposureId,
-      params.relation,
-      params.subjectType as any,
-      params.subjectId,
-    ),
-  );
-
-  return relations;
-}
-
 async function flushRelayAuthzEntries(entryIds: string[], source: string) {
   if (entryIds.length === 0) return;
   try {
@@ -254,15 +91,19 @@ export async function ensureRelayExposureDefaultAccess(params: {
          workspace_id,
          resource_type,
          resource_id,
+         target_type,
          relation,
          subject_type,
          subject_id,
+         actor_id,
+         conversation_id,
+         user_id,
          status,
          reason,
          metadata
        )
        VALUES (
-         $1, 'relay_exposure', $2, 'use_workspace', 'workspace', $3, 'active', $4, $5::jsonb
+         $1, 'relay_exposure', $2, 'workspace', 'use_workspace', 'workspace', $3, NULL, NULL, NULL, 'active', $4, $5::jsonb
        )
        RETURNING *`,
       [
@@ -272,19 +113,21 @@ export async function ensureRelayExposureDefaultAccess(params: {
         RELAY_EXPOSURE_PERMISSION_SUMMARY.reason,
         JSON.stringify({
           isDefault: true,
-          grantScope: "workspace",
+          accessTargetType: "workspace",
         }),
       ],
     );
 
     return queueAuthzRelationships(
       client,
-      buildRelayExposureAccessAuthzMutations({
-        exposureId: params.exposureId,
+      buildResourceAccessAuthzMutations({
+        resourceType: "relay_exposure",
+        resourceId: params.exposureId,
         workspaceId: params.workspaceId,
-        relation: "use_workspace",
-        subjectType: "workspace",
-        subjectId: params.workspaceId,
+        target: resolveAccessGrantTarget({
+          workspaceId: params.workspaceId,
+          target: { type: "workspace" },
+        }),
         operation: "touch",
       }),
       {
@@ -367,7 +210,7 @@ export async function listRelayExposureAccessState(
     [workspaceId, exposureId],
   );
 
-  const grants = result.rows.map(mapAccessBindingToGrant);
+  const grants = result.rows.map((row) => mapAccessBindingToGrant(row));
   return {
     grants,
     summary: {
@@ -383,24 +226,15 @@ export async function listRelayExposureAccessState(
 export async function grantRelayExposureAccess(input: {
   workspaceId: string;
   exposureId: string;
-  grantScope?: Exclude<AccessGrantScope, "platform">;
-  actorId?: string;
-  conversationId?: string;
-  userId?: string;
+  accessTarget?: CapabilityAccessTarget;
   grantedBy?: string;
   reason?: string;
   metadata?: Record<string, unknown>;
 }) {
-  const grantScope = input.grantScope || "workspace";
-  const target = normalizeGrantTarget({
-    grantScope,
-    actorId: input.actorId,
-    conversationId: input.conversationId,
-    userId: input.userId,
+  const target = resolveAccessGrantTarget({
+    workspaceId: input.workspaceId,
+    target: input.accessTarget || { type: "workspace" },
   });
-  if (!target) {
-    throw new Error(`Unsupported relay exposure grant scope: ${grantScope}`);
-  }
 
   const existing = await executeSql<AccessBindingRow>(
     `SELECT *
@@ -418,7 +252,7 @@ export async function grantRelayExposureAccess(input: {
       input.exposureId,
       target.relation,
       target.subjectType,
-      target.subjectId || input.workspaceId,
+      target.subjectId,
     ],
   );
 
@@ -428,50 +262,52 @@ export async function grantRelayExposureAccess(input: {
 
   const inserted = await transaction(async (client) => {
     const binding = await executeSqlOn<AccessBindingRow>(client, 
-      `INSERT INTO access_bindings (
+        `INSERT INTO access_bindings (
          workspace_id,
          resource_type,
          resource_id,
+         target_type,
          relation,
          subject_type,
          subject_id,
+         actor_id,
+         conversation_id,
+         user_id,
          status,
          created_by,
          reason,
          metadata
        )
        VALUES (
-         $1, 'relay_exposure', $2, $3, $4, $5, 'active', $6, $7, $8::jsonb
+         $1, 'relay_exposure', $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11::jsonb
        )
        RETURNING *`,
       [
         input.workspaceId,
         input.exposureId,
+        target.targetType,
         target.relation,
         target.subjectType,
-        target.subjectId || input.workspaceId,
+        target.subjectId,
+        target.actorId,
+        target.conversationId,
+        target.userId,
         input.grantedBy || null,
         input.reason || RELAY_EXPOSURE_PERMISSION_SUMMARY.reason,
         JSON.stringify({
           ...(input.metadata || {}),
-          grantScope,
-          actorId: target.actorId,
-          conversationId: target.conversationId,
-          userId: target.userId,
+          accessTargetType: target.targetType,
         }),
       ],
     );
 
     const authzEntryIds = await queueAuthzRelationships(
       client,
-      buildRelayExposureAccessAuthzMutations({
-        exposureId: input.exposureId,
+      buildResourceAccessAuthzMutations({
+        resourceType: "relay_exposure",
+        resourceId: input.exposureId,
         workspaceId: input.workspaceId,
-        relation: target.relation,
-        subjectType: target.subjectType,
-        subjectId: target.subjectId || input.workspaceId,
-        actorId: target.actorId,
-        conversationId: target.conversationId,
+        target,
         operation: "touch",
       }),
       {
@@ -518,21 +354,14 @@ export async function revokeRelayExposureAccess(input: {
   }
 
   const binding = result.rows[0]!;
-  const metadata = asObject(binding.metadata);
   const authzEntryIds = await transaction(async (client) => {
     const ids = await queueAuthzRelationships(
       client,
-      buildRelayExposureAccessAuthzMutations({
-        exposureId: input.exposureId,
+      buildResourceAccessAuthzMutations({
+        resourceType: "relay_exposure",
+        resourceId: input.exposureId,
         workspaceId: input.workspaceId,
-        relation: binding.relation,
-        subjectType: binding.subject_type,
-        subjectId: binding.subject_id,
-        actorId: typeof metadata.actorId === "string" ? metadata.actorId : undefined,
-        conversationId:
-          typeof metadata.conversationId === "string"
-            ? metadata.conversationId
-            : undefined,
+        target: readAccessBindingTarget(binding),
         operation: "delete",
       }),
       {
@@ -594,22 +423,15 @@ export async function revokeRelayDeviceAuthzState(input: {
             operation: "delete",
           }),
         ),
-        ...activeBindings.rows.flatMap((binding) => {
-          const metadata = asObject(binding.metadata);
-          return buildRelayExposureAccessAuthzMutations({
-            exposureId: binding.resource_id,
+        ...activeBindings.rows.flatMap((binding) =>
+          buildResourceAccessAuthzMutations({
+            resourceType: "relay_exposure",
+            resourceId: binding.resource_id,
             workspaceId: input.workspaceId,
-            relation: binding.relation,
-            subjectType: binding.subject_type,
-            subjectId: binding.subject_id,
-            actorId: typeof metadata.actorId === "string" ? metadata.actorId : undefined,
-            conversationId:
-              typeof metadata.conversationId === "string"
-                ? metadata.conversationId
-                : undefined,
+            target: readAccessBindingTarget(binding),
             operation: "delete",
-          });
-        }),
+          }),
+        ),
       ],
       {
         source: "relay.device.delete",

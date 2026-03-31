@@ -1,6 +1,6 @@
 import { normalizeActorDocs, textBlocks } from '@synapse/shared';
 import type {
-  AttachmentScope,
+  AttachmentTargetType,
   ActorDefinition,
   ActorPackageDependency,
   ReuseScope,
@@ -20,7 +20,7 @@ interface BuiltinActorPackageSeed {
     targetPackageKind: ActorPackageDependency['targetPackageKind'];
     targetPublisherSlug?: string;
     targetPackageSlug: string;
-    acceptableInstanceScopes?: AttachmentScope[];
+    acceptableInstanceScopes?: AttachmentTargetType[];
     acceptableReuseScopes?: ReuseScope[];
     description: string;
     notes?: ReturnType<typeof textBlocks>;
@@ -111,8 +111,8 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
         targetPackageKind: 'plugin',
         targetPublisherSlug: 'z_ai',
         targetPackageSlug: 'toolkit',
-        acceptableInstanceScopes: ['workspace', 'actor_global'],
-        acceptableReuseScopes: ['workspace', 'actor_global', 'conversation'],
+        acceptableInstanceScopes: ['workspace', 'actor'],
+        acceptableReuseScopes: ['workspace', 'actor', 'conversation'],
         description: 'Mira needs the official ZhipuAI Toolkit for live research and document-reading workflows.',
         notes: textBlocks('Without this plugin, Mira can still reason from existing context, but she cannot reliably gather fresh external evidence or inspect uploaded documents.'),
       },
@@ -207,8 +207,8 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
         targetPackageKind: 'plugin',
         targetPublisherSlug: 'z_ai',
         targetPackageSlug: 'toolkit',
-        acceptableInstanceScopes: ['workspace', 'actor_global'],
-        acceptableReuseScopes: ['workspace', 'actor_global', 'conversation'],
+        acceptableInstanceScopes: ['workspace', 'actor'],
+        acceptableReuseScopes: ['workspace', 'actor', 'conversation'],
         description: 'Recommended if Orian needs to inspect uploaded documents, screenshots, or external references during coordination.',
         notes: textBlocks('This is optional. Orian can still coordinate using existing conversation context and workspace state without the plugin.'),
       },

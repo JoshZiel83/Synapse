@@ -165,7 +165,7 @@ export const feishuSeed: BuiltinOrgSeed = {
       ],
       authorization: {
         requiredPermissions: ["network:outbound"],
-        defaultGrantScope: "workspace",
+        defaultAccessTargetType: "workspace",
         reason: "Feishu integration needs outbound network access to call Feishu OpenAPI endpoints on behalf of the connected account.",
       },
     },

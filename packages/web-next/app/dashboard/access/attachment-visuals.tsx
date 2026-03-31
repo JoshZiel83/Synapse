@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { AttachmentScope, ReuseScope } from '@synapse/shared';
+import type {
+  AccessTargetType,
+  AttachmentTargetType,
+  ReuseScope,
+} from '@synapse/shared';
 import {
   Activity,
   Bot,
@@ -51,8 +55,8 @@ export type AccessVisualUser = {
   name: string;
 };
 
-type ScopeOptionDef = {
-  value: AttachmentScope;
+type ScopeOptionDef<T extends string> = {
+  value: T;
   label: string;
   shortLabel: string;
   hint: string;
@@ -97,7 +101,7 @@ type FakeLifecycleNode = FakeLifecycleCall & {
   instance: { key: string; label: string } | null;
 };
 
-export const attachmentTypeOptionDefs: ScopeOptionDef[] = [
+export const attachmentTypeOptionDefs: ScopeOptionDef<AttachmentTargetType>[] = [
   {
     value: 'workspace',
     label: 'Workspace Owner',
@@ -117,7 +121,7 @@ export const attachmentTypeOptionDefs: ScopeOptionDef[] = [
     ring: 'ring-orange-500/20',
   },
   {
-    value: 'actor_global',
+    value: 'actor',
     label: 'Actor Owner',
     shortLabel: 'Actor',
     hint: 'Belongs to one actor',
@@ -126,35 +130,17 @@ export const attachmentTypeOptionDefs: ScopeOptionDef[] = [
     ring: 'ring-emerald-500/20',
   },
   {
-    value: 'actor_conversation',
-    label: 'Actor + Conversation Owner',
-    shortLabel: 'Actor + Conversation',
-    hint: 'Belongs to one actor in one conversation',
-    icon: Layers3,
-    tone: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200',
-    ring: 'ring-amber-500/20',
-  },
-  {
-    value: 'user',
-    label: 'Personal Owner',
-    shortLabel: 'Personal',
-    hint: 'Belongs to you personally',
+    value: 'workspace_user',
+    label: 'Workspace User Owner',
+    shortLabel: 'Workspace User',
+    hint: 'Belongs to one workspace user',
     icon: UserRound,
     tone: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 dark:border-fuchsia-500/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-200',
     ring: 'ring-fuchsia-500/20',
   },
-  {
-    value: 'platform',
-    label: 'Platform Owner',
-    shortLabel: 'Platform',
-    hint: 'Belongs to the platform',
-    icon: Workflow,
-    tone: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-200',
-    ring: 'ring-violet-500/20',
-  },
 ];
 
-const accessTypeOptionDefs: ScopeOptionDef[] = [
+const accessTypeOptionDefs: ScopeOptionDef<AccessTargetType>[] = [
   {
     value: 'workspace',
     label: 'Workspace Access',
@@ -165,16 +151,16 @@ const accessTypeOptionDefs: ScopeOptionDef[] = [
     ring: 'ring-sky-500/20',
   },
   {
-    value: 'conversation',
-    label: 'Conversation Access',
-    shortLabel: 'Conversation',
-    hint: 'Only one conversation can use this installation',
+    value: 'conversation_workspace',
+    label: 'Conversation Workspace Access',
+    shortLabel: 'Conversation Workspace',
+    hint: 'Only this workspace side of one conversation can use this installation',
     icon: MessageSquareText,
     tone: 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-500/20 dark:bg-orange-500/10 dark:text-orange-200',
     ring: 'ring-orange-500/20',
   },
   {
-    value: 'actor_global',
+    value: 'actor',
     label: 'Actor Access',
     shortLabel: 'Actor',
     hint: 'Only one actor can use this installation',
@@ -192,22 +178,13 @@ const accessTypeOptionDefs: ScopeOptionDef[] = [
     ring: 'ring-amber-500/20',
   },
   {
-    value: 'user',
-    label: 'User Access',
-    shortLabel: 'Personal',
-    hint: 'Only one user can use this installation personally',
+    value: 'workspace_user',
+    label: 'Workspace User Access',
+    shortLabel: 'Workspace User',
+    hint: 'Only one workspace user can use this installation personally',
     icon: UserRound,
     tone: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 dark:border-fuchsia-500/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-200',
     ring: 'ring-fuchsia-500/20',
-  },
-  {
-    value: 'platform',
-    label: 'Platform Access',
-    shortLabel: 'Platform',
-    hint: 'Anyone on the platform can use this installation',
-    icon: Workflow,
-    tone: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-200',
-    ring: 'ring-violet-500/20',
   },
 ];
 
@@ -222,9 +199,9 @@ const reuseOptionDefs: ReuseOptionDef[] = [
     lineClassName: 'stroke-slate-400',
   },
   {
-    value: 'user',
-    label: 'User',
-    hint: 'Reuse across the same user',
+    value: 'workspace_user',
+    label: 'Workspace User',
+    hint: 'Reuse across the same workspace user',
     icon: UserRound,
     tone: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 dark:border-fuchsia-500/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-200',
     ring: 'ring-fuchsia-500/20',
@@ -249,7 +226,7 @@ const reuseOptionDefs: ReuseOptionDef[] = [
     lineClassName: 'stroke-orange-400',
   },
   {
-    value: 'actor_global',
+    value: 'actor',
     label: 'Actor',
     hint: 'One runtime per actor',
     icon: Repeat2,
@@ -266,27 +243,16 @@ const reuseOptionDefs: ReuseOptionDef[] = [
     ring: 'ring-amber-500/20',
     lineClassName: 'stroke-amber-400',
   },
-  {
-    value: 'platform',
-    label: 'Platform',
-    hint: 'One platform-wide runtime',
-    icon: Workflow,
-    tone: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-200',
-    ring: 'ring-violet-500/20',
-    lineClassName: 'stroke-violet-400',
-  },
 ];
 
-const lifecycleOptionMap: Record<AttachmentScope, ReuseScope[]> = {
-  platform: ['platform', 'workspace', 'user', 'conversation', 'actor_global', 'actor_conversation', 'turn'],
-  workspace: ['workspace', 'user', 'conversation', 'actor_global', 'actor_conversation', 'turn'],
+const lifecycleOptionMap: Record<AttachmentTargetType, ReuseScope[]> = {
+  workspace: ['workspace', 'workspace_user', 'conversation', 'actor', 'actor_conversation', 'turn'],
   conversation: ['conversation', 'actor_conversation', 'turn'],
-  actor_global: ['actor_global', 'actor_conversation', 'turn'],
-  actor_conversation: ['actor_conversation', 'turn'],
-  user: ['user', 'workspace', 'conversation', 'actor_global', 'actor_conversation', 'turn'],
+  actor: ['actor', 'turn'],
+  workspace_user: ['workspace_user', 'turn'],
 };
 
-export function getAllowedReuseScopes(attachmentType: AttachmentScope) {
+export function getAllowedReuseScopes(attachmentType: AttachmentTargetType) {
   const allowedScopes = new Set(lifecycleOptionMap[attachmentType] || ['turn']);
   return reuseOptionDefs
     .map((option) => option.value)
@@ -304,7 +270,7 @@ export function getConversationDisplayName(conversation: AccessVisualConversatio
   return 'Untitled conversation';
 }
 
-function getScopeOption(scope: AttachmentScope) {
+function getScopeOption(scope: AttachmentTargetType) {
   return attachmentTypeOptionDefs.find((option) => option.value === scope) || attachmentTypeOptionDefs[0];
 }
 
@@ -474,7 +440,7 @@ function ScopeOptionCard({
   active,
   onClick,
 }: {
-  option: ScopeOptionDef;
+  option: ScopeOptionDef<string>;
   active: boolean;
   onClick: () => void;
 }) {
@@ -727,9 +693,9 @@ export function AccessAttachmentTypeStep({
   onConversationChange,
   error,
 }: {
-  value: AttachmentScope;
-  onChange: (value: AttachmentScope) => void;
-  allowedScopes?: AttachmentScope[];
+  value: AttachmentTargetType;
+  onChange: (value: AttachmentTargetType) => void;
+  allowedScopes?: AttachmentTargetType[];
   actors: AccessVisualActor[];
   conversations: AccessVisualConversation[];
   selectedActorId?: string;
@@ -740,7 +706,6 @@ export function AccessAttachmentTypeStep({
 }) {
   const allowedScopeSet = allowedScopes ? new Set(allowedScopes) : null;
   const availableOptions = attachmentTypeOptionDefs
-    .filter((option) => option.value !== 'platform')
     .filter((option) => !allowedScopeSet || allowedScopeSet.has(option.value));
   const activeScope = availableOptions.find((option) => option.value === value) || availableOptions[0];
   const conversationChoices = pickConversationChoices(conversations);
@@ -757,10 +722,10 @@ export function AccessAttachmentTypeStep({
           description: 'The installation belongs to the workspace and is managed at the workspace level.',
           fields: null,
         };
-      case 'user':
+      case 'workspace_user':
         return {
-          title: 'Personal owner',
-          description: 'The installation belongs to your personal space inside this workspace.',
+          title: 'Workspace user owner',
+          description: 'The installation belongs to one workspace user and is kept personal to that identity.',
           fields: null,
         };
       case 'conversation':
@@ -790,7 +755,7 @@ export function AccessAttachmentTypeStep({
             </Field>
           ),
         };
-      case 'actor_global':
+      case 'actor':
         return {
           title: 'Actor owner',
           description: 'Pick the single actor that should own and manage this installation.',
@@ -817,62 +782,6 @@ export function AccessAttachmentTypeStep({
             </Field>
           ),
         };
-      case 'actor_conversation':
-        return {
-          title: 'Actor + conversation owner',
-          description: 'Pick one actor and one conversation for this installation owner.',
-          fields: (
-            <FieldGroup>
-              <Field>
-                <FieldLabel>Actor</FieldLabel>
-                <Select value={selectedActorId} onValueChange={onActorChange}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select an actor" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {actors.map((actor) => (
-                        <SelectItem key={actor.id} value={actor.id}>
-                          {actor.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <FieldDescription>
-                  Current selection: {selectedActorName}
-                </FieldDescription>
-              </Field>
-
-              <Field>
-                <FieldLabel>Conversation</FieldLabel>
-                <Select value={selectedConversationId} onValueChange={onConversationChange}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select a conversation" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {conversationChoices.map((conversation) => (
-                        <SelectItem key={conversation.id} value={conversation.id}>
-                          {conversation.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <FieldDescription>
-                  Current selection: {selectedConversationName}
-                </FieldDescription>
-              </Field>
-
-              <Field>
-                <FieldDescription>
-                  One installation can only belong to one actor + one conversation pair. If you need more pairs, create more installations.
-                </FieldDescription>
-              </Field>
-            </FieldGroup>
-          ),
-        };
       default:
         return {
           title: 'Owner',
@@ -887,7 +796,7 @@ export function AccessAttachmentTypeStep({
       <div className="grid gap-6 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
         <RadioGroup
           value={value}
-          onValueChange={(nextValue) => onChange(nextValue as AttachmentScope)}
+          onValueChange={(nextValue) => onChange(nextValue as AttachmentTargetType)}
           className="w-full"
         >
           {availableOptions.map((option) => (
@@ -944,9 +853,9 @@ export function AccessGrantScopeStep({
   currentUserLabel,
   error,
 }: {
-  value: AttachmentScope;
-  onChange: (value: AttachmentScope) => void;
-  allowedScopes?: AttachmentScope[];
+  value: AccessTargetType;
+  onChange: (value: AccessTargetType) => void;
+  allowedScopes?: AccessTargetType[];
   actors: AccessVisualActor[];
   conversations: AccessVisualConversation[];
   users: AccessVisualUser[];
@@ -969,15 +878,14 @@ export function AccessGrantScopeStep({
 
   const isConversationActive = (conversation: FakeConversationPreview, index: number) => {
     switch (value) {
-      case 'platform':
       case 'workspace':
         return true;
-      case 'conversation':
+      case 'conversation_workspace':
       case 'actor_conversation':
         return index === 0;
-      case 'actor_global':
+      case 'actor':
         return true;
-      case 'user':
+      case 'workspace_user':
         return conversation.includesCurrentUser && conversation.singleRealUser;
       default:
         return false;
@@ -986,16 +894,15 @@ export function AccessGrantScopeStep({
 
   const isActorActive = (conversation: FakeConversationPreview, actorName: string, index: number) => {
     switch (value) {
-      case 'platform':
       case 'workspace':
         return true;
-      case 'conversation':
+      case 'conversation_workspace':
         return index === 0;
-      case 'actor_global':
+      case 'actor':
         return actorName === selectedActorName;
       case 'actor_conversation':
         return index === 0 && actorName === selectedActorName;
-      case 'user':
+      case 'workspace_user':
         return conversation.includesCurrentUser && conversation.singleRealUser;
       default:
         return false;
@@ -1017,7 +924,7 @@ export function AccessGrantScopeStep({
           ))}
       </div>
 
-      {(value === 'actor_global' || value === 'actor_conversation') && (
+      {(value === 'actor' || value === 'actor_conversation') && (
         <div className="space-y-2">
           <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Authorized actor</Label>
           <div className="flex flex-wrap gap-2">
@@ -1038,7 +945,7 @@ export function AccessGrantScopeStep({
         </div>
       )}
 
-      {(value === 'conversation' || value === 'actor_conversation') && (
+      {(value === 'conversation_workspace' || value === 'actor_conversation') && (
         <div className="space-y-2">
           <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Authorized conversation</Label>
           <div className="flex flex-wrap gap-2">
@@ -1059,7 +966,7 @@ export function AccessGrantScopeStep({
         </div>
       )}
 
-      {value === 'user' && (
+      {value === 'workspace_user' && (
         <div className="space-y-2">
           <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Authorized user</Label>
           <div className="flex flex-wrap gap-2">
@@ -1127,7 +1034,7 @@ export function AccessReuseScopeStep({
   selectedActorId,
   allowedReuseScopes,
 }: {
-  attachmentType: AttachmentScope;
+  attachmentType: AttachmentTargetType;
   value: ReuseScope;
   onChange: (value: ReuseScope) => void;
   actors: AccessVisualActor[];
@@ -1146,19 +1053,17 @@ export function AccessReuseScopeStep({
 
   const instanceForCall = (call: FakeLifecycleCall) => {
     switch (value) {
-      case 'platform':
-        return { key: 'platform', label: 'Platform runtime' };
       case 'workspace':
         return { key: 'workspace', label: 'Workspace runtime' };
       case 'conversation':
         return { key: `conversation:${call.conversationName}`, label: `${call.conversationName}` };
-      case 'actor_global':
+      case 'actor':
         return { key: `actor:${call.actorName}`, label: `${call.actorName}` };
       case 'actor_conversation':
         return { key: `${call.conversationName}:${call.actorName}`, label: `${call.actorName} @ ${call.conversationName}` };
-      case 'user':
+      case 'workspace_user':
         return call.includesCurrentUser && call.singleRealUser
-          ? { key: 'user', label: 'User runtime' }
+          ? { key: 'workspace-user', label: 'Workspace user runtime' }
           : { key: `conversation:${call.conversationName}`, label: `${call.conversationName}` };
       case 'turn':
       default:
@@ -1168,16 +1073,13 @@ export function AccessReuseScopeStep({
 
   const isCallAvailable = (call: FakeLifecycleCall) => {
     switch (attachmentType) {
-      case 'platform':
       case 'workspace':
         return true;
       case 'conversation':
         return call.conversationId === primaryConversationId;
-      case 'actor_global':
+      case 'actor':
         return call.actorName === primaryActorName;
-      case 'actor_conversation':
-        return call.conversationId === primaryConversationId && call.actorName === primaryActorName;
-      case 'user':
+      case 'workspace_user':
         return call.includesCurrentUser && call.singleRealUser;
       default:
         return false;

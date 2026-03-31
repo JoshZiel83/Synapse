@@ -7,6 +7,8 @@ import type { ColumnType } from "kysely";
 
 export type AccessBindingsStatus = "active" | "revoked";
 
+export type AccessBindingsTargetType = "actor" | "actor_conversation" | "conversation_workspace" | "workspace" | "workspace_user";
+
 export type ActorAccessPolicy = "approval_required" | "workspace_open";
 
 export type ActorSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
@@ -123,6 +125,8 @@ export type ConversationMembersRole = "admin" | "member" | "owner";
 
 export type ConversationMembersState = "active" | "kicked" | "left";
 
+export type ConversationsBoundary = "external" | "internal";
+
 export type ConversationsKind = "group" | "private" | "virtual";
 
 export type ConversationTransportBindingsInboundActorMode = "inherit_account" | "none" | "specified_actor";
@@ -189,13 +193,15 @@ export type PluginConnectionsOwnerScope = "installation" | "user" | "workspace";
 
 export type PluginConnectionsStatus = "active" | "expired" | "revoked";
 
-export type PluginInstallationsReuseScope = "actor" | "actor_conversation" | "conversation" | "turn" | "user" | "workspace";
+export type PluginInstallationsAttachmentTargetType = "actor" | "conversation" | "workspace" | "workspace_user";
+
+export type PluginInstallationsReuseScope = "actor" | "actor_conversation" | "conversation" | "turn" | "workspace" | "workspace_user";
 
 export type PluginInstallationsStatus = "active" | "archived" | "disabled" | "error";
 
-export type PluginPackageVersionSpecsDefaultMountScope = "actor" | "actor_conversation" | "conversation" | "user" | "workspace";
+export type PluginPackageVersionSpecsDefaultMountScope = "actor" | "conversation" | "workspace" | "workspace_user";
 
-export type PluginPackageVersionSpecsDefaultReuseScope = "actor" | "actor_conversation" | "conversation" | "turn" | "user" | "workspace";
+export type PluginPackageVersionSpecsDefaultReuseScope = "actor" | "actor_conversation" | "conversation" | "turn" | "workspace" | "workspace_user";
 
 export type PluginPackageVersionSpecsTransport = "builtin" | "http" | "relay" | "stdio";
 
@@ -316,6 +322,8 @@ export type WorkspaceInvitesTrustLevel = "admin" | "guest" | "member";
 export type WorkspaceMembersTrustLevel = "admin" | "guest" | "member";
 
 export interface AccessBindings {
+  actor_id: string | null;
+  conversation_id: string | null;
   created_at: Generated<Timestamp | null>;
   created_by: string | null;
   id: Generated<string>;
@@ -329,6 +337,8 @@ export interface AccessBindings {
   subject_id: string;
   subject_relation: string | null;
   subject_type: string;
+  target_type: AccessBindingsTargetType;
+  user_id: string | null;
   workspace_id: string | null;
 }
 
@@ -912,6 +922,7 @@ export interface ConversationParticipantAddresses {
 }
 
 export interface Conversations {
+  boundary: ConversationsBoundary;
   created_at: Generated<Timestamp | null>;
   created_by: string | null;
   id: Generated<string>;
@@ -1261,6 +1272,10 @@ export interface PluginConnections {
 
 export interface PluginInstallations {
   approved_runtime_permissions: Generated<string[] | null>;
+  attachment_actor_id: string | null;
+  attachment_conversation_id: string | null;
+  attachment_target_type: PluginInstallationsAttachmentTargetType;
+  attachment_user_id: string | null;
   catalog_item_id: string;
   catalog_version_id: string;
   config_data: Generated<Json>;

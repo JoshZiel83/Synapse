@@ -35,9 +35,9 @@ const transportLabels: Record<string, string> = {
 const attachmentTypeLabels: Record<string, string> = {
   workspace: 'Workspace',
   conversation: 'Conversation',
-  actor_global: 'Actor',
+  actor: 'Actor',
   actor_conversation: 'Actor in Conversation',
-  user: 'Personal',
+  workspace_user: 'Workspace User',
 };
 
 export default function PluginDetailDialog({ plugin, installedCount, onInstall, onClose }: Props) {

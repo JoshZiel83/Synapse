@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { RESOURCE_SCOPES } from '@synapse/shared/constants';
+import { CAPABILITY_ACCESS_TARGET_TYPES } from '@synapse/shared/constants';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import { AUTHZ_PLATFORM_ID } from '../../infrastructure/authz/index.js';
@@ -22,7 +22,12 @@ import {
   upgradeInstalledSkill,
 } from './service.js';
 
-const useScopeSchema = z.enum(RESOURCE_SCOPES);
+const accessTargetTypeSchema = z.enum(CAPABILITY_ACCESS_TARGET_TYPES);
+const accessTargetSchema = z.object({
+  type: accessTargetTypeSchema,
+  actorId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+});
 
 const skillAttachmentSchema = z.object({
   path: z.string().min(1),
@@ -49,18 +54,12 @@ const createWorkspaceSkillSchema = z.object({
   iconFileId: z.string().uuid().optional(),
   tags: z.array(z.string()).optional(),
   attachmentFiles: z.array(skillAttachmentSchema).optional(),
-  grantScope: useScopeSchema,
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  userId: z.string().uuid().optional(),
+  accessTarget: accessTargetSchema,
 });
 
 const installSkillSchema = z.object({
   marketSkillId: z.string().uuid(),
-  grantScope: useScopeSchema,
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  userId: z.string().uuid().optional(),
+  accessTarget: accessTargetSchema,
 });
 
 const updateInstalledSkillSchema = z.object({
@@ -73,13 +72,17 @@ const updateInstalledSkillSchema = z.object({
 });
 
 const skillAccessGrantSchema = z.object({
-  grantScope: useScopeSchema.optional(),
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  userId: z.string().uuid().optional(),
+  accessTarget: accessTargetSchema.optional(),
   permissions: z.array(z.string()).optional(),
   reason: z.string().trim().min(1).optional(),
   metadata: z.record(z.unknown()).optional(),
+});
+
+const listInstalledSkillsQuerySchema = z.object({
+  accessTargetType: accessTargetTypeSchema.optional(),
+  actorId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  sourceSkillId: z.string().uuid().optional(),
 });
 
 function handleError(reply: FastifyReply, error: unknown) {
@@ -198,19 +201,19 @@ export function registerSkillRoutes(app: FastifyInstance) {
       );
       if (!allowed) return;
 
-      const { useScope, actorId, conversationId, userId, sourceSkillId } = request.query as {
-        useScope?: 'workspace' | 'conversation' | 'actor_global' | 'actor_conversation' | 'user';
-        actorId?: string;
-        conversationId?: string;
-        userId?: string;
-        sourceSkillId?: string;
-      };
-
-      const skills = await listInstalledSkills(workspaceId, {
-        useScope,
+      const {
+        accessTargetType,
         actorId,
         conversationId,
-        userId,
+        sourceSkillId,
+      } = listInstalledSkillsQuerySchema.parse(
+        request.query || {},
+      ) as z.infer<typeof listInstalledSkillsQuerySchema>;
+
+      const skills = await listInstalledSkills(workspaceId, {
+        accessTargetType,
+        actorId,
+        conversationId,
         sourceSkillId,
       });
       return reply.status(200).send({ skills });
@@ -236,10 +239,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
       const skill = await installMarketplaceSkill({
         workspaceId,
         marketSkillId: body.marketSkillId,
-        useScope: body.grantScope,
-        actorId: body.actorId,
-        conversationId: body.conversationId,
-        userId: body.userId,
+        accessTarget: body.accessTarget,
         installedBy: user?.id || user?.userId,
       });
       return reply.status(201).send({ skill });
@@ -269,10 +269,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
         iconFileId: body.iconFileId,
         tags: body.tags,
         attachmentFiles: body.attachmentFiles,
-        useScope: body.grantScope,
-        actorId: body.actorId,
-        conversationId: body.conversationId,
-        userId: body.userId,
+        accessTarget: body.accessTarget,
         installedBy: user?.id || user?.userId,
       });
       return reply.status(201).send({ skill });
@@ -401,10 +398,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
       const grant = await grantInstalledSkillAccess({
         workspaceId,
         installedSkillId,
-        grantScope: body.grantScope,
-        actorId: body.actorId,
-        conversationId: body.conversationId,
-        userId: body.userId,
+        accessTarget: body.accessTarget,
         permissions: body.permissions,
         reason: body.reason,
         metadata: body.metadata,
