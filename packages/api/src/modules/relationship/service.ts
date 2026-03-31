@@ -26,6 +26,7 @@ import {
   createThread,
   getThreadsForUser,
 } from "../conversation/chat-service.js";
+import { getWorkspaceMemberIdentity } from "../conversation/workspace-identity.js";
 import {
   canonicalizeDirectConversationPair,
   directConversationBindingPeer,
@@ -68,6 +69,7 @@ type WorkspaceSummary = {
 
 type UserWorkspaceSummary = {
   workspace: WorkspaceSummary;
+  workspaceMemberId: string;
   userId: string;
   name: string;
   email: string;
@@ -95,6 +97,7 @@ type ContactHubEntry = {
   avatarUrl?: string;
   avatarEmoji?: string;
   workspace: WorkspaceSummary;
+  workspaceMemberId?: string;
   userId?: string;
   actorId?: string;
   relationLabel: string;
@@ -181,6 +184,7 @@ async function getWorkspaceUserSummary(
     .innerJoin("users as u", "u.id", "wm.user_id")
     .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
     .select([
+      "wm.id as workspace_member_id",
       "wm.workspace_id",
       "w.name as workspace_name",
       "w.slug as workspace_slug",
@@ -196,6 +200,7 @@ async function getWorkspaceUserSummary(
   if (!row) return null;
   return {
     workspace: workspaceSummary(row),
+    workspaceMemberId: row.workspace_member_id,
     userId: row.user_id,
     trustLevel: row.trust_level,
     name: row.name,
@@ -264,6 +269,7 @@ function mapUserFriendEntry(params: {
       ? getFileUrlById(params.peer.avatarFileId)
       : undefined,
     workspace: params.peer.workspace,
+    workspaceMemberId: params.peer.workspaceMemberId,
     userId: params.peer.userId,
     relationLabel: "Friend",
     directState: params.conversationId
@@ -310,6 +316,7 @@ function mapWorkspaceUserEntry(params: {
       ? getFileUrlById(params.user.avatarFileId)
       : undefined,
     workspace: params.user.workspace,
+    workspaceMemberId: params.user.workspaceMemberId,
     userId: params.user.userId,
     relationLabel: "Workspace user",
     directState: params.conversationId
@@ -671,10 +678,7 @@ async function createActorAccessRequest(params: {
   }
 }
 
-async function loadViewerDirectConversationMap(
-  workspaceId: string,
-  userId: string,
-) {
+async function loadViewerDirectConversationMap(workspaceMemberId: string) {
   const rows = await db
     .selectFrom("direct_conversation_bindings")
     .selectAll()
@@ -682,13 +686,11 @@ async function loadViewerDirectConversationMap(
       eb.or([
         eb.and([
           eb("participant_one_kind", "=", "user"),
-          eb("participant_one_workspace_id", "=", workspaceId),
-          eb("participant_one_user_id", "=", userId),
+          eb("participant_one_workspace_member_id", "=", workspaceMemberId),
         ]),
         eb.and([
           eb("participant_two_kind", "=", "user"),
-          eb("participant_two_workspace_id", "=", workspaceId),
-          eb("participant_two_user_id", "=", userId),
+          eb("participant_two_workspace_member_id", "=", workspaceMemberId),
         ]),
       ]),
     )
@@ -696,8 +698,7 @@ async function loadViewerDirectConversationMap(
 
   const viewerIdentity: DirectConversationIdentity = {
     kind: "user",
-    workspaceId,
-    userId,
+    workspaceMemberId,
   };
   const map = new Map<string, string>();
   for (const row of rows) {
@@ -722,19 +723,17 @@ async function findDirectConversationId(
     .select(["conversation_id"])
     .where("participant_one_kind", "=", values.participant_one_kind)
     .where(
-      "participant_one_workspace_id",
+      "participant_one_workspace_member_id",
       "=",
-      values.participant_one_workspace_id,
+      values.participant_one_workspace_member_id,
     )
-    .where("participant_one_user_id", "=", values.participant_one_user_id)
     .where("participant_one_actor_id", "=", values.participant_one_actor_id)
     .where("participant_two_kind", "=", values.participant_two_kind)
     .where(
-      "participant_two_workspace_id",
+      "participant_two_workspace_member_id",
       "=",
-      values.participant_two_workspace_id,
+      values.participant_two_workspace_member_id,
     )
-    .where("participant_two_user_id", "=", values.participant_two_user_id)
     .where("participant_two_actor_id", "=", values.participant_two_actor_id)
     .executeTakeFirst();
   return row?.conversation_id || null;
@@ -778,12 +777,10 @@ async function resolveContactReference(params: {
     }
     return {
       kind: params.contactKind,
-      domain: "workspace" as const,
       user,
       peerIdentity: {
         kind: "user" as const,
-        workspaceId: params.workspaceId,
-        userId: user.userId,
+        workspaceMemberId: user.workspaceMemberId,
       },
     };
   }
@@ -795,7 +792,6 @@ async function resolveContactReference(params: {
     }
     return {
       kind: params.contactKind,
-      domain: "workspace" as const,
       actor,
       peerIdentity: {
         kind: "actor" as const,
@@ -828,13 +824,11 @@ async function resolveContactReference(params: {
     }
     return {
       kind: params.contactKind,
-      domain: "social" as const,
       friendEntry,
       user,
       peerIdentity: {
         kind: "user" as const,
-        workspaceId: friendEntry.peer_workspace_id,
-        userId: friendEntry.peer_user_id,
+        workspaceMemberId: user.workspaceMemberId,
       },
     };
   }
@@ -848,7 +842,6 @@ async function resolveContactReference(params: {
   }
   return {
     kind: params.contactKind,
-    domain: "social" as const,
     friendEntry,
     actor,
     peerIdentity: {
@@ -862,10 +855,15 @@ async function buildContactHubEntryMap(params: {
   workspaceId: string;
   userId: string;
 }) {
-  const directConversationMap = await loadViewerDirectConversationMap(
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId,
   );
+  const directConversationMap = viewerWorkspaceMember
+    ? await loadViewerDirectConversationMap(
+        viewerWorkspaceMember.workspaceMemberId,
+      )
+    : new Map<string, string>();
   const [members, actors, friendEntries, pendingActorAccessRows] =
     await Promise.all([
       db
@@ -873,6 +871,7 @@ async function buildContactHubEntryMap(params: {
         .innerJoin("users as u", "u.id", "wm.user_id")
         .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
         .select([
+          "wm.id as workspace_member_id",
           "wm.workspace_id",
           "w.name as workspace_name",
           "w.slug as workspace_slug",
@@ -930,6 +929,7 @@ async function buildContactHubEntryMap(params: {
     mapWorkspaceUserEntry({
       user: {
         workspace: workspaceSummary(row),
+        workspaceMemberId: row.workspace_member_id,
         userId: row.user_id,
         trustLevel: row.trust_level,
         name: row.name,
@@ -939,8 +939,7 @@ async function buildContactHubEntryMap(params: {
       conversationId: directConversationMap.get(
         directConversationIdentityKey({
           kind: "user",
-          workspaceId: params.workspaceId,
-          userId: row.user_id,
+          workspaceMemberId: row.workspace_member_id,
         }),
       ),
     }),
@@ -995,8 +994,7 @@ async function buildContactHubEntryMap(params: {
           conversationId: directConversationMap.get(
             directConversationIdentityKey({
               kind: "user",
-              workspaceId: entry.peer_workspace_id,
-              userId: entry.peer_user_id,
+              workspaceMemberId: peer.workspaceMemberId,
             }),
           ),
         }),
@@ -1238,6 +1236,7 @@ export async function searchUsersByFriendId(params: {
     .innerJoin("users as u", "u.id", "wm.user_id")
     .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
     .select([
+      "wm.id as workspace_member_id",
       "wm.workspace_id",
       "w.name as workspace_name",
       "w.slug as workspace_slug",
@@ -1261,15 +1260,21 @@ export async function searchUsersByFriendId(params: {
     };
   }
 
-  const directConversationMap = await loadViewerDirectConversationMap(
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId,
   );
+  const directConversationMap = viewerWorkspaceMember
+    ? await loadViewerDirectConversationMap(
+        viewerWorkspaceMember.workspaceMemberId,
+      )
+    : new Map<string, string>();
   const matches = [];
 
   for (const row of memberships) {
     const peer: UserWorkspaceSummary = {
       workspace: workspaceSummary(row),
+      workspaceMemberId: row.workspace_member_id,
       userId: row.user_id,
       trustLevel: row.trust_level,
       name: row.name,
@@ -1285,8 +1290,7 @@ export async function searchUsersByFriendId(params: {
     const conversationId = directConversationMap.get(
       directConversationIdentityKey({
         kind: "user",
-        workspaceId: row.workspace_id,
-        userId: row.user_id,
+        workspaceMemberId: row.workspace_member_id,
       }),
     );
 
@@ -1928,6 +1932,10 @@ export async function getContactHub(params: {
   workspaceId: string;
   userId: string;
 }) {
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
   const [{ incoming: friendIncoming }, { incoming: actorIncoming }, entries] =
     await Promise.all([
       listFriendRequests(params),
@@ -1941,7 +1949,12 @@ export async function getContactHub(params: {
   const groups = await Promise.all(
     threads
       .filter((thread) => thread.kind === "group")
-      .map((thread) => mapConversationSummaryView(thread, params.userId)),
+      .map((thread) =>
+        mapConversationSummaryView(thread, {
+          userId: params.userId,
+          workspaceMemberId: viewerWorkspaceMember?.workspaceMemberId,
+        }),
+      ),
   );
 
   return {
@@ -2005,10 +2018,16 @@ export async function openDirectConversation(params: {
   contactId: string;
 }) {
   const resolved = await resolveContactReference(params);
+  const requesterWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!requesterWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
   const requesterIdentity: DirectConversationIdentity = {
     kind: "user",
-    workspaceId: params.workspaceId,
-    userId: params.userId,
+    workspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
   };
 
   if (resolved.kind === "workspace-actor" && resolved.actor) {
@@ -2059,15 +2078,19 @@ export async function openDirectConversation(params: {
   }
 
   try {
+    const targetWorkspaceMemberId =
+      resolved.peerIdentity.kind === "user" ? resolved.user?.workspaceMemberId : undefined;
+    if (resolved.peerIdentity.kind === "user" && !targetWorkspaceMemberId) {
+      throw new Error("Peer workspace membership not found");
+    }
     const created = await createThread({
-      workspaceId:
-        resolved.domain === "workspace" ? params.workspaceId : undefined,
-      domain: resolved.domain,
+      workspaceId: params.workspaceId,
       kind: "private",
-      createdBy: params.userId,
+      createdByUserId: params.userId,
+      createdByWorkspaceMemberId: requesterIdentity.workspaceMemberId,
       actorIds: resolved.peerIdentity.kind === "actor" ? [resolved.peerIdentity.actorId] : [],
-      userIds:
-        resolved.peerIdentity.kind === "user" ? [resolved.peerIdentity.userId] : [],
+      workspaceMemberIds:
+        targetWorkspaceMemberId ? [targetWorkspaceMemberId] : [],
       directBindingPair: canonicalizeDirectConversationPair(
         requesterIdentity,
         resolved.peerIdentity,

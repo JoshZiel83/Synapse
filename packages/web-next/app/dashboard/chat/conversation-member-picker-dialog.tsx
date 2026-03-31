@@ -35,7 +35,7 @@ function normalizeActorOption(actor: any): PickerOption {
 function normalizeUserOption(member: any): PickerOption {
   return {
     type: 'user',
-    id: member.userId || member.id,
+    id: member.id,
     name: member.userName || member.userEmail || 'Unknown user',
     subtitle: member.userEmail || undefined,
     avatarUrl: member.avatarUrl || undefined,
@@ -83,7 +83,11 @@ export default function ConversationMemberPickerDialog({
       const actorOptions = (actorsRes?.actors || actorsRes || []).map(normalizeActorOption);
       const userOptions = (membersRes?.data || membersRes || []).map(normalizeUserOption);
       const existingActorIds = new Set(existingMembers.filter((member) => member.type === 'actor').map((member) => member.id));
-      const existingUserIds = new Set(existingMembers.filter((member) => member.type === 'user').map((member) => member.id));
+      const existingUserIds = new Set(
+        existingMembers
+          .filter((member) => member.type === 'user')
+          .map((member) => member.workspaceMemberId || member.id),
+      );
 
       setOptions([
         ...actorOptions.filter((option: PickerOption) => !existingActorIds.has(option.id)),
@@ -128,17 +132,17 @@ export default function ConversationMemberPickerDialog({
     setSubmitting(true);
     try {
       const actorIds: string[] = [];
-      const userIds: string[] = [];
+      const workspaceMemberIds: string[] = [];
 
       for (const key of selectedKeys) {
         const [type, id] = key.split(':');
         if (type === 'actor') actorIds.push(id);
-        if (type === 'user') userIds.push(id);
+        if (type === 'user') workspaceMemberIds.push(id);
       }
 
-      await api.addThreadMembers(conversationId, {
+      await api.addThreadMembers(workspaceId, conversationId, {
         actorIds,
-        userIds,
+        workspaceMemberIds,
       });
       await onAdded();
       onOpenChange(false);

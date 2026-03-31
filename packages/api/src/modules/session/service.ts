@@ -1,5 +1,6 @@
 import {
   authzEnabled,
+  buildWorkspaceUserContextId,
   enqueueAuthzRelationships,
   flushAuthzOutboxEntries,
   touchActorConversationContext,
@@ -19,6 +20,7 @@ import {
   ensureConversationMember,
   getConversation,
 } from '../conversation/service.js';
+import { getWorkspaceMemberIdentity } from '../conversation/workspace-identity.js';
 import {
   buildNormalizedMessageContent,
   itemPartsToCanonicalContentBlocks,
@@ -81,6 +83,8 @@ async function loadSession(sessionId: UUID): Promise<any | null> {
 
 async function resolveSessionMessageAuthor(params: {
   conversationId: string;
+  workspaceId?: UUID;
+  workspaceMemberId?: UUID;
   fromActorId?: UUID;
   fromUserId?: UUID;
 }) {
@@ -98,6 +102,8 @@ async function resolveSessionMessageAuthor(params: {
     return ensureConversationMember({
       conversationId: params.conversationId,
       memberType: 'user',
+      workspaceId: params.workspaceId,
+      workspaceMemberId: params.workspaceMemberId,
       userId: params.fromUserId,
     });
   }
@@ -166,8 +172,6 @@ export async function createSession(params: {
   let privateConversationCreated = false;
   if (!resolvedConversationId) {
     const conversation = await createConversation({
-      workspaceId,
-      domain: 'workspace',
       kind: 'private',
       metadata: { channelType, trigger },
     });
@@ -189,9 +193,15 @@ export async function createSession(params: {
   });
 
   if (privateConversationCreated && resolvedUserId) {
+    const workspaceMember = await getWorkspaceMemberIdentity(workspaceId, resolvedUserId);
+    if (!workspaceMember) {
+      throw new Error(`Workspace member not found for user ${resolvedUserId}`);
+    }
     await ensureConversationMember({
       conversationId: finalConversationId,
       memberType: 'user',
+      workspaceId,
+      workspaceMemberId: workspaceMember.workspaceMemberId,
       userId: resolvedUserId,
     });
   }
@@ -218,13 +228,24 @@ export async function createSession(params: {
   if (privateConversationCreated) {
     const authzEntryIds = await enqueueAuthzRelationships(
       [
-        touchRelation('conversation', finalConversationId, 'workspace', 'workspace', workspaceId),
         touchRelation('conversation', finalConversationId, 'participant', 'actor', actorId),
         ...touchActorConversationContext(actorId, finalConversationId),
         ...(resolvedUserId
           ? [
-              touchRelation('conversation', finalConversationId, 'participant', 'user', resolvedUserId),
-              touchRelation('conversation', finalConversationId, 'admin', 'user', resolvedUserId),
+              touchRelation(
+                'conversation',
+                finalConversationId,
+                'participant',
+                'workspace_user',
+                buildWorkspaceUserContextId(workspaceId, resolvedUserId),
+              ),
+              touchRelation(
+                'conversation',
+                finalConversationId,
+                'admin',
+                'workspace_user',
+                buildWorkspaceUserContextId(workspaceId, resolvedUserId),
+              ),
             ]
           : []),
       ],
@@ -328,6 +349,7 @@ export async function addSessionMessage(params: {
 
   const authorMember = await resolveSessionMessageAuthor({
     conversationId: session.conversation_id,
+    workspaceId,
     fromActorId,
     fromUserId,
   });

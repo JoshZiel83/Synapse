@@ -11,6 +11,7 @@ import {
 } from "@/lib/storage";
 
 export type PendingConversationRead = {
+  workspaceId: string;
   conversationId: string;
   readUpToSequence: number;
   updatedAt: string;
@@ -18,6 +19,7 @@ export type PendingConversationRead = {
 
 export type PendingConversationMessage = {
   clientMessageId: string;
+  workspaceId: string;
   conversationId: string;
   contentBlocks: CanonicalContentBlock[];
   createdAt: string;
@@ -83,12 +85,14 @@ async function persistPendingMessagesMap(
 }
 
 export async function queuePendingConversationRead(
+  workspaceId: string,
   conversationId: string,
   readUpToSequence: number,
 ) {
   const readsMap = await loadPendingReads();
   const current = readsMap[conversationId];
   readsMap[conversationId] = {
+    workspaceId,
     conversationId,
     readUpToSequence: Math.max(
       Math.floor(readUpToSequence),
@@ -136,7 +140,11 @@ export async function flushPendingConversationReads() {
 
     for (const entry of entries) {
       try {
-        await api.markThreadRead(entry.conversationId, entry.readUpToSequence);
+        await api.markThreadRead(
+          entry.workspaceId,
+          entry.conversationId,
+          entry.readUpToSequence,
+        );
         await clearPendingConversationRead(
           entry.conversationId,
           entry.readUpToSequence,
@@ -209,6 +217,7 @@ export async function flushPendingConversationMessages(options?: {
 
       try {
         const result = await api.sendThreadMessage(
+          current.workspaceId,
           current.conversationId,
           current.contentBlocks,
           current.clientMessageId,

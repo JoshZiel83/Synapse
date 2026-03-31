@@ -1,9 +1,5 @@
 import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
-import {
-  authorizeAction,
-  userSubject,
-} from "../access/service.js";
 import { getConversationMembers } from "./chat-service.js";
 
 export function mapConversationMember(row: any) {
@@ -43,12 +39,14 @@ export function mapConversationMember(row: any) {
     memberId: row.id,
     participantId: row.id,
     type: "user" as const,
+    workspaceMemberId: row.workspace_member_id || undefined,
     userId: row.user_id,
     id: row.user_id,
     name: row.user_name || "User",
     avatarUrl: row.user_avatar_file_id
       ? getFileUrlById(row.user_avatar_file_id)
       : undefined,
+    conversationRole: row.role || undefined,
     state: row.state,
   };
 }
@@ -56,17 +54,30 @@ export function mapConversationMember(row: any) {
 function buildConversationPresentation(params: {
   row: any;
   members: ReturnType<typeof mapConversationMember>[];
-  userId: string;
-  canManage: boolean;
+  viewerUserId: string;
+  viewerWorkspaceMemberId?: string;
+  canManageConversation: boolean;
   canManageMembers: boolean;
 }) {
-  const { row, members, userId, canManage, canManageMembers } = params;
+  const {
+    row,
+    members,
+    viewerUserId,
+    viewerWorkspaceMemberId,
+    canManageConversation,
+    canManageMembers,
+  } = params;
   const activeMembers = members.filter((member) => member.state === "active");
   const peer =
     row.kind === "private"
       ? activeMembers.find(
           (member) =>
-            !(member.type === "user" && member.userId === userId),
+            !(
+              member.type === "user" &&
+              ((viewerWorkspaceMemberId &&
+                member.workspaceMemberId === viewerWorkspaceMemberId) ||
+                (!viewerWorkspaceMemberId && member.userId === viewerUserId))
+            ),
         ) || activeMembers[0]
       : undefined;
 
@@ -75,7 +86,12 @@ function buildConversationPresentation(params: {
       ? activeMembers
           .filter(
             (member) =>
-              !(member.type === "user" && member.userId === userId),
+              !(
+                member.type === "user" &&
+                ((viewerWorkspaceMemberId &&
+                  member.workspaceMemberId === viewerWorkspaceMemberId) ||
+                  (!viewerWorkspaceMemberId && member.userId === viewerUserId))
+              ),
           )
           .map((member) => member.name)
           .filter(Boolean)
@@ -98,12 +114,8 @@ function buildConversationPresentation(params: {
       : row.kind === "group"
         ? "group"
         : "virtual";
-  const canRename =
-    row.kind !== "private" && Boolean(row.workspace_id) && canManage;
-  const canManageConversationMembers =
-    row.kind !== "private" &&
-    Boolean(row.workspace_id) &&
-    canManageMembers;
+  const canRename = row.kind !== "private" && canManageConversation;
+  const canManageConversationMembers = row.kind !== "private" && canManageMembers;
 
   return {
     chatType,
@@ -114,20 +126,26 @@ function buildConversationPresentation(params: {
         : row.avatar_url || undefined,
     subtitle:
       row.kind === "private"
-        ? row.domain === "social"
-          ? "Friend direct chat"
-          : "Direct chat"
-        : row.domain === "social"
-          ? "Social group"
-          : "Workspace group",
+        ? "Direct chat"
+        : "Group chat",
     peer,
     canRename,
     canManageMembers: canManageConversationMembers,
-    scope: row.domain,
   };
 }
 
-export async function mapConversationSummaryView(row: any, userId: string) {
+export async function mapConversationSummaryView(
+  row: any,
+  viewer:
+    | string
+    | {
+        userId: string;
+        workspaceMemberId?: string;
+      },
+) {
+  const viewerUserId = typeof viewer === "string" ? viewer : viewer.userId;
+  const viewerWorkspaceMemberId =
+    typeof viewer === "string" ? undefined : viewer.workspaceMemberId;
   const members = (await getConversationMembers(row.id)).filter(
     (member: any) => member.state === "active",
   );
@@ -138,29 +156,35 @@ export async function mapConversationSummaryView(row: any, userId: string) {
   const hasOpenLane = members.some(
     (member: any) => member.actor_id && member.session_status !== "closed",
   );
-  const [canManage, canManageMembers] = await Promise.all([
-    authorizeAction({
-      subject: userSubject(userId),
-      action: "conversation.manage",
-      resourceId: row.id,
-    }),
-    authorizeAction({
-      subject: userSubject(userId),
-      action: "conversation.manage_members",
-      resourceId: row.id,
-    }),
-  ]);
+  const viewerMembership = members.find(
+    (member: any) =>
+      member.state === "active" &&
+      member.member_type === "user" &&
+      ((viewerWorkspaceMemberId &&
+        member.workspace_member_id === viewerWorkspaceMemberId) ||
+        (!viewerWorkspaceMemberId && member.user_id === viewerUserId)),
+  );
+  const viewerConversationRole =
+    viewerMembership?.role === "owner" ||
+    viewerMembership?.role === "admin" ||
+    viewerMembership?.role === "member"
+      ? viewerMembership.role
+      : "member";
+  const canManageConversation =
+    row.kind !== "private" &&
+    (viewerConversationRole === "owner" || viewerConversationRole === "admin");
+  const canManageMembers = canManageConversation;
   const presentation = buildConversationPresentation({
     row,
     members: mappedMembers,
-    userId,
-    canManage,
+    viewerUserId,
+    viewerWorkspaceMemberId,
+    canManageConversation,
     canManageMembers,
   });
 
   return {
     id: row.id,
-    domain: row.domain,
     kind: row.kind,
     status: hasOpenLane ? "active" : "completed",
     transportKind: row.transport_kind || undefined,
@@ -184,8 +208,10 @@ export async function mapConversationSummaryView(row: any, userId: string) {
     avatarUrl: presentation.avatarUrl,
     presentation,
     permissions: {
-      canManage: presentation.canRename,
+      canManage: canManageConversation,
       canManageMembers: presentation.canManageMembers,
     },
+    viewerParticipantId: viewerMembership?.id,
+    viewerWorkspaceMemberId,
   };
 }

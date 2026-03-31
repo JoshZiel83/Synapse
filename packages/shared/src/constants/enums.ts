@@ -55,7 +55,6 @@ export const MCP_LIFECYCLE_SCOPES = [
   'actor_conversation',
   'user',
 ] as const;
-export const CONVERSATION_DOMAINS = ['workspace', 'social'] as const;
 export const CONVERSATION_GRANT_PERMISSIONS = [
   'send',
   'moderate',

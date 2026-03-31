@@ -45,7 +45,6 @@ import {
   AUTOMATION_TARGET_POLICIES,
   AUTOMATION_TRIGGER_KINDS,
   AUTOMATION_TRIGGER_SOURCE_KINDS,
-  CONVERSATION_DOMAINS,
   CONTACT_TARGET_TYPES,
   CONVERSATION_GRANT_PERMISSIONS,
   MODEL_GROUP_GRANT_SCOPES,
@@ -81,7 +80,6 @@ import type {
   AuthSessionsClientType,
   AuthSessionsTransport,
   ConversationGrantsPermission,
-  ConversationsDomain,
   InteractionRequestsStatus,
   MemoryEntriesCategory,
   MemoryEntriesOwnerScope,
@@ -152,9 +150,6 @@ type _ActorRoleMatchesDb = Assert<IsEqual<ActorRole, ActorsRole>>;
 type _ActorDocVisibilityMatchesDb = Assert<IsEqual<ActorDocVisibility, ActorVersionDocsVisibility>>;
 type _ResourceScopeMatchesMemoryScopeDb = Assert<
   IsEqual<(typeof RESOURCE_SCOPES)[number], MemoryEntriesOwnerScope>
->;
-type _ConversationDomainMatchesDb = Assert<
-  IsEqual<(typeof CONVERSATION_DOMAINS)[number], ConversationsDomain>
 >;
 type _ContactTargetTypeMatchesDb = Assert<
   IsEqual<(typeof CONTACT_TARGET_TYPES)[number], RelationshipTargetType>

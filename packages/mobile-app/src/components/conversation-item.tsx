@@ -32,9 +32,7 @@ export function ConversationItem({
     conversation.lastMessage?.content?.trim() || "打开会话继续沟通";
   const messageAt =
     conversation.lastMessage?.createdAt || conversation.createdAt;
-  const metaLabel = `${conversation.domain === "social" ? "Social" : "Workspace"} · ${
-    conversation.kind === "private" ? "私聊" : "群聊"
-  }`;
+  const metaLabel = conversation.kind === "private" ? "私聊" : "群聊";
 
   return (
     <Pressable

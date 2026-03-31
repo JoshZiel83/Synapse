@@ -1,6 +1,7 @@
 import { transaction } from "../../infrastructure/database/index.js";
 import { db } from "../../infrastructure/database/kysely.js";
 import {
+  buildWorkspaceUserContextId,
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
   touchActorConversationContext,
@@ -17,6 +18,7 @@ type ParticipantInitiator = {
   memberType: "actor" | "user";
   participantId?: string;
   memberId?: string;
+  workspaceMemberId?: string;
   actorId?: string;
   userId?: string;
   name?: string;
@@ -83,6 +85,7 @@ async function hydrateMembershipInitiator(params: {
   if (!memberId) {
     const member = await getConversationMember({
       conversationId: params.conversationId,
+      workspaceMemberId: params.initiator.workspaceMemberId,
       actorId: params.initiator.actorId,
       userId: params.initiator.userId,
     });
@@ -146,6 +149,7 @@ export async function activateConversationParticipant(params: {
   workspaceId?: string;
   conversationId: string;
   memberType: "actor" | "user" | "external" | "remote_agent" | "system";
+  workspaceMemberId?: string;
   actorId?: string;
   userId?: string;
   displayName?: string;
@@ -157,6 +161,8 @@ export async function activateConversationParticipant(params: {
   const activation = await ensureConversationMemberActivation({
     conversationId: params.conversationId,
     memberType: params.memberType,
+    workspaceId: params.workspaceId,
+    workspaceMemberId: params.workspaceMemberId,
     actorId: params.actorId,
     userId: params.userId,
     displayName: params.displayName,
@@ -180,14 +186,17 @@ export async function activateConversationParticipant(params: {
           ),
           ...touchActorConversationContext(params.actorId, params.conversationId),
         ]
-      : params.memberType === "user" && params.userId
+      : params.memberType === "user" && params.userId && params.workspaceId
         ? [
             touchRelation(
               "conversation",
               params.conversationId,
               "participant",
-              "user",
-              params.userId,
+              "workspace_user",
+              buildWorkspaceUserContextId(
+                params.workspaceId,
+                params.userId,
+              ),
             ),
           ]
         : [];

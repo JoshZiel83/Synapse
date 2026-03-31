@@ -39,6 +39,8 @@ export interface ConversationMember {
   participantId: string
   type: "actor" | "user" | "external"
   id: string
+  workspaceMemberId?: string
+  userId?: string
   name: string
   role?: string
   title?: string
@@ -140,6 +142,7 @@ export interface OutboxEntry {
 }
 
 interface ChatState {
+  activeWorkspaceId: string | null
   conversations: ConversationSummary[]
   selectedConversationId: string | null
   messages: FeedMessage[]
@@ -499,6 +502,8 @@ function applyMemberJoined(
             ? "external"
             : "actor",
       id,
+      workspaceMemberId: member.workspaceMemberId,
+      userId: member.userId,
       name: member.name || "Unknown",
       title: member.title,
       role: member.role,
@@ -834,6 +839,7 @@ function applyFeedItemToRuntimeMap(
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
+  activeWorkspaceId: null,
   conversations: [],
   selectedConversationId: null,
   messages: [],
@@ -881,6 +887,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             : null
 
         return {
+          activeWorkspaceId: workspaceId,
           conversations,
           runtimeMap,
           totalUnread: sumConversationUnread(conversations),
@@ -911,7 +918,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadMessages: async (workspaceId, conversationId) => {
     set({ loadingMessages: true })
     try {
-      const res = await api.getThreadMessages(conversationId, 100)
+      const res = await api.getThreadMessages(workspaceId, conversationId, 100)
       const fetchedMessages = sortMessages(
         (res?.items || []).map(feedItemToMessage)
       )
@@ -1044,10 +1051,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       : typeof targetActorIdOrIds === "string" && targetActorIdOrIds
         ? [targetActorIdOrIds]
         : []
-    const res = await api.createThread({
-      domain: "workspace",
+    const res = await api.createThread(workspaceId, {
       kind,
-      workspaceId,
       actorIds,
       ...(title ? { title } : {}),
       ...(content ? { content } : {}),
@@ -1060,6 +1065,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   markConversationRead: async (conversationId, readUpToSequence) => {
+    const workspaceId = get().activeWorkspaceId
+    if (!workspaceId) {
+      return
+    }
     set((state) => {
       const conversations = state.conversations.map((conversation) =>
         conversation.id === conversationId
@@ -1073,10 +1082,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })
 
     try {
-      await api.markThreadRead(conversationId, readUpToSequence)
+      await api.markThreadRead(workspaceId, conversationId, readUpToSequence)
       clearPendingConversationRead(conversationId, readUpToSequence)
     } catch (err) {
-      queuePendingConversationRead(conversationId, readUpToSequence)
+      queuePendingConversationRead(workspaceId, conversationId, readUpToSequence)
       console.error("Failed to mark read:", err)
     }
   },
@@ -1321,6 +1330,7 @@ async function processOutboxEntry(clientMessageId: string) {
 
   try {
     const result = await api.sendThreadMessage(
+      entry.workspaceId,
       entry.conversationId,
       entry.contentBlocks,
       entry.clientMessageId,

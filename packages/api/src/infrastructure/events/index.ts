@@ -29,11 +29,20 @@ type TransactionalRealtimeEvent = SystemEvent & {
   type: TransactionalRealtimeEventType;
 };
 
+export interface TransactionalRealtimeRecipient {
+  workspaceId: string;
+  workspaceMemberId: string;
+}
+
 type EventHandler = (event: SystemEvent) => void | Promise<void>;
 
 type RealtimeEventOutboxRow = Pick<
   TableRow<"realtime_event_outbox">,
-  "id" | "event_timestamp" | "payload" | "workspace_id"
+  | "id"
+  | "event_timestamp"
+  | "payload"
+  | "recipient_workspace_member_id"
+  | "workspace_id"
 > & {
   event_type: TransactionalRealtimeEventType;
 };
@@ -107,7 +116,12 @@ async function claimPendingRealtimeOutboxEntries(limit: number) {
           updated_at = NOW()
       FROM claimed
       WHERE reo.id = claimed.id
-      RETURNING reo.id, reo.event_type, reo.workspace_id, reo.payload, reo.event_timestamp
+      RETURNING reo.id,
+                reo.event_type,
+                reo.workspace_id,
+                reo.recipient_workspace_member_id,
+                reo.payload,
+                reo.event_timestamp
     `.compile(db);
     const result = await executeCompiledSql<RealtimeEventOutboxRow>(
       client,
@@ -170,6 +184,7 @@ async function materializeRealtimeOutboxEvent(
       return {
         type: 'feed.item.created',
         workspaceId: entry.workspace_id,
+        recipientWorkspaceMemberId: entry.recipient_workspace_member_id,
         payload: item as unknown as Record<string, unknown>,
         timestamp,
       };
@@ -194,6 +209,7 @@ async function materializeRealtimeOutboxEvent(
       return {
         type: 'interaction.updated',
         workspaceId: entry.workspace_id,
+        recipientWorkspaceMemberId: entry.recipient_workspace_member_id,
         payload: {
           conversationId: interaction.conversationId,
           interactionId: interaction.id,
@@ -208,6 +224,7 @@ async function materializeRealtimeOutboxEvent(
       return {
         type: entry.event_type,
         workspaceId: entry.workspace_id,
+        recipientWorkspaceMemberId: entry.recipient_workspace_member_id,
         payload,
         timestamp,
       };
@@ -232,30 +249,67 @@ async function processRealtimeOutboxEntry(entry: RealtimeEventOutboxRow) {
   }
 }
 
-export async function enqueueTransactionalEvent(
+export async function enqueueTransactionalEventDeliveries(
   queryable: Queryable,
-  event: TransactionalRealtimeEvent,
+  event: {
+    type: TransactionalRealtimeEventType;
+    payload: Record<string, unknown>;
+    timestamp: string;
+    recipients: TransactionalRealtimeRecipient[];
+  },
 ) {
   if (!isTransactionalRealtimeEventType(event.type)) {
     throw new Error(`Event type ${event.type} does not support transactional outbox`);
   }
 
-  const row: Pick<
-    TableInsert<"realtime_event_outbox">,
-    "available_at" | "event_timestamp" | "event_type" | "payload" | "workspace_id"
-  > = {
-    available_at: new Date(),
-    event_timestamp: event.timestamp,
-    event_type: event.type,
-    payload:
-      (event.payload || {}) as TableInsert<"realtime_event_outbox">["payload"],
-    workspace_id: event.workspaceId,
-  };
+  const recipients = event.recipients.filter(
+    (recipient) => recipient.workspaceId && recipient.workspaceMemberId,
+  );
+  if (recipients.length === 0) {
+    return;
+  }
 
   await executeCompiledQuery(
     queryable,
-    db.insertInto("realtime_event_outbox").values(row),
+    db.insertInto("realtime_event_outbox").values(
+      recipients.map((recipient) => ({
+        available_at: new Date(),
+        event_timestamp: event.timestamp,
+        event_type: event.type,
+        payload:
+          (event.payload || {}) as TableInsert<"realtime_event_outbox">["payload"],
+        workspace_id: recipient.workspaceId,
+        recipient_workspace_member_id: recipient.workspaceMemberId,
+      })),
+    ),
   );
+}
+
+export async function enqueueTransactionalEvent(
+  queryable: Queryable,
+  event: TransactionalRealtimeEvent,
+) {
+  const recipientWorkspaceMemberId =
+    typeof event.recipientWorkspaceMemberId === "string"
+      ? event.recipientWorkspaceMemberId
+      : "";
+  if (!recipientWorkspaceMemberId) {
+    throw new Error(
+      `Transactional realtime event ${event.type} requires recipientWorkspaceMemberId`,
+    );
+  }
+
+  return enqueueTransactionalEventDeliveries(queryable, {
+    type: event.type,
+    payload: event.payload,
+    timestamp: event.timestamp,
+    recipients: [
+      {
+        workspaceId: event.workspaceId,
+        workspaceMemberId: recipientWorkspaceMemberId,
+      },
+    ],
+  });
 }
 
 export async function drainRealtimeEventOutbox(

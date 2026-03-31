@@ -14,7 +14,11 @@ import { onEvent } from "../events/index.js";
 import { handleRelayConnection } from "../../modules/mcp-plugins/relay-manager.js";
 import { isShuttingDown } from "../shutdown/state.js";
 import { authenticateSessionToken } from "../../modules/auth/service.js";
-import { isFeedItemVisibleToUser } from "../../modules/conversation/service.js";
+import {
+  getConversationMember,
+  isFeedItemVisibleToWorkspaceMember,
+} from "../../modules/conversation/service.js";
+import { getWorkspaceMemberIdentity } from "../../modules/conversation/workspace-identity.js";
 import {
   canUserViewInteraction,
   enrichFeedItemInteractionsForUser,
@@ -25,15 +29,10 @@ import {
   registerAuthenticatedSocket,
   unregisterAuthenticatedSocket,
 } from "./auth-session-registry.js";
-import {
-  authorizePermission,
-  userSubject,
-} from "../../modules/access/service.js";
 
 type InboxSubscription = {
   key: string;
   topic: "inbox";
-  workspaceId?: string;
 };
 
 type ConversationSubscription = {
@@ -47,6 +46,8 @@ type WSSubscription = InboxSubscription | ConversationSubscription;
 interface WSClient {
   ws: any;
   userId: string;
+  workspaceId: string;
+  workspaceMemberId: string;
   sessionId?: string;
   authenticated: boolean;
   subscriptions: Map<string, WSSubscription>;
@@ -72,25 +73,15 @@ function parseCookieHeader(cookieHeader: string | string[] | undefined) {
   }, {});
 }
 
-async function canUserAccessWorkspace(workspaceId: string, userId: string) {
-  return authorizePermission({
-    subject: userSubject(userId),
-    resourceType: "workspace",
-    resourceId: workspaceId,
-    permission: "view",
-  });
-}
-
-async function canUserAccessConversation(
+async function canWorkspaceMemberAccessConversation(
   conversationId: string,
-  userId: string,
+  workspaceMemberId: string,
 ) {
-  return authorizePermission({
-    subject: userSubject(userId),
-    resourceType: "conversation",
-    resourceId: conversationId,
-    permission: "view",
+  const member = await getConversationMember({
+    conversationId,
+    workspaceMemberId,
   });
+  return Boolean(member && member.state === "active");
 }
 
 function mapInternalEventToSocketEvent(
@@ -192,11 +183,10 @@ function safeSendSocketEvent(
   }
 }
 
-function getMatchingInboxSubscriptions(client: WSClient, workspaceId: string) {
+function getInboxSubscriptions(client: WSClient) {
   return [...client.subscriptions.values()].filter(
     (subscription): subscription is InboxSubscription =>
-      subscription.topic === "inbox" &&
-      (!subscription.workspaceId || subscription.workspaceId === workspaceId),
+      subscription.topic === "inbox",
   );
 }
 
@@ -224,20 +214,9 @@ async function handleSubscribe(clientId: string, msg: Record<string, unknown>) {
   }
 
   if (topic === "inbox") {
-    const workspaceId =
-      typeof msg.workspaceId === "string" && msg.workspaceId.trim()
-        ? msg.workspaceId.trim()
-        : undefined;
-    if (
-      workspaceId &&
-      !(await canUserAccessWorkspace(workspaceId, client.userId))
-    ) {
-      return;
-    }
     client.subscriptions.set(key, {
       key,
       topic: "inbox",
-      workspaceId,
     });
     return;
   }
@@ -250,7 +229,12 @@ async function handleSubscribe(clientId: string, msg: Record<string, unknown>) {
     if (!conversationId) {
       return;
     }
-    if (!(await canUserAccessConversation(conversationId, client.userId))) {
+    if (
+      !(await canWorkspaceMemberAccessConversation(
+        conversationId,
+        client.workspaceMemberId,
+      ))
+    ) {
       return;
     }
     client.subscriptions.set(key, {
@@ -327,6 +311,8 @@ export function setupWebSocket(app: FastifyInstance) {
     const client: WSClient = {
       ws: socket,
       userId: "",
+      workspaceId: "",
+      workspaceMemberId: "",
       authenticated: false,
       subscriptions: new Map(),
     };
@@ -351,9 +337,17 @@ export function setupWebSocket(app: FastifyInstance) {
             typeof msg.token === "string" && msg.token.trim().length > 0
               ? msg.token.trim()
               : cookieToken;
+          const workspaceId =
+            typeof msg.workspaceId === "string" && msg.workspaceId.trim()
+              ? msg.workspaceId.trim()
+              : "";
 
           if (!token) {
             closeClient(clientId, "No session provided");
+            return;
+          }
+          if (!workspaceId) {
+            closeClient(clientId, "workspaceId is required");
             return;
           }
 
@@ -363,7 +357,18 @@ export function setupWebSocket(app: FastifyInstance) {
             return;
           }
 
+          const workspaceMember = await getWorkspaceMemberIdentity(
+            workspaceId,
+            authenticated.user.id,
+          );
+          if (!workspaceMember) {
+            closeClient(clientId, "Workspace membership not found");
+            return;
+          }
+
           client.userId = authenticated.user.id;
+          client.workspaceId = workspaceMember.workspaceId;
+          client.workspaceMemberId = workspaceMember.workspaceMemberId;
           client.sessionId = authenticated.session.id;
           client.authenticated = true;
 
@@ -445,10 +450,22 @@ export function setupWebSocket(app: FastifyInstance) {
         continue;
       }
 
-      const inboxSubscriptions = getMatchingInboxSubscriptions(
-        client,
-        event.workspaceId,
-      );
+      if (
+        event.recipientWorkspaceMemberId &&
+        client.workspaceMemberId !== event.recipientWorkspaceMemberId
+      ) {
+        continue;
+      }
+
+      if (
+        !event.recipientWorkspaceMemberId &&
+        event.workspaceId &&
+        client.workspaceId !== event.workspaceId
+      ) {
+        continue;
+      }
+
+      const inboxSubscriptions = getInboxSubscriptions(client);
       const hasConversationTopic = conversationId
         ? hasConversationSubscription(client, conversationId)
         : false;
@@ -457,14 +474,18 @@ export function setupWebSocket(app: FastifyInstance) {
         continue;
       }
 
-      const isConversationAllowed = conversationId
-        ? await canUserAccessConversation(conversationId, client.userId)
-        : false;
+      const isConversationAllowed =
+        conversationId && client.workspaceMemberId
+          ? await canWorkspaceMemberAccessConversation(
+              conversationId,
+              client.workspaceMemberId,
+            )
+          : false;
 
       if (outbound.type === "conversation.read.updated") {
         const payload =
           outbound.payload as ChatSocketEventPayloadMap["conversation.read.updated"];
-        if (payload.userId !== client.userId) {
+        if (payload.workspaceMemberId !== client.workspaceMemberId) {
           continue;
         }
         if (
@@ -485,7 +506,9 @@ export function setupWebSocket(app: FastifyInstance) {
           outbound.payload as ConversationFeedItem,
           client.userId,
         );
-        if (!isFeedItemVisibleToUser(item, client.userId)) {
+        if (
+          !isFeedItemVisibleToWorkspaceMember(item, client.workspaceMemberId)
+        ) {
           continue;
         }
         if (inboxSubscriptions.length > 0 || hasConversationTopic) {
@@ -498,7 +521,7 @@ export function setupWebSocket(app: FastifyInstance) {
       }
 
       if (outbound.type === "interaction.updated") {
-        if (!conversationId || !hasConversationTopic || !isConversationAllowed) {
+        if (!conversationId || !isConversationAllowed) {
           continue;
         }
         const payload =
@@ -557,9 +580,10 @@ function cleanup(clientId: string) {
 export function broadcastToWorkspace(workspaceId: string, data: unknown) {
   const msg = JSON.stringify(data);
   for (const [, client] of clients) {
-    const inboxSubscriptions = getMatchingInboxSubscriptions(client, workspaceId);
+    const inboxSubscriptions = getInboxSubscriptions(client);
     if (
       client.authenticated &&
+      client.workspaceId === workspaceId &&
       client.ws.readyState === 1 &&
       inboxSubscriptions.length > 0
     ) {

@@ -74,7 +74,7 @@ export default function PluginAdvancedStep({
       try {
         const [actorData, conversationData] = await Promise.all([
           api.getActors(workspaceId),
-          api.getThreads(workspaceId, { domain: 'workspace' }),
+          api.getThreads(workspaceId),
         ]);
 
         if (cancelled) return;

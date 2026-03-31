@@ -2458,7 +2458,7 @@ export function WorkspaceSkillCreationPage() {
 
     Promise.all([
       api.getActors(workspaceId),
-      api.getThreads(workspaceId, { domain: "workspace" }),
+      api.getThreads(workspaceId),
       api.getWorkspaceMembers(workspaceId),
     ])
       .then(([actorsResponse, conversationsResponse, membersResponse]) => {
@@ -3092,7 +3092,7 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
         await Promise.all([
           api.getSkillMarketplaceItem(skillId, workspaceId),
           api.getActors(workspaceId),
-          api.getThreads(workspaceId, { domain: "workspace" }),
+          api.getThreads(workspaceId),
           api.getWorkspaceMembers(workspaceId),
         ])
 

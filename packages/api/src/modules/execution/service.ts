@@ -528,7 +528,7 @@ export async function recoverInterruptedExecutions(params?: {
     .select([
       't.id',
       't.session_id',
-      'c.workspace_id',
+      's.workspace_id',
     ])
     .where('t.status', '=', 'running')
     .execute() as Array<{

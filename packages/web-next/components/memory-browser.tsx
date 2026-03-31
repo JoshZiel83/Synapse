@@ -141,7 +141,7 @@ export default function MemoryBrowser() {
       const [memoryData, actorData, conversationData] = await Promise.all([
         api.getMemories(workspaceId),
         api.getActors(workspaceId),
-        api.getThreads(workspaceId, { domain: "workspace" }),
+        api.getThreads(workspaceId),
       ])
 
       setMemories(Array.isArray(memoryData) ? memoryData : memoryData?.memories || [])

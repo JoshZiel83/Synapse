@@ -71,7 +71,7 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
     try {
       const [actorData, conversationData, memoryData] = await Promise.all([
         api.getActors(workspaceId),
-        api.getThreads(workspaceId, { domain: "workspace" }),
+        api.getThreads(workspaceId),
         memoryId ? api.getMemory(workspaceId, memoryId) : Promise.resolve(null),
       ])
 

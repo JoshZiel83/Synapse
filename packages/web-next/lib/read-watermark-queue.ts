@@ -3,6 +3,7 @@
 import { api } from "@/lib/api"
 
 type PendingReadWatermark = {
+  workspaceId: string
   conversationId: string
   readUpToSequence: number
   updatedAt: string
@@ -28,6 +29,7 @@ function loadPendingReadsMap() {
         .filter(
           (entry) =>
             entry &&
+            typeof entry.workspaceId === "string" &&
             typeof entry.conversationId === "string" &&
             typeof entry.readUpToSequence === "number"
         )
@@ -53,6 +55,7 @@ function persistPendingReadsMap(
 }
 
 export function queuePendingConversationRead(
+  workspaceId: string,
   conversationId: string,
   readUpToSequence: number
 ) {
@@ -60,6 +63,7 @@ export function queuePendingConversationRead(
   const current = currentMap[conversationId]
   const normalizedSequence = Math.max(0, Math.floor(readUpToSequence))
   currentMap[conversationId] = {
+    workspaceId,
     conversationId,
     readUpToSequence: Math.max(
       normalizedSequence,
@@ -100,7 +104,11 @@ export async function flushPendingConversationReads() {
 
     for (const entry of entries) {
       try {
-        await api.markThreadRead(entry.conversationId, entry.readUpToSequence)
+        await api.markThreadRead(
+          entry.workspaceId,
+          entry.conversationId,
+          entry.readUpToSequence
+        )
         clearPendingConversationRead(
           entry.conversationId,
           entry.readUpToSequence

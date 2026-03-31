@@ -33,9 +33,9 @@ export type AutomationDeliveriesDeliveryMode = "conversation_notice" | "create_c
 
 export type AutomationDeliveriesTargetPolicy = "all_members" | "specified_members";
 
-export type AutomationDeliveryParticipantsEntityKind = "actor" | "user";
+export type AutomationDeliveryParticipantsEntityKind = "actor" | "workspace_member";
 
-export type AutomationDeliveryRecipientsEntityKind = "actor" | "user";
+export type AutomationDeliveryRecipientsEntityKind = "actor" | "workspace_member";
 
 export type AutomationEventSourcesCreatedByKind = "session" | "system" | "user";
 
@@ -99,7 +99,7 @@ export type ConversationGrantsPermission = "attach_resources" | "manage" | "mana
 
 export type ConversationGrantsStatus = "active" | "revoked";
 
-export type ConversationGrantsSubjectType = "actor" | "user";
+export type ConversationGrantsSubjectType = "actor" | "workspace_user";
 
 export type ConversationItemPartsPartType = "file_ref" | "json" | "text";
 
@@ -121,7 +121,7 @@ export type ConversationMembersMemberType = "actor" | "external" | "remote_agent
 
 export type ConversationMembersState = "active" | "kicked" | "left";
 
-export type ConversationsDomain = "social" | "workspace";
+export type ConversationMembersRole = "admin" | "member" | "owner";
 
 export type ConversationsKind = "group" | "private" | "virtual";
 
@@ -896,8 +896,10 @@ export interface ConversationMembers {
   left_at: Timestamp | null;
   member_type: ConversationMembersMemberType;
   metadata: Generated<Json | null>;
+  role: Generated<ConversationMembersRole>;
   state: Generated<ConversationMembersState>;
   user_id: string | null;
+  workspace_member_id: string | null;
 }
 
 export interface ConversationParticipantAddresses {
@@ -912,13 +914,11 @@ export interface ConversationParticipantAddresses {
 export interface Conversations {
   created_at: Generated<Timestamp | null>;
   created_by: string | null;
-  domain: ConversationsDomain;
   id: Generated<string>;
   kind: ConversationsKind;
   metadata: Generated<Json | null>;
   title: string | null;
   updated_at: Generated<Timestamp | null>;
-  workspace_id: string | null;
 }
 
 export interface ConversationTransportBindings {
@@ -942,6 +942,7 @@ export interface ConversationUserStates {
   read_watermark_sequence: Generated<Int8>;
   updated_at: Generated<Timestamp>;
   user_id: string;
+  workspace_member_id: string;
 }
 
 export interface DirectConversationBindings {
@@ -951,12 +952,10 @@ export interface DirectConversationBindings {
   metadata: Generated<Json>;
   participant_one_actor_id: string | null;
   participant_one_kind: RelationshipTargetType;
-  participant_one_user_id: string | null;
-  participant_one_workspace_id: string | null;
+  participant_one_workspace_member_id: string | null;
   participant_two_actor_id: string | null;
   participant_two_kind: RelationshipTargetType;
-  participant_two_user_id: string | null;
-  participant_two_workspace_id: string | null;
+  participant_two_workspace_member_id: string | null;
 }
 
 export interface EngineBranchCheckpoints {
@@ -1361,6 +1360,7 @@ export interface RealtimeEventOutbox {
   last_error: string | null;
   payload: Generated<Json>;
   processing_started_at: Timestamp | null;
+  recipient_workspace_member_id: string;
   status: Generated<RealtimeEventOutboxStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;

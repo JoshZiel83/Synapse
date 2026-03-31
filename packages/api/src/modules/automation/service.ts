@@ -57,6 +57,7 @@ import {
   createThread,
   getConversationMembers,
 } from '../conversation/chat-service.js';
+import { requireWorkspaceMemberIdentity } from '../conversation/workspace-identity.js';
 
 type AutomationRuleRow = {
   id: string;
@@ -350,9 +351,9 @@ export interface AutomationDeliveryInput {
   messageBlocks?: CanonicalContentBlock[];
   targetPolicy?: AutomationTargetPolicy;
   participantActorIds?: string[];
-  participantUserIds?: string[];
+  participantWorkspaceMemberIds?: string[];
   recipientActorIds?: string[];
-  recipientUserIds?: string[];
+  recipientWorkspaceMemberIds?: string[];
 }
 
 export interface CreateAutomationRuleInput {
@@ -956,11 +957,15 @@ async function normalizeDeliveryInput(
   });
   const participants = [
     ...mergeUniqueIds(input.participantActorIds).map((entityId) => targetEntityRef('actor', entityId)),
-    ...mergeUniqueIds(input.participantUserIds).map((entityId) => targetEntityRef('user', entityId)),
+    ...mergeUniqueIds(input.participantWorkspaceMemberIds).map((entityId) =>
+      targetEntityRef('workspace_member', entityId),
+    ),
   ];
   const recipients = [
     ...mergeUniqueIds(input.recipientActorIds).map((entityId) => targetEntityRef('actor', entityId)),
-    ...mergeUniqueIds(input.recipientUserIds).map((entityId) => targetEntityRef('user', entityId)),
+    ...mergeUniqueIds(input.recipientWorkspaceMemberIds).map((entityId) =>
+      targetEntityRef('workspace_member', entityId),
+    ),
   ];
 
   const targetPolicy = input.targetPolicy || (recipients.length > 0 ? 'specified_members' : 'all_members');
@@ -2516,14 +2521,18 @@ async function resolveExistingConversationId(rule: AutomationRule) {
   if (!operatorUserId) {
     throw new Error('No operator user is available to create a conversation for this automation');
   }
+  const operatorWorkspaceMember = await requireWorkspaceMemberIdentity(
+    rule.workspaceId,
+    operatorUserId,
+  );
 
   const participantActorIds = rule.delivery.participants
     .filter((entry) => entry.entityKind === 'actor')
     .map((entry) => entry.entityId);
-  const participantUserIds = rule.delivery.participants
-    .filter((entry) => entry.entityKind === 'user')
+  const participantWorkspaceMemberIds = rule.delivery.participants
+    .filter((entry) => entry.entityKind === 'workspace_member')
     .map((entry) => entry.entityId)
-    .filter((userId) => userId !== operatorUserId);
+    .filter(Boolean);
 
   const reuseExisting =
     rule.delivery.deliveryMode === 'create_conversation_once'
@@ -2543,16 +2552,17 @@ async function resolveExistingConversationId(rule: AutomationRule) {
   const created = await createThread({
     workspaceId: rule.workspaceId,
     kind: 'group',
-    createdBy: operatorUserId,
+    createdByUserId: operatorUserId,
+    createdByWorkspaceMemberId: operatorWorkspaceMember.workspaceMemberId,
     title: rule.delivery.conversationTitle || rule.name,
     actorIds: participantActorIds,
   });
 
-  if (participantUserIds.length > 0) {
+  if (participantWorkspaceMemberIds.length > 0) {
     await addMembersToConversation({
       conversationId: created.conversation.id,
       workspaceId: rule.workspaceId,
-      userIds: participantUserIds,
+      workspaceMemberIds: participantWorkspaceMemberIds,
       initiator: {
         memberType: 'user',
         userId: operatorUserId,
@@ -2594,9 +2604,9 @@ async function resolveRecipientMembers(rule: AutomationRule, conversationId: str
       .filter((entry) => entry.entityKind === 'actor')
       .map((entry) => entry.entityId),
   );
-  const recipientUsers = new Set(
+  const recipientWorkspaceMembers = new Set(
     rule.delivery.recipients
-      .filter((entry) => entry.entityKind === 'user')
+      .filter((entry) => entry.entityKind === 'workspace_member')
       .map((entry) => entry.entityId),
   );
 
@@ -2604,7 +2614,9 @@ async function resolveRecipientMembers(rule: AutomationRule, conversationId: str
     .filter((member: any) => member.state === 'active')
     .filter((member: any) => {
       if (member.actor_id) return recipientActors.has(member.actor_id);
-      if (member.user_id) return recipientUsers.has(member.user_id);
+      if (member.workspace_member_id) {
+        return recipientWorkspaceMembers.has(member.workspace_member_id);
+      }
       return false;
     })
     .map((member: any) => member.id as string);

@@ -72,9 +72,9 @@ const deliverySchema = z.object({
   messageBlocks: contentBlocksSchema,
   targetPolicy: z.enum(AUTOMATION_TARGET_POLICIES).optional(),
   participantActorIds: z.array(z.string().uuid()).optional(),
-  participantUserIds: z.array(z.string().uuid()).optional(),
+  participantWorkspaceMemberIds: z.array(z.string().uuid()).optional(),
   recipientActorIds: z.array(z.string().uuid()).optional(),
-  recipientUserIds: z.array(z.string().uuid()).optional(),
+  recipientWorkspaceMemberIds: z.array(z.string().uuid()).optional(),
 });
 
 const updateDeliverySchema = z.object({
@@ -87,9 +87,9 @@ const updateDeliverySchema = z.object({
   messageBlocks: contentBlocksSchema,
   targetPolicy: z.enum(AUTOMATION_TARGET_POLICIES).optional(),
   participantActorIds: z.array(z.string().uuid()).optional(),
-  participantUserIds: z.array(z.string().uuid()).optional(),
+  participantWorkspaceMemberIds: z.array(z.string().uuid()).optional(),
   recipientActorIds: z.array(z.string().uuid()).optional(),
-  recipientUserIds: z.array(z.string().uuid()).optional(),
+  recipientWorkspaceMemberIds: z.array(z.string().uuid()).optional(),
 });
 
 const createAutomationSchema = z.object({

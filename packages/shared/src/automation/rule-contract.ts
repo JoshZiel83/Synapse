@@ -41,9 +41,9 @@ export interface AutomationRuleCreateDeliveryPayload {
   messageBlocks?: CanonicalContentBlock[];
   targetPolicy?: AutomationTargetPolicy;
   participantActorIds?: string[];
-  participantUserIds?: string[];
+  participantWorkspaceMemberIds?: string[];
   recipientActorIds?: string[];
-  recipientUserIds?: string[];
+  recipientWorkspaceMemberIds?: string[];
 }
 
 export interface AutomationRuleCreatePayload {
@@ -90,9 +90,9 @@ export interface AutomationRuleDraft {
   wakeReason: string;
   targetPolicy: AutomationTargetPolicy;
   participantActorIds: string;
-  participantUserIds: string;
+  participantWorkspaceMemberIds: string;
   recipientActorIds: string;
-  recipientUserIds: string;
+  recipientWorkspaceMemberIds: string;
 }
 
 export interface AutomationRuleContractIssue {
@@ -143,7 +143,7 @@ function toDateTimeLocalInput(value: string | undefined) {
 
 function extractEntityIds(
   rule: AutomationRule,
-  entityKind: "actor" | "user",
+  entityKind: "actor" | "workspace_member",
   targetKind: "participants" | "recipients",
 ) {
   const entries =
@@ -213,9 +213,9 @@ export function createEmptyAutomationRuleDraft(
     wakeReason: "",
     targetPolicy: "all_members",
     participantActorIds: "",
-    participantUserIds: "",
+    participantWorkspaceMemberIds: "",
     recipientActorIds: "",
-    recipientUserIds: "",
+    recipientWorkspaceMemberIds: "",
   };
 }
 
@@ -257,9 +257,17 @@ export function buildAutomationRuleCreatePayloadFromRule(
       messageBlocks: cloneContentBlocks(rule.delivery.messageBlocks),
       targetPolicy: rule.delivery.targetPolicy,
       participantActorIds: extractEntityIds(rule, "actor", "participants"),
-      participantUserIds: extractEntityIds(rule, "user", "participants"),
+      participantWorkspaceMemberIds: extractEntityIds(
+        rule,
+        "workspace_member",
+        "participants",
+      ),
       recipientActorIds: extractEntityIds(rule, "actor", "recipients"),
-      recipientUserIds: extractEntityIds(rule, "user", "recipients"),
+      recipientWorkspaceMemberIds: extractEntityIds(
+        rule,
+        "workspace_member",
+        "recipients",
+      ),
     },
     metadata: cloneRecord(rule.metadata),
   };
@@ -297,9 +305,17 @@ export function buildAutomationRuleDraftFromRule(
     wakeReason: rule.delivery.wakeReasonText || "",
     targetPolicy: rule.delivery.targetPolicy,
     participantActorIds: extractEntityIds(rule, "actor", "participants").join("\n"),
-    participantUserIds: extractEntityIds(rule, "user", "participants").join("\n"),
+    participantWorkspaceMemberIds: extractEntityIds(
+      rule,
+      "workspace_member",
+      "participants",
+    ).join("\n"),
     recipientActorIds: extractEntityIds(rule, "actor", "recipients").join("\n"),
-    recipientUserIds: extractEntityIds(rule, "user", "recipients").join("\n"),
+    recipientWorkspaceMemberIds: extractEntityIds(
+      rule,
+      "workspace_member",
+      "recipients",
+    ).join("\n"),
   };
 }
 
@@ -423,18 +439,18 @@ export function mergeAutomationRuleUpdatePayload(
         patch.delivery?.participantActorIds !== undefined
           ? [...patch.delivery.participantActorIds]
           : base.delivery.participantActorIds,
-      participantUserIds:
-        patch.delivery?.participantUserIds !== undefined
-          ? [...patch.delivery.participantUserIds]
-          : base.delivery.participantUserIds,
+      participantWorkspaceMemberIds:
+        patch.delivery?.participantWorkspaceMemberIds !== undefined
+          ? [...patch.delivery.participantWorkspaceMemberIds]
+          : base.delivery.participantWorkspaceMemberIds,
       recipientActorIds:
         patch.delivery?.recipientActorIds !== undefined
           ? [...patch.delivery.recipientActorIds]
           : base.delivery.recipientActorIds,
-      recipientUserIds:
-        patch.delivery?.recipientUserIds !== undefined
-          ? [...patch.delivery.recipientUserIds]
-          : base.delivery.recipientUserIds,
+      recipientWorkspaceMemberIds:
+        patch.delivery?.recipientWorkspaceMemberIds !== undefined
+          ? [...patch.delivery.recipientWorkspaceMemberIds]
+          : base.delivery.recipientWorkspaceMemberIds,
     },
     metadata:
       patch.metadata !== undefined ? cloneRecord(patch.metadata) : base.metadata,
@@ -568,7 +584,7 @@ export function validateAutomationRuleCreatePayload(
   if (
     payload.delivery.targetPolicy === "specified_members" &&
     (payload.delivery.recipientActorIds?.length || 0) +
-      (payload.delivery.recipientUserIds?.length || 0) ===
+      (payload.delivery.recipientWorkspaceMemberIds?.length || 0) ===
       0
   ) {
     issues.push({
@@ -632,9 +648,13 @@ export function buildAutomationRuleCreatePayloadFromDraft(
         wakeReason: trimString(draft.wakeReason),
         targetPolicy: draft.targetPolicy,
         participantActorIds: parseAutomationIdList(draft.participantActorIds),
-        participantUserIds: parseAutomationIdList(draft.participantUserIds),
+        participantWorkspaceMemberIds: parseAutomationIdList(
+          draft.participantWorkspaceMemberIds,
+        ),
         recipientActorIds: parseAutomationIdList(draft.recipientActorIds),
-        recipientUserIds: parseAutomationIdList(draft.recipientUserIds),
+        recipientWorkspaceMemberIds: parseAutomationIdList(
+          draft.recipientWorkspaceMemberIds,
+        ),
       },
     };
 

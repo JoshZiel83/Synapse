@@ -12,6 +12,7 @@ import {
 } from "../../infrastructure/database/kysely.js";
 import {
   buildActorConversationContextId,
+  buildWorkspaceUserContextId,
   diffAuthzRelationships,
   deleteRelation,
   flushAuthzOutboxEntries,
@@ -21,7 +22,7 @@ import {
 } from "../../infrastructure/authz/index.js";
 import {
   emitEvent,
-  enqueueTransactionalEvent,
+  enqueueTransactionalEventDeliveries,
   type Queryable,
 } from "../../infrastructure/events/index.js";
 import { getFileUrl } from "../../infrastructure/storage/index.js";
@@ -43,6 +44,7 @@ import {
   getConversationReadState,
   getSharedVisibleConversationItems,
   getVisibleConversationItemsForMember,
+  listConversationRealtimeRecipients,
   listConversationMembers,
   listUserWorkspaceConversations,
   markConversationRead as markConversationCursorRead,
@@ -75,6 +77,11 @@ import {
   canonicalizeDirectConversationPair,
   directConversationBindingValues,
 } from "./direct-binding.js";
+import {
+  getWorkspaceMemberIdentityById,
+  requireWorkspaceMemberIdentity,
+  type WorkspaceMemberIdentity,
+} from "./workspace-identity.js";
 
 type ConversationGrantPermission = ConversationGrantsPermission;
 
@@ -183,6 +190,13 @@ function buildWakeupSummary(sourceName: string | undefined, content: string) {
   return preview || "New message";
 }
 
+async function requireCurrentWorkspaceMember(
+  workspaceId: string,
+  userId: string,
+): Promise<WorkspaceMemberIdentity> {
+  return requireWorkspaceMemberIdentity(workspaceId, userId);
+}
+
 async function resolveWorkspaceImageFile(workspaceId: string, fileId: string) {
   const row = await db
     .selectFrom("files")
@@ -262,14 +276,18 @@ function buildConversationGrantRelations(
     .flatMap((grant) => {
       const relation = conversationGrantRelation(grant.permission);
       if (!relation) return [];
-      if (grant.subject_type === "user" && grant.user_id) {
+      if (
+        grant.subject_type === "workspace_user" &&
+        grant.user_id &&
+        grant.workspace_id
+      ) {
         return [
           touchRelation(
             "conversation",
             conversationId,
             relation,
-            "user",
-            grant.user_id,
+            "workspace_user",
+            buildWorkspaceUserContextId(grant.workspace_id, grant.user_id),
           ),
         ];
       }
@@ -350,6 +368,7 @@ async function loadActiveConversationCounts(conversationIds: string[]) {
 async function loadLastVisibleConversationItems(
   conversationIds: string[],
   userId: string,
+  workspaceMemberId?: string,
 ) {
   if (conversationIds.length === 0) {
     return [] as any[];
@@ -388,7 +407,10 @@ async function loadLastVisibleConversationItems(
           JOIN conversation_members cm_target
             ON cm_target.id = cit.target_member_id
           WHERE cit.item_id = ci.id
-            AND cm_target.user_id = ${userId}
+            AND (
+              cm_target.user_id = ${userId}
+              OR cm_target.workspace_member_id = ${workspaceMemberId || null}
+            )
         )`,
       ]),
     )
@@ -411,13 +433,19 @@ async function loadConversationItemParts(itemIds: string[]) {
     .execute();
 }
 
-function unreadCountSelection(userId: string) {
+function unreadCountSelection(userId: string, workspaceMemberId?: string) {
+  const membershipPredicate = workspaceMemberId
+    ? sql`cm_u.workspace_member_id = ${workspaceMemberId}`
+    : sql`cm_u.user_id = ${userId}`;
+  const targetPredicate = workspaceMemberId
+    ? sql`cm_target.workspace_member_id = ${workspaceMemberId}`
+    : sql`cm_target.user_id = ${userId}`;
   return sql<number>`(
     SELECT COUNT(*)::int
     FROM conversation_items ci
     JOIN conversation_members cm_u
       ON cm_u.conversation_id = c.id
-     AND cm_u.user_id = ${userId}
+     AND ${membershipPredicate}
     WHERE ci.conversation_id = c.id
       AND ci.scope = 'shared'
       AND ci.surface = 'visible'
@@ -433,7 +461,7 @@ function unreadCountSelection(userId: string) {
           JOIN conversation_members cm_target
             ON cm_target.id = cit.target_member_id
           WHERE cit.item_id = ci.id
-            AND cm_target.user_id = ${userId}
+            AND ${targetPredicate}
         )
       )
       AND ci.sequence > COALESCE(cr.read_watermark_sequence, 0)
@@ -443,35 +471,50 @@ function unreadCountSelection(userId: string) {
 async function queueConversationReadUpdated(params: {
   queryable: Queryable;
   workspaceId: string;
+  workspaceMemberId: string;
   conversationId: string;
   userId: string;
   readWatermarkSequence: number;
   lastReadAt?: string;
 }) {
-  await enqueueTransactionalEvent(params.queryable, {
+  await enqueueTransactionalEventDeliveries(params.queryable, {
     type: "conversation.read.updated",
-    workspaceId: params.workspaceId,
     payload: {
       conversationId: params.conversationId,
+      workspaceMemberId: params.workspaceMemberId,
       userId: params.userId,
       readWatermarkSequence: params.readWatermarkSequence,
       lastReadAt: params.lastReadAt || nowISO(),
     },
     timestamp: nowISO(),
+    recipients: [
+      {
+        workspaceId: params.workspaceId,
+        workspaceMemberId: params.workspaceMemberId,
+      },
+    ],
   });
 }
 
 async function queueConversationUpdated(params: {
   queryable: Queryable;
-  workspaceId: string;
   conversationId: string;
   action: "created" | "profile_updated" | "cancelled";
   title?: string | null;
   avatarUrl?: string | null;
+  recipients?: Array<{
+    workspaceId: string;
+    workspaceMemberId: string;
+  }>;
 }) {
-  await enqueueTransactionalEvent(params.queryable, {
+  const recipients =
+    params.recipients ||
+    (await listConversationRealtimeRecipients(
+      params.conversationId,
+      params.queryable,
+    ));
+  await enqueueTransactionalEventDeliveries(params.queryable, {
     type: "conversation.updated",
-    workspaceId: params.workspaceId,
     payload: {
       conversationId: params.conversationId,
       action: params.action,
@@ -479,6 +522,7 @@ async function queueConversationUpdated(params: {
       avatarUrl: params.avatarUrl,
     },
     timestamp: nowISO(),
+    recipients,
   });
 }
 
@@ -554,6 +598,7 @@ async function hydrateMembershipInitiator(params: {
     memberType: "actor" | "user";
     participantId?: string;
     memberId?: string;
+    workspaceMemberId?: string;
     actorId?: string;
     userId?: string;
     name?: string;
@@ -567,6 +612,7 @@ async function hydrateMembershipInitiator(params: {
   if (!memberId) {
     const member = await getConversationMember({
       conversationId: params.conversationId,
+      workspaceMemberId: params.initiator.workspaceMemberId,
       actorId: params.initiator.actorId,
       userId: params.initiator.userId,
     });
@@ -611,6 +657,7 @@ async function recordMembershipEvent(params: {
     memberType: "actor" | "user";
     participantId?: string;
     memberId?: string;
+    workspaceMemberId?: string;
     actorId?: string;
     userId?: string;
     name?: string;
@@ -619,6 +666,7 @@ async function recordMembershipEvent(params: {
     participantId: string;
     memberId: string;
     memberType: "actor" | "user";
+    workspaceMemberId?: string;
     actorId?: string;
     userId?: string;
     name: string;
@@ -642,10 +690,11 @@ async function recordMembershipEvent(params: {
     eventPayload: {
       batchId: params.batchId,
       initiator: initiator
-        ? {
+          ? {
             participantId: initiator.participantId || initiator.memberId,
             memberId: initiator.memberId,
             memberType: initiator.memberType,
+            workspaceMemberId: initiator.workspaceMemberId,
             actorId: initiator.actorId,
             userId: initiator.userId,
             name: initiator.name,
@@ -655,6 +704,7 @@ async function recordMembershipEvent(params: {
         participantId: member.participantId || member.memberId,
         memberId: member.memberId,
         memberType: member.memberType,
+        workspaceMemberId: member.workspaceMemberId,
         actorId: member.actorId,
         userId: member.userId,
         name: member.name,
@@ -670,7 +720,7 @@ async function resolveMemberTargets(params: {
   members?: any[];
   targetParticipantIds?: string[];
   targetActorIds?: string[];
-  targetUserIds?: string[];
+  targetWorkspaceMemberIds?: string[];
 }) {
   const members =
     params.members || (await listConversationMembers(params.conversationId));
@@ -684,7 +734,7 @@ async function resolveMemberTargets(params: {
   }
 
   const actorIds = new Set(params.targetActorIds || []);
-  const userIds = new Set(params.targetUserIds || []);
+  const workspaceMemberIds = new Set(params.targetWorkspaceMemberIds || []);
   const targetMemberIds: string[] = [];
 
   for (const member of members) {
@@ -692,7 +742,10 @@ async function resolveMemberTargets(params: {
     if (member.actor_id && actorIds.has(member.actor_id)) {
       targetMemberIds.push(member.id);
     }
-    if (member.user_id && userIds.has(member.user_id)) {
+    if (
+      member.workspace_member_id &&
+      workspaceMemberIds.has(member.workspace_member_id)
+    ) {
       targetMemberIds.push(member.id);
     }
   }
@@ -753,11 +806,25 @@ function getAutomaticWakeActorIds(params: {
 
 function buildSenderSubject(params: {
   senderType: "user" | "actor";
+  senderWorkspaceId?: string;
   senderUserId?: string;
   senderActorId?: string;
 }): AccessSubject | null {
   if (params.senderType === "actor" && params.senderActorId) {
     return { type: "actor" as const, id: params.senderActorId };
+  }
+  if (
+    params.senderType === "user" &&
+    params.senderUserId &&
+    params.senderWorkspaceId
+  ) {
+    return {
+      type: "workspace_user" as const,
+      id: buildWorkspaceUserContextId(
+        params.senderWorkspaceId,
+        params.senderUserId,
+      ),
+    };
   }
   if (params.senderType === "user" && params.senderUserId) {
     return { type: "user" as const, id: params.senderUserId };
@@ -768,31 +835,60 @@ function buildSenderSubject(params: {
 async function requireConversationSendPermission(params: {
   conversationId: string;
   senderType: "user" | "actor";
+  senderWorkspaceId?: string;
+  senderWorkspaceMemberId?: string;
   senderUserId?: string;
   senderActorId?: string;
 }) {
-  const subject = buildSenderSubject(params);
-  if (!subject) {
-    throw new Error("Unable to resolve sender subject");
-  }
-
-  const allowed = await authorizePermission({
-    subject,
-    resourceType: "conversation",
-    resourceId: params.conversationId,
-    permission: "send",
-  });
-
-  if (!allowed) {
+  if (params.senderType === "actor" && params.senderActorId) {
+    const actorMember = await getConversationMember({
+      conversationId: params.conversationId,
+      actorId: params.senderActorId,
+    });
+    if (actorMember?.state === "active") {
+      return;
+    }
     throw new Error(
       "Sender is not allowed to send messages to this conversation",
     );
   }
+
+  if (params.senderType === "user" && params.senderUserId) {
+    const currentWorkspaceMember =
+      params.senderWorkspaceMemberId && params.senderWorkspaceId
+        ? {
+            workspaceMemberId: params.senderWorkspaceMemberId,
+            workspaceId: params.senderWorkspaceId,
+            userId: params.senderUserId,
+            userName: "",
+            trustLevel: "member",
+          }
+        : params.senderWorkspaceId
+          ? await requireCurrentWorkspaceMember(
+              params.senderWorkspaceId,
+              params.senderUserId,
+            )
+          : null;
+    const userMember = await getConversationMember({
+      conversationId: params.conversationId,
+      workspaceMemberId: currentWorkspaceMember?.workspaceMemberId,
+      userId: params.senderUserId,
+    });
+    if (userMember?.state === "active") {
+      return;
+    }
+    throw new Error(
+      "Sender is not allowed to send messages to this conversation",
+    );
+  }
+
+  throw new Error("Unable to resolve sender subject");
 }
 
 async function filterAllowedTargetActorIds(params: {
   conversationId: string;
   senderType: "user" | "actor";
+  senderWorkspaceId?: string;
   senderUserId?: string;
   senderActorId?: string;
   targetActorIds: string[];
@@ -865,12 +961,12 @@ async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
 
 export async function createThread(params: {
   workspaceId?: string;
-  domain?: "workspace" | "social";
   kind: "group" | "private" | "virtual";
-  createdBy: string;
+  createdByUserId?: string;
+  createdByWorkspaceMemberId?: string;
   title?: string;
   actorIds?: string[];
-  userIds?: string[];
+  workspaceMemberIds?: string[];
   initialMessage?: string;
   initialContentBlocks?: import("@synapse/shared").CanonicalContentBlock[];
   targetActorIds?: string[];
@@ -882,12 +978,12 @@ export async function createThread(params: {
 }): Promise<{ conversation: any; members: any[]; message: any }> {
   const {
     workspaceId,
-    domain = "workspace",
     kind,
-    createdBy,
+    createdByUserId,
+    createdByWorkspaceMemberId,
     title,
     actorIds: rawActorIds = [],
-    userIds: rawUserIds = [],
+    workspaceMemberIds: rawWorkspaceMemberIds = [],
     initialMessage,
     initialContentBlocks,
     targetActorIds = [],
@@ -895,25 +991,22 @@ export async function createThread(params: {
     directBindingPair,
   } = params;
   const actorIds = Array.from(new Set(rawActorIds.filter(Boolean)));
-  const userIds = Array.from(
-    new Set(rawUserIds.filter((userId) => Boolean(userId) && userId !== createdBy)),
+  const explicitWorkspaceMemberIds = Array.from(
+    new Set(
+      [
+        ...rawWorkspaceMemberIds.filter(Boolean),
+        ...(includeCreatorMember && createdByWorkspaceMemberId
+          ? [createdByWorkspaceMemberId]
+          : []),
+      ].filter(Boolean),
+    ),
   );
-  const participantUserIds = includeCreatorMember
-    ? Array.from(new Set([createdBy, ...userIds]))
-    : userIds;
-  const participantCount = actorIds.length + participantUserIds.length;
 
-  if (domain === "workspace" && !workspaceId) {
-    throw new Error("workspaceId is required for workspace conversations");
+  if (includeCreatorMember && !workspaceId) {
+    throw new Error("workspaceId is required for human participants");
   }
-  if (kind === "private" && participantCount !== 2) {
-    throw new Error("Private thread must have exactly two active members");
-  }
-  if (kind === "group" && participantCount < 2) {
-    throw new Error("Group thread must have at least two active members");
-  }
-  if (kind === "virtual" && participantCount !== 0) {
-    throw new Error("Virtual conversations cannot be created with active members");
+  if (includeCreatorMember && !createdByWorkspaceMemberId) {
+    throw new Error("createdByWorkspaceMemberId is required for human participants");
   }
 
   const actorIdSet = new Set(actorIds);
@@ -949,59 +1042,70 @@ export async function createThread(params: {
     if (actorRows.length !== actorIds.length) {
       throw new Error("One or more actors were not found");
     }
-    if (
-      domain === "workspace" &&
-      actorRows.some((row: any) => row.workspace_id !== workspaceId)
-    ) {
-      throw new Error("Workspace thread actors must belong to the current workspace");
+
+    const explicitWorkspaceMemberRows =
+      explicitWorkspaceMemberIds.length > 0
+        ? await db
+            .selectFrom("workspace_members as wm")
+            .innerJoin("users as u", "u.id", "wm.user_id")
+            .select([
+              "wm.id as workspace_member_id",
+              "wm.workspace_id",
+              "wm.user_id",
+              "wm.trust_level",
+              "u.name as user_name",
+              "u.avatar_file_id",
+            ])
+            .where("wm.id", "in", explicitWorkspaceMemberIds)
+            .execute()
+        : [];
+    if (explicitWorkspaceMemberRows.length !== explicitWorkspaceMemberIds.length) {
+      throw new Error("One or more workspace members were not found");
     }
 
-    const userRows =
-      participantUserIds.length > 0
-        ? (
-            await executeCompiledQuery<{
-              id: string;
-              name: string;
-              workspace_member_user_id: string | null;
-            }>(
-              client,
-              db
-                .selectFrom("users as u")
-                .leftJoin("workspace_members as wm", (join) =>
-                  join
-                    .onRef("wm.user_id", "=", "u.id")
-                    .on("wm.workspace_id", "=", workspaceId || null),
-                )
-                .select([
-                  "u.id",
-                  "u.name",
-                  "wm.user_id as workspace_member_user_id",
-                ])
-                .where("u.id", "in", participantUserIds),
-            )
-          ).rows
-        : [];
-    if (userRows.length !== participantUserIds.length) {
-      throw new Error("One or more users were not found");
+    const participantWorkspaceMembers = new Map<string, WorkspaceMemberIdentity>();
+    for (const row of explicitWorkspaceMemberRows) {
+      participantWorkspaceMembers.set(row.workspace_member_id, {
+        workspaceMemberId: row.workspace_member_id,
+        workspaceId: row.workspace_id,
+        userId: row.user_id,
+        userName: row.user_name,
+        avatarFileId: row.avatar_file_id,
+        trustLevel: row.trust_level,
+      });
     }
-    if (
-      domain === "workspace" &&
-      userRows.some((row: any) => !row.workspace_member_user_id)
-    ) {
-      throw new Error("Workspace thread users must be members of the current workspace");
+    const humanParticipants = Array.from(participantWorkspaceMembers.values());
+    const uniqueBackingUsers = new Set(humanParticipants.map((item) => item.userId));
+    if (uniqueBackingUsers.size !== humanParticipants.length) {
+      throw new Error("The same user cannot join a conversation through multiple workspace identities");
+    }
+    const participantCount = actorIds.length + humanParticipants.length;
+    if (kind === "private" && participantCount !== 2) {
+      throw new Error("Private thread must have exactly two active members");
+    }
+    if (kind === "group" && participantCount < 2) {
+      throw new Error("Group thread must have at least two active members");
+    }
+    if (kind === "virtual" && participantCount !== 0) {
+      throw new Error("Virtual conversations cannot be created with active members");
     }
 
     const actorMap = new Map<string, any>(
       actorRows.map((row: any) => [row.id, row]),
     );
-    const userMap = new Map<string, any>(
-      userRows.map((row: any) => [row.id, row]),
-    );
+    const creatorIdentity =
+      createdByWorkspaceMemberId
+        ? participantWorkspaceMembers.get(createdByWorkspaceMemberId)
+        : undefined;
+    if (includeCreatorMember && !creatorIdentity) {
+      throw new Error("Creator workspace membership not found");
+    }
+    const creatorUserId = creatorIdentity?.userId || createdByUserId;
     const fallbackTitle =
       title?.trim() ||
       (kind === "group"
-        ? userRows
-            .map((row: any) => row.name)
+        ? humanParticipants
+            .map((row: any) => row.userName)
             .filter(Boolean)
             .join(", ") ||
           actorRows
@@ -1017,11 +1121,9 @@ export async function createThread(params: {
         .insertInto("conversations")
         .values({
           id: conversationId,
-          workspace_id: domain === "workspace" ? workspaceId : null,
-          domain,
           kind,
           title: fallbackTitle,
-          created_by: createdBy,
+          created_by: creatorUserId || null,
           metadata: {} as TableInsert<"conversations">["metadata"],
         })
         .returningAll(),
@@ -1047,27 +1149,19 @@ export async function createThread(params: {
       );
     }
 
-    if (domain === "workspace" && workspaceId) {
-      await queueConversationUpdated({
-        queryable: client,
-        workspaceId,
-        conversationId,
-        action: "created",
-      });
-    }
-
     const members: any[] = [];
     const joinedMembers: Array<{
       participantId: string;
       memberId: string;
       memberType: "actor" | "user";
+      workspaceMemberId?: string;
       actorId?: string;
       userId?: string;
       name: string;
       title?: string;
     }> = [];
 
-    for (const userId of participantUserIds) {
+    for (const humanParticipant of humanParticipants) {
       const userMemberId = uuidv4();
       await executeCompiledQuery(
         client,
@@ -1075,19 +1169,26 @@ export async function createThread(params: {
           id: userMemberId,
           conversation_id: conversationId,
           member_type: "user",
-          user_id: userId,
+          workspace_member_id: humanParticipant.workspaceMemberId,
+          user_id: humanParticipant.userId,
+          role:
+            kind === "group" &&
+            createdByWorkspaceMemberId &&
+            humanParticipant.workspaceMemberId === createdByWorkspaceMemberId
+              ? "owner"
+              : "member",
           state: "active",
           metadata: {} as TableInsert<"conversation_members">["metadata"],
         }),
       );
 
-      const userInfo = userMap.get(userId);
       joinedMembers.push({
         participantId: userMemberId,
         memberId: userMemberId,
         memberType: "user" as const,
-        userId,
-        name: userInfo?.name || "User",
+        workspaceMemberId: humanParticipant.workspaceMemberId,
+        userId: humanParticipant.userId,
+        name: humanParticipant.userName || "User",
       });
     }
 
@@ -1133,23 +1234,44 @@ export async function createThread(params: {
       });
     }
 
+    await queueConversationUpdated({
+      queryable: client,
+      conversationId,
+      action: "created",
+      recipients: humanParticipants.map((participant) => ({
+        workspaceId: participant.workspaceId,
+        workspaceMemberId: participant.workspaceMemberId,
+      })),
+    });
+
     const authzEntryIds = await queueAuthzRelationships(
       client,
       [
-        ...(domain === "workspace" && workspaceId
+        ...(creatorIdentity
           ? [
               touchRelation(
                 "conversation",
                 conversationId,
-                "workspace",
-                "workspace",
-                workspaceId,
+                "admin",
+                "workspace_user",
+                buildWorkspaceUserContextId(
+                  creatorIdentity.workspaceId,
+                  creatorIdentity.userId,
+                ),
               ),
             ]
           : []),
-        touchRelation("conversation", conversationId, "admin", "user", createdBy),
-        ...participantUserIds.map((userId) =>
-          touchRelation("conversation", conversationId, "participant", "user", userId),
+        ...humanParticipants.map((participant) =>
+          touchRelation(
+            "conversation",
+            conversationId,
+            "participant",
+            "workspace_user",
+            buildWorkspaceUserContextId(
+              participant.workspaceId,
+              participant.userId,
+            ),
+          ),
         ),
         ...actorIds.flatMap((actorId) => [
           touchRelation(
@@ -1166,8 +1288,7 @@ export async function createThread(params: {
         source: "conversation.create",
         workspaceId: workspaceId || null,
         conversationId,
-        createdBy,
-        domain,
+        createdByUserId: creatorUserId || null,
         kind,
       },
     );
@@ -1176,7 +1297,9 @@ export async function createThread(params: {
       conversation,
       members,
       joinedMembers,
-      creatorName: userMap.get(createdBy)?.name || "User",
+      creatorName: creatorIdentity?.userName || "User",
+      creatorUserId: creatorUserId || undefined,
+      creatorWorkspaceMemberId: creatorIdentity?.workspaceMemberId,
       authzEntryIds,
     };
   });
@@ -1185,10 +1308,12 @@ export async function createThread(params: {
 
   if (result.joinedMembers.length > 0) {
     const creatorMember = result.joinedMembers.find(
-      (member) => member.memberType === "user" && member.userId === createdBy,
+      (member) =>
+        member.memberType === "user" &&
+        member.workspaceMemberId === result.creatorWorkspaceMemberId,
     );
     await recordMembershipEvent({
-      workspaceId: domain === "workspace" ? workspaceId : undefined,
+      workspaceId,
       conversationId: conversationId,
       subtype: "member_joined",
       batchId,
@@ -1199,7 +1324,8 @@ export async function createThread(params: {
             memberType: "user",
             participantId: creatorMember.memberId,
             memberId: creatorMember.memberId,
-            userId: createdBy,
+            workspaceMemberId: creatorMember.workspaceMemberId,
+            userId: result.creatorUserId,
             name: result.creatorName,
           }
         : undefined,
@@ -1212,10 +1338,17 @@ export async function createThread(params: {
     (initialMessage ||
       (initialContentBlocks && initialContentBlocks.length > 0))
   ) {
+    const creatorMember = result.joinedMembers.find(
+      (member) =>
+        member.memberType === "user" &&
+        member.workspaceMemberId === result.creatorWorkspaceMemberId,
+    );
     await sendConversationMessage({
       conversationId,
       senderType: "user",
-      senderUserId: createdBy,
+      senderWorkspaceId: workspaceId,
+      senderWorkspaceMemberId: creatorMember?.workspaceMemberId,
+      senderUserId: result.creatorUserId,
       content: initialMessage || "",
       contentBlocks: initialContentBlocks,
       targetActorIds: initialTargetActorIds,
@@ -1253,7 +1386,7 @@ export async function updateConversationProfile(params: {
   avatarFileId?: string | null;
 }) {
   const conversation = await getConversation(params.conversationId);
-  if (!conversation || conversation.workspace_id !== params.workspaceId) {
+  if (!conversation) {
     throw new Error("Conversation not found");
   }
 
@@ -1298,7 +1431,6 @@ export async function updateConversationProfile(params: {
     const nextConversation = normalizeConversationRow(nextConversationRow);
     await queueConversationUpdated({
       queryable: client,
-      workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       action: "profile_updated",
       title: nextConversation.title,
@@ -1316,6 +1448,10 @@ export async function getConversationsByWorkspace(
   userId: string,
   conversationIds?: string[],
 ): Promise<any[]> {
+  const currentWorkspaceMember = await requireCurrentWorkspaceMember(
+    workspaceId,
+    userId,
+  );
   const conversations = conversationIds
     ? conversationIds.length > 0
       ? await db
@@ -1333,7 +1469,11 @@ export async function getConversationsByWorkspace(
           .leftJoin("conversation_user_states as cr", (join) =>
             join
               .onRef("cr.conversation_id", "=", "c.id")
-              .on("cr.user_id", "=", userId),
+              .on(
+                "cr.workspace_member_id",
+                "=",
+                currentWorkspaceMember.workspaceMemberId,
+              ),
           )
           .selectAll("c")
           .select([
@@ -1342,16 +1482,30 @@ export async function getConversationsByWorkspace(
             sql<number>`COALESCE(cr.read_watermark_sequence, 0)`.as(
               "read_watermark_sequence",
             ),
-            unreadCountSelection(userId),
+            unreadCountSelection(
+              userId,
+              currentWorkspaceMember.workspaceMemberId,
+            ),
           ])
-          .where("c.workspace_id", "=", workspaceId)
-          .where("c.domain", "=", "workspace")
+          .where(
+            sql<boolean>`EXISTS (
+              SELECT 1
+              FROM conversation_members cm
+              WHERE cm.conversation_id = c.id
+                AND cm.workspace_member_id = ${currentWorkspaceMember.workspaceMemberId}
+                AND cm.state = 'active'
+            )`,
+          )
           .where("c.id", "in", conversationIds)
           .orderBy("c.updated_at", "desc")
           .orderBy("c.created_at", "desc")
           .execute()
       : []
-    : await listUserWorkspaceConversations(workspaceId, userId);
+    : await listUserWorkspaceConversations(
+        workspaceId,
+        userId,
+        currentWorkspaceMember.workspaceMemberId,
+      );
   if (conversations.length === 0) return [];
 
   const resolvedConversationIds = conversations.map(
@@ -1363,6 +1517,7 @@ export async function getConversationsByWorkspace(
   const lastItems = await loadLastVisibleConversationItems(
     resolvedConversationIds,
     userId,
+    currentWorkspaceMember.workspaceMemberId,
   );
 
   const lastItemMap = new Map<string, any>(
@@ -1401,14 +1556,25 @@ export async function getConversationsByWorkspace(
 export async function getThreadsForUser(params: {
   userId: string;
   workspaceId?: string;
-  domain?: "workspace" | "social";
+  workspaceMemberId?: string;
 }): Promise<any[]> {
+  const currentWorkspaceMember =
+    params.workspaceId && !params.workspaceMemberId
+      ? await requireCurrentWorkspaceMember(params.workspaceId, params.userId)
+      : params.workspaceId && params.workspaceMemberId
+        ? {
+            workspaceMemberId: params.workspaceMemberId,
+            workspaceId: params.workspaceId,
+            userId: params.userId,
+            userName: "",
+            trustLevel: "member",
+          }
+        : null;
   let statement = db
     .selectFrom("conversations as c")
     .innerJoin("conversation_members as cm", (join) =>
       join
         .onRef("cm.conversation_id", "=", "c.id")
-        .on("cm.user_id", "=", params.userId)
         .on("cm.state", "=", "active"),
     )
     .leftJoin(
@@ -1424,7 +1590,15 @@ export async function getThreadsForUser(params: {
     .leftJoin("conversation_user_states as cr", (join) =>
       join
         .onRef("cr.conversation_id", "=", "c.id")
-        .on("cr.user_id", "=", params.userId),
+        .on(
+          currentWorkspaceMember
+            ? "cr.workspace_member_id"
+            : "cr.user_id",
+          "=",
+          currentWorkspaceMember
+            ? currentWorkspaceMember.workspaceMemberId
+            : params.userId,
+        ),
     )
     .selectAll("c")
     .select([
@@ -1433,53 +1607,20 @@ export async function getThreadsForUser(params: {
       sql<number>`COALESCE(cr.read_watermark_sequence, 0)`.as(
         "read_watermark_sequence",
       ),
-      unreadCountSelection(params.userId),
+      unreadCountSelection(
+        params.userId,
+        currentWorkspaceMember?.workspaceMemberId,
+      ),
     ]);
 
-  if (params.workspaceId) {
-    const workspaceId = params.workspaceId;
-    const socialVisibilityFilter = (eb: any) =>
-      eb.or([
-        eb("c.kind", "<>", "private"),
-        sql<boolean>`exists (
-          select 1
-          from direct_conversation_bindings dcb
-          where dcb.conversation_id = c.id
-            and (
-              (
-                dcb.participant_one_kind = 'user'
-                and dcb.participant_one_workspace_id = ${workspaceId}
-                and dcb.participant_one_user_id = ${params.userId}
-              )
-              or (
-                dcb.participant_two_kind = 'user'
-                and dcb.participant_two_workspace_id = ${workspaceId}
-                and dcb.participant_two_user_id = ${params.userId}
-              )
-            )
-        )`,
-      ]);
-    if (params.domain === "workspace") {
-      statement = statement
-        .where("c.domain", "=", "workspace")
-        .where("c.workspace_id", "=", workspaceId);
-    } else if (params.domain === "social") {
-      statement = statement
-        .where("c.domain", "=", "social")
-        .where(socialVisibilityFilter);
-    } else {
-      statement = statement.where((eb) =>
-        eb.or([
-          eb.and([eb("c.domain", "=", "social"), socialVisibilityFilter(eb)]),
-          eb.and([
-            eb("c.domain", "=", "workspace"),
-            eb("c.workspace_id", "=", workspaceId),
-          ]),
-        ]),
-      );
-    }
-  } else if (params.domain) {
-    statement = statement.where("c.domain", "=", params.domain);
+  if (currentWorkspaceMember) {
+    statement = statement.where(
+      "cm.workspace_member_id",
+      "=",
+      currentWorkspaceMember.workspaceMemberId,
+    );
+  } else {
+    statement = statement.where("cm.user_id", "=", params.userId);
   }
 
   const conversations = await statement
@@ -1494,6 +1635,7 @@ export async function getThreadsForUser(params: {
   const lastItems = await loadLastVisibleConversationItems(
     conversationIds,
     params.userId,
+    currentWorkspaceMember?.workspaceMemberId,
   );
 
   const lastItemMap = new Map<string, any>(
@@ -1554,6 +1696,9 @@ export async function addActorToConversation(
     .select(["name", "title", "workspace_id"])
     .where("id", "=", actorId)
     .executeTakeFirst();
+  if (!actorInfo?.workspace_id) {
+    throw new Error("Actor workspace not found");
+  }
   const result = await transaction(async (client) => {
     const member = await ensureConversationMember({
       conversationId: conversationId,
@@ -1562,7 +1707,7 @@ export async function addActorToConversation(
       actorJoinVersionId,
     });
     const session = await createSession({
-      workspaceId: actorInfo?.workspace_id || conversation.workspace_id,
+      workspaceId: actorInfo.workspace_id,
       actorId,
       conversationId: conversationId,
       channelType: "web",
@@ -1587,16 +1732,16 @@ export async function addActorToConversation(
   });
 
   await flushQueuedAuthzEntries(result.authzEntryIds, "conversation.add_actor");
-  if (actorInfo?.workspace_id || conversation.workspace_id) {
+  if (actorInfo?.workspace_id) {
     await publishSessionRuntime(
-      actorInfo?.workspace_id || conversation.workspace_id,
+      actorInfo.workspace_id,
       result.session.id,
     );
   }
 
   const eventBatchId = batchId || uuidv4();
   await recordMembershipEvent({
-    workspaceId: conversation.workspace_id || undefined,
+    workspaceId: actorInfo?.workspace_id || undefined,
     conversationId: conversationId,
     subtype: "member_joined",
     batchId: eventBatchId,
@@ -1627,7 +1772,7 @@ export async function addMembersToConversation(params: {
   conversationId: string;
   workspaceId: string;
   actorIds?: string[];
-  userIds?: string[];
+  workspaceMemberIds?: string[];
   initiator?: {
     memberType: "actor" | "user";
     memberId?: string;
@@ -1637,13 +1782,15 @@ export async function addMembersToConversation(params: {
   };
 }) {
   const actorIds = [...new Set((params.actorIds || []).filter(Boolean))];
-  const userIds = [...new Set((params.userIds || []).filter(Boolean))];
-  if (actorIds.length === 0 && userIds.length === 0) {
-    throw new Error("At least one actor or user is required");
+  const workspaceMemberIds = [
+    ...new Set((params.workspaceMemberIds || []).filter(Boolean)),
+  ];
+  if (actorIds.length === 0 && workspaceMemberIds.length === 0) {
+    throw new Error("At least one actor or workspace member is required");
   }
 
   const conversation = await getConversation(params.conversationId);
-  if (!conversation || conversation.workspace_id !== params.workspaceId) {
+  if (!conversation) {
     throw new Error("Conversation not found");
   }
   if (conversation.kind === "private") {
@@ -1670,14 +1817,19 @@ export async function addMembersToConversation(params: {
         }
       : { rows: [] as any[] };
   const userResult =
-    userIds.length > 0
+    workspaceMemberIds.length > 0
       ? {
           rows: await db
             .selectFrom("workspace_members as wm")
             .innerJoin("users as u", "u.id", "wm.user_id")
-            .select(["u.id", "u.name", "u.avatar_file_id"])
-            .where("wm.workspace_id", "=", params.workspaceId)
-            .where("u.id", "in", userIds)
+            .select([
+              "wm.id as workspace_member_id",
+              "wm.workspace_id",
+              "u.id as user_id",
+              "u.name",
+              "u.avatar_file_id",
+            ])
+            .where("wm.id", "in", workspaceMemberIds)
             .execute(),
         }
       : { rows: [] as any[] };
@@ -1685,8 +1837,8 @@ export async function addMembersToConversation(params: {
   if (actorResult.rows.length !== actorIds.length) {
     throw new Error("One or more actors are not available in this workspace");
   }
-  if (userResult.rows.length !== userIds.length) {
-    throw new Error("One or more users are not members of this workspace");
+  if (userResult.rows.length !== workspaceMemberIds.length) {
+    throw new Error("One or more workspace members were not found");
   }
 
   const actorMap = new Map(
@@ -1694,7 +1846,7 @@ export async function addMembersToConversation(params: {
   );
   const actorJoinVersionRefs = await loadActorJoinVersionRefs(actorIds);
   const userMap = new Map(
-    userResult.rows.map((row) => [row.id as string, row]),
+    userResult.rows.map((row) => [row.workspace_member_id as string, row]),
   );
   const batchId = uuidv4();
 
@@ -1705,6 +1857,7 @@ export async function addMembersToConversation(params: {
       participantId: string;
       memberId: string;
       memberType: "actor" | "user";
+      workspaceMemberId?: string;
       actorId?: string;
       userId?: string;
       name: string;
@@ -1766,32 +1919,50 @@ export async function addMembersToConversation(params: {
       });
     }
 
-    for (const userId of userIds) {
-      const existing = await getConversationMember({
+    for (const workspaceMemberId of workspaceMemberIds) {
+      const userInfo = userMap.get(workspaceMemberId)!;
+      const existingByWorkspaceMember = await getConversationMember({
         conversationId: params.conversationId,
-        userId,
+        workspaceMemberId,
       });
-      if (existing?.state === "active") continue;
+      if (existingByWorkspaceMember?.state === "active") continue;
+      const existingByUser = await getConversationMember({
+        conversationId: params.conversationId,
+        userId: userInfo.user_id,
+      });
+      if (
+        existingByUser &&
+        existingByUser.workspace_member_id &&
+        existingByUser.workspace_member_id !== workspaceMemberId
+      ) {
+        throw new Error(
+          "The same user cannot join a conversation through multiple workspace identities",
+        );
+      }
 
       const member = await ensureConversationMember({
         conversationId: params.conversationId,
         memberType: "user",
-        userId,
+        workspaceMemberId,
+        userId: userInfo.user_id,
       });
-      const userInfo = userMap.get(userId)!;
       relationships.push(
         touchRelation(
           "conversation",
           params.conversationId,
           "participant",
-          "user",
-          userId,
+          "workspace_user",
+          buildWorkspaceUserContextId(
+            userInfo.workspace_id,
+            userInfo.user_id,
+          ),
         ),
       );
       addedMembers.push({
         memberId: member.id,
         type: "user" as const,
-        userId,
+        workspaceMemberId: userInfo.workspace_member_id,
+        userId: userInfo.user_id,
         name: userInfo.name || "User",
         avatarUrl: userInfo.avatar_file_id
           ? getFileUrlById(userInfo.avatar_file_id)
@@ -1801,7 +1972,8 @@ export async function addMembersToConversation(params: {
         participantId: member.id,
         memberId: member.id,
         memberType: "user",
-        userId,
+        workspaceMemberId: userInfo.workspace_member_id,
+        userId: userInfo.user_id,
         name: userInfo.name || "User",
       });
     }
@@ -1810,7 +1982,7 @@ export async function addMembersToConversation(params: {
       source: "conversation.add_members",
       conversationId: params.conversationId,
       actorIds,
-      userIds,
+      workspaceMemberIds,
     });
 
     return {
@@ -1949,7 +2121,7 @@ export async function removeActorFromConversation(
     .executeTakeFirst();
   const eventBatchId = uuidv4();
   await recordMembershipEvent({
-    workspaceId: conversation.workspace_id,
+    workspaceId: undefined,
     conversationId: conversationId,
     subtype: "member_kicked",
     batchId: eventBatchId,
@@ -2080,13 +2252,15 @@ export async function getConversationMembers(
 export async function sendConversationMessage(params: {
   conversationId: string;
   senderType: "user" | "actor";
+  senderWorkspaceId?: string;
+  senderWorkspaceMemberId?: string;
   senderUserId?: string;
   senderActorId?: string;
   senderSessionId?: string;
   clientMessageId?: string;
   targetParticipantIds?: string[];
   targetActorIds?: string[];
-  targetUserIds?: string[];
+  targetWorkspaceMemberIds?: string[];
   content: string;
   contentBlocks?: import("@synapse/shared").CanonicalContentBlock[];
   metadata?: Record<string, unknown>;
@@ -2094,6 +2268,8 @@ export async function sendConversationMessage(params: {
   const {
     conversationId,
     senderType,
+    senderWorkspaceId,
+    senderWorkspaceMemberId,
     senderUserId,
     senderActorId,
     senderSessionId,
@@ -2108,6 +2284,8 @@ export async function sendConversationMessage(params: {
   await requireConversationSendPermission({
     conversationId: conversationId,
     senderType,
+    senderWorkspaceId,
+    senderWorkspaceMemberId,
     senderUserId,
     senderActorId,
   });
@@ -2120,13 +2298,17 @@ export async function sendConversationMessage(params: {
   const requestedTargetActorIds = Array.isArray(params.targetActorIds)
     ? Array.from(new Set(params.targetActorIds.filter(Boolean)))
     : [];
-  const requestedTargetUserIds = Array.isArray(params.targetUserIds)
-    ? Array.from(new Set(params.targetUserIds.filter(Boolean)))
+  const requestedTargetWorkspaceMemberIds = Array.isArray(
+    params.targetWorkspaceMemberIds,
+  )
+    ? Array.from(
+        new Set(params.targetWorkspaceMemberIds.filter(Boolean)),
+      )
     : [];
   const hasExplicitTargets =
     requestedTargetParticipantIds.length > 0 ||
     requestedTargetActorIds.length > 0 ||
-    requestedTargetUserIds.length > 0;
+    requestedTargetWorkspaceMemberIds.length > 0;
 
   let senderName: string | undefined;
   if (senderActorId) {
@@ -2151,7 +2333,7 @@ export async function sendConversationMessage(params: {
     senderType === "actor"
       ? (
           await activateConversationParticipant({
-            workspaceId: conversation.workspace_id || undefined,
+            workspaceId: senderWorkspaceId,
             conversationId: conversationId,
             memberType: "actor",
             actorId: senderActorId,
@@ -2169,9 +2351,10 @@ export async function sendConversationMessage(params: {
         ).member
       : (
           await activateConversationParticipant({
-            workspaceId: conversation.workspace_id || undefined,
+            workspaceId: senderWorkspaceId,
             conversationId: conversationId,
             memberType: "user",
+            workspaceMemberId: senderWorkspaceMemberId,
             userId: senderUserId,
             initiator: senderUserId
               ? {
@@ -2188,7 +2371,7 @@ export async function sendConversationMessage(params: {
     conversationId: conversationId,
     members,
     targetParticipantIds: requestedTargetParticipantIds,
-    targetUserIds: requestedTargetUserIds,
+    targetWorkspaceMemberIds: requestedTargetWorkspaceMemberIds,
   });
   const membersById = new Map(
     members.map((member: any) => [member.id as string, member]),
@@ -2207,6 +2390,7 @@ export async function sendConversationMessage(params: {
   const allowedExplicitActorIds = await filterAllowedTargetActorIds({
     conversationId: conversationId,
     senderType,
+    senderWorkspaceId,
     senderUserId,
     senderActorId,
     targetActorIds: requestedExplicitActorIds,
@@ -2239,10 +2423,21 @@ export async function sendConversationMessage(params: {
   const additionalTargetActorIds = allowedExplicitActorIds.filter(
     (actorId) => !actorIdsRepresentedByTargetMemberSet.has(actorId),
   );
+  const transportBindingWorkspaceId =
+    targetMemberIds.length > 0
+      ? (
+          await db
+            .selectFrom("conversation_transport_bindings")
+            .select("workspace_id")
+            .where("conversation_id", "=", conversationId)
+            .limit(1)
+            .executeTakeFirst()
+        )?.workspace_id
+      : undefined;
   const transportBinding =
-    conversation.workspace_id && targetMemberIds.length > 0
+    transportBindingWorkspaceId && targetMemberIds.length > 0
       ? await getConversationTransportBinding({
-          workspaceId: conversation.workspace_id,
+          workspaceId: transportBindingWorkspaceId,
           conversationId: conversationId,
         })
       : null;
@@ -2289,6 +2484,7 @@ export async function sendConversationMessage(params: {
   const automaticWakeActorIds = await filterAllowedTargetActorIds({
     conversationId: conversationId,
     senderType,
+    senderWorkspaceId,
     senderUserId,
     senderActorId,
     targetActorIds: automaticWakeCandidateIds,
@@ -2311,7 +2507,7 @@ export async function sendConversationMessage(params: {
   let item: any;
   try {
     item = await createConversationItem({
-      workspaceId: conversation.workspace_id || undefined,
+      workspaceId: senderWorkspaceId || transportBindingWorkspaceId || undefined,
       conversationId: conversationId,
       sessionId: senderSessionId,
       clientMessageId,
@@ -2339,9 +2535,9 @@ export async function sendConversationMessage(params: {
     throw error;
   }
 
-  if (conversation.workspace_id && hasExplicitTransportTargets) {
+  if (transportBindingWorkspaceId && hasExplicitTransportTargets) {
     await queueConversationTransportProjection({
-      workspaceId: conversation.workspace_id,
+      workspaceId: transportBindingWorkspaceId,
       conversationId: conversationId,
       itemId: item.id,
       direction: "outbound",
@@ -2396,14 +2592,19 @@ export async function sendConversationMessage(params: {
 
 export async function getConversationMessages(
   conversationId: string,
-  viewer: { userId?: string; actorId?: string },
+  viewer: { userId?: string; actorId?: string; workspaceMemberId?: string },
   limit = 100,
   before?: string,
 ): Promise<{ items: any[]; hasMore: boolean; nextBeforeSequence?: number }> {
   const conversation = await getConversation(conversationId);
   if (!conversation) return { items: [], hasMore: false };
 
-  const viewerMember = viewer.userId
+  const viewerMember = viewer.workspaceMemberId
+    ? await getConversationMember({
+        conversationId: conversationId,
+        workspaceMemberId: viewer.workspaceMemberId,
+      })
+    : viewer.userId
     ? await getConversationMember({
         conversationId: conversationId,
         userId: viewer.userId,
@@ -2454,7 +2655,12 @@ export async function getConversationMessages(
     ...(viewer.userId
       ? {
           readWatermarkSequence: (
-            await getConversationReadState(viewer.userId, conversationId)
+            await getConversationReadState(
+              viewer.userId,
+              conversationId,
+              undefined,
+              viewer.workspaceMemberId,
+            )
           ).readWatermarkSequence,
         }
       : {}),
@@ -2487,7 +2693,6 @@ export async function wakeActor(params: {
 
   let session = await ensureActorSession({
     conversationId: params.conversationId,
-    workspaceId: conversation.workspace_id || undefined,
     actorId: params.actorId,
     trigger: mapWakeupSourceTypeToTrigger(params.sourceType),
   });
@@ -2568,7 +2773,7 @@ export async function issueConversationGrant(params: {
   reason?: string;
   metadata?: Record<string, unknown>;
 }) {
-  const subjectType = params.userId ? "user" : "actor";
+  const subjectType = params.userId ? "workspace_user" : "actor";
   if (!params.userId && !params.actorId) {
     throw new Error("userId or actorId is required");
   }
@@ -2790,22 +2995,28 @@ export async function markConversationRead(
   userId: string,
   conversationId: string,
   requestedSequence?: number,
+  workspaceId?: string,
 ): Promise<void> {
   const conversation = await getConversation(conversationId);
   if (!conversation) {
     return;
   }
+  const currentWorkspaceMember = workspaceId
+    ? await requireCurrentWorkspaceMember(workspaceId, userId)
+    : null;
 
   const resolvedSequence =
     typeof requestedSequence === "number" && Number.isFinite(requestedSequence)
       ? await resolveReadableConversationSequenceForUser({
           conversationId,
           userId,
+          workspaceMemberId: currentWorkspaceMember?.workspaceMemberId,
           maxSequence: requestedSequence,
         })
       : await resolveReadableConversationSequenceForUser({
           conversationId,
           userId,
+          workspaceMemberId: currentWorkspaceMember?.workspaceMemberId,
         });
 
   await transaction(async (client) => {
@@ -2814,16 +3025,23 @@ export async function markConversationRead(
       conversationId,
       resolvedSequence,
       client,
+      currentWorkspaceMember?.workspaceMemberId,
     );
 
-    if (!conversation.workspace_id) {
+    if (!currentWorkspaceMember?.workspaceId) {
       return;
     }
 
-    const state = await getConversationReadState(userId, conversationId, client);
+    const state = await getConversationReadState(
+      userId,
+      conversationId,
+      client,
+      currentWorkspaceMember.workspaceMemberId,
+    );
     await queueConversationReadUpdated({
       queryable: client,
-      workspaceId: conversation.workspace_id,
+      workspaceId: currentWorkspaceMember.workspaceId,
+      workspaceMemberId: currentWorkspaceMember.workspaceMemberId,
       conversationId,
       userId,
       readWatermarkSequence: state.readWatermarkSequence,
@@ -2849,25 +3067,11 @@ export async function cancelConversation(conversationId: string): Promise<void> 
         .where("status", "<>", "closed")
         .returning("id"),
     );
-    const conversationRow = await executeTakeFirst<{ workspace_id: string | null }>(
-      client,
-      db
-        .selectFrom("conversations")
-        .select("workspace_id")
-        .where("id", "=", conversationId)
-        .limit(1),
-    );
-    const workspaceId =
-      (conversationRow?.workspace_id as string | undefined) ||
-      undefined;
-    if (workspaceId) {
-      await queueConversationUpdated({
-        queryable: client,
-        workspaceId,
-        conversationId,
-        action: "cancelled",
-      });
-    }
+    await queueConversationUpdated({
+      queryable: client,
+      conversationId,
+      action: "cancelled",
+    });
     return {
       sessionIds: closed.rows.map((row) => row.id),
     };

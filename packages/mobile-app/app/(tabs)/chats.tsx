@@ -119,13 +119,13 @@ export default function ChatsTab() {
   );
 
   useWorkspaceWebSocket({
+    workspaceId: workspaceId || undefined,
     enabled: Boolean(workspaceId),
     subscriptions: workspaceId
       ? [
           {
             key: `inbox:${workspaceId}`,
             topic: "inbox",
-            workspaceId,
           },
         ]
       : [],

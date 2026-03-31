@@ -7,7 +7,6 @@ export type WebSocketSubscription =
   | {
       key: string
       topic: "inbox"
-      workspaceId?: string | null
     }
   | {
       key: string
@@ -16,12 +15,16 @@ export type WebSocketSubscription =
     }
 
 interface UseWebSocketOptions {
+  enabled?: boolean
+  workspaceId?: string | null
   subscriptions: WebSocketSubscription[]
   onEvent?: (event: ChatSocketEvent | Record<string, unknown>) => void
   onConnected?: () => void
 }
 
 export function useWebSocket({
+  enabled = true,
+  workspaceId,
   subscriptions,
   onEvent,
   onConnected,
@@ -157,7 +160,12 @@ export function useWebSocket({
     ws.current = socket
 
     socket.onopen = () => {
-      socket.send(JSON.stringify({ type: "auth" }))
+      socket.send(
+        JSON.stringify({
+          type: "auth",
+          ...(workspaceId ? { workspaceId } : {}),
+        })
+      )
     }
 
     socket.onmessage = (e) => {
@@ -227,17 +235,33 @@ export function useWebSocket({
     socket.onerror = () => {
       // Let the close handler schedule reconnects.
     }
-  }, [cleanup, maxReconnectAttempts, resetPingWatchdog, resolveWebSocketUrl, syncSubscriptions])
+  }, [
+    cleanup,
+    maxReconnectAttempts,
+    resetPingWatchdog,
+    resolveWebSocketUrl,
+    syncSubscriptions,
+    workspaceId,
+  ])
 
   useEffect(() => {
     mountedRef.current = true
+    if (!enabled || !workspaceId) {
+      setConnected(false)
+      setConnecting(false)
+      cleanup()
+      return () => {
+        mountedRef.current = false
+        cleanup()
+      }
+    }
     connect()
 
     return () => {
       mountedRef.current = false
       cleanup()
     }
-  }, [cleanup, connect])
+  }, [cleanup, connect, enabled, workspaceId])
 
   return { connected, connecting }
 }

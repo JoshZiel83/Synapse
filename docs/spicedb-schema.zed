@@ -119,31 +119,41 @@ definition actor_conversation {
 }
 
 definition conversation {
-    relation workspace: workspace
-    relation participant: user | actor
-    relation moderator: user | actor
-    relation admin: user | actor
-    relation blocked: user | actor
-    relation sender: user | actor
-    relation manager: user | actor
-    relation member_manager: user | actor
-    relation resource_attacher: user | actor
-    relation memory_reader: user | actor
-    relation memory_editor: user | actor
-    relation memory_retargeter: user | actor
-    relation memory_deleter: user | actor
+    relation participant: workspace_user | actor
+    relation moderator: workspace_user | actor
+    relation admin: workspace_user | actor
+    relation blocked: workspace_user | actor
+    relation sender: workspace_user | actor
+    relation manager: workspace_user | actor
+    relation member_manager: workspace_user | actor
+    relation resource_attacher: workspace_user | actor
+    relation memory_reader: workspace_user | actor
+    relation memory_editor: workspace_user | actor
+    relation memory_retargeter: workspace_user | actor
+    relation memory_deleter: workspace_user | actor
 
-    permission principal = participant + moderator + admin
-    permission view = (participant + moderator + admin) - blocked
-    permission send = (participant + moderator + admin + sender + workspace->manage_conversations) & view
-    permission moderate = (moderator + admin + workspace->manage_conversations) & view
-    permission manage = (admin + manager + workspace->manage_conversations) & view
-    permission manage_members = (admin + manager + member_manager + workspace->manage_conversations) & view
-    permission attach_resources = (moderator + admin + resource_attacher + workspace->manage_conversations) & view
+    permission principal = participant + participant->principal + moderator + moderator->principal + admin + admin->principal
+    permission blocked_principal = blocked + blocked->principal
+    permission moderator_principal = moderator + moderator->principal
+    permission admin_principal = admin + admin->principal
+    permission sender_principal = sender + sender->principal
+    permission manager_principal = manager + manager->principal
+    permission member_manager_principal = member_manager + member_manager->principal
+    permission resource_attacher_principal = resource_attacher + resource_attacher->principal
+    permission memory_editor_principal = memory_editor + memory_editor->principal
+    permission memory_retargeter_principal = memory_retargeter + memory_retargeter->principal
+    permission memory_deleter_principal = memory_deleter + memory_deleter->principal
+
+    permission view = principal - blocked_principal
+    permission send = (principal + sender_principal) & view
+    permission moderate = (moderator_principal + admin_principal) & view
+    permission manage = (admin_principal + manager_principal) & view
+    permission manage_members = (admin_principal + manager_principal + member_manager_principal) & view
+    permission attach_resources = (moderator_principal + admin_principal + resource_attacher_principal) & view
     permission memory_read = view
-    permission memory_edit = (moderator + admin + workspace->manage_conversations + memory_editor) & view
-    permission memory_retarget = (admin + workspace->manage_conversations + memory_retargeter) & view
-    permission memory_delete = (admin + workspace->manage_conversations + memory_deleter) & view
+    permission memory_edit = (moderator_principal + admin_principal + memory_editor_principal) & view
+    permission memory_retarget = (admin_principal + memory_retargeter_principal) & view
+    permission memory_delete = (admin_principal + memory_deleter_principal) & view
 }
 
 definition memory {

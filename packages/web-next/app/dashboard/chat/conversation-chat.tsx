@@ -500,7 +500,10 @@ export default function ConversationChat({
       current.includes(itemId) ? current : [...current, itemId]
     )
     try {
-      await api.retryConversationMessage(conversation.id, itemId)
+      if (!workspaceId) {
+        throw new Error("Workspace context is required to retry a message.")
+      }
+      await api.retryConversationMessage(workspaceId, conversation.id, itemId)
       toast.success("已请求重试")
     } catch (error) {
       const message = error instanceof Error ? error.message : "重试失败"
@@ -548,7 +551,7 @@ export default function ConversationChat({
 
     setSavingTitle(true)
     try {
-      await api.updateThread(conversation.id, {
+      await api.updateThread(workspaceId, conversation.id, {
         title: nextTitle,
       })
       await onRefreshConversation?.()
@@ -566,7 +569,7 @@ export default function ConversationChat({
     setAvatarUploading(true)
     try {
       const uploaded = await api.uploadFile(workspaceId, file)
-      await api.updateThread(conversation.id, {
+      await api.updateThread(workspaceId, conversation.id, {
         avatarFileId: uploaded.id,
       })
       await onRefreshConversation?.()
@@ -598,6 +601,7 @@ export default function ConversationChat({
     }
 
     const result = await api.resolveThreadInteraction(
+      workspaceId,
       conversation.id,
       interactionId,
       data

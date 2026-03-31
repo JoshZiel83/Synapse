@@ -12,7 +12,6 @@ CREATE TYPE platform_access_bindings_source AS ENUM ('config', 'manual');
 CREATE TYPE workspace_members_trust_level AS ENUM ('admin', 'member', 'guest');
 CREATE TYPE workspace_access_bindings_access_key AS ENUM ('model_admin', 'actor_admin', 'skill_admin', 'plugin_admin', 'memory_admin', 'relay_admin', 'conversation_admin');
 CREATE TYPE workspace_invites_trust_level AS ENUM ('admin', 'member', 'guest');
-CREATE TYPE conversations_domain AS ENUM ('workspace', 'social');
 CREATE TYPE conversations_kind AS ENUM ('group', 'private', 'virtual');
 CREATE TYPE files_category AS ENUM ('general', 'chat_attachment', 'plugin_output', 'plugin_asset');
 CREATE TYPE access_bindings_status AS ENUM ('active', 'revoked');
@@ -44,6 +43,7 @@ CREATE TYPE sessions_channel_type AS ENUM ('web', 'api', 'bridge');
 CREATE TYPE sessions_status AS ENUM ('idle', 'queued', 'running', 'blocked', 'closed');
 CREATE TYPE conversation_members_member_type AS ENUM ('actor', 'user', 'external', 'remote_agent', 'system');
 CREATE TYPE conversation_members_state AS ENUM ('active', 'left', 'kicked');
+CREATE TYPE conversation_members_role AS ENUM ('owner', 'admin', 'member');
 CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin');
 CREATE TYPE transport_accounts_owner_scope AS ENUM ('workspace', 'workspace_user');
 CREATE TYPE transport_accounts_inbound_actor_mode AS ENUM ('none', 'specified_actor', 'follow_owner_chief_actor');
@@ -54,7 +54,7 @@ CREATE TYPE conversation_transport_bindings_inbound_actor_mode AS ENUM ('inherit
 CREATE TYPE transport_addresses_transport_kind AS ENUM ('feishu', 'weixin');
 CREATE TYPE transport_addresses_address_type AS ENUM ('user', 'bot', 'system');
 CREATE TYPE conversation_grants_permission AS ENUM ('send', 'moderate', 'manage', 'manage_members', 'attach_resources');
-CREATE TYPE conversation_grants_subject_type AS ENUM ('user', 'actor');
+CREATE TYPE conversation_grants_subject_type AS ENUM ('workspace_user', 'actor');
 CREATE TYPE conversation_grants_status AS ENUM ('active', 'revoked');
 CREATE TYPE conversation_items_scope AS ENUM ('shared', 'private');
 CREATE TYPE conversation_items_surface AS ENUM ('visible', 'internal');
@@ -97,8 +97,8 @@ CREATE TYPE automation_triggers_source_kind AS ENUM ('clock', 'relay', 'webhook'
 CREATE TYPE automation_triggers_schedule_kind AS ENUM ('cron', 'at', 'interval');
 CREATE TYPE automation_deliveries_delivery_mode AS ENUM ('wake_session', 'conversation_notice', 'create_conversation_once', 'create_conversation_each_time');
 CREATE TYPE automation_deliveries_target_policy AS ENUM ('all_members', 'specified_members');
-CREATE TYPE automation_delivery_participants_entity_kind AS ENUM ('actor', 'user');
-CREATE TYPE automation_delivery_recipients_entity_kind AS ENUM ('actor', 'user');
+CREATE TYPE automation_delivery_participants_entity_kind AS ENUM ('actor', 'workspace_member');
+CREATE TYPE automation_delivery_recipients_entity_kind AS ENUM ('actor', 'workspace_member');
 CREATE TYPE automation_webhook_endpoints_status AS ENUM ('active', 'disabled', 'archived');
 CREATE TYPE automation_occurrences_source_kind AS ENUM ('clock', 'relay', 'webhook', 'internal', 'integration');
 CREATE TYPE automation_executions_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
@@ -281,23 +281,15 @@ CREATE TABLE workspace_invites (
 -- ============ Conversations ============
 CREATE TABLE conversations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  domain conversations_domain NOT NULL,
   kind conversations_kind NOT NULL,
   title VARCHAR(500),
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (
-    (domain = 'workspace' AND workspace_id IS NOT NULL) OR
-    (domain = 'social' AND workspace_id IS NULL)
-  )
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_conversations_workspace ON conversations(workspace_id, created_at DESC);
-CREATE INDEX idx_conversations_workspace_kind ON conversations(workspace_id, kind);
-CREATE INDEX idx_conversations_domain_kind ON conversations(domain, kind, created_at DESC);
+CREATE INDEX idx_conversations_kind ON conversations(kind, created_at DESC);
 
 -- ============ Audit Logs ============
 CREATE TABLE audit_logs (
@@ -393,6 +385,7 @@ CREATE TABLE realtime_event_outbox (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   event_type VARCHAR(100) NOT NULL,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  recipient_workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
   payload JSONB NOT NULL DEFAULT '{}',
   event_timestamp TIMESTAMPTZ NOT NULL,
   available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -409,6 +402,8 @@ CREATE INDEX idx_realtime_event_outbox_status
   ON realtime_event_outbox(status, available_at, created_at);
 CREATE INDEX idx_realtime_event_outbox_workspace
   ON realtime_event_outbox(workspace_id, event_timestamp DESC, created_at DESC);
+CREATE INDEX idx_realtime_event_outbox_recipient
+  ON realtime_event_outbox(recipient_workspace_member_id, event_timestamp DESC, created_at DESC);
 
 -- ============ Catalog Core ============
 CREATE TABLE publishers (
@@ -732,48 +727,42 @@ CREATE TABLE direct_conversation_bindings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
   participant_one_kind relationship_target_type NOT NULL,
-  participant_one_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  participant_one_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  participant_one_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
   participant_one_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   participant_two_kind relationship_target_type NOT NULL,
-  participant_two_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  participant_two_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  participant_two_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
   participant_two_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
-    (participant_one_kind = 'user' AND participant_one_workspace_id IS NOT NULL AND participant_one_user_id IS NOT NULL AND participant_one_actor_id IS NULL) OR
-    (participant_one_kind = 'actor' AND participant_one_workspace_id IS NULL AND participant_one_user_id IS NULL AND participant_one_actor_id IS NOT NULL)
+    (participant_one_kind = 'user' AND participant_one_workspace_member_id IS NOT NULL AND participant_one_actor_id IS NULL) OR
+    (participant_one_kind = 'actor' AND participant_one_workspace_member_id IS NULL AND participant_one_actor_id IS NOT NULL)
   ),
   CHECK (
-    (participant_two_kind = 'user' AND participant_two_workspace_id IS NOT NULL AND participant_two_user_id IS NOT NULL AND participant_two_actor_id IS NULL) OR
-    (participant_two_kind = 'actor' AND participant_two_workspace_id IS NULL AND participant_two_user_id IS NULL AND participant_two_actor_id IS NOT NULL)
+    (participant_two_kind = 'user' AND participant_two_workspace_member_id IS NOT NULL AND participant_two_actor_id IS NULL) OR
+    (participant_two_kind = 'actor' AND participant_two_workspace_member_id IS NULL AND participant_two_actor_id IS NOT NULL)
   )
 );
 
 CREATE UNIQUE INDEX uq_direct_conversation_bindings_pair
   ON direct_conversation_bindings(
     participant_one_kind,
-    COALESCE(participant_one_workspace_id, '00000000-0000-0000-0000-000000000000'::uuid),
-    COALESCE(participant_one_user_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE(participant_one_workspace_member_id, '00000000-0000-0000-0000-000000000000'::uuid),
     COALESCE(participant_one_actor_id, '00000000-0000-0000-0000-000000000000'::uuid),
     participant_two_kind,
-    COALESCE(participant_two_workspace_id, '00000000-0000-0000-0000-000000000000'::uuid),
-    COALESCE(participant_two_user_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE(participant_two_workspace_member_id, '00000000-0000-0000-0000-000000000000'::uuid),
     COALESCE(participant_two_actor_id, '00000000-0000-0000-0000-000000000000'::uuid)
   );
 CREATE INDEX idx_direct_conversation_bindings_participant_one
   ON direct_conversation_bindings(
     participant_one_kind,
-    participant_one_workspace_id,
-    participant_one_user_id,
+    participant_one_workspace_member_id,
     participant_one_actor_id
   );
 CREATE INDEX idx_direct_conversation_bindings_participant_two
   ON direct_conversation_bindings(
     participant_two_kind,
-    participant_two_workspace_id,
-    participant_two_user_id,
+    participant_two_workspace_member_id,
     participant_two_actor_id
   );
 
@@ -986,27 +975,34 @@ CREATE TABLE conversation_members (
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   member_type conversation_members_member_type NOT NULL,
   actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   actor_join_version_id UUID REFERENCES actor_versions(id) ON DELETE SET NULL,
   display_name VARCHAR(255),
+  role conversation_members_role NOT NULL DEFAULT 'member',
   state conversation_members_state NOT NULL DEFAULT 'active',
   metadata JSONB DEFAULT '{}',
   joined_at TIMESTAMPTZ DEFAULT NOW(),
   left_at TIMESTAMPTZ,
   CHECK (
-    (member_type = 'actor' AND actor_id IS NOT NULL AND user_id IS NULL) OR
-    (member_type = 'user' AND actor_id IS NULL AND user_id IS NOT NULL) OR
-    (member_type IN ('external', 'remote_agent', 'system') AND actor_id IS NULL AND user_id IS NULL)
+    (member_type = 'actor' AND actor_id IS NOT NULL AND workspace_member_id IS NULL AND user_id IS NULL) OR
+    (member_type = 'user' AND actor_id IS NULL AND workspace_member_id IS NOT NULL AND user_id IS NOT NULL) OR
+    (member_type IN ('external', 'remote_agent', 'system') AND actor_id IS NULL AND workspace_member_id IS NULL)
   )
 );
 
 CREATE INDEX idx_conversation_members_conversation ON conversation_members(conversation_id, state);
 CREATE INDEX idx_conversation_members_actor ON conversation_members(actor_id) WHERE actor_id IS NOT NULL;
+CREATE INDEX idx_conversation_members_workspace_member
+  ON conversation_members(workspace_member_id) WHERE workspace_member_id IS NOT NULL;
 CREATE INDEX idx_conversation_members_user ON conversation_members(user_id) WHERE user_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_conversation_members_unique_actor
   ON conversation_members(conversation_id, actor_id) WHERE actor_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_conversation_members_unique_user
   ON conversation_members(conversation_id, user_id) WHERE user_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_conversation_members_unique_workspace_member
+  ON conversation_members(conversation_id, workspace_member_id)
+  WHERE workspace_member_id IS NOT NULL;
 
 CREATE TABLE transport_accounts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1137,7 +1133,7 @@ CREATE TABLE conversation_grants (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
   CONSTRAINT chk_conversation_grants_target CHECK (
-    (subject_type = 'user' AND user_id IS NOT NULL AND actor_id IS NULL) OR
+    (subject_type = 'workspace_user' AND user_id IS NOT NULL AND actor_id IS NULL) OR
     (subject_type = 'actor' AND actor_id IS NOT NULL AND user_id IS NULL)
   )
 );
@@ -1221,17 +1217,20 @@ CREATE INDEX idx_conversation_item_context_targets_member
   ON conversation_item_context_targets(target_member_id, item_id);
 
 CREATE TABLE conversation_user_states (
+  workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   read_watermark_sequence BIGINT NOT NULL DEFAULT 0,
   last_read_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (user_id, conversation_id)
+  PRIMARY KEY (workspace_member_id, conversation_id)
 );
 
 CREATE INDEX idx_conversation_user_states_conversation
   ON conversation_user_states(conversation_id, updated_at DESC);
+CREATE INDEX idx_conversation_user_states_user
+  ON conversation_user_states(user_id, updated_at DESC);
 
 CREATE TABLE transport_message_links (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

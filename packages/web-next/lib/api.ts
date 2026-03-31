@@ -94,6 +94,7 @@ export interface ContactHubEntryView {
     name: string
     slug: string
   }
+  workspaceMemberId?: string
   userId?: string
   actorId?: string
   relationLabel: string
@@ -1082,10 +1083,13 @@ class ApiClient {
   getSessionTree(wsId: string, sessionId: string) {
     return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/tree`)
   }
-  retryConversationMessage(threadId: string, itemId: string) {
-    return this.fetch(`/conversations/${threadId}/messages/${itemId}/retry`, {
+  retryConversationMessage(workspaceId: string, threadId: string, itemId: string) {
+    return this.fetch(
+      `/workspaces/${workspaceId}/conversations/${threadId}/messages/${itemId}/retry`,
+      {
       method: "POST",
-    })
+      }
+    )
   }
   cancelSession(wsId: string, sessionId: string) {
     return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}`, {
@@ -1094,43 +1098,38 @@ class ApiClient {
   }
 
   // Threads
-  getThreads(
-    wsId: string,
-    options?: { domain?: "workspace" | "social" }
-  ): Promise<{
+  getThreads(wsId: string): Promise<{
     conversations: unknown[]
     runtimeMap?: Record<string, unknown>
   }> {
-    const params = new URLSearchParams({ workspaceId: wsId })
-    if (options?.domain) params.set("domain", options.domain)
-    return this.fetch(`/conversations?${params.toString()}`)
+    return this.fetch(`/workspaces/${wsId}/conversations`)
   }
   updateThread(
+    workspaceId: string,
     threadId: string,
     data: { title?: string; avatarFileId?: string | null }
   ) {
-    return this.fetch(`/conversations/${threadId}`, {
-      method: "PUT",
+    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}`, {
+      method: "PATCH",
       body: JSON.stringify(data),
     })
   }
-  createThread(data: {
-    domain: "workspace" | "social"
+  createThread(workspaceId: string, data: {
     kind: "private" | "group"
-    workspaceId?: string
     actorIds?: string[]
-    userIds?: string[]
+    workspaceMemberIds?: string[]
     title?: string
     content?: string
     contentBlocks?: CanonicalContentBlock[]
     targetActorIds?: string[]
   }): Promise<{ conversationId: string }> {
-    return this.fetch(`/conversations`, {
+    return this.fetch(`/workspaces/${workspaceId}/conversations`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
   getThreadMessages(
+    workspaceId: string,
     threadId: string,
     limit?: number,
     before?: string
@@ -1139,21 +1138,30 @@ class ApiClient {
     if (limit) params.set("limit", String(limit))
     if (before) params.set("before", before)
     const qs = params.toString()
-    return this.fetch(`/conversations/${threadId}/messages${qs ? "?" + qs : ""}`)
+    return this.fetch(
+      `/workspaces/${workspaceId}/conversations/${threadId}/messages${qs ? "?" + qs : ""}`
+    )
   }
-  getThreadMembers(threadId: string) {
-    return this.fetch(`/conversations/${threadId}/members`)
+  getThread(workspaceId: string, threadId: string) {
+    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}`, {
+      credentials: "include",
+    })
+  }
+  getThreadMembers(workspaceId: string, threadId: string) {
+    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}/members`)
   }
   addThreadMembers(
+    workspaceId: string,
     threadId: string,
-    data: { actorIds?: string[]; userIds?: string[] }
+    data: { actorIds?: string[]; workspaceMemberIds?: string[] }
   ) {
-    return this.fetch(`/conversations/${threadId}/members`, {
+    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}/members`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
   sendThreadMessage(
+    workspaceId: string,
     threadId: string,
     contentBlocks: CanonicalContentBlock[],
     clientMessageId: string,
@@ -1173,12 +1181,13 @@ class ApiClient {
       body.targetParticipantIds = targetParticipantIds
     if (targetActorIds && targetActorIds.length > 0)
       body.targetActorIds = targetActorIds
-    return this.fetch(`/conversations/${threadId}/messages`, {
+    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
     })
   }
   resolveThreadInteraction(
+    workspaceId: string,
     threadId: string,
     interactionId: string,
     data: {
@@ -1194,7 +1203,7 @@ class ApiClient {
     }
   ): Promise<{ interaction: InteractionRequestSummary }> {
     return this.fetch(
-      `/conversations/${threadId}/interactions/${interactionId}/respond`,
+      `/workspaces/${workspaceId}/conversations/${threadId}/interactions/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(data),
@@ -1323,9 +1332,10 @@ class ApiClient {
     })
   }
   getThreadTransportBinding(
+    workspaceId: string,
     threadId: string
   ): Promise<{ binding: ConversationTransportBindingSummary | null }> {
-    return this.fetch(`/conversations/${threadId}/transport-binding`)
+    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}/transport-binding`)
   }
   updateTransportSessionSettings(
     wsId: string,
@@ -1350,14 +1360,14 @@ class ApiClient {
       }
     )
   }
-  markThreadRead(threadId: string, readUpToSequence: number) {
-    return this.fetch(`/conversations/${threadId}/read-watermark`, {
+  markThreadRead(workspaceId: string, threadId: string, readUpToSequence: number) {
+    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}/read`, {
       method: "POST",
       body: JSON.stringify({ readUpToSequence }),
     })
   }
-  cancelThread(threadId: string) {
-    return this.fetch(`/conversations/${threadId}`, {
+  cancelThread(workspaceId: string, threadId: string) {
+    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}`, {
       method: "DELETE",
     })
   }

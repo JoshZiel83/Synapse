@@ -1691,7 +1691,6 @@ async function loadConversationExternalMemberPrimaryAddress(params: {
 }) {
   return db
     .selectFrom("conversation_members as cm")
-    .innerJoin("conversations as c", "c.id", "cm.conversation_id")
     .leftJoin(
       "conversation_participant_addresses as cpa",
       "cpa.conversation_member_id",
@@ -1702,10 +1701,10 @@ async function loadConversationExternalMemberPrimaryAddress(params: {
       "cm.id as conversation_member_id",
       "ta.id as transport_address_id",
     ])
-    .where("c.workspace_id", "=", params.workspaceId)
     .where("cm.conversation_id", "=", params.conversationId)
     .where("cm.id", "=", params.conversationMemberId)
     .where("cm.member_type", "=", "external")
+    .where("ta.workspace_id", "=", params.workspaceId)
     .orderBy("cpa.is_primary", "desc")
     .orderBy("cpa.created_at", "asc")
     .limit(1)

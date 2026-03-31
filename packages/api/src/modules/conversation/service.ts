@@ -7,7 +7,7 @@ import {
   type TableRow,
 } from "../../infrastructure/database/kysely.js";
 import {
-  enqueueTransactionalEvent,
+  enqueueTransactionalEventDeliveries,
   type Queryable,
 } from "../../infrastructure/events/index.js";
 import { v4 as uuidv4 } from "uuid";
@@ -32,8 +32,11 @@ import {
   getConversationEventSpec,
   renderConversationEventTimelineBlocks,
 } from "./event-registry.js";
+import {
+  getWorkspaceMemberIdentity,
+  getWorkspaceMemberIdentityById,
+} from "./workspace-identity.js";
 
-export type ConversationDomain = "workspace" | "social";
 export type ConversationKind = "group" | "private" | "virtual";
 export type ItemScope = "shared" | "private";
 export type ItemSurface = "visible" | "internal";
@@ -95,6 +98,51 @@ export interface CreateConversationEventParams<
 
 function getDefaultQueryable(): Queryable {
   return pool;
+}
+
+async function resolveWorkspaceMemberBinding(params: {
+  workspaceId?: string;
+  workspaceMemberId?: string;
+  userId?: string;
+}) {
+  if (params.workspaceMemberId) {
+    return getWorkspaceMemberIdentityById(params.workspaceMemberId);
+  }
+  if (params.workspaceId && params.userId) {
+    return getWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  }
+  return null;
+}
+
+export async function listConversationRealtimeRecipients(
+  conversationId: string,
+  queryable?: Queryable,
+) {
+  const runner = queryable || getDefaultQueryable();
+  const compiled = db
+    .selectFrom("conversation_members as cm")
+    .innerJoin("workspace_members as wm", "wm.id", "cm.workspace_member_id")
+    .select([
+      "cm.workspace_member_id",
+      "wm.workspace_id",
+    ])
+    .where("cm.conversation_id", "=", conversationId)
+    .where("cm.state", "=", "active")
+    .where("cm.workspace_member_id", "is not", null)
+    .compile();
+  const result = await runner.query(compiled.sql, [...compiled.parameters]);
+  return result.rows
+    .map((row: any) => ({
+      workspaceId: row.workspace_id as string,
+      workspaceMemberId: row.workspace_member_id as string,
+    }))
+    .filter(
+      (row) =>
+        typeof row.workspaceId === "string" &&
+        row.workspaceId &&
+        typeof row.workspaceMemberId === "string" &&
+        row.workspaceMemberId,
+    );
 }
 
 async function insertConversationItem(
@@ -197,18 +245,18 @@ async function insertConversationItem(
       .where("id", "=", params.conversationId),
   );
 
-  if (
-    params.workspaceId &&
-    params.scope === "shared" &&
-    params.surface === "visible"
-  ) {
-    await enqueueTransactionalEvent(queryable, {
+  if (params.scope === "shared" && params.surface === "visible") {
+    const recipients = await listConversationRealtimeRecipients(
+      params.conversationId,
+      queryable,
+    );
+    await enqueueTransactionalEventDeliveries(queryable, {
       type: "feed.item.created",
-      workspaceId: params.workspaceId,
       payload: {
         itemId,
       },
       timestamp: new Date().toISOString(),
+      recipients,
     });
   }
 
@@ -216,20 +264,15 @@ async function insertConversationItem(
 }
 
 export async function createConversation(params: {
-  workspaceId?: string;
-  domain?: ConversationDomain;
   kind: ConversationKind;
   title?: string;
   createdBy?: string;
   metadata?: Record<string, unknown>;
 }) {
-  const domain = params.domain || "workspace";
   const created = await db
     .insertInto("conversations")
     .values({
       id: uuidv4(),
-      workspace_id: params.workspaceId || null,
-      domain,
       kind: params.kind,
       title: params.title || null,
       created_by: params.createdBy || null,
@@ -259,10 +302,13 @@ export async function getConversation(conversationId: string) {
 export async function ensureConversationMember(params: {
   conversationId: string;
   memberType: "actor" | "user" | "external" | "remote_agent" | "system";
+  workspaceId?: string;
+  workspaceMemberId?: string;
   actorId?: string;
   userId?: string;
   displayName?: string;
   actorJoinVersionId?: string;
+  role?: "owner" | "admin" | "member";
   metadata?: Record<string, unknown>;
 }) {
   const result = await ensureConversationMemberActivation(params);
@@ -272,10 +318,13 @@ export async function ensureConversationMember(params: {
 export async function ensureConversationMemberActivation(params: {
   conversationId: string;
   memberType: "actor" | "user" | "external" | "remote_agent" | "system";
+  workspaceId?: string;
+  workspaceMemberId?: string;
   actorId?: string;
   userId?: string;
   displayName?: string;
   actorJoinVersionId?: string;
+  role?: "owner" | "admin" | "member";
   metadata?: Record<string, unknown>;
 }): Promise<{
   member: any;
@@ -286,12 +335,31 @@ export async function ensureConversationMemberActivation(params: {
   const {
     conversationId,
     memberType,
+    workspaceId,
+    workspaceMemberId,
     actorId,
     userId,
     displayName,
     actorJoinVersionId,
+    role = "member",
     metadata = {},
   } = params;
+  const resolvedUserMember =
+    memberType === "user"
+      ? await resolveWorkspaceMemberBinding({
+          workspaceId,
+          workspaceMemberId,
+          userId,
+        })
+      : null;
+  const resolvedWorkspaceMemberId =
+    memberType === "user" ? resolvedUserMember?.workspaceMemberId || null : null;
+  const resolvedUserId =
+    memberType === "user" ? resolvedUserMember?.userId || userId || null : null;
+
+  if (memberType === "user" && (!resolvedWorkspaceMemberId || !resolvedUserId)) {
+    throw new Error("Workspace member identity is required for user participants");
+  }
   let existing;
 
   if (memberType === "actor") {
@@ -308,9 +376,11 @@ export async function ensureConversationMemberActivation(params: {
       .selectFrom("conversation_members")
       .selectAll()
       .where("conversation_id", "=", conversationId);
-    userLookup = userId
-      ? userLookup.where("user_id", "=", userId)
-      : userLookup.where("user_id", "is", null);
+    userLookup = resolvedWorkspaceMemberId
+      ? userLookup.where("workspace_member_id", "=", resolvedWorkspaceMemberId)
+      : resolvedUserId
+        ? userLookup.where("user_id", "=", resolvedUserId)
+        : userLookup.where("workspace_member_id", "is", null);
     existing = await userLookup.limit(1).executeTakeFirst();
   } else if (
     memberType === "external" &&
@@ -347,6 +417,13 @@ export async function ensureConversationMemberActivation(params: {
         .set({
           state: "active",
           left_at: null,
+          role,
+          ...(memberType === "user"
+            ? {
+                workspace_member_id: resolvedWorkspaceMemberId,
+                user_id: resolvedUserId,
+              }
+            : {}),
           ...(actorJoinVersionId
             ? { actor_join_version_id: actorJoinVersionId }
             : {}),
@@ -380,9 +457,11 @@ export async function ensureConversationMemberActivation(params: {
       conversation_id: conversationId,
       member_type: memberType,
       actor_id: actorId || null,
-      user_id: userId || null,
+      workspace_member_id: resolvedWorkspaceMemberId,
+      user_id: resolvedUserId,
       actor_join_version_id: actorJoinVersionId || null,
       display_name: displayName || null,
+      role,
       state: "active",
       metadata:
         (metadata || {}) as TableInsert<"conversation_members">["metadata"],
@@ -404,9 +483,10 @@ export async function ensureConversationMemberActivation(params: {
 export async function getConversationMember(params: {
   conversationId: string;
   actorId?: string;
+  workspaceMemberId?: string;
   userId?: string;
 }) {
-  const { conversationId, actorId, userId } = params;
+  const { conversationId, actorId, workspaceMemberId, userId } = params;
   if (actorId) {
     return (
       (await db
@@ -414,6 +494,15 @@ export async function getConversationMember(params: {
         .selectAll()
         .where("conversation_id", "=", conversationId)
         .where("actor_id", "=", actorId)
+        .executeTakeFirst()) ?? null
+    );
+  } else if (workspaceMemberId) {
+    return (
+      (await db
+        .selectFrom("conversation_members")
+        .selectAll()
+        .where("conversation_id", "=", conversationId)
+        .where("workspace_member_id", "=", workspaceMemberId)
         .executeTakeFirst()) ?? null
     );
   } else if (userId) {
@@ -434,9 +523,12 @@ export async function listConversationMembers(conversationId: string) {
   return db
     .selectFrom("conversation_members as cm")
     .leftJoin("actors as a", "a.id", "cm.actor_id")
+    .leftJoin("workspace_members as wm", "wm.id", "cm.workspace_member_id")
     .leftJoin("users as u", "u.id", "cm.user_id")
     .selectAll("cm")
     .select([
+      "wm.id as workspace_member_id",
+      "wm.workspace_id as member_workspace_id",
       "a.name as actor_name",
       "a.title as actor_title",
       "a.role as actor_role",
@@ -600,13 +692,26 @@ export async function markConversationRead(
   conversationId: string,
   lastReadSequence?: number,
   queryable?: Queryable,
+  workspaceMemberId?: string,
 ) {
+  const resolvedWorkspaceMemberId =
+    workspaceMemberId ||
+    (
+      await getConversationMember({
+        conversationId,
+        userId,
+      })
+    )?.workspace_member_id;
+  if (!resolvedWorkspaceMemberId) {
+    throw new Error("Conversation member not found for read state");
+  }
   const runner = queryable || getDefaultQueryable();
   await executeCompiledQuery(
     runner,
     db
       .insertInto("conversation_user_states")
       .values({
+        workspace_member_id: resolvedWorkspaceMemberId,
         user_id: userId,
         conversation_id: conversationId,
         read_watermark_sequence: Math.max(0, Number(lastReadSequence || 0)),
@@ -614,7 +719,7 @@ export async function markConversationRead(
         updated_at: sql`NOW()`,
       })
       .onConflict((oc) =>
-        oc.columns(["user_id", "conversation_id"]).doUpdateSet({
+        oc.columns(["workspace_member_id", "conversation_id"]).doUpdateSet({
           read_watermark_sequence:
             sql`GREATEST(conversation_user_states.read_watermark_sequence, excluded.read_watermark_sequence)`,
           last_read_at: sql`NOW()`,
@@ -628,7 +733,22 @@ export async function getConversationReadState(
   userId: string,
   conversationId: string,
   queryable?: Queryable,
+  workspaceMemberId?: string,
 ) {
+  const resolvedWorkspaceMemberId =
+    workspaceMemberId ||
+    (
+      await getConversationMember({
+        conversationId,
+        userId,
+      })
+    )?.workspace_member_id;
+  if (!resolvedWorkspaceMemberId) {
+    return {
+      readWatermarkSequence: 0,
+      lastReadAt: undefined,
+    };
+  }
   const runner = queryable || getDefaultQueryable();
   const row = await executeTakeFirst<{
     read_watermark_sequence: string | number | null;
@@ -638,7 +758,7 @@ export async function getConversationReadState(
     db
       .selectFrom("conversation_user_states")
       .select(["read_watermark_sequence", "last_read_at"])
-      .where("user_id", "=", userId)
+      .where("workspace_member_id", "=", resolvedWorkspaceMemberId)
       .where("conversation_id", "=", conversationId)
       .limit(1),
   );
@@ -670,16 +790,19 @@ export async function updateConversationItemEventPayload(
 
 export async function resolveReadableConversationSequenceForUser(params: {
   conversationId: string;
-  userId: string;
+  userId?: string;
+  workspaceMemberId?: string;
   maxSequence?: number;
 }) {
+  if (!params.workspaceMemberId && !params.userId) {
+    return 0;
+  }
   let statement = db
     .selectFrom("conversation_items as ci")
     .innerJoin("conversations as c", "c.id", "ci.conversation_id")
     .innerJoin("conversation_members as cm_u", (join) =>
       join
         .onRef("cm_u.conversation_id", "=", "c.id")
-        .on("cm_u.user_id", "=", params.userId)
         .on("cm_u.state", "=", "active"),
     )
     .select(({ fn }) => fn.max("ci.sequence").as("sequence"))
@@ -707,6 +830,16 @@ export async function resolveReadableConversationSequenceForUser(params: {
         )`,
       ]),
     );
+
+  if (params.workspaceMemberId) {
+    statement = statement.where(
+      "cm_u.workspace_member_id",
+      "=",
+      params.workspaceMemberId,
+    );
+  } else if (params.userId) {
+    statement = statement.where("cm_u.user_id", "=", params.userId);
+  }
 
   if (
     typeof params.maxSequence === "number" &&
@@ -909,6 +1042,7 @@ function buildEntitySelect(params: {
   const prefix = params.prefix || "";
   return `${params.memberAlias}.id AS ${prefix}member_id,
           ${params.memberAlias}.member_type AS ${prefix}member_type,
+          ${params.memberAlias}.workspace_member_id AS ${prefix}workspace_member_id,
           ${params.memberAlias}.actor_id AS ${prefix}actor_id,
           ${params.memberAlias}.user_id AS ${prefix}user_id,
           COALESCE(
@@ -944,6 +1078,8 @@ function mapEntityRef(row: any): ConversationEntityRef | undefined {
     memberId: participantId,
     participantId,
     memberType,
+    workspaceMemberId:
+      row.workspace_member_id || row.author_workspace_member_id || undefined,
     actorId: row.actor_id || row.author_actor_id || undefined,
     userId: row.user_id || row.author_user_id || undefined,
     externalUserKey:
@@ -1124,6 +1260,41 @@ export function isFeedItemVisibleToUser(
   }
 
   return item.targets.some((target) => target.userId === userId);
+}
+
+export function isFeedItemVisibleToWorkspaceMember(
+  item: ConversationFeedItem,
+  workspaceMemberId: string,
+) {
+  if (item.kind === "message") {
+    if (item.messageType === "model_error_notice") {
+      if (!item.targets || item.targets.length === 0) {
+        return true;
+      }
+
+      if (item.author?.workspaceMemberId === workspaceMemberId) {
+        return true;
+      }
+
+      return item.targets.some(
+        (target) => target.workspaceMemberId === workspaceMemberId,
+      );
+    }
+
+    return true;
+  }
+
+  if (!item.targets || item.targets.length === 0) {
+    return true;
+  }
+
+  if (item.author?.workspaceMemberId === workspaceMemberId) {
+    return true;
+  }
+
+  return item.targets.some(
+    (target) => target.workspaceMemberId === workspaceMemberId,
+  );
 }
 
 export async function getConversationFeedItemById(itemId: string) {
@@ -1369,6 +1540,7 @@ export async function getLastVisibleConversationItem(conversationId: string) {
 export async function listUserWorkspaceConversations(
   workspaceId: string,
   userId: string,
+  workspaceMemberId?: string,
 ) {
   const result = await db.executeQuery(
     sql<any>`
@@ -1379,7 +1551,13 @@ export async function listUserWorkspaceConversations(
              (
                SELECT COUNT(*)::int
                FROM conversation_items ci
-               JOIN conversation_members cm_u ON cm_u.conversation_id = c.id AND cm_u.user_id = ${userId}
+               JOIN conversation_members cm_u
+                 ON cm_u.conversation_id = c.id
+                AND ${
+                  workspaceMemberId
+                    ? sql`cm_u.workspace_member_id = ${workspaceMemberId}`
+                    : sql`cm_u.user_id = ${userId}`
+                }
                WHERE ci.conversation_id = c.id
                  AND ci.scope = 'shared'
                  AND ci.surface = 'visible'
@@ -1395,7 +1573,11 @@ export async function listUserWorkspaceConversations(
                      JOIN conversation_members cm_target
                        ON cm_target.id = cit.target_member_id
                      WHERE cit.item_id = ci.id
-                       AND cm_target.user_id = ${userId}
+                       AND ${
+                         workspaceMemberId
+                           ? sql`cm_target.workspace_member_id = ${workspaceMemberId}`
+                           : sql`cm_target.user_id = ${userId}`
+                       }
                    )
                  )
                  AND ci.sequence > COALESCE(cr.read_watermark_sequence, 0)
@@ -1407,13 +1589,30 @@ export async function listUserWorkspaceConversations(
         ON transport_account.id = ctb.transport_account_id
       JOIN conversation_members cm
         ON cm.conversation_id = c.id
-       AND cm.user_id = ${userId}
+       AND ${
+         workspaceMemberId
+           ? sql`cm.workspace_member_id = ${workspaceMemberId}`
+           : sql`cm.user_id = ${userId}`
+       }
        AND cm.state = 'active'
       LEFT JOIN conversation_user_states cr
         ON cr.conversation_id = c.id
-       AND cr.user_id = ${userId}
-      WHERE c.workspace_id = ${workspaceId}
-        AND c.domain = 'workspace'
+       AND ${
+         workspaceMemberId
+           ? sql`cr.workspace_member_id = ${workspaceMemberId}`
+           : sql`cr.user_id = ${userId}`
+       }
+      WHERE EXISTS (
+        SELECT 1
+        FROM conversation_members cm_viewer
+        WHERE cm_viewer.conversation_id = c.id
+          AND cm_viewer.state = 'active'
+          AND ${
+            workspaceMemberId
+              ? sql`cm_viewer.workspace_member_id = ${workspaceMemberId}`
+              : sql`cm_viewer.user_id = ${userId}`
+          }
+      )
       ORDER BY c.updated_at DESC, c.created_at DESC
     `.compile(db),
   );

@@ -45,12 +45,10 @@ export function isGroupConversation(conversation: ConversationSummaryView) {
 function findPrivateConversationForActor(
   conversations: ConversationSummaryView[],
   actorId: string,
-  domain?: "workspace" | "social",
 ) {
   return conversations.find((conversation) => {
     return (
       conversation.kind === "private" &&
-      (!domain || conversation.domain === domain) &&
       conversationIncludesActor(conversation, actorId) &&
       !getActiveConversationMembers(conversation).some(
         (member) => member.type === "external",
@@ -62,12 +60,10 @@ function findPrivateConversationForActor(
 function findPrivateConversationForUser(
   conversations: ConversationSummaryView[],
   userId: string,
-  domain?: "workspace" | "social",
 ) {
   return conversations.find(
     (conversation) =>
       conversation.kind === "private" &&
-      (!domain || conversation.domain === domain) &&
       conversationIncludesUser(conversation, userId),
   );
 }
@@ -76,28 +72,28 @@ export function findPrivateWorkspaceConversationForActor(
   conversations: ConversationSummaryView[],
   actorId: string,
 ) {
-  return findPrivateConversationForActor(conversations, actorId, "workspace");
+  return findPrivateConversationForActor(conversations, actorId);
 }
 
 export function findPrivateSocialConversationForActor(
   conversations: ConversationSummaryView[],
   actorId: string,
 ) {
-  return findPrivateConversationForActor(conversations, actorId, "social");
+  return findPrivateConversationForActor(conversations, actorId);
 }
 
 export function findPrivateWorkspaceConversationForUser(
   conversations: ConversationSummaryView[],
   userId: string,
 ) {
-  return findPrivateConversationForUser(conversations, userId, "workspace");
+  return findPrivateConversationForUser(conversations, userId);
 }
 
 export function findPrivateSocialConversationForUser(
   conversations: ConversationSummaryView[],
   userId: string,
 ) {
-  return findPrivateConversationForUser(conversations, userId, "social");
+  return findPrivateConversationForUser(conversations, userId);
 }
 
 export function conversationDisplayCount(

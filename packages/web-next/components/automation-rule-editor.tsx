@@ -180,8 +180,8 @@ export function AutomationRuleEditor({
             entityKind: "actor" as const,
             entityId,
           })),
-          ...parseAutomationIdList(formState.participantUserIds).map((entityId) => ({
-            entityKind: "user" as const,
+          ...parseAutomationIdList(formState.participantWorkspaceMemberIds).map((entityId) => ({
+            entityKind: "workspace_member" as const,
             entityId,
           })),
         ],
@@ -190,8 +190,8 @@ export function AutomationRuleEditor({
             entityKind: "actor" as const,
             entityId,
           })),
-          ...parseAutomationIdList(formState.recipientUserIds).map((entityId) => ({
-            entityKind: "user" as const,
+          ...parseAutomationIdList(formState.recipientWorkspaceMemberIds).map((entityId) => ({
+            entityKind: "workspace_member" as const,
             entityId,
           })),
         ],
@@ -202,9 +202,9 @@ export function AutomationRuleEditor({
       formState.deliveryMode,
       formState.message,
       formState.participantActorIds,
-      formState.participantUserIds,
+      formState.participantWorkspaceMemberIds,
       formState.recipientActorIds,
-      formState.recipientUserIds,
+      formState.recipientWorkspaceMemberIds,
       formState.sessionId,
       formState.targetPolicy,
       formState.wakeReason,
@@ -800,13 +800,13 @@ export function AutomationRuleEditor({
                 </div>
                 <div className="grid gap-2">
                   <label className="text-sm font-medium text-foreground" htmlFor="trigger-recipient-users">
-                    Recipient user IDs
+                    Recipient workspace member IDs
                   </label>
                   <Textarea
                     id="trigger-recipient-users"
-                    value={formState.recipientUserIds}
+                    value={formState.recipientWorkspaceMemberIds}
                     onChange={(event) =>
-                      setFormState((current) => ({ ...current, recipientUserIds: event.target.value }))
+                      setFormState((current) => ({ ...current, recipientWorkspaceMemberIds: event.target.value }))
                     }
                     rows={4}
                     placeholder="Comma, space, or newline separated"
@@ -828,13 +828,13 @@ export function AutomationRuleEditor({
                 </div>
                 <div className="grid gap-2">
                   <label className="text-sm font-medium text-foreground" htmlFor="trigger-participant-users">
-                    Conversation participant user IDs
+                    Conversation participant workspace member IDs
                   </label>
                   <Textarea
                     id="trigger-participant-users"
-                    value={formState.participantUserIds}
+                    value={formState.participantWorkspaceMemberIds}
                     onChange={(event) =>
-                      setFormState((current) => ({ ...current, participantUserIds: event.target.value }))
+                      setFormState((current) => ({ ...current, participantWorkspaceMemberIds: event.target.value }))
                     }
                     rows={4}
                     placeholder="Used for conversation creation modes"

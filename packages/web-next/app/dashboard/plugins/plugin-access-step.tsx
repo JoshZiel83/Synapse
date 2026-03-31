@@ -579,7 +579,7 @@ export default function PluginAccessStep({
     const [accessData, actorData, conversationData, memberData] = await Promise.all([
       accessAdapter.loadAccess(workspaceId, resolvedResourceId),
       api.getActors(workspaceId),
-      api.getThreads(workspaceId, { domain: 'workspace' }),
+      api.getThreads(workspaceId),
       api.getWorkspaceMembers(workspaceId),
     ]);
 

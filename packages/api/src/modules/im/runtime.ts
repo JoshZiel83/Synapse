@@ -462,7 +462,7 @@ async function ensureTransportConversationBinding(params: {
   const created = await createThread({
     workspaceId: params.account.workspaceId,
     kind: "virtual",
-    createdBy: ownerId,
+    createdByUserId: ownerId,
     title:
       params.endpointDisplayName ||
       `${params.account.displayName} ${params.endpointType === "group" ? "群聊" : "私聊"}`,

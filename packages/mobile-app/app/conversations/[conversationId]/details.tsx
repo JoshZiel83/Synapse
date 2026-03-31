@@ -34,7 +34,7 @@ export default function ConversationDetailScreen() {
 
   useEffect(() => {
     async function loadData() {
-      if (!conversationId) {
+      if (!conversationId || !workspaceId) {
         setLoading(false);
         return;
       }
@@ -43,8 +43,8 @@ export default function ConversationDetailScreen() {
 
       try {
         const [threadResponse, membersResponse] = await Promise.all([
-          api.getThread(conversationId),
-          api.getThreadMembers(conversationId),
+          api.getThread(workspaceId, conversationId),
+          api.getThreadMembers(workspaceId, conversationId),
         ]);
 
         setConversation(
@@ -115,9 +115,7 @@ export default function ConversationDetailScreen() {
               <View style={styles.heroBody}>
                 <Text style={styles.heroTitle}>{conversation.title}</Text>
                 <Text style={styles.heroSubtitle}>
-                  {`${conversation.domain === "social" ? "Social" : "Workspace"} · ${
-                    conversation.kind === "private" ? "私聊" : "群聊"
-                  } · ${activeCount} 位成员`}
+                  {`${conversation.kind === "private" ? "私聊" : "群聊"} · ${activeCount} 位成员`}
                 </Text>
               </View>
               <Pill

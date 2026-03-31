@@ -492,10 +492,17 @@ async function assertActorInWorkspace(workspaceId: string, actorId: string) {
 
 async function assertConversationInWorkspace(workspaceId: string, conversationId: string) {
   const row = await db
-    .selectFrom('conversations')
-    .select('id')
-    .where('id', '=', conversationId)
-    .where('workspace_id', '=', workspaceId)
+    .selectFrom('conversation_members as cm')
+    .leftJoin('workspace_members as wm', 'wm.id', 'cm.workspace_member_id')
+    .leftJoin('actors as a', 'a.id', 'cm.actor_id')
+    .select('cm.id')
+    .where('cm.conversation_id', '=', conversationId)
+    .where((eb) =>
+      eb.or([
+        eb('wm.workspace_id', '=', workspaceId),
+        eb('a.workspace_id', '=', workspaceId),
+      ]),
+    )
     .limit(1)
     .executeTakeFirst();
   if (!row) {

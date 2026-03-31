@@ -63,6 +63,7 @@ export interface ScopedContactActorView {
 
 export interface ScopedContactUserView {
   id: string;
+  workspaceMemberId?: string;
   workspaceId: string;
   name?: string;
   email?: string;
@@ -118,11 +119,13 @@ export interface ConversationParticipantView {
   participantId?: string;
   type?: "actor" | "user" | "external";
   id?: string;
+  workspaceMemberId?: string;
   actorId?: string;
   userId?: string;
   name?: string;
   title?: string;
   role?: string;
+  conversationRole?: string;
   avatarUrl?: string;
   avatarEmoji?: string;
   state?: string;
@@ -143,12 +146,10 @@ export interface ConversationPresentationView {
   peer?: ConversationParticipantView;
   canRename?: boolean;
   canManageMembers?: boolean;
-  scope: "workspace" | "social";
 }
 
 export interface ConversationSummaryView {
   id: string;
-  domain: "workspace" | "social";
   kind: "private" | "group" | "virtual";
   status: "active" | "completed";
   transportKind?: string;
@@ -165,6 +166,8 @@ export interface ConversationSummaryView {
     canManage?: boolean;
     canManageMembers?: boolean;
   };
+  viewerParticipantId?: string;
+  viewerWorkspaceMemberId?: string;
 }
 
 export interface ConversationCollectionResponse {
@@ -240,6 +243,7 @@ export interface ContactHubEntryView {
   avatarUrl?: string;
   avatarEmoji?: string;
   workspace: WorkspaceInfo;
+  workspaceMemberId?: string;
   userId?: string;
   actorId?: string;
   relationLabel: string;

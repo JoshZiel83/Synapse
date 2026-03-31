@@ -108,7 +108,6 @@ export function useChatRealtimeSync({
       next.push({
         key: `inbox:${workspaceId}`,
         topic: "inbox" as const,
-        workspaceId,
       })
     }
     if (selectedConversationId) {
@@ -134,6 +133,8 @@ export function useChatRealtimeSync({
   }, [flushOutbox, loadConversations, loadMessages, selectedConversationId, workspaceId])
 
   useWebSocket({
+    enabled: Boolean(workspaceId),
+    workspaceId,
     subscriptions,
     onEvent,
     onConnected: handleSocketConnected,

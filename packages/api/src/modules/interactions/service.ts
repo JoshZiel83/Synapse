@@ -16,7 +16,7 @@ import type {
   RelayAuthorizationScope,
 } from "@synapse/shared/types";
 import {
-  enqueueTransactionalEvent,
+  enqueueTransactionalEventDeliveries,
   type Queryable,
 } from "../../infrastructure/events/index.js";
 import { transaction } from "../../infrastructure/database/index.js";
@@ -35,6 +35,7 @@ import {
 import { authorizeAction, userSubject } from "../access/service.js";
 import {
   createConversationEvent,
+  listConversationRealtimeRecipients,
   updateConversationItemEventPayload,
 } from "../conversation/service.js";
 import { getFileUrlById } from "../files/service.js";
@@ -722,13 +723,20 @@ async function queueInteractionUpdatedEvent(
   queryable: Queryable,
   interaction: InteractionRequestSummary,
 ) {
-  await enqueueTransactionalEvent(queryable, {
+  const recipients = await listConversationRealtimeRecipients(
+    interaction.conversationId,
+    queryable,
+  );
+  await enqueueTransactionalEventDeliveries(queryable, {
     type: "interaction.updated",
-    workspaceId: interaction.workspaceId,
     payload: {
+      conversationId: interaction.conversationId,
       interactionId: interaction.id,
+      itemId: interaction.itemId,
+      interaction,
     },
     timestamp: interaction.updatedAt,
+    recipients,
   });
 }
 

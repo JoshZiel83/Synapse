@@ -84,7 +84,9 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     requiredColumns: [
       "conversation_id",
       "participant_one_kind",
+      "participant_one_workspace_member_id",
       "participant_two_kind",
+      "participant_two_workspace_member_id",
     ],
     reason: "authoritative direct-conversation uniqueness",
   },
@@ -144,6 +146,7 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     requiredColumns: [
       "event_type",
       "workspace_id",
+      "recipient_workspace_member_id",
       "payload",
       "event_timestamp",
       "available_at",

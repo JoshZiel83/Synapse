@@ -145,6 +145,10 @@ export default function ChatDetailScreen() {
         setLoading(false);
         return;
       }
+      if (!workspaceId) {
+        setLoading(false);
+        return;
+      }
 
       if (isRefreshing) {
         setRefreshing(true);
@@ -158,9 +162,9 @@ export default function ChatDetailScreen() {
         );
         const [messagesResponse, threadResponse, membersResponse] =
           await Promise.all([
-            api.getThreadMessages(conversationId, 100),
-            api.getThread(conversationId),
-            api.getThreadMembers(conversationId),
+            api.getThreadMessages(workspaceId, conversationId, 100),
+            api.getThread(workspaceId, conversationId),
+            api.getThreadMembers(workspaceId, conversationId),
           ]);
 
         applyConversationMeta(
@@ -240,7 +244,7 @@ export default function ChatDetailScreen() {
   }, [loading, messages.length]);
 
   useEffect(() => {
-    if (!conversationId || loading || messages.length === 0) {
+    if (!conversationId || !workspaceId || loading || messages.length === 0) {
       return;
     }
 
@@ -258,10 +262,12 @@ export default function ChatDetailScreen() {
     }
     lastReportedReadRef.current = nextKey;
     void api
-      .markThreadRead(conversationId, maxSequence)
+      .markThreadRead(workspaceId, conversationId, maxSequence)
       .then(() => clearPendingConversationRead(conversationId, maxSequence))
-      .catch(() => queuePendingConversationRead(conversationId, maxSequence));
-  }, [conversationId, loading, messages]);
+      .catch(() =>
+        queuePendingConversationRead(workspaceId, conversationId, maxSequence),
+      );
+  }, [conversationId, loading, messages, workspaceId]);
 
   useEffect(() => {
     if (!conversationId || pendingMessages.length === 0) {
@@ -352,9 +358,10 @@ export default function ChatDetailScreen() {
   );
 
   useWorkspaceWebSocket({
-    enabled: Boolean(canRender && conversation?.domain !== "social"),
+    workspaceId: workspaceId || undefined,
+    enabled: Boolean(canRender),
     subscriptions:
-      canRender && conversation?.domain !== "social"
+      canRender
         ? [
             {
               key: `conversation:${conversationId}`,
@@ -383,20 +390,8 @@ export default function ChatDetailScreen() {
     onEvent: handleSocketEvent,
   });
 
-  useEffect(() => {
-    if (!conversationId || conversation?.domain !== "social") {
-      return;
-    }
-
-    const timer = setInterval(() => {
-      void loadConversation(true);
-    }, 5000);
-
-    return () => clearInterval(timer);
-  }, [conversation?.domain, conversationId, loadConversation]);
-
   async function handleSendMessage(contentBlocks: any[]) {
-    if (!conversationId) return;
+    if (!conversationId || !workspaceId) return;
 
     const clientMessageId = createId("message");
     const optimisticSequence =
@@ -407,6 +402,7 @@ export default function ChatDetailScreen() {
       ) + 1;
     const pendingMessage: PendingConversationMessage = {
       clientMessageId,
+      workspaceId,
       conversationId,
       contentBlocks,
       createdAt: new Date().toISOString(),
@@ -483,9 +479,9 @@ export default function ChatDetailScreen() {
               </Text>
               <Text style={styles.headerSubtitle}>
                 {conversation
-                  ? `${conversation.domain === "social" ? "Social" : "Workspace"} · ${
-                      conversation.kind === "private" ? "私聊" : "群聊"
-                    }`
+                  ? conversation.kind === "private"
+                    ? "私聊"
+                    : "群聊"
                   : members.length > 0
                     ? `${members.length} 位成员`
                     : "实时同步中"}

@@ -92,15 +92,12 @@ export default function MobileNewGroupPage() {
         .filter((value): value is string => Boolean(value))
     )
   )
-  const selectedUserIds = Array.from(
+  const selectedWorkspaceMemberIds = Array.from(
     new Set(
       selectedEntries
-        .map((entry) => entry.userId)
+        .map((entry) => entry.workspaceMemberId)
         .filter((value): value is string => Boolean(value))
     )
-  )
-  const hasRemoteSelection = selectedEntries.some((entry) =>
-    entry.kind.startsWith("friend-")
   )
 
   function toggleEntry(entry: ContactHubEntryView) {
@@ -118,12 +115,18 @@ export default function MobileNewGroupPage() {
     setSubmitting(true)
     setError(null)
     try {
-      const created = await api.createThread({
-        domain: hasRemoteSelection ? "social" : "workspace",
+      if (
+        selectedEntries.some(
+          (entry) => entry.targetType === "user" && !entry.workspaceMemberId
+        )
+      ) {
+        throw new Error("存在缺少 workspace 成员身份的用户，暂时无法发起群聊")
+      }
+
+      const created = await api.createThread(workspaceId, {
         kind: "group",
-        workspaceId: hasRemoteSelection ? undefined : workspaceId,
         actorIds: selectedActorIds,
-        userIds: selectedUserIds,
+        workspaceMemberIds: selectedWorkspaceMemberIds,
       })
       if (!created.conversationId) {
         throw new Error("服务器没有返回 conversationId")
@@ -169,9 +172,7 @@ export default function MobileNewGroupPage() {
                 />
               </div>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Badge variant={hasRemoteSelection ? "secondary" : "outline"}>
-                  {hasRemoteSelection ? "Social 群聊" : "Workspace 群聊"}
-                </Badge>
+                <Badge variant="outline">Group chat</Badge>
                 <span>已选 {selectedEntries.length} 项</span>
               </div>
               <Button

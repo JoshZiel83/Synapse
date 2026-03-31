@@ -136,10 +136,8 @@ export default function HomeTab() {
     setError(null);
 
     try {
-      const response = await api.createThread({
-        domain: "workspace",
+      const response = await api.createThread(workspaceId, {
         kind: "group",
-        workspaceId,
         actorIds: [selectedActor.id],
         title: selectedActor.definition.name,
         content: draft.trim(),

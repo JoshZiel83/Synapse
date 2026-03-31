@@ -46,7 +46,9 @@ export default function NewGroupConversationScreen() {
     [],
   );
   const [selectedActorIds, setSelectedActorIds] = useState<string[]>([]);
-  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+  const [selectedWorkspaceMemberIds, setSelectedWorkspaceMemberIds] = useState<
+    string[]
+  >([]);
   const [selectedWorkspaceContactIds, setSelectedWorkspaceContactIds] =
     useState<string[]>([]);
   const [selectedPersonalContactIds, setSelectedPersonalContactIds] = useState<
@@ -92,9 +94,9 @@ export default function NewGroupConversationScreen() {
             ? [actorId]
             : [],
         );
-        setSelectedUserIds(
+        setSelectedWorkspaceMemberIds(
           userId && nextMembers.some((item) => item.userId === userId)
-            ? [userId]
+            ? [nextMembers.find((item) => item.userId === userId)!.id]
             : [],
         );
         setSelectedWorkspaceContactIds(
@@ -203,19 +205,19 @@ export default function NewGroupConversationScreen() {
         .filter((value): value is string => Boolean(value)),
     [selectedRemoteContacts],
   );
-  const remoteUserIds = useMemo(
+  const remoteWorkspaceMemberIds = useMemo(
     () =>
       selectedRemoteContacts
-        .map((contact) => contact.user?.id)
+        .map((contact) => contact.user?.workspaceMemberId)
         .filter((value): value is string => Boolean(value)),
     [selectedRemoteContacts],
   );
 
   const hasRemoteSelection =
-    remoteActorIds.length > 0 || remoteUserIds.length > 0;
+    remoteActorIds.length > 0 || remoteWorkspaceMemberIds.length > 0;
   const selectedCount =
     selectedActorIds.length +
-    selectedUserIds.length +
+    selectedWorkspaceMemberIds.length +
     selectedWorkspaceContactIds.length +
     selectedPersonalContactIds.length;
 
@@ -227,11 +229,11 @@ export default function NewGroupConversationScreen() {
     );
   }
 
-  function toggleUser(userIdValue: string) {
-    setSelectedUserIds((current) =>
-      current.includes(userIdValue)
-        ? current.filter((id) => id !== userIdValue)
-        : [...current, userIdValue],
+  function toggleWorkspaceMember(workspaceMemberId: string) {
+    setSelectedWorkspaceMemberIds((current) =>
+      current.includes(workspaceMemberId)
+        ? current.filter((id) => id !== workspaceMemberId)
+        : [...current, workspaceMemberId],
     );
   }
 
@@ -258,14 +260,25 @@ export default function NewGroupConversationScreen() {
 
     setSubmitting(true);
     try {
-      const created = await api.createThread({
-        domain: hasRemoteSelection ? "social" : "workspace",
+      if (
+        selectedRemoteContacts.some(
+          (contact) => contact.targetType === "user" && !contact.user?.workspaceMemberId,
+        )
+      ) {
+        throw new Error("存在缺少 workspace 成员身份的联系人，暂时无法发起群聊。");
+      }
+
+      const created = await api.createThread(workspaceId, {
         kind: "group",
-        workspaceId: hasRemoteSelection ? undefined : workspaceId,
         actorIds: Array.from(
           new Set([...selectedActorIds, ...remoteActorIds]),
         ),
-        userIds: Array.from(new Set([...selectedUserIds, ...remoteUserIds])),
+        workspaceMemberIds: Array.from(
+          new Set([
+            ...selectedWorkspaceMemberIds,
+            ...remoteWorkspaceMemberIds,
+          ]),
+        ),
       });
       const conversationId = created.conversationId;
 
@@ -301,13 +314,11 @@ export default function NewGroupConversationScreen() {
         </Text>
         <View style={styles.modeRow}>
           <Pill
-            label={hasRemoteSelection ? "Social 群聊" : "Workspace 群聊"}
+            label={hasRemoteSelection ? "跨工作区参与" : "当前工作区参与"}
             tone={hasRemoteSelection ? "accent" : "primary"}
           />
           <Text style={styles.modeCopy}>
-            {hasRemoteSelection
-              ? "已选择跨工作区联系人，创建后会走 social thread。"
-              : "当前只选择了本地成员，创建后会留在当前 workspace。"}
+            会话本身不绑定某个 workspace，消息只会投递给被选中的参与身份。
           </Text>
         </View>
         <View style={styles.searchShell}>
@@ -395,18 +406,18 @@ export default function NewGroupConversationScreen() {
               title="选择本地成员"
               action={
                 <Text style={styles.countText}>
-                  已选 {selectedUserIds.length} 人
+                  已选 {selectedWorkspaceMemberIds.length} 人
                 </Text>
               }
             />
             {visibleMembers.length > 0 ? (
               <View style={styles.listShell}>
                 {visibleMembers.map((member) => {
-                  const selected = selectedUserIds.includes(member.userId);
+                  const selected = selectedWorkspaceMemberIds.includes(member.id);
                   return (
                     <Pressable
                       key={member.id}
-                      onPress={() => toggleUser(member.userId)}
+                      onPress={() => toggleWorkspaceMember(member.id)}
                       style={({ pressed }) => [
                         styles.rowCard,
                         pressed && styles.rowCardPressed,

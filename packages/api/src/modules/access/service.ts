@@ -1,5 +1,6 @@
 import type { FastifyRequest } from 'fastify';
 import {
+  buildWorkspaceUserContextId,
   checkPermission,
   lookupResources,
   type AuthzObjectType,
@@ -11,7 +12,7 @@ import {
 } from './actions.js';
 
 export type AccessSubject = AuthzSubject & {
-  type: 'user' | 'actor';
+  type: 'user' | 'actor' | 'workspace_user';
 };
 
 export function userSubject(userId: string): AccessSubject {
@@ -20,6 +21,16 @@ export function userSubject(userId: string): AccessSubject {
 
 export function actorSubject(actorId: string): AccessSubject {
   return { type: 'actor', id: actorId };
+}
+
+export function workspaceUserSubject(
+  workspaceId: string,
+  userId: string,
+): AccessSubject {
+  return {
+    type: 'workspace_user',
+    id: buildWorkspaceUserContextId(workspaceId, userId),
+  };
 }
 
 export function getRequestUserId(request: FastifyRequest): string {

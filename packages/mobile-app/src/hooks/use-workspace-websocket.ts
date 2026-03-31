@@ -12,7 +12,6 @@ export type WorkspaceSocketSubscription =
   | {
       key: string;
       topic: "inbox";
-      workspaceId?: string | null;
     }
   | {
       key: string;
@@ -22,6 +21,7 @@ export type WorkspaceSocketSubscription =
 
 interface UseWorkspaceWebSocketOptions {
   enabled?: boolean;
+  workspaceId?: string | null;
   subscriptions: WorkspaceSocketSubscription[];
   onEvent?: (event: ChatSocketEvent | Record<string, unknown>) => void;
   onConnected?: () => void;
@@ -31,6 +31,7 @@ type HookSubscriber = {
   id: string;
   enabled: boolean;
   token?: string | null;
+  workspaceId?: string | null;
   subscriptions: WorkspaceSocketSubscription[];
   onEventRef: MutableRefObject<
     | ((event: ChatSocketEvent | Record<string, unknown>) => void)
@@ -47,15 +48,20 @@ let sharedReconnectAttempts = 0;
 let sharedAuthenticated = false;
 let sharedSentSubscriptions = new Map<string, string>();
 let sharedActiveToken: string | null = null;
+let sharedActiveWorkspaceId: string | null = null;
 
 function getActiveSubscribers() {
   return [...hookSubscribers.values()].filter(
-    (subscriber) => subscriber.enabled && subscriber.token,
+    (subscriber) => subscriber.enabled && subscriber.token && subscriber.workspaceId,
   );
 }
 
 function getSharedToken() {
   return getActiveSubscribers()[0]?.token || null;
+}
+
+function getSharedWorkspaceId() {
+  return getActiveSubscribers()[0]?.workspaceId || null;
 }
 
 function getDesiredSubscriptions() {
@@ -136,14 +142,25 @@ function syncSharedSubscriptions() {
 
 function ensureSharedSocket() {
   const token = getSharedToken();
+  const workspaceId = getSharedWorkspaceId();
   if (!token) {
     sharedActiveToken = null;
+    sharedActiveWorkspaceId = null;
+    closeSharedSocket();
+    return;
+  }
+  if (!workspaceId) {
+    sharedActiveWorkspaceId = null;
     closeSharedSocket();
     return;
   }
 
   if (sharedActiveToken && sharedActiveToken !== token) {
     sharedActiveToken = token;
+    closeSharedSocket();
+  }
+  if (sharedActiveWorkspaceId && sharedActiveWorkspaceId !== workspaceId) {
+    sharedActiveWorkspaceId = workspaceId;
     closeSharedSocket();
   }
 
@@ -153,6 +170,7 @@ function ensureSharedSocket() {
   }
 
   sharedActiveToken = token;
+  sharedActiveWorkspaceId = workspaceId;
   const socket = new WebSocket(getWebSocketUrl());
   sharedSocket = socket;
 
@@ -162,6 +180,7 @@ function ensureSharedSocket() {
       JSON.stringify({
         type: "auth",
         token,
+        workspaceId,
       }),
     );
   };
@@ -238,6 +257,7 @@ function createSubscriberId() {
 
 export function useWorkspaceWebSocket({
   enabled = true,
+  workspaceId,
   subscriptions,
   onEvent,
   onConnected,
@@ -259,6 +279,7 @@ export function useWorkspaceWebSocket({
       id: subscriberId,
       enabled,
       token,
+      workspaceId,
       subscriptions: subscriptionsRef.current,
       onEventRef,
       onConnectedRef,
@@ -282,8 +303,9 @@ export function useWorkspaceWebSocket({
 
     subscriber.enabled = enabled;
     subscriber.token = token;
+    subscriber.workspaceId = workspaceId;
     subscriber.subscriptions = subscriptionsRef.current;
     ensureSharedSocket();
     syncSharedSubscriptions();
-  }, [enabled, subscriptionSignature, token]);
+  }, [enabled, subscriptionSignature, token, workspaceId]);
 }

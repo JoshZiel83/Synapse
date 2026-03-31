@@ -529,7 +529,7 @@ export type AutomationExecutionStatus =
   | "completed"
   | "failed"
   | "skipped";
-export type AutomationTargetEntityKind = "actor" | "user";
+export type AutomationTargetEntityKind = "actor" | "workspace_member";
 export type AutomationWebhookStatus = "active" | "disabled" | "archived";
 export type AutomationEventSourceStatus =
   | "active"
@@ -795,6 +795,7 @@ export type EventType =
 export interface SystemEvent {
   type: EventType;
   workspaceId: UUID;
+  recipientWorkspaceMemberId?: UUID;
   payload: Record<string, unknown>;
   timestamp: Timestamp;
 }
@@ -2354,6 +2355,7 @@ export interface ConversationEntityRef {
   memberId?: UUID;
   participantId?: UUID;
   memberType: ConversationMemberType;
+  workspaceMemberId?: UUID;
   actorId?: UUID;
   userId?: UUID;
   externalUserKey?: string;
@@ -3188,7 +3190,8 @@ export interface ChatSocketEventPayloadMap {
   "conversation.item.created": ConversationFeedItem;
   "conversation.read.updated": {
     conversationId: UUID;
-    userId: UUID;
+    workspaceMemberId: UUID;
+    userId?: UUID;
     readWatermarkSequence: number;
     lastReadAt: Timestamp;
   };
@@ -3392,6 +3395,8 @@ function isConversationEntityRef(
     (entity.memberId === undefined || typeof entity.memberId === "string") &&
     (entity.participantId === undefined ||
       typeof entity.participantId === "string") &&
+    (entity.workspaceMemberId === undefined ||
+      typeof entity.workspaceMemberId === "string") &&
     (entity.actorId === undefined || typeof entity.actorId === "string") &&
     (entity.userId === undefined || typeof entity.userId === "string") &&
     (entity.externalUserKey === undefined ||

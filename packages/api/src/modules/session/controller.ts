@@ -11,6 +11,7 @@ import type { SessionsChannelType } from '../../infrastructure/database/generate
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { requireRequestAction } from '../access/guards.js';
 import type { AccessAction } from '../access/actions.js';
+import { authorizeAction, workspaceUserSubject } from '../access/service.js';
 import {
   createSession,
   getSession,
@@ -69,14 +70,19 @@ async function requireSessionConversationPermission(
     return null;
   }
 
-  const allowed = await requireRequestAction(
-    request,
-    reply,
+  const userId = (request as any).user?.userId as string | undefined;
+  if (!userId) {
+    reply.status(401).send({ error: 'Unauthorized' });
+    return null;
+  }
+
+  const allowed = await authorizeAction({
+    subject: workspaceUserSubject(workspaceId, userId),
     action,
-    session.conversation_id,
-    errorMessage,
-  );
+    resourceId: session.conversation_id,
+  });
   if (!allowed) {
+    reply.status(403).send({ error: errorMessage });
     return null;
   }
 
