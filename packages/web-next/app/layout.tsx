@@ -8,6 +8,32 @@ import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { AuthStoreProvider } from "@/stores/auth-store"
 
+function resolveMetadataBase() {
+  const candidates = [
+    process.env.NEXT_PUBLIC_APP_URL,
+    process.env.NEXT_PUBLIC_SITE_URL,
+    process.env.VERCEL_PROJECT_PRODUCTION_URL
+      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+      : undefined,
+    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined,
+    "http://localhost:3000",
+  ]
+
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue
+    }
+
+    try {
+      return new URL(candidate)
+    } catch {
+      continue
+    }
+  }
+
+  return new URL("http://localhost:3000")
+}
+
 const sans = Manrope({
   subsets: ["latin"],
   variable: "--font-sans",
@@ -18,7 +44,10 @@ const display = Space_Grotesk({
   variable: "--font-display",
 })
 
+const metadataBase = resolveMetadataBase()
+
 export const metadata: Metadata = {
+  metadataBase,
   title: {
     default: "Synapse",
     template: "%s | Synapse",
