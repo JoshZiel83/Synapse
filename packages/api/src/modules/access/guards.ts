@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   authorizeAction,
-  getRequestUserSubject,
+  getRequestAccessSubject,
   type AccessSubject,
 } from './service.js';
 import type { AccessAction } from './actions.js';
@@ -26,7 +26,7 @@ export async function requireRequestAction(
   errorMessage = 'Forbidden',
 ) {
   const allowed = await requireSubjectAction(
-    getRequestUserSubject(request),
+    getRequestAccessSubject(request),
     action,
     resourceId,
   );

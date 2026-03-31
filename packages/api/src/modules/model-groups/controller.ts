@@ -10,7 +10,11 @@ import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { AUTHZ_PLATFORM_ID } from '../../infrastructure/authz/index.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import { requireRequestAction } from '../access/guards.js';
-import { authorizeAction, userSubject } from '../access/service.js';
+import {
+  authorizeAction,
+  userSubject,
+  workspaceUserSubject,
+} from '../access/service.js';
 import {
   addModelItem,
   createModelGroup,
@@ -179,6 +183,7 @@ async function requireModelGroupPermission(
   permission: 'view' | 'edit' | 'grant' | 'delete',
   reply: FastifyReply,
   errorMessage: string,
+  workspaceId?: string,
 ) {
   const action =
     permission === 'view'
@@ -186,10 +191,12 @@ async function requireModelGroupPermission(
       : permission === 'edit'
         ? 'model_group.edit'
         : permission === 'grant'
-          ? 'model_group.grant'
-          : 'model_group.delete';
+      ? 'model_group.grant'
+      : 'model_group.delete';
   const allowed = await authorizeAction({
-    subject: userSubject(userId),
+    subject: workspaceId
+      ? workspaceUserSubject(workspaceId, userId)
+      : userSubject(userId),
     action,
     resourceId: groupId,
   });
@@ -309,6 +316,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         'view',
         reply,
         'Not allowed to view this model group',
+        (request.params as any).workspaceId,
       );
       if (!groupAllowed) return;
 
@@ -339,6 +347,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         'edit',
         reply,
         'Not allowed to edit this model group',
+        (request.params as any).workspaceId,
       );
       if (!groupAllowed) return;
 
@@ -371,6 +380,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         'delete',
         reply,
         'Not allowed to delete this model group',
+        (request.params as any).workspaceId,
       );
       if (!groupAllowed) return;
 
@@ -402,6 +412,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         'grant',
         reply,
         'Not allowed to manage grants for this model group',
+        (request.params as any).workspaceId,
       );
       if (!groupAllowed) return;
 
@@ -433,6 +444,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         'grant',
         reply,
         'Not allowed to manage grants for this model group',
+        (request.params as any).workspaceId,
       );
       if (!groupAllowed) return;
 
@@ -468,6 +480,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         'grant',
         reply,
         'Not allowed to manage grants for this model group',
+        (request.params as any).workspaceId,
       );
       if (!groupAllowed) return;
 
@@ -500,6 +513,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         'edit',
         reply,
         'Not allowed to edit this model group',
+        (request.params as any).workspaceId,
       );
       if (!groupAllowed) return;
 
@@ -535,6 +549,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         'edit',
         reply,
         'Not allowed to edit this model group',
+        (request.params as any).workspaceId,
       );
       if (!groupAllowed) return;
 
@@ -568,6 +583,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         'edit',
         reply,
         'Not allowed to edit this model group',
+        (request.params as any).workspaceId,
       );
       if (!groupAllowed) return;
 
@@ -600,6 +616,7 @@ export function registerModelGroupRoutes(app: FastifyInstance) {
         'view',
         reply,
         'Not allowed to view this model group',
+        (request.params as any).workspaceId,
       );
       if (!groupAllowed) return;
 

@@ -446,11 +446,36 @@ export function touchWorkspaceUserContext(
     touchRelation(
       "workspace_user",
       contextId,
+      "self",
+      "workspace_user",
+      contextId,
+    ),
+    touchRelation(
+      "workspace_user",
+      contextId,
       "workspace",
       "workspace",
       workspaceId,
     ),
     touchRelation("workspace_user", contextId, "user", "user", userId),
+  ];
+}
+
+export function touchWorkspaceUserMembership(
+  workspaceId: string,
+  userId: string,
+  relation: string,
+): AuthzRelationMutation[] {
+  const contextId = buildWorkspaceUserContextId(workspaceId, userId);
+  return [
+    ...touchWorkspaceUserContext(workspaceId, userId),
+    touchRelation(
+      "workspace",
+      workspaceId,
+      relation,
+      "workspace_user",
+      contextId,
+    ),
   ];
 }
 

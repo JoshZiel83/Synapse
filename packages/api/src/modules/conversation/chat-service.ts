@@ -85,6 +85,24 @@ import {
 
 type ConversationGrantPermission = ConversationGrantsPermission;
 
+export class ConversationServiceError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    message: string,
+    public readonly code?: string,
+    public readonly details?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "ConversationServiceError";
+  }
+}
+
+export function isConversationServiceError(
+  error: unknown,
+): error is ConversationServiceError {
+  return error instanceof ConversationServiceError;
+}
+
 function mapWakeupSourceTypeToTrigger(
   sourceType:
     | "user_message"
@@ -922,8 +940,14 @@ async function filterAllowedTargetActorIds(params: {
     params.explicit &&
     allowedActorIds.length !== params.targetActorIds.length
   ) {
-    throw new Error(
+    const rejectedActorIds = checks
+      .filter((item) => !item.allowed)
+      .map((item) => item.actorId);
+    throw new ConversationServiceError(
+      403,
       "One or more target actors are not allowed to receive messages from this sender",
+      "ACTOR_TARGET_FORBIDDEN",
+      { rejectedActorIds },
     );
   }
 

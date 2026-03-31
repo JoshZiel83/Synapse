@@ -9,7 +9,7 @@ import {
   optionalAuth,
 } from "../../infrastructure/middleware/auth.js";
 import { requireRequestAction } from "../access/guards.js";
-import { authorizeAction, userSubject } from "../access/service.js";
+import { authorizeAction, workspaceUserSubject } from "../access/service.js";
 import type { AccessAction } from "../access/actions.js";
 import {
   createWorkspace,
@@ -76,7 +76,7 @@ async function canWorkspacePermission(
   action: AccessAction,
 ): Promise<boolean> {
   return authorizeAction({
-    subject: userSubject(userId),
+    subject: workspaceUserSubject(workspaceId, userId),
     action,
     resourceId: workspaceId,
   });

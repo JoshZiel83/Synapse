@@ -13,6 +13,7 @@ import {
   getConversationMembers,
   getConversationMessages,
   getThreadsForUser,
+  isConversationServiceError,
   markConversationRead,
   sendConversationMessage,
   updateConversationProfile,
@@ -218,6 +219,18 @@ async function loadConversationSummary(params: {
   return rows.find((row) => row.id === params.conversationId) || null;
 }
 
+function replyConversationServiceError(reply: any, error: unknown) {
+  if (!isConversationServiceError(error)) {
+    throw error;
+  }
+
+  return reply.status(error.statusCode).send({
+    error: error.message,
+    code: error.code,
+    ...(error.details || {}),
+  });
+}
+
 export default async function threadController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware);
 
@@ -256,40 +269,44 @@ export default async function threadController(app: FastifyInstance) {
     const workspaceMember = await resolveRequestWorkspaceMember(request, reply);
     if (!workspaceMember) return;
 
-    const body = createConversationSchema.parse(request.body);
-    const created = await createThread({
-      workspaceId: request.params.workspaceId,
-      kind: body.kind,
-      createdByUserId: getRequestUserId(request),
-      createdByWorkspaceMemberId: workspaceMember.workspaceMemberId,
-      title: body.title,
-      actorIds: body.actorIds,
-      workspaceMemberIds: body.workspaceMemberIds,
-      initialMessage:
-        typeof body.content === "string" ? body.content : undefined,
-      initialContentBlocks: Array.isArray(body.contentBlocks)
-        ? (body.contentBlocks as CanonicalContentBlock[])
-        : undefined,
-      targetActorIds: body.targetActorIds,
-      includeCreatorMember: true,
-    });
+    try {
+      const body = createConversationSchema.parse(request.body);
+      const created = await createThread({
+        workspaceId: request.params.workspaceId,
+        kind: body.kind,
+        createdByUserId: getRequestUserId(request),
+        createdByWorkspaceMemberId: workspaceMember.workspaceMemberId,
+        title: body.title,
+        actorIds: body.actorIds,
+        workspaceMemberIds: body.workspaceMemberIds,
+        initialMessage:
+          typeof body.content === "string" ? body.content : undefined,
+        initialContentBlocks: Array.isArray(body.contentBlocks)
+          ? (body.contentBlocks as CanonicalContentBlock[])
+          : undefined,
+        targetActorIds: body.targetActorIds,
+        includeCreatorMember: true,
+      });
 
-    const summary = await loadConversationSummary({
-      conversationId: created.conversation.id,
-      workspaceId: request.params.workspaceId,
-      userId: getRequestUserId(request),
-      workspaceMemberId: workspaceMember.workspaceMemberId,
-    });
+      const summary = await loadConversationSummary({
+        conversationId: created.conversation.id,
+        workspaceId: request.params.workspaceId,
+        userId: getRequestUserId(request),
+        workspaceMemberId: workspaceMember.workspaceMemberId,
+      });
 
-    return reply.status(201).send({
-      conversationId: created.conversation.id,
-      conversation: summary
-        ? await mapConversationSummaryView(summary, {
-            userId: getRequestUserId(request),
-            workspaceMemberId: workspaceMember.workspaceMemberId,
-          })
-        : undefined,
-    });
+      return reply.status(201).send({
+        conversationId: created.conversation.id,
+        conversation: summary
+          ? await mapConversationSummaryView(summary, {
+              userId: getRequestUserId(request),
+              workspaceMemberId: workspaceMember.workspaceMemberId,
+            })
+          : undefined,
+      });
+    } catch (error) {
+      return replyConversationServiceError(reply, error);
+    }
   });
 
   app.get<{
@@ -408,21 +425,25 @@ export default async function threadController(app: FastifyInstance) {
       const access = await requireConversationAccess(request, reply, "send");
       if (!access) return;
 
-      const body = sendConversationMessageSchema.parse(request.body);
-      const response = await sendConversationMessage({
-        conversationId: request.params.conversationId,
-        senderType: "user",
-        senderWorkspaceId: request.params.workspaceId,
-        senderWorkspaceMemberId: access.workspaceMember.workspaceMemberId,
-        senderUserId: getRequestUserId(request),
-        clientMessageId: body.clientMessageId,
-        targetParticipantIds: body.targetParticipantIds,
-        targetActorIds: body.targetActorIds,
-        content: body.content,
-        contentBlocks: body.contentBlocks as CanonicalContentBlock[] | undefined,
-      });
+      try {
+        const body = sendConversationMessageSchema.parse(request.body);
+        const response = await sendConversationMessage({
+          conversationId: request.params.conversationId,
+          senderType: "user",
+          senderWorkspaceId: request.params.workspaceId,
+          senderWorkspaceMemberId: access.workspaceMember.workspaceMemberId,
+          senderUserId: getRequestUserId(request),
+          clientMessageId: body.clientMessageId,
+          targetParticipantIds: body.targetParticipantIds,
+          targetActorIds: body.targetActorIds,
+          content: body.content,
+          contentBlocks: body.contentBlocks as CanonicalContentBlock[] | undefined,
+        });
 
-      return reply.status(201).send(response);
+        return reply.status(201).send(response);
+      } catch (error) {
+        return replyConversationServiceError(reply, error);
+      }
     },
   );
 

@@ -16,6 +16,7 @@ import {
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
   touchRelation,
+  touchWorkspaceUserMembership,
 } from "../../infrastructure/authz/index.js";
 import {
   INVITE_TRUST_LEVELS,
@@ -507,6 +508,11 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
           "user",
           input.userId,
         ),
+        ...touchWorkspaceUserMembership(
+          String(workspace.id),
+          input.userId,
+          workspaceRelationFromTrustLevel("owner"),
+        ),
         ...installedActors.flatMap(({ actorRow }) =>
           buildWorkspaceActorAuthzRelations(
             String(workspace.id),
@@ -738,6 +744,11 @@ export async function addMember(input: AddMemberInput) {
           workspaceRelationFromTrustLevel(input.trustLevel),
           "user",
           input.userId,
+        ),
+        ...touchWorkspaceUserMembership(
+          input.workspaceId,
+          input.userId,
+          workspaceRelationFromTrustLevel(input.trustLevel),
         ),
       ],
       {

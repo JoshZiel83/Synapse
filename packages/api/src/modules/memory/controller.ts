@@ -15,9 +15,9 @@ import { requireRequestAction } from '../access/guards.js';
 import {
   authorizeAction,
   authorizePermission,
+  getRequestAccessSubject,
   getRequestUserId,
   listAuthorizedResourceIds,
-  userSubject,
 } from '../access/service.js';
 import {
   createMemory,
@@ -145,7 +145,7 @@ async function requireMemoryPermission(
   errorMessage: string,
 ) {
   const allowed = await authorizePermission({
-    subject: userSubject(getRequestUserId(request)),
+    subject: getRequestAccessSubject(request),
     resourceType: 'memory',
     resourceId: memoryId,
     permission,
@@ -172,7 +172,7 @@ async function requireMemoryAnchorPermission(
   switch (body.ownerScope) {
     case 'workspace':
       allowed = await authorizeAction({
-        subject: userSubject(userId),
+        subject: getRequestAccessSubject(request),
         action: 'workspace.manage_memories',
         resourceId: workspaceId,
       });
@@ -180,7 +180,7 @@ async function requireMemoryAnchorPermission(
     case 'conversation':
       if (body.ownerConversationId) {
         allowed = await authorizePermission({
-          subject: userSubject(userId),
+          subject: getRequestAccessSubject(request),
           resourceType: 'conversation',
           resourceId: body.ownerConversationId,
           permission: 'memory_edit',
@@ -190,7 +190,7 @@ async function requireMemoryAnchorPermission(
     case 'actor_global':
       if (body.ownerActorId) {
         allowed = await authorizePermission({
-          subject: userSubject(userId),
+          subject: getRequestAccessSubject(request),
           resourceType: 'actor',
           resourceId: body.ownerActorId,
           permission: 'memory_edit',
@@ -200,7 +200,7 @@ async function requireMemoryAnchorPermission(
     case 'actor_conversation':
       if (body.ownerActorId && body.ownerConversationId) {
         allowed = await authorizePermission({
-          subject: userSubject(userId),
+          subject: getRequestAccessSubject(request),
           resourceType: 'actor_conversation',
           resourceId: buildActorConversationContextId(body.ownerActorId, body.ownerConversationId),
           permission: 'memory_edit',
@@ -211,7 +211,7 @@ async function requireMemoryAnchorPermission(
       allowed = body.ownerUserId === userId;
       if (!allowed) {
         allowed = await authorizeAction({
-          subject: userSubject(userId),
+          subject: getRequestAccessSubject(request),
           action: 'workspace.manage_memories',
           resourceId: workspaceId,
         });
@@ -305,7 +305,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
       const filters = listMemoriesSchema.parse(request.query);
       let memories = await listMemories(workspaceId, filters);
       const allowedIds = await listAuthorizedResourceIds({
-        subject: userSubject(getRequestUserId(request)),
+        subject: getRequestAccessSubject(request),
         action: 'memory.read',
       });
       const allowedIdSet = new Set(allowedIds);
@@ -329,7 +329,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
       const { workspaceId, memoryId } = request.params as { workspaceId: string; memoryId: string };
       const memory = await getMemory(workspaceId, memoryId);
       const readable = await authorizePermission({
-        subject: userSubject(getRequestUserId(request)),
+        subject: getRequestAccessSubject(request),
         resourceType: 'memory',
         resourceId: memoryId,
         permission: 'read',
@@ -420,7 +420,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
       const body = searchMemoriesSchema.parse(request.body);
       const result = await runMemorySearch(workspaceId, body);
       const allowedIds = await listAuthorizedResourceIds({
-        subject: userSubject(getRequestUserId(request)),
+        subject: getRequestAccessSubject(request),
         action: 'memory.read',
       });
       const allowedIdSet = new Set(allowedIds);
@@ -445,7 +445,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
       const body = recallMemoriesSchema.parse(request.body);
       const result = await recallMemories(workspaceId, body);
       const allowedIds = await listAuthorizedResourceIds({
-        subject: userSubject(getRequestUserId(request)),
+        subject: getRequestAccessSubject(request),
         action: 'memory.read',
       });
       const allowedIdSet = new Set(allowedIds);

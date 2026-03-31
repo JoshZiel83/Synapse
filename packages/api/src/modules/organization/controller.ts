@@ -11,7 +11,10 @@ import {
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
 import { requireRequestAction } from "../access/guards.js";
-import { getRequestUserId, userSubject } from "../access/service.js";
+import {
+  getRequestUserId,
+  workspaceUserSubject,
+} from "../access/service.js";
 import type { AccessAction } from "../access/actions.js";
 import * as service from "./service.js";
 
@@ -151,13 +154,19 @@ export async function organizationController(app: FastifyInstance) {
 
   app.get("/", async (request, reply) => {
     const { workspaceId } = request.params as WorkspaceParams;
-    const actors = await service.listActors(workspaceId, userSubject(getRequestUserId(request)));
+    const actors = await service.listActors(
+      workspaceId,
+      workspaceUserSubject(workspaceId, getRequestUserId(request)),
+    );
     return reply.send(actors);
   });
 
   app.get("/tree", async (request, reply) => {
     const { workspaceId } = request.params as WorkspaceParams;
-    const tree = await service.getFullOrgTree(workspaceId, userSubject(getRequestUserId(request)));
+    const tree = await service.getFullOrgTree(
+      workspaceId,
+      workspaceUserSubject(workspaceId, getRequestUserId(request)),
+    );
     return reply.send(tree);
   });
 

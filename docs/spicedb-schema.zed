@@ -26,17 +26,17 @@ definition platform {
 
 definition workspace {
     relation platform: platform
-    relation owner: user
-    relation admin: user
-    relation member: user
-    relation guest: user
-    relation model_admin: user
-    relation actor_admin: user
-    relation skill_admin: user
-    relation plugin_admin: user
-    relation memory_admin: user
-    relation relay_admin: user
-    relation conversation_admin: user
+    relation owner: user | workspace_user
+    relation admin: user | workspace_user
+    relation member: user | workspace_user
+    relation guest: user | workspace_user
+    relation model_admin: user | workspace_user
+    relation actor_admin: user | workspace_user
+    relation skill_admin: user | workspace_user
+    relation plugin_admin: user | workspace_user
+    relation memory_admin: user | workspace_user
+    relation relay_admin: user | workspace_user
+    relation conversation_admin: user | workspace_user
     relation actor: actor
 
     permission principal = owner + admin + member + model_admin + actor_admin + skill_admin + plugin_admin + memory_admin + relay_admin + conversation_admin + actor
@@ -55,10 +55,11 @@ definition workspace {
 }
 
 definition workspace_user {
+    relation self: workspace_user
     relation workspace: workspace
     relation user: user
 
-    permission principal = user & workspace->view
+    permission principal = self
 }
 
 definition actor {
@@ -227,6 +228,8 @@ definition model_group {
 // conversation:conv_01#workspace@workspace:ws_01
 // conversation:conv_01#participant@user:u_02
 // conversation:conv_01#participant@actor:a_01
+// workspace:ws_01#member@workspace_user:ws_01:u_02
+// workspace_user:ws_01:u_02#self@workspace_user:ws_01:u_02
 // workspace_user:ws_01:u_02#workspace@workspace:ws_01
 // workspace_user:ws_01:u_02#user@user:u_02
 // model_group:group_01#owner_workspace@workspace:ws_01

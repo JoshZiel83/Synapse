@@ -7,6 +7,7 @@ import {
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
   touchRelation,
+  touchWorkspaceUserMembership,
 } from '../../infrastructure/authz/index.js';
 import {
   db,
@@ -157,6 +158,11 @@ export async function redeemInvite(token: string, userId: string) {
       client,
       [
         touchRelation('workspace', invite.workspace_id, invite.trust_level, 'user', userId),
+        ...touchWorkspaceUserMembership(
+          invite.workspace_id,
+          userId,
+          invite.trust_level,
+        ),
       ],
       {
         source: 'workspace.redeem_invite',

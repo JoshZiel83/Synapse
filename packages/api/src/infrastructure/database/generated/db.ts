@@ -119,9 +119,9 @@ export type ConversationItemTargetsTargetKind = "cc" | "to" | "visible";
 
 export type ConversationMembersMemberType = "actor" | "external" | "remote_agent" | "system" | "user";
 
-export type ConversationMembersState = "active" | "kicked" | "left";
-
 export type ConversationMembersRole = "admin" | "member" | "owner";
+
+export type ConversationMembersState = "active" | "kicked" | "left";
 
 export type ConversationsKind = "group" | "private" | "virtual";
 

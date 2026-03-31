@@ -9,7 +9,12 @@ import { resolveModelEngineKind } from '@synapse/shared';
 import { redis } from '../../infrastructure/redis/index.js';
 import { db } from '../../infrastructure/database/kysely.js';
 import { config } from '../../config/index.js';
-import { actorSubject, listAuthorizedResourceIds, userSubject } from '../access/service.js';
+import {
+  actorSubject,
+  listAuthorizedResourceIds,
+  userSubject,
+  workspaceUserSubject,
+} from '../access/service.js';
 import { DEFAULT_MODEL_ATTEMPT_POLICY } from './defaults.js';
 
 type GroupRow = {
@@ -157,7 +162,9 @@ async function listAuthorizedModelGroupIds(current: ResolveContext) {
 
   if (current.userId) {
     const userResults = await listAuthorizedResourceIds({
-      subject: userSubject(current.userId),
+      subject: current.workspaceId
+        ? workspaceUserSubject(current.workspaceId, current.userId)
+        : userSubject(current.userId),
       action: 'model_group.use',
     });
     for (const id of userResults) {

@@ -13,6 +13,7 @@ import {
   enqueueAuthzRelationships,
   flushAuthzOutboxEntries,
   touchRelation,
+  touchWorkspaceUserMembership,
 } from "../authz/index.js";
 import { ensureStorageDir } from "../storage/index.js";
 import { transaction } from "./index.js";
@@ -732,6 +733,8 @@ export async function seedDatabase() {
       touchRelation("workspace", workspaceId, "platform", "platform", AUTHZ_PLATFORM_ID),
       touchRelation("workspace", workspaceId, "owner", "user", userId),
       touchRelation("workspace", workspaceId, "member", "user", userId),
+      ...touchWorkspaceUserMembership(workspaceId, userId, "owner"),
+      ...touchWorkspaceUserMembership(workspaceId, userId, "member"),
       ...runtimeRefs.actorIds.flatMap((actorId) => [
         touchRelation("workspace", workspaceId, "actor", "actor", actorId),
         touchRelation("actor", actorId, "workspace", "workspace", workspaceId),

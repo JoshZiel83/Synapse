@@ -45,6 +45,15 @@ export function getRequestUserSubject(request: FastifyRequest): AccessSubject {
   return userSubject(getRequestUserId(request));
 }
 
+export function getRequestAccessSubject(request: FastifyRequest): AccessSubject {
+  const userId = getRequestUserId(request);
+  const workspaceId = (request.params as any)?.workspaceId;
+  if (typeof workspaceId === 'string' && workspaceId.length > 0) {
+    return workspaceUserSubject(workspaceId, userId);
+  }
+  return userSubject(userId);
+}
+
 export async function authorizeAction(params: {
   subject: AccessSubject;
   action: AccessAction;

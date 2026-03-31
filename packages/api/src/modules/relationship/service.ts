@@ -21,6 +21,7 @@ import { getFileUrlById } from "../files/service.js";
 import {
   authorizeAction,
   userSubject,
+  workspaceUserSubject,
 } from "../access/service.js";
 import {
   createThread,
@@ -748,7 +749,7 @@ async function getActorAccessState(params: {
 }) {
   if (params.conversationId) return "existing" as const;
   const canInvoke = await authorizeAction({
-    subject: userSubject(params.userId),
+    subject: workspaceUserSubject(params.workspaceId, params.userId),
     action: "actor.invoke",
     resourceId: params.actor.actorId,
   });
@@ -1572,7 +1573,7 @@ export async function scanRelationshipQr(params: {
       throw new Error("Actor not found");
     }
     const canInvoke = await authorizeAction({
-      subject: userSubject(params.userId),
+      subject: workspaceUserSubject(params.workspaceId, params.userId),
       action: "actor.invoke",
       resourceId: actor.actorId,
     });
@@ -1709,7 +1710,7 @@ export async function listFriendRequests(params: {
       if (row.target_user_id !== params.userId) continue;
     } else if (row.target_actor_id) {
       const canApprove = await authorizeAction({
-        subject: userSubject(params.userId),
+        subject: workspaceUserSubject(params.workspaceId, params.userId),
         action: "actor.grant",
         resourceId: row.target_actor_id,
       });
@@ -1786,7 +1787,7 @@ export async function resolveFriendRequest(params: {
     }
   } else if (request.target_actor_id) {
     const canApprove = await authorizeAction({
-      subject: userSubject(params.userId),
+      subject: workspaceUserSubject(params.workspaceId, params.userId),
       action: "actor.grant",
       resourceId: request.target_actor_id,
     });
@@ -1849,7 +1850,7 @@ export async function listActorAccessRequests(params: {
   const incoming = [];
   for (const row of incomingRows) {
     const canApprove = await authorizeAction({
-      subject: userSubject(params.userId),
+      subject: workspaceUserSubject(params.workspaceId, params.userId),
       action: "actor.grant",
       resourceId: row.actor_id,
     });
@@ -1894,7 +1895,7 @@ export async function resolveActorAccessRequest(params: {
     throw new Error("Actor access request has already been resolved");
   }
   const canApprove = await authorizeAction({
-    subject: userSubject(params.userId),
+    subject: workspaceUserSubject(params.workspaceId, params.userId),
     action: "actor.grant",
     resourceId: request.actor_id,
   });
@@ -2032,7 +2033,7 @@ export async function openDirectConversation(params: {
 
   if (resolved.kind === "workspace-actor" && resolved.actor) {
     const canInvoke = await authorizeAction({
-      subject: userSubject(params.userId),
+      subject: workspaceUserSubject(params.workspaceId, params.userId),
       action: "actor.invoke",
       resourceId: resolved.actor.actorId,
     });
