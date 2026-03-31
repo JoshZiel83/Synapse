@@ -1,3 +1,46 @@
+import {
+  ACTOR_DOC_VISIBILITIES,
+  ACTOR_ROLES,
+  ATTACHMENT_SCOPES,
+  AUTH_CLIENT_TYPES,
+  AUTH_QR_LOGIN_STATUSES,
+  AUTH_SESSION_PERSISTENCES,
+  AUTH_TRANSPORTS,
+  CANONICAL_FILE_CATEGORIES,
+  INVITE_TRUST_LEVELS,
+  INTERACTION_DECISIONS,
+  INTERACTION_QUESTION_FIELD_TYPES,
+  INTERACTION_REQUEST_KINDS,
+  INTERACTION_REQUEST_STATUSES,
+  MEMORY_CATEGORIES,
+  MEMORY_RECALL_TYPES,
+  MEMORY_SCOPES,
+  MEMORY_STABILITIES,
+  MEMORY_STATUSES,
+  PLUGIN_AUTH_CONNECTION_STATUSES,
+  PLUGIN_AUTH_OWNER_SCOPES,
+  PLUGIN_AUTH_SESSION_STATUSES,
+  RELAY_AUTHORIZATION_DURATIONS,
+  RELAY_FILESYSTEM_AUTHORIZATION_ACCESSES,
+  REUSE_SCOPES,
+  SESSION_CHANNEL_INPUTS,
+  SESSION_CHANNELS,
+  SESSION_INTERRUPT_TYPES,
+  SESSION_STATUSES,
+  SESSION_TRIGGERS,
+  SESSION_WAKEUP_SOURCE_TYPES,
+  SESSION_WAKEUP_STATUSES,
+  TASK_NOTICE_STATUSES,
+  TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
+  TRANSPORT_ACCOUNT_OWNER_SCOPES,
+  TRANSPORT_ACCOUNT_STATUSES,
+  TRANSPORT_CONNECTION_MODES,
+  TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES,
+  TRANSPORT_DELIVERY_STATUSES,
+  TRANSPORT_ENDPOINT_TYPES,
+  TRANSPORT_KINDS,
+} from "../constants/enums.js";
+
 export * from "./relay.js";
 
 // ============ Common ============
@@ -21,16 +64,9 @@ export interface User {
   updatedAt: Timestamp;
 }
 
-export type AuthClientType =
-  | "web"
-  | "android"
-  | "windows"
-  | "ios"
-  | "cli"
-  | "api";
-
-export type AuthTransport = "cookie" | "token";
-export type AuthSessionPersistence = "persistent" | "temporary";
+export type AuthClientType = typeof AUTH_CLIENT_TYPES[number];
+export type AuthTransport = typeof AUTH_TRANSPORTS[number];
+export type AuthSessionPersistence = typeof AUTH_SESSION_PERSISTENCES[number];
 
 export interface AuthSessionSummary {
   id: UUID;
@@ -51,13 +87,7 @@ export interface AuthResponse {
   sessionToken?: string;
 }
 
-export type AuthQrLoginStatus =
-  | "pending_scan"
-  | "pending_confirm"
-  | "approved"
-  | "rejected"
-  | "expired"
-  | "consumed";
+export type AuthQrLoginStatus = typeof AUTH_QR_LOGIN_STATUSES[number];
 
 export interface AuthQrLoginRequestSummary {
   id: UUID;
@@ -130,7 +160,7 @@ export interface WorkspaceChiefActorPreference {
 }
 
 // ============ Workspace Invites ============
-export type InviteTrustLevel = "admin" | "member" | "guest";
+export type InviteTrustLevel = typeof INVITE_TRUST_LEVELS[number];
 
 export interface WorkspaceInvite {
   id: UUID;
@@ -149,20 +179,9 @@ export interface WorkspaceInvite {
 }
 
 // ============ Actor (Digital Employee) ============
-export type ActorRole =
-  | "secretary"
-  | "manager"
-  | "specialist"
-  | "reviewer"
-  | "archivist"
-  | "receptionist"
-  | "assistant";
+export type ActorRole = typeof ACTOR_ROLES[number];
 
-export type ActorDocVisibility =
-  | "always"
-  | "direct_only"
-  | "multi_member_only"
-  | "internal_only";
+export type ActorDocVisibility = typeof ACTOR_DOC_VISIBILITIES[number];
 
 export type CoreActorDocKey =
   | "identity_card"
@@ -416,27 +435,11 @@ export interface Message {
 }
 
 // ============ Memory ============
-export type MemoryScope =
-  | "workspace"
-  | "conversation"
-  | "actor_global"
-  | "actor_conversation"
-  | "user";
-export type MemoryCategory =
-  | "fact"
-  | "preference"
-  | "decision"
-  | "relationship"
-  | "procedure"
-  | "artifact"
-  | "summary";
-export type MemoryStatus =
-  | "candidate"
-  | "established"
-  | "superseded"
-  | "retracted";
-export type MemoryStability = "ephemeral" | "durable";
-export type MemoryRecallType = "bootstrap" | "turn_recall" | "manual_search";
+export type MemoryScope = typeof MEMORY_SCOPES[number];
+export type MemoryCategory = typeof MEMORY_CATEGORIES[number];
+export type MemoryStatus = typeof MEMORY_STATUSES[number];
+export type MemoryStability = typeof MEMORY_STABILITIES[number];
+export type MemoryRecallType = typeof MEMORY_RECALL_TYPES[number];
 
 export interface MemoryEntry {
   id: UUID;
@@ -797,43 +800,19 @@ export interface SystemEvent {
 }
 
 // ============ AI ============
-export type SessionStatus =
-  | "idle"
-  | "queued"
-  | "running"
-  | "blocked"
-  | "closed";
-export type ChannelType = "web" | "api";
-export type SessionTrigger =
-  | "user_message"
-  | "group_message"
-  | "actor_message"
-  | "broadcast"
-  | "api_call"
-  | "actor_invite"
-  | "automation"
-  | "system_interrupt"
-  | "retry";
+export type SessionStatus = typeof SESSION_STATUSES[number];
+export type SessionChannelType = typeof SESSION_CHANNELS[number];
+export type SessionChannelInput = typeof SESSION_CHANNEL_INPUTS[number];
+export type ChannelType = SessionChannelType;
+export type SessionTrigger = typeof SESSION_TRIGGERS[number];
 export type SessionMessageRole =
   | "user"
   | "assistant"
   | "system"
   | "tool_result";
-export type SessionInterruptType = "progress_check" | "priority_override";
-export type SessionWakeupSourceType =
-  | "user_message"
-  | "actor_message"
-  | "broadcast"
-  | "invite"
-  | "api_call"
-  | "automation"
-  | "system_interrupt"
-  | "retry";
-export type SessionWakeupStatus =
-  | "pending"
-  | "attached"
-  | "processed"
-  | "dropped";
+export type SessionInterruptType = typeof SESSION_INTERRUPT_TYPES[number];
+export type SessionWakeupSourceType = typeof SESSION_WAKEUP_SOURCE_TYPES[number];
+export type SessionWakeupStatus = typeof SESSION_WAKEUP_STATUSES[number];
 export type ActorRuntimeHealth = "ok" | "error";
 export type ActorRuntimePhase =
   | "idle"
@@ -852,8 +831,8 @@ export interface Session {
   conversationTitle?: string;
   isGroupConversation?: boolean;
   hasThreadContext?: boolean;
-  channelType: ChannelType;
-  trigger: string;
+  channelType: SessionChannelType;
+  trigger: SessionTrigger;
   status: SessionStatus;
   metadata: Record<string, unknown>;
   errorMessage?: string;
@@ -1073,7 +1052,7 @@ export interface AIRequestLog {
 export type AnthropicBuiltinTool = "web_search" | "web_fetch";
 export type ModelEngineKind = string;
 
-export type MultimodalType = "image" | "audio" | "video" | "document";
+export type MultimodalType = typeof CANONICAL_FILE_CATEGORIES[number];
 
 export interface MultimodalConfig {
   supported: boolean;
@@ -1118,7 +1097,7 @@ export interface ResolvedModelPlan {
 
 // ============ Canonical Content Block ============
 // Unified representation: text stored directly, media via file_ref pointing to platform file storage
-export type CanonicalFileCategory = "image" | "audio" | "video" | "document";
+export type CanonicalFileCategory = typeof CANONICAL_FILE_CATEGORIES[number];
 
 export interface CanonicalTextBlock {
   id: UUID;
@@ -1650,21 +1629,8 @@ export type PluginTransport =
   | "http"
   | "relay"
   | "filesystem";
-export type AttachmentScope =
-  | "platform"
-  | "workspace"
-  | "conversation"
-  | "actor_global"
-  | "actor_conversation"
-  | "user";
-export type ReuseScope =
-  | "turn"
-  | "platform"
-  | "workspace"
-  | "conversation"
-  | "actor_global"
-  | "actor_conversation"
-  | "user";
+export type AttachmentScope = typeof ATTACHMENT_SCOPES[number];
+export type ReuseScope = typeof REUSE_SCOPES[number];
 export type AccessGrantScope = AttachmentScope;
 export type MarketplaceSourceType =
   | "builtin"
@@ -1737,14 +1703,9 @@ export type PluginAuthBindingDriverKind =
   | "oauth2_authorization_code_pkce"
   | "mijia_qr_login"
   | "feishu_cli_setup";
-export type PluginAuthOwnerScope = "installation" | "user" | "workspace";
-export type PluginAuthSessionStatus =
-  | "pending"
-  | "completed"
-  | "failed"
-  | "expired"
-  | "consumed";
-export type PluginAuthConnectionStatus = "active" | "expired" | "revoked";
+export type PluginAuthOwnerScope = typeof PLUGIN_AUTH_OWNER_SCOPES[number];
+export type PluginAuthSessionStatus = typeof PLUGIN_AUTH_SESSION_STATUSES[number];
+export type PluginAuthConnectionStatus = typeof PLUGIN_AUTH_CONNECTION_STATUSES[number];
 export type PluginAuthSessionPhase =
   | "awaiting_start"
   | "awaiting_external_input"
@@ -2383,11 +2344,11 @@ export type ConversationParticipantType =
 
 export type ConversationMemberType = ConversationParticipantType;
 
-export type TransportKind = "feishu" | "weixin";
-export type TransportConnectionMode = "webhook" | "long_connection";
-export type TransportEndpointType = "direct" | "group";
-export type TransportAccountStatus = "active" | "disabled" | "error";
-export type TransportDeliveryStatus = "pending" | "sent" | "failed" | "skipped";
+export type TransportKind = typeof TRANSPORT_KINDS[number];
+export type TransportConnectionMode = typeof TRANSPORT_CONNECTION_MODES[number];
+export type TransportEndpointType = typeof TRANSPORT_ENDPOINT_TYPES[number];
+export type TransportAccountStatus = typeof TRANSPORT_ACCOUNT_STATUSES[number];
+export type TransportDeliveryStatus = typeof TRANSPORT_DELIVERY_STATUSES[number];
 
 export interface ConversationEntityRef {
   memberId?: UUID;
@@ -2419,15 +2380,12 @@ export interface TransportConnectorCapability {
   supportsGroupMessages: boolean;
 }
 
-export type TransportAccountOwnerScope = "workspace" | "workspace_user";
+export type TransportAccountOwnerScope =
+  typeof TRANSPORT_ACCOUNT_OWNER_SCOPES[number];
 export type TransportAccountInboundActorMode =
-  | "none"
-  | "specified_actor"
-  | "follow_owner_chief_actor";
+  typeof TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES[number];
 export type TransportConversationInboundActorMode =
-  | "inherit_account"
-  | "none"
-  | "specified_actor";
+  typeof TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES[number];
 
 export interface TransportAccountSummary {
   id: UUID;
@@ -2611,17 +2569,10 @@ export type ActorVersionChangeWire =
   | ({ kind: "field" } & ActorVersionFieldChangeWire)
   | ({ kind: "doc" } & ActorVersionDocChangeWire);
 
-export type InteractionRequestKind = "question_choice" | "relay_authorization";
+export type InteractionRequestKind = typeof INTERACTION_REQUEST_KINDS[number];
 
 export type InteractionRequestStatus =
-  | "pending"
-  | "answered"
-  | "approved_pending_apply"
-  | "applied"
-  | "rejected"
-  | "cancelled"
-  | "expired"
-  | "apply_failed";
+  typeof INTERACTION_REQUEST_STATUSES[number];
 
 export interface InteractionChoiceOption {
   id: string;
@@ -2630,9 +2581,7 @@ export interface InteractionChoiceOption {
 }
 
 export type InteractionQuestionFieldType =
-  | "single_select"
-  | "multi_select"
-  | "text";
+  typeof INTERACTION_QUESTION_FIELD_TYPES[number];
 
 export interface InteractionQuestionFieldDefinition {
   id: string;
@@ -2668,12 +2617,13 @@ export interface QuestionChoiceInteractionSummary {
   fields: InteractionQuestionFieldSummary[];
 }
 
-export type RelayAuthorizationDuration = "session" | "persistent";
+export type RelayAuthorizationDuration =
+  typeof RELAY_AUTHORIZATION_DURATIONS[number];
 
 export type RelayFilesystemAuthorizationAccess =
-  | "read"
-  | "write"
-  | "read_write";
+  typeof RELAY_FILESYSTEM_AUTHORIZATION_ACCESSES[number];
+
+export type InteractionDecision = typeof INTERACTION_DECISIONS[number];
 
 export interface RelayFilesystemAuthorizationScope {
   capability: "filesystem";
@@ -2729,7 +2679,7 @@ export interface InteractionRequestSummary {
   viewerCanResolve?: boolean;
 }
 
-export type TaskNoticeStatus = "completed" | "failed" | "cancelled";
+export type TaskNoticeStatus = typeof TASK_NOTICE_STATUSES[number];
 
 export interface TaskNoticeSummary {
   taskId: UUID;

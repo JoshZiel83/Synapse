@@ -1,6 +1,10 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import {
+  INVITE_TRUST_LEVELS,
+  WORKSPACE_ACCESS_KEYS,
+} from "@synapse/shared/constants";
+import {
   authMiddleware,
   optionalAuth,
 } from "../../infrastructure/middleware/auth.js";
@@ -43,26 +47,18 @@ const updateWorkspaceSchema = z.object({
 
 const addMemberSchema = z.object({
   userId: z.string().uuid(),
-  trustLevel: z.enum(["admin", "member", "guest"]),
+  trustLevel: z.enum(INVITE_TRUST_LEVELS),
 });
 
 const createInviteSchema = z.object({
-  trustLevel: z.enum(["admin", "member", "guest"]).optional(),
+  trustLevel: z.enum(INVITE_TRUST_LEVELS).optional(),
   maxUses: z.number().int().positive().optional(),
   expiresAt: z.string().optional(),
 });
 
 const workspaceAccessSchema = z.object({
   userId: z.string().uuid(),
-  accessKey: z.enum([
-    "model_admin",
-    "actor_admin",
-    "skill_admin",
-    "plugin_admin",
-    "memory_admin",
-    "relay_admin",
-    "conversation_admin",
-  ]),
+  accessKey: z.enum(WORKSPACE_ACCESS_KEYS),
   metadata: z.record(z.unknown()).optional(),
 });
 

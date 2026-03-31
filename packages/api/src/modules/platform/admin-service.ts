@@ -1,4 +1,5 @@
 import { config } from "../../config/index.js";
+import type { PlatformAccessBindingsAccessKey } from "../../infrastructure/database/generated/db.js";
 import {
   AUTHZ_PLATFORM_ID,
   deleteRelation,
@@ -18,12 +19,7 @@ import {
 import { sql } from "kysely";
 import { getFileUrlById } from "../files/service.js";
 
-export type PlatformAccessKey =
-  | "super_admin"
-  | "workspace_admin"
-  | "model_admin"
-  | "support"
-  | "auditor";
+export type PlatformAccessKey = PlatformAccessBindingsAccessKey;
 
 type UserIdentity = {
   id: string;

@@ -2,7 +2,7 @@
  * FileRef Resolver: validate and resolve <FileRef id="..."/> segments
  * from model output text into CanonicalContentBlock[].
  */
-import { fileRefBlock, textBlock, type CanonicalContentBlock } from '@synapse/shared';
+import { fileRefBlock, textBlock, type CanonicalContentBlock, type CanonicalFileCategory } from '@synapse/shared';
 import { getFileRecord } from '../files/service.js';
 
 export type FileRefSegment =
@@ -30,7 +30,7 @@ export function parseFileRefSegments(text: string): FileRefSegment[] {
   return segments;
 }
 
-function mimeToCategory(mimeType: string): 'image' | 'audio' | 'video' | 'document' {
+function mimeToCategory(mimeType: string): CanonicalFileCategory {
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('audio/')) return 'audio';
   if (mimeType.startsWith('video/')) return 'video';

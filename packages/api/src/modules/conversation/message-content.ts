@@ -7,6 +7,7 @@ import {
   textBlock,
   type CanonicalContentBlockInput,
   type CanonicalContentBlock,
+  type CanonicalFileCategory,
 } from "@synapse/shared";
 import { getFileUrlById } from "../files/service.js";
 import {
@@ -27,7 +28,7 @@ export type DraftConversationPart = {
 
 function getCategoryFromMimeType(
   mimeType: string,
-): "image" | "audio" | "video" | "document" {
+): CanonicalFileCategory {
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType.startsWith("audio/")) return "audio";
   if (mimeType.startsWith("video/")) return "video";

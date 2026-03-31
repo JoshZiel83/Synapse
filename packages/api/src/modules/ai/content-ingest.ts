@@ -2,17 +2,17 @@
  * Content Ingest: normalize arbitrary binary content (MCP results, model responses)
  * into platform file storage and return CanonicalContentBlock[].
  */
-import { fileRefBlock, normalizeCanonicalContentBlocks, textBlock, type CanonicalContentBlock, type ProviderType } from '@synapse/shared';
+import { fileRefBlock, normalizeCanonicalContentBlocks, textBlock, type CanonicalContentBlock, type CanonicalFileCategory, type ProviderType } from '@synapse/shared';
 import { saveFromBase64, saveFromUrl, type FileRecord } from '../../infrastructure/storage/file-io.js';
 
-function mimeToCategory(mimeType: string): 'image' | 'audio' | 'video' | 'document' {
+function mimeToCategory(mimeType: string): CanonicalFileCategory {
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('audio/')) return 'audio';
   if (mimeType.startsWith('video/')) return 'video';
   return 'document';
 }
 
-function fileRecordToFileRef(rec: FileRecord, category: 'image' | 'audio' | 'video' | 'document'): CanonicalContentBlock {
+function fileRecordToFileRef(rec: FileRecord, category: CanonicalFileCategory): CanonicalContentBlock {
   return fileRefBlock({
     fileId: rec.id,
     storedName: rec.storedName,

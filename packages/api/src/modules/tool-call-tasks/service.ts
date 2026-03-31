@@ -4,6 +4,14 @@ import {
   type CanonicalContentBlock,
   type TaskNoticeStatus,
 } from "@synapse/shared";
+import type {
+  SessionsChannelType,
+  SessionsStatus,
+  ToolCallTasksDeliveryPolicy,
+  ToolCallTasksDispatchStatus,
+  ToolCallTasksExecutorKind,
+  ToolCallTasksStatus,
+} from "../../infrastructure/database/generated/db.js";
 import { transaction } from "../../infrastructure/database/index.js";
 import {
   db,
@@ -18,30 +26,10 @@ import {
 } from "../conversation/service.js";
 import { enqueueSessionWakeup } from "../session/runtime.js";
 
-export type ToolCallTaskStatus =
-  | "working"
-  | "input_required"
-  | TaskNoticeStatus;
-
-export type ToolCallTaskDispatchStatus =
-  | "accepted"
-  | "queued"
-  | "dispatched"
-  | "received"
-  | "started"
-  | "input_requested"
-  | "cancel_requested";
-
-export type ToolCallTaskDeliveryPolicy =
-  | "online_only"
-  | "store_and_forward"
-  | "human_interaction";
-
-export type ToolCallTaskExecutorKind =
-  | "interaction_question"
-  | "interaction_form"
-  | "relay_authorization"
-  | "relay_mcp";
+export type ToolCallTaskStatus = ToolCallTasksStatus;
+export type ToolCallTaskDispatchStatus = ToolCallTasksDispatchStatus;
+export type ToolCallTaskDeliveryPolicy = ToolCallTasksDeliveryPolicy;
+export type ToolCallTaskExecutorKind = ToolCallTasksExecutorKind;
 
 type Queryable = QueryExecutor;
 type ToolCallTaskRow = TableRow<"tool_call_tasks">;
@@ -211,7 +199,11 @@ async function assertSessionAllowsToolCallTasks(
   client: Queryable,
   sessionId: string,
 ) {
-  const row = await executeTakeFirst<{ id: string; channel_type: string; status: string }>(
+  const row = await executeTakeFirst<{
+    id: string;
+    channel_type: SessionsChannelType;
+    status: SessionsStatus;
+  }>(
     client,
     db
       .selectFrom("sessions")

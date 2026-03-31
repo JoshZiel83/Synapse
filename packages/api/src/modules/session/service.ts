@@ -25,12 +25,16 @@ import {
 } from '../conversation/message-content.js';
 import type { UUID } from '@synapse/shared';
 import {
+  type SessionInterruptType,
+  type SessionStatus,
+  type SessionTrigger,
   isGroupConversationKind,
   isThreadConversationKind,
   nowISO,
 } from '@synapse/shared';
 import { sql } from 'kysely';
 import { v4 as uuidv4 } from 'uuid';
+import type { SessionsChannelType } from '../../infrastructure/database/generated/db.js';
 
 function normalizeSessionRow(row: any) {
   if (!row) return null;
@@ -143,8 +147,8 @@ export async function createSession(params: {
   actorId: UUID;
   conversationId?: UUID;
   userId?: UUID;
-  channelType?: string;
-  trigger?: string;
+  channelType?: SessionsChannelType;
+  trigger?: SessionTrigger;
   metadata?: Record<string, unknown>;
 }): Promise<any> {
   const {
@@ -245,7 +249,7 @@ export async function getSession(sessionId: UUID): Promise<any | null> {
 export async function getSessionsByActor(
   workspaceId: UUID,
   actorId: UUID,
-  status?: string,
+  status?: SessionStatus,
 ): Promise<any[]> {
   let sessionsQuery = db
     .selectFrom('sessions as s')
@@ -271,7 +275,7 @@ export async function getSessionsByActor(
 
 export async function updateSessionStatus(
   sessionId: UUID,
-  status: string,
+  status: SessionStatus,
   extra?: { errorMessage?: string | null },
 ): Promise<void> {
   await db
@@ -515,7 +519,7 @@ export async function consumeInterrupts(sessionId: UUID): Promise<any[]> {
 
 export async function createInterrupt(params: {
   targetSessionId: UUID;
-  type: string;
+  type: SessionInterruptType;
   content: string;
   fromSessionId?: UUID;
 }): Promise<void> {

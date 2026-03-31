@@ -1,5 +1,9 @@
 import { z } from "zod";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import {
+  MCP_LIFECYCLE_SCOPES,
+  RESOURCE_SCOPES,
+} from "@synapse/shared/constants";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
 import { requireRequestAction } from "../access/guards.js";
@@ -30,21 +34,8 @@ import {
 } from "./auth-service.js";
 import { getEventLogs, getToolCallLogs } from "./audit.js";
 
-const attachmentScopeSchema = z.enum([
-  "workspace",
-  "conversation",
-  "actor_global",
-  "actor_conversation",
-  "user",
-]);
-const lifecycleScopeSchema = z.enum([
-  "turn",
-  "workspace",
-  "conversation",
-  "actor_global",
-  "actor_conversation",
-  "user",
-]);
+const attachmentScopeSchema = z.enum(RESOURCE_SCOPES);
+const lifecycleScopeSchema = z.enum(MCP_LIFECYCLE_SCOPES);
 
 const installSchema = z.object({
   pluginId: z.string().uuid(),

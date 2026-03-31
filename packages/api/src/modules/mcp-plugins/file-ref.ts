@@ -1,14 +1,12 @@
-import { fileRefBlock, type CanonicalContentBlock, type ToolParameterProperty } from '@synapse/shared';
+import { fileRefBlock, type CanonicalContentBlock, type CanonicalFileCategory, type ToolParameterProperty } from '@synapse/shared';
 import { getFileRecord } from '../files/service.js';
 import { fileToBase64, fileToBuffer, type FileRecord } from '../../infrastructure/storage/file-io.js';
-
-type FileCategory = 'image' | 'audio' | 'video' | 'document';
 
 const FILE_REF_TAG_REGEX = /<FileRef\s+id="([^"]+)"\s*\/>/i;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SUPPORTED_VISION_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
-function mimeToCategory(mimeType: string): FileCategory {
+function mimeToCategory(mimeType: string): CanonicalFileCategory {
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('audio/')) return 'audio';
   if (mimeType.startsWith('video/')) return 'video';
@@ -60,7 +58,7 @@ export function extractFileRefId(value: unknown): string | null {
   return null;
 }
 
-export async function resolveFileRefRecord(value: unknown, label: string, expectedCategory?: FileCategory): Promise<FileRecord> {
+export async function resolveFileRefRecord(value: unknown, label: string, expectedCategory?: CanonicalFileCategory): Promise<FileRecord> {
   const fileId = extractFileRefId(value);
   if (!fileId) {
     throw new Error(`${label} must be a FileRef string like <FileRef id="..."/>`);

@@ -1,5 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import {
+  TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
+  TRANSPORT_ACCOUNT_OWNER_SCOPES,
+  TRANSPORT_ACCOUNT_STATUSES,
+  TRANSPORT_CONNECTION_MODES,
+  TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES,
+  TRANSPORT_KINDS,
+} from "@synapse/shared/constants";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
 import { requireRequestAction } from "../access/guards.js";
@@ -25,26 +33,20 @@ import {
 import { refreshTransportRuntimeManager } from "./runtime.js";
 
 const transportAccountOwnerCreateShape = {
-  ownerScope: z.enum(["workspace", "workspace_user"]).default("workspace"),
+  ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES).default("workspace"),
   ownerUserId: z.string().uuid().nullable().optional(),
 };
 
 const transportAccountOwnerUpdateShape = {
-  ownerScope: z.enum(["workspace", "workspace_user"]).optional(),
+  ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES).optional(),
   ownerUserId: z.string().uuid().nullable().optional(),
 };
 
-const transportAccountInboundActorModeSchema = z.enum([
-  "none",
-  "specified_actor",
-  "follow_owner_chief_actor",
-]);
+const transportAccountInboundActorModeSchema = z.enum(TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES);
 
-const transportConversationInboundActorModeSchema = z.enum([
-  "inherit_account",
-  "none",
-  "specified_actor",
-]);
+const transportConversationInboundActorModeSchema = z.enum(
+  TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES,
+);
 
 const transportAccountInboundActorCreateShape = {
   inboundActorMode: transportAccountInboundActorModeSchema.optional(),
@@ -63,7 +65,7 @@ const transportConversationInboundActorUpdateShape = {
 
 function validateTransportAccountOwnerCreate(
   value: {
-    ownerScope: "workspace" | "workspace_user";
+    ownerScope: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number];
     ownerUserId?: string | null;
   },
   ctx: z.RefinementCtx,
@@ -86,7 +88,7 @@ function validateTransportAccountOwnerCreate(
 
 function validateTransportAccountOwnerUpdate(
   value: {
-    ownerScope?: "workspace" | "workspace_user";
+    ownerScope?: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number];
     ownerUserId?: string | null;
   },
   ctx: z.RefinementCtx,
@@ -102,8 +104,8 @@ function validateTransportAccountOwnerUpdate(
 
 function validateTransportAccountInboundActorCreate(
   value: {
-    ownerScope: "workspace" | "workspace_user";
-    inboundActorMode?: "none" | "specified_actor" | "follow_owner_chief_actor";
+    ownerScope: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number];
+    inboundActorMode?: (typeof TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES)[number];
     inboundActorId?: string | null;
   },
   ctx: z.RefinementCtx,
@@ -148,8 +150,8 @@ function validateTransportAccountInboundActorCreate(
 
 function validateTransportAccountInboundActorUpdate(
   value: {
-    ownerScope?: "workspace" | "workspace_user";
-    inboundActorMode?: "none" | "specified_actor" | "follow_owner_chief_actor";
+    ownerScope?: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number];
+    inboundActorMode?: (typeof TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES)[number];
     inboundActorId?: string | null;
   },
   ctx: z.RefinementCtx,
@@ -187,7 +189,7 @@ function validateTransportAccountInboundActorUpdate(
 
 function validateTransportConversationInboundActorUpdate(
   value: {
-    inboundActorMode?: "inherit_account" | "none" | "specified_actor";
+    inboundActorMode?: (typeof TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES)[number];
     inboundActorId?: string | null;
   },
   ctx: z.RefinementCtx,
@@ -214,11 +216,11 @@ function validateTransportConversationInboundActorUpdate(
 
 const accountSchema = z
   .object({
-    transportKind: z.enum(["feishu", "weixin"]),
+    transportKind: z.enum(TRANSPORT_KINDS),
     accountKey: z.string().trim().min(1).max(120),
     displayName: z.string().trim().min(1).max(255),
-    connectionMode: z.enum(["webhook", "long_connection"]),
-    status: z.enum(["active", "disabled", "error"]).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
     credentials: z.record(z.unknown()).optional(),
     config: z.record(z.unknown()).optional(),
     metadata: z.record(z.unknown()).optional(),
@@ -231,8 +233,8 @@ const accountSchema = z
 const updateAccountSchema = z
   .object({
     displayName: z.string().trim().min(1).max(255).optional(),
-    connectionMode: z.enum(["webhook", "long_connection"]).optional(),
-    status: z.enum(["active", "disabled", "error"]).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
     credentials: z.record(z.unknown()).optional(),
     config: z.record(z.unknown()).optional(),
     metadata: z.record(z.unknown()).optional(),
@@ -246,12 +248,12 @@ const feishuAccountSchema = z
   .object({
     displayName: z.string().trim().min(1).max(255),
     accountKey: z.string().trim().min(1).max(120).optional(),
-    connectionMode: z.enum(["webhook", "long_connection"]),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES),
     appId: z.string().trim().min(1).max(255),
     appSecret: z.string().trim().min(1).max(255),
     verificationToken: z.string().trim().max(255).optional(),
     encryptKey: z.string().trim().max(255).optional(),
-    status: z.enum(["active", "disabled", "error"]).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
     ...transportAccountOwnerCreateShape,
     ...transportAccountInboundActorCreateShape,
   })
@@ -262,12 +264,12 @@ const updateFeishuAccountSchema = z
   .object({
     displayName: z.string().trim().min(1).max(255).optional(),
     accountKey: z.string().trim().min(1).max(120).optional(),
-    connectionMode: z.enum(["webhook", "long_connection"]).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES).optional(),
     appId: z.string().trim().min(1).max(255).optional(),
     appSecret: z.string().trim().min(1).max(255).optional(),
     verificationToken: z.string().trim().max(255).optional(),
     encryptKey: z.string().trim().max(255).optional(),
-    status: z.enum(["active", "disabled", "error"]).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
     ...transportAccountOwnerUpdateShape,
     ...transportAccountInboundActorUpdateShape,
   })

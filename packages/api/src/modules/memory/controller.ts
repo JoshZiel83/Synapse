@@ -1,5 +1,13 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import {
+  CANONICAL_FILE_CATEGORIES,
+  MEMORY_CATEGORIES,
+  MEMORY_RECALL_TYPES,
+  MEMORY_SCOPES,
+  MEMORY_STABILITIES,
+  MEMORY_STATUSES,
+} from '@synapse/shared/constants';
 import { buildActorConversationContextId } from '../../infrastructure/authz/index.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
@@ -22,10 +30,10 @@ import {
   updateMemory,
 } from './service.js';
 
-const memoryOwnerScopeEnum = z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']);
-const memoryCategoryEnum = z.enum(['fact', 'preference', 'decision', 'relationship', 'procedure', 'artifact', 'summary']);
-const memoryStatusEnum = z.enum(['candidate', 'established', 'superseded', 'retracted']);
-const memoryStabilityEnum = z.enum(['ephemeral', 'durable']);
+const memoryOwnerScopeEnum = z.enum(MEMORY_SCOPES);
+const memoryCategoryEnum = z.enum(MEMORY_CATEGORIES);
+const memoryStatusEnum = z.enum(MEMORY_STATUSES);
+const memoryStabilityEnum = z.enum(MEMORY_STABILITIES);
 const contentBlockSchema = z.discriminatedUnion('type', [
   z.object({
     id: z.string().uuid().optional(),
@@ -41,7 +49,7 @@ const contentBlockSchema = z.discriminatedUnion('type', [
     mimeType: z.string(),
     originalName: z.string(),
     sizeBytes: z.number(),
-    category: z.enum(['image', 'audio', 'video', 'document']),
+    category: z.enum(CANONICAL_FILE_CATEGORIES),
   }),
 ]);
 
@@ -99,7 +107,7 @@ const searchMemoriesSchema = z.object({
 });
 
 const recallMemoriesSchema = searchMemoriesSchema.extend({
-  recallType: z.enum(['bootstrap', 'turn_recall']),
+  recallType: z.enum(MEMORY_RECALL_TYPES.filter((value) => value !== 'manual_search') as ['bootstrap', 'turn_recall']),
   queryBlocks: z.array(contentBlockSchema).optional(),
 });
 

@@ -60,3 +60,4 @@ export const A2A_API_KEY_HEADER = 'x-api-key';
 export const A2A_DEFAULT_RATE_LIMIT = 60;
 
 export * from './model-providers.js';
+export * from './enums.js';

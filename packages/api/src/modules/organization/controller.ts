@@ -1,6 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { ACTOR_DOC_TEMPLATES, type ActorDoc } from "@synapse/shared";
+import {
+  ACTOR_DOC_TEMPLATES,
+  ACTOR_DOC_VISIBILITIES,
+  ACTOR_PACKAGE_SYNC_MODES,
+  ACTOR_ROLES,
+  CANONICAL_FILE_CATEGORIES,
+  type ActorDoc,
+} from "@synapse/shared";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
 import { requireRequestAction } from "../access/guards.js";
@@ -8,21 +15,6 @@ import { getRequestUserId, userSubject } from "../access/service.js";
 import type { AccessAction } from "../access/actions.js";
 import * as service from "./service.js";
 
-const actorRoles = [
-  "secretary",
-  "manager",
-  "specialist",
-  "reviewer",
-  "archivist",
-  "receptionist",
-  "assistant",
-] as const;
-const actorDocVisibility = [
-  "always",
-  "direct_only",
-  "multi_member_only",
-  "internal_only",
-] as const;
 const actorDocKeys = new Set(ACTOR_DOC_TEMPLATES.map((template) => template.key));
 
 const contentBlockSchema = z.discriminatedUnion("type", [
@@ -40,7 +32,7 @@ const contentBlockSchema = z.discriminatedUnion("type", [
     mimeType: z.string(),
     originalName: z.string(),
     sizeBytes: z.number(),
-    category: z.enum(["image", "audio", "video", "document"]),
+    category: z.enum(CANONICAL_FILE_CATEGORIES),
   }),
 ]);
 
@@ -54,13 +46,13 @@ const actorDocSchema = z.object({
   ),
   title: z.string().min(1).max(255),
   content: z.array(contentBlockSchema).default([]),
-  visibility: z.enum(actorDocVisibility),
+  visibility: z.enum(ACTOR_DOC_VISIBILITIES),
   priority: z.number().int().min(-1000).max(1000),
 });
 
 const createActorSchema = z.object({
   name: z.string().min(1).max(255),
-  role: z.enum(actorRoles),
+  role: z.enum(ACTOR_ROLES),
   title: z.string().max(255).default(""),
   avatarFileId: z.string().uuid().optional(),
   avatarEmoji: z.string().min(1).max(32).optional(),
@@ -76,7 +68,7 @@ const createActorSchema = z.object({
 
 const updateActorSchema = z.object({
   name: z.string().min(1).max(255).optional(),
-  role: z.enum(actorRoles).optional(),
+  role: z.enum(ACTOR_ROLES).optional(),
   title: z.string().max(255).optional(),
   avatarFileId: z.string().uuid().nullable().optional(),
   avatarEmoji: z.string().min(1).max(32).nullable().optional(),
@@ -94,7 +86,7 @@ const installActorPackageSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   title: z.string().max(255).optional(),
   parentId: z.string().uuid().nullable().optional(),
-  syncMode: z.enum(["notify", "manual_merge"]).default("notify"),
+  syncMode: z.enum(ACTOR_PACKAGE_SYNC_MODES).default("notify"),
 });
 
 type WorkspaceParams = { workspaceId: string };

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { RESOURCE_SCOPES } from '@synapse/shared/constants';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import { AUTHZ_PLATFORM_ID } from '../../infrastructure/authz/index.js';
@@ -21,7 +22,7 @@ import {
   upgradeInstalledSkill,
 } from './service.js';
 
-const useScopeSchema = z.enum(['workspace', 'conversation', 'actor_global', 'actor_conversation', 'user']);
+const useScopeSchema = z.enum(RESOURCE_SCOPES);
 
 const skillAttachmentSchema = z.object({
   path: z.string().min(1),

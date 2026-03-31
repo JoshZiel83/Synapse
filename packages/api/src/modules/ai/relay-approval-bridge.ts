@@ -1,6 +1,9 @@
 import path from 'node:path';
 import type { RelayAuthorizationScope } from '@synapse/shared';
-import type { NormalizedMcpToolResult } from '@synapse/shared/types';
+import type {
+  NormalizedMcpToolResult,
+  RelayAuthorizationDuration,
+} from '@synapse/shared/types';
 import { actorSubject, authorizeAction } from '../access/service.js';
 import {
   cancelToolCallTask,
@@ -198,7 +201,7 @@ function inferRelayAuthorizationScope(params: {
 function inferRelayAuthorizationDuration(
   structuredContent?: Record<string, unknown>,
   requestedScope?: RelayAuthorizationScope | null,
-): 'session' | 'persistent' {
+): RelayAuthorizationDuration {
   const structuredDuration = asTrimmedString(structuredContent?.authorization_duration);
   if (structuredDuration === 'persistent') {
     return 'persistent';

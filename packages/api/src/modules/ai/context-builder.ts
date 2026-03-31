@@ -3,6 +3,7 @@ import type {
   AssistantToolHistory,
   CanonicalContentBlock,
   CanonicalContentBlockInput,
+  CanonicalFileCategory,
   CanonicalToolCall,
   CanonicalToolResult,
 } from "@synapse/shared";
@@ -22,7 +23,7 @@ import { getFileUrlById } from "../files/service.js";
 
 function mimeToCategory(
   mimeType: string,
-): "image" | "audio" | "video" | "document" {
+): CanonicalFileCategory {
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType.startsWith("audio/")) return "audio";
   if (mimeType.startsWith("video/")) return "video";
@@ -87,7 +88,7 @@ export function itemPartsToCanonicalBlocks(
           originalName: part.original_name || part.name || "file",
           sizeBytes: parseSizeBytes(part.size_bytes ?? metadata.sizeBytes),
           category:
-            (metadata.category as "image" | "audio" | "video" | "document") ||
+            (metadata.category as CanonicalFileCategory) ||
             "document",
         }),
       );

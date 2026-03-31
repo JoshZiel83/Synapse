@@ -1,0 +1,327 @@
+export const AUTH_CLIENT_TYPES = ['web', 'android', 'windows', 'ios', 'cli', 'api'] as const;
+export const AUTH_TRANSPORTS = ['cookie', 'token'] as const;
+export const AUTH_SESSION_PERSISTENCES = ['persistent', 'temporary'] as const;
+export const AUTH_QR_LOGIN_STATUSES = [
+  'pending_scan',
+  'pending_confirm',
+  'approved',
+  'rejected',
+  'expired',
+  'consumed',
+] as const;
+
+export const INVITE_TRUST_LEVELS = ['admin', 'member', 'guest'] as const;
+export const PLATFORM_ACCESS_KEYS = [
+  'super_admin',
+  'workspace_admin',
+  'model_admin',
+  'support',
+  'auditor',
+] as const;
+
+export const WORKSPACE_ACCESS_KEYS = [
+  'model_admin',
+  'actor_admin',
+  'skill_admin',
+  'plugin_admin',
+  'memory_admin',
+  'relay_admin',
+  'conversation_admin',
+] as const;
+
+export const CONTACT_SCOPES = ['workspace', 'personal'] as const;
+export const CONTACT_TARGET_TYPES = ['user', 'actor'] as const;
+export const CANONICAL_FILE_CATEGORIES = ['image', 'audio', 'video', 'document'] as const;
+export const ATTACHMENT_SCOPES = [
+  'platform',
+  'workspace',
+  'conversation',
+  'actor_global',
+  'actor_conversation',
+  'user',
+] as const;
+export const RESOURCE_SCOPES = [
+  'workspace',
+  'conversation',
+  'actor_global',
+  'actor_conversation',
+  'user',
+] as const;
+export const REUSE_SCOPES = ['turn', ...ATTACHMENT_SCOPES] as const;
+export const MCP_LIFECYCLE_SCOPES = [
+  'turn',
+  'workspace',
+  'conversation',
+  'actor_global',
+  'actor_conversation',
+  'user',
+] as const;
+export const CONVERSATION_DOMAINS = ['workspace', 'social'] as const;
+export const CONVERSATION_GRANT_PERMISSIONS = [
+  'send',
+  'moderate',
+  'manage',
+  'manage_members',
+  'attach_resources',
+] as const;
+export const INTERACTION_REQUEST_KINDS = [
+  'question_choice',
+  'relay_authorization',
+] as const;
+export const INTERACTION_REQUEST_STATUSES = [
+  'pending',
+  'answered',
+  'approved_pending_apply',
+  'applied',
+  'rejected',
+  'cancelled',
+  'expired',
+  'apply_failed',
+] as const;
+export const INTERACTION_QUESTION_FIELD_TYPES = [
+  'single_select',
+  'multi_select',
+  'text',
+] as const;
+export const INTERACTION_DECISIONS = ['approve', 'reject'] as const;
+export const MODEL_GROUP_ROUTING_STRATEGIES = [
+  'weighted_random',
+  'round_robin',
+  'priority_failover',
+] as const;
+
+export const MODEL_GROUP_GRANT_SCOPES = [
+  'platform',
+  'workspace',
+  'user',
+  'workspace_user',
+  'actor',
+] as const;
+
+export const ACTOR_ROLES = [
+  'secretary',
+  'manager',
+  'specialist',
+  'reviewer',
+  'archivist',
+  'receptionist',
+  'assistant',
+] as const;
+
+export const ACTOR_DOC_VISIBILITIES = [
+  'always',
+  'direct_only',
+  'multi_member_only',
+  'internal_only',
+] as const;
+
+export const MEMORY_SCOPES = [
+  'workspace',
+  'conversation',
+  'actor_global',
+  'actor_conversation',
+  'user',
+] as const;
+
+export const MEMORY_CATEGORIES = [
+  'fact',
+  'preference',
+  'decision',
+  'relationship',
+  'procedure',
+  'artifact',
+  'summary',
+] as const;
+
+export const MEMORY_STATUSES = [
+  'candidate',
+  'established',
+  'superseded',
+  'retracted',
+] as const;
+
+export const MEMORY_STABILITIES = ['ephemeral', 'durable'] as const;
+export const MEMORY_RECALL_TYPES = ['bootstrap', 'turn_recall', 'manual_search'] as const;
+
+export const SESSION_STATUSES = ['idle', 'queued', 'running', 'blocked', 'closed'] as const;
+export const SESSION_CHANNELS = ['web', 'api', 'bridge'] as const;
+export const SESSION_CHANNEL_INPUTS = ['web', 'im', 'api'] as const;
+export const SESSION_TRIGGERS = [
+  'user_message',
+  'group_message',
+  'actor_message',
+  'broadcast',
+  'api_call',
+  'actor_invite',
+  'automation',
+  'system_interrupt',
+  'retry',
+] as const;
+
+export const SESSION_INTERRUPT_TYPES = ['progress_check', 'priority_override'] as const;
+export const SESSION_WAKEUP_SOURCE_TYPES = [
+  'user_message',
+  'actor_message',
+  'broadcast',
+  'invite',
+  'api_call',
+  'automation',
+  'system_interrupt',
+  'retry',
+] as const;
+
+export const SESSION_WAKEUP_STATUSES = ['pending', 'attached', 'processed', 'dropped'] as const;
+export const SEND_TO_INTENTS = ['reply', 'request'] as const;
+
+export const TRANSPORT_ACCOUNT_OWNER_SCOPES = ['workspace', 'workspace_user'] as const;
+export const TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES = [
+  'none',
+  'specified_actor',
+  'follow_owner_chief_actor',
+] as const;
+
+export const TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES = [
+  'inherit_account',
+  'none',
+  'specified_actor',
+] as const;
+
+export const TRANSPORT_KINDS = ['feishu', 'weixin'] as const;
+export const TRANSPORT_CONNECTION_MODES = ['webhook', 'long_connection'] as const;
+export const TRANSPORT_ENDPOINT_TYPES = ['direct', 'group'] as const;
+export const TRANSPORT_ACCOUNT_STATUSES = ['active', 'disabled', 'error'] as const;
+export const TRANSPORT_DELIVERY_STATUSES = ['pending', 'sent', 'failed', 'skipped'] as const;
+
+export const PLUGIN_AUTH_OWNER_SCOPES = ['installation', 'user', 'workspace'] as const;
+export const PLUGIN_AUTH_SESSION_STATUSES = [
+  'pending',
+  'completed',
+  'failed',
+  'expired',
+  'consumed',
+] as const;
+
+export const PLUGIN_AUTH_CONNECTION_STATUSES = ['active', 'expired', 'revoked'] as const;
+
+export const TASK_NOTICE_STATUSES = ['completed', 'failed', 'cancelled'] as const;
+
+export const RELAY_DEVICE_TRUST_STATUSES = ['pending', 'active', 'revoked', 'blocked'] as const;
+export const RELAY_MANAGEABLE_TRUST_STATUSES = ['active', 'revoked', 'blocked'] as const;
+export const RELAY_PAIRING_STATUSES = [
+  'pending',
+  'confirmed',
+  'consumed',
+  'expired',
+  'cancelled',
+  'rejected',
+] as const;
+
+export const RELAY_SESSION_STATUSES = [
+  'connecting',
+  'active',
+  'closing',
+  'closed',
+  'rejected',
+] as const;
+
+export const RELAY_SYNC_SOURCE_KINDS = [
+  'manual',
+  'claude_code',
+  'claude_desktop',
+  'codex',
+  'gemini',
+  'opencode',
+  'custom',
+] as const;
+
+export const RELAY_SYNC_MODES = ['snapshot', 'follow'] as const;
+export const RELAY_SYNC_STATUSES = ['unknown', 'idle', 'syncing', 'error', 'disabled'] as const;
+export const RELAY_AUTHORIZATION_DURATIONS = ['session', 'persistent'] as const;
+export const RELAY_FILESYSTEM_AUTHORIZATION_ACCESSES = [
+  'read',
+  'write',
+  'read_write',
+] as const;
+
+export const RELAY_EXPOSURE_RUNTIME_STATUSES = [
+  'discovered',
+  'starting',
+  'healthy',
+  'degraded',
+  'failed',
+  'quarantined',
+  'offline',
+] as const;
+
+export const RELAY_EXPOSURE_TRANSPORTS = ['builtin', 'stdio', 'http', 'sse', 'custom'] as const;
+export const RELAY_CATALOG_REVISION_STATUSES = ['active', 'superseded'] as const;
+export const RELAY_TOOL_STATUSES = ['active', 'removed'] as const;
+
+export const RELAY_OPERATION_STATUSES = [
+  'created',
+  'cancel_requested',
+  'dispatched',
+  'received',
+  'started',
+  'completed',
+  'failed',
+  'cancelled',
+  'aborted',
+  'expired',
+] as const;
+
+export const RELAY_DELIVERY_STATUSES = [
+  'queued',
+  'sent',
+  'acked',
+  'nacked',
+  'timed_out',
+  'cancelled',
+] as const;
+
+export const AUTOMATION_TRIGGER_KINDS = ['schedule', 'event'] as const;
+export const AUTOMATION_TRIGGER_SOURCE_KINDS = [
+  'clock',
+  'relay',
+  'webhook',
+  'internal',
+  'integration',
+] as const;
+
+export const AUTOMATION_SCHEDULE_KINDS = ['cron', 'at', 'interval'] as const;
+export const AUTOMATION_COMPLETION_STATUSES = ['completed', 'archived'] as const;
+export const AUTOMATION_DELIVERY_MODES = [
+  'wake_session',
+  'conversation_notice',
+  'create_conversation_once',
+  'create_conversation_each_time',
+] as const;
+
+export const AUTOMATION_TARGET_POLICIES = ['all_members', 'specified_members'] as const;
+export const AUTOMATION_RULE_STATUSES = [
+  'active',
+  'paused',
+  'error',
+  'archived',
+  'completed',
+  'expired',
+] as const;
+
+export const AUTOMATION_INTEGRATION_PROVIDERS = ['github', 'gitlab'] as const;
+export const AUTOMATION_INTEGRATION_INGRESS_KINDS = ['webhook', 'polling'] as const;
+export const AUTOMATION_INTEGRATION_TARGET_KINDS = ['repository', 'project'] as const;
+export const AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS = [
+  'relay',
+  'webhook',
+  'internal',
+  'integration',
+] as const;
+
+export const AUTOMATION_EVENT_SOURCE_STATUSES = [
+  'active',
+  'deprecated',
+  'disabled',
+  'archived',
+] as const;
+
+export const ACTOR_PACKAGE_SYNC_MODES = ['notify', 'manual_merge'] as const;

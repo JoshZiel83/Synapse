@@ -1,6 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { CanonicalContentBlock } from "@synapse/shared";
+import {
+  CONVERSATION_DOMAINS,
+  CONVERSATION_GRANT_PERMISSIONS,
+  INTERACTION_DECISIONS,
+  THREAD_CONVERSATION_KINDS,
+  type CanonicalContentBlock,
+} from "@synapse/shared";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
@@ -47,8 +53,8 @@ import { getConversationTransportBinding } from "../im/service.js";
 const CONVERSATIONS_BASE_PATH = "/api/v1/conversations";
 
 const createThreadSchema = z.object({
-  domain: z.enum(["workspace", "social"]),
-  kind: z.enum(["private", "group"]),
+  domain: z.enum(CONVERSATION_DOMAINS),
+  kind: z.enum(THREAD_CONVERSATION_KINDS),
   workspaceId: z.string().uuid().optional(),
   title: z.string().trim().min(1).max(255).optional(),
   actorIds: z.array(z.string().uuid()).optional().default([]),
@@ -102,13 +108,7 @@ const addThreadMembersSchema = z
     message: "At least one actor or user is required",
   });
 
-const threadGrantPermissionEnum = z.enum([
-  "send",
-  "moderate",
-  "manage",
-  "manage_members",
-  "attach_resources",
-]);
+const threadGrantPermissionEnum = z.enum(CONVERSATION_GRANT_PERMISSIONS);
 
 const issueThreadGrantSchema = z
   .object({
@@ -141,7 +141,7 @@ const resolveThreadInteractionSchema = z
       .max(50)
       .optional(),
     selectedOptionId: z.string().min(1).optional(),
-    decision: z.enum(["approve", "reject"]).optional(),
+    decision: z.enum(INTERACTION_DECISIONS).optional(),
     note: z.string().trim().max(2000).optional(),
   })
   .refine(

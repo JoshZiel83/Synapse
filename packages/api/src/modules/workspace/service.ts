@@ -18,12 +18,17 @@ import {
   touchRelation,
 } from "../../infrastructure/authz/index.js";
 import {
+  INVITE_TRUST_LEVELS,
   normalizeActorDocs,
   type ActorDoc,
   type ActorDocInput,
   type ActorRole,
   type WorkspaceChiefActorPreference,
 } from "@synapse/shared";
+import type {
+  WorkspaceAccessBindingsAccessKey,
+  WorkspaceMembersTrustLevel,
+} from "../../infrastructure/database/generated/db.js";
 import { sql } from "kysely";
 import { listAuthorizedResourceIds, userSubject } from "../access/service.js";
 
@@ -36,20 +41,13 @@ export interface CreateWorkspaceInput {
 export interface AddMemberInput {
   workspaceId: string;
   userId: string;
-  trustLevel: "admin" | "member" | "guest";
+  trustLevel: WorkspaceMembersTrustLevel;
 }
 
-export type WorkspaceAccessKey =
-  | "model_admin"
-  | "actor_admin"
-  | "skill_admin"
-  | "plugin_admin"
-  | "memory_admin"
-  | "relay_admin"
-  | "conversation_admin";
+export type WorkspaceAccessKey = WorkspaceAccessBindingsAccessKey;
 
 function workspaceRelationFromTrustLevel(
-  trustLevel: "owner" | "admin" | "member" | "guest",
+  trustLevel: "owner" | typeof INVITE_TRUST_LEVELS[number],
 ) {
   return trustLevel;
 }

@@ -11,8 +11,10 @@ import type {
   RelayToolView,
 } from '@synapse/shared';
 import {
+  RELAY_MANAGEABLE_TRUST_STATUSES,
   RELAY_PAIRING_TTL_MS,
   RELAY_PROTOCOL_VERSION,
+  RESOURCE_SCOPES,
   relayLifecycleEventDefinitions,
 } from '@synapse/shared';
 import { config } from '../../config/index.js';
@@ -50,16 +52,10 @@ const updateRelayDeviceSchema = z.object({
 });
 
 const updateRelayTrustSchema = z.object({
-  trustStatus: z.enum(['active', 'revoked', 'blocked']),
+  trustStatus: z.enum(RELAY_MANAGEABLE_TRUST_STATUSES),
 });
 
-const attachmentScopeSchema = z.enum([
-  'workspace',
-  'conversation',
-  'actor_global',
-  'actor_conversation',
-  'user',
-]);
+const attachmentScopeSchema = z.enum(RESOURCE_SCOPES);
 
 const accessGrantSchema = z.object({
   grantScope: attachmentScopeSchema.optional(),

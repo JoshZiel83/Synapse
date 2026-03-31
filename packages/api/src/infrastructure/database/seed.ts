@@ -16,6 +16,7 @@ import {
 } from "../authz/index.js";
 import { ensureStorageDir } from "../storage/index.js";
 import { transaction } from "./index.js";
+import type { CatalogVersionFilesFileRole } from "./generated/db.js";
 import { executeSql, executeSqlOn } from "./kysely.js";
 import { ensurePublisher } from "./seed-utils.js";
 import {
@@ -33,13 +34,7 @@ const CLAWHUB_SKILLS_DIR = resolve(
 
 const CLAWHUB_PUBLISHER_SLUG = "clawhub-official";
 
-type CatalogFileRole =
-  | "document"
-  | "reference"
-  | "script"
-  | "image"
-  | "json"
-  | "binary";
+type CatalogFileRole = CatalogVersionFilesFileRole;
 
 type ImportedSkillFile = {
   path: string;

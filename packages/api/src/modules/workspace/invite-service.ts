@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type pg from 'pg';
+import type { WorkspaceInvitesTrustLevel } from '../../infrastructure/database/generated/db.js';
 import { query, transaction } from '../../infrastructure/database/index.js';
 import {
   authzEnabled,
@@ -45,7 +46,7 @@ function mapInviteRow(row: any) {
 export async function createInvite(input: {
   workspaceId: string;
   createdBy: string;
-  trustLevel?: string;
+  trustLevel?: WorkspaceInvitesTrustLevel;
   maxUses?: number;
   expiresAt?: string;
 }) {

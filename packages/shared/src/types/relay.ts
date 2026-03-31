@@ -1,89 +1,43 @@
+import {
+  RELAY_CATALOG_REVISION_STATUSES,
+  RELAY_DELIVERY_STATUSES,
+  RELAY_DEVICE_TRUST_STATUSES,
+  RELAY_EXPOSURE_RUNTIME_STATUSES,
+  RELAY_EXPOSURE_TRANSPORTS,
+  RELAY_OPERATION_STATUSES,
+  RELAY_PAIRING_STATUSES,
+  RELAY_SESSION_STATUSES,
+  RELAY_SYNC_MODES,
+  RELAY_SYNC_SOURCE_KINDS,
+  RELAY_SYNC_STATUSES,
+  RELAY_TOOL_STATUSES,
+} from '../constants/enums.js';
+
 export type RelayProtocolVersion = 2;
 
-export type RelayDeviceTrustStatus =
-  | 'pending'
-  | 'active'
-  | 'revoked'
-  | 'blocked';
+export type RelayDeviceTrustStatus = typeof RELAY_DEVICE_TRUST_STATUSES[number];
 
-export type RelayPairingStatus =
-  | 'pending'
-  | 'confirmed'
-  | 'consumed'
-  | 'expired'
-  | 'cancelled'
-  | 'rejected';
+export type RelayPairingStatus = typeof RELAY_PAIRING_STATUSES[number];
 
-export type RelaySessionStatus =
-  | 'connecting'
-  | 'active'
-  | 'closing'
-  | 'closed'
-  | 'rejected';
+export type RelaySessionStatus = typeof RELAY_SESSION_STATUSES[number];
 
-export type RelaySyncSourceKind =
-  | 'manual'
-  | 'claude_code'
-  | 'claude_desktop'
-  | 'codex'
-  | 'gemini'
-  | 'opencode'
-  | 'custom';
+export type RelaySyncSourceKind = typeof RELAY_SYNC_SOURCE_KINDS[number];
 
-export type RelaySyncMode =
-  | 'snapshot'
-  | 'follow';
+export type RelaySyncMode = typeof RELAY_SYNC_MODES[number];
 
-export type RelaySyncStatus =
-  | 'unknown'
-  | 'idle'
-  | 'syncing'
-  | 'error'
-  | 'disabled';
+export type RelaySyncStatus = typeof RELAY_SYNC_STATUSES[number];
 
-export type RelayExposureRuntimeStatus =
-  | 'discovered'
-  | 'starting'
-  | 'healthy'
-  | 'degraded'
-  | 'failed'
-  | 'quarantined'
-  | 'offline';
+export type RelayExposureRuntimeStatus = typeof RELAY_EXPOSURE_RUNTIME_STATUSES[number];
 
-export type RelayExposureTransport =
-  | 'builtin'
-  | 'stdio'
-  | 'http'
-  | 'sse'
-  | 'custom';
+export type RelayExposureTransport = typeof RELAY_EXPOSURE_TRANSPORTS[number];
 
-export type RelayCatalogRevisionStatus =
-  | 'active'
-  | 'superseded';
+export type RelayCatalogRevisionStatus = typeof RELAY_CATALOG_REVISION_STATUSES[number];
 
-export type RelayToolStatus =
-  | 'active'
-  | 'removed';
+export type RelayToolStatus = typeof RELAY_TOOL_STATUSES[number];
 
-export type RelayOperationStatus =
-  | 'created'
-  | 'cancel_requested'
-  | 'dispatched'
-  | 'received'
-  | 'started'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'aborted'
-  | 'expired';
+export type RelayOperationStatus = typeof RELAY_OPERATION_STATUSES[number];
 
-export type RelayDeliveryStatus =
-  | 'queued'
-  | 'sent'
-  | 'acked'
-  | 'nacked'
-  | 'timed_out'
-  | 'cancelled';
+export type RelayDeliveryStatus = typeof RELAY_DELIVERY_STATUSES[number];
 
 export type RelayOperationErrorCode =
   | 'mcp_unavailable'

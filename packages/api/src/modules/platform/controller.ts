@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { PLATFORM_ACCESS_KEYS } from "@synapse/shared/constants";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { AUTHZ_PLATFORM_ID } from "../../infrastructure/authz/index.js";
 import {
@@ -13,13 +14,7 @@ import { authorizeAction, userSubject } from "../access/service.js";
 
 const platformAccessSchema = z.object({
   userId: z.string().uuid(),
-  accessKey: z.enum([
-    "super_admin",
-    "workspace_admin",
-    "model_admin",
-    "support",
-    "auditor",
-  ]),
+  accessKey: z.enum(PLATFORM_ACCESS_KEYS),
   metadata: z.record(z.unknown()).optional(),
 });
 

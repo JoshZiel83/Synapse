@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { sql } from 'kysely';
 import { v4 as uuidv4 } from 'uuid';
+import type { PayloadBlobsRetentionClass } from '../../infrastructure/database/generated/db.js';
 import {
   db,
   type TableInsert,
@@ -20,7 +21,11 @@ function asNullableUuid(value: unknown) {
   return typeof value === 'string' && UUID_PATTERN.test(value) ? value : null;
 }
 
-async function storePayloadBlobInternal(contentType: 'json' | 'text', payload: unknown, retentionClass = 'audit') {
+async function storePayloadBlobInternal(
+  contentType: 'json' | 'text',
+  payload: unknown,
+  retentionClass: PayloadBlobsRetentionClass = 'audit',
+) {
   const body = contentType === 'json'
     ? JSON.stringify(payload ?? {})
     : String(payload ?? '');
@@ -59,11 +64,17 @@ async function storePayloadBlobInternal(contentType: 'json' | 'text', payload: u
   return inserted.id;
 }
 
-export async function storePayloadBlob(payload: unknown, retentionClass = 'audit') {
+export async function storePayloadBlob(
+  payload: unknown,
+  retentionClass: PayloadBlobsRetentionClass = 'audit',
+) {
   return storePayloadBlobInternal('json', payload, retentionClass);
 }
 
-export async function storeTextPayloadBlob(payload: string, retentionClass = 'audit') {
+export async function storeTextPayloadBlob(
+  payload: string,
+  retentionClass: PayloadBlobsRetentionClass = 'audit',
+) {
   return storePayloadBlobInternal('text', payload, retentionClass);
 }
 

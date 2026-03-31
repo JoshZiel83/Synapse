@@ -1,4 +1,4 @@
-import { fileRefBlock, normalizeCanonicalContentBlocks, textBlock, textBlocks, type CanonicalContentBlock } from '@synapse/shared';
+import { fileRefBlock, normalizeCanonicalContentBlocks, textBlock, textBlocks, type CanonicalContentBlock, type CanonicalFileCategory } from '@synapse/shared';
 import type { NormalizedMcpToolResult } from '@synapse/shared/types';
 import { saveFromBase64, saveFromUrl, type FileRecord } from '../../infrastructure/storage/file-io.js';
 
@@ -6,14 +6,14 @@ export interface McpResultNormalizeOptions {
   binaryMetadata?: Record<string, unknown>;
 }
 
-function mimeToCategory(mimeType: string): 'image' | 'audio' | 'video' | 'document' {
+function mimeToCategory(mimeType: string): CanonicalFileCategory {
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('audio/')) return 'audio';
   if (mimeType.startsWith('video/')) return 'video';
   return 'document';
 }
 
-function fileRecordToFileRef(rec: FileRecord, category: 'image' | 'audio' | 'video' | 'document'): CanonicalContentBlock {
+function fileRecordToFileRef(rec: FileRecord, category: CanonicalFileCategory): CanonicalContentBlock {
   return fileRefBlock({
     fileId: rec.id,
     storedName: rec.storedName,

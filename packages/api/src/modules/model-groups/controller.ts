@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { isKnownModelEngineKind, isKnownModelProviderType } from '@synapse/shared';
+import {
+  MODEL_GROUP_GRANT_SCOPES,
+  MODEL_GROUP_ROUTING_STRATEGIES,
+  isKnownModelEngineKind,
+  isKnownModelProviderType,
+} from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { AUTHZ_PLATFORM_ID } from '../../infrastructure/authz/index.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
@@ -28,10 +33,10 @@ import {
   updateModelItem,
 } from './service.js';
 
-const routingStrategyEnum = z.enum(['weighted_random', 'round_robin', 'priority_failover']);
+const routingStrategyEnum = z.enum(MODEL_GROUP_ROUTING_STRATEGIES);
 const providerTypeSchema = z.string().min(1).refine(isKnownModelProviderType, 'Unknown provider type');
 const engineKindSchema = z.string().min(1).refine(isKnownModelEngineKind, 'Unknown engine kind');
-const grantScopeEnum = z.enum(['platform', 'workspace', 'user', 'workspace_user', 'actor']);
+const grantScopeEnum = z.enum(MODEL_GROUP_GRANT_SCOPES);
 
 const attemptPolicySchema = z.object({
   maxAttemptsTotal: z.number().int().positive().optional(),

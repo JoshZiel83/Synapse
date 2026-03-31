@@ -13,6 +13,7 @@ import {
   type ActorRuntimePhase,
   type ActorRuntimeState,
   type ActorRuntimeWakeup,
+  type SessionTrigger,
   type SessionWakeupSourceType,
   type SessionWakeupStatus,
 } from '@synapse/shared';
@@ -37,6 +38,10 @@ function parseMetadata(value: unknown): Record<string, unknown> {
     }
   }
   return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function mapWakeupSourceTypeToTrigger(sourceType: SessionWakeupSourceType): SessionTrigger {
+  return sourceType === 'invite' ? 'actor_invite' : sourceType;
 }
 
 function mapWakeupRow(row: any): ActorRuntimeWakeup {
@@ -278,7 +283,7 @@ export async function enqueueSessionWakeup(params: {
   automationExecutionId?: string;
   automationOccurrenceId?: string;
   metadata?: Record<string, unknown>;
-  trigger?: string;
+  trigger?: SessionTrigger;
 }) {
   const session = await getSession(params.sessionId);
   if (!session) {
@@ -326,7 +331,7 @@ export async function enqueueSessionWakeup(params: {
       sessionId: params.sessionId,
       actorId: params.actorId,
       workspaceId: params.workspaceId,
-      trigger: params.trigger || params.sourceType,
+      trigger: params.trigger || mapWakeupSourceTypeToTrigger(params.sourceType),
     });
   }
 

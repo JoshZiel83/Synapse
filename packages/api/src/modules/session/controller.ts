@@ -1,6 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { CanonicalContentBlock } from '@synapse/shared';
+import {
+  SESSION_CHANNEL_INPUTS,
+  SESSION_STATUSES,
+  type CanonicalContentBlock,
+  type SessionChannelInput,
+  type SessionStatus,
+} from '@synapse/shared';
+import type { SessionsChannelType } from '../../infrastructure/database/generated/db.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { requireRequestAction } from '../access/guards.js';
 import type { AccessAction } from '../access/actions.js';
@@ -17,7 +24,7 @@ import { enqueueSessionWakeup } from './runtime.js';
 const createSessionSchema = z.object({
   content: z.string().max(10000).optional().default(''),
   contentBlocks: z.array(z.any()).optional(),
-  channelType: z.enum(['web', 'im', 'api']).optional().default('web'),
+  channelType: z.enum(SESSION_CHANNEL_INPUTS).optional().default('web'),
 }).refine(
   (body) => body.content.trim().length > 0 || (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
   { message: 'content or contentBlocks is required' },
@@ -33,6 +40,10 @@ const sendMessageSchema = z.object({
 
 const retrySessionSchema = z.object({
   itemId: z.string().uuid().optional(),
+});
+
+const listSessionsQuerySchema = z.object({
+  status: z.enum(SESSION_STATUSES).optional(),
 });
 
 async function requireActorPermission(
@@ -78,14 +89,15 @@ export async function sessionController(app: FastifyInstance) {
   // POST /workspaces/:wsId/actors/:actorId/sessions — create a new session with any actor
   app.post<{
     Params: { workspaceId: string; actorId: string };
-    Body: { content: string; channelType?: string };
+    Body: { content: string; channelType?: 'web' | 'im' | 'api' };
   }>('/workspaces/:workspaceId/actors/:actorId/sessions', async (request, reply) => {
     const { workspaceId, actorId } = request.params;
     const { content, contentBlocks, channelType } = createSessionSchema.parse(request.body) as {
       content: string;
       contentBlocks?: CanonicalContentBlock[];
-      channelType?: string;
+      channelType?: SessionChannelInput;
     };
+    const normalizedChannelType: SessionsChannelType = channelType === 'im' ? 'bridge' : (channelType ?? 'web');
     const userId = (request as any).user!.userId;
 
     const allowed = await requireActorPermission(
@@ -101,7 +113,7 @@ export async function sessionController(app: FastifyInstance) {
       workspaceId,
       actorId,
       userId,
-      channelType,
+      channelType: normalizedChannelType,
       trigger: 'user_message',
       metadata: { userId },
     });
@@ -261,10 +273,12 @@ export async function sessionController(app: FastifyInstance) {
   // GET /workspaces/:wsId/actors/:actorId/sessions — list actor's sessions
   app.get<{
     Params: { workspaceId: string; actorId: string };
-    Querystring: { status?: string };
+    Querystring: { status?: SessionStatus };
   }>('/workspaces/:workspaceId/actors/:actorId/sessions', async (request, reply) => {
     const { workspaceId, actorId } = request.params;
-    const { status } = request.query as any;
+    const { status } = listSessionsQuerySchema.parse(request.query) as {
+      status?: SessionStatus;
+    };
 
     const allowed = await requireActorPermission(
       request,

@@ -770,18 +770,18 @@ function buildSearchFilters(workspaceId: string, input: SearchMemoriesInput, ali
 
   const scopes = input.scopes && input.scopes.length > 0 ? input.scopes : undefined;
   if (scopes) {
-    conditions.push(sql`${table}.owner_scope = ANY(${scopes}::text[])`);
+    conditions.push(sql`${table}.owner_scope::text = ANY(${scopes}::text[])`);
   }
 
   if (input.categories && input.categories.length > 0) {
-    conditions.push(sql`${table}.category = ANY(${input.categories}::text[])`);
+    conditions.push(sql`${table}.category::text = ANY(${input.categories}::text[])`);
   }
 
   const statuses = input.statuses && input.statuses.length > 0 ? input.statuses : ['established'];
-  conditions.push(sql`${table}.status = ANY(${statuses}::text[])`);
+  conditions.push(sql`${table}.status::text = ANY(${statuses}::text[])`);
 
   const stabilities = input.stabilities && input.stabilities.length > 0 ? input.stabilities : ['durable'];
-  conditions.push(sql`${table}.stability = ANY(${stabilities}::text[])`);
+  conditions.push(sql`${table}.stability::text = ANY(${stabilities}::text[])`);
 
   return sql`${sql.join(conditions, sql` AND `)}`;
 }

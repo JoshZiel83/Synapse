@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { CONTACT_TARGET_TYPES } from "@synapse/shared/constants";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
 import { getFileUrl } from "../../infrastructure/storage/index.js";
@@ -13,7 +14,7 @@ import {
 
 const contactTargetSchema = z
   .object({
-    targetType: z.enum(["user", "actor"]),
+    targetType: z.enum(CONTACT_TARGET_TYPES),
     targetWorkspaceId: z.string().uuid(),
     targetUserId: z.string().uuid().optional(),
     targetActorId: z.string().uuid().optional(),

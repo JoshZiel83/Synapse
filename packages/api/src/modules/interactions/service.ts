@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import type {
   ConversationFeedItem,
   ConversationEntityRef,
+  InteractionDecision,
   InteractionChoiceOption,
   InteractionQuestionFieldAnswer,
   InteractionQuestionFieldDefinition,
@@ -10,6 +11,7 @@ import type {
   InteractionRequestKind,
   InteractionRequestStatus,
   InteractionRequestSummary,
+  RelayAuthorizationDuration,
   RelayAuthorizationInteractionSummary,
   RelayAuthorizationScope,
 } from "@synapse/shared/types";
@@ -120,7 +122,7 @@ export interface CreateRelayAuthorizationInteractionParams {
   runtimeSessionId: string;
   relayToolName: string;
   reason: string;
-  duration: "session" | "persistent";
+  duration: RelayAuthorizationDuration;
   requestedScope: RelayAuthorizationScope;
   expiresAt?: string;
 }
@@ -131,7 +133,7 @@ export interface ResolveInteractionRequestParams {
   resolverMemberId: string;
   answers?: InteractionQuestionFieldAnswer[];
   selectedOptionId?: string;
-  decision?: "approve" | "reject";
+  decision?: InteractionDecision;
   note?: string;
 }
 
@@ -152,7 +154,7 @@ export interface PendingRelayAuthorizationApplication {
     runtimeSessionId: string;
     relayToolName: string;
     reason: string;
-    duration: "session" | "persistent";
+    duration: RelayAuthorizationDuration;
     requestedScope: RelayAuthorizationScope;
   };
 }
@@ -164,7 +166,7 @@ export interface FindOpenRelayAuthorizationInteractionParams {
   relayDeviceId: string;
   relayExposureId: string;
   runtimeSessionId: string;
-  duration: "session" | "persistent";
+  duration: RelayAuthorizationDuration;
   requestedScope: RelayAuthorizationScope;
 }
 

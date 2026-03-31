@@ -4,9 +4,11 @@ import {
   describeAutomationDelivery,
   describeAutomationPolicy,
   describeAutomationTrigger,
+  INTERACTION_QUESTION_FIELD_TYPES,
   isThreadConversationKind,
   normalizeActorDocs,
   resolveThreadSemantics,
+  SEND_TO_INTENTS,
   summarizeActorForRole,
   textBlocks,
   type ActorDoc,
@@ -107,7 +109,12 @@ type ToolQuestionFieldInput = {
   maxSelections?: number;
 };
 
-const sendToIntentSchema = z.enum(["reply", "request"]);
+const sendToIntentSchema = z.enum(SEND_TO_INTENTS);
+const questionFieldTypeOptions = [...INTERACTION_QUESTION_FIELD_TYPES];
+const selectableQuestionFieldTypeOptions = questionFieldTypeOptions.filter(
+  (value): value is Exclude<(typeof INTERACTION_QUESTION_FIELD_TYPES)[number], "text"> =>
+    value !== "text",
+);
 const sendToInputSchema = z
   .object({
     recipients: z.array(z.string().trim().min(1)).min(1).optional(),
@@ -196,7 +203,7 @@ function buildSendToDefinition(params: {
           intent: {
             type: "string",
             description: "Why you are sending this message.",
-            enum: ["reply", "request"],
+            enum: [...SEND_TO_INTENTS],
           },
           summary: {
             type: "string",
@@ -229,7 +236,7 @@ function buildSendToDefinition(params: {
           type: "string",
           description:
             'Use "reply" when you are replying back with information or a result. Use "request" when you are delegating, asking, or requesting action.',
-          enum: ["reply", "request"],
+          enum: [...SEND_TO_INTENTS],
         },
         summary: {
           type: "string",
@@ -1030,7 +1037,7 @@ export function registerCallableToolPlugins(): void {
           intent: {
             type: "string",
             description: "Why you are sending this message.",
-            enum: ["reply", "request"],
+            enum: [...SEND_TO_INTENTS],
           },
           summary: {
             type: "string",
@@ -1279,7 +1286,7 @@ export function registerCallableToolPlugins(): void {
             type: "string",
             description:
               "Whether the user may pick one option or multiple options.",
-            enum: ["single_select", "multi_select"],
+            enum: [...selectableQuestionFieldTypeOptions],
           },
           allowOther: {
             type: "boolean",
@@ -1351,7 +1358,7 @@ export function registerCallableToolPlugins(): void {
                 type: "string",
                 description:
                   "Whether the user may pick one option or multiple options.",
-                enum: ["single_select", "multi_select"],
+                enum: [...selectableQuestionFieldTypeOptions],
               },
               allowOther: {
                 type: "boolean",
@@ -1578,7 +1585,7 @@ export function registerCallableToolPlugins(): void {
                 id: { type: "string" },
                 type: {
                   type: "string",
-                  enum: ["single_select", "multi_select", "text"],
+                  enum: [...questionFieldTypeOptions],
                 },
                 label: { type: "string" },
                 description: { type: "string" },
@@ -1644,7 +1651,7 @@ export function registerCallableToolPlugins(): void {
                     id: { type: "string" },
                     type: {
                       type: "string",
-                      enum: ["single_select", "multi_select", "text"],
+                      enum: [...questionFieldTypeOptions],
                     },
                     label: { type: "string" },
                     description: { type: "string" },

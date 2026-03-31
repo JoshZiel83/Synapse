@@ -3,6 +3,7 @@ import {
   mentionBlock,
   textBlock,
   type CanonicalContentBlock,
+  type CanonicalFileCategory,
   type ConversationEntityRef,
   type ConversationMemberEntry,
 } from "@synapse/shared";
@@ -341,7 +342,7 @@ function resolveMentionReference(
 
 function mimeToCategory(
   mimeType: string,
-): "image" | "audio" | "video" | "document" {
+): CanonicalFileCategory {
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType.startsWith("audio/")) return "audio";
   if (mimeType.startsWith("video/")) return "video";

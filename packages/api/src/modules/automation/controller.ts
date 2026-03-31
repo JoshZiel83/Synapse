@@ -1,5 +1,19 @@
 import type { FastifyInstance } from 'fastify';
 import { validateAutomationRuleCreatePayload } from '@synapse/shared/automation';
+import {
+  AUTOMATION_COMPLETION_STATUSES,
+  AUTOMATION_DELIVERY_MODES,
+  AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
+  AUTOMATION_EVENT_SOURCE_STATUSES,
+  AUTOMATION_INTEGRATION_INGRESS_KINDS,
+  AUTOMATION_INTEGRATION_PROVIDERS,
+  AUTOMATION_INTEGRATION_TARGET_KINDS,
+  AUTOMATION_RULE_STATUSES,
+  AUTOMATION_SCHEDULE_KINDS,
+  AUTOMATION_TARGET_POLICIES,
+  AUTOMATION_TRIGGER_KINDS,
+  AUTOMATION_TRIGGER_SOURCE_KINDS,
+} from '@synapse/shared/constants';
 import { z } from 'zod';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
@@ -28,13 +42,13 @@ import { enqueueAutomationExecutionJobs } from '../../workers/queues.js';
 const contentBlocksSchema = z.array(z.any()).optional();
 
 const triggerSchema = z.object({
-  triggerKind: z.enum(['schedule', 'event']),
+  triggerKind: z.enum(AUTOMATION_TRIGGER_KINDS),
   eventSourceId: z.string().uuid().optional(),
-  sourceKind: z.enum(['clock', 'relay', 'webhook', 'internal', 'integration']).optional(),
+  sourceKind: z.enum(AUTOMATION_TRIGGER_SOURCE_KINDS).optional(),
   sourceLocator: z.string().trim().min(1).max(255).optional(),
   matchKey: z.string().trim().min(1).max(255).optional(),
   matcher: z.record(z.unknown()).optional(),
-  scheduleKind: z.enum(['cron', 'at', 'interval']).optional(),
+  scheduleKind: z.enum(AUTOMATION_SCHEDULE_KINDS).optional(),
   scheduleExpr: z.string().trim().min(1).max(255).optional(),
   scheduleTimezone: z.string().trim().min(1).max(64).optional(),
   intervalSeconds: z.number().int().positive().optional(),
@@ -45,23 +59,18 @@ const policySchema = z.object({
   activeFrom: z.string().datetime().optional(),
   activeUntil: z.string().datetime().optional(),
   maxTriggerCount: z.number().int().positive().optional(),
-  completionStatus: z.enum(['completed', 'archived']).optional(),
+  completionStatus: z.enum(AUTOMATION_COMPLETION_STATUSES).optional(),
 });
 
 const deliverySchema = z.object({
-  deliveryMode: z.enum([
-    'wake_session',
-    'conversation_notice',
-    'create_conversation_once',
-    'create_conversation_each_time',
-  ]),
+  deliveryMode: z.enum(AUTOMATION_DELIVERY_MODES),
   conversationId: z.string().uuid().optional(),
   sessionId: z.string().uuid().optional(),
   conversationTitle: z.string().trim().min(1).max(500).optional(),
   message: z.string().default(''),
   wakeReason: z.string().optional(),
   messageBlocks: contentBlocksSchema,
-  targetPolicy: z.enum(['all_members', 'specified_members']).optional(),
+  targetPolicy: z.enum(AUTOMATION_TARGET_POLICIES).optional(),
   participantActorIds: z.array(z.string().uuid()).optional(),
   participantUserIds: z.array(z.string().uuid()).optional(),
   recipientActorIds: z.array(z.string().uuid()).optional(),
@@ -69,19 +78,14 @@ const deliverySchema = z.object({
 });
 
 const updateDeliverySchema = z.object({
-  deliveryMode: z.enum([
-    'wake_session',
-    'conversation_notice',
-    'create_conversation_once',
-    'create_conversation_each_time',
-  ]).optional(),
+  deliveryMode: z.enum(AUTOMATION_DELIVERY_MODES).optional(),
   conversationId: z.string().uuid().optional(),
   sessionId: z.string().uuid().optional(),
   conversationTitle: z.string().trim().min(1).max(500).optional(),
   message: z.string().optional(),
   wakeReason: z.string().optional(),
   messageBlocks: contentBlocksSchema,
-  targetPolicy: z.enum(['all_members', 'specified_members']).optional(),
+  targetPolicy: z.enum(AUTOMATION_TARGET_POLICIES).optional(),
   participantActorIds: z.array(z.string().uuid()).optional(),
   participantUserIds: z.array(z.string().uuid()).optional(),
   recipientActorIds: z.array(z.string().uuid()).optional(),
@@ -91,7 +95,7 @@ const updateDeliverySchema = z.object({
 const createAutomationSchema = z.object({
   name: z.string().trim().min(1).max(255),
   description: z.string().default(''),
-  status: z.enum(['active', 'paused', 'error', 'archived', 'completed', 'expired']).optional(),
+  status: z.enum(AUTOMATION_RULE_STATUSES).optional(),
   ownerConversationId: z.string().uuid().optional(),
   ownerSessionId: z.string().uuid().optional(),
   trigger: triggerSchema,
@@ -103,7 +107,7 @@ const createAutomationSchema = z.object({
 const updateAutomationSchema = z.object({
   name: z.string().trim().min(1).max(255).optional(),
   description: z.string().optional(),
-  status: z.enum(['active', 'paused', 'error', 'archived', 'completed', 'expired']).optional(),
+  status: z.enum(AUTOMATION_RULE_STATUSES).optional(),
   ownerConversationId: z.string().uuid().optional(),
   ownerSessionId: z.string().uuid().optional(),
   trigger: triggerSchema.partial().optional(),
@@ -119,15 +123,15 @@ const createWebhookEndpointSchema = z.object({
 
 const integrationEventSourceSchema = z.object({
   installationId: z.string().uuid(),
-  provider: z.enum(['github', 'gitlab']),
-  ingressKind: z.enum(['webhook', 'polling']).optional(),
-  targetKind: z.enum(['repository', 'project']),
+  provider: z.enum(AUTOMATION_INTEGRATION_PROVIDERS),
+  ingressKind: z.enum(AUTOMATION_INTEGRATION_INGRESS_KINDS).optional(),
+  targetKind: z.enum(AUTOMATION_INTEGRATION_TARGET_KINDS),
   targetId: z.string().trim().min(1).max(255),
   targetLabel: z.string().trim().min(1).max(255).optional(),
 });
 
 const eventSourceSchema = z.object({
-  providerKind: z.enum(['relay', 'webhook', 'internal', 'integration']),
+  providerKind: z.enum(AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS),
   providerRef: z.string().trim().min(1).max(255).optional(),
   integration: integrationEventSourceSchema.optional(),
   sourceKey: z.string().trim().min(1).max(255).optional(),
@@ -136,7 +140,7 @@ const eventSourceSchema = z.object({
   recommendedUsage: z.string().trim().min(1).optional(),
   payloadSchema: z.record(z.unknown()).optional(),
   examplePayload: z.record(z.unknown()).optional(),
-  status: z.enum(['active', 'deprecated', 'disabled', 'archived']).optional(),
+  status: z.enum(AUTOMATION_EVENT_SOURCE_STATUSES).optional(),
   metadata: z.record(z.unknown()).optional(),
 }).superRefine((value, ctx) => {
   if (value.providerKind === 'integration') {
@@ -167,7 +171,7 @@ const updateEventSourceSchema = z.object({
   recommendedUsage: z.string().trim().min(1).optional(),
   payloadSchema: z.record(z.unknown()).optional(),
   examplePayload: z.record(z.unknown()).optional(),
-  status: z.enum(['active', 'deprecated', 'disabled', 'archived']).optional(),
+  status: z.enum(AUTOMATION_EVENT_SOURCE_STATUSES).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 

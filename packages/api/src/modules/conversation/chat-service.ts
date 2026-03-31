@@ -1,4 +1,9 @@
 import { query, transaction } from "../../infrastructure/database/index.js";
+import type {
+  ConversationGrantsPermission,
+  ConversationGrantsStatus,
+  ConversationGrantsSubjectType,
+} from "../../infrastructure/database/generated/db.js";
 import {
   db,
   executeCompiledQuery,
@@ -24,6 +29,7 @@ import { getFileUrlById } from "../files/service.js";
 import {
   extractText,
   nowISO,
+  type SessionTrigger,
 } from "@synapse/shared";
 import { v4 as uuidv4 } from "uuid";
 import { sql } from "kysely";
@@ -65,22 +71,30 @@ import {
   queueConversationTransportProjection,
 } from "../im/service.js";
 
-type ConversationGrantPermission =
-  | "send"
-  | "moderate"
-  | "manage"
-  | "manage_members"
-  | "attach_resources";
+type ConversationGrantPermission = ConversationGrantsPermission;
+
+function mapWakeupSourceTypeToTrigger(
+  sourceType:
+    | "user_message"
+    | "actor_message"
+    | "broadcast"
+    | "invite"
+    | "api_call"
+    | "system_interrupt"
+    | "retry",
+): SessionTrigger {
+  return sourceType === "invite" ? "actor_invite" : sourceType;
+}
 
 type ConversationGrantRow = {
   id?: string;
   conversation_id?: string;
   workspace_id: string;
   permission: ConversationGrantPermission;
-  subject_type: "user" | "actor";
+  subject_type: ConversationGrantsSubjectType;
   user_id: string | null;
   actor_id: string | null;
-  status: "active" | "revoked";
+  status: ConversationGrantsStatus;
   granted_by?: string | null;
   reason?: string | null;
   metadata?: Record<string, unknown> | string | null;
@@ -497,7 +511,7 @@ async function ensureActorSession(params: {
   conversationId: string;
   workspaceId?: string;
   actorId: string;
-  trigger: string;
+  trigger: SessionTrigger;
 }) {
   const existing = await getLatestActorSession(
     params.conversationId,
@@ -2420,7 +2434,7 @@ export async function wakeActor(params: {
     conversationId: params.conversationId,
     workspaceId: conversation.workspace_id || undefined,
     actorId: params.actorId,
-    trigger: params.sourceType,
+    trigger: mapWakeupSourceTypeToTrigger(params.sourceType),
   });
   session = await getSession(session.id);
   if (!session) return;
@@ -2437,7 +2451,7 @@ export async function wakeActor(params: {
     sourceName: params.sourceName,
     summary: params.summary,
     metadata: params.metadata,
-    trigger: params.sourceType,
+    trigger: mapWakeupSourceTypeToTrigger(params.sourceType),
   });
 }
 

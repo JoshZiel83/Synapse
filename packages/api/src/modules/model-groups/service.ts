@@ -3,6 +3,11 @@ import {
   resolveModelEngineKind,
   validateModelProviderConfig,
 } from '@synapse/shared';
+import type {
+  ModelGroupGrantsGrantScope,
+  ModelGroupsOwnerType,
+  ModelGroupsRoutingStrategy,
+} from '../../infrastructure/database/generated/db.js';
 import { query } from '../../infrastructure/database/index.js';
 import {
   db,
@@ -27,8 +32,8 @@ import { logProviderStep, logRuntimeEvent } from '../execution/service.js';
 import { sql } from 'kysely';
 
 type JsonMap = Record<string, unknown>;
-type ModelGroupOwnerType = 'platform' | 'workspace' | 'user';
-type ModelGroupGrantScope = 'platform' | 'workspace' | 'user' | 'workspace_user' | 'actor';
+type ModelGroupOwnerType = ModelGroupsOwnerType;
+type ModelGroupGrantScope = ModelGroupGrantsGrantScope;
 
 type ModelGroupRow = {
   id: string;
@@ -37,7 +42,7 @@ type ModelGroupRow = {
   owner_user_id: string | null;
   name: string;
   description: string | null;
-  routing_strategy: 'weighted_random' | 'round_robin' | 'priority_failover';
+  routing_strategy: ModelGroupsRoutingStrategy;
   attempt_policy: Record<string, unknown> | null;
   is_default: boolean;
   is_enabled: boolean;
@@ -724,7 +729,7 @@ export async function createModelGroup(data: {
   ownerUserId?: string;
   name: string;
   description?: string;
-  routingStrategy?: string;
+  routingStrategy?: ModelGroupsRoutingStrategy;
   attemptPolicy?: JsonMap;
   isDefault?: boolean;
   createdBy?: string;
@@ -790,7 +795,7 @@ export async function createModelGroup(data: {
 export async function updateModelGroup(groupId: string, data: {
   name?: string;
   description?: string;
-  routingStrategy?: string;
+  routingStrategy?: ModelGroupsRoutingStrategy;
   attemptPolicy?: JsonMap;
   isDefault?: boolean;
   isActive?: boolean;

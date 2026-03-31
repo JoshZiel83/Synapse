@@ -1,14 +1,20 @@
+import { sql } from "kysely";
+import type {
+  ActorsRole,
+  WorkspaceContactsScope,
+  WorkspaceContactsTargetType,
+} from "../../infrastructure/database/generated/db.js";
 import { db } from "../../infrastructure/database/kysely.js";
 
-type ContactScope = "workspace" | "personal";
-type ContactTargetType = "user" | "actor";
+type ContactScope = WorkspaceContactsScope;
+type ContactTargetType = WorkspaceContactsTargetType;
 type TimestampValue = string | Date | null | undefined;
 
 type ContactRecordRow = {
   id: string;
-  scope: ContactScope | string;
+  scope: ContactScope;
   owner_user_id: string | null;
-  target_type: string;
+  target_type: ContactTargetType;
   target_workspace_id: string;
   target_user_id: string | null;
   target_actor_id: string | null;
@@ -20,7 +26,7 @@ type ActorTargetRow = {
   workspace_id: string;
   name: string;
   title: string;
-  role: string;
+  role: ActorsRole;
   avatar_emoji: string | null;
   avatar_stored_name: string | null;
   workspace_name: string;
@@ -44,7 +50,7 @@ function toIsoString(value: TimestampValue) {
 }
 
 function targetKey(row: {
-  target_type: ContactTargetType | string;
+  target_type: ContactTargetType;
   target_workspace_id: string;
   target_user_id?: string | null;
   target_actor_id?: string | null;
@@ -448,7 +454,7 @@ export async function discoverContacts(params: {
       eb.or([
         eb("a.name", "ilike", pattern),
         eb("a.title", "ilike", pattern),
-        eb("a.role", "ilike", pattern),
+        sql<boolean>`a.role::text ilike ${pattern}`,
         eb("w.name", "ilike", pattern),
       ]),
     );

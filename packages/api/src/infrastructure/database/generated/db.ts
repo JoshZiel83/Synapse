@@ -5,11 +5,141 @@
 
 import type { ColumnType } from "kysely";
 
+export type AccessBindingsStatus = "active" | "revoked";
+
+export type ActorSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
+
+export type ActorsRole = "archivist" | "assistant" | "manager" | "receptionist" | "reviewer" | "secretary" | "specialist";
+
+export type ActorTemplateVersionSpecsRole = "archivist" | "assistant" | "manager" | "receptionist" | "reviewer" | "secretary" | "specialist";
+
+export type ActorVersionDocsVisibility = "always" | "direct_only" | "internal_only" | "multi_member_only";
+
+export type ActorVersionsSourceType = "actor" | "sync" | "system" | "user";
+
+export type AuthQrLoginRequestsApprovedSessionPersistence = "persistent" | "temporary";
+
+export type AuthQrLoginRequestsStatus = "approved" | "consumed" | "expired" | "pending_confirm" | "pending_scan" | "rejected";
+
+export type AuthSessionsClientType = "android" | "api" | "cli" | "ios" | "web" | "windows";
+
+export type AuthSessionsTransport = "cookie" | "token";
+
+export type AuthzOutboxOperation = "delete" | "touch";
+
+export type AuthzOutboxStatus = "applied" | "failed" | "pending" | "processing";
+
+export type AutomationDeliveriesDeliveryMode = "conversation_notice" | "create_conversation_each_time" | "create_conversation_once" | "wake_session";
+
+export type AutomationDeliveriesTargetPolicy = "all_members" | "specified_members";
+
+export type AutomationDeliveryParticipantsEntityKind = "actor" | "user";
+
+export type AutomationDeliveryRecipientsEntityKind = "actor" | "user";
+
+export type AutomationEventSourcesCreatedByKind = "session" | "system" | "user";
+
+export type AutomationEventSourcesProviderKind = "integration" | "internal" | "relay" | "webhook";
+
+export type AutomationEventSourcesStatus = "active" | "archived" | "deprecated" | "disabled";
+
+export type AutomationExecutionsStatus = "completed" | "failed" | "pending" | "running" | "skipped";
+
+export type AutomationExecutionTargetsStatus = "completed" | "failed" | "pending" | "running" | "skipped";
+
+export type AutomationIntegrationBindingsIngressKind = "polling" | "webhook";
+
+export type AutomationIntegrationBindingsProvider = "github" | "gitlab";
+
+export type AutomationIntegrationBindingsTargetKind = "project" | "repository";
+
+export type AutomationOccurrencesSourceKind = "clock" | "integration" | "internal" | "relay" | "webhook";
+
+export type AutomationPoliciesCompletionStatus = "archived" | "completed";
+
+export type AutomationRulesCategory = "event_subscription" | "schedule";
+
+export type AutomationRulesCreatedByKind = "session" | "system" | "user";
+
+export type AutomationRulesStatus = "active" | "archived" | "completed" | "error" | "expired" | "paused";
+
+export type AutomationTriggersScheduleKind = "at" | "cron" | "interval";
+
+export type AutomationTriggersSourceKind = "clock" | "integration" | "internal" | "relay" | "webhook";
+
+export type AutomationTriggersTriggerKind = "event" | "schedule";
+
+export type AutomationWebhookEndpointsStatus = "active" | "archived" | "disabled";
+
+export type CatalogCategoriesItemKind = "actor_template" | "plugin_package" | "skill_package";
+
+export type CatalogItemsItemKind = "actor_template" | "plugin_package" | "skill_package";
+
+export type CatalogItemsSourceKind = "builtin" | "official" | "relay" | "user" | "workspace";
+
+export type CatalogItemsVisibility = "private" | "public" | "workspace";
+
+export type CatalogVersionFilesFileRole = "binary" | "document" | "image" | "json" | "reference" | "script";
+
+export type CatalogVersionsStatus = "active" | "archived" | "deprecated" | "draft";
+
+export type ContextArchiveFramePartsPartType = "file_ref" | "json" | "text";
+
+export type ContextArchiveFramesRole = "assistant" | "system" | "tool" | "user";
+
+export type ContextArchivePointsChainScope = "private" | "shared";
+
+export type ContextCompactionRunInputsInputKind = "archive_point" | "item" | "sequence_range";
+
+export type ContextCompactionRunsChainScope = "private" | "shared";
+
+export type ContextCompactionRunsStatus = "cancelled" | "completed" | "failed" | "pending" | "running";
+
+export type ConversationGrantsPermission = "attach_resources" | "manage" | "manage_members" | "moderate" | "send";
+
+export type ConversationGrantsStatus = "active" | "revoked";
+
+export type ConversationGrantsSubjectType = "actor" | "user";
+
+export type ConversationItemPartsPartType = "file_ref" | "json" | "text";
+
+export type ConversationItemsEventContextPolicy = "actor_private" | "none" | "shared" | "targeted_members";
+
+export type ConversationItemsEventTimelinePolicy = "actors_only" | "all_members" | "none" | "targeted_members" | "users_only";
+
+export type ConversationItemsItemType = "control" | "event" | "message" | "summary";
+
+export type ConversationItemsRole = "assistant" | "system" | "tool" | "user";
+
+export type ConversationItemsScope = "private" | "shared";
+
+export type ConversationItemsSurface = "internal" | "visible";
+
+export type ConversationItemTargetsTargetKind = "cc" | "to" | "visible";
+
+export type ConversationMembersMemberType = "actor" | "external" | "remote_agent" | "system" | "user";
+
+export type ConversationMembersState = "active" | "kicked" | "left";
+
+export type ConversationsDomain = "social" | "workspace";
+
+export type ConversationsKind = "group" | "private" | "virtual";
+
+export type ConversationTransportBindingsInboundActorMode = "inherit_account" | "none" | "specified_actor";
+
+export type EngineBranchCheckpointsCheckpointKind = "compaction" | "snapshot";
+
+export type FilesCategory = "chat_attachment" | "general" | "plugin_asset" | "plugin_output";
+
 export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
   : ColumnType<T, T | undefined, T>;
 
 export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
+
+export type InteractionRequestsKind = "question_choice" | "relay_authorization";
+
+export type InteractionRequestsStatus = "answered" | "applied" | "apply_failed" | "approved_pending_apply" | "cancelled" | "expired" | "pending" | "rejected";
 
 export type Json = JsonValue;
 
@@ -23,7 +153,165 @@ export type JsonPrimitive = boolean | number | string | null;
 
 export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 
+export type MemoryEntriesCategory = "artifact" | "decision" | "fact" | "preference" | "procedure" | "relationship" | "summary";
+
+export type MemoryEntriesOwnerScope = "actor_conversation" | "actor_global" | "conversation" | "user" | "workspace";
+
+export type MemoryEntriesStability = "durable" | "ephemeral";
+
+export type MemoryEntriesStatus = "candidate" | "established" | "retracted" | "superseded";
+
+export type MemoryEntryPartsPartType = "file_ref" | "json" | "text";
+
+export type MemoryIndexChunksOwnerScope = "actor_conversation" | "actor_global" | "conversation" | "user" | "workspace";
+
+export type MemoryRecallRunsRecallType = "bootstrap" | "manual_search" | "turn_recall";
+
+export type ModelGroupGrantsGrantScope = "actor" | "platform" | "user" | "workspace" | "workspace_user";
+
+export type ModelGroupGrantsStatus = "active" | "revoked";
+
+export type ModelGroupsOwnerType = "platform" | "user" | "workspace";
+
+export type ModelGroupsRoutingStrategy = "priority_failover" | "round_robin" | "weighted_random";
+
+export type PayloadBlobsContentType = "json" | "text";
+
+export type PayloadBlobsRetentionClass = "audit" | "debug" | "ephemeral";
+
+export type PlatformAccessBindingsAccessKey = "auditor" | "model_admin" | "super_admin" | "support" | "workspace_admin";
+
+export type PlatformAccessBindingsSource = "config" | "manual";
+
+export type PluginAuthSessionsStatus = "completed" | "consumed" | "expired" | "failed" | "pending";
+
+export type PluginConnectionsOwnerScope = "installation" | "user" | "workspace";
+
+export type PluginConnectionsStatus = "active" | "expired" | "revoked";
+
+export type PluginInstallationsReuseScope = "actor" | "actor_conversation" | "conversation" | "turn" | "user" | "workspace";
+
+export type PluginInstallationsStatus = "active" | "archived" | "disabled" | "error";
+
+export type PluginPackageVersionSpecsDefaultMountScope = "actor" | "actor_conversation" | "conversation" | "user" | "workspace";
+
+export type PluginPackageVersionSpecsDefaultReuseScope = "actor" | "actor_conversation" | "conversation" | "turn" | "user" | "workspace";
+
+export type PluginPackageVersionSpecsTransport = "builtin" | "http" | "relay" | "stdio";
+
+export type PluginSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
+
+export type ProviderStepsRequestType = "actor_think" | "ai_complete";
+
+export type ProviderStepsStatus = "error" | "success" | "timeout";
+
+export type RealtimeEventOutboxStatus = "dispatched" | "failed" | "pending" | "processing";
+
+export type RelayCatalogRevisionsStatus = "active" | "superseded";
+
+export type RelayDevicesAutomationLifecycleState = "offline" | "online";
+
+export type RelayDeviceSessionsStatus = "active" | "closed" | "closing" | "connecting" | "rejected";
+
+export type RelayDeviceSessionsTransport = "websocket";
+
+export type RelayDevicesTrustStatus = "active" | "blocked" | "pending" | "revoked";
+
+export type RelayExposuresRuntimeStatus = "degraded" | "discovered" | "failed" | "healthy" | "offline" | "quarantined" | "starting";
+
+export type RelayExposuresTransport = "builtin" | "custom" | "http" | "sse" | "stdio";
+
+export type RelayOperationDeliveriesStatus = "acked" | "cancelled" | "nacked" | "queued" | "sent" | "timed_out";
+
+export type RelayOperationsDeliveryPolicy = "online_only" | "store_and_forward";
+
+export type RelayOperationsStatus = "aborted" | "cancel_requested" | "cancelled" | "completed" | "created" | "dispatched" | "expired" | "failed" | "received" | "started";
+
+export type RelayPairingSessionsStatus = "cancelled" | "confirmed" | "consumed" | "expired" | "pending" | "rejected";
+
+export type RelaySyncSourcesSourceKind = "claude_code" | "claude_desktop" | "codex" | "custom" | "gemini" | "manual" | "opencode";
+
+export type RelaySyncSourcesStatus = "disabled" | "error" | "idle" | "syncing" | "unknown";
+
+export type RelaySyncSourcesSyncMode = "follow" | "snapshot";
+
+export type RelayToolsStatus = "active" | "removed";
+
+export type RuntimeEventsLevel = "debug" | "error" | "info" | "warn";
+
+export type RuntimeEventsSource = "a2a" | "conversation" | "provider" | "relay" | "system" | "tool";
+
+export type SessionEngineBranchesStatus = "active" | "archived" | "superseded";
+
+export type SessionInterruptsType = "priority_override" | "progress_check";
+
+export type SessionsChannelType = "api" | "bridge" | "web";
+
+export type SessionsStatus = "blocked" | "closed" | "idle" | "queued" | "running";
+
+export type SessionWakeupsSourceMemberType = "actor" | "external" | "system" | "user";
+
+export type SessionWakeupsSourceType = "actor_message" | "api_call" | "automation" | "broadcast" | "invite" | "retry" | "system_interrupt" | "user_message";
+
+export type SessionWakeupsStatus = "attached" | "dropped" | "pending" | "processed";
+
+export type SkillSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
+
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
+
+export type ToolCallsStatus = "completed" | "failed" | "pending" | "running" | "skipped";
+
+export type ToolCallsToolKind = "a2a_proxy" | "action" | "builtin" | "callable" | "mcp_plugin" | "mcp_relay" | "provider_builtin";
+
+export type ToolCallTaskOutputChunksStream = "stderr" | "stdout" | "system";
+
+export type ToolCallTasksDeliveryPolicy = "human_interaction" | "online_only" | "store_and_forward";
+
+export type ToolCallTasksDispatchStatus = "accepted" | "cancel_requested" | "dispatched" | "input_requested" | "queued" | "received" | "started";
+
+export type ToolCallTasksExecutorKind = "interaction_form" | "interaction_question" | "relay_authorization" | "relay_mcp";
+
+export type ToolCallTasksStatus = "cancelled" | "completed" | "failed" | "input_required" | "working";
+
+export type ToolExecutionAttemptsExecutorKind = "a2a_proxy" | "action" | "builtin" | "callable" | "mcp_plugin" | "mcp_relay" | "provider_builtin";
+
+export type ToolExecutionAttemptsStatus = "error" | "success" | "timeout";
+
+export type ToolResultPartsPartType = "file_ref" | "json" | "text";
+
+export type TransportAccountsConnectionMode = "long_connection" | "webhook";
+
+export type TransportAccountsInboundActorMode = "follow_owner_chief_actor" | "none" | "specified_actor";
+
+export type TransportAccountsOwnerScope = "workspace" | "workspace_user";
+
+export type TransportAccountsStatus = "active" | "disabled" | "error";
+
+export type TransportAccountsTransportKind = "feishu" | "weixin";
+
+export type TransportAddressesAddressType = "bot" | "system" | "user";
+
+export type TransportAddressesTransportKind = "feishu" | "weixin";
+
+export type TransportEndpointsEndpointType = "direct" | "group";
+
+export type TransportMessageLinksDeliveryStatus = "failed" | "pending" | "sent" | "skipped";
+
+export type TransportMessageLinksDirection = "inbound" | "outbound";
+
+export type TransportMessageLinksTransportKind = "feishu" | "weixin";
+
+export type TurnsStatus = "cancelled" | "completed" | "failed" | "running";
+
+export type WorkspaceAccessBindingsAccessKey = "actor_admin" | "conversation_admin" | "memory_admin" | "model_admin" | "plugin_admin" | "relay_admin" | "skill_admin";
+
+export type WorkspaceContactsScope = "personal" | "workspace";
+
+export type WorkspaceContactsTargetType = "actor" | "user";
+
+export type WorkspaceInvitesTrustLevel = "admin" | "guest" | "member";
+
+export type WorkspaceMembersTrustLevel = "admin" | "guest" | "member";
 
 export interface AccessBindings {
   created_at: Generated<Timestamp | null>;
@@ -35,7 +323,7 @@ export interface AccessBindings {
   resource_id: string;
   resource_type: string;
   revoked_at: Timestamp | null;
-  status: Generated<string>;
+  status: Generated<AccessBindingsStatus>;
   subject_id: string;
   subject_relation: string | null;
   subject_type: string;
@@ -61,7 +349,7 @@ export interface Actors {
   is_active: Generated<boolean>;
   name: string;
   parent_id: string | null;
-  role: string;
+  role: ActorsRole;
   specialties: Generated<string[] | null>;
   title: string;
   updated_at: Generated<Timestamp | null>;
@@ -75,7 +363,7 @@ export interface ActorSourceRefs {
   metadata: Generated<Json | null>;
   source_catalog_item_id: string | null;
   source_catalog_version_id: string | null;
-  sync_mode: Generated<string>;
+  sync_mode: Generated<ActorSourceRefsSyncMode>;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -89,7 +377,7 @@ export interface ActorTemplateVersionSpecs {
   docs: Generated<Json>;
   metadata: Generated<Json | null>;
   name: string;
-  role: string;
+  role: ActorTemplateVersionSpecsRole;
   specialties: Generated<string[] | null>;
   title: string;
 }
@@ -103,7 +391,7 @@ export interface ActorVersionDocs {
   priority: Generated<number>;
   title: string;
   updated_at: Generated<Timestamp | null>;
-  visibility: Generated<string>;
+  visibility: Generated<ActorVersionDocsVisibility>;
 }
 
 export interface ActorVersions {
@@ -122,7 +410,7 @@ export interface ActorVersions {
   source_reason: string | null;
   source_session_id: string | null;
   source_turn_id: string | null;
-  source_type: Generated<string>;
+  source_type: Generated<ActorVersionsSourceType>;
   source_user_id: string | null;
   specialties: Generated<string[] | null>;
   title: string;
@@ -146,7 +434,7 @@ export interface AuditLogs {
 export interface AuthQrLoginRequests {
   approved_at: Timestamp | null;
   approved_by_user_id: string | null;
-  approved_session_persistence: string | null;
+  approved_session_persistence: AuthQrLoginRequestsApprovedSessionPersistence | null;
   browser_ip_address: string | null;
   browser_label: string;
   browser_token_hash: string;
@@ -159,12 +447,12 @@ export interface AuthQrLoginRequests {
   resolver_user_id: string | null;
   scan_token_hash: string;
   scanned_at: Timestamp | null;
-  status: Generated<string>;
+  status: Generated<AuthQrLoginRequestsStatus>;
   updated_at: Generated<Timestamp | null>;
 }
 
 export interface AuthSessions {
-  client_type: Generated<string>;
+  client_type: Generated<AuthSessionsClientType>;
   created_at: Generated<Timestamp | null>;
   device_name: string | null;
   expires_at: Timestamp;
@@ -177,7 +465,7 @@ export interface AuthSessions {
   revoked_at: Timestamp | null;
   token_hash: string;
   token_hint: string;
-  transport: Generated<string>;
+  transport: Generated<AuthSessionsTransport>;
   updated_at: Generated<Timestamp | null>;
   user_agent: string | null;
   user_id: string;
@@ -190,11 +478,11 @@ export interface AuthzOutbox {
   id: Generated<string>;
   last_error: string | null;
   metadata: Generated<Json | null>;
-  operation: string;
+  operation: AuthzOutboxOperation;
   relation: string;
   resource_id: string;
   resource_type: string;
-  status: Generated<string>;
+  status: Generated<AuthzOutboxStatus>;
   subject_id: string;
   subject_relation: string | null;
   subject_type: string;
@@ -206,14 +494,14 @@ export interface AutomationDeliveries {
   conversation_id: string | null;
   conversation_title: string | null;
   created_at: Generated<Timestamp | null>;
-  delivery_mode: string;
+  delivery_mode: AutomationDeliveriesDeliveryMode;
   message_blocks: Generated<Json>;
   message_text: Generated<string>;
   metadata: Generated<Json>;
   reused_conversation_id: string | null;
   rule_id: string;
   session_id: string | null;
-  target_policy: Generated<string>;
+  target_policy: Generated<AutomationDeliveriesTargetPolicy>;
   updated_at: Generated<Timestamp | null>;
   wake_reason_text: string | null;
 }
@@ -221,7 +509,7 @@ export interface AutomationDeliveries {
 export interface AutomationDeliveryParticipants {
   created_at: Generated<Timestamp | null>;
   entity_id: string;
-  entity_kind: string;
+  entity_kind: AutomationDeliveryParticipantsEntityKind;
   id: Generated<string>;
   rule_id: string;
 }
@@ -229,7 +517,7 @@ export interface AutomationDeliveryParticipants {
 export interface AutomationDeliveryRecipients {
   created_at: Generated<Timestamp | null>;
   entity_id: string;
-  entity_kind: string;
+  entity_kind: AutomationDeliveryRecipientsEntityKind;
   id: Generated<string>;
   rule_id: string;
 }
@@ -237,7 +525,7 @@ export interface AutomationDeliveryRecipients {
 export interface AutomationEventSources {
   created_at: Generated<Timestamp | null>;
   created_by_actor_id: string | null;
-  created_by_kind: string;
+  created_by_kind: AutomationEventSourcesCreatedByKind;
   created_by_session_id: string | null;
   created_by_user_id: string | null;
   description: Generated<string>;
@@ -248,11 +536,11 @@ export interface AutomationEventSources {
   metadata: Generated<Json>;
   name: string;
   payload_schema: Generated<Json>;
-  provider_kind: string;
+  provider_kind: AutomationEventSourcesProviderKind;
   provider_ref: string | null;
   recommended_usage: Generated<string>;
   source_key: string;
-  status: Generated<string>;
+  status: Generated<AutomationEventSourcesStatus>;
   updated_at: Generated<Timestamp | null>;
   webhook_endpoint_id: string | null;
   workspace_id: string;
@@ -267,7 +555,7 @@ export interface AutomationExecutions {
   occurrence_id: string;
   rule_id: string;
   started_at: Timestamp | null;
-  status: Generated<string>;
+  status: Generated<AutomationExecutionsStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
@@ -280,7 +568,7 @@ export interface AutomationExecutionTargets {
   id: Generated<string>;
   metadata: Generated<Json>;
   session_id: string | null;
-  status: Generated<string>;
+  status: Generated<AutomationExecutionTargetsStatus>;
   target_actor_id: string | null;
   target_user_id: string | null;
   updated_at: Generated<Timestamp | null>;
@@ -291,12 +579,12 @@ export interface AutomationIntegrationBindings {
   created_at: Generated<Timestamp | null>;
   external_subscription_id: string | null;
   id: Generated<string>;
-  ingress_kind: string;
+  ingress_kind: AutomationIntegrationBindingsIngressKind;
   installation_id: string;
   metadata: Generated<Json>;
-  provider: string;
+  provider: AutomationIntegrationBindingsProvider;
   target_id: string;
-  target_kind: string;
+  target_kind: AutomationIntegrationBindingsTargetKind;
   target_label: string;
   updated_at: Generated<Timestamp | null>;
   webhook_endpoint_id: string | null;
@@ -311,7 +599,7 @@ export interface AutomationOccurrences {
   match_key: string | null;
   occurred_at: Timestamp;
   payload: Generated<Json>;
-  source_kind: string;
+  source_kind: AutomationOccurrencesSourceKind;
   source_locator: string | null;
   source_snapshot: Generated<Json>;
   workspace_id: string;
@@ -321,7 +609,7 @@ export interface AutomationPolicies {
   active_from: Timestamp | null;
   active_until: Timestamp | null;
   completed_at: Timestamp | null;
-  completion_status: Generated<string>;
+  completion_status: Generated<AutomationPoliciesCompletionStatus>;
   created_at: Generated<Timestamp | null>;
   max_trigger_count: number | null;
   metadata: Generated<Json>;
@@ -331,10 +619,10 @@ export interface AutomationPolicies {
 }
 
 export interface AutomationRules {
-  category: string;
+  category: AutomationRulesCategory;
   created_at: Generated<Timestamp | null>;
   created_by_actor_id: string | null;
-  created_by_kind: string;
+  created_by_kind: AutomationRulesCreatedByKind;
   created_by_session_id: string | null;
   created_by_user_id: string | null;
   description: Generated<string>;
@@ -346,7 +634,7 @@ export interface AutomationRules {
   name: string;
   owner_conversation_id: string | null;
   owner_session_id: string | null;
-  status: Generated<string>;
+  status: Generated<AutomationRulesStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
@@ -362,12 +650,12 @@ export interface AutomationTriggers {
   next_fire_at: Timestamp | null;
   rule_id: string;
   schedule_expr: string | null;
-  schedule_kind: string | null;
+  schedule_kind: AutomationTriggersScheduleKind | null;
   schedule_timezone: string | null;
-  source_kind: string;
+  source_kind: AutomationTriggersSourceKind;
   source_locator: string | null;
   starts_at: Timestamp | null;
-  trigger_kind: string;
+  trigger_kind: AutomationTriggersTriggerKind;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -381,7 +669,7 @@ export interface AutomationWebhookEndpoints {
   path_token: string;
   secret_ciphertext: string;
   secret_hint: string;
-  status: Generated<string>;
+  status: Generated<AutomationWebhookEndpointsStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
@@ -392,7 +680,7 @@ export interface CatalogCategories {
   display_name: string;
   icon_file_id: string | null;
   id: Generated<string>;
-  item_kind: string;
+  item_kind: CatalogCategoriesItemKind;
   metadata: Generated<Json | null>;
   slug: string;
   sort_order: Generated<number>;
@@ -412,17 +700,17 @@ export interface CatalogItems {
   icon_file_id: string | null;
   id: Generated<string>;
   is_active: Generated<boolean | null>;
-  item_kind: string;
+  item_kind: CatalogItemsItemKind;
   latest_version_id: string | null;
   long_description: Generated<string | null>;
   metadata: Generated<Json | null>;
   publisher_id: string;
   slug: string;
-  source_kind: Generated<string>;
+  source_kind: Generated<CatalogItemsSourceKind>;
   summary: Generated<string | null>;
   tags: Generated<string[] | null>;
   updated_at: Generated<Timestamp | null>;
-  visibility: Generated<string>;
+  visibility: Generated<CatalogItemsVisibility>;
   workspace_id: string | null;
 }
 
@@ -430,7 +718,7 @@ export interface CatalogVersionFiles {
   catalog_version_id: string;
   content_blocks: Generated<Json | null>;
   created_at: Generated<Timestamp | null>;
-  file_role: string;
+  file_role: CatalogVersionFilesFileRole;
   id: Generated<string>;
   media_type: string | null;
   metadata: Generated<Json | null>;
@@ -447,7 +735,7 @@ export interface CatalogVersions {
   created_by: string | null;
   id: Generated<string>;
   metadata: Generated<Json | null>;
-  status: Generated<string>;
+  status: Generated<CatalogVersionsStatus>;
   version: string;
 }
 
@@ -460,7 +748,7 @@ export interface ContextArchiveFrameParts {
   mime_type: string | null;
   name: string | null;
   ordinal: number;
-  part_type: string;
+  part_type: ContextArchiveFramePartsPartType;
   text_value: string | null;
 }
 
@@ -470,14 +758,14 @@ export interface ContextArchiveFrames {
   id: Generated<string>;
   metadata: Generated<Json | null>;
   ordinal: number;
-  role: string;
+  role: ContextArchiveFramesRole;
   source_item_ids: Generated<string[] | null>;
   tool_calls: Json | null;
   tool_results: Json | null;
 }
 
 export interface ContextArchivePoints {
-  chain_scope: string;
+  chain_scope: ContextArchivePointsChainScope;
   conversation_id: string;
   covers_until_sequence: Generated<Int8>;
   created_at: Generated<Timestamp | null>;
@@ -491,7 +779,7 @@ export interface ContextCompactionRunInputs {
   archive_point_id: string | null;
   from_sequence: Int8 | null;
   id: Generated<string>;
-  input_kind: string;
+  input_kind: ContextCompactionRunInputsInputKind;
   item_id: string | null;
   metadata: Generated<Json | null>;
   run_id: string;
@@ -500,7 +788,7 @@ export interface ContextCompactionRunInputs {
 
 export interface ContextCompactionRuns {
   base_archive_point_id: string | null;
-  chain_scope: string;
+  chain_scope: ContextCompactionRunsChainScope;
   completed_at: Timestamp | null;
   conversation_id: string;
   error_message: string | null;
@@ -509,7 +797,7 @@ export interface ContextCompactionRuns {
   output_archive_point_id: string | null;
   session_id: string | null;
   started_at: Generated<Timestamp | null>;
-  status: Generated<string>;
+  status: Generated<ContextCompactionRunsStatus>;
   strategy_key: string;
 }
 
@@ -526,11 +814,11 @@ export interface ConversationGrants {
   granted_by: string | null;
   id: Generated<string>;
   metadata: Generated<Json | null>;
-  permission: string;
+  permission: ConversationGrantsPermission;
   reason: string | null;
   revoked_at: Timestamp | null;
-  status: Generated<string>;
-  subject_type: string;
+  status: Generated<ConversationGrantsStatus>;
+  subject_type: ConversationGrantsSubjectType;
   user_id: string | null;
   workspace_id: string;
 }
@@ -549,7 +837,7 @@ export interface ConversationItemParts {
   mime_type: string | null;
   name: string | null;
   ordinal: number;
-  part_type: string;
+  part_type: ConversationItemPartsPartType;
   text_value: string | null;
 }
 
@@ -560,25 +848,25 @@ export interface ConversationItems {
   client_message_id: string | null;
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
-  event_context_policy: string | null;
+  event_context_policy: ConversationItemsEventContextPolicy | null;
   event_payload: Generated<Json | null>;
-  event_timeline_policy: string | null;
+  event_timeline_policy: ConversationItemsEventTimelinePolicy | null;
   id: Generated<string>;
-  item_type: string;
+  item_type: ConversationItemsItemType;
   metadata: Generated<Json | null>;
   reply_to_item_id: string | null;
-  role: string;
-  scope: string;
+  role: ConversationItemsRole;
+  scope: ConversationItemsScope;
   sequence: Generated<Int8>;
   session_id: string | null;
   subtype: string;
-  surface: string;
+  surface: ConversationItemsSurface;
   turn_id: string | null;
 }
 
 export interface ConversationItemTargets {
   item_id: string;
-  target_kind: Generated<string>;
+  target_kind: Generated<ConversationItemTargetsTargetKind>;
   target_member_id: string;
 }
 
@@ -590,9 +878,9 @@ export interface ConversationMembers {
   id: Generated<string>;
   joined_at: Generated<Timestamp | null>;
   left_at: Timestamp | null;
-  member_type: string;
+  member_type: ConversationMembersMemberType;
   metadata: Generated<Json | null>;
-  state: Generated<string>;
+  state: Generated<ConversationMembersState>;
   user_id: string | null;
 }
 
@@ -608,9 +896,9 @@ export interface ConversationParticipantAddresses {
 export interface Conversations {
   created_at: Generated<Timestamp | null>;
   created_by: string | null;
-  domain: string;
+  domain: ConversationsDomain;
   id: Generated<string>;
-  kind: string;
+  kind: ConversationsKind;
   metadata: Generated<Json | null>;
   title: string | null;
   updated_at: Generated<Timestamp | null>;
@@ -622,7 +910,7 @@ export interface ConversationTransportBindings {
   created_at: Generated<Timestamp>;
   id: Generated<string>;
   inbound_actor_id: string | null;
-  inbound_actor_mode: Generated<string>;
+  inbound_actor_mode: Generated<ConversationTransportBindingsInboundActorMode>;
   metadata: Generated<Json>;
   outbound_enabled: Generated<boolean>;
   transport_account_id: string;
@@ -644,7 +932,7 @@ export interface EngineBranchCheckpoints {
   applied_item_keys: Generated<string[] | null>;
   binding_key: string;
   branch_id: string;
-  checkpoint_kind: Generated<string>;
+  checkpoint_kind: Generated<EngineBranchCheckpointsCheckpointKind>;
   conversation_id: string | null;
   created_at: Generated<Timestamp | null>;
   engine_kind: string;
@@ -658,7 +946,7 @@ export interface EngineBranchCheckpoints {
 }
 
 export interface Files {
-  category: Generated<string | null>;
+  category: Generated<FilesCategory | null>;
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
   metadata: Generated<Json | null>;
@@ -704,7 +992,7 @@ export interface InteractionRequests {
   created_at: Generated<Timestamp | null>;
   expires_at: Timestamp | null;
   id: Generated<string>;
-  kind: string;
+  kind: InteractionRequestsKind;
   metadata: Generated<Json>;
   requester_actor_id: string | null;
   requester_member_id: string | null;
@@ -712,7 +1000,7 @@ export interface InteractionRequests {
   resolved_at: Timestamp | null;
   resolved_by_member_id: string | null;
   resolved_by_user_id: string | null;
-  status: Generated<string>;
+  status: Generated<InteractionRequestsStatus>;
   target_member_id: string | null;
   target_user_id: string | null;
   task_id: string;
@@ -721,7 +1009,7 @@ export interface InteractionRequests {
 }
 
 export interface MemoryEntries {
-  category: string;
+  category: MemoryEntriesCategory;
   confidence: Generated<number>;
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
@@ -729,14 +1017,14 @@ export interface MemoryEntries {
   metadata: Generated<Json | null>;
   owner_actor_id: string | null;
   owner_conversation_id: string | null;
-  owner_scope: string;
+  owner_scope: MemoryEntriesOwnerScope;
   owner_user_id: string | null;
   search_text: Generated<string>;
   source_item_id: string | null;
   source_tool_call_id: string | null;
   source_turn_id: string | null;
-  stability: Generated<string>;
-  status: Generated<string>;
+  stability: Generated<MemoryEntriesStability>;
+  status: Generated<MemoryEntriesStatus>;
   supersedes_memory_id: string | null;
   tags: Generated<string[] | null>;
   text_digest: Generated<string>;
@@ -753,7 +1041,7 @@ export interface MemoryEntryParts {
   mime_type: string | null;
   name: string | null;
   ordinal: number;
-  part_type: string;
+  part_type: MemoryEntryPartsPartType;
   text_value: string | null;
 }
 
@@ -766,7 +1054,7 @@ export interface MemoryIndexChunks {
   metadata: Generated<Json | null>;
   owner_actor_id: string | null;
   owner_conversation_id: string | null;
-  owner_scope: string;
+  owner_scope: MemoryIndexChunksOwnerScope;
   owner_user_id: string | null;
   search_text: string;
   token_count: Generated<number | null>;
@@ -798,7 +1086,7 @@ export interface MemoryRecallRuns {
   metadata: Generated<Json | null>;
   query_blocks: Generated<Json | null>;
   query_text: Generated<string>;
-  recall_type: string;
+  recall_type: MemoryRecallRunsRecallType;
   user_id: string | null;
   workspace_id: string;
 }
@@ -806,14 +1094,14 @@ export interface MemoryRecallRuns {
 export interface ModelGroupGrants {
   actor_id: string | null;
   created_at: Generated<Timestamp | null>;
-  grant_scope: string;
+  grant_scope: ModelGroupGrantsGrantScope;
   granted_by: string | null;
   group_id: string;
   id: Generated<string>;
   metadata: Generated<Json | null>;
   reason: string | null;
   revoked_at: Timestamp | null;
-  status: Generated<string>;
+  status: Generated<ModelGroupGrantsStatus>;
   user_id: string | null;
   workspace_id: string | null;
 }
@@ -840,10 +1128,10 @@ export interface ModelGroups {
   is_enabled: Generated<boolean | null>;
   metadata: Generated<Json | null>;
   name: string;
-  owner_type: string;
+  owner_type: ModelGroupsOwnerType;
   owner_user_id: string | null;
   owner_workspace_id: string | null;
-  routing_strategy: Generated<string>;
+  routing_strategy: Generated<ModelGroupsRoutingStrategy>;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -878,21 +1166,21 @@ export interface ModelProfiles {
 
 export interface PayloadBlobs {
   byte_size: Generated<number>;
-  content_type: string;
+  content_type: PayloadBlobsContentType;
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
   json_body: Json | null;
-  retention_class: Generated<string>;
+  retention_class: Generated<PayloadBlobsRetentionClass>;
   sha256: string;
   text_body: string | null;
 }
 
 export interface PlatformAccessBindings {
-  access_key: string;
+  access_key: PlatformAccessBindingsAccessKey;
   assigned_by: string | null;
   created_at: Generated<Timestamp | null>;
   metadata: Generated<Json | null>;
-  source: Generated<string>;
+  source: Generated<PlatformAccessBindingsSource>;
   updated_at: Generated<Timestamp | null>;
   user_id: string;
 }
@@ -914,7 +1202,7 @@ export interface PluginAuthSessions {
   result_payload: Generated<Json | null>;
   result_preview: Generated<Json | null>;
   state: string | null;
-  status: Generated<string>;
+  status: Generated<PluginAuthSessionsStatus>;
   transient_payload: Generated<Json | null>;
   updated_at: Generated<Timestamp | null>;
   user_id: string;
@@ -932,11 +1220,11 @@ export interface PluginConnections {
   id: Generated<string>;
   installation_id: string;
   metadata: Generated<Json | null>;
-  owner_scope: Generated<string>;
+  owner_scope: Generated<PluginConnectionsOwnerScope>;
   owner_user_id: string | null;
   public_payload: Generated<Json | null>;
   secret_payload: Generated<Json | null>;
-  status: Generated<string>;
+  status: Generated<PluginConnectionsStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
@@ -951,8 +1239,8 @@ export interface PluginInstallations {
   id: Generated<string>;
   installed_by: string | null;
   metadata: Generated<Json | null>;
-  reuse_scope: Generated<string>;
-  status: Generated<string>;
+  reuse_scope: Generated<PluginInstallationsReuseScope>;
+  status: Generated<PluginInstallationsStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
@@ -963,14 +1251,14 @@ export interface PluginPackageVersionSpecs {
   config_schema: Generated<Json>;
   created_at: Generated<Timestamp | null>;
   default_config: Generated<Json>;
-  default_mount_scope: Generated<string>;
-  default_reuse_scope: Generated<string>;
+  default_mount_scope: Generated<PluginPackageVersionSpecsDefaultMountScope>;
+  default_reuse_scope: Generated<PluginPackageVersionSpecsDefaultReuseScope>;
   entry_point: string | null;
   install_flow: Generated<Json>;
   metadata: Generated<Json | null>;
   requires_handshake: Generated<boolean>;
   tool_manifest: Generated<Json>;
-  transport: string;
+  transport: PluginPackageVersionSpecsTransport;
 }
 
 export interface PluginSourceRefs {
@@ -979,7 +1267,7 @@ export interface PluginSourceRefs {
   metadata: Generated<Json | null>;
   source_catalog_item_id: string | null;
   source_catalog_version_id: string | null;
-  sync_mode: Generated<string>;
+  sync_mode: Generated<PluginSourceRefsSyncMode>;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -1008,9 +1296,9 @@ export interface ProviderSteps {
   output_tokens: Generated<number | null>;
   provider_type: string;
   request_payload_blob_id: string | null;
-  request_type: string;
+  request_type: ProviderStepsRequestType;
   response_payload_blob_id: string | null;
-  status: Generated<string>;
+  status: Generated<ProviderStepsStatus>;
   step_index: number;
   stop_reason: string | null;
   turn_id: string;
@@ -1042,7 +1330,7 @@ export interface RealtimeEventOutbox {
   last_error: string | null;
   payload: Generated<Json>;
   processing_started_at: Timestamp | null;
-  status: Generated<string>;
+  status: Generated<RealtimeEventOutboxStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
@@ -1056,14 +1344,14 @@ export interface RelayCatalogRevisions {
   metadata: Generated<Json | null>;
   revision_seq: Int8;
   schema_hash: string;
-  status: Generated<string>;
+  status: Generated<RelayCatalogRevisionsStatus>;
   updated_at: Generated<Timestamp | null>;
 }
 
 export interface RelayDevices {
   automation_lifecycle_event_at: Timestamp | null;
   automation_lifecycle_grace_until: Timestamp | null;
-  automation_lifecycle_state: string | null;
+  automation_lifecycle_state: RelayDevicesAutomationLifecycleState | null;
   client_kind: Generated<string>;
   created_at: Generated<Timestamp | null>;
   display_name: string;
@@ -1076,7 +1364,7 @@ export interface RelayDevices {
   platform: string | null;
   public_key: string;
   public_key_fingerprint: string;
-  trust_status: Generated<string>;
+  trust_status: Generated<RelayDevicesTrustStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
@@ -1094,8 +1382,8 @@ export interface RelayDeviceSessions {
   protocol_version: Generated<number>;
   remote_addr: string | null;
   started_at: Generated<Timestamp | null>;
-  status: Generated<string>;
-  transport: Generated<string>;
+  status: Generated<RelayDeviceSessionsStatus>;
+  transport: Generated<RelayDeviceSessionsTransport>;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -1109,10 +1397,10 @@ export interface RelayExposures {
   last_seen_at: Timestamp | null;
   metadata: Generated<Json | null>;
   projected_catalog_item_id: string | null;
-  runtime_status: Generated<string>;
+  runtime_status: Generated<RelayExposuresRuntimeStatus>;
   stable_key: string;
   sync_source_id: string | null;
-  transport: string;
+  transport: RelayExposuresTransport;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -1125,7 +1413,7 @@ export interface RelayOperationDeliveries {
   operation_id: string;
   relay_session_id: string | null;
   sent_at: Timestamp | null;
-  status: Generated<string>;
+  status: Generated<RelayOperationDeliveriesStatus>;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -1144,7 +1432,7 @@ export interface RelayOperations {
   completed_at: Timestamp | null;
   conversation_id: string | null;
   created_at: Generated<Timestamp | null>;
-  delivery_policy: Generated<string>;
+  delivery_policy: Generated<RelayOperationsDeliveryPolicy>;
   device_id: string;
   error_code: string | null;
   error_message: string | null;
@@ -1160,7 +1448,7 @@ export interface RelayOperations {
   requires_replan: Generated<boolean>;
   result_hash: string | null;
   runtime_session_id: string | null;
-  status: Generated<string>;
+  status: Generated<RelayOperationsStatus>;
   task_id: string | null;
   tool_id: string;
   tool_revision_id: string;
@@ -1181,7 +1469,7 @@ export interface RelayPairingSessions {
   requested_by: string | null;
   requested_display_name: string | null;
   server_base_url: string;
-  status: Generated<string>;
+  status: Generated<RelayPairingSessionsStatus>;
   updated_at: Generated<Timestamp | null>;
   verification_uri: string;
   verification_uri_complete: string | null;
@@ -1197,9 +1485,9 @@ export interface RelaySyncSources {
   last_synced_at: Timestamp | null;
   metadata: Generated<Json | null>;
   source_key: string;
-  source_kind: string;
-  status: Generated<string>;
-  sync_mode: Generated<string>;
+  source_kind: RelaySyncSourcesSourceKind;
+  status: Generated<RelaySyncSourcesStatus>;
+  sync_mode: Generated<RelaySyncSourcesSyncMode>;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -1225,7 +1513,7 @@ export interface RelayTools {
   latest_revision_id: string | null;
   metadata: Generated<Json | null>;
   stable_key: string;
-  status: Generated<string>;
+  status: Generated<RelayToolsStatus>;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -1235,11 +1523,11 @@ export interface RuntimeEvents {
   created_at: Generated<Timestamp | null>;
   event_type: string;
   id: Generated<string>;
-  level: Generated<string>;
+  level: Generated<RuntimeEventsLevel>;
   payload: Generated<Json | null>;
   provider_step_id: string | null;
   session_id: string | null;
-  source: string;
+  source: RuntimeEventsSource;
   tool_attempt_id: string | null;
   tool_call_id: string | null;
   turn_id: string | null;
@@ -1272,7 +1560,7 @@ export interface SessionEngineBranches {
   native_state: Generated<Json | null>;
   provider_type: string;
   session_id: string;
-  status: Generated<string>;
+  status: Generated<SessionEngineBranchesStatus>;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -1283,19 +1571,19 @@ export interface SessionInterrupts {
   id: Generated<string>;
   is_consumed: Generated<boolean | null>;
   target_session_id: string;
-  type: string;
+  type: SessionInterruptsType;
 }
 
 export interface Sessions {
   actor_id: string;
-  channel_type: Generated<string>;
+  channel_type: Generated<SessionsChannelType>;
   completed_at: Timestamp | null;
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
   error_message: string | null;
   id: Generated<string>;
   metadata: Generated<Json | null>;
-  status: Generated<string>;
+  status: Generated<SessionsStatus>;
   trigger: Generated<string>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
@@ -1313,11 +1601,11 @@ export interface SessionWakeups {
   session_id: string;
   source_item_id: string | null;
   source_member_id: string | null;
-  source_member_type: string | null;
+  source_member_type: SessionWakeupsSourceMemberType | null;
   source_name: string | null;
   source_session_id: string | null;
-  source_type: string;
-  status: Generated<string>;
+  source_type: SessionWakeupsSourceType;
+  status: Generated<SessionWakeupsStatus>;
   summary: string;
   turn_id: string | null;
 }
@@ -1353,7 +1641,7 @@ export interface SkillSourceRefs {
   skill_id: string;
   source_catalog_item_id: string | null;
   source_catalog_version_id: string | null;
-  sync_mode: Generated<string>;
+  sync_mode: Generated<SkillSourceRefsSyncMode>;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -1382,8 +1670,8 @@ export interface ToolCalls {
   provider_step_id: string | null;
   relay_id: string | null;
   session_id: string | null;
-  status: Generated<string>;
-  tool_kind: string;
+  status: Generated<ToolCallsStatus>;
+  tool_kind: ToolCallsToolKind;
   tool_name: string;
   turn_id: string;
 }
@@ -1393,7 +1681,7 @@ export interface ToolCallTaskOutputChunks {
   id: Generated<string>;
   metadata: Generated<Json>;
   seq: Int8;
-  stream: string;
+  stream: ToolCallTaskOutputChunksStream;
   task_id: string;
   text_value: string;
 }
@@ -1407,9 +1695,9 @@ export interface ToolCallTasks {
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
   deadline_at: Timestamp | null;
-  delivery_policy: string;
-  dispatch_status: Generated<string>;
-  executor_kind: string;
+  delivery_policy: ToolCallTasksDeliveryPolicy;
+  dispatch_status: Generated<ToolCallTasksDispatchStatus>;
+  executor_kind: ToolCallTasksExecutorKind;
   final_error_payload: Generated<Json>;
   final_result_payload: Generated<Json>;
   id: Generated<string>;
@@ -1423,7 +1711,7 @@ export interface ToolCallTasks {
   session_id: string;
   source_tool_call_id: string | null;
   source_tool_name: string;
-  status: Generated<string>;
+  status: Generated<ToolCallTasksStatus>;
   status_message: string | null;
   supports_cancel: Generated<boolean>;
   supports_output_tail: Generated<boolean>;
@@ -1437,7 +1725,7 @@ export interface ToolExecutionAttempts {
   created_at: Generated<Timestamp | null>;
   duration_ms: number | null;
   error_message: string | null;
-  executor_kind: string;
+  executor_kind: ToolExecutionAttemptsExecutorKind;
   id: Generated<string>;
   instance_key: string | null;
   is_error: Generated<boolean | null>;
@@ -1445,7 +1733,7 @@ export interface ToolExecutionAttempts {
   relay_id: string | null;
   request_payload_blob_id: string | null;
   response_payload_blob_id: string | null;
-  status: Generated<string>;
+  status: Generated<ToolExecutionAttemptsStatus>;
   tool_call_id: string;
   transport: string | null;
 }
@@ -1458,7 +1746,7 @@ export interface ToolResultParts {
   mime_type: string | null;
   name: string | null;
   ordinal: number;
-  part_type: string;
+  part_type: ToolResultPartsPartType;
   text_value: string | null;
   tool_result_id: string;
 }
@@ -1477,31 +1765,31 @@ export interface ToolResults {
 export interface TransportAccounts {
   account_key: string;
   config: Generated<Json>;
-  connection_mode: string;
+  connection_mode: TransportAccountsConnectionMode;
   created_at: Generated<Timestamp>;
   credentials: Generated<Json>;
   display_name: string;
   id: Generated<string>;
   inbound_actor_id: string | null;
-  inbound_actor_mode: Generated<string>;
+  inbound_actor_mode: Generated<TransportAccountsInboundActorMode>;
   metadata: Generated<Json>;
-  owner_scope: Generated<string>;
+  owner_scope: Generated<TransportAccountsOwnerScope>;
   owner_user_id: string | null;
-  status: Generated<string>;
-  transport_kind: string;
+  status: Generated<TransportAccountsStatus>;
+  transport_kind: TransportAccountsTransportKind;
   updated_at: Generated<Timestamp>;
   workspace_id: string;
 }
 
 export interface TransportAddresses {
-  address_type: Generated<string>;
+  address_type: Generated<TransportAddressesAddressType>;
   created_at: Generated<Timestamp>;
   display_name: string | null;
   external_id: string;
   id: Generated<string>;
   metadata: Generated<Json>;
   transport_account_id: string;
-  transport_kind: string;
+  transport_kind: TransportAddressesTransportKind;
   updated_at: Generated<Timestamp>;
   user_id: string | null;
   workspace_id: string;
@@ -1510,7 +1798,7 @@ export interface TransportAddresses {
 export interface TransportEndpoints {
   created_at: Generated<Timestamp>;
   display_name: string | null;
-  endpoint_type: string;
+  endpoint_type: TransportEndpointsEndpointType;
   external_id: string;
   id: Generated<string>;
   metadata: Generated<Json>;
@@ -1523,15 +1811,15 @@ export interface TransportMessageLinks {
   conversation_id: string;
   created_at: Generated<Timestamp>;
   delivered_at: Timestamp | null;
-  delivery_status: Generated<string>;
-  direction: string;
+  delivery_status: Generated<TransportMessageLinksDeliveryStatus>;
+  direction: TransportMessageLinksDirection;
   external_message_id: string | null;
   id: Generated<string>;
   item_id: string;
   metadata: Generated<Json>;
   transport_account_id: string;
   transport_endpoint_id: string;
-  transport_kind: string;
+  transport_kind: TransportMessageLinksTransportKind;
   updated_at: Generated<Timestamp>;
   workspace_id: string;
 }
@@ -1544,7 +1832,7 @@ export interface Turns {
   metadata: Generated<Json | null>;
   session_id: string;
   started_at: Generated<Timestamp | null>;
-  status: Generated<string>;
+  status: Generated<TurnsStatus>;
   trigger_item_id: string | null;
   trigger_type: string;
   updated_at: Generated<Timestamp | null>;
@@ -1561,7 +1849,7 @@ export interface Users {
 }
 
 export interface WorkspaceAccessBindings {
-  access_key: string;
+  access_key: WorkspaceAccessBindingsAccessKey;
   assigned_by: string | null;
   created_at: Generated<Timestamp | null>;
   metadata: Generated<Json | null>;
@@ -1576,9 +1864,9 @@ export interface WorkspaceContacts {
   id: Generated<string>;
   metadata: Generated<Json>;
   owner_user_id: string | null;
-  scope: Generated<string>;
+  scope: Generated<WorkspaceContactsScope>;
   target_actor_id: string | null;
-  target_type: string;
+  target_type: WorkspaceContactsTargetType;
   target_user_id: string | null;
   target_workspace_id: string;
   updated_at: Generated<Timestamp | null>;
@@ -1593,7 +1881,7 @@ export interface WorkspaceInvites {
   is_revoked: Generated<boolean | null>;
   max_uses: number | null;
   token: string;
-  trust_level: Generated<string>;
+  trust_level: Generated<WorkspaceInvitesTrustLevel>;
   updated_at: Generated<Timestamp | null>;
   use_count: Generated<number>;
   workspace_id: string;
@@ -1602,7 +1890,7 @@ export interface WorkspaceInvites {
 export interface WorkspaceMembers {
   id: Generated<string>;
   joined_at: Generated<Timestamp | null>;
-  trust_level: Generated<string>;
+  trust_level: Generated<WorkspaceMembersTrustLevel>;
   user_id: string;
   workspace_id: string;
 }

@@ -1,16 +1,19 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  AUTH_CLIENT_TYPES,
+  AUTH_SESSION_PERSISTENCES,
   AUTH_SESSION_COOKIE_NAME,
   AUTH_SESSION_MAX_AGE_SECONDS,
+  AUTH_TRANSPORTS,
   type AuthSessionPersistence,
 } from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { AuthError, createAuthService } from './service.js';
 
-const authClientTypeSchema = z.enum(['web', 'android', 'windows', 'ios', 'cli', 'api']);
-const authTransportSchema = z.enum(['cookie', 'token']);
-const authSessionPersistenceSchema = z.enum(['persistent', 'temporary']);
+const authClientTypeSchema = z.enum(AUTH_CLIENT_TYPES);
+const authTransportSchema = z.enum(AUTH_TRANSPORTS);
+const authSessionPersistenceSchema = z.enum(AUTH_SESSION_PERSISTENCES);
 
 const registerSchema = z.object({
   email: z.string().email('Invalid email address'),
