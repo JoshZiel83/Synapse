@@ -24,4 +24,5 @@ type Config struct {
 	UsageStatistics         bool
 	PerformanceCrux         bool
 	AuthStore               *runtimeauth.Store
+	LogsDir                 string
 }

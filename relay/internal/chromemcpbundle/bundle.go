@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/PekingSpades/Synapse/relay/internal/config"
 	"github.com/PekingSpades/Synapse/relay/internal/nodebundle"
+	"github.com/PekingSpades/Synapse/relay/internal/relaypaths"
 	"github.com/PekingSpades/Synapse/relay/internal/runtimebundle"
 )
 
@@ -60,7 +60,7 @@ func EnsureInstalled() (*Installation, error) {
 	}
 
 	nodeInstallation, nodeErr := nodebundle.EnsureInstalled()
-	userRootDir := filepath.Join(config.DefaultDir(), "runtime", "chrome-devtools-mcp", manifest.AssetVersion)
+	userRootDir := filepath.Join(relaypaths.Current().SharedRuntimeRoot, "chrome-devtools-mcp", manifest.AssetVersion)
 	rootDir, installed := runtimebundle.ResolveRoot(userRootDir, func(dir string) bool {
 		return installationReady(dir, manifest)
 	}, "runtime", "chrome-devtools-mcp", manifest.AssetVersion)

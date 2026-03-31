@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/PekingSpades/Synapse/relay/internal/config"
+	"github.com/PekingSpades/Synapse/relay/internal/relaypaths"
 	"github.com/PekingSpades/Synapse/relay/internal/runtimebundle"
 )
 
@@ -52,7 +52,7 @@ func EnsureInstalled() (*Installation, error) {
 		return nil, fmt.Errorf("bundled shared node runtime targets %s, but current platform is %s", manifest.Platform, currentPlatform)
 	}
 
-	userRootDir := filepath.Join(config.DefaultDir(), "runtime", "node", manifest.AssetVersion)
+	userRootDir := filepath.Join(relaypaths.Current().SharedRuntimeRoot, "node", manifest.AssetVersion)
 	rootDir, installed := runtimebundle.ResolveRoot(userRootDir, func(dir string) bool {
 		return installationReady(dir, manifest)
 	}, "runtime", "node", manifest.AssetVersion)

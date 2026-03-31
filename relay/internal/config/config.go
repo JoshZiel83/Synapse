@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PekingSpades/Synapse/relay/internal/relaypaths"
 	"gopkg.in/yaml.v3"
 )
 
@@ -250,20 +251,16 @@ func Clone(cfg *Config) *Config {
 
 // DefaultDir returns the default config directory (~/.synapse-relay/)
 func DefaultDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".synapse-relay"
-	}
-	return filepath.Join(home, ".synapse-relay")
+	return relaypaths.Current().ProfileRoot
 }
 
 // DefaultPath returns the default config file path (~/.synapse-relay/config.yaml)
 func DefaultPath() string {
-	return filepath.Join(DefaultDir(), "config.yaml")
+	return relaypaths.Current().ConfigPath
 }
 
 func DefaultPrivateKeyPath() string {
-	return filepath.Join(DefaultDir(), "device-key.pem")
+	return relaypaths.Current().PrivateKeyPath
 }
 
 // EnsureDir creates the ~/.synapse-relay/ directory if it doesn't exist
@@ -741,7 +738,7 @@ func applyBuiltinDefaults(server *ServerConfig) {
 			server.Builtin.Chrome.PerformanceCrux = boolPtr(false)
 		}
 		if strings.TrimSpace(server.Builtin.Chrome.UserDataDir) == "" && server.Builtin.Chrome.ConnectionMode == "managed" && (server.Builtin.Chrome.Isolated == nil || !*server.Builtin.Chrome.Isolated) {
-			server.Builtin.Chrome.UserDataDir = filepath.Join(DefaultDir(), "browsers", "chrome", server.Builtin.InstanceID, "profile")
+			server.Builtin.Chrome.UserDataDir = filepath.Join(relaypaths.Current().BrowsersDir, "chrome", server.Builtin.InstanceID, "profile")
 		}
 	case "commandline":
 		if server.Builtin.InstanceID == "" {

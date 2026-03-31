@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/PekingSpades/Synapse/relay/internal/config"
+	"github.com/PekingSpades/Synapse/relay/internal/relaypaths"
 )
 
 const (
@@ -39,7 +39,7 @@ type OperationJournal struct {
 
 func NewOperationJournal(path string) *OperationJournal {
 	if path == "" {
-		path = filepath.Join(config.DefaultDir(), "operation-journal.json")
+		path = relaypaths.Current().OperationJournalPath
 	}
 
 	journal := &OperationJournal{

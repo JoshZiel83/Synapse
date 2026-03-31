@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/PekingSpades/Synapse/relay/internal/config"
+	"github.com/PekingSpades/Synapse/relay/internal/relaypaths"
 )
 
 type DesktopUpdateManifest struct {
@@ -195,11 +196,7 @@ func downloadDesktopUpdate(ctx context.Context, relayCfg config.RelayConfig, man
 		return "", fmt.Errorf("download update failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	if err := config.EnsureDir(); err != nil {
-		return "", err
-	}
-
-	targetDir := filepath.Join(config.DefaultDir(), "updates", manifest.Version)
+	targetDir := filepath.Join(relaypaths.Current().UpdatesRoot, manifest.Version)
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return "", fmt.Errorf("create update directory: %w", err)
 	}

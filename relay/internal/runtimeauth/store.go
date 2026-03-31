@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/PekingSpades/Synapse/relay/internal/config"
+	"github.com/PekingSpades/Synapse/relay/internal/relaypaths"
 )
 
 type Grant struct {
@@ -51,7 +51,7 @@ type Store struct {
 
 func NewStore(path string) *Store {
 	if strings.TrimSpace(path) == "" {
-		path = filepath.Join(config.DefaultDir(), "runtime-authorizations.json")
+		path = relaypaths.Current().RuntimeAuthPath
 	}
 	s := &Store{
 		path:             path,

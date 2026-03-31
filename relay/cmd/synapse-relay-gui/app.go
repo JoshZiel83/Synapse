@@ -18,6 +18,7 @@ import (
 	"github.com/PekingSpades/Synapse/relay/internal/localapi"
 	"github.com/PekingSpades/Synapse/relay/internal/mcp"
 	"github.com/PekingSpades/Synapse/relay/internal/relay"
+	"github.com/PekingSpades/Synapse/relay/internal/relaypaths"
 	"github.com/PekingSpades/Synapse/relay/internal/startup"
 	"github.com/PekingSpades/Synapse/relay/internal/tray"
 	"github.com/adrg/xdg"
@@ -104,6 +105,9 @@ type App struct {
 	diagManager          *desktopdiag.Manager
 	crashRecovery        *CrashRecoveryNotice
 	stopShutdownSignals  func()
+	profilePaths         relaypaths.ResolvedPaths
+	agentMu              sync.Mutex
+	agent                *agentSession
 }
 
 // NewApp creates a new App instance
@@ -111,6 +115,7 @@ func NewApp(diagManager *desktopdiag.Manager, crashReport *desktopdiag.CrashRepo
 	return &App{
 		diagManager:   diagManager,
 		crashRecovery: crashRecoveryNotice(crashReport),
+		profilePaths:  relaypaths.Current(),
 	}
 }
 
@@ -131,13 +136,9 @@ func (a *App) startup(ctx context.Context) {
 	})
 
 	// Load config
-	cfgPath := config.Resolve("")
-	if cfgPath == "" {
-		cfgPath = config.DefaultPath()
-	}
-	a.cfgPath = cfgPath
+	a.cfgPath = a.profilePaths.ConfigPath
 
-	cfg, err := config.LoadOrDefault(cfgPath)
+	cfg, err := config.LoadOrDefault(a.cfgPath)
 	if err != nil {
 		cfg = &config.Config{LogLevel: "info"}
 	}
@@ -172,6 +173,11 @@ func (a *App) startup(ctx context.Context) {
 	}
 	if err := a.initialiseTray(); err != nil {
 		log.Printf("Warning: failed to initialise tray: %v", err)
+	}
+	if err := a.ensureAgent(); err != nil {
+		log.Printf("Warning: failed to start relay agent: %v", err)
+	} else {
+		a.loadLogsFromAgent()
 	}
 
 	// Check for deep link URL in args (synapse-relay://pair?serverBaseUrl=...&code=...)
@@ -212,9 +218,7 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.localAPI != nil {
 		a.localAPI.Stop()
 	}
-	if a.engine != nil && (a.engine.State() == relay.StateRunning || a.engine.State() == relay.StateStarting) {
-		a.engine.Stop()
-	}
+	a.closeAgent()
 	if a.tray != nil {
 		_ = a.tray.Close()
 	}
@@ -227,7 +231,8 @@ func (a *App) beforeClose(ctx context.Context) bool {
 	if a.shouldAllowQuit() {
 		return false
 	}
-	if a.engine == nil || a.engine.State() != relay.StateRunning {
+	status, err := a.fetchRemoteStatus(false)
+	if err != nil || status.State != string(relay.StateRunning) {
 		return false
 	}
 	if a.tray == nil || !a.tray.Available() {
@@ -287,17 +292,18 @@ func (a *App) handleRemotePairing(serverBaseURL, pairingCode, displayName string
 func (a *App) getLocalStatus() localapi.StatusSnapshot {
 	cfg := a.getConfigSnapshot()
 	state := "stopped"
-	if a.engine != nil {
-		state = string(a.engine.State())
+	status, err := a.fetchRemoteStatus(false)
+	if err == nil && strings.TrimSpace(status.State) != "" {
+		state = status.State
 	}
 
 	return localapi.StatusSnapshot{
 		Relay:                 state,
 		Paired:                strings.TrimSpace(cfg.Relay.DeviceID) != "",
 		ServerIdentityPinned:  strings.TrimSpace(cfg.Relay.ServerTLSPublicKeyPin) != "",
-		AuthFailureCode:       a.getAuthFailureCode(),
-		AuthFailureMessage:    a.getAuthFailureMessage(),
-		AuthFailurePermanent:  a.getAuthFailurePermanent(),
+		AuthFailureCode:       status.AuthFailureCode,
+		AuthFailureMessage:    status.AuthFailureMessage,
+		AuthFailurePermanent:  status.AuthFailurePermanent,
 		DeviceID:              cfg.Relay.DeviceID,
 		DisplayName:           cfg.Relay.DisplayName,
 		ServerBaseURL:         cfg.Relay.ServerBaseURL,
@@ -371,6 +377,9 @@ func (a *App) SaveDesktopPreferences(startupCfg config.StartupConfig, notificati
 		return err
 	}
 	if err := a.syncStartupPreference(cfg); err != nil {
+		return err
+	}
+	if _, err := a.applyConfigToAgent(cfg); err != nil {
 		return err
 	}
 
@@ -472,29 +481,23 @@ func (a *App) ClaimPairing(serverBaseURL, pairingCode, displayName string) (stri
 }
 
 func (a *App) claimPairing(serverBaseURL, pairingCode, displayName string) (*cloud.PairingClaimResult, error) {
-	cfg := a.getConfigSnapshot()
-	cfg.Relay.ServerBaseURL = strings.TrimSpace(serverBaseURL)
-	if strings.TrimSpace(displayName) != "" {
-		cfg.Relay.DisplayName = strings.TrimSpace(displayName)
+	result, err := a.claimPairingWithAgent(serverBaseURL, pairingCode, displayName)
+	if err != nil {
+		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	cfg, err := a.agentClient()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := a.agentContext()
 	defer cancel()
-
-	nextRelay, result, err := cloud.ClaimPairing(ctx, cfg.Relay, pairingCode, displayName)
-	if err != nil {
-		return nil, err
+	updatedCfg, err := cfg.GetConfig(ctx)
+	if err == nil {
+		a.setConfig(updatedCfg)
+		a.setConfigHash(config.Fingerprint(updatedCfg))
+		a.emitConfigUpdated(updatedCfg, "Pairing updated.", false)
 	}
-
-	cfg.Relay = *nextRelay
-	a.setConfig(cfg)
-
-	message, autoApplied, err := a.persistConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	a.emitConfigUpdated(cfg, message, autoApplied)
 	go a.prefetchUpdateAfterPairing()
 	return result, nil
 }
@@ -532,78 +535,39 @@ func suggestedFilesystemRootsFromUserDirs(downloadDir, desktopDir string) []conf
 // --- Relay control methods ---
 
 func (a *App) StartRelay() error {
-	if a.engine != nil && a.engine.State() == relay.StateRunning {
+	status, err := a.fetchRemoteStatus(false)
+	if err == nil && status.State == string(relay.StateRunning) {
 		return fmt.Errorf("relay already running")
 	}
 
 	cfg := a.getConfigSnapshot()
 	if importer.ReconcileConfig(cfg, importer.DetectAll()) {
-		if err := a.persistConfigSilently(cfg); err != nil {
+		message, autoApplied, err := a.persistConfig(cfg)
+		if err != nil {
 			return err
 		}
-		a.emitConfigUpdated(cfg, "Follow sync sources updated from disk.", false)
+		if strings.TrimSpace(message) == "" {
+			message = "Follow sync sources updated from disk."
+		}
+		a.emitConfigUpdated(cfg, message, autoApplied)
 	}
 	errs := config.Validate(cfg)
 	if len(errs) > 0 {
 		return fmt.Errorf("config invalid: %s", errs[0])
 	}
+	if err := a.beforeRelayConnect(context.Background()); err != nil {
+		return err
+	}
 
-	a.engine = relay.New(cfg)
-	a.engine.SetClientVersion(Version)
-	a.engine.SetBeforeConnect(a.beforeRelayConnect)
-	a.clearAuthFailure()
-	a.engine.OnEvent(func(evt relay.Event) {
-		switch evt.Type {
-		case relay.EventAuthFailed:
-			a.setAuthFailure(
-				metadataString(evt.Data, "code"),
-				evt.Message,
-				metadataBool(evt.Data, "permanent"),
-			)
-		case relay.EventConnected:
-			a.clearAuthFailure()
-		}
-
-		// Store log
-		a.logsMu.Lock()
-		a.logs = append(a.logs, LogEntry{
-			Time:    evt.Timestamp.Format("15:04:05"),
-			Type:    string(evt.Type),
-			Message: evt.Message,
-			Data:    evt.Data,
-		})
-		if len(a.logs) > 500 {
-			a.logs = a.logs[len(a.logs)-500:]
-		}
-		a.logsMu.Unlock()
-
-		// Emit to frontend
-		wailsRuntime.EventsEmit(a.ctx, "relay:event", map[string]interface{}{
-			"type":    evt.Type,
-			"message": evt.Message,
-			"time":    evt.Timestamp.Format("15:04:05"),
-			"data":    evt.Data,
-		})
-		a.maybeNotifyBackgroundEvent(evt)
-	})
-
-	return a.engine.Start(context.Background())
+	return a.startRelayWithAgent()
 }
 
 func (a *App) StopRelay() error {
-	if a.engine == nil {
-		return fmt.Errorf("relay not running")
-	}
-	return a.engine.Stop()
+	return a.stopRelayWithAgent()
 }
 
 func (a *App) RestartRelay() error {
-	if a.engine != nil && (a.engine.State() == relay.StateRunning || a.engine.State() == relay.StateStarting) {
-		if err := a.engine.Stop(); err != nil {
-			return err
-		}
-	}
-	return a.StartRelay()
+	return a.restartRelayWithAgent()
 }
 
 func (a *App) GetStatus() StatusInfo {
@@ -615,18 +579,9 @@ func (a *App) GetStatusSummary() StatusInfo {
 }
 
 func (a *App) getStatusInfo(includeServers bool) StatusInfo {
-	info := StatusInfo{State: "stopped"}
-	if a.engine != nil {
-		info.State = string(a.engine.State())
-		if err := a.engine.LastError(); err != nil {
-			info.Error = err.Error()
-		}
-		info.AuthFailureCode = a.getAuthFailureCode()
-		info.AuthFailureMessage = a.getAuthFailureMessage()
-		info.AuthFailurePermanent = a.getAuthFailurePermanent()
-		if includeServers {
-			info.Servers = a.engine.ServerInfo()
-		}
+	info, err := a.fetchRemoteStatus(includeServers)
+	if err != nil {
+		return StatusInfo{State: "stopped"}
 	}
 	return info
 }
@@ -722,6 +677,9 @@ func (a *App) DetectSources() []GUISource {
 		if err := config.Save(a.cfgPath, cfg); err != nil {
 			log.Printf("Warning: failed to persist sync source detection metadata: %v", err)
 		} else {
+			if _, err := a.applyConfigToAgent(cfg); err != nil {
+				log.Printf("Warning: failed to sync detected source metadata to relay agent: %v", err)
+			}
 			wailsRuntime.EventsEmit(a.ctx, "config:updated", config.Clone(cfg))
 		}
 	}
@@ -905,13 +863,7 @@ func (a *App) setConfig(next *config.Config) {
 
 	a.cfgMu.Lock()
 	a.cfg = config.Clone(next)
-	engine := a.engine
-	cfgCopy := config.Clone(next)
 	a.cfgMu.Unlock()
-
-	if engine != nil {
-		engine.UpdateConfig(cfgCopy)
-	}
 }
 
 func (a *App) handleConfigWatchEvent(evt config.WatchEvent) {
@@ -1015,25 +967,37 @@ func (a *App) saveCloseBehaviorPreference(behavior string) error {
 }
 
 func (a *App) applyConfigToRunningRelay(cfg *config.Config) (string, bool, bool) {
-	if cfg == nil || a.engine == nil {
-		return "", false, false
-	}
-
-	state := a.engine.State()
-	if state != relay.StateRunning && state != relay.StateStarting {
+	if cfg == nil {
 		return "", false, false
 	}
 
 	cfgCopy := config.Clone(cfg)
+	status, _ := a.fetchRemoteStatus(false)
+	wasRunning := status.State == string(relay.StateRunning) || status.State == string(relay.StateStarting)
 	if errs := config.Validate(cfgCopy); len(errs) > 0 {
-		return fmt.Sprintf("Configuration updated, but relay kept the previous runtime settings: %s", errs[0]), false, true
+		if wasRunning {
+			return fmt.Sprintf("Configuration updated, but relay kept the previous runtime settings: %s", errs[0]), false, true
+		}
+		if _, err := a.applyConfigToAgent(cfgCopy); err != nil {
+			return fmt.Sprintf("Configuration updated locally, but relay agent sync failed: %v", err), false, false
+		}
+		return "", false, false
 	}
 
-	if err := a.RestartRelay(); err != nil {
+	result, err := a.applyConfigToAgent(cfgCopy)
+	if err != nil {
 		return fmt.Sprintf("Configuration updated, but relay restart failed: %v", err), false, true
 	}
 
-	return "Configuration applied and relay restarted.", true, false
+	message := "Configuration applied and relay restarted."
+	autoApplied := true
+	if result != nil {
+		if strings.TrimSpace(result.Message) != "" {
+			message = result.Message
+		}
+		autoApplied = result.AutoApplied
+	}
+	return message, autoApplied, wasRunning && !autoApplied
 }
 
 func (a *App) emitConfigUpdated(cfg *config.Config, message string, autoApplied bool) {
@@ -1289,11 +1253,9 @@ func (a *App) maybeNotifyBackgroundEvent(evt relay.Event) {
 	case relay.EventConnected:
 		a.notifyTray("Synapse Relay", "Relay connected successfully.", false)
 	case relay.EventDisconnected:
-		if a.engine != nil {
-			state := a.engine.State()
-			if state == relay.StateStopping || state == relay.StateStopped {
-				return
-			}
+		status, err := a.fetchRemoteStatus(false)
+		if err == nil && (status.State == string(relay.StateStopping) || status.State == string(relay.StateStopped)) {
+			return
 		}
 		a.notifyTray("Synapse Relay", "Relay disconnected and will retry.", true)
 	case relay.EventAuthFailed, relay.EventError:

@@ -16,11 +16,14 @@ import (
 	"github.com/PekingSpades/Synapse/relay/internal/config"
 	"github.com/PekingSpades/Synapse/relay/internal/importer"
 	"github.com/PekingSpades/Synapse/relay/internal/relay"
+	"github.com/PekingSpades/Synapse/relay/internal/relaypaths"
 )
 
 var Version = "dev"
 
 func main() {
+	relaypaths.SetCurrent(relaypaths.ResolveStandaloneProfile(relaypaths.DefaultHostPaths(relaypaths.HostCLI)))
+
 	configPath := flag.String("c", "", "path to config file")
 	showVersion := flag.Bool("version", false, "show version")
 	importMode := flag.Bool("import", false, "import MCP configs from other tools")

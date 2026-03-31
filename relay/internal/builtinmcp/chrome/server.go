@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/chromemcpbundle"
-	"github.com/PekingSpades/Synapse/relay/internal/config"
 )
 
 type Server struct {
@@ -137,7 +137,11 @@ func (s *Server) startDelegateLocked(ctx context.Context) error {
 
 	logFile := s.cfg.LogFile
 	if logFile == "" {
-		logFile = filepath.Join(config.DefaultDir(), "logs", "chrome-devtools-mcp", s.cfg.InstanceID+".log")
+		baseDir := strings.TrimSpace(s.cfg.LogsDir)
+		if baseDir == "" {
+			baseDir = "."
+		}
+		logFile = filepath.Join(baseDir, s.cfg.InstanceID+".log")
 	}
 	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
 		return fmt.Errorf("create chrome-devtools log directory: %w", err)

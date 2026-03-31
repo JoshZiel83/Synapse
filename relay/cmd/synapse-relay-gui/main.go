@@ -7,6 +7,8 @@ import (
 	"runtime/debug"
 
 	"github.com/PekingSpades/Synapse/relay/internal/desktopdiag"
+	"github.com/PekingSpades/Synapse/relay/internal/relayagentcmd"
+	"github.com/PekingSpades/Synapse/relay/internal/relaypaths"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -19,6 +21,12 @@ var assets embed.FS
 var Version = "dev"
 
 func main() {
+	if args, ok := relayAgentArgs(os.Args[1:]); ok {
+		os.Exit(relayagentcmd.Run(Version, args))
+	}
+
+	relaypaths.SetCurrent(newStandalonePaths())
+
 	logging, err := desktopdiag.SetupLogging()
 	if err != nil {
 		println("Error:", err.Error())
@@ -79,4 +87,17 @@ func main() {
 	if err != nil {
 		log.Printf("Error: %v", err)
 	}
+}
+
+func relayAgentArgs(args []string) ([]string, bool) {
+	for index, arg := range args {
+		if arg != "--relay-agent" {
+			continue
+		}
+		filtered := make([]string, 0, len(args)-1)
+		filtered = append(filtered, args[:index]...)
+		filtered = append(filtered, args[index+1:]...)
+		return filtered, true
+	}
+	return nil, false
 }
