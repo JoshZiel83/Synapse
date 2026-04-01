@@ -198,46 +198,6 @@ jobs:
         run: |
           echo "version=dev-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
 
-      - name: Resolve Windows package variants
-        id: windows_package_variants
-        if: matrix.goos == 'windows'
-        shell: bash
-        env:
-          REQUESTED_WINDOWS_VARIANTS: ${{ vars.RELAY_GUI_WINDOWS_PACKAGE_VARIANTS || 'all' }}
-        run: |
-          raw="$(printf '%s' "${REQUESTED_WINDOWS_VARIANTS:-all}" | tr '[:upper:]' '[:lower:]' | xargs)"
-          if [ -z "$raw" ]; then
-            raw="all"
-          fi
-          case "$raw" in
-            all)
-              want_portable=true
-              want_setup=true
-              ;;
-            portable)
-              want_portable=true
-              want_setup=false
-              ;;
-            setup)
-              want_portable=false
-              want_setup=true
-              ;;
-            *)
-              echo "::error::Unsupported Windows package variant '$raw'. Use all, portable, or setup."
-              exit 1
-              ;;
-          esac
-          if [ "$want_setup" = true ]; then
-            wails_extra_args="-nsis"
-          else
-            wails_extra_args=""
-          fi
-          echo "value=$raw" >> "$GITHUB_OUTPUT"
-          echo "want_portable=$want_portable" >> "$GITHUB_OUTPUT"
-          echo "want_setup=$want_setup" >> "$GITHUB_OUTPUT"
-          echo "wails_extra_args=$wails_extra_args" >> "$GITHUB_OUTPUT"
-          echo "Resolved Windows package variants: $raw"
-
       - name: Show selected platforms
         run: |
           echo "Selected CLI platforms: ${{ needs.prepare-cli-matrix.outputs.selected_platforms }}"
@@ -396,6 +356,46 @@ jobs:
         shell: bash
         run: |
           echo "version=dev-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
+
+      - name: Resolve Windows package variants
+        id: windows_package_variants
+        if: matrix.goos == 'windows'
+        shell: bash
+        env:
+          REQUESTED_WINDOWS_VARIANTS: ${{ vars.RELAY_GUI_WINDOWS_PACKAGE_VARIANTS || 'all' }}
+        run: |
+          raw="$(printf '%s' "${REQUESTED_WINDOWS_VARIANTS:-all}" | tr '[:upper:]' '[:lower:]' | xargs)"
+          if [ -z "$raw" ]; then
+            raw="all"
+          fi
+          case "$raw" in
+            all)
+              want_portable=true
+              want_setup=true
+              ;;
+            portable)
+              want_portable=true
+              want_setup=false
+              ;;
+            setup)
+              want_portable=false
+              want_setup=true
+              ;;
+            *)
+              echo "::error::Unsupported Windows package variant '$raw'. Use all, portable, or setup."
+              exit 1
+              ;;
+          esac
+          if [ "$want_setup" = true ]; then
+            wails_extra_args="-nsis"
+          else
+            wails_extra_args=""
+          fi
+          echo "value=$raw" >> "$GITHUB_OUTPUT"
+          echo "want_portable=$want_portable" >> "$GITHUB_OUTPUT"
+          echo "want_setup=$want_setup" >> "$GITHUB_OUTPUT"
+          echo "wails_extra_args=$wails_extra_args" >> "$GITHUB_OUTPUT"
+          echo "Resolved Windows package variants: $raw"
 
       - name: Show selected platforms
         run: |
