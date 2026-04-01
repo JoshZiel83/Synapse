@@ -88,7 +88,7 @@ type SkillPackageRow = {
   latest_version_id: string | null;
   latest_version_value: string | null;
   latest_version_changelog: string | null;
-  latest_version_created_by: string | null;
+  latest_version_created_by_user_id: string | null;
   latest_version_created_at: string | null;
   spec_canonical_slug: string | null;
   spec_name: string | null;
@@ -117,7 +117,7 @@ type InstalledSkillRow = {
   tags: string[] | null;
   current_version: number;
   is_active: boolean;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   created_at: string;
   updated_at: string;
   current_skill_version_id: string;
@@ -154,7 +154,7 @@ type SkillAccessRow = AccessBindingRow & {
   bind_scope: RuntimeBindingScope;
   conversation_id: string | null;
   actor_id: string | null;
-  user_id: string | null;
+  workspace_member_id: string | null;
 };
 
 type VisibleSkillRow = {
@@ -163,7 +163,7 @@ type VisibleSkillRow = {
   access_bind_scope: RuntimeBindingScope;
   conversation_id: string | null;
   actor_id: string | null;
-  user_id: string | null;
+  workspace_member_id: string | null;
   slug: string;
   name: string;
   current_version: number;
@@ -200,7 +200,7 @@ const MARKETPLACE_SKILL_SELECT = `
     version.id AS latest_version_id,
     version.version AS latest_version_value,
     version.changelog AS latest_version_changelog,
-    version.created_by AS latest_version_created_by,
+    version.created_by_user_id AS latest_version_created_by_user_id,
     version.created_at AS latest_version_created_at,
     spec.canonical_slug AS spec_canonical_slug,
     spec.name AS spec_name,
@@ -231,7 +231,7 @@ const INSTALLED_SKILL_SELECT = `
     skill.tags,
     skill.current_version,
     skill.is_active,
-    skill.created_by,
+    skill.created_by_workspace_member_id,
     skill.created_at,
     skill.updated_at,
     version_row.id AS current_skill_version_id,
@@ -561,10 +561,10 @@ function resolvePublicUseScope(bindScope: RuntimeBindingScope): SkillUseScope {
     case "actor":
     case "actor_conversation":
       return bindScope;
-    case "workspace_user":
+    case "workspace_member":
       throw new SkillError(
         500,
-        "workspace_user is not a valid skill access scope",
+        "workspace_member is not a valid skill access scope",
       );
   }
 }
@@ -578,7 +578,7 @@ function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
     actor_conversation: 0,
     actor: 1,
     conversation_workspace: 2,
-    workspace_user: 99,
+    workspace_member: 99,
     workspace: 3,
   };
 
@@ -608,7 +608,7 @@ function compareVisibleBindingPriority(
     actor_conversation: 0,
     actor: 1,
     conversation_workspace: 2,
-    workspace_user: 99,
+    workspace_member: 99,
     workspace: 3,
   };
 
@@ -654,7 +654,7 @@ function mapMarketplaceVersion(
     version: row.latest_version_value,
     changelog: row.latest_version_changelog || "",
     description: descriptionBlockFromStored(row.spec_description_blocks),
-    createdBy: row.latest_version_created_by || undefined,
+    createdByUserId: row.latest_version_created_by_user_id || undefined,
     createdAt: row.latest_version_created_at || row.item_updated_at,
     attachmentFiles,
   };
@@ -712,7 +712,8 @@ function buildInstalledSkillPayload(
     isCustomized: Boolean(
       row.source_catalog_item_id && row.source_is_customized,
     ),
-    installedBy: row.created_by || undefined,
+    installedByWorkspaceMemberId:
+      row.created_by_workspace_member_id || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     sourceSkillId: row.source_catalog_item_id || undefined,
@@ -763,7 +764,7 @@ async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
 function buildInstalledSkillAuthzMutations(params: {
   skillId: string;
   workspaceId: string;
-  ownerUserId?: string | null;
+  ownerWorkspaceMemberId?: string | null;
   operation: "touch" | "delete";
 }) {
   const mutate = params.operation === "delete" ? deleteRelation : touchRelation;
@@ -777,14 +778,14 @@ function buildInstalledSkillAuthzMutations(params: {
     ),
   ];
 
-  if (params.ownerUserId) {
+  if (params.ownerWorkspaceMemberId) {
     relations.push(
       mutate(
         "installed_skill",
         params.skillId,
         "owner",
-        "user",
-        params.ownerUserId,
+        "workspace_member",
+        params.ownerWorkspaceMemberId,
       ),
     );
   }
@@ -1080,7 +1081,7 @@ function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
     bind_scope: target.bindScope,
     conversation_id: target.conversationId,
     actor_id: target.actorId,
-    user_id: target.userId,
+    workspace_member_id: target.workspaceMemberId,
   };
 }
 
@@ -1099,13 +1100,13 @@ async function loadAccessBindingsBySkillIds(
        target_type,
        relation,
        subject_workspace_id,
-       subject_user_id,
+       subject_workspace_member_id,
        subject_actor_id,
        subject_conversation_id,
        is_primary,
        granted_permissions,
        status,
-       created_by,
+       created_by_workspace_member_id,
        reason,
        metadata,
        created_at,
@@ -1217,8 +1218,8 @@ async function findSkillIdsByBindingFilter(params: {
     conditions.push(`relation = $${values.length}`);
     values.push(target.subjectWorkspaceId);
     conditions.push(`subject_workspace_id IS NOT DISTINCT FROM $${values.length}::uuid`);
-    values.push(target.subjectUserId);
-    conditions.push(`subject_user_id IS NOT DISTINCT FROM $${values.length}::uuid`);
+    values.push(target.subjectWorkspaceMemberId);
+    conditions.push(`subject_workspace_member_id IS NOT DISTINCT FROM $${values.length}::uuid`);
     values.push(target.subjectActorId);
     conditions.push(`subject_actor_id IS NOT DISTINCT FROM $${values.length}::uuid`);
     values.push(target.subjectConversationId);
@@ -1270,7 +1271,7 @@ async function ensureSkillBinding(
     skillId: string;
     workspaceId: string;
     target: SkillScopeTarget;
-    createdBy?: string;
+    createdByWorkspaceMemberId?: string;
     isPrimary?: boolean;
   },
 ) {
@@ -1292,13 +1293,13 @@ async function ensureSkillBinding(
        target_type,
        relation,
        subject_workspace_id,
-       subject_user_id,
+       subject_workspace_member_id,
        subject_actor_id,
        subject_conversation_id,
        is_primary,
        granted_permissions,
        status,
-       created_by,
+       created_by_workspace_member_id,
        reason,
        metadata,
        created_at,
@@ -1309,7 +1310,7 @@ async function ensureSkillBinding(
        AND resource_id = $2
        AND relation = $3
        AND subject_workspace_id IS NOT DISTINCT FROM $4::uuid
-       AND subject_user_id IS NOT DISTINCT FROM $5::uuid
+       AND subject_workspace_member_id IS NOT DISTINCT FROM $5::uuid
        AND subject_actor_id IS NOT DISTINCT FROM $6::uuid
        AND subject_conversation_id IS NOT DISTINCT FROM $7::uuid
        AND status = 'active'
@@ -1320,7 +1321,7 @@ async function ensureSkillBinding(
       input.skillId,
       grantTarget.relation,
       grantTarget.subjectWorkspaceId,
-      grantTarget.subjectUserId,
+      grantTarget.subjectWorkspaceMemberId,
       grantTarget.subjectActorId,
       grantTarget.subjectConversationId,
     ],
@@ -1342,14 +1343,14 @@ async function ensureSkillBinding(
        target_type,
        relation,
        subject_workspace_id,
-       subject_user_id,
+       subject_workspace_member_id,
        subject_actor_id,
        subject_conversation_id,
        is_primary,
        granted_permissions,
        metadata,
        status,
-       created_by
+       created_by_workspace_member_id
      )
      VALUES (
        $1,
@@ -1362,11 +1363,10 @@ async function ensureSkillBinding(
        $7,
        $8,
        $9,
-       $10,
-       $11::text[],
-       $12::jsonb,
+       $10::text[],
+       $11::jsonb,
        'active',
-       $13
+       $12
      )
      RETURNING id`,
     [
@@ -1375,13 +1375,13 @@ async function ensureSkillBinding(
       grantTarget.targetType,
       grantTarget.relation,
       grantTarget.subjectWorkspaceId,
-      grantTarget.subjectUserId,
+      grantTarget.subjectWorkspaceMemberId,
       grantTarget.subjectActorId,
       grantTarget.subjectConversationId,
       input.isPrimary === true,
       ["use"],
       JSON.stringify({}),
-      input.createdBy || null,
+      input.createdByWorkspaceMemberId || null,
     ],
   );
   const bindingId = inserted.rows[0]!.id;
@@ -1671,7 +1671,7 @@ export async function publishMarketplaceSkill(input: {
              status,
              changelog,
              metadata,
-             created_by
+             created_by_user_id
            )
            VALUES ($1, $2, 'active', $3, $4::jsonb, $5)
            RETURNING id`,
@@ -1691,7 +1691,7 @@ export async function publishMarketplaceSkill(input: {
          SET status = 'active',
              changelog = $2,
              metadata = $3::jsonb,
-             created_by = COALESCE(created_by, $4),
+             created_by_user_id = COALESCE(created_by_user_id, $4),
              created_at = created_at
          WHERE id = $1`,
         [
@@ -1757,7 +1757,7 @@ export async function createWorkspaceSkill(input: {
   tags?: string[];
   attachmentFiles?: SkillAttachmentInput[];
   accessTarget: CapabilityAccessTarget;
-  installedBy?: string;
+  installedByWorkspaceMemberId?: string;
 }) {
   const name = input.name.trim();
   if (!name) {
@@ -1793,7 +1793,7 @@ export async function createWorkspaceSkill(input: {
          tags,
          current_version,
          is_active,
-         created_by
+         created_by_workspace_member_id
        )
        VALUES ($1, $2, $3, $4, $5, $6, 1, TRUE, $7)`,
       [
@@ -1803,7 +1803,7 @@ export async function createWorkspaceSkill(input: {
         name,
         iconFileId,
         input.tags || [],
-        input.installedBy || null,
+        input.installedByWorkspaceMemberId || null,
       ],
     );
 
@@ -1815,7 +1815,7 @@ export async function createWorkspaceSkill(input: {
          description_blocks,
          summary_text,
          metadata,
-         created_by
+         created_by_workspace_member_id
        )
        VALUES ($1, 1, $2, $3::jsonb, $4, $5::jsonb, $6)
        RETURNING id`,
@@ -1825,7 +1825,7 @@ export async function createWorkspaceSkill(input: {
         JSON.stringify(descriptionBlocks),
         renderSkillBlocksToText(descriptionBlocks),
         JSON.stringify({}),
-        input.installedBy || null,
+        input.installedByWorkspaceMemberId || null,
       ],
     );
     const skillVersionId = insertedVersion.rows[0]!.id;
@@ -1841,7 +1841,7 @@ export async function createWorkspaceSkill(input: {
       buildInstalledSkillAuthzMutations({
         skillId,
         workspaceId: input.workspaceId,
-        ownerUserId: input.installedBy,
+        ownerWorkspaceMemberId: input.installedByWorkspaceMemberId,
         operation: "touch",
       }),
       {
@@ -1855,7 +1855,7 @@ export async function createWorkspaceSkill(input: {
       skillId,
       workspaceId: input.workspaceId,
       target,
-      createdBy: input.installedBy,
+      createdByWorkspaceMemberId: input.installedByWorkspaceMemberId,
       isPrimary: true,
     });
 
@@ -1962,7 +1962,7 @@ export async function grantInstalledSkillAccess(input: {
   installedSkillId: string;
   accessTarget?: CapabilityAccessTarget;
   permissions?: string[];
-  grantedBy?: string;
+  grantedByWorkspaceMemberId?: string;
   reason?: string;
   metadata?: JsonObject;
 }) {
@@ -1999,7 +1999,7 @@ export async function grantInstalledSkillAccess(input: {
       row.target_type === accessTarget.targetType &&
       row.actor_id === accessTarget.actorId &&
       row.conversation_id === accessTarget.conversationId &&
-      row.user_id === accessTarget.userId,
+      row.workspace_member_id === accessTarget.workspaceMemberId,
   );
   if (existing) {
     return mapSkillAccessRowToGrant(existing);
@@ -2014,14 +2014,14 @@ export async function grantInstalledSkillAccess(input: {
          target_type,
          relation,
          subject_workspace_id,
-         subject_user_id,
+         subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
          is_primary,
          granted_permissions,
          metadata,
          status,
-         created_by,
+         created_by_workspace_member_id,
          reason
        )
        VALUES (
@@ -2035,12 +2035,11 @@ export async function grantInstalledSkillAccess(input: {
          $7,
          $8,
          $9,
-         $10,
-         $11::text[],
-         $12::jsonb,
+         $10::text[],
+         $11::jsonb,
          'active',
-         $13,
-         $14
+         $12,
+         $13
        )
        RETURNING
          id,
@@ -2050,13 +2049,13 @@ export async function grantInstalledSkillAccess(input: {
          target_type,
          relation,
          subject_workspace_id,
-         subject_user_id,
+         subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
          is_primary,
          granted_permissions,
          status,
-         created_by,
+         created_by_workspace_member_id,
          reason,
          metadata,
          created_at,
@@ -2067,13 +2066,13 @@ export async function grantInstalledSkillAccess(input: {
         accessTarget.targetType,
         accessTarget.relation,
         accessTarget.subjectWorkspaceId,
-        accessTarget.subjectUserId,
+        accessTarget.subjectWorkspaceMemberId,
         accessTarget.subjectActorId,
         accessTarget.subjectConversationId,
         false,
         input.permissions || ["use"],
         JSON.stringify(input.metadata || {}),
-        input.grantedBy || null,
+        input.grantedByWorkspaceMemberId || null,
         input.reason || null,
       ],
     );
@@ -2161,7 +2160,7 @@ export async function installMarketplaceSkill(input: {
   workspaceId: string;
   marketSkillId: string;
   accessTarget: CapabilityAccessTarget;
-  installedBy?: string;
+  installedByWorkspaceMemberId?: string;
 }) {
   const target = normalizeScopeTarget({
     useScope: input.accessTarget.type,
@@ -2194,7 +2193,7 @@ export async function installMarketplaceSkill(input: {
           skillId: existingSkillId,
           workspaceId: input.workspaceId,
           target,
-          createdBy: input.installedBy,
+          createdByWorkspaceMemberId: input.installedByWorkspaceMemberId,
           isPrimary: false,
         },
       );
@@ -2222,7 +2221,7 @@ export async function installMarketplaceSkill(input: {
          tags,
          current_version,
          is_active,
-         created_by
+         created_by_workspace_member_id
        )
        VALUES ($1, $2, $3, $4, $5, 1, TRUE, $6)
        RETURNING id`,
@@ -2232,7 +2231,7 @@ export async function installMarketplaceSkill(input: {
         marketplaceSkill.spec_name || marketplaceSkill.item_display_name,
         marketplaceSkill.item_icon_file_id,
         marketplaceSkill.item_tags || [],
-        input.installedBy || null,
+        input.installedByWorkspaceMemberId || null,
       ],
     );
     const skillId = insertedSkill.rows[0]!.id;
@@ -2248,7 +2247,7 @@ export async function installMarketplaceSkill(input: {
          description_blocks,
          summary_text,
          metadata,
-         created_by
+         created_by_workspace_member_id
        )
        VALUES ($1, 1, $2, $3::jsonb, $4, $5::jsonb, $6)
        RETURNING id`,
@@ -2259,7 +2258,7 @@ export async function installMarketplaceSkill(input: {
         marketplaceSkill.spec_summary_text ||
           renderSkillBlocksToText(descriptionBlocks),
         JSON.stringify({}),
-        input.installedBy || null,
+        input.installedByWorkspaceMemberId || null,
       ],
     );
     const skillVersionId = insertedVersion.rows[0]!.id;
@@ -2299,7 +2298,7 @@ export async function installMarketplaceSkill(input: {
       buildInstalledSkillAuthzMutations({
         skillId,
         workspaceId: input.workspaceId,
-        ownerUserId: input.installedBy,
+        ownerWorkspaceMemberId: input.installedByWorkspaceMemberId,
         operation: "touch",
       }),
       {
@@ -2314,7 +2313,7 @@ export async function installMarketplaceSkill(input: {
       skillId,
       workspaceId: input.workspaceId,
       target,
-      createdBy: input.installedBy,
+      createdByWorkspaceMemberId: input.installedByWorkspaceMemberId,
       isPrimary: true,
     });
 
@@ -2403,7 +2402,7 @@ export async function updateInstalledSkill(input: {
            description_blocks,
            summary_text,
            metadata,
-           created_by
+           created_by_workspace_member_id
          )
          VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7)
          RETURNING id`,
@@ -2414,7 +2413,7 @@ export async function updateInstalledSkill(input: {
           JSON.stringify(descriptionBlocks),
           renderSkillBlocksToText(descriptionBlocks),
           JSON.stringify(parseJsonObject(existing.version_metadata)),
-          existing.created_by || null,
+          existing.created_by_workspace_member_id || null,
         ],
       );
 
@@ -2517,7 +2516,7 @@ export async function upgradeInstalledSkill(input: {
          description_blocks,
          summary_text,
          metadata,
-         created_by
+         created_by_workspace_member_id
        )
        VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7)
        RETURNING id`,
@@ -2529,7 +2528,7 @@ export async function upgradeInstalledSkill(input: {
         marketplaceSkill.spec_summary_text ||
           renderSkillBlocksToText(descriptionBlocks),
         JSON.stringify(parseJsonObject(existing.version_metadata)),
-        existing.created_by || null,
+        existing.created_by_workspace_member_id || null,
       ],
     );
 
@@ -2601,13 +2600,13 @@ export async function uninstallInstalledSkill(
          target_type,
          relation,
          subject_workspace_id,
-         subject_user_id,
+         subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
          is_primary,
          granted_permissions,
          status,
-         created_by,
+         created_by_workspace_member_id,
          reason,
          metadata,
          created_at,
@@ -2629,7 +2628,7 @@ export async function uninstallInstalledSkill(
       ...buildInstalledSkillAuthzMutations({
         skillId: installedSkillId,
         workspaceId,
-        ownerUserId: skill.created_by,
+        ownerWorkspaceMemberId: skill.created_by_workspace_member_id,
         operation: "delete",
       }),
       ...bindings.rows
@@ -2675,7 +2674,7 @@ function buildVisibilitySubjects(input: {
   workspaceId: string;
   actorId?: string;
   conversationId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
 }) {
   const subjects: AuthzSubject[] = [
     {
@@ -2688,6 +2687,13 @@ function buildVisibilitySubjects(input: {
     subjects.push({
       type: "actor",
       id: input.actorId,
+    });
+  }
+
+  if (input.workspaceMemberId) {
+    subjects.push({
+      type: "workspace_member",
+      id: input.workspaceMemberId,
     });
   }
 
@@ -2716,7 +2722,7 @@ function accessMatchesVisibilityContext(
   input: {
     actorId?: string;
     conversationId?: string;
-    userId?: string;
+    workspaceMemberId?: string;
   },
 ) {
   switch (binding.bind_scope) {
@@ -2731,8 +2737,8 @@ function accessMatchesVisibilityContext(
         binding.actor_id === input.actorId &&
         binding.conversation_id === input.conversationId
       );
-    case "workspace_user":
-      return false;
+    case "workspace_member":
+      return binding.workspace_member_id === input.workspaceMemberId;
   }
 }
 
@@ -2757,13 +2763,13 @@ function visibleRowToAccessRow(
     target_type: target.targetType,
     relation: target.relation,
     subject_workspace_id: target.subjectWorkspaceId,
-    subject_user_id: target.subjectUserId,
+    subject_workspace_member_id: target.subjectWorkspaceMemberId,
     subject_actor_id: target.subjectActorId,
     subject_conversation_id: target.subjectConversationId,
     is_primary: true,
     granted_permissions: ["use"],
     status: "active",
-    created_by: null,
+    created_by_workspace_member_id: null,
     reason: null,
     metadata: {},
     created_at: row.access_created_at,
@@ -2772,7 +2778,7 @@ function visibleRowToAccessRow(
     bind_scope: row.access_bind_scope,
     actor_id: row.actor_id,
     conversation_id: row.conversation_id,
-    user_id: row.user_id,
+    workspace_member_id: row.workspace_member_id,
   };
 }
 
@@ -2780,7 +2786,7 @@ export async function listVisibleSkills(input: {
   workspaceId: string;
   actorId?: string;
   conversationId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
 }) {
   const subjects = buildVisibilitySubjects(input);
   if (subjects.length === 0) {
@@ -2822,7 +2828,7 @@ export async function listVisibleSkills(input: {
          'workspace'::varchar AS access_bind_scope,
          NULL::uuid AS conversation_id,
          NULL::uuid AS actor_id,
-         NULL::uuid AS user_id,
+         NULL::uuid AS workspace_member_id,
          skill.updated_at AS access_created_at
        FROM installed_skills skill
        JOIN skill_versions version_row
@@ -2853,7 +2859,7 @@ export async function listVisibleSkills(input: {
       access_bind_scope: chosenBinding?.bind_scope || "workspace",
       conversation_id: chosenBinding?.conversation_id || null,
       actor_id: chosenBinding?.actor_id || null,
-      user_id: chosenBinding?.user_id || null,
+      workspace_member_id: chosenBinding?.workspace_member_id || null,
       access_created_at: chosenBinding?.created_at || row.access_created_at,
     };
     const existing = deduped.get(row.slug);
@@ -2878,7 +2884,7 @@ export async function readVisibleSkill(input: {
   workspaceId: string;
   actorId?: string;
   conversationId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
   skillName: string;
   assetPath?: string;
 }) {
@@ -2886,7 +2892,7 @@ export async function readVisibleSkill(input: {
     workspaceId: input.workspaceId,
     actorId: input.actorId,
     conversationId: input.conversationId,
-    userId: input.userId,
+    workspaceMemberId: input.workspaceMemberId,
   });
 
   const normalizedName = input.skillName.trim().toLowerCase();

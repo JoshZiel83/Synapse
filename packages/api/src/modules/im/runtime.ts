@@ -19,7 +19,7 @@ import {
   ensureTransportAddress,
   findConversationTransportBindingByEndpoint,
   findTransportMessageLinkByExternalMessage,
-  getPendingTransportAccountAutoLinkUserId,
+  getPendingTransportAccountAutoLinkWorkspaceMemberId,
   getTransportAccountByKindAndId,
   listActiveTransportAccounts,
   queueConversationTransportProjection,
@@ -462,7 +462,6 @@ async function ensureTransportConversationBinding(params: {
   const created = await createThread({
     workspaceId: params.account.workspaceId,
     kind: "virtual",
-    createdByUserId: ownerId,
     title:
       params.endpointDisplayName ||
       `${params.account.displayName} ${params.endpointType === "group" ? "群聊" : "私聊"}`,
@@ -508,12 +507,12 @@ async function resolveDefaultWakeTarget(
       actorId = binding.account.inboundActorId || null;
     } else if (
       binding.account.inboundActorMode === "follow_owner_chief_actor" &&
-      binding.account.ownerScope === "workspace_user" &&
-      binding.account.ownerUserId
+      binding.account.ownerScope === "workspace_member" &&
+      binding.account.ownerWorkspaceMemberId
     ) {
       const preference = await getWorkspaceChiefActorPreference(
         binding.workspaceId,
-        binding.account.ownerUserId,
+        binding.account.ownerWorkspaceMemberId,
       );
       actorId = preference.chiefActorId || null;
     }
@@ -567,36 +566,36 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
   if (!senderAddress) {
     throw new Error("Failed to create sender transport address");
   }
-  let linkedUserId =
-    typeof senderAddress.user_id === "string" && senderAddress.user_id.trim()
-      ? senderAddress.user_id
+  let linkedWorkspaceMemberId =
+    typeof senderAddress.workspace_member_id === "string" &&
+    senderAddress.workspace_member_id.trim()
+      ? senderAddress.workspace_member_id
       : undefined;
-  if (!linkedUserId) {
-    const pendingAutoLinkUserId = getPendingTransportAccountAutoLinkUserId(
-      params.account,
-    );
-    if (pendingAutoLinkUserId) {
+  if (!linkedWorkspaceMemberId) {
+    const pendingAutoLinkWorkspaceMemberId =
+      getPendingTransportAccountAutoLinkWorkspaceMemberId(params.account);
+    if (pendingAutoLinkWorkspaceMemberId) {
       await consumeTransportAccountAutoLink({
         account: params.account,
         transportAddressId: senderAddress.id,
-        targetUserId: pendingAutoLinkUserId,
+        targetWorkspaceMemberId: pendingAutoLinkWorkspaceMemberId,
         matchedExternalId: params.senderExternalId,
       });
       if (params.account.metadata && typeof params.account.metadata === "object") {
         delete (params.account.metadata as Record<string, unknown>)
-          .pendingAutoLinkUserId;
+          .pendingAutoLinkWorkspaceMemberId;
         delete (params.account.metadata as Record<string, unknown>)
           .pendingAutoLinkMode;
         delete (params.account.metadata as Record<string, unknown>)
           .pendingAutoLinkConfiguredAt;
       }
-      linkedUserId = pendingAutoLinkUserId;
+      linkedWorkspaceMemberId = pendingAutoLinkWorkspaceMemberId;
     }
   }
   const senderMember = await syncTransportAddressConversationMember({
     conversationId: binding.conversationId,
     transportAddressId: senderAddress.id,
-    userId: linkedUserId,
+    workspaceMemberId: linkedWorkspaceMemberId,
     displayName:
       params.senderDisplayName || params.senderExternalId || "External user",
   });
@@ -673,8 +672,10 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
       actorId: wakeTarget.actorId,
       sourceType: "user_message",
       sourceItemId: item.id,
-      sourceMemberType: linkedUserId ? "user" : "external",
-      sourceMemberId: linkedUserId || senderMember.id,
+      sourceMemberType: linkedWorkspaceMemberId
+        ? "workspace_member"
+        : "external",
+      sourceMemberId: linkedWorkspaceMemberId || senderMember.id,
       sourceName: params.senderDisplayName || params.senderExternalId,
       summary: normalizedContent.replace(/\s+/g, " ").trim().slice(0, 96),
       metadata: {

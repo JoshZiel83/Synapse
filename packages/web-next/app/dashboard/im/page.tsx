@@ -50,7 +50,7 @@ import { API_BASE, api } from "@/lib/api"
 
 type TransportAccountOwnerFormState = {
   ownerScope: TransportAccountOwnerScope
-  ownerUserId: string
+  ownerWorkspaceMemberId: string
   inboundActorMode: TransportAccountInboundActorMode
   inboundActorId: string
 }
@@ -70,6 +70,7 @@ type WeixinFormState = TransportAccountOwnerFormState & {
 }
 
 type WorkspaceDirectoryMember = {
+  id: string
   userId: string
   userName?: string
   userEmail?: string
@@ -91,7 +92,7 @@ type SessionDraft = {
 
 type AccountSettingsDraft = {
   ownerScope: TransportAccountOwnerScope
-  ownerUserId: string
+  ownerWorkspaceMemberId: string
   inboundActorMode: TransportAccountInboundActorMode
   inboundActorId: string
 }
@@ -103,7 +104,7 @@ const EMPTY_FEISHU_FORM: FeishuFormState = {
   appId: "",
   appSecret: "",
   ownerScope: "workspace",
-  ownerUserId: "",
+  ownerWorkspaceMemberId: "",
   inboundActorMode: "none",
   inboundActorId: "",
   connectionMode: "webhook",
@@ -115,7 +116,7 @@ const EMPTY_WEIXIN_FORM: WeixinFormState = {
   displayName: "",
   baseUrl: "",
   ownerScope: "workspace",
-  ownerUserId: "",
+  ownerWorkspaceMemberId: "",
   inboundActorMode: "none",
   inboundActorId: "",
 }
@@ -192,19 +193,19 @@ function actorOptionLabel(actor: WorkspaceActorOption) {
 }
 
 function transportAccountOwnerLabel(
-  account: Pick<TransportAccountSummary, "ownerScope" | "ownerUserId">,
+  account: Pick<TransportAccountSummary, "ownerScope" | "ownerWorkspaceMemberId">,
   workspaceMemberById: Map<string, WorkspaceDirectoryMember>,
   workspaceName?: string | null
 ) {
   if (account.ownerScope === "workspace") {
     return workspaceName || "Workspace"
   }
-  const member = account.ownerUserId
-    ? workspaceMemberById.get(account.ownerUserId)
+  const member = account.ownerWorkspaceMemberId
+    ? workspaceMemberById.get(account.ownerWorkspaceMemberId)
     : undefined
   return member
     ? workspaceMemberLabel(member)
-    : account.ownerUserId || "Unknown member"
+    : account.ownerWorkspaceMemberId || "Unknown member"
 }
 
 function transportAccountInboundActorLabel(
@@ -239,19 +240,19 @@ function sessionInboundActorLabel(
 type TransportAccountOwnerFieldsProps = {
   idPrefix: string
   ownerScope: TransportAccountOwnerScope
-  ownerUserId: string
+  ownerWorkspaceMemberId: string
   workspaceMembers: WorkspaceDirectoryMember[]
   onOwnerScopeChange: (value: TransportAccountOwnerScope) => void
-  onOwnerUserIdChange: (value: string) => void
+  onOwnerWorkspaceMemberIdChange: (value: string) => void
 }
 
 function TransportAccountOwnerFields({
   idPrefix,
   ownerScope,
-  ownerUserId,
+  ownerWorkspaceMemberId,
   workspaceMembers,
   onOwnerScopeChange,
-  onOwnerUserIdChange,
+  onOwnerWorkspaceMemberIdChange,
 }: TransportAccountOwnerFieldsProps) {
   return (
     <div className="space-y-4 rounded-2xl border bg-muted/20 p-4">
@@ -269,18 +270,20 @@ function TransportAccountOwnerFields({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="workspace">Workspace</SelectItem>
-              <SelectItem value="workspace_user">Workspace member</SelectItem>
+              <SelectItem value="workspace_member">Workspace member</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
-        {ownerScope === "workspace_user" ? (
+        {ownerScope === "workspace_member" ? (
           <div className="space-y-2">
             <Label htmlFor={`${idPrefix}-owner-user`}>Owner member</Label>
             <Select
-              value={ownerUserId || UNASSIGNED_VALUE}
+              value={ownerWorkspaceMemberId || UNASSIGNED_VALUE}
               onValueChange={(value) =>
-                onOwnerUserIdChange(value === UNASSIGNED_VALUE ? "" : value)
+                onOwnerWorkspaceMemberIdChange(
+                  value === UNASSIGNED_VALUE ? "" : value
+                )
               }
               disabled={workspaceMembers.length === 0}
             >
@@ -292,7 +295,7 @@ function TransportAccountOwnerFields({
                   Select workspace member
                 </SelectItem>
                 {workspaceMembers.map((member) => (
-                  <SelectItem key={member.userId} value={member.userId}>
+                  <SelectItem key={member.id} value={member.id}>
                     {workspaceMemberLabel(member)}
                   </SelectItem>
                 ))}
@@ -348,7 +351,7 @@ function TransportAccountInboundActorFields({
             <SelectContent>
               <SelectItem value="none">No default actor</SelectItem>
               <SelectItem value="specified_actor">Specific actor</SelectItem>
-              {ownerScope === "workspace_user" ? (
+              {ownerScope === "workspace_member" ? (
                 <SelectItem value="follow_owner_chief_actor">
                   Follow owner chief actor
                 </SelectItem>
@@ -502,7 +505,7 @@ export default function ImPage() {
     [workspaceMembers]
   )
   const workspaceMemberById = useMemo(
-    () => new Map(workspaceMembers.map((member) => [member.userId, member])),
+    () => new Map(workspaceMembers.map((member) => [member.id, member])),
     [workspaceMembers]
   )
   const actorOptions = useMemo<WorkspaceActorOption[]>(
@@ -581,7 +584,7 @@ export default function ImPage() {
           account.id,
           {
             ownerScope: account.ownerScope,
-            ownerUserId: account.ownerUserId || "",
+            ownerWorkspaceMemberId: account.ownerWorkspaceMemberId || "",
             inboundActorMode: account.inboundActorMode,
             inboundActorId: account.inboundActorId || "",
           },
@@ -597,7 +600,7 @@ export default function ImPage() {
       Object.fromEntries(
         nextExternalUsers.map((externalUser) => [
           externalUser.id,
-          externalUser.linkedUserId || UNASSIGNED_VALUE,
+          externalUser.linkedWorkspaceMemberId || UNASSIGNED_VALUE,
         ])
       )
     )
@@ -733,7 +736,10 @@ export default function ImPage() {
     if (!workspaceId) return
     setCreatingFeishu(true)
     setError(null)
-    if (feishuForm.ownerScope === "workspace_user" && !feishuForm.ownerUserId) {
+    if (
+      feishuForm.ownerScope === "workspace_member" &&
+      !feishuForm.ownerWorkspaceMemberId
+    ) {
       setError("Select a workspace member owner for the Feishu account.")
       setCreatingFeishu(false)
       return
@@ -752,9 +758,9 @@ export default function ImPage() {
         appId: feishuForm.appId.trim(),
         appSecret: feishuForm.appSecret.trim(),
         ownerScope: feishuForm.ownerScope,
-        ownerUserId:
-          feishuForm.ownerScope === "workspace_user"
-            ? feishuForm.ownerUserId
+        ownerWorkspaceMemberId:
+          feishuForm.ownerScope === "workspace_member"
+            ? feishuForm.ownerWorkspaceMemberId
             : null,
         inboundActorMode: feishuForm.inboundActorMode,
         inboundActorId:
@@ -769,10 +775,12 @@ export default function ImPage() {
         ...EMPTY_FEISHU_FORM,
         connectionMode: current.connectionMode,
         ownerScope: current.ownerScope,
-        ownerUserId:
-          current.ownerScope === "workspace_user" ? current.ownerUserId : "",
+        ownerWorkspaceMemberId:
+          current.ownerScope === "workspace_member"
+            ? current.ownerWorkspaceMemberId
+            : "",
         inboundActorMode:
-          current.ownerScope === "workspace_user"
+          current.ownerScope === "workspace_member"
             ? current.inboundActorMode
             : current.inboundActorMode === "follow_owner_chief_actor"
               ? "none"
@@ -806,7 +814,10 @@ export default function ImPage() {
     if (!workspaceId) return
     setCreatingWeixin(true)
     setError(null)
-    if (weixinForm.ownerScope === "workspace_user" && !weixinForm.ownerUserId) {
+    if (
+      weixinForm.ownerScope === "workspace_member" &&
+      !weixinForm.ownerWorkspaceMemberId
+    ) {
       setError("Select a workspace member owner for the WeChat account.")
       setCreatingWeixin(false)
       return
@@ -824,9 +835,9 @@ export default function ImPage() {
         displayName: weixinForm.displayName.trim() || undefined,
         baseUrl: weixinForm.baseUrl.trim() || undefined,
         ownerScope: weixinForm.ownerScope,
-        ownerUserId:
-          weixinForm.ownerScope === "workspace_user"
-            ? weixinForm.ownerUserId
+        ownerWorkspaceMemberId:
+          weixinForm.ownerScope === "workspace_member"
+            ? weixinForm.ownerWorkspaceMemberId
             : null,
         inboundActorMode: weixinForm.inboundActorMode,
         inboundActorId:
@@ -905,7 +916,10 @@ export default function ImPage() {
     if (!workspaceId) return
     const draft = accountSettingsDrafts[account.id]
     if (!draft) return
-    if (draft.ownerScope === "workspace_user" && !draft.ownerUserId) {
+    if (
+      draft.ownerScope === "workspace_member" &&
+      !draft.ownerWorkspaceMemberId
+    ) {
       setError("Select a workspace member owner before saving the account.")
       return
     }
@@ -919,8 +933,10 @@ export default function ImPage() {
     try {
       const result = await api.updateTransportAccount(workspaceId, account.id, {
         ownerScope: draft.ownerScope,
-        ownerUserId:
-          draft.ownerScope === "workspace_user" ? draft.ownerUserId : null,
+        ownerWorkspaceMemberId:
+          draft.ownerScope === "workspace_member"
+            ? draft.ownerWorkspaceMemberId
+            : null,
         inboundActorMode: draft.inboundActorMode,
         inboundActorId:
           draft.inboundActorMode === "specified_actor"
@@ -938,7 +954,8 @@ export default function ImPage() {
           ...current,
           [account.id]: {
             ownerScope: updatedAccount.ownerScope,
-            ownerUserId: updatedAccount.ownerUserId || "",
+            ownerWorkspaceMemberId:
+              updatedAccount.ownerWorkspaceMemberId || "",
             inboundActorMode: updatedAccount.inboundActorMode,
             inboundActorId: updatedAccount.inboundActorId || "",
           },
@@ -991,15 +1008,18 @@ export default function ImPage() {
     }
   }
 
-  async function handleLinkExternalUser(addressId: string, userId: string) {
+  async function handleLinkExternalUser(
+    addressId: string,
+    workspaceMemberId: string
+  ) {
     if (!workspaceId) return
     setLinkingAddressId(addressId)
     setError(null)
     try {
-      const result = await api.setTransportExternalUserWorkspaceUser(
+      const result = await api.setTransportExternalUserWorkspaceMember(
         workspaceId,
         addressId,
-        userId === UNASSIGNED_VALUE ? null : userId
+        workspaceMemberId === UNASSIGNED_VALUE ? null : workspaceMemberId
       )
       const updatedExternalUser = result?.externalUser
       if (updatedExternalUser) {
@@ -1010,7 +1030,8 @@ export default function ImPage() {
         )
         setExternalUserDrafts((current) => ({
           ...current,
-          [addressId]: updatedExternalUser.linkedUserId || UNASSIGNED_VALUE,
+          [addressId]:
+            updatedExternalUser.linkedWorkspaceMemberId || UNASSIGNED_VALUE,
         }))
       }
       toast.success("External user mapping updated")
@@ -1207,13 +1228,16 @@ export default function ImPage() {
             <TransportAccountOwnerFields
               idPrefix="feishu"
               ownerScope={feishuForm.ownerScope}
-              ownerUserId={feishuForm.ownerUserId}
+              ownerWorkspaceMemberId={feishuForm.ownerWorkspaceMemberId}
               workspaceMembers={sortedWorkspaceMembers}
               onOwnerScopeChange={(value) =>
                 setFeishuForm((current) => ({
                   ...current,
                   ownerScope: value,
-                  ownerUserId: value === "workspace" ? "" : current.ownerUserId,
+                  ownerWorkspaceMemberId:
+                    value === "workspace"
+                      ? ""
+                      : current.ownerWorkspaceMemberId,
                   inboundActorMode:
                     value === "workspace" &&
                     current.inboundActorMode === "follow_owner_chief_actor"
@@ -1221,10 +1245,10 @@ export default function ImPage() {
                       : current.inboundActorMode,
                 }))
               }
-              onOwnerUserIdChange={(value) =>
+              onOwnerWorkspaceMemberIdChange={(value) =>
                 setFeishuForm((current) => ({
                   ...current,
-                  ownerUserId: value,
+                  ownerWorkspaceMemberId: value,
                 }))
               }
             />
@@ -1307,13 +1331,16 @@ export default function ImPage() {
             <TransportAccountOwnerFields
               idPrefix="weixin"
               ownerScope={weixinForm.ownerScope}
-              ownerUserId={weixinForm.ownerUserId}
+              ownerWorkspaceMemberId={weixinForm.ownerWorkspaceMemberId}
               workspaceMembers={sortedWorkspaceMembers}
               onOwnerScopeChange={(value) =>
                 setWeixinForm((current) => ({
                   ...current,
                   ownerScope: value,
-                  ownerUserId: value === "workspace" ? "" : current.ownerUserId,
+                  ownerWorkspaceMemberId:
+                    value === "workspace"
+                      ? ""
+                      : current.ownerWorkspaceMemberId,
                   inboundActorMode:
                     value === "workspace" &&
                     current.inboundActorMode === "follow_owner_chief_actor"
@@ -1321,10 +1348,10 @@ export default function ImPage() {
                       : current.inboundActorMode,
                 }))
               }
-              onOwnerUserIdChange={(value) =>
+              onOwnerWorkspaceMemberIdChange={(value) =>
                 setWeixinForm((current) => ({
                   ...current,
-                  ownerUserId: value,
+                  ownerWorkspaceMemberId: value,
                 }))
               }
             />
@@ -1436,7 +1463,7 @@ export default function ImPage() {
                   : ""
               const draft = accountSettingsDrafts[account.id] || {
                 ownerScope: account.ownerScope,
-                ownerUserId: account.ownerUserId || "",
+                ownerWorkspaceMemberId: account.ownerWorkspaceMemberId || "",
                 inboundActorMode: account.inboundActorMode,
                 inboundActorId: account.inboundActorId || "",
               }
@@ -1448,7 +1475,8 @@ export default function ImPage() {
               const draftOwnerLabel = transportAccountOwnerLabel(
                 {
                   ownerScope: draft.ownerScope,
-                  ownerUserId: draft.ownerUserId || undefined,
+                  ownerWorkspaceMemberId:
+                    draft.ownerWorkspaceMemberId || undefined,
                 },
                 workspaceMemberById,
                 workspaceName
@@ -1539,10 +1567,10 @@ export default function ImPage() {
                               [account.id]: {
                                 ...draft,
                                 ownerScope: value as TransportAccountOwnerScope,
-                                ownerUserId:
+                                ownerWorkspaceMemberId:
                                   value === "workspace"
                                     ? ""
-                                    : draft.ownerUserId,
+                                    : draft.ownerWorkspaceMemberId,
                                 inboundActorMode:
                                   value === "workspace" &&
                                   draft.inboundActorMode ===
@@ -1559,20 +1587,22 @@ export default function ImPage() {
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="workspace">Workspace</SelectItem>
-                            <SelectItem value="workspace_user">
+                            <SelectItem value="workspace_member">
                               Workspace member
                             </SelectItem>
                           </SelectContent>
                         </Select>
-                        {draft.ownerScope === "workspace_user" ? (
+                        {draft.ownerScope === "workspace_member" ? (
                           <Select
-                            value={draft.ownerUserId || UNASSIGNED_VALUE}
+                            value={
+                              draft.ownerWorkspaceMemberId || UNASSIGNED_VALUE
+                            }
                             onValueChange={(value) =>
                               setAccountSettingsDrafts((current) => ({
                                 ...current,
                                 [account.id]: {
                                   ...draft,
-                                  ownerUserId:
+                                  ownerWorkspaceMemberId:
                                     value === UNASSIGNED_VALUE ? "" : value,
                                 },
                               }))
@@ -1590,10 +1620,7 @@ export default function ImPage() {
                                 Select workspace member
                               </SelectItem>
                               {sortedWorkspaceMembers.map((member) => (
-                                <SelectItem
-                                  key={member.userId}
-                                  value={member.userId}
-                                >
+                                <SelectItem key={member.id} value={member.id}>
                                   {workspaceMemberLabel(member)}
                                 </SelectItem>
                               ))}
@@ -1944,16 +1971,16 @@ export default function ImPage() {
                     <SelectContent>
                       <SelectItem value={UNASSIGNED_VALUE}>Unlinked</SelectItem>
                       {sortedWorkspaceMembers.map((member) => (
-                        <SelectItem key={member.userId} value={member.userId}>
+                        <SelectItem key={member.id} value={member.id}>
                           {workspaceMemberLabel(member)}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                   <div className="text-xs text-muted-foreground">
-                    {externalUser.linkedUserName
-                      ? `Currently linked to ${externalUser.linkedUserName}`
-                      : "No workspace user linked"}
+                    {externalUser.linkedWorkspaceMemberName
+                      ? `Currently linked to ${externalUser.linkedWorkspaceMemberName}`
+                      : "No workspace member linked"}
                   </div>
                 </div>
               </div>

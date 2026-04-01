@@ -12,13 +12,13 @@ import {
 } from './member-utils';
 
 function summarizeMemberCounts(conversation: ConversationSummary) {
-  const userCount = conversation.members.filter((member) => member.type === 'user').length;
+  const workspaceMemberCount = conversation.members.filter((member) => member.type === 'workspace_member').length;
   const actorCount = conversation.members.filter((member) => member.type === 'actor').length;
   const externalCount = conversation.members.filter((member) => member.type === 'external').length;
-  const userLabel = `${userCount} user${userCount === 1 ? '' : 's'}`;
+  const memberLabel = `${workspaceMemberCount} member${workspaceMemberCount === 1 ? '' : 's'}`;
   const actorLabel = `${actorCount} actor${actorCount === 1 ? '' : 's'}`;
-  if (externalCount === 0) return `${userLabel} · ${actorLabel}`;
-  return `${userLabel} · ${actorLabel} · ${externalCount} external${externalCount === 1 ? '' : 's'}`;
+  if (externalCount === 0) return `${memberLabel} · ${actorLabel}`;
+  return `${memberLabel} · ${actorLabel} · ${externalCount} external${externalCount === 1 ? '' : 's'}`;
 }
 
 function orderMembers(members: ConversationMember[]) {

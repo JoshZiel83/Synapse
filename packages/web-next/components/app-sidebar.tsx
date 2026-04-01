@@ -89,7 +89,7 @@ const accessItems = [
 const emptyWorkspaceNavigation = {
   canViewWorkspace: false,
   canAccessWorkspaceModels: false,
-  canAccessWorkspaceUserModels: false,
+  canAccessWorkspaceMemberModels: false,
   canAccessWorkspaceAccess: false,
 }
 
@@ -374,7 +374,7 @@ export function AppSidebar({
   const visibleModelItems = React.useMemo(() => {
     const items = []
 
-    if (workspaceNavigation.canAccessWorkspaceModels || workspaceNavigation.canAccessWorkspaceUserModels || platformNavigation.canAccessPlatformModels || user) {
+    if (workspaceNavigation.canAccessWorkspaceModels || workspaceNavigation.canAccessWorkspaceMemberModels || platformNavigation.canAccessPlatformModels || user) {
       items.push(modelItems[0])
     }
     if (workspaceNavigation.canAccessWorkspaceModels) {
@@ -382,7 +382,7 @@ export function AppSidebar({
     }
 
     return items
-  }, [platformNavigation.canAccessPlatformModels, user, workspaceNavigation.canAccessWorkspaceModels, workspaceNavigation.canAccessWorkspaceUserModels])
+  }, [platformNavigation.canAccessPlatformModels, user, workspaceNavigation.canAccessWorkspaceModels, workspaceNavigation.canAccessWorkspaceMemberModels])
 
   const visibleAccessItems = React.useMemo(() => {
     if (!workspaceNavigation.canAccessWorkspaceAccess && !platformNavigation.canAccessPlatformAccess) {

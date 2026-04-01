@@ -130,9 +130,9 @@ export const attachmentTypeOptionDefs: ScopeOptionDef<AttachmentTargetType>[] = 
     ring: 'ring-emerald-500/20',
   },
   {
-    value: 'workspace_user',
-    label: 'Workspace User Owner',
-    shortLabel: 'Workspace User',
+    value: 'workspace_member',
+    label: 'Workspace Member Owner',
+    shortLabel: 'Workspace Member',
     hint: 'Belongs to one workspace user',
     icon: UserRound,
     tone: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 dark:border-fuchsia-500/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-200',
@@ -178,9 +178,9 @@ const accessTypeOptionDefs: ScopeOptionDef<AccessTargetType>[] = [
     ring: 'ring-amber-500/20',
   },
   {
-    value: 'workspace_user',
-    label: 'Workspace User Access',
-    shortLabel: 'Workspace User',
+    value: 'workspace_member',
+    label: 'Workspace Member Access',
+    shortLabel: 'Workspace Member',
     hint: 'Only one workspace user can use this installation personally',
     icon: UserRound,
     tone: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 dark:border-fuchsia-500/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-200',
@@ -240,7 +240,7 @@ const lifecycleOptionMap: Record<AttachmentTargetType, ReuseScope[]> = {
   workspace: ['turn', 'session', 'conversation', 'actor', 'workspace'],
   conversation: ['turn', 'session', 'conversation', 'actor', 'workspace'],
   actor: ['turn', 'session', 'conversation', 'actor', 'workspace'],
-  workspace_user: ['turn', 'session', 'conversation', 'actor', 'workspace'],
+  workspace_member: ['turn', 'session', 'conversation', 'actor', 'workspace'],
 };
 
 export function getAllowedReuseScopes(attachmentType: AttachmentTargetType) {
@@ -713,7 +713,7 @@ export function AccessAttachmentTypeStep({
           description: 'The installation belongs to the workspace and is managed at the workspace level.',
           fields: null,
         };
-      case 'workspace_user':
+      case 'workspace_member':
         return {
           title: 'Workspace user owner',
           description: 'The installation belongs to one workspace user and is kept personal to that identity.',
@@ -876,7 +876,7 @@ export function AccessGrantScopeStep({
         return index === 0;
       case 'actor':
         return true;
-      case 'workspace_user':
+      case 'workspace_member':
         return conversation.includesCurrentUser && conversation.singleRealUser;
       default:
         return false;
@@ -893,7 +893,7 @@ export function AccessGrantScopeStep({
         return actorName === selectedActorName;
       case 'actor_conversation':
         return index === 0 && actorName === selectedActorName;
-      case 'workspace_user':
+      case 'workspace_member':
         return conversation.includesCurrentUser && conversation.singleRealUser;
       default:
         return false;
@@ -957,7 +957,7 @@ export function AccessGrantScopeStep({
         </div>
       )}
 
-      {value === 'workspace_user' && (
+      {value === 'workspace_member' && (
         <div className="space-y-2">
           <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Authorized user</Label>
           <div className="flex flex-wrap gap-2">

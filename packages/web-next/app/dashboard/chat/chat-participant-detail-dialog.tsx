@@ -86,12 +86,14 @@ function ParticipantDetailBody({
                   {actorRole}
                 </Badge>
               ) : null}
-              {member.type === "external" && member.linkedUserName ? (
+              {member.type === "external" &&
+              member.linkedWorkspaceMemberName ? (
                 <Badge variant="secondary" className="rounded-full">
-                  Linked to {member.linkedUserName}
+                  Linked to {member.linkedWorkspaceMemberName}
                 </Badge>
               ) : null}
-              {member.type === "external" && !member.linkedUserName ? (
+              {member.type === "external" &&
+              !member.linkedWorkspaceMemberName ? (
                 <Badge variant="outline" className="rounded-full">
                   No workspace link
                 </Badge>
@@ -112,13 +114,13 @@ function ParticipantDetailBody({
               {member.type === "actor" ? (
                 <DetailItem label="Role" value={actorRole} />
               ) : null}
-              {member.type === "user" ? (
+              {member.type === "workspace_member" ? (
                 <DetailItem
                   label="Workspace identity"
                   value={
                     member.transportKind
-                      ? `User account in this workspace, reachable via ${transportLabel || "transport"}`
-                      : "User account in this workspace"
+                      ? `Workspace member reachable via ${transportLabel || "transport"}`
+                      : "Workspace member in this workspace"
                   }
                 />
               ) : null}
@@ -146,25 +148,26 @@ function ParticipantDetailBody({
               <div className="mb-4 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground/80">
                 Workspace link
               </div>
-              {member.linkedUserId && member.linkedUserName ? (
+              {member.linkedWorkspaceMemberId &&
+              member.linkedWorkspaceMemberName ? (
                 <button
                   type="button"
                   onClick={onOpenContact}
                   className="flex w-full items-center gap-3 rounded-2xl border border-border/70 bg-muted/20 px-3 py-3 text-left transition-colors hover:bg-muted/35"
                 >
                   <ChatAvatar
-                    name={member.linkedUserName}
+                    name={member.linkedWorkspaceMemberName}
                     avatarUrl={member.linkedUserAvatarUrl}
-                    entityType="user"
+                    entityType="workspace_member"
                     size="default"
                     className="shrink-0"
                   />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium text-foreground">
-                      {member.linkedUserName}
+                      {member.linkedWorkspaceMemberName}
                     </div>
                     <div className="truncate text-xs text-muted-foreground">
-                      Open linked workspace user
+                      Open linked workspace member
                     </div>
                   </div>
                   <ArrowUpRight className="size-4 shrink-0 text-muted-foreground" />

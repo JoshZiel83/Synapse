@@ -23,7 +23,7 @@ import { createEmptyTextContentBlock } from "@/components/actor-editor-model"
 export type Memory = SharedMemory & {
   actorName?: string
   conversationTitle?: string
-  userName?: string
+  workspaceMemberName?: string
 }
 
 export type { MemoryScope }
@@ -51,7 +51,7 @@ export type MemoryFolderNode = {
     ownerScope: MemoryScope
     ownerActorId?: string
     ownerConversationId?: string
-    ownerUserId?: string
+    ownerWorkspaceMemberId?: string
   }
 }
 
@@ -63,7 +63,7 @@ export type EditorState = {
   ownerScope: MemoryScope
   ownerActorId: string
   ownerConversationId: string
-  ownerUserId: string
+  ownerWorkspaceMemberId: string
   category: MemoryCategory
   status: MemoryStatus
   stability: MemoryStability
@@ -128,14 +128,15 @@ export function hasMeaningfulBlocks(blocks: CanonicalContentBlock[]) {
 
 export function createDraftState(
   preset: MemoryFolderPreset,
-  currentUserId: string
+  currentWorkspaceMemberId: string
 ): EditorState {
   return {
     mode: "create",
     ownerScope: preset.ownerScope,
     ownerActorId: preset.ownerActorId || "",
     ownerConversationId: preset.ownerConversationId || "",
-    ownerUserId: preset.ownerUserId || currentUserId,
+    ownerWorkspaceMemberId:
+      preset.ownerWorkspaceMemberId || currentWorkspaceMemberId,
     category: "fact",
     status: "established",
     stability: "durable",
@@ -154,7 +155,7 @@ export function createEditorStateFromMemory(memory: Memory): EditorState {
     ownerScope: memory.ownerScope,
     ownerActorId: memory.ownerActorId || "",
     ownerConversationId: memory.ownerConversationId || "",
-    ownerUserId: memory.ownerUserId || "",
+    ownerWorkspaceMemberId: memory.ownerWorkspaceMemberId || "",
     category: memory.category,
     status: memory.status,
     stability: memory.stability,
@@ -192,9 +193,9 @@ export function buildMemoryPayload(editor: EditorState) {
       editor.ownerScope === "actor_conversation"
         ? editor.ownerConversationId || undefined
         : undefined,
-    ownerUserId:
-      editor.ownerScope === "user"
-        ? editor.ownerUserId || undefined
+    ownerWorkspaceMemberId:
+      editor.ownerScope === "workspace_member"
+        ? editor.ownerWorkspaceMemberId || undefined
         : undefined,
     category: editor.category,
     status: editor.status,
@@ -229,7 +230,7 @@ export function describeFolderVisibility(
   switch (folder.createPreset.ownerScope) {
     case "workspace":
       return "Visible across the workspace."
-    case "user":
+    case "workspace_member":
       return "Visible only in your personal memory path."
     case "conversation":
       return "Visible to participants in the selected conversation."
@@ -254,45 +255,47 @@ export function buildMemoryFolderPathLabel(
 
 export function buildMemoryOwnerStateFromPreset(
   preset: MemoryFolderPreset,
-  currentUserId: string
+  currentWorkspaceMemberId: string
 ) {
   return {
     ownerScope: preset.ownerScope,
     ownerActorId: preset.ownerActorId || "",
     ownerConversationId: preset.ownerConversationId || "",
-    ownerUserId:
-      preset.ownerScope === "user" ? preset.ownerUserId || currentUserId : "",
+    ownerWorkspaceMemberId:
+      preset.ownerScope === "workspace_member"
+        ? preset.ownerWorkspaceMemberId || currentWorkspaceMemberId
+        : "",
   }
 }
 
 export function buildMemoryOwnerPayloadFromPreset(
   preset: MemoryFolderPreset,
-  currentUserId: string
+  currentWorkspaceMemberId: string
 ) {
   return {
     ownerScope: preset.ownerScope,
     ownerActorId: preset.ownerActorId || undefined,
     ownerConversationId: preset.ownerConversationId || undefined,
-    ownerUserId:
-      preset.ownerScope === "user"
-        ? preset.ownerUserId || currentUserId
+    ownerWorkspaceMemberId:
+      preset.ownerScope === "workspace_member"
+        ? preset.ownerWorkspaceMemberId || currentWorkspaceMemberId
         : undefined,
   }
 }
 
 export function getFolderIdForOwner(input: {
   workspaceId: string
-  currentUserId: string
+  currentWorkspaceMemberId: string
   ownerScope: MemoryScope
   ownerActorId?: string
   ownerConversationId?: string
-  ownerUserId?: string
+  ownerWorkspaceMemberId?: string
 }) {
   switch (input.ownerScope) {
     case "workspace":
       return `folder:workspace:${input.workspaceId}`
-    case "user":
-      return `folder:user:${input.ownerUserId || input.currentUserId}`
+    case "workspace_member":
+      return `folder:workspace_member:${input.ownerWorkspaceMemberId || input.currentWorkspaceMemberId}`
     case "conversation":
       return input.ownerConversationId
         ? `folder:workspace:${input.workspaceId}:conversation:${input.ownerConversationId}`
@@ -313,8 +316,8 @@ export function getFolderIdForOwner(input: {
 export function buildMemoryFolders(params: {
   workspaceId: string
   workspaceName: string
-  currentUserId: string
-  currentUserLabel: string
+  currentWorkspaceMemberId: string
+  currentWorkspaceMemberLabel: string
   memories: Memory[]
   actors: ActorOption[]
   groups: GroupOption[]
@@ -322,8 +325,8 @@ export function buildMemoryFolders(params: {
   const {
     workspaceId,
     workspaceName,
-    currentUserId,
-    currentUserLabel,
+    currentWorkspaceMemberId,
+    currentWorkspaceMemberLabel,
     memories,
     actors,
     groups,
@@ -338,20 +341,21 @@ export function buildMemoryFolders(params: {
       directMemoryIds: [],
     },
     {
-      id: `folder:user:${currentUserId}`,
+      id: `folder:workspace_member:${currentWorkspaceMemberId}`,
       parentId: "root",
-      label: currentUserLabel,
+      label: currentWorkspaceMemberLabel,
       description: "Visible only in your personal memory path.",
       icon: UserRound,
       directMemoryIds: memories
         .filter(
           (memory) =>
-            memory.ownerScope === "user" && memory.ownerUserId === currentUserId
+            memory.ownerScope === "workspace_member" &&
+            memory.ownerWorkspaceMemberId === currentWorkspaceMemberId
         )
         .map((memory) => memory.id),
       createPreset: {
-        ownerScope: "user",
-        ownerUserId: currentUserId,
+        ownerScope: "workspace_member",
+        ownerWorkspaceMemberId: currentWorkspaceMemberId,
       },
     },
     {
@@ -371,6 +375,7 @@ export function buildMemoryFolders(params: {
 
   const actorMap = new Map(actors.map((actor) => [actor.id, actor]))
   const groupMap = new Map(groups.map((group) => [group.id, group]))
+  const externalWorkspaceMemberFolderIds = new Set<string>()
 
   for (const group of sortByName(
     groups.map((item) => ({ ...item, label: item.title }))
@@ -462,26 +467,31 @@ export function buildMemoryFolders(params: {
 
   for (const memory of memories) {
     if (
-      memory.ownerScope === "user" &&
-      memory.ownerUserId &&
-      memory.ownerUserId !== currentUserId
+      memory.ownerScope === "workspace_member" &&
+      memory.ownerWorkspaceMemberId &&
+      memory.ownerWorkspaceMemberId !== currentWorkspaceMemberId
     ) {
+      const folderId = `folder:workspace_member:${memory.ownerWorkspaceMemberId}`
+      if (externalWorkspaceMemberFolderIds.has(folderId)) {
+        continue
+      }
+      externalWorkspaceMemberFolderIds.add(folderId)
       folders.push({
-        id: `folder:user:${memory.ownerUserId}`,
+        id: folderId,
         parentId: "root",
-        label: memory.userName || "Unknown user",
+        label: memory.workspaceMemberName || "Unknown member",
         description: "Visible only in this personal memory path.",
         icon: UserRound,
         directMemoryIds: memories
           .filter(
             (item) =>
-              item.ownerScope === "user" &&
-              item.ownerUserId === memory.ownerUserId
+              item.ownerScope === "workspace_member" &&
+              item.ownerWorkspaceMemberId === memory.ownerWorkspaceMemberId
           )
           .map((item) => item.id),
         createPreset: {
-          ownerScope: "user",
-          ownerUserId: memory.ownerUserId,
+          ownerScope: "workspace_member",
+          ownerWorkspaceMemberId: memory.ownerWorkspaceMemberId,
         },
       })
     }

@@ -9,8 +9,8 @@ export function getConversationMemberSubtitle(member: ConversationMember) {
     return member.title || member.role || "Actor"
   }
   if (member.type === "external") {
-    return member.linkedUserName
-      ? `External participant · linked to ${member.linkedUserName}`
+    return member.linkedWorkspaceMemberName
+      ? `External participant · linked to ${member.linkedWorkspaceMemberName}`
       : "External participant"
   }
   if (member.transportKind) {
@@ -46,11 +46,11 @@ export function getConversationMemberContactHref(
   if (member.type === "actor") {
     return `${basePath}?kind=actor&id=${member.id}`
   }
-  if (member.type === "user") {
-    return `${basePath}?kind=user&id=${member.id}`
+  if (member.type === "workspace_member") {
+    return `${basePath}?kind=member&id=${member.id}`
   }
-  if (member.type === "external" && member.linkedUserId) {
-    return `${basePath}?kind=user&id=${member.linkedUserId}`
+  if (member.type === "external" && member.linkedWorkspaceMemberId) {
+    return `${basePath}?kind=member&id=${member.linkedWorkspaceMemberId}`
   }
   return undefined
 }
@@ -74,10 +74,10 @@ export function resolveAuthorMember(
       return true
     }
     if (
-      author.memberType === "user" &&
-      member.type === "user" &&
-      author.userId &&
-      member.id === author.userId
+      author.memberType === "workspace_member" &&
+      member.type === "workspace_member" &&
+      author.workspaceMemberId &&
+      member.id === author.workspaceMemberId
     ) {
       return true
     }
@@ -97,8 +97,8 @@ export function getAuthorContactHref(
   if (author?.memberType === "actor" && author.actorId) {
     return `${basePath}?kind=actor&id=${author.actorId}`
   }
-  if (author?.memberType === "user" && author.userId) {
-    return `${basePath}?kind=user&id=${author.userId}`
+  if (author?.memberType === "workspace_member" && author.workspaceMemberId) {
+    return `${basePath}?kind=member&id=${author.workspaceMemberId}`
   }
   return undefined
 }

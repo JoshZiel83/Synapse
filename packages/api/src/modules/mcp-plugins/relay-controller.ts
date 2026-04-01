@@ -115,7 +115,7 @@ type RelayExposureAccessParams = RelayExposureParams & { bindingId: string };
 type RelayDeviceSummaryRow = {
   id: string;
   workspace_id: string;
-  owner_user_id: string | null;
+  owner_workspace_member_id: string | null;
   display_name: string;
   client_kind: string;
   platform: string | null;
@@ -140,7 +140,7 @@ type RelayDeviceSummaryRow = {
 type RelayPairingRow = {
   id: string;
   workspace_id: string;
-  requested_by: string | null;
+  requested_by_workspace_member_id: string | null;
   device_id: string | null;
   server_base_url: string;
   requested_display_name: string | null;
@@ -301,7 +301,7 @@ function mapRelayDeviceSummary(row: RelayDeviceSummaryRow): RelayDeviceSummaryVi
   return {
     id: row.id,
     workspaceId: row.workspace_id,
-    ownerUserId: row.owner_user_id || undefined,
+    ownerWorkspaceMemberId: row.owner_workspace_member_id || undefined,
     displayName: row.display_name,
     clientKind: row.client_kind,
     platform: row.platform || undefined,
@@ -328,7 +328,8 @@ function mapRelayPairingSession(row: RelayPairingRow): RelayPairingSessionView {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
-    requestedBy: row.requested_by || undefined,
+    requestedByWorkspaceMemberId:
+      row.requested_by_workspace_member_id || undefined,
     deviceId: row.device_id || undefined,
     serverBaseUrl: row.server_base_url,
     requestedDisplayName: row.requested_display_name || undefined,
@@ -653,7 +654,7 @@ async function listRelayDeviceSummaries(workspaceId: string) {
     `SELECT
         d.id,
         d.workspace_id,
-        d.owner_user_id,
+        d.owner_workspace_member_id,
         d.display_name,
         d.client_kind,
         d.platform,
@@ -734,7 +735,7 @@ async function getRelayDeviceSummary(workspaceId: string, deviceId: string) {
     `SELECT
         d.id,
         d.workspace_id,
-        d.owner_user_id,
+        d.owner_workspace_member_id,
         d.display_name,
         d.client_kind,
         d.platform,
@@ -944,7 +945,7 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
 
 async function createRelayPairingSession(params: {
   workspaceId: string;
-  requestedBy: string;
+  requestedByWorkspaceMemberId: string;
   serverBaseUrl: string;
   displayName?: string;
   metadata?: Record<string, unknown>;
@@ -958,7 +959,7 @@ async function createRelayPairingSession(params: {
       const result = await executeSql<RelayPairingRow>(
         `INSERT INTO relay_pairing_sessions (
            workspace_id,
-           requested_by,
+           requested_by_workspace_member_id,
            server_base_url,
            requested_display_name,
            pairing_code,
@@ -971,7 +972,7 @@ async function createRelayPairingSession(params: {
          RETURNING *`,
         [
           params.workspaceId,
-          params.requestedBy,
+          params.requestedByWorkspaceMemberId,
           params.serverBaseUrl,
           params.displayName || null,
           pairingCode,
@@ -1156,7 +1157,7 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
     const deviceResult = await executeSqlOn(client, 
       `INSERT INTO relay_devices (
          workspace_id,
-         owner_user_id,
+         owner_workspace_member_id,
          display_name,
          client_kind,
          platform,
@@ -1169,7 +1170,7 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
        RETURNING id, workspace_id, display_name`,
       [
         pairing.workspace_id,
-        pairing.requested_by,
+        pairing.requested_by_workspace_member_id,
         input.displayName || pairing.requested_display_name || 'Relay Device',
         input.clientKind || 'desktop',
         input.platform || null,
@@ -1200,7 +1201,8 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
     return {
       deviceId: device.id as string,
       workspaceId: device.workspace_id as string,
-      ownerUserId: pairing.requested_by || undefined,
+      ownerWorkspaceMemberId:
+        pairing.requested_by_workspace_member_id || undefined,
       displayName: device.display_name as string,
       serverBaseUrl: pairing.server_base_url,
       websocketUrl: buildRelayWebSocketUrl(pairing.server_base_url),
@@ -1274,9 +1276,16 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const { workspaceId } = request.params as WorkspaceParams;
       const body = createPairingSchema.parse(request.body);
       const userId = (request as any).user.userId as string;
+      const workspaceMemberId = (request as any).workspaceMember?.id as
+        | string
+        | undefined;
+      if (!workspaceMemberId) {
+        reply.status(403).send({ error: 'Workspace member not found' });
+        return;
+      }
       const pairing = await createRelayPairingSession({
         workspaceId,
-        requestedBy: userId,
+        requestedByWorkspaceMemberId: workspaceMemberId,
         serverBaseUrl: resolveServerBaseUrl(request),
         displayName: body.displayName,
         metadata: body.metadata,
@@ -1356,7 +1365,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       await touchRelayDeviceAuthzState({
         workspaceId: claimed.workspaceId,
         deviceId: claimed.deviceId,
-        ownerUserId: claimed.ownerUserId,
+        ownerWorkspaceMemberId: claimed.ownerWorkspaceMemberId,
       });
 
       logEvent({
@@ -1430,7 +1439,6 @@ export function registerRelayRoutes(app: FastifyInstance) {
 
       const { workspaceId, id, exposureId } = request.params as RelayExposureParams;
       const body = accessGrantSchema.parse(request.body);
-      const user = (request as any).user;
 
       await assertRelayExposureInWorkspaceDevice(workspaceId, id, exposureId);
       const grant = await grantRelayExposureAccess({
@@ -1439,7 +1447,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
         accessTarget: body.accessTarget,
         reason: body.reason,
         metadata: body.metadata,
-        grantedBy: user.id || user.userId,
+        grantedByWorkspaceMemberId: (request as any).workspaceMember!.id,
       });
 
       reply.status(201).send({ grant });
@@ -1616,7 +1624,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
          RETURNING
            id,
            workspace_id,
-           owner_user_id,
+           owner_workspace_member_id,
            display_name,
            client_kind,
            platform,
@@ -1738,7 +1746,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
       await revokeRelayDeviceAuthzState({
         workspaceId,
         deviceId: id,
-        ownerUserId: device.ownerUserId || null,
+        ownerWorkspaceMemberId: device.ownerWorkspaceMemberId || null,
         exposureIds: exposuresResult.rows.map((row) => row.id),
       });
 

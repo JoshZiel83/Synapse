@@ -1,18 +1,19 @@
 import type { FastifyRequest } from 'fastify';
 import {
-  buildWorkspaceUserContextId,
+  buildWorkspaceMemberContextId,
   checkPermission,
   lookupResources,
   type AuthzObjectType,
   type AuthzSubject,
 } from '../../infrastructure/authz/index.js';
+import { db } from '../../infrastructure/database/kysely.js';
 import {
   getAccessActionSpec,
   type AccessAction,
 } from './actions.js';
 
 export type AccessSubject = AuthzSubject & {
-  type: 'user' | 'actor' | 'workspace_user';
+  type: 'user' | 'actor' | 'workspace_member';
 };
 
 export function userSubject(userId: string): AccessSubject {
@@ -23,14 +24,31 @@ export function actorSubject(actorId: string): AccessSubject {
   return { type: 'actor', id: actorId };
 }
 
-export function workspaceUserSubject(
-  workspaceId: string,
-  userId: string,
+export function workspaceMemberSubject(
+  workspaceMemberId: string,
+): AccessSubject;
+export function workspaceMemberSubject(
+  workspaceMemberId: string,
 ): AccessSubject {
   return {
-    type: 'workspace_user',
-    id: buildWorkspaceUserContextId(workspaceId, userId),
+    type: 'workspace_member',
+    id: buildWorkspaceMemberContextId(workspaceMemberId),
   };
+}
+
+export async function resolveWorkspaceAccessSubject(
+  workspaceId: string,
+  userId: string,
+): Promise<AccessSubject> {
+  const member = await db
+    .selectFrom('workspace_members')
+    .select('id')
+    .where('workspace_id', '=', workspaceId)
+    .where('user_id', '=', userId)
+    .limit(1)
+    .executeTakeFirst();
+
+  return member ? workspaceMemberSubject(member.id) : userSubject(userId);
 }
 
 export function getRequestUserId(request: FastifyRequest): string {
@@ -46,12 +64,13 @@ export function getRequestUserSubject(request: FastifyRequest): AccessSubject {
 }
 
 export function getRequestAccessSubject(request: FastifyRequest): AccessSubject {
-  const userId = getRequestUserId(request);
-  const workspaceId = (request.params as any)?.workspaceId;
-  if (typeof workspaceId === 'string' && workspaceId.length > 0) {
-    return workspaceUserSubject(workspaceId, userId);
+  const workspaceMemberId = (request as any).workspaceMember?.id as
+    | string
+    | undefined;
+  if (workspaceMemberId) {
+    return workspaceMemberSubject(workspaceMemberId);
   }
-  return userSubject(userId);
+  return userSubject(getRequestUserId(request));
 }
 
 export async function authorizeAction(params: {

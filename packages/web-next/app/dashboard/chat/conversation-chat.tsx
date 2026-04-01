@@ -24,7 +24,6 @@ import type {
   ConversationSummary,
   FeedMessage,
 } from "@/stores/chat-store"
-import { useAuthStore } from "@/stores/auth-store"
 import { api } from "@/lib/api"
 import ChatAvatar from "./chat-avatar"
 import ChatMemberStrip from "./chat-member-strip"
@@ -33,6 +32,7 @@ import ConversationMemberPickerDialog from "./conversation-member-picker-dialog"
 import MobileConversationDetailsDialog from "./mobile-conversation-details-dialog"
 import TransportKindIcon from "./transport-kind-icon"
 import { useChatStore } from "@/stores/chat-store"
+import { useWorkspace } from "@/app/dashboard/workspace-provider"
 
 interface ConversationChatProps {
   conversation: ConversationSummary
@@ -53,8 +53,8 @@ interface ConversationChatProps {
 }
 
 function summarizeMemberCounts(conversation: ConversationSummary) {
-  const userCount = conversation.members.filter(
-    (member) => member.type === "user"
+  const workspaceMemberCount = conversation.members.filter(
+    (member) => member.type === "workspace_member"
   ).length
   const actorCount = conversation.members.filter(
     (member) => member.type === "actor"
@@ -62,11 +62,11 @@ function summarizeMemberCounts(conversation: ConversationSummary) {
   const externalCount = conversation.members.filter(
     (member) => member.type === "external"
   ).length
-  const userLabel = `${userCount} user${userCount === 1 ? "" : "s"}`
+  const workspaceMemberLabel = `${workspaceMemberCount} member${workspaceMemberCount === 1 ? "" : "s"}`
   const actorLabel = `${actorCount} actor${actorCount === 1 ? "" : "s"}`
-  if (externalCount === 0) return `${userLabel} · ${actorLabel}`
+  if (externalCount === 0) return `${workspaceMemberLabel} · ${actorLabel}`
   const externalLabel = `${externalCount} external${externalCount === 1 ? "" : "s"}`
-  return `${userLabel} · ${actorLabel} · ${externalLabel}`
+  return `${workspaceMemberLabel} · ${actorLabel} · ${externalLabel}`
 }
 
 function getRuntimePriority(runtime: ActorRuntimeState) {
@@ -94,7 +94,7 @@ function buildMentionSearchTerms(
         member.name,
         member.title,
         member.role,
-        member.linkedUserName,
+        member.linkedWorkspaceMemberName,
         member.externalUserKey,
       ].filter((value): value is string => Boolean(value && value.trim()))
     )
@@ -237,11 +237,11 @@ export default function ConversationChat({
   mobileMentionPickerWorkspaceId,
   contactBasePath = "/dashboard/contacts",
 }: ConversationChatProps) {
-  const { user } = useAuthStore()
+  const { currentWorkspaceMemberId } = useWorkspace()
   const handleInteractionUpdated = useChatStore(
     (state) => state.handleInteractionUpdated
   )
-  const currentUserId = user?.id || ""
+  const currentViewerWorkspaceMemberId = currentWorkspaceMemberId || ""
   const [titleDraft, setTitleDraft] = useState(conversation.title || "")
   const [editingTitle, setEditingTitle] = useState(false)
   const [savingTitle, setSavingTitle] = useState(false)
@@ -295,7 +295,8 @@ export default function ConversationChat({
         memberId: member.memberId,
         participantId: member.participantId,
         actorId: member.type === "actor" ? member.id : undefined,
-        userId: member.type === "user" ? member.id : undefined,
+        workspaceMemberId:
+          member.type === "workspace_member" ? member.id : undefined,
         externalUserKey:
           member.type === "external" ? member.externalUserKey : undefined,
         transportAddressId: member.transportAddressId,
@@ -307,8 +308,8 @@ export default function ConversationChat({
         emoji: member.emoji,
         description:
           member.type === "external"
-            ? member.linkedUserName
-              ? `External participant · linked to ${member.linkedUserName}`
+            ? member.linkedWorkspaceMemberName
+              ? `External participant · linked to ${member.linkedWorkspaceMemberName}`
               : "External participant"
             : "Workspace user",
         searchTerms: buildMentionSearchTerms(member),
@@ -377,11 +378,11 @@ export default function ConversationChat({
           runtime.activeWakeups.some(
             (wakeup) =>
               wakeup.status === "attached" &&
-              wakeup.sourceMemberType === "user" &&
-              wakeup.sourceMemberId === currentUserId
+              wakeup.sourceMemberType === "workspace_member" &&
+              wakeup.sourceMemberId === currentViewerWorkspaceMemberId
           )
       ),
-    [activeRuntimes, currentUserId]
+    [activeRuntimes, currentViewerWorkspaceMemberId]
   )
   const workingHint = useMemo(
     () => summarizeCurrentUserProcessingActors(myProcessingRuntimes),
@@ -842,8 +843,8 @@ export default function ConversationChat({
                   timestamp={msg.createdAt}
                   isUser={
                     msg.author
-                      ? msg.author.memberType === "user" &&
-                        msg.author.userId === currentUserId
+                      ? msg.author.memberType === "workspace_member" &&
+                        msg.author.workspaceMemberId === currentViewerWorkspaceMemberId
                       : msg.role === "user"
                   }
                   status={msg.deliveryStatus}
@@ -859,7 +860,9 @@ export default function ConversationChat({
                   transportDeliveries={msg.transportDeliveries}
                   interaction={msg.interaction}
                   enableTablePreview={viewportLocked}
-                  viewerUserId={currentUserId || undefined}
+                  viewerWorkspaceMemberId={
+                    currentViewerWorkspaceMemberId || undefined
+                  }
                   contactBasePath={contactBasePath}
                   onParticipantClick={participantInteractionHandler}
                   onResolveInteraction={handleResolveInteraction}

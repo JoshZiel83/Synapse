@@ -25,8 +25,8 @@ import type {
   ContactHubEntryView,
   ContactHubResponse,
   ConversationSummaryView,
-  FriendIdSearchMatchView,
-  FriendIdSearchResponse,
+  IdentitySearchMatchView,
+  IdentitySearchResponse,
 } from "@/types/api";
 
 function matchesConversation(conversation: ConversationSummaryView, query: string) {
@@ -49,7 +49,7 @@ function matchesContact(entry: ContactHubEntryView, query: string) {
     .includes(query);
 }
 
-function buildSearchDetailParams(match: FriendIdSearchMatchView) {
+function buildSearchDetailParams(match: IdentitySearchMatchView) {
   return {
     pathname: "/contacts/search/[profileId]" as const,
     params: {
@@ -64,9 +64,9 @@ function buildSearchDetailParams(match: FriendIdSearchMatchView) {
   };
 }
 
-function friendStateLabel(match: FriendIdSearchMatchView) {
+function friendStateLabel(match: IdentitySearchMatchView) {
   switch (match.state) {
-    case "same_workspace_user":
+    case "same_workspace_member":
       return "同 workspace 用户";
     case "friend":
       return "已是好友";
@@ -84,8 +84,8 @@ export default function GlobalSearchScreen() {
   const [loading, setLoading] = useState(true);
   const [conversations, setConversations] = useState<ConversationSummaryView[]>([]);
   const [hub, setHub] = useState<ContactHubResponse | null>(null);
-  const [friendIdResults, setFriendIdResults] =
-    useState<FriendIdSearchResponse | null>(null);
+  const [identityResults, setIdentityResults] =
+    useState<IdentitySearchResponse | null>(null);
   const [friendIdMessage, setFriendIdMessage] = useState<string | null>(null);
 
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
@@ -117,17 +117,17 @@ export default function GlobalSearchScreen() {
 
   useEffect(() => {
     if (!workspaceId || !deferredQuery) {
-      setFriendIdResults(null);
+      setIdentityResults(null);
       setFriendIdMessage(null);
       return;
     }
 
     let active = true;
     void api
-      .searchFriendId(workspaceId, deferredQuery)
+      .searchIdentity(workspaceId, deferredQuery)
       .then((result) => {
         if (!active) return;
-        setFriendIdResults(result);
+        setIdentityResults(result);
         if (result.outcome === "invalid") {
           setFriendIdMessage("好友 ID 需为 4-32 位，只能包含字母、数字、点、下划线或短横线。");
         } else if (result.outcome === "not_found") {
@@ -140,7 +140,7 @@ export default function GlobalSearchScreen() {
       })
       .catch((error) => {
         if (!active) return;
-        setFriendIdResults(null);
+        setIdentityResults(null);
         setFriendIdMessage(error instanceof Error ? error.message : "搜索好友 ID 失败。");
       });
 
@@ -157,10 +157,10 @@ export default function GlobalSearchScreen() {
     () =>
       [
         ...(hub?.workspaceActors || []),
-        ...(hub?.workspaceUsers || []),
+        ...(hub?.workspaceMembers || []),
         ...(hub?.friends || []),
       ].filter((item) => matchesContact(item, deferredQuery)),
-    [deferredQuery, hub?.friends, hub?.workspaceActors, hub?.workspaceUsers],
+    [deferredQuery, hub?.friends, hub?.workspaceActors, hub?.workspaceMembers],
   );
 
   return (
@@ -306,13 +306,13 @@ export default function GlobalSearchScreen() {
               title="好友 ID"
               action={
                 <Text style={styles.countText}>
-                  {friendIdResults?.matches?.length || 0} 条
+                  {identityResults?.matches?.length || 0} 条
                 </Text>
               }
             />
-            {friendIdResults?.matches?.length ? (
+            {identityResults?.matches?.length ? (
               <View style={styles.listShell}>
-                {friendIdResults.matches.map((match) => (
+                {identityResults.matches.map((match) => (
                   <Pressable
                     key={match.profileId}
                     onPress={() => {

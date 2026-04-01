@@ -38,10 +38,9 @@ export function mapConversationMember(row: any) {
   return {
     memberId: row.id,
     participantId: row.id,
-    type: "user" as const,
+    type: "workspace_member" as const,
     workspaceMemberId: row.workspace_member_id || undefined,
-    userId: row.user_id,
-    id: row.user_id,
+    id: row.workspace_member_id,
     name: row.user_name || "User",
     avatarUrl: row.user_avatar_file_id
       ? getFileUrlById(row.user_avatar_file_id)
@@ -54,15 +53,13 @@ export function mapConversationMember(row: any) {
 function buildConversationPresentation(params: {
   row: any;
   members: ReturnType<typeof mapConversationMember>[];
-  viewerUserId: string;
-  viewerWorkspaceMemberId?: string;
+  viewerWorkspaceMemberId: string;
   canManageConversation: boolean;
   canManageMembers: boolean;
 }) {
   const {
     row,
     members,
-    viewerUserId,
     viewerWorkspaceMemberId,
     canManageConversation,
     canManageMembers,
@@ -70,13 +67,11 @@ function buildConversationPresentation(params: {
   const activeMembers = members.filter((member) => member.state === "active");
   const peer =
     row.kind === "private"
-      ? activeMembers.find(
+        ? activeMembers.find(
           (member) =>
             !(
-              member.type === "user" &&
-              ((viewerWorkspaceMemberId &&
-                member.workspaceMemberId === viewerWorkspaceMemberId) ||
-                (!viewerWorkspaceMemberId && member.userId === viewerUserId))
+              member.type === "workspace_member" &&
+              member.workspaceMemberId === viewerWorkspaceMemberId
             ),
         ) || activeMembers[0]
       : undefined;
@@ -87,10 +82,8 @@ function buildConversationPresentation(params: {
           .filter(
             (member) =>
               !(
-                member.type === "user" &&
-                ((viewerWorkspaceMemberId &&
-                  member.workspaceMemberId === viewerWorkspaceMemberId) ||
-                  (!viewerWorkspaceMemberId && member.userId === viewerUserId))
+                member.type === "workspace_member" &&
+                member.workspaceMemberId === viewerWorkspaceMemberId
               ),
           )
           .map((member) => member.name)
@@ -137,16 +130,10 @@ function buildConversationPresentation(params: {
 
 export async function mapConversationSummaryView(
   row: any,
-  viewer:
-    | string
-    | {
-        userId: string;
-        workspaceMemberId?: string;
-      },
+  viewer: string | { workspaceMemberId: string },
 ) {
-  const viewerUserId = typeof viewer === "string" ? viewer : viewer.userId;
   const viewerWorkspaceMemberId =
-    typeof viewer === "string" ? undefined : viewer.workspaceMemberId;
+    typeof viewer === "string" ? viewer : viewer.workspaceMemberId;
   const members = (await getConversationMembers(row.id)).filter(
     (member: any) => member.state === "active",
   );
@@ -160,10 +147,8 @@ export async function mapConversationSummaryView(
   const viewerMembership = members.find(
     (member: any) =>
       member.state === "active" &&
-      member.member_type === "user" &&
-      ((viewerWorkspaceMemberId &&
-        member.workspace_member_id === viewerWorkspaceMemberId) ||
-        (!viewerWorkspaceMemberId && member.user_id === viewerUserId)),
+      member.member_type === "workspace_member" &&
+      member.workspace_member_id === viewerWorkspaceMemberId,
   );
   const viewerConversationRole =
     viewerMembership?.role === "owner" ||
@@ -178,7 +163,6 @@ export async function mapConversationSummaryView(
   const presentation = buildConversationPresentation({
     row,
     members: mappedMembers,
-    viewerUserId,
     viewerWorkspaceMemberId,
     canManageConversation,
     canManageMembers,

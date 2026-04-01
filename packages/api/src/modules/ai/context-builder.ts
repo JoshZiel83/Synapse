@@ -128,7 +128,7 @@ function buildAuthor(
   if (row.author_user_id) {
     return {
       memberId: row.author_member_id,
-      memberType: "user",
+      memberType: "workspace_member",
       userId: row.author_user_id,
       sessionId: row.session_id || undefined,
       name: row.author_name || undefined,
@@ -443,7 +443,7 @@ export function buildSessionContextItems(
           messageType: "user_message",
           role: "user",
           author: {
-            memberType: "user",
+            memberType: "workspace_member",
             sessionId: msg.sessionId,
             isSelf: false,
           },
@@ -615,7 +615,7 @@ export function buildAdHocContextItems(
     messageType: "adhoc",
     role: message.role,
     author: {
-      memberType: message.role === "assistant" ? "actor" : "user",
+      memberType: message.role === "assistant" ? "actor" : "workspace_member",
       isSelf: message.role === "assistant",
     },
     parts: message.content,

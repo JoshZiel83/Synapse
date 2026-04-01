@@ -23,9 +23,9 @@ import type {
 
 type ContactType =
   | "workspace-actor"
-  | "workspace-user"
+  | "workspace-member"
   | "friend-actor"
-  | "friend-user";
+  | "friend-member";
 
 function directButtonLabel(entry: ContactHubEntryView) {
   switch (entry.directState.status) {
@@ -186,7 +186,7 @@ export default function ContactDetailScreen() {
               <View style={styles.metaRow}>
                 <Text style={styles.metaLabel}>类型</Text>
                 <Text style={styles.metaValue}>
-                  {detail.contact.targetType === "actor" ? "Actor" : "用户"}
+                  {detail.contact.targetType === "actor" ? "Actor" : "成员"}
                 </Text>
               </View>
               <View style={styles.metaRow}>

@@ -21,8 +21,8 @@ type ActorRecord = {
 type GroupRecord = {
   id: string;
   name: string;
-  scope?: 'workspace' | 'platform' | 'user';
-  owner_type?: 'workspace' | 'platform' | 'user';
+  scope?: 'workspace' | 'platform' | 'workspace_member';
+  owner_type?: 'workspace' | 'platform' | 'workspace_member';
   routing_strategy: string;
   is_default: boolean;
 };
@@ -35,7 +35,7 @@ type AssignedGroupRecord = {
   routing_strategy: string;
   is_default: boolean;
   workspace_id: string | null;
-  owner_type?: 'workspace' | 'platform' | 'user';
+  owner_type?: 'workspace' | 'platform' | 'workspace_member';
 };
 
 type DragState =
@@ -94,8 +94,8 @@ function groupScopeLabel(group: { scope?: string; owner_type?: string }) {
   switch (group.scope || group.owner_type) {
     case 'platform':
       return 'Platform';
-    case 'user':
-      return 'User';
+    case 'workspace_member':
+      return 'Member';
     default:
       return 'Workspace';
   }

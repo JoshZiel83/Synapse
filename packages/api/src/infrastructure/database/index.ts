@@ -91,8 +91,8 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "authoritative direct-conversation uniqueness",
   },
   {
-    table: "workspace_user_preferences",
-    requiredColumns: ["workspace_id", "user_id", "chief_actor_id"],
+    table: "workspace_member_preferences",
+    requiredColumns: ["workspace_member_id", "chief_actor_id"],
     reason: "workspace-level chief actor preferences",
   },
   {
@@ -102,7 +102,7 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
       "transport_kind",
       "account_key",
       "owner_scope",
-      "owner_user_id",
+      "owner_workspace_member_id",
     ],
     reason: "IM transport account ownership",
   },
@@ -113,7 +113,7 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
   },
   {
     table: "workspace_access_bindings",
-    requiredColumns: ["workspace_id", "user_id", "access_key"],
+    requiredColumns: ["workspace_member_id", "access_key"],
     reason: "workspace access bindings",
   },
   {

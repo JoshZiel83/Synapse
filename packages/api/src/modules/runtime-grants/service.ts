@@ -84,8 +84,7 @@ export interface RuntimeGrantRecord {
   relayExposureId: string;
   conversationId?: string;
   actorId?: string;
-  createdByUserId?: string;
-  createdByMemberId?: string;
+  createdByWorkspaceMemberId?: string;
   sourceInteractionId?: string;
   sourceTaskId?: string;
   scope: RuntimeGrantScope;
@@ -111,8 +110,7 @@ export interface CreateRuntimeGrantParams {
   relayExposureId: string;
   conversationId?: string;
   actorId?: string;
-  createdByUserId?: string;
-  createdByMemberId?: string;
+  createdByWorkspaceMemberId?: string;
   sourceInteractionId?: string;
   sourceTaskId?: string;
   preset: RuntimeAuthorizationPreset;
@@ -143,8 +141,8 @@ function mapRuntimeGrantRow(row: any): RuntimeGrantRecord {
     relayExposureId: row.relay_exposure_id,
     conversationId: row.conversation_id || undefined,
     actorId: row.actor_id || undefined,
-    createdByUserId: row.created_by_user_id || undefined,
-    createdByMemberId: row.created_by_member_id || undefined,
+    createdByWorkspaceMemberId:
+      row.created_by_workspace_member_id || undefined,
     sourceInteractionId: row.source_interaction_id || undefined,
     sourceTaskId: row.source_task_id || undefined,
     scope: row.scope,
@@ -195,8 +193,8 @@ export async function createRuntimeGrant(
       relay_exposure_id: params.relayExposureId,
       conversation_id: params.conversationId || null,
       actor_id: params.actorId || null,
-      created_by_user_id: params.createdByUserId || null,
-      created_by_member_id: params.createdByMemberId || null,
+      created_by_workspace_member_id:
+        params.createdByWorkspaceMemberId || null,
       source_interaction_id: params.sourceInteractionId || null,
       source_task_id: params.sourceTaskId || null,
       scope,

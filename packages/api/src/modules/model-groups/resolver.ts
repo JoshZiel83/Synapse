@@ -12,16 +12,15 @@ import { config } from '../../config/index.js';
 import {
   actorSubject,
   listAuthorizedResourceIds,
-  userSubject,
-  workspaceUserSubject,
+  workspaceMemberSubject,
 } from '../access/service.js';
 import { DEFAULT_MODEL_ATTEMPT_POLICY } from './defaults.js';
 
 type GroupRow = {
   id: string;
-  owner_type: 'platform' | 'workspace' | 'user';
+  owner_type: 'platform' | 'workspace' | 'workspace_member';
   owner_workspace_id: string | null;
-  owner_user_id: string | null;
+  owner_workspace_member_id: string | null;
   name: string;
   routing_strategy: 'weighted_random' | 'round_robin' | 'priority_failover';
   attempt_policy: Record<string, unknown> | null;
@@ -58,7 +57,7 @@ type ResolveContext = {
   actorId: string;
   workspaceId: string;
   conversationId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
 };
 
 const DEFAULT_ATTEMPT_POLICY: ModelAttemptPolicy = DEFAULT_MODEL_ATTEMPT_POLICY;
@@ -143,7 +142,12 @@ async function getRoundRobinOffset(groupId: string, length: number) {
 }
 
 function ownerRank(group: GroupRow, current: ResolveContext) {
-  if (group.owner_type === 'user' && group.owner_user_id === current.userId) return 0;
+  if (
+    group.owner_type === 'workspace_member' &&
+    group.owner_workspace_member_id === current.workspaceMemberId
+  ) {
+    return 0;
+  }
   if (group.owner_type === 'workspace' && group.owner_workspace_id === current.workspaceId) return 1;
   if (group.owner_type === 'platform') return 2;
   return 3;
@@ -160,11 +164,9 @@ async function listAuthorizedModelGroupIds(current: ResolveContext) {
     authorized.add(id);
   }
 
-  if (current.userId) {
+  if (current.workspaceMemberId) {
     const userResults = await listAuthorizedResourceIds({
-      subject: current.workspaceId
-        ? workspaceUserSubject(current.workspaceId, current.userId)
-        : userSubject(current.userId),
+      subject: workspaceMemberSubject(current.workspaceMemberId),
       action: 'model_group.use',
     });
     for (const id of userResults) {
@@ -176,7 +178,13 @@ async function listAuthorizedModelGroupIds(current: ResolveContext) {
 }
 
 async function listCandidateGroups(current: ResolveContext, authorizedGroupIds: Set<string>) {
-  const [groupsResult, assignmentsResult, workspaceDefaultResult, platformDefaultResult, userDefaultResult] = await Promise.all([
+  const [
+    groupsResult,
+    assignmentsResult,
+    workspaceDefaultResult,
+    platformDefaultResult,
+    workspaceMemberDefaultResult,
+  ] = await Promise.all([
     authorizedGroupIds.size > 0
       ? db
           .selectFrom('model_groups')
@@ -206,12 +214,12 @@ async function listCandidateGroups(current: ResolveContext, authorizedGroupIds: 
       .where('is_default', '=', true)
       .where('is_enabled', '=', true)
       .executeTakeFirst(),
-    current.userId
+    current.workspaceMemberId
       ? db
           .selectFrom('model_groups')
           .select('id')
-          .where('owner_type', '=', 'user')
-          .where('owner_user_id', '=', current.userId)
+          .where('owner_type', '=', 'workspace_member')
+          .where('owner_workspace_member_id', '=', current.workspaceMemberId)
           .where('is_default', '=', true)
           .where('is_enabled', '=', true)
           .executeTakeFirst()
@@ -225,7 +233,8 @@ async function listCandidateGroups(current: ResolveContext, authorizedGroupIds: 
 
   const workspaceDefaultGroupId = workspaceDefaultResult?.id || undefined;
   const platformDefaultGroupId = platformDefaultResult?.id || undefined;
-  const userDefaultGroupId = userDefaultResult?.id || undefined;
+  const workspaceMemberDefaultGroupId =
+    workspaceMemberDefaultResult?.id || undefined;
 
   return (groupsResult as GroupRow[]).sort((a, b) => {
     const aAssigned = assignedPriority.has(a.id);
@@ -236,9 +245,11 @@ async function listCandidateGroups(current: ResolveContext, authorizedGroupIds: 
     if (aAssigned) return -1;
     if (bAssigned) return 1;
 
-    const aIsUserDefault = a.id === userDefaultGroupId;
-    const bIsUserDefault = b.id === userDefaultGroupId;
-    if (aIsUserDefault !== bIsUserDefault) return aIsUserDefault ? -1 : 1;
+    const aIsWorkspaceMemberDefault = a.id === workspaceMemberDefaultGroupId;
+    const bIsWorkspaceMemberDefault = b.id === workspaceMemberDefaultGroupId;
+    if (aIsWorkspaceMemberDefault !== bIsWorkspaceMemberDefault) {
+      return aIsWorkspaceMemberDefault ? -1 : 1;
+    }
 
     const aIsWorkspaceDefault = a.id === workspaceDefaultGroupId;
     const bIsWorkspaceDefault = b.id === workspaceDefaultGroupId;
@@ -331,14 +342,14 @@ export async function resolveModelPlan(
   workspaceId: string,
   options?: {
     conversationId?: string;
-    userId?: string;
+    workspaceMemberId?: string;
   },
 ): Promise<ResolvedModelPlan | null> {
   const current: ResolveContext = {
     actorId,
     workspaceId,
     conversationId: options?.conversationId,
-    userId: options?.userId,
+    workspaceMemberId: options?.workspaceMemberId,
   };
 
   const authorizedGroupIds = await listAuthorizedModelGroupIds(current);
@@ -375,7 +386,7 @@ export async function resolveModelConfig(
   workspaceId: string,
   options?: {
     conversationId?: string;
-    userId?: string;
+    workspaceMemberId?: string;
   },
 ): Promise<ResolvedModelConfig | null> {
   const plan = await resolveModelPlan(actorId, workspaceId, options);

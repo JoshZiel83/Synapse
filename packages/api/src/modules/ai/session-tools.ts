@@ -85,10 +85,11 @@ type InviteableActor = {
 };
 
 type SendToCandidate = {
-  type: "actor" | "user" | "external";
+  type: "actor" | "workspace_member" | "external";
   memberId: string;
   participantId: string;
   actorId?: string;
+  workspaceMemberId?: string;
   userId?: string;
   externalUserKey?: string;
   title?: string;
@@ -100,7 +101,7 @@ type SendToCandidate = {
 
 type UserInteractionCandidate = {
   memberId: string;
-  userId: string;
+  workspaceMemberId: string;
   name: string;
   label: string;
 };
@@ -188,10 +189,10 @@ function buildSendToDefinition(params: {
   );
   const rosterDesc = params.otherMembers
     .map((member) =>
-      member.type === "user"
-        ? `"${member.name}" (user)`
+      member.type === "workspace_member"
+        ? `"${member.name}" (workspace member)`
         : member.type === "external"
-          ? `"${member.name}" (external${member.linkedUserName ? `, linked to workspace user ${member.linkedUserName}` : ""})`
+          ? `"${member.name}" (external${member.linkedWorkspaceMemberName ? `, linked to workspace user ${member.linkedWorkspaceMemberName}` : ""})`
           : `"${member.name}" (actor${member.title ? ", " + member.title : ""})`,
     )
     .join(", ");
@@ -297,7 +298,7 @@ function buildSendToMention(candidate: SendToCandidate): ConversationEntityRef {
     participantId: candidate.participantId,
     memberType: candidate.type,
     actorId: candidate.actorId,
-    userId: candidate.userId,
+    workspaceMemberId: candidate.workspaceMemberId,
     externalUserKey: candidate.externalUserKey,
     name: candidate.name,
     title: candidate.title,
@@ -385,29 +386,29 @@ function buildSendToCandidates(
         ? `, reachable via ${transportKind === "feishu" ? "Feishu" : "WeChat"}`
         : "";
       candidates.push({
-        type: "user",
+        type: "workspace_member",
         memberId: member.id,
         participantId: member.id,
-        userId: member.user_id,
+        workspaceMemberId: member.workspace_member_id,
         name,
-        title: "Workspace user",
-        label: `"${name}" (user${transportLabel})`,
+        title: "Workspace member",
+        label: `"${name}" (workspace member${transportLabel})`,
         aliases: [name],
       });
       continue;
     }
 
     if (member.member_type === "external") {
-      const linkedUserName =
+      const linkedWorkspaceMemberName =
         (member.linked_user_name as string | null) || undefined;
       const name =
         (member.transport_display_name as string | null) ||
         (member.display_name as string | null) ||
-        linkedUserName ||
+        linkedWorkspaceMemberName ||
         "External participant";
       const aliases = Array.from(
         new Set(
-          [name, linkedUserName].filter(
+          [name, linkedWorkspaceMemberName].filter(
             (value): value is string =>
               typeof value === "string" && value.trim().length > 0,
           ),
@@ -420,12 +421,12 @@ function buildSendToCandidates(
         externalUserKey:
           (member.transport_external_id as string | null) || undefined,
         name,
-        title: linkedUserName
-          ? `Linked workspace user: ${linkedUserName}`
+        title: linkedWorkspaceMemberName
+          ? `Linked workspace user: ${linkedWorkspaceMemberName}`
           : "External participant",
         label:
-          linkedUserName && linkedUserName !== name
-            ? `"${name}" (external, linked to workspace user ${linkedUserName})`
+          linkedWorkspaceMemberName && linkedWorkspaceMemberName !== name
+            ? `"${name}" (external, linked to workspace user ${linkedWorkspaceMemberName})`
             : `"${name}" (external)`,
         aliases,
       });
@@ -447,17 +448,17 @@ function buildUserInteractionCandidates(
         : "active";
     if (state !== "active") continue;
 
-    const userId =
+    const workspaceMemberId =
       typeof member.user_id === "string" && member.user_id.trim().length > 0
         ? member.user_id
-        : typeof member.userId === "string" && member.userId.trim().length > 0
-          ? member.userId
-          : member.type === "user" &&
+        : typeof member.workspaceMemberId === "string" && member.workspaceMemberId.trim().length > 0
+          ? member.workspaceMemberId
+          : member.type === "workspace_member" &&
               typeof member.id === "string" &&
               member.id.trim().length > 0
             ? member.id
             : null;
-    if (!userId) continue;
+    if (!workspaceMemberId) continue;
 
     const memberId =
       typeof member.participantId === "string" &&
@@ -474,7 +475,7 @@ function buildUserInteractionCandidates(
       "User";
     candidates.push({
       memberId,
-      userId,
+      workspaceMemberId,
       name,
       label: `"${name}" (user)`,
     });
@@ -642,7 +643,7 @@ async function hasNewUserFacingConversationMessage(
     .where((eb) =>
       eb.or([
         eb("ci.role", "=", "user"),
-        eb("cm.member_type", "in", ["user", "external"]),
+        eb("cm.member_type", "in", ["workspace_member", "external"]),
       ]),
     )
     .limit(1)
@@ -655,7 +656,7 @@ async function resolveRelayAuthorizationRequirementOrThrow(params: {
   workspaceId: string;
   sessionId: string;
   conversationId: string;
-  userId?: string;
+  workspaceMemberId?: string;
   relayToolName: string;
   toolArguments: Record<string, unknown>;
 }) {
@@ -664,7 +665,7 @@ async function resolveRelayAuthorizationRequirementOrThrow(params: {
     workspaceId: params.workspaceId,
     sessionId: params.sessionId,
     conversationId: params.conversationId,
-    userId: params.userId,
+    workspaceMemberId: params.workspaceMemberId,
     namespacedToolName: params.relayToolName,
   });
   if (!relayTarget) {
@@ -715,7 +716,7 @@ async function retryAuthorizedRelayTool(params: {
     workspaceId: params.context.workspaceId,
     sessionId: params.context.sessionId,
     conversationId: params.context.conversationId || "",
-    userId: params.context.userId,
+    workspaceMemberId: params.context.workspaceMemberId,
     relayToolName: params.relayToolName,
     toolArguments: params.toolArguments,
   });
@@ -730,7 +731,7 @@ async function retryAuthorizedRelayTool(params: {
   const rawResult = await callRelayTool({
     conversationId: params.context.conversationId,
     sessionId: params.context.sessionId,
-    requestedByUserId: params.context.userId,
+    requestedByWorkspaceMemberId: params.context.workspaceMemberId,
     requestedByActorId: params.context.actorId,
     deviceId: resolved.relayTarget.deviceId,
     exposureId: resolved.relayTarget.exposureId,
@@ -1264,7 +1265,7 @@ export function registerCallableToolPlugins(): void {
         return { active: false, definition: null as any };
       }
       const otherMembers = conversationMembers.filter(
-        (m) => m.type === "user" || m.id !== ctx.actorId,
+        (m) => m.type === "workspace_member" || m.id !== ctx.actorId,
       );
       if (otherMembers.length === 0) {
         return { active: false, definition: null as any };
@@ -1418,7 +1419,7 @@ export function registerCallableToolPlugins(): void {
         inlineReferences: {
           mentionCandidates: candidates.map(buildSendToMention),
           defaultUser: buildDefaultUserMention({
-            userId: context.userId,
+            workspaceMemberId: context.workspaceMemberId,
             userName: "User",
           }),
         },
@@ -1713,7 +1714,7 @@ export function registerCallableToolPlugins(): void {
         supportsCancel: true,
         requestPayload: {
           targetMemberId: resolution.candidate.memberId,
-          targetUserId: resolution.candidate.userId,
+          targetWorkspaceMemberId: resolution.candidate.workspaceMemberId,
           question,
           instructions: instructions || undefined,
           fields: [field],
@@ -1729,9 +1730,9 @@ export function registerCallableToolPlugins(): void {
           taskId: task.id,
           requesterMemberId: requesterMember.id,
           requesterActorId: context.actorId,
-          requesterUserId: context.userId,
+          requesterWorkspaceMemberId: context.workspaceMemberId,
           targetMemberId: resolution.candidate.memberId,
-          targetUserId: resolution.candidate.userId,
+          targetWorkspaceMemberId: resolution.candidate.workspaceMemberId,
           prompt: question,
           instructions: instructions || undefined,
           fields: [field],
@@ -1751,8 +1752,8 @@ export function registerCallableToolPlugins(): void {
         success: true,
         taskId: task.id,
         interactionId: interaction.id,
-        targetUser: resolution.candidate.name,
-        message: `Question sent to ${resolution.candidate.name}. Only that user can answer it.`,
+        targetMember: resolution.candidate.name,
+        message: `Question sent to ${resolution.candidate.name}. Only that member can answer it.`,
       });
     },
   });
@@ -1943,7 +1944,7 @@ export function registerCallableToolPlugins(): void {
         supportsCancel: true,
         requestPayload: {
           targetMemberId: resolution.candidate.memberId,
-          targetUserId: resolution.candidate.userId,
+          targetWorkspaceMemberId: resolution.candidate.workspaceMemberId,
           title,
           instructions: instructions || undefined,
           fields,
@@ -1959,9 +1960,9 @@ export function registerCallableToolPlugins(): void {
           taskId: task.id,
           requesterMemberId: requesterMember.id,
           requesterActorId: context.actorId,
-          requesterUserId: context.userId,
+          requesterWorkspaceMemberId: context.workspaceMemberId,
           targetMemberId: resolution.candidate.memberId,
-          targetUserId: resolution.candidate.userId,
+          targetWorkspaceMemberId: resolution.candidate.workspaceMemberId,
           prompt: title,
           instructions: instructions || undefined,
           fields,
@@ -1981,8 +1982,8 @@ export function registerCallableToolPlugins(): void {
         success: true,
         taskId: task.id,
         interactionId: interaction.id,
-        targetUser: resolution.candidate.name,
-        message: `Form sent to ${resolution.candidate.name}. Only that user can answer it.`,
+        targetMember: resolution.candidate.name,
+        message: `Form sent to ${resolution.candidate.name}. Only that member can answer it.`,
       });
     },
   });
@@ -2123,7 +2124,7 @@ export function registerCallableToolPlugins(): void {
           workspaceId: context.workspaceId,
           sessionId: context.sessionId,
           conversationId,
-          userId: context.userId,
+          workspaceMemberId: context.workspaceMemberId,
           relayToolName,
           toolArguments,
         });
@@ -2143,7 +2144,7 @@ export function registerCallableToolPlugins(): void {
         candidates.map(async (candidate) => ({
           candidate,
           allowed: await authorizeAction({
-            subject: { type: "user", id: candidate.userId },
+            subject: { type: "workspace_member", id: candidate.workspaceMemberId },
             action: "relay_device.authorize_runtime_access",
             resourceId: relayTarget.deviceId,
           }),
@@ -2240,7 +2241,7 @@ export function registerCallableToolPlugins(): void {
           taskId: task.id,
           requesterMemberId: requesterMember.id,
           requesterActorId: context.actorId,
-          requesterUserId: context.userId,
+          requesterWorkspaceMemberId: context.workspaceMemberId,
           relayDeviceId: relayTarget.deviceId,
           relayExposureId: relayTarget.exposureId,
           runtimeSessionId: relayTarget.runtimeSessionId || "",
@@ -3052,7 +3053,7 @@ export function registerCallableToolPlugins(): void {
           context.workspaceId,
           {
             kind: "session",
-            userId: context.userId,
+            workspaceMemberId: context.workspaceMemberId,
             actorId: context.actorId,
             sessionId: context.sessionId,
           },
@@ -3333,7 +3334,7 @@ export function registerCallableToolPlugins(): void {
           context.workspaceId,
           {
             kind: "session",
-            userId: context.userId,
+            workspaceMemberId: context.workspaceMemberId,
             actorId: context.actorId,
             sessionId: context.sessionId,
           },
@@ -3591,7 +3592,7 @@ export function registerCallableToolPlugins(): void {
       }
 
       await deleteAutomationRule(context.workspaceId, automationId, {
-        userId: context.userId,
+        workspaceMemberId: context.workspaceMemberId,
         actorId: context.actorId,
       });
       return JSON.stringify({
@@ -3697,6 +3698,7 @@ interface ToolExecutionContext {
   actorId: string;
   workspaceId: string;
   userId?: string;
+  workspaceMemberId?: string;
   turnId?: string;
   conversationId?: string;
   toolCallId?: string;

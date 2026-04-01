@@ -62,11 +62,11 @@ type RawInteractionRow = {
   created_at: string | Date;
   updated_at: string | Date;
   requester_member_id: string | null;
-  requester_user_id: string | null;
+  requester_workspace_member_id: string | null;
   requester_actor_id: string | null;
-  target_user_id: string | null;
+  target_workspace_member_id: string | null;
   target_member_id: string | null;
-  resolved_by_user_id: string | null;
+  resolved_by_workspace_member_id: string | null;
   resolved_by_member_id: string | null;
   relay_device_id: string | null;
   relay_exposure_id: string | null;
@@ -107,9 +107,9 @@ export interface CreateQuestionInteractionParams {
   taskId: string;
   requesterMemberId: string;
   requesterActorId?: string;
-  requesterUserId?: string;
+  requesterWorkspaceMemberId?: string;
   targetMemberId: string;
-  targetUserId: string;
+  targetWorkspaceMemberId: string;
   prompt: string;
   instructions?: string;
   fields: InteractionQuestionFieldDefinition[];
@@ -122,7 +122,7 @@ export interface CreateRuntimeAuthorizationInteractionParams {
   taskId: string;
   requesterMemberId: string;
   requesterActorId?: string;
-  requesterUserId?: string;
+  requesterWorkspaceMemberId?: string;
   relayDeviceId: string;
   relayExposureId: string;
   runtimeSessionId: string;
@@ -137,7 +137,7 @@ export interface CreateRuntimeAuthorizationInteractionParams {
 
 export interface ResolveInteractionRequestParams {
   interactionId: string;
-  resolverUserId: string;
+  resolverWorkspaceMemberId: string;
   resolverMemberId: string;
   answers?: InteractionQuestionFieldAnswer[];
   selectedOptionId?: string;
@@ -531,12 +531,12 @@ function mapEntityRefFromRow(
     return undefined;
   }
   const memberId = row[`${prefix}_member_id` as keyof RawInteractionRow];
-  const userId =
+  const workspaceMemberId =
     prefix === "requester"
-      ? row.requester_user_id
+      ? row.requester_workspace_member_id
       : prefix === "target"
-        ? row.target_user_id
-        : row.resolved_by_user_id;
+        ? row.target_workspace_member_id
+        : row.resolved_by_workspace_member_id;
   const actorId =
     prefix === "requester" ? row.requester_actor_id : null;
   const name = row[`${prefix}_name` as keyof RawInteractionRow];
@@ -554,7 +554,8 @@ function mapEntityRefFromRow(
     participantId: typeof memberId === "string" ? memberId : undefined,
     memberType: memberType as ConversationEntityRef["memberType"],
     actorId: typeof actorId === "string" ? actorId : undefined,
-    userId: typeof userId === "string" ? userId : undefined,
+    workspaceMemberId:
+      typeof workspaceMemberId === "string" ? workspaceMemberId : undefined,
     name: typeof name === "string" ? name : undefined,
     title: typeof title === "string" ? title : undefined,
     role: typeof role === "string" ? role : undefined,
@@ -891,11 +892,11 @@ async function insertInteractionRequest(
   conversationId: string;
   taskId: string;
   requesterMemberId: string;
-  requesterUserId?: string;
+  requesterWorkspaceMemberId?: string;
   requesterActorId?: string;
   kind: InteractionRequestKind;
   targetMemberId?: string;
-  targetUserId?: string;
+  targetWorkspaceMemberId?: string;
   expiresAt?: string;
 }) {
   const interactionId = uuidv4();
@@ -909,12 +910,12 @@ async function insertInteractionRequest(
         conversation_id: params.conversationId,
         task_id: params.taskId,
         requester_member_id: params.requesterMemberId,
-        requester_user_id: params.requesterUserId || null,
+        requester_workspace_member_id: params.requesterWorkspaceMemberId || null,
         requester_actor_id: params.requesterActorId || null,
         kind: params.kind,
         status: "pending",
         target_member_id: params.targetMemberId || null,
-        target_user_id: params.targetUserId || null,
+        target_workspace_member_id: params.targetWorkspaceMemberId || null,
         expires_at: params.expiresAt || null,
       })
       .returning("id"),
@@ -1043,10 +1044,10 @@ export async function createQuestionInteractionRequest(
       taskId: params.taskId,
       requesterMemberId: params.requesterMemberId,
       requesterActorId: params.requesterActorId,
-      requesterUserId: params.requesterUserId,
+      requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
       kind: "question_choice",
       targetMemberId: params.targetMemberId,
-      targetUserId: params.targetUserId,
+      targetWorkspaceMemberId: params.targetWorkspaceMemberId,
       expiresAt: params.expiresAt,
     });
 
@@ -1102,7 +1103,7 @@ export async function createRuntimeAuthorizationInteractionRequest(
       taskId: params.taskId,
       requesterMemberId: params.requesterMemberId,
       requesterActorId: params.requesterActorId,
-      requesterUserId: params.requesterUserId,
+      requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
       kind: "runtime_authorization",
       expiresAt: params.expiresAt,
     });
@@ -1294,19 +1295,31 @@ export async function canUserViewInteraction(params: {
     .select("ir.id")
     .where("ir.id", "=", params.interactionId)
     .where((eb) =>
-      eb.or([
-        eb("ir.requester_user_id", "=", params.userId),
+        eb.or([
+        sql<boolean>`EXISTS (
+          SELECT 1
+          FROM workspace_members wm
+          WHERE wm.id = ir.requester_workspace_member_id
+            AND wm.user_id = ${params.userId}
+        )`,
         eb.and([
           eb("ir.kind", "=", "question_choice"),
-          eb("ir.target_user_id", "=", params.userId),
+          sql<boolean>`EXISTS (
+            SELECT 1
+            FROM workspace_members wm
+            WHERE wm.id = ir.target_workspace_member_id
+              AND wm.user_id = ${params.userId}
+          )`,
         ]),
         eb.and([
           eb("ir.kind", "=", "runtime_authorization"),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM conversation_members cm
+            JOIN workspace_members wm
+              ON wm.id = cm.workspace_member_id
             WHERE cm.conversation_id = ir.conversation_id
-              AND cm.user_id = ${params.userId}
+              AND wm.user_id = ${params.userId}
               AND cm.state = 'active'
           )`,
         ]),
@@ -1327,7 +1340,20 @@ export async function canUserResolveInteraction(params: {
   }
 
   if (interaction.kind === "question_choice") {
-    return interaction.target?.userId === userId;
+    const targetWorkspaceMemberId = interaction.target?.workspaceMemberId;
+    if (!targetWorkspaceMemberId) {
+      return false;
+    }
+
+    const viewerWorkspaceMember = await db
+      .selectFrom("workspace_members")
+      .select("id")
+      .where("workspace_id", "=", interaction.workspaceId)
+      .where("user_id", "=", userId)
+      .limit(1)
+      .executeTakeFirst();
+
+    return viewerWorkspaceMember?.id === targetWorkspaceMemberId;
   }
 
   const deviceId = interaction.runtimeAuthorization?.deviceId;
@@ -1554,7 +1580,7 @@ export async function resolveInteractionRequest(
   }
   if (
     existing.kind === "question_choice" &&
-    existing.target_user_id !== params.resolverUserId
+    existing.target_workspace_member_id !== params.resolverWorkspaceMemberId
   ) {
     throw new Error("Only the targeted user can resolve this interaction");
   }
@@ -1622,8 +1648,7 @@ export async function resolveInteractionRequest(
           relayExposureId: existing.relay_exposure_id || "",
           conversationId: existing.conversation_id,
           actorId: existing.requester_actor_id || undefined,
-          createdByUserId: params.resolverUserId,
-          createdByMemberId: params.resolverMemberId,
+          createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
           sourceInteractionId: existing.id,
           sourceTaskId: existing.task_id || undefined,
           preset: params.preset || "once",
@@ -1659,7 +1684,7 @@ export async function resolveInteractionRequest(
     await updateInteractionRequestRow(client, params.interactionId, {
       status: nextStatus,
       resolved_by_member_id: params.resolverMemberId,
-      resolved_by_user_id: params.resolverUserId,
+      resolved_by_workspace_member_id: params.resolverWorkspaceMemberId,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     });

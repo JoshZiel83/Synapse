@@ -42,8 +42,8 @@ function getCompactNote(member: ConversationMember) {
     return member.title || member.role || "Actor"
   }
   if (member.type === "external") {
-    if (member.linkedUserName) {
-      return `Linked to ${member.linkedUserName}`
+    if (member.linkedWorkspaceMemberName) {
+      return `Linked to ${member.linkedWorkspaceMemberName}`
     }
     if (member.externalUserKey) {
       return member.externalUserKey
@@ -126,10 +126,11 @@ export default function ChatParticipantHoverCard({
                     {transportLabel}
                   </Badge>
                 ) : null}
-                {member.type === "external" && member.linkedUserName ? (
+                {member.type === "external" &&
+                member.linkedWorkspaceMemberName ? (
                   <Badge variant="secondary" className="rounded-full">
                     <Link2 data-icon="inline-start" />
-                    {member.linkedUserName}
+                    {member.linkedWorkspaceMemberName}
                   </Badge>
                 ) : null}
               </div>

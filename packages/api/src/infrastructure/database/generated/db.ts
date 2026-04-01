@@ -7,7 +7,7 @@ import type { ColumnType } from "kysely";
 
 export type AccessBindingsStatus = "active" | "revoked";
 
-export type AccessBindingsTargetType = "actor" | "actor_conversation" | "conversation_workspace" | "workspace" | "workspace_user";
+export type AccessBindingsTargetType = "actor" | "actor_conversation" | "conversation_workspace" | "workspace" | "workspace_member";
 
 export type ActorAccessPolicy = "approval_required" | "workspace_open";
 
@@ -17,7 +17,7 @@ export type ActorsRole = "archivist" | "assistant" | "manager" | "receptionist" 
 
 export type ActorVersionDocsVisibility = "always" | "direct_only" | "internal_only" | "multi_member_only";
 
-export type ActorVersionsSourceType = "actor" | "sync" | "system" | "user";
+export type ActorVersionsSourceType = "actor" | "sync" | "system" | "workspace_member";
 
 export type ArrayType<T> = ArrayTypeImpl<T> extends (infer U)[]
   ? U[]
@@ -47,7 +47,7 @@ export type AutomationDeliveryParticipantsEntityKind = "actor" | "workspace_memb
 
 export type AutomationDeliveryRecipientsEntityKind = "actor" | "workspace_member";
 
-export type AutomationEventSourcesCreatedByKind = "session" | "system" | "user";
+export type AutomationEventSourcesCreatedByKind = "session" | "system" | "workspace_member";
 
 export type AutomationEventSourcesProviderKind = "integration" | "internal" | "relay" | "webhook";
 
@@ -69,7 +69,7 @@ export type AutomationPoliciesCompletionStatus = "archived" | "completed";
 
 export type AutomationRulesCategory = "event_subscription" | "schedule";
 
-export type AutomationRulesCreatedByKind = "session" | "system" | "user";
+export type AutomationRulesCreatedByKind = "session" | "system" | "workspace_member";
 
 export type AutomationRulesStatus = "active" | "archived" | "completed" | "error" | "expired" | "paused";
 
@@ -109,7 +109,7 @@ export type ConversationGrantsPermission = "attach_resources" | "manage" | "mana
 
 export type ConversationGrantsStatus = "active" | "revoked";
 
-export type ConversationGrantsSubjectType = "actor" | "workspace_user";
+export type ConversationGrantsSubjectType = "actor" | "workspace_member";
 
 export type ConversationItemPartsPartType = "file_ref" | "json" | "text";
 
@@ -127,7 +127,7 @@ export type ConversationItemsSurface = "internal" | "visible";
 
 export type ConversationItemTargetsTargetKind = "cc" | "to" | "visible";
 
-export type ConversationMembersMemberType = "actor" | "external" | "remote_agent" | "system" | "user";
+export type ConversationMembersMemberType = "actor" | "external" | "remote_agent" | "system" | "workspace_member";
 
 export type ConversationMembersRole = "admin" | "member" | "owner";
 
@@ -167,7 +167,7 @@ export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 
 export type MemoryEntriesCategory = "artifact" | "decision" | "fact" | "preference" | "procedure" | "relationship" | "summary";
 
-export type MemoryEntriesOwnerScope = "actor_conversation" | "actor_global" | "conversation" | "user" | "workspace";
+export type MemoryEntriesOwnerScope = "actor_conversation" | "actor_global" | "conversation" | "workspace" | "workspace_member";
 
 export type MemoryEntriesStability = "durable" | "ephemeral";
 
@@ -175,15 +175,15 @@ export type MemoryEntriesStatus = "candidate" | "established" | "retracted" | "s
 
 export type MemoryEntryPartsPartType = "file_ref" | "json" | "text";
 
-export type MemoryIndexChunksOwnerScope = "actor_conversation" | "actor_global" | "conversation" | "user" | "workspace";
+export type MemoryIndexChunksOwnerScope = "actor_conversation" | "actor_global" | "conversation" | "workspace" | "workspace_member";
 
 export type MemoryRecallRunsRecallType = "bootstrap" | "manual_search" | "turn_recall";
 
-export type ModelGroupGrantsGrantScope = "actor" | "platform" | "user" | "workspace" | "workspace_user";
+export type ModelGroupGrantsGrantScope = "actor" | "platform" | "workspace" | "workspace_member";
 
 export type ModelGroupGrantsStatus = "active" | "revoked";
 
-export type ModelGroupsOwnerType = "platform" | "user" | "workspace";
+export type ModelGroupsOwnerType = "platform" | "workspace" | "workspace_member";
 
 export type ModelGroupsRoutingStrategy = "priority_failover" | "round_robin" | "weighted_random";
 
@@ -197,17 +197,17 @@ export type PlatformAccessBindingsSource = "config" | "manual";
 
 export type PluginAuthSessionsStatus = "completed" | "consumed" | "expired" | "failed" | "pending";
 
-export type PluginConnectionsOwnerScope = "installation" | "user" | "workspace";
+export type PluginConnectionsOwnerScope = "installation" | "workspace" | "workspace_member";
 
 export type PluginConnectionsStatus = "active" | "expired" | "revoked";
 
-export type PluginInstallationsAttachmentTargetType = "actor" | "conversation" | "workspace" | "workspace_user";
+export type PluginInstallationsAttachmentTargetType = "actor" | "conversation" | "workspace" | "workspace_member";
 
 export type PluginInstallationsReuseScope = "actor" | "conversation" | "session" | "turn" | "workspace";
 
 export type PluginInstallationsStatus = "active" | "archived" | "disabled" | "error";
 
-export type PluginPackageVersionSpecsDefaultMountScope = "actor" | "conversation" | "workspace" | "workspace_user";
+export type PluginPackageVersionSpecsDefaultMountScope = "actor" | "conversation" | "workspace" | "workspace_member";
 
 export type PluginPackageVersionSpecsDefaultReuseScope = "actor" | "conversation" | "session" | "turn" | "workspace";
 
@@ -275,7 +275,7 @@ export type SessionsChannelType = "api" | "bridge" | "web";
 
 export type SessionsStatus = "blocked" | "closed" | "idle" | "queued" | "running";
 
-export type SessionWakeupsSourceMemberType = "actor" | "external" | "system" | "user";
+export type SessionWakeupsSourceMemberType = "actor" | "external" | "system" | "workspace_member";
 
 export type SessionWakeupsSourceType = "actor_message" | "api_call" | "automation" | "broadcast" | "invite" | "retry" | "system_interrupt" | "user_message";
 
@@ -309,7 +309,7 @@ export type TransportAccountsConnectionMode = "long_connection" | "webhook";
 
 export type TransportAccountsInboundActorMode = "follow_owner_chief_actor" | "none" | "specified_actor";
 
-export type TransportAccountsOwnerScope = "workspace" | "workspace_user";
+export type TransportAccountsOwnerScope = "workspace" | "workspace_member";
 
 export type TransportAccountsStatus = "active" | "disabled" | "error";
 
@@ -337,7 +337,7 @@ export type WorkspaceMembersTrustLevel = "admin" | "guest" | "member";
 
 export interface AccessBindings {
   created_at: Generated<Timestamp | null>;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   granted_permissions: Generated<string[]>;
   id: Generated<string>;
   is_primary: Generated<boolean>;
@@ -350,8 +350,8 @@ export interface AccessBindings {
   status: Generated<AccessBindingsStatus>;
   subject_actor_id: string | null;
   subject_conversation_id: string | null;
-  subject_user_id: string | null;
   subject_workspace_id: string | null;
+  subject_workspace_member_id: string | null;
   target_type: AccessBindingsTargetType;
   workspace_id: string | null;
 }
@@ -363,7 +363,7 @@ export interface ActorAccessRequests {
   metadata: Generated<Json>;
   requester_workspace_member_id: string;
   resolved_at: Timestamp | null;
-  resolved_by_user_id: string | null;
+  resolved_by_workspace_member_id: string | null;
   status: Generated<RelationshipRequestStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
@@ -383,7 +383,7 @@ export interface Actors {
   can_represent_user: Generated<boolean>;
   config: Generated<Json | null>;
   created_at: Generated<Timestamp | null>;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   current_version: Generated<number>;
   id: Generated<string>;
   is_active: Generated<boolean>;
@@ -439,7 +439,7 @@ export interface ActorVersions {
   can_represent_user: Generated<boolean>;
   config: Generated<Json | null>;
   created_at: Generated<Timestamp | null>;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   id: Generated<string>;
   name: string;
   parent_id: string | null;
@@ -451,7 +451,7 @@ export interface ActorVersions {
   source_session_id: string | null;
   source_turn_id: string | null;
   source_type: Generated<ActorVersionsSourceType>;
-  source_user_id: string | null;
+  source_workspace_member_id: string | null;
   specialties: Generated<string[] | null>;
   title: string;
   version: number;
@@ -567,7 +567,7 @@ export interface AutomationEventSources {
   created_by_actor_id: string | null;
   created_by_kind: AutomationEventSourcesCreatedByKind;
   created_by_session_id: string | null;
-  created_by_user_id: string | null;
+  created_by_workspace_member_id: string | null;
   description: Generated<string>;
   example_payload: Generated<Json>;
   id: Generated<string>;
@@ -610,7 +610,7 @@ export interface AutomationExecutionTargets {
   session_id: string | null;
   status: Generated<AutomationExecutionTargetsStatus>;
   target_actor_id: string | null;
-  target_user_id: string | null;
+  target_workspace_member_id: string | null;
   updated_at: Generated<Timestamp | null>;
   wakeup_id: string | null;
 }
@@ -664,7 +664,7 @@ export interface AutomationRules {
   created_by_actor_id: string | null;
   created_by_kind: AutomationRulesCreatedByKind;
   created_by_session_id: string | null;
-  created_by_user_id: string | null;
+  created_by_workspace_member_id: string | null;
   description: Generated<string>;
   id: Generated<string>;
   last_error_at: Timestamp | null;
@@ -701,7 +701,7 @@ export interface AutomationTriggers {
 
 export interface AutomationWebhookEndpoints {
   created_at: Generated<Timestamp | null>;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   id: Generated<string>;
   last_received_at: Timestamp | null;
   metadata: Generated<Json>;
@@ -772,7 +772,7 @@ export interface CatalogVersions {
   catalog_item_id: string;
   changelog: Generated<string | null>;
   created_at: Generated<Timestamp | null>;
-  created_by: string | null;
+  created_by_user_id: string | null;
   id: Generated<string>;
   metadata: Generated<Json | null>;
   status: Generated<CatalogVersionsStatus>;
@@ -851,7 +851,7 @@ export interface ConversationGrants {
   actor_id: string | null;
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
-  granted_by: string | null;
+  granted_by_workspace_member_id: string | null;
   id: Generated<string>;
   metadata: Generated<Json | null>;
   permission: ConversationGrantsPermission;
@@ -859,8 +859,8 @@ export interface ConversationGrants {
   revoked_at: Timestamp | null;
   status: Generated<ConversationGrantsStatus>;
   subject_type: ConversationGrantsSubjectType;
-  user_id: string | null;
   workspace_id: string;
+  workspace_member_id: string | null;
 }
 
 export interface ConversationItemContextTargets {
@@ -922,7 +922,6 @@ export interface ConversationMembers {
   metadata: Generated<Json | null>;
   role: Generated<ConversationMembersRole>;
   state: Generated<ConversationMembersState>;
-  user_id: string | null;
   workspace_member_id: string | null;
 }
 
@@ -938,7 +937,7 @@ export interface ConversationParticipantAddresses {
 export interface Conversations {
   boundary: ConversationsBoundary;
   created_at: Generated<Timestamp | null>;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   id: Generated<string>;
   internal_workspace_id: string | null;
   kind: ConversationsKind;
@@ -967,7 +966,6 @@ export interface ConversationUserStates {
   last_read_at: Timestamp | null;
   read_watermark_sequence: Generated<Int8>;
   updated_at: Generated<Timestamp>;
-  user_id: string;
   workspace_member_id: string;
 }
 
@@ -1016,7 +1014,7 @@ export interface Files {
 
 export interface InstalledSkills {
   created_at: Generated<Timestamp | null>;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   current_version: Generated<number>;
   icon_file_id: string | null;
   id: Generated<string>;
@@ -1044,13 +1042,13 @@ export interface InteractionRequests {
   metadata: Generated<Json>;
   requester_actor_id: string | null;
   requester_member_id: string | null;
-  requester_user_id: string | null;
+  requester_workspace_member_id: string | null;
   resolved_at: Timestamp | null;
   resolved_by_member_id: string | null;
-  resolved_by_user_id: string | null;
+  resolved_by_workspace_member_id: string | null;
   status: Generated<InteractionRequestsStatus>;
   target_member_id: string | null;
-  target_user_id: string | null;
+  target_workspace_member_id: string | null;
   task_id: string;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
@@ -1075,7 +1073,7 @@ export interface MemoryEntries {
   owner_actor_id: string | null;
   owner_conversation_id: string | null;
   owner_scope: MemoryEntriesOwnerScope;
-  owner_user_id: string | null;
+  owner_workspace_member_id: string | null;
   search_text: Generated<string>;
   source_item_id: string | null;
   source_tool_call_id: string | null;
@@ -1112,7 +1110,7 @@ export interface MemoryIndexChunks {
   owner_actor_id: string | null;
   owner_conversation_id: string | null;
   owner_scope: MemoryIndexChunksOwnerScope;
-  owner_user_id: string | null;
+  owner_workspace_member_id: string | null;
   search_text: string;
   token_count: Generated<number | null>;
   updated_at: Generated<Timestamp | null>;
@@ -1144,23 +1142,23 @@ export interface MemoryRecallRuns {
   query_blocks: Generated<Json | null>;
   query_text: Generated<string>;
   recall_type: MemoryRecallRunsRecallType;
-  user_id: string | null;
   workspace_id: string;
+  workspace_member_id: string | null;
 }
 
 export interface ModelGroupGrants {
   actor_id: string | null;
   created_at: Generated<Timestamp | null>;
   grant_scope: ModelGroupGrantsGrantScope;
-  granted_by: string | null;
+  granted_by_workspace_member_id: string | null;
   group_id: string;
   id: Generated<string>;
   metadata: Generated<Json | null>;
   reason: string | null;
   revoked_at: Timestamp | null;
   status: Generated<ModelGroupGrantsStatus>;
-  user_id: string | null;
   workspace_id: string | null;
+  workspace_member_id: string | null;
 }
 
 export interface ModelGroupProfiles {
@@ -1178,7 +1176,7 @@ export interface ModelGroupProfiles {
 export interface ModelGroups {
   attempt_policy: Generated<Json | null>;
   created_at: Generated<Timestamp | null>;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   description: Generated<string | null>;
   id: Generated<string>;
   is_default: Generated<boolean | null>;
@@ -1186,8 +1184,8 @@ export interface ModelGroups {
   metadata: Generated<Json | null>;
   name: string;
   owner_type: ModelGroupsOwnerType;
-  owner_user_id: string | null;
   owner_workspace_id: string | null;
+  owner_workspace_member_id: string | null;
   routing_strategy: Generated<ModelGroupsRoutingStrategy>;
   updated_at: Generated<Timestamp | null>;
 }
@@ -1214,7 +1212,7 @@ export interface ModelProfiles {
   current_revision_id: string | null;
   display_name: string;
   id: Generated<string>;
-  installed_by: string | null;
+  installed_by_workspace_member_id: string | null;
   is_enabled: Generated<boolean | null>;
   metadata: Generated<Json | null>;
   updated_at: Generated<Timestamp | null>;
@@ -1234,7 +1232,7 @@ export interface PayloadBlobs {
 
 export interface PlatformAccessBindings {
   access_key: PlatformAccessBindingsAccessKey;
-  assigned_by: string | null;
+  assigned_by_user_id: string | null;
   created_at: Generated<Timestamp | null>;
   metadata: Generated<Json | null>;
   source: Generated<PlatformAccessBindingsSource>;
@@ -1262,8 +1260,8 @@ export interface PluginAuthSessions {
   status: Generated<PluginAuthSessionsStatus>;
   transient_payload: Generated<Json | null>;
   updated_at: Generated<Timestamp | null>;
-  user_id: string;
   workspace_id: string;
+  workspace_member_id: string;
 }
 
 export interface PluginConnections {
@@ -1278,7 +1276,7 @@ export interface PluginConnections {
   installation_id: string;
   metadata: Generated<Json | null>;
   owner_scope: Generated<PluginConnectionsOwnerScope>;
-  owner_user_id: string | null;
+  owner_workspace_member_id: string | null;
   public_payload: Generated<Json | null>;
   secret_payload: Generated<Json | null>;
   status: Generated<PluginConnectionsStatus>;
@@ -1291,14 +1289,14 @@ export interface PluginInstallations {
   attachment_actor_id: string | null;
   attachment_conversation_id: string | null;
   attachment_target_type: PluginInstallationsAttachmentTargetType;
-  attachment_user_id: string | null;
+  attachment_workspace_member_id: string | null;
   catalog_item_id: string;
   catalog_version_id: string;
   config_data: Generated<Json>;
   created_at: Generated<Timestamp | null>;
   display_name: string;
   id: Generated<string>;
-  installed_by: string | null;
+  installed_by_workspace_member_id: string | null;
   metadata: Generated<Json | null>;
   reuse_scope: Generated<PluginInstallationsReuseScope>;
   status: Generated<PluginInstallationsStatus>;
@@ -1423,7 +1421,7 @@ export interface RelayDevices {
   last_connected_at: Timestamp | null;
   last_seen_at: Timestamp | null;
   metadata: Generated<Json | null>;
-  owner_user_id: string | null;
+  owner_workspace_member_id: string | null;
   platform: string | null;
   public_key: string;
   public_key_fingerprint: string;
@@ -1508,7 +1506,7 @@ export interface RelayOperations {
   operation_timeout_ms: number | null;
   requested_by_actor_id: string | null;
   requested_by_session_id: string | null;
-  requested_by_user_id: string | null;
+  requested_by_workspace_member_id: string | null;
   requires_replan: Generated<boolean>;
   result_hash: string | null;
   runtime_session_id: string | null;
@@ -1530,7 +1528,7 @@ export interface RelayPairingSessions {
   id: Generated<string>;
   metadata: Generated<Json | null>;
   pairing_code: string;
-  requested_by: string | null;
+  requested_by_workspace_member_id: string | null;
   requested_display_name: string | null;
   server_base_url: string;
   status: Generated<RelayPairingSessionsStatus>;
@@ -1604,8 +1602,7 @@ export interface RuntimeGrants {
   consumed_at: Timestamp | null;
   conversation_id: string | null;
   created_at: Generated<Timestamp | null>;
-  created_by_member_id: string | null;
-  created_by_user_id: string | null;
+  created_by_workspace_member_id: string | null;
   effect: Generated<Json>;
   id: Generated<string>;
   metadata: Generated<Json>;
@@ -1739,7 +1736,7 @@ export interface SkillSourceRefs {
 
 export interface SkillVersions {
   created_at: Generated<Timestamp | null>;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   description_blocks: Generated<Json>;
   id: Generated<string>;
   metadata: Generated<Json | null>;
@@ -1866,7 +1863,7 @@ export interface TransportAccounts {
   inbound_actor_mode: Generated<TransportAccountsInboundActorMode>;
   metadata: Generated<Json>;
   owner_scope: Generated<TransportAccountsOwnerScope>;
-  owner_user_id: string | null;
+  owner_workspace_member_id: string | null;
   status: Generated<TransportAccountsStatus>;
   transport_kind: TransportAccountsTransportKind;
   updated_at: Generated<Timestamp>;
@@ -1883,8 +1880,8 @@ export interface TransportAddresses {
   transport_account_id: string;
   transport_kind: TransportAddressesTransportKind;
   updated_at: Generated<Timestamp>;
-  user_id: string | null;
   workspace_id: string;
+  workspace_member_id: string | null;
 }
 
 export interface TransportEndpoints {
@@ -1942,12 +1939,11 @@ export interface Users {
 
 export interface WorkspaceAccessBindings {
   access_key: WorkspaceAccessBindingsAccessKey;
-  assigned_by: string | null;
+  assigned_by_workspace_member_id: string | null;
   created_at: Generated<Timestamp | null>;
   metadata: Generated<Json | null>;
   updated_at: Generated<Timestamp | null>;
-  user_id: string;
-  workspace_id: string;
+  workspace_member_id: string;
 }
 
 export interface WorkspaceFriendEntries {
@@ -1970,7 +1966,7 @@ export interface WorkspaceFriendRequests {
   requested_via_profile_id: string | null;
   requester_workspace_member_id: string;
   resolved_at: Timestamp | null;
-  resolved_by_user_id: string | null;
+  resolved_by_workspace_member_id: string | null;
   status: Generated<RelationshipRequestStatus>;
   target_actor_id: string | null;
   target_subject_type: RelationshipTargetType;
@@ -1980,7 +1976,7 @@ export interface WorkspaceFriendRequests {
 
 export interface WorkspaceInvites {
   created_at: Generated<Timestamp | null>;
-  created_by: string;
+  created_by_workspace_member_id: string;
   expires_at: Timestamp | null;
   id: Generated<string>;
   is_revoked: Generated<boolean | null>;
@@ -1990,6 +1986,13 @@ export interface WorkspaceInvites {
   updated_at: Generated<Timestamp | null>;
   use_count: Generated<number>;
   workspace_id: string;
+}
+
+export interface WorkspaceMemberPreferences {
+  chief_actor_id: string | null;
+  created_at: Generated<Timestamp | null>;
+  updated_at: Generated<Timestamp | null>;
+  workspace_member_id: string;
 }
 
 export interface WorkspaceMembers {
@@ -2003,7 +2006,7 @@ export interface WorkspaceMembers {
 export interface WorkspaceRelationshipProfiles {
   approval_mode: Generated<RelationshipApprovalMode>;
   created_at: Generated<Timestamp | null>;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   id: Generated<string>;
   identity_id: Generated<string>;
   identity_search_enabled: Generated<boolean>;
@@ -2023,14 +2026,6 @@ export interface Workspaces {
   owner_id: string;
   slug: string;
   updated_at: Generated<Timestamp | null>;
-}
-
-export interface WorkspaceUserPreferences {
-  chief_actor_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  updated_at: Generated<Timestamp | null>;
-  user_id: string;
-  workspace_id: string;
 }
 
 export interface DB {
@@ -2146,8 +2141,8 @@ export interface DB {
   workspace_friend_entries: WorkspaceFriendEntries;
   workspace_friend_requests: WorkspaceFriendRequests;
   workspace_invites: WorkspaceInvites;
+  workspace_member_preferences: WorkspaceMemberPreferences;
   workspace_members: WorkspaceMembers;
   workspace_relationship_profiles: WorkspaceRelationshipProfiles;
-  workspace_user_preferences: WorkspaceUserPreferences;
   workspaces: Workspaces;
 }

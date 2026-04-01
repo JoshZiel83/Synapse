@@ -29,7 +29,7 @@ const RELAY_EXPOSURE_PERMISSION_SUMMARY = {
 export function buildRelayDeviceAuthzMutations(params: {
   deviceId: string;
   workspaceId: string;
-  ownerUserId?: string | null;
+  ownerWorkspaceMemberId?: string | null;
   operation: "touch" | "delete";
 }) {
   const mutate = params.operation === "delete" ? deleteRelation : touchRelation;
@@ -37,9 +37,15 @@ export function buildRelayDeviceAuthzMutations(params: {
     mutate("relay_device", params.deviceId, "workspace", "workspace", params.workspaceId),
   ];
 
-  if (params.ownerUserId) {
+  if (params.ownerWorkspaceMemberId) {
     relations.push(
-      mutate("relay_device", params.deviceId, "owner", "user", params.ownerUserId),
+      mutate(
+        "relay_device",
+        params.deviceId,
+        "owner",
+        "workspace_member",
+        params.ownerWorkspaceMemberId,
+      ),
     );
   }
 
@@ -94,7 +100,7 @@ export async function ensureRelayExposureDefaultAccess(params: {
          target_type,
          relation,
          subject_workspace_id,
-         subject_user_id,
+         subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
          is_primary,
@@ -143,7 +149,7 @@ export async function ensureRelayExposureDefaultAccess(params: {
 export async function touchRelayDeviceAuthzState(params: {
   workspaceId: string;
   deviceId: string;
-  ownerUserId?: string | null;
+  ownerWorkspaceMemberId?: string | null;
 }) {
   const authzEntryIds = await transaction(async (client) =>
     queueAuthzRelationships(
@@ -151,7 +157,7 @@ export async function touchRelayDeviceAuthzState(params: {
       buildRelayDeviceAuthzMutations({
         deviceId: params.deviceId,
         workspaceId: params.workspaceId,
-        ownerUserId: params.ownerUserId,
+        ownerWorkspaceMemberId: params.ownerWorkspaceMemberId,
         operation: "touch",
       }),
       {
@@ -225,7 +231,7 @@ export async function grantRelayExposureAccess(input: {
   workspaceId: string;
   exposureId: string;
   accessTarget?: CapabilityAccessTarget;
-  grantedBy?: string;
+  grantedByWorkspaceMemberId?: string;
   reason?: string;
   metadata?: Record<string, unknown>;
 }) {
@@ -242,7 +248,7 @@ export async function grantRelayExposureAccess(input: {
        AND resource_id = $2
        AND relation = $3
        AND subject_workspace_id IS NOT DISTINCT FROM $4::uuid
-       AND subject_user_id IS NOT DISTINCT FROM $5::uuid
+       AND subject_workspace_member_id IS NOT DISTINCT FROM $5::uuid
        AND subject_actor_id IS NOT DISTINCT FROM $6::uuid
        AND subject_conversation_id IS NOT DISTINCT FROM $7::uuid
        AND status = 'active'
@@ -252,7 +258,7 @@ export async function grantRelayExposureAccess(input: {
       input.exposureId,
       target.relation,
       target.subjectWorkspaceId,
-      target.subjectUserId,
+      target.subjectWorkspaceMemberId,
       target.subjectActorId,
       target.subjectConversationId,
     ],
@@ -271,13 +277,13 @@ export async function grantRelayExposureAccess(input: {
          target_type,
          relation,
          subject_workspace_id,
-         subject_user_id,
+         subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
          is_primary,
          granted_permissions,
          status,
-         created_by,
+         created_by_workspace_member_id,
          reason,
          metadata
        )
@@ -291,10 +297,10 @@ export async function grantRelayExposureAccess(input: {
         target.targetType,
         target.relation,
         target.subjectWorkspaceId,
-        target.subjectUserId,
+        target.subjectWorkspaceMemberId,
         target.subjectActorId,
         target.subjectConversationId,
-        input.grantedBy || null,
+        input.grantedByWorkspaceMemberId || null,
         input.reason || RELAY_EXPOSURE_PERMISSION_SUMMARY.reason,
         JSON.stringify(input.metadata || {}),
       ],
@@ -389,7 +395,7 @@ export async function revokeRelayExposureAccess(input: {
 export async function revokeRelayDeviceAuthzState(input: {
   workspaceId: string;
   deviceId: string;
-  ownerUserId?: string | null;
+  ownerWorkspaceMemberId?: string | null;
   exposureIds: string[];
 }) {
   const activeBindings = input.exposureIds.length > 0
@@ -411,7 +417,7 @@ export async function revokeRelayDeviceAuthzState(input: {
         ...buildRelayDeviceAuthzMutations({
           deviceId: input.deviceId,
           workspaceId: input.workspaceId,
-          ownerUserId: input.ownerUserId,
+          ownerWorkspaceMemberId: input.ownerWorkspaceMemberId,
           operation: "delete",
         }),
         ...input.exposureIds.flatMap((exposureId) =>

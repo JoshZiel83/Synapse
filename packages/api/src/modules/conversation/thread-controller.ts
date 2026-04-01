@@ -12,7 +12,7 @@ import {
   getConversation,
   getConversationMembers,
   getConversationMessages,
-  getThreadsForUser,
+  getThreadsForWorkspaceMember,
   isConversationServiceError,
   markConversationRead,
   sendConversationMessage,
@@ -210,11 +210,9 @@ async function requireConversationAccess(
 async function loadConversationSummary(params: {
   conversationId: string;
   workspaceId: string;
-  userId: string;
   workspaceMemberId: string;
 }) {
-  const rows = await getThreadsForUser({
-    userId: params.userId,
+  const rows = await getThreadsForWorkspaceMember({
     workspaceId: params.workspaceId,
     workspaceMemberId: params.workspaceMemberId,
   });
@@ -242,8 +240,7 @@ export default async function threadController(app: FastifyInstance) {
     const workspaceMember = await resolveRequestWorkspaceMember(request, reply);
     if (!workspaceMember) return;
 
-    const threads = await getThreadsForUser({
-      userId: getRequestUserId(request),
+    const threads = await getThreadsForWorkspaceMember({
       workspaceId: request.params.workspaceId,
       workspaceMemberId: workspaceMember.workspaceMemberId,
     });
@@ -255,7 +252,6 @@ export default async function threadController(app: FastifyInstance) {
       conversations: await Promise.all(
         threads.map((thread) =>
           mapConversationSummaryView(thread, {
-            userId: getRequestUserId(request),
             workspaceMemberId: workspaceMember.workspaceMemberId,
           }),
         ),
@@ -276,7 +272,6 @@ export default async function threadController(app: FastifyInstance) {
       const created = await createThread({
         workspaceId: request.params.workspaceId,
         kind: body.kind,
-        createdByUserId: getRequestUserId(request),
         createdByWorkspaceMemberId: workspaceMember.workspaceMemberId,
         title: body.title,
         actorIds: body.actorIds,
@@ -293,7 +288,6 @@ export default async function threadController(app: FastifyInstance) {
       const summary = await loadConversationSummary({
         conversationId: created.conversation.id,
         workspaceId: request.params.workspaceId,
-        userId: getRequestUserId(request),
         workspaceMemberId: workspaceMember.workspaceMemberId,
       });
 
@@ -301,7 +295,6 @@ export default async function threadController(app: FastifyInstance) {
         conversationId: created.conversation.id,
         conversation: summary
           ? await mapConversationSummaryView(summary, {
-              userId: getRequestUserId(request),
               workspaceMemberId: workspaceMember.workspaceMemberId,
             })
           : undefined,
@@ -322,7 +315,6 @@ export default async function threadController(app: FastifyInstance) {
       const summary = await loadConversationSummary({
         conversationId: request.params.conversationId,
         workspaceId: request.params.workspaceId,
-        userId: getRequestUserId(request),
         workspaceMemberId: access.workspaceMember.workspaceMemberId,
       });
       if (!summary) {
@@ -331,7 +323,6 @@ export default async function threadController(app: FastifyInstance) {
 
       return reply.send({
         conversation: await mapConversationSummaryView(summary, {
-          userId: getRequestUserId(request),
           workspaceMemberId: access.workspaceMember.workspaceMemberId,
         }),
       });
@@ -351,7 +342,6 @@ export default async function threadController(app: FastifyInstance) {
       const page = await getConversationMessages(
         request.params.conversationId,
         {
-          userId: getRequestUserId(request),
           workspaceMemberId: access.workspaceMember.workspaceMemberId,
         },
         limit,
@@ -408,9 +398,9 @@ export default async function threadController(app: FastifyInstance) {
         actorIds: body.actorIds,
         workspaceMemberIds: body.workspaceMemberIds,
         initiator: {
-          memberType: "user",
+          memberType: "workspace_member",
           memberId: access.viewerMember.id,
-          userId: getRequestUserId(request),
+          workspaceMemberId: access.workspaceMember.workspaceMemberId,
           name: access.workspaceMember.userName,
         },
       });
@@ -431,10 +421,9 @@ export default async function threadController(app: FastifyInstance) {
         const body = sendConversationMessageSchema.parse(request.body);
         const response = await sendConversationMessage({
           conversationId: request.params.conversationId,
-          senderType: "user",
+          senderType: "workspace_member",
           senderWorkspaceId: request.params.workspaceId,
           senderWorkspaceMemberId: access.workspaceMember.workspaceMemberId,
-          senderUserId: getRequestUserId(request),
           clientMessageId: body.clientMessageId,
           targetParticipantIds: body.targetParticipantIds,
           targetActorIds: body.targetActorIds,
@@ -460,7 +449,7 @@ export default async function threadController(app: FastifyInstance) {
 
       const body = markReadSchema.parse(request.body);
       await markConversationRead(
-        getRequestUserId(request),
+        access.workspaceMember.workspaceMemberId,
         request.params.conversationId,
         body.readUpToSequence,
         request.params.workspaceId,
@@ -526,7 +515,7 @@ export default async function threadController(app: FastifyInstance) {
         workspaceId: session.workspace_id,
         sourceType: "retry",
         sourceItemId: itemId,
-        sourceMemberType: "user",
+        sourceMemberType: "workspace_member",
         sourceMemberId: access.workspaceMember.workspaceMemberId,
         summary: "Retry requested",
         reasonText: "User requested a retry after a model error.",
@@ -565,7 +554,7 @@ export default async function threadController(app: FastifyInstance) {
       const updated = await updateConversationProfile({
         conversationId: request.params.conversationId,
         workspaceId: request.params.workspaceId,
-        updatedBy: getRequestUserId(request),
+        updatedByWorkspaceMemberId: access.workspaceMember.workspaceMemberId,
         title: body.title,
         avatarFileId: body.avatarFileId,
       });
@@ -618,7 +607,7 @@ export default async function threadController(app: FastifyInstance) {
       const body = resolveConversationInteractionSchema.parse(request.body);
       const result = await resolveInteractionRequest({
         interactionId: interaction.id,
-        resolverUserId: getRequestUserId(request),
+        resolverWorkspaceMemberId: access.workspaceMember.workspaceMemberId,
         resolverMemberId: resolverMember.id,
         answers: body.answers,
         selectedOptionId: body.selectedOptionId,

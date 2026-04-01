@@ -37,16 +37,17 @@ import { api } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 
 function isMemoryScope(value: string | null): value is MemoryScope {
-  return value === "workspace" || value === "user" || value === "conversation" || value === "actor_global" || value === "actor_conversation"
+  return value === "workspace" || value === "workspace_member" || value === "conversation" || value === "actor_global" || value === "actor_conversation"
 }
 
 export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { workspaceId, workspaceName } = useWorkspace()
+  const { workspaceId, workspaceName, currentWorkspaceMemberId } =
+    useWorkspace()
   const { user } = useAuthStore()
-  const currentUserId = user?.id || ""
-  const currentUserLabel = user?.name || user?.email || "Me"
+  const effectiveCurrentWorkspaceMemberId = currentWorkspaceMemberId || ""
+  const currentWorkspaceMemberLabel = user?.name || user?.email || "Me"
 
   const returnTo = searchParams.get("returnTo") || "/dashboard/memories"
 
@@ -93,9 +94,12 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
             ownerScope: isMemoryScope(ownerScopeParam) ? ownerScopeParam : "workspace",
             ownerActorId: searchParams.get("ownerActorId") || undefined,
             ownerConversationId: searchParams.get("ownerConversationId") || undefined,
-            ownerUserId: searchParams.get("ownerUserId") || currentUserId || undefined,
+            ownerWorkspaceMemberId:
+              searchParams.get("ownerWorkspaceMemberId") ||
+              effectiveCurrentWorkspaceMemberId ||
+              undefined,
           },
-          currentUserId,
+          effectiveCurrentWorkspaceMemberId,
         )
         setMemory(null)
         setEditor(nextEditor)
@@ -120,14 +124,22 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
         ? buildMemoryFolders({
             workspaceId,
             workspaceName,
-            currentUserId,
-            currentUserLabel,
+            currentWorkspaceMemberId: effectiveCurrentWorkspaceMemberId,
+            currentWorkspaceMemberLabel,
             memories: memory ? [memory] : [],
             actors,
             groups,
           })
         : [],
-    [actors, currentUserId, currentUserLabel, groups, memory, workspaceId, workspaceName],
+    [
+      actors,
+      effectiveCurrentWorkspaceMemberId,
+      currentWorkspaceMemberLabel,
+      groups,
+      memory,
+      workspaceId,
+      workspaceName,
+    ],
   )
 
   const folderMap = useMemo(() => new Map(folders.map((folder) => [folder.id, folder])), [folders])
@@ -136,13 +148,13 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
     if (!editor || !workspaceId) return ""
     return getFolderIdForOwner({
       workspaceId,
-      currentUserId,
+      currentWorkspaceMemberId: effectiveCurrentWorkspaceMemberId,
       ownerScope: editor.ownerScope,
       ownerActorId: editor.ownerActorId || undefined,
       ownerConversationId: editor.ownerConversationId || undefined,
-      ownerUserId: editor.ownerUserId || undefined,
+      ownerWorkspaceMemberId: editor.ownerWorkspaceMemberId || undefined,
     })
-  }, [currentUserId, editor, workspaceId])
+  }, [effectiveCurrentWorkspaceMemberId, editor, workspaceId])
 
   const selectedFolder = useMemo(
     () => folderMap.get(selectedFolderId) || null,
@@ -164,7 +176,10 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
 
     updateEditor((current) => ({
       ...current,
-      ...buildMemoryOwnerStateFromPreset(preset, currentUserId),
+      ...buildMemoryOwnerStateFromPreset(
+        preset,
+        effectiveCurrentWorkspaceMemberId
+      ),
     }))
   }
 

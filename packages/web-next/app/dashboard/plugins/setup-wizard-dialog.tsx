@@ -9,7 +9,6 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Check, ChevronRight, ExternalLink, HelpCircle } from 'lucide-react';
 import { usePluginStore } from '@/stores/plugin-store';
-import { useAuthStore } from '@/stores/auth-store';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 
 type AttachmentType = AttachmentTargetType;
@@ -30,7 +29,7 @@ interface Props {
   attachmentType?: AttachmentType;
   actorId?: string;
   conversationId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
   lifecycleScope?: ReuseScope;
   onClose: () => void;
   onComplete: () => void;
@@ -41,15 +40,14 @@ export default function SetupWizardDialog({
   attachmentType = 'workspace',
   actorId,
   conversationId,
-  userId,
+  workspaceMemberId,
   lifecycleScope,
   onClose,
   onComplete,
 }: Props) {
-  const { workspaceId } = useWorkspace();
+  const { workspaceId, currentWorkspaceMemberId } = useWorkspace();
   const { installPlugin } = usePluginStore();
-  const { user } = useAuthStore();
-  const currentUserId = user?.id || '';
+  const effectiveCurrentWorkspaceMemberId = currentWorkspaceMemberId || '';
 
   const allSteps: SetupStep[] = plugin.setup_steps || [];
 
@@ -114,7 +112,10 @@ export default function SetupWizardDialog({
             type: attachmentType,
             actorId: attachmentType === 'actor' ? actorId : undefined,
             conversationId: attachmentType === 'conversation' ? conversationId : undefined,
-            userId: attachmentType === 'workspace_user' ? userId || currentUserId : undefined,
+            workspaceMemberId:
+              attachmentType === 'workspace_member'
+                ? workspaceMemberId || effectiveCurrentWorkspaceMemberId
+                : undefined,
           },
           lifecycleScope,
           configData: Object.keys(allConfig).length > 0 ? allConfig : undefined,
@@ -140,7 +141,10 @@ export default function SetupWizardDialog({
           type: attachmentType,
           actorId: attachmentType === 'actor' ? actorId : undefined,
           conversationId: attachmentType === 'conversation' ? conversationId : undefined,
-          userId: attachmentType === 'workspace_user' ? userId || currentUserId : undefined,
+          workspaceMemberId:
+            attachmentType === 'workspace_member'
+              ? workspaceMemberId || effectiveCurrentWorkspaceMemberId
+              : undefined,
         },
         lifecycleScope,
       })

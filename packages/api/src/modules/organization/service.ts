@@ -53,7 +53,7 @@ type QueryRunner = <T extends QueryRow>(
 
 export interface ActorUpdateSourceInput {
   type: ActorUpdateSourceType;
-  userId?: UUID;
+  workspaceMemberId?: UUID;
   actorId?: UUID;
   sessionId?: UUID;
   turnId?: UUID;
@@ -110,9 +110,9 @@ type ActorVersionRow = {
   specialties: string[] | null;
   config: Record<string, unknown> | string | null;
   version_delta: ActorVersionDelta | string | null;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   source_type: ActorUpdateSourceType;
-  source_user_id: string | null;
+  source_workspace_member_id: string | null;
   source_actor_id: string | null;
   source_session_id: string | null;
   source_turn_id: string | null;
@@ -162,7 +162,7 @@ type ActorPackageRow = {
   version_status: MarketplaceVersionStatus;
   version_changelog: string;
   version_metadata: Record<string, unknown> | string | null;
-  version_created_by: string | null;
+  version_created_by_user_id: string | null;
   version_created_at: string;
   actor_role: ActorRole;
   actor_name: string;
@@ -259,7 +259,7 @@ const ACTOR_PACKAGE_SELECT = `
     version.status AS version_status,
     version.changelog AS version_changelog,
     version.metadata AS version_metadata,
-    version.created_by AS version_created_by,
+    version.created_by_user_id AS version_created_by_user_id,
     version.created_at AS version_created_at,
     spec.role AS actor_role,
     spec.name AS actor_name,
@@ -412,7 +412,7 @@ function buildActorPackageRevision(
     setupSteps: [],
     authBindings: [],
     metadata: versionMetadata,
-    createdBy: row.version_created_by || undefined,
+    createdByUserId: row.version_created_by_user_id || undefined,
     createdAt: row.version_created_at,
     assets: [],
   };
@@ -544,7 +544,7 @@ function buildActorVersionSource(
   if (!source) return undefined;
   return {
     type: source.type,
-    userId: source.userId || undefined,
+    workspaceMemberId: source.workspaceMemberId || undefined,
     actorId: source.actorId || undefined,
     sessionId: source.sessionId || undefined,
     turnId: source.turnId || undefined,
@@ -556,7 +556,7 @@ function buildActorVersionSource(
 function buildActorVersionSourceFromRow(row: Pick<
   ActorVersionRow,
   | "source_type"
-  | "source_user_id"
+  | "source_workspace_member_id"
   | "source_actor_id"
   | "source_session_id"
   | "source_turn_id"
@@ -565,7 +565,7 @@ function buildActorVersionSourceFromRow(row: Pick<
 >): ActorVersionSource {
   return {
     type: row.source_type,
-    userId: row.source_user_id || undefined,
+    workspaceMemberId: row.source_workspace_member_id || undefined,
     actorId: row.source_actor_id || undefined,
     sessionId: row.source_session_id || undefined,
     turnId: row.source_turn_id || undefined,
@@ -602,7 +602,8 @@ function mapActorVersionRow(row: ActorVersionRow, docs: ActorDoc[]): ActorVersio
       typeof row.version_delta === "string"
         ? (JSON.parse(row.version_delta) as ActorVersionDelta)
         : row.version_delta || undefined,
-    createdBy: row.created_by || undefined,
+    createdByWorkspaceMemberId:
+      row.created_by_workspace_member_id || undefined,
     source: buildActorVersionSourceFromRow(row),
     createdAt: row.created_at,
   };
@@ -968,7 +969,7 @@ async function ensureParentActor(
 function buildActorAuthzMutations(params: {
   actorId: UUID;
   workspaceId: UUID;
-  ownerUserId?: UUID;
+  ownerWorkspaceMemberId?: UUID;
   operation: "touch" | "delete";
 }) {
   const mutate = params.operation === "touch" ? touchRelation : deleteRelation;
@@ -980,9 +981,15 @@ function buildActorAuthzMutations(params: {
     mutate("actor", params.actorId, "receive_workspace", "workspace", params.workspaceId),
   ];
 
-  if (params.ownerUserId) {
+  if (params.ownerWorkspaceMemberId) {
     relations.push(
-      mutate("actor", params.actorId, "owner", "user", params.ownerUserId),
+      mutate(
+        "actor",
+        params.actorId,
+        "owner",
+        "workspace_member",
+        params.ownerWorkspaceMemberId,
+      ),
     );
   }
 
@@ -1081,9 +1088,9 @@ export async function listActorVersions(
         specialties,
         config,
         version_delta,
-        created_by,
+        created_by_workspace_member_id,
         source_type,
-        source_user_id,
+        source_workspace_member_id,
         source_actor_id,
         source_session_id,
         source_turn_id,
@@ -1108,7 +1115,7 @@ export async function listActorVersions(
 
 export async function createActor(input: {
   workspaceId: UUID;
-  createdBy?: UUID;
+  createdByWorkspaceMemberId?: UUID;
   name: string;
   role: ActorRole;
   title?: string;
@@ -1144,7 +1151,7 @@ export async function createActor(input: {
          specialties,
          config,
          current_version,
-         created_by
+         created_by_workspace_member_id
        )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, 1, $11)
        RETURNING id`,
@@ -1159,7 +1166,7 @@ export async function createActor(input: {
         Boolean(input.canRepresentUser),
         specialties,
         JSON.stringify(input.config || {}),
-        input.createdBy || null,
+        input.createdByWorkspaceMemberId || null,
       ],
     );
     const actorId = actorResult.rows[0]!.id;
@@ -1175,9 +1182,9 @@ export async function createActor(input: {
          can_represent_user,
          specialties,
          config,
-         created_by,
+         created_by_workspace_member_id,
          source_type,
-         source_user_id,
+         source_workspace_member_id,
          source_reason
        )
        VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)
@@ -1191,9 +1198,9 @@ export async function createActor(input: {
         Boolean(input.canRepresentUser),
         specialties,
         JSON.stringify(input.config || {}),
-        input.createdBy || null,
-        input.createdBy ? "user" : "system",
-        input.createdBy || null,
+        input.createdByWorkspaceMemberId || null,
+        input.createdByWorkspaceMemberId ? "workspace_member" : "system",
+        input.createdByWorkspaceMemberId || null,
         "actor_create",
       ],
     );
@@ -1226,14 +1233,14 @@ export async function createActor(input: {
       buildActorAuthzMutations({
         actorId,
         workspaceId: input.workspaceId,
-        ownerUserId: input.createdBy,
+        ownerWorkspaceMemberId: input.createdByWorkspaceMemberId,
         operation: "touch",
       }),
       {
         source: "actor.create",
         workspaceId: input.workspaceId,
         actorId,
-        userId: input.createdBy,
+        workspaceMemberId: input.createdByWorkspaceMemberId,
       },
     );
 
@@ -1365,9 +1372,9 @@ export async function updateActor(
          specialties,
          config,
          version_delta,
-         created_by,
+         created_by_workspace_member_id,
          source_type,
-         source_user_id,
+         source_workspace_member_id,
 	         source_actor_id,
 	         source_session_id,
 	         source_turn_id,
@@ -1388,9 +1395,9 @@ export async function updateActor(
         sanitizeSpecialties(nextDefinition.specialties),
         JSON.stringify(nextDefinition.config || {}),
         JSON.stringify(delta),
-        source.userId || null,
+        source.workspaceMemberId || null,
         source.type,
-        source.userId || null,
+        source.workspaceMemberId || null,
         source.actorId || null,
         source.sessionId || null,
         source.turnId || null,
@@ -1576,7 +1583,7 @@ export async function getActorPackage(
 export async function installActorPackage(input: {
   workspaceId: UUID;
   packageId: UUID;
-  createdBy?: UUID;
+  createdByWorkspaceMemberId?: UUID;
   name?: string;
   title?: string;
   parentId?: UUID | null;
@@ -1605,7 +1612,7 @@ export async function installActorPackage(input: {
          specialties,
          config,
          current_version,
-         created_by
+         created_by_workspace_member_id
        )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, 1, $11)
        RETURNING id`,
@@ -1620,7 +1627,7 @@ export async function installActorPackage(input: {
         packageActor.canRepresentUser,
         sanitizeSpecialties(packageActor.specialties),
         JSON.stringify(packageActor.config || {}),
-        input.createdBy || null,
+        input.createdByWorkspaceMemberId || null,
       ],
     );
     const actorId = actorResult.rows[0]!.id;
@@ -1636,9 +1643,12 @@ export async function installActorPackage(input: {
          can_represent_user,
          specialties,
          config,
-         created_by
+         created_by_workspace_member_id,
+         source_type,
+         source_workspace_member_id,
+         source_reason
        )
-       VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+       VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)
        RETURNING id`,
       [
         actorId,
@@ -1649,7 +1659,10 @@ export async function installActorPackage(input: {
         packageActor.canRepresentUser,
         sanitizeSpecialties(packageActor.specialties),
         JSON.stringify(packageActor.config || {}),
-        input.createdBy || null,
+        input.createdByWorkspaceMemberId || null,
+        input.createdByWorkspaceMemberId ? "workspace_member" : "system",
+        input.createdByWorkspaceMemberId || null,
+        "actor_package_install",
       ],
     );
     const actorVersionId = versionResult.rows[0]!.id;
@@ -1707,7 +1720,7 @@ export async function installActorPackage(input: {
       buildActorAuthzMutations({
         actorId,
         workspaceId: input.workspaceId,
-        ownerUserId: input.createdBy,
+        ownerWorkspaceMemberId: input.createdByWorkspaceMemberId,
         operation: "touch",
       }),
       {
@@ -1715,7 +1728,7 @@ export async function installActorPackage(input: {
         workspaceId: input.workspaceId,
         actorId,
         packageId: actorPackage.package.id,
-        userId: input.createdBy,
+        workspaceMemberId: input.createdByWorkspaceMemberId,
       },
     );
 

@@ -101,7 +101,7 @@ interface MessageBubbleProps {
   transportDeliveries?: ConversationMessageTransportDelivery[]
   interaction?: InteractionRequestSummary
   enableTablePreview?: boolean
-  viewerUserId?: string
+  viewerWorkspaceMemberId?: string
   contactBasePath?: string
   retryPending?: boolean
   onParticipantClick?: (member: ConversationMember) => void
@@ -595,11 +595,11 @@ function InteractionStatusNote({
 
 function InteractionCard({
   interaction,
-  viewerUserId,
+  viewerWorkspaceMemberId,
   onResolveInteraction,
 }: {
   interaction: InteractionRequestSummary
-  viewerUserId?: string
+  viewerWorkspaceMemberId?: string
   onResolveInteraction?: MessageBubbleProps["onResolveInteraction"]
 }) {
   const [submittingAction, setSubmittingAction] = useState<string | null>(null)
@@ -609,9 +609,9 @@ function InteractionCard({
   >(() => buildDraftQuestionAnswers(interaction))
 
   const isTargetUser =
-    interaction.target?.memberType === "user" &&
-    Boolean(viewerUserId) &&
-    interaction.target?.userId === viewerUserId
+    interaction.target?.memberType === "workspace_member" &&
+    Boolean(viewerWorkspaceMemberId) &&
+    interaction.target?.workspaceMemberId === viewerWorkspaceMemberId
   const canResolveQuestion =
     interaction.kind === "question_choice" &&
     Boolean(onResolveInteraction) &&
@@ -1249,7 +1249,7 @@ type MessageRecipient = Pick<
   | "role"
   | "emoji"
   | "avatarUrl"
-  | "linkedUserName"
+  | "linkedWorkspaceMemberName"
 > & {
   member?: ConversationMember
 }
@@ -1310,7 +1310,7 @@ function resolveRecipients(
       role: member?.role,
       emoji: member?.emoji,
       avatarUrl: member?.avatarUrl,
-      linkedUserName: member?.linkedUserName,
+      linkedWorkspaceMemberName: member?.linkedWorkspaceMemberName,
       member,
     })
 
@@ -1337,7 +1337,7 @@ function resolveRecipients(
         role: representedMember.role,
         emoji: representedMember.emoji,
         avatarUrl: representedMember.avatarUrl,
-        linkedUserName: representedMember.linkedUserName,
+        linkedWorkspaceMemberName: representedMember.linkedWorkspaceMemberName,
         member: representedMember,
       })
       continue
@@ -1354,7 +1354,7 @@ function resolveRecipients(
         role: undefined,
         emoji: undefined,
         avatarUrl: undefined,
-        linkedUserName: undefined,
+        linkedWorkspaceMemberName: undefined,
       })
       continue
     }
@@ -1368,7 +1368,7 @@ function resolveRecipients(
       role: actor.role,
       emoji: actor.emoji,
       avatarUrl: actor.avatarUrl,
-      linkedUserName: undefined,
+      linkedWorkspaceMemberName: undefined,
     })
   }
 
@@ -1390,9 +1390,9 @@ function resolveMentionMember(
         (mention.actorId &&
           member.type === "actor" &&
           member.id === mention.actorId) ||
-        (mention.userId &&
-          member.type === "user" &&
-          member.id === mention.userId) ||
+        (mention.workspaceMemberId &&
+          member.type === "workspace_member" &&
+          member.id === mention.workspaceMemberId) ||
         (mention.externalUserKey &&
           member.type === "external" &&
           member.externalUserKey === mention.externalUserKey)
@@ -1423,9 +1423,9 @@ function resolveMentionMember(
     }
   }
 
-  if (mention.memberType === "user") {
+  if (mention.memberType === "workspace_member") {
     const fallbackId =
-      mention.userId ||
+      mention.workspaceMemberId ||
       mention.participantId ||
       mention.memberId ||
       "unknown-user"
@@ -1433,8 +1433,8 @@ function resolveMentionMember(
     return {
       memberId: mention.memberId || fallbackId,
       participantId: mention.participantId || fallbackId,
-      type: "user" as const,
-      id: mention.userId || fallbackId,
+      type: "workspace_member" as const,
+      id: mention.workspaceMemberId || fallbackId,
       name: mention.name || "Unknown user",
       role: mention.role,
       title: mention.title,
@@ -1574,8 +1574,8 @@ function RecipientChip({
             {recipient.type === "actor"
               ? recipient.title || recipient.role || "Actor"
               : recipient.type === "external"
-                ? recipient.linkedUserName
-                  ? `External participant · linked to ${recipient.linkedUserName}`
+                ? recipient.linkedWorkspaceMemberName
+                  ? `External participant · linked to ${recipient.linkedWorkspaceMemberName}`
                   : "External participant"
                 : "User"}
           </div>
@@ -2197,7 +2197,7 @@ export default function MessageBubble({
   transportDeliveries,
   interaction,
   enableTablePreview = false,
-  viewerUserId,
+  viewerWorkspaceMemberId,
   contactBasePath = "/dashboard/contacts",
   retryPending = false,
   onParticipantClick,
@@ -2223,11 +2223,13 @@ export default function MessageBubble({
   const hasExplicitTargets =
     (targetParticipantIds?.length || 0) > 0 || (targetActorIds?.length || 0) > 0
   const viewerUserMember = useMemo(() => {
-    if (!viewerUserId) return undefined
+    if (!viewerWorkspaceMemberId) return undefined
     return conversationMembers?.find(
-      (member) => member.type === "user" && member.id === viewerUserId
+      (member) =>
+        member.type === "workspace_member" &&
+        member.id === viewerWorkspaceMemberId
     )
-  }, [conversationMembers, viewerUserId])
+  }, [conversationMembers, viewerWorkspaceMemberId])
   const authorMember = useMemo(
     () => resolveAuthorMember(author, conversationMembers),
     [author, conversationMembers]
@@ -2241,12 +2243,16 @@ export default function MessageBubble({
   )
   const authorEntityType = useMemo(() => {
     if (author?.memberType === "external") return "external" as const
-    if (author?.memberType === "user") return "user" as const
+    if (author?.memberType === "workspace_member") return "workspace_member" as const
     return "actor" as const
   }, [author?.memberType])
   const resolvedAuthorName = useMemo(() => {
-    if (author?.memberType === "user") {
-      if (author.userId && author.userId === viewerUserId) return "You"
+    if (author?.memberType === "workspace_member") {
+      if (
+        author.workspaceMemberId &&
+        author.workspaceMemberId === viewerWorkspaceMemberId
+      )
+        return "You"
       return author.name || authorMember?.name || "User"
     }
     if (author?.memberType === "external") {
@@ -2256,7 +2262,7 @@ export default function MessageBubble({
       return author.name || actorName || authorMember?.name || "Actor"
     }
     return actorName || (isUser ? "You" : "Member")
-  }, [actorName, author, authorMember, isUser, viewerUserId])
+  }, [actorName, author, authorMember, isUser, viewerWorkspaceMemberId])
   const resolvedAuthorAvatarUrl =
     authorEntityType === "actor"
       ? actorAvatarUrl || author?.avatarUrl || authorMember?.avatarUrl
@@ -2281,13 +2287,16 @@ export default function MessageBubble({
         ? getConversationMemberSubtitle(authorMember)
         : "External participant"
     }
-    if (author?.memberType === "user") {
-      return author.userId && author.userId === viewerUserId
+    if (author?.memberType === "workspace_member") {
+      return (
+        author.workspaceMemberId &&
+        author.workspaceMemberId === viewerWorkspaceMemberId
+      )
         ? "You"
-        : "Workspace user"
+        : "Workspace member"
     }
     return undefined
-  }, [actorRole, author, authorMember, viewerUserId])
+  }, [actorRole, author, authorMember, viewerWorkspaceMemberId])
 
   const { blocks: renderedBlocks, sources } = useMemo(
     () => buildRenderedMessageBlocks(contentBlocks, citationSources),
@@ -2510,7 +2519,7 @@ export default function MessageBubble({
         <ChatAvatar
           name={viewerUserMember?.name || resolvedAuthorName}
           avatarUrl={viewerUserMember?.avatarUrl || resolvedAuthorAvatarUrl}
-          entityType="user"
+          entityType="workspace_member"
           className="mt-1 shrink-0"
         />
       ) : isChildResult ? (
@@ -2671,7 +2680,7 @@ export default function MessageBubble({
             {interaction ? (
               <InteractionCard
                 interaction={interaction}
-                viewerUserId={viewerUserId}
+                viewerWorkspaceMemberId={viewerWorkspaceMemberId}
                 onResolveInteraction={onResolveInteraction}
               />
             ) : (

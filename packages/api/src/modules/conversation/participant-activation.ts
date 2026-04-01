@@ -1,7 +1,7 @@
 import { transaction } from "../../infrastructure/database/index.js";
 import { db } from "../../infrastructure/database/kysely.js";
 import {
-  buildWorkspaceUserContextId,
+  buildWorkspaceMemberContextId,
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
   touchActorConversationContext,
@@ -15,19 +15,18 @@ import {
 } from "./service.js";
 
 type ParticipantInitiator = {
-  memberType: "actor" | "user";
+  memberType: "actor" | "workspace_member";
   participantId?: string;
   memberId?: string;
   workspaceMemberId?: string;
   actorId?: string;
-  userId?: string;
   name?: string;
 };
 
 async function loadParticipantDisplay(params: {
-  memberType: "actor" | "user" | "external" | "remote_agent" | "system";
+  memberType: "actor" | "workspace_member" | "external" | "remote_agent" | "system";
   actorId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
   displayName?: string;
 }) {
   if (params.displayName?.trim()) {
@@ -50,11 +49,12 @@ async function loadParticipantDisplay(params: {
     };
   }
 
-  if (params.memberType === "user" && params.userId) {
+  if (params.memberType === "workspace_member" && params.workspaceMemberId) {
     const result = await db
-      .selectFrom('users')
-      .select('name')
-      .where('id', '=', params.userId)
+      .selectFrom('workspace_members as wm')
+      .innerJoin('users as u', 'u.id', 'wm.user_id')
+      .select('u.name')
+      .where('wm.id', '=', params.workspaceMemberId)
       .limit(1)
       .executeTakeFirst();
     return {
@@ -68,7 +68,7 @@ async function loadParticipantDisplay(params: {
       params.displayName?.trim() ||
       (params.memberType === "actor"
         ? "Actor"
-        : params.memberType === "user"
+        : params.memberType === "workspace_member"
           ? "User"
           : "External participant"),
     title: undefined as string | undefined,
@@ -87,7 +87,6 @@ async function hydrateMembershipInitiator(params: {
       conversationId: params.conversationId,
       workspaceMemberId: params.initiator.workspaceMemberId,
       actorId: params.initiator.actorId,
-      userId: params.initiator.userId,
     });
     memberId = member?.id;
   }
@@ -108,9 +107,9 @@ async function recordMembershipEvent(params: {
   members: Array<{
     participantId: string;
     memberId: string;
-    memberType: "actor" | "user" | "external";
+    memberType: "actor" | "workspace_member" | "external";
     actorId?: string;
-    userId?: string;
+    workspaceMemberId?: string;
     name: string;
     title?: string;
   }>;
@@ -137,7 +136,7 @@ async function recordMembershipEvent(params: {
             memberId: initiator.memberId,
             memberType: initiator.memberType,
             actorId: initiator.actorId,
-            userId: initiator.userId,
+            workspaceMemberId: initiator.workspaceMemberId,
             name: initiator.name,
           }
         : undefined,
@@ -148,10 +147,9 @@ async function recordMembershipEvent(params: {
 export async function activateConversationParticipant(params: {
   workspaceId?: string;
   conversationId: string;
-  memberType: "actor" | "user" | "external" | "remote_agent" | "system";
+  memberType: "actor" | "workspace_member" | "external" | "remote_agent" | "system";
   workspaceMemberId?: string;
   actorId?: string;
-  userId?: string;
   displayName?: string;
   actorJoinVersionId?: string;
   metadata?: Record<string, unknown>;
@@ -164,7 +162,6 @@ export async function activateConversationParticipant(params: {
     workspaceId: params.workspaceId,
     workspaceMemberId: params.workspaceMemberId,
     actorId: params.actorId,
-    userId: params.userId,
     displayName: params.displayName,
     actorJoinVersionId: params.actorJoinVersionId,
     metadata: params.metadata,
@@ -186,17 +183,14 @@ export async function activateConversationParticipant(params: {
           ),
           ...touchActorConversationContext(params.actorId, params.conversationId),
         ]
-      : params.memberType === "user" && params.userId && params.workspaceId
+      : params.memberType === "workspace_member" && params.workspaceMemberId
         ? [
             touchRelation(
               "conversation",
               params.conversationId,
               "participant",
-              "workspace_user",
-              buildWorkspaceUserContextId(
-                params.workspaceId,
-                params.userId,
-              ),
+              "workspace_member",
+              buildWorkspaceMemberContextId(params.workspaceMemberId),
             ),
           ]
         : [];
@@ -208,7 +202,7 @@ export async function activateConversationParticipant(params: {
         conversationId: params.conversationId,
         memberType: params.memberType,
         actorId: params.actorId,
-        userId: params.userId,
+        workspaceMemberId: params.workspaceMemberId,
       }),
     }));
     if (authzEntryIds.length > 0) {
@@ -220,7 +214,7 @@ export async function activateConversationParticipant(params: {
     const { name, title } = await loadParticipantDisplay({
       memberType: params.memberType,
       actorId: params.actorId,
-      userId: params.userId,
+      workspaceMemberId: params.workspaceMemberId,
       displayName: params.displayName,
     });
     await recordMembershipEvent({
@@ -237,11 +231,12 @@ export async function activateConversationParticipant(params: {
           participantId: activation.member.id,
           memberId: activation.member.id,
           memberType:
-            params.memberType === "actor" || params.memberType === "user"
+            params.memberType === "actor" ||
+            params.memberType === "workspace_member"
               ? params.memberType
               : "external",
           actorId: params.actorId,
-          userId: params.userId,
+          workspaceMemberId: params.workspaceMemberId,
           name,
           title,
         },

@@ -16,7 +16,6 @@ import {
   authorizeAction,
   authorizePermission,
   getRequestAccessSubject,
-  getRequestUserId,
   listAuthorizedResourceIds,
 } from '../access/service.js';
 import {
@@ -57,7 +56,7 @@ const memoryPayloadSchema = z.object({
   ownerScope: memoryOwnerScopeEnum,
   ownerActorId: z.string().uuid().optional(),
   ownerConversationId: z.string().uuid().optional(),
-  ownerUserId: z.string().uuid().optional(),
+  ownerWorkspaceMemberId: z.string().uuid().optional(),
   category: memoryCategoryEnum,
   status: memoryStatusEnum.optional(),
   stability: memoryStabilityEnum.optional(),
@@ -84,7 +83,7 @@ const updateMemorySchema = memoryPayloadSchema.partial();
 const listMemoriesSchema = z.object({
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
-  userId: z.string().uuid().optional(),
+  workspaceMemberId: z.string().uuid().optional(),
   ownerScope: memoryOwnerScopeEnum.optional(),
   category: memoryCategoryEnum.optional(),
   status: memoryStatusEnum.optional(),
@@ -97,7 +96,7 @@ const searchMemoriesSchema = z.object({
   queryText: z.string().min(1),
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
-  userId: z.string().uuid().optional(),
+  workspaceMemberId: z.string().uuid().optional(),
   scopes: z.array(memoryOwnerScopeEnum).optional(),
   categories: z.array(memoryCategoryEnum).optional(),
   statuses: z.array(memoryStatusEnum).optional(),
@@ -162,10 +161,12 @@ async function requireMemoryPermission(
 async function requireMemoryAnchorPermission(
   request: FastifyRequest,
   reply: FastifyReply,
-  body: Pick<z.infer<typeof memoryPayloadSchema>, 'ownerScope' | 'ownerActorId' | 'ownerConversationId' | 'ownerUserId'>,
+  body: Pick<z.infer<typeof memoryPayloadSchema>, 'ownerScope' | 'ownerActorId' | 'ownerConversationId' | 'ownerWorkspaceMemberId'>,
   errorMessage: string,
 ) {
-  const userId = getRequestUserId(request);
+  const workspaceMemberId = (request as any).workspaceMember?.id as
+    | string
+    | undefined;
   const { workspaceId } = request.params as { workspaceId: string };
 
   let allowed = false;
@@ -207,8 +208,8 @@ async function requireMemoryAnchorPermission(
         });
       }
       break;
-    case 'user':
-      allowed = body.ownerUserId === userId;
+    case 'workspace_member':
+      allowed = body.ownerWorkspaceMemberId === workspaceMemberId;
       if (!allowed) {
         allowed = await authorizeAction({
           subject: getRequestAccessSubject(request),
@@ -235,7 +236,10 @@ function resolveTargetScope(
     ownerScope: body.ownerScope ?? existing.ownerScope,
     ownerActorId: body.ownerActorId !== undefined ? body.ownerActorId : existing.ownerActorId,
     ownerConversationId: body.ownerConversationId !== undefined ? body.ownerConversationId : existing.ownerConversationId,
-    ownerUserId: body.ownerUserId !== undefined ? body.ownerUserId : existing.ownerUserId,
+    ownerWorkspaceMemberId:
+      body.ownerWorkspaceMemberId !== undefined
+        ? body.ownerWorkspaceMemberId
+        : existing.ownerWorkspaceMemberId,
   };
 }
 
@@ -264,7 +268,7 @@ function updateTouchesMemoryRetarget(body: z.infer<typeof updateMemorySchema>) {
     body.ownerScope !== undefined ||
     body.ownerActorId !== undefined ||
     body.ownerConversationId !== undefined ||
-    body.ownerUserId !== undefined
+    body.ownerWorkspaceMemberId !== undefined
   );
 }
 

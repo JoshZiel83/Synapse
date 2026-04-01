@@ -110,7 +110,7 @@ interface PendingRelayOperation {
   conversationId: string | null;
   sessionId: string | null;
   actorId: string | null;
-  userId: string | null;
+  workspaceMemberId: string | null;
   exposureId: string;
   exposureStableKey: string;
   runtimeSessionId: string;
@@ -149,7 +149,7 @@ interface PendingRelayRuntimeSessionRequest {
 interface ConnectedRelay {
   deviceId: string;
   workspaceId: string;
-  ownerUserId: string | null;
+  ownerWorkspaceMemberId: string | null;
   displayName: string;
   sessionRowId: string;
   sessionId: string;
@@ -181,7 +181,7 @@ interface RelayRuntimeAuthorizationEnvelope {
 interface RelayCallParams {
   conversationId?: string;
   sessionId?: string;
-  requestedByUserId?: string;
+  requestedByWorkspaceMemberId?: string;
   requestedByActorId?: string;
   deviceId: string;
   exposureId: string;
@@ -200,7 +200,7 @@ interface RelayAsyncCallParams extends RelayCallParams {
   sourceToolCallId: string;
   sourceToolName: string;
   turnId?: string;
-  requestedByUserId?: string;
+  requestedByWorkspaceMemberId?: string;
   deliveryPolicy: ToolCallTaskDeliveryPolicy;
 }
 
@@ -210,7 +210,7 @@ type RelayOperationLifecycleStatus =
 type RelayAuthRow = {
   id: string;
   workspace_id: string;
-  owner_user_id: string | null;
+  owner_workspace_member_id: string | null;
   display_name: string;
   public_key: string;
   public_key_fingerprint: string;
@@ -450,7 +450,8 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
         const connected: ConnectedRelay = {
           deviceId: pendingChallenge.device.id,
           workspaceId: pendingChallenge.device.workspace_id,
-          ownerUserId: pendingChallenge.device.owner_user_id,
+          ownerWorkspaceMemberId:
+            pendingChallenge.device.owner_workspace_member_id,
           displayName: pendingChallenge.device.display_name,
           sessionRowId: sessionResult.rows[0].id,
           sessionId,
@@ -754,7 +755,7 @@ async function insertRelayOperation(params: {
   workspaceId: string;
   conversationId?: string;
   sessionId?: string;
-  requestedByUserId?: string;
+  requestedByWorkspaceMemberId?: string;
   requestedByActorId?: string;
   taskId?: string;
   deviceId: string;
@@ -778,7 +779,7 @@ async function insertRelayOperation(params: {
        workspace_id,
        conversation_id,
        requested_by_session_id,
-       requested_by_user_id,
+       requested_by_workspace_member_id,
        requested_by_actor_id,
        task_id,
        device_id,
@@ -828,7 +829,7 @@ async function insertRelayOperation(params: {
       params.workspaceId,
       params.conversationId || null,
       params.sessionId || null,
-      params.requestedByUserId || null,
+      params.requestedByWorkspaceMemberId || null,
       params.requestedByActorId || null,
       params.taskId || null,
       params.deviceId,
@@ -880,7 +881,7 @@ async function callRelayToolLocal(params: RelayCallParams): Promise<unknown> {
     workspaceId: connected.workspaceId,
     conversationId: params.conversationId,
     sessionId: params.sessionId,
-    requestedByUserId: params.requestedByUserId,
+    requestedByWorkspaceMemberId: params.requestedByWorkspaceMemberId,
     requestedByActorId: params.requestedByActorId,
     deviceId: params.deviceId,
     exposureId: params.exposureId,
@@ -921,7 +922,7 @@ async function callRelayToolLocal(params: RelayCallParams): Promise<unknown> {
       conversationId: params.conversationId || null,
       sessionId: params.sessionId || null,
       actorId: params.requestedByActorId || null,
-      userId: params.requestedByUserId || null,
+      workspaceMemberId: params.requestedByWorkspaceMemberId || null,
       exposureId: params.exposureId,
       exposureStableKey: exposure.stableKey,
       runtimeSessionId: params.runtimeSessionId,
@@ -1061,7 +1062,7 @@ async function enqueueRelayToolTaskLocal(
          workspace_id,
          conversation_id,
          requested_by_session_id,
-         requested_by_user_id,
+         requested_by_workspace_member_id,
          requested_by_actor_id,
          task_id,
          device_id,
@@ -1111,7 +1112,7 @@ async function enqueueRelayToolTaskLocal(
         params.workspaceId,
         params.conversationId,
         params.sessionId,
-        params.requestedByUserId || null,
+        params.requestedByWorkspaceMemberId || null,
         params.requestedByActorId,
         task.id,
         params.deviceId,
@@ -1182,7 +1183,7 @@ async function enqueueRelayToolTaskLocal(
     conversationId: params.conversationId,
     sessionId: params.sessionId,
     actorId: params.requestedByActorId,
-    userId: params.requestedByUserId || null,
+    workspaceMemberId: params.requestedByWorkspaceMemberId || null,
     exposureId: params.exposureId,
     exposureStableKey: exposure.stableKey,
     runtimeSessionId: params.runtimeSessionId,
@@ -1985,7 +1986,7 @@ async function authenticateRelayDevice(deviceId: unknown): Promise<RelayAuthRow 
   if (typeof deviceId !== 'string' || deviceId.trim().length === 0) return null;
 
   const result = await executeSql<RelayAuthRow>(
-    `SELECT id, workspace_id, owner_user_id, display_name, public_key, public_key_fingerprint, trust_status
+    `SELECT id, workspace_id, owner_workspace_member_id, display_name, public_key, public_key_fingerprint, trust_status
      FROM relay_devices
      WHERE id = $1
      LIMIT 1`,
@@ -2779,7 +2780,7 @@ type RelayTaskOperationRecord = {
   workspace_id: string;
   conversation_id: string | null;
   requested_by_session_id: string | null;
-  requested_by_user_id: string | null;
+  requested_by_workspace_member_id: string | null;
   requested_by_actor_id: string | null;
   task_id: string | null;
   device_id: string;
@@ -2809,7 +2810,7 @@ async function loadAsyncRelayOperationRecord(operationId: string) {
        ro.workspace_id,
        ro.conversation_id,
        ro.requested_by_session_id,
-       ro.requested_by_user_id,
+       ro.requested_by_workspace_member_id,
        ro.requested_by_actor_id,
        ro.task_id,
        ro.device_id,
@@ -2852,7 +2853,7 @@ async function loadRelayOperationByTaskId(taskId: string) {
        ro.workspace_id,
        ro.conversation_id,
        ro.requested_by_session_id,
-       ro.requested_by_user_id,
+       ro.requested_by_workspace_member_id,
        ro.requested_by_actor_id,
        ro.task_id,
        ro.device_id,
@@ -3417,7 +3418,7 @@ async function redrivePendingRelayOperations(connected: ConnectedRelay) {
        ro.workspace_id,
        ro.conversation_id,
        ro.requested_by_session_id,
-       ro.requested_by_user_id,
+       ro.requested_by_workspace_member_id,
        ro.requested_by_actor_id,
        ro.task_id,
        ro.device_id,
@@ -3507,7 +3508,7 @@ async function redrivePendingRelayOperations(connected: ConnectedRelay) {
       conversationId: row.conversation_id,
       sessionId: row.requested_by_session_id,
       actorId: row.requested_by_actor_id,
-      userId: row.requested_by_user_id,
+      workspaceMemberId: row.requested_by_workspace_member_id,
       exposureId: row.exposure_id,
       exposureStableKey: row.exposure_stable_key || '',
       runtimeSessionId: row.runtime_session_id || '',

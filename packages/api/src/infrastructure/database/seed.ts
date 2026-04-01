@@ -13,7 +13,7 @@ import {
   enqueueAuthzRelationships,
   flushAuthzOutboxEntries,
   touchRelation,
-  touchWorkspaceUserMembership,
+  touchWorkspaceMemberMembership,
 } from "../authz/index.js";
 import { ensureStorageDir } from "../storage/index.js";
 import { transaction } from "./index.js";
@@ -70,14 +70,16 @@ async function seedDemoWorkspace(userId: string) {
   );
   const workspaceId = result.rows[0]!.id;
 
-  await executeSql(
+  const memberResult = await executeSql<{ id: string }>(
     `INSERT INTO workspace_members (workspace_id, user_id, trust_level)
      VALUES ($1, $2, 'admin')
-     ON CONFLICT (workspace_id, user_id) DO UPDATE SET trust_level = 'admin'`,
+     ON CONFLICT (workspace_id, user_id) DO UPDATE SET trust_level = 'admin'
+     RETURNING id`,
     [workspaceId, userId],
   );
+  const workspaceMemberId = memberResult.rows[0]!.id;
 
-  return workspaceId;
+  return { workspaceId, workspaceMemberId };
 }
 
 function sha256Hex(value: Buffer | string) {
@@ -550,7 +552,7 @@ async function seedOfficialSkills(userId: string) {
            status,
            changelog,
            metadata,
-           created_by
+           created_by_user_id
          )
          VALUES ($1, $2, 'active', 'Imported from ClawHub official seed', $3::jsonb, $4)
          ON CONFLICT (catalog_item_id, version) DO UPDATE SET
@@ -702,24 +704,24 @@ export async function seedDatabase() {
   });
   await seedPlatformDefaultGroup();
 
-  const workspaceId = await seedDemoWorkspace(userId);
+  const { workspaceId, workspaceMemberId } = await seedDemoWorkspace(userId);
   const actorCatalog = await seedOfficialActorCatalog(userId);
   const importedSkillCount = await seedOfficialSkills(userId);
   await seedBuiltinMcpPlugins();
   const runtimeRefs = await seedOfficialRuntimeActors(
     workspaceId,
-    userId,
+    workspaceMemberId,
     actorCatalog.actorRefs,
   );
   await executeSql(
-    `INSERT INTO workspace_user_preferences
-       (workspace_id, user_id, chief_actor_id, created_at, updated_at)
-     VALUES ($1, $2, $3, NOW(), NOW())
-     ON CONFLICT (workspace_id, user_id)
+    `INSERT INTO workspace_member_preferences
+       (workspace_member_id, chief_actor_id, created_at, updated_at)
+     VALUES ($1, $2, NOW(), NOW())
+     ON CONFLICT (workspace_member_id)
      DO UPDATE SET
        chief_actor_id = EXCLUDED.chief_actor_id,
        updated_at = NOW()`,
-    [workspaceId, userId, runtimeRefs.chiefActorId],
+    [workspaceMemberId, runtimeRefs.chiefActorId],
   );
   const [actorMarketplaceCount, skillMarketplaceCount, pluginMarketplaceCount] = await Promise.all([
     countCatalogItems("actor_template"),
@@ -731,17 +733,25 @@ export async function seedDatabase() {
     [
       touchRelation("platform", AUTHZ_PLATFORM_ID, "workspace", "workspace", workspaceId),
       touchRelation("workspace", workspaceId, "platform", "platform", AUTHZ_PLATFORM_ID),
-      touchRelation("workspace", workspaceId, "owner", "user", userId),
-      touchRelation("workspace", workspaceId, "member", "user", userId),
-      ...touchWorkspaceUserMembership(workspaceId, userId, "owner"),
-      ...touchWorkspaceUserMembership(workspaceId, userId, "member"),
+      ...touchWorkspaceMemberMembership({
+        workspaceId,
+        workspaceMemberId,
+        userId,
+        relation: "owner",
+      }),
+      ...touchWorkspaceMemberMembership({
+        workspaceId,
+        workspaceMemberId,
+        userId,
+        relation: "member",
+      }),
       ...runtimeRefs.actorIds.flatMap((actorId) => [
         touchRelation("workspace", workspaceId, "actor", "actor", actorId),
         touchRelation("actor", actorId, "workspace", "workspace", workspaceId),
         touchRelation("actor", actorId, "discover_workspace", "workspace", workspaceId),
         touchRelation("actor", actorId, "invoke_workspace", "workspace", workspaceId),
         touchRelation("actor", actorId, "receive_workspace", "workspace", workspaceId),
-        touchRelation("actor", actorId, "owner", "user", userId),
+        touchRelation("actor", actorId, "owner", "workspace_member", workspaceMemberId),
       ]),
     ],
     {

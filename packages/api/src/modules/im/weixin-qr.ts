@@ -29,7 +29,7 @@ type ActiveWeixinQrLogin = {
   botType: string;
   displayName?: string;
   ownerScope: TransportAccountOwnerScope;
-  ownerUserId?: string | null;
+  ownerWorkspaceMemberId?: string | null;
   inboundActorMode: TransportAccountInboundActorMode;
   inboundActorId?: string | null;
   status: WeixinQrLoginStatus;
@@ -200,7 +200,7 @@ async function persistWeixinAccount(params: {
       accountId: existing.id,
       displayName,
       ownerScope: params.session.ownerScope,
-      ownerUserId: params.session.ownerUserId ?? null,
+      ownerWorkspaceMemberId: params.session.ownerWorkspaceMemberId ?? null,
       inboundActorMode: params.session.inboundActorMode,
       inboundActorId: params.session.inboundActorId ?? null,
       connectionMode: "long_connection",
@@ -226,7 +226,8 @@ async function persistWeixinAccount(params: {
         accountKey,
         displayName,
         ownerScope: params.session.ownerScope,
-        ownerUserId: params.session.ownerUserId ?? null,
+        ownerWorkspaceMemberId:
+          params.session.ownerWorkspaceMemberId ?? null,
         inboundActorMode: params.session.inboundActorMode,
         inboundActorId: params.session.inboundActorId ?? null,
         connectionMode: "long_connection",
@@ -255,7 +256,8 @@ async function persistWeixinAccount(params: {
         accountId: concurrent.id,
         displayName,
         ownerScope: params.session.ownerScope,
-        ownerUserId: params.session.ownerUserId ?? null,
+        ownerWorkspaceMemberId:
+          params.session.ownerWorkspaceMemberId ?? null,
         inboundActorMode: params.session.inboundActorMode,
         inboundActorId: params.session.inboundActorId ?? null,
         connectionMode: "long_connection",
@@ -312,7 +314,7 @@ export function getWeixinQrLoginSessionOwner(params: {
   }
   return {
     ownerScope: existing.ownerScope,
-    ownerUserId: existing.ownerUserId || null,
+    ownerWorkspaceMemberId: existing.ownerWorkspaceMemberId || null,
   };
 }
 
@@ -342,7 +344,7 @@ export async function startWeixinQrLoginSession(params: {
   baseUrl?: string;
   botType?: string;
   ownerScope?: TransportAccountOwnerScope;
-  ownerUserId?: string | null;
+  ownerWorkspaceMemberId?: string | null;
   inboundActorMode?: TransportAccountInboundActorMode;
   inboundActorId?: string | null;
 }) {
@@ -367,7 +369,7 @@ export async function startWeixinQrLoginSession(params: {
     botType,
     displayName: nonEmptyString(params.displayName),
     ownerScope: params.ownerScope || "workspace",
-    ownerUserId: params.ownerUserId || null,
+    ownerWorkspaceMemberId: params.ownerWorkspaceMemberId || null,
     inboundActorMode: params.inboundActorMode || "none",
     inboundActorId: params.inboundActorId || null,
     status: "waiting",

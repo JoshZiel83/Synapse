@@ -11,10 +11,7 @@ import {
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
 import { requireRequestAction } from "../access/guards.js";
-import {
-  getRequestUserId,
-  workspaceUserSubject,
-} from "../access/service.js";
+import { workspaceMemberSubject } from "../access/service.js";
 import type { AccessAction } from "../access/actions.js";
 import * as service from "./service.js";
 
@@ -142,7 +139,7 @@ export async function organizationController(app: FastifyInstance) {
     try {
       const actor = await service.createActor({
         workspaceId: (request.params as WorkspaceParams).workspaceId,
-        createdBy: getRequestUserId(request),
+        createdByWorkspaceMemberId: (request as any).workspaceMember!.id,
         ...parsed.data,
       });
       return reply.status(201).send(actor);
@@ -156,7 +153,7 @@ export async function organizationController(app: FastifyInstance) {
     const { workspaceId } = request.params as WorkspaceParams;
     const actors = await service.listActors(
       workspaceId,
-      workspaceUserSubject(workspaceId, getRequestUserId(request)),
+      workspaceMemberSubject((request as any).workspaceMember!.id),
     );
     return reply.send(actors);
   });
@@ -165,7 +162,7 @@ export async function organizationController(app: FastifyInstance) {
     const { workspaceId } = request.params as WorkspaceParams;
     const tree = await service.getFullOrgTree(
       workspaceId,
-      workspaceUserSubject(workspaceId, getRequestUserId(request)),
+      workspaceMemberSubject((request as any).workspaceMember!.id),
     );
     return reply.send(tree);
   });
@@ -214,7 +211,7 @@ export async function organizationController(app: FastifyInstance) {
       const result = await service.installActorPackage({
         workspaceId,
         packageId,
-        createdBy: getRequestUserId(request),
+        createdByWorkspaceMemberId: (request as any).workspaceMember!.id,
         name: parsed.data.name,
         title: parsed.data.title,
         parentId: parsed.data.parentId,
@@ -288,8 +285,8 @@ export async function organizationController(app: FastifyInstance) {
 
     try {
       const actor = await service.updateActor(actorId, workspaceId, parsed.data, {
-        type: "user",
-        userId: getRequestUserId(request),
+        type: "workspace_member",
+        workspaceMemberId: (request as any).workspaceMember!.id,
         reason: "user_edit",
       });
       if (!actor) {

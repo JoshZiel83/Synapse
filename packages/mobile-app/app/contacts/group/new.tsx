@@ -24,25 +24,26 @@ import { api } from "@/lib/api";
 import { useSession } from "@/providers/session-provider";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
-import type { ScopedContactView, WorkspaceMemberView } from "@/types/api";
+import type { ContactHubEntryView, WorkspaceMemberView } from "@/types/api";
 import type { Actor } from "@shared";
 
 export default function NewGroupConversationScreen() {
   const router = useRouter();
   const { user } = useSession();
   const { workspaceId } = useWorkspace();
-  const { actorId, userId, contactScope, contactId } = useLocalSearchParams<{
+  const { actorId, workspaceMemberId, contactScope, contactId } =
+    useLocalSearchParams<{
     actorId?: string;
-    userId?: string;
+    workspaceMemberId?: string;
     contactScope?: "workspace" | "personal";
     contactId?: string;
   }>();
   const [actors, setActors] = useState<Actor[]>([]);
   const [members, setMembers] = useState<WorkspaceMemberView[]>([]);
   const [workspaceContacts, setWorkspaceContacts] = useState<
-    ScopedContactView[]
+    ContactHubEntryView[]
   >([]);
-  const [personalContacts, setPersonalContacts] = useState<ScopedContactView[]>(
+  const [personalContacts, setPersonalContacts] = useState<ContactHubEntryView[]>(
     [],
   );
   const [selectedActorIds, setSelectedActorIds] = useState<string[]>([]);
@@ -71,11 +72,11 @@ export default function NewGroupConversationScreen() {
 
       setLoading(true);
       try {
-        const [actorsResponse, membersResponse, contactsResponse] =
+        const [actorsResponse, membersResponse, hubResponse] =
           await Promise.all([
             api.getActors(workspaceId),
             api.getWorkspaceMembers(workspaceId),
-            api.getScopedContacts(workspaceId),
+            api.getContactHub(workspaceId),
           ]);
 
         const nextActors = actorsResponse.actors.filter(
@@ -87,29 +88,35 @@ export default function NewGroupConversationScreen() {
 
         setActors(nextActors);
         setMembers(nextMembers);
-        setWorkspaceContacts(contactsResponse.workspaceContacts);
-        setPersonalContacts(contactsResponse.personalContacts);
+        const nextWorkspaceContacts = [
+          ...hubResponse.workspaceActors,
+          ...hubResponse.workspaceMembers,
+        ];
+        const nextPersonalContacts = hubResponse.friends;
+        setWorkspaceContacts(nextWorkspaceContacts);
+        setPersonalContacts(nextPersonalContacts);
         setSelectedActorIds(
           actorId && nextActors.some((item) => item.id === actorId)
             ? [actorId]
             : [],
         );
         setSelectedWorkspaceMemberIds(
-          userId && nextMembers.some((item) => item.userId === userId)
-            ? [nextMembers.find((item) => item.userId === userId)!.id]
+          workspaceMemberId &&
+            nextMembers.some((item) => item.id === workspaceMemberId)
+            ? [workspaceMemberId]
             : [],
         );
         setSelectedWorkspaceContactIds(
           contactScope === "workspace" &&
             contactId &&
-            contactsResponse.workspaceContacts.some((item) => item.id === contactId)
+            nextWorkspaceContacts.some((item) => item.id === contactId)
             ? [contactId]
             : [],
         );
         setSelectedPersonalContactIds(
           contactScope === "personal" &&
             contactId &&
-            contactsResponse.personalContacts.some((item) => item.id === contactId)
+            nextPersonalContacts.some((item) => item.id === contactId)
             ? [contactId]
             : [],
         );
@@ -126,7 +133,7 @@ export default function NewGroupConversationScreen() {
     }
 
     void loadData();
-  }, [actorId, contactId, contactScope, user?.id, userId, workspaceId]);
+  }, [actorId, contactId, contactScope, user?.id, workspaceId, workspaceMemberId]);
 
   const visibleActors = useMemo(() => {
     if (!normalizedQuery) return actors;
@@ -201,14 +208,14 @@ export default function NewGroupConversationScreen() {
   const remoteActorIds = useMemo(
     () =>
       selectedRemoteContacts
-        .map((contact) => contact.actor?.id)
+        .map((contact) => contact.actorId)
         .filter((value): value is string => Boolean(value)),
     [selectedRemoteContacts],
   );
   const remoteWorkspaceMemberIds = useMemo(
     () =>
       selectedRemoteContacts
-        .map((contact) => contact.user?.workspaceMemberId)
+        .map((contact) => contact.workspaceMemberId)
         .filter((value): value is string => Boolean(value)),
     [selectedRemoteContacts],
   );
@@ -262,7 +269,8 @@ export default function NewGroupConversationScreen() {
     try {
       if (
         selectedRemoteContacts.some(
-          (contact) => contact.targetType === "user" && !contact.user?.workspaceMemberId,
+          (contact) =>
+            contact.targetType === "member" && !contact.workspaceMemberId,
         )
       ) {
         throw new Error("存在缺少 workspace 成员身份的联系人，暂时无法发起群聊。");
@@ -542,7 +550,7 @@ function SelectableScopedContactRow({
   selected,
   onPress,
 }: {
-  contact: ScopedContactView;
+  contact: ContactHubEntryView;
   selected: boolean;
   onPress: () => void;
 }) {
@@ -557,7 +565,7 @@ function SelectableScopedContactRow({
     >
       <Avatar
         name={name}
-        uri={contact.actor?.avatarUrl || contact.user?.avatarUrl || undefined}
+        uri={contact.avatarUrl || undefined}
         icon={contact.targetType === "actor" ? "cpu" : "user"}
         size={44}
       />
@@ -565,8 +573,8 @@ function SelectableScopedContactRow({
         <View style={styles.rowTitleLine}>
           <Text style={styles.rowTitle}>{name}</Text>
           <Pill
-            label={contact.scope === "workspace" ? "共享" : "我的"}
-            tone={contact.scope === "workspace" ? "primary" : "accent"}
+            label={contact.kind.startsWith("workspace-") ? "共享" : "好友"}
+            tone={contact.kind.startsWith("workspace-") ? "primary" : "accent"}
           />
         </View>
         <Text style={styles.rowSubtitle}>{subtitle}</Text>

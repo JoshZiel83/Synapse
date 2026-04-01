@@ -87,7 +87,7 @@ export function registerPlatformRoutes(app: FastifyInstance) {
       const accessBinding = await grantPlatformAccess({
         userId: parsed.data.userId,
         accessKey: parsed.data.accessKey as PlatformAccessKey,
-        assignedBy: (request as any).user!.userId,
+        assignedByUserId: (request as any).user!.userId,
         metadata: parsed.data.metadata as Record<string, unknown> | undefined,
       });
       return reply.status(201).send(accessBinding);

@@ -37,10 +37,9 @@ export interface ConversationParticipant {
 export interface ConversationMember {
   memberId: string
   participantId: string
-  type: "actor" | "user" | "external"
+  type: "actor" | "workspace_member" | "external"
   id: string
   workspaceMemberId?: string
-  userId?: string
   name: string
   role?: string
   title?: string
@@ -50,8 +49,8 @@ export interface ConversationMember {
   externalUserKey?: string
   transportKind?: TransportKind
   transportAddressId?: string
-  linkedUserId?: string
-  linkedUserName?: string
+  linkedWorkspaceMemberId?: string
+  linkedWorkspaceMemberName?: string
   linkedUserAvatarUrl?: string
 }
 
@@ -97,7 +96,7 @@ export interface FeedMessage {
   contentBlocks: CanonicalContentBlock[]
   author?: ConversationEntityRef
   fromActorId?: string
-  fromUserId?: string
+  fromWorkspaceMemberId?: string
   actorName?: string
   actorRole?: string
   actorEmoji?: string
@@ -417,7 +416,7 @@ function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
       contentBlocks: textBlocks(content),
       author: item.author,
       fromActorId: item.author?.actorId,
-      fromUserId: item.author?.userId,
+      fromWorkspaceMemberId: item.author?.workspaceMemberId,
       actorName: item.author?.name,
       actorRole: item.author?.role,
       actorEmoji: item.author?.avatarEmoji,
@@ -458,7 +457,7 @@ function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
     contentBlocks: normalizeContentBlocks(item.contentBlocks),
     author: item.author,
     fromActorId: item.author?.actorId,
-    fromUserId: item.author?.userId,
+    fromWorkspaceMemberId: item.author?.workspaceMemberId,
     actorName:
       item.author?.memberType === "actor" ? item.author.name : undefined,
     actorRole: item.author?.role,
@@ -489,21 +488,20 @@ function applyMemberJoined(
 
   for (const member of payload.members) {
     const id =
-      member.actorId || member.userId || member.participantId || member.memberId
+      member.actorId || member.workspaceMemberId || member.participantId || member.memberId
     if (!id) continue
 
     const normalizedMember: ConversationMember = {
       memberId: member.memberId,
       participantId: member.participantId || member.memberId,
       type:
-        member.memberType === "user"
-          ? "user"
+        member.memberType === "workspace_member"
+          ? "workspace_member"
           : member.memberType === "external"
             ? "external"
             : "actor",
       id,
       workspaceMemberId: member.workspaceMemberId,
-      userId: member.userId,
       name: member.name || "Unknown",
       title: member.title,
       role: member.role,
@@ -556,7 +554,7 @@ function applyMemberRemoved(
   )
   const removedUserIds = new Set(
     payload.members
-      .map((member) => member.userId)
+      .map((member) => member.workspaceMemberId)
       .filter((value): value is string => Boolean(value))
   )
 

@@ -254,6 +254,7 @@ export function startSessionThinkingWorker() {
         let promptConversationMembers: any[] | undefined;
         let memberEntries: ConversationMemberEntry[] = [];
         let conversationUserId: string | undefined;
+        let conversationWorkspaceMemberId: string | undefined;
         let actorMemberId: string | undefined;
         let lastKnownConversationSequence = 0;
         let contextItems: CanonicalContextItem[];
@@ -283,11 +284,14 @@ export function startSessionThinkingWorker() {
               });
             } else if (member.user_id && member.state === 'active') {
               memberEntries.push({
-                type: 'user',
-                id: member.user_id,
+                type: 'workspace_member',
+                id: member.workspace_member_id,
                 participantId: member.id,
                 name: member.user_name || 'User',
               });
+              if (!conversationWorkspaceMemberId) {
+                conversationWorkspaceMemberId = member.workspace_member_id;
+              }
               if (!conversationUserId) {
                 conversationUserId = member.user_id;
               }
@@ -309,9 +313,9 @@ export function startSessionThinkingWorker() {
                 title: linkedUserName
                   ? `Linked workspace user: ${linkedUserName}`
                   : 'External participant',
-                linkedUserId:
+                linkedWorkspaceMemberId:
                   (member.linked_user_id as string | null) || undefined,
-                linkedUserName,
+                linkedWorkspaceMemberName: linkedUserName,
                 externalUserKey:
                   (member.transport_external_id as string | null) || undefined,
               });
@@ -389,7 +393,7 @@ export function startSessionThinkingWorker() {
 
         const resolvedModelPlan = await resolveModelPlan(actorId, workspaceId, {
           conversationId: session.conversation_id,
-          userId: conversationUserId || userId,
+          workspaceMemberId: conversationWorkspaceMemberId,
         });
         const primaryModel = resolvedModelPlan?.candidates[0] || null;
         let finalContextItems = contextItems;
@@ -428,6 +432,7 @@ export function startSessionThinkingWorker() {
             workspaceId,
             sessionId,
             conversationId: session.conversation_id,
+            workspaceMemberId: conversationWorkspaceMemberId,
             userId: conversationUserId || userId,
           });
           if (mcpTools.tools.length > 0) {
@@ -740,7 +745,7 @@ export function startSessionThinkingWorker() {
 
         const wakeupTargets = pendingWakeups.filter(
           (wakeup) =>
-            (wakeup.sourceMemberType === 'user' || wakeup.sourceMemberType === 'external') &&
+            (wakeup.sourceMemberType === 'workspace_member' || wakeup.sourceMemberType === 'external') &&
             wakeup.sourceMemberId,
         );
 
@@ -748,10 +753,10 @@ export function startSessionThinkingWorker() {
           await runCleanupStep(`publish model error notice for session ${sessionId}`, async () => {
             const targetMembers = await Promise.all(
               wakeupTargets.map(async (wakeup) => {
-                if (wakeup.sourceMemberType === 'user') {
+                if (wakeup.sourceMemberType === 'workspace_member') {
                   return getConversationMember({
                     conversationId: failedSession.conversation_id,
-                    userId: wakeup.sourceMemberId as string,
+                    workspaceMemberId: wakeup.sourceMemberId as string,
                   });
                 }
 

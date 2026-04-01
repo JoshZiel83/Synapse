@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
 
-export default function WorkspaceUserModelsPage() {
+export default function WorkspaceMemberModelsPage() {
   redirect('/settings/models');
 }

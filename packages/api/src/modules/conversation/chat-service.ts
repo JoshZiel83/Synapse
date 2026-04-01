@@ -12,7 +12,7 @@ import {
 } from "../../infrastructure/database/kysely.js";
 import {
   buildActorConversationContextId,
-  buildWorkspaceUserContextId,
+  buildWorkspaceMemberContextId,
   diffAuthzRelationships,
   deleteRelation,
   flushAuthzOutboxEntries,
@@ -49,7 +49,7 @@ import {
   listConversationMembers,
   listUserWorkspaceConversations,
   markConversationRead as markConversationCursorRead,
-  resolveReadableConversationSequenceForUser,
+  resolveReadableConversationSequenceForWorkspaceMember,
 } from "./service.js";
 import { activateConversationParticipant } from "./participant-activation.js";
 import {
@@ -123,10 +123,10 @@ type ConversationGrantRow = {
   workspace_id: string;
   permission: ConversationGrantPermission;
   subject_type: ConversationGrantsSubjectType;
-  user_id: string | null;
+  workspace_member_id: string | null;
   actor_id: string | null;
   status: ConversationGrantsStatus;
-  granted_by?: string | null;
+  granted_by_workspace_member_id?: string | null;
   reason?: string | null;
   metadata?: Record<string, unknown> | string | null;
   created_at?: string | Date | null;
@@ -299,8 +299,8 @@ function mapConversationMemberPayload(row: any) {
 
   return stripUndefined({
     memberId: row.id as string,
-    type: "user" as const,
-    userId: row.user_id as string,
+    type: "workspace_member" as const,
+    workspaceMemberId: row.workspace_member_id as string,
     name: (row.user_name as string) || "User",
     avatarUrl: row.user_avatar_file_id
       ? getFileUrlById(row.user_avatar_file_id as string)
@@ -335,18 +335,14 @@ function buildConversationGrantRelations(
     .flatMap((grant) => {
       const relation = conversationGrantRelation(grant.permission);
       if (!relation) return [];
-      if (
-        grant.subject_type === "workspace_user" &&
-        grant.user_id &&
-        grant.workspace_id
-      ) {
+      if (grant.subject_type === "workspace_member" && grant.workspace_member_id) {
         return [
           touchRelation(
             "conversation",
             conversationId,
             relation,
-            "workspace_user",
-            buildWorkspaceUserContextId(grant.workspace_id, grant.user_id),
+            "workspace_member",
+            buildWorkspaceMemberContextId(grant.workspace_member_id),
           ),
         ];
       }
@@ -379,10 +375,11 @@ function mapConversationGrant(
     workspaceId: row.workspace_id,
     permission: row.permission,
     subjectType: row.subject_type,
-    userId: row.user_id || undefined,
+    workspaceMemberId: row.workspace_member_id || undefined,
     actorId: row.actor_id || undefined,
     status: row.status,
-    grantedBy: row.granted_by || undefined,
+    grantedByWorkspaceMemberId:
+      row.granted_by_workspace_member_id || undefined,
     reason: row.reason || undefined,
     metadata: parseJson(row.metadata),
     createdAt:
@@ -426,8 +423,7 @@ async function loadActiveConversationCounts(conversationIds: string[]) {
 
 async function loadLastVisibleConversationItems(
   conversationIds: string[],
-  userId: string,
-  workspaceMemberId?: string,
+  workspaceMemberId: string,
 ) {
   if (conversationIds.length === 0) {
     return [] as any[];
@@ -438,7 +434,8 @@ async function loadLastVisibleConversationItems(
     .distinctOn("ci.conversation_id")
     .leftJoin("conversation_members as cm", "cm.id", "ci.author_member_id")
     .leftJoin("actors as a", "a.id", "cm.actor_id")
-    .leftJoin("users as u", "u.id", "cm.user_id")
+    .leftJoin("workspace_members as wm", "wm.id", "cm.workspace_member_id")
+    .leftJoin("users as u", "u.id", "wm.user_id")
     .select([
       "ci.conversation_id",
       "ci.id",
@@ -467,8 +464,7 @@ async function loadLastVisibleConversationItems(
             ON cm_target.id = cit.target_member_id
           WHERE cit.item_id = ci.id
             AND (
-              cm_target.user_id = ${userId}
-              OR cm_target.workspace_member_id = ${workspaceMemberId || null}
+              cm_target.workspace_member_id = ${workspaceMemberId || null}
             )
         )`,
       ]),
@@ -492,13 +488,11 @@ async function loadConversationItemParts(itemIds: string[]) {
     .execute();
 }
 
-function unreadCountSelection(userId: string, workspaceMemberId?: string) {
-  const membershipPredicate = workspaceMemberId
-    ? sql`cm_u.workspace_member_id = ${workspaceMemberId}`
-    : sql`cm_u.user_id = ${userId}`;
-  const targetPredicate = workspaceMemberId
-    ? sql`cm_target.workspace_member_id = ${workspaceMemberId}`
-    : sql`cm_target.user_id = ${userId}`;
+function unreadCountSelection(workspaceMemberId: string) {
+  const membershipPredicate =
+    sql`cm_u.workspace_member_id = ${workspaceMemberId}`;
+  const targetPredicate =
+    sql`cm_target.workspace_member_id = ${workspaceMemberId}`;
   return sql<number>`(
     SELECT COUNT(*)::int
     FROM conversation_items ci
@@ -532,7 +526,6 @@ async function queueConversationReadUpdated(params: {
   workspaceId: string;
   workspaceMemberId: string;
   conversationId: string;
-  userId: string;
   readWatermarkSequence: number;
   lastReadAt?: string;
 }) {
@@ -541,7 +534,6 @@ async function queueConversationReadUpdated(params: {
     payload: {
       conversationId: params.conversationId,
       workspaceMemberId: params.workspaceMemberId,
-      userId: params.userId,
       readWatermarkSequence: params.readWatermarkSequence,
       lastReadAt: params.lastReadAt || nowISO(),
     },
@@ -654,12 +646,11 @@ async function ensureActorSession(params: {
 async function hydrateMembershipInitiator(params: {
   conversationId: string;
   initiator?: {
-    memberType: "actor" | "user";
+    memberType: "actor" | "workspace_member";
     participantId?: string;
     memberId?: string;
     workspaceMemberId?: string;
     actorId?: string;
-    userId?: string;
     name?: string;
   };
 }) {
@@ -673,7 +664,6 @@ async function hydrateMembershipInitiator(params: {
       conversationId: params.conversationId,
       workspaceMemberId: params.initiator.workspaceMemberId,
       actorId: params.initiator.actorId,
-      userId: params.initiator.userId,
     });
     memberId = member?.id;
   }
@@ -687,11 +677,12 @@ async function hydrateMembershipInitiator(params: {
         .limit(1)
         .executeTakeFirst();
       name = actorRow?.name || undefined;
-    } else if (params.initiator.userId) {
+    } else if (params.initiator.workspaceMemberId) {
       const userRow = await db
-        .selectFrom("users")
-        .select("name")
-        .where("id", "=", params.initiator.userId)
+        .selectFrom("workspace_members as wm")
+        .innerJoin("users as u", "u.id", "wm.user_id")
+        .select("u.name")
+        .where("wm.id", "=", params.initiator.workspaceMemberId)
         .limit(1)
         .executeTakeFirst();
       name = userRow?.name || undefined;
@@ -713,21 +704,19 @@ async function recordMembershipEvent(params: {
   batchId: string;
   authorMemberId?: string;
   initiator?: {
-    memberType: "actor" | "user";
+    memberType: "actor" | "workspace_member";
     participantId?: string;
     memberId?: string;
     workspaceMemberId?: string;
     actorId?: string;
-    userId?: string;
     name?: string;
   };
   members: Array<{
     participantId: string;
     memberId: string;
-    memberType: "actor" | "user";
+    memberType: "actor" | "workspace_member";
     workspaceMemberId?: string;
     actorId?: string;
-    userId?: string;
     name: string;
     title?: string;
   }>;
@@ -755,7 +744,6 @@ async function recordMembershipEvent(params: {
             memberType: initiator.memberType,
             workspaceMemberId: initiator.workspaceMemberId,
             actorId: initiator.actorId,
-            userId: initiator.userId,
             name: initiator.name,
           }
         : undefined,
@@ -765,7 +753,6 @@ async function recordMembershipEvent(params: {
         memberType: member.memberType,
         workspaceMemberId: member.workspaceMemberId,
         actorId: member.actorId,
-        userId: member.userId,
         name: member.name,
         title: member.title,
       })),
@@ -833,13 +820,13 @@ function getActorIdsFromTargetMembers(params: {
 
 function getAutomaticWakeActorIds(params: {
   members: any[];
-  senderType: "user" | "actor";
-  senderUserId?: string;
+  senderType: "workspace_member" | "actor";
+  senderWorkspaceMemberId?: string;
   hasExplicitTargets: boolean;
 }) {
   if (
-    params.senderType !== "user" ||
-    !params.senderUserId ||
+    params.senderType !== "workspace_member" ||
+    !params.senderWorkspaceMemberId ||
     params.hasExplicitTargets
   ) {
     return [];
@@ -848,15 +835,18 @@ function getAutomaticWakeActorIds(params: {
   const activeActors = params.members.filter(
     (member) => member.state === "active" && member.actor_id,
   );
-  const activeUsers = params.members.filter(
-    (member) => member.state === "active" && member.user_id,
+  const activeWorkspaceMembers = params.members.filter(
+    (member) => member.state === "active" && member.workspace_member_id,
   );
 
-  if (activeActors.length !== 1 || activeUsers.length !== 1) {
+  if (activeActors.length !== 1 || activeWorkspaceMembers.length !== 1) {
     return [];
   }
 
-  if (activeUsers[0]?.user_id !== params.senderUserId) {
+  if (
+    activeWorkspaceMembers[0]?.workspace_member_id !==
+    params.senderWorkspaceMemberId
+  ) {
     return [];
   }
 
@@ -864,39 +854,30 @@ function getAutomaticWakeActorIds(params: {
 }
 
 function buildSenderSubject(params: {
-  senderType: "user" | "actor";
-  senderWorkspaceId?: string;
-  senderUserId?: string;
+  senderType: "workspace_member" | "actor";
+  senderWorkspaceMemberId?: string;
   senderActorId?: string;
 }): AccessSubject | null {
   if (params.senderType === "actor" && params.senderActorId) {
     return { type: "actor" as const, id: params.senderActorId };
   }
   if (
-    params.senderType === "user" &&
-    params.senderUserId &&
-    params.senderWorkspaceId
+    params.senderType === "workspace_member" &&
+    params.senderWorkspaceMemberId
   ) {
     return {
-      type: "workspace_user" as const,
-      id: buildWorkspaceUserContextId(
-        params.senderWorkspaceId,
-        params.senderUserId,
-      ),
+      type: "workspace_member" as const,
+      id: buildWorkspaceMemberContextId(params.senderWorkspaceMemberId),
     };
-  }
-  if (params.senderType === "user" && params.senderUserId) {
-    return { type: "user" as const, id: params.senderUserId };
   }
   return null;
 }
 
 async function requireConversationSendPermission(params: {
   conversationId: string;
-  senderType: "user" | "actor";
+  senderType: "workspace_member" | "actor";
   senderWorkspaceId?: string;
   senderWorkspaceMemberId?: string;
-  senderUserId?: string;
   senderActorId?: string;
 }) {
   if (params.senderType === "actor" && params.senderActorId) {
@@ -912,26 +893,20 @@ async function requireConversationSendPermission(params: {
     );
   }
 
-  if (params.senderType === "user" && params.senderUserId) {
+  if (params.senderType === "workspace_member") {
     const currentWorkspaceMember =
       params.senderWorkspaceMemberId && params.senderWorkspaceId
         ? {
             workspaceMemberId: params.senderWorkspaceMemberId,
             workspaceId: params.senderWorkspaceId,
-            userId: params.senderUserId,
+            userId: undefined,
             userName: "",
             trustLevel: "member",
           }
-        : params.senderWorkspaceId
-          ? await requireCurrentWorkspaceMember(
-              params.senderWorkspaceId,
-              params.senderUserId,
-            )
-          : null;
+        : null;
     const userMember = await getConversationMember({
       conversationId: params.conversationId,
       workspaceMemberId: currentWorkspaceMember?.workspaceMemberId,
-      userId: params.senderUserId,
     });
     if (userMember?.state === "active") {
       return;
@@ -946,9 +921,8 @@ async function requireConversationSendPermission(params: {
 
 async function filterAllowedTargetActorIds(params: {
   conversationId: string;
-  senderType: "user" | "actor";
-  senderWorkspaceId?: string;
-  senderUserId?: string;
+  senderType: "workspace_member" | "actor";
+  senderWorkspaceMemberId?: string;
   senderActorId?: string;
   targetActorIds: string[];
   explicit: boolean;
@@ -1027,7 +1001,6 @@ async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
 export async function createThread(params: {
   workspaceId?: string;
   kind: "group" | "private" | "virtual";
-  createdByUserId?: string;
   createdByWorkspaceMemberId?: string;
   title?: string;
   actorIds?: string[];
@@ -1044,7 +1017,6 @@ export async function createThread(params: {
   const {
     workspaceId,
     kind,
-    createdByUserId,
     createdByWorkspaceMemberId,
     title,
     actorIds: rawActorIds = [],
@@ -1171,7 +1143,6 @@ export async function createThread(params: {
     if (includeCreatorMember && !creatorIdentity) {
       throw new Error("Creator workspace membership not found");
     }
-    const creatorUserId = creatorIdentity?.userId || createdByUserId;
     const fallbackTitle =
       title?.trim() ||
       (kind === "group"
@@ -1199,7 +1170,7 @@ export async function createThread(params: {
               ? boundaryInfo.internalWorkspaceId
               : null,
           title: fallbackTitle,
-          created_by: creatorUserId || null,
+          created_by_workspace_member_id: createdByWorkspaceMemberId || null,
           metadata: {} as TableInsert<"conversations">["metadata"],
         })
         .returningAll(),
@@ -1229,10 +1200,9 @@ export async function createThread(params: {
     const joinedMembers: Array<{
       participantId: string;
       memberId: string;
-      memberType: "actor" | "user";
+      memberType: "actor" | "workspace_member";
       workspaceMemberId?: string;
       actorId?: string;
-      userId?: string;
       name: string;
       title?: string;
     }> = [];
@@ -1244,9 +1214,8 @@ export async function createThread(params: {
         db.insertInto("conversation_members").values({
           id: userMemberId,
           conversation_id: conversationId,
-          member_type: "user",
+          member_type: "workspace_member",
           workspace_member_id: humanParticipant.workspaceMemberId,
-          user_id: humanParticipant.userId,
           role:
             kind === "group" &&
             createdByWorkspaceMemberId &&
@@ -1261,9 +1230,8 @@ export async function createThread(params: {
       joinedMembers.push({
         participantId: userMemberId,
         memberId: userMemberId,
-        memberType: "user" as const,
+        memberType: "workspace_member" as const,
         workspaceMemberId: humanParticipant.workspaceMemberId,
-        userId: humanParticipant.userId,
         name: humanParticipant.userName || "User",
       });
     }
@@ -1328,11 +1296,10 @@ export async function createThread(params: {
               touchRelation(
                 "conversation",
                 conversationId,
-                "admin",
-                "workspace_user",
-                buildWorkspaceUserContextId(
-                  creatorIdentity.workspaceId,
-                  creatorIdentity.userId,
+              "admin",
+              "workspace_member",
+                buildWorkspaceMemberContextId(
+                  creatorIdentity.workspaceMemberId,
                 ),
               ),
             ]
@@ -1347,20 +1314,18 @@ export async function createThread(params: {
               "conversation_workspace",
               `${participant.workspaceId}|${conversationId}`,
               "participant",
-              "workspace_user",
-              buildWorkspaceUserContextId(
-                participant.workspaceId,
-                participant.userId,
+              "workspace_member",
+              buildWorkspaceMemberContextId(
+                participant.workspaceMemberId,
               ),
             ),
             touchRelation(
               "conversation",
               conversationId,
               "participant",
-              "workspace_user",
-              buildWorkspaceUserContextId(
-                participant.workspaceId,
-                participant.userId,
+              "workspace_member",
+              buildWorkspaceMemberContextId(
+                participant.workspaceMemberId,
               ),
             ),
           ],
@@ -1391,7 +1356,7 @@ export async function createThread(params: {
         source: "conversation.create",
         workspaceId: workspaceId || null,
         conversationId,
-        createdByUserId: creatorUserId || null,
+        createdByWorkspaceMemberId: createdByWorkspaceMemberId || null,
         kind,
       },
     );
@@ -1401,7 +1366,6 @@ export async function createThread(params: {
       members,
       joinedMembers,
       creatorName: creatorIdentity?.userName || "User",
-      creatorUserId: creatorUserId || undefined,
       creatorWorkspaceMemberId: creatorIdentity?.workspaceMemberId,
       authzEntryIds,
     };
@@ -1412,7 +1376,7 @@ export async function createThread(params: {
   if (result.joinedMembers.length > 0) {
     const creatorMember = result.joinedMembers.find(
       (member) =>
-        member.memberType === "user" &&
+        member.memberType === "workspace_member" &&
         member.workspaceMemberId === result.creatorWorkspaceMemberId,
     );
     await recordMembershipEvent({
@@ -1424,11 +1388,10 @@ export async function createThread(params: {
         creatorMember?.memberId || result.joinedMembers[0]?.memberId,
       initiator: creatorMember
         ? {
-            memberType: "user",
+            memberType: "workspace_member",
             participantId: creatorMember.memberId,
             memberId: creatorMember.memberId,
             workspaceMemberId: creatorMember.workspaceMemberId,
-            userId: result.creatorUserId,
             name: result.creatorName,
           }
         : undefined,
@@ -1443,15 +1406,14 @@ export async function createThread(params: {
   ) {
     const creatorMember = result.joinedMembers.find(
       (member) =>
-        member.memberType === "user" &&
+        member.memberType === "workspace_member" &&
         member.workspaceMemberId === result.creatorWorkspaceMemberId,
     );
     await sendConversationMessage({
       conversationId,
-      senderType: "user",
+      senderType: "workspace_member",
       senderWorkspaceId: workspaceId,
       senderWorkspaceMemberId: creatorMember?.workspaceMemberId,
-      senderUserId: result.creatorUserId,
       content: initialMessage || "",
       contentBlocks: initialContentBlocks,
       targetActorIds: initialTargetActorIds,
@@ -1484,7 +1446,7 @@ export async function getConversation(conversationId: string): Promise<any | nul
 export async function updateConversationProfile(params: {
   conversationId: string;
   workspaceId: string;
-  updatedBy: string;
+  updatedByWorkspaceMemberId: string;
   title?: string;
   avatarFileId?: string | null;
 }) {
@@ -1548,13 +1510,15 @@ export async function updateConversationProfile(params: {
 
 export async function getConversationsByWorkspace(
   workspaceId: string,
-  userId: string,
+  workspaceMemberId: string,
   conversationIds?: string[],
 ): Promise<any[]> {
-  const currentWorkspaceMember = await requireCurrentWorkspaceMember(
-    workspaceId,
-    userId,
+  const currentWorkspaceMember = await getWorkspaceMemberIdentityById(
+    workspaceMemberId,
   );
+  if (!currentWorkspaceMember || currentWorkspaceMember.workspaceId !== workspaceId) {
+    throw new Error("Workspace member not found");
+  }
   const conversations = conversationIds
     ? conversationIds.length > 0
       ? await db
@@ -1585,10 +1549,7 @@ export async function getConversationsByWorkspace(
             sql<number>`COALESCE(cr.read_watermark_sequence, 0)`.as(
               "read_watermark_sequence",
             ),
-            unreadCountSelection(
-              userId,
-              currentWorkspaceMember.workspaceMemberId,
-            ),
+            unreadCountSelection(currentWorkspaceMember.workspaceMemberId),
           ])
           .where(
             sql<boolean>`EXISTS (
@@ -1606,7 +1567,6 @@ export async function getConversationsByWorkspace(
       : []
     : await listUserWorkspaceConversations(
         workspaceId,
-        userId,
         currentWorkspaceMember.workspaceMemberId,
       );
   if (conversations.length === 0) return [];
@@ -1619,7 +1579,6 @@ export async function getConversationsByWorkspace(
   );
   const lastItems = await loadLastVisibleConversationItems(
     resolvedConversationIds,
-    userId,
     currentWorkspaceMember.workspaceMemberId,
   );
 
@@ -1656,23 +1615,16 @@ export async function getConversationsByWorkspace(
   });
 }
 
-export async function getThreadsForUser(params: {
-  userId: string;
-  workspaceId?: string;
-  workspaceMemberId?: string;
+export async function getThreadsForWorkspaceMember(params: {
+  workspaceId: string;
+  workspaceMemberId: string;
 }): Promise<any[]> {
-  const currentWorkspaceMember =
-    params.workspaceId && !params.workspaceMemberId
-      ? await requireCurrentWorkspaceMember(params.workspaceId, params.userId)
-      : params.workspaceId && params.workspaceMemberId
-        ? {
-            workspaceMemberId: params.workspaceMemberId,
-            workspaceId: params.workspaceId,
-            userId: params.userId,
-            userName: "",
-            trustLevel: "member",
-          }
-        : null;
+  const currentWorkspaceMember = await getWorkspaceMemberIdentityById(
+    params.workspaceMemberId,
+  );
+  if (!currentWorkspaceMember || currentWorkspaceMember.workspaceId !== params.workspaceId) {
+    throw new Error("Workspace member not found");
+  }
   let statement = db
     .selectFrom("conversations as c")
     .innerJoin("conversation_members as cm", (join) =>
@@ -1694,13 +1646,9 @@ export async function getThreadsForUser(params: {
       join
         .onRef("cr.conversation_id", "=", "c.id")
         .on(
-          currentWorkspaceMember
-            ? "cr.workspace_member_id"
-            : "cr.user_id",
+          "cr.workspace_member_id",
           "=",
-          currentWorkspaceMember
-            ? currentWorkspaceMember.workspaceMemberId
-            : params.userId,
+          currentWorkspaceMember.workspaceMemberId,
         ),
     )
     .selectAll("c")
@@ -1710,21 +1658,14 @@ export async function getThreadsForUser(params: {
       sql<number>`COALESCE(cr.read_watermark_sequence, 0)`.as(
         "read_watermark_sequence",
       ),
-      unreadCountSelection(
-        params.userId,
-        currentWorkspaceMember?.workspaceMemberId,
-      ),
+      unreadCountSelection(currentWorkspaceMember.workspaceMemberId),
     ]);
 
-  if (currentWorkspaceMember) {
-    statement = statement.where(
-      "cm.workspace_member_id",
-      "=",
-      currentWorkspaceMember.workspaceMemberId,
-    );
-  } else {
-    statement = statement.where("cm.user_id", "=", params.userId);
-  }
+  statement = statement.where(
+    "cm.workspace_member_id",
+    "=",
+    currentWorkspaceMember.workspaceMemberId,
+  );
 
   const conversations = await statement
     .orderBy("c.updated_at", "desc")
@@ -1737,8 +1678,7 @@ export async function getThreadsForUser(params: {
   const activeCountMap = await loadActiveConversationCounts(conversationIds);
   const lastItems = await loadLastVisibleConversationItems(
     conversationIds,
-    params.userId,
-    currentWorkspaceMember?.workspaceMemberId,
+    currentWorkspaceMember.workspaceMemberId,
   );
 
   const lastItemMap = new Map<string, any>(
@@ -1877,10 +1817,10 @@ export async function addMembersToConversation(params: {
   actorIds?: string[];
   workspaceMemberIds?: string[];
   initiator?: {
-    memberType: "actor" | "user";
+    memberType: "actor" | "workspace_member";
     memberId?: string;
     actorId?: string;
-    userId?: string;
+    workspaceMemberId?: string;
     name?: string;
   };
 }) {
@@ -1978,10 +1918,9 @@ export async function addMembersToConversation(params: {
     const joinedMembers: Array<{
       participantId: string;
       memberId: string;
-      memberType: "actor" | "user";
+      memberType: "actor" | "workspace_member";
       workspaceMemberId?: string;
       actorId?: string;
-      userId?: string;
       name: string;
       title?: string;
     }> = [];
@@ -2059,25 +1998,11 @@ export async function addMembersToConversation(params: {
         workspaceMemberId,
       });
       if (existingByWorkspaceMember?.state === "active") continue;
-      const existingByUser = await getConversationMember({
-        conversationId: params.conversationId,
-        userId: userInfo.user_id,
-      });
-      if (
-        existingByUser &&
-        existingByUser.workspace_member_id &&
-        existingByUser.workspace_member_id !== workspaceMemberId
-      ) {
-        throw new Error(
-          "The same user cannot join a conversation through multiple workspace identities",
-        );
-      }
 
       const member = await ensureConversationMember({
         conversationId: params.conversationId,
-        memberType: "user",
+        memberType: "workspace_member",
         workspaceMemberId,
-        userId: userInfo.user_id,
       });
       relationships.push(
         ...touchConversationWorkspaceContext(
@@ -2088,28 +2013,21 @@ export async function addMembersToConversation(params: {
           "conversation_workspace",
           `${userInfo.workspace_id}|${params.conversationId}`,
           "participant",
-          "workspace_user",
-          buildWorkspaceUserContextId(
-            userInfo.workspace_id,
-            userInfo.user_id,
-          ),
+          "workspace_member",
+          buildWorkspaceMemberContextId(userInfo.workspace_member_id),
         ),
         touchRelation(
           "conversation",
           params.conversationId,
           "participant",
-          "workspace_user",
-          buildWorkspaceUserContextId(
-            userInfo.workspace_id,
-            userInfo.user_id,
-          ),
+          "workspace_member",
+          buildWorkspaceMemberContextId(userInfo.workspace_member_id),
         ),
       );
       addedMembers.push({
         memberId: member.id,
-        type: "user" as const,
+        type: "workspace_member" as const,
         workspaceMemberId: userInfo.workspace_member_id,
-        userId: userInfo.user_id,
         name: userInfo.name || "User",
         avatarUrl: userInfo.avatar_file_id
           ? getFileUrlById(userInfo.avatar_file_id)
@@ -2118,9 +2036,8 @@ export async function addMembersToConversation(params: {
       joinedMembers.push({
         participantId: member.id,
         memberId: member.id,
-        memberType: "user",
+        memberType: "workspace_member",
         workspaceMemberId: userInfo.workspace_member_id,
-        userId: userInfo.user_id,
         name: userInfo.name || "User",
       });
     }
@@ -2359,6 +2276,7 @@ export async function getConversationMembers(
             ${sql.raw(actorCurrentVersionExpr)} AS actor_current_version,
             a.avatar_emoji AS actor_avatar_emoji,
             actor_avatar_file.stored_name AS actor_avatar_stored_name,
+            wm.user_id AS user_id,
             u.name AS user_name,
             u.avatar_file_id AS user_avatar_file_id,
             primary_address.id AS transport_address_id,
@@ -2372,21 +2290,24 @@ export async function getConversationMembers(
             ls.status AS session_status
      FROM conversation_members cm
      LEFT JOIN actors a ON a.id = cm.actor_id
+     LEFT JOIN workspace_members wm ON wm.id = cm.workspace_member_id
      LEFT JOIN actor_versions current_version
        ON current_version.actor_id = a.id
       AND current_version.version = a.current_version
      LEFT JOIN actor_versions joined_version
        ON joined_version.id = cm.actor_join_version_id
      LEFT JOIN files actor_avatar_file ON actor_avatar_file.id = a.avatar_file_id
-     LEFT JOIN users u ON u.id = cm.user_id
+     LEFT JOIN users u ON u.id = wm.user_id
      LEFT JOIN LATERAL (
        SELECT ta.id,
               ta.transport_kind,
               ta.external_id,
-              ta.user_id AS linked_user_id,
+              linked_wm.user_id AS linked_user_id,
               COALESCE(ta.display_name, cm.display_name) AS display_name
        FROM conversation_participant_addresses cpa
        JOIN transport_addresses ta ON ta.id = cpa.transport_address_id
+       LEFT JOIN workspace_members linked_wm
+         ON linked_wm.id = ta.workspace_member_id
        WHERE cpa.conversation_member_id = cm.id
        ORDER BY cpa.is_primary DESC, cpa.created_at ASC
        LIMIT 1
@@ -2414,10 +2335,9 @@ export async function getConversationMembers(
 
 export async function sendConversationMessage(params: {
   conversationId: string;
-  senderType: "user" | "actor";
+  senderType: "workspace_member" | "actor";
   senderWorkspaceId?: string;
   senderWorkspaceMemberId?: string;
-  senderUserId?: string;
   senderActorId?: string;
   senderSessionId?: string;
   clientMessageId?: string;
@@ -2433,7 +2353,6 @@ export async function sendConversationMessage(params: {
     senderType,
     senderWorkspaceId,
     senderWorkspaceMemberId,
-    senderUserId,
     senderActorId,
     senderSessionId,
     clientMessageId,
@@ -2449,7 +2368,6 @@ export async function sendConversationMessage(params: {
     senderType,
     senderWorkspaceId,
     senderWorkspaceMemberId,
-    senderUserId,
     senderActorId,
   });
 
@@ -2482,12 +2400,13 @@ export async function sendConversationMessage(params: {
         .where("id", "=", senderActorId)
         .executeTakeFirst()
     )?.name;
-  } else if (senderUserId) {
+  } else if (senderWorkspaceMemberId) {
     senderName = (
       await db
-        .selectFrom("users")
-        .select("name")
-        .where("id", "=", senderUserId)
+        .selectFrom("workspace_members as wm")
+        .innerJoin("users as u", "u.id", "wm.user_id")
+        .select("u.name")
+        .where("wm.id", "=", senderWorkspaceMemberId)
         .executeTakeFirst()
     )?.name;
   }
@@ -2516,13 +2435,12 @@ export async function sendConversationMessage(params: {
           await activateConversationParticipant({
             workspaceId: senderWorkspaceId,
             conversationId: conversationId,
-            memberType: "user",
+            memberType: "workspace_member",
             workspaceMemberId: senderWorkspaceMemberId,
-            userId: senderUserId,
-            initiator: senderUserId
+            initiator: senderWorkspaceMemberId
               ? {
-                  memberType: "user",
-                  userId: senderUserId,
+                  memberType: "workspace_member",
+                  workspaceMemberId: senderWorkspaceMemberId,
                   name: senderName,
                 }
               : undefined,
@@ -2553,8 +2471,7 @@ export async function sendConversationMessage(params: {
   const allowedExplicitActorIds = await filterAllowedTargetActorIds({
     conversationId: conversationId,
     senderType,
-    senderWorkspaceId,
-    senderUserId,
+    senderWorkspaceMemberId,
     senderActorId,
     targetActorIds: requestedExplicitActorIds,
     explicit: requestedExplicitActorIds.length > 0,
@@ -2641,14 +2558,13 @@ export async function sendConversationMessage(params: {
   const automaticWakeCandidateIds = getAutomaticWakeActorIds({
     members,
     senderType,
-    senderUserId,
+    senderWorkspaceMemberId,
     hasExplicitTargets,
   });
   const automaticWakeActorIds = await filterAllowedTargetActorIds({
     conversationId: conversationId,
     senderType,
-    senderWorkspaceId,
-    senderUserId,
+    senderWorkspaceMemberId,
     senderActorId,
     targetActorIds: automaticWakeCandidateIds,
     explicit: false,
@@ -2707,7 +2623,7 @@ export async function sendConversationMessage(params: {
       metadata: {
         senderType,
         senderActorId,
-        senderUserId,
+        senderWorkspaceMemberId,
         targetMemberIds,
       },
     }).catch((err) => {
@@ -2735,7 +2651,8 @@ export async function sendConversationMessage(params: {
       sourceItemId: item.id,
       sourceSessionId: senderSessionId,
       sourceMemberType: senderType,
-      sourceMemberId: senderType === "actor" ? senderActorId : senderUserId,
+      sourceMemberId:
+        senderType === "actor" ? senderActorId : senderWorkspaceMemberId,
       sourceName: senderName,
       summary: wakeupSummary,
       metadata: isAutomaticWake
@@ -2755,7 +2672,7 @@ export async function sendConversationMessage(params: {
 
 export async function getConversationMessages(
   conversationId: string,
-  viewer: { userId?: string; actorId?: string; workspaceMemberId?: string },
+  viewer: { actorId?: string; workspaceMemberId?: string },
   limit = 100,
   before?: string,
 ): Promise<{ items: any[]; hasMore: boolean; nextBeforeSequence?: number }> {
@@ -2766,11 +2683,6 @@ export async function getConversationMessages(
     ? await getConversationMember({
         conversationId: conversationId,
         workspaceMemberId: viewer.workspaceMemberId,
-      })
-    : viewer.userId
-    ? await getConversationMember({
-        conversationId: conversationId,
-        userId: viewer.userId,
       })
     : viewer.actorId
       ? await getConversationMember({
@@ -2815,14 +2727,12 @@ export async function getConversationMessages(
     nextBeforeSequence: pageItems[0]?.sequence
       ? Number(pageItems[0].sequence)
       : undefined,
-    ...(viewer.userId
+    ...(viewer.workspaceMemberId
       ? {
           readWatermarkSequence: (
             await getConversationReadState(
-              viewer.userId,
-              conversationId,
-              undefined,
               viewer.workspaceMemberId,
+              conversationId,
             )
           ).readWatermarkSequence,
         }
@@ -2845,7 +2755,7 @@ export async function wakeActor(params: {
     | "retry";
   sourceItemId?: string;
   sourceSessionId?: string;
-  sourceMemberType?: "user" | "actor" | "external" | "system";
+  sourceMemberType?: "workspace_member" | "actor" | "external" | "system";
   sourceMemberId?: string;
   sourceName?: string;
   summary: string;
@@ -2930,21 +2840,21 @@ export async function issueConversationGrant(params: {
   conversationId: string;
   workspaceId: string;
   permission: ConversationGrantPermission;
-  userId?: string;
+  workspaceMemberId?: string;
   actorId?: string;
-  grantedBy?: string;
+  grantedByWorkspaceMemberId?: string;
   reason?: string;
   metadata?: Record<string, unknown>;
 }) {
-  const subjectType = params.userId ? "workspace_user" : "actor";
-  if (!params.userId && !params.actorId) {
-    throw new Error("userId or actorId is required");
+  const subjectType = params.workspaceMemberId ? "workspace_member" : "actor";
+  if (!params.workspaceMemberId && !params.actorId) {
+    throw new Error("workspaceMemberId or actorId is required");
   }
 
-  if (params.userId) {
-    await assertActiveConversationUserMember(
+  if (params.workspaceMemberId) {
+    await assertActiveConversationWorkspaceMember(
       params.conversationId,
-      params.userId,
+      params.workspaceMemberId,
     );
   }
   if (params.actorId) {
@@ -2983,7 +2893,7 @@ export async function issueConversationGrant(params: {
         .where("workspace_id", "=", params.workspaceId)
         .where("permission", "=", params.permission)
         .where("subject_type", "=", subjectType)
-        .where(sql<boolean>`COALESCE(user_id::text, '') = COALESCE(${params.userId ?? null}::text, '')`)
+        .where(sql<boolean>`COALESCE(workspace_member_id::text, '') = COALESCE(${params.workspaceMemberId ?? null}::text, '')`)
         .where(sql<boolean>`COALESCE(actor_id::text, '') = COALESCE(${params.actorId ?? null}::text, '')`)
         .where("status", "=", "active")
         .limit(1),
@@ -3009,10 +2919,11 @@ export async function issueConversationGrant(params: {
           workspace_id: params.workspaceId,
           permission: params.permission,
           subject_type: subjectType,
-          user_id: params.userId ?? null,
+          workspace_member_id: params.workspaceMemberId ?? null,
           actor_id: params.actorId ?? null,
           status: "active",
-          granted_by: params.grantedBy ?? null,
+          granted_by_workspace_member_id:
+            params.grantedByWorkspaceMemberId ?? null,
           reason: params.reason ?? null,
           metadata:
             (params.metadata ?? {}) as TableInsert<"conversation_grants">["metadata"],
@@ -3126,16 +3037,16 @@ export async function revokeConversationGrant(params: {
   return mapConversationGrant(result.grant);
 }
 
-async function assertActiveConversationUserMember(
+async function assertActiveConversationWorkspaceMember(
   conversationId: string,
-  userId: string,
+  workspaceMemberId: string,
 ) {
   const member = await getConversationMember({
     conversationId,
-    userId,
+    workspaceMemberId,
   });
   if (!member || member.state !== "active") {
-    throw new Error("User is not an active member of this conversation");
+    throw new Error("Workspace member is not an active member of this conversation");
   }
 }
 
@@ -3155,7 +3066,7 @@ async function assertActiveConversationActorMember(
 // ============ Mark Read ============
 
 export async function markConversationRead(
-  userId: string,
+  workspaceMemberId: string,
   conversationId: string,
   requestedSequence?: number,
   workspaceId?: string,
@@ -3164,31 +3075,33 @@ export async function markConversationRead(
   if (!conversation) {
     return;
   }
-  const currentWorkspaceMember = workspaceId
-    ? await requireCurrentWorkspaceMember(workspaceId, userId)
-    : null;
+  const currentWorkspaceMember =
+    workspaceId && workspaceMemberId
+      ? {
+          workspaceId,
+          workspaceMemberId,
+          userId: undefined,
+        }
+      : null;
 
   const resolvedSequence =
     typeof requestedSequence === "number" && Number.isFinite(requestedSequence)
-      ? await resolveReadableConversationSequenceForUser({
+      ? await resolveReadableConversationSequenceForWorkspaceMember({
           conversationId,
-          userId,
-          workspaceMemberId: currentWorkspaceMember?.workspaceMemberId,
+          workspaceMemberId,
           maxSequence: requestedSequence,
         })
-      : await resolveReadableConversationSequenceForUser({
+      : await resolveReadableConversationSequenceForWorkspaceMember({
           conversationId,
-          userId,
-          workspaceMemberId: currentWorkspaceMember?.workspaceMemberId,
+          workspaceMemberId,
         });
 
   await transaction(async (client) => {
     await markConversationCursorRead(
-      userId,
+      workspaceMemberId,
       conversationId,
       resolvedSequence,
       client,
-      currentWorkspaceMember?.workspaceMemberId,
     );
 
     if (!currentWorkspaceMember?.workspaceId) {
@@ -3196,17 +3109,15 @@ export async function markConversationRead(
     }
 
     const state = await getConversationReadState(
-      userId,
+      workspaceMemberId,
       conversationId,
       client,
-      currentWorkspaceMember.workspaceMemberId,
     );
     await queueConversationReadUpdated({
       queryable: client,
       workspaceId: currentWorkspaceMember.workspaceId,
       workspaceMemberId: currentWorkspaceMember.workspaceMemberId,
       conversationId,
-      userId,
       readWatermarkSequence: state.readWatermarkSequence,
       lastReadAt: state.lastReadAt,
     });

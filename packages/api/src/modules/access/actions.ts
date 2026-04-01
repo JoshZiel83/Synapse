@@ -66,12 +66,6 @@ export const ACCESS_ACTIONS = {
   'installed_skill.grant': { resourceType: 'installed_skill', permission: 'grant' },
   'installed_skill.delete': { resourceType: 'installed_skill', permission: 'delete' },
 
-  'relay.view': { resourceType: 'mcp_relay', permission: 'view' },
-  'relay.invoke': { resourceType: 'mcp_relay', permission: 'invoke' },
-  'relay.edit': { resourceType: 'mcp_relay', permission: 'edit' },
-  'relay.grant': { resourceType: 'mcp_relay', permission: 'grant' },
-  'relay.rotate_token': { resourceType: 'mcp_relay', permission: 'rotate_token' },
-  'relay.delete': { resourceType: 'mcp_relay', permission: 'delete' },
   'relay_device.view': { resourceType: 'relay_device', permission: 'view' },
   'relay_device.manage': { resourceType: 'relay_device', permission: 'manage' },
   'relay_device.authorize_runtime_access': { resourceType: 'relay_device', permission: 'authorize_runtime_access' },

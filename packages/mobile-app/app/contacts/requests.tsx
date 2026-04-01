@@ -238,7 +238,9 @@ export default function ContactRequestsScreen() {
                     <Text style={styles.rowTitle}>
                       {request.targetType === "actor"
                         ? request.targetActor?.name || "未知 Actor"
-                        : request.targetUser?.name || request.targetUser?.email || "未知用户"}
+                        : request.targetMember?.name ||
+                          request.targetMember?.email ||
+                          "未知成员"}
                     </Text>
                     <Pill label="好友申请中" tone="accent" />
                   </View>

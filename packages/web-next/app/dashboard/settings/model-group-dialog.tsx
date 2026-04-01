@@ -18,8 +18,8 @@ import {
 interface ModelGroupDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  scope?: 'workspace' | 'platform' | 'user';
-  availableScopes?: Array<'workspace' | 'platform' | 'user'>;
+  scope?: 'workspace' | 'platform' | 'workspace_member';
+  availableScopes?: Array<'workspace' | 'platform' | 'workspace_member'>;
   group: any | null; // null = create, object = edit
   onSaved: () => void;
 }
@@ -43,7 +43,8 @@ export default function ModelGroupDialog({
   const [description, setDescription] = useState('');
   const [strategy, setStrategy] = useState('priority_failover');
   const [isDefault, setIsDefault] = useState(false);
-  const [selectedScope, setSelectedScope] = useState<'workspace' | 'platform' | 'user'>(scope);
+  const [selectedScope, setSelectedScope] =
+    useState<'workspace' | 'platform' | 'workspace_member'>(scope);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -79,11 +80,15 @@ export default function ModelGroupDialog({
         } else {
           await api.createPlatformModelGroup(data);
         }
-      } else if (effectiveScope === 'user') {
+      } else if (effectiveScope === 'workspace_member') {
         if (group) {
-          await api.updateUserModelGroup(group.id, data);
+          await api.updateWorkspaceMemberModelGroup(
+            workspaceId!,
+            group.id,
+            data
+          );
         } else {
-          await api.createUserModelGroup(data);
+          await api.createWorkspaceMemberModelGroup(workspaceId!, data);
         }
       } else if (group) {
         await api.updateModelGroup(workspaceId!, group.id, data);
@@ -114,12 +119,23 @@ export default function ModelGroupDialog({
               <Label>Scope</Label>
               <select
                 value={selectedScope}
-                onChange={(event) => setSelectedScope(event.target.value as 'workspace' | 'platform' | 'user')}
+                onChange={(event) =>
+                  setSelectedScope(
+                    event.target.value as
+                      | 'workspace'
+                      | 'platform'
+                      | 'workspace_member'
+                  )
+                }
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
               >
                 {availableScopes?.map((option) => (
                   <option key={option} value={option}>
-                    {option === 'workspace' ? 'Workspace' : option === 'platform' ? 'Platform' : 'User'}
+                    {option === 'workspace'
+                      ? 'Workspace'
+                      : option === 'platform'
+                        ? 'Platform'
+                        : 'Member'}
                   </option>
                 ))}
               </select>

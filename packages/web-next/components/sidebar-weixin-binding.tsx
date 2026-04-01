@@ -49,7 +49,7 @@ function WechatIcon({ className }: { className?: string }) {
 }
 
 export function SidebarWeixinBinding() {
-  const { workspaceId } = useWorkspace()
+  const { workspaceId, currentWorkspaceMemberId } = useWorkspace()
   const currentUser = useAuthStore((state) => state.user)
   const currentUserId = currentUser?.id || null
   const currentUserName = currentUser?.name || "自己"
@@ -111,13 +111,17 @@ export function SidebarWeixinBinding() {
     }
 
     setSelectedUsage(
-      binding?.pendingAutoLinkUserId &&
-        currentUserId &&
-        binding.pendingAutoLinkUserId === currentUserId
+      binding?.pendingAutoLinkWorkspaceMemberId &&
+        currentWorkspaceMemberId &&
+        binding.pendingAutoLinkWorkspaceMemberId === currentWorkspaceMemberId
         ? "self"
         : "visitor"
     )
-  }, [binding?.pendingAutoLinkUserId, currentUserId, dialogOpen])
+  }, [
+    binding?.pendingAutoLinkWorkspaceMemberId,
+    currentWorkspaceMemberId,
+    dialogOpen,
+  ])
 
   React.useEffect(() => {
     let cancelled = false
@@ -234,9 +238,9 @@ export function SidebarWeixinBinding() {
     setQrImageUrl(null)
     setError(null)
     setSelectedUsage(
-      binding?.pendingAutoLinkUserId &&
-        currentUserId &&
-        binding.pendingAutoLinkUserId === currentUserId
+      binding?.pendingAutoLinkWorkspaceMemberId &&
+        currentWorkspaceMemberId &&
+        binding.pendingAutoLinkWorkspaceMemberId === currentWorkspaceMemberId
         ? "self"
         : "visitor"
     )
@@ -285,7 +289,7 @@ export function SidebarWeixinBinding() {
       }
       const result = await api.setCurrentUserWeixinBindingAutoLink(
         workspaceId,
-        selectedUsage === "self" ? currentUserId : null
+        selectedUsage === "self" ? currentWorkspaceMemberId || null : null
       )
       setBinding(result?.binding || null)
       toast.success("已保存", { position: "top-center" })
@@ -300,7 +304,7 @@ export function SidebarWeixinBinding() {
 
   const canShowLauncher =
     Boolean(workspaceId) &&
-    Boolean(currentUserId) &&
+    Boolean(currentWorkspaceMemberId) &&
     !loadingBinding &&
     !binding
 
@@ -470,7 +474,7 @@ export function SidebarWeixinBinding() {
                   onClick={() => void handleSaveBindingTarget()}
                   disabled={
                     savingBindingTarget ||
-                    (selectedUsage === "self" && !currentUserId)
+                    (selectedUsage === "self" && !currentWorkspaceMemberId)
                   }
                 >
                   {savingBindingTarget ? (

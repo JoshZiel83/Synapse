@@ -9,9 +9,10 @@ import {
 } from '@synapse/shared';
 import type { SessionsChannelType } from '../../infrastructure/database/generated/db.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
+import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import { requireRequestAction } from '../access/guards.js';
 import type { AccessAction } from '../access/actions.js';
-import { authorizeAction, workspaceUserSubject } from '../access/service.js';
+import { authorizeAction, workspaceMemberSubject } from '../access/service.js';
 import {
   createSession,
   getSession,
@@ -70,14 +71,14 @@ async function requireSessionConversationPermission(
     return null;
   }
 
-  const userId = (request as any).user?.userId as string | undefined;
-  if (!userId) {
+  const workspaceMemberId = (request as any).workspaceMember?.id as string | undefined;
+  if (!workspaceMemberId) {
     reply.status(401).send({ error: 'Unauthorized' });
     return null;
   }
 
   const allowed = await authorizeAction({
-    subject: workspaceUserSubject(workspaceId, userId),
+    subject: workspaceMemberSubject(workspaceMemberId),
     action,
     resourceId: session.conversation_id,
   });
@@ -91,6 +92,7 @@ async function requireSessionConversationPermission(
 
 export async function sessionController(app: FastifyInstance) {
   app.addHook('onRequest', authMiddleware);
+  app.addHook('onRequest', workspaceMiddleware);
 
   // POST /workspaces/:wsId/actors/:actorId/sessions — create a new session with any actor
   app.post<{
@@ -104,7 +106,7 @@ export async function sessionController(app: FastifyInstance) {
       channelType?: SessionChannelInput;
     };
     const normalizedChannelType: SessionsChannelType = channelType === 'im' ? 'bridge' : (channelType ?? 'web');
-    const userId = (request as any).user!.userId;
+    const workspaceMemberId = (request as any).workspaceMember!.id as string;
 
     const allowed = await requireActorPermission(
       request,
@@ -118,10 +120,10 @@ export async function sessionController(app: FastifyInstance) {
     const session = await createSession({
       workspaceId,
       actorId,
-      userId,
+      workspaceMemberId,
       channelType: normalizedChannelType,
       trigger: 'user_message',
-      metadata: { userId },
+      metadata: { workspaceMemberId },
     });
 
     // Add initial message
@@ -131,7 +133,7 @@ export async function sessionController(app: FastifyInstance) {
       role: 'user',
       content,
       contentBlocks,
-      fromUserId: userId,
+      fromWorkspaceMemberId: workspaceMemberId,
     });
 
     // Enqueue thinking
@@ -140,8 +142,8 @@ export async function sessionController(app: FastifyInstance) {
       actorId,
       workspaceId,
       sourceType: 'user_message',
-      sourceMemberType: 'user',
-      sourceMemberId: userId,
+      sourceMemberType: 'workspace_member',
+      sourceMemberId: workspaceMemberId,
       summary: content.trim().slice(0, 96) || 'New message',
       trigger: 'user_message',
     });
@@ -162,7 +164,7 @@ export async function sessionController(app: FastifyInstance) {
       content: string;
       contentBlocks?: CanonicalContentBlock[];
     };
-    const userId = (request as any).user!.userId;
+    const workspaceMemberId = (request as any).workspaceMember!.id as string;
 
     const session = await requireSessionConversationPermission(
       request,
@@ -183,7 +185,7 @@ export async function sessionController(app: FastifyInstance) {
       role: 'user',
       content,
       contentBlocks,
-      fromUserId: userId,
+      fromWorkspaceMemberId: workspaceMemberId,
     });
 
     await enqueueSessionWakeup({
@@ -191,8 +193,8 @@ export async function sessionController(app: FastifyInstance) {
       actorId: session.actor_id,
       workspaceId,
       sourceType: 'user_message',
-      sourceMemberType: 'user',
-      sourceMemberId: userId,
+      sourceMemberType: 'workspace_member',
+      sourceMemberId: workspaceMemberId,
       summary: content.trim().slice(0, 96) || 'New message',
       trigger: 'user_message',
     });
@@ -240,6 +242,7 @@ export async function sessionController(app: FastifyInstance) {
     const { workspaceId, sessionId } = request.params;
     const { itemId } = retrySessionSchema.parse(request.body || {});
     const userId = (request as any).user!.userId;
+    const workspaceMemberId = (request as any).workspaceMember!.id as string;
 
     const session = await requireSessionConversationPermission(
       request,
@@ -259,13 +262,14 @@ export async function sessionController(app: FastifyInstance) {
       workspaceId,
       sourceType: 'retry',
       sourceItemId: itemId,
-      sourceMemberType: 'user',
-      sourceMemberId: userId,
+      sourceMemberType: 'workspace_member',
+      sourceMemberId: workspaceMemberId,
       summary: 'Retry requested',
       reasonText: 'User requested a retry after a model error.',
       trigger: 'retry',
       metadata: {
         requestedByUserId: userId,
+        requestedByWorkspaceMemberId: workspaceMemberId,
         source: 'model_error_notice',
       },
     });

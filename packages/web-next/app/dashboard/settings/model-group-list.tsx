@@ -20,14 +20,14 @@ import {
 } from 'lucide-react';
 import ModelGroupDialog from './model-group-dialog';
 
-type ModelGroupScope = 'workspace' | 'platform' | 'user' | 'all';
+type ModelGroupScope = 'workspace' | 'platform' | 'workspace_member' | 'all';
 
 interface ModelGroup {
   id: string;
   workspace_id: string | null;
-  owner_type?: 'platform' | 'workspace' | 'user';
+  owner_type?: 'platform' | 'workspace' | 'workspace_member';
   owner_workspace_id?: string | null;
-  owner_user_id?: string | null;
+  owner_workspace_member_id?: string | null;
   name: string;
   description: string;
   routing_strategy: string;
@@ -53,8 +53,8 @@ function resolveScope(group: ModelGroup): Exclude<ModelGroupScope, 'all'> {
   if (group.owner_type === 'platform' || (!group.owner_type && !group.workspace_id)) {
     return 'platform';
   }
-  if (group.owner_type === 'user') {
-    return 'user';
+  if (group.owner_type === 'workspace_member') {
+    return 'workspace_member';
   }
   return 'workspace';
 }
@@ -67,9 +67,9 @@ function scopeVisual(scope: Exclude<ModelGroupScope, 'all'>) {
         icon: Globe2,
         badgeClassName: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
       };
-    case 'user':
+    case 'workspace_member':
       return {
-        label: 'User',
+        label: 'Member',
         icon: UserRound,
         badgeClassName: 'bg-violet-500/10 text-violet-400 border-violet-500/20',
       };
@@ -87,7 +87,7 @@ export default function ModelGroupList({
   detailOrigin,
 }: {
   scope?: ModelGroupScope;
-  detailOrigin?: 'workspace' | 'workspace-user' | 'user' | 'platform';
+  detailOrigin?: 'workspace' | 'workspace-member' | 'workspace_member' | 'platform';
 }) {
   const router = useRouter();
   const { workspaceId } = useWorkspace();
@@ -97,7 +97,7 @@ export default function ModelGroupList({
   const [editGroup, setEditGroup] = useState<ModelGroup | null>(null);
 
   const loadGroups = async () => {
-    if (scope !== 'platform' && scope !== 'user' && !workspaceId) return;
+    if (scope !== 'platform' && scope !== 'workspace_member' && !workspaceId) return;
     setLoading(true);
     try {
       let nextGroups: ModelGroup[] = [];
@@ -105,8 +105,8 @@ export default function ModelGroupList({
       if (scope === 'platform') {
         const response = await api.getPlatformModelGroups();
         nextGroups = response.groups || [];
-      } else if (scope === 'user') {
-        const response = await api.getUserModelGroups();
+      } else if (scope === 'workspace_member') {
+        const response = await api.getWorkspaceMemberModelGroups(workspaceId!);
         nextGroups = response.groups || [];
       } else {
         const response = await api.getModelGroups(workspaceId!);
@@ -143,8 +143,8 @@ export default function ModelGroupList({
   const emptyLabel =
     scope === 'platform'
       ? 'No platform model groups configured'
-      : scope === 'user'
-        ? 'No personal model groups configured'
+      : scope === 'workspace_member'
+        ? 'No member model groups configured'
         : 'No workspace model groups configured';
 
   return (
@@ -215,7 +215,7 @@ function GroupCard({
   onEdit,
 }: {
   group: ModelGroup;
-  detailOrigin?: 'workspace' | 'workspace-user' | 'user' | 'platform';
+  detailOrigin?: 'workspace' | 'workspace-member' | 'workspace_member' | 'platform';
   onSelect: () => void;
   onEdit: () => void;
 }) {

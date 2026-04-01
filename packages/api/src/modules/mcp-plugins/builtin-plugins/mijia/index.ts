@@ -30,7 +30,7 @@ export const mijiaSeed: BuiltinOrgSeed = {
       defaultLocale: "zh-CN",
       transport: "builtin",
       entryPoint: "mijia/smarthome",
-      defaultInstanceScope: "workspace_user",
+      defaultInstanceScope: "workspace_member",
       defaultReuseScope: "session",
       supportedReuseScopes: [
         "turn",

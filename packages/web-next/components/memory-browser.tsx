@@ -81,8 +81,11 @@ function buildCreateHref(
   if (folder.createPreset.ownerConversationId) {
     params.set("ownerConversationId", folder.createPreset.ownerConversationId)
   }
-  if (folder.createPreset.ownerUserId) {
-    params.set("ownerUserId", folder.createPreset.ownerUserId)
+  if (folder.createPreset.ownerWorkspaceMemberId) {
+    params.set(
+      "ownerWorkspaceMemberId",
+      folder.createPreset.ownerWorkspaceMemberId
+    )
   }
 
   return `${pathname}/new?${params.toString()}`
@@ -99,10 +102,11 @@ export default function MemoryBrowser() {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const { workspaceId, workspaceName } = useWorkspace()
+  const { workspaceId, workspaceName, currentWorkspaceMemberId } =
+    useWorkspace()
   const { user } = useAuthStore()
-  const currentUserId = user?.id || ""
-  const currentUserLabel = user?.name || user?.email || "Me"
+  const effectiveCurrentWorkspaceMemberId = currentWorkspaceMemberId || ""
+  const currentWorkspaceMemberLabel = user?.name || user?.email || "Me"
 
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -172,14 +176,22 @@ export default function MemoryBrowser() {
         ? buildMemoryFolders({
             workspaceId,
             workspaceName,
-            currentUserId,
-            currentUserLabel,
+            currentWorkspaceMemberId: effectiveCurrentWorkspaceMemberId,
+            currentWorkspaceMemberLabel,
             memories,
             actors,
             groups,
           })
         : [],
-    [actors, currentUserId, currentUserLabel, groups, memories, workspaceId, workspaceName],
+    [
+      actors,
+      effectiveCurrentWorkspaceMemberId,
+      currentWorkspaceMemberLabel,
+      groups,
+      memories,
+      workspaceId,
+      workspaceName,
+    ],
   )
 
   const folderMap = useMemo(() => new Map(folders.map((folder) => [folder.id, folder])), [folders])
@@ -247,13 +259,14 @@ export default function MemoryBrowser() {
 
     return getFolderIdForOwner({
       workspaceId,
-      currentUserId,
+      currentWorkspaceMemberId: effectiveCurrentWorkspaceMemberId,
       ownerScope: movingMemory.ownerScope,
       ownerActorId: movingMemory.ownerActorId || undefined,
       ownerConversationId: movingMemory.ownerConversationId || undefined,
-      ownerUserId: movingMemory.ownerUserId || undefined,
+      ownerWorkspaceMemberId:
+        movingMemory.ownerWorkspaceMemberId || undefined,
     })
-  }, [currentUserId, movingMemory, workspaceId])
+  }, [effectiveCurrentWorkspaceMemberId, movingMemory, workspaceId])
 
   function beginFileCreate(files: File[] | FileList | null) {
     if (!activeFolder?.createPreset) {
@@ -279,7 +292,10 @@ export default function MemoryBrowser() {
       const result = await api.updateMemory(
         workspaceId,
         movingMemory.id,
-        buildMemoryOwnerPayloadFromPreset(folder.createPreset, currentUserId),
+        buildMemoryOwnerPayloadFromPreset(
+          folder.createPreset,
+          effectiveCurrentWorkspaceMemberId
+        ),
       )
       const savedMemory = (result?.memory || result) as Memory
       setMemories((current) => current.map((memory) => (memory.id === savedMemory.id ? savedMemory : memory)))
@@ -304,7 +320,8 @@ export default function MemoryBrowser() {
           ownerScope: pendingFileCreate.preset.ownerScope,
           ownerActorId: pendingFileCreate.preset.ownerActorId,
           ownerConversationId: pendingFileCreate.preset.ownerConversationId,
-          ownerUserId: pendingFileCreate.preset.ownerUserId,
+          ownerWorkspaceMemberId:
+            pendingFileCreate.preset.ownerWorkspaceMemberId,
           category: "artifact",
           status: "established",
           stability: "durable",

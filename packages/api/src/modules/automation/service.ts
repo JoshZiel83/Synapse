@@ -57,7 +57,10 @@ import {
   createThread,
   getConversationMembers,
 } from '../conversation/chat-service.js';
-import { requireWorkspaceMemberIdentity } from '../conversation/workspace-identity.js';
+import {
+  getWorkspaceMemberIdentityById,
+  requireWorkspaceMemberIdentity,
+} from '../conversation/workspace-identity.js';
 
 type AutomationRuleRow = {
   id: string;
@@ -67,7 +70,7 @@ type AutomationRuleRow = {
   name: string;
   description: string;
   created_by_kind: AutomationCreatorKind;
-  created_by_user_id: string | null;
+  created_by_workspace_member_id: string | null;
   created_by_actor_id: string | null;
   created_by_session_id: string | null;
   owner_conversation_id: string | null;
@@ -161,7 +164,7 @@ type AutomationEventSourceRow = {
   example_payload: Record<string, unknown> | string | null;
   status: AutomationEventSourceStatus;
   created_by_kind: AutomationCreatorKind;
-  created_by_user_id: string | null;
+  created_by_workspace_member_id: string | null;
   created_by_actor_id: string | null;
   created_by_session_id: string | null;
   last_triggered_at: string | null;
@@ -224,7 +227,7 @@ type AutomationTargetRow = {
   conversation_id: string | null;
   session_id: string | null;
   target_actor_id: string | null;
-  target_user_id: string | null;
+  target_workspace_member_id: string | null;
   created_item_id: string | null;
   wakeup_id: string | null;
   status: AutomationExecutionStatus;
@@ -248,7 +251,7 @@ type AutomationWebhookEndpointRow = {
   secret_ciphertext?: string;
   secret_hint: string;
   metadata: Record<string, unknown> | string | null;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   last_received_at: string | null;
   created_at: string;
   updated_at: string;
@@ -315,9 +318,24 @@ function createAutomationValidationError(
 
 export interface AutomationCreatorInput {
   kind: AutomationCreatorKind;
-  userId?: string;
+  workspaceMemberId?: string;
   actorId?: string;
   sessionId?: string;
+}
+
+type AutomationOperatorInput = {
+  workspaceMemberId?: string;
+  actorId?: string;
+};
+
+async function resolveAutomationAuditUserId(params: {
+  workspaceMemberId?: string;
+}) {
+  if (!params.workspaceMemberId) {
+    return null;
+  }
+  const identity = await getWorkspaceMemberIdentityById(params.workspaceMemberId);
+  return identity?.userId || null;
 }
 
 export interface AutomationTriggerInput {
@@ -498,7 +516,8 @@ function mapRuleRow(
     name: row.name,
     description: row.description,
     createdByKind: row.created_by_kind,
-    createdByUserId: row.created_by_user_id || undefined,
+    createdByWorkspaceMemberId:
+      row.created_by_workspace_member_id || undefined,
     createdByActorId: row.created_by_actor_id || undefined,
     createdBySessionId: row.created_by_session_id || undefined,
     ownerConversationId: row.owner_conversation_id || undefined,
@@ -606,7 +625,8 @@ function mapEventSourceRow(row: AutomationEventSourceRow): AutomationEventSource
     examplePayload: parseJsonObject(row.example_payload),
     status: row.status,
     createdByKind: row.created_by_kind,
-    createdByUserId: row.created_by_user_id || undefined,
+    createdByWorkspaceMemberId:
+      row.created_by_workspace_member_id || undefined,
     createdByActorId: row.created_by_actor_id || undefined,
     createdBySessionId: row.created_by_session_id || undefined,
     lastTriggeredAt: row.last_triggered_at || undefined,
@@ -718,7 +738,8 @@ function mapWebhookEndpointRow(row: AutomationWebhookEndpointRow): AutomationWeb
     pathToken: row.path_token,
     secretHint: row.secret_hint,
     metadata: parseJsonObject(row.metadata),
-    createdBy: row.created_by || undefined,
+    createdByWorkspaceMemberId:
+      row.created_by_workspace_member_id || undefined,
     lastReceivedAt: row.last_received_at || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1185,9 +1206,10 @@ async function allocateAutomationEventSourceKey(params: {
 
 async function pauseAutomationRulesForEventSource(
   eventSourceId: string,
-  actorOrUser: { userId?: string; actorId?: string },
+  operator: AutomationOperatorInput,
   reason: string,
 ) {
+  const auditUserId = await resolveAutomationAuditUserId(operator);
   const affected = await executeSql<{ id: string; workspace_id: string }>(
     `UPDATE automation_rules ar
      SET status = 'paused',
@@ -1209,8 +1231,8 @@ async function pauseAutomationRulesForEventSource(
        VALUES ($1, $2, $3, 'automation_rule.pause', 'automation_rule', $4, $5)`,
       [
         row.workspace_id,
-        actorOrUser.userId || null,
-        actorOrUser.actorId || null,
+        auditUserId,
+        operator.actorId || null,
         row.id,
         JSON.stringify({
           reason,
@@ -1395,7 +1417,7 @@ async function ensureAutomationIntegrationBinding(params: {
     if (endpointId && pathToken && secret) {
       await executeSqlOn(client, 
         `INSERT INTO automation_webhook_endpoints
-           (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by, created_at, updated_at)
+           (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by_workspace_member_id, created_at, updated_at)
          VALUES ($1, $2, $3, 'disabled', $4, $5, $6, $7, $8, NOW(), NOW())`,
         [
           endpointId,
@@ -1411,7 +1433,7 @@ async function ensureAutomationIntegrationBinding(params: {
             integrationTargetId: targetId,
             integrationTargetLabel: targetLabel,
           }),
-          params.creator.userId || null,
+          params.creator.workspaceMemberId || null,
         ],
       );
     }
@@ -1563,6 +1585,7 @@ async function createIntegrationAutomationEventSource(
   creator: AutomationCreatorInput,
   input: CreateAutomationEventSourceInput,
 ) {
+  const auditUserId = await resolveAutomationAuditUserId(creator);
   if (!input.integration) {
     throw new Error('integration event sources require integration configuration');
   }
@@ -1664,7 +1687,7 @@ async function createIntegrationAutomationEventSource(
        VALUES ($1, $2, $3, 'automation_event_source.update', 'automation_event_source', $4, $5)`,
       [
         workspaceId,
-        creator.userId || null,
+        auditUserId,
         creator.actorId || null,
         existing.id,
         JSON.stringify({
@@ -1697,7 +1720,7 @@ async function createIntegrationAutomationEventSource(
       `INSERT INTO automation_event_sources
          (id, workspace_id, provider_kind, provider_ref, webhook_endpoint_id, integration_binding_id, source_key,
           name, description, recommended_usage, payload_schema, example_payload, status, created_by_kind,
-          created_by_user_id, created_by_actor_id, created_by_session_id, metadata, created_at, updated_at)
+          created_by_workspace_member_id, created_by_actor_id, created_by_session_id, metadata, created_at, updated_at)
        VALUES ($1, $2, 'integration', NULL, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())`,
       [
         sourceId,
@@ -1711,7 +1734,7 @@ async function createIntegrationAutomationEventSource(
         JSON.stringify(input.examplePayload || template.examplePayload || {}),
         initialStatus,
         creator.kind,
-        creator.userId || null,
+        creator.workspaceMemberId || null,
         creator.actorId || null,
         creator.sessionId || null,
         JSON.stringify({
@@ -1726,7 +1749,7 @@ async function createIntegrationAutomationEventSource(
        VALUES ($1, $2, $3, 'automation_event_source.create', 'automation_event_source', $4, $5)`,
       [
         workspaceId,
-        creator.userId || null,
+        auditUserId,
         creator.actorId || null,
         sourceId,
         JSON.stringify({
@@ -1777,6 +1800,7 @@ export async function createAutomationEventSource(
   creator: AutomationCreatorInput,
   input: CreateAutomationEventSourceInput,
 ) {
+  const auditUserId = await resolveAutomationAuditUserId(creator);
   if (input.providerKind === 'integration') {
     return createIntegrationAutomationEventSource(workspaceId, creator, input);
   }
@@ -1844,7 +1868,7 @@ export async function createAutomationEventSource(
        VALUES ($1, $2, $3, 'automation_event_source.update', 'automation_event_source', $4, $5)`,
       [
         workspaceId,
-        creator.userId || null,
+        auditUserId,
         creator.actorId || null,
         existing.id,
         JSON.stringify({
@@ -1870,7 +1894,7 @@ export async function createAutomationEventSource(
   await executeSql(
     `INSERT INTO automation_event_sources
        (id, workspace_id, provider_kind, provider_ref, webhook_endpoint_id, source_key, name, description, recommended_usage,
-        payload_schema, example_payload, status, created_by_kind, created_by_user_id, created_by_actor_id,
+        payload_schema, example_payload, status, created_by_kind, created_by_workspace_member_id, created_by_actor_id,
         created_by_session_id, metadata, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW())`,
     [
@@ -1887,7 +1911,7 @@ export async function createAutomationEventSource(
       JSON.stringify(input.examplePayload || {}),
       input.status || 'active',
       creator.kind,
-      creator.userId || null,
+      creator.workspaceMemberId || null,
       creator.actorId || null,
       creator.sessionId || null,
       JSON.stringify(input.metadata || {}),
@@ -1899,7 +1923,7 @@ export async function createAutomationEventSource(
      VALUES ($1, $2, $3, 'automation_event_source.create', 'automation_event_source', $4, $5)`,
     [
       workspaceId,
-      creator.userId || null,
+      auditUserId,
       creator.actorId || null,
       sourceId,
       JSON.stringify({
@@ -1922,9 +1946,10 @@ export async function createAutomationEventSource(
 export async function updateAutomationEventSource(
   workspaceId: string,
   eventSourceId: string,
-  actorOrUser: { userId?: string; actorId?: string },
+  operator: AutomationOperatorInput,
   input: UpdateAutomationEventSourceInput,
 ) {
+  const auditUserId = await resolveAutomationAuditUserId(operator);
   const existing = await getAutomationEventSource(workspaceId, eventSourceId);
   if (!existing) {
     throw new Error('Automation event source not found');
@@ -1998,7 +2023,7 @@ export async function updateAutomationEventSource(
   if ((nextStatus === 'disabled' || nextStatus === 'archived') && existing.status !== nextStatus) {
     await pauseAutomationRulesForEventSource(
       eventSourceId,
-      actorOrUser,
+      operator,
       `Event source ${eventSourceId} is ${nextStatus}`,
     );
   }
@@ -2008,8 +2033,8 @@ export async function updateAutomationEventSource(
      VALUES ($1, $2, $3, 'automation_event_source.update', 'automation_event_source', $4, $5)`,
     [
       workspaceId,
-      actorOrUser.userId || null,
-      actorOrUser.actorId || null,
+      auditUserId,
+      operator.actorId || null,
       eventSourceId,
       JSON.stringify({
         status: nextStatus,
@@ -2031,8 +2056,9 @@ export async function updateAutomationEventSource(
 export async function archiveAutomationEventSource(
   workspaceId: string,
   eventSourceId: string,
-  actorOrUser: { userId?: string; actorId?: string },
+  operator: AutomationOperatorInput,
 ) {
+  const auditUserId = await resolveAutomationAuditUserId(operator);
   const existing = await getAutomationEventSource(workspaceId, eventSourceId);
   if (!existing) {
     throw new Error('Automation event source not found');
@@ -2057,7 +2083,7 @@ export async function archiveAutomationEventSource(
 
   await pauseAutomationRulesForEventSource(
     eventSourceId,
-    actorOrUser,
+    operator,
     `Event source ${eventSourceId} was archived`,
   );
 
@@ -2066,8 +2092,8 @@ export async function archiveAutomationEventSource(
      VALUES ($1, $2, $3, 'automation_event_source.archive', 'automation_event_source', $4, $5)`,
     [
       workspaceId,
-      actorOrUser.userId || null,
-      actorOrUser.actorId || null,
+      auditUserId,
+      operator.actorId || null,
       eventSourceId,
       JSON.stringify({ archived: true }),
     ],
@@ -2408,7 +2434,7 @@ async function recordExecutionTarget(params: {
   conversationId?: string;
   sessionId?: string;
   targetActorId?: string;
-  targetUserId?: string;
+  targetWorkspaceMemberId?: string;
   createdItemId?: string;
   wakeupId?: string;
   status: AutomationExecutionStatus;
@@ -2416,7 +2442,7 @@ async function recordExecutionTarget(params: {
 }) {
   const result = await executeSql<AutomationTargetRow>(
     `INSERT INTO automation_execution_targets
-       (id, execution_id, conversation_id, session_id, target_actor_id, target_user_id, created_item_id, wakeup_id,
+       (id, execution_id, conversation_id, session_id, target_actor_id, target_workspace_member_id, created_item_id, wakeup_id,
         status, metadata, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
      RETURNING *`,
@@ -2426,7 +2452,7 @@ async function recordExecutionTarget(params: {
       params.conversationId || null,
       params.sessionId || null,
       params.targetActorId || null,
-      params.targetUserId || null,
+      params.targetWorkspaceMemberId || null,
       params.createdItemId || null,
       params.wakeupId || null,
       params.status,
@@ -2466,12 +2492,27 @@ function buildAutomationNoticePayload(params: {
 }
 
 async function resolveOperatorUserId(rule: AutomationRule) {
-  if (rule.createdByUserId) return rule.createdByUserId;
+  if (rule.createdByWorkspaceMemberId) {
+    const identity = await getWorkspaceMemberIdentityById(
+      rule.createdByWorkspaceMemberId,
+    );
+    if (identity?.userId) return identity.userId;
+  }
 
   if (rule.ownerConversationId) {
     const members = await listConversationMembers(rule.ownerConversationId);
-    const firstUser = members.find((member: any) => member.state === 'active' && member.user_id);
-    if (firstUser?.user_id) return firstUser.user_id as string;
+    const firstUser = members.find(
+      (member: any) =>
+        member.state === 'active' && member.workspace_member_id,
+    );
+    if (firstUser?.workspace_member_id) {
+      const workspaceMember = await getWorkspaceMemberIdentityById(
+        firstUser.workspace_member_id as string,
+      );
+      if (workspaceMember) {
+        return workspaceMember.userId;
+      }
+    }
   }
 
   const result = await executeSql<{ owner_id: string }>(
@@ -2552,7 +2593,6 @@ async function resolveExistingConversationId(rule: AutomationRule) {
   const created = await createThread({
     workspaceId: rule.workspaceId,
     kind: 'group',
-    createdByUserId: operatorUserId,
     createdByWorkspaceMemberId: operatorWorkspaceMember.workspaceMemberId,
     title: rule.delivery.conversationTitle || rule.name,
     actorIds: participantActorIds,
@@ -2564,8 +2604,8 @@ async function resolveExistingConversationId(rule: AutomationRule) {
       workspaceId: rule.workspaceId,
       workspaceMemberIds: participantWorkspaceMemberIds,
       initiator: {
-        memberType: 'user',
-        userId: operatorUserId,
+        memberType: 'workspace_member',
+        memberId: operatorWorkspaceMember.workspaceMemberId,
       },
     });
   }
@@ -2767,6 +2807,7 @@ export async function createAutomationRule(
   creator: AutomationCreatorInput,
   input: CreateAutomationRuleInput,
 ) {
+  const auditUserId = await resolveAutomationAuditUserId(creator);
   const ruleId = uuidv4();
   const category: AutomationCategory = input.trigger.triggerKind === 'schedule' ? 'schedule' : 'event_subscription';
   const normalizedPolicy = normalizePolicyInput(input.policy);
@@ -2776,7 +2817,7 @@ export async function createAutomationRule(
   await transaction(async (client) => {
     await executeSqlOn(client, 
       `INSERT INTO automation_rules
-         (id, workspace_id, category, status, name, description, created_by_kind, created_by_user_id, created_by_actor_id,
+         (id, workspace_id, category, status, name, description, created_by_kind, created_by_workspace_member_id, created_by_actor_id,
           created_by_session_id, owner_conversation_id, owner_session_id, metadata, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())`,
       [
@@ -2787,7 +2828,7 @@ export async function createAutomationRule(
         input.name.trim(),
         (input.description || '').trim(),
         creator.kind,
-        creator.userId || null,
+        creator.workspaceMemberId || null,
         creator.actorId || null,
         creator.sessionId || null,
         input.ownerConversationId || null,
@@ -2865,7 +2906,7 @@ export async function createAutomationRule(
        VALUES ($1, $2, $3, 'automation_rule.create', 'automation_rule', $4, $5)`,
       [
         workspaceId,
-        creator.userId || null,
+        auditUserId,
         creator.actorId || null,
         ruleId,
         JSON.stringify({
@@ -2934,9 +2975,10 @@ export async function getAutomationRule(workspaceId: string, ruleId: string) {
 export async function updateAutomationRule(
   workspaceId: string,
   ruleId: string,
-  actorOrUser: { userId?: string; actorId?: string },
+  operator: AutomationOperatorInput,
   input: UpdateAutomationRuleInput,
 ) {
+  const auditUserId = await resolveAutomationAuditUserId(operator);
   const existing = await getAutomationRule(workspaceId, ruleId);
   if (!existing) {
     throw new Error('Automation rule not found');
@@ -3065,8 +3107,8 @@ export async function updateAutomationRule(
        VALUES ($1, $2, $3, 'automation_rule.update', 'automation_rule', $4, $5)`,
       [
         workspaceId,
-        actorOrUser.userId || null,
-        actorOrUser.actorId || null,
+        auditUserId,
+        operator.actorId || null,
         ruleId,
         JSON.stringify({
           triggerKind: normalizedTrigger.trigger_kind,
@@ -3094,12 +3136,19 @@ export async function updateAutomationRule(
 export async function deleteAutomationRule(
   workspaceId: string,
   ruleId: string,
-  actorOrUser: { userId?: string; actorId?: string },
+  operator: AutomationOperatorInput,
 ) {
+  const auditUserId = await resolveAutomationAuditUserId(operator);
   await executeSql(
     `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
      VALUES ($1, $2, $3, 'automation_rule.delete', 'automation_rule', $4, $5)`,
-    [workspaceId, actorOrUser.userId || null, actorOrUser.actorId || null, ruleId, JSON.stringify({ deleted: true })],
+    [
+      workspaceId,
+      auditUserId,
+      operator.actorId || null,
+      ruleId,
+      JSON.stringify({ deleted: true }),
+    ],
   );
   await executeSql(
     `DELETE FROM automation_rules
@@ -3111,7 +3160,7 @@ export async function deleteAutomationRule(
 
 export async function createAutomationWebhookEndpoint(
   workspaceId: string,
-  createdBy: string,
+  createdByWorkspaceMemberId: string,
   params: {
     name: string;
     metadata?: Record<string, unknown>;
@@ -3120,7 +3169,7 @@ export async function createAutomationWebhookEndpoint(
   const secret = generateSecret();
   const result = await executeSql<AutomationWebhookEndpointRow>(
     `INSERT INTO automation_webhook_endpoints
-       (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by, created_at, updated_at)
+       (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by_workspace_member_id, created_at, updated_at)
      VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, NOW(), NOW())
      RETURNING *`,
     [
@@ -3131,7 +3180,7 @@ export async function createAutomationWebhookEndpoint(
       encrypt(secret),
       secretHint(secret),
       JSON.stringify(params.metadata || {}),
-      createdBy,
+      createdByWorkspaceMemberId,
     ],
   );
 
@@ -3662,7 +3711,7 @@ export async function processAutomationExecution(executionId: string): Promise<P
        VALUES ($1, $2, $3, 'automation_rule.trigger', 'automation_rule', $4, $5)`,
       [
         rule.workspaceId,
-        rule.createdByUserId || null,
+        (await resolveOperatorUserId(rule)) || null,
         rule.createdByActorId || null,
         rule.id,
         JSON.stringify({

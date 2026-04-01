@@ -23,11 +23,10 @@ export function buildActorConversationContextId(
   return `${actorId}|${conversationId}`;
 }
 
-export function buildWorkspaceUserContextId(
-  workspaceId: string,
-  userId: string,
+export function buildWorkspaceMemberContextId(
+  workspaceMemberId: string,
 ) {
-  return `${workspaceId}|${userId}`;
+  return workspaceMemberId;
 }
 
 export function buildConversationWorkspaceContextId(
@@ -40,7 +39,7 @@ export function buildConversationWorkspaceContextId(
 export type AuthzObjectType =
   | "platform"
   | "workspace"
-  | "workspace_user"
+  | "workspace_member"
   | "conversation_workspace"
   | "user"
   | "actor"
@@ -51,7 +50,6 @@ export type AuthzObjectType =
   | "actor_conversation"
   | "conversation"
   | "memory"
-  | "mcp_relay"
   | "model_group"
   | "model_profile";
 
@@ -74,7 +72,7 @@ export interface AuthzRelationMutation {
 const AUTHZ_RESOURCE_TYPES: AuthzObjectType[] = [
   "platform",
   "workspace",
-  "workspace_user",
+  "workspace_member",
   "conversation_workspace",
   "user",
   "actor",
@@ -85,7 +83,6 @@ const AUTHZ_RESOURCE_TYPES: AuthzObjectType[] = [
   "actor_conversation",
   "conversation",
   "memory",
-  "mcp_relay",
   "model_group",
   "model_profile",
 ];
@@ -446,28 +443,36 @@ export function touchActorConversationContext(
   ];
 }
 
-export function touchWorkspaceUserContext(
-  workspaceId: string,
-  userId: string,
-): AuthzRelationMutation[] {
-  const contextId = buildWorkspaceUserContextId(workspaceId, userId);
-  return [
+export function touchWorkspaceMemberContext(params: {
+  workspaceMemberId: string;
+  workspaceId?: string;
+  userId?: string;
+}): AuthzRelationMutation[] {
+  const contextId = buildWorkspaceMemberContextId(params.workspaceMemberId);
+  const relations: AuthzRelationMutation[] = [
     touchRelation(
-      "workspace_user",
+      "workspace_member",
       contextId,
       "self",
-      "workspace_user",
+      "workspace_member",
       contextId,
     ),
-    touchRelation(
-      "workspace_user",
-      contextId,
-      "workspace",
-      "workspace",
-      workspaceId,
-    ),
-    touchRelation("workspace_user", contextId, "user", "user", userId),
   ];
+
+  if (params.workspaceId && params.userId) {
+    relations.push(
+      touchRelation(
+        "workspace_member",
+        contextId,
+        "workspace",
+        "workspace",
+        params.workspaceId,
+      ),
+      touchRelation("workspace_member", contextId, "user", "user", params.userId),
+    );
+  }
+
+  return relations;
 }
 
 export function touchConversationWorkspaceContext(
@@ -496,19 +501,24 @@ export function touchConversationWorkspaceContext(
   ];
 }
 
-export function touchWorkspaceUserMembership(
-  workspaceId: string,
-  userId: string,
-  relation: string,
-): AuthzRelationMutation[] {
-  const contextId = buildWorkspaceUserContextId(workspaceId, userId);
+export function touchWorkspaceMemberMembership(params: {
+  workspaceId: string;
+  workspaceMemberId: string;
+  userId?: string;
+  relation: string;
+}): AuthzRelationMutation[] {
+  const contextId = buildWorkspaceMemberContextId(params.workspaceMemberId);
   return [
-    ...touchWorkspaceUserContext(workspaceId, userId),
+    ...touchWorkspaceMemberContext({
+      workspaceMemberId: params.workspaceMemberId,
+      workspaceId: params.workspaceId,
+      userId: params.userId,
+    }),
     touchRelation(
       "workspace",
-      workspaceId,
-      relation,
-      "workspace_user",
+      params.workspaceId,
+      params.relation,
+      "workspace_member",
       contextId,
     ),
   ];
@@ -625,12 +635,13 @@ export async function resetAuthzRelationships() {
 
   let relationshipsDeleted = 0;
 
-  const legacyResourceTypes = [
+  const resourceTypesToDelete = [
     "skill_binding",
     "plugin_mount",
+    ...AUTHZ_RESOURCE_TYPES,
   ] as const;
 
-  for (const resourceType of legacyResourceTypes) {
+  for (const resourceType of resourceTypesToDelete) {
     try {
       const response = await getAuthzClient().promises.deleteRelationships(
         v1.DeleteRelationshipsRequest.create({
@@ -638,7 +649,7 @@ export async function resetAuthzRelationships() {
             resourceType,
           }),
           optionalTransactionMetadata: v1.createStructFromObject({
-            source: "synapse-authz-reset-legacy",
+            source: "synapse-authz-reset",
             resourceType,
           }),
         }),
@@ -660,25 +671,6 @@ export async function resetAuthzRelationships() {
   }
 
   const schemaResult = await syncAuthzSchema();
-
-  for (const resourceType of AUTHZ_RESOURCE_TYPES) {
-    const response = await getAuthzClient().promises.deleteRelationships(
-      v1.DeleteRelationshipsRequest.create({
-        relationshipFilter: v1.RelationshipFilter.create({
-          resourceType,
-        }),
-        optionalTransactionMetadata: v1.createStructFromObject({
-          source: "synapse-authz-reset",
-          resourceType,
-        }),
-      }),
-    );
-
-    relationshipsDeleted += Number.parseInt(
-      response.relationshipsDeletedCount || "0",
-      10,
-    );
-  }
 
   return {
     enabled: true,

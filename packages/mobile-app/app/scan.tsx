@@ -48,7 +48,7 @@ export default function UnifiedScanScreen() {
     if (
       workspaceId &&
       result.contact &&
-      (result.outcome === "same_workspace_user" ||
+      (result.outcome === "same_workspace_member" ||
         result.outcome === "friend_active" ||
         result.outcome === "actor_access_granted")
     ) {

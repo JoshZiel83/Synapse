@@ -26,7 +26,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { Check, ExternalLink, HelpCircle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePluginStore } from '@/stores/plugin-store';
-import { useAuthStore } from '@/stores/auth-store';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
 import {
@@ -518,10 +517,9 @@ export default function InstallDialog({
   createDefaultWorkspaceAccess = false,
   closeLabel = 'Cancel',
 }: Props) {
-  const { workspaceId } = useWorkspace();
+  const { workspaceId, currentWorkspaceMemberId } = useWorkspace();
   const { installPlugin, updateInstallation } = usePluginStore();
-  const { user } = useAuthStore();
-  const currentUserId = user?.id || '';
+  const effectiveCurrentWorkspaceMemberId = currentWorkspaceMemberId || '';
 
   const locale = useMemo(() => getLocale(plugin.default_locale), [plugin.default_locale]);
   const integrationProvider = useMemo(() => getIntegrationProvider(plugin), [plugin]);
@@ -537,7 +535,7 @@ export default function InstallDialog({
   const authBindings = useMemo<PluginAuthBindingDefinition[]>(() => plugin.auth_bindings || [], [plugin.auth_bindings]);
   const authBindingMap = useMemo(() => new Map(authBindings.map((binding) => [binding.key, binding])), [authBindings]);
   const allowedAttachmentTypes = useMemo<PluginAttachmentType[]>(
-    () => ['workspace', 'conversation', 'actor', 'workspace_user'],
+    () => ['workspace', 'conversation', 'actor', 'workspace_member'],
     [],
   );
   const initialAttachmentType = initialInstallation?.attachment_target?.type as PluginAttachmentType | undefined;
@@ -925,8 +923,8 @@ export default function InstallDialog({
     if (selectedAttachmentType === 'conversation' && !selectedConversationId) {
       errors.__scope = 'Please select a conversation.';
     }
-    if (selectedAttachmentType === 'workspace_user' && !currentUserId) {
-      errors.__scope = 'Current user is unavailable. Please refresh and try again.';
+    if (selectedAttachmentType === 'workspace_member' && !effectiveCurrentWorkspaceMemberId) {
+      errors.__scope = 'Current workspace member is unavailable. Please refresh and try again.';
     }
     return errors;
   };
@@ -975,8 +973,10 @@ export default function InstallDialog({
             actorId: selectedAttachmentType === 'actor' ? selectedActorId : undefined,
             conversationId:
               selectedAttachmentType === 'conversation' ? selectedConversationId : undefined,
-            userId:
-              selectedAttachmentType === 'workspace_user' ? currentUserId : undefined,
+            workspaceMemberId:
+              selectedAttachmentType === 'workspace_member'
+                ? effectiveCurrentWorkspaceMemberId
+                : undefined,
           },
           lifecycleScope,
           configData,
@@ -990,8 +990,10 @@ export default function InstallDialog({
             actorId: selectedAttachmentType === 'actor' ? selectedActorId : undefined,
             conversationId:
               selectedAttachmentType === 'conversation' ? selectedConversationId : undefined,
-            userId:
-              selectedAttachmentType === 'workspace_user' ? currentUserId : undefined,
+            workspaceMemberId:
+              selectedAttachmentType === 'workspace_member'
+                ? effectiveCurrentWorkspaceMemberId
+                : undefined,
           },
           lifecycleScope,
           configData,

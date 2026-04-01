@@ -1,6 +1,6 @@
 import {
   authzEnabled,
-  buildWorkspaceUserContextId,
+  buildWorkspaceMemberContextId,
   enqueueAuthzRelationships,
   flushAuthzOutboxEntries,
   touchActorConversationContext,
@@ -20,7 +20,9 @@ import {
   ensureConversationMember,
   getConversation,
 } from '../conversation/service.js';
-import { getWorkspaceMemberIdentity } from '../conversation/workspace-identity.js';
+import {
+  getWorkspaceMemberIdentityById,
+} from '../conversation/workspace-identity.js';
 import {
   buildNormalizedMessageContent,
   itemPartsToCanonicalContentBlocks,
@@ -86,7 +88,7 @@ async function resolveSessionMessageAuthor(params: {
   workspaceId?: UUID;
   workspaceMemberId?: UUID;
   fromActorId?: UUID;
-  fromUserId?: UUID;
+  fromWorkspaceMemberId?: UUID;
 }) {
   if (params.fromActorId) {
     const actorJoinVersionId = await getActorJoinVersionId(params.fromActorId);
@@ -98,13 +100,11 @@ async function resolveSessionMessageAuthor(params: {
     });
   }
 
-  if (params.fromUserId) {
+  if (params.fromWorkspaceMemberId) {
     return ensureConversationMember({
       conversationId: params.conversationId,
-      memberType: 'user',
-      workspaceId: params.workspaceId,
-      workspaceMemberId: params.workspaceMemberId,
-      userId: params.fromUserId,
+      memberType: 'workspace_member',
+      workspaceMemberId: params.fromWorkspaceMemberId,
     });
   }
 
@@ -152,7 +152,7 @@ export async function createSession(params: {
   workspaceId: UUID;
   actorId: UUID;
   conversationId?: UUID;
-  userId?: UUID;
+  workspaceMemberId?: UUID;
   channelType?: SessionsChannelType;
   trigger?: SessionTrigger;
   metadata?: Record<string, unknown>;
@@ -161,13 +161,12 @@ export async function createSession(params: {
     workspaceId,
     actorId,
     conversationId,
-    userId,
+    workspaceMemberId,
     channelType = 'web',
     trigger = 'user_message',
     metadata = {},
   } = params;
 
-  const resolvedUserId = userId || (typeof metadata.userId === 'string' ? metadata.userId as UUID : undefined);
   let resolvedConversationId = conversationId;
   let privateConversationCreated = false;
   if (!resolvedConversationId) {
@@ -193,17 +192,19 @@ export async function createSession(params: {
     actorJoinVersionId: await getActorJoinVersionId(actorId),
   });
 
-  if (privateConversationCreated && resolvedUserId) {
-    const workspaceMember = await getWorkspaceMemberIdentity(workspaceId, resolvedUserId);
+  let resolvedWorkspaceMemberId: string | undefined;
+  if (privateConversationCreated && workspaceMemberId) {
+    const workspaceMember = await getWorkspaceMemberIdentityById(
+      workspaceMemberId,
+    );
     if (!workspaceMember) {
-      throw new Error(`Workspace member not found for user ${resolvedUserId}`);
+      throw new Error('Workspace member not found for session creator');
     }
+    resolvedWorkspaceMemberId = workspaceMember.workspaceMemberId;
     await ensureConversationMember({
       conversationId: finalConversationId,
-      memberType: 'user',
-      workspaceId,
-      workspaceMemberId: workspaceMember.workspaceMemberId,
-      userId: resolvedUserId,
+      memberType: 'workspace_member',
+      workspaceMemberId: resolvedWorkspaceMemberId,
     });
   }
 
@@ -231,21 +232,21 @@ export async function createSession(params: {
       [
         touchRelation('conversation', finalConversationId, 'participant', 'actor', actorId),
         ...touchActorConversationContext(actorId, finalConversationId),
-        ...(resolvedUserId
+        ...(resolvedWorkspaceMemberId
           ? [
               touchRelation(
                 'conversation',
                 finalConversationId,
                 'participant',
-                'workspace_user',
-                buildWorkspaceUserContextId(workspaceId, resolvedUserId),
+                'workspace_member',
+                buildWorkspaceMemberContextId(resolvedWorkspaceMemberId),
               ),
               touchRelation(
                 'conversation',
                 finalConversationId,
                 'admin',
-                'workspace_user',
-                buildWorkspaceUserContextId(workspaceId, resolvedUserId),
+                'workspace_member',
+                buildWorkspaceMemberContextId(resolvedWorkspaceMemberId),
               ),
             ]
           : []),
@@ -255,7 +256,7 @@ export async function createSession(params: {
         workspaceId,
         conversationId: finalConversationId,
         actorId,
-        userId: resolvedUserId,
+        workspaceMemberId: resolvedWorkspaceMemberId,
       },
     );
     await flushQueuedAuthzEntries(authzEntryIds, 'session.create_private_conversation');
@@ -323,7 +324,7 @@ export async function addSessionMessage(params: {
   content: string;
   contentBlocks?: import('@synapse/shared').CanonicalContentBlock[];
   fromActorId?: UUID;
-  fromUserId?: UUID;
+  fromWorkspaceMemberId?: UUID;
   subtype?: string;
   visibility?: 'default' | 'shared_visible' | 'private_internal';
   metadata?: Record<string, unknown>;
@@ -337,7 +338,7 @@ export async function addSessionMessage(params: {
     content,
     contentBlocks,
     fromActorId,
-    fromUserId,
+    fromWorkspaceMemberId,
     subtype,
     visibility = 'default',
     metadata = {},
@@ -352,7 +353,7 @@ export async function addSessionMessage(params: {
     conversationId: session.conversation_id,
     workspaceId,
     fromActorId,
-    fromUserId,
+    fromWorkspaceMemberId,
   });
   const { scope, surface } =
     visibility === 'shared_visible'
@@ -391,9 +392,10 @@ export async function addSessionMessage(params: {
       itemId: item.id,
       direction: 'outbound',
       metadata: {
-        senderType: fromActorId ? 'actor' : fromUserId ? 'user' : 'system',
+        senderType:
+          fromActorId ? 'actor' : fromWorkspaceMemberId ? 'workspace_member' : 'system',
         senderActorId: fromActorId || undefined,
-        senderUserId: fromUserId || undefined,
+        senderWorkspaceMemberId: fromWorkspaceMemberId || undefined,
         targetMemberIds,
       },
     }).catch((error) => {
@@ -431,7 +433,7 @@ export async function addSessionMessage(params: {
         contentBlocks: normalizedMessage.contentBlocks,
         fromActorId,
         actorName,
-        fromUserId,
+        fromWorkspaceMemberId,
         metadata: normalizedMessage.normalizedMetadata,
         createdAt: item.created_at,
       },
@@ -447,7 +449,7 @@ export async function addSessionMessage(params: {
     content: normalizedMessage.normalizedContent,
     contentBlocks: normalizedMessage.contentBlocks,
     fromActorId: fromActorId || null,
-    fromUserId: fromUserId || null,
+    fromWorkspaceMemberId: fromWorkspaceMemberId || null,
     metadata: normalizedMessage.normalizedMetadata,
     createdAt: item.created_at,
   };
@@ -459,7 +461,8 @@ export async function getSessionMessages(sessionId: UUID): Promise<any[]> {
     .innerJoin("sessions as s", "s.id", "ci.session_id")
     .leftJoin("conversation_members as cm", "cm.id", "ci.author_member_id")
     .leftJoin("actors as a", "a.id", "cm.actor_id")
-    .leftJoin("users as u", "u.id", "cm.user_id")
+    .leftJoin("workspace_members as wm", "wm.id", "cm.workspace_member_id")
+    .leftJoin("users as u", "u.id", "wm.user_id")
     .select([
       "ci.id",
       "ci.session_id",
@@ -473,7 +476,7 @@ export async function getSessionMessages(sessionId: UUID): Promise<any[]> {
       "ci.created_at",
       "s.workspace_id",
       "cm.actor_id as from_actor_id",
-      "cm.user_id as from_user_id",
+      "cm.workspace_member_id as from_workspace_member_id",
       sql<string | null>`COALESCE(a.name, u.name, cm.display_name)`.as(
         "author_name",
       ),
@@ -527,7 +530,7 @@ export async function getSessionMessages(sessionId: UUID): Promise<any[]> {
       content: buildContentFromItemParts(item),
       contentBlocks: itemPartsToCanonicalContentBlocks(item.parts || []),
       fromActorId: row.from_actor_id || null,
-      fromUserId: row.from_user_id || null,
+      fromWorkspaceMemberId: row.from_workspace_member_id || null,
       metadata: buildMetadataFromItem(item),
       createdAt: row.created_at,
     };

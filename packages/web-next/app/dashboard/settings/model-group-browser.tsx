@@ -40,14 +40,14 @@ import {
   getSaveErrorMessage,
 } from './model-config-utils';
 
-type ModelGroupScope = 'workspace' | 'platform' | 'user';
+type ModelGroupScope = 'workspace' | 'platform' | 'workspace_member';
 
 type ModelGroupSummary = {
   id: string;
   workspace_id: string | null;
-  owner_type?: 'platform' | 'workspace' | 'user';
+  owner_type?: 'platform' | 'workspace' | 'workspace_member';
   owner_workspace_id?: string | null;
-  owner_user_id?: string | null;
+  owner_workspace_member_id?: string | null;
   name: string;
   description: string;
   routing_strategy: string;
@@ -120,8 +120,8 @@ function resolveScope(group: ModelGroupSummary): ModelGroupScope {
   if (group.owner_type === 'platform' || (!group.owner_type && !group.workspace_id)) {
     return 'platform';
   }
-  if (group.owner_type === 'user') {
-    return 'user';
+  if (group.owner_type === 'workspace_member') {
+    return 'workspace_member';
   }
   return 'workspace';
 }
@@ -147,9 +147,9 @@ function scopeVisual(scope: ModelGroupScope) {
         icon: Globe2,
         badgeClassName: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
       };
-    case 'user':
+    case 'workspace_member':
       return {
-        label: 'User',
+        label: 'Member',
         icon: UserRound,
         badgeClassName: 'bg-violet-500/10 text-violet-400 border-violet-500/20',
       };
@@ -192,8 +192,11 @@ async function fetchGroupDetail(
   if (scope === 'platform') {
     return api.getPlatformModelGroup(groupId);
   }
-  if (scope === 'user') {
-    return api.getUserModelGroup(groupId);
+  if (scope === 'workspace_member') {
+    if (!workspaceId) {
+      throw new Error('Workspace is required');
+    }
+    return api.getWorkspaceMemberModelGroup(workspaceId!, groupId);
   }
   if (!workspaceId) {
     throw new Error('Workspace is required');
@@ -338,8 +341,8 @@ export default function ModelGroupBrowser({
       if (scope === 'platform') {
         const response = await api.getPlatformModelGroups();
         nextGroups = response.groups || [];
-      } else if (scope === 'user') {
-        const response = await api.getUserModelGroups();
+      } else if (scope === 'workspace_member') {
+        const response = await api.getWorkspaceMemberModelGroups(workspaceId!);
         nextGroups = response.groups || [];
       } else {
         const response = await api.getModelGroups(workspaceId!);
@@ -412,8 +415,8 @@ export default function ModelGroupBrowser({
   const emptyLabel =
     scope === 'platform'
       ? 'No platform model groups configured'
-      : scope === 'user'
-        ? 'No personal model groups configured'
+      : scope === 'workspace_member'
+        ? 'No member model groups configured'
         : 'No workspace model groups configured';
 
   const editorTitle = currentItem ? currentItem.display_name : selectedGroup ? 'New Model Config' : 'Select a model group';
@@ -429,8 +432,12 @@ export default function ModelGroupBrowser({
     try {
       if (scope === 'platform') {
         await api.deletePlatformModelItem(selectedGroup.id, currentItem.id);
-      } else if (scope === 'user') {
-        await api.deleteUserModelItem(selectedGroup.id, currentItem.id);
+      } else if (scope === 'workspace_member') {
+        await api.deleteWorkspaceMemberModelItem(
+          workspaceId!,
+          selectedGroup.id,
+          currentItem.id
+        );
       } else if (workspaceId) {
         await api.deleteModelItem(workspaceId, selectedGroup.id, currentItem.id);
       }
@@ -477,8 +484,13 @@ export default function ModelGroupBrowser({
 
         if (scope === 'platform') {
           await api.updatePlatformModelItem(selectedGroup.id, currentItem.id, payload);
-        } else if (scope === 'user') {
-          await api.updateUserModelItem(selectedGroup.id, currentItem.id, payload);
+        } else if (scope === 'workspace_member') {
+          await api.updateWorkspaceMemberModelItem(
+            workspaceId!,
+            selectedGroup.id,
+            currentItem.id,
+            payload
+          );
         } else if (workspaceId) {
           await api.updateModelItem(workspaceId, selectedGroup.id, currentItem.id, payload);
         }
@@ -501,8 +513,12 @@ export default function ModelGroupBrowser({
         let response;
         if (scope === 'platform') {
           response = await api.addPlatformModelItem(selectedGroup.id, payload);
-        } else if (scope === 'user') {
-          response = await api.addUserModelItem(selectedGroup.id, payload);
+        } else if (scope === 'workspace_member') {
+          response = await api.addWorkspaceMemberModelItem(
+            workspaceId!,
+            selectedGroup.id,
+            payload
+          );
         } else {
           response = await api.addModelItem(workspaceId!, selectedGroup.id, payload);
         }

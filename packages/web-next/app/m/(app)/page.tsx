@@ -34,7 +34,7 @@ type PickerIntent = "submit" | "target"
 function emptyPreference(workspaceId: string): WorkspaceChiefActorPreference {
   return {
     workspaceId,
-    userId: "",
+    workspaceMemberId: "",
   }
 }
 

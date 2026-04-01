@@ -50,7 +50,7 @@ type PluginAuthSessionRow = {
   installation_id: string | null;
   binding_key: string;
   driver: string;
-  user_id: string;
+  workspace_member_id: string;
   status: string;
   phase: string | null;
   state: string | null;
@@ -73,7 +73,7 @@ type PluginConnectionRow = {
   catalog_item_id: string;
   catalog_version_id?: string | null;
   owner_scope: string;
-  owner_user_id: string | null;
+  owner_workspace_member_id: string | null;
   binding_key: string;
   driver: string;
   external_account_id: string | null;
@@ -272,7 +272,7 @@ function mapConnectionRow(row: PluginConnectionRow): PluginAuthConnection {
     bindingKey: row.binding_key,
     driver: row.driver as PluginAuthConnection["driver"],
     ownerScope: row.owner_scope as PluginAuthConnection["ownerScope"],
-    ownerUserId: row.owner_user_id || undefined,
+    ownerWorkspaceMemberId: row.owner_workspace_member_id || undefined,
     externalAccountId: row.external_account_id || undefined,
     displayName: row.display_name || undefined,
     avatarUrl: row.avatar_url || undefined,
@@ -294,7 +294,7 @@ function mapSessionRow(row: PluginAuthSessionRow): PluginAuthSession {
     revisionId: row.catalog_version_id || undefined,
     bindingKey: row.binding_key,
     driver: row.driver as PluginAuthSession["driver"],
-    userId: row.user_id,
+    workspaceMemberId: row.workspace_member_id,
     status: row.status as PluginAuthSession["status"],
     phase: (row.phase as PluginAuthSession["phase"] | null) || undefined,
     state: row.state || undefined,
@@ -364,13 +364,13 @@ function getBinding(
   return binding;
 }
 
-async function getSessionRow(sessionId: string, workspaceId: string, userId: string) {
+async function getSessionRow(sessionId: string, workspaceId: string, workspaceMemberId: string) {
   const row = await db
     .selectFrom("plugin_auth_sessions")
     .selectAll()
     .where("id", "=", sessionId)
     .where("workspace_id", "=", workspaceId)
-    .where("user_id", "=", userId)
+    .where("workspace_member_id", "=", workspaceMemberId)
     .limit(1)
     .executeTakeFirst();
   if (!row) {
@@ -1291,7 +1291,7 @@ export async function startPluginAuthSession(input: {
   pluginId: string;
   installationId?: string;
   bindingKey: string;
-  userId: string;
+  workspaceMemberId: string;
   draftConfig?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }) {
@@ -1389,7 +1389,7 @@ export async function startPluginAuthSession(input: {
           installation_id: input.installationId || null,
           binding_key: binding.key,
           driver: binding.driver,
-          user_id: input.userId,
+          workspace_member_id: input.workspaceMemberId,
           status: "pending",
           phase: "awaiting_callback",
           state,
@@ -1422,7 +1422,7 @@ export async function startPluginAuthSession(input: {
           installation_id: input.installationId || null,
           binding_key: binding.key,
           driver: binding.driver,
-          user_id: input.userId,
+          workspace_member_id: input.workspaceMemberId,
           status: "pending",
           phase: "pending_scan",
           state: null,
@@ -1485,7 +1485,7 @@ export async function startPluginAuthSession(input: {
           installation_id: input.installationId || null,
           binding_key: binding.key,
           driver: binding.driver,
-          user_id: input.userId,
+          workspace_member_id: input.workspaceMemberId,
           status: "pending",
           phase: "pending_scan",
           state: null,
@@ -1512,9 +1512,9 @@ export async function startPluginAuthSession(input: {
 export async function getPluginAuthSession(
   sessionId: string,
   workspaceId: string,
-  userId: string,
+  workspaceMemberId: string,
 ) {
-  let row = await getSessionRow(sessionId, workspaceId, userId);
+  let row = await getSessionRow(sessionId, workspaceId, workspaceMemberId);
   if (row.driver === "mijia_qr_login" && row.status === "pending") {
     row = await progressMijiaPluginAuthSession(row);
   } else if (row.driver === "feishu_cli_setup" && row.status === "pending") {
@@ -1531,9 +1531,13 @@ export async function getPluginAuthSession(
 export async function inspectPluginAuthSession(input: {
   sessionId: string;
   workspaceId: string;
-  userId: string;
+  workspaceMemberId: string;
 }) {
-  const row = await getSessionRow(input.sessionId, input.workspaceId, input.userId);
+  const row = await getSessionRow(
+    input.sessionId,
+    input.workspaceId,
+    input.workspaceMemberId,
+  );
   if (row.driver !== "feishu_cli_setup") {
     throw new PluginAuthError(400, "Only Feishu auth sessions support app scope inspection.");
   }
@@ -1734,7 +1738,7 @@ export async function getAuthConnection(
 export async function attachAuthConnectionsToConfig(input: {
   installationId: string;
   workspaceId: string;
-  userId: string;
+  workspaceMemberId: string;
   configFields: PluginConfigFieldDefinition[];
   authBindings: PluginAuthBindingDefinition[];
   configData?: Record<string, unknown>;
@@ -1751,7 +1755,11 @@ export async function attachAuthConnectionsToConfig(input: {
     const sessionId = authSessionIds[field.key];
     if (!sessionId) continue;
 
-    const session = await getSessionRow(sessionId, input.workspaceId, input.userId);
+    const session = await getSessionRow(
+      sessionId,
+      input.workspaceId,
+      input.workspaceMemberId,
+    );
     if (!["completed", "consumed"].includes(session.status)) {
       throw new PluginAuthError(
         400,
@@ -1819,7 +1827,7 @@ export async function attachAuthConnectionsToConfig(input: {
         const updated = await run<PluginConnectionRow>(
           `UPDATE plugin_connections
            SET owner_scope = $2,
-               owner_user_id = $3,
+               owner_workspace_member_id = $3,
                display_name = $4,
                avatar_url = $5,
                status = 'active',
@@ -1838,7 +1846,7 @@ export async function attachAuthConnectionsToConfig(input: {
           [
             existing.rows[0]!.id,
             binding?.ownerScope || "installation",
-            input.userId || null,
+            input.workspaceMemberId || null,
             displayName,
             avatarUrl,
             asNullableString(secretPayload.expiresAt),
@@ -1858,7 +1866,7 @@ export async function attachAuthConnectionsToConfig(input: {
              installation_id,
              workspace_id,
              owner_scope,
-             owner_user_id,
+             owner_workspace_member_id,
              binding_key,
              driver,
              external_account_id,
@@ -1883,7 +1891,7 @@ export async function attachAuthConnectionsToConfig(input: {
             input.installationId,
             input.workspaceId,
             binding?.ownerScope || "installation",
-            input.userId || null,
+            input.workspaceMemberId || null,
             bindingKey,
             session.driver,
             externalAccountId,

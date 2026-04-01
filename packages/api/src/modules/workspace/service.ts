@@ -12,11 +12,12 @@ import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
 import {
   AUTHZ_PLATFORM_ID,
+  buildWorkspaceMemberContextId,
   deleteRelation,
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
   touchRelation,
-  touchWorkspaceUserMembership,
+  touchWorkspaceMemberMembership,
 } from "../../infrastructure/authz/index.js";
 import {
   INVITE_TRUST_LEVELS,
@@ -31,7 +32,6 @@ import type {
   WorkspaceMembersTrustLevel,
 } from "../../infrastructure/database/generated/db.js";
 import { sql } from "kysely";
-import { listAuthorizedResourceIds, userSubject } from "../access/service.js";
 
 export interface CreateWorkspaceInput {
   name: string;
@@ -75,6 +75,39 @@ async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
       error,
     );
   }
+}
+
+async function getWorkspaceMemberRowByUserId(
+  workspaceId: string,
+  userId: string,
+) {
+  return db
+    .selectFrom("workspace_members")
+    .select(["id", "workspace_id", "user_id", "trust_level", "joined_at"])
+    .where("workspace_id", "=", workspaceId)
+    .where("user_id", "=", userId)
+    .limit(1)
+    .executeTakeFirst();
+}
+
+async function requireWorkspaceMemberRowByUserId(
+  workspaceId: string,
+  userId: string,
+) {
+  const member = await getWorkspaceMemberRowByUserId(workspaceId, userId);
+  if (!member) {
+    throw new Error("Workspace membership not found");
+  }
+  return member;
+}
+
+async function getWorkspaceMemberRowById(workspaceMemberId: string) {
+  return db
+    .selectFrom("workspace_members")
+    .select(["id", "workspace_id", "user_id", "trust_level", "joined_at"])
+    .where("id", "=", workspaceMemberId)
+    .limit(1)
+    .executeTakeFirst();
 }
 
 function generateSlug(name: string): string {
@@ -196,7 +229,7 @@ async function findOfficialChiefActorId(
 export async function assignOfficialChiefActorPreference(
   client: pg.PoolClient,
   workspaceId: string,
-  userId: string,
+  workspaceMemberId: string,
   actorId?: string | null,
 ) {
   const chiefActorId =
@@ -212,16 +245,15 @@ export async function assignOfficialChiefActorPreference(
   await executeCompiledQuery(
     runner,
     db
-      .insertInto("workspace_user_preferences")
+      .insertInto("workspace_member_preferences")
       .values({
-        workspace_id: workspaceId,
-        user_id: userId,
+        workspace_member_id: workspaceMemberId,
         chief_actor_id: chiefActorId,
         created_at: sql`NOW()`,
         updated_at: sql`NOW()`,
       })
       .onConflict((oc) =>
-        oc.columns(["workspace_id", "user_id"]).doUpdateSet({
+        oc.column("workspace_member_id").doUpdateSet({
           chief_actor_id: chiefActorId,
           updated_at: sql`NOW()`,
         }),
@@ -318,12 +350,18 @@ async function loadOfficialActorTemplates(
 function buildWorkspaceActorAuthzRelations(
   workspaceId: string,
   actorId: string,
-  ownerUserId: string,
+  ownerWorkspaceMemberId: string,
 ) {
   return [
     touchRelation("workspace", workspaceId, "actor", "actor", actorId),
     touchRelation("actor", actorId, "workspace", "workspace", workspaceId),
-    touchRelation("actor", actorId, "owner", "user", ownerUserId),
+    touchRelation(
+      "actor",
+      actorId,
+      "owner",
+      "workspace_member",
+      ownerWorkspaceMemberId,
+    ),
     touchRelation("actor", actorId, "discover_workspace", "workspace", workspaceId),
     touchRelation("actor", actorId, "invoke_workspace", "workspace", workspaceId),
     touchRelation("actor", actorId, "receive_workspace", "workspace", workspaceId),
@@ -353,7 +391,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     }
 
     // 2. Add creator as admin member; owner is derived from workspaces.owner_id.
-    await executeCompiledQuery(
+    const creatorMember = await executeTakeFirst<Record<string, unknown>>(
       runner,
       db
         .insertInto("workspace_members")
@@ -361,8 +399,12 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
           workspace_id: String(workspace.id),
           user_id: input.userId,
           trust_level: "admin",
-        }),
+        })
+        .returningAll(),
     );
+    if (!creatorMember) {
+      throw new Error("Failed to create workspace member.");
+    }
 
     const officialActorTemplates = await loadOfficialActorTemplates(client);
     const installedActors: Array<{
@@ -373,9 +415,9 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     for (const template of officialActorTemplates) {
       const actorRow = await executeTakeFirst<Record<string, unknown>>(
         runner,
-        db
-          .insertInto("actors")
-          .values({
+      db
+        .insertInto("actors")
+        .values({
             workspace_id: String(workspace.id),
             name: template.actorName,
             role: template.actorRole,
@@ -387,7 +429,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
             specialties: template.actorSpecialties,
             config: template.actorConfig as TableInsert<'actors'>['config'],
             current_version: 1,
-            created_by: input.userId,
+            created_by_workspace_member_id: String(creatorMember.id),
           })
           .returningAll(),
       );
@@ -398,8 +440,8 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       const actorVersionResult = await executeTakeFirst<{ id: string }>(
         runner,
         db
-          .insertInto("actor_versions")
-          .values({
+        .insertInto("actor_versions")
+        .values({
             actor_id: String(actorRow.id),
             version: 1,
             name: template.actorName,
@@ -409,7 +451,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
             can_represent_user: template.canRepresentUser,
             specialties: template.actorSpecialties,
             config: template.actorConfig as TableInsert<'actor_versions'>['config'],
-            created_by: input.userId,
+            created_by_workspace_member_id: String(creatorMember.id),
           })
           .returning("id"),
       );
@@ -480,7 +522,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     await assignOfficialChiefActorPreference(
       client,
       String(workspace.id),
-      input.userId,
+      String(creatorMember.id),
       String(chiefActor.actorRow.id),
     );
 
@@ -501,23 +543,17 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
           "platform",
           AUTHZ_PLATFORM_ID,
         ),
-        touchRelation(
-          "workspace",
-          String(workspace.id),
-          workspaceRelationFromTrustLevel("owner"),
-          "user",
-          input.userId,
-        ),
-        ...touchWorkspaceUserMembership(
-          String(workspace.id),
-          input.userId,
-          workspaceRelationFromTrustLevel("owner"),
-        ),
+        ...touchWorkspaceMemberMembership({
+          workspaceId: String(workspace.id),
+          workspaceMemberId: String(creatorMember.id),
+          userId: input.userId,
+          relation: workspaceRelationFromTrustLevel("owner"),
+        }),
         ...installedActors.flatMap(({ actorRow }) =>
           buildWorkspaceActorAuthzRelations(
             String(workspace.id),
             String(actorRow.id),
-            input.userId,
+            String(creatorMember.id),
           ),
         ),
       ],
@@ -547,29 +583,20 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
 }
 
 export async function listUserWorkspaces(userId: string) {
-  const workspaceIds = await listAuthorizedResourceIds({
-    subject: userSubject(userId),
-    action: "workspace.view",
-  });
-
-  if (workspaceIds.length === 0) {
-    return [];
-  }
-
   const rows = await db
-    .selectFrom("workspaces as w")
-    .leftJoin("workspace_members as wm", (join) =>
-      join
-        .onRef("wm.workspace_id", "=", "w.id")
-        .on("wm.user_id", "=", userId),
-    )
+    .selectFrom("workspace_members as wm")
+    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
     .selectAll("w")
-    .select("wm.trust_level")
-    .where("w.id", "in", workspaceIds)
+    .select([
+      "wm.id as current_workspace_member_id",
+      "wm.trust_level",
+    ])
+    .where("wm.user_id", "=", userId)
     .orderBy("w.created_at", "desc")
     .execute();
   return rows.map((row) => ({
     ...mapWorkspaceRow(row),
+    currentWorkspaceMemberId: row.current_workspace_member_id ?? undefined,
     trustLevel: deriveWorkspaceTrustLevel(row),
   }));
 }
@@ -587,18 +614,21 @@ export async function getWorkspaceChiefActorPreference(
   workspaceId: string,
   userId: string,
 ): Promise<WorkspaceChiefActorPreference> {
+  const member = await requireWorkspaceMemberRowByUserId(workspaceId, userId);
   const row = await db
-    .selectFrom("workspace_user_preferences as pref")
+    .selectFrom("workspace_member_preferences as pref")
+    .innerJoin("workspace_members as wm", "wm.id", "pref.workspace_member_id")
     .leftJoin("actors as a", (join) =>
       join
         .onRef("a.id", "=", "pref.chief_actor_id")
-        .onRef("a.workspace_id", "=", "pref.workspace_id")
+        .onRef("a.workspace_id", "=", "wm.workspace_id")
         .on("a.is_active", "=", true),
     )
     .leftJoin("files as avatar_file", "avatar_file.id", "a.avatar_file_id")
     .select([
-      "pref.workspace_id",
-      "pref.user_id",
+      "wm.workspace_id",
+      "wm.user_id",
+      "wm.id as workspace_member_id",
       "pref.chief_actor_id",
       "pref.created_at",
       "pref.updated_at",
@@ -607,14 +637,13 @@ export async function getWorkspaceChiefActorPreference(
       "a.title as chief_actor_title",
       "avatar_file.stored_name as chief_actor_avatar_stored_name",
     ])
-    .where("pref.workspace_id", "=", workspaceId)
-    .where("pref.user_id", "=", userId)
+    .where("pref.workspace_member_id", "=", member.id)
     .limit(1)
     .executeTakeFirst();
   if (!row) {
     return {
       workspaceId,
-      userId,
+      workspaceMemberId: member.id,
     };
   }
 
@@ -626,16 +655,16 @@ export async function updateWorkspaceChiefActorPreference(
   userId: string,
   chiefActorId?: string | null,
 ): Promise<WorkspaceChiefActorPreference> {
+  const member = await requireWorkspaceMemberRowByUserId(workspaceId, userId);
   if (!chiefActorId) {
     await db
-      .deleteFrom("workspace_user_preferences")
-      .where("workspace_id", "=", workspaceId)
-      .where("user_id", "=", userId)
+      .deleteFrom("workspace_member_preferences")
+      .where("workspace_member_id", "=", member.id)
       .execute();
 
     return {
       workspaceId,
-      userId,
+      workspaceMemberId: member.id,
     };
   }
 
@@ -653,16 +682,15 @@ export async function updateWorkspaceChiefActorPreference(
   }
 
   await db
-    .insertInto("workspace_user_preferences")
+    .insertInto("workspace_member_preferences")
     .values({
-      workspace_id: workspaceId,
-      user_id: userId,
+      workspace_member_id: member.id,
       chief_actor_id: chiefActorId,
       created_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
-      oc.columns(["workspace_id", "user_id"]).doUpdateSet({
+      oc.column("workspace_member_id").doUpdateSet({
         chief_actor_id: chiefActorId,
         updated_at: sql`NOW()`,
       }),
@@ -732,24 +760,18 @@ export async function addMember(input: AddMemberInput) {
     await assignOfficialChiefActorPreference(
       client,
       input.workspaceId,
-      input.userId,
+      String(memberRow.id),
     );
 
     const authzEntryIds = await queueAuthzRelationships(
       client,
       [
-        touchRelation(
-          "workspace",
-          input.workspaceId,
-          workspaceRelationFromTrustLevel(input.trustLevel),
-          "user",
-          input.userId,
-        ),
-        ...touchWorkspaceUserMembership(
-          input.workspaceId,
-          input.userId,
-          workspaceRelationFromTrustLevel(input.trustLevel),
-        ),
+        ...touchWorkspaceMemberMembership({
+          workspaceId: input.workspaceId,
+          workspaceMemberId: String(memberRow.id),
+          userId: input.userId,
+          relation: workspaceRelationFromTrustLevel(input.trustLevel),
+        }),
       ],
       {
         source: "workspace.add_member",
@@ -777,11 +799,10 @@ export async function listMembers(workspaceId: string) {
   const accessMap = db
     .selectFrom("workspace_access_bindings")
     .select([
-      "workspace_id",
-      "user_id",
+      "workspace_member_id",
       sql<string[]>`array_agg(access_key order by access_key)`.as("access_keys"),
     ])
-    .groupBy(["workspace_id", "user_id"])
+    .groupBy(["workspace_member_id"])
     .as("access_map");
 
   const rows = await db
@@ -789,9 +810,7 @@ export async function listMembers(workspaceId: string) {
     .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
     .innerJoin("users as u", "u.id", "wm.user_id")
     .leftJoin(accessMap, (join) =>
-      join
-        .onRef("access_map.workspace_id", "=", "wm.workspace_id")
-        .onRef("access_map.user_id", "=", "wm.user_id"),
+      join.onRef("access_map.workspace_member_id", "=", "wm.id"),
     )
     .select([
       "wm.id",
@@ -820,37 +839,37 @@ export async function listMembers(workspaceId: string) {
 export async function listWorkspaceAccessBindings(workspaceId: string) {
   const rows = await db
     .selectFrom("workspace_access_bindings as wab")
-    .innerJoin("workspaces as w", "w.id", "wab.workspace_id")
-    .innerJoin("users as u", "u.id", "wab.user_id")
-    .innerJoin("workspace_members as wm", (join) =>
-      join
-        .onRef("wm.workspace_id", "=", "wab.workspace_id")
-        .onRef("wm.user_id", "=", "wab.user_id"),
-    )
+    .innerJoin("workspace_members as wm", "wm.id", "wab.workspace_member_id")
+    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
+    .innerJoin("users as u", "u.id", "wm.user_id")
     .select([
-      "wab.workspace_id",
-      "wab.user_id",
+      "wab.workspace_member_id",
       "wab.access_key",
-      "wab.assigned_by",
+      "wab.assigned_by_workspace_member_id",
       "wab.metadata",
       "wab.created_at",
       "wab.updated_at",
+      "wm.id",
+      "wm.workspace_id",
+      "wm.user_id",
       "u.name as user_name",
       "u.email as user_email",
       "u.avatar_file_id",
       "w.owner_id",
       "wm.trust_level",
     ])
-    .where("wab.workspace_id", "=", workspaceId)
+    .where("wm.workspace_id", "=", workspaceId)
     .orderBy("wab.access_key", "asc")
     .orderBy("wab.created_at", "asc")
     .execute();
 
   return rows.map((row) => ({
     workspaceId: row.workspace_id,
+    workspaceMemberId: row.workspace_member_id,
     userId: row.user_id,
     accessKey: row.access_key as WorkspaceAccessKey,
-    assignedBy: row.assigned_by ?? null,
+    assignedByWorkspaceMemberId:
+      row.assigned_by_workspace_member_id ?? null,
     metadata: row.metadata ?? {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -863,34 +882,27 @@ export async function listWorkspaceAccessBindings(workspaceId: string) {
 
 export async function grantWorkspaceAccess(input: {
   workspaceId: string;
-  userId: string;
+  workspaceMemberId: string;
   accessKey: WorkspaceAccessKey;
-  assignedBy: string;
+  assignedByWorkspaceMemberId: string;
   metadata?: Record<string, unknown>;
 }) {
-  const membership = await db
-    .selectFrom("workspace_members")
-    .select("id")
-    .where("workspace_id", "=", input.workspaceId)
-    .where("user_id", "=", input.userId)
-    .limit(1)
-    .executeTakeFirst();
+  const membership = await getWorkspaceMemberRowById(input.workspaceMemberId);
 
-  if (!membership) {
-    throw new Error("User is not a member of this workspace");
+  if (!membership || membership.workspace_id !== input.workspaceId) {
+    throw new Error("Workspace member is not part of this workspace");
   }
 
   const row = await db
     .insertInto("workspace_access_bindings")
     .values({
-      workspace_id: input.workspaceId,
-      user_id: input.userId,
+      workspace_member_id: input.workspaceMemberId,
       access_key: input.accessKey,
-      assigned_by: input.assignedBy,
+      assigned_by_workspace_member_id: input.assignedByWorkspaceMemberId,
       metadata: (input.metadata || {}) as TableInsert<'workspace_access_bindings'>['metadata'],
     })
     .onConflict((oc) =>
-      oc.columns(["workspace_id", "user_id", "access_key"]).doNothing(),
+      oc.columns(["workspace_member_id", "access_key"]).doNothing(),
     )
     .returningAll()
     .executeTakeFirst();
@@ -902,21 +914,23 @@ export async function grantWorkspaceAccess(input: {
   const authzEntryIds = await queueAccessBindingRelation({
     operation: "touch",
     workspaceId: input.workspaceId,
-    userId: input.userId,
+    workspaceMemberId: input.workspaceMemberId,
     accessKey: input.accessKey,
     source: "workspace.access.grant",
     metadata: {
-      assignedBy: input.assignedBy,
+      assignedByWorkspaceMemberId: input.assignedByWorkspaceMemberId,
       ...input.metadata,
     },
   });
   await flushQueuedAuthzEntries(authzEntryIds, "workspace.access.grant");
 
   return {
-    workspaceId: row.workspace_id,
-    userId: row.user_id,
+    workspaceId: membership.workspace_id,
+    workspaceMemberId: row.workspace_member_id,
+    userId: membership.user_id,
     accessKey: row.access_key as WorkspaceAccessKey,
-    assignedBy: row.assigned_by ?? null,
+    assignedByWorkspaceMemberId:
+      row.assigned_by_workspace_member_id ?? null,
     metadata: row.metadata ?? {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -925,15 +939,19 @@ export async function grantWorkspaceAccess(input: {
 
 export async function revokeWorkspaceAccess(
   workspaceId: string,
-  userId: string,
+  workspaceMemberId: string,
   accessKey: WorkspaceAccessKey,
 ) {
+  const membership = await getWorkspaceMemberRowById(workspaceMemberId);
+  if (!membership || membership.workspace_id !== workspaceId) {
+    throw new Error("Access grant not found");
+  }
+
   const row = await db
     .deleteFrom("workspace_access_bindings")
-    .where("workspace_id", "=", workspaceId)
-    .where("user_id", "=", userId)
+    .where("workspace_member_id", "=", workspaceMemberId)
     .where("access_key", "=", accessKey)
-    .returning(["workspace_id", "user_id", "access_key"])
+    .returning(["workspace_member_id", "access_key"])
     .executeTakeFirst();
 
   if (!row) {
@@ -943,7 +961,7 @@ export async function revokeWorkspaceAccess(
   const authzEntryIds = await queueAccessBindingRelation({
     operation: "delete",
     workspaceId,
-    userId,
+    workspaceMemberId,
     accessKey,
     source: "workspace.access.revoke",
   });
@@ -1009,7 +1027,7 @@ function mapWorkspaceChiefActorPreferenceRow(
 
   return {
     workspaceId: row.workspace_id,
-    userId: row.user_id,
+    workspaceMemberId: row.workspace_member_id,
     chiefActorId,
     chiefActor:
       chiefActorId && row.chief_actor_name
@@ -1031,7 +1049,7 @@ function mapWorkspaceChiefActorPreferenceRow(
 async function queueAccessBindingRelation(input: {
   operation: "touch" | "delete";
   workspaceId: string;
-  userId: string;
+  workspaceMemberId: string;
   accessKey: WorkspaceAccessKey;
   source: string;
   metadata?: Record<string, unknown>;
@@ -1045,21 +1063,21 @@ async function queueAccessBindingRelation(input: {
               "workspace",
               input.workspaceId,
               input.accessKey,
-              "user",
-              input.userId,
+              "workspace_member",
+              buildWorkspaceMemberContextId(input.workspaceMemberId),
             )
           : deleteRelation(
               "workspace",
               input.workspaceId,
               input.accessKey,
-              "user",
-              input.userId,
+              "workspace_member",
+              buildWorkspaceMemberContextId(input.workspaceMemberId),
             ),
       ],
       {
         source: input.source,
         workspaceId: input.workspaceId,
-        userId: input.userId,
+        workspaceMemberId: input.workspaceMemberId,
         accessKey: input.accessKey,
         ...(input.metadata || {}),
       },

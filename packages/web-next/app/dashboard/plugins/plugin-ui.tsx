@@ -21,7 +21,7 @@ export const attachmentTypeLabels: Record<string, string> = {
   conversation: 'Conversation',
   actor: 'Actor',
   actor_conversation: 'Actor in Conversation',
-  workspace_user: 'Workspace User',
+  workspace_member: 'Workspace Member',
 };
 
 export const attachmentTypeColors: Record<string, string> = {
@@ -29,7 +29,7 @@ export const attachmentTypeColors: Record<string, string> = {
   conversation: 'border-orange-500/30 text-orange-500 dark:text-orange-300',
   actor: 'border-green-500/30 text-green-500 dark:text-green-300',
   actor_conversation: 'border-amber-500/30 text-amber-500 dark:text-amber-300',
-  workspace_user: 'border-fuchsia-500/30 text-fuchsia-500 dark:text-fuchsia-300',
+  workspace_member: 'border-fuchsia-500/30 text-fuchsia-500 dark:text-fuchsia-300',
 };
 
 export const transportLabels: Record<string, string> = {
@@ -52,7 +52,7 @@ const ownershipSummaryByAttachmentType: Record<string, string> = {
   conversation: 'Owned by one conversation',
   actor: 'Owned by one actor',
   actor_conversation: 'Owned by one actor in one conversation',
-  workspace_user: 'Owned by one workspace user',
+  workspace_member: 'Owned by one workspace user',
 };
 
 const lifecycleSummaryByScope: Record<string, string> = {
@@ -77,7 +77,7 @@ export function getPluginInstallationTitle(installation: PluginInstallationSumma
   if (attachmentType === 'actor_conversation') {
     return 'Actor + conversation configuration';
   }
-  if (attachmentType === 'workspace_user') {
+  if (attachmentType === 'workspace_member') {
     return 'Workspace user configuration';
   }
   return `${attachmentTypeLabels[attachmentType || ''] || attachmentType || 'Plugin'} configuration`;

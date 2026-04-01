@@ -7,7 +7,7 @@ import ChatAvatar from './chat-avatar';
 export type MentionableParticipant = {
   id: string;
   name: string;
-  type: 'actor' | 'user' | 'external';
+  type: 'actor' | 'workspace_member' | 'external';
   role?: string;
   avatarUrl?: string;
   emoji?: string;
@@ -18,7 +18,7 @@ export type MentionableParticipant = {
 type ParticipantSuggestion = {
   id: string;
   display: string;
-  type: 'actor' | 'user' | 'external';
+  type: 'actor' | 'workspace_member' | 'external';
   role?: string;
   avatarUrl?: string;
   emoji?: string;

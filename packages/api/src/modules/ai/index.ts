@@ -290,14 +290,14 @@ async function buildMergedResponseContentBlocks(
 
 function buildInlineReferenceOptions(params: {
   conversationMembers?: ConversationMemberEntry[];
-  userId?: string;
+  workspaceMemberId?: string;
   userName?: string;
 }): InlineReferenceResolveOptions | undefined {
   const mentionCandidates = (params.conversationMembers || []).map(
     conversationMemberEntryToEntityRef,
   );
   const defaultUser = buildDefaultUserMention({
-    userId: params.userId,
+    workspaceMemberId: params.workspaceMemberId,
     userName: params.userName,
   });
 
@@ -347,18 +347,18 @@ async function loadToolResolveConversationMembers(params: {
           ? member.transport_kind
           : undefined;
       entries.push({
-        type: "user",
-        id: member.user_id,
+        type: "workspace_member",
+        id: member.workspace_member_id,
         participantId: member.id,
         name: member.user_name || "User",
         title: transportKind
-          ? `Workspace user · reachable via ${transportKind === "feishu" ? "Feishu" : "WeChat"}`
-          : "Workspace user",
+          ? `Workspace member · reachable via ${transportKind === "feishu" ? "Feishu" : "WeChat"}`
+          : "Workspace member",
       });
       continue;
     }
     if (member.member_type === "external") {
-      const linkedUserName =
+      const linkedWorkspaceMemberName =
         (member.linked_user_name as string | null) || undefined;
       entries.push({
         type: "external",
@@ -370,13 +370,14 @@ async function loadToolResolveConversationMembers(params: {
         name:
           (member.transport_display_name as string | null) ||
           (member.display_name as string | null) ||
-          linkedUserName ||
+          linkedWorkspaceMemberName ||
           "External participant",
-        title: linkedUserName
-          ? `Linked workspace user: ${linkedUserName}`
+        title: linkedWorkspaceMemberName
+          ? `Linked workspace user: ${linkedWorkspaceMemberName}`
           : "External participant",
-        linkedUserId: (member.linked_user_id as string | null) || undefined,
-        linkedUserName,
+        linkedWorkspaceMemberId:
+          (member.linked_user_id as string | null) || undefined,
+        linkedWorkspaceMemberName,
         externalUserKey:
           (member.transport_external_id as string | null) || undefined,
       });
@@ -560,6 +561,7 @@ export async function actorThink(
     conversationKind?: "private" | "group" | "virtual";
     conversationMembers?: ConversationMemberEntry[];
     userId?: string;
+    workspaceMemberId?: string;
     availableSkills?: AvailableSkillSummary[];
     onStatus?: (status: string) => Promise<void>;
     mcpTools?: import("@synapse/shared").ToolDefinition[];
@@ -653,13 +655,13 @@ export async function actorThink(
     conversationId: options?.conversationId,
     conversationKind: options?.conversationKind,
     conversationMembers: currentToolConversationMembers,
-    userId: options?.userId,
+    workspaceMemberId: options?.workspaceMemberId,
     availableSkills: options?.availableSkills,
   });
   const getInlineReferenceOptions = () =>
     buildInlineReferenceOptions({
       conversationMembers: currentToolConversationMembers,
-      userId: options?.userId,
+      workspaceMemberId: options?.workspaceMemberId,
     });
   const refreshBuiltinTools = async (): Promise<
     import("@synapse/shared").ToolDefinition[]
@@ -1283,6 +1285,7 @@ export async function actorThink(
                   conversationId: options?.conversationId,
                   actorId: actor.id,
                   userId: options?.userId,
+                  workspaceMemberId: options?.workspaceMemberId,
                   turnId,
                   toolCallId: tc.callId,
                   providerCallId: tc.providerCallId,

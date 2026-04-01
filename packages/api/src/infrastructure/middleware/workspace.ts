@@ -15,10 +15,12 @@ export async function workspaceMiddleware(request: FastifyRequest, reply: Fastif
 
   const member = await db
     .selectFrom('workspace_members')
-    .select('trust_level')
+    .select(['id', 'workspace_id', 'user_id', 'trust_level'])
     .where('workspace_id', '=', workspaceId)
     .where('user_id', '=', user.userId)
     .executeTakeFirst();
+
+  (request as any).workspaceMember = member ?? null;
 
   const allowed = await requireRequestAction(
     request,
@@ -30,6 +32,4 @@ export async function workspaceMiddleware(request: FastifyRequest, reply: Fastif
   if (!allowed) {
     return;
   }
-
-  (request as any).workspaceMember = member ?? null;
 }

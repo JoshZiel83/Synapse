@@ -37,7 +37,7 @@ const attachmentTypeLabels: Record<string, string> = {
   conversation: 'Conversation',
   actor: 'Actor',
   actor_conversation: 'Actor in Conversation',
-  workspace_user: 'Workspace User',
+  workspace_member: 'Workspace Member',
 };
 
 const reuseScopeLabels: Record<string, string> = {

@@ -17,18 +17,16 @@ import type {
   AuthResponse,
   ContactHubDetailResponse,
   ContactHubResponse,
-  ContactDiscoveryResponse,
   ConversationCollectionResponse,
   ConversationCreateResponse,
   ConversationMemberListResponse,
   ConversationSendResponse,
   DirectConversationOpenResponse,
   FriendIdProfileView,
-  FriendIdSearchResponse,
+  IdentitySearchResponse,
   FriendRequestListResponse,
   RelationshipProfileView,
   RelationshipScanResponse,
-  ScopedContactsResponse,
   UploadAssetInput,
   WorkspaceChiefActorPreference,
   WorkspaceListResponse,
@@ -147,40 +145,6 @@ function normalizeConversationCollectionResponse(
   }
 
   return { conversations: [] };
-}
-
-function normalizeScopedContactsResponse(data: unknown): ScopedContactsResponse {
-  if (data && typeof data === "object") {
-    return {
-      workspaceContacts: asArray(
-        (data as { workspaceContacts?: unknown }).workspaceContacts,
-      ),
-      personalContacts: asArray(
-        (data as { personalContacts?: unknown }).personalContacts,
-      ),
-    };
-  }
-
-  return {
-    workspaceContacts: [],
-    personalContacts: [],
-  };
-}
-
-function normalizeContactDiscoveryResponse(
-  data: unknown,
-): ContactDiscoveryResponse {
-  if (data && typeof data === "object") {
-    return {
-      actors: asArray((data as { actors?: unknown }).actors),
-      users: asArray((data as { users?: unknown }).users),
-    };
-  }
-
-  return {
-    actors: [],
-    users: [],
-  };
 }
 
 class ApiClient {
@@ -362,27 +326,27 @@ class ApiClient {
     );
   }
 
-  searchFriendId(
+  searchIdentity(
     workspaceId: string,
     query: string,
-  ): Promise<FriendIdSearchResponse> {
+  ): Promise<IdentitySearchResponse> {
     const params = new URLSearchParams();
     if (query.trim()) {
       params.set("q", query.trim());
     }
-    return this.request<FriendIdSearchResponse>(
-      `/workspaces/${workspaceId}/friend-id-search${
+    return this.request<IdentitySearchResponse>(
+      `/workspaces/${workspaceId}/identity-search${
         params.size > 0 ? `?${params.toString()}` : ""
       }`,
     );
   }
 
-  requestFriendBySearchProfile(
+  requestIdentityProfile(
     workspaceId: string,
     profileId: string,
   ): Promise<RelationshipScanResponse> {
     return this.request<RelationshipScanResponse>(
-      `/workspaces/${workspaceId}/friend-id-search/request`,
+      `/workspaces/${workspaceId}/identity-search/request`,
       {
         method: "POST",
         body: JSON.stringify({ profileId }),
@@ -398,7 +362,11 @@ class ApiClient {
 
   getContactHubDetail(
     workspaceId: string,
-    contactKind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user",
+    contactKind:
+      | "workspace-actor"
+      | "workspace-member"
+      | "friend-actor"
+      | "friend-member",
     contactId: string,
   ): Promise<ContactHubDetailResponse> {
     return this.request<ContactHubDetailResponse>(
@@ -453,86 +421,14 @@ class ApiClient {
     input: {
       contactKind:
         | "workspace-actor"
-        | "workspace-user"
+        | "workspace-member"
         | "friend-actor"
-        | "friend-user";
+        | "friend-member";
       contactId: string;
     },
   ): Promise<DirectConversationOpenResponse> {
     return this.request<DirectConversationOpenResponse>(
       `/workspaces/${workspaceId}/direct-conversations/open`,
-      {
-        method: "POST",
-        body: JSON.stringify(input),
-      },
-    );
-  }
-
-  getScopedContacts(workspaceId: string): Promise<ScopedContactsResponse> {
-    return this.request<unknown>(`/workspaces/${workspaceId}/contacts`).then(
-      normalizeScopedContactsResponse,
-    );
-  }
-
-  discoverContacts(
-    workspaceId: string,
-    queryText = "",
-    limit = 20,
-  ): Promise<ContactDiscoveryResponse> {
-    const params = new URLSearchParams();
-    if (queryText.trim()) {
-      params.set("q", queryText.trim());
-    }
-    if (limit > 0) {
-      params.set("limit", String(limit));
-    }
-
-    return this.request<unknown>(
-      `/workspaces/${workspaceId}/contacts/discover${
-        params.size > 0 ? `?${params.toString()}` : ""
-      }`,
-    ).then(normalizeContactDiscoveryResponse);
-  }
-
-  createWorkspaceContact(
-    workspaceId: string,
-    input:
-      | {
-          targetType: "actor";
-          targetWorkspaceId: string;
-          targetActorId: string;
-        }
-      | {
-          targetType: "user";
-          targetWorkspaceId: string;
-          targetUserId: string;
-        },
-  ) {
-    return this.request<{ contact: unknown }>(
-      `/workspaces/${workspaceId}/contacts/workspace`,
-      {
-        method: "POST",
-        body: JSON.stringify(input),
-      },
-    );
-  }
-
-  createPersonalContact(
-    workspaceId: string,
-    input:
-      | {
-          targetType: "actor";
-          targetWorkspaceId: string;
-          targetActorId: string;
-        }
-      | {
-          targetType: "user";
-          targetWorkspaceId: string;
-          targetUserId: string;
-        },
-  ) {
-    return this.request<{ contact: unknown }>(
-      `/workspaces/${workspaceId}/contacts/personal`,
       {
         method: "POST",
         body: JSON.stringify(input),

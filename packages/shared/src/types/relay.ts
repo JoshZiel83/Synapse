@@ -97,7 +97,7 @@ export interface RelayDispatchEnvelope<TPayload = Record<string, unknown>> {
 export interface RelayPairingSessionView {
   id: string;
   workspaceId: string;
-  requestedBy?: string;
+  requestedByWorkspaceMemberId?: string;
   deviceId?: string;
   serverBaseUrl: string;
   requestedDisplayName?: string;
@@ -163,7 +163,7 @@ export interface RelayExposureView {
 export interface RelayDeviceSummaryView {
   id: string;
   workspaceId: string;
-  ownerUserId?: string;
+  ownerWorkspaceMemberId?: string;
   displayName: string;
   clientKind: string;
   platform?: string;

@@ -35,7 +35,7 @@ interface ModelItemDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   groupId: string;
-  scope?: 'workspace' | 'platform' | 'user';
+  scope?: 'workspace' | 'platform' | 'workspace_member';
   item: any | null;
   onSaved: () => void;
 }
@@ -175,8 +175,13 @@ export default function ModelItemDialog({
 
         if (scope === 'platform') {
           await api.updatePlatformModelItem(groupId, item.id, updateData);
-        } else if (scope === 'user') {
-          await api.updateUserModelItem(groupId, item.id, updateData);
+        } else if (scope === 'workspace_member') {
+          await api.updateWorkspaceMemberModelItem(
+            workspaceId!,
+            groupId,
+            item.id,
+            updateData
+          );
         } else {
           await api.updateModelItem(workspaceId!, groupId, item.id, updateData);
         }
@@ -196,8 +201,8 @@ export default function ModelItemDialog({
         };
         if (scope === 'platform') {
           await api.addPlatformModelItem(groupId, payload);
-        } else if (scope === 'user') {
-          await api.addUserModelItem(groupId, payload);
+        } else if (scope === 'workspace_member') {
+          await api.addWorkspaceMemberModelItem(workspaceId!, groupId, payload);
         } else {
           await api.addModelItem(workspaceId!, groupId, payload);
         }

@@ -15,12 +15,14 @@ interface WorkspaceInfo {
   id: string
   name: string
   slug: string
+  currentWorkspaceMemberId?: string
   trustLevel?: string
 }
 
 interface WorkspaceContextType {
   workspaceId: string | null
   workspaceName: string | null
+  currentWorkspaceMemberId: string | null
   workspaces: WorkspaceInfo[]
   needsOnboarding: boolean
   setWorkspaceId: (id: string) => void
@@ -31,6 +33,7 @@ interface WorkspaceContextType {
 const WorkspaceContext = createContext<WorkspaceContextType>({
   workspaceId: null,
   workspaceName: null,
+  currentWorkspaceMemberId: null,
   workspaces: [],
   needsOnboarding: false,
   setWorkspaceId: () => {},
@@ -53,6 +56,7 @@ export function useWorkspace() {
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null)
   const [workspaceName, setWorkspaceName] = useState<string | null>(null)
+  const [currentWorkspaceMemberId, setCurrentWorkspaceMemberId] = useState<string | null>(null)
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([])
   const [needsOnboarding, setNeedsOnboarding] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -73,6 +77,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         setNeedsOnboarding(true)
         setWorkspaceId(null)
         setWorkspaceName(null)
+        setCurrentWorkspaceMemberId(null)
         localStorage.removeItem("workspaceId")
       } else {
         setNeedsOnboarding(false)
@@ -81,9 +86,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (match) {
           setWorkspaceId(match.id)
           setWorkspaceName(match.name)
+          setCurrentWorkspaceMemberId(match.currentWorkspaceMemberId ?? null)
         } else {
           setWorkspaceId(list[0].id)
           setWorkspaceName(list[0].name)
+          setCurrentWorkspaceMemberId(list[0].currentWorkspaceMemberId ?? null)
           localStorage.setItem("workspaceId", list[0].id)
         }
       }
@@ -104,6 +111,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const ws = workspaces.find((w) => w.id === id)
     setWorkspaceId(id)
     setWorkspaceName(ws?.name ?? null)
+    setCurrentWorkspaceMemberId(ws?.currentWorkspaceMemberId ?? null)
     localStorage.setItem("workspaceId", id)
     if (!ws) {
       api
@@ -118,6 +126,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       value={{
         workspaceId,
         workspaceName,
+        currentWorkspaceMemberId,
         workspaces,
         needsOnboarding,
         setWorkspaceId: handleSetWorkspaceId,

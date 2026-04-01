@@ -43,15 +43,15 @@ import {
   getSaveErrorMessage,
 } from './model-config-utils';
 
-type ModelGroupScope = 'workspace' | 'platform' | 'user';
-type GrantScope = 'platform' | 'workspace' | 'user' | 'workspace_user' | 'actor';
+type ModelGroupScope = 'workspace' | 'platform' | 'workspace_member';
+type GrantScope = 'platform' | 'workspace' | 'workspace_member' | 'actor';
 
 type ModelGroupSummary = {
   id: string;
   workspace_id: string | null;
-  owner_type?: 'platform' | 'workspace' | 'user';
+  owner_type?: 'platform' | 'workspace' | 'workspace_member';
   owner_workspace_id?: string | null;
-  owner_user_id?: string | null;
+  owner_workspace_member_id?: string | null;
   name: string;
   description: string;
   routing_strategy: string;
@@ -65,10 +65,10 @@ type ModelGroupGrant = {
   group_id: string;
   grant_scope: GrantScope;
   workspace_id: string | null;
-  user_id: string | null;
+  workspace_member_id: string | null;
   actor_id: string | null;
   status: 'active' | 'revoked';
-  granted_by?: string | null;
+  grantedByWorkspaceMemberId?: string | null;
   reason?: string | null;
   metadata?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -100,6 +100,7 @@ type GroupDetail = ModelGroupSummary & {
 };
 
 type WorkspaceMember = {
+  id: string;
   userId: string;
   userName?: string;
   userEmail?: string;
@@ -158,8 +159,8 @@ function resolveScope(group: ModelGroupSummary): ModelGroupScope {
   if (group.owner_type === 'platform' || (!group.owner_type && !group.workspace_id)) {
     return 'platform';
   }
-  if (group.owner_type === 'user') {
-    return 'user';
+  if (group.owner_type === 'workspace_member') {
+    return 'workspace_member';
   }
   return 'workspace';
 }
@@ -191,8 +192,8 @@ async function fetchGroupsForScope(scope: ModelGroupScope, workspaceId: string |
     const response = await api.getPlatformModelGroups();
     return (response.groups || []) as ModelGroupSummary[];
   }
-  if (scope === 'user') {
-    const response = await api.getUserModelGroups();
+  if (scope === 'workspace_member') {
+    const response = await api.getWorkspaceMemberModelGroups(workspaceId!);
     return (response.groups || []) as ModelGroupSummary[];
   }
   if (!workspaceId) {
@@ -206,8 +207,8 @@ async function fetchGroupDetail(scope: ModelGroupScope, groupId: string, workspa
   if (scope === 'platform') {
     return api.getPlatformModelGroup(groupId);
   }
-  if (scope === 'user') {
-    return api.getUserModelGroup(groupId);
+  if (scope === 'workspace_member') {
+    return api.getWorkspaceMemberModelGroup(workspaceId!, groupId);
   }
   if (!workspaceId) {
     throw new Error('Workspace is required');
@@ -224,8 +225,8 @@ async function updateGroupForScope(
   if (scope === 'platform') {
     return api.updatePlatformModelGroup(groupId, data);
   }
-  if (scope === 'user') {
-    return api.updateUserModelGroup(groupId, data);
+  if (scope === 'workspace_member') {
+    return api.updateWorkspaceMemberModelGroup(workspaceId!, groupId, data);
   }
   if (!workspaceId) {
     throw new Error('Workspace is required');
@@ -237,8 +238,8 @@ async function issueGrantForGroup(scope: ModelGroupScope, groupId: string, works
   if (scope === 'platform') {
     return api.issuePlatformModelGroupGrant(groupId, data);
   }
-  if (scope === 'user') {
-    return api.issueUserModelGroupGrant(groupId, data);
+  if (scope === 'workspace_member') {
+    return api.issueWorkspaceMemberModelGroupGrant(workspaceId!, groupId, data);
   }
   if (!workspaceId) {
     throw new Error('Workspace is required');
@@ -250,8 +251,12 @@ async function revokeGrantForGroup(scope: ModelGroupScope, groupId: string, work
   if (scope === 'platform') {
     return api.revokePlatformModelGroupGrant(groupId, grantId);
   }
-  if (scope === 'user') {
-    return api.revokeUserModelGroupGrant(groupId, grantId);
+  if (scope === 'workspace_member') {
+    return api.revokeWorkspaceMemberModelGroupGrant(
+      workspaceId!,
+      groupId,
+      grantId
+    );
   }
   if (!workspaceId) {
     throw new Error('Workspace is required');
@@ -270,8 +275,13 @@ async function saveItemForGroup(
     if (scope === 'platform') {
       return api.updatePlatformModelItem(groupId, itemId, payload);
     }
-    if (scope === 'user') {
-      return api.updateUserModelItem(groupId, itemId, payload);
+    if (scope === 'workspace_member') {
+      return api.updateWorkspaceMemberModelItem(
+        workspaceId!,
+        groupId,
+        itemId,
+        payload
+      );
     }
     if (!workspaceId) {
       throw new Error('Workspace is required');
@@ -282,8 +292,8 @@ async function saveItemForGroup(
   if (scope === 'platform') {
     return api.addPlatformModelItem(groupId, payload);
   }
-  if (scope === 'user') {
-    return api.addUserModelItem(groupId, payload);
+  if (scope === 'workspace_member') {
+    return api.addWorkspaceMemberModelItem(workspaceId!, groupId, payload);
   }
   if (!workspaceId) {
     throw new Error('Workspace is required');
@@ -295,8 +305,8 @@ async function deleteItemForGroup(scope: ModelGroupScope, groupId: string, works
   if (scope === 'platform') {
     return api.deletePlatformModelItem(groupId, itemId);
   }
-  if (scope === 'user') {
-    return api.deleteUserModelItem(groupId, itemId);
+  if (scope === 'workspace_member') {
+    return api.deleteWorkspaceMemberModelItem(workspaceId!, groupId, itemId);
   }
   if (!workspaceId) {
     throw new Error('Workspace is required');
@@ -309,6 +319,7 @@ function grantTargetLabel(
   workspaces: Array<{ id: string; name: string }>,
   members: WorkspaceMember[],
   actors: WorkspaceActor[],
+  currentWorkspaceMemberId: string | null,
   currentUser: WorkbenchUser | null,
 ) {
   switch (grant.grant_scope) {
@@ -316,13 +327,15 @@ function grantTargetLabel(
       return 'Platform';
     case 'workspace':
       return workspaces.find((workspace) => workspace.id === grant.workspace_id)?.name || 'Workspace';
-    case 'user':
-    case 'workspace_user': {
-      if (grant.user_id && currentUser?.id === grant.user_id) {
-        return currentUser.name || currentUser.email || 'Current user';
+    case 'workspace_member': {
+      if (
+        grant.workspace_member_id &&
+        currentWorkspaceMemberId === grant.workspace_member_id
+      ) {
+        return currentUser?.name || currentUser?.email || 'Current member';
       }
-      const member = members.find((item) => item.userId === grant.user_id);
-      return member?.userName || member?.userEmail || grant.user_id || 'User';
+      const member = members.find((item) => item.id === grant.workspace_member_id);
+      return member?.userName || member?.userEmail || grant.workspace_member_id || 'Member';
     }
     case 'actor': {
       const actor = actors.find((item) => item.id === grant.actor_id);
@@ -341,6 +354,7 @@ function GrantDialog({
   workspaces,
   members,
   actors,
+  currentWorkspaceMemberId,
   currentUser,
 }: {
   open: boolean;
@@ -350,11 +364,12 @@ function GrantDialog({
   workspaces: Array<{ id: string; name: string }>;
   members: WorkspaceMember[];
   actors: WorkspaceActor[];
+  currentWorkspaceMemberId: string | null;
   currentUser: WorkbenchUser | null;
 }) {
   const [grantScope, setGrantScope] = useState<GrantScope>('workspace');
   const [workspaceId, setWorkspaceId] = useState('');
-  const [userId, setUserId] = useState('');
+  const [workspaceMemberId, setWorkspaceMemberId] = useState('');
   const [actorId, setActorId] = useState('');
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
@@ -363,30 +378,17 @@ function GrantDialog({
     if (!open) return;
     setGrantScope(groupScope === 'platform' ? 'platform' : 'workspace');
     setWorkspaceId(workspaces[0]?.id || '');
-    setUserId(currentUser?.id || members[0]?.userId || '');
+    setWorkspaceMemberId(currentWorkspaceMemberId || members[0]?.id || '');
     setActorId(actors[0]?.id || '');
     setReason('');
-  }, [actors, currentUser?.id, groupScope, members, open, workspaces]);
+  }, [actors, currentWorkspaceMemberId, groupScope, members, open, workspaces]);
 
   const grantScopeOptions: Array<{ value: GrantScope; label: string }> = [
     ...(groupScope === 'platform' ? [{ value: 'platform' as const, label: 'Platform' }] : []),
     { value: 'workspace', label: 'Workspace' },
-    { value: 'user', label: 'User' },
-    { value: 'workspace_user', label: 'Workspace User' },
+    { value: 'workspace_member', label: 'Workspace Member' },
     ...(actors.length > 0 ? [{ value: 'actor' as const, label: 'Actor' }] : []),
   ];
-
-  const users = useMemo(() => {
-    const options = [...members];
-    if (currentUser?.id && !options.some((member) => member.userId === currentUser.id)) {
-      options.unshift({
-        userId: currentUser.id,
-        userName: currentUser.name,
-        userEmail: currentUser.email,
-      });
-    }
-    return options;
-  }, [currentUser, members]);
 
   const canSubmit =
     grantScope === 'platform'
@@ -395,7 +397,7 @@ function GrantDialog({
         ? Boolean(workspaceId)
         : grantScope === 'actor'
           ? Boolean(workspaceId && actorId)
-          : Boolean(userId);
+          : Boolean(workspaceMemberId);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -421,7 +423,7 @@ function GrantDialog({
             </select>
           </div>
 
-          {(grantScope === 'workspace' || grantScope === 'workspace_user' || grantScope === 'actor') && (
+          {(grantScope === 'workspace' || grantScope === 'workspace_member' || grantScope === 'actor') && (
             <div className="space-y-2">
               <Label>Workspace</Label>
               <select
@@ -438,17 +440,17 @@ function GrantDialog({
             </div>
           )}
 
-          {(grantScope === 'user' || grantScope === 'workspace_user') && (
+          {grantScope === 'workspace_member' && (
             <div className="space-y-2">
-              <Label>User</Label>
+              <Label>Workspace Member</Label>
               <select
-                value={userId}
-                onChange={(event) => setUserId(event.target.value)}
+                value={workspaceMemberId}
+                onChange={(event) => setWorkspaceMemberId(event.target.value)}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
               >
-                {users.map((member) => (
-                  <option key={member.userId} value={member.userId}>
-                    {member.userName || member.userEmail || member.userId}
+                {members.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.userName || member.userEmail || member.id}
                   </option>
                 ))}
               </select>
@@ -493,8 +495,11 @@ function GrantDialog({
               try {
                 await onSubmit({
                   grantScope,
-                  workspaceId: grantScope === 'workspace' || grantScope === 'workspace_user' || grantScope === 'actor' ? workspaceId : undefined,
-                  userId: grantScope === 'user' || grantScope === 'workspace_user' ? userId : undefined,
+                  workspaceId: grantScope === 'workspace' || grantScope === 'workspace_member' || grantScope === 'actor' ? workspaceId : undefined,
+                  workspaceMemberId:
+                    grantScope === 'workspace_member'
+                      ? workspaceMemberId
+                      : undefined,
                   actorId: grantScope === 'actor' ? actorId : undefined,
                   reason: reason.trim() || undefined,
                 });
@@ -764,7 +769,7 @@ export default function ModelSettingsWorkbench() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { workspaceId } = useWorkspace();
+  const { workspaceId, currentWorkspaceMemberId } = useWorkspace();
   const { user } = useAuthStore();
   const [groups, setGroups] = useState<ModelGroupSummary[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
@@ -782,7 +787,8 @@ export default function ModelSettingsWorkbench() {
   const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>([]);
   const [workspaceActors, setWorkspaceActors] = useState<WorkspaceActor[]>([]);
   const [availableWorkspaces, setAvailableWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
-  const [creatableScopes, setCreatableScopes] = useState<ModelGroupScope[]>(['user']);
+  const [creatableScopes, setCreatableScopes] =
+    useState<ModelGroupScope[]>(['workspace_member']);
   const [editingField, setEditingField] = useState<'name' | 'description' | null>(null);
   const [groupNameDraft, setGroupNameDraft] = useState('');
   const [groupDescriptionDraft, setGroupDescriptionDraft] = useState('');
@@ -795,7 +801,7 @@ export default function ModelSettingsWorkbench() {
     try {
       const [workspaceResult, userResult, platformResult, workspacesResult] = await Promise.allSettled([
         fetchGroupsForScope('workspace', workspaceId),
-        fetchGroupsForScope('user', workspaceId),
+        fetchGroupsForScope('workspace_member', workspaceId),
         fetchGroupsForScope('platform', workspaceId),
         api.getWorkspaces(),
       ]);
@@ -807,7 +813,7 @@ export default function ModelSettingsWorkbench() {
       ].sort((left, right) => {
         const rank = (group: ModelGroupSummary) => {
           const scope = resolveScope(group);
-          return scope === 'workspace' ? 0 : scope === 'user' ? 1 : 2;
+          return scope === 'workspace' ? 0 : scope === 'workspace_member' ? 1 : 2;
         };
         return rank(left) - rank(right) || Number(right.is_default) - Number(left.is_default) || left.name.localeCompare(right.name);
       });
@@ -815,7 +821,7 @@ export default function ModelSettingsWorkbench() {
       setGroups(nextGroups);
       setCreatableScopes([
         ...(workspaceResult.status === 'fulfilled' ? (['workspace'] as ModelGroupScope[]) : []),
-        'user',
+        'workspace_member',
         ...(platformResult.status === 'fulfilled' ? (['platform'] as ModelGroupScope[]) : []),
       ]);
 
@@ -1388,7 +1394,14 @@ export default function ModelSettingsWorkbench() {
                             <div>
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="font-medium text-foreground">
-                                  {grantTargetLabel(grant, availableWorkspaces, workspaceMembers, workspaceActors, currentUser)}
+                                  {grantTargetLabel(
+                                    grant,
+                                    availableWorkspaces,
+                                    workspaceMembers,
+                                    workspaceActors,
+                                    currentWorkspaceMemberId,
+                                    currentUser
+                                  )}
                                 </span>
                                 <Badge variant="outline">{grant.grant_scope.replaceAll('_', ' ')}</Badge>
                               </div>
@@ -1409,7 +1422,7 @@ export default function ModelSettingsWorkbench() {
                           <ShieldCheck className="size-10 text-muted-foreground/60" />
                           <div>
                             <div className="font-medium text-foreground">No explicit grants</div>
-                            <div className="text-sm text-muted-foreground">Add a grant to share this group with a workspace, user, or actor.</div>
+                            <div className="text-sm text-muted-foreground">Add a grant to share this group with a workspace, member, or actor.</div>
                           </div>
                         </CardContent>
                       </Card>
@@ -1452,6 +1465,7 @@ export default function ModelSettingsWorkbench() {
         workspaces={availableWorkspaces}
         members={workspaceMembers}
         actors={workspaceActors}
+        currentWorkspaceMemberId={currentWorkspaceMemberId}
         currentUser={currentUser}
         onSubmit={handleIssueGrant}
       />

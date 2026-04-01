@@ -8,8 +8,9 @@ import {
   authMiddleware,
   optionalAuth,
 } from "../../infrastructure/middleware/auth.js";
+import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
 import { requireRequestAction } from "../access/guards.js";
-import { authorizeAction, workspaceUserSubject } from "../access/service.js";
+import { authorizeAction, resolveWorkspaceAccessSubject } from "../access/service.js";
 import type { AccessAction } from "../access/actions.js";
 import {
   createWorkspace,
@@ -57,7 +58,7 @@ const createInviteSchema = z.object({
 });
 
 const workspaceAccessSchema = z.object({
-  userId: z.string().uuid(),
+  workspaceMemberId: z.string().uuid(),
   accessKey: z.enum(WORKSPACE_ACCESS_KEYS),
   metadata: z.record(z.unknown()).optional(),
 });
@@ -76,7 +77,7 @@ async function canWorkspacePermission(
   action: AccessAction,
 ): Promise<boolean> {
   return authorizeAction({
-    subject: workspaceUserSubject(workspaceId, userId),
+    subject: await resolveWorkspaceAccessSubject(workspaceId, userId),
     action,
     resourceId: workspaceId,
   });
@@ -258,6 +259,14 @@ export async function handleGetWorkspaceChiefActorPreference(
   if (!allowed) return;
 
   const userId = (request as any).user!.userId;
+  const workspaceMemberId = (request as any).workspaceMember?.id as
+    | string
+    | undefined;
+  if (!workspaceMemberId) {
+    return reply
+      .status(403)
+      .send({ error: "Workspace membership required for chief actor preference" });
+  }
   const preference = await getWorkspaceChiefActorPreference(
     request.params.workspaceId,
     userId,
@@ -285,6 +294,14 @@ export async function handleUpdateWorkspaceChiefActorPreference(
   }
 
   try {
+    const workspaceMemberId = (request as any).workspaceMember?.id as
+      | string
+      | undefined;
+    if (!workspaceMemberId) {
+      return reply
+        .status(403)
+        .send({ error: "Workspace membership required for chief actor preference" });
+    }
     const preference = await updateWorkspaceChiefActorPreference(
       request.params.workspaceId,
       (request as any).user!.userId,
@@ -318,7 +335,7 @@ export async function handleGetWorkspaceNavigation(
     data: {
       canViewWorkspace,
       canAccessWorkspaceModels,
-      canAccessWorkspaceUserModels: canViewWorkspace,
+      canAccessWorkspaceMemberModels: canViewWorkspace,
       canAccessWorkspaceAccess,
     },
   });
@@ -346,15 +363,15 @@ export async function handleGrantWorkspaceAccess(
   try {
     const accessBinding = await grantWorkspaceAccess({
       workspaceId: request.params.workspaceId,
-      userId: parsed.data.userId,
+      workspaceMemberId: parsed.data.workspaceMemberId,
       accessKey: parsed.data.accessKey as WorkspaceAccessKey,
-      assignedBy: (request as any).user!.userId,
+      assignedByWorkspaceMemberId: (request as any).workspaceMember!.id,
       metadata: parsed.data.metadata as Record<string, unknown> | undefined,
     });
     return reply.status(201).send(accessBinding);
   } catch (err: any) {
     const msg = err.message || "Failed to grant workspace access";
-    if (msg === "User is not a member of this workspace") {
+    if (msg === "Workspace member is not part of this workspace") {
       return reply.status(400).send({ error: msg });
     }
     if (msg === "Access already granted") {
@@ -366,7 +383,10 @@ export async function handleGrantWorkspaceAccess(
 
 export async function handleRevokeWorkspaceAccess(
   request: FastifyRequest<{
-    Params: WorkspaceParams & { userId: string; accessKey: WorkspaceAccessKey };
+    Params: WorkspaceParams & {
+      workspaceMemberId: string;
+      accessKey: WorkspaceAccessKey;
+    };
   }>,
   reply: FastifyReply,
 ) {
@@ -381,7 +401,7 @@ export async function handleRevokeWorkspaceAccess(
   try {
     await revokeWorkspaceAccess(
       request.params.workspaceId,
-      request.params.userId,
+      request.params.workspaceMemberId,
       request.params.accessKey,
     );
     return reply.status(204).send();
@@ -420,7 +440,7 @@ export async function handleCreateInvite(
 
   const invite = await createInvite({
     workspaceId: request.params.workspaceId,
-    createdBy: (request as any).user!.userId,
+    createdByWorkspaceMemberId: (request as any).workspaceMember!.id,
     trustLevel: parsed.data.trustLevel,
     maxUses: parsed.data.maxUses,
     expiresAt: parsed.data.expiresAt,
@@ -510,7 +530,7 @@ export async function handleRedeemInvite(
 
 export async function registerWorkspaceRoutes(fastify: FastifyInstance) {
   const authHook = { preHandler: [authMiddleware] };
-  const workspaceAuthHook = { preHandler: [authMiddleware] };
+  const workspaceAuthHook = { preHandler: [authMiddleware, workspaceMiddleware] };
   const optionalAuthHook = { preHandler: [optionalAuth] };
 
   // Workspace collection routes
@@ -566,9 +586,12 @@ export async function registerWorkspaceRoutes(fastify: FastifyInstance) {
     handleGrantWorkspaceAccess,
   );
   fastify.post<{
-    Params: WorkspaceParams & { userId: string; accessKey: WorkspaceAccessKey };
+    Params: WorkspaceParams & {
+      workspaceMemberId: string;
+      accessKey: WorkspaceAccessKey;
+    };
   }>(
-    "/api/v1/workspaces/:workspaceId/access/:accessKey/users/:userId/revoke",
+    "/api/v1/workspaces/:workspaceId/access/:accessKey/members/:workspaceMemberId/revoke",
     workspaceAuthHook,
     handleRevokeWorkspaceAccess,
   );

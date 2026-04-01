@@ -36,12 +36,12 @@ export const ATTACHMENT_TARGET_TYPES = [
   'workspace',
   'conversation',
   'actor',
-  'workspace_user',
+  'workspace_member',
 ] as const;
 export const ACCESS_TARGET_TYPES = [
   'workspace',
   'actor',
-  'workspace_user',
+  'workspace_member',
   'conversation_workspace',
   'actor_conversation',
 ] as const;
@@ -93,8 +93,7 @@ export const MODEL_GROUP_ROUTING_STRATEGIES = [
 export const MODEL_GROUP_GRANT_SCOPES = [
   'platform',
   'workspace',
-  'user',
-  'workspace_user',
+  'workspace_member',
   'actor',
 ] as const;
 
@@ -120,7 +119,7 @@ export const MEMORY_SCOPES = [
   'conversation',
   'actor_global',
   'actor_conversation',
-  'user',
+  'workspace_member',
 ] as const;
 
 export const MEMORY_CATEGORIES = [
@@ -169,11 +168,17 @@ export const SESSION_WAKEUP_SOURCE_TYPES = [
   'system_interrupt',
   'retry',
 ] as const;
+export const SESSION_WAKEUP_SOURCE_MEMBER_TYPES = [
+  'workspace_member',
+  'actor',
+  'external',
+  'system',
+] as const;
 
 export const SESSION_WAKEUP_STATUSES = ['pending', 'attached', 'processed', 'dropped'] as const;
 export const SEND_TO_INTENTS = ['reply', 'request'] as const;
 
-export const TRANSPORT_ACCOUNT_OWNER_SCOPES = ['workspace', 'workspace_user'] as const;
+export const TRANSPORT_ACCOUNT_OWNER_SCOPES = ['workspace', 'workspace_member'] as const;
 export const TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES = [
   'none',
   'specified_actor',
@@ -192,7 +197,7 @@ export const TRANSPORT_ENDPOINT_TYPES = ['direct', 'group'] as const;
 export const TRANSPORT_ACCOUNT_STATUSES = ['active', 'disabled', 'error'] as const;
 export const TRANSPORT_DELIVERY_STATUSES = ['pending', 'sent', 'failed', 'skipped'] as const;
 
-export const PLUGIN_AUTH_OWNER_SCOPES = ['installation', 'user', 'workspace'] as const;
+export const PLUGIN_AUTH_OWNER_SCOPES = ['installation', 'workspace_member', 'workspace'] as const;
 export const PLUGIN_AUTH_SESSION_STATUSES = [
   'pending',
   'completed',

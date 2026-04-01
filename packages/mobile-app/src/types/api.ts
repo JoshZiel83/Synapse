@@ -51,77 +51,13 @@ export interface ContactWorkspaceRef {
   slug: string;
 }
 
-export interface ScopedContactActorView {
-  id: string;
-  workspaceId: string;
-  name: string;
-  title?: string;
-  role?: string;
-  avatarUrl?: string | null;
-  avatarEmoji?: string;
-}
-
-export interface ScopedContactUserView {
-  id: string;
-  workspaceMemberId?: string;
-  workspaceId: string;
-  name?: string;
-  email?: string;
-  avatarUrl?: string | null;
-}
-
-export interface ScopedContactView {
-  id: string;
-  scope: "workspace" | "personal";
-  targetType: "actor" | "user";
-  targetWorkspace: ContactWorkspaceRef;
-  actor: ScopedContactActorView | null;
-  user: ScopedContactUserView | null;
-  createdAt: string;
-}
-
-export interface ScopedContactsResponse {
-  workspaceContacts: ScopedContactView[];
-  personalContacts: ScopedContactView[];
-}
-
-export interface ContactDiscoveryActorView {
-  targetType: "actor";
-  actorId: string;
-  name: string;
-  title?: string;
-  role?: string;
-  avatarUrl?: string | null;
-  avatarEmoji?: string;
-  targetWorkspace: ContactWorkspaceRef;
-  alreadyInWorkspaceContacts: boolean;
-  alreadyInPersonalContacts: boolean;
-}
-
-export interface ContactDiscoveryUserView {
-  targetType: "user";
-  userId: string;
-  name?: string;
-  email?: string;
-  avatarUrl?: string | null;
-  targetWorkspace: ContactWorkspaceRef;
-  alreadyInWorkspaceContacts: boolean;
-  alreadyInPersonalContacts: boolean;
-}
-
-export interface ContactDiscoveryResponse {
-  actors: ContactDiscoveryActorView[];
-  users: ContactDiscoveryUserView[];
-}
-
 export interface ConversationParticipantView {
   memberId?: string;
   participantId?: string;
-  type?: "actor" | "user" | "external";
+  type?: "actor" | "workspace_member" | "external";
   id?: string;
   workspaceMemberId?: string;
   actorId?: string;
-  userId?: string;
   name?: string;
   title?: string;
   role?: string;
@@ -208,37 +144,53 @@ export interface FriendIdProfileView {
 }
 
 export interface ContactHubEntryRef {
-  kind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user";
+  kind:
+    | "workspace-actor"
+    | "workspace-member"
+    | "friend-actor"
+    | "friend-member";
   id: string;
 }
 
-export interface FriendIdSearchMatchView {
+export interface IdentitySearchMatchView {
   profileId: string;
+  targetType: "member" | "actor";
   title: string;
   subtitle?: string;
   avatarUrl?: string;
+  avatarEmoji?: string;
   workspace: WorkspaceInfo;
-  userId: string;
+  workspaceMemberId?: string;
+  userId?: string;
+  actorId?: string;
   state:
-    | "same_workspace_user"
+    | "same_workspace_member"
     | "friend"
     | "pending_request"
-    | "requestable";
+    | "requestable"
+    | "existing"
+    | "available"
+    | "approval_required"
+    | "pending_approval";
   contact?: ContactHubEntryRef;
   conversationId?: string;
   requestId?: string;
 }
 
-export interface FriendIdSearchResponse {
+export interface IdentitySearchResponse {
   query: string;
   outcome: "empty" | "invalid" | "self" | "not_found" | "found";
-  matches: FriendIdSearchMatchView[];
+  matches: IdentitySearchMatchView[];
 }
 
 export interface ContactHubEntryView {
-  kind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user";
+  kind:
+    | "workspace-actor"
+    | "workspace-member"
+    | "friend-actor"
+    | "friend-member";
   id: string;
-  targetType: "user" | "actor";
+  targetType: "member" | "actor";
   title: string;
   subtitle?: string;
   avatarUrl?: string;
@@ -258,8 +210,9 @@ export interface ContactHubEntryView {
   };
 }
 
-export interface RelationshipUserSummaryView {
+export interface RelationshipMemberSummaryView {
   workspace: WorkspaceInfo;
+  workspaceMemberId: string;
   userId: string;
   name: string;
   email: string;
@@ -282,9 +235,9 @@ export interface FriendRequestView {
   id: string;
   status: "pending" | "approved" | "rejected";
   createdAt: string;
-  requester?: RelationshipUserSummaryView | null;
-  targetType: "user" | "actor";
-  targetUser?: RelationshipUserSummaryView | null;
+  requester?: RelationshipMemberSummaryView | null;
+  targetType: "member" | "actor";
+  targetMember?: RelationshipMemberSummaryView | null;
   targetActor?: RelationshipActorSummaryView | null;
 }
 
@@ -297,7 +250,7 @@ export interface ActorAccessRequestView {
   id: string;
   status: "pending" | "approved" | "rejected";
   createdAt: string;
-  requester?: RelationshipUserSummaryView | null;
+  requester?: RelationshipMemberSummaryView | null;
   actor?: RelationshipActorSummaryView | null;
 }
 
@@ -313,7 +266,7 @@ export interface ContactHubResponse {
     totalPendingCount: number;
   };
   workspaceActors: ContactHubEntryView[];
-  workspaceUsers: ContactHubEntryView[];
+  workspaceMembers: ContactHubEntryView[];
   friends: ContactHubEntryView[];
   groups: ConversationSummaryView[];
 }
@@ -326,7 +279,7 @@ export interface ContactHubDetailResponse {
 export interface RelationshipScanResponse {
   outcome:
     | "self_scan"
-    | "same_workspace_user"
+    | "same_workspace_member"
     | "friend_active"
     | "friend_request_created"
     | "friend_request_pending"

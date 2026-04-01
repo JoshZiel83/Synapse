@@ -31,7 +31,7 @@ export default function ModelItemVersions({
 }: {
   groupId: string;
   itemId: string;
-  scope?: 'workspace' | 'platform' | 'user';
+  scope?: 'workspace' | 'platform' | 'workspace_member';
   onBack: () => void;
 }) {
   const { workspaceId } = useWorkspace();
@@ -44,8 +44,8 @@ export default function ModelItemVersions({
     const request =
       scope === 'platform'
         ? api.getPlatformItemVersions(groupId, itemId)
-        : scope === 'user'
-          ? api.getUserItemVersions(groupId, itemId)
+        : scope === 'workspace_member'
+          ? api.getWorkspaceMemberItemVersions(workspaceId!, groupId, itemId)
           : api.getItemVersions(workspaceId!, groupId, itemId);
     request
       .then((res) => setVersions(res.versions || []))

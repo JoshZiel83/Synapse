@@ -20,12 +20,11 @@ import {
 import {
   AUTHZ_PLATFORM_ID,
   authzEnabled,
-  buildWorkspaceUserContextId,
+  buildWorkspaceMemberContextId,
   diffAuthzRelationships,
   enqueueAuthzRelationships,
   flushAuthzOutboxEntries,
   touchRelation,
-  touchWorkspaceUserContext,
   type AuthzRelationMutation,
 } from '../../infrastructure/authz/index.js';
 import { logProviderStep, logRuntimeEvent } from '../execution/service.js';
@@ -39,14 +38,14 @@ type ModelGroupRow = {
   id: string;
   owner_type: ModelGroupOwnerType;
   owner_workspace_id: string | null;
-  owner_user_id: string | null;
+  owner_workspace_member_id: string | null;
   name: string;
   description: string | null;
   routing_strategy: ModelGroupsRoutingStrategy;
   attempt_policy: Record<string, unknown> | null;
   is_default: boolean;
   is_enabled: boolean;
-  created_by: string | null;
+  created_by_workspace_member_id: string | null;
   metadata: Record<string, unknown> | null;
   created_at: string | Date;
   updated_at: string | Date;
@@ -57,10 +56,10 @@ type ModelGroupGrantRow = {
   group_id?: string;
   grant_scope: ModelGroupGrantScope;
   workspace_id: string | null;
-  user_id: string | null;
+  workspace_member_id: string | null;
   actor_id: string | null;
   status: 'active' | 'revoked';
-  granted_by?: string | null;
+  granted_by_workspace_member_id?: string | null;
   reason?: string | null;
   metadata?: Record<string, unknown> | null;
   created_at?: string | Date;
@@ -71,7 +70,7 @@ type ModelGroupAuthzState = {
   id: string;
   owner_type: ModelGroupOwnerType;
   owner_workspace_id: string | null;
-  owner_user_id: string | null;
+  owner_workspace_member_id: string | null;
   is_enabled: boolean;
   grants: ModelGroupGrantRow[];
 };
@@ -148,20 +147,15 @@ function buildModelGroupGrantRelations(groupId: string, grant: ModelGroupGrantRo
       return grant.workspace_id
         ? [touchRelation('model_group', groupId, 'use_workspace', 'workspace', grant.workspace_id)]
         : [];
-    case 'user':
-      return grant.user_id
-        ? [touchRelation('model_group', groupId, 'use_principal', 'user', grant.user_id)]
-        : [];
-    case 'workspace_user':
-      return grant.workspace_id && grant.user_id
+    case 'workspace_member':
+      return grant.workspace_member_id
         ? [
-            ...touchWorkspaceUserContext(grant.workspace_id, grant.user_id),
             touchRelation(
               'model_group',
               groupId,
-              'use_workspace_user',
-              'workspace_user',
-              buildWorkspaceUserContextId(grant.workspace_id, grant.user_id),
+              'use_workspace_member',
+              'workspace_member',
+              buildWorkspaceMemberContextId(grant.workspace_member_id),
             ),
           ]
         : [];
@@ -180,8 +174,8 @@ function buildModelGroupAuthzRelations(group: ModelGroupAuthzState): AuthzRelati
       ? [touchRelation('model_group', group.id, 'owner_platform', 'platform', AUTHZ_PLATFORM_ID)]
       : group.owner_type === 'workspace' && group.owner_workspace_id
         ? [touchRelation('model_group', group.id, 'owner_workspace', 'workspace', group.owner_workspace_id)]
-        : group.owner_type === 'user' && group.owner_user_id
-          ? [touchRelation('model_group', group.id, 'owner_user', 'user', group.owner_user_id)]
+        : group.owner_type === 'workspace_member' && group.owner_workspace_member_id
+          ? [touchRelation('model_group', group.id, 'owner_workspace_member', 'workspace_member', group.owner_workspace_member_id)]
           : [];
 
   return [
@@ -206,7 +200,7 @@ function mapGroupRow(row: ModelGroupRow) {
     id: row.id,
     owner_type: row.owner_type,
     owner_workspace_id: row.owner_workspace_id,
-    owner_user_id: row.owner_user_id,
+    owner_workspace_member_id: row.owner_workspace_member_id,
     workspace_id: row.owner_workspace_id,
     scope: row.owner_type,
     name: row.name,
@@ -215,7 +209,7 @@ function mapGroupRow(row: ModelGroupRow) {
     attempt_policy: asObject(row.attempt_policy),
     is_default: Boolean(row.is_default),
     is_active: Boolean(row.is_enabled),
-    created_by: row.created_by || null,
+    createdByWorkspaceMemberId: row.created_by_workspace_member_id || null,
     metadata: asObject(row.metadata),
     created_at: toIsoString(row.created_at),
     updated_at: toIsoString(row.updated_at),
@@ -256,10 +250,11 @@ function mapGrantRow(row: ModelGroupGrantRow & { id: string; group_id: string })
     group_id: row.group_id,
     grant_scope: row.grant_scope,
     workspace_id: row.workspace_id,
-    user_id: row.user_id,
+    workspace_member_id: row.workspace_member_id,
     actor_id: row.actor_id,
     status: row.status,
-    granted_by: row.granted_by || null,
+    grantedByWorkspaceMemberId:
+      row.granted_by_workspace_member_id || null,
     reason: row.reason || null,
     metadata: asObject(row.metadata),
     created_at: toIsoString(row.created_at),
@@ -267,7 +262,11 @@ function mapGrantRow(row: ModelGroupGrantRow & { id: string; group_id: string })
   };
 }
 
-async function clearExistingDefault(ownerType: ModelGroupOwnerType, ownerWorkspaceId?: string | null, ownerUserId?: string | null) {
+async function clearExistingDefault(
+  ownerType: ModelGroupOwnerType,
+  ownerWorkspaceId?: string | null,
+  ownerWorkspaceMemberId?: string | null,
+) {
   if (ownerType === 'platform') {
     await db
       .updateTable('model_groups')
@@ -296,16 +295,16 @@ async function clearExistingDefault(ownerType: ModelGroupOwnerType, ownerWorkspa
     return;
   }
 
-  if (!ownerUserId) {
-    throw new ModelGroupError(400, 'ownerUserId is required for user defaults');
+  if (!ownerWorkspaceMemberId) {
+    throw new ModelGroupError(400, 'ownerWorkspaceMemberId is required for workspace_member defaults');
   }
   await db
     .updateTable('model_groups')
     .set({
       is_default: false,
     })
-    .where('owner_type', '=', 'user')
-      .where('owner_user_id', '=', ownerUserId)
+    .where('owner_type', '=', 'workspace_member')
+      .where('owner_workspace_member_id', '=', ownerWorkspaceMemberId)
       .where('is_default', '=', true)
       .execute();
 }
@@ -349,7 +348,7 @@ async function loadGroupAuthzState(groupId: string) {
     id: group.id,
     owner_type: group.owner_type,
     owner_workspace_id: group.owner_workspace_id,
-    owner_user_id: group.owner_user_id,
+    owner_workspace_member_id: group.owner_workspace_member_id,
     is_enabled: Boolean(group.is_enabled),
     grants,
   } satisfies ModelGroupAuthzState;
@@ -425,19 +424,28 @@ async function createDefaultGroupGrant(
   groupId: string,
   ownerType: ModelGroupOwnerType,
   ownerWorkspaceId?: string | null,
-  ownerUserId?: string | null,
-  grantedBy?: string | null,
+  ownerWorkspaceMemberId?: string | null,
+  grantedByWorkspaceMemberId?: string | null,
 ) {
   return (await db
     .insertInto('model_group_grants')
     .values({
       group_id: groupId,
-      grant_scope: ownerType === 'platform' ? 'platform' : ownerType === 'workspace' ? 'workspace' : 'user',
+      grant_scope:
+        ownerType === 'platform'
+          ? 'platform'
+          : ownerType === 'workspace'
+            ? 'workspace'
+            : 'workspace_member',
       workspace_id: ownerType === 'workspace' ? ownerWorkspaceId || null : null,
-      user_id: ownerType === 'user' ? ownerUserId || null : null,
+      workspace_member_id:
+        ownerType === 'workspace_member'
+          ? ownerWorkspaceMemberId || null
+          : null,
       actor_id: null,
       status: 'active',
-      granted_by: grantedBy || null,
+      granted_by_workspace_member_id:
+        grantedByWorkspaceMemberId || null,
       reason: 'default_group_scope',
       metadata: {} as TableInsert<'model_group_grants'>['metadata'],
     })
@@ -457,28 +465,15 @@ async function ensureWorkspaceExists(workspaceId: string) {
   }
 }
 
-async function ensureUserExists(userId: string) {
-  const row = await db
-    .selectFrom('users')
-    .select('id')
-    .where('id', '=', userId)
-    .limit(1)
-    .executeTakeFirst();
-  if (!row) {
-    throw new ModelGroupError(404, 'User not found');
-  }
-}
-
-async function ensureWorkspaceMember(workspaceId: string, userId: string) {
+async function ensureWorkspaceMember(workspaceMemberId: string, workspaceId?: string) {
   const row = await db
     .selectFrom('workspace_members')
-    .select('workspace_id')
-    .where('workspace_id', '=', workspaceId)
-    .where('user_id', '=', userId)
+    .select(['id', 'workspace_id'])
+    .where('id', '=', workspaceMemberId)
     .limit(1)
     .executeTakeFirst();
-  if (!row) {
-    throw new ModelGroupError(400, 'User is not a member of the target workspace');
+  if (!row || (workspaceId && row.workspace_id !== workspaceId)) {
+    throw new ModelGroupError(400, 'Workspace member is not valid for the target workspace');
   }
 }
 
@@ -498,7 +493,7 @@ async function ensureActorInWorkspace(actorId: string, workspaceId: string) {
 async function validateGrantTarget(input: {
   grantScope: ModelGroupGrantScope;
   workspaceId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
   actorId?: string;
 }) {
   switch (input.grantScope) {
@@ -510,18 +505,11 @@ async function validateGrantTarget(input: {
       }
       await ensureWorkspaceExists(input.workspaceId);
       return;
-    case 'user':
-      if (!input.userId) {
-        throw new ModelGroupError(400, 'userId is required for user grants');
+    case 'workspace_member':
+      if (!input.workspaceMemberId) {
+        throw new ModelGroupError(400, 'workspaceMemberId is required for workspace_member grants');
       }
-      await ensureUserExists(input.userId);
-      return;
-    case 'workspace_user':
-      if (!input.workspaceId || !input.userId) {
-        throw new ModelGroupError(400, 'workspaceId and userId are required for workspace_user grants');
-      }
-      await ensureWorkspaceExists(input.workspaceId);
-      await ensureWorkspaceMember(input.workspaceId, input.userId);
+      await ensureWorkspaceMember(input.workspaceMemberId, input.workspaceId);
       return;
     case 'actor':
       if (!input.workspaceId || !input.actorId) {
@@ -538,7 +526,7 @@ async function validateGrantTarget(input: {
 async function ensureNoDuplicateActiveGrant(groupId: string, input: {
   grantScope: ModelGroupGrantScope;
   workspaceId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
   actorId?: string;
 }) {
   const row = await db
@@ -551,7 +539,7 @@ async function ensureNoDuplicateActiveGrant(groupId: string, input: {
       sql<boolean>`workspace_id IS NOT DISTINCT FROM ${input.workspaceId || null}::uuid`,
     )
     .where(
-      sql<boolean>`user_id IS NOT DISTINCT FROM ${input.userId || null}::uuid`,
+      sql<boolean>`workspace_member_id IS NOT DISTINCT FROM ${input.workspaceMemberId || null}::uuid`,
     )
     .where(
       sql<boolean>`actor_id IS NOT DISTINCT FROM ${input.actorId || null}::uuid`,
@@ -605,8 +593,13 @@ export async function listWorkspaceModelGroups(workspaceId: string) {
           eb('mgg.workspace_id', '=', workspaceId),
         ]),
         eb.and([
-          eb('mgg.grant_scope', '=', 'workspace_user'),
-          eb('mgg.workspace_id', '=', workspaceId),
+          eb('mgg.grant_scope', '=', 'workspace_member'),
+          sql<boolean>`EXISTS (
+            SELECT 1
+            FROM workspace_members wm
+            WHERE wm.id = mgg.workspace_member_id
+              AND wm.workspace_id = ${workspaceId}
+          )`,
         ]),
         eb.and([
           eb('mgg.grant_scope', '=', 'actor'),
@@ -621,12 +614,12 @@ export async function listWorkspaceModelGroups(workspaceId: string) {
   return result.map((row) => mapGroupRow(row as ModelGroupRow));
 }
 
-export async function listUserOwnedModelGroups(userId: string) {
+export async function listWorkspaceMemberOwnedModelGroups(workspaceMemberId: string) {
   const result = await db
     .selectFrom('model_groups')
     .selectAll()
-    .where('owner_type', '=', 'user')
-    .where('owner_user_id', '=', userId)
+    .where('owner_type', '=', 'workspace_member')
+    .where('owner_workspace_member_id', '=', workspaceMemberId)
     .where('is_enabled', '=', true)
     .orderBy('is_default', 'desc')
     .orderBy('name')
@@ -709,8 +702,13 @@ export async function isModelGroupAvailableInWorkspace(groupId: string, workspac
           eb('mgg.workspace_id', '=', workspaceId),
         ]),
         eb.and([
-          eb('mgg.grant_scope', '=', 'workspace_user'),
-          eb('mgg.workspace_id', '=', workspaceId),
+          eb('mgg.grant_scope', '=', 'workspace_member'),
+          sql<boolean>`EXISTS (
+            SELECT 1
+            FROM workspace_members wm
+            WHERE wm.id = mgg.workspace_member_id
+              AND wm.workspace_id = ${workspaceId}
+          )`,
         ]),
         eb.and([
           eb('mgg.grant_scope', '=', 'actor'),
@@ -726,25 +724,35 @@ export async function isModelGroupAvailableInWorkspace(groupId: string, workspac
 export async function createModelGroup(data: {
   ownerType?: ModelGroupOwnerType;
   workspaceId?: string;
-  ownerUserId?: string;
+  ownerWorkspaceMemberId?: string;
   name: string;
   description?: string;
   routingStrategy?: ModelGroupsRoutingStrategy;
   attemptPolicy?: JsonMap;
   isDefault?: boolean;
-  createdBy?: string;
+  createdByWorkspaceMemberId?: string;
 }) {
-  const ownerType = data.ownerType || (data.workspaceId ? 'workspace' : data.ownerUserId ? 'user' : 'platform');
+  const ownerType =
+    data.ownerType
+    || (data.workspaceId
+      ? 'workspace'
+      : data.ownerWorkspaceMemberId
+        ? 'workspace_member'
+        : 'platform');
 
   if (ownerType === 'workspace' && !data.workspaceId) {
     throw new ModelGroupError(400, 'workspaceId is required for workspace-owned groups');
   }
-  if (ownerType === 'user' && !data.ownerUserId) {
-    throw new ModelGroupError(400, 'ownerUserId is required for user-owned groups');
+  if (ownerType === 'workspace_member' && !data.ownerWorkspaceMemberId) {
+    throw new ModelGroupError(400, 'ownerWorkspaceMemberId is required for workspace_member-owned groups');
   }
 
   if (data.isDefault) {
-    await clearExistingDefault(ownerType, data.workspaceId || null, data.ownerUserId || null);
+    await clearExistingDefault(
+      ownerType,
+      data.workspaceId || null,
+      data.ownerWorkspaceMemberId || null,
+    );
   }
 
   const row = (await db
@@ -752,7 +760,10 @@ export async function createModelGroup(data: {
     .values({
       owner_type: ownerType,
       owner_workspace_id: ownerType === 'workspace' ? data.workspaceId || null : null,
-      owner_user_id: ownerType === 'user' ? data.ownerUserId || null : null,
+      owner_workspace_member_id:
+        ownerType === 'workspace_member'
+          ? data.ownerWorkspaceMemberId || null
+          : null,
       name: data.name,
       description: data.description || '',
       routing_strategy: data.routingStrategy || 'priority_failover',
@@ -760,7 +771,8 @@ export async function createModelGroup(data: {
         (data.attemptPolicy || {}) as TableInsert<'model_groups'>['attempt_policy'],
       is_default: data.isDefault || false,
       is_enabled: true,
-      created_by: data.createdBy || null,
+      created_by_workspace_member_id:
+        data.createdByWorkspaceMemberId || null,
       metadata: {} as TableInsert<'model_groups'>['metadata'],
     })
     .returningAll()
@@ -769,8 +781,8 @@ export async function createModelGroup(data: {
     row.id,
     row.owner_type,
     row.owner_workspace_id,
-    row.owner_user_id,
-    data.createdBy || null,
+    row.owner_workspace_member_id,
+    data.createdByWorkspaceMemberId || null,
   );
 
   const authzEntryIds = await enqueueAuthzRelationships(
@@ -778,7 +790,7 @@ export async function createModelGroup(data: {
       id: row.id,
       owner_type: row.owner_type,
       owner_workspace_id: row.owner_workspace_id,
-      owner_user_id: row.owner_user_id,
+      owner_workspace_member_id: row.owner_workspace_member_id,
       is_enabled: Boolean(row.is_enabled),
       grants: [defaultGrant],
     }),
@@ -806,7 +818,7 @@ export async function updateModelGroup(groupId: string, data: {
     await clearExistingDefault(
       previousState.owner_type,
       previousState.owner_workspace_id,
-      previousState.owner_user_id,
+      previousState.owner_workspace_member_id,
     );
   }
 
@@ -973,7 +985,7 @@ export async function addModelItem(groupId: string, data: {
   extraConfig?: JsonMap;
   requestTimeoutMs?: number;
   maxRetries?: number;
-  installedBy?: string;
+  installedByWorkspaceMemberId?: string;
 }) {
   const group = await getGroupRow(groupId);
 
@@ -983,7 +995,10 @@ export async function addModelItem(groupId: string, data: {
       workspace_id: group.owner_type === 'workspace' ? group.owner_workspace_id : null,
       display_name: data.displayName,
       is_enabled: true,
-      installed_by: data.installedBy || group.created_by || null,
+      installed_by_workspace_member_id:
+        data.installedByWorkspaceMemberId
+        || group.created_by_workspace_member_id
+        || null,
       metadata: {} as TableInsert<'model_profiles'>['metadata'],
     })
     .returningAll()
@@ -1091,7 +1106,7 @@ export async function updateModelItem(groupId: string, itemId: string, data: {
       'mp.display_name',
       'mp.current_revision_id',
       'mp.is_enabled as profile_enabled',
-      'mp.installed_by',
+      'mp.installed_by_workspace_member_id',
       'mg.is_enabled as group_enabled',
       'r.version',
       'r.provider_type',
@@ -1343,8 +1358,13 @@ async function ensureAssignableModelGroups(workspaceId: string, groupIds: string
           eb('mgg.workspace_id', '=', workspaceId),
         ]),
         eb.and([
-          eb('mgg.grant_scope', '=', 'workspace_user'),
-          eb('mgg.workspace_id', '=', workspaceId),
+          eb('mgg.grant_scope', '=', 'workspace_member'),
+          sql<boolean>`EXISTS (
+            SELECT 1
+            FROM workspace_members wm
+            WHERE wm.id = mgg.workspace_member_id
+              AND wm.workspace_id = ${workspaceId}
+          )`,
         ]),
         eb.and([
           eb('mgg.grant_scope', '=', 'actor'),
@@ -1416,7 +1436,7 @@ export async function getActorModelGroups(actorId: string, workspaceId?: string)
       'mg.is_default',
       'mg.owner_workspace_id as workspace_id',
       'mg.owner_type',
-      'mg.owner_user_id',
+      'mg.owner_workspace_member_id',
     ])
     .where('amga.actor_id', '=', actorId)
     .where('mg.is_enabled', '=', true);
@@ -1436,7 +1456,15 @@ export async function getActorModelGroups(actorId: string, workspaceId?: string)
             AND (
               mgg.grant_scope = 'platform'
               OR (mgg.grant_scope = 'workspace' AND mgg.workspace_id = ${workspaceId})
-              OR (mgg.grant_scope = 'workspace_user' AND mgg.workspace_id = ${workspaceId})
+              OR (
+                mgg.grant_scope = 'workspace_member'
+                AND EXISTS (
+                  SELECT 1
+                  FROM workspace_members wm
+                  WHERE wm.id = mgg.workspace_member_id
+                    AND wm.workspace_id = ${workspaceId}
+                )
+              )
               OR (mgg.grant_scope = 'actor' AND mgg.workspace_id = ${workspaceId})
             )
         )`,
@@ -1528,9 +1556,9 @@ export async function listModelGroupGrants(groupId: string) {
 export async function issueModelGroupGrant(groupId: string, input: {
   grantScope: ModelGroupGrantScope;
   workspaceId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
   actorId?: string;
-  grantedBy?: string;
+  grantedByWorkspaceMemberId?: string;
   reason?: string;
   metadata?: JsonMap;
 }) {
@@ -1544,10 +1572,11 @@ export async function issueModelGroupGrant(groupId: string, input: {
       group_id: groupId,
       grant_scope: input.grantScope,
       workspace_id: input.workspaceId || null,
-      user_id: input.userId || null,
+      workspace_member_id: input.workspaceMemberId || null,
       actor_id: input.actorId || null,
       status: 'active',
-      granted_by: input.grantedBy || null,
+      granted_by_workspace_member_id:
+        input.grantedByWorkspaceMemberId || null,
       reason: input.reason || null,
       metadata: (input.metadata || {}) as TableInsert<'model_group_grants'>['metadata'],
     })

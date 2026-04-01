@@ -37,6 +37,7 @@ import {
   SESSION_INTERRUPT_TYPES,
   SESSION_STATUSES,
   SESSION_TRIGGERS,
+  SESSION_WAKEUP_SOURCE_MEMBER_TYPES,
   SESSION_WAKEUP_SOURCE_TYPES,
   SESSION_WAKEUP_STATUSES,
   TASK_NOTICE_STATUSES,
@@ -161,7 +162,7 @@ export interface WorkspaceChiefActorSummary {
 
 export interface WorkspaceChiefActorPreference {
   workspaceId: UUID;
-  userId: UUID;
+  workspaceMemberId: UUID;
   chiefActorId?: UUID;
   chiefActor?: WorkspaceChiefActorSummary;
   createdAt?: Timestamp;
@@ -175,7 +176,7 @@ export interface WorkspaceInvite {
   id: UUID;
   workspaceId: UUID;
   token: string;
-  createdBy: UUID;
+  createdByWorkspaceMemberId: UUID;
   trustLevel: InviteTrustLevel;
   maxUses?: number;
   useCount: number;
@@ -239,11 +240,11 @@ export interface ActorDefinition {
   config: Record<string, unknown>;
 }
 
-export type ActorUpdateSourceType = "user" | "actor" | "system" | "sync";
+export type ActorUpdateSourceType = "workspace_member" | "actor" | "system" | "sync";
 
 export interface ActorVersionSource {
   type: ActorUpdateSourceType;
-  userId?: UUID;
+  workspaceMemberId?: UUID;
   actorId?: UUID;
   sessionId?: UUID;
   turnId?: UUID;
@@ -311,7 +312,7 @@ export interface ActorVersion {
   previousVersionId?: UUID;
   snapshot: ActorDefinition;
   delta?: ActorVersionDelta;
-  createdBy?: UUID;
+  createdByWorkspaceMemberId?: UUID;
   source?: ActorVersionSource;
   createdAt: Timestamp;
 }
@@ -370,7 +371,8 @@ export interface WorkItem {
   status: WorkItemStatus;
   priority: WorkItemPriority;
   parentId?: UUID; // Parent work item (for decomposition)
-  createdBy: UUID; // Actor or user who created it
+  createdByPrincipalType: "workspace_member" | "actor" | "user";
+  createdByPrincipalId: UUID;
   assignedTo?: UUID; // Current owner actor
   accountableId?: UUID; // Ultimate accountability
   sourceType:
@@ -436,8 +438,8 @@ export interface Message {
   type: MessageType;
   fromActorId?: UUID;
   toActorId?: UUID;
-  fromUserId?: UUID;
-  toUserId?: UUID;
+  fromWorkspaceMemberId?: UUID;
+  toWorkspaceMemberId?: UUID;
   content: string;
   metadata: Record<string, unknown>;
   createdAt: Timestamp;
@@ -456,7 +458,7 @@ export interface MemoryEntry {
   ownerScope: MemoryScope;
   ownerActorId?: UUID;
   ownerConversationId?: UUID;
-  ownerUserId?: UUID;
+  ownerWorkspaceMemberId?: UUID;
   category: MemoryCategory;
   status: MemoryStatus;
   stability: MemoryStability;
@@ -475,7 +477,7 @@ export interface MemoryEntry {
   updatedAt: Timestamp;
   actorName?: string;
   conversationTitle?: string;
-  userName?: string;
+  workspaceMemberName?: string;
 }
 
 export type Memory = MemoryEntry;
@@ -499,7 +501,7 @@ export interface MemoryRecallRun {
   workspaceId: UUID;
   actorId?: UUID;
   conversationId?: UUID;
-  userId?: UUID;
+  workspaceMemberId?: UUID;
   recallType: MemoryRecallType;
   queryText: string;
   queryBlocks: CanonicalContentBlock[];
@@ -517,7 +519,7 @@ export type AutomationStatus =
   | "archived"
   | "completed"
   | "expired";
-export type AutomationCreatorKind = "user" | "session" | "system";
+export type AutomationCreatorKind = "workspace_member" | "session" | "system";
 export type AutomationTriggerKind = "schedule" | "event";
 export type AutomationSourceKind = "clock" | "relay" | "webhook" | "internal" | "integration";
 export type AutomationEventProviderKind = "relay" | "webhook" | "internal" | "integration";
@@ -572,7 +574,7 @@ export interface AutomationEventSource {
   examplePayload: Record<string, unknown>;
   status: AutomationEventSourceStatus;
   createdByKind: AutomationCreatorKind;
-  createdByUserId?: UUID;
+  createdByWorkspaceMemberId?: UUID;
   createdByActorId?: UUID;
   createdBySessionId?: UUID;
   lastTriggeredAt?: Timestamp;
@@ -589,7 +591,7 @@ export interface AutomationRule {
   name: string;
   description: string;
   createdByKind: AutomationCreatorKind;
-  createdByUserId?: UUID;
+  createdByWorkspaceMemberId?: UUID;
   createdByActorId?: UUID;
   createdBySessionId?: UUID;
   ownerConversationId?: UUID;
@@ -706,7 +708,7 @@ export interface AutomationExecutionTarget {
   conversationId?: UUID;
   sessionId?: UUID;
   targetActorId?: UUID;
-  targetUserId?: UUID;
+  targetWorkspaceMemberId?: UUID;
   createdItemId?: UUID;
   wakeupId?: UUID;
   status: AutomationExecutionStatus;
@@ -723,7 +725,7 @@ export interface AutomationWebhookEndpoint {
   pathToken: string;
   secretHint: string;
   metadata: Record<string, unknown>;
-  createdBy?: UUID;
+  createdByWorkspaceMemberId?: UUID;
   lastReceivedAt?: Timestamp;
   createdAt: Timestamp;
   updatedAt: Timestamp;
@@ -821,6 +823,8 @@ export type SessionMessageRole =
   | "system"
   | "tool_result";
 export type SessionInterruptType = typeof SESSION_INTERRUPT_TYPES[number];
+export type SessionWakeupSourceMemberType =
+  typeof SESSION_WAKEUP_SOURCE_MEMBER_TYPES[number];
 export type SessionWakeupSourceType = typeof SESSION_WAKEUP_SOURCE_TYPES[number];
 export type SessionWakeupStatus = typeof SESSION_WAKEUP_STATUSES[number];
 export type ActorRuntimeHealth = "ok" | "error";
@@ -858,7 +862,7 @@ export interface SessionWakeup {
   sourceType: SessionWakeupSourceType;
   sourceItemId?: UUID;
   sourceSessionId?: UUID;
-  sourceMemberType?: "user" | "actor" | "external" | "system";
+  sourceMemberType?: SessionWakeupSourceMemberType;
   sourceMemberId?: UUID;
   sourceName?: string;
   summary: string;
@@ -877,7 +881,7 @@ export interface ActorRuntimeWakeup {
   sourceType: SessionWakeupSourceType;
   sourceItemId?: UUID;
   sourceSessionId?: UUID;
-  sourceMemberType?: "user" | "actor" | "external" | "system";
+  sourceMemberType?: SessionWakeupSourceMemberType;
   sourceMemberId?: UUID;
   sourceName?: string;
   summary: string;
@@ -917,7 +921,7 @@ export interface SessionMessage {
   content: string;
   contentBlocks: CanonicalContentBlock[];
   fromActorId?: UUID;
-  fromUserId?: UUID;
+  fromWorkspaceMemberId?: UUID;
   metadata: Record<string, unknown>;
   createdAt: Timestamp;
 }
@@ -977,16 +981,16 @@ export type AIRequestStatus = "success" | "error" | "timeout";
 
 export interface ModelGroup {
   id: UUID;
-  ownerType?: "platform" | "workspace" | "user";
+  ownerType?: "platform" | "workspace" | "workspace_member";
   ownerWorkspaceId?: UUID | null;
-  ownerUserId?: UUID | null;
+  ownerWorkspaceMemberId?: UUID | null;
   workspaceId?: UUID;
   name: string;
   description: string;
   routingStrategy: RoutingStrategy;
   isDefault: boolean;
   isActive: boolean;
-  createdBy?: UUID;
+  createdByWorkspaceMemberId?: UUID;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -1030,12 +1034,12 @@ export interface ActorModelGroup {
 export interface ModelGroupGrant {
   id: UUID;
   groupId: UUID;
-  grantScope: "platform" | "workspace" | "user" | "workspace_user" | "actor";
+  grantScope: "platform" | "workspace" | "workspace_member" | "actor";
   workspaceId?: UUID | null;
-  userId?: UUID | null;
+  workspaceMemberId?: UUID | null;
   actorId?: UUID | null;
   status: "active" | "revoked";
-  grantedBy?: UUID | null;
+  grantedByWorkspaceMemberId?: UUID | null;
   reason?: string | null;
   metadata?: Record<string, unknown>;
   createdAt?: Timestamp | null;
@@ -1348,7 +1352,7 @@ export type CanonicalContextSurface = "visible" | "internal";
 export type CanonicalContextRole = "user" | "assistant" | "system" | "tool";
 export type CanonicalContextMemberType =
   | "actor"
-  | "user"
+  | "workspace_member"
   | "external"
   | "remote_agent"
   | "system"
@@ -1580,13 +1584,13 @@ export interface NormalizedMcpToolResult {
 // ============ Tool Plugin System ============
 
 export interface ConversationMemberEntry {
-  type: "actor" | "user" | "external";
+  type: "actor" | "workspace_member" | "external";
   id: string;
   name: string;
   title?: string;
   participantId?: string;
-  linkedUserId?: string;
-  linkedUserName?: string;
+  linkedWorkspaceMemberId?: string;
+  linkedWorkspaceMemberName?: string;
   externalUserKey?: string;
 }
 
@@ -1597,7 +1601,7 @@ export interface ToolResolveContext {
   conversationId?: string;
   conversationKind?: "private" | "group" | "virtual";
   conversationMembers?: ConversationMemberEntry[];
-  userId?: string;
+  workspaceMemberId?: string;
   availableSkills?: AvailableSkillSummary[];
 }
 
@@ -1732,14 +1736,14 @@ export interface AttachmentTarget {
   type: AttachmentTargetType;
   actorId?: string;
   conversationId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
 }
 
 export interface AccessTarget {
   type: AccessTargetType;
   actorId?: string;
   conversationId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
 }
 
 export interface CapabilityAccessTarget {
@@ -1930,7 +1934,7 @@ export interface MarketplaceVersion {
   installFlow?: PluginInstallFlow;
   authBindings: PluginAuthBindingDefinition[];
   metadata: Record<string, unknown>;
-  createdBy?: string;
+  createdByUserId?: string;
   createdAt: string;
   assets?: MarketplaceAsset[];
 }
@@ -1986,7 +1990,7 @@ export interface PluginInstallationView {
   isEnabled: boolean;
   configData: Record<string, unknown>;
   configState: PluginConfigFieldState[];
-  installedBy?: string;
+  installedByWorkspaceMemberId?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -2001,7 +2005,7 @@ export interface AccessGrant {
   target: CapabilityAccessTarget;
   permissions: string[];
   status: AccessGrantStatus;
-  grantedBy?: string;
+  grantedByWorkspaceMemberId?: string;
   reason?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
@@ -2015,7 +2019,7 @@ export interface PluginAuthSession {
   revisionId?: string;
   bindingKey: string;
   driver: PluginAuthBindingDriverKind;
-  userId: string;
+  workspaceMemberId: string;
   status: PluginAuthSessionStatus;
   phase?: PluginAuthSessionPhase;
   state?: string;
@@ -2037,7 +2041,7 @@ export interface PluginAuthConnection {
   bindingKey: string;
   driver: PluginAuthBindingDriverKind;
   ownerScope: PluginAuthOwnerScope;
-  ownerUserId?: string;
+  ownerWorkspaceMemberId?: string;
   externalAccountId?: string;
   displayName?: string;
   avatarUrl?: string;
@@ -2189,7 +2193,7 @@ export interface SkillMarketplaceVersion {
   version: string;
   changelog: string;
   description: CanonicalContentBlock;
-  createdBy?: string;
+  createdByUserId?: string;
   createdByName?: string;
   createdAt: string;
   attachmentFiles?: SkillAttachmentFile[];
@@ -2229,7 +2233,7 @@ export interface InstalledSkill {
   accessTarget: CapabilityAccessTarget;
   isEnabled: boolean;
   isCustomized: boolean;
-  installedBy?: string;
+  installedByWorkspaceMemberId?: string;
   createdAt: string;
   updatedAt: string;
   sourceSkillId?: string;
@@ -2347,7 +2351,7 @@ export interface McpSetupStep {
 
 export type ConversationParticipantType =
   | "actor"
-  | "user"
+  | "workspace_member"
   | "external"
   | "remote_agent"
   | "system";
@@ -2366,7 +2370,6 @@ export interface ConversationEntityRef {
   memberType: ConversationMemberType;
   workspaceMemberId?: UUID;
   actorId?: UUID;
-  userId?: UUID;
   externalUserKey?: string;
   transportAddressId?: UUID;
   transportKind?: TransportKind;
@@ -2380,7 +2383,7 @@ export interface ConversationEntityRef {
 export type ConversationMemberRef = ConversationEntityRef & {
   memberId: UUID;
   participantId: UUID;
-  memberType: "actor" | "user" | "external";
+  memberType: "actor" | "workspace_member" | "external";
 };
 
 export interface TransportConnectorCapability {
@@ -2405,7 +2408,7 @@ export interface TransportAccountSummary {
   accountKey: string;
   displayName: string;
   ownerScope: TransportAccountOwnerScope;
-  ownerUserId?: UUID;
+  ownerWorkspaceMemberId?: UUID;
   inboundActorMode: TransportAccountInboundActorMode;
   inboundActorId?: UUID;
   connectionMode: TransportConnectionMode;
@@ -2489,8 +2492,8 @@ export interface CurrentUserWeixinBindingSummary {
   account: TransportAccountSummary;
   scannerUserId?: string;
   externalUser?: TransportExternalUserSummary;
-  pendingAutoLinkUserId?: UUID;
-  pendingAutoLinkUserName?: string;
+  pendingAutoLinkWorkspaceMemberId?: UUID;
+  pendingAutoLinkWorkspaceMemberName?: string;
 }
 
 export interface TransportExternalUserSessionRef {
@@ -2510,8 +2513,8 @@ export interface TransportExternalUserSummary {
   accountDisplayName: string;
   externalId: string;
   displayName?: string;
-  linkedUserId?: UUID;
-  linkedUserName?: string;
+  linkedWorkspaceMemberId?: UUID;
+  linkedWorkspaceMemberName?: string;
   metadata: Record<string, unknown>;
   createdAt: Timestamp;
   updatedAt: Timestamp;
@@ -3087,8 +3090,8 @@ export function summarizeConversationEvent(
     } else {
       fragments.push("Profile details changed.");
     }
-    if (source?.type === "user") {
-      fragments.push("Updated by a user.");
+    if (source?.type === "workspace_member") {
+      fragments.push("Updated by a workspace member.");
     } else if (source?.type === "actor") {
       fragments.push("Updated by the actor.");
     }
@@ -3244,7 +3247,6 @@ export interface ChatSocketEventPayloadMap {
   "conversation.read.updated": {
     conversationId: UUID;
     workspaceMemberId: UUID;
-    userId?: UUID;
     readWatermarkSequence: number;
     lastReadAt: Timestamp;
   };
@@ -3292,7 +3294,8 @@ export interface A2AApp {
   apiKeyPrefix: string;
   rateLimitRpm: number;
   isActive: boolean;
-  createdBy?: UUID;
+  createdByPrincipalType?: "workspace_member" | "actor" | "user";
+  createdByPrincipalId?: UUID;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -3839,7 +3842,7 @@ export type AccessSubjectType =
   | "conversation_workspace"
   | "user"
   | "actor"
-  | "workspace_user"
+  | "workspace_member"
   | "actor_conversation";
 
 export interface CatalogPublisherRecord {
@@ -3885,7 +3888,7 @@ export interface CatalogVersionRecord {
   status: CatalogVersionStatus;
   changelog: string;
   metadata: Record<string, unknown>;
-  createdBy?: string;
+  createdByUserId?: string;
   createdAt: string;
 }
 
@@ -3966,7 +3969,7 @@ export interface AccessBindingRecord {
   subjectId: string;
   subjectRelation?: string;
   status: AccessBindingStatus;
-  createdBy?: string;
+  createdByWorkspaceMemberId?: string;
   reason?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
@@ -3982,7 +3985,7 @@ export interface InstalledSkillRecord {
   tags: string[];
   currentVersion: number;
   isActive: boolean;
-  createdBy?: string;
+  createdByWorkspaceMemberId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -3995,7 +3998,7 @@ export interface SkillVersionRecord {
   descriptionBlocks: CanonicalContentBlock[];
   summaryText: string;
   metadata: Record<string, unknown>;
-  createdBy?: string;
+  createdByWorkspaceMemberId?: string;
   createdAt: string;
 }
 
@@ -4021,10 +4024,10 @@ export interface SkillBindingRecord {
   bindScope: RuntimeBindingScope;
   conversationId?: string;
   actorId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
   status: "active" | "disabled" | "revoked";
   metadata: Record<string, unknown>;
-  createdBy?: string;
+  createdByWorkspaceMemberId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -4038,7 +4041,7 @@ export interface PluginInstallationRecord {
   configData: Record<string, unknown>;
   approvedRuntimePermissions: string[];
   status: "active" | "disabled" | "error" | "archived";
-  installedBy?: string;
+  installedByWorkspaceMemberId?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -4051,11 +4054,11 @@ export interface PluginMountRecord {
   mountScope: RuntimeBindingScope;
   conversationId?: string;
   actorId?: string;
-  userId?: string;
+  workspaceMemberId?: string;
   reuseScope: PluginReuseScopeV2;
   status: "active" | "disabled" | "revoked";
   metadata: Record<string, unknown>;
-  createdBy?: string;
+  createdByWorkspaceMemberId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -4063,7 +4066,7 @@ export interface PluginMountRecord {
 export interface RelayDeviceRecord {
   id: string;
   workspaceId: string;
-  ownerUserId?: string;
+  ownerWorkspaceMemberId?: string;
   displayName: string;
   clientKind: string;
   platform?: string;

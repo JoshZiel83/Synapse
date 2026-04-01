@@ -136,7 +136,7 @@ function normalizeAccountRow(row: any): TransportAccountSummary {
     ownerScope:
       (row.owner_scope as TransportAccountOwnerScope | undefined) ||
       "workspace",
-    ownerUserId: row.owner_user_id || undefined,
+    ownerWorkspaceMemberId: row.owner_workspace_member_id || undefined,
     inboundActorMode:
       (row.account_inbound_actor_mode as
         | TransportAccountInboundActorMode
@@ -236,8 +236,8 @@ function normalizeTransportExternalUserRow(
     accountDisplayName: row.account_display_name || "Transport account",
     externalId: row.external_id,
     displayName: row.display_name || undefined,
-    linkedUserId: row.linked_user_id || undefined,
-    linkedUserName: row.linked_user_name || undefined,
+    linkedWorkspaceMemberId: row.linked_workspace_member_id || undefined,
+    linkedWorkspaceMemberName: row.linked_workspace_member_name || undefined,
     metadata: parseJsonObject(row.metadata),
     createdAt: toIsoString(row.created_at)!,
     updatedAt: toIsoString(row.updated_at)!,
@@ -260,8 +260,10 @@ function pickCurrentWeixinExternalUser(params: {
   return params.externalUsers[0] || null;
 }
 
-function readPendingAutoLinkUserId(metadata: Record<string, unknown>) {
-  return readTrimmedString(metadata, "pendingAutoLinkUserId");
+function readPendingAutoLinkWorkspaceMemberId(
+  metadata: Record<string, unknown>,
+) {
+  return readTrimmedString(metadata, "pendingAutoLinkWorkspaceMemberId");
 }
 
 async function assertWorkspaceActor(params: {
@@ -291,37 +293,39 @@ async function assertWorkspaceActor(params: {
 async function assertTransportAccountOwner(params: {
   workspaceId: string;
   ownerScope: TransportAccountOwnerScope;
-  ownerUserId?: string | null;
+  ownerWorkspaceMemberId?: string | null;
 }) {
   if (params.ownerScope === "workspace") {
-    if (params.ownerUserId) {
+    if (params.ownerWorkspaceMemberId) {
       throw new Error(
-        "Workspace-owned transport account cannot have an owner user",
+        "Workspace-owned transport account cannot have an owner workspace member",
       );
     }
     return null;
   }
 
-  const ownerUserId = params.ownerUserId || null;
-  if (!ownerUserId) {
-    throw new Error("Workspace-user transport account requires ownerUserId");
+  const ownerWorkspaceMemberId = params.ownerWorkspaceMemberId || null;
+  if (!ownerWorkspaceMemberId) {
+    throw new Error(
+      "Workspace-member transport account requires ownerWorkspaceMemberId",
+    );
   }
 
   const isWorkspaceMember = await assertWorkspaceMember({
     workspaceId: params.workspaceId,
-    userId: ownerUserId,
+    workspaceMemberId: ownerWorkspaceMemberId,
   });
   if (!isWorkspaceMember) {
     throw new Error("Transport account owner must be a workspace member");
   }
 
-  return ownerUserId;
+  return ownerWorkspaceMemberId;
 }
 
 async function assertTransportAccountInboundActor(params: {
   workspaceId: string;
   ownerScope: TransportAccountOwnerScope;
-  ownerUserId?: string | null;
+  ownerWorkspaceMemberId?: string | null;
   inboundActorMode: TransportAccountInboundActorMode;
   inboundActorId?: string | null;
 }) {
@@ -330,7 +334,10 @@ async function assertTransportAccountInboundActor(params: {
   }
 
   if (params.inboundActorMode === "follow_owner_chief_actor") {
-    if (params.ownerScope !== "workspace_user" || !params.ownerUserId) {
+    if (
+      params.ownerScope !== "workspace_member" ||
+      !params.ownerWorkspaceMemberId
+    ) {
       throw new Error(
         "Follow chief actor is only available for workspace-member-owned IM accounts",
       );
@@ -395,9 +402,9 @@ async function loadTransportAccountRowById(accountId: string) {
     .executeTakeFirst();
 }
 
-async function loadWorkspaceUserTransportAccountRow(params: {
+async function loadWorkspaceMemberTransportAccountRow(params: {
   workspaceId: string;
-  userId: string;
+  workspaceMemberId: string;
   transportKind: TransportKind;
 }) {
   return db
@@ -405,8 +412,8 @@ async function loadWorkspaceUserTransportAccountRow(params: {
     .selectAll()
     .where("workspace_id", "=", params.workspaceId)
     .where("transport_kind", "=", params.transportKind)
-    .where("owner_scope", "=", "workspace_user")
-    .where("owner_user_id", "=", params.userId)
+    .where("owner_scope", "=", "workspace_member")
+    .where("owner_workspace_member_id", "=", params.workspaceMemberId)
     .orderBy(
       sql<number>`CASE
         WHEN status = 'active' THEN 0
@@ -422,14 +429,14 @@ async function loadWorkspaceUserTransportAccountRow(params: {
 
 async function loadWorkspaceMemberDisplayName(params: {
   workspaceId: string;
-  userId: string;
+  workspaceMemberId: string;
 }) {
   const row = await db
     .selectFrom("workspace_members as wm")
     .innerJoin("users as u", "u.id", "wm.user_id")
     .select("u.name as name")
     .where("wm.workspace_id", "=", params.workspaceId)
-    .where("wm.user_id", "=", params.userId)
+    .where("wm.id", "=", params.workspaceMemberId)
     .limit(1)
     .executeTakeFirst();
   return readTrimmedString((row || {}) as Record<string, unknown>, "name");
@@ -550,9 +557,20 @@ export async function getCurrentUserWeixinBinding(params: {
   workspaceId: string;
   userId: string;
 }): Promise<CurrentUserWeixinBindingSummary | null> {
-  const row = await loadWorkspaceUserTransportAccountRow({
+  const workspaceMember = await db
+    .selectFrom("workspace_members")
+    .select("id")
+    .where("workspace_id", "=", params.workspaceId)
+    .where("user_id", "=", params.userId)
+    .limit(1)
+    .executeTakeFirst();
+  if (!workspaceMember?.id) {
+    return null;
+  }
+
+  const row = await loadWorkspaceMemberTransportAccountRow({
     workspaceId: params.workspaceId,
-    userId: params.userId,
+    workspaceMemberId: workspaceMember.id,
     transportKind: "weixin",
   });
   if (!row) {
@@ -565,23 +583,25 @@ export async function getCurrentUserWeixinBinding(params: {
   }
   const metadata = parseJsonObject(row.metadata);
   const scannerUserId = readTrimmedString(metadata, "scannerUserId");
-  const pendingAutoLinkUserId = readPendingAutoLinkUserId(metadata);
+  const pendingAutoLinkWorkspaceMemberId =
+    readPendingAutoLinkWorkspaceMemberId(metadata);
   const externalUsers = await listTransportExternalUsers({
     workspaceId: params.workspaceId,
     transportAccountId: account.id,
   });
-  const pendingAutoLinkUserName = pendingAutoLinkUserId
+  const pendingAutoLinkWorkspaceMemberName = pendingAutoLinkWorkspaceMemberId
     ? await loadWorkspaceMemberDisplayName({
         workspaceId: params.workspaceId,
-        userId: pendingAutoLinkUserId,
+        workspaceMemberId: pendingAutoLinkWorkspaceMemberId,
       })
     : undefined;
 
   return {
     account,
     scannerUserId,
-    pendingAutoLinkUserId: pendingAutoLinkUserId || undefined,
-    pendingAutoLinkUserName,
+    pendingAutoLinkWorkspaceMemberId:
+      pendingAutoLinkWorkspaceMemberId || undefined,
+    pendingAutoLinkWorkspaceMemberName,
     externalUser:
       pickCurrentWeixinExternalUser({ externalUsers, scannerUserId }) ||
       undefined,
@@ -591,7 +611,7 @@ export async function getCurrentUserWeixinBinding(params: {
 export async function setCurrentUserWeixinBindingAutoLink(params: {
   workspaceId: string;
   userId: string;
-  targetUserId?: string | null;
+  targetWorkspaceMemberId?: string | null;
 }): Promise<CurrentUserWeixinBindingSummary> {
   const binding = await getCurrentUserWeixinBinding({
     workspaceId: params.workspaceId,
@@ -601,26 +621,27 @@ export async function setCurrentUserWeixinBindingAutoLink(params: {
     throw new Error("WeChat binding not found");
   }
 
-  const nextTargetUserId = params.targetUserId || null;
-  if (nextTargetUserId) {
+  const nextTargetWorkspaceMemberId = params.targetWorkspaceMemberId || null;
+  if (nextTargetWorkspaceMemberId) {
     const isWorkspaceMember = await assertWorkspaceMember({
       workspaceId: params.workspaceId,
-      userId: nextTargetUserId,
+      workspaceMemberId: nextTargetWorkspaceMemberId,
     });
     if (!isWorkspaceMember) {
-      throw new Error("Workspace user not found");
+      throw new Error("Workspace member not found");
     }
   }
 
   const nextMetadata = {
     ...(binding.account.metadata || {}),
   } as Record<string, unknown>;
-  if (nextTargetUserId) {
-    nextMetadata.pendingAutoLinkUserId = nextTargetUserId;
+  if (nextTargetWorkspaceMemberId) {
+    nextMetadata.pendingAutoLinkWorkspaceMemberId =
+      nextTargetWorkspaceMemberId;
     nextMetadata.pendingAutoLinkMode = "first_inbound_once";
     nextMetadata.pendingAutoLinkConfiguredAt = new Date().toISOString();
   } else {
-    delete (nextMetadata as any).pendingAutoLinkUserId;
+    delete (nextMetadata as any).pendingAutoLinkWorkspaceMemberId;
     delete (nextMetadata as any).pendingAutoLinkMode;
     delete (nextMetadata as any).pendingAutoLinkConfiguredAt;
   }
@@ -647,6 +668,17 @@ export async function linkCurrentUserWeixinBinding(params: {
   workspaceId: string;
   userId: string;
 }): Promise<CurrentUserWeixinBindingSummary> {
+  const currentWorkspaceMember = await db
+    .selectFrom("workspace_members")
+    .select("id")
+    .where("workspace_id", "=", params.workspaceId)
+    .where("user_id", "=", params.userId)
+    .limit(1)
+    .executeTakeFirst();
+  if (!currentWorkspaceMember?.id) {
+    throw new Error("Workspace member not found");
+  }
+
   const binding = await getCurrentUserWeixinBinding(params);
   if (!binding) {
     throw new Error("WeChat binding not found");
@@ -679,14 +711,17 @@ export async function linkCurrentUserWeixinBinding(params: {
   if (!externalUser) {
     throw new Error("WeChat user not found");
   }
-  if (externalUser.linkedUserId && externalUser.linkedUserId !== params.userId) {
+  if (
+    externalUser.linkedWorkspaceMemberId &&
+    externalUser.linkedWorkspaceMemberId !== currentWorkspaceMember.id
+  ) {
     throw new Error("WeChat user is already linked to another workspace member");
   }
 
   await setTransportAddressLinkedUser({
     workspaceId: params.workspaceId,
     transportAddressId: externalUser.id,
-    userId: params.userId,
+    workspaceMemberId: currentWorkspaceMember.id,
   });
 
   const updatedBinding = await getCurrentUserWeixinBinding(params);
@@ -696,23 +731,23 @@ export async function linkCurrentUserWeixinBinding(params: {
   return updatedBinding;
 }
 
-export function getPendingTransportAccountAutoLinkUserId(
+export function getPendingTransportAccountAutoLinkWorkspaceMemberId(
   account: Pick<TransportAccountSummary, "metadata">,
 ) {
   const metadata = parseJsonObject(account.metadata);
-  return readPendingAutoLinkUserId(metadata) || null;
+  return readPendingAutoLinkWorkspaceMemberId(metadata) || null;
 }
 
 export async function consumeTransportAccountAutoLink(params: {
   account: TransportAccountSummary;
   transportAddressId: string;
-  targetUserId: string;
+  targetWorkspaceMemberId: string;
   matchedExternalId: string;
 }) {
   await setTransportAddressLinkedUser({
     workspaceId: params.account.workspaceId,
     transportAddressId: params.transportAddressId,
-    userId: params.targetUserId,
+    workspaceMemberId: params.targetWorkspaceMemberId,
   });
 
   const nextMetadata = {
@@ -720,7 +755,7 @@ export async function consumeTransportAccountAutoLink(params: {
     pendingAutoLinkConsumedAt: new Date().toISOString(),
     pendingAutoLinkConsumedExternalId: params.matchedExternalId,
   };
-  delete (nextMetadata as any).pendingAutoLinkUserId;
+  delete (nextMetadata as any).pendingAutoLinkWorkspaceMemberId;
   delete (nextMetadata as any).pendingAutoLinkMode;
   delete (nextMetadata as any).pendingAutoLinkConfiguredAt;
 
@@ -802,7 +837,7 @@ export async function listTransportSessions(
       "ta.display_name",
       "ta.transport_kind",
       "ta.owner_scope",
-      "ta.owner_user_id",
+      "ta.owner_workspace_member_id",
       "ta.inbound_actor_mode as account_inbound_actor_mode",
       "ta.inbound_actor_id as account_inbound_actor_id",
       "ta.connection_mode",
@@ -859,7 +894,12 @@ export async function listTransportExternalUsers(params: {
   let builder = db
     .selectFrom("transport_addresses as ta")
     .innerJoin("transport_accounts as account", "account.id", "ta.transport_account_id")
-    .leftJoin("users as linked_user", "linked_user.id", "ta.user_id")
+    .leftJoin(
+      "workspace_members as linked_wm",
+      "linked_wm.id",
+      "ta.workspace_member_id",
+    )
+    .leftJoin("users as linked_user", "linked_user.id", "linked_wm.user_id")
     .leftJoin(
       "conversation_participant_addresses as cpa",
       "cpa.transport_address_id",
@@ -885,8 +925,8 @@ export async function listTransportExternalUsers(params: {
       "ta.created_at",
       "ta.updated_at",
       "account.display_name as account_display_name",
-      "linked_user.id as linked_user_id",
-      "linked_user.name as linked_user_name",
+      "linked_wm.id as linked_workspace_member_id",
+      "linked_user.name as linked_workspace_member_name",
       "activity.last_seen_at as last_seen_at",
       sql<any>`COALESCE(
         jsonb_agg(
@@ -937,7 +977,7 @@ export async function createTransportAccount(params: {
   accountKey: string;
   displayName: string;
   ownerScope?: TransportAccountOwnerScope;
-  ownerUserId?: string | null;
+  ownerWorkspaceMemberId?: string | null;
   inboundActorMode?: TransportAccountInboundActorMode;
   inboundActorId?: string | null;
   connectionMode: TransportConnectionMode;
@@ -955,16 +995,17 @@ export async function createTransportAccount(params: {
     credentials: params.credentials,
   });
   const ownerScope = params.ownerScope || "workspace";
-  const ownerUserId = await assertTransportAccountOwner({
+  const ownerWorkspaceMemberId = await assertTransportAccountOwner({
     workspaceId: params.workspaceId,
     ownerScope,
-    ownerUserId: ownerScope === "workspace" ? null : params.ownerUserId,
+    ownerWorkspaceMemberId:
+      ownerScope === "workspace" ? null : params.ownerWorkspaceMemberId,
   });
   const inboundActorMode = params.inboundActorMode || "none";
   const inboundActorId = await assertTransportAccountInboundActor({
     workspaceId: params.workspaceId,
     ownerScope,
-    ownerUserId,
+    ownerWorkspaceMemberId,
     inboundActorMode,
     inboundActorId: params.inboundActorId,
   });
@@ -978,7 +1019,7 @@ export async function createTransportAccount(params: {
       account_key: params.accountKey.trim(),
       display_name: params.displayName.trim(),
       owner_scope: ownerScope,
-      owner_user_id: ownerUserId,
+      owner_workspace_member_id: ownerWorkspaceMemberId,
       inbound_actor_mode: inboundActorMode,
       inbound_actor_id: inboundActorId,
       connection_mode: params.connectionMode,
@@ -1000,7 +1041,7 @@ export async function updateTransportAccount(params: {
   accountId: string;
   displayName?: string;
   ownerScope?: TransportAccountOwnerScope;
-  ownerUserId?: string | null;
+  ownerWorkspaceMemberId?: string | null;
   inboundActorMode?: TransportAccountInboundActorMode;
   inboundActorId?: string | null;
   connectionMode?: TransportConnectionMode;
@@ -1033,22 +1074,23 @@ export async function updateTransportAccount(params: {
     params.ownerScope ||
     (existing.owner_scope as TransportAccountOwnerScope | undefined) ||
     "workspace";
-  const nextOwnerUserId =
+  const nextOwnerWorkspaceMemberId =
     nextOwnerScope === "workspace"
       ? null
-      : params.ownerUserId !== undefined
-        ? params.ownerUserId
-        : (existing.owner_user_id as string | null | undefined) || null;
+      : params.ownerWorkspaceMemberId !== undefined
+        ? params.ownerWorkspaceMemberId
+        : (existing.owner_workspace_member_id as string | null | undefined) ||
+          null;
   assertTransportAccountConfiguration({
     transportKind: existing.transport_kind as TransportKind,
     connectionMode: nextConnectionMode,
     status: nextStatus,
     credentials: nextCredentials,
   });
-  const resolvedOwnerUserId = await assertTransportAccountOwner({
+  const resolvedOwnerWorkspaceMemberId = await assertTransportAccountOwner({
     workspaceId: params.workspaceId,
     ownerScope: nextOwnerScope,
-    ownerUserId: nextOwnerUserId,
+    ownerWorkspaceMemberId: nextOwnerWorkspaceMemberId,
   });
   const nextInboundActorMode =
     params.inboundActorMode ||
@@ -1063,7 +1105,7 @@ export async function updateTransportAccount(params: {
   const resolvedInboundActorId = await assertTransportAccountInboundActor({
     workspaceId: params.workspaceId,
     ownerScope: nextOwnerScope,
-    ownerUserId: resolvedOwnerUserId,
+    ownerWorkspaceMemberId: resolvedOwnerWorkspaceMemberId,
     inboundActorMode: nextInboundActorMode,
     inboundActorId: nextInboundActorId,
   });
@@ -1072,7 +1114,7 @@ export async function updateTransportAccount(params: {
     .set({
       display_name: params.displayName?.trim() || existing.display_name,
       owner_scope: nextOwnerScope,
-      owner_user_id: resolvedOwnerUserId,
+      owner_workspace_member_id: resolvedOwnerWorkspaceMemberId,
       inbound_actor_mode: nextInboundActorMode,
       inbound_actor_id: resolvedInboundActorId,
       connection_mode: nextConnectionMode,
@@ -1117,7 +1159,7 @@ export async function getConversationTransportBinding(params: {
       "ta.display_name",
       "ta.transport_kind",
       "ta.owner_scope",
-      "ta.owner_user_id",
+      "ta.owner_workspace_member_id",
       "ta.inbound_actor_mode as account_inbound_actor_mode",
       "ta.inbound_actor_id as account_inbound_actor_id",
       "ta.connection_mode",
@@ -1169,7 +1211,7 @@ export async function findConversationTransportBindingByEndpoint(params: {
       "ta.display_name",
       "ta.transport_kind",
       "ta.owner_scope",
-      "ta.owner_user_id",
+      "ta.owner_workspace_member_id",
       "ta.inbound_actor_mode as account_inbound_actor_mode",
       "ta.inbound_actor_id as account_inbound_actor_id",
       "ta.connection_mode",
@@ -1420,7 +1462,7 @@ export async function ensureTransportAddress(params: {
   addressType?: "user" | "bot" | "system";
   externalId: string;
   displayName?: string;
-  userId?: string;
+  workspaceMemberId?: string;
   metadata?: Record<string, unknown>;
 }) {
   return db
@@ -1433,7 +1475,7 @@ export async function ensureTransportAddress(params: {
       address_type: params.addressType || "user",
       external_id: params.externalId.trim(),
       display_name: params.displayName?.trim() || null,
-      user_id: params.userId || null,
+      workspace_member_id: params.workspaceMemberId || null,
       metadata: (params.metadata || {}) as TableInsert<"transport_addresses">["metadata"],
       created_at: sql`NOW()`,
       updated_at: sql`NOW()`,
@@ -1443,7 +1485,7 @@ export async function ensureTransportAddress(params: {
         .columns(["transport_account_id", "address_type", "external_id"])
         .doUpdateSet({
           display_name: sql`COALESCE(excluded.display_name, transport_addresses.display_name)`,
-          user_id: sql`COALESCE(excluded.user_id, transport_addresses.user_id)`,
+          workspace_member_id: sql`COALESCE(excluded.workspace_member_id, transport_addresses.workspace_member_id)`,
           metadata: sql`transport_addresses.metadata || excluded.metadata`,
           updated_at: sql`NOW()`,
         }),
@@ -1525,10 +1567,10 @@ export async function getReachableTransportAddressForParticipant(params: {
                ta.created_at AS binding_created_at
         FROM conversation_members cm
         JOIN transport_addresses ta
-          ON ta.user_id = cm.user_id
+          ON ta.workspace_member_id = cm.workspace_member_id
          AND ta.address_type = 'user'
         WHERE cm.id = ${params.conversationMemberId}
-          AND cm.user_id IS NOT NULL
+          AND cm.workspace_member_id IS NOT NULL
           AND ta.transport_account_id = ${params.transportAccountId}
       ) candidate
       ORDER BY candidate.is_attached DESC,
@@ -1590,7 +1632,7 @@ async function archiveConversationMemberIfOrphaned(
 export async function syncTransportAddressConversationMember(params: {
   conversationId: string;
   transportAddressId: string;
-  userId?: string | null;
+  workspaceMemberId?: string | null;
   displayName?: string;
   recordJoinEvent?: boolean;
 }) {
@@ -1599,13 +1641,13 @@ export async function syncTransportAddressConversationMember(params: {
     throw new Error("Transport external user not found");
   }
 
-  const desiredMember = params.userId
+  const desiredMember = params.workspaceMemberId
     ? (
         await activateConversationParticipant({
           workspaceId: address.workspace_id,
           conversationId: params.conversationId,
-          memberType: "user",
-          userId: params.userId,
+          memberType: "workspace_member",
+          workspaceMemberId: params.workspaceMemberId,
           recordJoinEvent: params.recordJoinEvent,
         })
       ).member
@@ -1669,7 +1711,7 @@ async function listConversationIdsForTransportAddress(
 
 async function syncTransportAddressLinkedUserMemberships(params: {
   transportAddressId: string;
-  userId?: string | null;
+  workspaceMemberId?: string | null;
 }) {
   const conversationIds = await listConversationIdsForTransportAddress(
     params.transportAddressId,
@@ -1678,7 +1720,7 @@ async function syncTransportAddressLinkedUserMemberships(params: {
     await syncTransportAddressConversationMember({
       conversationId,
       transportAddressId: params.transportAddressId,
-      userId: params.userId || null,
+      workspaceMemberId: params.workspaceMemberId || null,
       recordJoinEvent: false,
     });
   }
@@ -1713,13 +1755,13 @@ async function loadConversationExternalMemberPrimaryAddress(params: {
 
 async function assertWorkspaceMember(params: {
   workspaceId: string;
-  userId: string;
+  workspaceMemberId: string;
 }) {
   const row = await db
     .selectFrom("workspace_members")
     .select("workspace_id")
     .where("workspace_id", "=", params.workspaceId)
-    .where("user_id", "=", params.userId)
+    .where("id", "=", params.workspaceMemberId)
     .limit(1)
     .executeTakeFirst();
   return Boolean(row);
@@ -1729,7 +1771,7 @@ export async function setConversationExternalMemberLinkedUser(params: {
   workspaceId: string;
   conversationId: string;
   conversationMemberId: string;
-  userId?: string | null;
+  workspaceMemberId?: string | null;
 }) {
   const memberAddress = await loadConversationExternalMemberPrimaryAddress({
     workspaceId: params.workspaceId,
@@ -1746,30 +1788,30 @@ export async function setConversationExternalMemberLinkedUser(params: {
   return setTransportAddressLinkedUser({
     workspaceId: params.workspaceId,
     transportAddressId: memberAddress.transport_address_id as string,
-    userId: params.userId,
+    workspaceMemberId: params.workspaceMemberId,
   });
 }
 
 export async function setTransportAddressLinkedUser(params: {
   workspaceId: string;
   transportAddressId: string;
-  userId?: string | null;
+  workspaceMemberId?: string | null;
 }) {
-  const nextUserId = params.userId || null;
-  if (nextUserId) {
+  const nextWorkspaceMemberId = params.workspaceMemberId || null;
+  if (nextWorkspaceMemberId) {
     const isWorkspaceMember = await assertWorkspaceMember({
       workspaceId: params.workspaceId,
-      userId: nextUserId,
+      workspaceMemberId: nextWorkspaceMemberId,
     });
     if (!isWorkspaceMember) {
-      throw new Error("Workspace user not found");
+      throw new Error("Workspace member not found");
     }
   }
 
   const row = await db
     .updateTable("transport_addresses")
     .set({
-      user_id: nextUserId,
+      workspace_member_id: nextWorkspaceMemberId,
       updated_at: sql`NOW()`,
     })
     .where("workspace_id", "=", params.workspaceId)
@@ -1783,7 +1825,7 @@ export async function setTransportAddressLinkedUser(params: {
 
   await syncTransportAddressLinkedUserMemberships({
     transportAddressId: params.transportAddressId,
-    userId: nextUserId,
+    workspaceMemberId: nextWorkspaceMemberId,
   });
 
   return row;
@@ -2010,7 +2052,7 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
       "ta.account_key",
       "ta.display_name as account_display_name",
       "ta.owner_scope",
-      "ta.owner_user_id",
+      "ta.owner_workspace_member_id",
       "ta.connection_mode",
       "ta.status as account_status",
       "ta.credentials",
@@ -2041,7 +2083,7 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
       account_key: row.account_key,
       display_name: row.account_display_name,
       owner_scope: row.owner_scope,
-      owner_user_id: row.owner_user_id,
+      owner_workspace_member_id: row.owner_workspace_member_id,
       connection_mode: row.connection_mode,
       status: row.account_status,
       credentials: row.credentials,

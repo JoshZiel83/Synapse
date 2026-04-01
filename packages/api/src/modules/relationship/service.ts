@@ -8,24 +8,25 @@ import {
   type TableInsert,
 } from "../../infrastructure/database/kysely.js";
 import {
-  buildWorkspaceUserContextId,
+  buildWorkspaceMemberContextId,
   deleteRelation,
   enqueueAuthzRelationships,
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
   touchRelation,
-  touchWorkspaceUserContext,
+  touchWorkspaceMemberContext,
 } from "../../infrastructure/authz/index.js";
 import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
 import {
   authorizeAction,
+  resolveWorkspaceAccessSubject,
   userSubject,
-  workspaceUserSubject,
+  workspaceMemberSubject,
 } from "../access/service.js";
 import {
   createThread,
-  getThreadsForUser,
+  getThreadsForWorkspaceMember,
 } from "../conversation/chat-service.js";
 import { getWorkspaceMemberIdentity } from "../conversation/workspace-identity.js";
 import {
@@ -393,7 +394,7 @@ function mapWorkspaceActorEntry(params: {
 
 async function ensureRelationshipProfile(params: {
   workspaceId: string;
-  createdBy: string;
+  createdByWorkspaceMemberId: string;
   subjectType: ContactTargetType;
   subjectWorkspaceMemberId?: string;
   subjectActorId?: string;
@@ -425,7 +426,7 @@ async function ensureRelationshipProfile(params: {
           : null,
       subject_actor_id: params.subjectType === "actor" ? params.subjectActorId || null : null,
       qr_token: uuidv4(),
-      created_by: params.createdBy,
+      created_by_workspace_member_id: params.createdByWorkspaceMemberId,
       approval_mode: "manual",
     })
     .returningAll()
@@ -439,7 +440,7 @@ async function ensureRelationshipProfile(params: {
 async function updateActorAccessPolicy(params: {
   workspaceId: string;
   actorId: string;
-  updatedBy: string;
+  updatedByWorkspaceMemberId: string;
   accessPolicy: AccessPolicy;
 }) {
   const actor = await db
@@ -502,7 +503,7 @@ async function updateActorAccessPolicy(params: {
         workspaceId: params.workspaceId,
         actorId: params.actorId,
         accessPolicy: params.accessPolicy,
-        updatedBy: params.updatedBy,
+        updatedByWorkspaceMemberId: params.updatedByWorkspaceMemberId,
       },
     );
 
@@ -524,7 +525,7 @@ async function grantActorAccess(params: {
   workspaceId: string;
   actorId: string;
   requesterWorkspaceMemberId: string;
-  grantedBy: string;
+  grantedByWorkspaceMemberId: string;
 }) {
   const requester = await getWorkspaceMemberSummaryById(
     params.requesterWorkspaceMemberId,
@@ -532,33 +533,36 @@ async function grantActorAccess(params: {
   if (!requester || requester.workspace.id !== params.workspaceId) {
     throw new Error("Workspace member not found");
   }
-  const workspaceUserContextId = buildWorkspaceUserContextId(
-    params.workspaceId,
-    requester.userId,
+  const workspaceMemberContextId = buildWorkspaceMemberContextId(
+    requester.workspaceMemberId,
   );
   const entryIds = await enqueueAuthzRelationships(
     [
-      ...touchWorkspaceUserContext(params.workspaceId, requester.userId),
+      ...touchWorkspaceMemberContext({
+        workspaceMemberId: requester.workspaceMemberId,
+        workspaceId: params.workspaceId,
+        userId: requester.userId,
+      }),
       touchRelation(
         "actor",
         params.actorId,
-        "discover_workspace_user",
-        "workspace_user",
-        workspaceUserContextId,
+        "discover_workspace_member",
+        "workspace_member",
+        workspaceMemberContextId,
       ),
       touchRelation(
         "actor",
         params.actorId,
-        "invoke_workspace_user",
-        "workspace_user",
-        workspaceUserContextId,
+        "invoke_workspace_member",
+        "workspace_member",
+        workspaceMemberContextId,
       ),
       touchRelation(
         "actor",
         params.actorId,
-        "receive_workspace_user",
-        "workspace_user",
-        workspaceUserContextId,
+        "receive_workspace_member",
+        "workspace_member",
+        workspaceMemberContextId,
       ),
     ],
     {
@@ -566,7 +570,7 @@ async function grantActorAccess(params: {
       workspaceId: params.workspaceId,
       actorId: params.actorId,
       requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
-      grantedBy: params.grantedBy,
+      grantedByWorkspaceMemberId: params.grantedByWorkspaceMemberId,
     },
   );
   await flushAuthzEntries(entryIds, "relationship.actor_access_grant");
@@ -815,7 +819,10 @@ async function getActorAccessState(params: {
 }) {
   if (params.conversationId) return "existing" as const;
   const canInvoke = await authorizeAction({
-    subject: workspaceUserSubject(params.workspaceId, params.userId),
+    subject: await resolveWorkspaceAccessSubject(
+      params.workspaceId,
+      params.userId,
+    ),
     action: "actor.invoke",
     resourceId: params.actor.actorId,
   });
@@ -1575,7 +1582,10 @@ export async function requestRelationshipByIdentityProfile(params: {
 
   if (profile.workspace_id === params.workspaceId) {
     const canInvoke = await authorizeAction({
-      subject: workspaceUserSubject(params.workspaceId, params.userId),
+      subject: await resolveWorkspaceAccessSubject(
+        params.workspaceId,
+        params.userId,
+      ),
       action: "actor.invoke",
       resourceId: actor.actorId,
     });
@@ -1595,7 +1605,7 @@ export async function requestRelationshipByIdentityProfile(params: {
         workspaceId: params.workspaceId,
         actorId: actor.actorId,
         requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-        grantedBy: params.userId,
+        grantedByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       });
       return {
         outcome: "actor_access_granted" as const,
@@ -1689,7 +1699,7 @@ export async function getMemberRelationshipProfile(params: {
   }
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
-    createdBy: params.userId,
+    createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     subjectType: "member",
     subjectWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
   });
@@ -1719,7 +1729,7 @@ export async function updateMemberRelationshipProfile(params: {
   }
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
-    createdBy: params.userId,
+    createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     subjectType: "member",
     subjectWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
   });
@@ -1769,9 +1779,16 @@ export async function getActorRelationshipProfile(params: {
   if (!actor || actor.workspace.id !== params.workspaceId) {
     throw new Error("Actor not found");
   }
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
-    createdBy: params.userId,
+    createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     subjectType: "actor",
     subjectActorId: params.actorId,
   });
@@ -1795,9 +1812,16 @@ export async function updateActorRelationshipProfile(params: {
   identitySearchEnabled?: boolean;
   accessPolicy?: AccessPolicy;
 }) {
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
-    createdBy: params.userId,
+    createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     subjectType: "actor",
     subjectActorId: params.actorId,
   });
@@ -1836,7 +1860,7 @@ export async function updateActorRelationshipProfile(params: {
     const actor = await updateActorAccessPolicy({
       workspaceId: params.workspaceId,
       actorId: params.actorId,
-      updatedBy: params.userId,
+      updatedByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       accessPolicy: params.accessPolicy,
     });
     accessPolicy = actor.access_policy as AccessPolicy;
@@ -1945,7 +1969,10 @@ export async function listFriendRequests(params: {
         continue;
       }
       const canApprove = await authorizeAction({
-        subject: workspaceUserSubject(params.workspaceId, params.userId),
+        subject: await resolveWorkspaceAccessSubject(
+          params.workspaceId,
+          params.userId,
+        ),
         action: "actor.grant",
         resourceId: row.target_actor_id,
       });
@@ -2035,7 +2062,10 @@ export async function resolveFriendRequest(params: {
       throw new Error("Friend request not found");
     }
     const canApprove = await authorizeAction({
-      subject: workspaceUserSubject(params.workspaceId, params.userId),
+      subject: await resolveWorkspaceAccessSubject(
+        params.workspaceId,
+        params.userId,
+      ),
       action: "actor.grant",
       resourceId: request.target_actor_id,
     });
@@ -2058,7 +2088,8 @@ export async function resolveFriendRequest(params: {
     .updateTable("workspace_friend_requests")
     .set({
       status: params.decision === "approve" ? "approved" : "rejected",
-      resolved_by_user_id: params.userId,
+      resolved_by_workspace_member_id:
+        viewerWorkspaceMember.workspaceMemberId,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     })
@@ -2107,7 +2138,10 @@ export async function listActorAccessRequests(params: {
   const incoming = [];
   for (const row of incomingRows) {
     const canApprove = await authorizeAction({
-      subject: workspaceUserSubject(params.workspaceId, params.userId),
+      subject: await resolveWorkspaceAccessSubject(
+        params.workspaceId,
+        params.userId,
+      ),
       action: "actor.grant",
       resourceId: row.actor_id,
     });
@@ -2142,6 +2176,13 @@ export async function resolveActorAccessRequest(params: {
   requestId: string;
   decision: "approve" | "reject";
 }) {
+  const approverWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!approverWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
   const request = await db
     .selectFrom("actor_access_requests")
     .selectAll()
@@ -2154,7 +2195,10 @@ export async function resolveActorAccessRequest(params: {
     throw new Error("Actor access request has already been resolved");
   }
   const canApprove = await authorizeAction({
-    subject: workspaceUserSubject(params.workspaceId, params.userId),
+    subject: await resolveWorkspaceAccessSubject(
+      params.workspaceId,
+      params.userId,
+    ),
     action: "actor.grant",
     resourceId: request.actor_id,
   });
@@ -2167,7 +2211,7 @@ export async function resolveActorAccessRequest(params: {
       workspaceId: params.workspaceId,
       actorId: request.actor_id,
       requesterWorkspaceMemberId: request.requester_workspace_member_id,
-      grantedBy: params.userId,
+      grantedByWorkspaceMemberId: approverWorkspaceMember.workspaceMemberId,
     });
   }
 
@@ -2175,7 +2219,8 @@ export async function resolveActorAccessRequest(params: {
     .updateTable("actor_access_requests")
     .set({
       status: params.decision === "approve" ? "approved" : "rejected",
-      resolved_by_user_id: params.userId,
+      resolved_by_workspace_member_id:
+        approverWorkspaceMember.workspaceMemberId,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     })
@@ -2196,23 +2241,25 @@ export async function getContactHub(params: {
     params.workspaceId,
     params.userId,
   );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
   const [{ incoming: friendIncoming }, { incoming: actorIncoming }, entries] =
     await Promise.all([
       listFriendRequests(params),
       listActorAccessRequests(params),
       buildContactHubEntryMap(params),
     ]);
-  const threads = await getThreadsForUser({
-    userId: params.userId,
+  const threads = await getThreadsForWorkspaceMember({
     workspaceId: params.workspaceId,
+    workspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
   });
   const groups = await Promise.all(
     threads
       .filter((thread) => thread.kind === "group")
       .map((thread) =>
         mapConversationSummaryView(thread, {
-          userId: params.userId,
-          workspaceMemberId: viewerWorkspaceMember?.workspaceMemberId,
+          workspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
         }),
       ),
   );
@@ -2260,7 +2307,7 @@ export async function getContactHubDetail(params: {
     if (entry.workspaceMemberId) {
       return conversation.members.some(
         (member) =>
-          member.type === "user" &&
+          member.type === "workspace_member" &&
           member.workspaceMemberId === entry.workspaceMemberId,
       );
     }
@@ -2294,7 +2341,10 @@ export async function openDirectConversation(params: {
 
   if (resolved.kind === "workspace-actor" && resolved.actor) {
     const canInvoke = await authorizeAction({
-      subject: workspaceUserSubject(params.workspaceId, params.userId),
+      subject: await resolveWorkspaceAccessSubject(
+        params.workspaceId,
+        params.userId,
+      ),
       action: "actor.invoke",
       resourceId: resolved.actor.actorId,
     });
@@ -2302,7 +2352,7 @@ export async function openDirectConversation(params: {
     if (!canInvoke && resolved.actor.accessPolicy === "approval_required") {
       const profile = await ensureRelationshipProfile({
         workspaceId: params.workspaceId,
-        createdBy: params.userId,
+        createdByWorkspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
         subjectType: "actor",
         subjectActorId: resolved.actor.actorId,
       });
@@ -2311,7 +2361,7 @@ export async function openDirectConversation(params: {
           workspaceId: params.workspaceId,
           actorId: resolved.actor.actorId,
           requesterWorkspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
-          grantedBy: params.userId,
+          grantedByWorkspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
         });
       } else {
         const accessRequest = await createActorAccessRequest({
@@ -2351,7 +2401,6 @@ export async function openDirectConversation(params: {
     const created = await createThread({
       workspaceId: params.workspaceId,
       kind: "private",
-      createdByUserId: params.userId,
       createdByWorkspaceMemberId: requesterIdentity.workspaceMemberId,
       actorIds: resolved.peerIdentity.kind === "actor" ? [resolved.peerIdentity.actorId] : [],
       workspaceMemberIds:

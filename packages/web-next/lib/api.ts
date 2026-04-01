@@ -65,6 +65,7 @@ export interface WorkspaceListResponse {
     id: string
     name: string
     slug: string
+    currentWorkspaceMemberId?: string
     trustLevel?: string
   }>
 }
@@ -366,7 +367,7 @@ class ApiClient {
   grantWorkspaceAccess(
     wsId: string,
     data: {
-      userId: string
+      workspaceMemberId: string
       accessKey:
         | "model_admin"
         | "actor_admin"
@@ -385,7 +386,7 @@ class ApiClient {
   }
   revokeWorkspaceAccess(
     wsId: string,
-    userId: string,
+    workspaceMemberId: string,
     accessKey:
       | "model_admin"
       | "actor_admin"
@@ -396,7 +397,7 @@ class ApiClient {
       | "conversation_admin"
   ) {
     return this.fetch(
-      `/workspaces/${wsId}/access/${accessKey}/users/${userId}/revoke`,
+      `/workspaces/${wsId}/access/${accessKey}/members/${workspaceMemberId}/revoke`,
       { method: "POST", body: "{}" }
     )
   }
@@ -836,62 +837,92 @@ class ApiClient {
     )
   }
 
-  // Model Groups - User
-  getUserModelGroups() {
-    return this.fetch("/me/model-groups")
+  // Model Groups - Workspace Member
+  getWorkspaceMemberModelGroups(wsId: string) {
+    return this.fetch(`/workspaces/${wsId}/me/model-groups`)
   }
-  createUserModelGroup(data: any) {
-    return this.fetch("/me/model-groups", {
+  createWorkspaceMemberModelGroup(wsId: string, data: any) {
+    return this.fetch(`/workspaces/${wsId}/me/model-groups`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
-  getUserModelGroup(groupId: string) {
-    return this.fetch(`/me/model-groups/${groupId}`)
+  getWorkspaceMemberModelGroup(wsId: string, groupId: string) {
+    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}`)
   }
-  updateUserModelGroup(groupId: string, data: any) {
-    return this.fetch(`/me/model-groups/${groupId}`, {
+  updateWorkspaceMemberModelGroup(wsId: string, groupId: string, data: any) {
+    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}`, {
       method: "PUT",
       body: JSON.stringify(data),
     })
   }
-  deleteUserModelGroup(groupId: string) {
-    return this.fetch(`/me/model-groups/${groupId}`, { method: "DELETE" })
-  }
-  getUserModelGroupGrants(groupId: string) {
-    return this.fetch(`/me/model-groups/${groupId}/grants`)
-  }
-  issueUserModelGroupGrant(groupId: string, data: any) {
-    return this.fetch(`/me/model-groups/${groupId}/grants`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
-  }
-  revokeUserModelGroupGrant(groupId: string, grantId: string) {
-    return this.fetch(`/me/model-groups/${groupId}/grants/${grantId}/revoke`, {
-      method: "POST",
-      body: "{}",
-    })
-  }
-  addUserModelItem(groupId: string, data: any) {
-    return this.fetch(`/me/model-groups/${groupId}/items`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
-  }
-  updateUserModelItem(groupId: string, itemId: string, data: any) {
-    return this.fetch(`/me/model-groups/${groupId}/items/${itemId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
-  }
-  deleteUserModelItem(groupId: string, itemId: string) {
-    return this.fetch(`/me/model-groups/${groupId}/items/${itemId}`, {
+  deleteWorkspaceMemberModelGroup(wsId: string, groupId: string) {
+    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}`, {
       method: "DELETE",
     })
   }
-  getUserItemVersions(groupId: string, itemId: string) {
-    return this.fetch(`/me/model-groups/${groupId}/items/${itemId}/versions`)
+  getWorkspaceMemberModelGroupGrants(wsId: string, groupId: string) {
+    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}/grants`)
+  }
+  issueWorkspaceMemberModelGroupGrant(
+    wsId: string,
+    groupId: string,
+    data: any
+  ) {
+    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}/grants`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  revokeWorkspaceMemberModelGroupGrant(
+    wsId: string,
+    groupId: string,
+    grantId: string
+  ) {
+    return this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}/grants/${grantId}/revoke`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
+  }
+  addWorkspaceMemberModelItem(wsId: string, groupId: string, data: any) {
+    return this.fetch(`/workspaces/${wsId}/me/model-groups/${groupId}/items`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  updateWorkspaceMemberModelItem(
+    wsId: string,
+    groupId: string,
+    itemId: string,
+    data: any
+  ) {
+    return this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}/items/${itemId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+  }
+  deleteWorkspaceMemberModelItem(wsId: string, groupId: string, itemId: string) {
+    return this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}/items/${itemId}`,
+      {
+        method: "DELETE",
+      }
+    )
+  }
+  getWorkspaceMemberItemVersions(
+    wsId: string,
+    groupId: string,
+    itemId: string
+  ) {
+    return this.fetch(
+      `/workspaces/${wsId}/me/model-groups/${groupId}/items/${itemId}/versions`
+    )
   }
 
   // Actor Model Group Assignment
@@ -1292,11 +1323,11 @@ class ApiClient {
   }
   setCurrentUserWeixinBindingAutoLink(
     wsId: string,
-    userId: string | null
+    workspaceMemberId: string | null
   ): Promise<{ binding: CurrentUserWeixinBindingSummary }> {
     return this.fetch(`/workspaces/${wsId}/im/me/weixin-binding/auto-link`, {
       method: "PUT",
-      body: JSON.stringify({ userId }),
+      body: JSON.stringify({ workspaceMemberId }),
     })
   }
   createTransportAccount(
@@ -1334,16 +1365,16 @@ class ApiClient {
       body: JSON.stringify(data),
     })
   }
-  setTransportExternalUserWorkspaceUser(
+  setTransportExternalUserWorkspaceMember(
     wsId: string,
     addressId: string,
-    userId: string | null
+    workspaceMemberId: string | null
   ): Promise<{ externalUser: TransportExternalUserSummary }> {
     return this.fetch(
-      `/workspaces/${wsId}/im/external-users/${addressId}/workspace-user`,
+      `/workspaces/${wsId}/im/external-users/${addressId}/workspace-member`,
       {
         method: "PUT",
-        body: JSON.stringify({ userId }),
+        body: JSON.stringify({ workspaceMemberId }),
       }
     )
   }

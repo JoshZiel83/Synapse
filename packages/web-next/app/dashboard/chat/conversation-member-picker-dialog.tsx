@@ -12,7 +12,7 @@ import ChatAvatar from './chat-avatar';
 import type { ConversationMember } from '@/stores/chat-store';
 
 type PickerOption = {
-  type: 'actor' | 'user';
+  type: 'actor' | 'workspace_member';
   id: string;
   name: string;
   subtitle?: string;
@@ -34,7 +34,7 @@ function normalizeActorOption(actor: any): PickerOption {
 
 function normalizeUserOption(member: any): PickerOption {
   return {
-    type: 'user',
+    type: 'workspace_member',
     id: member.id,
     name: member.userName || member.userEmail || 'Unknown user',
     subtitle: member.userEmail || undefined,
@@ -81,17 +81,17 @@ export default function ConversationMemberPickerDialog({
       if (cancelled) return;
 
       const actorOptions = (actorsRes?.actors || actorsRes || []).map(normalizeActorOption);
-      const userOptions = (membersRes?.data || membersRes || []).map(normalizeUserOption);
+      const memberOptions = (membersRes?.data || membersRes || []).map(normalizeUserOption);
       const existingActorIds = new Set(existingMembers.filter((member) => member.type === 'actor').map((member) => member.id));
-      const existingUserIds = new Set(
+      const existingMemberIds = new Set(
         existingMembers
-          .filter((member) => member.type === 'user')
+          .filter((member) => member.type === 'workspace_member')
           .map((member) => member.workspaceMemberId || member.id),
       );
 
       setOptions([
         ...actorOptions.filter((option: PickerOption) => !existingActorIds.has(option.id)),
-        ...userOptions.filter((option: PickerOption) => !existingUserIds.has(option.id)),
+        ...memberOptions.filter((option: PickerOption) => !existingMemberIds.has(option.id)),
       ]);
     })().catch((error) => {
       console.error('Failed to load available conversation members:', error);
@@ -114,7 +114,7 @@ export default function ConversationMemberPickerDialog({
 
   const groupedOptions = useMemo(() => ({
     actors: filteredOptions.filter((option) => option.type === 'actor'),
-    users: filteredOptions.filter((option) => option.type === 'user'),
+    members: filteredOptions.filter((option) => option.type === 'workspace_member'),
   }), [filteredOptions]);
 
   function toggleOption(option: PickerOption) {
@@ -137,7 +137,7 @@ export default function ConversationMemberPickerDialog({
       for (const key of selectedKeys) {
         const [type, id] = key.split(':');
         if (type === 'actor') actorIds.push(id);
-        if (type === 'user') workspaceMemberIds.push(id);
+        if (type === 'workspace_member') workspaceMemberIds.push(id);
       }
 
       await api.addThreadMembers(workspaceId, conversationId, {
@@ -211,7 +211,7 @@ export default function ConversationMemberPickerDialog({
             <Input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search actors or users"
+              placeholder="Search actors or members"
               className="pl-9"
             />
           </div>
@@ -219,10 +219,10 @@ export default function ConversationMemberPickerDialog({
           <ScrollArea className="h-[420px] pr-3">
             <div className="flex flex-col gap-4">
               {renderSection('Actors', groupedOptions.actors)}
-              {renderSection('Users', groupedOptions.users)}
+              {renderSection('Members', groupedOptions.members)}
               {filteredOptions.length === 0 ? (
                 <div className="rounded-3xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-                  No available actors or users
+                  No available actors or members
                 </div>
               ) : null}
             </div>

@@ -15,14 +15,14 @@ import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
 
 type SearchState =
-  | "same_workspace_user"
+  | "same_workspace_member"
   | "friend"
   | "pending_request"
   | "requestable";
 
 function statusLabel(state: SearchState) {
   switch (state) {
-    case "same_workspace_user":
+    case "same_workspace_member":
       return "同 workspace 用户";
     case "friend":
       return "已是好友";
@@ -56,7 +56,7 @@ export default function SearchContactDetailScreen() {
     setSubmitting(true);
     setMessage(null);
     try {
-      const result = await api.requestFriendBySearchProfile(
+      const result = await api.requestIdentityProfile(
         workspaceId,
         params.profileId,
       );

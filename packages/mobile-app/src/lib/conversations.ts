@@ -29,12 +29,14 @@ export function conversationIncludesActor(
   );
 }
 
-export function conversationIncludesUser(
+export function conversationIncludesWorkspaceMember(
   conversation: ConversationSummaryView,
-  userId: string,
+  workspaceMemberId: string,
 ) {
   return getActiveConversationMembers(conversation).some(
-    (member) => member.type === "user" && member.userId === userId,
+    (member) =>
+      member.type === "workspace_member" &&
+      member.workspaceMemberId === workspaceMemberId,
   );
 }
 
@@ -82,14 +84,14 @@ function findPrivateConversationForActor(
   });
 }
 
-function findPrivateConversationForUser(
+function findPrivateConversationForWorkspaceMember(
   conversations: ConversationSummaryView[],
-  userId: string,
+  workspaceMemberId: string,
 ) {
   return conversations.find(
     (conversation) =>
       conversation.kind === "private" &&
-      conversationIncludesUser(conversation, userId),
+      conversationIncludesWorkspaceMember(conversation, workspaceMemberId),
   );
 }
 
@@ -112,22 +114,25 @@ export function findPrivateSocialConversationForActor(
   );
 }
 
-export function findPrivateWorkspaceConversationForUser(
+export function findPrivateWorkspaceConversationForWorkspaceMember(
   conversations: ConversationSummaryView[],
-  userId: string,
+  workspaceMemberId: string,
 ) {
-  return findPrivateConversationForUser(conversations, userId);
+  return findPrivateConversationForWorkspaceMember(
+    conversations,
+    workspaceMemberId,
+  );
 }
 
-export function findPrivateSocialConversationForUser(
+export function findPrivateSocialConversationForWorkspaceMember(
   conversations: ConversationSummaryView[],
-  userId: string,
+  workspaceMemberId: string,
 ) {
   return conversations.find(
     (conversation) =>
       conversation.boundary === "external" &&
       conversation.kind === "private" &&
-      conversationIncludesUser(conversation, userId),
+      conversationIncludesWorkspaceMember(conversation, workspaceMemberId),
   );
 }
 

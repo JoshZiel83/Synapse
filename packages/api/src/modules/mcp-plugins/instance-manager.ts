@@ -98,6 +98,7 @@ export interface McpExecutionContext {
   conversationId?: string;
   actorId?: string;
   userId?: string;
+  workspaceMemberId?: string;
   turnId?: string;
   toolCallId?: string;
   providerCallId?: string;
@@ -608,7 +609,7 @@ async function createRelayInstance(
     return callRelayTool({
       conversationId: executionContext?.conversationId,
       sessionId: executionContext?.sessionId,
-      requestedByUserId: executionContext?.userId,
+      requestedByWorkspaceMemberId: executionContext?.workspaceMemberId,
       requestedByActorId: executionContext?.actorId,
       deviceId,
       exposureId,

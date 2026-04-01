@@ -24,7 +24,7 @@ interface ChatAvatarProps {
   name?: string;
   avatarUrl?: string;
   emoji?: string;
-  entityType?: 'conversation' | 'user' | 'actor' | 'external';
+  entityType?: 'conversation' | 'workspace_member' | 'actor' | 'external';
   size?: 'sm' | 'default' | 'lg';
   statusState?: ActorAvatarStatus;
   statusPhase?: ThinkingPhase;

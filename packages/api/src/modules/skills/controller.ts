@@ -6,6 +6,11 @@ import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.j
 import { AUTHZ_PLATFORM_ID } from '../../infrastructure/authz/index.js';
 import { requireRequestAction } from '../access/guards.js';
 import {
+  authorizeAction,
+  getRequestUserId,
+  resolveWorkspaceAccessSubject,
+} from '../access/service.js';
+import {
   createWorkspaceSkill,
   SkillError,
   getInstalledSkillAccessState,
@@ -115,6 +120,29 @@ async function requirePlatformManage(
   );
 }
 
+async function requireWorkspaceQueryView(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  workspaceId: string,
+  errorMessage: string,
+) {
+  const allowed = await authorizeAction({
+    subject: await resolveWorkspaceAccessSubject(
+      workspaceId,
+      getRequestUserId(request),
+    ),
+    action: 'workspace.view',
+    resourceId: workspaceId,
+  });
+
+  if (!allowed) {
+    reply.status(403).send({ error: errorMessage });
+    return false;
+  }
+
+  return true;
+}
+
 export function registerSkillRoutes(app: FastifyInstance) {
   const authHook = { preHandler: [authMiddleware] };
   const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] };
@@ -127,10 +155,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
         workspaceId?: string;
       };
       if (workspaceId) {
-        const allowed = await requireRequestAction(
+        const allowed = await requireWorkspaceQueryView(
           request,
           reply,
-          'workspace.view',
           workspaceId,
           'Not allowed to view skills for this workspace',
         );
@@ -152,10 +179,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
       const { skillId } = request.params as { skillId: string };
       const { workspaceId } = request.query as { workspaceId?: string };
       if (workspaceId) {
-        const allowed = await requireRequestAction(
+        const allowed = await requireWorkspaceQueryView(
           request,
           reply,
-          'workspace.view',
           workspaceId,
           'Not allowed to view skills for this workspace',
         );
@@ -235,12 +261,12 @@ export function registerSkillRoutes(app: FastifyInstance) {
       if (!allowed) return;
 
       const body = installSkillSchema.parse(request.body);
-      const user = (request as any).user;
+      const workspaceMemberId = (request as any).workspaceMember?.id as string;
       const skill = await installMarketplaceSkill({
         workspaceId,
         marketSkillId: body.marketSkillId,
         accessTarget: body.accessTarget,
-        installedBy: user?.id || user?.userId,
+        installedByWorkspaceMemberId: workspaceMemberId,
       });
       return reply.status(201).send({ skill });
     } catch (error) {
@@ -261,7 +287,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
       if (!allowed) return;
 
       const body = createWorkspaceSkillSchema.parse(request.body);
-      const user = (request as any).user;
+      const workspaceMemberId = (request as any).workspaceMember?.id as string;
       const skill = await createWorkspaceSkill({
         workspaceId,
         name: body.name,
@@ -270,7 +296,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
         tags: body.tags,
         attachmentFiles: body.attachmentFiles,
         accessTarget: body.accessTarget,
-        installedBy: user?.id || user?.userId,
+        installedByWorkspaceMemberId: workspaceMemberId,
       });
       return reply.status(201).send({ skill });
     } catch (error) {
@@ -394,7 +420,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
       if (!allowed) return;
 
       const body = skillAccessGrantSchema.parse(request.body);
-      const user = (request as any).user;
+      const workspaceMemberId = (request as any).workspaceMember?.id as string;
       const grant = await grantInstalledSkillAccess({
         workspaceId,
         installedSkillId,
@@ -402,7 +428,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
         permissions: body.permissions,
         reason: body.reason,
         metadata: body.metadata,
-        grantedBy: user?.id || user?.userId,
+        grantedByWorkspaceMemberId: workspaceMemberId,
       });
       return reply.status(201).send({ grant });
     } catch (error) {

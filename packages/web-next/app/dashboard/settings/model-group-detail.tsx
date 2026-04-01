@@ -23,7 +23,7 @@ import {
 import ModelItemDialog from './model-item-dialog';
 import ModelItemVersions from './model-item-versions';
 
-type ModelGroupScope = 'workspace' | 'platform' | 'user' | 'auto';
+type ModelGroupScope = 'workspace' | 'platform' | 'workspace_member' | 'auto';
 
 interface ModelItem {
   id: string;
@@ -50,9 +50,9 @@ interface GroupDetail {
   routing_strategy: string;
   is_default: boolean;
   workspace_id: string | null;
-  owner_type?: 'platform' | 'workspace' | 'user';
+  owner_type?: 'platform' | 'workspace' | 'workspace_member';
   owner_workspace_id?: string | null;
-  owner_user_id?: string | null;
+  owner_workspace_member_id?: string | null;
   items: ModelItem[];
 }
 
@@ -60,8 +60,8 @@ function groupScopeLabel(scope: Exclude<ModelGroupScope, 'auto'>) {
   switch (scope) {
     case 'platform':
       return 'Platform';
-    case 'user':
-      return 'User';
+    case 'workspace_member':
+      return 'Member';
     default:
       return 'Workspace';
   }
@@ -71,7 +71,7 @@ function groupScopeIcon(scope: Exclude<ModelGroupScope, 'auto'>) {
   switch (scope) {
     case 'platform':
       return Globe2;
-    case 'user':
+    case 'workspace_member':
       return UserRound;
     default:
       return Building2;
@@ -86,8 +86,11 @@ async function fetchGroupByScope(
   if (scope === 'platform') {
     return api.getPlatformModelGroup(groupId);
   }
-  if (scope === 'user') {
-    return api.getUserModelGroup(groupId);
+  if (scope === 'workspace_member') {
+    if (!workspaceId) {
+      throw new Error('Workspace is required');
+    }
+    return api.getWorkspaceMemberModelGroup(workspaceId, groupId);
   }
   if (!workspaceId) {
     throw new Error('Workspace is required');
@@ -134,9 +137,9 @@ export default function ModelGroupDetail({
       }
 
       try {
-        const response = await fetchGroupByScope('user', groupId, workspaceId);
+        const response = await fetchGroupByScope('workspace_member', groupId, workspaceId);
         setGroup(response.group);
-        setResolvedScope('user');
+        setResolvedScope('workspace_member');
         return;
       } catch {}
 
@@ -159,8 +162,10 @@ export default function ModelGroupDetail({
     try {
       if (resolvedScope === 'platform') {
         await api.updatePlatformModelItem(groupId, item.id, { isEnabled: !item.is_enabled });
-      } else if (resolvedScope === 'user') {
-        await api.updateUserModelItem(groupId, item.id, { isEnabled: !item.is_enabled });
+      } else if (resolvedScope === 'workspace_member') {
+        await api.updateWorkspaceMemberModelItem(workspaceId!, groupId, item.id, {
+          isEnabled: !item.is_enabled,
+        });
       } else if (workspaceId) {
         await api.updateModelItem(workspaceId, groupId, item.id, { isEnabled: !item.is_enabled });
       }
@@ -174,8 +179,8 @@ export default function ModelGroupDetail({
     try {
       if (resolvedScope === 'platform') {
         await api.deletePlatformModelItem(groupId, itemId);
-      } else if (resolvedScope === 'user') {
-        await api.deleteUserModelItem(groupId, itemId);
+      } else if (resolvedScope === 'workspace_member') {
+        await api.deleteWorkspaceMemberModelItem(workspaceId!, groupId, itemId);
       } else if (workspaceId) {
         await api.deleteModelItem(workspaceId, groupId, itemId);
       }

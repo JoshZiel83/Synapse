@@ -23,7 +23,7 @@ const allowedAttachmentTypes: PluginAttachmentType[] = [
   'workspace',
   'conversation',
   'actor',
-  'workspace_user',
+  'workspace_member',
 ];
 
 function normalizeActorOption(actor: any) {

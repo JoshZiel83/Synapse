@@ -164,7 +164,7 @@ async function handleCreateMemory(
     ownerScope: effectiveScope as any,
     ownerActorId: effectiveScope === 'conversation' ? undefined : actorId,
     ownerConversationId: conversationId,
-    ownerUserId: undefined,
+    ownerWorkspaceMemberId: undefined,
     category: ((metadata.category as string | undefined) ?? 'fact') as any,
     stability: ((metadata.stability as string | undefined) ?? 'durable') as any,
     importance: (metadata.importance as number | undefined) ?? 0.5,
@@ -222,7 +222,6 @@ async function handleRenameSelf(
   const source: ActorUpdateSourceInput = {
     type: 'actor',
     actorId,
-    userId: context.userId,
     sessionId: context.sessionId,
     turnId: context.turnId,
     conversationId: context.conversationId,
@@ -242,7 +241,6 @@ async function handleChangeAvatar(
   const source: ActorUpdateSourceInput = {
     type: 'actor',
     actorId,
-    userId: context.userId,
     sessionId: context.sessionId,
     turnId: context.turnId,
     conversationId: context.conversationId,

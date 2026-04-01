@@ -158,7 +158,9 @@ export default function ConversationDetailScreen() {
                       <Text style={styles.rowSubtitle}>
                         {member.title ||
                           member.role ||
-                          (member.type === "user" ? "成员" : "会话成员")}
+                          (member.type === "workspace_member"
+                            ? "成员"
+                            : "会话成员")}
                       </Text>
                     </View>
                     <Pill label={member.type === "actor" ? "角色" : "成员"} />

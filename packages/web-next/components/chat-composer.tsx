@@ -71,7 +71,7 @@ type ComposerMentionNodeAttrs = {
   memberId?: string | null
   participantId?: string | null
   actorId?: string | null
-  userId?: string | null
+  workspaceMemberId?: string | null
   externalUserKey?: string | null
   transportAddressId?: string | null
   transportKind?: ConversationEntityRef["transportKind"] | null
@@ -88,7 +88,7 @@ type ComposerSuggestionItem = {
   trigger: SuggestionTrigger
   kind: "participant" | "attachment" | "emoji"
   targetType?: MentionTargetType
-  participantType?: "actor" | "user" | "external"
+  participantType?: "actor" | "workspace_member" | "external"
   avatarUrl?: string
   emoji?: string
   inGroup?: boolean
@@ -97,7 +97,7 @@ type ComposerSuggestionItem = {
   memberId?: string
   participantId?: string
   actorId?: string
-  userId?: string
+  workspaceMemberId?: string
   externalUserKey?: string
   transportAddressId?: string
   transportKind?: ConversationEntityRef["transportKind"]
@@ -113,7 +113,7 @@ type SuggestionListHandle = {
 export type ChatComposerParticipant = {
   id: string
   name: string
-  type: "actor" | "user" | "external"
+  type: "actor" | "workspace_member" | "external"
   targetType?: "actor" | "participant"
   inGroup?: boolean
   role?: string
@@ -125,7 +125,7 @@ export type ChatComposerParticipant = {
   memberId?: string
   participantId?: string
   actorId?: string
-  userId?: string
+  workspaceMemberId?: string
   externalUserKey?: string
   transportAddressId?: string
   transportKind?: ConversationEntityRef["transportKind"]
@@ -220,7 +220,7 @@ function filterParticipants(
         actorId:
           participant.actorId ||
           (participant.type === "actor" ? participant.id : undefined),
-        userId: participant.userId,
+        workspaceMemberId: participant.workspaceMemberId,
         externalUserKey: participant.externalUserKey,
         transportAddressId: participant.transportAddressId,
         transportKind: participant.transportKind,
@@ -300,7 +300,9 @@ function buildMentionRef(
     ...(attrs.memberId ? { memberId: attrs.memberId } : {}),
     ...(attrs.participantId ? { participantId: attrs.participantId } : {}),
     ...(attrs.actorId ? { actorId: attrs.actorId } : {}),
-    ...(attrs.userId ? { userId: attrs.userId } : {}),
+    ...(attrs.workspaceMemberId
+      ? { workspaceMemberId: attrs.workspaceMemberId }
+      : {}),
     ...(attrs.externalUserKey
       ? { externalUserKey: attrs.externalUserKey }
       : {}),
@@ -506,7 +508,7 @@ const ComposerSuggestionList = forwardRef<
                   name={item.label}
                   avatarUrl={item.avatarUrl}
                   emoji={item.emoji}
-                  entityType={item.participantType || "user"}
+                  entityType={item.participantType || "workspace_member"}
                   size="sm"
                 />
               ) : item.kind === "emoji" ? (
@@ -629,7 +631,7 @@ const ComposerMention = Mention.extend({
       memberId: { default: null },
       participantId: { default: null },
       actorId: { default: null },
-      userId: { default: null },
+      workspaceMemberId: { default: null },
       externalUserKey: { default: null },
       transportAddressId: { default: null },
       transportKind: { default: null },

@@ -248,8 +248,12 @@ export default async function automationController(app: FastifyInstance) {
     if (!allowed) return;
 
     const body = eventSourceSchema.parse(request.body);
-    const userId = (request as any).user!.userId as string;
-    const source = await createAutomationEventSource(workspaceId, { kind: 'user', userId }, body);
+    const workspaceMemberId = (request as any).workspaceMember!.id as string;
+    const source = await createAutomationEventSource(
+      workspaceId,
+      { kind: 'workspace_member', workspaceMemberId },
+      body,
+    );
     return reply.status(201).send(source);
   });
 
@@ -299,8 +303,8 @@ export default async function automationController(app: FastifyInstance) {
     if (!allowed) return;
 
     const body = updateEventSourceSchema.parse(request.body);
-    const userId = (request as any).user!.userId as string;
-    return updateAutomationEventSource(workspaceId, eventSourceId, { userId }, body);
+    const workspaceMemberId = (request as any).workspaceMember!.id as string;
+    return updateAutomationEventSource(workspaceId, eventSourceId, { workspaceMemberId }, body);
   });
 
   app.delete('/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId', { preHandler: protectedPreHandler }, async (request, reply) => {
@@ -314,8 +318,8 @@ export default async function automationController(app: FastifyInstance) {
     );
     if (!allowed) return;
 
-    const userId = (request as any).user!.userId as string;
-    await archiveAutomationEventSource(workspaceId, eventSourceId, { userId });
+    const workspaceMemberId = (request as any).workspaceMember!.id as string;
+    await archiveAutomationEventSource(workspaceId, eventSourceId, { workspaceMemberId });
     return { success: true };
   });
 
@@ -388,8 +392,12 @@ export default async function automationController(app: FastifyInstance) {
         issues,
       });
     }
-    const userId = (request as any).user!.userId as string;
-    const automation = await createAutomationRule(workspaceId, { kind: 'user', userId }, body);
+    const workspaceMemberId = (request as any).workspaceMember!.id as string;
+    const automation = await createAutomationRule(
+      workspaceId,
+      { kind: 'workspace_member', workspaceMemberId },
+      body,
+    );
     return reply.status(201).send(automation);
   });
 
@@ -423,9 +431,14 @@ export default async function automationController(app: FastifyInstance) {
     if (!allowed) return;
 
     const body = updateAutomationSchema.parse(request.body);
-    const userId = (request as any).user!.userId as string;
+    const workspaceMemberId = (request as any).workspaceMember!.id as string;
     try {
-      const automation = await updateAutomationRule(workspaceId, automationId, { userId }, body);
+      const automation = await updateAutomationRule(
+        workspaceId,
+        automationId,
+        { workspaceMemberId },
+        body,
+      );
       return automation;
     } catch (error) {
       if (
@@ -452,8 +465,8 @@ export default async function automationController(app: FastifyInstance) {
     );
     if (!allowed) return;
 
-    const userId = (request as any).user!.userId as string;
-    await deleteAutomationRule(workspaceId, automationId, { userId });
+    const workspaceMemberId = (request as any).workspaceMember!.id as string;
+    await deleteAutomationRule(workspaceId, automationId, { workspaceMemberId });
     return { success: true };
   });
 
@@ -497,8 +510,12 @@ export default async function automationController(app: FastifyInstance) {
     if (!allowed) return;
 
     const body = createWebhookEndpointSchema.parse(request.body);
-    const userId = (request as any).user!.userId as string;
-    const created = await createAutomationWebhookEndpoint(workspaceId, userId, body);
+    const workspaceMemberId = (request as any).workspaceMember!.id as string;
+    const created = await createAutomationWebhookEndpoint(
+      workspaceId,
+      workspaceMemberId,
+      body,
+    );
     return reply.status(201).send(created);
   });
 

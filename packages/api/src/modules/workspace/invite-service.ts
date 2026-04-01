@@ -6,8 +6,7 @@ import {
   authzEnabled,
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
-  touchRelation,
-  touchWorkspaceUserMembership,
+  touchWorkspaceMemberMembership,
 } from '../../infrastructure/authz/index.js';
 import {
   db,
@@ -30,7 +29,7 @@ function mapInviteRow(row: any) {
     id: row.id,
     workspaceId: row.workspace_id,
     token: row.token,
-    createdBy: row.created_by,
+    createdByWorkspaceMemberId: row.created_by_workspace_member_id,
     trustLevel: row.trust_level,
     maxUses: row.max_uses ?? null,
     useCount: row.use_count,
@@ -46,7 +45,7 @@ function mapInviteRow(row: any) {
 
 export async function createInvite(input: {
   workspaceId: string;
-  createdBy: string;
+  createdByWorkspaceMemberId: string;
   trustLevel?: WorkspaceInvitesTrustLevel;
   maxUses?: number;
   expiresAt?: string;
@@ -57,7 +56,7 @@ export async function createInvite(input: {
     .values({
       workspace_id: input.workspaceId,
       token,
-      created_by: input.createdBy,
+      created_by_workspace_member_id: input.createdByWorkspaceMemberId,
       trust_level: input.trustLevel || 'member',
       max_uses: input.maxUses ?? null,
       expires_at: input.expiresAt ?? null,
@@ -126,7 +125,7 @@ export async function redeemInvite(token: string, userId: string) {
     }
 
     // Add as member
-    await executeCompiledQuery(
+    const memberRow = await executeTakeFirst<{ id: string }>(
       runner,
       db
         .insertInto('workspace_members')
@@ -134,13 +133,17 @@ export async function redeemInvite(token: string, userId: string) {
           workspace_id: invite.workspace_id,
           user_id: userId,
           trust_level: invite.trust_level,
-        }),
+        })
+        .returning('id'),
     );
+    if (!memberRow) {
+      throw new Error('Failed to create workspace member');
+    }
 
     await assignOfficialChiefActorPreference(
       client,
       invite.workspace_id,
-      userId,
+      memberRow.id,
     );
 
     // Increment use count
@@ -157,12 +160,12 @@ export async function redeemInvite(token: string, userId: string) {
     const authzEntryIds = await queueAuthzRelationships(
       client,
       [
-        touchRelation('workspace', invite.workspace_id, invite.trust_level, 'user', userId),
-        ...touchWorkspaceUserMembership(
-          invite.workspace_id,
+        ...touchWorkspaceMemberMembership({
+          workspaceId: invite.workspace_id,
+          workspaceMemberId: memberRow.id,
           userId,
-          invite.trust_level,
-        ),
+          relation: invite.trust_level,
+        }),
       ],
       {
         source: 'workspace.redeem_invite',

@@ -14,9 +14,9 @@ import {
 import { api } from "@/lib/api";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
-import type { FriendIdSearchMatchView } from "@/types/api";
+import type { IdentitySearchMatchView } from "@/types/api";
 
-function buildSearchDetailParams(match: FriendIdSearchMatchView) {
+function buildSearchDetailParams(match: IdentitySearchMatchView) {
   return {
     pathname: "/contacts/search/[profileId]" as const,
     params: {
@@ -31,9 +31,9 @@ function buildSearchDetailParams(match: FriendIdSearchMatchView) {
   };
 }
 
-function resultStateLabel(match: FriendIdSearchMatchView) {
+function resultStateLabel(match: IdentitySearchMatchView) {
   switch (match.state) {
-    case "same_workspace_user":
+    case "same_workspace_member":
       return "同 workspace 用户";
     case "friend":
       return "已是好友";
@@ -48,7 +48,7 @@ export default function AddFriendScreen() {
   const router = useRouter();
   const { workspaceId } = useWorkspace();
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<FriendIdSearchMatchView[]>([]);
+  const [results, setResults] = useState<IdentitySearchMatchView[]>([]);
   const [searching, setSearching] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -58,7 +58,7 @@ export default function AddFriendScreen() {
     setSearching(true);
     setMessage(null);
     try {
-      const result = await api.searchFriendId(workspaceId, query);
+      const result = await api.searchIdentity(workspaceId, query);
 
       if (result.outcome === "empty") {
         setResults([]);
@@ -108,7 +108,7 @@ export default function AddFriendScreen() {
     }
   }
 
-  function handleSelectMatch(match: FriendIdSearchMatchView) {
+  function handleSelectMatch(match: IdentitySearchMatchView) {
     if (match.contact) {
       router.push({
         pathname: "/contacts/[contactType]/[contactId]",

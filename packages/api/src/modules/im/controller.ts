@@ -34,12 +34,12 @@ import { refreshTransportRuntimeManager } from "./runtime.js";
 
 const transportAccountOwnerCreateShape = {
   ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES).default("workspace"),
-  ownerUserId: z.string().uuid().nullable().optional(),
+  ownerWorkspaceMemberId: z.string().uuid().nullable().optional(),
 };
 
 const transportAccountOwnerUpdateShape = {
   ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES).optional(),
-  ownerUserId: z.string().uuid().nullable().optional(),
+  ownerWorkspaceMemberId: z.string().uuid().nullable().optional(),
 };
 
 const transportAccountInboundActorModeSchema = z.enum(TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES);
@@ -66,22 +66,27 @@ const transportConversationInboundActorUpdateShape = {
 function validateTransportAccountOwnerCreate(
   value: {
     ownerScope: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number];
-    ownerUserId?: string | null;
+    ownerWorkspaceMemberId?: string | null;
   },
   ctx: z.RefinementCtx,
 ) {
-  if (value.ownerScope === "workspace" && value.ownerUserId) {
+  if (value.ownerScope === "workspace" && value.ownerWorkspaceMemberId) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "Workspace-owned transport accounts cannot include ownerUserId",
-      path: ["ownerUserId"],
+      message:
+        "Workspace-owned transport accounts cannot include ownerWorkspaceMemberId",
+      path: ["ownerWorkspaceMemberId"],
     });
   }
-  if (value.ownerScope === "workspace_user" && !value.ownerUserId) {
+  if (
+    value.ownerScope === "workspace_member" &&
+    !value.ownerWorkspaceMemberId
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "Workspace-user transport accounts require ownerUserId",
-      path: ["ownerUserId"],
+      message:
+        "Workspace-member transport accounts require ownerWorkspaceMemberId",
+      path: ["ownerWorkspaceMemberId"],
     });
   }
 }
@@ -89,15 +94,16 @@ function validateTransportAccountOwnerCreate(
 function validateTransportAccountOwnerUpdate(
   value: {
     ownerScope?: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number];
-    ownerUserId?: string | null;
+    ownerWorkspaceMemberId?: string | null;
   },
   ctx: z.RefinementCtx,
 ) {
-  if (value.ownerScope === "workspace" && value.ownerUserId) {
+  if (value.ownerScope === "workspace" && value.ownerWorkspaceMemberId) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "Workspace-owned transport accounts cannot include ownerUserId",
-      path: ["ownerUserId"],
+      message:
+        "Workspace-owned transport accounts cannot include ownerWorkspaceMemberId",
+      path: ["ownerWorkspaceMemberId"],
     });
   }
 }
@@ -137,12 +143,12 @@ function validateTransportAccountInboundActorCreate(
   }
   if (
     value.inboundActorMode === "follow_owner_chief_actor" &&
-    value.ownerScope !== "workspace_user"
+    value.ownerScope !== "workspace_member"
   ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message:
-        "follow_owner_chief_actor requires a workspace_user-owned account",
+        "follow_owner_chief_actor requires a workspace_member-owned account",
       path: ["inboundActorMode"],
     });
   }
@@ -181,7 +187,7 @@ function validateTransportAccountInboundActorUpdate(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message:
-        "follow_owner_chief_actor requires a workspace_user-owned account",
+        "follow_owner_chief_actor requires a workspace_member-owned account",
       path: ["inboundActorMode"],
     });
   }
@@ -296,11 +302,11 @@ const weixinQrSessionSchema = z
   .superRefine(validateTransportAccountInboundActorCreate);
 
 const linkedUserSchema = z.object({
-  userId: z.string().uuid().nullable(),
+  workspaceMemberId: z.string().uuid().nullable(),
 });
 
 const bindingAutoLinkSchema = z.object({
-  userId: z.string().uuid().nullable(),
+  workspaceMemberId: z.string().uuid().nullable(),
 });
 
 async function requireWorkspaceAction(
@@ -449,6 +455,7 @@ export default async function imController(app: FastifyInstance) {
       if (!allowed) return;
 
       const { workspaceId } = request.params;
+      const workspaceMemberId = (request as any).workspaceMember?.id as string;
       const userId = (request as any).user!.userId as string;
       const existing = await getCurrentUserWeixinBinding({
         workspaceId,
@@ -460,8 +467,8 @@ export default async function imController(app: FastifyInstance) {
 
       const session = await startWeixinQrLoginSession({
         workspaceId,
-        ownerScope: "workspace_user",
-        ownerUserId: userId,
+        ownerScope: "workspace_member",
+        ownerWorkspaceMemberId: workspaceMemberId,
         inboundActorMode: "follow_owner_chief_actor",
       });
       return reply.status(201).send({ session });
@@ -482,12 +489,12 @@ export default async function imController(app: FastifyInstance) {
       if (!allowed) return;
 
       const { workspaceId, sessionId } = request.params;
-      const userId = (request as any).user!.userId as string;
+      const workspaceMemberId = (request as any).workspaceMember?.id as string;
       const owner = getWeixinQrLoginSessionOwner({ workspaceId, sessionId });
       if (
         !owner ||
-        owner.ownerScope !== "workspace_user" ||
-        owner.ownerUserId !== userId
+        owner.ownerScope !== "workspace_member" ||
+        owner.ownerWorkspaceMemberId !== workspaceMemberId
       ) {
         return reply.status(404).send({ error: "Weixin QR session not found" });
       }
@@ -550,7 +557,7 @@ export default async function imController(app: FastifyInstance) {
         const binding = await setCurrentUserWeixinBindingAutoLink({
           workspaceId: request.params.workspaceId,
           userId: (request as any).user!.userId,
-          targetUserId: body.userId,
+          targetWorkspaceMemberId: body.workspaceMemberId,
         });
         return reply.send({ binding });
       } catch (error) {
@@ -561,7 +568,7 @@ export default async function imController(app: FastifyInstance) {
         if (message === "WeChat binding not found") {
           return reply.status(404).send({ error: message });
         }
-        if (message === "Workspace user not found") {
+        if (message === "Workspace member not found") {
           return reply.status(404).send({ error: message });
         }
         return reply.status(400).send({ error: message });
@@ -601,7 +608,7 @@ export default async function imController(app: FastifyInstance) {
         accountKey: body.accountKey || body.appId,
         displayName: body.displayName,
         ownerScope: body.ownerScope,
-        ownerUserId: body.ownerUserId ?? null,
+        ownerWorkspaceMemberId: body.ownerWorkspaceMemberId ?? null,
         connectionMode: body.connectionMode,
         status: body.status,
         inboundActorMode: body.inboundActorMode,
@@ -645,7 +652,7 @@ export default async function imController(app: FastifyInstance) {
     Params: { workspaceId: string; addressId: string };
     Body: unknown;
   }>(
-    "/api/v1/workspaces/:workspaceId/im/external-users/:addressId/workspace-user",
+    "/api/v1/workspaces/:workspaceId/im/external-users/:addressId/workspace-member",
     async (request, reply) => {
       const allowed = await requireWorkspaceAction(
         request,
@@ -660,7 +667,7 @@ export default async function imController(app: FastifyInstance) {
       await setTransportAddressLinkedUser({
         workspaceId,
         transportAddressId: addressId,
-        userId: body.userId,
+        workspaceMemberId: body.workspaceMemberId,
       });
 
       const externalUsers = await listTransportExternalUsers({ workspaceId });
@@ -712,7 +719,7 @@ export default async function imController(app: FastifyInstance) {
         accountId,
         displayName: body.displayName,
         ownerScope: body.ownerScope,
-        ownerUserId: body.ownerUserId,
+        ownerWorkspaceMemberId: body.ownerWorkspaceMemberId,
         connectionMode: body.connectionMode,
         status: body.status,
         inboundActorMode: body.inboundActorMode,
@@ -743,7 +750,7 @@ export default async function imController(app: FastifyInstance) {
         baseUrl: body.baseUrl,
         botType: body.botType,
         ownerScope: body.ownerScope,
-        ownerUserId: body.ownerUserId ?? null,
+        ownerWorkspaceMemberId: body.ownerWorkspaceMemberId ?? null,
         inboundActorMode: body.inboundActorMode,
         inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
       });
@@ -794,7 +801,7 @@ export default async function imController(app: FastifyInstance) {
         accountKey: body.accountKey,
         displayName: body.displayName,
         ownerScope: body.ownerScope,
-        ownerUserId: body.ownerUserId ?? null,
+        ownerWorkspaceMemberId: body.ownerWorkspaceMemberId ?? null,
         connectionMode: body.connectionMode,
         status: body.status,
         inboundActorMode: body.inboundActorMode,
@@ -829,7 +836,7 @@ export default async function imController(app: FastifyInstance) {
         accountId,
         displayName: body.displayName,
         ownerScope: body.ownerScope,
-        ownerUserId: body.ownerUserId,
+        ownerWorkspaceMemberId: body.ownerWorkspaceMemberId,
         connectionMode: body.connectionMode,
         status: body.status,
         inboundActorMode: body.inboundActorMode,

@@ -194,7 +194,7 @@ export async function reindexMemoryEntry(memoryEntryId: string) {
         owner_scope: source.entry.owner_scope,
         owner_actor_id: source.entry.owner_actor_id,
         owner_conversation_id: source.entry.owner_conversation_id,
-        owner_user_id: source.entry.owner_user_id,
+        owner_workspace_member_id: source.entry.owner_workspace_member_id,
         chunk_index: index,
         search_text: chunk,
         embedding: embeddings?.[index]

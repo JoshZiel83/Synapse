@@ -43,6 +43,7 @@ type PlatformAccessKey =
   | "auditor"
 
 type WorkspaceMemberRecord = {
+  id: string
   userId: string
   userName?: string
   userEmail?: string
@@ -52,9 +53,10 @@ type WorkspaceMemberRecord = {
 
 type WorkspaceAccessBinding = {
   workspaceId: string
+  workspaceMemberId: string
   userId: string
   accessKey: WorkspaceAccessKey
-  assignedBy?: string | null
+  assignedByWorkspaceMemberId?: string | null
   createdAt: string
   updatedAt: string
   trustLevel: string
@@ -66,7 +68,7 @@ type PlatformAccessBinding = {
   userId: string
   accessKey: PlatformAccessKey
   source: string
-  assignedBy?: string | null
+  assignedByUserId?: string | null
   createdAt: string
   updatedAt: string
   userName?: string
@@ -211,7 +213,7 @@ export default function AccessManagement({
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const [platformError, setPlatformError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [workspaceAccessTargetUserId, setWorkspaceAccessTargetUserId] =
+  const [workspaceAccessTargetMemberId, setWorkspaceAccessTargetMemberId] =
     useState("")
   const [workspaceAccessKey, setWorkspaceAccessKey] =
     useState<WorkspaceAccessKey>("model_admin")
@@ -244,13 +246,13 @@ export default function AccessManagement({
       setWorkspaceError(null)
 
       if (
-        !workspaceAccessTargetUserId ||
+        !workspaceAccessTargetMemberId ||
         !nextMembers.some(
           (member: WorkspaceMemberRecord) =>
-            member.userId === workspaceAccessTargetUserId
+            member.id === workspaceAccessTargetMemberId
         )
       ) {
-        setWorkspaceAccessTargetUserId(nextMembers[0]?.userId ?? "")
+        setWorkspaceAccessTargetMemberId(nextMembers[0]?.id ?? "")
       }
 
       if (!platformTargetUserId && nextMembers[0]?.userId) {
@@ -269,7 +271,7 @@ export default function AccessManagement({
     [
       platformSuggestionUserId,
       platformTargetUserId,
-      workspaceAccessTargetUserId,
+      workspaceAccessTargetMemberId,
     ]
   )
 
@@ -328,12 +330,12 @@ export default function AccessManagement({
   }, [refreshData])
 
   const handleGrantWorkspaceAccess = async () => {
-    if (!workspaceId || !workspaceAccessTargetUserId) return
+    if (!workspaceId || !workspaceAccessTargetMemberId) return
     setAssigningWorkspaceAccess(true)
     setActionError(null)
     try {
       await api.grantWorkspaceAccess(workspaceId, {
-        userId: workspaceAccessTargetUserId,
+        workspaceMemberId: workspaceAccessTargetMemberId,
         accessKey: workspaceAccessKey,
       })
       await loadWorkspaceData(workspaceId)
@@ -347,15 +349,19 @@ export default function AccessManagement({
   }
 
   const handleRevokeWorkspaceAccess = async (
-    userId: string,
+    workspaceMemberId: string,
     accessKey: WorkspaceAccessKey
   ) => {
     if (!workspaceId) return
-    const key = `${userId}:${accessKey}`
+    const key = `${workspaceMemberId}:${accessKey}`
     setRevokingWorkspaceKey(key)
     setActionError(null)
     try {
-      await api.revokeWorkspaceAccess(workspaceId, userId, accessKey)
+      await api.revokeWorkspaceAccess(
+        workspaceId,
+        workspaceMemberId,
+        accessKey
+      )
       await loadWorkspaceData(workspaceId)
     } catch (error) {
       setActionError(
@@ -535,9 +541,9 @@ export default function AccessManagement({
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_auto]">
                     <div className="flex flex-col gap-2">
                       <Label htmlFor="workspace-access-member">Person</Label>
-                      <Select
-                        value={workspaceAccessTargetUserId}
-                        onValueChange={setWorkspaceAccessTargetUserId}
+                        <Select
+                        value={workspaceAccessTargetMemberId}
+                        onValueChange={setWorkspaceAccessTargetMemberId}
                       >
                         <SelectTrigger
                           id="workspace-access-member"
@@ -548,8 +554,8 @@ export default function AccessManagement({
                         <SelectContent>
                           {members.map((member) => (
                             <SelectItem
-                              key={member.userId}
-                              value={member.userId}
+                              key={member.id}
+                              value={member.id}
                             >
                               {member.userName ||
                                 member.userEmail ||
@@ -597,7 +603,7 @@ export default function AccessManagement({
                         onClick={handleGrantWorkspaceAccess}
                         disabled={
                           assigningWorkspaceAccess ||
-                          !workspaceAccessTargetUserId
+                          !workspaceAccessTargetMemberId
                         }
                       >
                         <Zap className="h-4 w-4" />
@@ -633,7 +639,7 @@ export default function AccessManagement({
                           </TableRow>
                         ) : (
                           workspaceAccessBindings.map((assignment) => {
-                            const key = `${assignment.userId}:${assignment.accessKey}`
+                            const key = `${assignment.workspaceMemberId}:${assignment.accessKey}`
                             return (
                               <TableRow key={key}>
                                 <TableCell className="max-w-0">
@@ -662,7 +668,7 @@ export default function AccessManagement({
                                     size="sm"
                                     onClick={() =>
                                       void handleRevokeWorkspaceAccess(
-                                        assignment.userId,
+                                        assignment.workspaceMemberId,
                                         assignment.accessKey
                                       )
                                     }
@@ -919,7 +925,7 @@ export default function AccessManagement({
                     </TableRow>
                   ) : (
                     members.map((member) => (
-                      <TableRow key={member.userId}>
+                      <TableRow key={member.id}>
                         <TableCell className="max-w-0">
                           <UserIdentity
                             name={member.userName}

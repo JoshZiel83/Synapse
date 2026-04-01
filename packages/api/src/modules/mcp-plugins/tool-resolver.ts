@@ -49,6 +49,7 @@ interface ResolveParams {
   sessionId: string;
   conversationId: string;
   userId?: string;
+  workspaceMemberId?: string;
 }
 
 export interface ResolvedRelayToolTarget {
@@ -168,10 +169,10 @@ function buildVisibilitySubjects(params: ResolveParams) {
     },
   ];
 
-  if (params.userId) {
+  if (params.workspaceMemberId) {
     subjects.push({
-      type: "user",
-      id: params.userId,
+      type: "workspace_member",
+      id: params.workspaceMemberId,
     });
   }
 
@@ -334,7 +335,7 @@ function buildRelayScopedInstance(params: {
           conversationId: executionContext.conversationId,
           sessionId: executionContext.sessionId,
           requestedByActorId: executionContext.actorId,
-          requestedByUserId: executionContext.userId,
+          requestedByWorkspaceMemberId: executionContext.workspaceMemberId,
           turnId: executionContext.turnId,
           sourceToolCallId: executionContext.toolCallId,
           sourceToolName:
