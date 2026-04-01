@@ -86,6 +86,7 @@ async function resolveWindowsPackagedRuntime() {
   }
 
   const physicalRoot = join(tmpdir(), "srg");
+  await mkdir(physicalRoot, { recursive: true });
   const stagePath = process.platform === "win32"
     ? await ensureWindowsSubstDrive(physicalRoot)
     : physicalRoot;

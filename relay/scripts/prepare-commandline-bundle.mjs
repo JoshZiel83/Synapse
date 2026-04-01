@@ -122,6 +122,38 @@ const PYTHON_REQUIREMENTS = [
   'xlrd==2.0.1',
 ]
 
+const NODE_MODULE_PRUNE_DIRS = new Set([
+  '__image_snapshots__',
+  '__snapshots__',
+  '__tests__',
+  '__mocks__',
+  '__fixtures__',
+  'coverage',
+  'benchmark',
+  'benchmarks',
+  'demo',
+  'demos',
+  'doc',
+  'docs',
+  'example',
+  'examples',
+  'test',
+  'tests',
+  'website',
+  '.github',
+])
+
+const PYTHON_PACKAGE_PRUNE_DIRS = new Set([
+  '__pycache__',
+  'doc',
+  'docs',
+  'example',
+  'examples',
+  'test',
+  'tests',
+  'testing',
+])
+
 function parseArgs(argv) {
   const options = {
     targetPlatform: '',
@@ -426,6 +458,32 @@ async function copyDirectory(source, target) {
   })
 }
 
+async function pruneDirectories(rootDir, removableNames) {
+  const queue = [rootDir]
+  let removed = 0
+
+  while (queue.length > 0) {
+    const current = queue.pop()
+    const entries = await readdir(current, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue
+      }
+
+      const entryPath = join(current, entry.name)
+      if (removableNames.has(entry.name.toLowerCase())) {
+        await rm(entryPath, { recursive: true, force: true })
+        removed += 1
+        continue
+      }
+
+      queue.push(entryPath)
+    }
+  }
+
+  return removed
+}
+
 function normalizeRelativePath(baseDir, targetPath) {
   return relative(baseDir, targetPath).split('\\').join('/')
 }
@@ -484,6 +542,10 @@ async function main() {
     if (await stat(nodeLockPath).then(() => true).catch(() => false)) {
       await copyFile(nodeLockPath, join(assetsDir, 'node-modules', 'package-lock.json'))
     }
+    const prunedNodeDirs = await pruneDirectories(join(assetsDir, 'node-modules'), NODE_MODULE_PRUNE_DIRS)
+    if (prunedNodeDirs > 0) {
+      console.log(`Pruned ${prunedNodeDirs} non-runtime Node module directories`)
+    }
 
     const {
       executable: sourcePythonBinary,
@@ -493,6 +555,10 @@ async function main() {
     await ensureExists(sourcePythonBinary)
     await copyDirectory(pythonRuntimeRoot, join(assetsDir, 'python'))
     await copyDirectory(pythonPackageDir, join(assetsDir, 'python-site-packages'))
+    const prunedPythonDirs = await pruneDirectories(join(assetsDir, 'python-site-packages'), PYTHON_PACKAGE_PRUNE_DIRS)
+    if (prunedPythonDirs > 0) {
+      console.log(`Pruned ${prunedPythonDirs} non-runtime Python package directories`)
+    }
     await rm(join(assetsDir, 'python', 'share', 'terminfo'), { recursive: true, force: true })
 
     const ffmpegBinary = options.targetPlatform.startsWith('windows-') ? 'ffmpeg/ffmpeg.exe' : 'ffmpeg/ffmpeg'
