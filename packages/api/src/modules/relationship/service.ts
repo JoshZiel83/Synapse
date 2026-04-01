@@ -39,9 +39,9 @@ import { mapConversationSummaryView } from "../conversation/summary-view.js";
 
 export const CONTACT_HUB_KINDS = [
   "workspace-actor",
-  "workspace-user",
+  "workspace-member",
   "friend-actor",
-  "friend-user",
+  "friend-member",
 ] as const;
 
 export type ContactHubKind = (typeof CONTACT_HUB_KINDS)[number];
@@ -49,15 +49,15 @@ export type ContactHubKind = (typeof CONTACT_HUB_KINDS)[number];
 type ApprovalMode = "auto" | "manual";
 type AccessPolicy = "workspace_open" | "approval_required";
 type RequestStatus = "pending" | "approved" | "rejected";
-type ContactTargetType = "user" | "actor";
-type FriendSearchOutcome =
+type ContactTargetType = "member" | "actor";
+type IdentitySearchOutcome =
   | "empty"
   | "invalid"
   | "self"
   | "not_found"
   | "found";
-type FriendSearchMatchState =
-  | "same_workspace_user"
+type IdentitySearchMatchState =
+  | "same_workspace_member"
   | "friend"
   | "pending_request"
   | "requestable";
@@ -68,7 +68,7 @@ type WorkspaceSummary = {
   slug: string;
 };
 
-type UserWorkspaceSummary = {
+type WorkspaceMemberSummary = {
   workspace: WorkspaceSummary;
   workspaceMemberId: string;
   userId: string;
@@ -108,7 +108,7 @@ type ContactHubEntry = {
   };
 };
 
-const FRIEND_SEARCH_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{3,31})$/;
+const IDENTITY_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{3,31})$/;
 
 function isUniqueViolation(error: unknown) {
   return (
@@ -125,15 +125,15 @@ function toIsoString(value: string | Date | null | undefined) {
   return new Date(0).toISOString();
 }
 
-function normalizeFriendSearchId(value: string) {
+function normalizeIdentityId(value: string) {
   return value.trim().toLowerCase();
 }
 
-function validateFriendSearchId(value: string) {
-  const normalized = normalizeFriendSearchId(value);
-  if (!FRIEND_SEARCH_ID_PATTERN.test(normalized)) {
+function validateIdentityId(value: string) {
+  const normalized = normalizeIdentityId(value);
+  if (!IDENTITY_ID_PATTERN.test(normalized)) {
     throw new Error(
-      "Friend ID must be 4-32 characters using letters, numbers, dot, underscore, or hyphen.",
+      "Identity ID must be 4-32 characters using letters, numbers, dot, underscore, or hyphen.",
     );
   }
   return normalized;
@@ -176,10 +176,10 @@ async function getWorkspaceById(workspaceId: string): Promise<WorkspaceSummary |
   return row ? workspaceSummary(row) : null;
 }
 
-async function getWorkspaceUserSummary(
+async function getWorkspaceMemberSummaryByUser(
   workspaceId: string,
   userId: string,
-): Promise<UserWorkspaceSummary | null> {
+): Promise<WorkspaceMemberSummary | null> {
   const row = await db
     .selectFrom("workspace_members as wm")
     .innerJoin("users as u", "u.id", "wm.user_id")
@@ -210,14 +210,54 @@ async function getWorkspaceUserSummary(
   };
 }
 
-async function getUserFriendSearchProfileRow(userId: string) {
+async function getWorkspaceMemberSummaryById(
+  workspaceMemberId: string,
+): Promise<WorkspaceMemberSummary | null> {
   const row = await db
-    .selectFrom("users")
-    .select(["id", "friend_search_id", "friend_search_enabled"])
-    .where("id", "=", userId)
+    .selectFrom("workspace_members as wm")
+    .innerJoin("users as u", "u.id", "wm.user_id")
+    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
+    .select([
+      "wm.id as workspace_member_id",
+      "wm.workspace_id",
+      "w.name as workspace_name",
+      "w.slug as workspace_slug",
+      "wm.user_id",
+      "wm.trust_level",
+      "u.name",
+      "u.email",
+      "u.avatar_file_id",
+    ])
+    .where("wm.id", "=", workspaceMemberId)
+    .executeTakeFirst();
+  if (!row) return null;
+  return {
+    workspace: workspaceSummary(row),
+    workspaceMemberId: row.workspace_member_id,
+    userId: row.user_id,
+    trustLevel: row.trust_level,
+    name: row.name,
+    email: row.email,
+    avatarFileId: row.avatar_file_id,
+  };
+}
+
+async function getMemberRelationshipProfileRow(workspaceMemberId: string) {
+  const row = await db
+    .selectFrom("workspace_relationship_profiles")
+    .select([
+      "id",
+      "workspace_id",
+      "identity_id",
+      "identity_search_enabled",
+      "approval_mode",
+      "qr_token",
+    ])
+    .where("subject_type", "=", "member")
+    .where("subject_workspace_member_id", "=", workspaceMemberId)
     .executeTakeFirst();
   if (!row) {
-    throw new Error("User not found");
+    throw new Error("Relationship profile not found");
   }
   return row;
 }
@@ -255,16 +295,16 @@ async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
   };
 }
 
-function mapUserFriendEntry(params: {
+function mapMemberFriendEntry(params: {
   entryId: string;
-  peer: UserWorkspaceSummary;
+  peer: WorkspaceMemberSummary;
   conversationId?: string;
 }): ContactHubEntry {
   return {
-    kind: "friend-user",
+    kind: "friend-member",
     id: params.entryId,
-    targetType: "user",
-    title: params.peer.name || params.peer.email || "Unknown user",
+    targetType: "member",
+    title: params.peer.name || params.peer.email || "Unknown member",
     subtitle: `${params.peer.workspace.name} · ${params.peer.email}`,
     avatarUrl: params.peer.avatarFileId
       ? getFileUrlById(params.peer.avatarFileId)
@@ -303,23 +343,23 @@ function mapActorFriendEntry(params: {
   };
 }
 
-function mapWorkspaceUserEntry(params: {
-  user: UserWorkspaceSummary;
+function mapWorkspaceMemberEntry(params: {
+  member: WorkspaceMemberSummary;
   conversationId?: string;
 }): ContactHubEntry {
   return {
-    kind: "workspace-user",
-    id: params.user.userId,
-    targetType: "user",
-    title: params.user.name || params.user.email || "Unknown user",
-    subtitle: `${params.user.email} · ${params.user.trustLevel || "member"}`,
-    avatarUrl: params.user.avatarFileId
-      ? getFileUrlById(params.user.avatarFileId)
+    kind: "workspace-member",
+    id: params.member.workspaceMemberId,
+    targetType: "member",
+    title: params.member.name || params.member.email || "Unknown member",
+    subtitle: `${params.member.email} · ${params.member.trustLevel || "member"}`,
+    avatarUrl: params.member.avatarFileId
+      ? getFileUrlById(params.member.avatarFileId)
       : undefined,
-    workspace: params.user.workspace,
-    workspaceMemberId: params.user.workspaceMemberId,
-    userId: params.user.userId,
-    relationLabel: "Workspace user",
+    workspace: params.member.workspace,
+    workspaceMemberId: params.member.workspaceMemberId,
+    userId: params.member.userId,
+    relationLabel: "Workspace member",
     directState: params.conversationId
       ? { status: "existing", conversationId: params.conversationId }
       : { status: "available" },
@@ -355,7 +395,7 @@ async function ensureRelationshipProfile(params: {
   workspaceId: string;
   createdBy: string;
   subjectType: ContactTargetType;
-  subjectUserId?: string;
+  subjectWorkspaceMemberId?: string;
   subjectActorId?: string;
 }) {
   let queryBuilder = db
@@ -364,8 +404,12 @@ async function ensureRelationshipProfile(params: {
     .where("workspace_id", "=", params.workspaceId)
     .where("subject_type", "=", params.subjectType);
   queryBuilder =
-    params.subjectType === "user"
-      ? queryBuilder.where("subject_user_id", "=", params.subjectUserId || null)
+    params.subjectType === "member"
+      ? queryBuilder.where(
+          "subject_workspace_member_id",
+          "=",
+          params.subjectWorkspaceMemberId || null,
+        )
       : queryBuilder.where("subject_actor_id", "=", params.subjectActorId || null);
   const existing = await queryBuilder.executeTakeFirst();
   if (existing) return existing;
@@ -375,7 +419,10 @@ async function ensureRelationshipProfile(params: {
     .values({
       workspace_id: params.workspaceId,
       subject_type: params.subjectType,
-      subject_user_id: params.subjectType === "user" ? params.subjectUserId || null : null,
+      subject_workspace_member_id:
+        params.subjectType === "member"
+          ? params.subjectWorkspaceMemberId || null
+          : null,
       subject_actor_id: params.subjectType === "actor" ? params.subjectActorId || null : null,
       qr_token: uuidv4(),
       created_by: params.createdBy,
@@ -476,16 +523,22 @@ async function updateActorAccessPolicy(params: {
 async function grantActorAccess(params: {
   workspaceId: string;
   actorId: string;
-  requesterUserId: string;
+  requesterWorkspaceMemberId: string;
   grantedBy: string;
 }) {
+  const requester = await getWorkspaceMemberSummaryById(
+    params.requesterWorkspaceMemberId,
+  );
+  if (!requester || requester.workspace.id !== params.workspaceId) {
+    throw new Error("Workspace member not found");
+  }
   const workspaceUserContextId = buildWorkspaceUserContextId(
     params.workspaceId,
-    params.requesterUserId,
+    requester.userId,
   );
   const entryIds = await enqueueAuthzRelationships(
     [
-      ...touchWorkspaceUserContext(params.workspaceId, params.requesterUserId),
+      ...touchWorkspaceUserContext(params.workspaceId, requester.userId),
       touchRelation(
         "actor",
         params.actorId,
@@ -512,7 +565,7 @@ async function grantActorAccess(params: {
       source: "relationship.actor_access_grant",
       workspaceId: params.workspaceId,
       actorId: params.actorId,
-      requesterUserId: params.requesterUserId,
+      requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
       grantedBy: params.grantedBy,
     },
   );
@@ -521,10 +574,9 @@ async function grantActorAccess(params: {
 
 async function ensureFriendEntry(params: {
   workspaceId: string;
-  ownerUserId: string;
+  ownerWorkspaceMemberId: string;
   peerType: ContactTargetType;
-  peerWorkspaceId: string;
-  peerUserId?: string;
+  peerWorkspaceMemberId?: string;
   peerActorId?: string;
   sourceRequestId?: string;
 }) {
@@ -532,10 +584,12 @@ async function ensureFriendEntry(params: {
     .insertInto("workspace_friend_entries")
     .values({
       workspace_id: params.workspaceId,
-      owner_user_id: params.ownerUserId,
+      owner_workspace_member_id: params.ownerWorkspaceMemberId,
       peer_type: params.peerType,
-      peer_workspace_id: params.peerWorkspaceId,
-      peer_user_id: params.peerType === "user" ? params.peerUserId || null : null,
+      peer_workspace_member_id:
+        params.peerType === "member"
+          ? params.peerWorkspaceMemberId || null
+          : null,
       peer_actor_id: params.peerType === "actor" ? params.peerActorId || null : null,
       source_request_id: params.sourceRequestId || null,
       metadata: {} as TableInsert<"workspace_friend_entries">["metadata"],
@@ -546,56 +600,59 @@ async function ensureFriendEntry(params: {
 
 async function findExistingFriendEntry(params: {
   workspaceId: string;
-  ownerUserId: string;
+  ownerWorkspaceMemberId: string;
   peerType: ContactTargetType;
-  peerWorkspaceId?: string;
-  peerUserId?: string;
+  peerWorkspaceMemberId?: string;
   peerActorId?: string;
 }) {
   let queryBuilder = db
     .selectFrom("workspace_friend_entries")
     .selectAll()
     .where("workspace_id", "=", params.workspaceId)
-    .where("owner_user_id", "=", params.ownerUserId)
+    .where("owner_workspace_member_id", "=", params.ownerWorkspaceMemberId)
     .where("peer_type", "=", params.peerType);
   queryBuilder =
-    params.peerType === "user"
-      ? queryBuilder
-          .where("peer_workspace_id", "=", params.peerWorkspaceId || null)
-          .where("peer_user_id", "=", params.peerUserId || null)
+    params.peerType === "member"
+      ? queryBuilder.where(
+          "peer_workspace_member_id",
+          "=",
+          params.peerWorkspaceMemberId || null,
+        )
       : queryBuilder.where("peer_actor_id", "=", params.peerActorId || null);
   return queryBuilder.executeTakeFirst();
 }
 
 async function findPendingFriendRequest(params: {
-  requesterWorkspaceId: string;
-  requesterUserId: string;
-  targetWorkspaceId: string;
+  requesterWorkspaceMemberId: string;
   targetType: ContactTargetType;
-  targetUserId?: string;
+  targetWorkspaceMemberId?: string;
   targetActorId?: string;
 }) {
   let queryBuilder = db
     .selectFrom("workspace_friend_requests")
     .selectAll()
-    .where("requester_workspace_id", "=", params.requesterWorkspaceId)
-    .where("requester_user_id", "=", params.requesterUserId)
-    .where("target_workspace_id", "=", params.targetWorkspaceId)
+    .where(
+      "requester_workspace_member_id",
+      "=",
+      params.requesterWorkspaceMemberId,
+    )
     .where("target_subject_type", "=", params.targetType)
     .where("status", "=", "pending");
   queryBuilder =
-    params.targetType === "user"
-      ? queryBuilder.where("target_user_id", "=", params.targetUserId || null)
+    params.targetType === "member"
+      ? queryBuilder.where(
+          "target_workspace_member_id",
+          "=",
+          params.targetWorkspaceMemberId || null,
+        )
       : queryBuilder.where("target_actor_id", "=", params.targetActorId || null);
   return queryBuilder.executeTakeFirst();
 }
 
 async function createFriendRequest(params: {
-  requesterWorkspaceId: string;
-  requesterUserId: string;
-  targetWorkspaceId: string;
+  requesterWorkspaceMemberId: string;
   targetType: ContactTargetType;
-  targetUserId?: string;
+  targetWorkspaceMemberId?: string;
   targetActorId?: string;
   profileId?: string;
 }) {
@@ -607,11 +664,12 @@ async function createFriendRequest(params: {
     const created = await db
       .insertInto("workspace_friend_requests")
       .values({
-        requester_workspace_id: params.requesterWorkspaceId,
-        requester_user_id: params.requesterUserId,
-        target_workspace_id: params.targetWorkspaceId,
+        requester_workspace_member_id: params.requesterWorkspaceMemberId,
         target_subject_type: params.targetType,
-        target_user_id: params.targetType === "user" ? params.targetUserId || null : null,
+        target_workspace_member_id:
+          params.targetType === "member"
+            ? params.targetWorkspaceMemberId || null
+            : null,
         target_actor_id: params.targetType === "actor" ? params.targetActorId || null : null,
         requested_via_profile_id: params.profileId || null,
         status: "pending",
@@ -634,14 +692,18 @@ async function createFriendRequest(params: {
 async function createActorAccessRequest(params: {
   workspaceId: string;
   actorId: string;
-  requesterUserId: string;
+  requesterWorkspaceMemberId: string;
 }) {
   const existing = await db
     .selectFrom("actor_access_requests")
     .selectAll()
     .where("workspace_id", "=", params.workspaceId)
     .where("actor_id", "=", params.actorId)
-    .where("requester_user_id", "=", params.requesterUserId)
+    .where(
+      "requester_workspace_member_id",
+      "=",
+      params.requesterWorkspaceMemberId,
+    )
     .where("status", "=", "pending")
     .executeTakeFirst();
   if (existing) {
@@ -654,7 +716,7 @@ async function createActorAccessRequest(params: {
       .values({
         workspace_id: params.workspaceId,
         actor_id: params.actorId,
-        requester_user_id: params.requesterUserId,
+        requester_workspace_member_id: params.requesterWorkspaceMemberId,
         status: "pending",
         metadata: {} as TableInsert<"actor_access_requests">["metadata"],
       })
@@ -671,7 +733,11 @@ async function createActorAccessRequest(params: {
       .selectAll()
       .where("workspace_id", "=", params.workspaceId)
       .where("actor_id", "=", params.actorId)
-      .where("requester_user_id", "=", params.requesterUserId)
+      .where(
+        "requester_workspace_member_id",
+        "=",
+        params.requesterWorkspaceMemberId,
+      )
       .where("status", "=", "pending")
       .executeTakeFirst();
     if (!retry) throw error;
@@ -686,11 +752,11 @@ async function loadViewerDirectConversationMap(workspaceMemberId: string) {
     .where((eb) =>
       eb.or([
         eb.and([
-          eb("participant_one_kind", "=", "user"),
+          eb("participant_one_kind", "=", "member"),
           eb("participant_one_workspace_member_id", "=", workspaceMemberId),
         ]),
         eb.and([
-          eb("participant_two_kind", "=", "user"),
+          eb("participant_two_kind", "=", "member"),
           eb("participant_two_workspace_member_id", "=", workspaceMemberId),
         ]),
       ]),
@@ -698,7 +764,7 @@ async function loadViewerDirectConversationMap(workspaceMemberId: string) {
     .execute();
 
   const viewerIdentity: DirectConversationIdentity = {
-    kind: "user",
+    kind: "member",
     workspaceMemberId,
   };
   const map = new Map<string, string>();
@@ -768,20 +834,22 @@ async function resolveContactReference(params: {
   contactKind: ContactHubKind;
   contactId: string;
 }) {
-  if (params.contactKind === "workspace-user") {
-    const user = await getWorkspaceUserSummary(params.workspaceId, params.contactId);
-    if (!user) {
-      throw new Error("Workspace user not found");
+  const viewer = await getWorkspaceMemberIdentity(params.workspaceId, params.userId);
+
+  if (params.contactKind === "workspace-member") {
+    const member = await getWorkspaceMemberSummaryById(params.contactId);
+    if (!member || member.workspace.id !== params.workspaceId) {
+      throw new Error("Workspace member not found");
     }
-    if (user.userId === params.userId) {
+    if (viewer && member.workspaceMemberId === viewer.workspaceMemberId) {
       throw new Error("Cannot open a direct conversation with yourself");
     }
     return {
       kind: params.contactKind,
-      user,
+      member,
       peerIdentity: {
-        kind: "user" as const,
-        workspaceMemberId: user.workspaceMemberId,
+        kind: "member" as const,
+        workspaceMemberId: member.workspaceMemberId,
       },
     };
   }
@@ -805,31 +873,30 @@ async function resolveContactReference(params: {
     .selectFrom("workspace_friend_entries")
     .selectAll()
     .where("workspace_id", "=", params.workspaceId)
-    .where("owner_user_id", "=", params.userId)
+    .where("owner_workspace_member_id", "=", viewer?.workspaceMemberId || "")
     .where("id", "=", params.contactId)
     .executeTakeFirst();
   if (!friendEntry) {
     throw new Error("Friend not found");
   }
 
-  if (params.contactKind === "friend-user") {
-    if (!friendEntry.peer_user_id) {
+  if (params.contactKind === "friend-member") {
+    if (!friendEntry.peer_workspace_member_id) {
       throw new Error("Friend not found");
     }
-    const user = await getWorkspaceUserSummary(
-      friendEntry.peer_workspace_id,
-      friendEntry.peer_user_id,
+    const member = await getWorkspaceMemberSummaryById(
+      friendEntry.peer_workspace_member_id,
     );
-    if (!user) {
+    if (!member) {
       throw new Error("Friend not found");
     }
     return {
       kind: params.contactKind,
       friendEntry,
-      user,
+      member,
       peerIdentity: {
-        kind: "user" as const,
-        workspaceMemberId: user.workspaceMemberId,
+        kind: "member" as const,
+        workspaceMemberId: member.workspaceMemberId,
       },
     };
   }
@@ -910,25 +977,35 @@ async function buildContactHubEntryMap(params: {
         .selectFrom("workspace_friend_entries")
         .selectAll()
         .where("workspace_id", "=", params.workspaceId)
-        .where("owner_user_id", "=", params.userId)
+        .where(
+          "owner_workspace_member_id",
+          "=",
+          viewerWorkspaceMember?.workspaceMemberId || "",
+        )
         .orderBy("created_at", "desc")
         .execute(),
-      db
-        .selectFrom("actor_access_requests")
-        .select(["actor_id"])
-        .where("workspace_id", "=", params.workspaceId)
-        .where("requester_user_id", "=", params.userId)
-        .where("status", "=", "pending")
-        .execute(),
+      viewerWorkspaceMember
+        ? db
+            .selectFrom("actor_access_requests")
+            .select(["actor_id"])
+            .where("workspace_id", "=", params.workspaceId)
+            .where(
+              "requester_workspace_member_id",
+              "=",
+              viewerWorkspaceMember.workspaceMemberId,
+            )
+            .where("status", "=", "pending")
+            .execute()
+        : Promise.resolve([]),
     ]);
 
   const pendingActorAccessIds = new Set(
     pendingActorAccessRows.map((row) => row.actor_id),
   );
 
-  const workspaceUsers = members.map((row) =>
-    mapWorkspaceUserEntry({
-      user: {
+  const workspaceMembers = members.map((row) =>
+    mapWorkspaceMemberEntry({
+      member: {
         workspace: workspaceSummary(row),
         workspaceMemberId: row.workspace_member_id,
         userId: row.user_id,
@@ -939,7 +1016,7 @@ async function buildContactHubEntryMap(params: {
       },
       conversationId: directConversationMap.get(
         directConversationIdentityKey({
-          kind: "user",
+          kind: "member",
           workspaceMemberId: row.workspace_member_id,
         }),
       ),
@@ -982,19 +1059,18 @@ async function buildContactHubEntryMap(params: {
 
   const friends: ContactHubEntry[] = [];
   for (const entry of friendEntries) {
-    if (entry.peer_type === "user" && entry.peer_user_id) {
-      const peer = await getWorkspaceUserSummary(
-        entry.peer_workspace_id,
-        entry.peer_user_id,
+    if (entry.peer_type === "member" && entry.peer_workspace_member_id) {
+      const peer = await getWorkspaceMemberSummaryById(
+        entry.peer_workspace_member_id,
       );
       if (!peer) continue;
       friends.push(
-        mapUserFriendEntry({
+        mapMemberFriendEntry({
           entryId: entry.id,
           peer,
           conversationId: directConversationMap.get(
             directConversationIdentityKey({
-              kind: "user",
+              kind: "member",
               workspaceMemberId: peer.workspaceMemberId,
             }),
           ),
@@ -1021,80 +1097,99 @@ async function buildContactHubEntryMap(params: {
   }
 
   return {
-    workspaceUsers,
+    workspaceMembers,
     workspaceActors,
     friends,
   };
 }
 
 async function createOrApproveFriendship(params: {
-  requesterWorkspaceId: string;
-  requesterUserId: string;
-  targetWorkspaceId: string;
+  requesterWorkspaceMemberId: string;
   targetType: ContactTargetType;
-  targetUserId?: string;
+  targetWorkspaceMemberId?: string;
   targetActorId?: string;
   sourceRequestId?: string;
 }) {
+  const requester = await getWorkspaceMemberSummaryById(
+    params.requesterWorkspaceMemberId,
+  );
+  if (!requester) {
+    throw new Error("Requester workspace member not found");
+  }
+
   await ensureFriendEntry({
-    workspaceId: params.requesterWorkspaceId,
-    ownerUserId: params.requesterUserId,
+    workspaceId: requester.workspace.id,
+    ownerWorkspaceMemberId: requester.workspaceMemberId,
     peerType: params.targetType,
-    peerWorkspaceId: params.targetWorkspaceId,
-    peerUserId: params.targetUserId,
+    peerWorkspaceMemberId: params.targetWorkspaceMemberId,
     peerActorId: params.targetActorId,
     sourceRequestId: params.sourceRequestId,
   });
 
-  if (params.targetType === "user" && params.targetUserId) {
+  if (params.targetType === "member" && params.targetWorkspaceMemberId) {
+    const target = await getWorkspaceMemberSummaryById(
+      params.targetWorkspaceMemberId,
+    );
+    if (!target) {
+      throw new Error("Target workspace member not found");
+    }
     await ensureFriendEntry({
-      workspaceId: params.targetWorkspaceId,
-      ownerUserId: params.targetUserId,
-      peerType: "user",
-      peerWorkspaceId: params.requesterWorkspaceId,
-      peerUserId: params.requesterUserId,
+      workspaceId: target.workspace.id,
+      ownerWorkspaceMemberId: target.workspaceMemberId,
+      peerType: "member",
+      peerWorkspaceMemberId: requester.workspaceMemberId,
       sourceRequestId: params.sourceRequestId,
     });
   }
 }
 
-async function resolveUserRelationshipProfile(params: {
+async function resolveMemberRelationshipProfile(params: {
   workspaceId: string;
   userId: string;
+  viewerWorkspaceMemberId: string;
   profile: {
     id: string;
     workspace_id: string;
     subject_type: string;
-    subject_user_id: string | null;
+    subject_workspace_member_id: string | null;
     approval_mode: ApprovalMode;
   };
 }) {
-  if (params.profile.subject_user_id === params.userId) {
+  if (
+    !params.profile.subject_workspace_member_id ||
+    params.profile.subject_workspace_member_id === params.viewerWorkspaceMemberId
+  ) {
     return { outcome: "self_scan" as const };
+  }
+
+  const member = await getWorkspaceMemberSummaryById(
+    params.profile.subject_workspace_member_id,
+  );
+  if (!member) {
+    throw new Error("Relationship profile target not found");
   }
 
   if (params.profile.workspace_id === params.workspaceId) {
     return {
-      outcome: "same_workspace_user" as const,
+      outcome: "same_workspace_member" as const,
       contact: {
-        kind: "workspace-user" as const,
-        id: params.profile.subject_user_id!,
+        kind: "workspace-member" as const,
+        id: member.workspaceMemberId,
       },
     };
   }
 
   const existingFriend = await findExistingFriendEntry({
     workspaceId: params.workspaceId,
-    ownerUserId: params.userId,
-    peerType: "user",
-    peerWorkspaceId: params.profile.workspace_id,
-    peerUserId: params.profile.subject_user_id || undefined,
+    ownerWorkspaceMemberId: params.viewerWorkspaceMemberId,
+    peerType: "member",
+    peerWorkspaceMemberId: params.profile.subject_workspace_member_id,
   });
   if (existingFriend) {
     return {
       outcome: "friend_active" as const,
       contact: {
-        kind: "friend-user" as const,
+        kind: "friend-member" as const,
         id: existingFriend.id,
       },
     };
@@ -1102,24 +1197,21 @@ async function resolveUserRelationshipProfile(params: {
 
   if (params.profile.approval_mode === "auto") {
     await createOrApproveFriendship({
-      requesterWorkspaceId: params.workspaceId,
-      requesterUserId: params.userId,
-      targetWorkspaceId: params.profile.workspace_id,
-      targetType: "user",
-      targetUserId: params.profile.subject_user_id || undefined,
+      requesterWorkspaceMemberId: params.viewerWorkspaceMemberId,
+      targetType: "member",
+      targetWorkspaceMemberId: params.profile.subject_workspace_member_id,
     });
     const entry = await findExistingFriendEntry({
       workspaceId: params.workspaceId,
-      ownerUserId: params.userId,
-      peerType: "user",
-      peerWorkspaceId: params.profile.workspace_id,
-      peerUserId: params.profile.subject_user_id || undefined,
+      ownerWorkspaceMemberId: params.viewerWorkspaceMemberId,
+      peerType: "member",
+      peerWorkspaceMemberId: params.profile.subject_workspace_member_id,
     });
     return {
       outcome: "friend_active" as const,
       contact: entry
         ? {
-            kind: "friend-user" as const,
+            kind: "friend-member" as const,
             id: entry.id,
           }
         : undefined,
@@ -1127,11 +1219,9 @@ async function resolveUserRelationshipProfile(params: {
   }
 
   const requestResult = await createFriendRequest({
-    requesterWorkspaceId: params.workspaceId,
-    requesterUserId: params.userId,
-    targetWorkspaceId: params.profile.workspace_id,
-    targetType: "user",
-    targetUserId: params.profile.subject_user_id || undefined,
+    requesterWorkspaceMemberId: params.viewerWorkspaceMemberId,
+    targetType: "member",
+    targetWorkspaceMemberId: params.profile.subject_workspace_member_id,
     profileId: params.profile.id,
   });
   return {
@@ -1142,121 +1232,23 @@ async function resolveUserRelationshipProfile(params: {
   };
 }
 
-export async function getUserFriendSearchProfile(params: { userId: string }) {
-  const row = await getUserFriendSearchProfileRow(params.userId);
-  return {
-    friendId: row.friend_search_id,
-    searchByIdEnabled: row.friend_search_enabled,
-  };
-}
-
-export async function updateUserFriendSearchProfile(params: {
-  userId: string;
-  friendId?: string;
-  searchByIdEnabled?: boolean;
-}) {
-  const current = await getUserFriendSearchProfileRow(params.userId);
-  const nextFriendId =
-    typeof params.friendId === "string"
-      ? validateFriendSearchId(params.friendId)
-      : current.friend_search_id;
-  const nextSearchByIdEnabled =
-    typeof params.searchByIdEnabled === "boolean"
-      ? params.searchByIdEnabled
-      : current.friend_search_enabled;
-
-  try {
-    const updated = await db
-      .updateTable("users")
-      .set({
-        friend_search_id: nextFriendId,
-        friend_search_enabled: nextSearchByIdEnabled,
-        updated_at: sql`NOW()`,
-      })
-      .where("id", "=", params.userId)
-      .returning(["friend_search_id", "friend_search_enabled"])
-      .executeTakeFirst();
-    if (!updated) {
-      throw new Error("Failed to update friend search profile");
-    }
-    return {
-      friendId: updated.friend_search_id,
-      searchByIdEnabled: updated.friend_search_enabled,
-    };
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new Error("This friend ID is already taken.");
-    }
-    throw error;
-  }
-}
-
-export async function searchUsersByFriendId(params: {
+export async function searchRelationshipsByIdentity(params: {
   workspaceId: string;
   userId: string;
   query: string;
 }) {
-  const normalizedQuery = normalizeFriendSearchId(params.query);
+  const normalizedQuery = normalizeIdentityId(params.query);
   if (!normalizedQuery) {
     return {
       query: normalizedQuery,
-      outcome: "empty" as FriendSearchOutcome,
+      outcome: "empty" as IdentitySearchOutcome,
       matches: [],
     };
   }
-  if (!FRIEND_SEARCH_ID_PATTERN.test(normalizedQuery)) {
+  if (!IDENTITY_ID_PATTERN.test(normalizedQuery)) {
     return {
       query: normalizedQuery,
-      outcome: "invalid" as FriendSearchOutcome,
-      matches: [],
-    };
-  }
-
-  const targetUser = await db
-    .selectFrom("users")
-    .select(["id", "friend_search_id", "friend_search_enabled"])
-    .where("friend_search_id", "=", normalizedQuery)
-    .executeTakeFirst();
-  if (!targetUser || !targetUser.friend_search_enabled) {
-    return {
-      query: normalizedQuery,
-      outcome: "not_found" as FriendSearchOutcome,
-      matches: [],
-    };
-  }
-  if (targetUser.id === params.userId) {
-    return {
-      query: normalizedQuery,
-      outcome: "self" as FriendSearchOutcome,
-      matches: [],
-    };
-  }
-
-  const memberships = await db
-    .selectFrom("workspace_members as wm")
-    .innerJoin("users as u", "u.id", "wm.user_id")
-    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
-    .select([
-      "wm.id as workspace_member_id",
-      "wm.workspace_id",
-      "w.name as workspace_name",
-      "w.slug as workspace_slug",
-      "wm.user_id",
-      "wm.trust_level",
-      "u.name",
-      "u.email",
-      "u.avatar_file_id",
-    ])
-    .where("wm.user_id", "=", targetUser.id)
-    .orderBy(
-      sql<number>`CASE WHEN wm.workspace_id = ${params.workspaceId} THEN 0 ELSE 1 END`,
-    )
-    .orderBy("w.name", "asc")
-    .execute();
-  if (memberships.length === 0) {
-    return {
-      query: normalizedQuery,
-      outcome: "not_found" as FriendSearchOutcome,
+      outcome: "invalid" as IdentitySearchOutcome,
       matches: [],
     };
   }
@@ -1265,197 +1257,507 @@ export async function searchUsersByFriendId(params: {
     params.workspaceId,
     params.userId,
   );
-  const directConversationMap = viewerWorkspaceMember
-    ? await loadViewerDirectConversationMap(
-        viewerWorkspaceMember.workspaceMemberId,
-      )
-    : new Map<string, string>();
-  const matches = [];
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
 
-  for (const row of memberships) {
-    const peer: UserWorkspaceSummary = {
-      workspace: workspaceSummary(row),
-      workspaceMemberId: row.workspace_member_id,
-      userId: row.user_id,
-      trustLevel: row.trust_level,
-      name: row.name,
-      email: row.email,
-      avatarFileId: row.avatar_file_id,
+  const profile = await db
+    .selectFrom("workspace_relationship_profiles")
+    .selectAll()
+    .where("identity_id", "=", normalizedQuery)
+    .where("identity_search_enabled", "=", true)
+    .executeTakeFirst();
+  if (!profile) {
+    return {
+      query: normalizedQuery,
+      outcome: "not_found" as IdentitySearchOutcome,
+      matches: [],
     };
-    const profile = await ensureRelationshipProfile({
-      workspaceId: row.workspace_id,
-      createdBy: row.user_id,
-      subjectType: "user",
-      subjectUserId: row.user_id,
-    });
+  }
+
+  const directConversationMap = await loadViewerDirectConversationMap(
+    viewerWorkspaceMember.workspaceMemberId,
+  );
+
+  if (profile.subject_type === "member") {
+    if (
+      profile.subject_workspace_member_id ===
+      viewerWorkspaceMember.workspaceMemberId
+    ) {
+      return {
+        query: normalizedQuery,
+        outcome: "self" as IdentitySearchOutcome,
+        matches: [],
+      };
+    }
+
+    const member = profile.subject_workspace_member_id
+      ? await getWorkspaceMemberSummaryById(profile.subject_workspace_member_id)
+      : null;
+    if (!member) {
+      return {
+        query: normalizedQuery,
+        outcome: "not_found" as IdentitySearchOutcome,
+        matches: [],
+      };
+    }
+
     const conversationId = directConversationMap.get(
       directConversationIdentityKey({
-        kind: "user",
-        workspaceMemberId: row.workspace_member_id,
+        kind: "member",
+        workspaceMemberId: member.workspaceMemberId,
       }),
     );
 
-    if (row.workspace_id === params.workspaceId) {
-      matches.push({
-        profileId: profile.id,
-        title: peer.name || peer.email || "Unknown user",
-        subtitle: `${peer.workspace.name} · ${peer.email}`,
-        avatarUrl: peer.avatarFileId
-          ? getFileUrlById(peer.avatarFileId)
-          : undefined,
-        workspace: peer.workspace,
-        userId: peer.userId,
-        state: "same_workspace_user" as FriendSearchMatchState,
-        contact: {
-          kind: "workspace-user" as const,
-          id: peer.userId,
-        },
-        conversationId,
-      });
-      continue;
+    if (member.workspace.id === params.workspaceId) {
+      return {
+        query: normalizedQuery,
+        outcome: "found" as IdentitySearchOutcome,
+        matches: [
+          {
+            profileId: profile.id,
+            targetType: "member" as const,
+            title: member.name || member.email || "Unknown member",
+            subtitle: `${member.workspace.name} · ${member.email}`,
+            avatarUrl: member.avatarFileId
+              ? getFileUrlById(member.avatarFileId)
+              : undefined,
+            workspace: member.workspace,
+            workspaceMemberId: member.workspaceMemberId,
+            userId: member.userId,
+            state: "same_workspace_member" as IdentitySearchMatchState,
+            contact: {
+              kind: "workspace-member" as const,
+              id: member.workspaceMemberId,
+            },
+            conversationId,
+          },
+        ],
+      };
     }
 
     const existingFriend = await findExistingFriendEntry({
       workspaceId: params.workspaceId,
-      ownerUserId: params.userId,
-      peerType: "user",
-      peerWorkspaceId: row.workspace_id,
-      peerUserId: row.user_id,
+      ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+      peerType: "member",
+      peerWorkspaceMemberId: member.workspaceMemberId,
     });
     if (existingFriend) {
-      matches.push({
-        profileId: profile.id,
-        title: peer.name || peer.email || "Unknown user",
-        subtitle: `${peer.workspace.name} · ${peer.email}`,
-        avatarUrl: peer.avatarFileId
-          ? getFileUrlById(peer.avatarFileId)
-          : undefined,
-        workspace: peer.workspace,
-        userId: peer.userId,
-        state: "friend" as FriendSearchMatchState,
-        contact: {
-          kind: "friend-user" as const,
-          id: existingFriend.id,
-        },
-        conversationId,
-      });
-      continue;
+      return {
+        query: normalizedQuery,
+        outcome: "found" as IdentitySearchOutcome,
+        matches: [
+          {
+            profileId: profile.id,
+            targetType: "member" as const,
+            title: member.name || member.email || "Unknown member",
+            subtitle: `${member.workspace.name} · ${member.email}`,
+            avatarUrl: member.avatarFileId
+              ? getFileUrlById(member.avatarFileId)
+              : undefined,
+            workspace: member.workspace,
+            workspaceMemberId: member.workspaceMemberId,
+            userId: member.userId,
+            state: "friend" as IdentitySearchMatchState,
+            contact: {
+              kind: "friend-member" as const,
+              id: existingFriend.id,
+            },
+            conversationId,
+          },
+        ],
+      };
     }
 
     const pendingRequest = await findPendingFriendRequest({
-      requesterWorkspaceId: params.workspaceId,
-      requesterUserId: params.userId,
-      targetWorkspaceId: row.workspace_id,
-      targetType: "user",
-      targetUserId: row.user_id,
+      requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+      targetType: "member",
+      targetWorkspaceMemberId: member.workspaceMemberId,
     });
-    matches.push({
-      profileId: profile.id,
-      title: peer.name || peer.email || "Unknown user",
-      subtitle: `${peer.workspace.name} · ${peer.email}`,
-      avatarUrl: peer.avatarFileId
-        ? getFileUrlById(peer.avatarFileId)
-        : undefined,
-      workspace: peer.workspace,
-      userId: peer.userId,
-      state: pendingRequest
-        ? ("pending_request" as FriendSearchMatchState)
-        : ("requestable" as FriendSearchMatchState),
-      requestId: pendingRequest?.id,
-    });
+    return {
+      query: normalizedQuery,
+      outcome: "found" as IdentitySearchOutcome,
+      matches: [
+        {
+          profileId: profile.id,
+          targetType: "member" as const,
+          title: member.name || member.email || "Unknown member",
+          subtitle: `${member.workspace.name} · ${member.email}`,
+          avatarUrl: member.avatarFileId
+            ? getFileUrlById(member.avatarFileId)
+            : undefined,
+          workspace: member.workspace,
+          workspaceMemberId: member.workspaceMemberId,
+          userId: member.userId,
+          state: pendingRequest
+            ? ("pending_request" as IdentitySearchMatchState)
+            : ("requestable" as IdentitySearchMatchState),
+          requestId: pendingRequest?.id,
+        },
+      ],
+    };
   }
 
+  const actor = profile.subject_actor_id
+    ? await getActorSummary(profile.subject_actor_id)
+    : null;
+  if (!actor) {
+    return {
+      query: normalizedQuery,
+      outcome: "not_found" as IdentitySearchOutcome,
+      matches: [],
+    };
+  }
+
+  const conversationId = directConversationMap.get(
+    directConversationIdentityKey({
+      kind: "actor",
+      actorId: actor.actorId,
+    }),
+  );
+
+  if (actor.workspace.id === params.workspaceId) {
+    const pendingActorRequest = await db
+      .selectFrom("actor_access_requests")
+      .select(["id"])
+      .where("workspace_id", "=", params.workspaceId)
+      .where("actor_id", "=", actor.actorId)
+      .where(
+        "requester_workspace_member_id",
+        "=",
+        viewerWorkspaceMember.workspaceMemberId,
+      )
+      .where("status", "=", "pending")
+      .executeTakeFirst();
+    const accessState = await getActorAccessState({
+      workspaceId: params.workspaceId,
+      userId: params.userId,
+      actor,
+      conversationId,
+      pendingRequestActorIds: new Set(
+        pendingActorRequest ? [actor.actorId] : [],
+      ),
+    });
+    return {
+      query: normalizedQuery,
+      outcome: "found" as IdentitySearchOutcome,
+      matches: [
+        {
+          profileId: profile.id,
+          targetType: "actor" as const,
+          title: actor.name,
+          subtitle: `${actor.workspace.name} · ${actor.title}`,
+          avatarUrl: actor.avatarStoredName
+            ? getFileUrl(actor.avatarStoredName)
+            : undefined,
+          avatarEmoji: actor.avatarEmoji || undefined,
+          workspace: actor.workspace,
+          actorId: actor.actorId,
+          state: accessState,
+          contact: {
+            kind: "workspace-actor" as const,
+            id: actor.actorId,
+          },
+          conversationId,
+          requestId: pendingActorRequest?.id,
+        },
+      ],
+    };
+  }
+
+  const existingFriend = await findExistingFriendEntry({
+    workspaceId: params.workspaceId,
+    ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+    peerType: "actor",
+    peerActorId: actor.actorId,
+  });
+  if (existingFriend) {
+    return {
+      query: normalizedQuery,
+      outcome: "found" as IdentitySearchOutcome,
+      matches: [
+        {
+          profileId: profile.id,
+          targetType: "actor" as const,
+          title: actor.name,
+          subtitle: `${actor.workspace.name} · ${actor.title}`,
+          avatarUrl: actor.avatarStoredName
+            ? getFileUrl(actor.avatarStoredName)
+            : undefined,
+          avatarEmoji: actor.avatarEmoji || undefined,
+          workspace: actor.workspace,
+          actorId: actor.actorId,
+          state: "friend" as const,
+          contact: {
+            kind: "friend-actor" as const,
+            id: existingFriend.id,
+          },
+          conversationId,
+        },
+      ],
+    };
+  }
+
+  const pendingRequest = await findPendingFriendRequest({
+    requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+    targetType: "actor",
+    targetActorId: actor.actorId,
+  });
   return {
     query: normalizedQuery,
-    outcome: matches.length > 0 ? ("found" as FriendSearchOutcome) : ("not_found" as FriendSearchOutcome),
-    matches,
+    outcome: "found" as IdentitySearchOutcome,
+    matches: [
+      {
+        profileId: profile.id,
+        targetType: "actor" as const,
+        title: actor.name,
+        subtitle: `${actor.workspace.name} · ${actor.title}`,
+        avatarUrl: actor.avatarStoredName
+          ? getFileUrl(actor.avatarStoredName)
+          : undefined,
+        avatarEmoji: actor.avatarEmoji || undefined,
+        workspace: actor.workspace,
+        actorId: actor.actorId,
+        state: pendingRequest ? ("pending_request" as const) : ("requestable" as const),
+        requestId: pendingRequest?.id,
+      },
+    ],
   };
 }
 
-export async function requestFriendBySearchProfile(params: {
+export async function requestRelationshipByIdentityProfile(params: {
   workspaceId: string;
   userId: string;
   profileId: string;
+  requireSearchable?: boolean;
 }) {
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
+
   const profile = await db
     .selectFrom("workspace_relationship_profiles")
     .selectAll()
     .where("id", "=", params.profileId)
-    .where("subject_type", "=", "user")
     .executeTakeFirst();
   if (!profile) {
     throw new Error("Search target not found");
   }
-
-  const targetUser = await db
-    .selectFrom("users")
-    .select(["id", "friend_search_enabled"])
-    .where("id", "=", profile.subject_user_id!)
-    .executeTakeFirst();
-  if (!targetUser?.friend_search_enabled) {
-    throw new Error("This user cannot be added by friend ID.");
+  if (params.requireSearchable !== false && !profile.identity_search_enabled) {
+    throw new Error("Search target not found");
   }
 
-  return resolveUserRelationshipProfile({
+  if (profile.subject_type === "member") {
+    return resolveMemberRelationshipProfile({
+      workspaceId: params.workspaceId,
+      userId: params.userId,
+      viewerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+      profile: {
+        id: profile.id,
+        workspace_id: profile.workspace_id,
+        subject_type: profile.subject_type,
+        subject_workspace_member_id: profile.subject_workspace_member_id,
+        approval_mode: profile.approval_mode as ApprovalMode,
+      },
+    });
+  }
+
+  const actor = profile.subject_actor_id
+    ? await getActorSummary(profile.subject_actor_id)
+    : null;
+  if (!actor) {
+    throw new Error("Relationship profile target not found");
+  }
+
+  if (profile.workspace_id === params.workspaceId) {
+    const canInvoke = await authorizeAction({
+      subject: workspaceUserSubject(params.workspaceId, params.userId),
+      action: "actor.invoke",
+      resourceId: actor.actorId,
+    });
+
+    if (canInvoke || actor.accessPolicy === "workspace_open") {
+      return {
+        outcome: "actor_access_granted" as const,
+        contact: {
+          kind: "workspace-actor" as const,
+          id: actor.actorId,
+        },
+      };
+    }
+
+    if (profile.approval_mode === "auto") {
+      await grantActorAccess({
+        workspaceId: params.workspaceId,
+        actorId: actor.actorId,
+        requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+        grantedBy: params.userId,
+      });
+      return {
+        outcome: "actor_access_granted" as const,
+        contact: {
+          kind: "workspace-actor" as const,
+          id: actor.actorId,
+        },
+      };
+    }
+
+    const requestResult = await createActorAccessRequest({
+      workspaceId: params.workspaceId,
+      actorId: actor.actorId,
+      requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+    });
+    return {
+      outcome: requestResult.created
+        ? ("actor_access_request_created" as const)
+        : ("actor_access_pending" as const),
+      requestId: requestResult.request.id,
+      contact: {
+        kind: "workspace-actor" as const,
+        id: actor.actorId,
+      },
+    };
+  }
+
+  const existingFriend = await findExistingFriendEntry({
     workspaceId: params.workspaceId,
-    userId: params.userId,
-    profile: {
-      id: profile.id,
-      workspace_id: profile.workspace_id,
-      subject_type: profile.subject_type,
-      subject_user_id: profile.subject_user_id,
-      approval_mode: profile.approval_mode as ApprovalMode,
-    },
+    ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+    peerType: "actor",
+    peerActorId: actor.actorId,
   });
+  if (existingFriend) {
+    return {
+      outcome: "friend_active" as const,
+      contact: {
+        kind: "friend-actor" as const,
+        id: existingFriend.id,
+      },
+    };
+  }
+
+  if (profile.approval_mode === "auto") {
+    await createOrApproveFriendship({
+      requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+      targetType: "actor",
+      targetActorId: actor.actorId,
+    });
+    const entry = await findExistingFriendEntry({
+      workspaceId: params.workspaceId,
+      ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+      peerType: "actor",
+      peerActorId: actor.actorId,
+    });
+    return {
+      outcome: "friend_active" as const,
+      contact: entry
+        ? {
+            kind: "friend-actor" as const,
+            id: entry.id,
+          }
+        : undefined,
+    };
+  }
+
+  const requestResult = await createFriendRequest({
+    requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+    targetType: "actor",
+    targetActorId: actor.actorId,
+    profileId: profile.id,
+  });
+  return {
+    outcome: requestResult.created
+      ? ("friend_request_created" as const)
+      : ("friend_request_pending" as const),
+    requestId: requestResult.request.id,
+  };
 }
 
-export async function getUserRelationshipProfile(params: {
+export async function getMemberRelationshipProfile(params: {
   workspaceId: string;
   userId: string;
 }) {
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdBy: params.userId,
-    subjectType: "user",
-    subjectUserId: params.userId,
+    subjectType: "member",
+    subjectWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
   });
   return {
-    subjectType: "user" as const,
+    subjectType: "member" as const,
     approvalMode: profile.approval_mode,
     qrToken: profile.qr_token,
     qrUrl: buildRelationshipQrUrl(profile.qr_token),
+    identityId: profile.identity_id,
+    identitySearchEnabled: profile.identity_search_enabled,
   };
 }
 
-export async function updateUserRelationshipProfile(params: {
+export async function updateMemberRelationshipProfile(params: {
   workspaceId: string;
   userId: string;
   approvalMode: ApprovalMode;
+  identityId?: string;
+  identitySearchEnabled?: boolean;
 }) {
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdBy: params.userId,
-    subjectType: "user",
-    subjectUserId: params.userId,
+    subjectType: "member",
+    subjectWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
   });
-  const updated = await db
-    .updateTable("workspace_relationship_profiles")
-    .set({
-      approval_mode: params.approvalMode,
-      updated_at: sql`NOW()`,
-    })
-    .where("id", "=", profile.id)
-    .returningAll()
-    .executeTakeFirst();
-  if (!updated) {
-    throw new Error("Failed to update relationship profile");
+  try {
+    const updated = await db
+      .updateTable("workspace_relationship_profiles")
+      .set({
+        approval_mode: params.approvalMode,
+        identity_id:
+          typeof params.identityId === "string"
+            ? validateIdentityId(params.identityId)
+            : profile.identity_id,
+        identity_search_enabled:
+          typeof params.identitySearchEnabled === "boolean"
+            ? params.identitySearchEnabled
+            : profile.identity_search_enabled,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", profile.id)
+      .returningAll()
+      .executeTakeFirst();
+    if (!updated) {
+      throw new Error("Failed to update relationship profile");
+    }
+    return {
+      subjectType: "member" as const,
+      approvalMode: updated.approval_mode,
+      qrToken: updated.qr_token,
+      qrUrl: buildRelationshipQrUrl(updated.qr_token),
+      identityId: updated.identity_id,
+      identitySearchEnabled: updated.identity_search_enabled,
+    };
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new Error("This identity ID is already taken.");
+    }
+    throw error;
   }
-  return {
-    subjectType: "user" as const,
-    approvalMode: updated.approval_mode,
-    qrToken: updated.qr_token,
-    qrUrl: buildRelationshipQrUrl(updated.qr_token),
-  };
 }
 
 export async function getActorRelationshipProfile(params: {
@@ -1478,6 +1780,8 @@ export async function getActorRelationshipProfile(params: {
     approvalMode: profile.approval_mode,
     qrToken: profile.qr_token,
     qrUrl: buildRelationshipQrUrl(profile.qr_token),
+    identityId: profile.identity_id,
+    identitySearchEnabled: profile.identity_search_enabled,
     accessPolicy: actor.accessPolicy,
   };
 }
@@ -1487,6 +1791,8 @@ export async function updateActorRelationshipProfile(params: {
   actorId: string;
   userId: string;
   approvalMode: ApprovalMode;
+  identityId?: string;
+  identitySearchEnabled?: boolean;
   accessPolicy?: AccessPolicy;
 }) {
   const profile = await ensureRelationshipProfile({
@@ -1496,15 +1802,31 @@ export async function updateActorRelationshipProfile(params: {
     subjectActorId: params.actorId,
   });
 
-  const updatedProfile = await db
-    .updateTable("workspace_relationship_profiles")
-    .set({
-      approval_mode: params.approvalMode,
-      updated_at: sql`NOW()`,
-    })
-    .where("id", "=", profile.id)
-    .returningAll()
-    .executeTakeFirst();
+  let updatedProfile;
+  try {
+    updatedProfile = await db
+      .updateTable("workspace_relationship_profiles")
+      .set({
+        approval_mode: params.approvalMode,
+        identity_id:
+          typeof params.identityId === "string"
+            ? validateIdentityId(params.identityId)
+            : profile.identity_id,
+        identity_search_enabled:
+          typeof params.identitySearchEnabled === "boolean"
+            ? params.identitySearchEnabled
+            : profile.identity_search_enabled,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", profile.id)
+      .returningAll()
+      .executeTakeFirst();
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new Error("This identity ID is already taken.");
+    }
+    throw error;
+  }
   if (!updatedProfile) {
     throw new Error("Failed to update relationship profile");
   }
@@ -1525,6 +1847,8 @@ export async function updateActorRelationshipProfile(params: {
     approvalMode: updatedProfile.approval_mode,
     qrToken: updatedProfile.qr_token,
     qrUrl: buildRelationshipQrUrl(updatedProfile.qr_token),
+    identityId: updatedProfile.identity_id,
+    identitySearchEnabled: updatedProfile.identity_search_enabled,
     accessPolicy: accessPolicy || "workspace_open",
   };
 }
@@ -1534,6 +1858,14 @@ export async function scanRelationshipQr(params: {
   userId: string;
   token: string;
 }) {
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
+
   const profile = await db
     .selectFrom("workspace_relationship_profiles")
     .selectAll()
@@ -1543,139 +1875,27 @@ export async function scanRelationshipQr(params: {
     throw new Error("Relationship QR code not found");
   }
 
-  if (
-    profile.subject_type === "user" &&
-    profile.subject_user_id === params.userId
-  ) {
-    return { outcome: "self_scan" as const };
-  }
-
-  if (profile.subject_type === "user") {
-    return resolveUserRelationshipProfile({
+  if (profile.subject_type === "member") {
+    return resolveMemberRelationshipProfile({
       workspaceId: params.workspaceId,
       userId: params.userId,
+      viewerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       profile: {
         id: profile.id,
         workspace_id: profile.workspace_id,
         subject_type: profile.subject_type,
-        subject_user_id: profile.subject_user_id,
+        subject_workspace_member_id: profile.subject_workspace_member_id,
         approval_mode: profile.approval_mode as ApprovalMode,
       },
     });
   }
 
-  if (
-    profile.subject_type === "actor" &&
-    profile.workspace_id === params.workspaceId
-  ) {
-    const actor = await getActorSummary(profile.subject_actor_id!);
-    if (!actor) {
-      throw new Error("Actor not found");
-    }
-    const canInvoke = await authorizeAction({
-      subject: workspaceUserSubject(params.workspaceId, params.userId),
-      action: "actor.invoke",
-      resourceId: actor.actorId,
-    });
-
-    if (canInvoke || actor.accessPolicy === "workspace_open") {
-      return {
-        outcome: "actor_access_granted" as const,
-        contact: {
-          kind: "workspace-actor" as const,
-          id: actor.actorId,
-        },
-      };
-    }
-
-    if (profile.approval_mode === "auto") {
-      await grantActorAccess({
-        workspaceId: params.workspaceId,
-        actorId: actor.actorId,
-        requesterUserId: params.userId,
-        grantedBy: params.userId,
-      });
-      return {
-        outcome: "actor_access_granted" as const,
-        contact: {
-          kind: "workspace-actor" as const,
-          id: actor.actorId,
-        },
-      };
-    }
-
-    const requestResult = await createActorAccessRequest({
-      workspaceId: params.workspaceId,
-      actorId: actor.actorId,
-      requesterUserId: params.userId,
-    });
-    return {
-      outcome: requestResult.created
-        ? ("actor_access_request_created" as const)
-        : ("actor_access_pending" as const),
-      requestId: requestResult.request.id,
-      contact: {
-        kind: "workspace-actor" as const,
-        id: actor.actorId,
-      },
-    };
-  }
-
-  const existingFriend = await findExistingFriendEntry({
+  return requestRelationshipByIdentityProfile({
     workspaceId: params.workspaceId,
-    ownerUserId: params.userId,
-    peerType: "actor",
-    peerActorId: profile.subject_actor_id || undefined,
-  });
-  if (existingFriend) {
-    return {
-      outcome: "friend_active" as const,
-      contact: {
-        kind: "friend-actor" as const,
-        id: existingFriend.id,
-      },
-    };
-  }
-
-  if (profile.approval_mode === "auto") {
-    await createOrApproveFriendship({
-      requesterWorkspaceId: params.workspaceId,
-      requesterUserId: params.userId,
-      targetWorkspaceId: profile.workspace_id,
-      targetType: "actor",
-      targetActorId: profile.subject_actor_id || undefined,
-    });
-    const entry = await findExistingFriendEntry({
-      workspaceId: params.workspaceId,
-      ownerUserId: params.userId,
-      peerType: "actor",
-      peerActorId: profile.subject_actor_id || undefined,
-    });
-    return {
-      outcome: "friend_active" as const,
-      contact: entry
-        ? {
-            kind: "friend-actor" as const,
-            id: entry.id,
-          }
-        : undefined,
-    };
-  }
-
-  const requestResult = await createFriendRequest({
-    requesterWorkspaceId: params.workspaceId,
-    requesterUserId: params.userId,
-    targetWorkspaceId: profile.workspace_id,
-    targetType: "actor",
-    targetActorId: profile.subject_actor_id || undefined,
+    userId: params.userId,
     profileId: profile.id,
+    requireSearchable: false,
   });
-  return {
-    outcome: requestResult.created
-      ? ("friend_request_created" as const)
-      : ("friend_request_pending" as const),
-    requestId: requestResult.request.id,
-  };
 }
 
 export async function listFriends(params: {
@@ -1690,25 +1910,40 @@ export async function listFriendRequests(params: {
   workspaceId: string;
   userId: string;
 }) {
-  const incomingRows = await db
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
+
+  const pendingRows = await db
     .selectFrom("workspace_friend_requests")
     .selectAll()
-    .where("target_workspace_id", "=", params.workspaceId)
     .where("status", "=", "pending")
+    .orderBy("created_at", "desc")
     .execute();
-  const outgoingRows = await db
-    .selectFrom("workspace_friend_requests")
-    .selectAll()
-    .where("requester_workspace_id", "=", params.workspaceId)
-    .where("requester_user_id", "=", params.userId)
-    .where("status", "=", "pending")
-    .execute();
+  const outgoingRows = pendingRows.filter(
+    (row) =>
+      row.requester_workspace_member_id ===
+      viewerWorkspaceMember.workspaceMemberId,
+  );
 
   const incoming = [];
-  for (const row of incomingRows) {
-    if (row.target_subject_type === "user") {
-      if (row.target_user_id !== params.userId) continue;
+  for (const row of pendingRows) {
+    if (row.target_subject_type === "member") {
+      if (
+        row.target_workspace_member_id !==
+        viewerWorkspaceMember.workspaceMemberId
+      ) {
+        continue;
+      }
     } else if (row.target_actor_id) {
+      const targetActor = await getActorSummary(row.target_actor_id);
+      if (!targetActor || targetActor.workspace.id !== params.workspaceId) {
+        continue;
+      }
       const canApprove = await authorizeAction({
         subject: workspaceUserSubject(params.workspaceId, params.userId),
         action: "actor.grant",
@@ -1717,13 +1952,12 @@ export async function listFriendRequests(params: {
       if (!canApprove) continue;
     }
 
-    const requester = await getWorkspaceUserSummary(
-      row.requester_workspace_id,
-      row.requester_user_id,
+    const requester = await getWorkspaceMemberSummaryById(
+      row.requester_workspace_member_id,
     );
-    const targetUser =
-      row.target_subject_type === "user" && row.target_user_id
-        ? await getWorkspaceUserSummary(row.target_workspace_id, row.target_user_id)
+    const targetMember =
+      row.target_subject_type === "member" && row.target_workspace_member_id
+        ? await getWorkspaceMemberSummaryById(row.target_workspace_member_id)
         : null;
     const targetActor =
       row.target_subject_type === "actor" && row.target_actor_id
@@ -1735,16 +1969,16 @@ export async function listFriendRequests(params: {
       createdAt: toIsoString(row.created_at),
       requester,
       targetType: row.target_subject_type,
-      targetUser,
+      targetMember,
       targetActor,
     });
   }
 
   const outgoing = [];
   for (const row of outgoingRows) {
-    const targetUser =
-      row.target_subject_type === "user" && row.target_user_id
-        ? await getWorkspaceUserSummary(row.target_workspace_id, row.target_user_id)
+    const targetMember =
+      row.target_subject_type === "member" && row.target_workspace_member_id
+        ? await getWorkspaceMemberSummaryById(row.target_workspace_member_id)
         : null;
     const targetActor =
       row.target_subject_type === "actor" && row.target_actor_id
@@ -1755,7 +1989,7 @@ export async function listFriendRequests(params: {
       status: row.status,
       createdAt: toIsoString(row.created_at),
       targetType: row.target_subject_type,
-      targetUser,
+      targetMember,
       targetActor,
     });
   }
@@ -1769,23 +2003,37 @@ export async function resolveFriendRequest(params: {
   requestId: string;
   decision: "approve" | "reject";
 }) {
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
   const request = await db
     .selectFrom("workspace_friend_requests")
     .selectAll()
     .where("id", "=", params.requestId)
     .executeTakeFirst();
-  if (!request || request.target_workspace_id !== params.workspaceId) {
+  if (!request) {
     throw new Error("Friend request not found");
   }
   if (request.status !== "pending") {
     throw new Error("Friend request has already been resolved");
   }
 
-  if (request.target_subject_type === "user") {
-    if (request.target_user_id !== params.userId) {
+  if (request.target_subject_type === "member") {
+    if (
+      request.target_workspace_member_id !==
+      viewerWorkspaceMember.workspaceMemberId
+    ) {
       throw new Error("Not allowed to resolve this friend request");
     }
   } else if (request.target_actor_id) {
+    const targetActor = await getActorSummary(request.target_actor_id);
+    if (!targetActor || targetActor.workspace.id !== params.workspaceId) {
+      throw new Error("Friend request not found");
+    }
     const canApprove = await authorizeAction({
       subject: workspaceUserSubject(params.workspaceId, params.userId),
       action: "actor.grant",
@@ -1798,11 +2046,9 @@ export async function resolveFriendRequest(params: {
 
   if (params.decision === "approve") {
     await createOrApproveFriendship({
-      requesterWorkspaceId: request.requester_workspace_id,
-      requesterUserId: request.requester_user_id,
-      targetWorkspaceId: request.target_workspace_id,
+      requesterWorkspaceMemberId: request.requester_workspace_member_id,
       targetType: request.target_subject_type as ContactTargetType,
-      targetUserId: request.target_user_id || undefined,
+      targetWorkspaceMemberId: request.target_workspace_member_id || undefined,
       targetActorId: request.target_actor_id || undefined,
       sourceRequestId: request.id,
     });
@@ -1831,6 +2077,13 @@ export async function listActorAccessRequests(params: {
   workspaceId: string;
   userId: string;
 }) {
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
   const [incomingRows, outgoingRows] = await Promise.all([
     db
       .selectFrom("actor_access_requests")
@@ -1842,7 +2095,11 @@ export async function listActorAccessRequests(params: {
       .selectFrom("actor_access_requests")
       .selectAll()
       .where("workspace_id", "=", params.workspaceId)
-      .where("requester_user_id", "=", params.userId)
+      .where(
+        "requester_workspace_member_id",
+        "=",
+        viewerWorkspaceMember.workspaceMemberId,
+      )
       .where("status", "=", "pending")
       .execute(),
   ]);
@@ -1859,7 +2116,9 @@ export async function listActorAccessRequests(params: {
       id: row.id,
       status: row.status,
       createdAt: toIsoString(row.created_at),
-      requester: await getWorkspaceUserSummary(params.workspaceId, row.requester_user_id),
+      requester: await getWorkspaceMemberSummaryById(
+        row.requester_workspace_member_id,
+      ),
       actor: await getActorSummary(row.actor_id),
     });
   }
@@ -1907,7 +2166,7 @@ export async function resolveActorAccessRequest(params: {
     await grantActorAccess({
       workspaceId: params.workspaceId,
       actorId: request.actor_id,
-      requesterUserId: request.requester_user_id,
+      requesterWorkspaceMemberId: request.requester_workspace_member_id,
       grantedBy: params.userId,
     });
   }
@@ -1965,7 +2224,7 @@ export async function getContactHub(params: {
       totalPendingCount: friendIncoming.length + actorIncoming.length,
     },
     workspaceActors: entries.workspaceActors,
-    workspaceUsers: entries.workspaceUsers,
+    workspaceMembers: entries.workspaceMembers,
     friends: entries.friends,
     groups,
   };
@@ -1983,7 +2242,7 @@ export async function getContactHubDetail(params: {
   });
   const entry = [
     ...hub.workspaceActors,
-    ...hub.workspaceUsers,
+    ...hub.workspaceMembers,
     ...hub.friends,
   ].find(
     (item) => item.kind === params.contactKind && item.id === params.contactId,
@@ -1998,9 +2257,11 @@ export async function getContactHubDetail(params: {
         (member) => member.type === "actor" && member.actorId === entry.actorId,
       );
     }
-    if (entry.userId) {
+    if (entry.workspaceMemberId) {
       return conversation.members.some(
-        (member) => member.type === "user" && member.userId === entry.userId,
+        (member) =>
+          member.type === "user" &&
+          member.workspaceMemberId === entry.workspaceMemberId,
       );
     }
     return false;
@@ -2027,7 +2288,7 @@ export async function openDirectConversation(params: {
     throw new Error("Workspace member not found");
   }
   const requesterIdentity: DirectConversationIdentity = {
-    kind: "user",
+    kind: "member",
     workspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
   };
 
@@ -2049,14 +2310,15 @@ export async function openDirectConversation(params: {
         await grantActorAccess({
           workspaceId: params.workspaceId,
           actorId: resolved.actor.actorId,
-          requesterUserId: params.userId,
+          requesterWorkspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
           grantedBy: params.userId,
         });
       } else {
         const accessRequest = await createActorAccessRequest({
           workspaceId: params.workspaceId,
           actorId: resolved.actor.actorId,
-          requesterUserId: params.userId,
+          requesterWorkspaceMemberId:
+            requesterWorkspaceMember.workspaceMemberId,
         });
         return {
           status: "pending_approval" as const,
@@ -2080,8 +2342,10 @@ export async function openDirectConversation(params: {
 
   try {
     const targetWorkspaceMemberId =
-      resolved.peerIdentity.kind === "user" ? resolved.user?.workspaceMemberId : undefined;
-    if (resolved.peerIdentity.kind === "user" && !targetWorkspaceMemberId) {
+      resolved.peerIdentity.kind === "member"
+        ? resolved.member?.workspaceMemberId
+        : undefined;
+    if (resolved.peerIdentity.kind === "member" && !targetWorkspaceMemberId) {
       throw new Error("Peer workspace membership not found");
     }
     const created = await createThread({

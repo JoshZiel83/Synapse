@@ -15,8 +15,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import type {
   ContactHubEntryView,
   ContactHubResponse,
-  FriendIdSearchMatchView,
-  FriendIdSearchResponse,
+  IdentitySearchMatchView,
+  IdentitySearchResponse,
 } from "@/lib/api"
 import { api } from "@/lib/api"
 import { resolveFileUrl } from "@/lib/utils"
@@ -55,7 +55,7 @@ function matchesContact(entry: ContactHubEntryView, query: string) {
     .includes(query)
 }
 
-function buildSearchDetailHref(match: FriendIdSearchMatchView) {
+function buildSearchDetailHref(match: IdentitySearchMatchView) {
   const params = new URLSearchParams({
     title: match.title,
     subtitle: match.subtitle || "",
@@ -67,16 +67,24 @@ function buildSearchDetailHref(match: FriendIdSearchMatchView) {
   return `/m/contacts/search/${match.profileId}?${params.toString()}`
 }
 
-function friendStateLabel(match: FriendIdSearchMatchView) {
+function identityStateLabel(match: IdentitySearchMatchView) {
   switch (match.state) {
-    case "same_workspace_user":
-      return "同 workspace 用户"
+    case "same_workspace_member":
+      return "同 workspace 成员"
     case "friend":
       return "已是好友"
+    case "available":
+      return "可直接联系"
+    case "approval_required":
+      return "需要审批"
+    case "pending_approval":
+      return "审批中"
+    case "existing":
+      return "已可直接联系"
     case "pending_request":
       return "好友申请待处理"
     default:
-      return "可发起好友申请"
+      return "可发起关系请求"
   }
 }
 
@@ -87,9 +95,9 @@ export default function MobileGlobalSearchPage() {
   const [loading, setLoading] = useState(true)
   const [conversations, setConversations] = useState<ConversationSummaryLike[]>([])
   const [hub, setHub] = useState<ContactHubResponse | null>(null)
-  const [friendIdResults, setFriendIdResults] =
-    useState<FriendIdSearchResponse | null>(null)
-  const [friendIdMessage, setFriendIdMessage] = useState<string | null>(null)
+  const [identityResults, setIdentityResults] =
+    useState<IdentitySearchResponse | null>(null)
+  const [identityMessage, setIdentityMessage] = useState<string | null>(null)
 
   const deferredQuery = useDeferredValue(query.trim().toLowerCase())
 
@@ -120,31 +128,33 @@ export default function MobileGlobalSearchPage() {
 
   useEffect(() => {
     if (!workspaceId || !deferredQuery) {
-      setFriendIdResults(null)
-      setFriendIdMessage(null)
+      setIdentityResults(null)
+      setIdentityMessage(null)
       return
     }
 
     let active = true
     void api
-      .searchFriendId(workspaceId, deferredQuery)
+      .searchIdentity(workspaceId, deferredQuery)
       .then((result) => {
         if (!active) return
-        setFriendIdResults(result)
+        setIdentityResults(result)
         if (result.outcome === "invalid") {
-          setFriendIdMessage("好友 ID 需为 4-32 位，只能包含字母、数字、点、下划线或短横线。")
+          setIdentityMessage(
+            "Identity ID 需为 4-32 位，只能包含字母、数字、点、下划线或短横线。"
+          )
         } else if (result.outcome === "not_found") {
-          setFriendIdMessage("没有匹配的好友 ID。")
+          setIdentityMessage("没有匹配的 Identity ID。")
         } else if (result.outcome === "self") {
-          setFriendIdMessage("这是你自己的好友 ID。")
+          setIdentityMessage("这是你自己的当前 workspace 身份。")
         } else {
-          setFriendIdMessage(null)
+          setIdentityMessage(null)
         }
       })
       .catch((error) => {
         if (!active) return
-        setFriendIdResults(null)
-        setFriendIdMessage(error instanceof Error ? error.message : "搜索好友 ID 失败。")
+        setIdentityResults(null)
+        setIdentityMessage(error instanceof Error ? error.message : "搜索 Identity 失败。")
       })
 
     return () => {
@@ -160,10 +170,10 @@ export default function MobileGlobalSearchPage() {
     () =>
       [
         ...(hub?.workspaceActors || []),
-        ...(hub?.workspaceUsers || []),
+        ...(hub?.workspaceMembers || []),
         ...(hub?.friends || []),
       ].filter((item) => matchesContact(item, deferredQuery)),
-    [deferredQuery, hub?.friends, hub?.workspaceActors, hub?.workspaceUsers]
+    [deferredQuery, hub?.friends, hub?.workspaceActors, hub?.workspaceMembers]
   )
 
   return (
@@ -193,7 +203,7 @@ export default function MobileGlobalSearchPage() {
                   onChange={(event) => setQuery(event.target.value)}
                   autoCapitalize="none"
                   autoCorrect="off"
-                  placeholder="搜索群聊记录、联系人或好友 ID"
+                  placeholder="搜索群聊记录、联系人或 Identity ID"
                   className="rounded-2xl pl-9"
                   autoFocus
                 />
@@ -209,7 +219,7 @@ export default function MobileGlobalSearchPage() {
           ) : !deferredQuery ? (
             <Card>
               <CardContent className="py-10 text-center text-sm text-muted-foreground">
-                输入关键词开始搜索。这里会同时搜索会话记录、已有联系人和好友 ID。
+                输入关键词开始搜索。这里会同时搜索会话记录、已有联系人和 Identity ID。
               </CardContent>
             </Card>
           ) : (
@@ -303,11 +313,11 @@ export default function MobileGlobalSearchPage() {
 
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">好友 ID</CardTitle>
+                  <CardTitle className="text-base">Identity</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  {friendIdResults?.matches?.length ? (
-                    friendIdResults.matches.map((match) => (
+                  {identityResults?.matches?.length ? (
+                    identityResults.matches.map((match) => (
                       <button
                         key={match.profileId}
                         type="button"
@@ -337,14 +347,14 @@ export default function MobileGlobalSearchPage() {
                             {match.subtitle}
                           </div>
                           <div className="mt-1 text-xs text-muted-foreground">
-                            {friendStateLabel(match)}
+                            {identityStateLabel(match)}
                           </div>
                         </div>
                       </button>
                     ))
                   ) : (
                     <p className="text-sm text-muted-foreground">
-                      {friendIdMessage || "没有匹配的好友 ID。"}
+                      {identityMessage || "没有匹配的 Identity ID。"}
                     </p>
                   )}
                 </CardContent>

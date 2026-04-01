@@ -1194,15 +1194,13 @@ export async function createThread(params: {
           id: conversationId,
           kind,
           boundary: conversationBoundary,
+          internal_workspace_id:
+            conversationBoundary === "internal"
+              ? boundaryInfo.internalWorkspaceId
+              : null,
           title: fallbackTitle,
           created_by: creatorUserId || null,
-          metadata: {
-            ...(conversationBoundary === "internal" && boundaryInfo.internalWorkspaceId
-              ? {
-                  internalWorkspaceId: boundaryInfo.internalWorkspaceId,
-                }
-              : {}),
-          } as TableInsert<"conversations">["metadata"],
+          metadata: {} as TableInsert<"conversations">["metadata"],
         })
         .returningAll(),
     );
@@ -1954,11 +1952,8 @@ export async function addMembersToConversation(params: {
     userResult.rows.map((row) => [row.workspace_member_id as string, row]),
   );
   const batchId = uuidv4();
-  const conversationMetadata = parseConversationMetadata(conversation.metadata);
   const internalWorkspaceId =
-    typeof conversationMetadata.internalWorkspaceId === "string"
-      ? conversationMetadata.internalWorkspaceId
-      : params.workspaceId;
+    conversation.internal_workspace_id || params.workspaceId;
 
   if (conversation.boundary === "internal") {
     for (const actor of actorResult.rows) {

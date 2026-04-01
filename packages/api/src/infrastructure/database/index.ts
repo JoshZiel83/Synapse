@@ -24,14 +24,8 @@ type RequiredSchemaIssue = {
 const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
   {
     table: "users",
-    requiredColumns: [
-      "id",
-      "email",
-      "password_hash",
-      "friend_search_id",
-      "friend_search_enabled",
-    ],
-    reason: "auth, seed users, and friend search identity",
+    requiredColumns: ["id", "email", "password_hash"],
+    reason: "auth and seed users",
   },
   {
     table: "workspaces",
@@ -48,35 +42,41 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     requiredColumns: [
       "workspace_id",
       "subject_type",
+      "identity_id",
+      "identity_search_enabled",
       "approval_mode",
       "qr_token",
     ],
-    reason: "workspace-scoped QR relationship profiles",
+    reason: "workspace-scoped relationship identities and QR profiles",
   },
   {
     table: "workspace_friend_requests",
     requiredColumns: [
-      "requester_workspace_id",
-      "requester_user_id",
-      "target_workspace_id",
+      "requester_workspace_member_id",
       "target_subject_type",
+      "target_workspace_member_id",
       "status",
     ],
-    reason: "workspace-scoped friend requests",
+    reason: "workspace-scoped relationship requests",
   },
   {
     table: "workspace_friend_entries",
     requiredColumns: [
       "workspace_id",
-      "owner_user_id",
+      "owner_workspace_member_id",
       "peer_type",
-      "peer_workspace_id",
+      "peer_workspace_member_id",
     ],
-    reason: "workspace-scoped friend entries",
+    reason: "workspace-scoped relationship entries",
   },
   {
     table: "actor_access_requests",
-    requiredColumns: ["workspace_id", "actor_id", "requester_user_id", "status"],
+    requiredColumns: [
+      "workspace_id",
+      "actor_id",
+      "requester_workspace_member_id",
+      "status",
+    ],
     reason: "workspace actor access approval flow",
   },
   {

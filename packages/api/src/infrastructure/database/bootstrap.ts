@@ -7,9 +7,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const __filename = fileURLToPath(import.meta.url);
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8");
 
-const CURRENT_SCHEMA_VERSION = "2026-03-31-02";
+const CURRENT_SCHEMA_VERSION = "2026-04-01-01";
 const CURRENT_SCHEMA_DESCRIPTION =
-  "remove legacy workspace contacts and keep relationship hub as the single contact surface";
+  "promote relationship identities to workspace members, store internal conversation ownership explicitly, and normalize access binding subjects";
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

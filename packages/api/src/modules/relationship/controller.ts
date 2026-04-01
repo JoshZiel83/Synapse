@@ -8,20 +8,18 @@ import {
   getActorRelationshipProfile,
   getContactHub,
   getContactHubDetail,
-  getUserFriendSearchProfile,
-  getUserRelationshipProfile,
+  getMemberRelationshipProfile,
   listActorAccessRequests,
   listFriendRequests,
   listFriends,
   openDirectConversation,
-  requestFriendBySearchProfile,
+  requestRelationshipByIdentityProfile,
   resolveActorAccessRequest,
   resolveFriendRequest,
   scanRelationshipQr,
-  searchUsersByFriendId,
+  searchRelationshipsByIdentity,
   updateActorRelationshipProfile,
-  updateUserFriendSearchProfile,
-  updateUserRelationshipProfile,
+  updateMemberRelationshipProfile,
 } from "./service.js";
 
 const approvalModeSchema = z.enum(["auto", "manual"]);
@@ -40,25 +38,24 @@ const openDirectSchema = z.object({
   contactId: z.string().trim().min(1).max(255),
 });
 
-const updateUserProfileSchema = z.object({
+const updateMemberProfileSchema = z.object({
   approvalMode: approvalModeSchema,
+  identityId: z.string().trim().min(4).max(32).optional(),
+  identitySearchEnabled: z.boolean().optional(),
 });
 
-const updateUserFriendIdSchema = z.object({
-  friendId: z.string().trim().min(4).max(32).optional(),
-  searchByIdEnabled: z.boolean().optional(),
-});
-
-const friendIdSearchQuerySchema = z.object({
+const identitySearchQuerySchema = z.object({
   q: z.string().trim().max(64).optional(),
 });
 
-const requestFriendBySearchSchema = z.object({
+const requestRelationshipBySearchSchema = z.object({
   profileId: z.string().uuid(),
 });
 
 const updateActorProfileSchema = z.object({
   approvalMode: approvalModeSchema,
+  identityId: z.string().trim().min(4).max(32).optional(),
+  identitySearchEnabled: z.boolean().optional(),
   accessPolicy: actorAccessPolicySchema.optional(),
 });
 
@@ -82,10 +79,10 @@ export default async function relationshipController(app: FastifyInstance) {
 
   app.get<{
     Params: { workspaceId: string };
-  }>("/api/v1/workspaces/:workspaceId/me/friend-profile", async (request, reply) => {
+  }>("/api/v1/workspaces/:workspaceId/me/relationship-profile", async (request, reply) => {
     const userId = (request as any).user!.userId;
     return reply.send(
-      await getUserRelationshipProfile({
+      await getMemberRelationshipProfile({
         workspaceId: request.params.workspaceId,
         userId,
       }),
@@ -95,47 +92,23 @@ export default async function relationshipController(app: FastifyInstance) {
   app.put<{
     Params: { workspaceId: string };
     Body: unknown;
-  }>("/api/v1/workspaces/:workspaceId/me/friend-profile", async (request, reply) => {
+  }>("/api/v1/workspaces/:workspaceId/me/relationship-profile", async (request, reply) => {
     const userId = (request as any).user!.userId;
-    const body = updateUserProfileSchema.parse(request.body);
+    const body = updateMemberProfileSchema.parse(request.body);
     return reply.send(
-      await updateUserRelationshipProfile({
+      await updateMemberRelationshipProfile({
         workspaceId: request.params.workspaceId,
         userId,
         approvalMode: body.approvalMode,
+        identityId: body.identityId,
+        identitySearchEnabled: body.identitySearchEnabled,
       }),
     );
-  });
-
-  app.get<{
-    Params: { workspaceId: string };
-  }>("/api/v1/workspaces/:workspaceId/me/friend-id", async (request, reply) => {
-    const userId = (request as any).user!.userId;
-    return reply.send(await getUserFriendSearchProfile({ userId }));
-  });
-
-  app.put<{
-    Params: { workspaceId: string };
-    Body: unknown;
-  }>("/api/v1/workspaces/:workspaceId/me/friend-id", async (request, reply) => {
-    const userId = (request as any).user!.userId;
-    const body = updateUserFriendIdSchema.parse(request.body);
-    try {
-      return reply.send(
-        await updateUserFriendSearchProfile({
-          userId,
-          friendId: body.friendId,
-          searchByIdEnabled: body.searchByIdEnabled,
-        }),
-      );
-    } catch (error) {
-      return sendServiceError(reply, error);
-    }
   });
 
   app.get<{
     Params: { workspaceId: string; actorId: string };
-  }>("/api/v1/workspaces/:workspaceId/actors/:actorId/friend-profile", async (request, reply) => {
+  }>("/api/v1/workspaces/:workspaceId/actors/:actorId/relationship-profile", async (request, reply) => {
     const allowed = await requireRequestAction(
       request,
       reply,
@@ -161,7 +134,7 @@ export default async function relationshipController(app: FastifyInstance) {
   app.put<{
     Params: { workspaceId: string; actorId: string };
     Body: unknown;
-  }>("/api/v1/workspaces/:workspaceId/actors/:actorId/friend-profile", async (request, reply) => {
+  }>("/api/v1/workspaces/:workspaceId/actors/:actorId/relationship-profile", async (request, reply) => {
     const allowed = await requireRequestAction(
       request,
       reply,
@@ -179,6 +152,8 @@ export default async function relationshipController(app: FastifyInstance) {
           actorId: request.params.actorId,
           userId,
           approvalMode: body.approvalMode,
+          identityId: body.identityId,
+          identitySearchEnabled: body.identitySearchEnabled,
           accessPolicy: body.accessPolicy,
         }),
       );
@@ -209,11 +184,11 @@ export default async function relationshipController(app: FastifyInstance) {
   app.get<{
     Params: { workspaceId: string };
     Querystring: { q?: string };
-  }>("/api/v1/workspaces/:workspaceId/friend-id-search", async (request, reply) => {
+  }>("/api/v1/workspaces/:workspaceId/identity-search", async (request, reply) => {
     const userId = (request as any).user!.userId;
-    const query = friendIdSearchQuerySchema.parse(request.query);
+    const query = identitySearchQuerySchema.parse(request.query);
     return reply.send(
-      await searchUsersByFriendId({
+      await searchRelationshipsByIdentity({
         workspaceId: request.params.workspaceId,
         userId,
         query: query.q || "",
@@ -224,12 +199,12 @@ export default async function relationshipController(app: FastifyInstance) {
   app.post<{
     Params: { workspaceId: string };
     Body: unknown;
-  }>("/api/v1/workspaces/:workspaceId/friend-id-search/request", async (request, reply) => {
+  }>("/api/v1/workspaces/:workspaceId/identity-search/request", async (request, reply) => {
     const userId = (request as any).user!.userId;
-    const body = requestFriendBySearchSchema.parse(request.body);
+    const body = requestRelationshipBySearchSchema.parse(request.body);
     try {
       return reply.send(
-        await requestFriendBySearchProfile({
+        await requestRelationshipByIdentityProfile({
           workspaceId: request.params.workspaceId,
           userId,
           profileId: body.profileId,

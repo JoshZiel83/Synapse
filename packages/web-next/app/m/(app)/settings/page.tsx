@@ -21,7 +21,7 @@ import { api } from "@/lib/api"
 import { resolveFileUrl } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
 import { useEffect } from "react"
-import type { FriendIdProfileView } from "@/lib/api"
+import type { RelationshipProfileView } from "@/lib/api"
 
 export default function MobileSettingsPage() {
   const router = useRouter()
@@ -32,7 +32,7 @@ export default function MobileSettingsPage() {
 
   const [loggingOut, setLoggingOut] = useState(false)
   const [friendIdProfile, setFriendIdProfile] =
-    useState<FriendIdProfileView | null>(null)
+    useState<RelationshipProfileView | null>(null)
   const [friendIdDraft, setFriendIdDraft] = useState("")
   const [friendIdSaving, setFriendIdSaving] = useState(false)
   const [friendIdMessage, setFriendIdMessage] = useState<string | null>(null)
@@ -67,11 +67,11 @@ export default function MobileSettingsPage() {
 
     let active = true
     void api
-      .getMyFriendIdProfile(workspaceId)
+      .getMyRelationshipProfile(workspaceId)
       .then((profile) => {
         if (!active) return
         setFriendIdProfile(profile)
-        setFriendIdDraft(profile.friendId)
+        setFriendIdDraft(profile.identityId)
       })
       .catch(() => {
         if (!active) return
@@ -88,15 +88,16 @@ export default function MobileSettingsPage() {
     setFriendIdSaving(true)
     setFriendIdMessage(null)
     try {
-      const nextProfile = await api.updateMyFriendIdProfile(workspaceId, {
-        friendId: friendIdDraft,
-        searchByIdEnabled: friendIdProfile?.searchByIdEnabled,
+      const nextProfile = await api.updateMyRelationshipProfile(workspaceId, {
+        approvalMode: friendIdProfile?.approvalMode || "auto",
+        identityId: friendIdDraft,
+        identitySearchEnabled: friendIdProfile?.identitySearchEnabled,
       })
       setFriendIdProfile(nextProfile)
-      setFriendIdDraft(nextProfile.friendId)
-      setFriendIdMessage(`好友 ID 已更新为 ${nextProfile.friendId}`)
+      setFriendIdDraft(nextProfile.identityId)
+      setFriendIdMessage(`Identity ID 已更新为 ${nextProfile.identityId}`)
     } catch (error) {
-      setFriendIdMessage(error instanceof Error ? error.message : "保存好友 ID 失败。")
+      setFriendIdMessage(error instanceof Error ? error.message : "保存 Identity ID 失败。")
     } finally {
       setFriendIdSaving(false)
     }
@@ -107,16 +108,17 @@ export default function MobileSettingsPage() {
     setFriendIdSaving(true)
     setFriendIdMessage(null)
     try {
-      const nextProfile = await api.updateMyFriendIdProfile(workspaceId, {
-        friendId: friendIdProfile.friendId,
-        searchByIdEnabled: !friendIdProfile.searchByIdEnabled,
+      const nextProfile = await api.updateMyRelationshipProfile(workspaceId, {
+        approvalMode: friendIdProfile.approvalMode,
+        identityId: friendIdProfile.identityId,
+        identitySearchEnabled: !friendIdProfile.identitySearchEnabled,
       })
       setFriendIdProfile(nextProfile)
-      setFriendIdDraft(nextProfile.friendId)
+      setFriendIdDraft(nextProfile.identityId)
       setFriendIdMessage(
-        nextProfile.searchByIdEnabled
-          ? "已开启通过好友 ID 搜索。"
-          : "已关闭通过好友 ID 搜索。"
+        nextProfile.identitySearchEnabled
+          ? "已开启通过 Identity ID 搜索。"
+          : "已关闭通过 Identity ID 搜索。"
       )
     } catch (error) {
       setFriendIdMessage(error instanceof Error ? error.message : "更新搜索开关失败。")
@@ -220,9 +222,9 @@ export default function MobileSettingsPage() {
 
           <section className="-mx-4 border-y border-border/70 bg-background px-4 py-4">
             <div className="mb-3">
-              <h2 className="text-sm font-semibold text-foreground">好友 ID</h2>
+              <h2 className="text-sm font-semibold text-foreground">Identity ID</h2>
               <p className="text-sm text-muted-foreground">
-                好友 ID 整个平台唯一，默认关闭被搜索。
+                Identity ID 是 workspace 身份级别的唯一标识，默认关闭被搜索。
               </p>
             </div>
             <div className="space-y-3">
@@ -231,7 +233,7 @@ export default function MobileSettingsPage() {
                 onChange={(event) => setFriendIdDraft(event.target.value)}
                 autoCapitalize="none"
                 autoCorrect="off"
-                placeholder="输入你的好友 ID"
+                placeholder="输入你的 Identity ID"
                 className="rounded-2xl"
               />
               {friendIdMessage ? (
@@ -254,7 +256,7 @@ export default function MobileSettingsPage() {
                   onClick={() => void handleToggleFriendIdSearch()}
                   disabled={friendIdSaving || !friendIdProfile}
                 >
-                  {friendIdProfile?.searchByIdEnabled ? "关闭搜索" : "开启搜索"}
+                  {friendIdProfile?.identitySearchEnabled ? "关闭搜索" : "开启搜索"}
                 </Button>
               </div>
             </div>

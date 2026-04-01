@@ -225,7 +225,7 @@ export type RelationshipApprovalMode = "auto" | "manual";
 
 export type RelationshipRequestStatus = "approved" | "pending" | "rejected";
 
-export type RelationshipTargetType = "actor" | "user";
+export type RelationshipTargetType = "actor" | "member";
 
 export type RelayCatalogRevisionsStatus = "active" | "superseded";
 
@@ -336,11 +336,11 @@ export type WorkspaceInvitesTrustLevel = "admin" | "guest" | "member";
 export type WorkspaceMembersTrustLevel = "admin" | "guest" | "member";
 
 export interface AccessBindings {
-  actor_id: string | null;
-  conversation_id: string | null;
   created_at: Generated<Timestamp | null>;
   created_by: string | null;
+  granted_permissions: Generated<string[]>;
   id: Generated<string>;
+  is_primary: Generated<boolean>;
   metadata: Generated<Json | null>;
   reason: string | null;
   relation: string;
@@ -348,11 +348,11 @@ export interface AccessBindings {
   resource_type: string;
   revoked_at: Timestamp | null;
   status: Generated<AccessBindingsStatus>;
-  subject_id: string;
-  subject_relation: string | null;
-  subject_type: string;
+  subject_actor_id: string | null;
+  subject_conversation_id: string | null;
+  subject_user_id: string | null;
+  subject_workspace_id: string | null;
   target_type: AccessBindingsTargetType;
-  user_id: string | null;
   workspace_id: string | null;
 }
 
@@ -361,7 +361,7 @@ export interface ActorAccessRequests {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
   metadata: Generated<Json>;
-  requester_user_id: string;
+  requester_workspace_member_id: string;
   resolved_at: Timestamp | null;
   resolved_by_user_id: string | null;
   status: Generated<RelationshipRequestStatus>;
@@ -940,6 +940,7 @@ export interface Conversations {
   created_at: Generated<Timestamp | null>;
   created_by: string | null;
   id: Generated<string>;
+  internal_workspace_id: string | null;
   kind: ConversationsKind;
   metadata: Generated<Json | null>;
   title: string | null;
@@ -1933,8 +1934,6 @@ export interface Users {
   avatar_file_id: string | null;
   created_at: Generated<Timestamp | null>;
   email: string;
-  friend_search_enabled: Generated<boolean>;
-  friend_search_id: Generated<string>;
   id: Generated<string>;
   name: string;
   password_hash: string;
@@ -1955,11 +1954,10 @@ export interface WorkspaceFriendEntries {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
   metadata: Generated<Json>;
-  owner_user_id: string;
+  owner_workspace_member_id: string;
   peer_actor_id: string | null;
   peer_type: RelationshipTargetType;
-  peer_user_id: string | null;
-  peer_workspace_id: string;
+  peer_workspace_member_id: string | null;
   source_request_id: string | null;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
@@ -1970,15 +1968,13 @@ export interface WorkspaceFriendRequests {
   id: Generated<string>;
   metadata: Generated<Json>;
   requested_via_profile_id: string | null;
-  requester_user_id: string;
-  requester_workspace_id: string;
+  requester_workspace_member_id: string;
   resolved_at: Timestamp | null;
   resolved_by_user_id: string | null;
   status: Generated<RelationshipRequestStatus>;
   target_actor_id: string | null;
   target_subject_type: RelationshipTargetType;
-  target_user_id: string | null;
-  target_workspace_id: string;
+  target_workspace_member_id: string | null;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -2009,10 +2005,12 @@ export interface WorkspaceRelationshipProfiles {
   created_at: Generated<Timestamp | null>;
   created_by: string | null;
   id: Generated<string>;
+  identity_id: Generated<string>;
+  identity_search_enabled: Generated<boolean>;
   qr_token: string;
   subject_actor_id: string | null;
   subject_type: RelationshipTargetType;
-  subject_user_id: string | null;
+  subject_workspace_member_id: string | null;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }

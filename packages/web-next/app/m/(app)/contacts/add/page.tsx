@@ -11,11 +11,11 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import type { FriendIdSearchMatchView } from "@/lib/api"
+import type { IdentitySearchMatchView } from "@/lib/api"
 import { api } from "@/lib/api"
 import { resolveFileUrl } from "@/lib/utils"
 
-function buildSearchDetailHref(match: FriendIdSearchMatchView) {
+function buildSearchDetailHref(match: IdentitySearchMatchView) {
   const params = new URLSearchParams({
     title: match.title,
     subtitle: match.subtitle || "",
@@ -27,16 +27,24 @@ function buildSearchDetailHref(match: FriendIdSearchMatchView) {
   return `/m/contacts/search/${match.profileId}?${params.toString()}`
 }
 
-function resultStateLabel(match: FriendIdSearchMatchView) {
+function resultStateLabel(match: IdentitySearchMatchView) {
   switch (match.state) {
-    case "same_workspace_user":
-      return "同 workspace 用户"
+    case "same_workspace_member":
+      return "同 workspace 成员"
     case "friend":
       return "已是好友"
+    case "available":
+      return "可直接发起会话"
+    case "approval_required":
+      return "需要审批"
+    case "pending_approval":
+      return "审批中"
+    case "existing":
+      return "已可直接联系"
     case "pending_request":
       return "好友申请待处理"
     default:
-      return "可查看并发起好友申请"
+      return "可查看并发起关系请求"
   }
 }
 
@@ -44,7 +52,7 @@ export default function MobileAddFriendPage() {
   const router = useRouter()
   const { workspaceId } = useWorkspace()
   const [query, setQuery] = useState("")
-  const [results, setResults] = useState<FriendIdSearchMatchView[]>([])
+  const [results, setResults] = useState<IdentitySearchMatchView[]>([])
   const [message, setMessage] = useState<string | null>(null)
   const [searching, setSearching] = useState(false)
 
@@ -54,25 +62,25 @@ export default function MobileAddFriendPage() {
     setSearching(true)
     setMessage(null)
     try {
-      const result = await api.searchFriendId(workspaceId, query)
+      const result = await api.searchIdentity(workspaceId, query)
       if (result.outcome === "empty") {
         setResults([])
-        setMessage("请输入好友 ID。")
+        setMessage("请输入 Identity ID。")
         return
       }
       if (result.outcome === "invalid") {
         setResults([])
-        setMessage("好友 ID 需为 4-32 位，只能包含字母、数字、点、下划线或短横线。")
+        setMessage("Identity ID 需为 4-32 位，只能包含字母、数字、点、下划线或短横线。")
         return
       }
       if (result.outcome === "self") {
         setResults([])
-        setMessage("这是你自己的好友 ID。")
+        setMessage("这是你当前 workspace 身份的 Identity ID。")
         return
       }
       if (result.outcome === "not_found" || result.matches.length === 0) {
         setResults([])
-        setMessage("没有找到结果。对方可能关闭了 ID 搜索。")
+        setMessage("没有找到结果。对方可能关闭了 Identity 搜索。")
         return
       }
 
@@ -86,10 +94,10 @@ export default function MobileAddFriendPage() {
         }
         return
       }
-      setMessage("同一个账号在多个 workspace 中可被添加，请选择具体身份。")
+      setMessage("同一个账号在多个 workspace 中可能对应多个身份，请选择具体 Identity。")
     } catch (error) {
       setResults([])
-      setMessage(error instanceof Error ? error.message : "搜索好友失败。")
+      setMessage(error instanceof Error ? error.message : "搜索 Identity 失败。")
     } finally {
       setSearching(false)
     }
@@ -98,7 +106,7 @@ export default function MobileAddFriendPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
       <MobilePageHeader
-        title="添加好友"
+        title="添加联系人"
         action={
           <Button
             type="button"
@@ -116,7 +124,7 @@ export default function MobileAddFriendPage() {
           <Card>
             <CardContent className="space-y-3 pt-5">
               <p className="text-sm text-muted-foreground">
-                输入对方的好友 ID。查到后会进入联系人详情；如果没有结果，会直接在这里提示。
+                输入对方的 Identity ID。查到后会进入联系人详情；如果没有结果，会直接在这里提示。
               </p>
               <div className="relative">
                 <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -125,7 +133,7 @@ export default function MobileAddFriendPage() {
                   onChange={(event) => setQuery(event.target.value)}
                   autoCapitalize="none"
                   autoCorrect="off"
-                  placeholder="输入好友 ID"
+                  placeholder="输入 Identity ID"
                   className="rounded-2xl pl-9"
                 />
               </div>
@@ -135,7 +143,7 @@ export default function MobileAddFriendPage() {
                 onClick={() => void handleSearch()}
                 disabled={searching}
               >
-                {searching ? "搜索中..." : "搜索好友 ID"}
+                {searching ? "搜索中..." : "搜索 Identity ID"}
               </Button>
             </CardContent>
           </Card>

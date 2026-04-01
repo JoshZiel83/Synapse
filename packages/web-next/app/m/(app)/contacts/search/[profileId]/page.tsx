@@ -13,21 +13,33 @@ import { resolveFileUrl } from "@/lib/utils"
 import { api } from "@/lib/api"
 
 type SearchState =
-  | "same_workspace_user"
+  | "same_workspace_member"
   | "friend"
   | "pending_request"
   | "requestable"
+  | "available"
+  | "approval_required"
+  | "pending_approval"
+  | "existing"
 
 function statusLabel(state: SearchState) {
   switch (state) {
-    case "same_workspace_user":
-      return "同 workspace 用户"
+    case "same_workspace_member":
+      return "同 workspace 成员"
     case "friend":
       return "已是好友"
     case "pending_request":
       return "好友申请待处理"
+    case "available":
+      return "可直接联系"
+    case "approval_required":
+      return "需要审批"
+    case "pending_approval":
+      return "审批中"
+    case "existing":
+      return "已建立联系"
     default:
-      return "可发起好友申请"
+      return "可发起关系请求"
   }
 }
 
@@ -43,12 +55,12 @@ export default function MobileSearchContactDetailPage() {
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
-  async function handleRequestFriend() {
+  async function handleRequestRelationship() {
     if (!workspaceId || !profileId || submitting) return
     setSubmitting(true)
     setMessage(null)
     try {
-      const result = await api.requestFriendBySearchProfile(workspaceId, profileId)
+      const result = await api.requestRelationshipByIdentityProfile(workspaceId, profileId)
       if (result.contact) {
         router.replace(`/m/contacts/${result.contact.kind}/${result.contact.id}`)
         return
@@ -63,7 +75,7 @@ export default function MobileSearchContactDetailPage() {
               : "操作已提交。"
       )
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "发起好友申请失败。")
+      setMessage(error instanceof Error ? error.message : "发起关系请求失败。")
     } finally {
       setSubmitting(false)
     }
@@ -115,14 +127,14 @@ export default function MobileSearchContactDetailPage() {
               <Button
                 type="button"
                 className="w-full rounded-full"
-                onClick={() => void handleRequestFriend()}
-                disabled={state === "pending_request" || submitting}
+                onClick={() => void handleRequestRelationship()}
+                disabled={["pending_request", "pending_approval"].includes(state) || submitting}
               >
-                {state === "pending_request"
+                {state === "pending_request" || state === "pending_approval"
                   ? "等待处理"
                   : submitting
                     ? "提交中..."
-                    : "加好友"}
+                    : "发起联系"}
               </Button>
               {message ? (
                 <p className="text-sm text-muted-foreground">{message}</p>

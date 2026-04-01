@@ -21,7 +21,7 @@ import type { ContactHubEntryView, ContactHubResponse } from "@/lib/api"
 import { api } from "@/lib/api"
 import { resolveFileUrl } from "@/lib/utils"
 
-type ContactFilter = "all" | "friend" | "actor" | "workspace-user"
+type ContactFilter = "all" | "friend" | "actor" | "workspace-member"
 
 type ContactSection = {
   letter: string
@@ -32,7 +32,7 @@ const FILTER_OPTIONS: Array<{ value: ContactFilter; label: string }> = [
   { value: "all", label: "默认" },
   { value: "friend", label: "好友" },
   { value: "actor", label: "Actor" },
-  { value: "workspace-user", label: "Workspace User" },
+  { value: "workspace-member", label: "Workspace Member" },
 ]
 
 const LETTER_RAIL = [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ", "#"]
@@ -196,7 +196,7 @@ export default function MobileContactsPage() {
   const filteredEntries = useMemo(() => {
     const all = [
       ...(hub?.workspaceActors || []),
-      ...(hub?.workspaceUsers || []),
+      ...(hub?.workspaceMembers || []),
       ...(hub?.friends || []),
     ]
 
@@ -206,11 +206,11 @@ export default function MobileContactsPage() {
     if (filter === "actor") {
       return [...(hub?.workspaceActors || [])].sort(compareEntries)
     }
-    if (filter === "workspace-user") {
-      return [...(hub?.workspaceUsers || [])].sort(compareEntries)
+    if (filter === "workspace-member") {
+      return [...(hub?.workspaceMembers || [])].sort(compareEntries)
     }
     return [...all].sort(compareEntries)
-  }, [filter, hub?.friends, hub?.workspaceActors, hub?.workspaceUsers])
+  }, [filter, hub?.friends, hub?.workspaceActors, hub?.workspaceMembers])
 
   const sections = useMemo<ContactSection[]>(() => {
     const grouped = new Map<string, ContactHubEntryView[]>()

@@ -61,7 +61,7 @@ export function MobileScanRelationshipClient({
               const scanResult = await api.scanRelationshipQr(workspaceId, token)
               if (
                 scanResult.contact &&
-                (scanResult.outcome === "same_workspace_user" ||
+                (scanResult.outcome === "same_workspace_member" ||
                   scanResult.outcome === "friend_active" ||
                   scanResult.outcome === "actor_access_granted")
               ) {
@@ -177,4 +177,3 @@ export function MobileScanRelationshipClient({
     </div>
   )
 }
-

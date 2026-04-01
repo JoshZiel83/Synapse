@@ -67,10 +67,10 @@ export default function MobileNewGroupPage() {
   const allEntries = useMemo(
     () => [
       ...(hub?.workspaceActors || []),
-      ...(hub?.workspaceUsers || []),
+      ...(hub?.workspaceMembers || []),
       ...(hub?.friends || []),
     ],
-    [hub?.friends, hub?.workspaceActors, hub?.workspaceUsers]
+    [hub?.friends, hub?.workspaceActors, hub?.workspaceMembers]
   )
   const entries = useMemo(
     () => allEntries.filter((entry) => matchesEntry(entry, normalizedQuery)),
@@ -117,10 +117,10 @@ export default function MobileNewGroupPage() {
     try {
       if (
         selectedEntries.some(
-          (entry) => entry.targetType === "user" && !entry.workspaceMemberId
+          (entry) => entry.targetType === "member" && !entry.workspaceMemberId
         )
       ) {
-        throw new Error("存在缺少 workspace 成员身份的用户，暂时无法发起群聊")
+        throw new Error("存在缺少 workspace 成员身份的联系人，暂时无法发起群聊")
       }
 
       const created = await api.createThread(workspaceId, {

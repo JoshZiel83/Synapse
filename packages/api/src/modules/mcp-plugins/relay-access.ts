@@ -93,17 +93,18 @@ export async function ensureRelayExposureDefaultAccess(params: {
          resource_id,
          target_type,
          relation,
-         subject_type,
-         subject_id,
-         actor_id,
-         conversation_id,
-         user_id,
+         subject_workspace_id,
+         subject_user_id,
+         subject_actor_id,
+         subject_conversation_id,
+         is_primary,
+         granted_permissions,
          status,
          reason,
          metadata
        )
        VALUES (
-         $1, 'relay_exposure', $2, 'workspace', 'use_workspace', 'workspace', $3, NULL, NULL, NULL, 'active', $4, $5::jsonb
+         $1, 'relay_exposure', $2, 'workspace', 'use_workspace', $3, NULL, NULL, NULL, FALSE, ARRAY['invoke']::text[], 'active', $4, $5::jsonb
        )
        RETURNING *`,
       [
@@ -111,10 +112,7 @@ export async function ensureRelayExposureDefaultAccess(params: {
         params.exposureId,
         params.workspaceId,
         RELAY_EXPOSURE_PERMISSION_SUMMARY.reason,
-        JSON.stringify({
-          isDefault: true,
-          accessTargetType: "workspace",
-        }),
+        JSON.stringify({ isDefault: true }),
       ],
     );
 
@@ -243,16 +241,20 @@ export async function grantRelayExposureAccess(input: {
        AND resource_type = 'relay_exposure'
        AND resource_id = $2
        AND relation = $3
-       AND subject_type = $4
-       AND subject_id = $5
+       AND subject_workspace_id IS NOT DISTINCT FROM $4::uuid
+       AND subject_user_id IS NOT DISTINCT FROM $5::uuid
+       AND subject_actor_id IS NOT DISTINCT FROM $6::uuid
+       AND subject_conversation_id IS NOT DISTINCT FROM $7::uuid
        AND status = 'active'
      LIMIT 1`,
     [
       input.workspaceId,
       input.exposureId,
       target.relation,
-      target.subjectType,
-      target.subjectId,
+      target.subjectWorkspaceId,
+      target.subjectUserId,
+      target.subjectActorId,
+      target.subjectConversationId,
     ],
   );
 
@@ -268,18 +270,19 @@ export async function grantRelayExposureAccess(input: {
          resource_id,
          target_type,
          relation,
-         subject_type,
-         subject_id,
-         actor_id,
-         conversation_id,
-         user_id,
+         subject_workspace_id,
+         subject_user_id,
+         subject_actor_id,
+         subject_conversation_id,
+         is_primary,
+         granted_permissions,
          status,
          created_by,
          reason,
          metadata
        )
        VALUES (
-         $1, 'relay_exposure', $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11::jsonb
+         $1, 'relay_exposure', $2, $3, $4, $5, $6, $7, $8, FALSE, ARRAY['invoke']::text[], 'active', $9, $10, $11::jsonb
        )
        RETURNING *`,
       [
@@ -287,17 +290,13 @@ export async function grantRelayExposureAccess(input: {
         input.exposureId,
         target.targetType,
         target.relation,
-        target.subjectType,
-        target.subjectId,
-        target.actorId,
-        target.conversationId,
-        target.userId,
+        target.subjectWorkspaceId,
+        target.subjectUserId,
+        target.subjectActorId,
+        target.subjectConversationId,
         input.grantedBy || null,
         input.reason || RELAY_EXPOSURE_PERMISSION_SUMMARY.reason,
-        JSON.stringify({
-          ...(input.metadata || {}),
-          accessTargetType: target.targetType,
-        }),
+        JSON.stringify(input.metadata || {}),
       ],
     );
 

@@ -100,34 +100,13 @@ function getDefaultQueryable(): Queryable {
   return pool;
 }
 
-function parseConversationMetadata(
-  value: unknown,
-): Record<string, unknown> {
-  if (!value) return {};
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {};
-    } catch {
-      return {};
-    }
-  }
-  return typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 async function resolveInternalConversationWorkspaceId(
   conversationId: string,
-  metadata: unknown,
+  internalWorkspaceId: string | null | undefined,
 ) {
-  const parsed = parseConversationMetadata(metadata);
-  if (typeof parsed.internalWorkspaceId === "string") {
-    return parsed.internalWorkspaceId;
+  if (typeof internalWorkspaceId === "string" && internalWorkspaceId.trim()) {
+    return internalWorkspaceId;
   }
-
   const member = await db
     .selectFrom("conversation_members as cm")
     .leftJoin("workspace_members as wm", "wm.id", "cm.workspace_member_id")
@@ -425,7 +404,7 @@ export async function ensureConversationMemberActivation(params: {
 
     const internalWorkspaceId = await resolveInternalConversationWorkspaceId(
       conversationId,
-      conversation.metadata,
+      conversation.internal_workspace_id,
     );
     let participantWorkspaceId: string | null = null;
 

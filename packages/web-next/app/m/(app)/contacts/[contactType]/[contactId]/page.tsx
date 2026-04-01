@@ -191,7 +191,7 @@ export default function MobileContactDetailPage() {
                   <div className="flex items-center justify-between gap-3">
                     <span>类型</span>
                     <span className="font-medium text-foreground">
-                      {detail.contact.targetType === "actor" ? "Actor" : "用户"}
+                      {detail.contact.targetType === "actor" ? "Actor" : "成员"}
                     </span>
                   </div>
                   <div className="flex items-center justify-between gap-3">

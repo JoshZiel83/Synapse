@@ -29,7 +29,7 @@ export const WORKSPACE_ACCESS_KEYS = [
   'conversation_admin',
 ] as const;
 
-export const CONTACT_TARGET_TYPES = ['user', 'actor'] as const;
+export const CONTACT_TARGET_TYPES = ['member', 'actor'] as const;
 export const CANONICAL_FILE_CATEGORIES = ['image', 'audio', 'video', 'document'] as const;
 export const CONVERSATION_BOUNDARIES = ['internal', 'external'] as const;
 export const ATTACHMENT_TARGET_TYPES = [

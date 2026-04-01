@@ -1098,16 +1098,16 @@ async function loadAccessBindingsBySkillIds(
        resource_id,
        target_type,
        relation,
-       subject_type,
-       subject_id,
-       subject_relation,
-       actor_id,
-       conversation_id,
-       user_id,
+       subject_workspace_id,
+       subject_user_id,
+       subject_actor_id,
+       subject_conversation_id,
+       is_primary,
+       granted_permissions,
        status,
        created_by,
        reason,
-        metadata,
+       metadata,
        created_at,
        revoked_at
      FROM access_bindings
@@ -1215,18 +1215,22 @@ async function findSkillIdsByBindingFilter(params: {
     conditions.push(`target_type = $${values.length}`);
     values.push(target.relation);
     conditions.push(`relation = $${values.length}`);
-    values.push(target.subjectType);
-    conditions.push(`subject_type = $${values.length}`);
-    values.push(target.subjectId);
-    conditions.push(`subject_id = $${values.length}`);
+    values.push(target.subjectWorkspaceId);
+    conditions.push(`subject_workspace_id IS NOT DISTINCT FROM $${values.length}::uuid`);
+    values.push(target.subjectUserId);
+    conditions.push(`subject_user_id IS NOT DISTINCT FROM $${values.length}::uuid`);
+    values.push(target.subjectActorId);
+    conditions.push(`subject_actor_id IS NOT DISTINCT FROM $${values.length}::uuid`);
+    values.push(target.subjectConversationId);
+    conditions.push(`subject_conversation_id IS NOT DISTINCT FROM $${values.length}::uuid`);
   } else {
     if (params.actorId) {
       values.push(params.actorId);
-      conditions.push(`actor_id = $${values.length}`);
+      conditions.push(`subject_actor_id = $${values.length}`);
     }
     if (params.conversationId) {
       values.push(params.conversationId);
-      conditions.push(`conversation_id = $${values.length}`);
+      conditions.push(`subject_conversation_id = $${values.length}`);
     }
   }
 
@@ -1287,12 +1291,12 @@ async function ensureSkillBinding(
        resource_id,
        target_type,
        relation,
-       subject_type,
-       subject_id,
-       subject_relation,
-       actor_id,
-       conversation_id,
-       user_id,
+       subject_workspace_id,
+       subject_user_id,
+       subject_actor_id,
+       subject_conversation_id,
+       is_primary,
+       granted_permissions,
        status,
        created_by,
        reason,
@@ -1304,8 +1308,10 @@ async function ensureSkillBinding(
        AND resource_type = 'installed_skill'
        AND resource_id = $2
        AND relation = $3
-       AND subject_type = $4
-       AND subject_id = $5
+       AND subject_workspace_id IS NOT DISTINCT FROM $4::uuid
+       AND subject_user_id IS NOT DISTINCT FROM $5::uuid
+       AND subject_actor_id IS NOT DISTINCT FROM $6::uuid
+       AND subject_conversation_id IS NOT DISTINCT FROM $7::uuid
        AND status = 'active'
      ORDER BY created_at DESC
     LIMIT 1`,
@@ -1313,8 +1319,10 @@ async function ensureSkillBinding(
       input.workspaceId,
       input.skillId,
       grantTarget.relation,
-      grantTarget.subjectType,
-      grantTarget.subjectId,
+      grantTarget.subjectWorkspaceId,
+      grantTarget.subjectUserId,
+      grantTarget.subjectActorId,
+      grantTarget.subjectConversationId,
     ],
   );
 
@@ -1333,11 +1341,12 @@ async function ensureSkillBinding(
        resource_id,
        target_type,
        relation,
-       subject_type,
-       subject_id,
-       actor_id,
-       conversation_id,
-       user_id,
+       subject_workspace_id,
+       subject_user_id,
+       subject_actor_id,
+       subject_conversation_id,
+       is_primary,
+       granted_permissions,
        metadata,
        status,
        created_by
@@ -1353,9 +1362,11 @@ async function ensureSkillBinding(
        $7,
        $8,
        $9,
-       $10::jsonb,
+       $10,
+       $11::text[],
+       $12::jsonb,
        'active',
-       $11
+       $13
      )
      RETURNING id`,
     [
@@ -1363,15 +1374,13 @@ async function ensureSkillBinding(
       input.skillId,
       grantTarget.targetType,
       grantTarget.relation,
-      grantTarget.subjectType,
-      grantTarget.subjectId,
-      grantTarget.actorId,
-      grantTarget.conversationId,
-      grantTarget.userId,
-      JSON.stringify({
-        accessTargetType: input.target.useScope,
-        isPrimary: input.isPrimary === true,
-      }),
+      grantTarget.subjectWorkspaceId,
+      grantTarget.subjectUserId,
+      grantTarget.subjectActorId,
+      grantTarget.subjectConversationId,
+      input.isPrimary === true,
+      ["use"],
+      JSON.stringify({}),
       input.createdBy || null,
     ],
   );
@@ -2004,11 +2013,12 @@ export async function grantInstalledSkillAccess(input: {
          resource_id,
          target_type,
          relation,
-         subject_type,
-         subject_id,
-         actor_id,
-         conversation_id,
-         user_id,
+         subject_workspace_id,
+         subject_user_id,
+         subject_actor_id,
+         subject_conversation_id,
+         is_primary,
+         granted_permissions,
          metadata,
          status,
          created_by,
@@ -2025,10 +2035,12 @@ export async function grantInstalledSkillAccess(input: {
          $7,
          $8,
          $9,
-         $10::jsonb,
+         $10,
+         $11::text[],
+         $12::jsonb,
          'active',
-         $11,
-         $12
+         $13,
+         $14
        )
        RETURNING
          id,
@@ -2037,12 +2049,12 @@ export async function grantInstalledSkillAccess(input: {
          resource_id,
          target_type,
          relation,
-         subject_type,
-         subject_id,
-         subject_relation,
-         actor_id,
-         conversation_id,
-         user_id,
+         subject_workspace_id,
+         subject_user_id,
+         subject_actor_id,
+         subject_conversation_id,
+         is_primary,
+         granted_permissions,
          status,
          created_by,
          reason,
@@ -2054,21 +2066,13 @@ export async function grantInstalledSkillAccess(input: {
         input.installedSkillId,
         accessTarget.targetType,
         accessTarget.relation,
-        accessTarget.subjectType,
-        accessTarget.subjectId,
-        accessTarget.actorId,
-        accessTarget.conversationId,
-        accessTarget.userId,
-        JSON.stringify({
-          ...(input.metadata || {}),
-          isPrimary: false,
-          accessTargetType: accessTarget.targetType,
-          actorId: accessTarget.actorId,
-          conversationId: accessTarget.conversationId,
-          userId: accessTarget.userId,
-          requestedPermissions: input.permissions || ["use"],
-          reason: input.reason || null,
-        }),
+        accessTarget.subjectWorkspaceId,
+        accessTarget.subjectUserId,
+        accessTarget.subjectActorId,
+        accessTarget.subjectConversationId,
+        false,
+        input.permissions || ["use"],
+        JSON.stringify(input.metadata || {}),
         input.grantedBy || null,
         input.reason || null,
       ],
@@ -2596,12 +2600,12 @@ export async function uninstallInstalledSkill(
          resource_id,
          target_type,
          relation,
-         subject_type,
-         subject_id,
-         subject_relation,
-         actor_id,
-         conversation_id,
-         user_id,
+         subject_workspace_id,
+         subject_user_id,
+         subject_actor_id,
+         subject_conversation_id,
+         is_primary,
+         granted_permissions,
          status,
          created_by,
          reason,
@@ -2752,20 +2756,23 @@ function visibleRowToAccessRow(
     resource_id: row.skill_id,
     target_type: target.targetType,
     relation: target.relation,
-    subject_type: target.subjectType,
-    subject_id: target.subjectId,
-    subject_relation: null,
-    actor_id: row.actor_id,
-    conversation_id: row.conversation_id,
-    user_id: row.user_id,
+    subject_workspace_id: target.subjectWorkspaceId,
+    subject_user_id: target.subjectUserId,
+    subject_actor_id: target.subjectActorId,
+    subject_conversation_id: target.subjectConversationId,
+    is_primary: true,
+    granted_permissions: ["use"],
     status: "active",
     created_by: null,
     reason: null,
-    metadata: { isPrimary: true },
+    metadata: {},
     created_at: row.access_created_at,
     revoked_at: null,
     skill_id: row.skill_id,
     bind_scope: row.access_bind_scope,
+    actor_id: row.actor_id,
+    conversation_id: row.conversation_id,
+    user_id: row.user_id,
   };
 }
 

@@ -1,6 +1,6 @@
 export type DirectConversationIdentity =
   | {
-      kind: "user";
+      kind: "member";
       workspaceMemberId: string;
     }
   | {
@@ -11,7 +11,7 @@ export type DirectConversationIdentity =
 export function directConversationIdentityKey(
   identity: DirectConversationIdentity,
 ) {
-  return identity.kind === "user"
+  return identity.kind === "member"
     ? `workspace_member:${identity.workspaceMemberId}`
     : `actor:${identity.actorId}`;
 }
@@ -31,9 +31,9 @@ export function directConversationBindingValues(
   pair: ReturnType<typeof canonicalizeDirectConversationPair>,
 ) {
   const participantOne =
-    pair.participantOne.kind === "user"
+    pair.participantOne.kind === "member"
       ? {
-          participant_one_kind: "user" as const,
+          participant_one_kind: "member" as const,
           participant_one_workspace_member_id:
             pair.participantOne.workspaceMemberId,
           participant_one_actor_id: null,
@@ -44,9 +44,9 @@ export function directConversationBindingValues(
           participant_one_actor_id: pair.participantOne.actorId,
         };
   const participantTwo =
-    pair.participantTwo.kind === "user"
+    pair.participantTwo.kind === "member"
       ? {
-          participant_two_kind: "user" as const,
+          participant_two_kind: "member" as const,
           participant_two_workspace_member_id:
             pair.participantTwo.workspaceMemberId,
           participant_two_actor_id: null,
@@ -65,20 +65,20 @@ export function directConversationBindingValues(
 
 export function directConversationBindingPeer(
   row: {
-    participant_one_kind: "user" | "actor";
+    participant_one_kind: "member" | "actor";
     participant_one_workspace_member_id: string | null;
     participant_one_actor_id: string | null;
-    participant_two_kind: "user" | "actor";
+    participant_two_kind: "member" | "actor";
     participant_two_workspace_member_id: string | null;
     participant_two_actor_id: string | null;
   },
   viewer: DirectConversationIdentity,
 ): DirectConversationIdentity | null {
   const left =
-    row.participant_one_kind === "user" &&
+    row.participant_one_kind === "member" &&
     row.participant_one_workspace_member_id
       ? {
-          kind: "user" as const,
+          kind: "member" as const,
           workspaceMemberId: row.participant_one_workspace_member_id,
         }
       : row.participant_one_actor_id
@@ -88,10 +88,10 @@ export function directConversationBindingPeer(
           }
         : null;
   const right =
-    row.participant_two_kind === "user" &&
+    row.participant_two_kind === "member" &&
     row.participant_two_workspace_member_id
       ? {
-          kind: "user" as const,
+          kind: "member" as const,
           workspaceMemberId: row.participant_two_workspace_member_id,
         }
       : row.participant_two_actor_id

@@ -70,22 +70,19 @@ export interface WorkspaceListResponse {
 }
 
 export interface RelationshipProfileView {
-  subjectType: "user" | "actor"
+  subjectType: "member" | "actor"
   approvalMode: "auto" | "manual"
   qrToken: string
   qrUrl: string
+  identityId: string
+  identitySearchEnabled: boolean
   accessPolicy?: "workspace_open" | "approval_required"
 }
 
-export interface FriendIdProfileView {
-  friendId: string
-  searchByIdEnabled: boolean
-}
-
 export interface ContactHubEntryView {
-  kind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user"
+  kind: "workspace-actor" | "workspace-member" | "friend-actor" | "friend-member"
   id: string
-  targetType: "user" | "actor"
+  targetType: "member" | "actor"
   title: string
   subtitle?: string
   avatarUrl?: string
@@ -116,39 +113,47 @@ export interface ContactHubResponse {
     totalPendingCount: number
   }
   workspaceActors: ContactHubEntryView[]
-  workspaceUsers: ContactHubEntryView[]
+  workspaceMembers: ContactHubEntryView[]
   friends: ContactHubEntryView[]
   groups: unknown[]
 }
 
-export interface FriendIdSearchMatchView {
+export interface IdentitySearchMatchView {
   profileId: string
+  targetType: "member" | "actor"
   title: string
   subtitle?: string
   avatarUrl?: string
+  avatarEmoji?: string
   workspace: {
     id: string
     name: string
     slug: string
   }
-  userId: string
+  workspaceMemberId?: string
+  userId?: string
+  actorId?: string
   state:
-    | "same_workspace_user"
+    | "same_workspace_member"
     | "friend"
     | "pending_request"
     | "requestable"
+    | "existing"
+    | "available"
+    | "approval_required"
+    | "pending_approval"
   contact?: {
-    kind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user"
+    kind: "workspace-actor" | "workspace-member" | "friend-actor" | "friend-member"
     id: string
   }
   conversationId?: string
   requestId?: string
 }
 
-export interface FriendIdSearchResponse {
+export interface IdentitySearchResponse {
   query: string
   outcome: "empty" | "invalid" | "self" | "not_found" | "found"
-  matches: FriendIdSearchMatchView[]
+  matches: IdentitySearchMatchView[]
 }
 
 export interface ContactHubDetailResponse {
@@ -169,7 +174,7 @@ export interface ActorAccessRequestListResponse {
 export interface RelationshipScanResponse {
   outcome:
     | "self_scan"
-    | "same_workspace_user"
+    | "same_workspace_member"
     | "friend_active"
     | "friend_request_created"
     | "friend_request_pending"
@@ -178,7 +183,7 @@ export interface RelationshipScanResponse {
     | "actor_access_pending"
   requestId?: string
   contact?: {
-    kind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user"
+    kind: "workspace-actor" | "workspace-member" | "friend-actor" | "friend-member"
     id: string
   }
 }
@@ -910,25 +915,17 @@ class ApiClient {
   }
 
   getMyRelationshipProfile(wsId: string): Promise<RelationshipProfileView> {
-    return this.fetch(`/workspaces/${wsId}/me/friend-profile`)
-  }
-  getMyFriendIdProfile(wsId: string): Promise<FriendIdProfileView> {
-    return this.fetch(`/workspaces/${wsId}/me/friend-id`)
-  }
-  updateMyFriendIdProfile(
-    wsId: string,
-    input: { friendId?: string; searchByIdEnabled?: boolean }
-  ): Promise<FriendIdProfileView> {
-    return this.fetch(`/workspaces/${wsId}/me/friend-id`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    })
+    return this.fetch(`/workspaces/${wsId}/me/relationship-profile`)
   }
   updateMyRelationshipProfile(
     wsId: string,
-    input: { approvalMode: "auto" | "manual" }
+    input: {
+      approvalMode: "auto" | "manual"
+      identityId?: string
+      identitySearchEnabled?: boolean
+    }
   ): Promise<RelationshipProfileView> {
-    return this.fetch(`/workspaces/${wsId}/me/friend-profile`, {
+    return this.fetch(`/workspaces/${wsId}/me/relationship-profile`, {
       method: "PUT",
       body: JSON.stringify(input),
     })
@@ -937,17 +934,19 @@ class ApiClient {
     wsId: string,
     actorId: string
   ): Promise<RelationshipProfileView> {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/friend-profile`)
+    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/relationship-profile`)
   }
   updateActorRelationshipProfile(
     wsId: string,
     actorId: string,
     input: {
       approvalMode: "auto" | "manual"
+      identityId?: string
+      identitySearchEnabled?: boolean
       accessPolicy?: "workspace_open" | "approval_required"
     }
   ): Promise<RelationshipProfileView> {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/friend-profile`, {
+    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/relationship-profile`, {
       method: "PUT",
       body: JSON.stringify(input),
     })
@@ -961,25 +960,25 @@ class ApiClient {
       body: JSON.stringify({ token }),
     })
   }
-  searchFriendId(
+  searchIdentity(
     wsId: string,
     query: string
-  ): Promise<FriendIdSearchResponse> {
+  ): Promise<IdentitySearchResponse> {
     const params = new URLSearchParams()
     if (query.trim()) {
       params.set("q", query.trim())
     }
     return this.fetch(
-      `/workspaces/${wsId}/friend-id-search${
+      `/workspaces/${wsId}/identity-search${
         params.size > 0 ? `?${params.toString()}` : ""
       }`
     )
   }
-  requestFriendBySearchProfile(
+  requestRelationshipByIdentityProfile(
     wsId: string,
     profileId: string
   ): Promise<RelationshipScanResponse> {
-    return this.fetch(`/workspaces/${wsId}/friend-id-search/request`, {
+    return this.fetch(`/workspaces/${wsId}/identity-search/request`, {
       method: "POST",
       body: JSON.stringify({ profileId }),
     })
@@ -989,7 +988,7 @@ class ApiClient {
   }
   getContactHubDetail(
     wsId: string,
-    contactKind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user",
+    contactKind: "workspace-actor" | "workspace-member" | "friend-actor" | "friend-member",
     contactId: string
   ): Promise<ContactHubDetailResponse> {
     return this.fetch(`/workspaces/${wsId}/contact-hub/${contactKind}/${contactId}`)
@@ -1029,7 +1028,7 @@ class ApiClient {
   openDirectConversation(
     wsId: string,
     input: {
-      contactKind: "workspace-actor" | "workspace-user" | "friend-actor" | "friend-user"
+      contactKind: "workspace-actor" | "workspace-member" | "friend-actor" | "friend-member"
       contactId: string
     }
   ): Promise<DirectConversationOpenResponse> {

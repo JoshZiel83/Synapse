@@ -19,9 +19,8 @@ import type {
   ContactHubDetailResponse,
   ContactHubEntryView,
   ContactHubResponse,
-  FriendIdProfileView,
-  FriendIdSearchResponse,
   FriendRequestListResponse,
+  IdentitySearchResponse,
   RelationshipProfileView,
 } from "@/lib/api"
 import { api } from "@/lib/api"
@@ -118,13 +117,13 @@ export function ContactHubClient() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [myProfile, setMyProfile] = useState<RelationshipProfileView | null>(null)
-  const [friendIdProfile, setFriendIdProfile] = useState<FriendIdProfileView | null>(
+  const [friendIdProfile, setFriendIdProfile] = useState<RelationshipProfileView | null>(
     null
   )
   const [friendIdDraft, setFriendIdDraft] = useState("")
   const [friendIdQuery, setFriendIdQuery] = useState("")
   const [friendIdResults, setFriendIdResults] =
-    useState<FriendIdSearchResponse | null>(null)
+    useState<IdentitySearchResponse | null>(null)
   const [friendRequests, setFriendRequests] =
     useState<FriendRequestListResponse | null>(null)
   const [actorAccessRequests, setActorAccessRequests] =
@@ -146,20 +145,18 @@ export function ContactHubClient() {
       const [
         hubResponse,
         profileResponse,
-        friendIdProfileResponse,
         friendRequestResponse,
         actorAccessResponse,
       ] = await Promise.all([
         api.getContactHub(workspaceId),
         api.getMyRelationshipProfile(workspaceId),
-        api.getMyFriendIdProfile(workspaceId),
         api.getFriendRequests(workspaceId),
         api.getActorAccessRequests(workspaceId),
       ])
       setHub(hubResponse)
       setMyProfile(profileResponse)
-      setFriendIdProfile(friendIdProfileResponse)
-      setFriendIdDraft(friendIdProfileResponse.friendId)
+      setFriendIdProfile(profileResponse)
+      setFriendIdDraft(profileResponse.identityId)
       setFriendRequests(friendRequestResponse)
       setActorAccessRequests(actorAccessResponse)
 
@@ -167,7 +164,7 @@ export function ContactHubClient() {
         nextSelected ||
         selectedEntry ||
         hubResponse.workspaceActors[0] ||
-        hubResponse.workspaceUsers[0] ||
+        hubResponse.workspaceMembers[0] ||
         hubResponse.friends[0] ||
         null
 
@@ -192,18 +189,20 @@ export function ContactHubClient() {
   }
 
   async function handleSaveFriendId() {
-    if (!workspaceId) return
+    if (!workspaceId || !friendIdProfile) return
     setSavingFriendId(true)
     try {
-      const nextProfile = await api.updateMyFriendIdProfile(workspaceId, {
-        friendId: friendIdDraft,
-        searchByIdEnabled: friendIdProfile?.searchByIdEnabled,
+      const nextProfile = await api.updateMyRelationshipProfile(workspaceId, {
+        approvalMode: friendIdProfile.approvalMode,
+        identityId: friendIdDraft,
+        identitySearchEnabled: friendIdProfile.identitySearchEnabled,
       })
       setFriendIdProfile(nextProfile)
-      setFriendIdDraft(nextProfile.friendId)
-      toast.success(`Friend ID updated to ${nextProfile.friendId}.`)
+      setMyProfile(nextProfile)
+      setFriendIdDraft(nextProfile.identityId)
+      toast.success(`Identity ID updated to ${nextProfile.identityId}.`)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update friend ID")
+      toast.error(error instanceof Error ? error.message : "Failed to update identity ID")
     } finally {
       setSavingFriendId(false)
     }
@@ -213,16 +212,18 @@ export function ContactHubClient() {
     if (!workspaceId || !friendIdProfile) return
     setSavingFriendId(true)
     try {
-      const nextProfile = await api.updateMyFriendIdProfile(workspaceId, {
-        friendId: friendIdProfile.friendId,
-        searchByIdEnabled: !friendIdProfile.searchByIdEnabled,
+      const nextProfile = await api.updateMyRelationshipProfile(workspaceId, {
+        approvalMode: friendIdProfile.approvalMode,
+        identityId: friendIdProfile.identityId,
+        identitySearchEnabled: !friendIdProfile.identitySearchEnabled,
       })
       setFriendIdProfile(nextProfile)
-      setFriendIdDraft(nextProfile.friendId)
+      setMyProfile(nextProfile)
+      setFriendIdDraft(nextProfile.identityId)
       toast.success(
-        nextProfile.searchByIdEnabled
-          ? "Friend ID search is now enabled."
-          : "Friend ID search is now disabled."
+        nextProfile.identitySearchEnabled
+          ? "Identity search is now enabled."
+          : "Identity search is now disabled."
       )
     } catch (error) {
       toast.error(
@@ -237,30 +238,30 @@ export function ContactHubClient() {
     if (!workspaceId) return
     setSearchingFriendId(true)
     try {
-      const result = await api.searchFriendId(workspaceId, friendIdQuery)
+      const result = await api.searchIdentity(workspaceId, friendIdQuery)
       setFriendIdResults(result)
       if (result.outcome === "self") {
-        toast.message("This is your own friend ID.")
+        toast.message("This is your current workspace identity.")
       } else if (result.outcome === "invalid") {
         toast.error(
-          "Friend IDs must be 4-32 chars using letters, numbers, dot, underscore, or hyphen."
+          "Identity IDs must be 4-32 chars using letters, numbers, dot, underscore, or hyphen."
         )
       } else if (result.outcome === "not_found") {
-        toast.message("No searchable user matched that friend ID.")
+        toast.message("No searchable identity matched that ID.")
       } else if (result.outcome === "found" && result.matches.length > 1) {
         toast.message(
           "This account can be added from multiple workspace identities. Pick the right one."
         )
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Friend ID search failed")
+      toast.error(error instanceof Error ? error.message : "Identity search failed")
     } finally {
       setSearchingFriendId(false)
     }
   }
 
   async function handleFriendIdMatchAction(
-    match: NonNullable<FriendIdSearchResponse["matches"]>[number]
+    match: NonNullable<IdentitySearchResponse["matches"]>[number]
   ) {
     if (!workspaceId) return
 
@@ -281,26 +282,26 @@ export function ContactHubClient() {
 
     setSubmittingSearchProfileId(match.profileId)
     try {
-      const result = await api.requestFriendBySearchProfile(
+      const result = await api.requestRelationshipByIdentityProfile(
         workspaceId,
         match.profileId
       )
       toast.message(
         result.outcome === "friend_request_created"
-          ? "Friend request created."
+          ? "Relationship request created."
           : result.outcome === "friend_request_pending"
-            ? "Friend request is already pending."
+            ? "Relationship request is already pending."
             : result.outcome === "friend_active"
-              ? "You are already friends."
+              ? "You are already connected."
               : "Request submitted."
       )
       await loadHub(selectedEntry)
       if (friendIdQuery.trim()) {
-        const refreshed = await api.searchFriendId(workspaceId, friendIdQuery)
+        const refreshed = await api.searchIdentity(workspaceId, friendIdQuery)
         setFriendIdResults(refreshed)
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to add friend")
+      toast.error(error instanceof Error ? error.message : "Failed to create relationship")
     } finally {
       setSubmittingSearchProfileId(null)
     }
@@ -439,6 +440,7 @@ export function ContactHubClient() {
       approvalMode: nextMode,
     })
     setMyProfile(nextProfile)
+    setFriendIdProfile(nextProfile)
     toast.success(`My approval mode switched to ${nextMode}.`)
   }
 
@@ -486,9 +488,9 @@ export function ContactHubClient() {
     () => (hub?.workspaceActors || []).filter((entry) => filterEntry(entry, normalizedQuery)),
     [hub?.workspaceActors, normalizedQuery]
   )
-  const visibleUsers = useMemo(
-    () => (hub?.workspaceUsers || []).filter((entry) => filterEntry(entry, normalizedQuery)),
-    [hub?.workspaceUsers, normalizedQuery]
+  const visibleMembers = useMemo(
+    () => (hub?.workspaceMembers || []).filter((entry) => filterEntry(entry, normalizedQuery)),
+    [hub?.workspaceMembers, normalizedQuery]
   )
   const visibleFriends = useMemo(
     () => (hub?.friends || []).filter((entry) => filterEntry(entry, normalizedQuery)),
@@ -513,7 +515,7 @@ export function ContactHubClient() {
               <Input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search groups, actors, users, friends"
+                placeholder="Search groups, actors, members, friends"
                 className="rounded-2xl"
               />
             </div>
@@ -610,12 +612,12 @@ export function ContactHubClient() {
                 </section>
 
                 <section className="space-y-2">
-                  <h3 className="text-sm font-semibold text-foreground">My friend ID</h3>
+                  <h3 className="text-sm font-semibold text-foreground">My Identity ID</h3>
                   <div className="rounded-2xl border border-border bg-muted/20 px-4 py-4">
                     <div className="space-y-1">
                       <div className="text-sm text-muted-foreground">
-                        Globally unique across Synapse. Searchability is off by default and
-                        changing the ID applies across all workspaces.
+                        Unique to your current workspace identity. Searchability is off by
+                        default.
                       </div>
                     </div>
                     <div className="mt-3 space-y-3">
@@ -624,7 +626,7 @@ export function ContactHubClient() {
                         onChange={(event) => setFriendIdDraft(event.target.value)}
                         autoCapitalize="none"
                         autoCorrect="off"
-                        placeholder="Set your friend ID"
+                        placeholder="Set your identity ID"
                         className="rounded-2xl"
                       />
                       <div className="grid grid-cols-2 gap-2">
@@ -642,7 +644,7 @@ export function ContactHubClient() {
                           onClick={() => void handleToggleFriendIdSearch()}
                           disabled={savingFriendId || !friendIdProfile}
                         >
-                          {friendIdProfile?.searchByIdEnabled
+                          {friendIdProfile?.identitySearchEnabled
                             ? "Disable search"
                             : "Enable search"}
                         </Button>
@@ -652,10 +654,10 @@ export function ContactHubClient() {
                 </section>
 
                 <section className="space-y-2">
-                  <h3 className="text-sm font-semibold text-foreground">Add by friend ID</h3>
+                  <h3 className="text-sm font-semibold text-foreground">Add by Identity ID</h3>
                   <div className="rounded-2xl border border-border bg-muted/20 px-4 py-4">
                     <div className="text-sm text-muted-foreground">
-                      Search a global Synapse ID and add the matching workspace-scoped user.
+                      Search a workspace identity and add the matching member or actor.
                     </div>
                     <div className="mt-3 space-y-3">
                       <Input
@@ -663,7 +665,7 @@ export function ContactHubClient() {
                         onChange={(event) => setFriendIdQuery(event.target.value)}
                         autoCapitalize="none"
                         autoCorrect="off"
-                        placeholder="Enter a friend ID"
+                        placeholder="Enter an identity ID"
                         className="rounded-2xl"
                       />
                       <Button
@@ -672,7 +674,7 @@ export function ContactHubClient() {
                         onClick={() => void handleSearchFriendId()}
                         disabled={searchingFriendId}
                       >
-                        {searchingFriendId ? "Searching..." : "Search friend ID"}
+                        {searchingFriendId ? "Searching..." : "Search identity"}
                       </Button>
                       {friendIdResults?.matches?.length ? (
                         <div className="space-y-3">
@@ -688,13 +690,21 @@ export function ContactHubClient() {
                                 {match.subtitle}
                               </div>
                               <div className="mt-2 text-xs text-muted-foreground">
-                                {match.state === "same_workspace_user"
-                                  ? "Same workspace user"
+                                {match.state === "same_workspace_member"
+                                  ? "Same workspace member"
                                   : match.state === "friend"
                                     ? "Already a friend"
+                                    : match.state === "available"
+                                      ? "Available for DM"
+                                      : match.state === "approval_required"
+                                        ? "Approval required"
+                                        : match.state === "pending_approval"
+                                          ? "Approval pending"
+                                          : match.state === "existing"
+                                            ? "Already connected"
                                     : match.state === "pending_request"
                                       ? "Friend request pending"
-                                      : "Can send friend request"}
+                                      : "Can send relationship request"}
                               </div>
                               <Button
                                 variant="outline"
@@ -702,17 +712,21 @@ export function ContactHubClient() {
                                 onClick={() => void handleFriendIdMatchAction(match)}
                                 disabled={
                                   match.state === "pending_request" ||
+                                  match.state === "pending_approval" ||
                                   submittingSearchProfileId === match.profileId
                                 }
                               >
-                                {match.state === "same_workspace_user" ||
-                                match.state === "friend"
+                                {match.state === "same_workspace_member" ||
+                                match.state === "friend" ||
+                                match.state === "available" ||
+                                match.state === "existing"
                                   ? "Open DM"
-                                  : match.state === "pending_request"
+                                  : match.state === "pending_request" ||
+                                      match.state === "pending_approval"
                                     ? "Pending"
                                     : submittingSearchProfileId === match.profileId
                                       ? "Submitting..."
-                                      : "Add friend"}
+                                      : "Request"}
                               </Button>
                             </div>
                           ))}
@@ -777,9 +791,9 @@ export function ContactHubClient() {
                 </section>
 
                 <section className="space-y-2">
-                  <h3 className="text-sm font-semibold text-foreground">Workspace users</h3>
+                  <h3 className="text-sm font-semibold text-foreground">Workspace members</h3>
                   <div className="space-y-2">
-                    {visibleUsers.map((entry) => (
+                    {visibleMembers.map((entry) => (
                       <button
                         key={`${entry.kind}:${entry.id}`}
                         type="button"
@@ -919,7 +933,7 @@ export function ContactHubClient() {
                     {myQrImage ? (
                       <img
                         src={myQrImage}
-                        alt="My friendship QR"
+                        alt="My relationship QR"
                         className="w-full rounded-2xl border border-border bg-white p-4"
                       />
                     ) : (
@@ -948,7 +962,7 @@ export function ContactHubClient() {
                       {actorQrImage ? (
                         <img
                           src={actorQrImage}
-                          alt="Actor friendship QR"
+                          alt="Actor relationship QR"
                           className="w-full rounded-2xl border border-border bg-white p-4"
                         />
                       ) : (
