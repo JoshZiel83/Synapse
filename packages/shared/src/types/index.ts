@@ -1952,6 +1952,7 @@ export interface MarketplaceItem {
   latestRevisionId?: string;
   defaultInstanceScope?: AttachmentTargetType;
   defaultReuseScope?: ReuseScope;
+  supportedReuseScopes?: ReuseScope[];
   defaultIdleTtlMs?: number;
   defaultMaxAgeMs?: number;
   requiresHandshake: boolean;
@@ -3767,11 +3768,10 @@ export type CatalogFileRole =
 export type RuntimeBindingScope = AccessTargetType;
 export type PluginReuseScopeV2 =
   | "turn"
+  | "session"
   | "workspace"
   | "conversation"
-  | "actor"
-  | "actor_conversation"
-  | "workspace_user";
+  | "actor";
 export type AccessBindingStatus = "active" | "revoked";
 export type AccessResourceType =
   | "workspace"
@@ -3900,6 +3900,7 @@ export interface PluginPackageVersionSpecRecord {
   authBindings: PluginAuthBindingDefinition[];
   defaultMountScope: RuntimeBindingScope;
   defaultReuseScope: PluginReuseScopeV2;
+  supportedReuseScopes: PluginReuseScopeV2[];
   requiresHandshake: boolean;
   metadata: Record<string, unknown>;
   createdAt: string;

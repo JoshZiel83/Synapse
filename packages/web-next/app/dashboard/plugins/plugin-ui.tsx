@@ -57,11 +57,10 @@ const ownershipSummaryByAttachmentType: Record<string, string> = {
 
 const lifecycleSummaryByScope: Record<string, string> = {
   turn: 'fresh for every run',
-  workspace_user: 'reused per workspace user',
+  session: 'reused per actor in each conversation',
   workspace: 'reused across the workspace',
   conversation: 'reused per conversation',
   actor: 'reused per actor',
-  actor_conversation: 'reused per actor in each conversation',
 };
 
 export function getPluginInstallationTitle(installation: PluginInstallationSummaryShape) {

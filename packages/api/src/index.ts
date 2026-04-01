@@ -57,7 +57,10 @@ import {
   initRelayManager,
   shutdownAllRelays,
 } from "./modules/mcp-plugins/relay-manager.js";
-import { shutdownAllInstances } from "./modules/mcp-plugins/instance-manager.js";
+import {
+  initInstanceManagerListeners,
+  shutdownAllInstances,
+} from "./modules/mcp-plugins/instance-manager.js";
 import { recoverInterruptedExecutions } from "./modules/execution/service.js";
 import { registerActionToolPlugins } from "./modules/ai/tools.js";
 import { registerActorFileToolPlugins } from "./modules/ai/file-tools.js";
@@ -160,6 +163,7 @@ async function main() {
 
   try {
     await initBuiltinRegistry();
+    initInstanceManagerListeners();
     await initRelayManager();
   } catch (err) {
     console.error("Failed to initialize MCP runtime:", err);

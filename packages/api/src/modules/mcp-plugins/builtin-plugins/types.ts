@@ -26,6 +26,7 @@ export interface BuiltinPluginSeed {
   entryPoint: string;
   defaultInstanceScope: AttachmentTargetType;
   defaultReuseScope: ReuseScope;
+  supportedReuseScopes?: ReuseScope[];
   requiresHandshake?: boolean;
   tags: string[];
   categorySlugs?: string[];

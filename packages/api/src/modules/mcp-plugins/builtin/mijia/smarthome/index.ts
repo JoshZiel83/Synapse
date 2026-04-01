@@ -21,21 +21,14 @@ function getAuthConnection(config: Record<string, unknown>) {
   };
 }
 
-const clientCache = new Map<string, MijiaCloudClient>();
-
 function getClient(config: Record<string, unknown>) {
   const connection = getAuthConnection(config);
-  const cacheKey = connection.connectionId || JSON.stringify(connection.secretPayload);
-  let client = clientCache.get(cacheKey);
-  if (!client) {
-    client = new MijiaCloudClient(connection.secretPayload, {
-      onAuthStateChanged: async (nextState) => {
-        if (!connection.connectionId) return;
-        await persistMijiaConnectionState(connection.connectionId, nextState);
-      },
-    });
-    clientCache.set(cacheKey, client);
-  }
+  const client = new MijiaCloudClient(connection.secretPayload, {
+    onAuthStateChanged: async (nextState) => {
+      if (!connection.connectionId) return;
+      await persistMijiaConnectionState(connection.connectionId, nextState);
+    },
+  });
   return {
     client,
     connectionId: connection.connectionId,

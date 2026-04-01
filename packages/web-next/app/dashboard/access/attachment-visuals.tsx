@@ -199,13 +199,13 @@ const reuseOptionDefs: ReuseOptionDef[] = [
     lineClassName: 'stroke-slate-400',
   },
   {
-    value: 'workspace_user',
-    label: 'Workspace User',
-    hint: 'Reuse across the same workspace user',
-    icon: UserRound,
-    tone: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 dark:border-fuchsia-500/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-200',
-    ring: 'ring-fuchsia-500/20',
-    lineClassName: 'stroke-fuchsia-400',
+    value: 'session',
+    label: 'Session',
+    hint: 'Reuse for one actor in one conversation',
+    icon: Layers3,
+    tone: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200',
+    ring: 'ring-amber-500/20',
+    lineClassName: 'stroke-amber-400',
   },
   {
     value: 'workspace',
@@ -234,22 +234,13 @@ const reuseOptionDefs: ReuseOptionDef[] = [
     ring: 'ring-emerald-500/20',
     lineClassName: 'stroke-emerald-400',
   },
-  {
-    value: 'actor_conversation',
-    label: 'Actor + Conversation',
-    hint: 'One runtime per actor in one conversation',
-    icon: Layers3,
-    tone: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200',
-    ring: 'ring-amber-500/20',
-    lineClassName: 'stroke-amber-400',
-  },
 ];
 
 const lifecycleOptionMap: Record<AttachmentTargetType, ReuseScope[]> = {
-  workspace: ['workspace', 'workspace_user', 'conversation', 'actor', 'actor_conversation', 'turn'],
-  conversation: ['conversation', 'actor_conversation', 'turn'],
-  actor: ['actor', 'turn'],
-  workspace_user: ['workspace_user', 'turn'],
+  workspace: ['turn', 'session', 'conversation', 'actor', 'workspace'],
+  conversation: ['turn', 'session', 'conversation', 'actor', 'workspace'],
+  actor: ['turn', 'session', 'conversation', 'actor', 'workspace'],
+  workspace_user: ['turn', 'session', 'conversation', 'actor', 'workspace'],
 };
 
 export function getAllowedReuseScopes(attachmentType: AttachmentTargetType) {
@@ -1049,42 +1040,27 @@ export function AccessReuseScopeStep({
   const calls = buildFakeLifecycleCalls(primaryActorName, secondaryActorName);
   const selectedReuseOption = getReuseOption(value);
   const instanceTone = selectedReuseOption.tone;
-  const primaryConversationId = calls[0]?.conversationId;
 
   const instanceForCall = (call: FakeLifecycleCall) => {
     switch (value) {
       case 'workspace':
         return { key: 'workspace', label: 'Workspace runtime' };
       case 'conversation':
-        return { key: `conversation:${call.conversationName}`, label: `${call.conversationName}` };
+        return { key: `conversation:${call.conversationId}`, label: `${call.conversationName}` };
       case 'actor':
         return { key: `actor:${call.actorName}`, label: `${call.actorName}` };
-      case 'actor_conversation':
-        return { key: `${call.conversationName}:${call.actorName}`, label: `${call.actorName} @ ${call.conversationName}` };
-      case 'workspace_user':
-        return call.includesCurrentUser && call.singleRealUser
-          ? { key: 'workspace-user', label: 'Workspace user runtime' }
-          : { key: `conversation:${call.conversationName}`, label: `${call.conversationName}` };
+      case 'session':
+        return {
+          key: `conversation:${call.conversationId}:actor:${call.actorName}`,
+          label: `${call.actorName} @ ${call.conversationName}`,
+        };
       case 'turn':
       default:
         return { key: `turn:${call.id}`, label: `Turn ${call.id.split('-')[1]}` };
     }
   };
 
-  const isCallAvailable = (call: FakeLifecycleCall) => {
-    switch (attachmentType) {
-      case 'workspace':
-        return true;
-      case 'conversation':
-        return call.conversationId === primaryConversationId;
-      case 'actor':
-        return call.actorName === primaryActorName;
-      case 'workspace_user':
-        return call.includesCurrentUser && call.singleRealUser;
-      default:
-        return false;
-    }
-  };
+  const isCallAvailable = (_call: FakeLifecycleCall) => true;
 
   const callNodes = useMemo(
     () => calls.map((call) => {
@@ -1095,7 +1071,7 @@ export function AccessReuseScopeStep({
         instance: available ? instanceForCall(call) : null,
       } satisfies FakeLifecycleNode;
     }),
-    [calls, value, attachmentType, primaryConversationId, primaryActorName],
+    [calls, value, attachmentType, primaryActorName],
   );
 
   const conversationCards = useMemo(() => {

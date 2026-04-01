@@ -9,19 +9,15 @@ import {
 import { db } from "../../infrastructure/database/kysely.js";
 import { resolveInstallationConfig } from "./config-resolver.js";
 import {
-  getMcpVersion,
   getOrCreateInstance,
   type McpExecutionContext,
   type McpInstance,
 } from "./instance-manager.js";
+import { getMcpVersion } from "./runtime-version.js";
 import { logToolCall } from "./audit.js";
 import {
-  callRelayTool,
-  closeRelayRuntimeSession,
   enqueueRelayToolTask,
-  getConnectedRelaySessionId,
-  getRelayExposureCatalog,
-  openRelayRuntimeSession,
+  loadRelayExposureCatalogSnapshot,
 } from "./relay-manager.js";
 import { normalizeMcpToolResult } from "./result-normalizer.js";
 
@@ -73,7 +69,7 @@ type VisiblePluginRow = {
   transport: "builtin" | "stdio" | "http" | "relay";
   entry_point: string | null;
   tool_manifest: unknown;
-  reuse_scope: "turn" | "workspace" | "conversation" | "actor" | "actor_conversation" | "user" | null;
+  reuse_scope: "turn" | "session" | "workspace" | "conversation" | "actor" | null;
 };
 
 type VisibleRelayExposureRow = {
@@ -189,18 +185,7 @@ function buildVisibilitySubjects(params: ResolveParams) {
 }
 
 function publicReuseScope(scope: VisiblePluginRow["reuse_scope"]) {
-  switch (scope) {
-    case "actor":
-      return "actor_global";
-    case "turn":
-    case "workspace":
-    case "conversation":
-    case "actor_conversation":
-    case "user":
-      return scope;
-    default:
-      return "conversation";
-  }
+  return scope || "conversation";
 }
 
 function resolveReuseOwnerKey(
@@ -210,21 +195,17 @@ function resolveReuseOwnerKey(
 ) {
   switch (scope) {
     case "workspace":
-      return params.workspaceId;
+      return `workspace:${params.workspaceId}`;
     case "conversation":
-      return params.conversationId;
-    case "actor_global":
-      return params.actorId;
-    case "actor_conversation":
-      return `${params.actorId}:${params.conversationId}`;
-    case "user":
-      return params.userId
-        ? `workspace:${params.workspaceId}:user:${params.userId}`
-        : params.conversationId;
+      return `conversation:${params.conversationId}`;
+    case "actor":
+      return `actor:${params.actorId}`;
+    case "session":
+      return `conversation:${params.conversationId}:actor:${params.actorId}`;
     case "turn":
       return turnOwnerKey;
     default:
-      return params.conversationId;
+      return `conversation:${params.conversationId}`;
   }
 }
 
@@ -281,179 +262,6 @@ function buildPluginNamespace(
   return `${publisher}${MCP_TOOL_NAMESPACE_SEPARATOR}${basePluginSlug}_${installationSuffix}`;
 }
 
-async function createRelayBaseInstance(params: {
-  pluginId: string;
-  installationId: string;
-  pluginSlug: string;
-  orgSlug: string;
-  scope: string;
-  scopeId: string;
-  workspaceId: string;
-  deviceId: string;
-  exposureId: string;
-  exposureStableKey: string;
-  key: string;
-  configHash: string;
-}): Promise<McpInstance> {
-  let runtimeSessionId: string | undefined;
-  let relaySessionId: string | undefined;
-
-  const ensureRuntimeSession = async () => {
-    const currentRelaySessionId = getConnectedRelaySessionId(params.deviceId);
-    if (!currentRelaySessionId) {
-      runtimeSessionId = undefined;
-      relaySessionId = undefined;
-      throw new Error(`Relay device ${params.deviceId} is not connected`);
-    }
-
-    if (
-      runtimeSessionId &&
-      relaySessionId &&
-      relaySessionId === currentRelaySessionId
-    ) {
-      return runtimeSessionId;
-    }
-
-    runtimeSessionId = await openRelayRuntimeSession({
-      deviceId: params.deviceId,
-      exposureId: params.exposureId,
-      exposureStableKey: params.exposureStableKey,
-    });
-    relaySessionId = currentRelaySessionId;
-    return runtimeSessionId;
-  };
-
-  const executeRelayCall = async (
-    visibleToolName: string,
-    binding: RelayHiddenToolBinding,
-    input: Record<string, unknown>,
-    executionContext?: McpExecutionContext,
-  ) => {
-    const runtimeSession = await ensureRuntimeSession();
-
-    if (wantsAsyncRelayCommandlineExecution(visibleToolName, input)) {
-      if (
-        !executionContext?.sessionId ||
-        !executionContext.conversationId ||
-        !executionContext.actorId ||
-        !executionContext.toolCallId
-      ) {
-        throw new Error(
-          "Async relay commandline tool calls require a session-backed actor tool call",
-        );
-      }
-
-      const accepted = await enqueueRelayToolTask({
-        workspaceId: params.workspaceId,
-        conversationId: executionContext.conversationId,
-        sessionId: executionContext.sessionId,
-        requestedByActorId: executionContext.actorId,
-        requestedByUserId: executionContext.userId,
-        turnId: executionContext.turnId,
-        sourceToolCallId: executionContext.toolCallId,
-        sourceToolName: executionContext.namespacedToolName || visibleToolName,
-        deviceId: params.deviceId,
-        exposureId: params.exposureId,
-        visibleToolName,
-        binding,
-        args: input,
-        runtimeSessionId: runtimeSession,
-        deliveryPolicy: "online_only",
-      });
-
-      return {
-        content: textBlocks(
-          `Accepted async ${visibleToolName} request. The relay will execute it and wake you with the final result.`,
-        ),
-        structuredContent: {
-          deferred: true,
-          task: {
-            taskId: accepted.taskId,
-            status: "working",
-            dispatchStatus: "queued",
-            statusMessage: `Queued async ${visibleToolName} on the relay.`,
-          },
-          relayOperationId: accepted.operationId,
-        },
-      };
-    }
-
-    return callRelayTool({
-      conversationId: executionContext?.conversationId,
-      sessionId: executionContext?.sessionId,
-      requestedByUserId: executionContext?.userId,
-      requestedByActorId: executionContext?.actorId,
-      deviceId: params.deviceId,
-      exposureId: params.exposureId,
-      visibleToolName,
-      binding,
-      args: input,
-      runtimeSessionId: runtimeSession,
-    });
-  };
-
-  return {
-    pluginId: params.pluginId,
-    installationId: params.installationId,
-    pluginSlug: params.pluginSlug,
-    orgSlug: params.orgSlug,
-    transport: "relay",
-    scope: params.scope,
-    scopeId: params.scopeId,
-    workspaceId: params.workspaceId,
-    configHash: params.configHash,
-    tools: [],
-    execute: async (toolName, input, executionContext) => {
-      const relayCatalog = getRelayExposureCatalog(
-        params.deviceId,
-        params.exposureId,
-      );
-      if (!relayCatalog) {
-        throw new Error(
-          `Relay exposure ${params.exposureId} is not currently connected`,
-        );
-      }
-      const toolBinding = relayCatalog.tools.find(
-        (tool) => tool.visible.name === toolName,
-      );
-      if (!toolBinding) {
-        throw new Error(`Relay binding missing for tool ${toolName}`);
-      }
-      return executeRelayCall(
-        toolBinding.visible.name,
-        toolBinding.binding,
-        input,
-        executionContext,
-      );
-    },
-    executeWithBinding: async (toolName, input, binding, executionContext) => {
-      return executeRelayCall(
-        toolName,
-        binding as RelayHiddenToolBinding,
-        input,
-        executionContext,
-      );
-    },
-    ensureRuntimeSession,
-    getRuntimeSessionId: () => runtimeSessionId,
-    shutdown: async () => {
-      const activeRuntimeSessionId = runtimeSessionId;
-      runtimeSessionId = undefined;
-      relaySessionId = undefined;
-      if (activeRuntimeSessionId) {
-        await closeRelayRuntimeSession({
-          deviceId: params.deviceId,
-          runtimeSessionId: activeRuntimeSessionId,
-        }).catch(() => {});
-      }
-    },
-    lastUsed: Date.now(),
-    createdAt: Date.now(),
-    idleTtlMs: 0,
-    maxAgeMs: undefined,
-  };
-}
-
 function buildRelayScopedInstance(params: {
   baseInstance: McpInstance;
   tools: ToolDefinition[];
@@ -491,6 +299,54 @@ function buildRelayScopedInstance(params: {
             runtimeSessionId,
           },
         );
+      }
+      if (wantsAsyncRelayCommandlineExecution(toolBinding.visibleToolName, input)) {
+        if (
+          !executionContext?.sessionId ||
+          !executionContext.conversationId ||
+          !executionContext.actorId ||
+          !executionContext.toolCallId ||
+          !runtimeSessionId
+        ) {
+          throw new Error(
+            "Async relay commandline tool calls require a session-backed actor tool call",
+          );
+        }
+
+        const accepted = await enqueueRelayToolTask({
+          workspaceId: params.baseInstance.workspaceId || "",
+          conversationId: executionContext.conversationId,
+          sessionId: executionContext.sessionId,
+          requestedByActorId: executionContext.actorId,
+          requestedByUserId: executionContext.userId,
+          turnId: executionContext.turnId,
+          sourceToolCallId: executionContext.toolCallId,
+          sourceToolName:
+            executionContext.namespacedToolName || toolBinding.visibleToolName,
+          deviceId: params.deviceId,
+          exposureId: params.exposureId,
+          visibleToolName: toolBinding.visibleToolName,
+          binding: toolBinding.binding,
+          args: input,
+          runtimeSessionId,
+          deliveryPolicy: "online_only",
+        });
+
+        return {
+          content: textBlocks(
+            `Accepted async ${toolBinding.visibleToolName} request. The relay will execute it and wake you with the final result.`,
+          ),
+          structuredContent: {
+            deferred: true,
+            task: {
+              taskId: accepted.taskId,
+              status: "working",
+              dispatchStatus: "queued",
+              statusMessage: `Queued async ${toolBinding.visibleToolName} on the relay.`,
+            },
+            relayOperationId: accepted.operationId,
+          },
+        };
       }
       if (params.baseInstance.executeWithBinding) {
         return params.baseInstance.executeWithBinding(
@@ -636,9 +492,12 @@ async function resolveTools(
           throw new Error(`Relay plugin ${namespace} is missing relay entry point metadata`);
         }
 
-        const relayCatalog = getRelayExposureCatalog(entry.deviceId, entry.exposureId);
+        const relayCatalog = await loadRelayExposureCatalogSnapshot(
+          entry.deviceId,
+          entry.exposureId,
+        );
         if (!relayCatalog) {
-          throw new Error(`Relay exposure ${entry.exposureId} is not currently connected`);
+          throw new Error(`Relay exposure ${entry.exposureId} is not available`);
         }
 
         const bindingMap = new Map<string, { binding: any; visibleToolName: string }>();
@@ -671,21 +530,6 @@ async function resolveTools(
             exposureStableKey: relayCatalog.exposureStableKey,
           },
           workspaceId: params.workspaceId,
-          factory: async ({ key, configHash }) =>
-            createRelayBaseInstance({
-              pluginId: plugin.catalog_item_id,
-              installationId: plugin.installation_id,
-              pluginSlug: plugin.item_slug,
-              orgSlug: plugin.publisher_slug || "plugin",
-              scope: reuseScope,
-              scopeId,
-              workspaceId: params.workspaceId,
-              deviceId: entry.deviceId!,
-              exposureId: entry.exposureId!,
-              exposureStableKey: relayCatalog.exposureStableKey,
-              key,
-              configHash,
-            }),
         });
         const relayInstance = buildRelayScopedInstance({
           baseInstance: baseRelayInstance,
@@ -752,7 +596,10 @@ async function resolveTools(
   }
 
   for (const exposure of visibleRelayExposures) {
-    const relayCatalog = getRelayExposureCatalog(exposure.device_id, exposure.exposure_id);
+    const relayCatalog = await loadRelayExposureCatalogSnapshot(
+      exposure.device_id,
+      exposure.exposure_id,
+    );
     if (!relayCatalog) {
       continue;
     }
@@ -794,21 +641,6 @@ async function resolveTools(
         exposureStableKey: relayCatalog.exposureStableKey,
       },
       workspaceId: params.workspaceId,
-      factory: async ({ key, configHash }) =>
-        createRelayBaseInstance({
-          pluginId: exposure.exposure_id,
-          installationId: exposure.exposure_id,
-          pluginSlug: exposureSlug,
-          orgSlug: "relay",
-          scope: "conversation",
-          scopeId: params.conversationId,
-          workspaceId: params.workspaceId,
-          deviceId: exposure.device_id,
-          exposureId: exposure.exposure_id,
-          exposureStableKey: relayCatalog.exposureStableKey,
-          key,
-          configHash,
-        }),
     });
     const relayInstance = buildRelayScopedInstance({
       baseInstance: baseRelayInstance,
@@ -979,7 +811,7 @@ export async function resolveRelayTargetForNamespacedTool(
   const visibleExposures = await loadVisibleRelayExposures(params);
 
   for (const exposure of visibleExposures) {
-    const relayCatalog = getRelayExposureCatalog(
+    const relayCatalog = await loadRelayExposureCatalogSnapshot(
       exposure.device_id,
       exposure.exposure_id,
     );

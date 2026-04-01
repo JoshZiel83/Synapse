@@ -18,9 +18,15 @@ import {
   relayDeviceOnlineEventDefinition,
   textBlocks,
 } from '@synapse/shared';
+import { redis } from '../../infrastructure/redis/index.js';
 import { transaction } from '../../infrastructure/database/index.js';
 import { executeSql, executeSqlOn } from '../../infrastructure/database/kysely.js';
-import { incrementMcpVersion } from './instance-manager.js';
+import { incrementMcpVersion } from './runtime-version.js';
+import {
+  getRuntimeNodeId,
+  registerRuntimeCommandHandler,
+  sendRuntimeCommand,
+} from './runtime-control-plane.js';
 import { logEvent } from './audit.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { touchRelayExposureAuthzState } from './relay-access.js';
@@ -78,6 +84,8 @@ interface RelaySyncSourceRegistration {
 }
 
 interface ConnectedRelayExposure {
+  deviceId?: string;
+  deviceDisplayName?: string;
   exposureId: string;
   stableKey: string;
   displayName: string;
@@ -219,6 +227,86 @@ const RELAY_AUTHORIZATION_APPLY_TIMEOUT_MS = 30_000;
 const pendingRelayAuthorizationApplies = new Map<string, PendingRelayAuthorizationApply>();
 const RELAY_RUNTIME_SESSION_TIMEOUT_MS = 15_000;
 const pendingRelayRuntimeSessionRequests = new Map<string, PendingRelayRuntimeSessionRequest>();
+const RELAY_ROUTE_TTL_MS = Math.max(RELAY_HEARTBEAT_INTERVAL * 3, 45_000);
+const RELAY_RUNTIME_NODE_ID = getRuntimeNodeId();
+let relayCommandHandlersRegistered = false;
+
+type RelayRouteRecord = {
+  deviceId: string;
+  nodeId: string;
+  sessionId: string;
+  updatedAt: number;
+};
+
+type RelayCommandPayload =
+  | {
+      command: 'open_runtime_session';
+      deviceId: string;
+      exposureId: string;
+      exposureStableKey: string;
+    }
+  | {
+      command: 'close_runtime_session';
+      deviceId: string;
+      runtimeSessionId: string;
+    }
+  | {
+      command: 'call_tool';
+      params: RelayCallParams;
+    }
+  | {
+      command: 'enqueue_tool_task';
+      params: RelayAsyncCallParams;
+    };
+
+function relayRouteKey(deviceId: string) {
+  return `mcp:relay:route:${deviceId}`;
+}
+
+async function publishRelayRoute(connected: ConnectedRelay) {
+  const record: RelayRouteRecord = {
+    deviceId: connected.deviceId,
+    nodeId: RELAY_RUNTIME_NODE_ID,
+    sessionId: connected.sessionId,
+    updatedAt: Date.now(),
+  };
+  await redis.set(
+    relayRouteKey(connected.deviceId),
+    JSON.stringify(record),
+    'PX',
+    RELAY_ROUTE_TTL_MS,
+  );
+}
+
+async function readRelayRoute(deviceId: string): Promise<RelayRouteRecord | null> {
+  const raw = await redis.get(relayRouteKey(deviceId));
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as RelayRouteRecord;
+    return parsed?.nodeId && parsed?.sessionId ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function clearRelayRoute(deviceId: string, sessionId: string) {
+  await redis.eval(
+    `local raw = redis.call("GET", KEYS[1])
+     if not raw then
+       return 0
+     end
+     local decoded = cjson.decode(raw)
+     if decoded["sessionId"] == ARGV[1] then
+       return redis.call("DEL", KEYS[1])
+     end
+     return 0`,
+    1,
+    relayRouteKey(deviceId),
+    sessionId,
+  ).catch(() => undefined);
+}
 
 export function handleRelayConnection(socket: any, _req: any, _app: FastifyInstance) {
   let deviceId: string | null = null;
@@ -375,6 +463,7 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
           nextDeliverySeq: 1,
         };
         connectedRelays.set(connected.deviceId, connected);
+        await publishRelayRoute(connected);
 
         await onRelayAuthenticated(connected);
 
@@ -428,6 +517,7 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
         clearTimeout(connected.pongTimer);
         connected.pongTimer = null;
       }
+      void publishRelayRoute(connected).catch(() => {});
       void executeSql(
         `UPDATE relay_device_sessions SET last_heartbeat_at = NOW() WHERE id = $1`,
         [connected.sessionRowId],
@@ -538,7 +628,7 @@ function buildAsyncRelayBinaryMetadata(params: {
   };
 }
 
-async function validateRelayCallTarget(params: RelayCallParams) {
+async function validateRelayCallTargetLocal(params: RelayCallParams) {
   if (!params.runtimeSessionId) {
     throw buildRelayExecutionError({
       code: 'delivery_rejected',
@@ -691,9 +781,9 @@ async function insertRelayOperation(params: {
   );
 }
 
-export async function callRelayTool(params: RelayCallParams): Promise<unknown> {
+async function callRelayToolLocal(params: RelayCallParams): Promise<unknown> {
   const { connected, exposure, currentTool } =
-    await validateRelayCallTarget(params);
+    await validateRelayCallTargetLocal(params);
 
   const operationId = crypto.randomUUID();
   const inputHash = hashValue(params.args);
@@ -778,11 +868,36 @@ export async function callRelayTool(params: RelayCallParams): Promise<unknown> {
   });
 }
 
-export async function enqueueRelayToolTask(
+async function resolveRelayRoute(deviceId: string): Promise<RelayRouteRecord | null> {
+  const connected = connectedRelays.get(deviceId);
+  if (connected && connected.ws.readyState === 1) {
+    void publishRelayRoute(connected).catch(() => {});
+    return {
+      deviceId: connected.deviceId,
+      nodeId: RELAY_RUNTIME_NODE_ID,
+      sessionId: connected.sessionId,
+      updatedAt: Date.now(),
+    };
+  }
+  return readRelayRoute(deviceId);
+}
+
+export async function callRelayTool(params: RelayCallParams): Promise<unknown> {
+  const route = await resolveRelayRoute(params.deviceId);
+  if (route?.nodeId && route.nodeId !== RELAY_RUNTIME_NODE_ID) {
+    return sendRuntimeCommand<unknown>(route.nodeId, 'relay.command', {
+      command: 'call_tool',
+      params,
+    } satisfies RelayCommandPayload);
+  }
+  return callRelayToolLocal(params);
+}
+
+async function enqueueRelayToolTaskLocal(
   params: RelayAsyncCallParams,
 ): Promise<{ operationId: string; taskId: string }> {
   const { connected, exposure, currentTool } =
-    await validateRelayCallTarget(params);
+    await validateRelayCallTargetLocal(params);
 
   const operationId = crypto.randomUUID();
   const inputHash = hashValue(params.args);
@@ -989,6 +1104,23 @@ export async function enqueueRelayToolTask(
     operationId,
     taskId: created.id,
   };
+}
+
+export async function enqueueRelayToolTask(
+  params: RelayAsyncCallParams,
+): Promise<{ operationId: string; taskId: string }> {
+  const route = await resolveRelayRoute(params.deviceId);
+  if (route?.nodeId && route.nodeId !== RELAY_RUNTIME_NODE_ID) {
+    return sendRuntimeCommand<{ operationId: string; taskId: string }>(
+      route.nodeId,
+      'relay.command',
+      {
+        command: 'enqueue_tool_task',
+        params,
+      } satisfies RelayCommandPayload,
+    );
+  }
+  return enqueueRelayToolTaskLocal(params);
 }
 
 async function dispatchPendingRelayOperation(connected: ConnectedRelay, pending: PendingRelayOperation) {
@@ -1298,7 +1430,7 @@ async function finalizePendingRelayCancellation(
   }).catch(() => {});
 }
 
-export function getRelayExposureCatalog(deviceId: string, exposureId: string): RelayExposureCatalog | null {
+function getRelayExposureCatalogLocal(deviceId: string, exposureId: string): RelayExposureCatalog | null {
   const connected = connectedRelays.get(deviceId);
   if (!connected) return null;
 
@@ -1324,11 +1456,44 @@ export function getRelayExposureCatalog(deviceId: string, exposureId: string): R
   };
 }
 
-export function getConnectedRelaySessionId(deviceId: string): string | null {
-  const connected = connectedRelays.get(deviceId);
-  if (!connected || connected.ws.readyState !== 1) {
+export async function loadRelayExposureCatalogSnapshot(
+  deviceId: string,
+  exposureId: string,
+): Promise<RelayExposureCatalog | null> {
+  const local = getRelayExposureCatalogLocal(deviceId, exposureId);
+  if (local) {
+    return local;
+  }
+
+  const catalog = await loadExposureCatalog(exposureId);
+  if (!catalog) {
     return null;
   }
+  return {
+    deviceId: catalog.deviceId || deviceId,
+    deviceDisplayName: catalog.deviceDisplayName || '',
+    exposureId: catalog.exposureId,
+    exposureStableKey: catalog.stableKey,
+    exposureDisplayName: catalog.displayName,
+    transport: catalog.transport,
+    tools: catalog.tools.map((tool) => ({
+      binding: { ...tool.binding },
+      visible: {
+        name: tool.visible.name,
+        description: tool.visible.description,
+        inputSchema: tool.visible.inputSchema,
+      },
+      definitionHash: tool.definitionHash,
+    })),
+  };
+}
+
+export async function getConnectedRelaySessionId(deviceId: string): Promise<string | null> {
+  const connected = connectedRelays.get(deviceId);
+  if (!connected || connected.ws.readyState !== 1) {
+    return (await readRelayRoute(deviceId))?.sessionId || null;
+  }
+  void publishRelayRoute(connected).catch(() => {});
   return connected.sessionId;
 }
 
@@ -1336,7 +1501,7 @@ function buildRuntimeSessionRequestKey(action: 'open' | 'close', runtimeSessionI
   return `${action}:${runtimeSessionId}`;
 }
 
-export async function openRelayRuntimeSession(params: {
+async function openRelayRuntimeSessionLocal(params: {
   deviceId: string;
   exposureId: string;
   exposureStableKey: string;
@@ -1372,7 +1537,7 @@ export async function openRelayRuntimeSession(params: {
   return runtimeSessionId;
 }
 
-export async function closeRelayRuntimeSession(params: {
+async function closeRelayRuntimeSessionLocal(params: {
   deviceId: string;
   runtimeSessionId: string;
 }): Promise<void> {
@@ -1390,6 +1555,39 @@ export async function closeRelayRuntimeSession(params: {
     connected,
     runtimeSessionId: params.runtimeSessionId,
   }).catch(() => {});
+}
+
+export async function openRelayRuntimeSession(params: {
+  deviceId: string;
+  exposureId: string;
+  exposureStableKey: string;
+}): Promise<string> {
+  const route = await resolveRelayRoute(params.deviceId);
+  if (route?.nodeId && route.nodeId !== RELAY_RUNTIME_NODE_ID) {
+    return sendRuntimeCommand<string>(route.nodeId, 'relay.command', {
+      command: 'open_runtime_session',
+      deviceId: params.deviceId,
+      exposureId: params.exposureId,
+      exposureStableKey: params.exposureStableKey,
+    } satisfies RelayCommandPayload);
+  }
+  return openRelayRuntimeSessionLocal(params);
+}
+
+export async function closeRelayRuntimeSession(params: {
+  deviceId: string;
+  runtimeSessionId: string;
+}): Promise<void> {
+  const route = await resolveRelayRoute(params.deviceId);
+  if (route?.nodeId && route.nodeId !== RELAY_RUNTIME_NODE_ID) {
+    await sendRuntimeCommand<void>(route.nodeId, 'relay.command', {
+      command: 'close_runtime_session',
+      deviceId: params.deviceId,
+      runtimeSessionId: params.runtimeSessionId,
+    } satisfies RelayCommandPayload);
+    return;
+  }
+  await closeRelayRuntimeSessionLocal(params);
 }
 
 async function dispatchRelayRuntimeSessionRequest(params: {
@@ -1498,6 +1696,29 @@ async function dispatchRelayRuntimeSessionRequest(params: {
   });
 }
 
+async function handleRelayCommand(payload: RelayCommandPayload) {
+  switch (payload.command) {
+    case 'open_runtime_session':
+      return openRelayRuntimeSessionLocal({
+        deviceId: payload.deviceId,
+        exposureId: payload.exposureId,
+        exposureStableKey: payload.exposureStableKey,
+      });
+    case 'close_runtime_session':
+      await closeRelayRuntimeSessionLocal({
+        deviceId: payload.deviceId,
+        runtimeSessionId: payload.runtimeSessionId,
+      });
+      return null;
+    case 'call_tool':
+      return callRelayToolLocal(payload.params);
+    case 'enqueue_tool_task':
+      return enqueueRelayToolTaskLocal(payload.params);
+    default:
+      throw new Error(`Unsupported relay command '${(payload as { command: string }).command}'`);
+  }
+}
+
 export function disconnectRelay(relayId: string) {
   const connected = connectedRelays.get(relayId);
   if (!connected) return;
@@ -1514,6 +1735,12 @@ export function isRelayConnected(relayId: string): boolean {
 }
 
 export async function initRelayManager() {
+  if (!relayCommandHandlersRegistered) {
+    registerRuntimeCommandHandler('relay.command', async (payload) =>
+      handleRelayCommand(payload as RelayCommandPayload),
+    );
+    relayCommandHandlersRegistered = true;
+  }
   await executeSql(
     `UPDATE relay_device_sessions
      SET status = 'closed',
@@ -1611,6 +1838,10 @@ export async function shutdownAllRelays() {
     pending.reject(new Error('Server shutting down'));
   }
 
+  const relaySessions = [...connectedRelays.values()].map((connected) => ({
+    deviceId: connected.deviceId,
+    sessionId: connected.sessionId,
+  }));
   const deviceIds = [...connectedRelays.keys()];
   connectedRelays.clear();
   pendingRelayOperations.clear();
@@ -1618,6 +1849,11 @@ export async function shutdownAllRelays() {
   pendingRelayRuntimeSessionRequests.clear();
 
   if (deviceIds.length > 0) {
+    await Promise.allSettled(
+      relaySessions.map(({ deviceId, sessionId }) =>
+        clearRelayRoute(deviceId, sessionId),
+      ),
+    );
     await executeSql(
       `UPDATE relay_devices
        SET last_seen_at = NOW(),
@@ -2345,6 +2581,8 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
 async function loadExposureCatalog(exposureId: string): Promise<ConnectedRelayExposure | null> {
   const result = await executeSql(
     `SELECT
+        d.id AS device_id,
+        d.display_name AS device_display_name,
         e.id AS exposure_id,
         e.stable_key AS exposure_stable_key,
         e.display_name AS exposure_display_name,
@@ -2359,6 +2597,8 @@ async function loadExposureCatalog(exposureId: string): Promise<ConnectedRelayEx
         tr.annotations,
         tr.definition_hash
      FROM relay_exposures e
+     JOIN relay_devices d
+       ON d.id = e.device_id
      LEFT JOIN relay_tools t
        ON t.exposure_id = e.id
       AND t.status = 'active'
@@ -2390,6 +2630,8 @@ async function loadExposureCatalog(exposureId: string): Promise<ConnectedRelayEx
     }));
 
   return {
+    deviceId: first.device_id,
+    deviceDisplayName: first.device_display_name,
     exposureId: first.exposure_id,
     stableKey: first.exposure_stable_key,
     displayName: first.exposure_display_name,
@@ -3393,6 +3635,7 @@ function cleanupRelay(deviceId: string) {
   if (connected.pongTimer) clearTimeout(connected.pongTimer);
 
   connectedRelays.delete(deviceId);
+  void clearRelayRoute(deviceId, connected.sessionId);
 
   for (const pending of pendingRelayOperations.values()) {
     if (pending.deviceId !== deviceId) continue;

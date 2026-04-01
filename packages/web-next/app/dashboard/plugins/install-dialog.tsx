@@ -13,6 +13,7 @@ import type {
   ReuseScope,
   LocalizedText,
 } from '@synapse/shared';
+import { REUSE_SCOPES } from '@synapse/shared';
 import { AppCard } from '@/components/app-card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -145,15 +146,13 @@ function normalizeActorOption(actor: any) {
   };
 }
 
-const installLifecycleOptionMap: Record<PluginAttachmentType, PluginReuseScope[]> = {
-  workspace: ['workspace', 'conversation', 'actor', 'actor_conversation', 'workspace_user', 'turn'],
-  conversation: ['conversation', 'actor_conversation', 'turn'],
-  actor: ['actor', 'turn'],
-  workspace_user: ['workspace_user', 'turn'],
-};
-
-function getInstallAllowedReuseScopes(attachmentType: PluginAttachmentType) {
-  return installLifecycleOptionMap[attachmentType] || ['turn'];
+function normalizeSupportedReuseScopes(value: unknown): PluginReuseScope[] {
+  const supported = Array.isArray(value)
+    ? value.filter((scope): scope is PluginReuseScope =>
+        typeof scope === 'string' && REUSE_SCOPES.includes(scope as PluginReuseScope),
+      )
+    : [];
+  return supported.length > 0 ? supported : [...REUSE_SCOPES];
 }
 
 function getLocale(defaultLocale?: string) {
@@ -648,8 +647,17 @@ export default function InstallDialog({
     return firstPostInstallStepIndex >= 0 ? firstPostInstallStepIndex - 1 : installSteps.length - 1;
   }, [installSteps]);
   const installLifecycleOptions = useMemo(
-    () => getInstallAllowedReuseScopes(selectedAttachmentType),
-    [selectedAttachmentType],
+    () =>
+      normalizeSupportedReuseScopes(
+        currentInstallation?.supported_reuse_scopes ||
+        currentInstallation?.plugin_supported_reuse_scopes ||
+        plugin.supported_reuse_scopes,
+      ),
+    [
+      currentInstallation?.plugin_supported_reuse_scopes,
+      currentInstallation?.supported_reuse_scopes,
+      plugin.supported_reuse_scopes,
+    ],
   );
   const currentAuthStepState = currentAuthStepField ? authFields[currentAuthStepField.key] : undefined;
   const currentAuthStepValue = currentAuthStepField ? configData[currentAuthStepField.key] : undefined;

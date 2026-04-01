@@ -50,9 +50,9 @@ import {
 import { runWithToolContext } from "./session-tools.js";
 import { maybeAutoBridgeRelayApproval } from "./relay-approval-bridge.js";
 import {
-  getMcpVersion,
   type McpExecutionContext,
 } from "../mcp-plugins/instance-manager.js";
+import { getMcpVersion } from "../mcp-plugins/runtime-version.js";
 import { ingestResponseMedia } from "./content-ingest.js";
 import {
   buildDefaultUserMention,

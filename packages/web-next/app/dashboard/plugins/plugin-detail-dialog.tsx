@@ -40,6 +40,14 @@ const attachmentTypeLabels: Record<string, string> = {
   workspace_user: 'Workspace User',
 };
 
+const reuseScopeLabels: Record<string, string> = {
+  turn: 'Turn',
+  session: 'Session',
+  conversation: 'Conversation',
+  actor: 'Actor',
+  workspace: 'Workspace',
+};
+
 export default function PluginDetailDialog({ plugin, installedCount, onInstall, onClose }: Props) {
   const tools = plugin.tools_manifest || [];
   const configFields = plugin.config_fields || [];
@@ -77,7 +85,7 @@ export default function PluginDetailDialog({ plugin, installedCount, onInstall, 
               Default owner: {attachmentTypeLabels[plugin.default_instance_scope] || plugin.default_instance_scope || 'Workspace'}
             </Badge>
             <Badge variant="outline" className="border-gray-200 dark:border-white/10">
-              Runtime: {plugin.lifecycle_scope}
+              Runtime: {reuseScopeLabels[plugin.lifecycle_scope] || plugin.lifecycle_scope}
             </Badge>
             {(plugin.categories || []).map((category: any) => (
               <Badge key={category.slug} variant="outline" className="border-blue-500/20 text-blue-500 dark:text-blue-300">

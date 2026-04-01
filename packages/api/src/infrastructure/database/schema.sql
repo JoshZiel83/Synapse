@@ -28,7 +28,7 @@ CREATE TYPE catalog_versions_status AS ENUM ('draft', 'active', 'deprecated', 'a
 CREATE TYPE catalog_version_files_file_role AS ENUM ('document', 'reference', 'script', 'image', 'json', 'binary');
 CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 'http', 'relay');
 CREATE TYPE plugin_package_version_specs_default_mount_scope AS ENUM ('workspace', 'conversation', 'actor', 'workspace_user');
-CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'workspace', 'conversation', 'actor', 'actor_conversation', 'workspace_user');
+CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'session', 'workspace', 'conversation', 'actor');
 CREATE TYPE actors_role AS ENUM ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant');
 CREATE TYPE relationship_target_type AS ENUM ('user', 'actor');
 CREATE TYPE actor_access_policy AS ENUM ('workspace_open', 'approval_required');
@@ -125,7 +125,7 @@ CREATE TYPE runtime_events_source AS ENUM ('conversation', 'provider', 'tool', '
 CREATE TYPE runtime_events_level AS ENUM ('debug', 'info', 'warn', 'error');
 CREATE TYPE skill_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'follow_upstream', 'detached');
 CREATE TYPE plugin_installations_attachment_target_type AS ENUM ('workspace', 'conversation', 'actor', 'workspace_user');
-CREATE TYPE plugin_installations_reuse_scope AS ENUM ('turn', 'workspace', 'conversation', 'actor', 'actor_conversation', 'workspace_user');
+CREATE TYPE plugin_installations_reuse_scope AS ENUM ('turn', 'session', 'workspace', 'conversation', 'actor');
 CREATE TYPE plugin_installations_status AS ENUM ('active', 'disabled', 'error', 'archived');
 CREATE TYPE automation_integration_bindings_provider AS ENUM ('github', 'gitlab');
 CREATE TYPE automation_integration_bindings_ingress_kind AS ENUM ('webhook', 'polling');
@@ -564,6 +564,8 @@ CREATE TABLE plugin_package_version_specs (
   auth_bindings JSONB NOT NULL DEFAULT '[]',
   default_mount_scope plugin_package_version_specs_default_mount_scope NOT NULL DEFAULT 'workspace',
   default_reuse_scope plugin_package_version_specs_default_reuse_scope NOT NULL DEFAULT 'conversation',
+  supported_reuse_scopes plugin_package_version_specs_default_reuse_scope[] NOT NULL
+    DEFAULT ARRAY['turn', 'session', 'workspace', 'conversation', 'actor']::plugin_package_version_specs_default_reuse_scope[],
   requires_handshake BOOLEAN NOT NULL DEFAULT FALSE,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW()

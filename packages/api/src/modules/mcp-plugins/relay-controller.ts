@@ -24,7 +24,7 @@ import { transaction } from '../../infrastructure/database/index.js';
 import { executeSql, executeSqlOn } from '../../infrastructure/database/kysely.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { disconnectRelay } from './relay-manager.js';
-import { incrementMcpVersion } from './instance-manager.js';
+import { incrementMcpVersion } from './runtime-version.js';
 import { logEvent } from './audit.js';
 import { requireRequestAction } from '../access/guards.js';
 import {

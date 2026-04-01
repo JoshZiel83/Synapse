@@ -19,6 +19,14 @@ export type ActorVersionDocsVisibility = "always" | "direct_only" | "internal_on
 
 export type ActorVersionsSourceType = "actor" | "sync" | "system" | "user";
 
+export type ArrayType<T> = ArrayTypeImpl<T> extends (infer U)[]
+  ? U[]
+  : ArrayTypeImpl<T>;
+
+export type ArrayTypeImpl<T> = T extends ColumnType<infer S, infer I, infer U>
+  ? ColumnType<S[], I[], U[]>
+  : T[];
+
 export type AuthQrLoginRequestsApprovedSessionPersistence = "persistent" | "temporary";
 
 export type AuthQrLoginRequestsStatus = "approved" | "consumed" | "expired" | "pending_confirm" | "pending_scan" | "rejected";
@@ -195,13 +203,13 @@ export type PluginConnectionsStatus = "active" | "expired" | "revoked";
 
 export type PluginInstallationsAttachmentTargetType = "actor" | "conversation" | "workspace" | "workspace_user";
 
-export type PluginInstallationsReuseScope = "actor" | "actor_conversation" | "conversation" | "turn" | "workspace" | "workspace_user";
+export type PluginInstallationsReuseScope = "actor" | "conversation" | "session" | "turn" | "workspace";
 
 export type PluginInstallationsStatus = "active" | "archived" | "disabled" | "error";
 
 export type PluginPackageVersionSpecsDefaultMountScope = "actor" | "conversation" | "workspace" | "workspace_user";
 
-export type PluginPackageVersionSpecsDefaultReuseScope = "actor" | "actor_conversation" | "conversation" | "turn" | "workspace" | "workspace_user";
+export type PluginPackageVersionSpecsDefaultReuseScope = "actor" | "conversation" | "session" | "turn" | "workspace";
 
 export type PluginPackageVersionSpecsTransport = "builtin" | "http" | "relay" | "stdio";
 
@@ -1302,6 +1310,7 @@ export interface PluginPackageVersionSpecs {
   install_flow: Generated<Json>;
   metadata: Generated<Json | null>;
   requires_handshake: Generated<boolean>;
+  supported_reuse_scopes: Generated<ArrayType<PluginPackageVersionSpecsDefaultReuseScope>>;
   tool_manifest: Generated<Json>;
   transport: PluginPackageVersionSpecsTransport;
 }

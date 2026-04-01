@@ -1392,11 +1392,10 @@ class ApiClient {
       attachmentTarget: AttachmentTarget
       lifecycleScope?:
         | "turn"
+        | "session"
         | "workspace"
         | "conversation"
         | "actor"
-        | "actor_conversation"
-        | "workspace_user"
       configData?: Record<string, unknown>
       authSessionIds?: Record<string, string>
     }

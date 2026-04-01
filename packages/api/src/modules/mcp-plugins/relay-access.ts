@@ -16,7 +16,7 @@ import {
   resolveAccessGrantTarget,
   type AccessBindingRow,
 } from "../access/bindings.js";
-import { incrementMcpVersion } from "./instance-manager.js";
+import { incrementMcpVersion } from "./runtime-version.js";
 
 type Queryable = Pick<pg.PoolClient, "query">;
 

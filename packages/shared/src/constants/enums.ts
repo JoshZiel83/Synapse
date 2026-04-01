@@ -53,11 +53,10 @@ export const CAPABILITY_ACCESS_TARGET_TYPES = [
 ] as const;
 export const REUSE_SCOPES = [
   'turn',
+  'session',
   'workspace',
   'conversation',
   'actor',
-  'actor_conversation',
-  'workspace_user',
 ] as const;
 export const CONVERSATION_GRANT_PERMISSIONS = [
   'send',

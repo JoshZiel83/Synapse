@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import type pg from "pg";
-import { nowISO } from "@synapse/shared";
+import { nowISO, REUSE_SCOPES } from "@synapse/shared";
 import type {
   AccessGrant,
   AttachmentTarget,
@@ -42,7 +42,7 @@ import { getFileUrlById } from "../files/service.js";
 import {
   attachAuthConnectionsToConfig,
 } from "./auth-service.js";
-import { incrementMcpVersion } from "./instance-manager.js";
+import { incrementMcpVersion } from "./runtime-version.js";
 import { builtinCapabilityCategories } from "./builtin-plugins/categories.js";
 import { builtinSeeds } from "./builtin-plugins/index.js";
 import {
@@ -101,6 +101,7 @@ type PluginCatalogRow = {
   spec_auth_bindings: unknown;
   spec_default_mount_scope: AttachmentTargetType | null;
   spec_default_reuse_scope: PluginReuseScopeV2 | null;
+  spec_supported_reuse_scopes: unknown;
   spec_requires_handshake: boolean | null;
   spec_metadata: unknown;
   publisher_id: string;
@@ -215,6 +216,7 @@ const PLUGIN_CATALOG_SELECT = `
     spec.auth_bindings AS spec_auth_bindings,
     spec.default_mount_scope AS spec_default_mount_scope,
     spec.default_reuse_scope AS spec_default_reuse_scope,
+    spec.supported_reuse_scopes AS spec_supported_reuse_scopes,
     spec.requires_handshake AS spec_requires_handshake,
     spec.metadata AS spec_metadata,
     publisher.id AS publisher_id,
@@ -335,6 +337,38 @@ function isConfigValueMissing(value: unknown) {
 function parseBoolean(value: unknown, fallback = false) {
   if (typeof value === "boolean") return value;
   return fallback;
+}
+
+function isReuseScope(value: unknown): value is ReuseScope {
+  return typeof value === "string" && REUSE_SCOPES.includes(value as ReuseScope);
+}
+
+function normalizeSupportedReuseScopes(
+  value: unknown,
+  defaultScope: ReuseScope,
+): ReuseScope[] {
+  const requested = asArray<unknown>(value).filter(isReuseScope);
+  const enabledScopes = new Set<ReuseScope>(requested);
+  if (enabledScopes.size === 0) {
+    for (const scope of REUSE_SCOPES) {
+      enabledScopes.add(scope);
+    }
+  }
+  enabledScopes.add(defaultScope);
+  return REUSE_SCOPES.filter((scope) => enabledScopes.has(scope));
+}
+
+function assertSupportedReuseScope(
+  supportedScopes: readonly ReuseScope[],
+  lifecycleScope: ReuseScope,
+  pluginLabel: string,
+) {
+  if (!supportedScopes.includes(lifecycleScope)) {
+    throw new McpPluginError(
+      400,
+      `Reuse scope '${lifecycleScope}' is not supported by plugin '${pluginLabel}'`,
+    );
+  }
 }
 
 function publicAttachmentScope(
@@ -477,6 +511,11 @@ function mapPluginView(row: PluginCatalogRow) {
   const itemMetadata = asObject(row.item_metadata);
   const specMetadata = asObject(row.spec_metadata);
   const defaultInstanceScope = publicAttachmentScope(row.spec_default_mount_scope);
+  const defaultReuseScope = publicReuseScope(row.spec_default_reuse_scope);
+  const supportedReuseScopes = normalizeSupportedReuseScopes(
+    row.spec_supported_reuse_scopes,
+    defaultReuseScope,
+  );
   const authorization = authorizationFromRuntimePermissions(
     row.runtime_permissions_json,
     defaultInstanceScope,
@@ -515,8 +554,9 @@ function mapPluginView(row: PluginCatalogRow) {
     version: row.version_value || "1.0.0",
     transport: row.spec_transport || "builtin",
     entry_point: row.spec_entry_point || "",
-    lifecycle_scope: publicReuseScope(row.spec_default_reuse_scope),
-    default_reuse_scope: publicReuseScope(row.spec_default_reuse_scope),
+    lifecycle_scope: defaultReuseScope,
+    default_reuse_scope: defaultReuseScope,
+    supported_reuse_scopes: supportedReuseScopes,
     default_instance_scope: defaultInstanceScope,
     config_schema: asObject(row.spec_config_schema),
     config_fields: configFields,
@@ -1125,6 +1165,8 @@ function buildInstallationPayload(
     attachment_target: attachmentTarget,
     access_target: accessTarget,
     lifecycle_scope: publicReuseScope(row.reuse_scope),
+    default_reuse_scope: plugin.default_reuse_scope,
+    supported_reuse_scopes: plugin.supported_reuse_scopes || [],
     is_enabled:
       row.installation_status === "active" &&
       row.primary_access_status !== "revoked" &&
@@ -1151,6 +1193,8 @@ function buildInstallationPayload(
     default_locale: plugin.default_locale,
     transport: plugin.transport,
     plugin_lifecycle_scope: plugin.lifecycle_scope,
+    plugin_default_reuse_scope: plugin.default_reuse_scope,
+    plugin_supported_reuse_scopes: plugin.supported_reuse_scopes || [],
     tools_manifest: plugin.tools_manifest,
     plugin_icon_url: plugin.icon_url,
     plugin_categories: plugin.categories || [],
@@ -1321,6 +1365,7 @@ async function upsertPluginVersion(
     transport: string;
     entryPoint?: string;
     lifecycleScope?: ReuseScope;
+    supportedReuseScopes?: ReuseScope[];
     defaultInstanceScope?: AttachmentTargetType;
     requiresHandshake?: boolean;
     toolsManifest?: unknown[];
@@ -1365,6 +1410,11 @@ async function upsertPluginVersion(
       reason: input.authorization?.reason || undefined,
     },
   };
+  const defaultReuseScope = input.lifecycleScope || "conversation";
+  const supportedReuseScopes = normalizeSupportedReuseScopes(
+    input.supportedReuseScopes,
+    defaultReuseScope,
+  );
 
   await run(
     `INSERT INTO plugin_package_version_specs (
@@ -1378,12 +1428,13 @@ async function upsertPluginVersion(
        auth_bindings,
        default_mount_scope,
        default_reuse_scope,
+       supported_reuse_scopes,
        requires_handshake,
        metadata
      )
      VALUES (
        $1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb,
-       $9, $10, $11, $12::jsonb
+       $9, $10, $11, $12, $13::jsonb
      )
      ON CONFLICT (catalog_version_id) DO UPDATE
        SET transport = EXCLUDED.transport,
@@ -1395,6 +1446,7 @@ async function upsertPluginVersion(
            auth_bindings = EXCLUDED.auth_bindings,
            default_mount_scope = EXCLUDED.default_mount_scope,
            default_reuse_scope = EXCLUDED.default_reuse_scope,
+           supported_reuse_scopes = EXCLUDED.supported_reuse_scopes,
            requires_handshake = EXCLUDED.requires_handshake,
            metadata = EXCLUDED.metadata`,
     [
@@ -1407,7 +1459,8 @@ async function upsertPluginVersion(
       JSON.stringify(input.installFlow || { steps: input.setupSteps || [] }),
       JSON.stringify(input.authBindings || []),
       internalAttachmentScope(input.defaultInstanceScope || "workspace"),
-      internalReuseScope(input.lifecycleScope || "conversation"),
+      internalReuseScope(defaultReuseScope),
+      supportedReuseScopes.map((scope) => internalReuseScope(scope)),
       input.requiresHandshake ?? input.transport !== "builtin",
       JSON.stringify(metadata),
     ],
@@ -1593,6 +1646,7 @@ export async function createPlugin(data: {
   summaryI18n?: Record<string, string>;
   defaultLocale?: string;
   defaultInstanceScope?: AttachmentTargetType;
+  supportedReuseScopes?: ReuseScope[];
   requiresHandshake?: boolean;
   authorization?: {
     requiredPermissions?: string[];
@@ -1704,29 +1758,11 @@ export async function getPlugin(id: string) {
   return mapPluginView(row);
 }
 
-export function validateLifecycleHierarchy(
-  attachmentType: AttachmentTargetType,
+export function validateSupportedLifecycleScope(
+  supportedScopes: readonly ReuseScope[],
   lifecycleScope: ReuseScope,
 ) {
-  switch (attachmentType) {
-    case "workspace":
-      return [
-        "workspace",
-        "conversation",
-        "actor",
-        "actor_conversation",
-        "workspace_user",
-        "turn",
-      ].includes(lifecycleScope);
-    case "conversation":
-      return ["conversation", "actor_conversation", "turn"].includes(lifecycleScope);
-    case "actor":
-      return ["actor", "turn"].includes(lifecycleScope);
-    case "workspace_user":
-      return ["workspace_user", "turn"].includes(lifecycleScope);
-    default:
-      return false;
-  }
+  return supportedScopes.includes(lifecycleScope);
 }
 
 export async function installPluginUnified(data: {
@@ -1738,15 +1774,14 @@ export async function installPluginUnified(data: {
   authSessionIds?: Record<string, string>;
   installedBy?: string;
 }) {
-  const lifecycleScope = data.lifecycleScope || "conversation";
-  if (!validateLifecycleHierarchy(data.attachmentTarget.type, lifecycleScope)) {
-    throw new McpPluginError(
-      400,
-      `Reuse scope '${lifecycleScope}' is not valid for attachment '${data.attachmentTarget.type}'`,
-    );
-  }
-
   const plugin = await getPlugin(data.pluginId);
+  const supportedReuseScopes = normalizeSupportedReuseScopes(
+    plugin.supported_reuse_scopes,
+    plugin.default_reuse_scope || "conversation",
+  );
+  const lifecycleScope =
+    data.lifecycleScope || plugin.default_reuse_scope || "conversation";
+  assertSupportedReuseScope(supportedReuseScopes, lifecycleScope, plugin.slug);
   const target = normalizeAttachmentTarget({ attachmentTarget: data.attachmentTarget });
   const approvedRuntimePermissions =
     plugin.authorization?.requiredPermissions || [];
@@ -2091,13 +2126,15 @@ export async function updateInstallation(
     data.attachmentTarget?.type || publicAttachmentScope(row.attachment_target_type);
   const nextLifecycleScope =
     data.lifecycleScope || publicReuseScope(row.reuse_scope);
-
-  if (!validateLifecycleHierarchy(nextAttachmentType, nextLifecycleScope)) {
-    throw new McpPluginError(
-      400,
-      `Reuse scope '${nextLifecycleScope}' is not valid for attachment '${nextAttachmentType}'`,
-    );
-  }
+  const supportedReuseScopes = normalizeSupportedReuseScopes(
+    plugin.supported_reuse_scopes,
+    plugin.default_reuse_scope || "conversation",
+  );
+  assertSupportedReuseScope(
+    supportedReuseScopes,
+    nextLifecycleScope,
+    plugin.slug,
+  );
 
   const target = normalizeAttachmentTarget({
     attachmentTarget:
@@ -2674,6 +2711,7 @@ export async function seedBuiltinMcpPlugins() {
         transport: pluginSeed.transport,
         entryPoint: pluginSeed.entryPoint,
         lifecycleScope: pluginSeed.defaultReuseScope,
+        supportedReuseScopes: pluginSeed.supportedReuseScopes,
         defaultInstanceScope: pluginSeed.defaultInstanceScope,
         requiresHandshake: pluginSeed.requiresHandshake,
         tags: pluginSeed.tags,

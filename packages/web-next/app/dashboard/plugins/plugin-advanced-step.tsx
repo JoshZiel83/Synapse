@@ -2,13 +2,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { AttachmentTargetType, ReuseScope } from '@synapse/shared';
+import { REUSE_SCOPES } from '@synapse/shared';
 import { Layers3, Save } from 'lucide-react';
 
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import {
   AccessAttachmentTypeStep,
   AccessReuseScopeStep,
-  getAllowedReuseScopes,
   getConversationDisplayName,
 } from '@/app/dashboard/access/attachment-visuals';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -41,6 +41,15 @@ function normalizeConversationOption(group: any) {
     title: group.title,
     participants: group.participants,
   };
+}
+
+function normalizeSupportedReuseScopes(value: unknown): PluginReuseScope[] {
+  const supported = Array.isArray(value)
+    ? value.filter((scope): scope is PluginReuseScope =>
+        typeof scope === 'string' && REUSE_SCOPES.includes(scope as PluginReuseScope),
+      )
+    : [];
+  return supported.length > 0 ? supported : [...REUSE_SCOPES];
 }
 
 export default function PluginAdvancedStep({
@@ -102,8 +111,12 @@ export default function PluginAdvancedStep({
   }, [installation]);
 
   const allowedReuseScopes = useMemo(
-    () => getAllowedReuseScopes(selectedAttachmentType) as PluginReuseScope[],
-    [selectedAttachmentType],
+    () =>
+      normalizeSupportedReuseScopes(
+        installation?.supported_reuse_scopes ||
+        installation?.plugin_supported_reuse_scopes,
+      ),
+    [installation?.plugin_supported_reuse_scopes, installation?.supported_reuse_scopes],
   );
 
   useEffect(() => {
