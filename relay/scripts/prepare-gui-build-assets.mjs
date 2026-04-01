@@ -11,6 +11,7 @@ const guiRoot = join(relayRoot, "cmd", "synapse-relay-gui");
 const buildRoot = join(guiRoot, "build");
 const windowsBuildRoot = join(buildRoot, "windows");
 const windowsInstallerRoot = join(windowsBuildRoot, "installer");
+const windowsRuntimeRoot = join(windowsBuildRoot, "r");
 const packagingRoot = join(guiRoot, "packaging", "windows");
 
 const args = parseArgs(process.argv.slice(2));
@@ -27,9 +28,9 @@ await copyFile(join(packagingRoot, "installer", "project.nsi"), join(windowsInst
 if (runtimeOutput) {
   await stageRuntimeBundles(runtimeOutput);
 } else if (goos === "windows" && runtimeMode === "packaged") {
-  await stageRuntimeBundles(join(windowsBuildRoot, "runtime"));
+  await stageRuntimeBundles(windowsRuntimeRoot);
 } else {
-  await rm(join(windowsBuildRoot, "runtime"), { recursive: true, force: true });
+  await rm(windowsRuntimeRoot, { recursive: true, force: true });
 }
 
 console.log(`Prepared GUI build assets for ${goos} (${runtimeMode})`);

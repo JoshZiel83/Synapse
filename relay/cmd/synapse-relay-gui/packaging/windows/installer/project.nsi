@@ -319,7 +319,7 @@ Section
     !insertmacro wails.files
 
     SetOutPath "$INSTDIR\runtime"
-    File /r "..\runtime\*"
+    File /r "..\r\*"
 
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"

@@ -131,7 +131,7 @@ jobs:
             portable_root="synapse-relay-gui-${{ matrix.suffix }}-portable"
             mkdir -p "$portable_root"
             cp "$main_exe" "$portable_root/synapse-relay-gui.exe"
-            cp -R relay/cmd/synapse-relay-gui/build/windows/runtime "$portable_root/runtime"
+            cp -R relay/cmd/synapse-relay-gui/build/windows/r "$portable_root/runtime"
             portable_zip="synapse-relay-gui-${{ matrix.suffix }}-portable.zip"
             portable_root_win="$(cygpath -w "$portable_root")"
             portable_zip_win="$(cygpath -w "$portable_zip")"
