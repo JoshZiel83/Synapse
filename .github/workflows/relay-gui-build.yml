@@ -13,6 +13,10 @@ on:
         description: 'Build platforms: leave blank to use repo variable, or set all / a comma or space separated list, e.g. linux-amd64 windows-amd64'
         required: false
         default: ''
+      windows_package_variants:
+        description: 'Windows package variants: leave blank to use repo variable, or set all / portable / setup'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -99,6 +103,46 @@ jobs:
             echo "version=dev-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Resolve Windows package variants
+        id: windows_package_variants
+        if: matrix.goos == 'windows'
+        shell: bash
+        env:
+          REQUESTED_WINDOWS_VARIANTS: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_package_variants || vars.RELAY_GUI_WINDOWS_PACKAGE_VARIANTS || 'all' }}
+        run: |
+          raw="$(printf '%s' "${REQUESTED_WINDOWS_VARIANTS:-all}" | tr '[:upper:]' '[:lower:]' | xargs)"
+          if [ -z "$raw" ]; then
+            raw="all"
+          fi
+          case "$raw" in
+            all)
+              want_portable=true
+              want_setup=true
+              ;;
+            portable)
+              want_portable=true
+              want_setup=false
+              ;;
+            setup)
+              want_portable=false
+              want_setup=true
+              ;;
+            *)
+              echo "::error::Unsupported Windows package variant '$raw'. Use all, portable, or setup."
+              exit 1
+              ;;
+          esac
+          if [ "$want_setup" = true ]; then
+            wails_extra_args="-nsis"
+          else
+            wails_extra_args=""
+          fi
+          echo "value=$raw" >> "$GITHUB_OUTPUT"
+          echo "want_portable=$want_portable" >> "$GITHUB_OUTPUT"
+          echo "want_setup=$want_setup" >> "$GITHUB_OUTPUT"
+          echo "wails_extra_args=$wails_extra_args" >> "$GITHUB_OUTPUT"
+          echo "Resolved Windows package variants: $raw"
+
       - name: Show selected platforms
         run: |
           echo "Selected GUI platforms: ${{ needs.prepare-matrix.outputs.selected_platforms }}"
@@ -129,7 +173,16 @@ jobs:
         working-directory: relay/cmd/synapse-relay-gui
         env:
           CGO_LDFLAGS_ALLOW: ${{ matrix.cgo_ldflags_allow }}
-        run: wails build ${{ matrix.wails_extra_args }} -tags "${{ matrix.wails_tags }},relay_packaged_runtime" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
+        run: |
+          extra_args="${{ matrix.wails_extra_args }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            extra_args="${{ steps.windows_package_variants.outputs.wails_extra_args }}"
+          fi
+          if [ -n "$extra_args" ]; then
+            wails build "$extra_args" -tags "${{ matrix.wails_tags }},relay_packaged_runtime" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
+          else
+            wails build -tags "${{ matrix.wails_tags }},relay_packaged_runtime" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}"
+          fi
 
       - name: Rename artifact
         shell: bash
@@ -137,23 +190,25 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then
             find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f -print
             main_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui.exe' -o -name 'synapse-relay-gui-windows-*.exe' \) ! -name '*-setup.exe' | head -n 1)"
-            setup_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui*-setup.exe' -o -name 'synapse-relay-gui*-installer.exe' -o -name 'Synapse Relay*-installer.exe' \) | head -n 1)"
             test -n "$main_exe"
-            test -n "$setup_exe"
-
-            portable_root="synapse-relay-gui-${{ matrix.suffix }}-portable"
-            mkdir -p "$portable_root"
-            cp "$main_exe" "$portable_root/synapse-relay-gui.exe"
-            runtime_stage="$(tr -d '\r\n' < relay/cmd/synapse-relay-gui/build/windows/runtime-path.txt)"
-            runtime_stage_unix="$(cygpath -u "$runtime_stage")"
-            mkdir -p "$portable_root/runtime"
-            cp -R "$runtime_stage_unix"/. "$portable_root/runtime"/
-            portable_zip="synapse-relay-gui-${{ matrix.suffix }}-portable.zip"
-            portable_root_win="$(cygpath -w "$portable_root")"
-            portable_zip_win="$(cygpath -w "$portable_zip")"
-            powershell.exe -NoLogo -NoProfile -Command "\$ErrorActionPreference='Stop'; Add-Type -AssemblyName 'System.IO.Compression.FileSystem'; if (Test-Path -LiteralPath '$portable_zip_win') { Remove-Item -LiteralPath '$portable_zip_win' -Force }; [System.IO.Compression.ZipFile]::CreateFromDirectory('$portable_root_win', '$portable_zip_win', [System.IO.Compression.CompressionLevel]::Optimal, \$false)"
-
-            mv "$setup_exe" synapse-relay-gui-${{ matrix.suffix }}-setup.exe
+            if [ "${{ steps.windows_package_variants.outputs.want_portable }}" = "true" ]; then
+              portable_root="synapse-relay-gui-${{ matrix.suffix }}-portable"
+              mkdir -p "$portable_root"
+              cp "$main_exe" "$portable_root/synapse-relay-gui.exe"
+              runtime_stage="$(tr -d '\r\n' < relay/cmd/synapse-relay-gui/build/windows/runtime-path.txt)"
+              runtime_stage_unix="$(cygpath -u "$runtime_stage")"
+              mkdir -p "$portable_root/runtime"
+              cp -R "$runtime_stage_unix"/. "$portable_root/runtime"/
+              portable_zip="synapse-relay-gui-${{ matrix.suffix }}-portable.zip"
+              portable_root_win="$(cygpath -w "$portable_root")"
+              portable_zip_win="$(cygpath -w "$portable_zip")"
+              powershell.exe -NoLogo -NoProfile -Command "\$ErrorActionPreference='Stop'; Add-Type -AssemblyName 'System.IO.Compression.FileSystem'; if (Test-Path -LiteralPath '$portable_zip_win') { Remove-Item -LiteralPath '$portable_zip_win' -Force }; [System.IO.Compression.ZipFile]::CreateFromDirectory('$portable_root_win', '$portable_zip_win', [System.IO.Compression.CompressionLevel]::Optimal, \$false)"
+            fi
+            if [ "${{ steps.windows_package_variants.outputs.want_setup }}" = "true" ]; then
+              setup_exe="$(find relay/cmd/synapse-relay-gui/build/bin -maxdepth 1 -type f \( -name 'synapse-relay-gui*-setup.exe' -o -name 'synapse-relay-gui*-installer.exe' -o -name 'Synapse Relay*-installer.exe' \) | head -n 1)"
+              test -n "$setup_exe"
+              mv "$setup_exe" synapse-relay-gui-${{ matrix.suffix }}-setup.exe
+            fi
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
             app_path="relay/cmd/synapse-relay-gui/build/bin/Synapse Relay.app"
             test -d "$app_path"
@@ -269,7 +324,24 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Upload Windows Portable Artifact
+        if: matrix.goos == 'windows' && steps.windows_package_variants.outputs.want_portable == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: synapse-relay-gui-${{ matrix.suffix }}-portable
+          path: synapse-relay-gui-${{ matrix.suffix }}-portable.zip
+
+      - name: Upload Windows Setup Artifact
+        if: matrix.goos == 'windows' && steps.windows_package_variants.outputs.want_setup == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: synapse-relay-gui-${{ matrix.suffix }}-setup
+          path: synapse-relay-gui-${{ matrix.suffix }}-setup.exe
+
       - name: Upload artifact
+        if: matrix.goos != 'windows'
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
