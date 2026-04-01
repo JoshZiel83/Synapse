@@ -204,15 +204,30 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "interaction requests linked to task governance",
   },
   {
-    table: "interaction_relay_authorization_requests",
+    table: "interaction_runtime_authorization_requests",
     requiredColumns: [
       "interaction_id",
       "relay_device_id",
       "relay_exposure_id",
       "requested_effect",
+      "request_payload",
       "resolution_payload",
     ],
-    reason: "relay authorization interaction subtype storage",
+    reason: "runtime authorization interaction subtype storage",
+  },
+  {
+    table: "runtime_grants",
+    requiredColumns: [
+      "workspace_id",
+      "relay_device_id",
+      "relay_exposure_id",
+      "scope",
+      "retention",
+      "status",
+      "relay_tool_name",
+      "effect",
+    ],
+    reason: "server-authoritative runtime grants",
   },
   {
     table: "relay_operations",

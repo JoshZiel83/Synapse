@@ -149,9 +149,9 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
 
 export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
 
-export type InteractionRequestsKind = "question_choice" | "relay_authorization";
+export type InteractionRequestsKind = "question_choice" | "runtime_authorization";
 
-export type InteractionRequestsStatus = "answered" | "applied" | "apply_failed" | "approved_pending_apply" | "cancelled" | "expired" | "pending" | "rejected";
+export type InteractionRequestsStatus = "answered" | "approved" | "cancelled" | "expired" | "pending" | "rejected" | "superseded";
 
 export type Json = JsonValue;
 
@@ -261,6 +261,12 @@ export type RuntimeEventsLevel = "debug" | "error" | "info" | "warn";
 
 export type RuntimeEventsSource = "a2a" | "conversation" | "provider" | "relay" | "system" | "tool";
 
+export type RuntimeGrantsRetention = "consume_once" | "until_revoked";
+
+export type RuntimeGrantsScope = "actor" | "conversation" | "once" | "workspace";
+
+export type RuntimeGrantsStatus = "active" | "consumed" | "revoked" | "superseded";
+
 export type SessionEngineBranchesStatus = "active" | "archived" | "superseded";
 
 export type SessionInterruptsType = "priority_override" | "progress_check";
@@ -289,7 +295,7 @@ export type ToolCallTasksDeliveryPolicy = "human_interaction" | "online_only" | 
 
 export type ToolCallTasksDispatchStatus = "accepted" | "cancel_requested" | "dispatched" | "input_requested" | "queued" | "received" | "started";
 
-export type ToolCallTasksExecutorKind = "interaction_form" | "interaction_question" | "relay_authorization" | "relay_mcp";
+export type ToolCallTasksExecutorKind = "interaction_form" | "interaction_question" | "relay_mcp" | "runtime_authorization";
 
 export type ToolCallTasksStatus = "cancelled" | "completed" | "failed" | "input_required" | "working";
 
@@ -1027,14 +1033,6 @@ export interface InteractionQuestionRequests {
   resolution_payload: Generated<Json>;
 }
 
-export interface InteractionRelayAuthorizationRequests {
-  interaction_id: string;
-  relay_device_id: string;
-  relay_exposure_id: string;
-  requested_effect: Generated<Json>;
-  resolution_payload: Generated<Json>;
-}
-
 export interface InteractionRequests {
   conversation_id: string;
   conversation_item_id: string | null;
@@ -1055,6 +1053,15 @@ export interface InteractionRequests {
   task_id: string;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
+}
+
+export interface InteractionRuntimeAuthorizationRequests {
+  interaction_id: string;
+  relay_device_id: string;
+  relay_exposure_id: string;
+  request_payload: Generated<Json>;
+  requested_effect: Generated<Json>;
+  resolution_payload: Generated<Json>;
 }
 
 export interface MemoryEntries {
@@ -1483,6 +1490,7 @@ export interface RelayOperationResults {
 }
 
 export interface RelayOperations {
+  authorization_payload: Generated<Json>;
   catalog_revision_id: string;
   completed_at: Timestamp | null;
   conversation_id: string | null;
@@ -1588,6 +1596,34 @@ export interface RuntimeEvents {
   turn_id: string | null;
   user_id: string | null;
   workspace_id: string | null;
+}
+
+export interface RuntimeGrants {
+  actor_id: string | null;
+  consumed_at: Timestamp | null;
+  conversation_id: string | null;
+  created_at: Generated<Timestamp | null>;
+  created_by_member_id: string | null;
+  created_by_user_id: string | null;
+  effect: Generated<Json>;
+  id: Generated<string>;
+  metadata: Generated<Json>;
+  relay_device_id: string;
+  relay_exposure_id: string;
+  relay_tool_name: string;
+  retention: RuntimeGrantsRetention;
+  revoked_at: Timestamp | null;
+  scope: RuntimeGrantsScope;
+  source_interaction_id: string | null;
+  source_request_args: Generated<Json>;
+  source_request_hash: string | null;
+  source_retry_nonce: string | null;
+  source_runtime_session_id: string | null;
+  source_task_id: string | null;
+  status: Generated<RuntimeGrantsStatus>;
+  superseded_at: Timestamp | null;
+  updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
 }
 
 export interface SchemaMigrations {
@@ -2050,8 +2086,8 @@ export interface DB {
   files: Files;
   installed_skills: InstalledSkills;
   interaction_question_requests: InteractionQuestionRequests;
-  interaction_relay_authorization_requests: InteractionRelayAuthorizationRequests;
   interaction_requests: InteractionRequests;
+  interaction_runtime_authorization_requests: InteractionRuntimeAuthorizationRequests;
   memory_entries: MemoryEntries;
   memory_entry_parts: MemoryEntryParts;
   memory_index_chunks: MemoryIndexChunks;
@@ -2085,6 +2121,7 @@ export interface DB {
   relay_tool_revisions: RelayToolRevisions;
   relay_tools: RelayTools;
   runtime_events: RuntimeEvents;
+  runtime_grants: RuntimeGrants;
   schema_migrations: SchemaMigrations;
   session_context_states: SessionContextStates;
   session_engine_branches: SessionEngineBranches;

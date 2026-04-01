@@ -8,12 +8,18 @@ import type {
   RelayDeviceSummaryView,
   RelayExposureView,
 } from '@synapse/shared';
+import type { RuntimeGrantEffect, RuntimeGrantView } from '@synapse/shared/types';
 import { relayLifecycleEventDefinitions } from '@synapse/shared';
 import {
   ArrowLeft,
   CheckCircle2,
+  FolderOpen,
+  Globe,
   Loader2,
+  MousePointerClick,
   Radio,
+  Shield,
+  Terminal,
   Unplug,
   Wifi,
   WifiOff,
@@ -88,6 +94,55 @@ function syncSourceVariant(status: NonNullable<RelayExposureView['syncSource']>[
   }
 }
 
+function formatRuntimeGrantScope(scope: RuntimeGrantView['scope']) {
+  switch (scope) {
+    case 'once':
+      return 'Allow once';
+    case 'actor':
+      return 'Allow this actor';
+    case 'conversation':
+      return 'Allow this conversation';
+    case 'workspace':
+      return 'Always allow';
+    default:
+      return scope;
+  }
+}
+
+function describeRuntimeGrantEffect(effect: RuntimeGrantEffect) {
+  if (effect.capability === 'filesystem') {
+    return {
+      icon: FolderOpen,
+      summary:
+        effect.access === 'read_write'
+          ? 'Filesystem read and write'
+          : effect.access === 'write'
+            ? 'Filesystem write'
+            : 'Filesystem read',
+      detail: effect.path,
+    };
+  }
+  if (effect.capability === 'commandline') {
+    return {
+      icon: Terminal,
+      summary: `Command line: ${effect.executor}`,
+      detail: effect.cwdPrefix || 'Any working directory',
+    };
+  }
+  if (effect.capability === 'chrome') {
+    return {
+      icon: Globe,
+      summary: 'Browser automation',
+      detail: 'Chrome DevTools MCP',
+    };
+  }
+  return {
+    icon: MousePointerClick,
+    summary: 'Computer control',
+    detail: 'CUA automation',
+  };
+}
+
 export default function RelayDevicePage() {
   const params = useParams<{ relayId: string }>();
   const router = useRouter();
@@ -101,6 +156,9 @@ export default function RelayDevicePage() {
   const [saving, setSaving] = useState(false);
   const [loadingRelayEventSources, setLoadingRelayEventSources] = useState(true);
   const [togglingRelaySourceKey, setTogglingRelaySourceKey] = useState<string | null>(null);
+  const [runtimeGrants, setRuntimeGrants] = useState<RuntimeGrantView[]>([]);
+  const [loadingRuntimeGrants, setLoadingRuntimeGrants] = useState(false);
+  const [revokingGrantId, setRevokingGrantId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
 
   const exposureId = searchParams.get('exposureId');
@@ -180,6 +238,21 @@ export default function RelayDevicePage() {
     }
   }
 
+  async function loadRuntimeGrants(targetExposureId: string) {
+    if (!workspaceId || !relayId || !targetExposureId) return;
+
+    setLoadingRuntimeGrants(true);
+    try {
+      const result = await api.listRelayRuntimeGrants(workspaceId, relayId, targetExposureId);
+      setRuntimeGrants(result.grants);
+    } catch (error) {
+      console.error('Failed to load relay runtime grants:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to load runtime grants');
+    } finally {
+      setLoadingRuntimeGrants(false);
+    }
+  }
+
   useEffect(() => {
     void loadRelayDetail();
   }, [relayId, workspaceId]);
@@ -196,6 +269,14 @@ export default function RelayDevicePage() {
     next.set('exposureId', activeExposure.id);
     router.replace(`/dashboard/plugins/relays/${relayId}?${next.toString()}`, { scroll: false });
   }, [activeExposure, exposureId, relayDetail, relayId, router, searchParams]);
+
+  useEffect(() => {
+    if (!activeExposure?.id) {
+      setRuntimeGrants([]);
+      return;
+    }
+    void loadRuntimeGrants(activeExposure.id);
+  }, [activeExposure?.id, relayId, workspaceId]);
 
   async function handleSaveRelay() {
     if (!workspaceId || !relayDetail || !draftName.trim()) return;
@@ -227,6 +308,28 @@ export default function RelayDevicePage() {
       toast.error(error instanceof Error ? error.message : 'Failed to disconnect relay');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleRevokeRuntimeGrant(grantId: string) {
+    if (!workspaceId || !activeExposure) return;
+    if (!window.confirm('Revoke this runtime grant?')) return;
+
+    setRevokingGrantId(grantId);
+    try {
+      await api.revokeRelayRuntimeGrant(
+        workspaceId,
+        relayId,
+        activeExposure.id,
+        grantId,
+      );
+      await loadRuntimeGrants(activeExposure.id);
+      toast.success('Runtime grant revoked');
+    } catch (error) {
+      console.error('Failed to revoke runtime grant:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to revoke runtime grant');
+    } finally {
+      setRevokingGrantId(null);
     }
   }
 
@@ -610,6 +713,75 @@ export default function RelayDevicePage() {
                 dialogDescription="Choose who can invoke this relay exposure."
                 noAccessMessage="No one can invoke this relay exposure yet."
               />
+
+              <AppCard variant="panel">
+                <AppCardHeader>
+                  <div className="flex items-center gap-2">
+                    <Shield className="h-4 w-4 text-primary" />
+                    <AppCardTitle>Runtime Grants</AppCardTitle>
+                  </div>
+                  <AppCardDescription>
+                    Fine-grained approvals for special relay MCP actions. These grants are independent from MCP session lifecycle and stay active until consumed or revoked.
+                  </AppCardDescription>
+                </AppCardHeader>
+                <AppCardContent className="space-y-3">
+                  {loadingRuntimeGrants ? (
+                    <div className="flex items-center gap-2 rounded-2xl border border-border/70 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading runtime grants...
+                    </div>
+                  ) : runtimeGrants.length > 0 ? (
+                    runtimeGrants.map((grant) => {
+                      const effect = describeRuntimeGrantEffect(grant.effect);
+                      const EffectIcon = effect.icon;
+                      const isRevoking = revokingGrantId === grant.id;
+                      return (
+                        <div
+                          key={grant.id}
+                          className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-4"
+                        >
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                            <div className="min-w-0 space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant="secondary">{formatRuntimeGrantScope(grant.scope)}</Badge>
+                                <Badge variant="outline">{grant.relayToolName}</Badge>
+                                <Badge variant="outline">{grant.status}</Badge>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <EffectIcon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                                <div className="min-w-0">
+                                  <div className="text-sm font-medium text-foreground">{effect.summary}</div>
+                                  <div className="text-xs break-all text-muted-foreground">{effect.detail}</div>
+                                </div>
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                Created {formatDateTime(grant.createdAt)}
+                              </div>
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void handleRevokeRuntimeGrant(grant.id)}
+                              disabled={isRevoking}
+                            >
+                              {isRevoking ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : (
+                                <XCircle className="mr-2 h-4 w-4" />
+                              )}
+                              Revoke
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-border/70 px-4 py-6 text-sm text-muted-foreground">
+                      No active runtime grants for this exposure.
+                    </div>
+                  )}
+                </AppCardContent>
+              </AppCard>
             </>
           ) : (
             <AppCard variant="panel">

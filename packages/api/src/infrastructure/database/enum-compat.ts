@@ -279,7 +279,7 @@ type _InteractionRequestStatusHasAppTerminalStates = Assert<
   IsEqual<
     Extract<
       InteractionRequestsStatus,
-      'pending' | 'answered' | 'approved_pending_apply' | 'applied' | 'rejected' | 'cancelled' | 'expired' | 'apply_failed'
+      'pending' | 'answered' | 'approved' | 'rejected' | 'cancelled' | 'expired' | 'superseded'
     >,
     InteractionRequestsStatus
   >

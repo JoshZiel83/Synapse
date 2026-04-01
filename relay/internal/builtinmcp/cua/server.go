@@ -244,7 +244,7 @@ func disabledResult(toolName string) core.CallResult {
 }
 
 func (s *Server) readOnlyBlock(runtimeSessionID, toolName string, args map[string]interface{}) (bool, string) {
-	if s.cfg.AuthStore != nil && s.cfg.AuthStore.AllowsCUAControl(s.cfg.StableKey, runtimeSessionID) {
+	if s.cfg.TrustRemoteAuthorization {
 		return false, ""
 	}
 	if !s.cfg.ReadOnly {
@@ -260,13 +260,7 @@ func (s *Server) readOnlyBlock(runtimeSessionID, toolName string, args map[strin
 }
 
 func (s *Server) canOperate(runtimeSessionID string) bool {
-	if s.cfg.Enabled {
-		return true
-	}
-	if s.cfg.AuthStore == nil || s.cfg.StableKey == "" {
-		return false
-	}
-	return s.cfg.AuthStore.AllowsCUAControl(s.cfg.StableKey, runtimeSessionID)
+	return s.cfg.Enabled || s.cfg.TrustRemoteAuthorization
 }
 
 func (s *Server) ensureReady(runtimeSessionID string) error {

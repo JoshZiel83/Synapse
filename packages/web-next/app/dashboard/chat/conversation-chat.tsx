@@ -591,6 +591,7 @@ export default function ConversationChat({
       }[]
       selectedOptionId?: string
       decision?: "approve" | "reject"
+      preset?: "once" | "actor" | "conversation" | "workspace"
       note?: string
     }
   ): Promise<InteractionRequestSummary> {

@@ -15,7 +15,6 @@ import (
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/cloud"
 	"github.com/PekingSpades/Synapse/relay/internal/config"
-	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 // ServerInfo describes a server and its tools for registration with the cloud
@@ -64,7 +63,7 @@ type pendingServerEntry struct {
 	nextRetryAt time.Time
 }
 
-type serverFactory func(config.ServerConfig, *runtimeauth.Store) (Server, error)
+type serverFactory func(config.ServerConfig) (Server, error)
 
 type serverAttemptError struct {
 	phase     string
@@ -87,7 +86,6 @@ type Manager struct {
 	configs   []config.ServerConfig
 	servers   []serverEntry
 	pending   map[string]*pendingServerEntry
-	authStore *runtimeauth.Store
 	newServer serverFactory
 	mu        sync.RWMutex
 	hints     chan struct{}
@@ -100,7 +98,6 @@ func NewManager(configs []config.ServerConfig) *Manager {
 	return &Manager{
 		configs:   configs,
 		pending:   make(map[string]*pendingServerEntry),
-		authStore: runtimeauth.NewStore(""),
 		newServer: defaultServerFactory,
 		hints:     make(chan struct{}, 1),
 	}
@@ -128,14 +125,14 @@ func shouldInitializeServer(cfg config.ServerConfig) bool {
 	}
 }
 
-func defaultServerFactory(cfg config.ServerConfig, authStore *runtimeauth.Store) (Server, error) {
+func defaultServerFactory(cfg config.ServerConfig) (Server, error) {
 	switch cfg.Transport {
 	case "stdio":
 		return NewStdioServer(cfg.Command, cfg.Args, cfg.Env), nil
 	case "http":
 		return NewHTTPServer(cfg.Endpoint), nil
 	case "builtin":
-		return newBuiltinServer(cfg, authStore)
+		return newBuiltinServer(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported transport %q", cfg.Transport)
 	}
@@ -228,7 +225,7 @@ func (m *Manager) attemptServerStart(ctx context.Context, cfg config.ServerConfi
 		"transport": cfg.Transport,
 	})
 
-	srv, err := m.newServer(cfg, m.authStore)
+	srv, err := m.newServer(cfg)
 	if err != nil {
 		return nil, &serverAttemptError{
 			phase:     "builtin init",
@@ -272,13 +269,22 @@ func (m *Manager) attemptServerStart(ctx context.Context, cfg config.ServerConfi
 		}
 	}
 
+	metadata := configCloneMetadata(cfg.Metadata)
+	if metadata == nil {
+		metadata = map[string]interface{}{}
+	}
+	if cfg.Transport == "builtin" && cfg.Builtin != nil {
+		metadata["builtinKind"] = cfg.Builtin.Kind
+		metadata["trustRemoteAuthorization"] = true
+	}
+
 	return &serverEntry{
 		cfg:           cfg,
 		stableKey:     cfg.StableKey,
 		syncSourceKey: cfg.SyncSourceKey,
 		name:          cfg.Name,
 		transport:     cfg.Transport,
-		metadata:      configCloneMetadata(cfg.Metadata),
+		metadata:      metadata,
 		server:        srv,
 		tools:         tools,
 	}, nil
@@ -494,9 +500,6 @@ func (m *Manager) CancelTask(exposureStableKey, taskID, reason string) error {
 }
 
 func (m *Manager) OpenRuntimeSession(_ context.Context, request cloud.RuntimeSessionRequest) error {
-	if m.authStore == nil {
-		return fmt.Errorf("runtime authorization store is not initialized")
-	}
 	if strings.TrimSpace(request.ExposureStableKey) == "" {
 		return fmt.Errorf("exposure stable key is required")
 	}
@@ -514,18 +517,10 @@ func (m *Manager) OpenRuntimeSession(_ context.Context, request cloud.RuntimeSes
 	if !exists {
 		return fmt.Errorf("relay exposure %q not found", request.ExposureStableKey)
 	}
-
-	return m.authStore.OpenSession(runtimeauth.RuntimeSession{
-		ID:                request.RuntimeSessionID,
-		ExposureStableKey: request.ExposureStableKey,
-	})
+	return nil
 }
 
 func (m *Manager) CloseRuntimeSession(_ context.Context, runtimeSessionID string) error {
-	if m.authStore != nil {
-		m.authStore.CloseSession(runtimeSessionID)
-	}
-
 	m.mu.RLock()
 	servers := make([]serverEntry, len(m.servers))
 	copy(servers, m.servers)
@@ -540,10 +535,6 @@ func (m *Manager) CloseRuntimeSession(_ context.Context, runtimeSessionID string
 }
 
 func (m *Manager) ResetRuntimeSessions(_ context.Context) error {
-	if m.authStore != nil {
-		m.authStore.ResetSessions()
-	}
-
 	m.mu.RLock()
 	servers := make([]serverEntry, len(m.servers))
 	copy(servers, m.servers)
@@ -555,44 +546,6 @@ func (m *Manager) ResetRuntimeSessions(_ context.Context) error {
 		}
 	}
 	return nil
-}
-
-func (m *Manager) ApplyRuntimeAuthorization(_ context.Context, application cloud.RuntimeAuthorizationApplication) error {
-	if m.authStore == nil {
-		return fmt.Errorf("runtime authorization store is not initialized")
-	}
-
-	grant := runtimeauth.Grant{
-		InteractionID:     application.InteractionID,
-		RuntimeSessionID:  application.RuntimeSessionID,
-		ExposureStableKey: application.ExposureStableKey,
-		Duration:          application.Duration,
-		Reason:            application.Reason,
-	}
-
-	capability, _ := application.RequestedScope["capability"].(string)
-	switch strings.TrimSpace(strings.ToLower(capability)) {
-	case "filesystem":
-		grant.Capability = "filesystem"
-		if path, ok := application.RequestedScope["path"].(string); ok {
-			grant.Path = path
-		}
-		if access, ok := application.RequestedScope["access"].(string); ok {
-			grant.Access = access
-		}
-	case "cua":
-		grant.Capability = "cua"
-		if mode, ok := application.RequestedScope["mode"].(string); ok {
-			grant.Mode = mode
-		}
-	case "chrome":
-		grant.Capability = "chrome"
-		grant.Duration = "persistent"
-	default:
-		return fmt.Errorf("unsupported authorization capability %q", capability)
-	}
-
-	return m.authStore.Apply(grant)
 }
 
 // ShutdownAll stops all MCP servers

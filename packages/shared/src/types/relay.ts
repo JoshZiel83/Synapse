@@ -44,6 +44,7 @@ export type RelayOperationErrorCode =
   | 'tool_removed'
   | 'tool_definition_changed'
   | 'tool_execution_failed'
+  | 'authorization_required'
   | 'delivery_timed_out'
   | 'delivery_rejected'
   | 'operation_cancelled'

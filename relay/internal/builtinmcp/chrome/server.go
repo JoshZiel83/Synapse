@@ -101,13 +101,7 @@ func (s *Server) Shutdown() {
 }
 
 func (s *Server) isAuthorized() bool {
-	if s.cfg.Enabled {
-		return true
-	}
-	if s.cfg.AuthStore == nil || s.cfg.StableKey == "" {
-		return false
-	}
-	return s.cfg.AuthStore.AllowsChromeAutomation(s.cfg.StableKey)
+	return s.cfg.Enabled || s.cfg.TrustRemoteAuthorization
 }
 
 func (s *Server) ensureReady(ctx context.Context) error {

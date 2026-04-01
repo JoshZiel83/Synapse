@@ -67,17 +67,16 @@ export const CONVERSATION_GRANT_PERMISSIONS = [
 ] as const;
 export const INTERACTION_REQUEST_KINDS = [
   'question_choice',
-  'relay_authorization',
+  'runtime_authorization',
 ] as const;
 export const INTERACTION_REQUEST_STATUSES = [
   'pending',
   'answered',
-  'approved_pending_apply',
-  'applied',
+  'approved',
   'rejected',
   'cancelled',
   'expired',
-  'apply_failed',
+  'superseded',
 ] as const;
 export const INTERACTION_QUESTION_FIELD_TYPES = [
   'single_select',
@@ -237,11 +236,40 @@ export const RELAY_SYNC_SOURCE_KINDS = [
 
 export const RELAY_SYNC_MODES = ['snapshot', 'follow'] as const;
 export const RELAY_SYNC_STATUSES = ['unknown', 'idle', 'syncing', 'error', 'disabled'] as const;
-export const RELAY_AUTHORIZATION_DURATIONS = ['session', 'persistent'] as const;
-export const RELAY_FILESYSTEM_AUTHORIZATION_ACCESSES = [
+export const RUNTIME_AUTHORIZATION_PRESETS = [
+  'once',
+  'actor',
+  'conversation',
+  'workspace',
+] as const;
+export const RUNTIME_GRANT_SCOPES = ['once', 'actor', 'conversation', 'workspace'] as const;
+export const RUNTIME_GRANT_RETENTIONS = ['consume_once', 'until_revoked'] as const;
+export const RUNTIME_GRANT_STATUSES = [
+  'active',
+  'consumed',
+  'revoked',
+  'superseded',
+] as const;
+export const RUNTIME_AUTHORIZATION_REQUEST_MODES = [
+  'background',
+  'blocking',
+] as const;
+export const RUNTIME_AUTHORIZATION_CAPABILITIES = [
+  'filesystem',
+  'cua',
+  'chrome',
+  'commandline',
+] as const;
+export const RUNTIME_FILESYSTEM_AUTHORIZATION_ACCESSES = [
   'read',
   'write',
   'read_write',
+] as const;
+export const RUNTIME_COMMANDLINE_EXECUTORS = [
+  'bash',
+  'git',
+  'node',
+  'python',
 ] as const;
 
 export const RELAY_EXPOSURE_RUNTIME_STATUSES = [

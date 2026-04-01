@@ -76,7 +76,7 @@ CREATE TYPE provider_steps_request_type AS ENUM ('actor_think', 'ai_complete');
 CREATE TYPE provider_steps_status AS ENUM ('success', 'error', 'timeout');
 CREATE TYPE tool_calls_tool_kind AS ENUM ('builtin', 'callable', 'action', 'mcp_plugin', 'mcp_relay', 'provider_builtin', 'a2a_proxy');
 CREATE TYPE tool_calls_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
-CREATE TYPE tool_call_tasks_executor_kind AS ENUM ('interaction_question', 'interaction_form', 'relay_authorization', 'relay_mcp');
+CREATE TYPE tool_call_tasks_executor_kind AS ENUM ('interaction_question', 'interaction_form', 'runtime_authorization', 'relay_mcp');
 CREATE TYPE tool_call_tasks_delivery_policy AS ENUM ('online_only', 'store_and_forward', 'human_interaction');
 CREATE TYPE tool_call_tasks_status AS ENUM ('working', 'input_required', 'completed', 'failed', 'cancelled');
 CREATE TYPE tool_call_tasks_dispatch_status AS ENUM ('accepted', 'queued', 'dispatched', 'received', 'started', 'input_requested', 'cancel_requested');
@@ -149,8 +149,11 @@ CREATE TYPE relay_tools_status AS ENUM ('active', 'removed');
 CREATE TYPE relay_operations_delivery_policy AS ENUM ('online_only', 'store_and_forward');
 CREATE TYPE relay_operations_status AS ENUM ('created', 'dispatched', 'received', 'started', 'cancel_requested', 'completed', 'failed', 'cancelled', 'aborted', 'expired');
 CREATE TYPE relay_operation_deliveries_status AS ENUM ('queued', 'sent', 'acked', 'nacked', 'timed_out', 'cancelled');
-CREATE TYPE interaction_requests_kind AS ENUM ('question_choice', 'relay_authorization');
-CREATE TYPE interaction_requests_status AS ENUM ('pending', 'answered', 'approved_pending_apply', 'applied', 'rejected', 'cancelled', 'expired', 'apply_failed');
+CREATE TYPE interaction_requests_kind AS ENUM ('question_choice', 'runtime_authorization');
+CREATE TYPE interaction_requests_status AS ENUM ('pending', 'answered', 'approved', 'rejected', 'cancelled', 'expired', 'superseded');
+CREATE TYPE runtime_grants_scope AS ENUM ('once', 'actor', 'conversation', 'workspace');
+CREATE TYPE runtime_grants_retention AS ENUM ('consume_once', 'until_revoked');
+CREATE TYPE runtime_grants_status AS ENUM ('active', 'consumed', 'revoked', 'superseded');
 
 -- ============ Users ============
 CREATE TABLE users (
@@ -2497,6 +2500,7 @@ CREATE TABLE relay_operations (
   delivery_policy relay_operations_delivery_policy NOT NULL DEFAULT 'online_only',
   status relay_operations_status NOT NULL DEFAULT 'created',
   input_payload JSONB NOT NULL DEFAULT '{}',
+  authorization_payload JSONB NOT NULL DEFAULT '{}',
   input_hash VARCHAR(128) NOT NULL,
   operation_timeout_ms INT,
   expires_at TIMESTAMPTZ,
@@ -2569,7 +2573,7 @@ CREATE TABLE interaction_requests (
       AND target_user_id IS NOT NULL
     )
     OR (
-      kind = 'relay_authorization'
+      kind = 'runtime_authorization'
       AND target_member_id IS NULL
       AND target_user_id IS NULL
     )
@@ -2582,12 +2586,41 @@ CREATE TABLE interaction_question_requests (
   resolution_payload JSONB NOT NULL DEFAULT '{}'
 );
 
-CREATE TABLE interaction_relay_authorization_requests (
+CREATE TABLE interaction_runtime_authorization_requests (
   interaction_id UUID PRIMARY KEY REFERENCES interaction_requests(id) ON DELETE CASCADE,
   relay_device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
   relay_exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
   requested_effect JSONB NOT NULL DEFAULT '{}',
+  request_payload JSONB NOT NULL DEFAULT '{}',
   resolution_payload JSONB NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE runtime_grants (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  relay_device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
+  relay_exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_by_member_id UUID REFERENCES conversation_members(id) ON DELETE SET NULL,
+  source_interaction_id UUID REFERENCES interaction_requests(id) ON DELETE SET NULL,
+  source_task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
+  scope runtime_grants_scope NOT NULL,
+  retention runtime_grants_retention NOT NULL,
+  status runtime_grants_status NOT NULL DEFAULT 'active',
+  relay_tool_name TEXT NOT NULL,
+  source_retry_nonce TEXT,
+  source_runtime_session_id TEXT,
+  source_request_args JSONB NOT NULL DEFAULT '{}',
+  source_request_hash TEXT,
+  effect JSONB NOT NULL DEFAULT '{}',
+  consumed_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  superseded_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_interaction_requests_conversation
@@ -2596,5 +2629,11 @@ CREATE INDEX idx_interaction_requests_task
   ON interaction_requests(task_id);
 CREATE INDEX idx_interaction_requests_target
   ON interaction_requests(target_user_id, status, created_at DESC);
-CREATE INDEX idx_interaction_relay_authorization_requests_device
-  ON interaction_relay_authorization_requests(relay_device_id, interaction_id);
+CREATE INDEX idx_interaction_runtime_authorization_requests_device
+  ON interaction_runtime_authorization_requests(relay_device_id, interaction_id);
+CREATE INDEX idx_runtime_grants_exposure
+  ON runtime_grants(relay_exposure_id, status, scope, created_at DESC);
+CREATE INDEX idx_runtime_grants_actor
+  ON runtime_grants(actor_id, relay_exposure_id, status, created_at DESC);
+CREATE INDEX idx_runtime_grants_conversation
+  ON runtime_grants(conversation_id, relay_exposure_id, status, created_at DESC);

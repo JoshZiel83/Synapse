@@ -34,7 +34,6 @@ import {
   getConversationMember,
   isFeedItemVisibleToWorkspaceMember,
 } from "./service.js";
-import { enqueueRelayAuthorizationApply } from "../mcp-plugins/relay-manager.js";
 import { getConversationTransportBinding } from "../im/service.js";
 import {
   mapConversationMember,
@@ -119,6 +118,9 @@ const resolveConversationInteractionSchema = z
       .optional(),
     selectedOptionId: z.string().min(1).optional(),
     decision: z.enum(INTERACTION_DECISIONS).optional(),
+    preset: z
+      .enum(["once", "actor", "conversation", "workspace"])
+      .optional(),
     note: z.string().trim().max(2000).optional(),
   })
   .refine(
@@ -621,12 +623,9 @@ export default async function threadController(app: FastifyInstance) {
         answers: body.answers,
         selectedOptionId: body.selectedOptionId,
         decision: body.decision,
+        preset: body.preset,
         note: body.note,
       });
-
-      if (result.relayApplyNeeded) {
-        await enqueueRelayAuthorizationApply(result.interaction.id);
-      }
 
       return reply.send({
         interaction: await enrichInteractionForUser(

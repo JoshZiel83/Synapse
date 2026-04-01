@@ -6,6 +6,7 @@ import type {
   RelayOperationError,
   RelayVisibleToolDefinition,
 } from '@synapse/shared';
+import type { RuntimeGrantEffect, RuntimeGrantScope } from '@synapse/shared/types';
 import {
   extractText,
   RELAY_AUTH_TIMEOUT,
@@ -46,14 +47,9 @@ import {
   cancelToolCallTask,
   type ToolCallTaskDeliveryPolicy,
 } from '../tool-call-tasks/service.js';
-import {
-  getPendingRelayAuthorizationApplication,
-  listPendingRelayAuthorizationApplicationsForDevice,
-  markRelayAuthorizationInteractionApplied,
-  markRelayAuthorizationInteractionApplyFailed,
-  type PendingRelayAuthorizationApplication,
-} from '../interactions/service.js';
+import { findMatchingRuntimeGrant } from '../runtime-grants/service.js';
 import { normalizeMcpToolResult } from './result-normalizer.js';
+import { inferRelaySpecialAuthorizationRequirement } from './relay-special-mcp.js';
 
 interface RelayToolRegistration {
   stableKey: string;
@@ -91,6 +87,7 @@ interface ConnectedRelayExposure {
   displayName: string;
   transport: string;
   runtimeStatus: string;
+  metadata: Record<string, unknown>;
   tools: RelayCatalogToolSnapshot[];
 }
 
@@ -123,6 +120,7 @@ interface PendingRelayOperation {
   toolRevisionId: string;
   catalogRevisionId: string;
   args: Record<string, unknown>;
+  authorization?: RelayRuntimeAuthorizationEnvelope;
   inputHash: string;
   taskId: string | null;
   operationTimeoutMs: number;
@@ -136,13 +134,6 @@ interface PendingRelayOperation {
   cancelReason: string | null;
   resolve?: (value: unknown) => void;
   reject?: (error: Error) => void;
-}
-
-interface PendingRelayAuthorizationApply {
-  interactionId: string;
-  deviceId: string;
-  deliveryId: string | null;
-  timeoutTimer: NodeJS.Timeout;
 }
 
 interface PendingRelayRuntimeSessionRequest {
@@ -176,7 +167,15 @@ interface RelayExposureCatalog {
   exposureStableKey: string;
   exposureDisplayName: string;
   transport: string;
+  metadata: Record<string, unknown>;
   tools: RelayCatalogToolSnapshot[];
+}
+
+interface RelayRuntimeAuthorizationEnvelope {
+  grantId?: string;
+  grantScope?: RuntimeGrantScope;
+  effect?: RuntimeGrantEffect;
+  retryNonce?: string;
 }
 
 interface RelayCallParams {
@@ -190,6 +189,7 @@ interface RelayCallParams {
   binding: RelayHiddenToolBinding;
   args: Record<string, unknown>;
   runtimeSessionId: string;
+  authorization?: RelayRuntimeAuthorizationEnvelope;
 }
 
 interface RelayAsyncCallParams extends RelayCallParams {
@@ -223,8 +223,6 @@ let relayLifecycleSweepTimer: NodeJS.Timeout | null = null;
 const RELAY_LIFECYCLE_OFFLINE_GRACE_MS =
   relayDeviceOfflineEventDefinition.graceWindowMs || 60_000;
 const RELAY_LIFECYCLE_SWEEP_INTERVAL_MS = 15_000;
-const RELAY_AUTHORIZATION_APPLY_TIMEOUT_MS = 30_000;
-const pendingRelayAuthorizationApplies = new Map<string, PendingRelayAuthorizationApply>();
 const RELAY_RUNTIME_SESSION_TIMEOUT_MS = 15_000;
 const pendingRelayRuntimeSessionRequests = new Map<string, PendingRelayRuntimeSessionRequest>();
 const RELAY_ROUTE_TTL_MS = Math.max(RELAY_HEARTBEAT_INTERVAL * 3, 45_000);
@@ -534,7 +532,6 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
           socket.send(JSON.stringify({ type: 'catalog.sync_error', code: 'catalog_sync_rejected', message: error, retryable: true }));
         } else {
           void redrivePendingRelayOperations(connected);
-          void redrivePendingRelayAuthorizations(connected);
           socket.send(JSON.stringify({ type: 'catalog.synced', exposureCount: exposures.length }));
         }
       } catch (error: any) {
@@ -564,11 +561,6 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
 
     if (msg.type === 'operation.result' && typeof msg.operationId === 'string') {
       await resolveOperationResult(connected, msg);
-      return;
-    }
-
-    if (msg.type === 'authorization.result' && typeof msg.interactionId === 'string') {
-      await resolveAuthorizationResult(connected, msg);
       return;
     }
 
@@ -685,6 +677,78 @@ async function validateRelayCallTargetLocal(params: RelayCallParams) {
   };
 }
 
+function buildAuthorizationRequiredResult(params: {
+  relayToolName: string;
+  runtimeSessionId: string;
+  requirement: ReturnType<typeof inferRelaySpecialAuthorizationRequirement>;
+}) {
+  const requirement = params.requirement;
+  return {
+    content: textBlocks(requirement?.message || "User authorization is required."),
+    structuredContent: {
+      authorization_required: true,
+      relayToolName: params.relayToolName,
+      runtimeSessionId: params.runtimeSessionId,
+      effect: requirement?.effect,
+      available_presets: ["once", "actor", "conversation", "workspace"],
+      client_hint: requirement?.clientHint,
+    },
+    isError: true,
+  };
+}
+
+export async function resolveRelayToolAuthorization(params: {
+  workspaceId: string;
+  relayExposureId: string;
+  conversationId?: string | null;
+  actorId?: string | null;
+  relayToolName: string;
+  toolArguments: Record<string, unknown>;
+  runtimeSessionId: string;
+  exposureMetadata: Record<string, unknown>;
+  authorization?: RelayRuntimeAuthorizationEnvelope;
+}) {
+  const requirement = inferRelaySpecialAuthorizationRequirement({
+    visibleToolName: params.relayToolName,
+    toolInput: params.toolArguments,
+    exposureMetadata: params.exposureMetadata,
+  });
+  if (!requirement) {
+    return {
+      authorization: params.authorization,
+    };
+  }
+
+  const grant = await findMatchingRuntimeGrant({
+    workspaceId: params.workspaceId,
+    relayExposureId: params.relayExposureId,
+    conversationId: params.conversationId || undefined,
+    actorId: params.actorId || undefined,
+    relayToolName: params.relayToolName,
+    effect: requirement.effect,
+    retryNonce: params.authorization?.retryNonce,
+    consumeOnce: true,
+  });
+  if (!grant) {
+    return {
+      denialResult: buildAuthorizationRequiredResult({
+        relayToolName: params.relayToolName,
+        runtimeSessionId: params.runtimeSessionId,
+        requirement,
+      }),
+    };
+  }
+
+  return {
+    authorization: {
+      grantId: grant.id,
+      grantScope: grant.scope,
+      effect: grant.effect,
+      retryNonce: params.authorization?.retryNonce,
+    } satisfies RelayRuntimeAuthorizationEnvelope,
+  };
+}
+
 async function insertRelayOperation(params: {
   operationId: string;
   workspaceId: string;
@@ -703,6 +767,7 @@ async function insertRelayOperation(params: {
   deliveryPolicy: 'online_only' | 'store_and_forward';
   status?: RelayOperationLifecycleStatus;
   inputPayload: Record<string, unknown>;
+  authorizationPayload?: RelayRuntimeAuthorizationEnvelope;
   inputHash: string;
   operationTimeoutMs: number;
   expiresAt: string | null;
@@ -726,6 +791,7 @@ async function insertRelayOperation(params: {
        delivery_policy,
        status,
        input_payload,
+       authorization_payload,
        input_hash,
        operation_timeout_ms,
        expires_at,
@@ -750,9 +816,10 @@ async function insertRelayOperation(params: {
        $15,
        $16,
        $17::jsonb,
-       $18,
+       $18::jsonb,
        $19,
        $20,
+       $21,
        NOW(),
        NOW()
      )`,
@@ -774,6 +841,7 @@ async function insertRelayOperation(params: {
       params.deliveryPolicy,
       params.status || 'created',
       JSON.stringify(params.inputPayload),
+      JSON.stringify(params.authorizationPayload || {}),
       params.inputHash,
       params.operationTimeoutMs,
       params.expiresAt,
@@ -784,6 +852,20 @@ async function insertRelayOperation(params: {
 async function callRelayToolLocal(params: RelayCallParams): Promise<unknown> {
   const { connected, exposure, currentTool } =
     await validateRelayCallTargetLocal(params);
+  const authorizationState = await resolveRelayToolAuthorization({
+    workspaceId: connected.workspaceId,
+    relayExposureId: params.exposureId,
+    conversationId: params.conversationId,
+    actorId: params.requestedByActorId,
+    relayToolName: currentTool.visible.name,
+    toolArguments: params.args,
+    runtimeSessionId: params.runtimeSessionId,
+    exposureMetadata: exposure.metadata,
+    authorization: params.authorization,
+  });
+  if (authorizationState.denialResult) {
+    return authorizationState.denialResult;
+  }
 
   const operationId = crypto.randomUUID();
   const inputHash = hashValue(params.args);
@@ -809,6 +891,7 @@ async function callRelayToolLocal(params: RelayCallParams): Promise<unknown> {
     runtimeSessionId: params.runtimeSessionId,
     deliveryPolicy: 'online_only',
     inputPayload: params.args,
+    authorizationPayload: authorizationState.authorization,
     inputHash,
     operationTimeoutMs,
     expiresAt,
@@ -848,6 +931,7 @@ async function callRelayToolLocal(params: RelayCallParams): Promise<unknown> {
       toolRevisionId: params.binding.toolRevisionId,
       catalogRevisionId: params.binding.catalogRevisionId,
       args: params.args,
+      authorization: authorizationState.authorization,
       inputHash,
       taskId: null,
       operationTimeoutMs,
@@ -898,6 +982,27 @@ async function enqueueRelayToolTaskLocal(
 ): Promise<{ operationId: string; taskId: string }> {
   const { connected, exposure, currentTool } =
     await validateRelayCallTargetLocal(params);
+  const authorizationState = await resolveRelayToolAuthorization({
+    workspaceId: params.workspaceId,
+    relayExposureId: params.exposureId,
+    conversationId: params.conversationId,
+    actorId: params.requestedByActorId,
+    relayToolName: currentTool.visible.name,
+    toolArguments: params.args,
+    runtimeSessionId: params.runtimeSessionId,
+    exposureMetadata: exposure.metadata,
+    authorization: params.authorization,
+  });
+  if (authorizationState.denialResult) {
+    throw buildRelayExecutionError({
+      code: 'authorization_required' as RelayOperationError['code'],
+      message: extractText(
+        (authorizationState.denialResult as { content?: ReturnType<typeof textBlocks> })
+          .content || textBlocks('User authorization is required.'),
+      ),
+      retryable: false,
+    });
+  }
 
   const operationId = crypto.randomUUID();
   const inputHash = hashValue(params.args);
@@ -969,6 +1074,7 @@ async function enqueueRelayToolTaskLocal(
          delivery_policy,
          status,
          input_payload,
+         authorization_payload,
          input_hash,
          operation_timeout_ms,
          expires_at,
@@ -993,9 +1099,10 @@ async function enqueueRelayToolTaskLocal(
          $15,
          'created',
          $16::jsonb,
-         $17,
+         $17::jsonb,
          $18,
          $19,
+         $20,
          NOW(),
          NOW()
        )`,
@@ -1016,6 +1123,7 @@ async function enqueueRelayToolTaskLocal(
         params.runtimeSessionId,
         params.deliveryPolicy,
         JSON.stringify(params.args),
+        JSON.stringify(authorizationState.authorization || {}),
         inputHash,
         operationTimeoutMs,
         expiresAt,
@@ -1084,6 +1192,7 @@ async function enqueueRelayToolTaskLocal(
     toolRevisionId: params.binding.toolRevisionId,
     catalogRevisionId: params.binding.catalogRevisionId,
     args: params.args,
+    authorization: authorizationState.authorization,
     inputHash,
     taskId: created.id,
     operationTimeoutMs,
@@ -1210,6 +1319,7 @@ async function dispatchPendingRelayOperation(connected: ConnectedRelay, pending:
       responseMode: pending.responseMode,
       inputHash: pending.inputHash,
       arguments: pending.args,
+      authorization: pending.authorization,
       expiresInMs: pending.operationTimeoutMs,
     };
 
@@ -1444,6 +1554,7 @@ function getRelayExposureCatalogLocal(deviceId: string, exposureId: string): Rel
     exposureStableKey: exposure.stableKey,
     exposureDisplayName: exposure.displayName,
     transport: exposure.transport,
+    metadata: { ...exposure.metadata },
     tools: exposure.tools.map((tool) => ({
       binding: { ...tool.binding },
       visible: {
@@ -1476,6 +1587,7 @@ export async function loadRelayExposureCatalogSnapshot(
     exposureStableKey: catalog.stableKey,
     exposureDisplayName: catalog.displayName,
     transport: catalog.transport,
+    metadata: { ...catalog.metadata },
     tools: catalog.tools.map((tool) => ({
       binding: { ...tool.binding },
       visible: {
@@ -1829,10 +1941,6 @@ export async function shutdownAllRelays() {
     void failOperation(pending.operationId, 'delivery_rejected', 'Server shutting down', true, false);
   }
 
-  for (const pending of pendingRelayAuthorizationApplies.values()) {
-    clearTimeout(pending.timeoutTimer);
-  }
-
   for (const pending of pendingRelayRuntimeSessionRequests.values()) {
     clearTimeout(pending.timeoutTimer);
     pending.reject(new Error('Server shutting down'));
@@ -1845,7 +1953,6 @@ export async function shutdownAllRelays() {
   const deviceIds = [...connectedRelays.keys()];
   connectedRelays.clear();
   pendingRelayOperations.clear();
-  pendingRelayAuthorizationApplies.clear();
   pendingRelayRuntimeSessionRequests.clear();
 
   if (deviceIds.length > 0) {
@@ -2588,6 +2695,7 @@ async function loadExposureCatalog(exposureId: string): Promise<ConnectedRelayEx
         e.display_name AS exposure_display_name,
         e.transport AS exposure_transport,
         e.runtime_status AS exposure_runtime_status,
+        e.metadata AS exposure_metadata,
         t.id AS tool_id,
         tr.id AS tool_revision_id,
         tr.catalog_revision_id,
@@ -2637,6 +2745,7 @@ async function loadExposureCatalog(exposureId: string): Promise<ConnectedRelayEx
     displayName: first.exposure_display_name,
     transport: first.exposure_transport,
     runtimeStatus: first.exposure_runtime_status,
+    metadata: asObject(first.exposure_metadata),
     tools,
   };
 }
@@ -2684,6 +2793,7 @@ type RelayTaskOperationRecord = {
   tool_revision_id: string;
   catalog_revision_id: string;
   input_payload: unknown;
+  authorization_payload: unknown;
   input_hash: string;
   operation_timeout_ms: number | null;
   expires_at: string | null;
@@ -2713,6 +2823,7 @@ async function loadAsyncRelayOperationRecord(operationId: string) {
        ro.tool_revision_id,
        ro.catalog_revision_id,
        ro.input_payload,
+       ro.authorization_payload,
        ro.input_hash,
        ro.operation_timeout_ms,
        ro.expires_at,
@@ -2755,6 +2866,7 @@ async function loadRelayOperationByTaskId(taskId: string) {
        ro.tool_revision_id,
        ro.catalog_revision_id,
        ro.input_payload,
+       ro.authorization_payload,
        ro.input_hash,
        ro.operation_timeout_ms,
        ro.expires_at,
@@ -3319,6 +3431,7 @@ async function redrivePendingRelayOperations(connected: ConnectedRelay) {
        ro.tool_revision_id,
        ro.catalog_revision_id,
        ro.input_payload,
+       ro.authorization_payload,
        ro.input_hash,
        ro.operation_timeout_ms,
        ro.expires_at,
@@ -3404,6 +3517,9 @@ async function redrivePendingRelayOperations(connected: ConnectedRelay) {
       toolRevisionId: row.tool_revision_id,
       catalogRevisionId: row.catalog_revision_id,
       args: (row.input_payload as Record<string, unknown>) || {},
+      authorization:
+        (row.authorization_payload as RelayRuntimeAuthorizationEnvelope | null) ||
+        undefined,
       inputHash: row.input_hash,
       taskId: row.task_id,
       operationTimeoutMs: row.operation_timeout_ms || RELAY_OPERATION_TTL_MS,
@@ -3422,126 +3538,6 @@ async function redrivePendingRelayOperations(connected: ConnectedRelay) {
       pendingRelayOperations.get(row.operation_id)!,
     );
   }
-}
-
-export async function enqueueRelayAuthorizationApply(interactionId: string) {
-  const application = await getPendingRelayAuthorizationApplication(interactionId);
-  if (!application) {
-    return;
-  }
-
-  const connected = connectedRelays.get(application.deviceId);
-  if (!connected || connected.ws.readyState !== 1) {
-    return;
-  }
-
-  await dispatchPendingRelayAuthorizationApply(connected, application);
-}
-
-async function redrivePendingRelayAuthorizations(connected: ConnectedRelay) {
-  const applications =
-    await listPendingRelayAuthorizationApplicationsForDevice(connected.deviceId);
-
-  for (const application of applications) {
-    await dispatchPendingRelayAuthorizationApply(connected, application);
-  }
-}
-
-async function dispatchPendingRelayAuthorizationApply(
-  connected: ConnectedRelay,
-  application: PendingRelayAuthorizationApplication,
-) {
-  if (pendingRelayAuthorizationApplies.has(application.interactionId)) {
-    return;
-  }
-  if (connected.ws.readyState !== 1) {
-    return;
-  }
-
-  const exposure = connected.exposures.get(application.exposureId);
-  if (!exposure) {
-    await markRelayAuthorizationInteractionApplyFailed(
-      application.interactionId,
-      `Relay exposure ${application.exposureId} is not currently available`,
-    );
-    return;
-  }
-
-  const deliveryId = crypto.randomUUID();
-  const timeoutTimer = setTimeout(() => {
-    const pending = pendingRelayAuthorizationApplies.get(application.interactionId);
-    if (!pending) {
-      return;
-    }
-    pendingRelayAuthorizationApplies.delete(application.interactionId);
-    void markRelayAuthorizationInteractionApplyFailed(
-      application.interactionId,
-      `Relay authorization apply timed out after ${RELAY_AUTHORIZATION_APPLY_TIMEOUT_MS}ms`,
-    );
-  }, RELAY_AUTHORIZATION_APPLY_TIMEOUT_MS);
-
-  pendingRelayAuthorizationApplies.set(application.interactionId, {
-    interactionId: application.interactionId,
-    deviceId: application.deviceId,
-    deliveryId,
-    timeoutTimer,
-  });
-
-  try {
-    connected.ws.send(JSON.stringify({
-      type: 'relay.authorization.apply',
-      protocolVersion: RELAY_PROTOCOL_VERSION,
-      sessionId: connected.sessionId,
-      interactionId: application.interactionId,
-      deliveryId,
-      payload: {
-        exposureId: application.exposureId,
-        exposureStableKey: application.exposureStableKey,
-        runtimeSessionId: application.requestedEffect.runtimeSessionId,
-        relayToolName: application.requestedEffect.relayToolName,
-        reason: application.requestedEffect.reason,
-        duration: application.requestedEffect.duration,
-        requestedScope: application.requestedEffect.requestedScope,
-      },
-    }));
-    await markToolCallTaskDispatched(
-      application.taskId,
-      `Dispatched relay authorization apply for ${application.requestedEffect.relayToolName}.`,
-    ).catch(() => {});
-  } catch (error: any) {
-    clearTimeout(timeoutTimer);
-    pendingRelayAuthorizationApplies.delete(application.interactionId);
-    await markRelayAuthorizationInteractionApplyFailed(
-      application.interactionId,
-      error?.message || 'Failed to dispatch relay authorization apply',
-    );
-  }
-}
-
-async function resolveAuthorizationResult(
-  connected: ConnectedRelay,
-  msg: Record<string, unknown>,
-) {
-  const interactionId = msg.interactionId as string;
-  const pending = pendingRelayAuthorizationApplies.get(interactionId);
-  if (!pending || pending.deviceId !== connected.deviceId) {
-    return;
-  }
-
-  clearTimeout(pending.timeoutTimer);
-  pendingRelayAuthorizationApplies.delete(interactionId);
-
-  const isError = msg.success === false || Boolean(msg.error);
-  if (isError) {
-    const error = normalizeOperationError(msg.error);
-    await markRelayAuthorizationInteractionApplyFailed(
-      interactionId,
-      error.message,
-    );
-    return;
-  }
-
-  await markRelayAuthorizationInteractionApplied(interactionId);
 }
 
 async function resolveRuntimeSessionResult(
@@ -3649,12 +3645,6 @@ function cleanupRelay(deviceId: string) {
       pending.deliveryId = null;
       pending.relaySessionRowId = null;
     }
-  }
-
-  for (const pending of pendingRelayAuthorizationApplies.values()) {
-    if (pending.deviceId !== deviceId) continue;
-    clearTimeout(pending.timeoutTimer);
-    pendingRelayAuthorizationApplies.delete(pending.interactionId);
   }
 
   for (const [key, pending] of pendingRelayRuntimeSessionRequests.entries()) {

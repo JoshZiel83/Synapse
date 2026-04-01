@@ -143,7 +143,7 @@ func (s *Server) Shutdown() {
 }
 
 func (s *Server) shouldStart(runtimeSessionID string) bool {
-	return s.cfg.Enabled || len(s.effectiveRootsForSession(runtimeSessionID)) > 0
+	return s.cfg.Enabled || s.cfg.TrustRemoteAuthorization || len(s.effectiveRootsForSession(runtimeSessionID)) > 0
 }
 
 func (s *Server) ensureStarted() error {
@@ -266,31 +266,32 @@ func (s *Server) effectiveRoots() []Root {
 
 func (s *Server) effectiveRootsForSession(runtimeSessionID string) []Root {
 	roots := make([]Root, 0, len(s.roots))
-	if s.cfg.Enabled {
-		roots = append(roots, s.roots...)
-	}
-	if s.cfg.AuthStore != nil && strings.TrimSpace(s.cfg.StableKey) != "" {
-		for index, grant := range s.cfg.AuthStore.FilesystemGrants(s.cfg.StableKey, runtimeSessionID) {
+	if s.cfg.Enabled || s.cfg.TrustRemoteAuthorization {
+		for _, root := range s.roots {
+			access := root.Access
+			if s.cfg.TrustRemoteAuthorization {
+				access = "rw"
+			}
 			roots = append(roots, Root{
-				ID:     fmt.Sprintf("grant_%d", index),
-				Path:   filepath.Clean(grant.Path),
-				Access: normalizeRootAccess(grant.Access),
+				ID:     root.ID,
+				Path:   root.Path,
+				Access: access,
 			})
 		}
-		sort.Slice(roots, func(i, j int) bool {
-			leftLen := len(roots[i].Path)
-			rightLen := len(roots[j].Path)
-			if leftLen != rightLen {
-				return leftLen > rightLen
-			}
-			leftRank := rootAccessRank(roots[i].Access)
-			rightRank := rootAccessRank(roots[j].Access)
-			if leftRank != rightRank {
-				return leftRank > rightRank
-			}
-			return roots[i].ID < roots[j].ID
-		})
 	}
+	sort.Slice(roots, func(i, j int) bool {
+		leftLen := len(roots[i].Path)
+		rightLen := len(roots[j].Path)
+		if leftLen != rightLen {
+			return leftLen > rightLen
+		}
+		leftRank := rootAccessRank(roots[i].Access)
+		rightRank := rootAccessRank(roots[j].Access)
+		if leftRank != rightRank {
+			return leftRank > rightRank
+		}
+		return roots[i].ID < roots[j].ID
+	})
 	return roots
 }
 
@@ -402,31 +403,14 @@ func (s *Server) resolvePath(runtimeSessionID, input string, write bool, allowMi
 
 	root, ok := s.matchRootForSession(runtimeSessionID, resolved)
 	if !ok {
-		message := fmt.Sprintf("The path %q is outside the directories exposed by this filesystem server.", absPath)
-		toolErr := &toolError{
+		return resolvedPath{}, &toolError{
 			Code:    "path_not_allowed",
-			Message: message,
+			Message: fmt.Sprintf("The path %q is outside the directories exposed by this filesystem server.", absPath),
 			Path:    absPath,
 		}
-		if s.cfg.AuthStore != nil && strings.TrimSpace(s.cfg.StableKey) != "" {
-			access := "read"
-			if write {
-				access = "write"
-			}
-			toolErr.Code = "path_authorization_required"
-			toolErr.Message = fmt.Sprintf("The path %q is not currently exposed by this filesystem server. Ask the user to grant %s access for this location in the Synapse Relay client, then retry.", absPath, access)
-			toolErr.RequiresUserApproval = true
-			toolErr.ClientHint = fmt.Sprintf("Grant %s access for this location in the Synapse Relay client, then retry.", access)
-			toolErr.Capability = "filesystem"
-			toolErr.Access = access
-			if !s.cfg.Enabled {
-				toolErr.AuthorizationDuration = "persistent"
-			}
-		}
-		return resolvedPath{}, toolErr
 	}
 	if write {
-		if s.cfg.ReadOnly {
+		if s.cfg.ReadOnly && !s.cfg.TrustRemoteAuthorization {
 			return resolvedPath{}, &toolError{
 				Code:                 "read_only_mode",
 				Message:              "This built-in filesystem server is currently in read-only mode. Read and search tools remain available, but write actions require manual approval in the Synapse Relay client. Ask the user to disable read-only mode there, then retry.",
@@ -435,7 +419,7 @@ func (s *Server) resolvePath(runtimeSessionID, input string, write bool, allowMi
 				ClientHint:           "Disable read-only mode in the Synapse Relay client, then retry the write action.",
 			}
 		}
-		if root.Access != "rw" {
+		if root.Access != "rw" && !s.cfg.TrustRemoteAuthorization {
 			return resolvedPath{}, &toolError{
 				Code:                 "write_permission_required",
 				Message:              fmt.Sprintf("The path %q is currently configured read-only in the Synapse Relay client. Ask the user to grant write access for this location, then retry.", absPath),
@@ -1296,19 +1280,9 @@ func (s *Server) searchFiles(_ context.Context, runtimeSessionID string, args ma
 				}
 			}
 			return toolResultError("SearchFiles", "read", &toolError{
-				Code:                 "path_authorization_required",
-				Message:              fmt.Sprintf("Search is not currently enabled for %q. Ask the user to grant read access for this location in the Synapse Relay client, then retry.", requestPath),
-				Path:                 requestPath,
-				RequiresUserApproval: true,
-				ClientHint:           "Grant read access for this location in the Synapse Relay client, then retry.",
-				Capability:           "filesystem",
-				Access:               "read",
-				AuthorizationDuration: func() string {
-					if !s.cfg.Enabled {
-						return "persistent"
-					}
-					return ""
-				}(),
+				Code:    "search_unavailable",
+				Message: fmt.Sprintf("Search is not enabled for %q because this filesystem server does not currently expose any searchable directories.", requestPath),
+				Path:    requestPath,
 			}), nil
 		}
 		if err := s.ensureStarted(); err != nil {

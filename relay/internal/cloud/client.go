@@ -70,21 +70,6 @@ type TaskToolCaller interface {
 	CancelTask(exposureStableKey, taskID, reason string) error
 }
 
-type RuntimeAuthorizationApplication struct {
-	InteractionID     string
-	RuntimeSessionID  string
-	ExposureID        string
-	ExposureStableKey string
-	RelayToolName     string
-	Reason            string
-	Duration          string
-	RequestedScope    map[string]interface{}
-}
-
-type RuntimeAuthorizationApplier interface {
-	ApplyRuntimeAuthorization(ctx context.Context, application RuntimeAuthorizationApplication) error
-}
-
 type RuntimeSessionRequest struct {
 	RuntimeSessionID  string
 	ExposureID        string
@@ -116,7 +101,6 @@ type taskBinding struct {
 type Client struct {
 	relay          config.RelayConfig
 	caller         ToolCaller
-	authApplier    RuntimeAuthorizationApplier
 	sessionManager RuntimeSessionManager
 	syncSources    interface{}
 	exposures      interface{}
@@ -136,13 +120,11 @@ type Client struct {
 func NewClient(
 	relayCfg config.RelayConfig,
 	caller ToolCaller,
-	authApplier RuntimeAuthorizationApplier,
 	sessionManager RuntimeSessionManager,
 ) *Client {
 	return &Client{
 		relay:          relayCfg,
 		caller:         caller,
-		authApplier:    authApplier,
 		sessionManager: sessionManager,
 		inflight:       make(map[string]*runningOperation),
 		taskBindings:   make(map[string]taskBinding),
@@ -226,6 +208,25 @@ func mergeLogData(base map[string]interface{}, extra map[string]interface{}) map
 	return merged
 }
 
+func bindDispatchCallContext(
+	base context.Context,
+	dispatch RelayDispatchMessage,
+) context.Context {
+	callCtx := runtimeauth.ContextWithRuntimeSessionID(base, dispatch.Payload.RuntimeSessionID)
+	if dispatch.Payload.Authorization != nil {
+		callCtx = runtimeauth.ContextWithRuntimeAuthorization(
+			callCtx,
+			runtimeauth.RuntimeAuthorization{
+				GrantID:    dispatch.Payload.Authorization.GrantID,
+				GrantScope: dispatch.Payload.Authorization.GrantScope,
+				RetryNonce: dispatch.Payload.Authorization.RetryNonce,
+				Effect:     dispatch.Payload.Authorization.Effect,
+			},
+		)
+	}
+	return callCtx
+}
+
 func taskSnapshotLogData(snapshot core.TaskSnapshot) map[string]interface{} {
 	data := map[string]interface{}{
 		"taskId":             snapshot.TaskID,
@@ -257,44 +258,6 @@ func formatDispatchSummary(dispatch RelayDispatchMessage) string {
 		dispatch.Payload.ToolName,
 		mode,
 	)
-}
-
-func asTrimmedString(value interface{}) string {
-	text, ok := value.(string)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(text)
-}
-
-func summarizeRequestedScope(scope map[string]interface{}) string {
-	capability := strings.ToLower(asTrimmedString(scope["capability"]))
-	switch capability {
-	case "filesystem":
-		access := strings.ToLower(asTrimmedString(scope["access"]))
-		path := asTrimmedString(scope["path"])
-		switch {
-		case access != "" && path != "":
-			return fmt.Sprintf("filesystem %s access to %s", access, path)
-		case path != "":
-			return fmt.Sprintf("filesystem access to %s", path)
-		default:
-			return "filesystem access"
-		}
-	case "cua":
-		mode := strings.ToLower(asTrimmedString(scope["mode"]))
-		if mode == "" {
-			mode = "control"
-		}
-		return fmt.Sprintf("cua %s access", mode)
-	case "chrome":
-		return "chrome browser access"
-	default:
-		if capability != "" {
-			return fmt.Sprintf("%s access", capability)
-		}
-		return "runtime access"
-	}
 }
 
 func (c *Client) SetExposures(exposures interface{}) {
@@ -680,13 +643,6 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 				continue
 			}
 			go c.handleOperationCancel(conn, cancelMsg)
-		case "relay.authorization.apply":
-			var apply RelayAuthorizationApplyMessage
-			if err := json.Unmarshal(raw, &apply); err != nil {
-				log.Printf("Failed to parse relay authorization apply: %v", err)
-				continue
-			}
-			go c.handleAuthorizationApply(ctx, conn, apply)
 		case "relay.runtime_session.open":
 			var open RelayRuntimeSessionOpenMessage
 			if err := json.Unmarshal(raw, &open); err != nil {
@@ -820,7 +776,7 @@ func (c *Client) handleOperationDispatch(
 
 	if dispatch.Payload.ResponseMode == "async" {
 		if taskCaller, ok := c.caller.(TaskToolCaller); ok {
-			callCtx := runtimeauth.ContextWithRuntimeSessionID(context.Background(), dispatch.Payload.RuntimeSessionID)
+			callCtx := bindDispatchCallContext(context.Background(), dispatch)
 			c.emitLog(
 				fmt.Sprintf("Task start requested %s.", formatDispatchSummary(dispatch)),
 				dispatchData,
@@ -879,7 +835,7 @@ func (c *Client) handleOperationDispatch(
 		callCtx, cancel = context.WithTimeout(ctx, time.Duration(dispatch.Payload.ExpiresInMs)*time.Millisecond)
 	}
 	defer cancel()
-	callCtx = runtimeauth.ContextWithRuntimeSessionID(callCtx, dispatch.Payload.RuntimeSessionID)
+	callCtx = bindDispatchCallContext(callCtx, dispatch)
 	c.emitLog(
 		fmt.Sprintf("Task execution started %s.", formatDispatchSummary(dispatch)),
 		dispatchData,
@@ -924,129 +880,6 @@ func (c *Client) handleOperationDispatch(
 		"operationId":      dispatch.OperationID,
 		"runtimeSessionId": dispatch.Payload.RuntimeSessionID,
 		"error":            false,
-	})
-}
-
-func (c *Client) handleAuthorizationApply(
-	ctx context.Context,
-	conn *websocket.Conn,
-	apply RelayAuthorizationApplyMessage,
-) {
-	scopeSummary := summarizeRequestedScope(apply.Payload.RequestedScope)
-	c.emitLog(
-		fmt.Sprintf(
-			"Applying relay authorization %s for runtime session %s (%s).",
-			apply.InteractionID,
-			apply.Payload.RuntimeSessionID,
-			scopeSummary,
-		),
-		map[string]interface{}{
-			"interactionId":     apply.InteractionID,
-			"deliveryId":        apply.DeliveryID,
-			"runtimeSessionId":  apply.Payload.RuntimeSessionID,
-			"exposureId":        apply.Payload.ExposureID,
-			"exposureStableKey": apply.Payload.ExposureStableKey,
-			"relayToolName":     apply.Payload.RelayToolName,
-			"duration":          apply.Payload.Duration,
-			"requestedScope":    apply.Payload.RequestedScope,
-			"scopeSummary":      scopeSummary,
-			"reason":            apply.Payload.Reason,
-		},
-	)
-	if c.authApplier == nil {
-		c.emitError(
-			fmt.Sprintf(
-				"Rejected relay authorization %s because runtime authorization is not supported by this client.",
-				apply.InteractionID,
-			),
-			map[string]interface{}{
-				"interactionId":     apply.InteractionID,
-				"deliveryId":        apply.DeliveryID,
-				"runtimeSessionId":  apply.Payload.RuntimeSessionID,
-				"exposureId":        apply.Payload.ExposureID,
-				"exposureStableKey": apply.Payload.ExposureStableKey,
-			},
-		)
-		_ = c.writeJSON(conn, AuthorizationResultMessage{
-			Type:          "authorization.result",
-			InteractionID: apply.InteractionID,
-			DeliveryID:    apply.DeliveryID,
-			Success:       false,
-			Error: &RelayOperationError{
-				Code:      "tool_execution_failed",
-				Message:   "relay runtime authorization is not supported by this client",
-				Retryable: false,
-			},
-		})
-		return
-	}
-
-	err := c.authApplier.ApplyRuntimeAuthorization(ctx, RuntimeAuthorizationApplication{
-		InteractionID:     apply.InteractionID,
-		RuntimeSessionID:  apply.Payload.RuntimeSessionID,
-		ExposureID:        apply.Payload.ExposureID,
-		ExposureStableKey: apply.Payload.ExposureStableKey,
-		RelayToolName:     apply.Payload.RelayToolName,
-		Reason:            apply.Payload.Reason,
-		Duration:          apply.Payload.Duration,
-		RequestedScope:    apply.Payload.RequestedScope,
-	})
-	if err != nil {
-		c.emitError(
-			fmt.Sprintf(
-				"Relay authorization %s failed for runtime session %s: %v",
-				apply.InteractionID,
-				apply.Payload.RuntimeSessionID,
-				err,
-			),
-			map[string]interface{}{
-				"interactionId":     apply.InteractionID,
-				"deliveryId":        apply.DeliveryID,
-				"runtimeSessionId":  apply.Payload.RuntimeSessionID,
-				"exposureId":        apply.Payload.ExposureID,
-				"exposureStableKey": apply.Payload.ExposureStableKey,
-				"relayToolName":     apply.Payload.RelayToolName,
-				"duration":          apply.Payload.Duration,
-				"requestedScope":    apply.Payload.RequestedScope,
-				"scopeSummary":      scopeSummary,
-				"error":             err.Error(),
-			},
-		)
-		_ = c.writeJSON(conn, AuthorizationResultMessage{
-			Type:          "authorization.result",
-			InteractionID: apply.InteractionID,
-			DeliveryID:    apply.DeliveryID,
-			Success:       false,
-			Error:         normalizeOperationError(err),
-		})
-		return
-	}
-
-	c.emitLog(
-		fmt.Sprintf(
-			"Relay authorization %s applied for runtime session %s (%s).",
-			apply.InteractionID,
-			apply.Payload.RuntimeSessionID,
-			scopeSummary,
-		),
-		map[string]interface{}{
-			"interactionId":     apply.InteractionID,
-			"deliveryId":        apply.DeliveryID,
-			"runtimeSessionId":  apply.Payload.RuntimeSessionID,
-			"exposureId":        apply.Payload.ExposureID,
-			"exposureStableKey": apply.Payload.ExposureStableKey,
-			"relayToolName":     apply.Payload.RelayToolName,
-			"duration":          apply.Payload.Duration,
-			"requestedScope":    apply.Payload.RequestedScope,
-			"scopeSummary":      scopeSummary,
-		},
-	)
-
-	_ = c.writeJSON(conn, AuthorizationResultMessage{
-		Type:          "authorization.result",
-		InteractionID: apply.InteractionID,
-		DeliveryID:    apply.DeliveryID,
-		Success:       true,
 	})
 }
 

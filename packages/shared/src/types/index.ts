@@ -23,9 +23,15 @@ import {
   PLUGIN_AUTH_CONNECTION_STATUSES,
   PLUGIN_AUTH_OWNER_SCOPES,
   PLUGIN_AUTH_SESSION_STATUSES,
-  RELAY_AUTHORIZATION_DURATIONS,
-  RELAY_FILESYSTEM_AUTHORIZATION_ACCESSES,
   REUSE_SCOPES,
+  RUNTIME_AUTHORIZATION_CAPABILITIES,
+  RUNTIME_AUTHORIZATION_PRESETS,
+  RUNTIME_AUTHORIZATION_REQUEST_MODES,
+  RUNTIME_COMMANDLINE_EXECUTORS,
+  RUNTIME_FILESYSTEM_AUTHORIZATION_ACCESSES,
+  RUNTIME_GRANT_RETENTIONS,
+  RUNTIME_GRANT_SCOPES,
+  RUNTIME_GRANT_STATUSES,
   SESSION_CHANNEL_INPUTS,
   SESSION_CHANNELS,
   SESSION_INTERRUPT_TYPES,
@@ -2622,45 +2628,89 @@ export interface QuestionChoiceInteractionSummary {
   fields: InteractionQuestionFieldSummary[];
 }
 
-export type RelayAuthorizationDuration =
-  typeof RELAY_AUTHORIZATION_DURATIONS[number];
-
-export type RelayFilesystemAuthorizationAccess =
-  typeof RELAY_FILESYSTEM_AUTHORIZATION_ACCESSES[number];
-
 export type InteractionDecision = typeof INTERACTION_DECISIONS[number];
 
-export interface RelayFilesystemAuthorizationScope {
+export type RuntimeAuthorizationPreset =
+  typeof RUNTIME_AUTHORIZATION_PRESETS[number];
+
+export type RuntimeAuthorizationRequestMode =
+  typeof RUNTIME_AUTHORIZATION_REQUEST_MODES[number];
+
+export type RuntimeGrantScope = typeof RUNTIME_GRANT_SCOPES[number];
+
+export type RuntimeGrantRetention = typeof RUNTIME_GRANT_RETENTIONS[number];
+
+export type RuntimeGrantStatus = typeof RUNTIME_GRANT_STATUSES[number];
+
+export type RuntimeAuthorizationCapability =
+  typeof RUNTIME_AUTHORIZATION_CAPABILITIES[number];
+
+export type RuntimeFilesystemAuthorizationAccess =
+  typeof RUNTIME_FILESYSTEM_AUTHORIZATION_ACCESSES[number];
+
+export type RuntimeCommandlineExecutor =
+  typeof RUNTIME_COMMANDLINE_EXECUTORS[number];
+
+export interface RuntimeFilesystemGrantEffect {
   capability: "filesystem";
   path: string;
-  access: RelayFilesystemAuthorizationAccess;
+  access: RuntimeFilesystemAuthorizationAccess;
 }
 
-export interface RelayCuaAuthorizationScope {
+export interface RuntimeCuaGrantEffect {
   capability: "cua";
   mode: "control";
 }
 
-export interface RelayChromeAuthorizationScope {
+export interface RuntimeChromeGrantEffect {
   capability: "chrome";
+  mode: "automation";
 }
 
-export type RelayAuthorizationScope =
-  | RelayFilesystemAuthorizationScope
-  | RelayCuaAuthorizationScope
-  | RelayChromeAuthorizationScope;
+export interface RuntimeCommandlineGrantEffect {
+  capability: "commandline";
+  executor: RuntimeCommandlineExecutor;
+  cwdPrefix?: string;
+}
 
-export interface RelayAuthorizationInteractionSummary {
+export type RuntimeGrantEffect =
+  | RuntimeFilesystemGrantEffect
+  | RuntimeCuaGrantEffect
+  | RuntimeChromeGrantEffect
+  | RuntimeCommandlineGrantEffect;
+
+export interface RuntimeGrantSummary {
+  id: UUID;
+  scope: RuntimeGrantScope;
+  retention: RuntimeGrantRetention;
+  status: RuntimeGrantStatus;
+  effect: RuntimeGrantEffect;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  consumedAt?: Timestamp;
+  revokedAt?: Timestamp;
+}
+
+export interface RuntimeGrantView extends RuntimeGrantSummary {
+  relayToolName: string;
+  workspaceId: UUID;
+  deviceId: UUID;
+  exposureId: UUID;
+  conversationId?: UUID;
+  actorId?: UUID;
+}
+
+export interface RuntimeAuthorizationInteractionSummary {
   relayToolName: string;
   reason: string;
   deviceId: UUID;
   deviceDisplayName: string;
   exposureId: UUID;
   exposureDisplayName: string;
-  duration: RelayAuthorizationDuration;
-  requestedScope: RelayAuthorizationScope;
-  approvedScope?: RelayAuthorizationScope;
-  applyError?: string;
+  requestedEffect: RuntimeGrantEffect;
+  approvedPreset?: RuntimeAuthorizationPreset;
+  approvedGrant?: RuntimeGrantSummary;
+  requestMode: RuntimeAuthorizationRequestMode;
 }
 
 export interface InteractionRequestSummary {
@@ -2676,7 +2726,7 @@ export interface InteractionRequestSummary {
   resolvedBy?: ConversationEntityRef;
   resolutionNote?: string;
   question?: QuestionChoiceInteractionSummary;
-  relayAuthorization?: RelayAuthorizationInteractionSummary;
+  runtimeAuthorization?: RuntimeAuthorizationInteractionSummary;
   createdAt: Timestamp;
   updatedAt: Timestamp;
   resolvedAt?: Timestamp;
@@ -3113,22 +3163,22 @@ export function summarizeConversationEvent(
         : `Question for ${targetName}: ${prompt}`;
     }
     const deviceName =
-      interaction.relayAuthorization?.deviceDisplayName?.trim() || "relay";
+      interaction.runtimeAuthorization?.deviceDisplayName?.trim() || "relay";
     if (interaction.status === "cancelled") {
-      return `Relay authorization request was cancelled for ${deviceName}`;
+      return `Runtime authorization request was cancelled for ${deviceName}`;
     }
     if (interaction.status === "rejected") {
       const resolverName = interaction.resolvedBy?.name?.trim() || "A user";
-      return `${resolverName} rejected relay access for ${deviceName}`;
+      return `${resolverName} rejected access for ${deviceName}`;
     }
-    if (
-      interaction.status === "approved_pending_apply" ||
-      interaction.status === "applied"
-    ) {
+    if (interaction.status === "approved") {
       const resolverName = interaction.resolvedBy?.name?.trim() || "A user";
-      return `${resolverName} approved relay access for ${deviceName}`;
+      return `${resolverName} approved access for ${deviceName}`;
     }
-    return `Relay authorization requested for ${deviceName}`;
+    if (interaction.status === "superseded") {
+      return `Runtime authorization request was superseded for ${deviceName}`;
+    }
+    return `Runtime authorization requested for ${deviceName}`;
   }
 
   return `[Event: ${eventType}]`;

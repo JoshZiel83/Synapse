@@ -8,9 +8,11 @@ import type {
   ConversationMessageTransportContext,
   ConversationMessageTransportDelivery,
   InteractionRequestSummary,
-  RelayAuthorizationScope,
 } from "@synapse/shared"
-import type { InteractionQuestionFieldAnswer } from "@synapse/shared/types"
+import type {
+  InteractionQuestionFieldAnswer,
+  RuntimeGrantEffect,
+} from "@synapse/shared/types"
 import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -38,7 +40,6 @@ import {
   AtSign,
   Expand,
   CheckCircle2,
-  Clock3,
   FolderOpen,
   Loader2,
   MousePointerClick,
@@ -111,6 +112,7 @@ interface MessageBubbleProps {
       answers?: InteractionQuestionFieldAnswer[]
       selectedOptionId?: string
       decision?: "approve" | "reject"
+      preset?: "once" | "actor" | "conversation" | "workspace"
       note?: string
     }
   ) =>
@@ -402,16 +404,14 @@ function getInteractionStatusLabel(
       return "Pending"
     case "answered":
       return "Answered"
-    case "approved_pending_apply":
-      return "Approved, applying"
-    case "applied":
-      return "Applied"
+    case "approved":
+      return "Approved"
     case "rejected":
       return "Rejected"
     case "expired":
       return "Expired"
-    case "apply_failed":
-      return "Apply failed"
+    case "superseded":
+      return "Superseded"
     default:
       return status
   }
@@ -422,20 +422,18 @@ function getInteractionStatusBadgeClassName(
 ) {
   switch (status) {
     case "answered":
-    case "applied":
+    case "approved":
       return "border-emerald-500/25 bg-emerald-500/10 text-emerald-700"
-    case "approved_pending_apply":
-      return "border-sky-500/25 bg-sky-500/10 text-sky-700"
     case "rejected":
-    case "apply_failed":
     case "expired":
+    case "superseded":
       return "border-destructive/25 bg-destructive/10 text-destructive"
     default:
       return "border-amber-500/25 bg-amber-500/10 text-amber-700"
   }
 }
 
-function describeRelayAuthorizationScope(scope: RelayAuthorizationScope) {
+function describeRuntimeGrantEffect(scope: RuntimeGrantEffect) {
   if (scope.capability === "filesystem") {
     const accessLabel =
       scope.access === "read_write"
@@ -453,8 +451,16 @@ function describeRelayAuthorizationScope(scope: RelayAuthorizationScope) {
   if (scope.capability === "chrome") {
     return {
       icon: Globe,
-      summary: "browser access",
+      summary: "browser automation",
       detail: "Chrome DevTools MCP",
+    }
+  }
+
+  if (scope.capability === "commandline") {
+    return {
+      icon: Wrench,
+      summary: `${scope.executor} execution`,
+      detail: scope.cwdPrefix || "default working directory",
     }
   }
 
@@ -551,22 +557,15 @@ function InteractionStatusNote({
     return (
       <p className="text-xs text-muted-foreground">
         {viewerCanResolve
-          ? "You can approve or reject this relay access request if you have relay authorization permission."
+          ? "You can choose how broadly to allow this runtime action if you have relay authorization permission."
           : "Waiting for an authorized user to approve or reject."}
       </p>
     )
   }
-  if (interaction.status === "approved_pending_apply") {
+  if (interaction.status === "approved") {
     return (
       <p className="text-xs text-muted-foreground">
-        The relay is applying the approved runtime access now.
-      </p>
-    )
-  }
-  if (interaction.status === "applied") {
-    return (
-      <p className="text-xs text-muted-foreground">
-        The relay accepted the grant and updated its local runtime policy.
+        The runtime grant is active and the blocked action can continue.
       </p>
     )
   }
@@ -577,18 +576,17 @@ function InteractionStatusNote({
       </p>
     )
   }
-  if (interaction.status === "apply_failed") {
-    return (
-      <p className="text-xs text-destructive/80">
-        {interaction.relayAuthorization?.applyError ||
-          "The relay could not apply the approved authorization."}
-      </p>
-    )
-  }
   if (interaction.status === "expired") {
     return (
       <p className="text-xs text-muted-foreground">
         This authorization request expired before it was resolved.
+      </p>
+    )
+  }
+  if (interaction.status === "superseded") {
+    return (
+      <p className="text-xs text-muted-foreground">
+        A newer user message superseded this authorization request.
       </p>
     )
   }
@@ -620,7 +618,7 @@ function InteractionCard({
     isTargetUser &&
     interaction.status === "pending"
   const canResolveRelayAuthorization =
-    interaction.kind === "relay_authorization" &&
+    interaction.kind === "runtime_authorization" &&
     Boolean(onResolveInteraction) &&
     interaction.viewerCanResolve === true &&
     interaction.status === "pending"
@@ -1027,15 +1025,15 @@ function InteractionCard({
   }
 
   if (
-    interaction.kind === "relay_authorization" &&
-    interaction.relayAuthorization
+    interaction.kind === "runtime_authorization" &&
+    interaction.runtimeAuthorization
   ) {
-    const requestedScope = describeRelayAuthorizationScope(
-      interaction.relayAuthorization.requestedScope
+    const requestedScope = describeRuntimeGrantEffect(
+      interaction.runtimeAuthorization.requestedEffect
     )
-    const approvedScope = interaction.relayAuthorization.approvedScope
-      ? describeRelayAuthorizationScope(
-          interaction.relayAuthorization.approvedScope
+    const approvedScope = interaction.runtimeAuthorization.approvedGrant
+      ? describeRuntimeGrantEffect(
+          interaction.runtimeAuthorization.approvedGrant.effect
         )
       : null
     const ScopeIcon = requestedScope.icon
@@ -1049,7 +1047,7 @@ function InteractionCard({
             className="rounded-full border-primary/20 bg-primary/5 text-primary"
           >
             <Shield className="mr-1 h-3 w-3" />
-            Relay Authorization
+            Runtime Authorization
           </Badge>
           <Badge
             variant="outline"
@@ -1064,10 +1062,10 @@ function InteractionCard({
 
         <div className="space-y-1.5">
           <p className="text-sm leading-6 font-medium text-foreground">
-            {`Grant ${interaction.relayAuthorization.relayToolName} access on ${interaction.relayAuthorization.deviceDisplayName}`}
+            {`Authorize ${interaction.runtimeAuthorization.relayToolName} on ${interaction.runtimeAuthorization.deviceDisplayName}`}
           </p>
           <p className="text-xs leading-5 text-muted-foreground">
-            {interaction.relayAuthorization.reason}
+            {interaction.runtimeAuthorization.reason}
           </p>
         </div>
 
@@ -1077,7 +1075,7 @@ function InteractionCard({
               Exposure
             </div>
             <div className="mt-1 text-sm text-foreground">
-              {interaction.relayAuthorization.exposureDisplayName}
+              {interaction.runtimeAuthorization.exposureDisplayName}
             </div>
           </div>
           <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
@@ -1094,23 +1092,10 @@ function InteractionCard({
               </div>
             </div>
           </div>
-          <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
-            <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70 uppercase">
-              Duration
-            </div>
-            <div className="mt-1 inline-flex items-center gap-2 text-sm text-foreground">
-              <Clock3 className="h-4 w-4 text-primary" />
-              <span>
-                {interaction.relayAuthorization.duration === "persistent"
-                  ? "Persistent until revoked"
-                  : "Current relay session"}
-              </span>
-            </div>
-          </div>
           {approvedScope ? (
             <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3">
               <div className="text-[11px] font-medium tracking-[0.08em] text-emerald-700/80 uppercase">
-                Approved Scope
+                Approved Grant
               </div>
               <div className="mt-1 flex items-start gap-2 text-sm text-foreground">
                 {ApprovedScopeIcon ? (
@@ -1120,6 +1105,15 @@ function InteractionCard({
                   <div>{approvedScope.summary}</div>
                   <div className="mt-0.5 text-xs break-all text-muted-foreground">
                     {approvedScope.detail}
+                  </div>
+                  <div className="mt-1 text-[11px] text-emerald-700/80">
+                    {interaction.runtimeAuthorization.approvedPreset === "workspace"
+                      ? "Always allow"
+                      : interaction.runtimeAuthorization.approvedPreset === "conversation"
+                        ? "Allow this conversation"
+                        : interaction.runtimeAuthorization.approvedPreset === "actor"
+                          ? "Allow this actor"
+                          : "Allow once"}
                   </div>
                 </div>
               </div>
@@ -1133,16 +1127,76 @@ function InteractionCard({
               type="button"
               disabled={Boolean(submittingAction)}
               onClick={() =>
-                void submitResolution("approve", { decision: "approve" })
+                void submitResolution("approve_once", {
+                  decision: "approve",
+                  preset: "once",
+                })
               }
               className="rounded-full"
             >
-              {submittingAction === "approve" ? (
+              {submittingAction === "approve_once" ? (
                 <Loader2 className="mr-1 h-4 w-4 animate-spin" />
               ) : (
                 <CheckCircle2 className="mr-1 h-4 w-4" />
               )}
-              Approve
+              Allow Once
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={Boolean(submittingAction)}
+              onClick={() =>
+                void submitResolution("approve_actor", {
+                  decision: "approve",
+                  preset: "actor",
+                })
+              }
+              className="rounded-full"
+            >
+              {submittingAction === "approve_actor" ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="mr-1 h-4 w-4" />
+              )}
+              Allow This Actor
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={Boolean(submittingAction)}
+              onClick={() =>
+                void submitResolution("approve_conversation", {
+                  decision: "approve",
+                  preset: "conversation",
+                })
+              }
+              className="rounded-full"
+            >
+              {submittingAction === "approve_conversation" ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="mr-1 h-4 w-4" />
+              )}
+              Allow This Conversation
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={Boolean(submittingAction)}
+              onClick={() =>
+                void submitResolution("approve_workspace", {
+                  decision: "approve",
+                  preset: "workspace",
+                })
+              }
+              className="rounded-full"
+            >
+              {submittingAction === "approve_workspace" ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="mr-1 h-4 w-4" />
+              )}
+              Always Allow
             </Button>
             <Button
               type="button"

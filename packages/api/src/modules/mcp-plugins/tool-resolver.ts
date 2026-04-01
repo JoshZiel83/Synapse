@@ -18,6 +18,7 @@ import { logToolCall } from "./audit.js";
 import {
   enqueueRelayToolTask,
   loadRelayExposureCatalogSnapshot,
+  resolveRelayToolAuthorization,
 } from "./relay-manager.js";
 import { normalizeMcpToolResult } from "./result-normalizer.js";
 
@@ -270,6 +271,7 @@ function buildRelayScopedInstance(params: {
   exposureId: string;
   exposureStableKey: string;
   exposureDisplayName: string;
+  exposureMetadata: Record<string, unknown>;
   sessionId: string;
   namespace: string;
   bindingMap: Map<string, { binding: RelayHiddenToolBinding; visibleToolName: string }>;
@@ -313,6 +315,20 @@ function buildRelayScopedInstance(params: {
           );
         }
 
+        const authorizationState = await resolveRelayToolAuthorization({
+          workspaceId: params.baseInstance.workspaceId || "",
+          relayExposureId: params.exposureId,
+          conversationId: executionContext.conversationId,
+          actorId: executionContext.actorId,
+          relayToolName: toolBinding.visibleToolName,
+          toolArguments: input,
+          runtimeSessionId,
+          exposureMetadata: params.exposureMetadata,
+        });
+        if (authorizationState.denialResult) {
+          return authorizationState.denialResult as any;
+        }
+
         const accepted = await enqueueRelayToolTask({
           workspaceId: params.baseInstance.workspaceId || "",
           conversationId: executionContext.conversationId,
@@ -329,6 +345,7 @@ function buildRelayScopedInstance(params: {
           binding: toolBinding.binding,
           args: input,
           runtimeSessionId,
+          authorization: authorizationState.authorization,
           deliveryPolicy: "online_only",
         });
 
@@ -539,6 +556,7 @@ async function resolveTools(
           exposureId: entry.exposureId,
           exposureStableKey: relayCatalog.exposureStableKey,
           exposureDisplayName: relayCatalog.exposureDisplayName,
+          exposureMetadata: relayCatalog.metadata,
           sessionId: params.sessionId,
           namespace,
           bindingMap,
@@ -650,6 +668,7 @@ async function resolveTools(
       exposureId: exposure.exposure_id,
       exposureStableKey: relayCatalog.exposureStableKey,
       exposureDisplayName: exposure.exposure_display_name,
+      exposureMetadata: relayCatalog.metadata,
       sessionId: params.sessionId,
       namespace,
       bindingMap,

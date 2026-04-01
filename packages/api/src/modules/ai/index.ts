@@ -48,7 +48,6 @@ import {
   isActionTool,
 } from "./tool-plugins.js";
 import { runWithToolContext } from "./session-tools.js";
-import { maybeAutoBridgeRelayApproval } from "./relay-approval-bridge.js";
 import {
   type McpExecutionContext,
 } from "../mcp-plugins/instance-manager.js";
@@ -1297,42 +1296,6 @@ export async function actorThink(
                   ? { structuredContent: normalizedResult.structuredContent }
                   : {}),
               };
-
-              try {
-                const approvalBridge = await maybeAutoBridgeRelayApproval({
-                  actorId: actor.id,
-                  workspaceId,
-                  sessionId: options?.sessionId,
-                  conversationId: options?.conversationId,
-                  userId: options?.userId,
-                  turnId,
-                  sourceToolCallId: tc.callId,
-                  relayToolName: tc.toolName,
-                  toolInput: tc.input,
-                  result: normalizedResult,
-                });
-                if (approvalBridge) {
-                  normalizedContent = [
-                    ...normalizedContent,
-                    textBlock(approvalBridge.note),
-                  ];
-                  metadata = {
-                    ...metadata,
-                    relayApprovalBridge: {
-                      status: approvalBridge.status,
-                      interactionId:
-                        "interactionId" in approvalBridge
-                          ? approvalBridge.interactionId
-                          : undefined,
-                    },
-                  };
-                }
-              } catch (bridgeError: any) {
-                console.error(
-                  "[AI] Failed to auto-bridge relay approval:",
-                  bridgeError?.message || bridgeError,
-                );
-              }
 
               mcpResults.push({
                 toolCallId: tc.callId,

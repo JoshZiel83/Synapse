@@ -36,7 +36,7 @@ import type {
   RelayPairingSessionView,
   SkillMarketplaceEntry,
 } from "@synapse/shared"
-import type { FileRecordView } from "@synapse/shared/types"
+import type { FileRecordView, RuntimeGrantView } from "@synapse/shared/types"
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
 
@@ -1186,6 +1186,7 @@ class ApiClient {
       }[]
       selectedOptionId?: string
       decision?: "approve" | "reject"
+      preset?: "once" | "actor" | "conversation" | "workspace"
       note?: string
     }
   ): Promise<{ interaction: InteractionRequestSummary }> {
@@ -1572,6 +1573,29 @@ class ApiClient {
       `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access/${bindingId}`,
       {
         method: "DELETE",
+      }
+    )
+  }
+  listRelayRuntimeGrants(
+    wsId: string,
+    relayId: string,
+    exposureId: string
+  ): Promise<{ grants: RuntimeGrantView[] }> {
+    return this.fetch(
+      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/runtime-grants`
+    )
+  }
+  revokeRelayRuntimeGrant(
+    wsId: string,
+    relayId: string,
+    exposureId: string,
+    grantId: string
+  ) {
+    return this.fetch(
+      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/runtime-grants/${grantId}/revoke`,
+      {
+        method: "POST",
+        body: "{}",
       }
     )
   }
