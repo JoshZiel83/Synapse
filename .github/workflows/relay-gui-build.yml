@@ -151,7 +151,7 @@ jobs:
             portable_zip="synapse-relay-gui-${{ matrix.suffix }}-portable.zip"
             portable_root_win="$(cygpath -w "$portable_root")"
             portable_zip_win="$(cygpath -w "$portable_zip")"
-            powershell.exe -NoLogo -NoProfile -Command "\$ErrorActionPreference='Stop'; Compress-Archive -LiteralPath '$portable_root_win' -DestinationPath '$portable_zip_win' -CompressionLevel Optimal -Force"
+            powershell.exe -NoLogo -NoProfile -Command "\$ErrorActionPreference='Stop'; Add-Type -AssemblyName 'System.IO.Compression.FileSystem'; if (Test-Path -LiteralPath '$portable_zip_win') { Remove-Item -LiteralPath '$portable_zip_win' -Force }; [System.IO.Compression.ZipFile]::CreateFromDirectory('$portable_root_win', '$portable_zip_win', [System.IO.Compression.CompressionLevel]::Optimal, \$false)"
 
             mv "$setup_exe" synapse-relay-gui-${{ matrix.suffix }}-setup.exe
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
