@@ -110,7 +110,7 @@ async function ensureWindowsSubstDrive(targetPath) {
     if (await pathExists(driveRoot)) {
       continue;
     }
-    await runCommand("cmd", ["/d", "/s", "/c", `subst ${letter}: "${targetPath}"`]);
+    await runCommand("subst", [`${letter}:`, targetPath]);
     if (await pathExists(driveRoot)) {
       return driveRoot;
     }
