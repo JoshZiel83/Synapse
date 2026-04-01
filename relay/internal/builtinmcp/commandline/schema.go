@@ -13,7 +13,7 @@ func (s *Server) buildTools() []core.Tool {
 	if _, err := s.resolveBashBinary(); err == nil {
 		tools = append(tools, core.Tool{
 			Name:        "bash_exec",
-			Description: "Execute one bash command for shell-only tasks. Prefer dedicated filesystem tools for reading, searching, or editing files, and prefer git_exec for git operations. Use cwd instead of relying on cd or shell state across calls. Returns stdout, stderr, exitCode, and timeout metadata. On Windows this uses the bundled Git Bash runtime when present. Bundled command line runtimes also place ffmpeg and ffprobe on PATH.",
+			Description: "Execute one bash command for shell-only tasks. Prefer GlobTool for filename or path discovery, GrepTool for current regex content search, SearchFiles for indexed broad discovery, dedicated filesystem tools for reading or editing files, and git_exec for git operations. Do not use bash_exec for find/grep/rg-style filesystem search when a dedicated tool fits. Use cwd instead of relying on cd or shell state across calls. Returns stdout, stderr, exitCode, and timeout metadata. On Windows this uses the bundled Git Bash runtime when present. Bundled command line runtimes also place ffmpeg and ffprobe on PATH.",
 			InputSchema: s.shellSchema(),
 		})
 	}
@@ -44,11 +44,11 @@ func (s *Server) buildTools() []core.Tool {
 
 func (s *Server) shellSchema() map[string]interface{} {
 	return objectSchema(map[string]interface{}{
-		"command":     stringSchema("One shell command string to execute. If subcommands depend on each other, chain them inside this command."),
+		"command":        stringSchema("One shell command string to execute. If subcommands depend on each other, chain them inside this command."),
 		"execution_mode": executionModeSchema(),
-		"cwd":         stringSchema("Optional working directory for this invocation only. Defaults to the builtin default_cwd when configured. Shell state does not persist across tool calls."),
-		"timeout_sec": s.timeoutSchema(),
-		"env":         envSchema(),
+		"cwd":            stringSchema("Optional working directory for this invocation only. Defaults to the builtin default_cwd when configured. Shell state does not persist across tool calls."),
+		"timeout_sec":    s.timeoutSchema(),
+		"env":            envSchema(),
 	}, []string{"command"})
 }
 
@@ -62,19 +62,19 @@ func (s *Server) gitSchema() map[string]interface{} {
 			},
 		},
 		"execution_mode": executionModeSchema(),
-		"cwd":         stringSchema("Optional working directory for this invocation only. Defaults to the builtin default_cwd when configured."),
-		"timeout_sec": s.timeoutSchema(),
-		"env":         envSchema(),
+		"cwd":            stringSchema("Optional working directory for this invocation only. Defaults to the builtin default_cwd when configured."),
+		"timeout_sec":    s.timeoutSchema(),
+		"env":            envSchema(),
 	}, []string{"args"})
 }
 
 func (s *Server) codeSchema(description string) map[string]interface{} {
 	return objectSchema(map[string]interface{}{
-		"code":        stringSchema(description),
+		"code":           stringSchema(description),
 		"execution_mode": executionModeSchema(),
-		"cwd":         stringSchema("Optional working directory for this invocation only. Defaults to the builtin default_cwd when configured."),
-		"timeout_sec": s.timeoutSchema(),
-		"env":         envSchema(),
+		"cwd":            stringSchema("Optional working directory for this invocation only. Defaults to the builtin default_cwd when configured."),
+		"timeout_sec":    s.timeoutSchema(),
+		"env":            envSchema(),
 	}, []string{"code"})
 }
 

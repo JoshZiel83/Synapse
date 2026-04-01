@@ -221,7 +221,7 @@ func (s *Server) buildTools() []core.Tool {
 		},
 		{
 			Name:        "GlobTool",
-			Description: "Finds files by glob pattern. Prefer this over LS when you already know the filename or path pattern you want, and prefer it over shell find for filesystem discovery. Supports patterns like \"**/*.js\" or \"src/**/*.ts\" and returns matches sorted by modification time. Use GrepTool for content regex searches and SearchFiles for indexed broad discovery.",
+			Description: "Finds files by glob pattern against the current filesystem. Prefer this over LS when you already know the filename or path pattern you want, and prefer it over shell find for filesystem discovery. Supports patterns like \"**/*.js\" or \"src/**/*.ts\", optional paging, and returns matches sorted by modification time with no index lag. Use GrepTool for current regex content searches and SearchFiles for indexed broad discovery.",
 			InputSchema: objectSchema(map[string]interface{}{
 				"pattern": stringSchema("The glob pattern to match files against."),
 				"path":    stringSchema("The directory to search in. Defaults to the current working directory."),
@@ -230,35 +230,72 @@ func (s *Server) buildTools() []core.Tool {
 					"type":        "boolean",
 					"description": "Whether to honor the search root's .gitignore file. Defaults to false.",
 				},
+				"limit": map[string]interface{}{
+					"type":        "integer",
+					"description": "Optional maximum number of matches to return after sorting. Defaults to unlimited.",
+					"minimum":     0,
+					"maximum":     1000,
+				},
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "Optional number of matches to skip after sorting. Defaults to 0.",
+					"minimum":     0,
+					"maximum":     10000,
+				},
 			}, []string{"pattern"}),
 		},
 		{
 			Name:        "GrepTool",
-			Description: "Searches file contents with a regular expression and returns matching locations sorted by file modification time. Prefer this over shell grep when you need up-to-date regex search results. Supports full regex syntax, optional include filtering such as \"*.js\" or \"*.{ts,tsx}\", and optional context lines around each hit. Use GlobTool for filename or path searches and SearchFiles for indexed broad discovery.",
+			Description: "Searches current file contents with a ripgrep-compatible regular expression. Prefer this over shell grep when you need up-to-date regex search results with no index lag. By default it returns matching file paths sorted by file modification time; use output_mode=\"content\" for detailed hit previews or output_mode=\"count\" for per-file match totals. Supports include and exclude filters, paging, case-insensitive search, multiline search, and optional context lines in content mode. Use GlobTool for filename or path searches and SearchFiles for indexed broad discovery.",
 			InputSchema: objectSchema(map[string]interface{}{
 				"pattern": stringSchema("The regular expression pattern to search for in file contents."),
 				"path":    stringSchema("The directory to search in. Defaults to the current working directory."),
 				"include": stringSchema("Optional file pattern to include in the search, for example *.js or *.{ts,tsx}."),
 				"exclude": stringArraySchema("Optional glob patterns to exclude from the search."),
+				"output_mode": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"files_with_matches", "content", "count"},
+					"description": "Result mode. files_with_matches returns matching file paths, content returns detailed matching locations, and count returns per-file match totals. Defaults to files_with_matches.",
+				},
 				"respect_gitignore": map[string]interface{}{
 					"type":        "boolean",
 					"description": "Whether to honor the search root's .gitignore file. Defaults to false.",
 				},
+				"case_insensitive": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Whether to perform a case-insensitive search. Defaults to false.",
+				},
+				"multiline": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Whether to allow the pattern to span multiple lines using dotall semantics. Defaults to false.",
+				},
+				"head_limit": map[string]interface{}{
+					"type":        "integer",
+					"description": "Optional maximum number of returned entries after sorting. Defaults to 250. Use 0 for unlimited.",
+					"minimum":     0,
+					"maximum":     1000,
+				},
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "Optional number of returned entries to skip after sorting. Defaults to 0.",
+					"minimum":     0,
+					"maximum":     10000,
+				},
 				"max_matches": map[string]interface{}{
 					"type":        "integer",
-					"description": "Maximum number of matching locations to return across all files. Defaults to 50.",
+					"description": "Maximum number of detailed matching locations to scan before truncating content-mode or fallback searches. Defaults to 250.",
 					"minimum":     1,
-					"maximum":     500,
+					"maximum":     5000,
 				},
 				"context_before": map[string]interface{}{
 					"type":        "integer",
-					"description": "Number of context lines to include before each match. Defaults to 0.",
+					"description": "Number of context lines to include before each match in content mode. Defaults to 0.",
 					"minimum":     0,
 					"maximum":     20,
 				},
 				"context_after": map[string]interface{}{
 					"type":        "integer",
-					"description": "Number of context lines to include after each match. Defaults to 0.",
+					"description": "Number of context lines to include after each match in content mode. Defaults to 0.",
 					"minimum":     0,
 					"maximum":     20,
 				},

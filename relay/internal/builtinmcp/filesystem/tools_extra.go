@@ -3,7 +3,6 @@ package filesystem
 import (
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -56,12 +55,42 @@ type grepOccurrence struct {
 	After   []string `json:"after,omitempty"`
 }
 
+type grepOutputMode string
+
+const (
+	grepOutputModeFilesWithMatches grepOutputMode = "files_with_matches"
+	grepOutputModeContent          grepOutputMode = "content"
+	grepOutputModeCount            grepOutputMode = "count"
+	defaultGrepHeadLimit                          = 250
+	maxGrepHeadLimit                              = 1000
+)
+
 type grepFileMatch struct {
 	Path        string           `json:"path"`
 	ModifiedAt  string           `json:"modified_at"`
 	MatchCount  int              `json:"match_count"`
 	Occurrences []grepOccurrence `json:"occurrences"`
 	ModTime     int64            `json:"-"`
+}
+
+type grepCountEntry struct {
+	Path       string `json:"path"`
+	ModifiedAt string `json:"modified_at"`
+	MatchCount int    `json:"match_count"`
+	ModTime    int64  `json:"-"`
+}
+
+type grepContentEntry struct {
+	Path           string   `json:"path"`
+	ModifiedAt     string   `json:"modified_at"`
+	FileMatchCount int      `json:"file_match_count"`
+	Line           int      `json:"line"`
+	Column         int      `json:"column"`
+	Match          string   `json:"match"`
+	Preview        string   `json:"preview"`
+	Before         []string `json:"before,omitempty"`
+	After          []string `json:"after,omitempty"`
+	ModTime        int64    `json:"-"`
 }
 
 func (s *Server) readViewFile(runtimeSessionID, filePath string, offset, limit int) (viewedFile, error) {
@@ -824,51 +853,212 @@ func sortGrepFileMatches(matches []grepFileMatch) {
 	})
 }
 
-func grepMatchResult(pattern, root string, matches []grepFileMatch, maxMatches int, truncated bool) core.CallResult {
-	lines := make([]string, 0)
-	totalMatches := 0
+func normalizeGrepOutputMode(value string) grepOutputMode {
+	switch strings.TrimSpace(value) {
+	case "", string(grepOutputModeFilesWithMatches):
+		return grepOutputModeFilesWithMatches
+	case string(grepOutputModeContent):
+		return grepOutputModeContent
+	case string(grepOutputModeCount):
+		return grepOutputModeCount
+	default:
+		return ""
+	}
+}
+
+func resolveGrepHeadLimit(value *int) (int, bool) {
+	if value == nil {
+		return defaultGrepHeadLimit, false
+	}
+	if *value == 0 {
+		return 0, true
+	}
+	if *value > maxGrepHeadLimit {
+		return maxGrepHeadLimit, false
+	}
+	return *value, false
+}
+
+func paginateSearchWindow(total, offset, limit int, unlimited bool) (int, int, int, int, bool) {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	if unlimited {
+		return offset, total, offset, 0, false
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return offset, end, offset, limit, end < total
+}
+
+func grepMatchedPathsFromFileMatches(matches []grepFileMatch) []matchedPath {
+	paths := make([]matchedPath, 0, len(matches))
+	for _, match := range matches {
+		paths = append(paths, matchedPath{
+			Path:       match.Path,
+			ModifiedAt: match.ModifiedAt,
+			ModTime:    time.Unix(0, match.ModTime),
+		})
+	}
+	sortMatchedPaths(paths)
+	return paths
+}
+
+func grepCountEntriesFromFileMatches(matches []grepFileMatch) []grepCountEntry {
+	entries := make([]grepCountEntry, 0, len(matches))
+	for _, match := range matches {
+		entries = append(entries, grepCountEntry{
+			Path:       match.Path,
+			ModifiedAt: match.ModifiedAt,
+			MatchCount: match.MatchCount,
+			ModTime:    match.ModTime,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].ModTime != entries[j].ModTime {
+			return entries[i].ModTime > entries[j].ModTime
+		}
+		return entries[i].Path < entries[j].Path
+	})
+	return entries
+}
+
+func flattenGrepContentEntries(matches []grepFileMatch) []grepContentEntry {
+	entries := make([]grepContentEntry, 0)
+	for _, match := range matches {
+		for _, occurrence := range match.Occurrences {
+			entries = append(entries, grepContentEntry{
+				Path:           match.Path,
+				ModifiedAt:     match.ModifiedAt,
+				FileMatchCount: match.MatchCount,
+				Line:           occurrence.Line,
+				Column:         occurrence.Column,
+				Match:          occurrence.Match,
+				Preview:        occurrence.Preview,
+				Before:         occurrence.Before,
+				After:          occurrence.After,
+				ModTime:        match.ModTime,
+			})
+		}
+	}
+	return entries
+}
+
+func grepFilesWithMatchesResult(pattern, root string, matches []matchedPath, totalFiles, offset, headLimit int, hasMore, truncated bool, backend string) core.CallResult {
+	lines := make([]string, 0, len(matches))
 	structuredMatches := make([]map[string]interface{}, 0, len(matches))
 	for _, match := range matches {
-		totalMatches += len(match.Occurrences)
-		occurrences := make([]map[string]interface{}, 0, len(match.Occurrences))
-		for _, occurrence := range match.Occurrences {
-			lines = append(lines, fmt.Sprintf("%s:%d:%d: %s", match.Path, occurrence.Line, occurrence.Column, occurrence.Preview))
-			occurrenceMap := map[string]interface{}{
-				"line":    occurrence.Line,
-				"column":  occurrence.Column,
-				"match":   occurrence.Match,
-				"preview": occurrence.Preview,
-			}
-			if len(occurrence.Before) > 0 {
-				occurrenceMap["before"] = occurrence.Before
-			}
-			if len(occurrence.After) > 0 {
-				occurrenceMap["after"] = occurrence.After
-			}
-			occurrences = append(occurrences, occurrenceMap)
-		}
+		lines = append(lines, match.Path)
 		structuredMatches = append(structuredMatches, map[string]interface{}{
 			"path":        match.Path,
 			"modified_at": match.ModifiedAt,
-			"match_count": match.MatchCount,
-			"occurrences": occurrences,
 		})
 	}
-	return textResult(strings.Join(lines, "\n"), map[string]interface{}{
-		"pattern":          pattern,
-		"path":             root,
-		"matches":          structuredMatches,
-		"returned_matches": totalMatches,
-		"max_matches":      maxMatches,
-		"truncated":        truncated,
+	text := strings.Join(lines, "\n")
+	if text == "" {
+		text = "No files found"
+	}
+	return textResult(text, map[string]interface{}{
+		"pattern":             pattern,
+		"path":                root,
+		"mode":                string(grepOutputModeFilesWithMatches),
+		"files":               structuredMatches,
+		"returned_files":      len(matches),
+		"total_files":         totalFiles,
+		"offset":              offset,
+		"head_limit":          headLimit,
+		"has_more":            hasMore,
+		"truncated":           truncated,
+		"backend":             backend,
+		"freshness_guarantee": "current_filesystem",
+	})
+}
+
+func grepCountResult(pattern, root string, entries []grepCountEntry, totalFiles, totalMatches, offset, headLimit int, hasMore, truncated bool, backend string) core.CallResult {
+	lines := make([]string, 0, len(entries))
+	structuredEntries := make([]map[string]interface{}, 0, len(entries))
+	returnedMatches := 0
+	for _, entry := range entries {
+		lines = append(lines, fmt.Sprintf("%s:%d", entry.Path, entry.MatchCount))
+		returnedMatches += entry.MatchCount
+		structuredEntries = append(structuredEntries, map[string]interface{}{
+			"path":        entry.Path,
+			"modified_at": entry.ModifiedAt,
+			"match_count": entry.MatchCount,
+		})
+	}
+	text := strings.Join(lines, "\n")
+	if text == "" {
+		text = "No matches found"
+	}
+	return textResult(text, map[string]interface{}{
+		"pattern":             pattern,
+		"path":                root,
+		"mode":                string(grepOutputModeCount),
+		"counts":              structuredEntries,
+		"returned_files":      len(entries),
+		"total_files":         totalFiles,
+		"returned_matches":    returnedMatches,
+		"total_matches":       totalMatches,
+		"offset":              offset,
+		"head_limit":          headLimit,
+		"has_more":            hasMore,
+		"truncated":           truncated,
+		"backend":             backend,
+		"freshness_guarantee": "current_filesystem",
+	})
+}
+
+func grepContentResult(pattern, root string, entries []grepContentEntry, totalMatches, maxMatches, offset, headLimit int, hasMore, truncated bool, backend string) core.CallResult {
+	lines := make([]string, 0, len(entries))
+	structuredEntries := make([]map[string]interface{}, 0, len(entries))
+	for _, entry := range entries {
+		lines = append(lines, fmt.Sprintf("%s:%d:%d: %s", entry.Path, entry.Line, entry.Column, entry.Preview))
+		entryMap := map[string]interface{}{
+			"path":             entry.Path,
+			"modified_at":      entry.ModifiedAt,
+			"file_match_count": entry.FileMatchCount,
+			"line":             entry.Line,
+			"column":           entry.Column,
+			"match":            entry.Match,
+			"preview":          entry.Preview,
+		}
+		if len(entry.Before) > 0 {
+			entryMap["before"] = entry.Before
+		}
+		if len(entry.After) > 0 {
+			entryMap["after"] = entry.After
+		}
+		structuredEntries = append(structuredEntries, entryMap)
+	}
+	text := strings.Join(lines, "\n")
+	if text == "" {
+		text = "No matches found"
+	}
+	return textResult(text, map[string]interface{}{
+		"pattern":             pattern,
+		"path":                root,
+		"mode":                string(grepOutputModeContent),
+		"matches":             structuredEntries,
+		"returned_matches":    len(entries),
+		"total_matches":       totalMatches,
+		"max_matches":         maxMatches,
+		"offset":              offset,
+		"head_limit":          headLimit,
+		"has_more":            hasMore,
+		"truncated":           truncated,
+		"backend":             backend,
+		"freshness_guarantee": "current_filesystem",
 	})
 }
 
 func (s *Server) grepMatchesDetailed(root string, rootInfo os.FileInfo, re *regexp.Regexp, include string, pathFilter *pathSearchFilter, maxMatches, contextBefore, contextAfter int) ([]grepFileMatch, bool, error) {
 	include = strings.TrimSpace(include)
-	matches := make([]grepFileMatch, 0)
-	totalMatches := 0
-	truncated := false
 
 	matchInclude := func(rel string) (bool, error) {
 		if include == "" {
@@ -882,7 +1072,8 @@ func (s *Server) grepMatchesDetailed(root string, rootInfo os.FileInfo, re *rege
 		return doublestar.PathMatch(include, filepath.Base(normalized))
 	}
 
-	searchFile := func(path string, info os.FileInfo, rel string) error {
+	candidates := make([]grepCandidateFile, 0)
+	collectCandidate := func(path string, info os.FileInfo, rel string) error {
 		if pathFilter != nil && pathFilter.Skip(path, info.IsDir()) {
 			return nil
 		}
@@ -890,65 +1081,23 @@ func (s *Server) grepMatchesDetailed(root string, rootInfo os.FileInfo, re *rege
 		if err != nil || !allowed {
 			return err
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		text, ok := decodeExtractableText(path, data)
-		if !ok {
-			return nil
-		}
-		normalized := strings.ReplaceAll(text, "\r\n", "\n")
-		indexes := re.FindAllStringIndex(normalized, -1)
-		if len(indexes) == 0 {
-			return nil
-		}
-
-		lines, lineOffsets := splitLinesWithOffsets(normalized)
-		fileMatch := grepFileMatch{
-			Path:       path,
-			ModifiedAt: info.ModTime().UTC().Format(time.RFC3339),
-			ModTime:    info.ModTime().UnixNano(),
-		}
-		for _, location := range indexes {
-			if totalMatches >= maxMatches {
-				truncated = true
-				break
-			}
-			lineIndex := lineIndexForOffset(lineOffsets, location[0])
-			preview, _ := truncateLine(lines[lineIndex], 400)
-			matchText, _ := truncateLine(normalized[location[0]:location[1]], 400)
-			occurrence := grepOccurrence{
-				Line:    lineIndex + 1,
-				Column:  columnForOffset(lines[lineIndex], location[0]-lineOffsets[lineIndex]),
-				Match:   matchText,
-				Preview: preview,
-				Before:  contextWindow(lines, lineIndex-contextBefore, lineIndex),
-				After:   contextWindow(lines, lineIndex+1, lineIndex+1+contextAfter),
-			}
-			fileMatch.Occurrences = append(fileMatch.Occurrences, occurrence)
-			totalMatches++
-		}
-		fileMatch.MatchCount = len(fileMatch.Occurrences)
-		if fileMatch.MatchCount > 0 {
-			matches = append(matches, fileMatch)
-		}
+		candidates = append(candidates, grepCandidateFile{
+			Path: path,
+			Info: info,
+		})
 		return nil
 	}
 
 	if !rootInfo.IsDir() {
-		if err := searchFile(root, rootInfo, filepath.Base(root)); err != nil {
+		if err := collectCandidate(root, rootInfo, filepath.Base(root)); err != nil {
 			return nil, false, err
 		}
-		return matches, truncated, nil
+		return buildGrepMatchesFromCandidates(candidates, re, maxMatches, contextBefore, contextAfter)
 	}
 
 	err := filepath.WalkDir(root, func(current string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
-		}
-		if truncated {
-			return fs.SkipAll
 		}
 		if current == root {
 			return nil
@@ -973,12 +1122,18 @@ func (s *Server) grepMatchesDetailed(root string, rootInfo os.FileInfo, re *rege
 		if err != nil {
 			return nil
 		}
-		return searchFile(current, info, rel)
+		return collectCandidate(current, info, rel)
 	})
-	if err == fs.SkipAll {
-		err = nil
+	if err != nil {
+		return nil, false, err
 	}
-	return matches, truncated, err
+	sort.Slice(candidates, func(i, j int) bool {
+		if !candidates[i].Info.ModTime().Equal(candidates[j].Info.ModTime()) {
+			return candidates[i].Info.ModTime().After(candidates[j].Info.ModTime())
+		}
+		return candidates[i].Path < candidates[j].Path
+	})
+	return buildGrepMatchesFromCandidates(candidates, re, maxMatches, contextBefore, contextAfter)
 }
 
 func splitLinesWithOffsets(text string) ([]string, []int) {

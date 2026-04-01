@@ -2,11 +2,8 @@ package chrome
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 func TestDisabledChromeListsStaticToolsAndRequestsPersistentAuthorization(t *testing.T) {
@@ -15,7 +12,6 @@ func TestDisabledChromeListsStaticToolsAndRequestsPersistentAuthorization(t *tes
 		InstanceID: "chrome_default",
 		Enabled:    false,
 		Slim:       true,
-		AuthStore:  runtimeauth.NewStore(filepath.Join(t.TempDir(), "runtime-auth.json")),
 	})
 	if err != nil {
 		t.Fatalf("new chrome server: %v", err)
@@ -67,7 +63,6 @@ func TestFullChromeCatalogDescriptionsAddRoutingGuidance(t *testing.T) {
 		InstanceID: "chrome_default",
 		Enabled:    false,
 		Slim:       false,
-		AuthStore:  runtimeauth.NewStore(filepath.Join(t.TempDir(), "runtime-auth.json")),
 	})
 	if err != nil {
 		t.Fatalf("new chrome server: %v", err)

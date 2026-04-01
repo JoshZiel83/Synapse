@@ -4,14 +4,15 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
-	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 func newTestServer(t *testing.T, cfg Config) *Server {
@@ -199,109 +200,6 @@ func TestRootReadOnlyBlocksWriteTool(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(content.Text), "grant write access") {
 		t.Fatalf("expected client authorization hint, got %q", content.Text)
-	}
-}
-
-func TestSessionGrantAllowsWriteOnlyForMatchingRuntimeSession(t *testing.T) {
-	root := t.TempDir()
-	authStore := runtimeauth.NewStore(filepath.Join(t.TempDir(), "runtime-auth.json"))
-	if err := authStore.OpenSession(runtimeauth.RuntimeSession{
-		ID:                "fs-session-a",
-		ExposureStableKey: "test-session-grant",
-	}); err != nil {
-		t.Fatalf("open session-a: %v", err)
-	}
-	if err := authStore.OpenSession(runtimeauth.RuntimeSession{
-		ID:                "fs-session-b",
-		ExposureStableKey: "test-session-grant",
-	}); err != nil {
-		t.Fatalf("open session-b: %v", err)
-	}
-	if err := authStore.Apply(runtimeauth.Grant{
-		InteractionID:     "grant-session-a",
-		RuntimeSessionID:  "fs-session-a",
-		ExposureStableKey: "test-session-grant",
-		Duration:          "session",
-		Capability:        "filesystem",
-		Path:              root,
-		Access:            "read_write",
-	}); err != nil {
-		t.Fatalf("apply runtime session grant: %v", err)
-	}
-
-	server := newTestServer(t, Config{
-		StableKey: "test-session-grant",
-		Name:      "filesystem",
-		Scope:     "roots",
-		Roots: []Root{
-			{ID: "root_0", Path: root, Access: "ro"},
-		},
-		AuthStore: authStore,
-		Index: IndexConfig{
-			Dir:              filepath.Join(t.TempDir(), "index"),
-			ContentEnabled:   false,
-			FileTypes:        []string{".txt"},
-			MaxFileSizeBytes: 1024,
-			ParsePDF:         true,
-			ParseOffice:      true,
-		},
-	})
-
-	target := filepath.Join(root, "session-note.txt")
-
-	noSessionResult, err := server.CallTool(context.Background(), "Replace", map[string]interface{}{
-		"file_path": target,
-		"content":   "blocked",
-	})
-	if err != nil {
-		t.Fatalf("call Replace without session: %v", err)
-	}
-	if !noSessionResult.IsError {
-		t.Fatalf("expected Replace without runtime session to be blocked")
-	}
-
-	otherSessionCtx := runtimeauth.ContextWithRuntimeSessionID(context.Background(), "fs-session-b")
-	otherSessionResult, err := server.CallTool(otherSessionCtx, "Replace", map[string]interface{}{
-		"file_path": target,
-		"content":   "still blocked",
-	})
-	if err != nil {
-		t.Fatalf("call Replace for other session: %v", err)
-	}
-	if !otherSessionResult.IsError {
-		t.Fatalf("expected Replace for different runtime session to remain blocked")
-	}
-
-	grantedCtx := runtimeauth.ContextWithRuntimeSessionID(context.Background(), "fs-session-a")
-	grantedResult, err := server.CallTool(grantedCtx, "Replace", map[string]interface{}{
-		"file_path": target,
-		"content":   "allowed",
-	})
-	if err != nil {
-		t.Fatalf("call Replace for granted session: %v", err)
-	}
-	if grantedResult.IsError {
-		t.Fatalf("expected Replace for granted runtime session to succeed")
-	}
-
-	data, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read written file: %v", err)
-	}
-	if string(data) != "allowed" {
-		t.Fatalf("expected granted write to persist file content, got %q", string(data))
-	}
-
-	authStore.CloseSession("fs-session-a")
-	afterCloseResult, err := server.CallTool(grantedCtx, "Replace", map[string]interface{}{
-		"file_path": target,
-		"content":   "blocked again",
-	})
-	if err != nil {
-		t.Fatalf("call Replace after session close: %v", err)
-	}
-	if !afterCloseResult.IsError {
-		t.Fatalf("expected closed runtime session grant to be removed")
 	}
 }
 
@@ -889,14 +787,13 @@ func TestViewExtractsPPTXSlidesAndNotes(t *testing.T) {
 	}
 }
 
-func TestDisabledFilesystemViewRequestsPersistentAuthorization(t *testing.T) {
+func TestDisabledFilesystemViewRejectsAccess(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "note.txt")
 	if err := os.WriteFile(target, []byte("hello from disabled filesystem"), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	authStore := runtimeauth.NewStore(filepath.Join(t.TempDir(), "runtime-auth.json"))
 	server, err := New(Config{
 		StableKey: "disabled-fs",
 		Name:      "filesystem",
@@ -905,7 +802,6 @@ func TestDisabledFilesystemViewRequestsPersistentAuthorization(t *testing.T) {
 		Roots: []Root{
 			{ID: "root_0", Path: root, Access: "ro"},
 		},
-		AuthStore: authStore,
 		Index: IndexConfig{
 			Dir:              filepath.Join(t.TempDir(), "index"),
 			ContentEnabled:   false,
@@ -930,39 +826,15 @@ func TestDisabledFilesystemViewRequestsPersistentAuthorization(t *testing.T) {
 		t.Fatalf("call View: %v", err)
 	}
 	if !blocked.IsError {
-		t.Fatalf("expected disabled filesystem to require approval")
+		t.Fatalf("expected disabled filesystem to reject access")
 	}
 
 	structured, ok := blocked.StructuredContent.(map[string]interface{})
 	if !ok {
 		t.Fatalf("expected structured content map, got %T", blocked.StructuredContent)
 	}
-	if structured["requires_user_approval"] != true {
-		t.Fatalf("expected approval hint, got %#v", structured["requires_user_approval"])
-	}
-	if structured["authorization_duration"] != "persistent" {
-		t.Fatalf("expected persistent authorization hint, got %#v", structured["authorization_duration"])
-	}
-
-	if err := authStore.Apply(runtimeauth.Grant{
-		InteractionID:     "persistent-read",
-		ExposureStableKey: "disabled-fs",
-		Duration:          "persistent",
-		Capability:        "filesystem",
-		Path:              root,
-		Access:            "read",
-	}); err != nil {
-		t.Fatalf("apply persistent grant: %v", err)
-	}
-
-	allowed, err := server.CallTool(context.Background(), "View", map[string]interface{}{
-		"file_path": target,
-	})
-	if err != nil {
-		t.Fatalf("call View after grant: %v", err)
-	}
-	if allowed.IsError {
-		t.Fatalf("expected View to succeed after persistent grant")
+	if structured["code"] != "path_not_allowed" {
+		t.Fatalf("expected path_not_allowed code, got %#v", structured["code"])
 	}
 }
 
@@ -1088,6 +960,7 @@ func TestGlobAndGrepToolsFindMatchingFiles(t *testing.T) {
 		"path":           root,
 		"pattern":        "hello\\s+world",
 		"include":        "*.{ts,tsx}",
+		"output_mode":    "content",
 		"context_before": 1,
 		"context_after":  1,
 	})
@@ -1112,19 +985,308 @@ func TestGlobAndGrepToolsFindMatchingFiles(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected structured content map, got %T", grepResult.StructuredContent)
 	}
+	if structured["mode"] != "content" {
+		t.Fatalf("expected content mode, got %#v", structured["mode"])
+	}
 	matches, ok := structured["matches"].([]map[string]interface{})
 	if !ok {
 		t.Fatalf("expected matches slice, got %T", structured["matches"])
 	}
 	if len(matches) != 1 {
-		t.Fatalf("expected one matching file, got %d", len(matches))
+		t.Fatalf("expected one matching location, got %d", len(matches))
 	}
-	occurrences, ok := matches[0]["occurrences"].([]map[string]interface{})
-	if !ok || len(occurrences) != 1 {
-		t.Fatalf("expected one structured occurrence, got %#v", matches[0]["occurrences"])
+	if matches[0]["path"] != filepath.Join(root, "src", "beta.tsx") {
+		t.Fatalf("expected structured match to point at beta.tsx, got %#v", matches[0]["path"])
 	}
-	if occurrences[0]["line"] != 1 {
-		t.Fatalf("expected line 1, got %#v", occurrences[0]["line"])
+	if matches[0]["line"] != 1 {
+		t.Fatalf("expected line 1, got %#v", matches[0]["line"])
+	}
+}
+
+func TestGlobToolSupportsPagingAfterModifiedSort(t *testing.T) {
+	root := t.TempDir()
+	paths := []string{
+		filepath.Join(root, "alpha.txt"),
+		filepath.Join(root, "beta.txt"),
+		filepath.Join(root, "gamma.txt"),
+	}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte(path), 0o644); err != nil {
+			t.Fatalf("write %s: %v", filepath.Base(path), err)
+		}
+	}
+	now := time.Now()
+	if err := os.Chtimes(paths[0], now.Add(-3*time.Hour), now.Add(-3*time.Hour)); err != nil {
+		t.Fatalf("chtimes alpha: %v", err)
+	}
+	if err := os.Chtimes(paths[1], now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("chtimes beta: %v", err)
+	}
+	if err := os.Chtimes(paths[2], now.Add(-1*time.Hour), now.Add(-1*time.Hour)); err != nil {
+		t.Fatalf("chtimes gamma: %v", err)
+	}
+
+	server := newTestServer(t, Config{
+		StableKey: "test-glob-paging",
+		Name:      "filesystem",
+		Scope:     "roots",
+		Roots: []Root{
+			{ID: "root_0", Path: root, Access: "ro"},
+		},
+		Index: IndexConfig{
+			Dir:              filepath.Join(t.TempDir(), "index"),
+			ContentEnabled:   false,
+			FileTypes:        []string{".txt"},
+			MaxFileSizeBytes: 1024,
+			ParsePDF:         true,
+			ParseOffice:      true,
+		},
+	})
+
+	result, err := server.CallTool(context.Background(), "GlobTool", map[string]interface{}{
+		"path":    root,
+		"pattern": "*.txt",
+		"offset":  1,
+		"limit":   1,
+	})
+	if err != nil {
+		t.Fatalf("call GlobTool: %v", err)
+	}
+	structured, ok := result.StructuredContent.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected structured content map, got %T", result.StructuredContent)
+	}
+	if structured["total"] != 3 {
+		t.Fatalf("expected total 3, got %#v", structured["total"])
+	}
+	if structured["has_more"] != true {
+		t.Fatalf("expected has_more=true, got %#v", structured["has_more"])
+	}
+	if structured["backend"] != "ripgrep" && structured["backend"] != "walk_fallback" {
+		t.Fatalf("unexpected backend %#v", structured["backend"])
+	}
+	matches, ok := structured["matches"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("expected matches slice, got %T", structured["matches"])
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one paged match, got %d", len(matches))
+	}
+	if matches[0]["path"] != paths[1] {
+		t.Fatalf("expected beta.txt as the paged result, got %#v", matches[0]["path"])
+	}
+}
+
+func TestGrepToolAppliesMaxMatchesAfterModifiedSort(t *testing.T) {
+	root := t.TempDir()
+	older := filepath.Join(root, "aaa.txt")
+	newer := filepath.Join(root, "zzz.txt")
+	if err := os.WriteFile(older, []byte("needle in old file\n"), 0o644); err != nil {
+		t.Fatalf("write older file: %v", err)
+	}
+	if err := os.WriteFile(newer, []byte("needle in new file\n"), 0o644); err != nil {
+		t.Fatalf("write newer file: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(older, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("chtimes older file: %v", err)
+	}
+	if err := os.Chtimes(newer, now.Add(-1*time.Hour), now.Add(-1*time.Hour)); err != nil {
+		t.Fatalf("chtimes newer file: %v", err)
+	}
+
+	server := newTestServer(t, Config{
+		StableKey: "test-grep-sort-limit",
+		Name:      "filesystem",
+		Scope:     "roots",
+		Roots: []Root{
+			{ID: "root_0", Path: root, Access: "ro"},
+		},
+		Index: IndexConfig{
+			Dir:              filepath.Join(t.TempDir(), "index"),
+			ContentEnabled:   false,
+			FileTypes:        []string{".txt"},
+			MaxFileSizeBytes: 1024,
+			ParsePDF:         true,
+			ParseOffice:      true,
+		},
+	})
+
+	result, err := server.CallTool(context.Background(), "GrepTool", map[string]interface{}{
+		"path":        root,
+		"pattern":     "needle",
+		"output_mode": "content",
+		"max_matches": 1,
+	})
+	if err != nil {
+		t.Fatalf("call GrepTool: %v", err)
+	}
+	text, ok := result.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if strings.Contains(text.Text, older) {
+		t.Fatalf("expected max_matches to keep the newer file first, got %q", text.Text)
+	}
+	if !strings.Contains(text.Text, newer) {
+		t.Fatalf("expected grep result to include newer file, got %q", text.Text)
+	}
+}
+
+func TestGrepToolDefaultsToFilesWithMatchesAndSupportsPagingAfterModifiedSort(t *testing.T) {
+	root := t.TempDir()
+	paths := []string{
+		filepath.Join(root, "alpha.txt"),
+		filepath.Join(root, "beta.txt"),
+		filepath.Join(root, "gamma.txt"),
+	}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte("needle in "+filepath.Base(path)), 0o644); err != nil {
+			t.Fatalf("write %s: %v", filepath.Base(path), err)
+		}
+	}
+	now := time.Now()
+	if err := os.Chtimes(paths[0], now.Add(-3*time.Hour), now.Add(-3*time.Hour)); err != nil {
+		t.Fatalf("chtimes alpha: %v", err)
+	}
+	if err := os.Chtimes(paths[1], now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("chtimes beta: %v", err)
+	}
+	if err := os.Chtimes(paths[2], now.Add(-1*time.Hour), now.Add(-1*time.Hour)); err != nil {
+		t.Fatalf("chtimes gamma: %v", err)
+	}
+
+	server := newTestServer(t, Config{
+		StableKey: "test-grep-files-mode",
+		Name:      "filesystem",
+		Scope:     "roots",
+		Roots: []Root{
+			{ID: "root_0", Path: root, Access: "ro"},
+		},
+		Index: IndexConfig{
+			Dir:              filepath.Join(t.TempDir(), "index"),
+			ContentEnabled:   false,
+			FileTypes:        []string{".txt"},
+			MaxFileSizeBytes: 1024,
+			ParsePDF:         true,
+			ParseOffice:      true,
+		},
+	})
+
+	result, err := server.CallTool(context.Background(), "GrepTool", map[string]interface{}{
+		"path":       root,
+		"pattern":    "needle",
+		"offset":     1,
+		"head_limit": 1,
+	})
+	if err != nil {
+		t.Fatalf("call GrepTool: %v", err)
+	}
+	text, ok := result.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if strings.Contains(text.Text, paths[2]) || strings.Contains(text.Text, paths[0]) {
+		t.Fatalf("expected paged file list to contain only beta.txt, got %q", text.Text)
+	}
+	if !strings.Contains(text.Text, paths[1]) {
+		t.Fatalf("expected paged file list to include beta.txt, got %q", text.Text)
+	}
+
+	structured, ok := result.StructuredContent.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected structured content map, got %T", result.StructuredContent)
+	}
+	if structured["mode"] != "files_with_matches" {
+		t.Fatalf("expected files_with_matches mode, got %#v", structured["mode"])
+	}
+	if structured["total_files"] != 3 {
+		t.Fatalf("expected total_files=3, got %#v", structured["total_files"])
+	}
+	if structured["has_more"] != true {
+		t.Fatalf("expected has_more=true, got %#v", structured["has_more"])
+	}
+	files, ok := structured["files"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("expected files slice, got %T", structured["files"])
+	}
+	if len(files) != 1 || files[0]["path"] != paths[1] {
+		t.Fatalf("expected paged files result to contain beta.txt, got %+v", files)
+	}
+}
+
+func TestGrepToolCountModeReturnsPerFileTotals(t *testing.T) {
+	root := t.TempDir()
+	older := filepath.Join(root, "alpha.txt")
+	newer := filepath.Join(root, "beta.txt")
+	if err := os.WriteFile(older, []byte("needle one\nneedle two\n"), 0o644); err != nil {
+		t.Fatalf("write older file: %v", err)
+	}
+	if err := os.WriteFile(newer, []byte("needle three\n"), 0o644); err != nil {
+		t.Fatalf("write newer file: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(older, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("chtimes older file: %v", err)
+	}
+	if err := os.Chtimes(newer, now.Add(-1*time.Hour), now.Add(-1*time.Hour)); err != nil {
+		t.Fatalf("chtimes newer file: %v", err)
+	}
+
+	server := newTestServer(t, Config{
+		StableKey: "test-grep-count-mode",
+		Name:      "filesystem",
+		Scope:     "roots",
+		Roots: []Root{
+			{ID: "root_0", Path: root, Access: "ro"},
+		},
+		Index: IndexConfig{
+			Dir:              filepath.Join(t.TempDir(), "index"),
+			ContentEnabled:   false,
+			FileTypes:        []string{".txt"},
+			MaxFileSizeBytes: 1024,
+			ParsePDF:         true,
+			ParseOffice:      true,
+		},
+	})
+
+	result, err := server.CallTool(context.Background(), "GrepTool", map[string]interface{}{
+		"path":        root,
+		"pattern":     "needle",
+		"output_mode": "count",
+	})
+	if err != nil {
+		t.Fatalf("call GrepTool: %v", err)
+	}
+	text, ok := result.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	newerLine := fmt.Sprintf("%s:%d", newer, 1)
+	olderLine := fmt.Sprintf("%s:%d", older, 2)
+	if !strings.Contains(text.Text, newerLine) || !strings.Contains(text.Text, olderLine) {
+		t.Fatalf("expected count lines for both files, got %q", text.Text)
+	}
+	if strings.Index(text.Text, newerLine) > strings.Index(text.Text, olderLine) {
+		t.Fatalf("expected newer file to appear first in count mode, got %q", text.Text)
+	}
+
+	structured, ok := result.StructuredContent.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected structured content map, got %T", result.StructuredContent)
+	}
+	if structured["mode"] != "count" {
+		t.Fatalf("expected count mode, got %#v", structured["mode"])
+	}
+	if structured["total_matches"] != 3 {
+		t.Fatalf("expected total_matches=3, got %#v", structured["total_matches"])
+	}
+	counts, ok := structured["counts"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("expected counts slice, got %T", structured["counts"])
+	}
+	if len(counts) != 2 || counts[0]["path"] != newer || counts[1]["path"] != older {
+		t.Fatalf("unexpected count ordering: %+v", counts)
 	}
 }
 

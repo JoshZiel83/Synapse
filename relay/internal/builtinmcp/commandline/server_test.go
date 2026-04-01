@@ -27,8 +27,16 @@ func TestListToolsDescriptionsPreferDedicatedTools(t *testing.T) {
 		descriptions[tool.Name] = tool.Description
 	}
 
-	if description, ok := descriptions["bash_exec"]; ok && !strings.Contains(description, "Prefer dedicated filesystem tools") {
-		t.Fatalf("expected bash_exec description to prefer dedicated tools, got %q", description)
+	if description, ok := descriptions["bash_exec"]; ok {
+		if !strings.Contains(description, "Prefer GlobTool") {
+			t.Fatalf("expected bash_exec description to steer filename search to GlobTool, got %q", description)
+		}
+		if !strings.Contains(description, "GrepTool") || !strings.Contains(description, "SearchFiles") {
+			t.Fatalf("expected bash_exec description to mention dedicated search tools, got %q", description)
+		}
+		if !strings.Contains(description, "Do not use bash_exec for find/grep/rg-style filesystem search") {
+			t.Fatalf("expected bash_exec description to discourage shell search, got %q", description)
+		}
 	}
 	if description, ok := descriptions["git_exec"]; ok && !strings.Contains(description, "Prefer this over bash_exec") {
 		t.Fatalf("expected git_exec description to prefer git_exec over bash_exec, got %q", description)

@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
-	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/djherbis/times"
 	"github.com/fsnotify/fsnotify"
@@ -170,7 +169,7 @@ func (s *Server) ensureStarted() error {
 }
 
 func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
-	runtimeSessionID := runtimeauth.RuntimeSessionIDFromContext(ctx)
+	runtimeSessionID := ""
 	switch toolName {
 	case "ListAllowedDirectories":
 		return s.listAllowedDirectories(runtimeSessionID), nil
@@ -203,9 +202,9 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 	case "Stat":
 		return s.getFileInfo(runtimeSessionID, args)
 	case "GlobTool":
-		return s.globTool(runtimeSessionID, args)
+		return s.globTool(ctx, runtimeSessionID, args)
 	case "GrepTool":
-		return s.grepTool(runtimeSessionID, args)
+		return s.grepTool(ctx, runtimeSessionID, args)
 	case "SearchFiles":
 		return s.searchFiles(ctx, runtimeSessionID, args)
 	case "ListBackups":
@@ -905,18 +904,29 @@ func (s *Server) listFiles(runtimeSessionID string, args map[string]interface{})
 	}), nil
 }
 
-func (s *Server) globTool(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) globTool(ctx context.Context, runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		Pattern          string   `json:"pattern"`
 		Path             string   `json:"path"`
 		Exclude          []string `json:"exclude"`
 		RespectGitignore bool     `json:"respect_gitignore"`
+		Limit            int      `json:"limit"`
+		Offset           int      `json:"offset"`
 	}
 	if err := decodeArgs(args, &input); err != nil {
 		return errorResult(fmt.Sprintf("Invalid GlobTool arguments: %v", err)), nil
 	}
 	if strings.TrimSpace(input.Pattern) == "" {
 		return errorResult("pattern is required."), nil
+	}
+	if input.Offset < 0 {
+		return errorResult("offset must be greater than or equal to 0."), nil
+	}
+	if input.Limit < 0 {
+		return errorResult("limit must be greater than or equal to 0."), nil
+	}
+	if input.Limit > 1000 {
+		input.Limit = 1000
 	}
 
 	root, err := s.resolveOptionalSearchPath(runtimeSessionID, input.Path)
@@ -937,21 +947,43 @@ func (s *Server) globTool(runtimeSessionID string, args map[string]interface{}) 
 		return errorResult(fmt.Sprintf("Glob failed to compile path filters: %v", err)), nil
 	}
 
-	matches, err := s.globMatches(root.Path, info, input.Pattern, pathFilter)
-	if err != nil {
-		return errorResult(fmt.Sprintf("Glob failed: %v", err)), nil
+	backend := "walk_fallback"
+	matches := make([]matchedPath, 0)
+	if info.IsDir() {
+		rgMatches, rgErr := s.globMatchesWithRipgrep(ctx, root.Path, input.Pattern, pathFilter, input.Exclude, input.RespectGitignore)
+		if rgErr == nil {
+			matches = rgMatches
+			backend = "ripgrep"
+		} else {
+			fallbackMatches, fallbackErr := s.globMatches(root.Path, info, input.Pattern, pathFilter)
+			if fallbackErr != nil {
+				return errorResult(fmt.Sprintf("Glob failed: %v", rgErr)), nil
+			}
+			matches = fallbackMatches
+		}
+	} else {
+		matches, err = s.globMatches(root.Path, info, input.Pattern, pathFilter)
+		if err != nil {
+			return errorResult(fmt.Sprintf("Glob failed: %v", err)), nil
+		}
 	}
 	sortMatchedPaths(matches)
-	return matchedPathResult(input.Pattern, root.Path, matches), nil
+	paged, total, hasMore, appliedOffset, appliedLimit := paginateMatchedPaths(matches, input.Offset, input.Limit)
+	return matchedPathResult(input.Pattern, root.Path, paged, total, appliedOffset, appliedLimit, hasMore, backend), nil
 }
 
-func (s *Server) grepTool(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) grepTool(ctx context.Context, runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		Pattern          string   `json:"pattern"`
 		Path             string   `json:"path"`
 		Include          string   `json:"include"`
 		Exclude          []string `json:"exclude"`
+		OutputMode       string   `json:"output_mode"`
 		RespectGitignore bool     `json:"respect_gitignore"`
+		CaseInsensitive  bool     `json:"case_insensitive"`
+		Multiline        bool     `json:"multiline"`
+		HeadLimit        *int     `json:"head_limit"`
+		Offset           int      `json:"offset"`
 		MaxMatches       int      `json:"max_matches"`
 		ContextBefore    int      `json:"context_before"`
 		ContextAfter     int      `json:"context_after"`
@@ -962,8 +994,31 @@ func (s *Server) grepTool(runtimeSessionID string, args map[string]interface{}) 
 	if strings.TrimSpace(input.Pattern) == "" {
 		return errorResult("pattern is required."), nil
 	}
+	outputMode := normalizeGrepOutputMode(input.OutputMode)
+	if outputMode == "" {
+		return errorResult(fmt.Sprintf("output_mode must be one of %q, %q, or %q.", grepOutputModeFilesWithMatches, grepOutputModeContent, grepOutputModeCount)), nil
+	}
+	if input.Offset < 0 {
+		return errorResult("offset must be greater than or equal to 0."), nil
+	}
+	if input.HeadLimit != nil && *input.HeadLimit < 0 {
+		return errorResult("head_limit must be greater than or equal to 0."), nil
+	}
+	headLimit, unlimitedHeadLimit := resolveGrepHeadLimit(input.HeadLimit)
 
-	re, err := regexp.Compile(input.Pattern)
+	compiledPattern := input.Pattern
+	flagPrefix := ""
+	if input.CaseInsensitive {
+		flagPrefix += "i"
+	}
+	if input.Multiline {
+		flagPrefix += "s"
+	}
+	if flagPrefix != "" {
+		compiledPattern = "(?" + flagPrefix + ")" + compiledPattern
+	}
+
+	re, err := regexp.Compile(compiledPattern)
 	if err != nil {
 		return errorResult(fmt.Sprintf("Invalid regular expression %q: %v", input.Pattern, err)), nil
 	}
@@ -986,10 +1041,10 @@ func (s *Server) grepTool(runtimeSessionID string, args map[string]interface{}) 
 	}
 
 	if input.MaxMatches <= 0 {
-		input.MaxMatches = 50
+		input.MaxMatches = defaultGrepHeadLimit
 	}
-	if input.MaxMatches > 500 {
-		input.MaxMatches = 500
+	if input.MaxMatches > 5000 {
+		input.MaxMatches = 5000
 	}
 	if input.ContextBefore < 0 {
 		input.ContextBefore = 0
@@ -1004,12 +1059,65 @@ func (s *Server) grepTool(runtimeSessionID string, args map[string]interface{}) 
 		input.ContextAfter = 20
 	}
 
-	matches, truncated, err := s.grepMatchesDetailed(root.Path, info, re, input.Include, pathFilter, input.MaxMatches, input.ContextBefore, input.ContextAfter)
-	if err != nil {
-		return errorResult(fmt.Sprintf("Grep failed: %v", err)), nil
+	backend := "walk_fallback"
+	switch outputMode {
+	case grepOutputModeFilesWithMatches:
+		fileMatches, err := s.grepFilePathsWithRipgrep(ctx, root.Path, info, input.Pattern, input.Include, pathFilter, input.Exclude, input.RespectGitignore, input.CaseInsensitive, input.Multiline)
+		truncated := false
+		if err == nil {
+			backend = "ripgrep"
+			start, end, appliedOffset, appliedHeadLimit, hasMore := paginateSearchWindow(len(fileMatches), input.Offset, headLimit, unlimitedHeadLimit)
+			return grepFilesWithMatchesResult(input.Pattern, root.Path, fileMatches[start:end], len(fileMatches), appliedOffset, appliedHeadLimit, hasMore, truncated, backend), nil
+		}
+
+		matches, fallbackTruncated, fallbackErr := s.grepMatchesDetailed(root.Path, info, re, input.Include, pathFilter, input.MaxMatches, 0, 0)
+		if fallbackErr != nil {
+			return errorResult(fmt.Sprintf("Grep failed: %v", fallbackErr)), nil
+		}
+		truncated = fallbackTruncated
+		fileMatches = grepMatchedPathsFromFileMatches(matches)
+		start, end, appliedOffset, appliedHeadLimit, hasMore := paginateSearchWindow(len(fileMatches), input.Offset, headLimit, unlimitedHeadLimit)
+		return grepFilesWithMatchesResult(input.Pattern, root.Path, fileMatches[start:end], len(fileMatches), appliedOffset, appliedHeadLimit, hasMore, truncated, backend), nil
+	case grepOutputModeCount:
+		countEntries, err := s.grepCountEntriesWithRipgrep(ctx, root.Path, info, input.Pattern, input.Include, pathFilter, input.Exclude, input.RespectGitignore, input.CaseInsensitive, input.Multiline)
+		truncated := false
+		if err == nil {
+			backend = "ripgrep"
+			totalMatches := 0
+			for _, entry := range countEntries {
+				totalMatches += entry.MatchCount
+			}
+			start, end, appliedOffset, appliedHeadLimit, hasMore := paginateSearchWindow(len(countEntries), input.Offset, headLimit, unlimitedHeadLimit)
+			return grepCountResult(input.Pattern, root.Path, countEntries[start:end], len(countEntries), totalMatches, appliedOffset, appliedHeadLimit, hasMore, truncated, backend), nil
+		}
+
+		matches, fallbackTruncated, fallbackErr := s.grepMatchesDetailed(root.Path, info, re, input.Include, pathFilter, input.MaxMatches, 0, 0)
+		if fallbackErr != nil {
+			return errorResult(fmt.Sprintf("Grep failed: %v", fallbackErr)), nil
+		}
+		truncated = fallbackTruncated
+		countEntries = grepCountEntriesFromFileMatches(matches)
+		totalMatches := 0
+		for _, entry := range countEntries {
+			totalMatches += entry.MatchCount
+		}
+		start, end, appliedOffset, appliedHeadLimit, hasMore := paginateSearchWindow(len(countEntries), input.Offset, headLimit, unlimitedHeadLimit)
+		return grepCountResult(input.Pattern, root.Path, countEntries[start:end], len(countEntries), totalMatches, appliedOffset, appliedHeadLimit, hasMore, truncated, backend), nil
+	default:
+		matches, truncated, err := s.grepMatchesDetailedWithRipgrep(ctx, root.Path, info, re, input.Pattern, input.Include, pathFilter, input.Exclude, input.RespectGitignore, input.CaseInsensitive, input.Multiline, input.MaxMatches, input.ContextBefore, input.ContextAfter)
+		if err == nil {
+			backend = "ripgrep"
+		} else {
+			matches, truncated, err = s.grepMatchesDetailed(root.Path, info, re, input.Include, pathFilter, input.MaxMatches, input.ContextBefore, input.ContextAfter)
+			if err != nil {
+				return errorResult(fmt.Sprintf("Grep failed: %v", err)), nil
+			}
+		}
+		sortGrepFileMatches(matches)
+		contentEntries := flattenGrepContentEntries(matches)
+		start, end, appliedOffset, appliedHeadLimit, hasMore := paginateSearchWindow(len(contentEntries), input.Offset, headLimit, unlimitedHeadLimit)
+		return grepContentResult(input.Pattern, root.Path, contentEntries[start:end], len(contentEntries), input.MaxMatches, appliedOffset, appliedHeadLimit, hasMore, truncated, backend), nil
 	}
-	sortGrepFileMatches(matches)
-	return grepMatchResult(input.Pattern, root.Path, matches, input.MaxMatches, truncated), nil
 }
 
 func (s *Server) getFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
@@ -1325,7 +1433,7 @@ func sortMatchedPaths(matches []matchedPath) {
 	})
 }
 
-func matchedPathResult(pattern, root string, matches []matchedPath) core.CallResult {
+func matchedPathResult(pattern, root string, matches []matchedPath, total, offset, limit int, hasMore bool, backend string) core.CallResult {
 	lines := make([]string, 0, len(matches))
 	structuredMatches := make([]map[string]interface{}, 0, len(matches))
 	for _, match := range matches {
@@ -1336,10 +1444,15 @@ func matchedPathResult(pattern, root string, matches []matchedPath) core.CallRes
 		})
 	}
 	return textResult(strings.Join(lines, "\n"), map[string]interface{}{
-		"pattern": pattern,
-		"path":    root,
-		"matches": structuredMatches,
-		"total":   len(matches),
+		"pattern":             pattern,
+		"path":                root,
+		"matches":             structuredMatches,
+		"total":               total,
+		"offset":              offset,
+		"limit":               limit,
+		"has_more":            hasMore,
+		"backend":             backend,
+		"freshness_guarantee": "current_filesystem",
 	})
 }
 

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/PekingSpades/Synapse/relay/internal/config"
-	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 func TestManagerNotifyCatalogHintEmitsEventAndSignal(t *testing.T) {
@@ -185,7 +184,7 @@ func TestInitAllKeepsRetryableServerPendingUntilRefreshActivatesIt(t *testing.T)
 
 	manager := NewManager([]config.ServerConfig{cfg})
 	attempts := 0
-	manager.newServer = func(cfg config.ServerConfig, _ *runtimeauth.Store) (Server, error) {
+	manager.newServer = func(cfg config.ServerConfig) (Server, error) {
 		return &scriptedServer{
 			startFn: func(context.Context) error {
 				attempts++

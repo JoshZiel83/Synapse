@@ -377,31 +377,7 @@ func TestReadOnlyStillAllowsObservationTools(t *testing.T) {
 	}
 }
 
-func TestReadOnlyGrantIsScopedToMatchingRuntimeSession(t *testing.T) {
-	authStore := runtimeauth.NewStore(t.TempDir() + "/runtime-auth.json")
-	if err := authStore.OpenSession(runtimeauth.RuntimeSession{
-		ID:                "cua-session-a",
-		ExposureStableKey: "test-cua-session",
-	}); err != nil {
-		t.Fatalf("open session-a: %v", err)
-	}
-	if err := authStore.OpenSession(runtimeauth.RuntimeSession{
-		ID:                "cua-session-b",
-		ExposureStableKey: "test-cua-session",
-	}); err != nil {
-		t.Fatalf("open session-b: %v", err)
-	}
-	if err := authStore.Apply(runtimeauth.Grant{
-		InteractionID:     "grant-cua-session-a",
-		RuntimeSessionID:  "cua-session-a",
-		ExposureStableKey: "test-cua-session",
-		Duration:          "session",
-		Capability:        "cua",
-		Mode:              "control",
-	}); err != nil {
-		t.Fatalf("apply cua session grant: %v", err)
-	}
-
+func TestReadOnlyModeIgnoresRuntimeSessionContextForAuthorization(t *testing.T) {
 	server := NewWithDesktop(Config{
 		Enabled:         true,
 		StableKey:       "test-cua-session",
@@ -409,7 +385,6 @@ func TestReadOnlyGrantIsScopedToMatchingRuntimeSession(t *testing.T) {
 		ImageSize:       [2]int{1280, 800},
 		RelativeSize:    [2]int{1000, 1000},
 		DisplaySelector: DisplaySelector{Mode: "main"},
-		AuthStore:       authStore,
 	}, &fakeDesktop{
 		displays: []DisplayInfo{
 			{
@@ -427,47 +402,32 @@ func TestReadOnlyGrantIsScopedToMatchingRuntimeSession(t *testing.T) {
 		t.Fatalf("initialize server: %v", err)
 	}
 
-	blockedResult, err := server.CallTool(context.Background(), "desktop_press_keys", map[string]interface{}{
-		"keys": []string{"enter"},
-	})
-	if err != nil {
-		t.Fatalf("call desktop_press_keys without session: %v", err)
-	}
-	if !blockedResult.IsError {
-		t.Fatalf("expected read-only cua tool to be blocked without runtime session grant")
-	}
-
-	otherSessionCtx := runtimeauth.ContextWithRuntimeSessionID(context.Background(), "cua-session-b")
-	otherSessionResult, err := server.CallTool(otherSessionCtx, "desktop_press_keys", map[string]interface{}{
-		"keys": []string{"enter"},
-	})
-	if err != nil {
-		t.Fatalf("call desktop_press_keys for other session: %v", err)
-	}
-	if !otherSessionResult.IsError {
-		t.Fatalf("expected different runtime session to remain blocked")
+	testCases := []struct {
+		name string
+		ctx  context.Context
+	}{
+		{name: "no runtime session", ctx: context.Background()},
+		{name: "session a", ctx: runtimeauth.ContextWithRuntimeSessionID(context.Background(), "cua-session-a")},
+		{name: "session b", ctx: runtimeauth.ContextWithRuntimeSessionID(context.Background(), "cua-session-b")},
 	}
 
-	grantedCtx := runtimeauth.ContextWithRuntimeSessionID(context.Background(), "cua-session-a")
-	grantedResult, err := server.CallTool(grantedCtx, "desktop_press_keys", map[string]interface{}{
-		"keys": []string{"enter"},
-	})
-	if err != nil {
-		t.Fatalf("call desktop_press_keys for granted session: %v", err)
-	}
-	if grantedResult.IsError {
-		t.Fatalf("expected granted runtime session to bypass read-only block")
-	}
-
-	authStore.CloseSession("cua-session-a")
-	afterCloseResult, err := server.CallTool(grantedCtx, "desktop_press_keys", map[string]interface{}{
-		"keys": []string{"enter"},
-	})
-	if err != nil {
-		t.Fatalf("call desktop_press_keys after close: %v", err)
-	}
-	if !afterCloseResult.IsError {
-		t.Fatalf("expected runtime session close to remove cua control grant")
+	for _, tc := range testCases {
+		result, err := server.CallTool(tc.ctx, "desktop_press_keys", map[string]interface{}{
+			"keys": []string{"enter"},
+		})
+		if err != nil {
+			t.Fatalf("call desktop_press_keys for %s: %v", tc.name, err)
+		}
+		if !result.IsError {
+			t.Fatalf("expected read-only cua tool to stay blocked for %s", tc.name)
+		}
+		content, ok := result.Content[0].(core.TextContent)
+		if !ok {
+			t.Fatalf("expected text content for %s, got %T", tc.name, result.Content[0])
+		}
+		if !strings.Contains(content.Text, "read-only mode") {
+			t.Fatalf("expected read-only guidance for %s, got %q", tc.name, content.Text)
+		}
 	}
 }
 
