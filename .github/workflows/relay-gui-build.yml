@@ -85,7 +85,7 @@ jobs:
         run: ${{ matrix.setup }}
 
       - name: Install Wails
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
 
       - name: Determine version
         id: version
@@ -144,7 +144,9 @@ jobs:
             portable_root="synapse-relay-gui-${{ matrix.suffix }}-portable"
             mkdir -p "$portable_root"
             cp "$main_exe" "$portable_root/synapse-relay-gui.exe"
-            cp -R relay/cmd/synapse-relay-gui/build/windows/r "$portable_root/runtime"
+            runtime_stage="$(tr -d '\r\n' < relay/cmd/synapse-relay-gui/build/windows/runtime-path.txt)"
+            runtime_stage_unix="$(cygpath -u "$runtime_stage")"
+            cp -R "$runtime_stage_unix" "$portable_root/runtime"
             portable_zip="synapse-relay-gui-${{ matrix.suffix }}-portable.zip"
             portable_root_win="$(cygpath -w "$portable_root")"
             portable_zip_win="$(cygpath -w "$portable_zip")"

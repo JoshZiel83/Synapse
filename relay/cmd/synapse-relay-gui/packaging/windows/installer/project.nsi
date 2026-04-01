@@ -15,6 +15,7 @@ Unicode true
 !define PRODUCT_EXECUTABLE "synapse-relay-gui.exe"
 !define INSTALL_SCOPE_MARKER "install.scope"
 !define REQUEST_EXECUTION_LEVEL "user"
+!define SYNAPSE_RUNTIME_STAGE "__SYNAPSE_RUNTIME_STAGE__"
 
 !include "wails_tools.nsh"
 
@@ -319,7 +320,7 @@ Section
     !insertmacro wails.files
 
     SetOutPath "$INSTDIR\runtime"
-    File /r "..\r\*"
+    File /r "${SYNAPSE_RUNTIME_STAGE}\*"
 
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"

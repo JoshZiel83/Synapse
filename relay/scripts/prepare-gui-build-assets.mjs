@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { cp, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,7 +12,7 @@ const guiRoot = join(relayRoot, "cmd", "synapse-relay-gui");
 const buildRoot = join(guiRoot, "build");
 const windowsBuildRoot = join(buildRoot, "windows");
 const windowsInstallerRoot = join(windowsBuildRoot, "installer");
-const windowsRuntimeRoot = join(windowsBuildRoot, "r");
+const windowsRuntimeStageFile = join(windowsBuildRoot, "runtime-path.txt");
 const packagingRoot = join(guiRoot, "packaging", "windows");
 
 const args = parseArgs(process.argv.slice(2));
@@ -22,15 +23,23 @@ const runtimeOutput = args["runtime-output"] ? resolve(repoRoot, args["runtime-o
 await mkdir(buildRoot, { recursive: true });
 await mkdir(windowsInstallerRoot, { recursive: true });
 
-await copyFile(join(repoRoot, "packages", "web-next", "public", "synapse.png"), join(buildRoot, "appicon.png"));
-await copyFile(join(packagingRoot, "installer", "project.nsi"), join(windowsInstallerRoot, "project.nsi"));
+await cp(join(repoRoot, "packages", "web-next", "public", "synapse.png"), join(buildRoot, "appicon.png"), { force: true });
+
+const windowsPackagedRuntimeRoot = resolveWindowsPackagedRuntimeRoot();
+await writeWindowsInstallerScript(windowsPackagedRuntimeRoot || "..\\r");
 
 if (runtimeOutput) {
   await stageRuntimeBundles(runtimeOutput);
-} else if (goos === "windows" && runtimeMode === "packaged") {
-  await stageRuntimeBundles(windowsRuntimeRoot);
+  if (!windowsPackagedRuntimeRoot) {
+    await rm(join(windowsBuildRoot, "r"), { recursive: true, force: true });
+    await rm(windowsRuntimeStageFile, { force: true });
+  }
+} else if (windowsPackagedRuntimeRoot) {
+  await stageRuntimeBundles(windowsPackagedRuntimeRoot);
+  await writeFile(windowsRuntimeStageFile, `${windowsPackagedRuntimeRoot}\n`);
 } else {
-  await rm(windowsRuntimeRoot, { recursive: true, force: true });
+  await rm(join(windowsBuildRoot, "r"), { recursive: true, force: true });
+  await rm(windowsRuntimeStageFile, { force: true });
 }
 
 console.log(`Prepared GUI build assets for ${goos} (${runtimeMode})`);
@@ -61,6 +70,26 @@ function hostGoos() {
     default:
       return process.platform;
   }
+}
+
+function resolveWindowsPackagedRuntimeRoot() {
+  if (goos !== "windows" || runtimeMode !== "packaged") {
+    return "";
+  }
+
+  if (runtimeOutput) {
+    return runtimeOutput;
+  }
+
+  return join(tmpdir(), "srg");
+}
+
+async function writeWindowsInstallerScript(runtimeStagePath) {
+  const templatePath = join(packagingRoot, "installer", "project.nsi");
+  const installerPath = join(windowsInstallerRoot, "project.nsi");
+  const template = await readFile(templatePath, "utf8");
+  const nsisRuntimeStagePath = runtimeStagePath.replaceAll("/", "\\");
+  await writeFile(installerPath, template.replaceAll("__SYNAPSE_RUNTIME_STAGE__", nsisRuntimeStagePath));
 }
 
 async function stageRuntimeBundles(runtimeRoot) {
