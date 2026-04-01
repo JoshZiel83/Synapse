@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -25,18 +26,18 @@ await mkdir(windowsInstallerRoot, { recursive: true });
 
 await cp(join(repoRoot, "packages", "web-next", "public", "synapse.png"), join(buildRoot, "appicon.png"), { force: true });
 
-const windowsPackagedRuntimeRoot = resolveWindowsPackagedRuntimeRoot();
-await writeWindowsInstallerScript(windowsPackagedRuntimeRoot || "..\\r");
+const windowsPackagedRuntime = await resolveWindowsPackagedRuntime();
+await writeWindowsInstallerScript(windowsPackagedRuntime?.stagePath ?? "..\\r");
 
 if (runtimeOutput) {
   await stageRuntimeBundles(runtimeOutput);
-  if (!windowsPackagedRuntimeRoot) {
+  if (!windowsPackagedRuntime) {
     await rm(join(windowsBuildRoot, "r"), { recursive: true, force: true });
     await rm(windowsRuntimeStageFile, { force: true });
   }
-} else if (windowsPackagedRuntimeRoot) {
-  await stageRuntimeBundles(windowsPackagedRuntimeRoot);
-  await writeFile(windowsRuntimeStageFile, `${windowsPackagedRuntimeRoot}\n`);
+} else if (windowsPackagedRuntime) {
+  await stageRuntimeBundles(windowsPackagedRuntime.physicalRoot);
+  await writeFile(windowsRuntimeStageFile, `${windowsPackagedRuntime.stagePath}\n`);
 } else {
   await rm(join(windowsBuildRoot, "r"), { recursive: true, force: true });
   await rm(windowsRuntimeStageFile, { force: true });
@@ -72,16 +73,24 @@ function hostGoos() {
   }
 }
 
-function resolveWindowsPackagedRuntimeRoot() {
+async function resolveWindowsPackagedRuntime() {
   if (goos !== "windows" || runtimeMode !== "packaged") {
-    return "";
+    return null;
   }
 
   if (runtimeOutput) {
-    return runtimeOutput;
+    return {
+      physicalRoot: runtimeOutput,
+      stagePath: runtimeOutput,
+    };
   }
 
-  return join(tmpdir(), "srg");
+  const physicalRoot = join(tmpdir(), "srg");
+  const stagePath = process.platform === "win32"
+    ? await ensureWindowsSubstDrive(physicalRoot)
+    : physicalRoot;
+
+  return { physicalRoot, stagePath };
 }
 
 async function writeWindowsInstallerScript(runtimeStagePath) {
@@ -90,6 +99,62 @@ async function writeWindowsInstallerScript(runtimeStagePath) {
   const template = await readFile(templatePath, "utf8");
   const nsisRuntimeStagePath = runtimeStagePath.replaceAll("/", "\\");
   await writeFile(installerPath, template.replaceAll("__SYNAPSE_RUNTIME_STAGE__", nsisRuntimeStagePath));
+}
+
+async function ensureWindowsSubstDrive(targetPath) {
+  const candidateLetters = ["R", "S", "T", "U", "V", "W", "X", "Y", "Z"];
+
+  for (const letter of candidateLetters) {
+    const driveRoot = `${letter}:\\`;
+    if (await pathExists(driveRoot)) {
+      continue;
+    }
+    await runCommand("cmd", ["/d", "/s", "/c", `subst ${letter}: "${targetPath}"`]);
+    if (await pathExists(driveRoot)) {
+      return driveRoot;
+    }
+  }
+
+  throw new Error(`unable to allocate a free Windows SUBST drive for ${targetPath}`);
+}
+
+async function pathExists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function runCommand(command, args, options = {}) {
+  return new Promise((resolveCommand, rejectCommand) => {
+    const commandLabel = [command, ...args].join(" ");
+    const child = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      ...options,
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", (error) => {
+      rejectCommand(new Error(`${commandLabel} failed to start: ${error instanceof Error ? error.message : String(error)}`));
+    });
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolveCommand({ stdout, stderr });
+        return;
+      }
+      rejectCommand(new Error(`${commandLabel} failed with exit code ${code}\n${stderr || stdout}`));
+    });
+  });
 }
 
 async function stageRuntimeBundles(runtimeRoot) {
