@@ -624,7 +624,7 @@ export async function actorThink(
     engineKind:
       resolved?.engineKind ||
       config.ai.engineKind ||
-      getDefaultModelEngineKind(config.ai.provider),
+      (config.ai.provider ? getDefaultModelEngineKind(config.ai.provider) : ''),
     model: resolved?.modelName || config.ai.model,
     round,
     attempt: attempt || 1,

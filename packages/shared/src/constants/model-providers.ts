@@ -30,7 +30,6 @@ export interface ModelProviderDefinition {
   label: string;
   defaultBaseUrl: string;
   defaultEngineKind: string;
-  envApiKeyAliases: string[];
   supportsBuiltinTools: boolean;
   engines: ModelProviderEngineDefinition[];
 }
@@ -73,7 +72,6 @@ export const MODEL_PROVIDER_CATALOG: Record<string, ModelProviderDefinition> = {
     label: 'Anthropic',
     defaultBaseUrl: 'https://api.anthropic.com',
     defaultEngineKind: 'anthropic.messages',
-    envApiKeyAliases: ['ANTHROPIC_API_KEY'],
     supportsBuiltinTools: true,
     engines: [
       {
@@ -90,7 +88,6 @@ export const MODEL_PROVIDER_CATALOG: Record<string, ModelProviderDefinition> = {
     label: 'OpenAI',
     defaultBaseUrl: 'https://api.openai.com',
     defaultEngineKind: 'openai.chat_completions',
-    envApiKeyAliases: ['OPENAI_API_KEY'],
     supportsBuiltinTools: false,
     engines: [
       {
@@ -114,13 +111,12 @@ export const MODEL_PROVIDER_CATALOG: Record<string, ModelProviderDefinition> = {
     label: 'BigModel',
     defaultBaseUrl: 'https://open.bigmodel.cn/api',
     defaultEngineKind: 'bigmodel.chat_completions',
-    envApiKeyAliases: ['BIGMODEL_API_KEY', 'ZHIPUAI_API_KEY'],
     supportsBuiltinTools: false,
     engines: [
       {
         engineKind: 'bigmodel.chat_completions',
         label: 'Chat Completions',
-        defaultModelName: 'glm-5-turbo',
+        defaultModelName: 'glm-5.1',
         providerAdapter: 'bigmodel.chat_completions',
         branchStateMode: 'openai.chat_completions',
         maxOutputTokens: 131072,

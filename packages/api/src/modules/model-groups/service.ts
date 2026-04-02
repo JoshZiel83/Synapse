@@ -1760,7 +1760,7 @@ export async function seedPlatformDefaultGroup() {
     groupId = group.id;
   }
 
-  if (config.ai.apiKey && groupId) {
+  if (config.ai.provider && config.ai.apiKey && config.ai.model && groupId) {
     const existingItem = await db
       .selectFrom('model_group_profiles')
       .select('id')

@@ -6,6 +6,29 @@ WEB_ENV_FILE="$(cd "$(dirname "$0")" && pwd)/packages/web-next/.env.local"
 DOMAIN="${SYNAPSE_PUBLIC_DOMAIN:-change-me.example.com}"
 APP_URL="https://$DOMAIN"
 API_PROXY_ORIGIN="${SYNAPSE_API_PROXY_ORIGIN:-http://localhost:3001}"
+SELECTED_AI_PROVIDER="${SYNAPSE_AI_PROVIDER:-}"
+SELECTED_AI_ENGINE_KIND="${SYNAPSE_AI_ENGINE_KIND:-}"
+SELECTED_AI_BASE_URL="${SYNAPSE_AI_BASE_URL:-}"
+SELECTED_AI_MODEL="${SYNAPSE_AI_MODEL:-}"
+SELECTED_AI_API_KEY="${SYNAPSE_AI_API_KEY:-}"
+
+case "$SELECTED_AI_PROVIDER" in
+  anthropic)
+    SELECTED_AI_ENGINE_KIND="${SELECTED_AI_ENGINE_KIND:-anthropic.messages}"
+    SELECTED_AI_BASE_URL="${SELECTED_AI_BASE_URL:-https://api.anthropic.com}"
+    SELECTED_AI_MODEL="${SELECTED_AI_MODEL:-claude-sonnet-4-20250514}"
+    ;;
+  openai)
+    SELECTED_AI_ENGINE_KIND="${SELECTED_AI_ENGINE_KIND:-openai.chat_completions}"
+    SELECTED_AI_BASE_URL="${SELECTED_AI_BASE_URL:-https://api.openai.com}"
+    SELECTED_AI_MODEL="${SELECTED_AI_MODEL:-gpt-4.1}"
+    ;;
+  bigmodel)
+    SELECTED_AI_ENGINE_KIND="${SELECTED_AI_ENGINE_KIND:-bigmodel.chat_completions}"
+    SELECTED_AI_BASE_URL="${SELECTED_AI_BASE_URL:-https://open.bigmodel.cn/api}"
+    SELECTED_AI_MODEL="${SELECTED_AI_MODEL:-glm-5.1}"
+    ;;
+esac
 
 generate_password() {
   openssl rand -base64 32 | tr -d '/+=' | head -c 32
@@ -63,12 +86,11 @@ NEXT_PUBLIC_API_URL=/api/v1
 NEXT_PUBLIC_WS_URL=wss://$DOMAIN
 
 # AI provider
-AI_PROVIDER=anthropic
-AI_API_KEY=
-AI_BASE_URL=
-AI_MODEL=
-ANTHROPIC_API_KEY=
-ANTHROPIC_BASE_URL=
+AI_PROVIDER=$SELECTED_AI_PROVIDER
+AI_ENGINE_KIND=$SELECTED_AI_ENGINE_KIND
+AI_API_KEY=$SELECTED_AI_API_KEY
+AI_BASE_URL=$SELECTED_AI_BASE_URL
+AI_MODEL=$SELECTED_AI_MODEL
 EOF
 
   chmod 600 "$ENV_FILE"

@@ -5,7 +5,6 @@ import {
   getDefaultModelBaseUrl,
   getDefaultModelEngineKind,
   getDefaultModelName,
-  getModelProviderDefinition,
 } from '@synapse/shared';
 
 for (const candidate of [
@@ -24,6 +23,10 @@ if (!authzEnabled) {
     'AUTHZ_ENABLED=false is no longer supported. Synapse now requires SpiceDB authorization to be enabled in every environment.',
   );
 }
+
+const configuredAiProvider = process.env.AI_PROVIDER || '';
+const configuredAiEngineKind = process.env.AI_ENGINE_KIND
+  || (configuredAiProvider ? getDefaultModelEngineKind(configuredAiProvider) : '');
 
 export const config = {
   port: parseInt(process.env.PORT || '3001'),
@@ -57,20 +60,14 @@ export const config = {
       '',
   },
   ai: {
-    provider: process.env.AI_PROVIDER || 'anthropic',
-    engineKind: process.env.AI_ENGINE_KIND || getDefaultModelEngineKind(process.env.AI_PROVIDER || 'anthropic'),
-    apiKey: process.env.AI_API_KEY
-      || getModelProviderDefinition(process.env.AI_PROVIDER || 'anthropic')?.envApiKeyAliases
-        .map((envKey: string) => process.env[envKey])
-        .find((value: string | undefined) => typeof value === 'string' && value.length > 0)
-      || '',
-    baseUrl: process.env.AI_BASE_URL || getDefaultModelBaseUrl(process.env.AI_PROVIDER || 'anthropic'),
+    provider: configuredAiProvider,
+    engineKind: configuredAiEngineKind,
+    apiKey: process.env.AI_API_KEY || '',
+    baseUrl: process.env.AI_BASE_URL
+      || (configuredAiProvider ? getDefaultModelBaseUrl(configuredAiProvider) : ''),
     model: process.env.AI_MODEL
       || process.env.MODEL_NAME
-      || getDefaultModelName(
-        process.env.AI_PROVIDER || 'anthropic',
-        process.env.AI_ENGINE_KIND || getDefaultModelEngineKind(process.env.AI_PROVIDER || 'anthropic'),
-      ),
+      || (configuredAiProvider ? getDefaultModelName(configuredAiProvider, configuredAiEngineKind) : ''),
     maxTokens: parseInt(process.env.AI_MAX_TOKENS || '4096'),
   },
   audioFallback: {
@@ -89,8 +86,8 @@ export const config = {
     recallLimit: parseInt(process.env.MEMORY_RECALL_LIMIT || '6'),
     searchCandidateLimit: parseInt(process.env.MEMORY_SEARCH_CANDIDATE_LIMIT || '40'),
     embeddings: {
-      baseUrl: process.env.MEMORY_EMBEDDINGS_BASE_URL || process.env.OPENAI_BASE_URL || '',
-      apiKey: process.env.MEMORY_EMBEDDINGS_API_KEY || process.env.OPENAI_API_KEY || '',
+      baseUrl: process.env.MEMORY_EMBEDDINGS_BASE_URL || '',
+      apiKey: process.env.MEMORY_EMBEDDINGS_API_KEY || '',
       model: process.env.MEMORY_EMBEDDINGS_MODEL || 'text-embedding-3-small',
       dimensions: parseInt(process.env.MEMORY_EMBEDDINGS_DIMENSIONS || '1536'),
       timeoutMs: parseInt(process.env.MEMORY_EMBEDDINGS_TIMEOUT_MS || '12000'),
