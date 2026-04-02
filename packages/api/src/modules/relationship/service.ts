@@ -88,6 +88,7 @@ type ActorSummary = {
   avatarStoredName?: string | null;
   avatarEmoji?: string | null;
   accessPolicy: AccessPolicy;
+  isPublicShared: boolean;
 };
 
 type ContactHubEntry = {
@@ -277,6 +278,7 @@ async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
       "a.title",
       "a.role",
       "a.access_policy",
+      "a.is_public_shared",
       "a.avatar_emoji",
       "avatar_file.stored_name as avatar_stored_name",
     ])
@@ -293,6 +295,7 @@ async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
     avatarStoredName: row.avatar_stored_name,
     avatarEmoji: row.avatar_emoji,
     accessPolicy: row.access_policy as AccessPolicy,
+    isPublicShared: Boolean(row.is_public_shared),
   };
 }
 
@@ -973,6 +976,7 @@ async function buildContactHubEntryMap(params: {
           "a.title",
           "a.role",
           "a.access_policy",
+          "a.is_public_shared",
           "a.avatar_emoji",
           "avatar_file.stored_name as avatar_stored_name",
         ])
@@ -1041,6 +1045,7 @@ async function buildContactHubEntryMap(params: {
       avatarStoredName: row.avatar_stored_name,
       avatarEmoji: row.avatar_emoji,
       accessPolicy: row.access_policy as AccessPolicy,
+      isPublicShared: Boolean(row.is_public_shared),
     };
     const conversationId = directConversationMap.get(
       directConversationIdentityKey({
@@ -1800,6 +1805,7 @@ export async function getActorRelationshipProfile(params: {
     identityId: profile.identity_id,
     identitySearchEnabled: profile.identity_search_enabled,
     accessPolicy: actor.accessPolicy,
+    isPublicShared: actor.isPublicShared,
   };
 }
 
@@ -1811,6 +1817,7 @@ export async function updateActorRelationshipProfile(params: {
   identityId?: string;
   identitySearchEnabled?: boolean;
   accessPolicy?: AccessPolicy;
+  isPublicShared?: boolean;
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
@@ -1855,15 +1862,33 @@ export async function updateActorRelationshipProfile(params: {
     throw new Error("Failed to update relationship profile");
   }
 
-  let accessPolicy = (await getActorSummary(params.actorId))?.accessPolicy;
+  const actorSummary = await getActorSummary(params.actorId);
+  let accessPolicy = actorSummary?.accessPolicy;
+  let isPublicShared = actorSummary?.isPublicShared ?? false;
   if (params.accessPolicy) {
-    const actor = await updateActorAccessPolicy({
+    const actorResult = await updateActorAccessPolicy({
       workspaceId: params.workspaceId,
       actorId: params.actorId,
       updatedByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       accessPolicy: params.accessPolicy,
     });
-    accessPolicy = actor.access_policy as AccessPolicy;
+    accessPolicy = actorResult.access_policy as AccessPolicy;
+  }
+  if (typeof params.isPublicShared === "boolean") {
+    const actorResult = await db
+      .updateTable("actors")
+      .set({
+        is_public_shared: params.isPublicShared,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", params.actorId)
+      .where("workspace_id", "=", params.workspaceId)
+      .returning(["is_public_shared"])
+      .executeTakeFirst();
+    if (!actorResult) {
+      throw new Error("Actor not found");
+    }
+    isPublicShared = Boolean(actorResult.is_public_shared);
   }
 
   return {
@@ -1874,6 +1899,7 @@ export async function updateActorRelationshipProfile(params: {
     identityId: updatedProfile.identity_id,
     identitySearchEnabled: updatedProfile.identity_search_enabled,
     accessPolicy: accessPolicy || "workspace_open",
+    isPublicShared,
   };
 }
 

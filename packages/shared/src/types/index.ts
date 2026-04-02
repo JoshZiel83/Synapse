@@ -145,6 +145,7 @@ export interface Workspace {
   slug: string;
   description?: string;
   ownerId: UUID;
+  isTrusted: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -332,6 +333,7 @@ export interface Actor {
   currentVersion: number;
   sourceLink?: ActorPackageSourceLink;
   isActive: boolean;
+  isPublicShared: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }

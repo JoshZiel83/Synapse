@@ -57,6 +57,7 @@ const updateActorProfileSchema = z.object({
   identityId: z.string().trim().min(4).max(32).optional(),
   identitySearchEnabled: z.boolean().optional(),
   accessPolicy: actorAccessPolicySchema.optional(),
+  isPublicShared: z.boolean().optional(),
 });
 
 function sendServiceError(reply: FastifyReply, error: unknown) {
@@ -155,6 +156,7 @@ export default async function relationshipController(app: FastifyInstance) {
           identityId: body.identityId,
           identitySearchEnabled: body.identitySearchEnabled,
           accessPolicy: body.accessPolicy,
+          isPublicShared: body.isPublicShared,
         }),
       );
     } catch (error) {

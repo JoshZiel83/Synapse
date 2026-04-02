@@ -61,10 +61,12 @@ type ImportedSkillPackage = {
 
 async function seedDemoWorkspace(userId: string) {
   const result = await executeSql<{ id: string }>(
-    `INSERT INTO workspaces (name, slug, description, owner_id)
-     VALUES ('Demo Workspace', 'demo-workspace', 'Refactored workspace seed', $1)
+    `INSERT INTO workspaces (name, slug, description, owner_id, is_trusted)
+     VALUES ('Yihang', 'yihang', 'Refactored workspace seed', $1, TRUE)
      ON CONFLICT (slug) DO UPDATE SET
+       name = EXCLUDED.name,
        description = EXCLUDED.description,
+       is_trusted = EXCLUDED.is_trusted,
        updated_at = NOW()
      RETURNING id`,
     [userId],
@@ -81,6 +83,52 @@ async function seedDemoWorkspace(userId: string) {
   const workspaceMemberId = memberResult.rows[0]!.id;
 
   return { workspaceId, workspaceMemberId };
+}
+
+async function seedDefaultActorDiscoveryProfiles(params: {
+  workspaceId: string;
+  workspaceMemberId: string;
+  actorIds: string[];
+}) {
+  for (const actorId of params.actorIds) {
+    await executeSql(
+      `INSERT INTO workspace_relationship_profiles (
+         workspace_id,
+         subject_type,
+         subject_actor_id,
+         identity_search_enabled,
+         approval_mode,
+         qr_token,
+         created_by_workspace_member_id
+       )
+       VALUES ($1, 'actor', $2, TRUE, 'auto', $3, $4)
+       ON CONFLICT (workspace_id, subject_actor_id)
+         WHERE subject_type = 'actor' AND subject_actor_id IS NOT NULL
+       DO UPDATE SET
+         identity_search_enabled = EXCLUDED.identity_search_enabled,
+         approval_mode = EXCLUDED.approval_mode,
+         updated_at = NOW()`,
+      [
+        params.workspaceId,
+        actorId,
+        crypto.randomUUID(),
+        params.workspaceMemberId,
+      ],
+    );
+  }
+
+  if (params.actorIds.length === 0) {
+    return;
+  }
+
+  await executeSql(
+    `UPDATE actors
+     SET is_public_shared = TRUE,
+         updated_at = NOW()
+     WHERE workspace_id = $1
+       AND id = ANY($2::uuid[])`,
+    [params.workspaceId, params.actorIds],
+  );
 }
 
 function sha256Hex(value: Buffer | string) {
@@ -530,6 +578,32 @@ export async function seedDatabase() {
     id: userId,
     email: "demo@synapse.dev",
   });
+
+  const ordinaryUserResult = await executeSql<{ id: string }>(
+    `INSERT INTO users (email, name, password_hash)
+     VALUES ('yihang@synapse.dev', 'Yihang', $1)
+     ON CONFLICT (email) DO UPDATE SET
+       name = EXCLUDED.name,
+       password_hash = EXCLUDED.password_hash,
+       updated_at = NOW()
+     RETURNING id`,
+    [passwordHash],
+  );
+  const ordinaryUserId = ordinaryUserResult.rows[0]!.id;
+
+  const ordinaryUserAvatar = await createGeneratedUserAvatarFile({ query: executeSql }, {
+    userId: ordinaryUserId,
+    name: "Yihang",
+    email: "yihang@synapse.dev",
+  });
+  await executeSql(
+    `UPDATE users
+     SET avatar_file_id = $2,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [ordinaryUserId, ordinaryUserAvatar.fileId],
+  );
+
   await seedPlatformDefaultGroup();
 
   const { workspaceId, workspaceMemberId } = await seedDemoWorkspace(userId);
@@ -541,6 +615,11 @@ export async function seedDatabase() {
     workspaceMemberId,
     actorCatalog.actorRefs,
   );
+  await seedDefaultActorDiscoveryProfiles({
+    workspaceId,
+    workspaceMemberId,
+    actorIds: runtimeRefs.actorIds,
+  });
   await executeSql(
     `INSERT INTO workspace_member_preferences
        (workspace_member_id, chief_actor_id, created_at, updated_at)

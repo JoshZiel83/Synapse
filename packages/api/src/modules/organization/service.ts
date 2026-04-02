@@ -75,6 +75,7 @@ type ActorRow = {
   config: Record<string, unknown> | string | null;
   current_version: number;
   is_active: boolean;
+  is_public_shared: boolean;
   created_at: string;
   updated_at: string;
   current_actor_version_id: string;
@@ -195,6 +196,7 @@ const ACTOR_SELECT = `
     a.config,
     a.current_version,
     a.is_active,
+    a.is_public_shared,
     a.created_at,
     a.updated_at,
     current_version.id AS current_actor_version_id,
@@ -586,6 +588,7 @@ function mapActorRow(row: ActorRow, docs: ActorDoc[]): Actor {
     currentVersion: row.current_version,
     sourceLink: buildActorSourceLink(row),
     isActive: Boolean(row.is_active),
+    isPublicShared: Boolean(row.is_public_shared),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

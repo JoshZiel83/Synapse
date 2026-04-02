@@ -226,6 +226,7 @@ CREATE TABLE workspaces (
   slug VARCHAR(255) UNIQUE NOT NULL,
   description TEXT,
   owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  is_trusted BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -713,6 +714,7 @@ CREATE TABLE actors (
   config JSONB DEFAULT '{}',
   current_version INT NOT NULL DEFAULT 1,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  is_public_shared BOOLEAN NOT NULL DEFAULT FALSE,
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),

@@ -479,6 +479,26 @@ export function ContactHubClient() {
     toast.success(`Actor access policy switched to ${nextPolicy}.`)
   }
 
+  async function handleToggleActorPublicShare() {
+    if (!workspaceId || !selectedEntry?.actorId || !selectedActorProfile) return
+    const nextPublicShared = !selectedActorProfile.isPublicShared
+    const nextProfile = await api.updateActorRelationshipProfile(
+      workspaceId,
+      selectedEntry.actorId,
+      {
+        approvalMode: selectedActorProfile.approvalMode,
+        accessPolicy: selectedActorProfile.accessPolicy,
+        isPublicShared: nextPublicShared,
+      }
+    )
+    setSelectedActorProfile(nextProfile)
+    toast.success(
+      nextPublicShared
+        ? "Actor public sharing enabled."
+        : "Actor public sharing disabled."
+    )
+  }
+
   const normalizedQuery = search.trim().toLowerCase()
   const visibleGroups = useMemo(
     () => ((hub?.groups as ConversationSummaryLike[] | undefined) || []).filter((item) => filterConversation(item, normalizedQuery)),
@@ -970,7 +990,8 @@ export function ContactHubClient() {
                       )}
                       <p className="text-sm text-muted-foreground">
                         Approval mode: {selectedActorProfile.approvalMode} · access policy{" "}
-                        {selectedActorProfile.accessPolicy}
+                        {selectedActorProfile.accessPolicy} · public share{" "}
+                        {selectedActorProfile.isPublicShared ? "on" : "off"}
                       </p>
                       <div className="grid gap-2">
                         <Button
@@ -994,6 +1015,15 @@ export function ContactHubClient() {
                           {selectedActorProfile.accessPolicy === "workspace_open"
                             ? "approval_required"
                             : "workspace_open"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full rounded-full"
+                          onClick={() => void handleToggleActorPublicShare()}
+                        >
+                          Turn public share{" "}
+                          {selectedActorProfile.isPublicShared ? "off" : "on"}
                         </Button>
                       </div>
                     </CardContent>

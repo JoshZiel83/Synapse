@@ -66,6 +66,7 @@ export interface WorkspaceListResponse {
     id: string
     name: string
     slug: string
+    isTrusted?: boolean
     currentWorkspaceMemberId?: string
     trustLevel?: string
   }>
@@ -79,6 +80,7 @@ export interface RelationshipProfileView {
   identityId: string
   identitySearchEnabled: boolean
   accessPolicy?: "workspace_open" | "approval_required"
+  isPublicShared?: boolean
 }
 
 export interface ContactHubEntryView {
@@ -1049,6 +1051,7 @@ class ApiClient {
       identityId?: string
       identitySearchEnabled?: boolean
       accessPolicy?: "workspace_open" | "approval_required"
+      isPublicShared?: boolean
     }
   ): Promise<RelationshipProfileView> {
     return this.fetch(`/workspaces/${wsId}/actors/${actorId}/relationship-profile`, {

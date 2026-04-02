@@ -392,6 +392,7 @@ export interface Actors {
   current_version: Generated<number>;
   id: Generated<string>;
   is_active: Generated<boolean>;
+  is_public_shared: Generated<boolean>;
   name: string;
   parent_id: string | null;
   role: ActorsRole;
@@ -2110,6 +2111,7 @@ export interface Workspaces {
   created_at: Generated<Timestamp | null>;
   description: string | null;
   id: Generated<string>;
+  is_trusted: Generated<boolean>;
   name: string;
   owner_id: string;
   slug: string;

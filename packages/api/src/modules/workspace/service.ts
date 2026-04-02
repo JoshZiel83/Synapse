@@ -987,6 +987,7 @@ function mapWorkspaceRow(row: any) {
     slug: row.slug,
     description: row.description ?? null,
     ownerId: row.owner_id,
+    isTrusted: Boolean(row.is_trusted),
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
   };
@@ -1013,6 +1014,7 @@ function mapActorRow(row: any, docs: ActorDoc[]) {
     },
     currentVersion: Number(row.current_version || 1),
     isActive: row.is_active,
+    isPublicShared: Boolean(row.is_public_shared),
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
   };
