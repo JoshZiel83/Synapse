@@ -502,7 +502,7 @@ class ApiClient {
     })
   }
 
-  // Installed Skills
+  // Skills
   getInstalledSkills(
     wsId: string,
     params?: string

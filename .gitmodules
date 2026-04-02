@@ -1,0 +1,3 @@
+[submodule "subprojects/cli-anything"]
+	path = subprojects/cli-anything
+	url = https://github.com/HKUDS/CLI-Anything

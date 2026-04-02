@@ -167,6 +167,7 @@ interface RelayExposureCatalog {
   exposureStableKey: string;
   exposureDisplayName: string;
   transport: string;
+  runtimeStatus: string;
   metadata: Record<string, unknown>;
   tools: RelayCatalogToolSnapshot[];
 }
@@ -1555,6 +1556,7 @@ function getRelayExposureCatalogLocal(deviceId: string, exposureId: string): Rel
     exposureStableKey: exposure.stableKey,
     exposureDisplayName: exposure.displayName,
     transport: exposure.transport,
+    runtimeStatus: exposure.runtimeStatus,
     metadata: { ...exposure.metadata },
     tools: exposure.tools.map((tool) => ({
       binding: { ...tool.binding },
@@ -1588,6 +1590,7 @@ export async function loadRelayExposureCatalogSnapshot(
     exposureStableKey: catalog.stableKey,
     exposureDisplayName: catalog.displayName,
     transport: catalog.transport,
+    runtimeStatus: catalog.runtimeStatus,
     metadata: { ...catalog.metadata },
     tools: catalog.tools.map((tool) => ({
       binding: { ...tool.binding },

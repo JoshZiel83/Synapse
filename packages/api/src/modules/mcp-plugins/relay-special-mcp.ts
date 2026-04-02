@@ -37,13 +37,6 @@ const CUA_CONTROL_TOOL_NAMES = new Set([
   "desktop_press_keys",
 ]);
 
-const COMMANDLINE_TOOL_NAMES = new Map<string, "bash" | "git" | "node" | "python">([
-  ["bash_exec", "bash"],
-  ["git_exec", "git"],
-  ["node_exec", "node"],
-  ["python_exec", "python"],
-]);
-
 export type RelaySpecialMcpKind =
   | "filesystem"
   | "cua"
@@ -142,21 +135,16 @@ export function inferRelaySpecialAuthorizationRequirement(params: {
       params.exposureMetadata?.kind,
   );
 
-  const commandlineExecutor = COMMANDLINE_TOOL_NAMES.get(params.visibleToolName);
-  if (builtinKind === "commandline" || commandlineExecutor) {
-    const executor = commandlineExecutor;
-    if (!executor) {
-      return null;
-    }
+  if (builtinKind === "commandline" || params.visibleToolName === "bash") {
     const cwdPrefix = asTrimmedString(params.toolInput.cwd);
     return {
       kind: "commandline",
       effect: {
         capability: "commandline",
-        executor,
+        executor: "bash",
         cwdPrefix,
       },
-      message: `Running ${executor} commands on the relay requires user authorization.`,
+      message: "Running bash commands on the relay requires user authorization.",
       clientHint:
         "Ask the user whether this command execution should be allowed once, for this actor, for this conversation, or always.",
     };

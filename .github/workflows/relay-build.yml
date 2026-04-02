@@ -25,6 +25,7 @@ env:
   BUNDLED_WINDOWS_GIT_VERSION: '2.49.0.windows.1'
   BUNDLED_FFMPEG_RELEASE_TAG: 'n7.1-2'
   COMMANDLINE_PACKAGE_PROFILE: 'default-data-v5'
+  PIP_INDEX_URL: 'https://pypi.org/simple'
   ENABLE_COS_UPLOAD: ${{ vars.ENABLE_COS_UPLOAD || '' }}
 
 jobs:
@@ -35,6 +36,8 @@ jobs:
       selected_platforms: ${{ steps.select.outputs.selected_platforms }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Select target platforms
         id: select
@@ -58,6 +61,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-go@v5
         with:

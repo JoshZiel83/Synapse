@@ -1073,13 +1073,13 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "read_skill",
       description:
-        "Read the description or an attachment of an installed skill package on demand. Use when a listed skill clearly matches the task and you need its detailed instructions or referenced text resources.",
+        "Read the description or an attachment of an available skill package on demand. Use when a listed skill clearly matches the task and you need its detailed instructions or referenced text resources.",
       parameters: {
         type: "object",
         properties: {
           skillName: {
             type: "string",
-            description: "The installed skill name/slug to read.",
+            description: "The available skill name/slug to read.",
           },
           path: {
             type: "string",
@@ -1105,13 +1105,13 @@ export function registerCallableToolPlugins(): void {
         active: true,
         definition: {
           name: "read_skill",
-          description: `Read the contents of an installed skill package. Available skills: ${skillList}`,
+          description: `Read the contents of an available skill package. Available skills: ${skillList}`,
           parameters: {
             type: "object",
             properties: {
               skillName: {
                 type: "string",
-                description: "The installed skill name/slug to read.",
+                description: "The available skill name/slug to read.",
                 enum: skillNames,
               },
               path: {
@@ -1149,6 +1149,7 @@ export function registerCallableToolPlugins(): void {
         const result = await readVisibleSkill({
           workspaceId: context.workspaceId,
           actorId: context.actorId,
+          sessionId: context.sessionId,
           conversationId: session.conversation_id,
           skillName,
           assetPath: path || undefined,

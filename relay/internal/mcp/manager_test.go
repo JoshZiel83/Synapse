@@ -194,7 +194,7 @@ func TestInitAllKeepsRetryableServerPendingUntilRefreshActivatesIt(t *testing.T)
 				return nil
 			},
 			listToolsFn: func() ([]Tool, error) {
-				return []Tool{{Name: "bash_exec"}}, nil
+				return []Tool{{Name: "bash"}}, nil
 			},
 		}, nil
 	}

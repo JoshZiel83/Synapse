@@ -14,37 +14,56 @@ import (
 )
 
 type Manifest struct {
-	Prepared              bool     `json:"prepared"`
-	AssetVersion          string   `json:"assetVersion"`
-	Platform              string   `json:"platform"`
-	NodeAssetVersion      string   `json:"nodeAssetVersion"`
-	NodeModulesDir        string   `json:"nodeModulesDir"`
-	PythonHomeDir         string   `json:"pythonHomeDir"`
-	PythonBinary          string   `json:"pythonBinary"`
-	PythonSitePackagesDir string   `json:"pythonSitePackagesDir"`
-	FFmpegBinary          string   `json:"ffmpegBinary"`
-	FFprobeBinary         string   `json:"ffprobeBinary"`
-	GitBinary             string   `json:"gitBinary"`
-	BashBinary            string   `json:"bashBinary"`
-	PackageProfile        string   `json:"packageProfile"`
-	FFmpegReleaseTag      string   `json:"ffmpegReleaseTag"`
-	Executables           []string `json:"executables"`
+	Prepared                bool                    `json:"prepared"`
+	AssetVersion            string                  `json:"assetVersion"`
+	Platform                string                  `json:"platform"`
+	NodeAssetVersion        string                  `json:"nodeAssetVersion"`
+	NodeModulesDir          string                  `json:"nodeModulesDir"`
+	PythonHomeDir           string                  `json:"pythonHomeDir"`
+	PythonBinary            string                  `json:"pythonBinary"`
+	PythonSitePackagesDir   string                  `json:"pythonSitePackagesDir"`
+	ManagedBinDir           string                  `json:"managedBinDir"`
+	FFmpegBinary            string                  `json:"ffmpegBinary"`
+	FFprobeBinary           string                  `json:"ffprobeBinary"`
+	GitBinary               string                  `json:"gitBinary"`
+	BashBinary              string                  `json:"bashBinary"`
+	CliAnythingCapabilities []CliAnythingCapability `json:"cliAnythingCapabilities"`
+	PackageProfile          string                  `json:"packageProfile"`
+	FFmpegReleaseTag        string                  `json:"ffmpegReleaseTag"`
+	Executables             []string                `json:"executables"`
+}
+
+type CliAnythingProbe struct {
+	Type       string   `json:"type"`
+	EnvPathVar string   `json:"envPathVar"`
+	Candidates []string `json:"candidates"`
+	Paths      []string `json:"paths"`
+}
+
+type CliAnythingCapability struct {
+	Slug    string           `json:"slug"`
+	Command string           `json:"command"`
+	Module  string           `json:"module"`
+	Version string           `json:"version"`
+	Probe   CliAnythingProbe `json:"probe"`
 }
 
 type Installation struct {
-	RootDir               string
-	NodeBinaryPath        string
-	NodeModulesDir        string
-	PythonHomeDir         string
-	PythonBinaryPath      string
-	PythonSitePackagesDir string
-	FFmpegBinaryPath      string
-	FFprobeBinaryPath     string
-	GitBinaryPath         string
-	BashBinaryPath        string
-	PackageProfile        string
-	FFmpegReleaseTag      string
-	AssetVersion          string
+	RootDir                 string
+	NodeBinaryPath          string
+	NodeModulesDir          string
+	PythonHomeDir           string
+	PythonBinaryPath        string
+	PythonSitePackagesDir   string
+	ManagedBinDir           string
+	FFmpegBinaryPath        string
+	FFprobeBinaryPath       string
+	GitBinaryPath           string
+	BashBinaryPath          string
+	CliAnythingCapabilities []CliAnythingCapability
+	PackageProfile          string
+	FFmpegReleaseTag        string
+	AssetVersion            string
 }
 
 func LoadManifest() (Manifest, error) {
@@ -103,19 +122,21 @@ func EnsureInstalled() (*Installation, error) {
 	}
 
 	return &Installation{
-		RootDir:               rootDir,
-		NodeBinaryPath:        nodeInstallation.NodeBinaryPath,
-		NodeModulesDir:        joinIfNotEmpty(rootDir, manifest.NodeModulesDir),
-		PythonHomeDir:         joinIfNotEmpty(rootDir, manifest.PythonHomeDir),
-		PythonBinaryPath:      joinIfNotEmpty(rootDir, manifest.PythonBinary),
-		PythonSitePackagesDir: joinIfNotEmpty(rootDir, manifest.PythonSitePackagesDir),
-		FFmpegBinaryPath:      joinIfNotEmpty(rootDir, manifest.FFmpegBinary),
-		FFprobeBinaryPath:     joinIfNotEmpty(rootDir, manifest.FFprobeBinary),
-		GitBinaryPath:         joinIfNotEmpty(rootDir, manifest.GitBinary),
-		BashBinaryPath:        joinIfNotEmpty(rootDir, manifest.BashBinary),
-		PackageProfile:        manifest.PackageProfile,
-		FFmpegReleaseTag:      manifest.FFmpegReleaseTag,
-		AssetVersion:          manifest.AssetVersion,
+		RootDir:                 rootDir,
+		NodeBinaryPath:          nodeInstallation.NodeBinaryPath,
+		NodeModulesDir:          joinIfNotEmpty(rootDir, manifest.NodeModulesDir),
+		PythonHomeDir:           joinIfNotEmpty(rootDir, manifest.PythonHomeDir),
+		PythonBinaryPath:        joinIfNotEmpty(rootDir, manifest.PythonBinary),
+		PythonSitePackagesDir:   joinIfNotEmpty(rootDir, manifest.PythonSitePackagesDir),
+		ManagedBinDir:           joinIfNotEmpty(rootDir, manifest.ManagedBinDir),
+		FFmpegBinaryPath:        joinIfNotEmpty(rootDir, manifest.FFmpegBinary),
+		FFprobeBinaryPath:       joinIfNotEmpty(rootDir, manifest.FFprobeBinary),
+		GitBinaryPath:           joinIfNotEmpty(rootDir, manifest.GitBinary),
+		BashBinaryPath:          joinIfNotEmpty(rootDir, manifest.BashBinary),
+		CliAnythingCapabilities: manifest.CliAnythingCapabilities,
+		PackageProfile:          manifest.PackageProfile,
+		FFmpegReleaseTag:        manifest.FFmpegReleaseTag,
+		AssetVersion:            manifest.AssetVersion,
 	}, nil
 }
 

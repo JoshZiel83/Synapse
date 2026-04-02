@@ -1917,9 +1917,10 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
               <Badge variant="secondary">git</Badge>
               <Badge variant="secondary">node</Badge>
               <Badge variant="secondary">python</Badge>
+              <Badge variant="secondary">cli-anything</Badge>
             </div>
             <div className="mt-2 text-sm text-muted-foreground">
-              Exposes one built-in command line app that enables `bash_exec`, `git_exec`, `node_exec`, and `python_exec` together. Node and Python use the bundled runtime prepared at build time.
+              Exposes one built-in command line app with a single public `bash` tool. The runtime bundles git, node, python, ffmpeg, and managed CLI-Anything wrappers on PATH.
             </div>
           </div>
 
@@ -2036,7 +2037,7 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
                 Runtime surface
               </div>
               <div className="mt-2">
-                This app always turns on the four command runtimes together. `bash_exec` runs shell commands, `git_exec` runs argv-style Git commands, and `node_exec` plus `python_exec` use the bundled data-processing runtime prepared in CI. All four share the relay-level timeout ceiling configured above.
+                This app exposes a single `bash` tool. Inside that environment, bash, git, node, python, ffmpeg, ffprobe, and managed CLI-Anything commands are prewired together and share the relay-level timeout ceiling configured above.
               </div>
             </div>
           </div>

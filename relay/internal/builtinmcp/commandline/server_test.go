@@ -4,7 +4,6 @@ import (
 	"context"
 	"os/exec"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -27,37 +26,24 @@ func TestListToolsDescriptionsPreferDedicatedTools(t *testing.T) {
 		descriptions[tool.Name] = tool.Description
 	}
 
-	if description, ok := descriptions["bash_exec"]; ok {
-		if !strings.Contains(description, "Prefer GlobTool") {
-			t.Fatalf("expected bash_exec description to steer filename search to GlobTool, got %q", description)
-		}
-		if !strings.Contains(description, "GrepTool") || !strings.Contains(description, "SearchFiles") {
-			t.Fatalf("expected bash_exec description to mention dedicated search tools, got %q", description)
-		}
-		if !strings.Contains(description, "Do not use bash_exec for find/grep/rg-style filesystem search") {
-			t.Fatalf("expected bash_exec description to discourage shell search, got %q", description)
-		}
+	description, ok := descriptions["bash"]
+	if !ok {
+		t.Fatalf("expected unified bash tool to be listed, got %#v", descriptions)
 	}
-	if description, ok := descriptions["git_exec"]; ok && !strings.Contains(description, "Prefer this over bash_exec") {
-		t.Fatalf("expected git_exec description to prefer git_exec over bash_exec, got %q", description)
+	if !strings.Contains(description, "dedicated filesystem tools") {
+		t.Fatalf("expected bash description to prefer dedicated filesystem tools, got %q", description)
 	}
-	if description, ok := descriptions["node_exec"]; ok && !strings.Contains(description, "Returns stdout, stderr, exitCode") {
-		t.Fatalf("expected node_exec description to mention structured execution metadata, got %q", description)
+	if !strings.Contains(description, "git, node, python") {
+		t.Fatalf("expected bash description to mention bundled runtimes, got %q", description)
 	}
-	if description, ok := descriptions["python_exec"]; ok && !strings.Contains(description, "Prefer dedicated filesystem tools") {
-		t.Fatalf("expected python_exec description to prefer dedicated filesystem tools, got %q", description)
+	if !strings.Contains(description, "cli-anything wrappers") {
+		t.Fatalf("expected bash description to mention cli-anything wrappers, got %q", description)
 	}
 
-	names := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		names = append(names, tool.Name)
-	}
-	if slices.Contains(names, "bash_exec") {
-		schema := server.shellSchema()
-		cwd := schema["properties"].(map[string]interface{})["cwd"].(map[string]interface{})
-		if !strings.Contains(cwd["description"].(string), "Shell state does not persist") {
-			t.Fatalf("expected shell cwd description to warn about shell state, got %q", cwd["description"])
-		}
+	schema := server.shellSchema()
+	cwd := schema["properties"].(map[string]interface{})["cwd"].(map[string]interface{})
+	if !strings.Contains(cwd["description"].(string), "Shell state does not persist") {
+		t.Fatalf("expected shell cwd description to warn about shell state, got %q", cwd["description"])
 	}
 }
 

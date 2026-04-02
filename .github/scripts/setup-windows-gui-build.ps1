@@ -1,6 +1,69 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+function Get-SevenZipExecutable {
+    $commands = @('7z.exe', '7z', '7za.exe', '7za')
+    foreach ($command in $commands) {
+        $resolved = Get-Command $command -ErrorAction SilentlyContinue
+        if ($resolved) {
+            return $resolved
+        }
+    }
+
+    $searchRoots = @()
+    if ($env:ProgramFiles) {
+        $searchRoots += (Join-Path $env:ProgramFiles '7-Zip')
+    }
+    if (${env:ProgramFiles(x86)}) {
+        $searchRoots += (Join-Path ${env:ProgramFiles(x86)} '7-Zip')
+    }
+    if ($env:ChocolateyInstall) {
+        $searchRoots += (Join-Path $env:ChocolateyInstall 'bin')
+        $searchRoots += (Join-Path $env:ChocolateyInstall 'lib\7zip.commandline\tools')
+    }
+
+    foreach ($root in $searchRoots | Where-Object { $_ } | Select-Object -Unique) {
+        foreach ($name in @('7z.exe', '7za.exe')) {
+            $candidate = Join-Path $root $name
+            if (Test-Path -LiteralPath $candidate) {
+                return (Get-Item -LiteralPath $candidate)
+            }
+        }
+    }
+
+    return $null
+}
+
+function Ensure-SevenZip {
+    $sevenZip = Get-SevenZipExecutable
+    if ($sevenZip) {
+        $directory = Split-Path -Parent $sevenZip.Path
+        if ($directory) {
+            $directory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        }
+        & $sevenZip.Path | Select-Object -First 1 | Out-Null
+        return
+    }
+
+    if (-not $env:ChocolateyInstall) {
+        throw '7-Zip is required to extract PortableGit, and Chocolatey is unavailable to install it'
+    }
+
+    Write-Host 'Installing 7-Zip command line tools via Chocolatey...'
+    choco install 7zip.commandline -y --no-progress
+
+    $sevenZip = Get-SevenZipExecutable
+    if (-not $sevenZip) {
+        throw '7-Zip is required to extract PortableGit, but installation did not make 7z available'
+    }
+
+    $directory = Split-Path -Parent $sevenZip.Path
+    if ($directory) {
+        $directory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+    }
+    & $sevenZip.Path | Select-Object -First 1 | Out-Null
+}
+
 function Get-MakeNSIS {
     param(
         [string[]]$SearchRoots
@@ -53,6 +116,7 @@ if ($env:ChocolateyInstall) {
 
 $existingMakeNSIS = Get-MakeNSIS -SearchRoots $nsisSearchRoots
 if ($existingMakeNSIS) {
+    Ensure-SevenZip
     Register-MakeNSIS -Executable $existingMakeNSIS
     exit 0
 }
@@ -118,4 +182,5 @@ if (-not $downloadedMakeNSIS) {
     throw 'makensis.exe not found after extracting downloaded NSIS archive'
 }
 
+Ensure-SevenZip
 Register-MakeNSIS -Executable $downloadedMakeNSIS

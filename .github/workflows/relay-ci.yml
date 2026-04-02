@@ -23,6 +23,7 @@ env:
   BUNDLED_WINDOWS_GIT_VERSION: '2.49.0.windows.1'
   BUNDLED_FFMPEG_RELEASE_TAG: 'n7.1-2'
   COMMANDLINE_PACKAGE_PROFILE: 'default-data-v5'
+  PIP_INDEX_URL: 'https://pypi.org/simple'
   ENABLE_COS_UPLOAD: ${{ vars.ENABLE_COS_UPLOAD || '' }}
 
 jobs:
@@ -33,6 +34,8 @@ jobs:
       selected_platforms: ${{ steps.select.outputs.selected_platforms }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Select CLI target platforms
         id: select
@@ -55,6 +58,8 @@ jobs:
       selected_platforms: ${{ steps.select.outputs.selected_platforms }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Select GUI target platforms
         id: select
@@ -125,6 +130,8 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare-bundle-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Restore shared runtime bundle cache
         id: runtime-cache
@@ -134,7 +141,7 @@ jobs:
             relay/internal/nodebundle/assets
             relay/internal/chromemcpbundle/assets
             relay/internal/commandlinebundle/assets
-          key: relay-runtime-bundle-${{ runner.os }}-${{ matrix.suffix }}-${{ env.BUNDLED_NODE_VERSION }}-${{ env.CHROME_DEVTOOLS_MCP_VERSION }}-${{ env.BUNDLED_PYTHON_VERSION }}-${{ env.BUNDLED_PYTHON_STANDALONE_RELEASE }}-${{ env.BUNDLED_WINDOWS_GIT_VERSION }}-${{ env.BUNDLED_FFMPEG_RELEASE_TAG }}-${{ env.COMMANDLINE_PACKAGE_PROFILE }}-${{ hashFiles('relay/scripts/prepare-node-bundle.mjs', 'relay/scripts/prepare-chrome-devtools-bundle.mjs', 'relay/scripts/prepare-commandline-bundle.mjs') }}
+          key: relay-runtime-bundle-${{ runner.os }}-${{ matrix.suffix }}-${{ env.BUNDLED_NODE_VERSION }}-${{ env.CHROME_DEVTOOLS_MCP_VERSION }}-${{ env.BUNDLED_PYTHON_VERSION }}-${{ env.BUNDLED_PYTHON_STANDALONE_RELEASE }}-${{ env.BUNDLED_WINDOWS_GIT_VERSION }}-${{ env.BUNDLED_FFMPEG_RELEASE_TAG }}-${{ env.COMMANDLINE_PACKAGE_PROFILE }}-${{ hashFiles('.gitmodules', 'relay/cli-anything-wave1.json', 'relay/scripts/prepare-node-bundle.mjs', 'relay/scripts/prepare-chrome-devtools-bundle.mjs', 'relay/scripts/prepare-commandline-bundle.mjs', 'relay/scripts/lib/subprojects.mjs', 'subprojects/cli-anything/**/agent-harness/setup.py', 'subprojects/cli-anything/**/agent-harness/cli_anything/**') }}
 
       - uses: actions/setup-node@v4
         with:
@@ -187,6 +194,8 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare-cli-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-go@v5
         with:
@@ -331,6 +340,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-go@v5
         with:

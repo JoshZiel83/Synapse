@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
+import { resolveRequiredSubprojectRoot } from './lib/subprojects.mjs'
 
 const DEFAULT_NODE_VERSION = '20.19.5'
 const DEFAULT_PYTHON_VERSION = '3.12.12'
@@ -99,6 +100,7 @@ const NODE_DEPENDENCIES = {
 const PYTHON_REQUIREMENTS = [
   'aiohttp==3.10.11',
   'beautifulsoup4==4.12.3',
+  'click==8.1.8',
   'httpx==0.28.1',
   'imageio==2.36.0',
   'imageio-ffmpeg==0.6.0',
@@ -113,6 +115,7 @@ const PYTHON_REQUIREMENTS = [
   'pyzipper==0.3.6',
   'pypdf==5.1.0',
   'pyxlsb==1.0.10',
+  'prompt-toolkit==3.0.48',
   'qrcode==8.0',
   'python-docx==1.1.2',
   'python-pptx==1.0.2',
@@ -488,14 +491,188 @@ function normalizeRelativePath(baseDir, targetPath) {
   return relative(baseDir, targetPath).split('\\').join('/')
 }
 
+async function loadCliAnythingManifest(relayRoot) {
+  const manifestPath = join(relayRoot, 'cli-anything-wave1.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  const capabilities = Array.isArray(manifest?.capabilities) ? manifest.capabilities : []
+  return capabilities.map((capability) => ({
+    slug: String(capability.slug || '').trim(),
+    repoDir: String(capability.repoDir || '').trim(),
+    module: String(capability.module || '').trim(),
+    command: String(capability.command || '').trim(),
+    probe: capability.probe && typeof capability.probe === 'object' ? capability.probe : { type: 'wrapper_only' },
+  })).filter((capability) =>
+    capability.slug &&
+    capability.repoDir &&
+    capability.module &&
+    capability.command,
+  )
+}
+
+async function parseCliAnythingVersion(setupPath) {
+  try {
+    const setupPy = await readFile(setupPath, 'utf8')
+    const match = setupPy.match(/version\s*=\s*["']([^"']+)["']/)
+    return match?.[1]?.trim() || '1.0.0'
+  } catch {
+    return '1.0.0'
+  }
+}
+
+function extractQuotedStrings(text) {
+  const values = []
+  for (const pattern of [/"([^"\n]+)"/g, /'([^'\n]+)'/g]) {
+    let match
+    while ((match = pattern.exec(text)) !== null) {
+      values.push(match[1])
+    }
+  }
+  return values
+}
+
+function parseCliAnythingEntryPoint(setupPy, commandName, fallbackModuleName) {
+  const entries = extractQuotedStrings(setupPy)
+    .filter((value) => value.includes('=') && value.includes('cli-anything'))
+    .map((value) => {
+      const [name, target] = value.split('=', 2).map((part) => part.trim())
+      return { name, target }
+    })
+    .filter((entry) => entry.name && entry.target)
+
+  const chosen = entries.find((entry) => entry.name === commandName) || entries[0]
+  if (!chosen || !chosen.target.includes(':')) {
+    return {
+      scriptName: commandName,
+      modulePath: `cli_anything.${fallbackModuleName}`,
+      functionName: 'main',
+    }
+  }
+
+  const [modulePath, functionName] = chosen.target.split(':', 2).map((part) => part.trim())
+  return {
+    scriptName: chosen.name,
+    modulePath,
+    functionName,
+  }
+}
+
+function parsePyModules(setupPy) {
+  const match = setupPy.match(/py_modules\s*=\s*\[([\s\S]*?)\]/)
+  if (!match?.[1]) {
+    return []
+  }
+  return extractQuotedStrings(match[1]).map((value) => value.trim()).filter(Boolean)
+}
+
+async function copyCliAnythingPackages(cliAnythingRoot, targetDirectory, capabilities) {
+  const copied = []
+  const namespaceRoot = join(targetDirectory, 'cli_anything')
+  await mkdir(namespaceRoot, { recursive: true })
+
+  for (const capability of capabilities) {
+    const harnessRoot = join(
+      cliAnythingRoot,
+      capability.repoDir,
+      'agent-harness',
+    )
+    const setupPath = join(harnessRoot, 'setup.py')
+    const setupPy = await readFile(setupPath, 'utf8')
+    const sourceDir = join(
+      harnessRoot,
+      'cli_anything',
+      capability.module,
+    )
+    await ensureExists(sourceDir)
+    const targetDir = join(namespaceRoot, capability.module)
+    await copyDirectory(sourceDir, targetDir)
+
+    const pyModules = parsePyModules(setupPy)
+    for (const pyModule of pyModules) {
+      const sourceModulePath = join(harnessRoot, `${pyModule}.py`)
+      await ensureExists(sourceModulePath)
+      await copyFile(sourceModulePath, join(targetDirectory, `${pyModule}.py`))
+    }
+
+    const entryPoint = parseCliAnythingEntryPoint(
+      setupPy,
+      capability.command,
+      capability.module,
+    )
+
+    copied.push({
+      ...capability,
+      version: await parseCliAnythingVersion(setupPath),
+      entryPointTarget: `${entryPoint.modulePath}:${entryPoint.functionName}`,
+      scriptName: entryPoint.scriptName,
+      pyModules,
+    })
+  }
+
+  return copied
+}
+
+function buildCliAnythingWrapperContent(pythonBinaryRelative, capability) {
+  const [modulePath, functionName] = String(capability.entryPointTarget || '').split(':', 2)
+  const pythonCode = [
+    'import importlib, sys',
+    `sys.argv[0] = ${JSON.stringify(capability.command)}`,
+    `module = importlib.import_module(${JSON.stringify(modulePath || `cli_anything.${capability.module}`)})`,
+    `raise SystemExit(getattr(module, ${JSON.stringify(functionName || 'main')})())`,
+  ].join('; ')
+
+  return [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+    'ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"',
+    `PYTHON_BIN="${'$'}ROOT_DIR/${pythonBinaryRelative}"`,
+    'export PYTHONHOME="${ROOT_DIR}/python"',
+    'if [ -n "${PYTHONPATH:-}" ]; then',
+    '  export PYTHONPATH="${ROOT_DIR}/python-site-packages:${PYTHONPATH}"',
+    'else',
+    '  export PYTHONPATH="${ROOT_DIR}/python-site-packages"',
+    'fi',
+    'export PYTHONUTF8=1',
+    `exec "${'$'}PYTHON_BIN" -c '${pythonCode}' "${'$'}@"`,
+    '',
+  ].join('\n')
+}
+
+async function writeCliAnythingWrappers(assetsDir, pythonBinaryRelative, capabilities, targetPlatform) {
+  const managedBinDir = join(assetsDir, 'managed-bin')
+  await mkdir(managedBinDir, { recursive: true })
+
+  const wrapperPaths = []
+  for (const capability of capabilities) {
+    const wrapperPath = join(managedBinDir, capability.command)
+    await writeFile(
+      wrapperPath,
+      buildCliAnythingWrapperContent(pythonBinaryRelative, capability),
+      'utf8',
+    )
+    if (!targetPlatform.startsWith('windows-')) {
+      await runCommand('chmod', ['755', wrapperPath])
+    }
+    wrapperPaths.push(normalizeRelativePath(assetsDir, wrapperPath))
+  }
+
+  return {
+    managedBinDir: 'managed-bin',
+    wrapperPaths,
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2))
   const scriptDir = dirname(fileURLToPath(import.meta.url))
   const relayRoot = resolve(scriptDir, '..')
+  const repoRoot = resolve(relayRoot, '..')
   const assetsDir = join(relayRoot, 'internal', 'commandlinebundle', 'assets')
   const workDir = await mkdtemp(join(tmpdir(), 'commandlinebundle-'))
 
   try {
+    const cliAnythingRoot = await resolveRequiredSubprojectRoot(repoRoot, 'cli-anything')
+    const cliAnythingCapabilities = await loadCliAnythingManifest(relayRoot)
     const pythonSpec = getPythonSpec(options.targetPlatform, options.pythonVersion, options.pythonStandaloneRelease)
     const ffmpegSpec = getFFmpegSpec(options.targetPlatform, options.ffmpegReleaseTag)
     const sharedNodeManifest = await loadSharedNodeManifest(relayRoot, options.targetPlatform, options.nodeVersion)
@@ -559,6 +736,12 @@ async function main() {
     if (prunedPythonDirs > 0) {
       console.log(`Pruned ${prunedPythonDirs} non-runtime Python package directories`)
     }
+    console.log(`Bundling CLI-Anything wave1 packages (${cliAnythingCapabilities.length} capabilities)`)
+    const bundledCliAnythingCapabilities = await copyCliAnythingPackages(
+      cliAnythingRoot,
+      join(assetsDir, 'python-site-packages'),
+      cliAnythingCapabilities,
+    )
     await rm(join(assetsDir, 'python', 'share', 'terminfo'), { recursive: true, force: true })
 
     const ffmpegBinary = options.targetPlatform.startsWith('windows-') ? 'ffmpeg/ffmpeg.exe' : 'ffmpeg/ffmpeg'
@@ -571,6 +754,14 @@ async function main() {
     if (!pythonBinaryTarget) {
       throw new Error('failed to locate bundled Python executable after copying runtime')
     }
+
+    const pythonBinaryRelative = normalizeRelativePath(assetsDir, pythonBinaryTarget)
+    const { managedBinDir, wrapperPaths } = await writeCliAnythingWrappers(
+      assetsDir,
+      pythonBinaryRelative,
+      bundledCliAnythingCapabilities,
+      options.targetPlatform,
+    )
 
     if (options.targetPlatform === 'windows-amd64') {
       const gitSpec = getWindowsGitSpec(options.windowsGitVersion)
@@ -594,8 +785,7 @@ async function main() {
       bashBinary = 'git/bin/bash.exe'
     }
 
-    const pythonBinaryRelative = normalizeRelativePath(assetsDir, pythonBinaryTarget)
-    const executables = [pythonBinaryRelative, ffmpegBinary, ffprobeBinary]
+    const executables = [pythonBinaryRelative, ffmpegBinary, ffprobeBinary, ...wrapperPaths]
     if (gitBinary) {
       executables.push(gitBinary)
     }
@@ -611,10 +801,19 @@ async function main() {
       pythonHomeDir: 'python',
       pythonBinary: pythonBinaryRelative,
       pythonSitePackagesDir: 'python-site-packages',
+      managedBinDir,
       ffmpegBinary,
       ffprobeBinary,
       gitBinary,
       bashBinary,
+      cliAnythingCapabilities: bundledCliAnythingCapabilities.map((capability) => ({
+        slug: capability.slug,
+        command: capability.command,
+        module: capability.module,
+        version: capability.version,
+        entryPointTarget: capability.entryPointTarget,
+        probe: capability.probe,
+      })),
       packageProfile: options.packageProfile,
       ffmpegReleaseTag: options.ffmpegReleaseTag,
       assetVersion: `commandline-${options.packageProfile}-python-${options.pythonVersion}-${options.pythonStandaloneRelease}-ffmpeg-${options.ffmpegReleaseTag}-${options.targetPlatform}`,

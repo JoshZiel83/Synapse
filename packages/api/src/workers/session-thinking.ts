@@ -445,6 +445,7 @@ export function startSessionThinkingWorker() {
         const availableSkills = await listVisibleSkills({
           workspaceId,
           actorId,
+          sessionId,
           conversationId: session.conversation_id,
         });
 

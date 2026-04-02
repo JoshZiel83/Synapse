@@ -187,7 +187,7 @@ func (s *Server) prepareInvocation(
 	args map[string]interface{},
 ) (commandInvocation, error) {
 	switch toolName {
-	case "bash_exec":
+	case "bash":
 		binaryPath, err := s.resolveBashBinary()
 		if err != nil {
 			return commandInvocation{}, err
@@ -212,93 +212,6 @@ func (s *Server) prepareInvocation(
 			runtimeName: "bash",
 			binaryPath:  binaryPath,
 			args:        []string{"-lc", command},
-			cwd:         cwd,
-			env:         env,
-			timeout:     timeout,
-		}, nil
-	case "git_exec":
-		binaryPath, err := s.resolveGitBinary()
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		commandArgs, err := stringArrayArg(args, "args", true)
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		cwd, err := s.resolveWorkingDir(args)
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		timeout, err := s.resolveTimeout(args)
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		env, err := mapArg(args, "env")
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		return commandInvocation{
-			runtimeName: "git",
-			binaryPath:  binaryPath,
-			args:        commandArgs,
-			cwd:         cwd,
-			env:         env,
-			timeout:     timeout,
-		}, nil
-	case "node_exec":
-		binaryPath, err := s.resolveNodeBinary()
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		code, err := stringArg(args, "code", true)
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		cwd, err := s.resolveWorkingDir(args)
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		timeout, err := s.resolveTimeout(args)
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		env, err := mapArg(args, "env")
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		return commandInvocation{
-			runtimeName: "node",
-			binaryPath:  binaryPath,
-			args:        []string{"-e", code},
-			cwd:         cwd,
-			env:         env,
-			timeout:     timeout,
-		}, nil
-	case "python_exec":
-		binaryPath, err := s.resolvePythonBinary()
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		code, err := stringArg(args, "code", true)
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		cwd, err := s.resolveWorkingDir(args)
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		timeout, err := s.resolveTimeout(args)
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		env, err := mapArg(args, "env")
-		if err != nil {
-			return commandInvocation{}, err
-		}
-		return commandInvocation{
-			runtimeName: "python",
-			binaryPath:  binaryPath,
-			args:        []string{"-c", code},
 			cwd:         cwd,
 			env:         env,
 			timeout:     timeout,

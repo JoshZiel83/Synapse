@@ -162,12 +162,12 @@ function buildToolRoutingGuidance(
     );
   }
 
-  if (hasToolBaseName(tools, ["bash_exec", "git_exec", "node_exec", "python_exec"])) {
+  if (hasToolBaseName(tools, ["bash"])) {
     lines.push(
-      "- Reserve `bash_exec` for shell-only tasks that dedicated tools cannot handle. Use `git_exec` for git operations, and use `node_exec` or `python_exec` only when you need custom runtime logic beyond the dedicated tools.",
+      "- Reserve relay `bash` for shell commands that dedicated tools cannot handle. The bundled commandline runtime already places git, node, python, ffmpeg, and cli-anything wrappers on PATH.",
     );
     lines.push(
-      "- Relay commandline tools accept `execution_mode`. Use `execution_mode: \"async\"` for long-running shell, git, node, or python jobs when you do not need the final output in the current reasoning step. Synapse will create a background task now and wake you later with the result.",
+      "- Relay `bash` accepts `execution_mode`. Use `execution_mode: \"async\"` for long-running shell or CLI jobs when you do not need the final output in the current reasoning step. Synapse will create a background task now and wake you later with the result.",
     );
   }
 
@@ -284,11 +284,11 @@ export function buildActorPrompt(
 
   if (availableSkills && availableSkills.length > 0) {
     parts.push(
-      `# Installed Skills\n` +
-        `These skills are installed and available on demand. Do not assume their detailed contents are already loaded.\n` +
+      `# Available Skills\n` +
+        `These skills are available on demand. Do not assume their detailed contents are already loaded.\n` +
         `If one skill clearly matches the task, call \`read_skill\` to read its description or a referenced attachment before using it.\n` +
         availableSkills
-          .map((skill) => `- \`${skill.slug}\`: ${skill.description}`)
+          .map((skill) => `- \`${skill.slug}\`${skill.sourceKind === "relay_auto_loaded" ? " (relay auto-loaded)" : ""}: ${skill.description}`)
           .join("\n"),
     );
   }
@@ -402,7 +402,7 @@ export function buildActorPrompt(
       `- \`create_memory\`: Save a durable established fact for future reference`,
       ...(availableSkills && availableSkills.length > 0
         ? [
-            "- `read_skill`: Load an installed skill package on demand when a listed skill clearly applies",
+            "- `read_skill`: Load an available skill package on demand when a listed skill clearly applies",
           ]
         : []),
     ].join("\n");
@@ -448,7 +448,7 @@ export function buildActorPrompt(
         `Handle the task directly. Do not defer obvious work.\n` +
         `Use recalled memory when the task depends on durable facts or prior decisions, and use \`memory_search\` if you need deeper retrieval.\n` +
         `Use \`get_current_time\` when the task depends on the current time or date.\n` +
-        `${availableSkills && availableSkills.length > 0 ? "When a listed installed skill clearly matches the task, load it with `read_skill` before using it.\n" : ""}` +
+        `${availableSkills && availableSkills.length > 0 ? "When a listed available skill clearly matches the task, load it with `read_skill` before using it.\n" : ""}` +
         `Do not prepend \`<Mention name="User"/>\` by default when replying. Use mention tags when the sentence itself needs to point to a member, such as saying who owns something, who should follow up, or who should be contacted.\n` +
         `Mention is an inline body reference for better UI presentation, not a generic addressee marker and not the same as sending the message to that person. Otherwise write normal text.`,
     );

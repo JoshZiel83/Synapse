@@ -23,6 +23,8 @@ type Server struct {
 	cfg          Config
 	installation *commandlinebundle.Installation
 	tools        []core.Tool
+	metadataMu   sync.RWMutex
+	metadata     map[string]interface{}
 	taskMu       sync.RWMutex
 	tasks        map[string]*commandTask
 }
@@ -50,6 +52,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.installation = installation
 	s.tools = s.buildTools()
+	s.setMetadata(s.buildMetadata())
 	return nil
 }
 
@@ -65,14 +68,8 @@ func (s *Server) ListTools() ([]core.Tool, error) {
 
 func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
 	switch toolName {
-	case "bash_exec":
+	case "bash":
 		return s.callBash(ctx, args), nil
-	case "git_exec":
-		return s.callGit(ctx, args), nil
-	case "node_exec":
-		return s.callNode(ctx, args), nil
-	case "python_exec":
-		return s.callPython(ctx, args), nil
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", toolName)), nil
 	}
@@ -105,87 +102,6 @@ func (s *Server) callBash(ctx context.Context, args map[string]interface{}) core
 	}
 
 	return s.runCommand(ctx, "bash", binaryPath, []string{"-lc", command}, cwd, env, timeout)
-}
-
-func (s *Server) callGit(ctx context.Context, args map[string]interface{}) core.CallResult {
-	binaryPath, err := s.resolveGitBinary()
-	if err != nil {
-		return errorResult(err.Error())
-	}
-
-	commandArgs, err := stringArrayArg(args, "args", true)
-	if err != nil {
-		return errorResult(err.Error())
-	}
-
-	cwd, err := s.resolveWorkingDir(args)
-	if err != nil {
-		return errorResult(err.Error())
-	}
-	timeout, err := s.resolveTimeout(args)
-	if err != nil {
-		return errorResult(err.Error())
-	}
-	env, err := mapArg(args, "env")
-	if err != nil {
-		return errorResult(err.Error())
-	}
-
-	return s.runCommand(ctx, "git", binaryPath, commandArgs, cwd, env, timeout)
-}
-
-func (s *Server) callNode(ctx context.Context, args map[string]interface{}) core.CallResult {
-	binaryPath, err := s.resolveNodeBinary()
-	if err != nil {
-		return errorResult(err.Error())
-	}
-
-	code, err := stringArg(args, "code", true)
-	if err != nil {
-		return errorResult(err.Error())
-	}
-
-	cwd, err := s.resolveWorkingDir(args)
-	if err != nil {
-		return errorResult(err.Error())
-	}
-	timeout, err := s.resolveTimeout(args)
-	if err != nil {
-		return errorResult(err.Error())
-	}
-	env, err := mapArg(args, "env")
-	if err != nil {
-		return errorResult(err.Error())
-	}
-
-	return s.runCommand(ctx, "node", binaryPath, []string{"-e", code}, cwd, env, timeout)
-}
-
-func (s *Server) callPython(ctx context.Context, args map[string]interface{}) core.CallResult {
-	binaryPath, err := s.resolvePythonBinary()
-	if err != nil {
-		return errorResult(err.Error())
-	}
-
-	code, err := stringArg(args, "code", true)
-	if err != nil {
-		return errorResult(err.Error())
-	}
-
-	cwd, err := s.resolveWorkingDir(args)
-	if err != nil {
-		return errorResult(err.Error())
-	}
-	timeout, err := s.resolveTimeout(args)
-	if err != nil {
-		return errorResult(err.Error())
-	}
-	env, err := mapArg(args, "env")
-	if err != nil {
-		return errorResult(err.Error())
-	}
-
-	return s.runCommand(ctx, "python", binaryPath, []string{"-c", code}, cwd, env, timeout)
 }
 
 func (s *Server) resolveTimeout(args map[string]interface{}) (resolvedTimeout, error) {
@@ -319,6 +235,15 @@ func (s *Server) environment(extraEnv map[string]string) []string {
 		env["PYTHONUTF8"] = "1"
 
 		pathEntries := []string{}
+		if strings.TrimSpace(s.installation.ManagedBinDir) != "" {
+			pathEntries = append(pathEntries, s.installation.ManagedBinDir)
+		}
+		if strings.TrimSpace(s.installation.NodeBinaryPath) != "" {
+			pathEntries = append(pathEntries, filepath.Dir(s.installation.NodeBinaryPath))
+		}
+		if strings.TrimSpace(s.installation.PythonBinaryPath) != "" {
+			pathEntries = append(pathEntries, filepath.Dir(s.installation.PythonBinaryPath))
+		}
 		if strings.TrimSpace(s.installation.GitBinaryPath) != "" {
 			pathEntries = append(pathEntries, filepath.Dir(s.installation.GitBinaryPath))
 		}
@@ -340,6 +265,18 @@ func (s *Server) environment(extraEnv map[string]string) []string {
 		env[key] = value
 	}
 	return environmentList(env)
+}
+
+func (s *Server) Metadata() map[string]interface{} {
+	s.metadataMu.RLock()
+	defer s.metadataMu.RUnlock()
+	return copyMetadataMap(s.metadata)
+}
+
+func (s *Server) setMetadata(metadata map[string]interface{}) {
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
+	s.metadata = copyMetadataMap(metadata)
 }
 
 func (s *Server) resolveWorkingDir(args map[string]interface{}) (string, error) {
@@ -416,6 +353,17 @@ func (s *Server) resolvePythonBinary() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("python is not available on this system")
+}
+
+func copyMetadataMap(input map[string]interface{}) map[string]interface{} {
+	if len(input) == 0 {
+		return map[string]interface{}{}
+	}
+	output := make(map[string]interface{}, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
 }
 
 func stringArg(args map[string]interface{}, key string, required bool) (string, error) {

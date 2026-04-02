@@ -272,9 +272,6 @@ export const RUNTIME_FILESYSTEM_AUTHORIZATION_ACCESSES = [
 ] as const;
 export const RUNTIME_COMMANDLINE_EXECUTORS = [
   'bash',
-  'git',
-  'node',
-  'python',
 ] as const;
 
 export const RELAY_EXPOSURE_RUNTIME_STATUSES = [

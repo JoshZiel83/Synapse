@@ -40,6 +40,10 @@ import {
   getFileUrlById,
 } from "../files/service.js";
 import { getConversationActorContextByPair } from "../session/service.js";
+import {
+  listRelayAutoLoadedSkills,
+  readRelayAutoLoadedSkill,
+} from "./relay-auto-skills.js";
 
 type SkillUseScope = CapabilityAccessTarget["type"];
 
@@ -749,6 +753,7 @@ function buildAvailableSkillPayload(
       actorId: row.actor_id || undefined,
       conversationId: row.conversation_id || undefined,
     },
+    sourceKind: "installed",
   };
 }
 
@@ -2831,12 +2836,20 @@ function visibleRowToAccessRow(
 export async function listVisibleSkills(input: {
   workspaceId: string;
   actorId?: string;
+  sessionId?: string;
   conversationId?: string;
   workspaceMemberId?: string;
 }) {
   const subjects = await buildVisibilitySubjects(input);
+  const relayAutoLoadedSkills = await listRelayAutoLoadedSkills({
+    workspaceId: input.workspaceId,
+    actorId: input.actorId,
+    sessionId: input.sessionId,
+    conversationId: input.conversationId,
+    workspaceMemberId: input.workspaceMemberId,
+  });
   if (subjects.length === 0) {
-    return [] as AvailableSkillSummary[];
+    return relayAutoLoadedSkills;
   }
 
   const visibleSkillIds = new Set<string>();
@@ -2856,79 +2869,95 @@ export async function listVisibleSkills(input: {
     }
   }
 
-  if (visibleSkillIds.size === 0) {
-    return [];
+  const installedSkills =
+    visibleSkillIds.size === 0
+      ? []
+      : await (async () => {
+          const [rows, bindingsBySkillId] = await Promise.all([
+            runQuery<VisibleSkillRow>(
+              `SELECT
+                 skill.id AS skill_id,
+                 skill.slug,
+                 skill.name,
+                 skill.current_version,
+                 version_row.id AS current_skill_version_id,
+                 version_row.description_blocks,
+                 imported_version.version AS source_version_value,
+                 skill.id AS access_binding_id,
+                 'workspace'::varchar AS access_bind_scope,
+                 NULL::uuid AS conversation_id,
+                 NULL::uuid AS actor_id,
+                 NULL::uuid AS workspace_member_id,
+                 skill.updated_at AS access_created_at
+               FROM installed_skills skill
+               JOIN skill_versions version_row
+                 ON version_row.skill_id = skill.id
+                AND version_row.version = skill.current_version
+               LEFT JOIN skill_source_refs source_ref
+                 ON source_ref.skill_id = skill.id
+               LEFT JOIN catalog_versions imported_version
+                 ON imported_version.id = source_ref.source_catalog_version_id
+               WHERE skill.id = ANY($1::uuid[])
+                 AND skill.workspace_id = $2
+                 AND skill.is_active = TRUE
+               ORDER BY skill.slug ASC, skill.updated_at DESC`,
+              [Array.from(visibleSkillIds), input.workspaceId],
+            ),
+            loadAccessBindingsBySkillIds(Array.from(visibleSkillIds)),
+          ]);
+
+          const deduped = new Map<string, VisibleSkillRow>();
+          for (const row of rows.rows) {
+            const bindings = (bindingsBySkillId.get(row.skill_id) || []).filter(
+              (binding) => accessMatchesVisibilityContext(binding, input),
+            );
+            const chosenBinding = [...bindings].sort(compareVisibleBindingPriority)[0];
+            const candidate: VisibleSkillRow = {
+              ...row,
+              access_binding_id: chosenBinding?.id || row.access_binding_id,
+              access_bind_scope: chosenBinding?.bind_scope || "workspace",
+              conversation_id: chosenBinding?.conversation_id || null,
+              actor_id: chosenBinding?.actor_id || null,
+              workspace_member_id: chosenBinding?.workspace_member_id || null,
+              access_created_at: chosenBinding?.created_at || row.access_created_at,
+            };
+            const existing = deduped.get(row.slug);
+            if (!existing) {
+              deduped.set(row.slug, candidate);
+              continue;
+            }
+            if (
+              compareVisibleBindingPriority(
+                visibleRowToAccessRow(candidate, input.workspaceId),
+                visibleRowToAccessRow(existing, input.workspaceId),
+              ) < 0
+            ) {
+              deduped.set(row.slug, candidate);
+            }
+          }
+
+          return Array.from(deduped.values()).map(buildAvailableSkillPayload);
+        })();
+
+  const combined = new Map<string, AvailableSkillSummary>();
+  for (const skill of installedSkills) {
+    combined.set(skill.slug.toLowerCase(), skill);
+  }
+  for (const skill of relayAutoLoadedSkills) {
+    if (!combined.has(skill.slug.toLowerCase())) {
+      combined.set(skill.slug.toLowerCase(), skill);
+    }
   }
 
-  const [rows, bindingsBySkillId] = await Promise.all([
-    runQuery<VisibleSkillRow>(
-      `SELECT
-         skill.id AS skill_id,
-         skill.slug,
-         skill.name,
-         skill.current_version,
-         version_row.id AS current_skill_version_id,
-         version_row.description_blocks,
-         imported_version.version AS source_version_value,
-         skill.id AS access_binding_id,
-         'workspace'::varchar AS access_bind_scope,
-         NULL::uuid AS conversation_id,
-         NULL::uuid AS actor_id,
-         NULL::uuid AS workspace_member_id,
-         skill.updated_at AS access_created_at
-       FROM installed_skills skill
-       JOIN skill_versions version_row
-         ON version_row.skill_id = skill.id
-        AND version_row.version = skill.current_version
-       LEFT JOIN skill_source_refs source_ref
-         ON source_ref.skill_id = skill.id
-       LEFT JOIN catalog_versions imported_version
-         ON imported_version.id = source_ref.source_catalog_version_id
-       WHERE skill.id = ANY($1::uuid[])
-         AND skill.workspace_id = $2
-         AND skill.is_active = TRUE
-       ORDER BY skill.slug ASC, skill.updated_at DESC`,
-      [Array.from(visibleSkillIds), input.workspaceId],
-    ),
-    loadAccessBindingsBySkillIds(Array.from(visibleSkillIds)),
-  ]);
-
-  const deduped = new Map<string, VisibleSkillRow>();
-  for (const row of rows.rows) {
-    const bindings = (bindingsBySkillId.get(row.skill_id) || []).filter(
-      (binding) => accessMatchesVisibilityContext(binding, input),
-    );
-    const chosenBinding = [...bindings].sort(compareVisibleBindingPriority)[0];
-    const candidate: VisibleSkillRow = {
-      ...row,
-      access_binding_id: chosenBinding?.id || row.access_binding_id,
-      access_bind_scope: chosenBinding?.bind_scope || "workspace",
-      conversation_id: chosenBinding?.conversation_id || null,
-      actor_id: chosenBinding?.actor_id || null,
-      workspace_member_id: chosenBinding?.workspace_member_id || null,
-      access_created_at: chosenBinding?.created_at || row.access_created_at,
-    };
-    const existing = deduped.get(row.slug);
-    if (!existing) {
-      deduped.set(row.slug, candidate);
-      continue;
-    }
-    if (
-      compareVisibleBindingPriority(
-        visibleRowToAccessRow(candidate, input.workspaceId),
-        visibleRowToAccessRow(existing, input.workspaceId),
-      ) < 0
-    ) {
-      deduped.set(row.slug, candidate);
-    }
-  }
-
-  return Array.from(deduped.values()).map(buildAvailableSkillPayload);
+  return Array.from(combined.values()).sort((left, right) =>
+    left.slug.localeCompare(right.slug),
+  );
 }
 
 export async function readVisibleSkill(input: {
   workspaceId: string;
   actorId?: string;
+  sessionId?: string;
   conversationId?: string;
   workspaceMemberId?: string;
   skillName: string;
@@ -2937,6 +2966,7 @@ export async function readVisibleSkill(input: {
   const visibleSkills = await listVisibleSkills({
     workspaceId: input.workspaceId,
     actorId: input.actorId,
+    sessionId: input.sessionId,
     conversationId: input.conversationId,
     workspaceMemberId: input.workspaceMemberId,
   });
@@ -2950,6 +2980,33 @@ export async function readVisibleSkill(input: {
 
   if (!match) {
     throw new SkillError(404, `Visible skill "${input.skillName}" not found`);
+  }
+
+  if (match.sourceKind === "relay_auto_loaded") {
+    try {
+      const relayAutoLoaded = await readRelayAutoLoadedSkill({
+        skillName: input.skillName,
+        actorId: input.actorId,
+        conversationId: input.conversationId,
+        assetPath: input.assetPath,
+        skill: match,
+      });
+      if (!relayAutoLoaded) {
+        throw new SkillError(404, `Visible skill "${input.skillName}" not found`);
+      }
+      return relayAutoLoaded;
+    } catch (error) {
+      if (error instanceof SkillError) {
+        throw error;
+      }
+      if (error instanceof Error) {
+        if (error.message.startsWith("Invalid skill file path: ")) {
+          throw new SkillError(400, error.message);
+        }
+        throw new SkillError(404, `Skill attachment "${input.assetPath || REQUIRED_SKILL_FILE_PATH}" not found`);
+      }
+      throw error;
+    }
   }
 
   const installedSkill = await loadInstalledSkillForUpdate(

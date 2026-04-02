@@ -2174,6 +2174,7 @@ export interface AvailableSkillSummary {
   description: string;
   version: string;
   accessTarget: CapabilityAccessTarget;
+  sourceKind?: "installed" | "relay_auto_loaded";
   entryPoint?: string;
 }
 

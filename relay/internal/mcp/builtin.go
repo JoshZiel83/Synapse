@@ -195,6 +195,18 @@ func (b *builtinAdapter) Shutdown() {
 	b.inner.Shutdown()
 }
 
+func (b *builtinAdapter) Metadata() map[string]interface{} {
+	provider, ok := b.inner.(interface{ Metadata() map[string]interface{} })
+	if !ok {
+		return map[string]interface{}{}
+	}
+	metadata := provider.Metadata()
+	if metadata == nil {
+		return map[string]interface{}{}
+	}
+	return metadata
+}
+
 func (b *builtinAdapter) StartTask(
 	ctx context.Context,
 	toolName string,

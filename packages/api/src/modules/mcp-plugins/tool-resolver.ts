@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { textBlocks, type RelayHiddenToolBinding, type ToolDefinition } from "@synapse/shared";
 import type { NormalizedMcpToolResult } from "@synapse/shared/types";
+import { sql } from "kysely";
 import {
   lookupResources,
   type AuthzSubject,
@@ -23,12 +24,7 @@ import {
 import { normalizeMcpToolResult } from "./result-normalizer.js";
 
 const MCP_TOOL_NAMESPACE_SEPARATOR = "__";
-const RELAY_ASYNC_COMMANDLINE_TOOL_NAMES = new Set([
-  "bash_exec",
-  "git_exec",
-  "node_exec",
-  "python_exec",
-]);
+const RELAY_ASYNC_COMMANDLINE_TOOL_NAMES = new Set(["bash"]);
 
 export interface ResolvedMcpTools {
   tools: ToolDefinition[];
@@ -117,6 +113,10 @@ function getRelayToolRuntimeContext(
   return activeRelayToolContexts.get(
     buildRelayToolContextKey(sessionId, namespacedToolName),
   );
+}
+
+function normalizeBuiltinKind(value: unknown) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function clearRelayToolRuntimeContexts(sessionId: string) {
@@ -468,8 +468,38 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
     ])
     .where("exposure.id", "in", Array.from(visibleExposureIds))
     .where("device.workspace_id", "=", params.workspaceId)
+    .where("exposure.runtime_status", "=", "healthy")
+    .where(sql<boolean>`EXISTS (
+      SELECT 1
+      FROM relay_device_sessions session_row
+      WHERE session_row.device_id = device.id
+        AND session_row.status = 'active'
+    )`)
     .orderBy("exposure.updated_at", "desc")
     .execute() as Promise<VisibleRelayExposureRow[]>;
+}
+
+export async function listVisibleHealthyRelayCommandlineExposureMetadata(
+  params: ResolveParams,
+) {
+  const exposures = await loadVisibleRelayExposures(params);
+  const metadata: Record<string, unknown>[] = [];
+
+  for (const exposure of exposures) {
+    const relayCatalog = await loadRelayExposureCatalogSnapshot(
+      exposure.device_id,
+      exposure.exposure_id,
+    );
+    if (!relayCatalog || relayCatalog.runtimeStatus !== "healthy") {
+      continue;
+    }
+    if (normalizeBuiltinKind(relayCatalog.metadata?.builtinKind) !== "commandline") {
+      continue;
+    }
+    metadata.push(relayCatalog.metadata || {});
+  }
+
+  return metadata;
 }
 
 async function resolveTools(
@@ -515,7 +545,7 @@ async function resolveTools(
           entry.deviceId,
           entry.exposureId,
         );
-        if (!relayCatalog) {
+        if (!relayCatalog || relayCatalog.runtimeStatus !== "healthy") {
           throw new Error(`Relay exposure ${entry.exposureId} is not available`);
         }
 
@@ -620,7 +650,7 @@ async function resolveTools(
       exposure.device_id,
       exposure.exposure_id,
     );
-    if (!relayCatalog) {
+    if (!relayCatalog || relayCatalog.runtimeStatus !== "healthy") {
       continue;
     }
 
@@ -836,7 +866,7 @@ export async function resolveRelayTargetForNamespacedTool(
       exposure.device_id,
       exposure.exposure_id,
     );
-    if (!relayCatalog) {
+    if (!relayCatalog || relayCatalog.runtimeStatus !== "healthy") {
       continue;
     }
 

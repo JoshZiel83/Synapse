@@ -82,6 +82,10 @@ type toolListChangeNotifier interface {
 	SetToolsChangedHandler(handler func())
 }
 
+type metadataProvider interface {
+	Metadata() map[string]interface{}
+}
+
 type Manager struct {
 	configs   []config.ServerConfig
 	servers   []serverEntry
@@ -276,6 +280,11 @@ func (m *Manager) attemptServerStart(ctx context.Context, cfg config.ServerConfi
 	if cfg.Transport == "builtin" && cfg.Builtin != nil {
 		metadata["builtinKind"] = cfg.Builtin.Kind
 		metadata["trustRemoteAuthorization"] = true
+	}
+	if provider, ok := srv.(metadataProvider); ok {
+		for key, value := range provider.Metadata() {
+			metadata[key] = value
+		}
 	}
 
 	return &serverEntry{
