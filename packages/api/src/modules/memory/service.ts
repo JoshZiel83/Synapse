@@ -40,6 +40,12 @@ import {
   queueMemoryItemEmbeddingIndex,
   rebuildMemoryItemLexicalIndex,
 } from './indexing.js';
+import { embedMemoryQueryCached } from './embedding-cache.js';
+import {
+  expandMemoryLexicalQueries,
+  extractMemoryKeywords,
+  tokenizeMemorySearchText,
+} from './query-expansion.js';
 import {
   buildNormalizedMessageContent,
   itemPartsToCanonicalContentBlocks,
@@ -142,7 +148,6 @@ const MEMORY_RECALL_MAX_CONTEXT_SNIPPETS = 8;
 const MEMORY_RECALL_SNIPPET_MAX_CHARS = 240;
 const MEMORY_RECALL_QUERY_MAX_CHARS = 1_200;
 const MEMORY_LEXICAL_TOKEN_LIMIT = 24;
-const MEMORY_LEXICAL_TOKEN_MAX_CHARS = 64;
 const MEMORY_LEXICAL_QUERY_MAX_CHARS = 512;
 const MEMORY_RRF_K = 60;
 
@@ -182,38 +187,10 @@ function truncateText(value: string, maxChars: number) {
   return value.slice(0, Math.max(0, maxChars - 3)).trimEnd() + '...';
 }
 
-function tokenizeQuery(queryText: string) {
-  return Array.from(
-    new Set(
-      queryText
-        .toLowerCase()
-        .split(/[^a-z0-9_\u4e00-\u9fff]+/i)
-        .map((token) => token.trim())
-        .filter((token) => token.length >= 2),
-    ),
-  );
-}
-
-function buildLexicalSearchQuery(queryText: string) {
-  const normalized = normalizeWhitespace(queryText);
-  if (!normalized) return '';
-
-  const tokens = tokenizeQuery(normalized)
-    .map((token) => token.slice(0, MEMORY_LEXICAL_TOKEN_MAX_CHARS))
-    .filter(Boolean)
-    .slice(0, MEMORY_LEXICAL_TOKEN_LIMIT);
-
-  if (tokens.length > 0) {
-    return truncateText(tokens.join(' '), MEMORY_LEXICAL_QUERY_MAX_CHARS);
-  }
-
-  return truncateText(normalized, MEMORY_LEXICAL_QUERY_MAX_CHARS);
-}
-
 function buildLexicalVariants(queryText: string) {
-  const primary = buildLexicalSearchQuery(queryText);
-  const compactKeywords = tokenizeQuery(queryText).slice(0, 8).join(' ');
-  return Array.from(new Set([primary, compactKeywords].map((value) => value.trim()).filter(Boolean)));
+  return expandMemoryLexicalQueries(queryText, {
+    keywordLimit: MEMORY_LEXICAL_TOKEN_LIMIT,
+  }).map((value) => truncateText(value, MEMORY_LEXICAL_QUERY_MAX_CHARS));
 }
 
 function isTsqueryStackOverflow(error: unknown) {
@@ -227,9 +204,9 @@ function isTsqueryStackOverflow(error: unknown) {
 }
 
 function computeMatchedTerms(queryText: string, candidateText: string) {
-  const queryTokens = tokenizeQuery(queryText);
-  const haystack = candidateText.toLowerCase();
-  return queryTokens.filter((token) => haystack.includes(token));
+  const queryTokens = extractMemoryKeywords(queryText);
+  const candidateTokens = new Set(tokenizeMemorySearchText(candidateText));
+  return queryTokens.filter((token) => candidateTokens.has(token));
 }
 
 function spaceRank(spaceType: MemorySpaceType) {
@@ -276,34 +253,112 @@ function deriveSpaceBoost(memory: Memory, target: MemoryAccessTarget) {
   return spaceMatchesTarget(memory, target) ? spaceRank(memory.spaceType) * 0.03 : 0;
 }
 
-function deriveRecencyBoost(updatedAt: string) {
-  const ageMs = Math.max(0, Date.now() - new Date(updatedAt).getTime());
-  const ageDays = ageMs / (1000 * 60 * 60 * 24);
-  return Math.max(0, 1 - ageDays / 365) * 0.04;
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
 }
 
-function computeFinalScore(
+function deriveSummaryDecayMultiplier(memory: Pick<Memory, 'category' | 'createdAt'>) {
+  if (memory.category !== 'summary') {
+    return 1;
+  }
+
+  const halfLifeDays = Number.isFinite(config.memory.summaryDecayHalfLifeDays)
+    ? Math.max(1, config.memory.summaryDecayHalfLifeDays)
+    : 30;
+  const floor = clamp01(config.memory.summaryDecayFloor);
+  const createdAtMs = new Date(memory.createdAt).getTime();
+  if (!Number.isFinite(createdAtMs)) {
+    return 1;
+  }
+  const ageMs = Math.max(0, Date.now() - createdAtMs);
+  const ageDays = ageMs / (1000 * 60 * 60 * 24);
+  const lambda = Math.LN2 / halfLifeDays;
+  return floor + (1 - floor) * Math.exp(-lambda * ageDays);
+}
+
+function computeBaseScore(
   row: SearchCandidateRow,
   memory: Memory,
   target: MemoryAccessTarget,
 ) {
-  const rrfScore = Math.max(0, Math.min(1, (row.rrf_score ?? 0) * 18));
+  const rrfScore = clamp01((row.rrf_score ?? 0) * 18);
   const vectorScore = Math.max(0, row.vector_score ?? 0);
-  const textScore = Math.max(0, Math.min(1, row.text_score ?? 0));
-  const similarityScore = Math.max(0, Math.min(1, row.similarity_score ?? 0));
-  const importanceScore = Math.max(0, Math.min(1, row.importance ?? 0));
-  const confidenceScore = Math.max(0, Math.min(1, row.confidence ?? 0));
-
-  return (
+  const textScore = clamp01(row.text_score ?? 0);
+  const similarityScore = clamp01(row.similarity_score ?? 0);
+  const importanceScore = clamp01(row.importance ?? 0);
+  const confidenceScore = clamp01(row.confidence ?? 0);
+  const baseScore = (
     rrfScore * 0.5 +
     vectorScore * 0.2 +
     textScore * 0.1 +
     similarityScore * 0.05 +
     importanceScore * 0.07 +
     confidenceScore * 0.04 +
-    deriveSpaceBoost(memory, target) +
-    deriveRecencyBoost(toIsoString(row.updated_at)!)
+    deriveSpaceBoost(memory, target)
   );
+  return baseScore * deriveSummaryDecayMultiplier(memory);
+}
+
+function jaccardSimilarity(left: Set<string>, right: Set<string>) {
+  if (left.size === 0 || right.size === 0) return 0;
+  let intersection = 0;
+  const smaller = left.size <= right.size ? left : right;
+  const larger = left.size <= right.size ? right : left;
+  for (const token of smaller) {
+    if (larger.has(token)) intersection += 1;
+  }
+  const union = left.size + right.size - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+function applyMmrRerank<T extends { baseScore: number; mmrTokens: Set<string> }>(items: T[], limit: number) {
+  if (items.length <= 1) return items;
+
+  const candidatePoolSize = Math.min(
+    items.length,
+    Math.max(12, Math.max(1, limit) * Math.max(1, config.memory.mmrCandidateMultiplier)),
+  );
+  const lambda = clamp01(config.memory.mmrLambda);
+  const head = items.slice(0, candidatePoolSize);
+  const tail = items.slice(head.length);
+
+  const maxScore = Math.max(...head.map((item) => item.baseScore));
+  const minScore = Math.min(...head.map((item) => item.baseScore));
+  const scoreRange = maxScore - minScore;
+  const normalizeScore = (score: number) => (scoreRange > 0 ? (score - minScore) / scoreRange : 1);
+
+  const selected: T[] = [];
+  const remaining = new Set(head);
+
+  while (remaining.size > 0) {
+    let bestItem: T | null = null;
+    let bestScore = -Infinity;
+
+    for (const item of remaining) {
+      const relevance = normalizeScore(item.baseScore);
+      let maxSimilarity = 0;
+      for (const selectedItem of selected) {
+        maxSimilarity = Math.max(
+          maxSimilarity,
+          jaccardSimilarity(item.mmrTokens, selectedItem.mmrTokens),
+        );
+      }
+      const mmrScore = lambda * relevance - (1 - lambda) * maxSimilarity;
+      if (
+        mmrScore > bestScore ||
+        (mmrScore === bestScore && item.baseScore > (bestItem?.baseScore ?? -Infinity))
+      ) {
+        bestItem = item;
+        bestScore = mmrScore;
+      }
+    }
+
+    if (!bestItem) break;
+    selected.push(bestItem);
+    remaining.delete(bestItem);
+  }
+
+  return [...selected, ...tail];
 }
 
 function mapMemoryRow(row: MemoryRow, contentBlocks: CanonicalContentBlock[]): Memory {
@@ -1073,6 +1128,7 @@ function buildSearchFilters(workspaceId: string, input: SearchMemoriesInput, ite
 async function searchLexicalCandidates(workspaceId: string, input: SearchMemoriesInput, candidateLimit: number, queryText: string) {
   const whereClause = buildSearchFilters(workspaceId, input);
   if (!queryText) return [];
+  const normalizedQueryText = normalizeWhitespace(queryText).toLowerCase();
   const result = await db.executeQuery(
     sql<SearchCandidateRow>`SELECT mi.id,
         mi.workspace_id,
@@ -1109,7 +1165,10 @@ async function searchLexicalCandidates(workspaceId: string, input: SearchMemorie
         ms.anchor_workspace_member_id AS resolved_workspace_member_id,
         mic.id AS matched_chunk_id,
         mic.search_text AS chunk_search_text,
-        ts_rank_cd(to_tsvector('simple', mic.search_text), websearch_to_tsquery('simple', ${queryText})) AS text_score,
+        GREATEST(
+          ts_rank_cd(to_tsvector('simple', mic.search_text), websearch_to_tsquery('simple', ${queryText})),
+          CASE WHEN POSITION(${normalizedQueryText} IN lower(mic.search_text)) > 0 THEN 0.2 ELSE 0 END
+        ) AS text_score,
         similarity(mic.search_text, ${queryText}) AS similarity_score,
         NULL::real AS vector_score,
         NULL::real AS rrf_score
@@ -1124,8 +1183,10 @@ async function searchLexicalCandidates(workspaceId: string, input: SearchMemorie
       LEFT JOIN workspace_members wm ON wm.id = ms.anchor_workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       WHERE ${whereClause}
+        AND mic.index_version = mi.active_index_version
         AND (
           to_tsvector('simple', mic.search_text) @@ websearch_to_tsquery('simple', ${queryText})
+          OR POSITION(${normalizedQueryText} IN lower(mic.search_text)) > 0
           OR similarity(mic.search_text, ${queryText}) > 0.08
         )
       ORDER BY text_score DESC, similarity_score DESC, mi.importance DESC, mi.updated_at DESC
@@ -1189,6 +1250,7 @@ async function searchVectorCandidates(workspaceId: string, input: SearchMemories
       LEFT JOIN workspace_members wm ON wm.id = ms.anchor_workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       WHERE ${whereClause}
+        AND mic.index_version = mi.active_index_version
         AND mic.embedding IS NOT NULL
       ORDER BY mic.embedding <=> ${formattedEmbedding}::vector ASC
       LIMIT ${candidateLimit}`.compile(db),
@@ -1287,17 +1349,22 @@ async function buildSearchHits(params: {
       return {
         row,
         memory,
-        finalScore: computeFinalScore(row, memory, params.target),
+        baseScore: computeBaseScore(row, memory, params.target),
+        mmrTokens: new Set(
+          tokenizeMemorySearchText(row.chunk_search_text || memory.textDigest || memory.searchText),
+        ),
       };
     })
-    .sort((left, right) => right.finalScore - left.finalScore)
+    .sort((left, right) => right.baseScore - left.baseScore);
+
+  const rerankedRows = applyMmrRerank(orderedRows, params.limit)
     .slice(0, params.limit);
 
-  return orderedRows.map(({ row, memory, finalScore }, index) => ({
+  return rerankedRows.map(({ row, memory, baseScore }, index) => ({
     ...memory,
     matchedChunkId: row.matched_chunk_id,
     rank: index + 1,
-    finalScore,
+    finalScore: baseScore,
     vectorScore: row.vector_score ?? undefined,
     textScore: row.text_score ?? undefined,
     similarityScore: row.similarity_score ?? undefined,
@@ -1431,7 +1498,8 @@ export async function createMemory(workspaceId: UUID, input: CreateMemoryInput) 
           text_digest: normalizedContent.textDigest,
           search_text: normalizedContent.searchText,
           index_status: 'lexical_ready',
-          index_version: 0,
+          active_index_version: 0,
+          staged_index_version: null,
           embedding_model: '',
           embedding_dim: null,
           indexed_at: null,
@@ -1698,8 +1766,7 @@ export async function searchMemories(
   let vectorRows: SearchCandidateRow[] = [];
   if (queryText) {
     try {
-      const { embedMemoryQuery } = await import('./embedding-runtime.js');
-      const embedding = await embedMemoryQuery(queryText);
+      const embedding = await embedMemoryQueryCached(queryText);
       if (embedding) {
         vectorRows = await searchVectorCandidates(workspaceId, searchInput, embedding, candidateLimit);
       }

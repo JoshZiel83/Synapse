@@ -190,39 +190,39 @@ export function registerActionToolPlugins(): void {
     kind: 'callable',
     definition: {
       name: 'create_memory',
-      description: 'Store a stable, established fact for future recall. Use only for durable facts, preferences, decisions, relationships, procedures, or artifacts that should persist beyond the current turn.',
+      description: 'Store a durable, reusable memory for future recall. Use for stable user facts, preferences, decisions, working conventions, relationships, procedures, artifacts, or external reference pointers that should still matter after this turn. Do not use for ephemeral task state, temporary plans, repo facts derivable from files or git, or secrets.',
       parameters: {
         type: 'object',
         properties: {
           content: {
             type: 'string',
-            description: 'The information to remember. May include exact FileRef strings like <FileRef id="..."/>. If you include a FileRef, also include concise natural-language context so the memory can be recalled later.',
+            description: 'The information to remember, written as a standalone reusable statement rather than a chat quote. Expand pronouns to explicit names or roles, include exact entities, convert relative dates to absolute dates when time matters, and include rationale or how-to-apply context for decisions, preferences, procedures, or summaries when useful. May include exact FileRef strings like <FileRef id="..."/>; if you include a FileRef, also include concise natural-language context so the memory can be recalled later.',
           },
           category: {
             type: 'string',
-            description: 'Memory category',
+            description: 'Memory category. Use fact for stable profile/state, preference for user or workflow preferences, decision for settled choices, relationship for persistent people/entity links, procedure for reusable instructions, artifact for durable file/resource pointers, and summary only for compact durable takeaways.',
             enum: ['fact', 'preference', 'decision', 'relationship', 'procedure', 'artifact', 'summary'],
           },
           spaceType: {
             type: 'string',
-            description: 'Memory visibility. participant_private = private to you inside the current conversation; conversation_shared = shared in the current conversation; actor_private = follows you across conversations.',
+            description: 'Memory visibility. participant_private = private to you inside the current conversation and best for narrow local context; conversation_shared = shared with everyone in this conversation; actor_private = follows you across conversations and is best for stable user facts or long-lived working agreements.',
             enum: ['participant_private', 'conversation_shared', 'actor_private'],
           },
           importance: {
             type: 'string',
-            description: 'Importance score from 0.0 to 1.0',
+            description: 'Importance score from 0.0 to 1.0. Use around 0.5 by default. Raise it for memories likely to matter repeatedly or shape future behavior.',
           },
           confidence: {
             type: 'string',
-            description: 'Confidence score from 0.0 to 1.0. Use high confidence only for established facts.',
+            description: 'Confidence score from 0.0 to 1.0. Use high confidence only for explicit, directly observed, or otherwise well-established facts.',
           },
           textDigest: {
             type: 'string',
-            description: 'Optional one-line digest of the memory for faster future retrieval. Strongly recommended when content includes a FileRef.',
+            description: 'Optional one-line retrieval hook. Use explicit subject-plus-predicate wording such as "Demo User is a teacher"; avoid pronouns. Strongly recommended for long content or FileRef-backed memories.',
           },
           tags: {
             type: 'string',
-            description: 'Comma-separated tags for this memory',
+            description: 'Comma-separated stable tags for retrieval, preferably concrete nouns or topics rather than full sentences.',
           },
         },
         required: ['content', 'category'],

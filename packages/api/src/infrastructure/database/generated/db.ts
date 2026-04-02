@@ -1081,12 +1081,23 @@ export interface InteractionRuntimeAuthorizationRequests {
   resolution_payload: Generated<Json>;
 }
 
+export interface MemoryEmbeddingCache {
+  content_hash: string;
+  created_at: Generated<Timestamp | null>;
+  embedding: string;
+  embedding_dim: number;
+  input_type: string;
+  model_id: string;
+  updated_at: Generated<Timestamp | null>;
+}
+
 export interface MemoryItemChunks {
   chunk_index: number;
   chunk_kind: Generated<string>;
   created_at: Generated<Timestamp | null>;
   embedding: string | null;
   id: Generated<string>;
+  index_version: number;
   memory_item_id: string;
   metadata: Generated<Json | null>;
   search_text: string;
@@ -1109,6 +1120,7 @@ export interface MemoryItemParts {
 }
 
 export interface MemoryItems {
+  active_index_version: Generated<number>;
   category: MemoryItemsCategory;
   confidence: Generated<number>;
   created_at: Generated<Timestamp | null>;
@@ -1118,7 +1130,6 @@ export interface MemoryItems {
   importance: Generated<number>;
   index_error: string | null;
   index_status: Generated<MemoryItemsIndexStatus>;
-  index_version: Generated<number>;
   indexed_at: Timestamp | null;
   memory_space_id: string;
   metadata: Generated<Json | null>;
@@ -1127,6 +1138,7 @@ export interface MemoryItems {
   source_kind: Generated<string>;
   source_tool_call_id: string | null;
   source_turn_id: string | null;
+  staged_index_version: number | null;
   state: Generated<MemoryItemsState>;
   supersedes_item_id: string | null;
   tags: Generated<string[] | null>;
@@ -2158,6 +2170,7 @@ export interface DB {
   interaction_question_requests: InteractionQuestionRequests;
   interaction_requests: InteractionRequests;
   interaction_runtime_authorization_requests: InteractionRuntimeAuthorizationRequests;
+  memory_embedding_cache: MemoryEmbeddingCache;
   memory_item_chunks: MemoryItemChunks;
   memory_item_parts: MemoryItemParts;
   memory_items: MemoryItems;

@@ -1998,7 +1998,8 @@ CREATE TABLE memory_items (
   text_digest TEXT NOT NULL DEFAULT '',
   search_text TEXT NOT NULL DEFAULT '',
   index_status memory_items_index_status NOT NULL DEFAULT 'lexical_ready',
-  index_version INT NOT NULL DEFAULT 1,
+  active_index_version INT NOT NULL DEFAULT 0,
+  staged_index_version INT,
   embedding_model TEXT NOT NULL DEFAULT '',
   embedding_dim INT,
   indexed_at TIMESTAMPTZ,
@@ -2043,6 +2044,7 @@ CREATE TABLE memory_item_chunks (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   memory_item_id UUID NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  index_version INT NOT NULL,
   chunk_index INT NOT NULL,
   chunk_kind TEXT NOT NULL DEFAULT 'body',
   search_text TEXT NOT NULL,
@@ -2051,14 +2053,29 @@ CREATE TABLE memory_item_chunks (
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(memory_item_id, chunk_index)
+  UNIQUE(memory_item_id, index_version, chunk_index)
 );
 
-CREATE INDEX idx_memory_item_chunks_item ON memory_item_chunks(memory_item_id, chunk_index);
+CREATE INDEX idx_memory_item_chunks_item ON memory_item_chunks(memory_item_id, index_version, chunk_index);
 CREATE INDEX idx_memory_item_chunks_workspace ON memory_item_chunks(workspace_id, created_at DESC);
 CREATE INDEX idx_memory_item_chunks_fts ON memory_item_chunks USING GIN(to_tsvector('simple', search_text));
 CREATE INDEX idx_memory_item_chunks_trgm ON memory_item_chunks USING GIN(search_text gin_trgm_ops);
 CREATE INDEX idx_memory_item_chunks_hnsw ON memory_item_chunks USING hnsw (embedding vector_cosine_ops);
+
+CREATE TABLE memory_embedding_cache (
+  model_id TEXT NOT NULL,
+  input_type TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  embedding VECTOR(384) NOT NULL,
+  embedding_dim INT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (model_id, input_type, content_hash),
+  CHECK (input_type = 'passage')
+);
+
+CREATE INDEX idx_memory_embedding_cache_updated_at
+  ON memory_embedding_cache(updated_at DESC);
 
 CREATE TABLE memory_recall_runs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

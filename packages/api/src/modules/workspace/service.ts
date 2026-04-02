@@ -366,6 +366,10 @@ function buildWorkspaceActorAuthzRelations(
     touchRelation("actor", actorId, "discover_workspace", "workspace", workspaceId),
     touchRelation("actor", actorId, "invoke_workspace", "workspace", workspaceId),
     touchRelation("actor", actorId, "receive_workspace", "workspace", workspaceId),
+    touchRelation("actor", actorId, "memory_reader_principal", "actor", actorId),
+    touchRelation("actor", actorId, "memory_editor_principal", "actor", actorId),
+    touchRelation("actor", actorId, "memory_retargeter_principal", "actor", actorId),
+    touchRelation("actor", actorId, "memory_deleter_principal", "actor", actorId),
   ];
 }
 

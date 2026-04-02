@@ -55,7 +55,7 @@ async function getExtractor() {
   return extractorPromise;
 }
 
-function prefixText(text: string, inputType: 'query' | 'passage') {
+function normalizeMemoryEmbeddingText(text: string, inputType: MemoryEmbeddingInputType) {
   const normalized = text.replace(/\s+/g, ' ').trim();
   return `${inputType}: ${normalized}`;
 }
@@ -80,11 +80,11 @@ function tensorToRows(tensor: any): number[][] {
   return rows;
 }
 
-async function embedTexts(texts: string[], inputType: 'query' | 'passage') {
+async function embedTexts(texts: string[], inputType: MemoryEmbeddingInputType) {
   if (texts.length === 0) return [];
   const extractor = await getExtractor();
   const output = await extractor(
-    texts.map((text) => prefixText(text, inputType)),
+    texts.map((text) => normalizeMemoryEmbeddingText(text, inputType)),
     {
       pooling: 'mean',
       normalize: true,
@@ -126,3 +126,4 @@ parentPort?.on('message', async (request: WorkerRequest) => {
     } satisfies WorkerResponse);
   }
 });
+type MemoryEmbeddingInputType = 'query' | 'passage';

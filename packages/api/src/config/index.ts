@@ -103,6 +103,11 @@ export const config = {
     modelCacheDir: process.env.MEMORY_MODEL_CACHE_DIR || resolve(process.cwd(), 'storage/models/memory'),
     embedBatchSize: parseInt(process.env.MEMORY_EMBED_BATCH_SIZE || '12'),
     indexQueueConcurrency: parseInt(process.env.MEMORY_INDEX_QUEUE_CONCURRENCY || '2'),
+    queryEmbedCacheTtlSec: parseInt(process.env.MEMORY_QUERY_EMBED_CACHE_TTL_SEC || '86400'),
+    mmrLambda: parseFloat(process.env.MEMORY_MMR_LAMBDA || '0.8'),
+    mmrCandidateMultiplier: parseInt(process.env.MEMORY_MMR_CANDIDATE_MULTIPLIER || '4'),
+    summaryDecayHalfLifeDays: parseFloat(process.env.MEMORY_SUMMARY_DECAY_HALF_LIFE_DAYS || '30'),
+    summaryDecayFloor: parseFloat(process.env.MEMORY_SUMMARY_DECAY_FLOOR || '0.35'),
     allowRuntimeModelDownload: process.env.MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD === 'true',
   },
   authz: {

@@ -4,11 +4,13 @@ import { sql } from 'kysely';
 import {
   db,
   type TableInsert,
+  withDbTransaction,
 } from '../../infrastructure/database/kysely.js';
 import { config } from '../../config/index.js';
 import { itemPartsToCanonicalContentBlocks } from '../conversation/message-content.js';
 import { embedMemoryPassages } from './embedding-runtime.js';
 import { memoryIndexingQueue } from '../../workers/queues.js';
+import { hashMemoryEmbeddingText } from './embedding-input.js';
 
 const MEMORY_VECTOR_DIMENSIONS = 384;
 const TARGET_CHUNK_CHARS = 800;
@@ -200,6 +202,113 @@ function formatEmbeddingVector(values: number[]) {
   return `[${values.map((value) => Number.isFinite(value) ? value.toFixed(8) : '0').join(',')}]`;
 }
 
+function parseEmbeddingVector(value: string | null | undefined) {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) return null;
+  const parts = trimmed
+    .slice(1, -1)
+    .split(',')
+    .map((part) => Number(part.trim()))
+    .filter((part) => Number.isFinite(part));
+  return parts.length > 0 ? parts : null;
+}
+
+async function loadCachedPassageEmbeddings(searchTexts: string[]) {
+  const hashes = Array.from(
+    new Set(searchTexts.map((text) => hashMemoryEmbeddingText(text, 'passage'))),
+  );
+  if (hashes.length === 0) return new Map<string, number[]>();
+
+  const rows = await db
+    .selectFrom('memory_embedding_cache')
+    .select([
+      'content_hash',
+      sql<string>`embedding::text`.as('embedding_text'),
+    ])
+    .where('model_id', '=', config.memory.modelId)
+    .where('input_type', '=', 'passage')
+    .where('content_hash', 'in', hashes)
+    .execute();
+
+  const cache = new Map<string, number[]>();
+  for (const row of rows) {
+    const embedding = parseEmbeddingVector(row.embedding_text);
+    if (embedding && embedding.length > 0) {
+      cache.set(row.content_hash, embedding);
+    }
+  }
+  return cache;
+}
+
+async function upsertCachedPassageEmbeddings(entries: Array<{ searchText: string; embedding: number[] }>) {
+  if (entries.length === 0) return;
+
+  await withDbTransaction(async (trx) => {
+    for (const entry of entries) {
+      if (entry.embedding.length === 0) continue;
+      const contentHash = hashMemoryEmbeddingText(entry.searchText, 'passage');
+      await trx
+        .insertInto('memory_embedding_cache')
+        .values({
+          model_id: config.memory.modelId,
+          input_type: 'passage',
+          content_hash: contentHash,
+          embedding: sql`${formatEmbeddingVector(entry.embedding)}::vector`,
+          embedding_dim: entry.embedding.length,
+          created_at: sql`NOW()`,
+          updated_at: sql`NOW()`,
+        })
+        .onConflict((oc) =>
+          oc.columns(['model_id', 'input_type', 'content_hash']).doUpdateSet({
+            embedding: sql`${formatEmbeddingVector(entry.embedding)}::vector`,
+            embedding_dim: entry.embedding.length,
+            updated_at: sql`NOW()`,
+          }),
+        )
+        .execute();
+    }
+  });
+}
+
+async function embedPassageBatchWithCache(batch: Array<{ id: string; search_text: string }>) {
+  const cached = await loadCachedPassageEmbeddings(batch.map((chunk) => chunk.search_text));
+  const embeddings: Array<number[] | null> = Array.from({ length: batch.length }, () => null);
+  const missing: Array<{ index: number; searchText: string }> = [];
+
+  for (let index = 0; index < batch.length; index += 1) {
+    const contentHash = hashMemoryEmbeddingText(batch[index].search_text, 'passage');
+    const embedding = cached.get(contentHash);
+    if (embedding && embedding.length > 0) {
+      embeddings[index] = embedding;
+    } else {
+      missing.push({
+        index,
+        searchText: batch[index].search_text,
+      });
+    }
+  }
+
+  if (missing.length > 0) {
+    const computed = await embedMemoryPassages(missing.map((entry) => entry.searchText));
+    const newCacheEntries: Array<{ searchText: string; embedding: number[] }> = [];
+    for (let index = 0; index < missing.length; index += 1) {
+      const missingEntry = missing[index];
+      const embedding = computed[index] || [];
+      embeddings[missingEntry.index] = embedding;
+      if (embedding.length > 0) {
+        newCacheEntries.push({
+          searchText: missingEntry.searchText,
+          embedding,
+        });
+      }
+    }
+    await upsertCachedPassageEmbeddings(newCacheEntries);
+  }
+
+  return embeddings.map((embedding) => embedding || []);
+}
+
 async function loadMemoryItemIndexSource(memoryItemId: string) {
   const item = await db
     .selectFrom('memory_items as mi')
@@ -252,49 +361,61 @@ export async function rebuildMemoryItemLexicalIndex(memoryItemId: string) {
     tags: source.item.tags || [],
     category: source.item.category,
   });
-  const nextIndexVersion = Number(source.item.index_version || 0) + 1;
+  const currentActiveVersion = Number(source.item.active_index_version || 0);
+  const currentStagedVersion = Number(source.item.staged_index_version || 0);
+  const nextIndexVersion = Math.max(currentActiveVersion, currentStagedVersion) + 1;
+  const shouldStageNextVersion = currentActiveVersion > 0;
+  const nextActiveVersion = shouldStageNextVersion ? currentActiveVersion : nextIndexVersion;
+  const nextStagedVersion = shouldStageNextVersion ? nextIndexVersion : null;
 
-  await db
-    .deleteFrom('memory_item_chunks')
-    .where('memory_item_id', '=', memoryItemId)
-    .execute();
+  await withDbTransaction(async (trx) => {
+    if (currentStagedVersion > 0) {
+      await trx
+        .deleteFrom('memory_item_chunks')
+        .where('memory_item_id', '=', memoryItemId)
+        .where('index_version', '=', currentStagedVersion)
+        .execute();
+    }
 
-  for (const spec of specs) {
-    await db
-      .insertInto('memory_item_chunks')
-      .values({
-        id: crypto.randomUUID(),
-        memory_item_id: memoryItemId,
-        workspace_id: source.item.workspace_id,
-        chunk_index: spec.chunkIndex,
-        chunk_kind: spec.chunkKind,
-        search_text: spec.searchText,
-        embedding: null,
-        token_count: Math.ceil(spec.searchText.length / 4),
-        metadata: {
-          textDigest: source.item.text_digest,
-          state: source.item.state,
-        } as TableInsert<'memory_item_chunks'>['metadata'],
-        created_at: sql`NOW()`,
+    for (const spec of specs) {
+      await trx
+        .insertInto('memory_item_chunks')
+        .values({
+          id: crypto.randomUUID(),
+          memory_item_id: memoryItemId,
+          workspace_id: source.item.workspace_id,
+          index_version: nextIndexVersion,
+          chunk_index: spec.chunkIndex,
+          chunk_kind: spec.chunkKind,
+          search_text: spec.searchText,
+          embedding: null,
+          token_count: Math.ceil(spec.searchText.length / 4),
+          metadata: {
+            textDigest: source.item.text_digest,
+            state: source.item.state,
+          } as TableInsert<'memory_item_chunks'>['metadata'],
+          created_at: sql`NOW()`,
+          updated_at: sql`NOW()`,
+        })
+        .execute();
+    }
+
+    await trx
+      .updateTable('memory_items')
+      .set({
+        search_text: searchText,
+        index_status: 'lexical_ready',
+        active_index_version: nextActiveVersion,
+        staged_index_version: nextStagedVersion,
+        embedding_model: '',
+        embedding_dim: null,
+        indexed_at: null,
+        index_error: null,
         updated_at: sql`NOW()`,
       })
+      .where('id', '=', memoryItemId)
       .execute();
-  }
-
-  await db
-    .updateTable('memory_items')
-    .set({
-      search_text: searchText,
-      index_status: 'lexical_ready',
-      index_version: nextIndexVersion,
-      embedding_model: '',
-      embedding_dim: null,
-      indexed_at: null,
-      index_error: null,
-      updated_at: sql`NOW()`,
-    })
-    .where('id', '=', memoryItemId)
-    .execute();
+  });
 
   return {
     indexVersion: nextIndexVersion,
@@ -328,73 +449,105 @@ export async function reindexMemoryItemEmbeddings(memoryItemId: string, expected
     .selectFrom('memory_items')
     .select([
       'id',
-      'index_version',
+      'active_index_version',
+      'staged_index_version',
     ])
     .where('id', '=', memoryItemId)
     .limit(1)
     .executeTakeFirst();
   if (!item) return { status: 'missing' as const };
-  if (
-    expectedIndexVersion !== undefined
-    && Number(item.index_version || 0) !== expectedIndexVersion
-  ) {
+
+  const activeIndexVersion = Number(item.active_index_version || 0);
+  const stagedIndexVersion = Number(item.staged_index_version || 0);
+  const targetIndexVersion = stagedIndexVersion > 0 ? stagedIndexVersion : activeIndexVersion;
+
+  if (targetIndexVersion <= 0) {
+    return { status: 'missing' as const };
+  }
+  if (expectedIndexVersion !== undefined && targetIndexVersion !== expectedIndexVersion) {
     return { status: 'stale' as const };
   }
 
   const chunks = await db
     .selectFrom('memory_item_chunks')
-    .select(['id', 'search_text'])
+    .select(['id', 'search_text', 'index_version'])
     .where('memory_item_id', '=', memoryItemId)
+    .where('index_version', '=', targetIndexVersion)
     .orderBy('chunk_index', 'asc')
     .execute();
 
   if (chunks.length === 0) {
-    await db
-      .updateTable('memory_items')
-      .set({
-        index_status: 'ready',
-        embedding_model: config.memory.modelId,
-        embedding_dim: MEMORY_VECTOR_DIMENSIONS,
-        indexed_at: sql`NOW()`,
-        index_error: null,
-        updated_at: sql`NOW()`,
-      })
-      .where('id', '=', memoryItemId)
-      .execute();
+    await withDbTransaction(async (trx) => {
+      await trx
+        .updateTable('memory_items')
+        .set({
+          active_index_version: targetIndexVersion,
+          staged_index_version: null,
+          index_status: 'ready',
+          embedding_model: config.memory.modelId,
+          embedding_dim: MEMORY_VECTOR_DIMENSIONS,
+          indexed_at: sql`NOW()`,
+          index_error: null,
+          updated_at: sql`NOW()`,
+        })
+        .where('id', '=', memoryItemId)
+        .execute();
+
+      if (stagedIndexVersion > 0 && activeIndexVersion > 0 && activeIndexVersion !== targetIndexVersion) {
+        await trx
+          .deleteFrom('memory_item_chunks')
+          .where('memory_item_id', '=', memoryItemId)
+          .where('index_version', '=', activeIndexVersion)
+          .execute();
+      }
+    });
     return { status: 'ready' as const, chunkCount: 0 };
   }
 
   try {
     for (const batch of chunkBatches(chunks, Math.max(1, config.memory.embedBatchSize))) {
-      const embeddings = await embedMemoryPassages(batch.map((chunk) => chunk.search_text));
+      const embeddings = await embedPassageBatchWithCache(batch);
       for (let index = 0; index < batch.length; index += 1) {
         const chunk = batch[index];
         const embedding = embeddings[index];
         await db
           .updateTable('memory_item_chunks')
           .set({
-            embedding: embedding
+            embedding: embedding && embedding.length > 0
               ? sql`${formatEmbeddingVector(embedding)}::vector`
               : null,
             updated_at: sql`NOW()`,
           })
           .where('id', '=', chunk.id)
+          .where('index_version', '=', targetIndexVersion)
           .execute();
       }
     }
 
-    await db
-      .updateTable('memory_items')
-      .set({
-        index_status: 'ready',
-        embedding_model: config.memory.modelId,
-        embedding_dim: MEMORY_VECTOR_DIMENSIONS,
-        indexed_at: sql`NOW()`,
-        index_error: null,
-        updated_at: sql`NOW()`,
-      })
-      .where('id', '=', memoryItemId)
-      .execute();
+    await withDbTransaction(async (trx) => {
+      await trx
+        .updateTable('memory_items')
+        .set({
+          active_index_version: targetIndexVersion,
+          staged_index_version: null,
+          index_status: 'ready',
+          embedding_model: config.memory.modelId,
+          embedding_dim: MEMORY_VECTOR_DIMENSIONS,
+          indexed_at: sql`NOW()`,
+          index_error: null,
+          updated_at: sql`NOW()`,
+        })
+        .where('id', '=', memoryItemId)
+        .execute();
+
+      if (stagedIndexVersion > 0 && activeIndexVersion > 0 && activeIndexVersion !== targetIndexVersion) {
+        await trx
+          .deleteFrom('memory_item_chunks')
+          .where('memory_item_id', '=', memoryItemId)
+          .where('index_version', '=', activeIndexVersion)
+          .execute();
+      }
+    });
 
     return {
       status: 'ready' as const,

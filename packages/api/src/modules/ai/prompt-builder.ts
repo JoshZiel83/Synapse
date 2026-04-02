@@ -277,7 +277,16 @@ export function buildActorPrompt(
       `- If the current task depends on history, decisions, user preferences, or durable facts, consult recalled memories first.\n` +
       `- If recalled memories are insufficient, use \`memory_search\` to search deeper.\n` +
       `- Use \`create_memory\` only for stable and established information that should persist beyond the current turn.\n` +
+      `- If the user explicitly asks you to remember something, save it immediately once the statement is complete and unambiguous. If the request is incomplete or ambiguous, ask a short clarification question first.\n` +
+      `- Good memory candidates include durable user profile facts, stable preferences, validated working conventions, durable decisions, reusable procedures, persistent relationships, and external reference pointers.\n` +
+      `- Do not save ephemeral task state, current-turn logistics, temporary plans, repo facts that can be derived from files or git, or secrets such as passwords, tokens, or private credentials.\n` +
+      `- Write memory as a reusable standalone statement rather than a raw chat quote. Replace pronouns with explicit names or roles, include concrete entities, and convert relative dates to absolute dates when time matters.\n` +
+      `- For preference, decision, procedure, or summary memories, include the rationale and how it should be applied when that context is available.\n` +
+      `- Avoid duplicate saves. Only create a new memory when the information is genuinely new, materially clearer, or worth preserving independently.\n` +
       `- Actor-created memories support three visibility modes: \`participant_private\` (private to you in this conversation), \`conversation_shared\` (shared in this conversation), and \`actor_private\` (follows you across conversations).\n` +
+      `- Prefer \`actor_private\` for stable cross-conversation facts about the user or your long-lived working relationship, \`conversation_shared\` for facts all participants in this conversation should share, and \`participant_private\` for narrow context that only you need inside this conversation.\n` +
+      `- Keep \`importance\` near the default unless the memory is likely to shape future behavior repeatedly. Use high \`confidence\` only when the fact was stated explicitly, directly observed, or otherwise well established.\n` +
+      `- When useful, provide a short \`textDigest\` that makes retrieval easy. Prefer explicit subject-plus-predicate wording over pronouns.\n` +
       `- In a direct one-to-one conversation with a workspace user, recalled memory and \`memory_search\` may also include that user's personal workspace memory.\n` +
       `- If you store a file-backed memory, include the exact FileRef string such as <FileRef id="..."/> in the memory content, and include a concise textual summary or \`textDigest\` so it can be retrieved later.\n` +
       `- If memory appears uncertain or conflicts with current evidence, say so explicitly instead of guessing.`,
