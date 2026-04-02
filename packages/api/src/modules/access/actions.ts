@@ -32,10 +32,10 @@ export const ACCESS_ACTIONS = {
   'actor.grant': { resourceType: 'actor', permission: 'grant' },
   'actor.delete': { resourceType: 'actor', permission: 'delete' },
 
-  'actor_conversation.memory_read': { resourceType: 'actor_conversation', permission: 'memory_read' },
-  'actor_conversation.memory_edit': { resourceType: 'actor_conversation', permission: 'memory_edit' },
-  'actor_conversation.memory_retarget': { resourceType: 'actor_conversation', permission: 'memory_retarget' },
-  'actor_conversation.memory_delete': { resourceType: 'actor_conversation', permission: 'memory_delete' },
+  'actor_in_conversation.memory_read': { resourceType: 'conversation_actor_context', permission: 'memory_read' },
+  'actor_in_conversation.memory_edit': { resourceType: 'conversation_actor_context', permission: 'memory_edit' },
+  'actor_in_conversation.memory_retarget': { resourceType: 'conversation_actor_context', permission: 'memory_retarget' },
+  'actor_in_conversation.memory_delete': { resourceType: 'conversation_actor_context', permission: 'memory_delete' },
 
   'conversation.view': { resourceType: 'conversation', permission: 'view' },
   'conversation.send': { resourceType: 'conversation', permission: 'send' },

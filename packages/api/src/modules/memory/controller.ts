@@ -8,7 +8,6 @@ import {
   MEMORY_STABILITIES,
   MEMORY_STATUSES,
 } from '@synapse/shared/constants';
-import { buildActorConversationContextId } from '../../infrastructure/authz/index.js';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import { requireRequestAction } from '../access/guards.js';
@@ -28,6 +27,7 @@ import {
   runMemorySearch,
   updateMemory,
 } from './service.js';
+import { ensureConversationActorSessionContext } from '../session/service.js';
 
 const memoryOwnerScopeEnum = z.enum(MEMORY_SCOPES);
 const memoryCategoryEnum = z.enum(MEMORY_CATEGORIES);
@@ -198,12 +198,17 @@ async function requireMemoryAnchorPermission(
         });
       }
       break;
-    case 'actor_conversation':
+    case 'actor_in_conversation':
       if (body.ownerActorId && body.ownerConversationId) {
+        const context = await ensureConversationActorSessionContext({
+          workspaceId,
+          actorId: body.ownerActorId,
+          conversationId: body.ownerConversationId,
+        });
         allowed = await authorizePermission({
           subject: getRequestAccessSubject(request),
-          resourceType: 'actor_conversation',
-          resourceId: buildActorConversationContextId(body.ownerActorId, body.ownerConversationId),
+          resourceType: 'conversation_actor_context',
+          resourceId: context.conversationActorContextId,
           permission: 'memory_edit',
         });
       }

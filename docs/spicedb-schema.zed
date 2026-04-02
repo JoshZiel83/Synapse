@@ -108,7 +108,7 @@ definition actor {
     permission delete = owner + workspace->manage_actors
 }
 
-definition actor_conversation {
+definition conversation_actor_context {
     relation actor: actor
     relation conversation: conversation
 
@@ -171,13 +171,13 @@ definition memory {
     relation owner_workspace: workspace
     relation owner_conversation: conversation
     relation owner_actor: actor
-    relation owner_actor_conversation: actor_conversation
+    relation owner_actor_in_conversation: conversation_actor_context
 
-    permission read = owner_workspace_member + owner_workspace->view + owner_conversation->memory_read + owner_actor->memory_read + owner_actor_conversation->memory_read + workspace->manage_memories
+    permission read = owner_workspace_member + owner_workspace->view + owner_conversation->memory_read + owner_actor->memory_read + owner_actor_in_conversation->memory_read + workspace->manage_memories
     permission recall = read
-    permission edit = owner_workspace_member + owner_workspace->manage_memories + owner_conversation->memory_edit + owner_actor->memory_edit + owner_actor_conversation->memory_edit + workspace->manage_memories
-    permission retarget = owner_workspace_member + owner_workspace->manage_memories + owner_conversation->memory_retarget + owner_actor->memory_retarget + owner_actor_conversation->memory_retarget + workspace->manage_memories
-    permission delete = owner_workspace_member + owner_workspace->manage_memories + owner_conversation->memory_delete + owner_actor->memory_delete + owner_actor_conversation->memory_delete + workspace->manage_memories
+    permission edit = owner_workspace_member + owner_workspace->manage_memories + owner_conversation->memory_edit + owner_actor->memory_edit + owner_actor_in_conversation->memory_edit + workspace->manage_memories
+    permission retarget = owner_workspace_member + owner_workspace->manage_memories + owner_conversation->memory_retarget + owner_actor->memory_retarget + owner_actor_in_conversation->memory_retarget + workspace->manage_memories
+    permission delete = owner_workspace_member + owner_workspace->manage_memories + owner_conversation->memory_delete + owner_actor->memory_delete + owner_actor_in_conversation->memory_delete + workspace->manage_memories
 }
 
 definition model_profile {
@@ -232,11 +232,11 @@ definition installed_skill {
     relation editor: workspace_member | actor
     relation use_actor: actor
     relation use_workspace_member: workspace_member
-    relation use_actor_conversation: actor_conversation
+    relation use_actor_in_conversation: conversation_actor_context
     relation use_conversation_workspace: conversation_workspace
     relation use_workspace: workspace
 
-    permission use = owner + editor + workspace->manage_skills + use_actor + use_workspace_member->principal + use_actor_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
+    permission use = owner + editor + workspace->manage_skills + use_actor + use_workspace_member->principal + use_actor_in_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
     permission view = use
     permission edit = owner + editor + workspace->manage_skills
     permission grant = edit
@@ -249,11 +249,11 @@ definition plugin_installation {
     relation editor: workspace_member | actor
     relation use_actor: actor
     relation use_workspace_member: workspace_member
-    relation use_actor_conversation: actor_conversation
+    relation use_actor_in_conversation: conversation_actor_context
     relation use_conversation_workspace: conversation_workspace
     relation use_workspace: workspace
 
-    permission use = owner + editor + workspace->manage_plugins + use_actor + use_workspace_member->principal + use_actor_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
+    permission use = owner + editor + workspace->manage_plugins + use_actor + use_workspace_member->principal + use_actor_in_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
     permission view = use
     permission edit = owner + editor + workspace->manage_plugins
     permission grant = edit
@@ -281,12 +281,12 @@ definition relay_exposure {
     relation operator: workspace_member | actor
     relation use_actor: actor
     relation use_workspace_member: workspace_member
-    relation use_actor_conversation: actor_conversation
+    relation use_actor_in_conversation: conversation_actor_context
     relation use_conversation_workspace: conversation_workspace
     relation use_workspace: workspace
 
     permission view = device->view + owner + operator + workspace->manage_relays
-    permission invoke = device->invoke + owner + operator + workspace->manage_relays + use_actor + use_workspace_member->principal + use_actor_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
+    permission invoke = device->invoke + owner + operator + workspace->manage_relays + use_actor + use_workspace_member->principal + use_actor_in_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
     permission request_authorization = invoke
     permission edit = owner + operator + workspace->manage_relays
     permission grant = edit

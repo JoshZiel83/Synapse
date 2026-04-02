@@ -7,7 +7,7 @@ import type { ColumnType } from "kysely";
 
 export type AccessBindingsStatus = "active" | "revoked";
 
-export type AccessBindingsTargetType = "actor" | "actor_conversation" | "conversation_workspace" | "workspace" | "workspace_member";
+export type AccessBindingsTargetType = "actor" | "actor_in_conversation" | "conversation_workspace" | "workspace" | "workspace_member";
 
 export type ActorAccessPolicy = "approval_required" | "workspace_open";
 
@@ -167,7 +167,7 @@ export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 
 export type MemoryEntriesCategory = "artifact" | "decision" | "fact" | "preference" | "procedure" | "relationship" | "summary";
 
-export type MemoryEntriesOwnerScope = "actor_conversation" | "actor_global" | "conversation" | "workspace" | "workspace_member";
+export type MemoryEntriesOwnerScope = "actor_global" | "actor_in_conversation" | "conversation" | "workspace" | "workspace_member";
 
 export type MemoryEntriesStability = "durable" | "ephemeral";
 
@@ -175,7 +175,7 @@ export type MemoryEntriesStatus = "candidate" | "established" | "retracted" | "s
 
 export type MemoryEntryPartsPartType = "file_ref" | "json" | "text";
 
-export type MemoryIndexChunksOwnerScope = "actor_conversation" | "actor_global" | "conversation" | "workspace" | "workspace_member";
+export type MemoryIndexChunksOwnerScope = "actor_global" | "actor_in_conversation" | "conversation" | "workspace" | "workspace_member";
 
 export type MemoryRecallRunsRecallType = "bootstrap" | "manual_search" | "turn_recall";
 
@@ -349,6 +349,7 @@ export interface AccessBindings {
   revoked_at: Timestamp | null;
   status: Generated<AccessBindingsStatus>;
   subject_actor_id: string | null;
+  subject_conversation_actor_context_id: string | null;
   subject_conversation_id: string | null;
   subject_workspace_id: string | null;
   subject_workspace_member_id: string | null;
@@ -841,6 +842,16 @@ export interface ContextCompactionRuns {
   strategy_key: string;
 }
 
+export interface ConversationActorContexts {
+  actor_id: string;
+  conversation_id: string;
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  metadata: Generated<Json | null>;
+  session_id: string;
+  updated_at: Generated<Timestamp | null>;
+}
+
 export interface ConversationContextStates {
   active_shared_archive_point_id: string | null;
   conversation_id: string;
@@ -1071,6 +1082,7 @@ export interface MemoryEntries {
   importance: Generated<number>;
   metadata: Generated<Json | null>;
   owner_actor_id: string | null;
+  owner_conversation_actor_context_id: string | null;
   owner_conversation_id: string | null;
   owner_scope: MemoryEntriesOwnerScope;
   owner_workspace_member_id: string | null;
@@ -1108,6 +1120,7 @@ export interface MemoryIndexChunks {
   memory_entry_id: string;
   metadata: Generated<Json | null>;
   owner_actor_id: string | null;
+  owner_conversation_actor_context_id: string | null;
   owner_conversation_id: string | null;
   owner_scope: MemoryIndexChunksOwnerScope;
   owner_workspace_member_id: string | null;
@@ -2063,6 +2076,7 @@ export interface DB {
   context_archive_points: ContextArchivePoints;
   context_compaction_run_inputs: ContextCompactionRunInputs;
   context_compaction_runs: ContextCompactionRuns;
+  conversation_actor_contexts: ConversationActorContexts;
   conversation_context_states: ConversationContextStates;
   conversation_grants: ConversationGrants;
   conversation_item_context_targets: ConversationItemContextTargets;

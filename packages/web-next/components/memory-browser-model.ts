@@ -185,12 +185,12 @@ export function buildMemoryPayload(editor: EditorState) {
     ownerScope: editor.ownerScope,
     ownerActorId:
       editor.ownerScope === "actor_global" ||
-      editor.ownerScope === "actor_conversation"
+      editor.ownerScope === "actor_in_conversation"
         ? editor.ownerActorId || undefined
         : undefined,
     ownerConversationId:
       editor.ownerScope === "conversation" ||
-      editor.ownerScope === "actor_conversation"
+      editor.ownerScope === "actor_in_conversation"
         ? editor.ownerConversationId || undefined
         : undefined,
     ownerWorkspaceMemberId:
@@ -236,7 +236,7 @@ export function describeFolderVisibility(
       return "Visible to participants in the selected conversation."
     case "actor_global":
       return "Available to the selected actor across conversations."
-    case "actor_conversation":
+    case "actor_in_conversation":
       return "Available only to the selected actor inside the selected conversation."
     default:
       return folder.description || "Visibility follows the selected path."
@@ -304,7 +304,7 @@ export function getFolderIdForOwner(input: {
       return input.ownerActorId
         ? `folder:workspace:${input.workspaceId}:actor:${input.ownerActorId}`
         : `folder:workspace:${input.workspaceId}`
-    case "actor_conversation":
+    case "actor_in_conversation":
       return input.ownerConversationId && input.ownerActorId
         ? `folder:workspace:${input.workspaceId}:conversation:${input.ownerConversationId}:actor:${input.ownerActorId}`
         : `folder:workspace:${input.workspaceId}`
@@ -403,7 +403,7 @@ export function buildMemoryFolders(params: {
     const scopedActorIds = new Set(group.actorIds)
     for (const memory of memories) {
       if (
-        memory.ownerScope === "actor_conversation" &&
+        memory.ownerScope === "actor_in_conversation" &&
         memory.ownerConversationId === group.id &&
         memory.ownerActorId
       ) {
@@ -428,13 +428,13 @@ export function buildMemoryFolders(params: {
         directMemoryIds: memories
           .filter(
             (memory) =>
-              memory.ownerScope === "actor_conversation" &&
+              memory.ownerScope === "actor_in_conversation" &&
               memory.ownerConversationId === group.id &&
               memory.ownerActorId === actorId
           )
           .map((memory) => memory.id),
         createPreset: {
-          ownerScope: "actor_conversation",
+          ownerScope: "actor_in_conversation",
           ownerConversationId: group.id,
           ownerActorId: actorId,
         },

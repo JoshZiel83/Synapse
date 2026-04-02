@@ -37,7 +37,7 @@ import { api } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 
 function isMemoryScope(value: string | null): value is MemoryScope {
-  return value === "workspace" || value === "workspace_member" || value === "conversation" || value === "actor_global" || value === "actor_conversation"
+  return value === "workspace" || value === "workspace_member" || value === "conversation" || value === "actor_global" || value === "actor_in_conversation"
 }
 
 export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {

@@ -50,7 +50,7 @@ const allowedGrantScopes: PluginGrantScope[] = [
   'workspace',
   'conversation_workspace',
   'actor',
-  'actor_conversation',
+  'actor_in_conversation',
 ];
 
 function buildGrantScopeOptions(resourceLabel: string): Array<{
@@ -75,7 +75,7 @@ function buildGrantScopeOptions(resourceLabel: string): Array<{
       description: `Only one actor can use this ${resourceLabel} anywhere it appears.`,
     },
     {
-      value: 'actor_conversation',
+      value: 'actor_in_conversation',
       label: 'Actor in Conversation',
       description: `Only one actor can use this ${resourceLabel} inside one conversation.`,
     },
@@ -164,7 +164,7 @@ function getScopeLabel(scope: PluginGrantScope) {
       return 'Conversation Workspace';
     case 'actor':
       return 'Actor';
-    case 'actor_conversation':
+    case 'actor_in_conversation':
       return 'Actor in Conversation';
     default:
       return scope;
@@ -184,7 +184,7 @@ function formatGrantTarget(
       return conversationsById.get(target.conversationId) || 'Selected conversation';
     case 'actor':
       return actorsById.get(target.actorId) || 'Selected actor';
-    case 'actor_conversation': {
+    case 'actor_in_conversation': {
       const actorName = actorsById.get(target.actorId) || 'Selected actor';
       const conversationName =
         conversationsById.get(target.conversationId) || 'Selected conversation';
@@ -387,7 +387,7 @@ export default function PluginAccessStep({
     if (grantScope === 'actor') {
       return actorId ? 'The actor you selected on the left' : 'Choose an actor on the left';
     }
-    if (grantScope === 'actor_conversation') {
+    if (grantScope === 'actor_in_conversation') {
       return actorId && conversationId
         ? 'The actor + conversation pair you selected on the left'
         : 'Choose one actor and one conversation on the left';
@@ -457,7 +457,7 @@ export default function PluginAccessStep({
           secondaryActorActive: false,
           footer: `Good when one actor owns this ${resourceLabelLower} across every conversation it joins.`,
         };
-      case 'actor_conversation':
+      case 'actor_in_conversation':
         return {
           title: `${PREVIEW_PRIMARY_ACTOR} in ${PREVIEW_CONVERSATION}`,
           subtitle: 'Only this actor in this conversation can use it',
@@ -506,7 +506,7 @@ export default function PluginAccessStep({
   const canCreateGrant = useMemo(() => {
     if (grantScope === 'conversation_workspace') return Boolean(conversationId);
     if (grantScope === 'actor') return Boolean(actorId);
-    if (grantScope === 'actor_conversation') return Boolean(actorId && conversationId);
+    if (grantScope === 'actor_in_conversation') return Boolean(actorId && conversationId);
     return true;
   }, [actorId, conversationId, grantScope]);
 
@@ -566,9 +566,9 @@ export default function PluginAccessStep({
       await accessAdapter.grantAccess(workspaceId, resolvedResourceId, {
         accessTarget: {
           type: grantScope,
-          actorId: grantScope === 'actor' || grantScope === 'actor_conversation' ? actorId : undefined,
+          actorId: grantScope === 'actor' || grantScope === 'actor_in_conversation' ? actorId : undefined,
           conversationId:
-            grantScope === 'conversation_workspace' || grantScope === 'actor_conversation'
+            grantScope === 'conversation_workspace' || grantScope === 'actor_in_conversation'
               ? conversationId
               : undefined,
         },
@@ -635,7 +635,7 @@ export default function PluginAccessStep({
       );
     }
 
-    if (grantScope === 'actor_conversation') {
+    if (grantScope === 'actor_in_conversation') {
       return (
         <FieldGroup>
           <Field>

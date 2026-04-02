@@ -1049,16 +1049,7 @@ async function scanLeaseKeys(pattern: string) {
 }
 
 export async function shutdownSessionInstances(sessionId: string) {
-  const sessionRow = await db
-    .selectFrom("sessions")
-    .select(["actor_id", "conversation_id"])
-    .where("id", "=", sessionId)
-    .executeTakeFirst();
-
-  const sessionScopeId =
-    sessionRow?.actor_id && sessionRow.conversation_id
-      ? `conversation:${sessionRow.conversation_id}:actor:${sessionRow.actor_id}`
-      : null;
+  const sessionScopeId = `session:${sessionId}`;
 
   const keysToRemove: string[] = [];
   for (const [key, instance] of instanceCache) {
@@ -1066,7 +1057,7 @@ export async function shutdownSessionInstances(sessionId: string) {
       keysToRemove.push(key);
       continue;
     }
-    if (sessionScopeId && instance.scope === "session" && instance.scopeId === sessionScopeId) {
+    if (instance.scope === "session" && instance.scopeId === sessionScopeId) {
       keysToRemove.push(key);
     }
   }
@@ -1075,14 +1066,12 @@ export async function shutdownSessionInstances(sessionId: string) {
     await shutdownInstanceByKey(key, "session_terminated");
   }
 
-  if (sessionScopeId) {
-    const leaseKeys = await scanLeaseKeys(
-      `mcp:runtime:lease:*:*:session:${sessionScopeId}`,
-    );
-    if (leaseKeys.length > 0) {
-      const metaKeys = leaseKeys.map((key) => key.replace(":lease:", ":lease-meta:"));
-      await redis.del(...leaseKeys, ...metaKeys).catch(() => undefined);
-    }
+  const leaseKeys = await scanLeaseKeys(
+    `mcp:runtime:lease:*:*:session:${sessionScopeId}`,
+  );
+  if (leaseKeys.length > 0) {
+    const metaKeys = leaseKeys.map((key) => key.replace(":lease:", ":lease-meta:"));
+    await redis.del(...leaseKeys, ...metaKeys).catch(() => undefined);
   }
 }
 

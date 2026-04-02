@@ -4,7 +4,6 @@ import {
   buildWorkspaceMemberContextId,
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
-  touchActorConversationContext,
   touchRelation,
 } from "../../infrastructure/authz/index.js";
 import { v4 as uuidv4 } from "uuid";
@@ -181,7 +180,6 @@ export async function activateConversationParticipant(params: {
             "actor",
             params.actorId,
           ),
-          ...touchActorConversationContext(params.actorId, params.conversationId),
         ]
       : params.memberType === "workspace_member" && params.workspaceMemberId
         ? [

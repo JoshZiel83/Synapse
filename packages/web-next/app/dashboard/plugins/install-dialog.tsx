@@ -311,8 +311,8 @@ function deriveInstallFlow(
     {
       id: 'attachment-scope',
       kind: 'attachment_scope',
-      titleI18n: { [locale]: 'Choose owner' },
-      descriptionI18n: { [locale]: 'Choose where this installation belongs. Access is set later.' },
+      titleI18n: { [locale]: 'Choose placement' },
+      descriptionI18n: { [locale]: 'Choose where this installation lives. Access is set later.' },
       scope: 'plugin',
       fields: [],
     },

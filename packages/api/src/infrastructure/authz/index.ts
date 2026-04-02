@@ -16,13 +16,6 @@ import {
 
 export const AUTHZ_PLATFORM_ID = "synapse";
 
-export function buildActorConversationContextId(
-  actorId: string,
-  conversationId: string,
-) {
-  return `${actorId}|${conversationId}`;
-}
-
 export function buildWorkspaceMemberContextId(
   workspaceMemberId: string,
 ) {
@@ -47,7 +40,7 @@ export type AuthzObjectType =
   | "plugin_installation"
   | "relay_device"
   | "relay_exposure"
-  | "actor_conversation"
+  | "conversation_actor_context"
   | "conversation"
   | "memory"
   | "model_group"
@@ -80,7 +73,7 @@ const AUTHZ_RESOURCE_TYPES: AuthzObjectType[] = [
   "plugin_installation",
   "relay_device",
   "relay_exposure",
-  "actor_conversation",
+  "conversation_actor_context",
   "conversation",
   "memory",
   "model_group",
@@ -426,19 +419,25 @@ export function touchRelation(
   };
 }
 
-export function touchActorConversationContext(
-  actorId: string,
-  conversationId: string,
-): AuthzRelationMutation[] {
-  const contextId = buildActorConversationContextId(actorId, conversationId);
+export function touchConversationActorContext(params: {
+  conversationActorContextId: string;
+  actorId: string;
+  conversationId: string;
+}): AuthzRelationMutation[] {
   return [
-    touchRelation("actor_conversation", contextId, "actor", "actor", actorId),
     touchRelation(
-      "actor_conversation",
-      contextId,
+      "conversation_actor_context",
+      params.conversationActorContextId,
+      "actor",
+      "actor",
+      params.actorId,
+    ),
+    touchRelation(
+      "conversation_actor_context",
+      params.conversationActorContextId,
       "conversation",
       "conversation",
-      conversationId,
+      params.conversationId,
     ),
   ];
 }

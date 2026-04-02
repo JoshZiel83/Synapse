@@ -136,7 +136,7 @@ function buildCreateMemoryAction(input: Record<string, any>): ActorAction {
     content: input.content,
     metadata: {
       category: input.category || 'fact',
-      scope: input.scope || 'actor_conversation',
+      scope: input.scope || 'actor_in_conversation',
       importance: parseFloat(input.importance) || 0.5,
       confidence: parseFloat(input.confidence) || 0.8,
       stability: input.stability || 'durable',
@@ -202,8 +202,8 @@ export function registerActionToolPlugins(): void {
           },
           scope: {
             type: 'string',
-            description: 'Memory owner scope. actor_conversation = private to you inside the current conversation; conversation = shared within the current conversation; actor_global = follows you across conversations.',
-            enum: ['actor_conversation', 'conversation', 'actor_global'],
+            description: 'Memory owner scope. actor_in_conversation = private to you inside the current conversation; conversation = shared within the current conversation; actor_global = follows you across conversations.',
+            enum: ['actor_in_conversation', 'conversation', 'actor_global'],
           },
           importance: {
             type: 'string',

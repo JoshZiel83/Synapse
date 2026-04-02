@@ -36,7 +36,7 @@ const attachmentTypeLabels: Record<string, string> = {
   workspace: 'Workspace',
   conversation: 'Conversation',
   actor: 'Actor',
-  actor_conversation: 'Actor in Conversation',
+  actor_in_conversation: 'Actor in Conversation',
   workspace_member: 'Workspace Member',
 };
 

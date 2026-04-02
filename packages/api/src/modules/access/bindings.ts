@@ -4,17 +4,17 @@ import type {
   CapabilityAccessTarget,
 } from "@synapse/shared/types";
 import {
-  buildActorConversationContextId,
   buildConversationWorkspaceContextId,
   buildWorkspaceMemberContextId,
   deleteRelation,
-  touchActorConversationContext,
+  touchConversationActorContext,
   touchConversationWorkspaceContext,
   touchRelation,
   touchWorkspaceMemberContext,
   type AuthzObjectType,
   type AuthzRelationMutation,
 } from "../../infrastructure/authz/index.js";
+import { ensureConversationActorSessionContext } from "../session/service.js";
 
 export type AccessBindableResourceType = Extract<
   AuthzObjectType,
@@ -31,17 +31,18 @@ export type AccessBindingRow = {
     | "actor"
     | "workspace_member"
     | "conversation_workspace"
-    | "actor_conversation";
+    | "actor_in_conversation";
   relation:
     | "use_workspace"
     | "use_actor"
     | "use_workspace_member"
     | "use_conversation_workspace"
-    | "use_actor_conversation";
+    | "use_actor_in_conversation";
   subject_workspace_id: string | null;
   subject_workspace_member_id: string | null;
   subject_actor_id: string | null;
   subject_conversation_id: string | null;
+  subject_conversation_actor_context_id: string | null;
   is_primary: boolean;
   granted_permissions: string[] | unknown;
   status: "active" | "revoked";
@@ -61,11 +62,12 @@ export type AccessGrantTarget = {
     | "actor"
     | "workspace_member"
     | "conversation_workspace"
-    | "actor_conversation";
+    | "conversation_actor_context";
   subjectWorkspaceId: string | null;
   subjectWorkspaceMemberId: string | null;
   subjectActorId: string | null;
   subjectConversationId: string | null;
+  subjectConversationActorContextId: string | null;
   subjectId: string;
   actorId: string | null;
   conversationId: string | null;
@@ -94,10 +96,10 @@ function asStringArray(value: unknown) {
   );
 }
 
-export function resolveAccessGrantTarget(input: {
+export async function resolveAccessGrantTarget(input: {
   workspaceId: string;
   target: AccessTarget;
-}): AccessGrantTarget {
+}): Promise<AccessGrantTarget> {
   switch (input.target.type) {
     case "workspace":
       return {
@@ -109,6 +111,7 @@ export function resolveAccessGrantTarget(input: {
         subjectWorkspaceMemberId: null,
         subjectActorId: null,
         subjectConversationId: null,
+        subjectConversationActorContextId: null,
         subjectId: input.workspaceId,
         actorId: null,
         conversationId: null,
@@ -127,6 +130,7 @@ export function resolveAccessGrantTarget(input: {
         subjectWorkspaceMemberId: null,
         subjectActorId: input.target.actorId,
         subjectConversationId: null,
+        subjectConversationActorContextId: null,
         subjectId: input.target.actorId,
         actorId: input.target.actorId,
         conversationId: null,
@@ -147,6 +151,7 @@ export function resolveAccessGrantTarget(input: {
         subjectWorkspaceMemberId: input.target.workspaceMemberId,
         subjectActorId: null,
         subjectConversationId: null,
+        subjectConversationActorContextId: null,
         subjectId: buildWorkspaceMemberContextId(
           input.target.workspaceMemberId,
         ),
@@ -169,6 +174,7 @@ export function resolveAccessGrantTarget(input: {
         subjectWorkspaceMemberId: null,
         subjectActorId: null,
         subjectConversationId: input.target.conversationId,
+        subjectConversationActorContextId: null,
         subjectId: buildConversationWorkspaceContextId(
           input.workspaceId,
           input.target.conversationId,
@@ -177,29 +183,36 @@ export function resolveAccessGrantTarget(input: {
         conversationId: input.target.conversationId,
         workspaceMemberId: null,
       };
-    case "actor_conversation":
+    case "actor_in_conversation": {
       if (!input.target.actorId || !input.target.conversationId) {
         throw new Error(
-          "actorId and conversationId are required for actor_conversation target",
+          "actorId and conversationId are required for actor_in_conversation target",
         );
       }
+      const context = await ensureConversationActorSessionContext({
+        workspaceId: input.workspaceId,
+        actorId: input.target.actorId,
+        conversationId: input.target.conversationId,
+      });
       return {
-        targetType: "actor_conversation",
-        bindScope: "actor_conversation",
-        relation: "use_actor_conversation",
-        subjectType: "actor_conversation",
+        targetType: "actor_in_conversation",
+        bindScope: "actor_in_conversation",
+        relation: "use_actor_in_conversation",
+        subjectType: "conversation_actor_context",
         subjectWorkspaceId: null,
         subjectWorkspaceMemberId: null,
         subjectActorId: input.target.actorId,
         subjectConversationId: input.target.conversationId,
-        subjectId: buildActorConversationContextId(
-          input.target.actorId,
-          input.target.conversationId,
-        ),
+        subjectConversationActorContextId:
+          context.conversationActorContextId,
+        subjectId: context.conversationActorContextId,
         actorId: input.target.actorId,
         conversationId: input.target.conversationId,
         workspaceMemberId: null,
       };
+    }
+    default:
+      throw new Error(`Unsupported access target type: ${String(input.target.type)}`);
   }
 }
 
@@ -212,6 +225,7 @@ export function readAccessBindingTarget(
     | "subject_workspace_member_id"
     | "subject_actor_id"
     | "subject_conversation_id"
+    | "subject_conversation_actor_context_id"
   >,
 ): AccessGrantTarget {
   switch (row.target_type) {
@@ -225,6 +239,7 @@ export function readAccessBindingTarget(
         subjectWorkspaceMemberId: null,
         subjectActorId: null,
         subjectConversationId: null,
+        subjectConversationActorContextId: null,
         subjectId: row.subject_workspace_id || "",
         actorId: null,
         conversationId: null,
@@ -240,6 +255,7 @@ export function readAccessBindingTarget(
         subjectWorkspaceMemberId: null,
         subjectActorId: row.subject_actor_id,
         subjectConversationId: null,
+        subjectConversationActorContextId: null,
         subjectId: row.subject_actor_id || "",
         actorId: row.subject_actor_id,
         conversationId: null,
@@ -255,6 +271,7 @@ export function readAccessBindingTarget(
         subjectWorkspaceMemberId: row.subject_workspace_member_id,
         subjectActorId: null,
         subjectConversationId: null,
+        subjectConversationActorContextId: null,
         subjectId: row.subject_workspace_member_id
           ? buildWorkspaceMemberContextId(row.subject_workspace_member_id)
           : "",
@@ -272,6 +289,7 @@ export function readAccessBindingTarget(
         subjectWorkspaceMemberId: null,
         subjectActorId: null,
         subjectConversationId: row.subject_conversation_id,
+        subjectConversationActorContextId: null,
         subjectId:
           row.subject_workspace_id && row.subject_conversation_id
             ? buildConversationWorkspaceContextId(
@@ -283,27 +301,25 @@ export function readAccessBindingTarget(
         conversationId: row.subject_conversation_id,
         workspaceMemberId: null,
       };
-    case "actor_conversation":
+    case "actor_in_conversation":
       return {
-        targetType: "actor_conversation",
-        bindScope: "actor_conversation",
+        targetType: "actor_in_conversation",
+        bindScope: "actor_in_conversation",
         relation: row.relation,
-        subjectType: "actor_conversation",
+        subjectType: "conversation_actor_context",
         subjectWorkspaceId: null,
         subjectWorkspaceMemberId: null,
         subjectActorId: row.subject_actor_id,
         subjectConversationId: row.subject_conversation_id,
-        subjectId:
-          row.subject_actor_id && row.subject_conversation_id
-            ? buildActorConversationContextId(
-                row.subject_actor_id,
-                row.subject_conversation_id,
-              )
-            : "",
+        subjectConversationActorContextId:
+          row.subject_conversation_actor_context_id,
+        subjectId: row.subject_conversation_actor_context_id || "",
         actorId: row.subject_actor_id,
         conversationId: row.subject_conversation_id,
         workspaceMemberId: null,
       };
+    default:
+      throw new Error(`Unsupported stored access target type: ${String(row.target_type)}`);
   }
 }
 
@@ -339,6 +355,7 @@ export function accessBindingHasTarget(
     | "subject_workspace_member_id"
     | "subject_actor_id"
     | "subject_conversation_id"
+    | "subject_conversation_actor_context_id"
   >,
   target: AccessGrantTarget,
 ) {
@@ -349,7 +366,9 @@ export function accessBindingHasTarget(
       (target.subjectWorkspaceMemberId || null) &&
     (row.subject_actor_id || null) === (target.subjectActorId || null) &&
     (row.subject_conversation_id || null) ===
-      (target.subjectConversationId || null)
+      (target.subjectConversationId || null) &&
+    (row.subject_conversation_actor_context_id || null) ===
+      (target.subjectConversationActorContextId || null)
   );
 }
 
@@ -396,19 +415,18 @@ function buildAuthzSubject(target: AccessGrantTarget) {
           target.subjectConversationId,
         ),
       };
-    case "actor_conversation":
-      if (!target.subjectActorId || !target.subjectConversationId) {
+    case "conversation_actor_context":
+      if (!target.subjectConversationActorContextId) {
         throw new Error(
-          "subjectActorId and subjectConversationId are required for actor_conversation bindings",
+          "subjectConversationActorContextId is required for actor_in_conversation bindings",
         );
       }
       return {
-        subjectType: "actor_conversation" as const,
-        subjectId: buildActorConversationContextId(
-          target.subjectActorId,
-          target.subjectConversationId,
-        ),
+        subjectType: "conversation_actor_context" as const,
+        subjectId: target.subjectConversationActorContextId,
       };
+    default:
+      throw new Error(`Unsupported access binding subject type: ${String(target.subjectType)}`);
   }
 }
 
@@ -446,15 +464,18 @@ export function buildResourceAccessAuthzMutations(params: {
       );
     }
     if (
-      params.target.targetType === "actor_conversation" &&
+      params.target.targetType === "actor_in_conversation" &&
+      params.target.subjectConversationActorContextId &&
       params.target.subjectActorId &&
       params.target.subjectConversationId
     ) {
       relations.push(
-        ...touchActorConversationContext(
-          params.target.subjectActorId,
-          params.target.subjectConversationId,
-        ),
+        ...touchConversationActorContext({
+          conversationActorContextId:
+            params.target.subjectConversationActorContextId,
+          actorId: params.target.subjectActorId,
+          conversationId: params.target.subjectConversationId,
+        }),
       );
     }
   }
@@ -499,9 +520,9 @@ export function mapAccessBindingToGrant(
         conversationId: target.subjectConversationId || undefined,
       };
       break;
-    case "actor_conversation":
+    case "actor_in_conversation":
       capabilityTarget = {
-        type: "actor_conversation",
+        type: "actor_in_conversation",
         actorId: target.subjectActorId || undefined,
         conversationId: target.subjectConversationId || undefined,
       };
@@ -510,6 +531,8 @@ export function mapAccessBindingToGrant(
       throw new Error(
         "workspace_member access targets are not supported for capability grants",
       );
+    default:
+      throw new Error(`Unsupported capability access target type: ${String(target.targetType)}`);
   }
 
   return {

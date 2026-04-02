@@ -13,7 +13,6 @@ import {
   type SkillMarketplaceVersion,
 } from "@synapse/shared";
 import {
-  buildActorConversationContextId,
   buildConversationWorkspaceContextId,
   deleteRelation,
   flushAuthzOutboxEntries,
@@ -40,6 +39,7 @@ import {
   getFileAccessInfo,
   getFileUrlById,
 } from "../files/service.js";
+import { getConversationActorContextByPair } from "../session/service.js";
 
 type SkillUseScope = CapabilityAccessTarget["type"];
 
@@ -383,16 +383,16 @@ function normalizeScopeTarget(input: {
         actorId: input.actorId,
         conversationId: null,
       };
-    case "actor_conversation":
+    case "actor_in_conversation":
       if (!input.actorId || !input.conversationId) {
         throw new SkillError(
           400,
-          "actorId and conversationId are required for actor_conversation scope",
+          "actorId and conversationId are required for actor_in_conversation scope",
         );
       }
       return {
-        bindScope: "actor_conversation",
-        useScope: "actor_conversation",
+        bindScope: "actor_in_conversation",
+        useScope: "actor_in_conversation",
         actorId: input.actorId,
         conversationId: input.conversationId,
       };
@@ -559,7 +559,7 @@ function resolvePublicUseScope(bindScope: RuntimeBindingScope): SkillUseScope {
     case "workspace":
     case "conversation_workspace":
     case "actor":
-    case "actor_conversation":
+    case "actor_in_conversation":
       return bindScope;
     case "workspace_member":
       throw new SkillError(
@@ -575,7 +575,7 @@ function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
     revoked: 1,
   };
   const scopeOrder: Record<RuntimeBindingScope, number> = {
-    actor_conversation: 0,
+    actor_in_conversation: 0,
     actor: 1,
     conversation_workspace: 2,
     workspace_member: 99,
@@ -605,7 +605,7 @@ function compareVisibleBindingPriority(
     revoked: 1,
   };
   const scopeOrder: Record<RuntimeBindingScope, number> = {
-    actor_conversation: 0,
+    actor_in_conversation: 0,
     actor: 1,
     conversation_workspace: 2,
     workspace_member: 99,
@@ -1093,29 +1093,32 @@ async function loadAccessBindingsBySkillIds(
 
   const result = await runQuery<AccessBindingRow>(
     `SELECT
-       id,
-       workspace_id,
-       resource_type,
-       resource_id,
-       target_type,
-       relation,
-       subject_workspace_id,
-       subject_workspace_member_id,
-       subject_actor_id,
-       subject_conversation_id,
-       is_primary,
-       granted_permissions,
-       status,
-       created_by_workspace_member_id,
-       reason,
-       metadata,
-       created_at,
-       revoked_at
-     FROM access_bindings
-     WHERE resource_type = 'installed_skill'
-       AND resource_id = ANY($1::text[])
-       ${includeRevoked ? "" : "AND status = 'active'"}
-     ORDER BY resource_id, created_at DESC`,
+       binding.id,
+       binding.workspace_id,
+       binding.resource_type,
+       binding.resource_id,
+       binding.target_type,
+       binding.relation,
+       binding.subject_workspace_id,
+       binding.subject_workspace_member_id,
+       COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
+       COALESCE(binding.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
+       binding.subject_conversation_actor_context_id,
+       binding.is_primary,
+       binding.granted_permissions,
+       binding.status,
+       binding.created_by_workspace_member_id,
+       binding.reason,
+       binding.metadata,
+       binding.created_at,
+       binding.revoked_at
+     FROM access_bindings binding
+     LEFT JOIN conversation_actor_contexts cac
+       ON cac.id = binding.subject_conversation_actor_context_id
+     WHERE binding.resource_type = 'installed_skill'
+       AND binding.resource_id = ANY($1::text[])
+       ${includeRevoked ? "" : "AND binding.status = 'active'"}
+     ORDER BY binding.resource_id, binding.created_at DESC`,
     [skillIds],
   );
 
@@ -1194,7 +1197,7 @@ async function findSkillIdsByBindingFilter(params: {
   }
 
   const target = params.accessTargetType
-    ? resolveAccessGrantTarget({
+    ? await resolveAccessGrantTarget({
         workspaceId: params.workspaceId,
         target: {
           type: params.accessTargetType,
@@ -1216,6 +1219,10 @@ async function findSkillIdsByBindingFilter(params: {
     conditions.push(`target_type = $${values.length}`);
     values.push(target.relation);
     conditions.push(`relation = $${values.length}`);
+    values.push(target.subjectConversationActorContextId);
+    conditions.push(
+      `subject_conversation_actor_context_id IS NOT DISTINCT FROM $${values.length}::uuid`,
+    );
     values.push(target.subjectWorkspaceId);
     conditions.push(`subject_workspace_id IS NOT DISTINCT FROM $${values.length}::uuid`);
     values.push(target.subjectWorkspaceMemberId);
@@ -1227,11 +1234,19 @@ async function findSkillIdsByBindingFilter(params: {
   } else {
     if (params.actorId) {
       values.push(params.actorId);
-      conditions.push(`subject_actor_id = $${values.length}`);
+      conditions.push(
+        `(subject_actor_id = $${values.length} OR subject_conversation_actor_context_id IN (
+          SELECT id FROM conversation_actor_contexts WHERE actor_id = $${values.length}::uuid
+        ))`,
+      );
     }
     if (params.conversationId) {
       values.push(params.conversationId);
-      conditions.push(`subject_conversation_id = $${values.length}`);
+      conditions.push(
+        `(subject_conversation_id = $${values.length} OR subject_conversation_actor_context_id IN (
+          SELECT id FROM conversation_actor_contexts WHERE conversation_id = $${values.length}::uuid
+        ))`,
+      );
     }
   }
 
@@ -1275,7 +1290,7 @@ async function ensureSkillBinding(
     isPrimary?: boolean;
   },
 ) {
-  const grantTarget = resolveAccessGrantTarget({
+  const grantTarget = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
     target: {
       type: input.target.useScope,
@@ -1286,25 +1301,28 @@ async function ensureSkillBinding(
 
   const existing = await run<AccessBindingRow>(
     `SELECT
-       id,
-       workspace_id,
-       resource_type,
-       resource_id,
-       target_type,
-       relation,
-       subject_workspace_id,
-       subject_workspace_member_id,
-       subject_actor_id,
-       subject_conversation_id,
-       is_primary,
-       granted_permissions,
-       status,
-       created_by_workspace_member_id,
-       reason,
-       metadata,
-       created_at,
-       revoked_at
+       access_bindings.id,
+       access_bindings.workspace_id,
+       access_bindings.resource_type,
+       access_bindings.resource_id,
+       access_bindings.target_type,
+       access_bindings.relation,
+       access_bindings.subject_workspace_id,
+       access_bindings.subject_workspace_member_id,
+       COALESCE(access_bindings.subject_actor_id, cac.actor_id) AS subject_actor_id,
+       COALESCE(access_bindings.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
+       access_bindings.subject_conversation_actor_context_id,
+       access_bindings.is_primary,
+       access_bindings.granted_permissions,
+       access_bindings.status,
+       access_bindings.created_by_workspace_member_id,
+       access_bindings.reason,
+       access_bindings.metadata,
+       access_bindings.created_at,
+       access_bindings.revoked_at
      FROM access_bindings
+     LEFT JOIN conversation_actor_contexts cac
+       ON cac.id = access_bindings.subject_conversation_actor_context_id
      WHERE workspace_id = $1
        AND resource_type = 'installed_skill'
        AND resource_id = $2
@@ -1313,9 +1331,10 @@ async function ensureSkillBinding(
        AND subject_workspace_member_id IS NOT DISTINCT FROM $5::uuid
        AND subject_actor_id IS NOT DISTINCT FROM $6::uuid
        AND subject_conversation_id IS NOT DISTINCT FROM $7::uuid
+       AND subject_conversation_actor_context_id IS NOT DISTINCT FROM $8::uuid
        AND status = 'active'
-     ORDER BY created_at DESC
-    LIMIT 1`,
+     ORDER BY access_bindings.created_at DESC
+     LIMIT 1`,
     [
       input.workspaceId,
       input.skillId,
@@ -1324,6 +1343,7 @@ async function ensureSkillBinding(
       grantTarget.subjectWorkspaceMemberId,
       grantTarget.subjectActorId,
       grantTarget.subjectConversationId,
+      grantTarget.subjectConversationActorContextId,
     ],
   );
 
@@ -1346,6 +1366,7 @@ async function ensureSkillBinding(
        subject_workspace_member_id,
        subject_actor_id,
        subject_conversation_id,
+       subject_conversation_actor_context_id,
        is_primary,
        granted_permissions,
        metadata,
@@ -1363,10 +1384,11 @@ async function ensureSkillBinding(
        $7,
        $8,
        $9,
-       $10::text[],
-       $11::jsonb,
+       $10,
+       $11::text[],
+       $12::jsonb,
        'active',
-       $12
+       $13
      )
      RETURNING id`,
     [
@@ -1378,6 +1400,7 @@ async function ensureSkillBinding(
       grantTarget.subjectWorkspaceMemberId,
       grantTarget.subjectActorId,
       grantTarget.subjectConversationId,
+      grantTarget.subjectConversationActorContextId,
       input.isPrimary === true,
       ["use"],
       JSON.stringify({}),
@@ -1988,7 +2011,7 @@ export async function grantInstalledSkillAccess(input: {
           type: "workspace",
         } satisfies CapabilityAccessTarget));
 
-  const accessTarget = resolveAccessGrantTarget({
+  const accessTarget = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
     target: accessTargetInput,
   });
@@ -2017,6 +2040,7 @@ export async function grantInstalledSkillAccess(input: {
          subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
+         subject_conversation_actor_context_id,
          is_primary,
          granted_permissions,
          metadata,
@@ -2035,11 +2059,12 @@ export async function grantInstalledSkillAccess(input: {
          $7,
          $8,
          $9,
-         $10::text[],
-         $11::jsonb,
+         $10,
+         $11::text[],
+         $12::jsonb,
          'active',
-         $12,
-         $13
+         $13,
+         $14
        )
        RETURNING
          id,
@@ -2052,6 +2077,7 @@ export async function grantInstalledSkillAccess(input: {
          subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
+         subject_conversation_actor_context_id,
          is_primary,
          granted_permissions,
          status,
@@ -2069,6 +2095,7 @@ export async function grantInstalledSkillAccess(input: {
         accessTarget.subjectWorkspaceMemberId,
         accessTarget.subjectActorId,
         accessTarget.subjectConversationId,
+        accessTarget.subjectConversationActorContextId,
         false,
         input.permissions || ["use"],
         JSON.stringify(input.metadata || {}),
@@ -2077,7 +2104,13 @@ export async function grantInstalledSkillAccess(input: {
       ],
     );
 
-    const accessRow = buildSkillAccessRow(inserted.rows[0]!);
+    const accessRow = buildSkillAccessRow({
+      ...inserted.rows[0]!,
+      subject_actor_id: accessTarget.subjectActorId,
+      subject_conversation_id: accessTarget.subjectConversationId,
+      subject_conversation_actor_context_id:
+        accessTarget.subjectConversationActorContextId,
+    } as AccessBindingRow);
     const authzEntryIds = await queueAuthzRelationships(
       client,
       buildResourceAccessAuthzMutations({
@@ -2603,6 +2636,7 @@ export async function uninstallInstalledSkill(
          subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
+         subject_conversation_actor_context_id,
          is_primary,
          granted_permissions,
          status,
@@ -2670,7 +2704,7 @@ export async function uninstallInstalledSkill(
   return result.deleted;
 }
 
-function buildVisibilitySubjects(input: {
+async function buildVisibilitySubjects(input: {
   workspaceId: string;
   actorId?: string;
   conversationId?: string;
@@ -2708,10 +2742,16 @@ function buildVisibilitySubjects(input: {
   }
 
   if (input.actorId && input.conversationId) {
+    const context = await getConversationActorContextByPair(
+      input.conversationId,
+      input.actorId,
+    );
+    if (context) {
     subjects.push({
-      type: "actor_conversation",
-      id: buildActorConversationContextId(input.actorId, input.conversationId),
+      type: "conversation_actor_context",
+      id: context.id,
     });
+    }
   }
 
   return subjects;
@@ -2732,7 +2772,7 @@ function accessMatchesVisibilityContext(
       return binding.conversation_id === input.conversationId;
     case "actor":
       return binding.actor_id === input.actorId;
-    case "actor_conversation":
+    case "actor_in_conversation":
       return (
         binding.actor_id === input.actorId &&
         binding.conversation_id === input.conversationId
@@ -2746,26 +2786,32 @@ function visibleRowToAccessRow(
   row: VisibleSkillRow,
   workspaceId: string,
 ): SkillAccessRow {
-  const target = resolveAccessGrantTarget({
-    workspaceId,
-    target: {
-      type: resolvePublicUseScope(row.access_bind_scope),
-      actorId: row.actor_id || undefined,
-      conversationId: row.conversation_id || undefined,
-    },
-  });
+  const publicScope = resolvePublicUseScope(row.access_bind_scope);
+  const relation =
+    publicScope === "workspace"
+      ? "use_workspace"
+      : publicScope === "actor"
+        ? "use_actor"
+        : publicScope === "conversation_workspace"
+          ? "use_conversation_workspace"
+          : "use_actor_in_conversation";
 
   return {
     id: row.access_binding_id,
     workspace_id: workspaceId,
     resource_type: "installed_skill",
     resource_id: row.skill_id,
-    target_type: target.targetType,
-    relation: target.relation,
-    subject_workspace_id: target.subjectWorkspaceId,
-    subject_workspace_member_id: target.subjectWorkspaceMemberId,
-    subject_actor_id: target.subjectActorId,
-    subject_conversation_id: target.subjectConversationId,
+    target_type: publicScope,
+    relation,
+    subject_workspace_id:
+      publicScope === "workspace" || publicScope === "conversation_workspace"
+        ? workspaceId
+        : null,
+    subject_workspace_member_id: null,
+    subject_actor_id: publicScope === "actor" ? row.actor_id : null,
+    subject_conversation_id:
+      publicScope === "conversation_workspace" ? row.conversation_id : null,
+    subject_conversation_actor_context_id: null,
     is_primary: true,
     granted_permissions: ["use"],
     status: "active",
@@ -2788,7 +2834,7 @@ export async function listVisibleSkills(input: {
   conversationId?: string;
   workspaceMemberId?: string;
 }) {
-  const subjects = buildVisibilitySubjects(input);
+  const subjects = await buildVisibilitySubjects(input);
   if (subjects.length === 0) {
     return [] as AvailableSkillSummary[];
   }

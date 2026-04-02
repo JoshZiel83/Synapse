@@ -7,7 +7,7 @@ import { getActor, updateActor, type ActorUpdateSourceInput } from '../organizat
 import { getSession } from '../session/service.js';
 import { createConversationEvent, listConversationMembers } from '../conversation/service.js';
 
-const ACTOR_MEMORY_SCOPES = new Set(['actor_conversation', 'conversation', 'actor_global']);
+const ACTOR_MEMORY_SCOPES = new Set(['actor_in_conversation', 'conversation', 'actor_global']);
 const PIXEL_ART_OPTION_KEYS = [
   'seed',
   'accessories',
@@ -148,12 +148,12 @@ async function handleCreateMemory(
 ): Promise<void> {
   const metadata = action.metadata ?? {};
   const session = context.sessionId ? await getSession(context.sessionId) : null;
-  const requestedScope = typeof metadata.scope === 'string' ? metadata.scope : 'actor_conversation';
-  const normalizedRequestedScope = ACTOR_MEMORY_SCOPES.has(requestedScope) ? requestedScope : 'actor_conversation';
+  const requestedScope = typeof metadata.scope === 'string' ? metadata.scope : 'actor_in_conversation';
+  const normalizedRequestedScope = ACTOR_MEMORY_SCOPES.has(requestedScope) ? requestedScope : 'actor_in_conversation';
   const effectiveScope =
     normalizedRequestedScope === 'conversation' && !session?.conversation_id
       ? 'actor_global'
-      : normalizedRequestedScope === 'actor_conversation' && !session?.conversation_id
+      : normalizedRequestedScope === 'actor_in_conversation' && !session?.conversation_id
           ? 'actor_global'
           : normalizedRequestedScope;
   const conversationId = effectiveScope === 'actor_global'

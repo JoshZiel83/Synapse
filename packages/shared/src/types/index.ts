@@ -3843,7 +3843,7 @@ export type AccessSubjectType =
   | "user"
   | "actor"
   | "workspace_member"
-  | "actor_conversation";
+  | "conversation_actor_context";
 
 export interface CatalogPublisherRecord {
   id: string;

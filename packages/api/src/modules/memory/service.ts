@@ -24,11 +24,10 @@ import {
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { config } from '../../config/index.js';
 import {
-  buildActorConversationContextId,
   diffAuthzRelationships,
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
-  touchActorConversationContext,
+  touchConversationActorContext,
   touchRelation,
   type AuthzRelationMutation,
 } from '../../infrastructure/authz/index.js';
@@ -42,6 +41,9 @@ import {
   itemPartsToCanonicalContentBlocks,
   type DraftConversationPart,
 } from '../conversation/message-content.js';
+import {
+  ensureConversationActorSessionContext,
+} from '../session/service.js';
 import { v4 as uuidv4 } from 'uuid';
 
 type MemoryRow = {
@@ -50,6 +52,7 @@ type MemoryRow = {
   owner_scope: MemoryScope;
   owner_actor_id: string | null;
   owner_conversation_id: string | null;
+  owner_conversation_actor_context_id: string | null;
   owner_workspace_member_id: string | null;
   category: MemoryCategory;
   status: MemoryStatus;
@@ -69,6 +72,8 @@ type MemoryRow = {
   actor_name?: string | null;
   conversation_title?: string | null;
   workspace_member_name?: string | null;
+  resolved_owner_actor_id?: string | null;
+  resolved_owner_conversation_id?: string | null;
 };
 
 type MemoryPartRow = {
@@ -193,7 +198,7 @@ function computeMatchedTerms(queryText: string, candidateText: string) {
 
 function scopeRank(scope: MemoryScope) {
   switch (scope) {
-    case 'actor_conversation':
+    case 'actor_in_conversation':
       return 5;
     case 'conversation':
       return 4;
@@ -216,7 +221,7 @@ function ownerMatchesTarget(memory: Pick<MemoryRow, 'owner_scope' | 'owner_actor
       return Boolean(target.conversationId && memory.owner_conversation_id === target.conversationId);
     case 'actor_global':
       return Boolean(target.actorId && memory.owner_actor_id === target.actorId);
-    case 'actor_conversation':
+    case 'actor_in_conversation':
       return Boolean(
         target.actorId &&
         target.conversationId &&
@@ -284,8 +289,9 @@ function mapMemoryRow(row: MemoryRow, contentBlocks: CanonicalContentBlock[]): M
     id: row.id,
     workspaceId: row.workspace_id,
     ownerScope: row.owner_scope,
-    ownerActorId: row.owner_actor_id ?? undefined,
-    ownerConversationId: row.owner_conversation_id ?? undefined,
+    ownerActorId: row.resolved_owner_actor_id ?? row.owner_actor_id ?? undefined,
+    ownerConversationId:
+      row.resolved_owner_conversation_id ?? row.owner_conversation_id ?? undefined,
     ownerWorkspaceMemberId: row.owner_workspace_member_id ?? undefined,
     category: row.category,
     status: row.status,
@@ -350,12 +356,29 @@ async function loadMemoryEntriesFromRows(rows: MemoryRow[]) {
 async function getMemoryRow(workspaceId: string, memoryId: string) {
   const row = await db
     .selectFrom('memory_entries as me')
-    .leftJoin('actors as a', 'a.id', 'me.owner_actor_id')
-    .leftJoin('conversations as c', 'c.id', 'me.owner_conversation_id')
+    .leftJoin(
+      'conversation_actor_contexts as cac',
+      'cac.id',
+      'me.owner_conversation_actor_context_id',
+    )
+    .leftJoin('actors as a', (join) =>
+      join.on(sql<boolean>`a.id = COALESCE(me.owner_actor_id, cac.actor_id)`),
+    )
+    .leftJoin('conversations as c', (join) =>
+      join.on(
+        sql<boolean>`c.id = COALESCE(me.owner_conversation_id, cac.conversation_id)`,
+      ),
+    )
     .leftJoin('workspace_members as wm', 'wm.id', 'me.owner_workspace_member_id')
     .leftJoin('users as u', 'u.id', 'wm.user_id')
     .selectAll('me')
     .select([
+      sql<string | null>`COALESCE(me.owner_actor_id, cac.actor_id)`.as(
+        'resolved_owner_actor_id',
+      ),
+      sql<string | null>`COALESCE(me.owner_conversation_id, cac.conversation_id)`.as(
+        'resolved_owner_conversation_id',
+      ),
       'a.name as actor_name',
       'c.title as conversation_title',
       'u.name as workspace_member_name',
@@ -389,9 +412,9 @@ function validateMemoryOwnerBinding(input: {
         throw new MemoryError(`${label} actor_global scope requires actorId and no conversationId or workspaceMemberId`, 400);
       }
       break;
-    case 'actor_conversation':
+    case 'actor_in_conversation':
       if (!input.actorId || !input.conversationId || input.workspaceMemberId) {
-        throw new MemoryError(`${label} actor_conversation scope requires actorId and conversationId and no workspaceMemberId`, 400);
+        throw new MemoryError(`${label} actor_in_conversation scope requires actorId and conversationId and no workspaceMemberId`, 400);
       }
       break;
     case 'workspace_member':
@@ -408,6 +431,7 @@ function buildMemoryOwnerRelations(params: {
   scope: MemoryScope;
   actorId?: string;
   conversationId?: string;
+  conversationActorContextId?: string;
   workspaceMemberId?: string;
 }): AuthzRelationMutation[] {
   switch (params.scope) {
@@ -423,16 +447,23 @@ function buildMemoryOwnerRelations(params: {
       return params.actorId
         ? [touchRelation('memory', params.memoryId, 'owner_actor', 'actor', params.actorId)]
         : [];
-    case 'actor_conversation':
-      return params.actorId && params.conversationId
+    case 'actor_in_conversation':
+      return params.actorId &&
+        params.conversationId &&
+        params.conversationActorContextId
         ? [
-            ...touchActorConversationContext(params.actorId, params.conversationId),
+            ...touchConversationActorContext({
+              conversationActorContextId:
+                params.conversationActorContextId,
+              actorId: params.actorId,
+              conversationId: params.conversationId,
+            }),
             touchRelation(
               'memory',
               params.memoryId,
-              'owner_actor_conversation',
-              'actor_conversation',
-              buildActorConversationContextId(params.actorId, params.conversationId),
+              'owner_actor_in_conversation',
+              'conversation_actor_context',
+              params.conversationActorContextId,
             ),
           ]
         : [];
@@ -459,6 +490,7 @@ function buildMemoryAuthzRelations(params: {
   ownerScope: MemoryScope;
   ownerActorId?: string;
   ownerConversationId?: string;
+  ownerConversationActorContextId?: string;
   ownerWorkspaceMemberId?: string;
 }): AuthzRelationMutation[] {
   return [
@@ -469,6 +501,7 @@ function buildMemoryAuthzRelations(params: {
       scope: params.ownerScope,
       actorId: params.ownerActorId,
       conversationId: params.ownerConversationId,
+      conversationActorContextId: params.ownerConversationActorContextId,
       workspaceMemberId: params.ownerWorkspaceMemberId,
     }),
   ];
@@ -557,7 +590,7 @@ async function validateMemoryOwnerTarget(workspaceId: string, input: {
         await assertActorInWorkspace(workspaceId, input.actorId);
       }
       return;
-    case 'actor_conversation':
+    case 'actor_in_conversation':
       if (input.actorId && input.conversationId) {
         await assertActorInWorkspace(workspaceId, input.actorId);
         await assertConversationInWorkspace(workspaceId, input.conversationId);
@@ -570,6 +603,30 @@ async function validateMemoryOwnerTarget(workspaceId: string, input: {
       }
       return;
   }
+}
+
+async function resolveConversationActorContextId(
+  workspaceId: string,
+  input: {
+    scope: MemoryScope;
+    actorId?: string;
+    conversationId?: string;
+  },
+) {
+  if (
+    input.scope !== 'actor_in_conversation' ||
+    !input.actorId ||
+    !input.conversationId
+  ) {
+    return null;
+  }
+
+  const context = await ensureConversationActorSessionContext({
+    workspaceId,
+    actorId: input.actorId,
+    conversationId: input.conversationId,
+  });
+  return context.conversationActorContextId;
 }
 
 async function normalizeMemoryContent(input: {
@@ -742,7 +799,12 @@ function buildVisibilityClause(target: MemoryAccessTarget, alias = 'me') {
 
   if (target.actorId && target.conversationId) {
     ownerClauses.push(
-      sql`(${table}.owner_scope = 'actor_conversation' AND ${table}.owner_actor_id = ${target.actorId} AND ${table}.owner_conversation_id = ${target.conversationId})`,
+      sql`(${table}.owner_scope = 'actor_in_conversation' AND ${table}.owner_conversation_actor_context_id IN (
+        SELECT id
+        FROM conversation_actor_contexts
+        WHERE actor_id = ${target.actorId}
+          AND conversation_id = ${target.conversationId}
+      ))`,
     );
   }
 
@@ -848,6 +910,8 @@ async function searchLexicalCandidates(workspaceId: string, input: SearchMemorie
   if (!queryText) return [];
   const result = await db.executeQuery(
     sql<SearchCandidateRow>`SELECT me.*,
+        COALESCE(me.owner_actor_id, cac.actor_id) AS resolved_owner_actor_id,
+        COALESCE(me.owner_conversation_id, cac.conversation_id) AS resolved_owner_conversation_id,
         a.name AS actor_name,
         c.title AS conversation_title,
         u.name AS workspace_member_name,
@@ -858,8 +922,9 @@ async function searchLexicalCandidates(workspaceId: string, input: SearchMemorie
         NULL::real AS vector_score
       FROM memory_index_chunks mic
       JOIN memory_entries me ON me.id = mic.memory_entry_id
-      LEFT JOIN actors a ON a.id = me.owner_actor_id
-      LEFT JOIN conversations c ON c.id = me.owner_conversation_id
+      LEFT JOIN conversation_actor_contexts cac ON cac.id = me.owner_conversation_actor_context_id
+      LEFT JOIN actors a ON a.id = COALESCE(me.owner_actor_id, cac.actor_id)
+      LEFT JOIN conversations c ON c.id = COALESCE(me.owner_conversation_id, cac.conversation_id)
       LEFT JOIN workspace_members wm ON wm.id = me.owner_workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       WHERE ${whereClause}
@@ -878,6 +943,8 @@ async function searchFallbackCandidates(workspaceId: string, input: SearchMemori
   const whereClause = buildSearchFilters(workspaceId, input);
   const result = await db.executeQuery(
     sql<SearchCandidateRow>`SELECT me.*,
+        COALESCE(me.owner_actor_id, cac.actor_id) AS resolved_owner_actor_id,
+        COALESCE(me.owner_conversation_id, cac.conversation_id) AS resolved_owner_conversation_id,
         a.name AS actor_name,
         c.title AS conversation_title,
         u.name AS workspace_member_name,
@@ -887,8 +954,9 @@ async function searchFallbackCandidates(workspaceId: string, input: SearchMemori
         NULL::real AS similarity_score,
         NULL::real AS vector_score
       FROM memory_entries me
-      LEFT JOIN actors a ON a.id = me.owner_actor_id
-      LEFT JOIN conversations c ON c.id = me.owner_conversation_id
+      LEFT JOIN conversation_actor_contexts cac ON cac.id = me.owner_conversation_actor_context_id
+      LEFT JOIN actors a ON a.id = COALESCE(me.owner_actor_id, cac.actor_id)
+      LEFT JOIN conversations c ON c.id = COALESCE(me.owner_conversation_id, cac.conversation_id)
       LEFT JOIN workspace_members wm ON wm.id = me.owner_workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       LEFT JOIN LATERAL (
@@ -911,6 +979,8 @@ async function searchVectorCandidates(workspaceId: string, input: SearchMemories
   const formattedEmbedding = formatEmbeddingVector(embedding);
   const result = await db.executeQuery(
     sql<SearchCandidateRow>`SELECT me.*,
+        COALESCE(me.owner_actor_id, cac.actor_id) AS resolved_owner_actor_id,
+        COALESCE(me.owner_conversation_id, cac.conversation_id) AS resolved_owner_conversation_id,
         a.name AS actor_name,
         c.title AS conversation_title,
         u.name AS workspace_member_name,
@@ -921,8 +991,9 @@ async function searchVectorCandidates(workspaceId: string, input: SearchMemories
         (1 - (mic.embedding <=> ${formattedEmbedding}::vector))::real AS vector_score
       FROM memory_index_chunks mic
       JOIN memory_entries me ON me.id = mic.memory_entry_id
-      LEFT JOIN actors a ON a.id = me.owner_actor_id
-      LEFT JOIN conversations c ON c.id = me.owner_conversation_id
+      LEFT JOIN conversation_actor_contexts cac ON cac.id = me.owner_conversation_actor_context_id
+      LEFT JOIN actors a ON a.id = COALESCE(me.owner_actor_id, cac.actor_id)
+      LEFT JOIN conversations c ON c.id = COALESCE(me.owner_conversation_id, cac.conversation_id)
       LEFT JOIN workspace_members wm ON wm.id = me.owner_workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       WHERE ${whereClause}
@@ -1070,7 +1141,7 @@ function buildDefaultRecallReason(memory: Memory, target: MemoryAccessTarget) {
   const bestRank = effectiveScopeRank(memory, target);
   switch (bestRank) {
     case 5:
-      return 'Private actor-conversation memory strongly matched the current task';
+      return 'Private actor-in-conversation memory strongly matched the current task';
     case 4:
       return 'Conversation-shared memory matched the current discussion';
     case 3:
@@ -1098,6 +1169,12 @@ export async function createMemory(workspaceId: UUID, input: CreateMemoryInput) 
     conversationId: input.ownerConversationId,
     workspaceMemberId: input.ownerWorkspaceMemberId,
   });
+  const ownerConversationActorContextId =
+    await resolveConversationActorContextId(workspaceId, {
+      scope: input.ownerScope,
+      actorId: input.ownerActorId,
+      conversationId: input.ownerConversationId,
+    });
 
   const normalizedContent = await normalizeMemoryContent(input);
   const memoryId = uuidv4();
@@ -1111,8 +1188,17 @@ export async function createMemory(workspaceId: UUID, input: CreateMemoryInput) 
           id: memoryId,
           workspace_id: workspaceId,
           owner_scope: input.ownerScope,
-          owner_actor_id: input.ownerActorId || null,
-          owner_conversation_id: input.ownerConversationId || null,
+          owner_actor_id:
+            input.ownerScope === 'actor_in_conversation'
+              ? null
+              : input.ownerActorId || null,
+          owner_conversation_id:
+            input.ownerScope === 'actor_in_conversation'
+              ? null
+              : input.ownerConversationId || null,
+          owner_conversation_actor_context_id: input.ownerScope === 'actor_in_conversation'
+            ? ownerConversationActorContextId
+            : null,
           owner_workspace_member_id: input.ownerWorkspaceMemberId || null,
           category: input.category,
           status: input.status || 'established',
@@ -1141,6 +1227,8 @@ export async function createMemory(workspaceId: UUID, input: CreateMemoryInput) 
         ownerScope: input.ownerScope,
         ownerActorId: input.ownerActorId,
         ownerConversationId: input.ownerConversationId,
+        ownerConversationActorContextId:
+          ownerConversationActorContextId || undefined,
         ownerWorkspaceMemberId: input.ownerWorkspaceMemberId,
       }),
       {
@@ -1181,7 +1269,11 @@ export async function getMemory(workspaceId: UUID, memoryId: UUID) {
 }
 
 export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: UpdateMemoryInput) {
-  const existing = await getMemory(workspaceId, memoryId);
+  const existingRow = await getMemoryRow(workspaceId, memoryId);
+  if (!existingRow) {
+    throw new MemoryError('Memory not found', 404);
+  }
+  const [existing] = await loadMemoryEntriesFromRows([existingRow]);
   const ownerScope = input.ownerScope || existing.ownerScope;
   const ownerActorId = input.ownerActorId !== undefined ? input.ownerActorId : existing.ownerActorId;
   const ownerConversationId = input.ownerConversationId !== undefined ? input.ownerConversationId : existing.ownerConversationId;
@@ -1205,6 +1297,12 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
     conversationId: ownerConversationId || undefined,
     workspaceMemberId: ownerWorkspaceMemberId || undefined,
   });
+  const ownerConversationActorContextId =
+    await resolveConversationActorContextId(workspaceId, {
+      scope: ownerScope,
+      actorId: ownerActorId || undefined,
+      conversationId: ownerConversationId || undefined,
+    });
 
   const normalizedContent = await normalizeMemoryContent({
     content: input.content,
@@ -1222,8 +1320,16 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
         .updateTable('memory_entries')
         .set({
           owner_scope: ownerScope,
-          owner_actor_id: ownerActorId || null,
-          owner_conversation_id: ownerConversationId || null,
+          owner_actor_id:
+            ownerScope === 'actor_in_conversation' ? null : ownerActorId || null,
+          owner_conversation_id:
+            ownerScope === 'actor_in_conversation'
+              ? null
+              : ownerConversationId || null,
+          owner_conversation_actor_context_id:
+            ownerScope === 'actor_in_conversation'
+              ? ownerConversationActorContextId
+              : null,
           owner_workspace_member_id: ownerWorkspaceMemberId || null,
           category: input.category || existing.category,
           status: input.status || existing.status,
@@ -1259,6 +1365,8 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
           ownerScope: existing.ownerScope,
           ownerActorId: existing.ownerActorId,
           ownerConversationId: existing.ownerConversationId,
+          ownerConversationActorContextId:
+            existingRow.owner_conversation_actor_context_id || undefined,
           ownerWorkspaceMemberId: existing.ownerWorkspaceMemberId,
         }),
         buildMemoryAuthzRelations({
@@ -1267,6 +1375,8 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
           ownerScope,
           ownerActorId: ownerActorId || undefined,
           ownerConversationId: ownerConversationId || undefined,
+          ownerConversationActorContextId:
+            ownerConversationActorContextId || undefined,
           ownerWorkspaceMemberId: ownerWorkspaceMemberId || undefined,
         }),
       ),
@@ -1285,7 +1395,11 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
 }
 
 export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
-  const existing = await getMemory(workspaceId, memoryId);
+  const existingRow = await getMemoryRow(workspaceId, memoryId);
+  if (!existingRow) {
+    throw new MemoryError('Memory not found', 404);
+  }
+  const [existing] = await loadMemoryEntriesFromRows([existingRow]);
   const result = await transaction(async (client) => {
     const deleted = await executeCompiledQuery(
       client,
@@ -1307,6 +1421,8 @@ export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
           ownerScope: existing.ownerScope,
           ownerActorId: existing.ownerActorId,
           ownerConversationId: existing.ownerConversationId,
+          ownerConversationActorContextId:
+            existingRow.owner_conversation_actor_context_id || undefined,
           ownerWorkspaceMemberId: existing.ownerWorkspaceMemberId,
         }),
         [],
@@ -1333,12 +1449,15 @@ export async function listMemories(workspaceId: UUID, input: ListMemoriesInput) 
   const limit = Math.max(1, Math.min(200, input.limit ?? 200));
   const result = await db.executeQuery(
     sql<MemoryRow>`SELECT me.*,
+        COALESCE(me.owner_actor_id, cac.actor_id) AS resolved_owner_actor_id,
+        COALESCE(me.owner_conversation_id, cac.conversation_id) AS resolved_owner_conversation_id,
         a.name AS actor_name,
         c.title AS conversation_title,
         u.name AS workspace_member_name
       FROM memory_entries me
-      LEFT JOIN actors a ON a.id = me.owner_actor_id
-      LEFT JOIN conversations c ON c.id = me.owner_conversation_id
+      LEFT JOIN conversation_actor_contexts cac ON cac.id = me.owner_conversation_actor_context_id
+      LEFT JOIN actors a ON a.id = COALESCE(me.owner_actor_id, cac.actor_id)
+      LEFT JOIN conversations c ON c.id = COALESCE(me.owner_conversation_id, cac.conversation_id)
       LEFT JOIN workspace_members wm ON wm.id = me.owner_workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       WHERE ${whereClause}

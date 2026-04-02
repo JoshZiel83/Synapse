@@ -171,7 +171,7 @@ export default function RelayDevicePage() {
         targetExposureId: string,
         payload: {
           accessTarget?: {
-            type: 'workspace' | 'conversation_workspace' | 'actor' | 'actor_conversation';
+            type: 'workspace' | 'conversation_workspace' | 'actor' | 'actor_in_conversation';
             actorId?: string;
             conversationId?: string;
           };

@@ -3,13 +3,15 @@ import {
   buildWorkspaceMemberContextId,
   enqueueAuthzRelationships,
   flushAuthzOutboxEntries,
-  touchActorConversationContext,
+  touchConversationActorContext,
   touchRelation,
 } from '../../infrastructure/authz/index.js';
-import { query } from '../../infrastructure/database/index.js';
+import { pool } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import {
   db,
+  executeTakeFirst,
+  type QueryExecutor,
   type TableInsert,
 } from '../../infrastructure/database/kysely.js';
 import { shutdownSessionInstances } from '../mcp-plugins/instance-manager.js';
@@ -81,6 +83,159 @@ async function loadSession(sessionId: UUID): Promise<any | null> {
     .where('s.id', '=', sessionId)
     .executeTakeFirst();
   return normalizeSessionRow(row ?? null);
+}
+
+export async function getConversationActorContextByPair(
+  conversationId: UUID,
+  actorId: UUID,
+  queryable: QueryExecutor = pool,
+) {
+  return executeTakeFirst(
+    queryable,
+    db
+      .selectFrom('conversation_actor_contexts')
+      .selectAll()
+      .where('conversation_id', '=', conversationId)
+      .where('actor_id', '=', actorId)
+      .limit(1),
+  );
+}
+
+export async function getConversationActorContextBySessionId(
+  sessionId: UUID,
+  queryable: QueryExecutor = pool,
+) {
+  return executeTakeFirst(
+    queryable,
+    db
+      .selectFrom('conversation_actor_contexts')
+      .selectAll()
+      .where('session_id', '=', sessionId)
+      .limit(1),
+  );
+}
+
+async function getConversationActorSessionRow(
+  conversationId: UUID,
+  actorId: UUID,
+  queryable: QueryExecutor = pool,
+) {
+  return executeTakeFirst(
+    queryable,
+    db
+      .selectFrom('sessions')
+      .selectAll()
+      .where('conversation_id', '=', conversationId)
+      .where('actor_id', '=', actorId)
+      .limit(1),
+  );
+}
+
+export async function ensureConversationActorSessionContext(
+  params: {
+    workspaceId?: UUID;
+    actorId: UUID;
+    conversationId: UUID;
+    channelType?: SessionsChannelType;
+    trigger?: SessionTrigger;
+    metadata?: Record<string, unknown>;
+  },
+  queryable: QueryExecutor = pool,
+) {
+  const existingContext = await getConversationActorContextByPair(
+    params.conversationId,
+    params.actorId,
+    queryable,
+  );
+  if (existingContext) {
+    return {
+      conversationActorContextId: existingContext.id,
+      sessionId: existingContext.session_id,
+      conversationActorContextCreated: false,
+      sessionCreated: false,
+    };
+  }
+
+  let session = await getConversationActorSessionRow(
+    params.conversationId,
+    params.actorId,
+    queryable,
+  );
+  let sessionCreated = false;
+
+  if (!session) {
+    if (!params.workspaceId) {
+      throw new Error(
+        `workspaceId is required to create a session for actor ${params.actorId} in conversation ${params.conversationId}`,
+      );
+    }
+
+    const insertedSession = await executeTakeFirst<{ id: string }>(
+      queryable,
+      db
+        .insertInto('sessions')
+        .values({
+          id: uuidv4(),
+          workspace_id: params.workspaceId,
+          actor_id: params.actorId,
+          conversation_id: params.conversationId,
+          channel_type: params.channelType || 'web',
+          trigger: params.trigger || 'user_message',
+          status: 'idle',
+          metadata: (params.metadata || {}) as TableInsert<'sessions'>['metadata'],
+        })
+        .onConflict((oc) =>
+          oc.columns(['conversation_id', 'actor_id']).doNothing(),
+        )
+        .returning('id'),
+    );
+    sessionCreated = Boolean(insertedSession);
+    session = await getConversationActorSessionRow(
+      params.conversationId,
+      params.actorId,
+      queryable,
+    );
+  }
+
+  if (!session) {
+    throw new Error(
+      `Failed to resolve session for actor ${params.actorId} in conversation ${params.conversationId}`,
+    );
+  }
+
+  const insertedContext = await executeTakeFirst<{ id: string }>(
+    queryable,
+    db
+      .insertInto('conversation_actor_contexts')
+      .values({
+        id: uuidv4(),
+        conversation_id: params.conversationId,
+        actor_id: params.actorId,
+        session_id: session.id,
+        metadata:
+          (params.metadata || {}) as TableInsert<'conversation_actor_contexts'>['metadata'],
+      })
+      .onConflict((oc) => oc.columns(['conversation_id', 'actor_id']).doNothing())
+      .returning('id'),
+  );
+
+  const context = await getConversationActorContextByPair(
+    params.conversationId,
+    params.actorId,
+    queryable,
+  );
+  if (!context) {
+    throw new Error(
+      `Failed to resolve conversation actor context for actor ${params.actorId} in conversation ${params.conversationId}`,
+    );
+  }
+
+  return {
+    conversationActorContextId: context.id,
+    sessionId: session.id,
+    conversationActorContextCreated: Boolean(insertedContext),
+    sessionCreated,
+  };
 }
 
 async function resolveSessionMessageAuthor(params: {
@@ -208,30 +363,35 @@ export async function createSession(params: {
     });
   }
 
-  const id = uuidv4();
-  const created = await db
-    .insertInto('sessions')
-    .values({
-      id,
-      workspace_id: workspaceId,
-      actor_id: actorId,
-      conversation_id: finalConversationId,
-      channel_type: channelType,
-      trigger,
-      status: 'idle',
-      metadata: metadata as TableInsert<'sessions'>['metadata'],
-    })
-    .returning('id')
-    .executeTakeFirst();
-  if (!created) {
-    throw new Error('Failed to create session');
-  }
+  const ensuredContext = await ensureConversationActorSessionContext({
+    workspaceId,
+    actorId,
+    conversationId: finalConversationId,
+    channelType,
+    trigger,
+    metadata,
+  });
 
-  if (privateConversationCreated) {
+  if (authzEnabled()) {
     const authzEntryIds = await enqueueAuthzRelationships(
       [
-        touchRelation('conversation', finalConversationId, 'participant', 'actor', actorId),
-        ...touchActorConversationContext(actorId, finalConversationId),
+        ...touchConversationActorContext({
+          conversationActorContextId:
+            ensuredContext.conversationActorContextId,
+          actorId,
+          conversationId: finalConversationId,
+        }),
+        ...(privateConversationCreated
+          ? [
+              touchRelation(
+                'conversation',
+                finalConversationId,
+                'participant',
+                'actor',
+                actorId,
+              ),
+            ]
+          : []),
         ...(resolvedWorkspaceMemberId
           ? [
               touchRelation(
@@ -252,17 +412,24 @@ export async function createSession(params: {
           : []),
       ],
       {
-        source: 'session.create_private_conversation',
+        source: privateConversationCreated
+          ? 'session.create_private_conversation'
+          : 'session.ensure_context',
         workspaceId,
         conversationId: finalConversationId,
         actorId,
         workspaceMemberId: resolvedWorkspaceMemberId,
       },
     );
-    await flushQueuedAuthzEntries(authzEntryIds, 'session.create_private_conversation');
+    await flushQueuedAuthzEntries(
+      authzEntryIds,
+      privateConversationCreated
+        ? 'session.create_private_conversation'
+        : 'session.ensure_context',
+    );
   }
 
-  return loadSession(created.id);
+  return loadSession(ensuredContext.sessionId);
 }
 
 export async function getSession(sessionId: UUID): Promise<any | null> {

@@ -51,7 +51,7 @@ All three repeat the same scope vocabulary:
 - `workspace`
 - `conversation`
 - `actor_global`
-- `actor_conversation`
+- `actor_in_conversation`
 - `user`
 
 But each module re-implements matching logic itself.

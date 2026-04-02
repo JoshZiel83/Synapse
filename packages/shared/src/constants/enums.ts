@@ -43,13 +43,13 @@ export const ACCESS_TARGET_TYPES = [
   'actor',
   'workspace_member',
   'conversation_workspace',
-  'actor_conversation',
+  'actor_in_conversation',
 ] as const;
 export const CAPABILITY_ACCESS_TARGET_TYPES = [
   'workspace',
   'actor',
   'conversation_workspace',
-  'actor_conversation',
+  'actor_in_conversation',
 ] as const;
 export const REUSE_SCOPES = [
   'turn',
@@ -118,7 +118,7 @@ export const MEMORY_SCOPES = [
   'workspace',
   'conversation',
   'actor_global',
-  'actor_conversation',
+  'actor_in_conversation',
   'workspace_member',
 ] as const;
 

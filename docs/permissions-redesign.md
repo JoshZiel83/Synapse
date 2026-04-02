@@ -115,7 +115,7 @@
 
 当前系统至少有这些 scope：
 
-- workspace / conversation / actor_global / actor_conversation / user
+- workspace / conversation / actor_global / actor_in_conversation / user
 - workspace_member
 - platform
 - attachmentType
@@ -140,7 +140,7 @@
 - user
 - actor
 - workspace_member 这种拼接上下文
-- actor_conversation 这种拼接上下文
+- actor_in_conversation 这种拼接上下文
 
 这说明系统缺少一个清晰的“运行时主体”建模。现在很多逻辑本质上在表达“某个 actor 在某个 conversation 里的运行身份”，但代码里是拿字符串拼 id。
 
@@ -278,7 +278,7 @@ Actor 在某个具体对话上下文中的运行主体。
 
 这样可以替代当前的：
 
-- `actor_conversation`
+- `actor_in_conversation`
 - 一部分 `workspace_member`
 
 ### 3.4 新的资源分类

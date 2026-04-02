@@ -169,9 +169,9 @@ const accessTypeOptionDefs: ScopeOptionDef<AccessTargetType>[] = [
     ring: 'ring-emerald-500/20',
   },
   {
-    value: 'actor_conversation',
-    label: 'Actor + Conversation Access',
-    shortLabel: 'Actor + Conversation',
+    value: 'actor_in_conversation',
+    label: 'Actor in Conversation Access',
+    shortLabel: 'Actor in Conversation',
     hint: 'Only one actor can use this installation in one conversation',
     icon: Layers3,
     tone: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200',
@@ -872,7 +872,7 @@ export function AccessGrantScopeStep({
       case 'workspace':
         return true;
       case 'conversation_workspace':
-      case 'actor_conversation':
+      case 'actor_in_conversation':
         return index === 0;
       case 'actor':
         return true;
@@ -891,7 +891,7 @@ export function AccessGrantScopeStep({
         return index === 0;
       case 'actor':
         return actorName === selectedActorName;
-      case 'actor_conversation':
+      case 'actor_in_conversation':
         return index === 0 && actorName === selectedActorName;
       case 'workspace_member':
         return conversation.includesCurrentUser && conversation.singleRealUser;
@@ -915,7 +915,7 @@ export function AccessGrantScopeStep({
           ))}
       </div>
 
-      {(value === 'actor' || value === 'actor_conversation') && (
+      {(value === 'actor' || value === 'actor_in_conversation') && (
         <div className="space-y-2">
           <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Authorized actor</Label>
           <div className="flex flex-wrap gap-2">
@@ -936,7 +936,7 @@ export function AccessGrantScopeStep({
         </div>
       )}
 
-      {(value === 'conversation_workspace' || value === 'actor_conversation') && (
+      {(value === 'conversation_workspace' || value === 'actor_in_conversation') && (
         <div className="space-y-2">
           <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Authorized conversation</Label>
           <div className="flex flex-wrap gap-2">

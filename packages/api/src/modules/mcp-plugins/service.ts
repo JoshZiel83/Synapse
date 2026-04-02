@@ -951,8 +951,8 @@ async function loadInstallationRows(
         source_ref.sync_mode AS source_sync_mode,
         primary_access.id AS primary_access_id,
         primary_access.target_type AS primary_access_target_type,
-        primary_access.subject_conversation_id AS primary_conversation_id,
-        primary_access.subject_actor_id AS primary_actor_id,
+        primary_access.resolved_subject_conversation_id AS primary_conversation_id,
+        primary_access.resolved_subject_actor_id AS primary_actor_id,
         primary_access.subject_workspace_member_id AS primary_workspace_member_id,
         primary_access.status AS primary_access_status,
         primary_access.metadata AS primary_access_metadata,
@@ -965,14 +965,16 @@ async function loadInstallationRows(
         SELECT
           binding.id,
           binding.target_type,
-          binding.subject_conversation_id,
-          binding.subject_actor_id,
+          COALESCE(binding.subject_conversation_id, cac.conversation_id) AS resolved_subject_conversation_id,
+          COALESCE(binding.subject_actor_id, cac.actor_id) AS resolved_subject_actor_id,
           binding.subject_workspace_member_id,
           binding.status,
           binding.metadata,
           binding.created_by_workspace_member_id,
           binding.created_at
         FROM access_bindings binding
+        LEFT JOIN conversation_actor_contexts cac
+          ON cac.id = binding.subject_conversation_actor_context_id
         WHERE binding.resource_type = 'plugin_installation'
           AND binding.resource_id = installation.id::text
           AND binding.status = 'active'
@@ -1012,35 +1014,45 @@ async function loadInstallationRows(
 
 async function listAccessRows(installationId: string, includeRevoked = false) {
   let builder = db
-    .selectFrom("access_bindings")
+    .selectFrom("access_bindings as binding")
+    .leftJoin(
+      "conversation_actor_contexts as cac",
+      "cac.id",
+      "binding.subject_conversation_actor_context_id",
+    )
     .select([
-      "id",
-      "workspace_id",
-      "resource_type",
-      "resource_id",
-      "target_type",
-      "relation",
-      "subject_workspace_id",
-      "subject_workspace_member_id",
-      "subject_actor_id",
-      "subject_conversation_id",
-      "is_primary",
-      "granted_permissions",
-      "status",
-      "created_by_workspace_member_id",
-      "reason",
-      "metadata",
-      "created_at",
-      "revoked_at",
+      "binding.id",
+      "binding.workspace_id",
+      "binding.resource_type",
+      "binding.resource_id",
+      "binding.target_type",
+      "binding.relation",
+      "binding.subject_workspace_id",
+      "binding.subject_workspace_member_id",
+      sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(
+        "subject_actor_id",
+      ),
+      sql<string | null>`COALESCE(binding.subject_conversation_id, cac.conversation_id)`.as(
+        "subject_conversation_id",
+      ),
+      "binding.subject_conversation_actor_context_id",
+      "binding.is_primary",
+      "binding.granted_permissions",
+      "binding.status",
+      "binding.created_by_workspace_member_id",
+      "binding.reason",
+      "binding.metadata",
+      "binding.created_at",
+      "binding.revoked_at",
     ])
-    .where("resource_type", "=", "plugin_installation")
-    .where("resource_id", "=", installationId);
+    .where("binding.resource_type", "=", "plugin_installation")
+    .where("binding.resource_id", "=", installationId);
 
   if (!includeRevoked) {
-    builder = builder.where("status", "=", "active");
+    builder = builder.where("binding.status", "=", "active");
   }
 
-  const rows = await builder.orderBy("created_at", "asc").execute();
+  const rows = await builder.orderBy("binding.created_at", "asc").execute();
   return rows.map((row) =>
     buildInstallationAccessRow(row as unknown as AccessBindingRow),
   );
@@ -1113,9 +1125,9 @@ function capabilityAccessTargetFromStored(input: {
         type: "conversation_workspace",
         conversationId: input.conversationId || undefined,
       };
-    case "actor_conversation":
+    case "actor_in_conversation":
       return {
-        type: "actor_conversation",
+        type: "actor_in_conversation",
         actorId: input.actorId || undefined,
         conversationId: input.conversationId || undefined,
       };
@@ -1905,7 +1917,7 @@ export async function installPluginUnified(data: {
         .where("id", "=", installationId),
     );
 
-    const primaryAccessTarget = resolveAccessGrantTarget({
+    const primaryAccessTarget = await resolveAccessGrantTarget({
       workspaceId: data.workspaceId,
       target: defaultAccessTargetForAttachment(data.attachmentTarget),
     });
@@ -1924,6 +1936,8 @@ export async function installPluginUnified(data: {
             primaryAccessTarget.subjectWorkspaceMemberId,
           subject_actor_id: primaryAccessTarget.subjectActorId,
           subject_conversation_id: primaryAccessTarget.subjectConversationId,
+          subject_conversation_actor_context_id:
+            primaryAccessTarget.subjectConversationActorContextId,
           is_primary: true,
           granted_permissions: approvedRuntimePermissions,
           metadata: {} as TableInsert<"access_bindings">["metadata"],
@@ -2148,7 +2162,7 @@ export async function updateInstallation(
         workspaceMemberId: row.attachment_workspace_member_id || undefined,
       },
   });
-  const nextPrimaryAccessTarget = resolveAccessGrantTarget({
+  const nextPrimaryAccessTarget = await resolveAccessGrantTarget({
     workspaceId,
     target: defaultAccessTargetForAttachment(
       data.attachmentTarget || {
@@ -2304,8 +2318,9 @@ export async function updateInstallation(
              subject_workspace_member_id = $5,
              subject_actor_id = $6,
              subject_conversation_id = $7,
+             subject_conversation_actor_context_id = $8,
              is_primary = TRUE,
-             metadata = $8::jsonb
+             metadata = $9::jsonb
          WHERE id = $1`,
         [
           primaryAccess.id,
@@ -2315,6 +2330,7 @@ export async function updateInstallation(
           nextPrimaryAccessTarget.subjectWorkspaceMemberId,
           nextPrimaryAccessTarget.subjectActorId,
           nextPrimaryAccessTarget.subjectConversationId,
+          nextPrimaryAccessTarget.subjectConversationActorContextId,
           JSON.stringify(asObject(primaryAccess.metadata)),
         ],
       );
@@ -2428,7 +2444,7 @@ export async function grantPluginInstallationAccess(input: {
       actorId: primaryAccess.actor_id,
       conversationId: primaryAccess.conversation_id,
     });
-  const accessTarget = resolveAccessGrantTarget({
+  const accessTarget = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
     target: resolvedAccessTarget,
   });
@@ -2465,6 +2481,8 @@ export async function grantPluginInstallationAccess(input: {
             accessTarget.subjectWorkspaceMemberId,
           subject_actor_id: accessTarget.subjectActorId,
           subject_conversation_id: accessTarget.subjectConversationId,
+          subject_conversation_actor_context_id:
+            accessTarget.subjectConversationActorContextId,
           is_primary: false,
           granted_permissions: input.permissions || [],
           metadata:
@@ -2477,9 +2495,13 @@ export async function grantPluginInstallationAccess(input: {
         .returningAll(),
     );
 
-    const accessRow = buildInstallationAccessRow(
-      inserted as unknown as AccessBindingRow,
-    );
+    const accessRow = buildInstallationAccessRow({
+      ...(inserted as unknown as AccessBindingRow),
+      subject_actor_id: accessTarget.subjectActorId,
+      subject_conversation_id: accessTarget.subjectConversationId,
+      subject_conversation_actor_context_id:
+        accessTarget.subjectConversationActorContextId,
+    });
     const authzEntryIds = await queueAuthzRelationships(
       client,
       buildResourceAccessAuthzMutations({

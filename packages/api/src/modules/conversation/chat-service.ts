@@ -11,13 +11,12 @@ import {
   type TableInsert,
 } from "../../infrastructure/database/kysely.js";
 import {
-  buildActorConversationContextId,
   buildWorkspaceMemberContextId,
   diffAuthzRelationships,
   deleteRelation,
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
-  touchActorConversationContext,
+  touchConversationActorContext,
   touchConversationWorkspaceContext,
   touchRelation,
 } from "../../infrastructure/authz/index.js";
@@ -58,6 +57,7 @@ import {
 } from "./message-content.js";
 import {
   createSession,
+  ensureConversationActorSessionContext,
   getSession,
   updateSessionStatus,
 } from "../session/service.js";
@@ -594,7 +594,10 @@ async function findFeedItemByClientMessageId(params: {
   return itemId ? getConversationFeedItemById(itemId) : null;
 }
 
-async function getLatestActorSession(conversationId: string, actorId: string) {
+async function getConversationActorSession(
+  conversationId: string,
+  actorId: string,
+) {
   return (
     (await db
       .selectFrom("sessions")
@@ -607,13 +610,13 @@ async function getLatestActorSession(conversationId: string, actorId: string) {
   );
 }
 
-async function ensureActorSession(params: {
+async function ensureConversationActorSession(params: {
   conversationId: string;
   workspaceId?: string;
   actorId: string;
   trigger: SessionTrigger;
 }) {
-  const existing = await getLatestActorSession(
+  const existing = await getConversationActorSession(
     params.conversationId,
     params.actorId,
   );
@@ -1238,19 +1241,16 @@ export async function createThread(params: {
 
     for (const actorId of actorIds) {
       const actorInfo = actorMap.get(actorId);
-      const sessionId = uuidv4();
-      await executeCompiledQuery(
-        client,
-        db.insertInto("sessions").values({
-          id: sessionId,
-          workspace_id: actorInfo.workspace_id,
-          actor_id: actorId,
-          conversation_id: conversationId,
-          channel_type: "web",
+      const ensuredContext = await ensureConversationActorSessionContext(
+        {
+          workspaceId: actorInfo.workspace_id,
+          actorId,
+          conversationId,
+          channelType: "web",
           trigger: "user_message",
-          status: "idle",
-          metadata: {} as TableInsert<"sessions">["metadata"],
-        }),
+          metadata: {},
+        },
+        client,
       );
 
       const memberId = uuidv4();
@@ -1266,7 +1266,13 @@ export async function createThread(params: {
           metadata: {} as TableInsert<"conversation_members">["metadata"],
         }),
       );
-      members.push({ id: memberId, actorId, sessionId });
+      members.push({
+        id: memberId,
+        actorId,
+        sessionId: ensuredContext.sessionId,
+        conversationActorContextId:
+          ensuredContext.conversationActorContextId,
+      });
 
       joinedMembers.push({
         participantId: memberId,
@@ -1330,27 +1336,37 @@ export async function createThread(params: {
             ),
           ],
         ).flat(),
-        ...actorRows.flatMap((actor) => [
-          ...touchConversationWorkspaceContext(
-            actor.workspace_id,
-            conversationId,
-          ),
-          touchRelation(
-            "conversation_workspace",
-            `${actor.workspace_id}|${conversationId}`,
-            "participant",
-            "actor",
-            actor.id,
-          ),
-          touchRelation(
-            "conversation",
-            conversationId,
-            "participant",
-            "actor",
-            actor.id,
-          ),
-          ...touchActorConversationContext(actor.id, conversationId),
-        ]),
+        ...members.flatMap((member) => {
+          const actor = actorRows.find((entry) => entry.id === member.actorId);
+          if (!actor) return [];
+
+          return [
+            ...touchConversationWorkspaceContext(
+              actor.workspace_id,
+              conversationId,
+            ),
+            touchRelation(
+              "conversation_workspace",
+              `${actor.workspace_id}|${conversationId}`,
+              "participant",
+              "actor",
+              actor.id,
+            ),
+            touchRelation(
+              "conversation",
+              conversationId,
+              "participant",
+              "actor",
+              actor.id,
+            ),
+            ...touchConversationActorContext({
+              conversationActorContextId:
+                member.conversationActorContextId,
+              actorId: actor.id,
+              conversationId,
+            }),
+          ];
+        }),
       ],
       {
         source: "conversation.create",
@@ -1762,7 +1778,6 @@ export async function addActorToConversation(
       client,
       [
         touchRelation("conversation", conversationId, "participant", "actor", actorId),
-        ...touchActorConversationContext(actorId, conversationId),
       ],
       {
         source: "conversation.add_actor",
@@ -1967,7 +1982,6 @@ export async function addMembersToConversation(params: {
           "actor",
           actorId,
         ),
-        ...touchActorConversationContext(actorId, params.conversationId),
       );
       addedMembers.push({
         memberId: member.id,
@@ -2061,7 +2075,7 @@ export async function addMembersToConversation(params: {
     result.addedMembers
       .filter((member: any) => member.type === "actor" && member.actorId)
       .map(async (member: any) => {
-        const session = await getLatestActorSession(
+        const session = await getConversationActorSession(
           params.conversationId,
           member.actorId,
         );
@@ -2112,7 +2126,7 @@ export async function removeActorFromConversation(
     .where("id", "=", actorId)
     .executeTakeFirst();
 
-  const { authzEntryIds, closedSessionIds } = await transaction(
+  const { authzEntryIds, retainedSessionIds } = await transaction(
     async (client) => {
       await executeCompiledQuery(
         client,
@@ -2124,23 +2138,17 @@ export async function removeActorFromConversation(
           })
           .where("id", "=", member.id),
       );
-      const closedSessions = await executeCompiledQuery<{ id: string }>(
+      const retainedSessions = await executeCompiledQuery<{ id: string }>(
         client,
         db
-          .updateTable("sessions")
-          .set({
-            status: "closed",
-            completed_at: sql`NOW()`,
-            updated_at: sql`NOW()`,
-          })
+          .selectFrom("sessions")
+          .select("id")
           .where("conversation_id", "=", conversationId)
           .where("actor_id", "=", actorId)
-          .where("status", "<>", "closed")
-          .returning("id"),
       );
 
       return {
-        closedSessionIds: closedSessions.rows.map((row) => row.id),
+        retainedSessionIds: retainedSessions.rows.map((row) => row.id),
         authzEntryIds: await queueAuthzRelationships(
           client,
           [
@@ -2162,20 +2170,6 @@ export async function removeActorFromConversation(
               "actor",
               actorId,
             ),
-            deleteRelation(
-              "actor_conversation",
-              buildActorConversationContextId(actorId, conversationId),
-              "actor",
-              "actor",
-              actorId,
-            ),
-            deleteRelation(
-              "actor_conversation",
-              buildActorConversationContextId(actorId, conversationId),
-              "conversation",
-              "conversation",
-              conversationId,
-            ),
           ],
           {
             source: "conversation.remove_actor",
@@ -2189,7 +2183,7 @@ export async function removeActorFromConversation(
 
   await flushQueuedAuthzEntries(authzEntryIds, "conversation.remove_actor");
   await Promise.all(
-    closedSessionIds.map((sessionId: string) =>
+    retainedSessionIds.map((sessionId: string) =>
       removeSessionRuntime(sessionId),
     ),
   );
@@ -2764,7 +2758,7 @@ export async function wakeActor(params: {
   const conversation = await getConversation(params.conversationId);
   if (!conversation) return;
 
-  let session = await ensureActorSession({
+  let session = await ensureConversationActorSession({
     conversationId: params.conversationId,
     actorId: params.actorId,
     trigger: mapWakeupSourceTypeToTrigger(params.sourceType),

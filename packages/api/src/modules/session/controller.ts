@@ -94,7 +94,7 @@ export async function sessionController(app: FastifyInstance) {
   app.addHook('onRequest', authMiddleware);
   app.addHook('onRequest', workspaceMiddleware);
 
-  // POST /workspaces/:wsId/actors/:actorId/sessions — create a new session with any actor
+  // POST /workspaces/:wsId/actors/:actorId/sessions — start a session with an actor in a private conversation
   app.post<{
     Params: { workspaceId: string; actorId: string };
     Body: { content: string; channelType?: 'web' | 'im' | 'api' };

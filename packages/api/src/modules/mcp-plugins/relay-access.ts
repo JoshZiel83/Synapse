@@ -122,16 +122,18 @@ export async function ensureRelayExposureDefaultAccess(params: {
       ],
     );
 
+    const target = await resolveAccessGrantTarget({
+      workspaceId: params.workspaceId,
+      target: { type: "workspace" },
+    });
+
     return queueAuthzRelationships(
       client,
       buildResourceAccessAuthzMutations({
         resourceType: "relay_exposure",
         resourceId: params.exposureId,
         workspaceId: params.workspaceId,
-        target: resolveAccessGrantTarget({
-          workspaceId: params.workspaceId,
-          target: { type: "workspace" },
-        }),
+        target,
         operation: "touch",
       }),
       {
@@ -235,14 +237,19 @@ export async function grantRelayExposureAccess(input: {
   reason?: string;
   metadata?: Record<string, unknown>;
 }) {
-  const target = resolveAccessGrantTarget({
+  const target = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
     target: input.accessTarget || { type: "workspace" },
   });
 
   const existing = await executeSql<AccessBindingRow>(
-    `SELECT *
+    `SELECT
+       access_bindings.*,
+       COALESCE(access_bindings.subject_actor_id, cac.actor_id) AS subject_actor_id,
+       COALESCE(access_bindings.subject_conversation_id, cac.conversation_id) AS subject_conversation_id
      FROM access_bindings
+     LEFT JOIN conversation_actor_contexts cac
+       ON cac.id = access_bindings.subject_conversation_actor_context_id
      WHERE workspace_id = $1
        AND resource_type = 'relay_exposure'
        AND resource_id = $2
@@ -251,6 +258,7 @@ export async function grantRelayExposureAccess(input: {
        AND subject_workspace_member_id IS NOT DISTINCT FROM $5::uuid
        AND subject_actor_id IS NOT DISTINCT FROM $6::uuid
        AND subject_conversation_id IS NOT DISTINCT FROM $7::uuid
+       AND subject_conversation_actor_context_id IS NOT DISTINCT FROM $8::uuid
        AND status = 'active'
      LIMIT 1`,
     [
@@ -261,6 +269,7 @@ export async function grantRelayExposureAccess(input: {
       target.subjectWorkspaceMemberId,
       target.subjectActorId,
       target.subjectConversationId,
+      target.subjectConversationActorContextId,
     ],
   );
 
@@ -280,6 +289,7 @@ export async function grantRelayExposureAccess(input: {
          subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
+         subject_conversation_actor_context_id,
          is_primary,
          granted_permissions,
          status,
@@ -288,7 +298,7 @@ export async function grantRelayExposureAccess(input: {
          metadata
        )
        VALUES (
-         $1, 'relay_exposure', $2, $3, $4, $5, $6, $7, $8, FALSE, ARRAY['invoke']::text[], 'active', $9, $10, $11::jsonb
+         $1, 'relay_exposure', $2, $3, $4, $5, $6, $7, $8, $9, FALSE, ARRAY['invoke']::text[], 'active', $10, $11, $12::jsonb
        )
        RETURNING *`,
       [
@@ -300,6 +310,7 @@ export async function grantRelayExposureAccess(input: {
         target.subjectWorkspaceMemberId,
         target.subjectActorId,
         target.subjectConversationId,
+        target.subjectConversationActorContextId,
         input.grantedByWorkspaceMemberId || null,
         input.reason || RELAY_EXPOSURE_PERMISSION_SUMMARY.reason,
         JSON.stringify(input.metadata || {}),
@@ -331,7 +342,13 @@ export async function grantRelayExposureAccess(input: {
 
   await flushRelayAuthzEntries(inserted.authzEntryIds, "relay.exposure.grant");
   await incrementMcpVersion(input.workspaceId);
-  return mapAccessBindingToGrant(inserted.binding);
+  return mapAccessBindingToGrant({
+    ...inserted.binding,
+    subject_actor_id: target.subjectActorId,
+    subject_conversation_id: target.subjectConversationId,
+    subject_conversation_actor_context_id:
+      target.subjectConversationActorContextId,
+  } as AccessBindingRow);
 }
 
 export async function revokeRelayExposureAccess(input: {

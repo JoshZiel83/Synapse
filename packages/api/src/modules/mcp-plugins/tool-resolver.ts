@@ -2,11 +2,11 @@ import { randomUUID } from "crypto";
 import { textBlocks, type RelayHiddenToolBinding, type ToolDefinition } from "@synapse/shared";
 import type { NormalizedMcpToolResult } from "@synapse/shared/types";
 import {
-  buildActorConversationContextId,
   lookupResources,
   type AuthzSubject,
 } from "../../infrastructure/authz/index.js";
 import { db } from "../../infrastructure/database/kysely.js";
+import { getConversationActorContextBySessionId } from "../session/service.js";
 import { resolveInstallationConfig } from "./config-resolver.js";
 import {
   getOrCreateInstance,
@@ -161,7 +161,7 @@ function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
-function buildVisibilitySubjects(params: ResolveParams) {
+async function buildVisibilitySubjects(params: ResolveParams) {
   const subjects: AuthzSubject[] = [
     {
       type: "actor",
@@ -176,10 +176,11 @@ function buildVisibilitySubjects(params: ResolveParams) {
     });
   }
 
-  if (params.actorId && params.conversationId) {
+  const context = await getConversationActorContextBySessionId(params.sessionId);
+  if (context) {
     subjects.push({
-      type: "actor_conversation",
-      id: buildActorConversationContextId(params.actorId, params.conversationId),
+      type: "conversation_actor_context",
+      id: context.id,
     });
   }
 
@@ -203,7 +204,7 @@ function resolveReuseOwnerKey(
     case "actor":
       return `actor:${params.actorId}`;
     case "session":
-      return `conversation:${params.conversationId}:actor:${params.actorId}`;
+      return `session:${params.sessionId}`;
     case "turn":
       return turnOwnerKey;
     default:
@@ -380,7 +381,7 @@ function buildRelayScopedInstance(params: {
 }
 
 async function loadVisiblePlugins(params: ResolveParams) {
-  const subjects = buildVisibilitySubjects(params);
+  const subjects = await buildVisibilitySubjects(params);
   const visibleInstallationIds = new Set<string>();
 
   const lookups = await Promise.all(
@@ -431,7 +432,7 @@ async function loadVisiblePlugins(params: ResolveParams) {
 }
 
 async function loadVisibleRelayExposures(params: ResolveParams) {
-  const subjects = buildVisibilitySubjects(params);
+  const subjects = await buildVisibilitySubjects(params);
   const visibleExposureIds = new Set<string>();
 
   const lookups = await Promise.all(
