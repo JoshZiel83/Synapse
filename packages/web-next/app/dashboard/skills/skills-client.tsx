@@ -129,6 +129,8 @@ type UploadedFile = {
   fullUrl?: string
 }
 
+type SkillImportSourceType = "github" | "clawhub"
+
 const skillAccessAdapter = {
   loadAccess: (workspaceId: string, resourceId: string) =>
     api.getInstalledSkillAccess(workspaceId, resourceId),
@@ -282,7 +284,7 @@ function createEmptySkillFile(
   }
 }
 
-const REQUIRED_SKILL_PATH = "Skill.md"
+const REQUIRED_SKILL_PATH = "SKILL.md"
 
 function ensureRequiredSkillPath(files: SkillFileDraft[]) {
   const hasRequired = files.some(
@@ -2802,7 +2804,7 @@ export function WorkspaceSkillCreationPage() {
       key: "content" as const,
       number: 2,
       title: "Content",
-      description: "Edit Skill.md and any extra paths",
+      description: "Edit SKILL.md and any extra paths",
     },
   ]
 
@@ -3498,6 +3500,210 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
   )
 }
 
+function MarketplaceImportDialog({
+  open,
+  onOpenChange,
+  onImported,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onImported: (skill: SkillMarketplaceEntry) => Promise<void> | void
+}) {
+  const [sourceType, setSourceType] = useState<SkillImportSourceType>("github")
+  const [githubRepoUrl, setGitHubRepoUrl] = useState("")
+  const [githubPath, setGitHubPath] = useState(".")
+  const [githubRef, setGitHubRef] = useState("")
+  const [clawhubOwnerId, setClawhubOwnerId] = useState("")
+  const [clawhubSlug, setClawhubSlug] = useState("")
+  const [clawhubVersion, setClawhubVersion] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+
+  async function handleSubmit() {
+    if (sourceType === "github" && !githubRepoUrl.trim()) {
+      toast.error("Repository URL is required")
+      return
+    }
+    if (sourceType === "clawhub" && !clawhubSlug.trim()) {
+      toast.error("ClawHub slug is required")
+      return
+    }
+
+    try {
+      setSubmitting(true)
+      const result =
+        sourceType === "github"
+          ? await api.importMarketplaceSkill({
+              sourceType: "github",
+              repoUrl: githubRepoUrl.trim(),
+              path: githubPath.trim() || ".",
+              ref: githubRef.trim() || undefined,
+            })
+          : await api.importMarketplaceSkill({
+              sourceType: "clawhub",
+              ownerId: clawhubOwnerId.trim() || undefined,
+              slug: clawhubSlug.trim(),
+              version: clawhubVersion.trim() || undefined,
+            })
+
+      toast.success(
+        sourceType === "github"
+          ? "GitHub skill mirrored"
+          : "ClawHub skill mirrored"
+      )
+      onOpenChange(false)
+      await onImported(result.skill)
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to import skill"
+      )
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Import mirrored skill</DialogTitle>
+          <DialogDescription>
+            Platform admins can mirror a skill into the marketplace from a
+            GitHub repository path or a ClawHub release archive.
+          </DialogDescription>
+        </DialogHeader>
+
+        <Tabs
+          value={sourceType}
+          onValueChange={(value) => setSourceType(value as SkillImportSourceType)}
+          className="space-y-4"
+        >
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="github">GitHub</TabsTrigger>
+            <TabsTrigger value="clawhub">ClawHub</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="github" className="space-y-4">
+            <FieldGroup>
+              <Field>
+                <FieldLabel>Repository URL</FieldLabel>
+                <FieldContent>
+                  <Input
+                    value={githubRepoUrl}
+                    onChange={(event) => setGitHubRepoUrl(event.target.value)}
+                    placeholder="https://github.com/owner/repo"
+                    autoComplete="off"
+                  />
+                  <FieldDescription>
+                    Use the repository root URL. The importer will mirror only
+                    the path below, and that path must contain `SKILL.md`.
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
+              <Field>
+                <FieldLabel>Path</FieldLabel>
+                <FieldContent>
+                  <Input
+                    value={githubPath}
+                    onChange={(event) => setGitHubPath(event.target.value)}
+                    placeholder="."
+                    autoComplete="off"
+                  />
+                  <FieldDescription>
+                    `.` imports from the repository root. Use a subdirectory
+                    when the repo contains many unrelated files.
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
+              <Field>
+                <FieldLabel>Ref</FieldLabel>
+                <FieldContent>
+                  <Input
+                    value={githubRef}
+                    onChange={(event) => setGitHubRef(event.target.value)}
+                    placeholder="main"
+                    autoComplete="off"
+                  />
+                  <FieldDescription>
+                    Optional branch, tag, or commit. Leave empty to use the
+                    repository default branch.
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
+            </FieldGroup>
+          </TabsContent>
+
+          <TabsContent value="clawhub" className="space-y-4">
+            <FieldGroup>
+              <Field>
+                <FieldLabel>Owner ID (optional)</FieldLabel>
+                <FieldContent>
+                  <Input
+                    value={clawhubOwnerId}
+                    onChange={(event) => setClawhubOwnerId(event.target.value)}
+                    placeholder="kn73rqfztb1dtgk3pwgas0j7ed823j8d"
+                    autoComplete="off"
+                  />
+                  <FieldDescription>
+                    Optional. Keep it when you have the legacy owner ID and want
+                    extra archive verification.
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
+              <Field>
+                <FieldLabel>Slug</FieldLabel>
+                <FieldContent>
+                  <Input
+                    value={clawhubSlug}
+                    onChange={(event) => setClawhubSlug(event.target.value)}
+                    placeholder="ai-video-cultural-travel-video"
+                    autoComplete="off"
+                  />
+                  <FieldDescription>
+                    Skill slug used by the official ClawHub download API.
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
+              <Field>
+                <FieldLabel>Version</FieldLabel>
+                <FieldContent>
+                  <Input
+                    value={clawhubVersion}
+                    onChange={(event) => setClawhubVersion(event.target.value)}
+                    placeholder="1.0.0"
+                    autoComplete="off"
+                  />
+                  <FieldDescription>
+                    Optional published version. Leave empty to mirror the latest
+                    archive returned by ClawHub.
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
+            </FieldGroup>
+          </TabsContent>
+        </Tabs>
+
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={submitting}
+          >
+            Cancel
+          </Button>
+          <Button onClick={() => void handleSubmit()} disabled={submitting}>
+            {submitting ? (
+              <Loader2 className="animate-spin" data-icon="inline-start" />
+            ) : (
+              <UploadCloud data-icon="inline-start" />
+            )}
+            Import mirror
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export default function SkillsPage() {
   const router = useRouter()
   const { workspaceId, workspaceName } = useWorkspace()
@@ -3506,6 +3712,8 @@ export default function SkillsPage() {
   const [marketplace, setMarketplace] = useState<SkillMarketplaceEntry[]>([])
   const [installed, setInstalled] = useState<InstalledSkill[]>([])
   const [loadingPage, setLoadingPage] = useState(false)
+  const [canManagePlatformSkills, setCanManagePlatformSkills] = useState(false)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
 
   const skillRows = useMemo(() => {
     const marketplaceIds = new Set(marketplace.map((skill) => skill.id))
@@ -3621,6 +3829,28 @@ export default function SkillsPage() {
     void refreshIndex()
   }, [refreshIndex])
 
+  useEffect(() => {
+    let cancelled = false
+
+    api
+      .getPlatformNavigation()
+      .then((response) => {
+        if (cancelled) return
+        setCanManagePlatformSkills(
+          Boolean(response?.data?.canAccessPlatformSkills)
+        )
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCanManagePlatformSkills(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   function openSkillRow(row: SkillListRow) {
     if (row.installedSkillId) {
       router.push(`/dashboard/skills/installed/${row.installedSkillId}`)
@@ -3659,6 +3889,15 @@ export default function SkillsPage() {
             <Plus data-icon="inline-start" />
             New skill
           </Button>
+          {canManagePlatformSkills ? (
+            <Button
+              variant="outline"
+              onClick={() => setImportDialogOpen(true)}
+            >
+              <UploadCloud data-icon="inline-start" />
+              Import mirror
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             onClick={() => void refreshIndex()}
@@ -3758,6 +3997,15 @@ export default function SkillsPage() {
           )}
         </div>
       </div>
+
+      <MarketplaceImportDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onImported={async (skill) => {
+          await refreshIndex()
+          router.push(`/dashboard/skills/marketplace/${skill.id}`)
+        }}
+      />
     </div>
   )
 }

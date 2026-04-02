@@ -7,9 +7,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const __filename = fileURLToPath(import.meta.url);
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8");
 
-const CURRENT_SCHEMA_VERSION = "2026-04-01-01";
+const CURRENT_SCHEMA_VERSION = "2026-04-02-01";
 const CURRENT_SCHEMA_DESCRIPTION =
-  "promote relationship identities to workspace members, store internal conversation ownership explicitly, and normalize access binding subjects";
+  "rebuild skill storage around SKILL.md snapshots and mirror sources";
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

@@ -124,6 +124,9 @@ CREATE TYPE session_interrupts_type AS ENUM ('progress_check', 'priority_overrid
 CREATE TYPE runtime_events_source AS ENUM ('conversation', 'provider', 'tool', 'relay', 'a2a', 'system');
 CREATE TYPE runtime_events_level AS ENUM ('debug', 'info', 'warn', 'error');
 CREATE TYPE skill_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'follow_upstream', 'detached');
+CREATE TYPE skill_mirror_sources_source_type AS ENUM ('github', 'clawhub');
+CREATE TYPE skill_mirror_sources_refresh_mode AS ENUM ('manual');
+CREATE TYPE skill_mirror_sources_sync_status AS ENUM ('pending', 'synced', 'error');
 CREATE TYPE plugin_installations_attachment_target_type AS ENUM ('workspace', 'conversation', 'actor', 'workspace_member');
 CREATE TYPE plugin_installations_reuse_scope AS ENUM ('turn', 'session', 'workspace', 'conversation', 'actor');
 CREATE TYPE plugin_installations_status AS ENUM ('active', 'disabled', 'error', 'archived');
@@ -463,6 +466,75 @@ CREATE INDEX idx_realtime_event_outbox_workspace
 CREATE INDEX idx_realtime_event_outbox_recipient
   ON realtime_event_outbox(recipient_workspace_member_id, event_timestamp DESC, created_at DESC);
 
+-- ============ Skill Content ============
+CREATE TABLE skill_mirror_sources (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  source_type skill_mirror_sources_source_type NOT NULL,
+  locator_key TEXT NOT NULL,
+  locator JSONB NOT NULL DEFAULT '{}',
+  requested_ref VARCHAR(255),
+  resolved_revision VARCHAR(255),
+  refresh_mode skill_mirror_sources_refresh_mode NOT NULL DEFAULT 'manual',
+  last_sync_status skill_mirror_sources_sync_status NOT NULL DEFAULT 'pending',
+  source_warnings TEXT[] NOT NULL DEFAULT '{}',
+  last_error TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  last_synced_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(source_type, locator_key)
+);
+
+CREATE INDEX idx_skill_mirror_sources_sync
+  ON skill_mirror_sources(source_type, last_sync_status, updated_at DESC);
+
+CREATE TABLE skill_snapshots (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  mirror_source_id UUID REFERENCES skill_mirror_sources(id) ON DELETE SET NULL,
+  entry_path TEXT NOT NULL DEFAULT 'SKILL.md',
+  name VARCHAR(64) NOT NULL,
+  description TEXT NOT NULL,
+  argument_hint VARCHAR(255),
+  disable_model_invocation BOOLEAN NOT NULL DEFAULT FALSE,
+  user_invocable BOOLEAN NOT NULL DEFAULT TRUE,
+  allowed_tools TEXT[] NOT NULL DEFAULT '{}',
+  model VARCHAR(255),
+  effort VARCHAR(16)
+    CHECK (effort IS NULL OR effort IN ('low', 'medium', 'high', 'max')),
+  context VARCHAR(16)
+    CHECK (context IS NULL OR context IN ('fork')),
+  agent VARCHAR(255),
+  hooks JSONB NOT NULL DEFAULT '{}',
+  body_blocks JSONB NOT NULL DEFAULT '[]',
+  content_hash VARCHAR(64) NOT NULL,
+  source_warnings TEXT[] NOT NULL DEFAULT '{}',
+  resolved_revision VARCHAR(255),
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_skill_snapshots_mirror_source
+  ON skill_snapshots(mirror_source_id, created_at DESC);
+CREATE INDEX idx_skill_snapshots_content_hash
+  ON skill_snapshots(content_hash);
+
+CREATE TABLE skill_snapshot_files (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  skill_snapshot_id UUID NOT NULL REFERENCES skill_snapshots(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  media_type VARCHAR(255),
+  content_blocks JSONB NOT NULL DEFAULT '[]',
+  sha256 VARCHAR(64) NOT NULL,
+  size_bytes INT NOT NULL DEFAULT 0,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(skill_snapshot_id, path)
+);
+
+CREATE INDEX idx_skill_snapshot_files_snapshot
+  ON skill_snapshot_files(skill_snapshot_id, path);
+
 -- ============ Catalog Core ============
 CREATE TABLE publishers (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -503,6 +575,7 @@ CREATE TABLE catalog_items (
   summary TEXT DEFAULT '',
   long_description TEXT DEFAULT '',
   icon_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  mirror_source_id UUID REFERENCES skill_mirror_sources(id) ON DELETE SET NULL,
   source_kind catalog_items_source_kind NOT NULL DEFAULT 'official',
   visibility catalog_items_visibility NOT NULL DEFAULT 'public',
   tags TEXT[] DEFAULT '{}',
@@ -520,6 +593,9 @@ CREATE UNIQUE INDEX uq_catalog_items_global_slug
 CREATE UNIQUE INDEX uq_catalog_items_workspace_slug
   ON catalog_items(publisher_id, workspace_id, item_kind, slug)
   WHERE workspace_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_catalog_items_mirror_source
+  ON catalog_items(mirror_source_id)
+  WHERE mirror_source_id IS NOT NULL;
 CREATE INDEX idx_catalog_items_kind ON catalog_items(item_kind, created_at DESC);
 CREATE INDEX idx_catalog_items_workspace ON catalog_items(workspace_id, item_kind, created_at DESC);
 CREATE INDEX idx_catalog_items_tags ON catalog_items USING GIN(tags);
@@ -585,13 +661,9 @@ CREATE TABLE actor_template_version_specs (
 
 CREATE TABLE skill_package_version_specs (
   catalog_version_id UUID PRIMARY KEY REFERENCES catalog_versions(id) ON DELETE CASCADE,
-  canonical_slug VARCHAR(120) NOT NULL,
-  name VARCHAR(255) NOT NULL,
-  description_blocks JSONB NOT NULL DEFAULT '[]',
-  summary_text TEXT DEFAULT '',
+  skill_snapshot_id UUID NOT NULL REFERENCES skill_snapshots(id) ON DELETE RESTRICT,
   default_conversation_type_mask INT NOT NULL DEFAULT 31
     CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 31),
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -2198,6 +2270,7 @@ CREATE TABLE installed_skills (
   icon_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
   tags TEXT[] DEFAULT '{}',
   current_version INT NOT NULL DEFAULT 1,
+  current_snapshot_id UUID NOT NULL REFERENCES skill_snapshots(id) ON DELETE RESTRICT,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   conversation_type_mask_override INT
     CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
@@ -2213,28 +2286,11 @@ CREATE TABLE skill_versions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   skill_id UUID NOT NULL REFERENCES installed_skills(id) ON DELETE CASCADE,
   version INT NOT NULL,
-  name VARCHAR(255) NOT NULL,
-  description_blocks JSONB NOT NULL DEFAULT '[]',
-  summary_text TEXT DEFAULT '',
+  skill_snapshot_id UUID NOT NULL REFERENCES skill_snapshots(id) ON DELETE RESTRICT,
   metadata JSONB DEFAULT '{}',
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(skill_id, version)
-);
-
-CREATE TABLE skill_files (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  skill_version_id UUID NOT NULL REFERENCES skill_versions(id) ON DELETE CASCADE,
-  path TEXT NOT NULL,
-  media_type VARCHAR(255),
-  text_content TEXT NOT NULL,
-  content_blocks JSONB NOT NULL DEFAULT '[]',
-  sha256 VARCHAR(64) NOT NULL,
-  size_bytes INT NOT NULL DEFAULT 0,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(skill_version_id, path)
 );
 
 CREATE TABLE skill_source_refs (

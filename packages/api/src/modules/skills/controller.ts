@@ -17,6 +17,8 @@ import {
   getInstalledSkill,
   getMarketplaceSkill,
   grantInstalledSkillAccess,
+  importMarketplaceMirrorSkill,
+  refreshMarketplaceSkill,
   installMarketplaceSkill,
   listInstalledSkills,
   listMarketplaceSkills,
@@ -39,6 +41,7 @@ const accessTargetSchema = z.object({
 const skillAttachmentSchema = z.object({
   path: z.string().min(1),
   contentBlocks: z.array(z.any()).default([]),
+  mediaType: z.string().min(1).optional(),
 });
 
 const publishSkillSchema = z.object({
@@ -69,6 +72,21 @@ const installSkillSchema = z.object({
   marketSkillId: z.string().uuid(),
   accessTarget: accessTargetSchema,
 });
+
+const importMarketplaceSkillSchema = z.discriminatedUnion("sourceType", [
+  z.object({
+    sourceType: z.literal("github"),
+    repoUrl: z.string().url(),
+    path: z.string().min(1),
+    ref: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    sourceType: z.literal("clawhub"),
+    ownerId: z.string().trim().min(1).optional(),
+    slug: z.string().trim().min(1),
+    version: z.string().trim().min(1).optional(),
+  }),
+]);
 
 const updateInstalledSkillSchema = z.object({
   name: z.string().min(1).optional(),
@@ -219,6 +237,48 @@ export function registerSkillRoutes(app: FastifyInstance) {
         authorUserId: user?.id || user?.userId,
       });
       return reply.status(201).send({ skill });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.post('/api/v1/skills/marketplace/import', authHook, async (request, reply) => {
+    try {
+      const allowed = await requirePlatformManage(
+        request,
+        reply,
+        'Not allowed to import marketplace skills',
+      );
+      if (!allowed) return;
+
+      const body = importMarketplaceSkillSchema.parse(request.body);
+      const user = (request as any).user;
+      const skill = await importMarketplaceMirrorSkill({
+        ...body,
+        authorUserId: user?.id || user?.userId,
+      } as any);
+      return reply.status(201).send({ skill });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.post('/api/v1/skills/marketplace/:skillId/refresh', authHook, async (request, reply) => {
+    try {
+      const allowed = await requirePlatformManage(
+        request,
+        reply,
+        'Not allowed to refresh marketplace skills',
+      );
+      if (!allowed) return;
+
+      const { skillId } = request.params as { skillId: string };
+      const user = (request as any).user;
+      const skill = await refreshMarketplaceSkill({
+        skillId,
+        authorUserId: user?.id || user?.userId,
+      });
+      return reply.status(200).send({ skill });
     } catch (error) {
       return handleError(reply, error);
     }

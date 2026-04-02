@@ -500,11 +500,40 @@ class ApiClient {
     attachmentFiles?: Array<{
       path: string
       contentBlocks: CanonicalContentBlock[]
+      mediaType?: string
     }>
   }): Promise<{ skill: SkillMarketplaceEntry }> {
     return this.fetch("/skills/marketplace", {
       method: "POST",
       body: JSON.stringify(data),
+    })
+  }
+  importMarketplaceSkill(
+    data:
+      | {
+          sourceType: "github"
+          repoUrl: string
+          path: string
+          ref?: string
+        }
+      | {
+          sourceType: "clawhub"
+          ownerId?: string
+          slug: string
+          version?: string
+        }
+  ): Promise<{ skill: SkillMarketplaceEntry }> {
+    return this.fetch("/skills/marketplace/import", {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  refreshMarketplaceSkill(
+    skillId: string
+  ): Promise<{ skill: SkillMarketplaceEntry }> {
+    return this.fetch(`/skills/marketplace/${skillId}/refresh`, {
+      method: "POST",
+      body: "{}",
     })
   }
   createWorkspaceSkill(
@@ -517,6 +546,7 @@ class ApiClient {
       attachmentFiles?: Array<{
         path: string
         contentBlocks: CanonicalContentBlock[]
+        mediaType?: string
       }>
       accessTarget: CapabilityAccessTarget
     }
@@ -565,6 +595,7 @@ class ApiClient {
       attachmentFiles?: Array<{
         path: string
         contentBlocks: CanonicalContentBlock[]
+        mediaType?: string
       }>
     }
   ): Promise<{ skill: InstalledSkill }> {

@@ -281,6 +281,12 @@ export type SessionWakeupsSourceType = "actor_message" | "api_call" | "automatio
 
 export type SessionWakeupsStatus = "attached" | "dropped" | "pending" | "processed";
 
+export type SkillMirrorSourcesRefreshMode = "manual";
+
+export type SkillMirrorSourcesSourceType = "clawhub" | "github";
+
+export type SkillMirrorSourcesSyncStatus = "error" | "pending" | "synced";
+
 export type SkillSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
@@ -745,6 +751,7 @@ export interface CatalogItems {
   latest_version_id: string | null;
   long_description: Generated<string | null>;
   metadata: Generated<Json | null>;
+  mirror_source_id: string | null;
   publisher_id: string;
   slug: string;
   source_kind: Generated<CatalogItemsSourceKind>;
@@ -1027,6 +1034,7 @@ export interface InstalledSkills {
   conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
+  current_snapshot_id: string;
   current_version: Generated<number>;
   icon_file_id: string | null;
   id: Generated<string>;
@@ -1716,29 +1724,64 @@ export interface SessionWakeups {
   turn_id: string | null;
 }
 
-export interface SkillFiles {
-  content_blocks: Generated<Json>;
+export interface SkillMirrorSources {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
-  media_type: string | null;
-  metadata: Generated<Json | null>;
-  path: string;
-  sha256: string;
-  size_bytes: Generated<number>;
-  skill_version_id: string;
-  text_content: string;
+  last_error: string | null;
+  last_sync_status: Generated<SkillMirrorSourcesSyncStatus>;
+  last_synced_at: Timestamp | null;
+  locator: Generated<Json>;
+  locator_key: string;
+  metadata: Generated<Json>;
+  refresh_mode: Generated<SkillMirrorSourcesRefreshMode>;
+  requested_ref: string | null;
+  resolved_revision: string | null;
+  source_type: SkillMirrorSourcesSourceType;
+  source_warnings: Generated<string[]>;
   updated_at: Generated<Timestamp | null>;
 }
 
 export interface SkillPackageVersionSpecs {
-  canonical_slug: string;
   catalog_version_id: string;
   created_at: Generated<Timestamp | null>;
   default_conversation_type_mask: Generated<number>;
-  description_blocks: Generated<Json>;
-  metadata: Generated<Json | null>;
+  skill_snapshot_id: string;
+}
+
+export interface SkillSnapshotFiles {
+  content_blocks: Generated<Json>;
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  media_type: string | null;
+  metadata: Generated<Json>;
+  path: string;
+  sha256: string;
+  size_bytes: Generated<number>;
+  skill_snapshot_id: string;
+  updated_at: Generated<Timestamp | null>;
+}
+
+export interface SkillSnapshots {
+  agent: string | null;
+  allowed_tools: Generated<string[]>;
+  argument_hint: string | null;
+  body_blocks: Generated<Json>;
+  content_hash: string;
+  context: string | null;
+  created_at: Generated<Timestamp | null>;
+  description: string;
+  disable_model_invocation: Generated<boolean>;
+  effort: string | null;
+  entry_path: Generated<string>;
+  hooks: Generated<Json>;
+  id: Generated<string>;
+  metadata: Generated<Json>;
+  mirror_source_id: string | null;
+  model: string | null;
   name: string;
-  summary_text: Generated<string | null>;
+  resolved_revision: string | null;
+  source_warnings: Generated<string[]>;
+  user_invocable: Generated<boolean>;
 }
 
 export interface SkillSourceRefs {
@@ -1755,12 +1798,10 @@ export interface SkillSourceRefs {
 export interface SkillVersions {
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
-  description_blocks: Generated<Json>;
   id: Generated<string>;
   metadata: Generated<Json | null>;
-  name: string;
   skill_id: string;
-  summary_text: Generated<string | null>;
+  skill_snapshot_id: string;
   version: number;
 }
 
@@ -2148,8 +2189,10 @@ export interface DB {
   session_interrupts: SessionInterrupts;
   session_wakeups: SessionWakeups;
   sessions: Sessions;
-  skill_files: SkillFiles;
+  skill_mirror_sources: SkillMirrorSources;
   skill_package_version_specs: SkillPackageVersionSpecs;
+  skill_snapshot_files: SkillSnapshotFiles;
+  skill_snapshots: SkillSnapshots;
   skill_source_refs: SkillSourceRefs;
   skill_versions: SkillVersions;
   tool_call_task_output_chunks: ToolCallTaskOutputChunks;

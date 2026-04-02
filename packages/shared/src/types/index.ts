@@ -2253,9 +2253,46 @@ export interface AvailableSkillSummary {
 
 export type SkillAccessTargetType = CapabilityAccessTargetType;
 
+export type SkillSourceType = "github" | "clawhub";
+export type SkillMirrorRefreshMode = "manual";
+export type SkillMirrorSyncStatus = "pending" | "synced" | "error";
+export type SkillFrontmatterEffort = "low" | "medium" | "high" | "max";
+export type SkillFrontmatterContext = "fork";
+
+export interface SkillFrontmatter {
+  name: string;
+  description: string;
+  argumentHint?: string;
+  disableModelInvocation: boolean;
+  userInvocable: boolean;
+  allowedTools: string[];
+  model?: string;
+  effort?: SkillFrontmatterEffort;
+  context?: SkillFrontmatterContext;
+  agent?: string;
+  hooks?: Record<string, unknown>;
+}
+
+export interface SkillMirrorSourceSummary {
+  id: string;
+  sourceType: SkillSourceType;
+  locatorKey: string;
+  locator: Record<string, unknown>;
+  requestedRef?: string;
+  resolvedRevision?: string;
+  refreshMode: SkillMirrorRefreshMode;
+  lastSyncStatus: SkillMirrorSyncStatus;
+  sourceWarnings: string[];
+  lastError?: string;
+  lastSyncedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface SkillAttachmentFile {
   id: string;
   path: string;
+  mediaType?: string;
   contentBlocks: CanonicalContentBlock[];
   createdAt: string;
   updatedAt: string;
@@ -2266,11 +2303,18 @@ export interface SkillMarketplaceVersion {
   skillId: string;
   version: string;
   changelog: string;
+  frontmatter: SkillFrontmatter;
+  bodyBlocks: CanonicalContentBlock[];
+  entryPath: string;
+  contentHash: string;
+  sourceWarnings: string[];
+  resolvedRevision?: string;
   description: CanonicalContentBlock;
   defaultConversationTypeMask?: ConversationTypeMask;
   createdByUserId?: string;
   createdByName?: string;
   createdAt: string;
+  files?: SkillAttachmentFile[];
   attachmentFiles?: SkillAttachmentFile[];
 }
 
@@ -2284,6 +2328,8 @@ export interface SkillMarketplaceEntry {
   id: string;
   slug: string;
   name: string;
+  frontmatter: SkillFrontmatter;
+  bodyBlocks: CanonicalContentBlock[];
   description: CanonicalContentBlock;
   iconUrl?: string;
   tags: string[];
@@ -2295,6 +2341,7 @@ export interface SkillMarketplaceEntry {
   defaultConversationTypeMask?: ConversationTypeMask;
   latestVersionId?: string;
   latestVersion?: SkillMarketplaceVersion;
+  mirrorSource?: SkillMirrorSourceSummary;
   workspaceInstallation?: SkillMarketplaceWorkspaceInstallation;
 }
 
@@ -2303,6 +2350,11 @@ export interface InstalledSkill {
   workspaceId: string;
   slug: string;
   name: string;
+  frontmatter: SkillFrontmatter;
+  bodyBlocks: CanonicalContentBlock[];
+  entryPath: string;
+  contentHash: string;
+  sourceWarnings: string[];
   description: CanonicalContentBlock;
   iconUrl?: string;
   tags: string[];
@@ -2321,7 +2373,9 @@ export interface InstalledSkill {
   sourceVersion?: string;
   upgradeAvailable: boolean;
   latestSourceVersion?: string;
+  files?: SkillAttachmentFile[];
   attachmentFiles?: SkillAttachmentFile[];
+  mirrorSource?: SkillMirrorSourceSummary;
 }
 
 export type McpTransport = Exclude<PluginTransport, "filesystem">;
@@ -3978,8 +4032,6 @@ export interface CatalogVersionFileRecord {
   path: string;
   fileRole: CatalogFileRole;
   mediaType?: string;
-  blobId?: string;
-  textContent?: string;
   contentBlocks: CanonicalContentBlock[];
   sha256: string;
   sizeBytes: number;
@@ -4004,11 +4056,8 @@ export interface ActorTemplateVersionSpecRecord {
 
 export interface SkillPackageVersionSpecRecord {
   catalogVersionId: string;
-  canonicalSlug: string;
-  name: string;
-  descriptionBlocks: CanonicalContentBlock[];
-  summaryText: string;
-  metadata: Record<string, unknown>;
+  skillSnapshotId: string;
+  defaultConversationTypeMask: number;
   createdAt: string;
 }
 
@@ -4061,10 +4110,12 @@ export interface InstalledSkillRecord {
   workspaceId: string;
   slug: string;
   name: string;
-  iconBlobId?: string;
+  iconFileId?: string;
   tags: string[];
   currentVersion: number;
   isActive: boolean;
+  currentSnapshotId: string;
+  conversationTypeMaskOverride?: number;
   createdByWorkspaceMemberId?: string;
   createdAt: string;
   updatedAt: string;
@@ -4074,25 +4125,58 @@ export interface SkillVersionRecord {
   id: string;
   skillId: string;
   version: number;
-  name: string;
-  descriptionBlocks: CanonicalContentBlock[];
-  summaryText: string;
+  skillSnapshotId: string;
   metadata: Record<string, unknown>;
   createdByWorkspaceMemberId?: string;
   createdAt: string;
 }
 
-export interface SkillFileRecord {
+export interface SkillSnapshotRecord {
   id: string;
-  skillVersionId: string;
+  entryPath: string;
+  name: string;
+  description: string;
+  argumentHint?: string;
+  disableModelInvocation: boolean;
+  userInvocable: boolean;
+  allowedTools: string[];
+  model?: string;
+  effort?: SkillFrontmatterEffort;
+  context?: SkillFrontmatterContext;
+  agent?: string;
+  hooks: Record<string, unknown>;
+  bodyBlocks: CanonicalContentBlock[];
+  contentHash: string;
+  sourceWarnings: string[];
+  createdAt: string;
+}
+
+export interface SkillSnapshotFileRecord {
+  id: string;
+  skillSnapshotId: string;
   path: string;
   mediaType?: string;
-  blobId?: string;
-  textContent?: string;
   contentBlocks: CanonicalContentBlock[];
   sha256: string;
   sizeBytes: number;
   metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillMirrorSourceRecord {
+  id: string;
+  sourceType: SkillSourceType;
+  locatorKey: string;
+  locator: Record<string, unknown>;
+  requestedRef?: string;
+  resolvedRevision?: string;
+  refreshMode: SkillMirrorRefreshMode;
+  lastSyncStatus: SkillMirrorSyncStatus;
+  sourceWarnings: string[];
+  lastError?: string;
+  metadata: Record<string, unknown>;
+  lastSyncedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

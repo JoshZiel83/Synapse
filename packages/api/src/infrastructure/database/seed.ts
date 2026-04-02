@@ -8,6 +8,7 @@ import { createGeneratedUserAvatarFile } from "../../modules/avatar/service.js";
 import { seedBuiltinMcpPlugins } from "../../modules/mcp-plugins/service.js";
 import { seedPlatformDefaultGroup } from "../../modules/model-groups/service.js";
 import { ensureSeedPlatformAdminForUser } from "../../modules/platform/admin-service.js";
+import { importSeededClawhubMarketplaceSkill } from "../../modules/skills/service.js";
 import {
   AUTHZ_PLATFORM_ID,
   enqueueAuthzRelationships,
@@ -465,193 +466,20 @@ async function loadClawHubSkillPackages() {
 }
 
 async function seedOfficialSkills(userId: string) {
-  const skills = await loadClawHubSkillPackages();
+  const entries = await fs.readdir(CLAWHUB_SKILLS_DIR, { withFileTypes: true });
+  const directories = entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => resolve(CLAWHUB_SKILLS_DIR, entry.name))
+    .sort((left, right) => left.localeCompare(right));
 
-  await transaction(async (client) => {
-    const publisherId = await ensurePublisher(client, {
-      slug: CLAWHUB_PUBLISHER_SLUG,
-      displayName: "ClawHub Official",
-      description: "Official ClawHub skill marketplace publisher",
-      ownerUserId: userId,
-      isVerified: true,
-      metadata: {
-        sourceCatalog: "clawhub",
-      },
+  for (const skillDir of directories) {
+    await importSeededClawhubMarketplaceSkill({
+      skillDir,
+      authorUserId: userId,
     });
+  }
 
-    for (const skill of skills) {
-      const itemMetadata = {
-        sourceCatalog: "clawhub",
-        sourceOwnerId: skill.ownerId || null,
-        sourcePublishedAt: skill.publishedAt || null,
-      };
-
-      const insertedItem = await executeSqlOn<{ id: string }>(
-        client,
-        `INSERT INTO catalog_items (
-           publisher_id,
-           workspace_id,
-           item_kind,
-           slug,
-           display_name,
-           summary,
-           long_description,
-           source_kind,
-           visibility,
-           tags,
-           is_active,
-           metadata
-         )
-         VALUES (
-           $1,
-           NULL,
-           'skill_package',
-           $2,
-           $3,
-           $4,
-           $4,
-           'official',
-           'public',
-           $5,
-           TRUE,
-           $6::jsonb
-         )
-         ON CONFLICT (publisher_id, item_kind, slug) WHERE workspace_id IS NULL
-         DO UPDATE SET
-           display_name = EXCLUDED.display_name,
-           summary = EXCLUDED.summary,
-           long_description = EXCLUDED.long_description,
-           tags = EXCLUDED.tags,
-           is_active = TRUE,
-           metadata = EXCLUDED.metadata,
-           updated_at = NOW()
-         RETURNING id`,
-        [
-          publisherId,
-          skill.slug,
-          skill.name,
-          skill.description,
-          skill.tags,
-          JSON.stringify(itemMetadata),
-        ],
-      );
-      const itemId = insertedItem.rows[0]!.id;
-
-      const versionMetadata = {
-        sourceCatalog: "clawhub",
-        sourceOwnerId: skill.ownerId || null,
-        sourcePublishedAt: skill.publishedAt || null,
-        importedFileCount: skill.files.length,
-      };
-
-      const upsertedVersion = await executeSqlOn<{ id: string }>(
-        client,
-        `INSERT INTO catalog_versions (
-           catalog_item_id,
-           version,
-           status,
-           changelog,
-           metadata,
-           created_by_user_id
-         )
-         VALUES ($1, $2, 'active', 'Imported from ClawHub official seed', $3::jsonb, $4)
-         ON CONFLICT (catalog_item_id, version) DO UPDATE SET
-           status = 'active',
-           changelog = EXCLUDED.changelog,
-           metadata = EXCLUDED.metadata
-         RETURNING id`,
-        [
-          itemId,
-          skill.version,
-          JSON.stringify(versionMetadata),
-          userId,
-        ],
-      );
-      const versionId = upsertedVersion.rows[0]!.id;
-
-      await executeSqlOn(client, 
-        `INSERT INTO skill_package_version_specs (
-           catalog_version_id,
-           canonical_slug,
-           name,
-           description_blocks,
-           summary_text,
-           metadata
-         )
-         VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb)
-         ON CONFLICT (catalog_version_id) DO UPDATE SET
-           canonical_slug = EXCLUDED.canonical_slug,
-           name = EXCLUDED.name,
-           description_blocks = EXCLUDED.description_blocks,
-           summary_text = EXCLUDED.summary_text,
-           metadata = EXCLUDED.metadata`,
-        [
-          versionId,
-          skill.slug,
-          skill.name,
-          JSON.stringify(textBlocks(skill.description)),
-          skill.description,
-          JSON.stringify(versionMetadata),
-        ],
-      );
-
-      await executeSqlOn(client, 
-        `DELETE FROM catalog_version_files
-         WHERE catalog_version_id = $1`,
-        [versionId],
-      );
-
-      for (const file of skill.files) {
-        await executeSqlOn(client, 
-          `INSERT INTO catalog_version_files (
-             catalog_version_id,
-             path,
-             file_role,
-             media_type,
-             text_content,
-             content_blocks,
-             sha256,
-             size_bytes,
-             metadata
-           )
-           VALUES (
-             $1,
-             $2,
-             $3,
-             $4,
-             $5,
-             $6::jsonb,
-             $7,
-             $8,
-             $9::jsonb
-           )`,
-          [
-            versionId,
-            file.path,
-            file.fileRole,
-            file.mediaType,
-            file.textContent,
-            JSON.stringify(file.contentBlocks),
-            file.sha256,
-            file.sizeBytes,
-            JSON.stringify({
-              sourceCatalog: "clawhub",
-            }),
-          ],
-        );
-      }
-
-      await executeSqlOn(client, 
-        `UPDATE catalog_items
-         SET latest_version_id = $2,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [itemId, versionId],
-      );
-    }
-  });
-
-  return skills.length;
+  return directories.length;
 }
 
 async function countCatalogItems(

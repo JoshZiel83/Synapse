@@ -28,6 +28,13 @@ const configuredAiProvider = process.env.AI_PROVIDER || '';
 const configuredAiEngineKind = process.env.AI_ENGINE_KIND
   || (configuredAiProvider ? getDefaultModelEngineKind(configuredAiProvider) : '');
 
+function readEnvList(name: string) {
+  return (process.env[name] || '')
+    .split(/[\n,]/g)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '3001'),
   host: process.env.HOST || '0.0.0.0',
@@ -58,6 +65,12 @@ export const config = {
       process.env.RELAY_UPDATE_LATEST_COMMIT ||
       process.env.RELAY_LATEST_COMMIT ||
       '',
+  },
+  skills: {
+    import: {
+      githubRawProxyPrefixes: readEnvList('SKILL_GITHUB_RAW_PROXY_PREFIXES'),
+      clawhubDownloadProxyOrigins: readEnvList('SKILL_CLAWHUB_DOWNLOAD_PROXY_ORIGINS'),
+    },
   },
   ai: {
     provider: configuredAiProvider,

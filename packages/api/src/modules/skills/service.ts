@@ -9,13 +9,15 @@ import {
   type AvailableSkillSummary,
   type CapabilityAccessTarget,
   type InstalledSkill,
-  normalizeCanonicalContentBlocks,
   type CanonicalContentBlock,
   type CanonicalContentBlockInput,
+  normalizeCanonicalContentBlocks,
   type RuntimeBindingScope,
   type SkillAttachmentFile,
+  type SkillFrontmatter,
   type SkillMarketplaceEntry,
   type SkillMarketplaceVersion,
+  textBlock,
 } from "@synapse/shared";
 import {
   deleteRelation,
@@ -51,6 +53,26 @@ import {
   listRelayAutoLoadedSkills,
   readRelayAutoLoadedSkill,
 } from "./relay-auto-skills.js";
+import {
+  SKILL_ENTRY_PATH,
+  buildSyntheticEntryFile,
+  buildSkillMarkdown,
+  normalizeSkillCommandName,
+  normalizeSkillFiles,
+  normalizeSkillFilePath,
+  renderCanonicalBlocksToText,
+  type SkillFileInput,
+} from "./manifest.js";
+import {
+  buildPreparedSnapshotFromExistingData,
+  buildSyntheticSkillFilesFromSnapshot,
+  importClawhubSeedSkillPackage,
+  importClawhubSkillPackage,
+  importGitHubSkillPackage,
+  prepareSkillSnapshotFromFiles,
+  type ImportedMirrorSkillPackage,
+  type PreparedSkillSnapshot,
+} from "./mirror-import.js";
 
 type SkillUseScope = CapabilityAccessTarget["type"];
 
@@ -69,11 +91,11 @@ function clientRunner(client: pg.PoolClient): QueryRunner {
 }
 
 type JsonObject = Record<string, unknown>;
-const REQUIRED_SKILL_FILE_PATH = "Skill.md";
 
 type SkillAttachmentInput = {
   path: string;
   contentBlocks: CanonicalContentBlockInput[];
+  mediaType?: string;
 };
 
 type SkillScopeTarget = {
@@ -81,6 +103,40 @@ type SkillScopeTarget = {
   useScope: SkillUseScope;
   actorId: string | null;
   conversationId: string | null;
+};
+
+type SkillSnapshotJoinRow = {
+  snapshot_id: string | null;
+  snapshot_entry_path: string | null;
+  snapshot_name: string | null;
+  snapshot_description: string | null;
+  snapshot_argument_hint: string | null;
+  snapshot_disable_model_invocation: boolean | null;
+  snapshot_user_invocable: boolean | null;
+  snapshot_allowed_tools: string[] | null;
+  snapshot_model: string | null;
+  snapshot_effort: "low" | "medium" | "high" | "max" | null;
+  snapshot_context: "fork" | null;
+  snapshot_agent: string | null;
+  snapshot_hooks: unknown;
+  snapshot_body_blocks: unknown;
+  snapshot_content_hash: string | null;
+  snapshot_source_warnings: string[] | null;
+  snapshot_resolved_revision: string | null;
+  snapshot_created_at: string | null;
+  mirror_source_id: string | null;
+  mirror_source_type: "github" | "clawhub" | null;
+  mirror_locator_key: string | null;
+  mirror_locator: unknown;
+  mirror_requested_ref: string | null;
+  mirror_resolved_revision: string | null;
+  mirror_refresh_mode: "manual" | null;
+  mirror_last_sync_status: "pending" | "synced" | "error" | null;
+  mirror_source_warnings: string[] | null;
+  mirror_last_error: string | null;
+  mirror_last_synced_at: string | null;
+  mirror_created_at: string | null;
+  mirror_updated_at: string | null;
 };
 
 type SkillPackageRow = {
@@ -101,24 +157,12 @@ type SkillPackageRow = {
   latest_version_changelog: string | null;
   latest_version_created_by_user_id: string | null;
   latest_version_created_at: string | null;
-  spec_canonical_slug: string | null;
-  spec_name: string | null;
-  spec_description_blocks: unknown;
-  spec_summary_text: string | null;
   spec_default_conversation_type_mask: number | null;
   publisher_id: string;
   publisher_slug: string;
   publisher_display_name: string;
   publisher_owner_user_id: string | null;
-};
-
-type CatalogFileRow = {
-  id: string;
-  catalog_version_id: string;
-  path: string;
-  content_blocks: unknown;
-  created_at: string;
-};
+} & SkillSnapshotJoinRow;
 
 type InstalledSkillRow = {
   skill_id: string;
@@ -133,10 +177,9 @@ type InstalledSkillRow = {
   created_by_workspace_member_id: string | null;
   created_at: string;
   updated_at: string;
+  current_snapshot_id: string;
   current_skill_version_id: string;
-  version_name: string;
-  version_description_blocks: unknown;
-  version_summary_text: string | null;
+  current_skill_snapshot_id: string;
   version_metadata: unknown;
   source_catalog_item_id: string | null;
   source_catalog_version_id: string | null;
@@ -152,12 +195,13 @@ type InstalledSkillRow = {
   source_version_value: string | null;
   latest_source_version: string | null;
   source_default_conversation_type_mask: number | null;
-};
+} & SkillSnapshotJoinRow;
 
-type SkillFileRow = {
+type SkillSnapshotFileRow = {
   id: string;
-  skill_version_id: string;
+  skill_snapshot_id: string;
   path: string;
+  media_type: string | null;
   content_blocks: unknown;
   created_at: string;
   updated_at: string;
@@ -183,7 +227,7 @@ type VisibleSkillRow = {
   name: string;
   current_version: number;
   current_skill_version_id: string;
-  description_blocks: unknown;
+  description: string;
   source_version_value: string | null;
   conversation_type_mask_override: number | null;
   access_created_at: string;
@@ -197,7 +241,44 @@ type InstallationSummary = {
 
 const DEFAULT_MARKETPLACE_PUBLISHER_SLUG = "synapse-official";
 const DEFAULT_MARKETPLACE_PUBLISHER_NAME = "Synapse Official";
-const SKILL_DESCRIPTION_ASSET_PATH = "(description)";
+const GITHUB_MARKETPLACE_PUBLISHER_SLUG = "github-mirror";
+const GITHUB_MARKETPLACE_PUBLISHER_NAME = "GitHub Mirror";
+const CLAWHUB_MARKETPLACE_PUBLISHER_SLUG = "clawhub-official";
+const CLAWHUB_MARKETPLACE_PUBLISHER_NAME = "ClawHub Mirror";
+
+const SKILL_SNAPSHOT_SELECT = `
+    snapshot.id AS snapshot_id,
+    snapshot.entry_path AS snapshot_entry_path,
+    snapshot.name AS snapshot_name,
+    snapshot.description AS snapshot_description,
+    snapshot.argument_hint AS snapshot_argument_hint,
+    snapshot.disable_model_invocation AS snapshot_disable_model_invocation,
+    snapshot.user_invocable AS snapshot_user_invocable,
+    snapshot.allowed_tools AS snapshot_allowed_tools,
+    snapshot.model AS snapshot_model,
+    snapshot.effort AS snapshot_effort,
+    snapshot.context AS snapshot_context,
+    snapshot.agent AS snapshot_agent,
+    snapshot.hooks AS snapshot_hooks,
+    snapshot.body_blocks AS snapshot_body_blocks,
+    snapshot.content_hash AS snapshot_content_hash,
+    snapshot.source_warnings AS snapshot_source_warnings,
+    snapshot.resolved_revision AS snapshot_resolved_revision,
+    snapshot.created_at AS snapshot_created_at,
+    mirror.id AS mirror_source_id,
+    mirror.source_type AS mirror_source_type,
+    mirror.locator_key AS mirror_locator_key,
+    mirror.locator AS mirror_locator,
+    mirror.requested_ref AS mirror_requested_ref,
+    mirror.resolved_revision AS mirror_resolved_revision,
+    mirror.refresh_mode AS mirror_refresh_mode,
+    mirror.last_sync_status AS mirror_last_sync_status,
+    mirror.source_warnings AS mirror_source_warnings,
+    mirror.last_error AS mirror_last_error,
+    mirror.last_synced_at AS mirror_last_synced_at,
+    mirror.created_at AS mirror_created_at,
+    mirror.updated_at AS mirror_updated_at
+`;
 
 const MARKETPLACE_SKILL_SELECT = `
   SELECT
@@ -218,11 +299,8 @@ const MARKETPLACE_SKILL_SELECT = `
     version.changelog AS latest_version_changelog,
     version.created_by_user_id AS latest_version_created_by_user_id,
     version.created_at AS latest_version_created_at,
-    spec.canonical_slug AS spec_canonical_slug,
-    spec.name AS spec_name,
-    spec.description_blocks AS spec_description_blocks,
-    spec.summary_text AS spec_summary_text,
     spec.default_conversation_type_mask AS spec_default_conversation_type_mask,
+${SKILL_SNAPSHOT_SELECT},
     publisher.id AS publisher_id,
     publisher.slug AS publisher_slug,
     publisher.display_name AS publisher_display_name,
@@ -234,6 +312,10 @@ const MARKETPLACE_SKILL_SELECT = `
     ON version.id = item.latest_version_id
   LEFT JOIN skill_package_version_specs spec
     ON spec.catalog_version_id = version.id
+  LEFT JOIN skill_snapshots snapshot
+    ON snapshot.id = spec.skill_snapshot_id
+  LEFT JOIN skill_mirror_sources mirror
+    ON mirror.id = snapshot.mirror_source_id
   WHERE item.item_kind = 'skill_package'
     AND item.workspace_id IS NULL
 `;
@@ -247,15 +329,14 @@ const INSTALLED_SKILL_SELECT = `
     skill.icon_file_id,
     skill.tags,
     skill.current_version,
+    skill.current_snapshot_id,
     skill.is_active,
     skill.conversation_type_mask_override,
     skill.created_by_workspace_member_id,
     skill.created_at,
     skill.updated_at,
     version_row.id AS current_skill_version_id,
-    version_row.name AS version_name,
-    version_row.description_blocks AS version_description_blocks,
-    version_row.summary_text AS version_summary_text,
+    version_row.skill_snapshot_id AS current_skill_snapshot_id,
     version_row.metadata AS version_metadata,
     source_ref.source_catalog_item_id,
     source_ref.source_catalog_version_id,
@@ -265,11 +346,14 @@ const INSTALLED_SKILL_SELECT = `
     source_item.latest_version_id AS source_latest_version_id,
     imported_version.version AS source_version_value,
     latest_version.version AS latest_source_version,
-    imported_spec.default_conversation_type_mask AS source_default_conversation_type_mask
+    imported_spec.default_conversation_type_mask AS source_default_conversation_type_mask,
+${SKILL_SNAPSHOT_SELECT}
   FROM installed_skills skill
   JOIN skill_versions version_row
     ON version_row.skill_id = skill.id
    AND version_row.version = skill.current_version
+  JOIN skill_snapshots snapshot
+    ON snapshot.id = skill.current_snapshot_id
   LEFT JOIN skill_source_refs source_ref
     ON source_ref.skill_id = skill.id
   LEFT JOIN catalog_items source_item
@@ -280,6 +364,8 @@ const INSTALLED_SKILL_SELECT = `
     ON imported_spec.catalog_version_id = source_ref.source_catalog_version_id
   LEFT JOIN catalog_versions latest_version
     ON latest_version.id = source_item.latest_version_id
+  LEFT JOIN skill_mirror_sources mirror
+    ON mirror.id = snapshot.mirror_source_id
 `;
 
 export class SkillError extends Error {
@@ -302,25 +388,18 @@ function sanitizeSlug(value: string) {
 }
 
 function normalizePath(assetPath: string) {
-  const value = assetPath.replace(/\\/g, "/").trim();
-  if (!value || value.startsWith("/") || value.includes("\0")) {
-    throw new SkillError(400, `Invalid skill file path: ${assetPath}`);
+  try {
+    return normalizeSkillFilePath(assetPath);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new SkillError(400, error.message);
+    }
+    throw error;
   }
-
-  const segments = value.split("/").filter(Boolean);
-  if (segments.some((segment) => segment === "." || segment === "..")) {
-    throw new SkillError(400, `Invalid skill file path: ${assetPath}`);
-  }
-
-  return segments.join("/");
 }
 
-function defaultDescriptionBlock(): CanonicalContentBlock {
-  return {
-    id: crypto.randomUUID(),
-    type: "text",
-    text: "",
-  };
+function defaultDescriptionBlock(text = ""): CanonicalContentBlock {
+  return textBlock(text);
 }
 
 function normalizeSkillDescription(description?: CanonicalContentBlockInput) {
@@ -332,38 +411,29 @@ function normalizeSkillDescription(description?: CanonicalContentBlockInput) {
 }
 
 function normalizeSkillAttachments(files?: SkillAttachmentInput[]) {
-  if (!Array.isArray(files) || files.length === 0) {
-    return [] as Array<{
-      path: string;
-      contentBlocks: CanonicalContentBlock[];
-    }>;
-  }
-
-  const normalized = files.map((file) => ({
-    path: normalizePath(file.path),
-    contentBlocks: normalizeCanonicalContentBlocks(
-      Array.isArray(file.contentBlocks) ? file.contentBlocks : [],
-    ),
-  }));
-
-  const seen = new Set<string>();
-  for (const file of normalized) {
-    if (seen.has(file.path)) {
-      throw new SkillError(400, `Duplicate skill file path: ${file.path}`);
+  try {
+    return normalizeSkillFiles(
+      (files || []).map((file) => ({
+        path: file.path,
+        mediaType: file.mediaType,
+        contentBlocks: Array.isArray(file.contentBlocks) ? file.contentBlocks : [],
+      })),
+    );
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new SkillError(400, error.message);
     }
-    seen.add(file.path);
+    throw error;
   }
-
-  return normalized;
 }
 
 function assertRequiredSkillFile(
   files: Array<{ path: string; contentBlocks: CanonicalContentBlock[] }>,
 ) {
-  if (!files.some((file) => file.path === REQUIRED_SKILL_FILE_PATH)) {
+  if (!files.some((file) => file.path === SKILL_ENTRY_PATH)) {
     throw new SkillError(
       400,
-      `Skill must include required path: ${REQUIRED_SKILL_FILE_PATH}`,
+      `Skill must include required path: ${SKILL_ENTRY_PATH}`,
     );
   }
 }
@@ -465,31 +535,10 @@ function descriptionBlockFromStored(value: unknown) {
 }
 
 function renderSkillBlocksToText(blocks: CanonicalContentBlock[]) {
-  return blocks
-    .map((block) =>
-      block.type === "text"
-        ? block.text
-        : block.type === "mention"
-          ? `@${block.mention.name || "Unknown"}`
-          : `[File: ${block.originalName} | ${block.mimeType} | ${block.url}]`,
-    )
+  return renderCanonicalBlocksToText(blocks)
+    .split("\n")
     .filter((chunk) => chunk.trim().length > 0)
     .join("\n");
-}
-
-function hashSkillBlocks(blocks: CanonicalContentBlock[]) {
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify(blocks))
-    .digest("hex");
-}
-
-function inferMediaType(path: string) {
-  const lower = path.toLowerCase();
-  if (lower.endsWith(".md")) return "text/markdown";
-  if (lower.endsWith(".json")) return "application/json";
-  if (lower.endsWith(".txt")) return "text/plain";
-  return "text/plain";
 }
 
 async function normalizeWorkspaceSkillIconFileId(
@@ -552,27 +601,103 @@ async function normalizeMarketplaceSkillIconFileId(
 }
 
 function buildSkillAttachmentFromCatalogFile(
-  row: CatalogFileRow,
+  row: SkillSnapshotFileRow,
 ): SkillAttachmentFile {
   return {
     id: row.id,
     path: row.path,
-    contentBlocks: normalizeStoredBlocks(row.content_blocks),
-    createdAt: row.created_at,
-    updatedAt: row.created_at,
-  };
-}
-
-function buildSkillAttachmentFromSkillFile(
-  row: SkillFileRow,
-): SkillAttachmentFile {
-  return {
-    id: row.id,
-    path: row.path,
+    mediaType: row.media_type || undefined,
     contentBlocks: normalizeStoredBlocks(row.content_blocks),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function frontmatterFromSnapshotRow(row: SkillSnapshotJoinRow): SkillFrontmatter {
+  if (!row.snapshot_id || !row.snapshot_name || row.snapshot_description === null) {
+    throw new SkillError(500, "Skill snapshot metadata is missing");
+  }
+
+  return {
+    name: row.snapshot_name,
+    description: row.snapshot_description,
+    argumentHint: row.snapshot_argument_hint || undefined,
+    disableModelInvocation: Boolean(row.snapshot_disable_model_invocation),
+    userInvocable:
+      row.snapshot_user_invocable === null
+        ? true
+        : Boolean(row.snapshot_user_invocable),
+    allowedTools: row.snapshot_allowed_tools || [],
+    model: row.snapshot_model || undefined,
+    effort: row.snapshot_effort || undefined,
+    context: row.snapshot_context || undefined,
+    agent: row.snapshot_agent || undefined,
+    hooks: parseJsonObject(row.snapshot_hooks),
+  };
+}
+
+function bodyBlocksFromSnapshotRow(row: SkillSnapshotJoinRow) {
+  return normalizeStoredBlocks(row.snapshot_body_blocks);
+}
+
+function descriptionBlockFromSnapshotRow(row: SkillSnapshotJoinRow) {
+  return defaultDescriptionBlock(row.snapshot_description || "");
+}
+
+function buildMirrorSourceSummary(row: SkillSnapshotJoinRow) {
+  if (
+    !row.mirror_source_id ||
+    !row.mirror_source_type ||
+    !row.mirror_locator_key
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: row.mirror_source_id,
+    sourceType: row.mirror_source_type,
+    locatorKey: row.mirror_locator_key,
+    locator: parseJsonObject(row.mirror_locator),
+    requestedRef: row.mirror_requested_ref || undefined,
+    resolvedRevision:
+      row.snapshot_resolved_revision ||
+      row.mirror_resolved_revision ||
+      undefined,
+    refreshMode: row.mirror_refresh_mode || "manual",
+    lastSyncStatus: row.mirror_last_sync_status || "pending",
+    sourceWarnings: row.mirror_source_warnings || [],
+    lastError: row.mirror_last_error || undefined,
+    lastSyncedAt: row.mirror_last_synced_at || undefined,
+    createdAt: row.mirror_created_at || row.snapshot_created_at || new Date(0).toISOString(),
+    updatedAt: row.mirror_updated_at || row.snapshot_created_at || new Date(0).toISOString(),
+  };
+}
+
+function buildSyntheticEntryAttachment(
+  row: SkillSnapshotJoinRow,
+  timestamp: string,
+): SkillAttachmentFile {
+  const synthetic = buildSyntheticEntryFile({
+    frontmatter: frontmatterFromSnapshotRow(row),
+    bodyBlocks: bodyBlocksFromSnapshotRow(row),
+  });
+
+  return {
+    id: `${row.snapshot_id}:entry`,
+    path: synthetic.path,
+    mediaType: synthetic.mediaType,
+    contentBlocks: synthetic.contentBlocks,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function buildSnapshotAttachmentFiles(
+  row: SkillSnapshotJoinRow,
+  timestamp: string,
+  files?: SkillAttachmentFile[],
+) {
+  return [buildSyntheticEntryAttachment(row, timestamp), ...(files || [])];
 }
 
 function resolvePublicUseScope(bindScope: RuntimeBindingScope): SkillUseScope {
@@ -658,7 +783,7 @@ function matchesScopeTarget(
 
 function mapMarketplaceVersion(
   row: SkillPackageRow,
-  attachmentFiles?: SkillAttachmentFile[],
+  files?: SkillAttachmentFile[],
 ): SkillMarketplaceVersion | undefined {
   if (!row.latest_version_id || !row.latest_version_value) {
     return undefined;
@@ -669,12 +794,27 @@ function mapMarketplaceVersion(
     skillId: row.item_id,
     version: row.latest_version_value,
     changelog: row.latest_version_changelog || "",
-    description: descriptionBlockFromStored(row.spec_description_blocks),
+    frontmatter: frontmatterFromSnapshotRow(row),
+    bodyBlocks: bodyBlocksFromSnapshotRow(row),
+    entryPath: row.snapshot_entry_path || SKILL_ENTRY_PATH,
+    contentHash: row.snapshot_content_hash || "",
+    sourceWarnings: row.snapshot_source_warnings || [],
+    resolvedRevision: row.snapshot_resolved_revision || undefined,
+    description: descriptionBlockFromSnapshotRow(row),
     defaultConversationTypeMask:
       row.spec_default_conversation_type_mask || DEFAULT_CONVERSATION_TYPE_MASK,
     createdByUserId: row.latest_version_created_by_user_id || undefined,
     createdAt: row.latest_version_created_at || row.item_updated_at,
-    attachmentFiles,
+    files: buildSnapshotAttachmentFiles(
+      row,
+      row.latest_version_created_at || row.item_updated_at,
+      files,
+    ),
+    attachmentFiles: buildSnapshotAttachmentFiles(
+      row,
+      row.latest_version_created_at || row.item_updated_at,
+      files,
+    ),
   };
 }
 
@@ -699,15 +839,17 @@ function resolveInstalledSkillEffectiveConversationTypeMask(row: {
 function mapMarketplaceEntry(
   row: SkillPackageRow,
   installation?: InstallationSummary,
-  attachmentFiles?: SkillAttachmentFile[],
+  files?: SkillAttachmentFile[],
 ): SkillMarketplaceEntry {
   const defaultConversationTypeMask =
     resolveMarketplaceSkillDefaultConversationTypeMask(row);
   return {
     id: row.item_id,
-    slug: row.spec_canonical_slug || row.item_slug,
-    name: row.spec_name || row.item_display_name,
-    description: descriptionBlockFromStored(row.spec_description_blocks),
+    slug: row.item_slug,
+    name: row.snapshot_name || row.item_display_name,
+    frontmatter: frontmatterFromSnapshotRow(row),
+    bodyBlocks: bodyBlocksFromSnapshotRow(row),
+    description: descriptionBlockFromSnapshotRow(row),
     iconUrl: row.item_icon_file_id
       ? getFileUrlById(row.item_icon_file_id)
       : undefined,
@@ -719,7 +861,8 @@ function mapMarketplaceEntry(
     updatedAt: row.item_updated_at,
     defaultConversationTypeMask,
     latestVersionId: row.latest_version_id || undefined,
-    latestVersion: mapMarketplaceVersion(row, attachmentFiles),
+    latestVersion: mapMarketplaceVersion(row, files),
+    mirrorSource: buildMirrorSourceSummary(row),
     workspaceInstallation: installation,
   };
 }
@@ -728,7 +871,7 @@ function buildInstalledSkillPayload(
   row: InstalledSkillRow,
   binding: SkillAccessRow | undefined,
   workspaceConversationTypeMask: number,
-  attachmentFiles?: SkillAttachmentFile[],
+  files?: SkillAttachmentFile[],
 ): InstalledSkill {
   const chosenBinding = binding;
   const accessTargetType = chosenBinding
@@ -747,7 +890,12 @@ function buildInstalledSkillPayload(
     workspaceId: row.workspace_id,
     slug: row.slug,
     name: row.name,
-    description: descriptionBlockFromStored(row.version_description_blocks),
+    frontmatter: frontmatterFromSnapshotRow(row),
+    bodyBlocks: bodyBlocksFromSnapshotRow(row),
+    entryPath: row.snapshot_entry_path || SKILL_ENTRY_PATH,
+    contentHash: row.snapshot_content_hash || "",
+    sourceWarnings: row.snapshot_source_warnings || [],
+    description: descriptionBlockFromSnapshotRow(row),
     iconUrl: row.icon_file_id ? getFileUrlById(row.icon_file_id) : undefined,
     tags: row.tags || [],
     accessTarget: {
@@ -776,24 +924,22 @@ function buildInstalledSkillPayload(
       Boolean(row.source_latest_version_id) &&
       row.source_catalog_version_id !== row.source_latest_version_id,
     latestSourceVersion: row.latest_source_version || undefined,
-    attachmentFiles,
+    files: buildSnapshotAttachmentFiles(row, row.updated_at, files),
+    attachmentFiles: buildSnapshotAttachmentFiles(row, row.updated_at, files),
+    mirrorSource: buildMirrorSourceSummary(row),
   };
 }
 
 function buildAvailableSkillPayload(
   row: VisibleSkillRow,
 ): AvailableSkillSummary {
-  const description = renderSkillBlocksToText([
-    descriptionBlockFromStored(row.description_blocks),
-  ]);
-
   return {
     instanceId: row.skill_id,
     packageId: row.skill_id,
     revisionId: row.current_skill_version_id,
     slug: row.slug,
     name: row.name,
-    description,
+    description: row.description,
     version: row.source_version_value || `local-${row.current_version}`,
     accessTarget: {
       type: resolvePublicUseScope(row.access_bind_scope),
@@ -847,7 +993,13 @@ function buildInstalledSkillAuthzMutations(params: {
 
 async function ensureMarketplacePublisher(
   run: QueryRunner,
-  ownerUserId?: string,
+  options?: {
+    ownerUserId?: string;
+    slug?: string;
+    displayName?: string;
+    description?: string;
+    metadata?: JsonObject;
+  },
 ) {
   const result = await run<{ id: string }>(
     `INSERT INTO publishers (
@@ -868,9 +1020,9 @@ async function ensureMarketplacePublisher(
        updated_at = NOW()
      RETURNING id`,
     [
-      DEFAULT_MARKETPLACE_PUBLISHER_SLUG,
-      DEFAULT_MARKETPLACE_PUBLISHER_NAME,
-      ownerUserId || null,
+      options?.slug || DEFAULT_MARKETPLACE_PUBLISHER_SLUG,
+      options?.displayName || DEFAULT_MARKETPLACE_PUBLISHER_NAME,
+      options?.ownerUserId || null,
     ],
   );
 
@@ -923,118 +1075,320 @@ async function allocateInstalledSkillSlug(
   }
 }
 
-async function upsertCatalogVersionFiles(
-  run: QueryRunner,
-  versionId: string,
-  attachments: Array<{ path: string; contentBlocks: CanonicalContentBlock[] }>,
-) {
-  await run(
-    `DELETE FROM catalog_version_files
-     WHERE catalog_version_id = $1`,
-    [versionId],
-  );
+function descriptionTextFromInput(description?: CanonicalContentBlockInput) {
+  return renderSkillBlocksToText(
+    normalizeCanonicalContentBlocks(
+      description ? [description] : [defaultDescriptionBlock()],
+    ),
+  ).trim();
+}
 
-  for (const attachment of attachments) {
-    const textContent = renderSkillBlocksToText(attachment.contentBlocks);
+function buildPreparedSnapshotFromInput(params: {
+  fallbackName: string;
+  explicitName?: string;
+  explicitDescription?: CanonicalContentBlockInput;
+  files?: SkillAttachmentInput[];
+  existingSnapshot?: {
+    frontmatter: SkillFrontmatter;
+    bodyBlocks: CanonicalContentBlock[];
+    files: SkillAttachmentFile[];
+  };
+}) {
+  const descriptionText = descriptionTextFromInput(params.explicitDescription);
+
+  if (params.files && params.files.length > 0) {
+    return prepareSkillSnapshotFromFiles({
+      files: params.files.map((file) => ({
+        path: file.path,
+        mediaType: file.mediaType,
+        contentBlocks: file.contentBlocks,
+      })),
+      fallbackName: params.fallbackName,
+      frontmatterOverrides: {
+        name: params.explicitName?.trim() || undefined,
+        description: descriptionText || undefined,
+      },
+    });
+  }
+
+  if (params.existingSnapshot) {
+    return buildPreparedSnapshotFromExistingData({
+      fallbackName: params.fallbackName,
+      existingFiles: buildSyntheticSkillFilesFromSnapshot({
+        frontmatter: params.existingSnapshot.frontmatter,
+        bodyBlocks: params.existingSnapshot.bodyBlocks,
+        files: params.existingSnapshot.files.map((file) => ({
+          path: file.path,
+          mediaType: file.mediaType,
+          contentBlocks: file.contentBlocks,
+        })),
+      }),
+      frontmatterOverrides: {
+        name: params.explicitName?.trim() || undefined,
+        description: descriptionText || undefined,
+      },
+    });
+  }
+
+  const frontmatterName = normalizeSkillCommandName(
+    params.explicitName?.trim() || params.fallbackName,
+  );
+  if (!frontmatterName) {
+    throw new SkillError(400, "Skill name is required");
+  }
+
+  return prepareSkillSnapshotFromFiles({
+    files: [
+      {
+        path: SKILL_ENTRY_PATH,
+        mediaType: "text/markdown",
+        contentBlocks: [
+          {
+            type: "text",
+            text: buildSkillMarkdown(
+              {
+                name: frontmatterName,
+                description:
+                  descriptionText || `Skill package for ${frontmatterName}.`,
+                disableModelInvocation: false,
+                userInvocable: true,
+                allowedTools: [],
+              },
+              [],
+            ),
+          },
+        ],
+      },
+    ],
+    fallbackName: frontmatterName,
+  });
+}
+
+async function allocateMarketplaceItemSlug(
+  run: QueryRunner,
+  publisherId: string,
+  preferredSlug: string,
+  excludeItemId?: string,
+) {
+  let candidate = preferredSlug || "skill";
+  let index = 2;
+  while (true) {
+    const existing = await run<{ id: string }>(
+      `SELECT id
+       FROM catalog_items
+       WHERE publisher_id = $1
+         AND item_kind = 'skill_package'
+         AND workspace_id IS NULL
+         AND slug = $2
+         AND ($3::uuid IS NULL OR id <> $3::uuid)
+       LIMIT 1`,
+      [publisherId, candidate, excludeItemId || null],
+    );
+    if (existing.rows.length === 0) {
+      return candidate;
+    }
+    candidate = `${preferredSlug}-${index}`;
+    index += 1;
+  }
+}
+
+async function upsertSkillMirrorSource(
+  run: QueryRunner,
+  input: ImportedMirrorSkillPackage["mirrorSource"],
+) {
+  const result = await run<{ id: string }>(
+    `INSERT INTO skill_mirror_sources (
+       source_type,
+       locator_key,
+       locator,
+       requested_ref,
+       resolved_revision,
+       refresh_mode,
+       last_sync_status,
+       source_warnings,
+       last_error,
+       metadata,
+       last_synced_at
+     )
+     VALUES (
+       $1,
+       $2,
+       $3::jsonb,
+       $4,
+       $5,
+       'manual',
+       'synced',
+       $6::text[],
+       NULL,
+       $7::jsonb,
+       NOW()
+     )
+     ON CONFLICT (source_type, locator_key) DO UPDATE SET
+       locator = EXCLUDED.locator,
+       requested_ref = EXCLUDED.requested_ref,
+       resolved_revision = EXCLUDED.resolved_revision,
+       refresh_mode = EXCLUDED.refresh_mode,
+       last_sync_status = 'synced',
+       source_warnings = EXCLUDED.source_warnings,
+       last_error = NULL,
+       metadata = EXCLUDED.metadata,
+       last_synced_at = NOW(),
+       updated_at = NOW()
+     RETURNING id`,
+    [
+      input.sourceType,
+      input.locatorKey,
+      JSON.stringify(input.locator),
+      input.requestedRef || null,
+      input.resolvedRevision || null,
+      input.sourceWarnings,
+      JSON.stringify(input.metadata || {}),
+    ],
+  );
+  return result.rows[0]!.id;
+}
+
+function hashSnapshotFileContent(blocks: CanonicalContentBlock[]) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(blocks))
+    .digest("hex");
+}
+
+function snapshotFileSize(blocks: CanonicalContentBlock[]) {
+  const fileRefSize = blocks.find((block) => block.type === "file_ref");
+  if (fileRefSize && fileRefSize.type === "file_ref") {
+    return fileRefSize.sizeBytes;
+  }
+  return Buffer.byteLength(renderSkillBlocksToText(blocks), "utf8");
+}
+
+async function insertSkillSnapshot(
+  run: QueryRunner,
+  snapshot: PreparedSkillSnapshot,
+  options?: {
+    mirrorSourceId?: string | null;
+    resolvedRevision?: string | null;
+  },
+) {
+  const inserted = await run<{ id: string }>(
+    `INSERT INTO skill_snapshots (
+       mirror_source_id,
+       entry_path,
+       name,
+       description,
+       argument_hint,
+       disable_model_invocation,
+       user_invocable,
+       allowed_tools,
+       model,
+       effort,
+       context,
+       agent,
+       hooks,
+       body_blocks,
+       content_hash,
+       source_warnings,
+       resolved_revision,
+       metadata
+     )
+     VALUES (
+       $1,
+       $2,
+       $3,
+       $4,
+       $5,
+       $6,
+       $7,
+       $8::text[],
+       $9,
+       $10,
+       $11,
+       $12,
+       $13::jsonb,
+       $14::jsonb,
+       $15,
+       $16::text[],
+       $17,
+       '{}'::jsonb
+     )
+     RETURNING id`,
+    [
+      options?.mirrorSourceId || null,
+      SKILL_ENTRY_PATH,
+      snapshot.frontmatter.name,
+      snapshot.frontmatter.description,
+      snapshot.frontmatter.argumentHint || null,
+      snapshot.frontmatter.disableModelInvocation,
+      snapshot.frontmatter.userInvocable,
+      snapshot.frontmatter.allowedTools,
+      snapshot.frontmatter.model || null,
+      snapshot.frontmatter.effort || null,
+      snapshot.frontmatter.context || null,
+      snapshot.frontmatter.agent || null,
+      JSON.stringify(snapshot.frontmatter.hooks || {}),
+      JSON.stringify(snapshot.bodyBlocks),
+      snapshot.contentHash,
+      snapshot.sourceWarnings,
+      options?.resolvedRevision || null,
+    ],
+  );
+  const snapshotId = inserted.rows[0]!.id;
+
+  for (const file of snapshot.files) {
     await run(
-      `INSERT INTO catalog_version_files (
-         catalog_version_id,
+      `INSERT INTO skill_snapshot_files (
+         skill_snapshot_id,
          path,
-         file_role,
          media_type,
-         text_content,
          content_blocks,
          sha256,
          size_bytes,
          metadata
        )
-       VALUES ($1, $2, 'reference', $3, $4, $5::jsonb, $6, $7, '{}'::jsonb)`,
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, '{}'::jsonb)`,
       [
-        versionId,
-        attachment.path,
-        inferMediaType(attachment.path),
-        textContent,
-        JSON.stringify(attachment.contentBlocks),
-        hashSkillBlocks(attachment.contentBlocks),
-        Buffer.byteLength(textContent, "utf8"),
+        snapshotId,
+        file.path,
+        file.mediaType || null,
+        JSON.stringify(file.contentBlocks),
+        hashSnapshotFileContent(file.contentBlocks),
+        snapshotFileSize(file.contentBlocks),
       ],
     );
   }
+
+  return snapshotId;
 }
 
-async function insertSkillFiles(
-  run: QueryRunner,
-  skillVersionId: string,
-  attachments: Array<{ path: string; contentBlocks: CanonicalContentBlock[] }>,
-) {
-  for (const attachment of attachments) {
-    const textContent = renderSkillBlocksToText(attachment.contentBlocks);
-    await run(
-      `INSERT INTO skill_files (
-         skill_version_id,
-         path,
-         media_type,
-         text_content,
-         content_blocks,
-         sha256,
-         size_bytes,
-         metadata
-       )
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, '{}'::jsonb)`,
-      [
-        skillVersionId,
-        attachment.path,
-        inferMediaType(attachment.path),
-        textContent,
-        JSON.stringify(attachment.contentBlocks),
-        hashSkillBlocks(attachment.contentBlocks),
-        Buffer.byteLength(textContent, "utf8"),
-      ],
-    );
-  }
-}
-
-async function loadCatalogVersionFilesMap(versionIds: string[]) {
-  if (versionIds.length === 0) return new Map<string, SkillAttachmentFile[]>();
-
-  const result = await runQuery<CatalogFileRow>(
-    `SELECT id, catalog_version_id, path, content_blocks, created_at
-     FROM catalog_version_files
-     WHERE catalog_version_id = ANY($1::uuid[])
-     ORDER BY path ASC`,
-    [versionIds],
-  );
-
-  const filesByVersionId = new Map<string, SkillAttachmentFile[]>();
-  for (const row of result.rows) {
-    const files = filesByVersionId.get(row.catalog_version_id) || [];
-    files.push(buildSkillAttachmentFromCatalogFile(row));
-    filesByVersionId.set(row.catalog_version_id, files);
-  }
-
-  return filesByVersionId;
-}
-
-async function loadSkillFilesMap(skillVersionIds: string[]) {
-  if (skillVersionIds.length === 0)
+async function loadSkillSnapshotFilesMap(snapshotIds: string[]) {
+  if (snapshotIds.length === 0) {
     return new Map<string, SkillAttachmentFile[]>();
-
-  const result = await runQuery<SkillFileRow>(
-    `SELECT id, skill_version_id, path, content_blocks, created_at, updated_at
-     FROM skill_files
-     WHERE skill_version_id = ANY($1::uuid[])
-     ORDER BY path ASC`,
-    [skillVersionIds],
-  );
-
-  const filesByVersionId = new Map<string, SkillAttachmentFile[]>();
-  for (const row of result.rows) {
-    const files = filesByVersionId.get(row.skill_version_id) || [];
-    files.push(buildSkillAttachmentFromSkillFile(row));
-    filesByVersionId.set(row.skill_version_id, files);
   }
 
-  return filesByVersionId;
+  const result = await runQuery<SkillSnapshotFileRow>(
+    `SELECT
+       id,
+       skill_snapshot_id,
+       path,
+       media_type,
+       content_blocks,
+       created_at,
+       updated_at
+     FROM skill_snapshot_files
+     WHERE skill_snapshot_id = ANY($1::uuid[])
+     ORDER BY path ASC`,
+    [snapshotIds],
+  );
+
+  const filesBySnapshotId = new Map<string, SkillAttachmentFile[]>();
+  for (const row of result.rows) {
+    const files = filesBySnapshotId.get(row.skill_snapshot_id) || [];
+    files.push(buildSkillAttachmentFromCatalogFile(row));
+    filesBySnapshotId.set(row.skill_snapshot_id, files);
+  }
+
+  return filesBySnapshotId;
 }
 
 async function buildMarketplaceInstallationMap(workspaceId: string) {
@@ -1092,6 +1446,20 @@ async function getMarketplaceRowBySlug(
       AND item.slug = $2
      LIMIT 1`,
     [publisherId, slug],
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getMarketplaceRowByMirrorSourceId(
+  mirrorSourceId: string,
+  run: QueryRunner = runQuery,
+) {
+  const result = await run<SkillPackageRow>(
+    `${MARKETPLACE_SKILL_SELECT}
+      AND item.mirror_source_id = $1
+     LIMIT 1`,
+    [mirrorSourceId],
   );
 
   return result.rows[0] || null;
@@ -1518,7 +1886,7 @@ async function getInstalledSkillResponse(
 
   const [bindingMap, fileMap] = await Promise.all([
     chooseBindingMap([installedSkillId]),
-    loadSkillFilesMap([row.current_skill_version_id]),
+    loadSkillSnapshotFilesMap([row.current_snapshot_id]),
   ]);
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
@@ -1530,7 +1898,7 @@ async function getInstalledSkillResponse(
     row,
     bindingMap.get(installedSkillId),
     workspaceConversationTypeMask,
-    fileMap.get(row.current_skill_version_id) || [],
+    fileMap.get(row.current_snapshot_id) || [],
   );
 }
 
@@ -1567,11 +1935,11 @@ export async function listMarketplaceSkills(filters?: {
     values,
   );
 
-  const latestVersionIds = result.rows
-    .map((row) => row.latest_version_id)
+  const latestSnapshotIds = result.rows
+    .map((row) => row.snapshot_id)
     .filter((value): value is string => Boolean(value));
   const [filesMap, installationMap] = await Promise.all([
-    loadCatalogVersionFilesMap(latestVersionIds),
+    loadSkillSnapshotFilesMap(latestSnapshotIds),
     filters?.workspaceId
       ? buildMarketplaceInstallationMap(filters.workspaceId)
       : Promise.resolve(null),
@@ -1581,8 +1949,8 @@ export async function listMarketplaceSkills(filters?: {
     mapMarketplaceEntry(
       row,
       installationMap?.get(row.item_id),
-      row.latest_version_id
-        ? filesMap.get(row.latest_version_id) || []
+      row.snapshot_id
+        ? filesMap.get(row.snapshot_id) || []
         : undefined,
     ),
   );
@@ -1598,9 +1966,7 @@ export async function getMarketplaceSkill(
   }
 
   const [filesMap, installationMap] = await Promise.all([
-    loadCatalogVersionFilesMap(
-      row.latest_version_id ? [row.latest_version_id] : [],
-    ),
+    loadSkillSnapshotFilesMap(row.snapshot_id ? [row.snapshot_id] : []),
     workspaceId
       ? buildMarketplaceInstallationMap(workspaceId)
       : Promise.resolve(null),
@@ -1609,10 +1975,315 @@ export async function getMarketplaceSkill(
   return mapMarketplaceEntry(
     row,
     installationMap?.get(row.item_id),
-    row.latest_version_id
-      ? filesMap.get(row.latest_version_id) || []
+    row.snapshot_id
+      ? filesMap.get(row.snapshot_id) || []
       : undefined,
   );
+}
+
+function publisherOptionsForMirrorSource(sourceType: ImportedMirrorSkillPackage["mirrorSource"]["sourceType"]) {
+  if (sourceType === "github") {
+    return {
+      slug: GITHUB_MARKETPLACE_PUBLISHER_SLUG,
+      displayName: GITHUB_MARKETPLACE_PUBLISHER_NAME,
+    };
+  }
+
+  return {
+    slug: CLAWHUB_MARKETPLACE_PUBLISHER_SLUG,
+    displayName: CLAWHUB_MARKETPLACE_PUBLISHER_NAME,
+  };
+}
+
+async function upsertImportedMarketplaceSkill(
+  imported: ImportedMirrorSkillPackage,
+  authorUserId?: string,
+) {
+  const result = await transaction(async (client) => {
+    const publisherId = await ensureMarketplacePublisher(
+      clientRunner(client),
+      {
+        ownerUserId: authorUserId,
+        ...publisherOptionsForMirrorSource(imported.mirrorSource.sourceType),
+      },
+    );
+    const mirrorSourceId = await upsertSkillMirrorSource(
+      clientRunner(client),
+      imported.mirrorSource,
+    );
+    const existing = await getMarketplaceRowByMirrorSourceId(
+      mirrorSourceId,
+      clientRunner(client),
+    );
+
+    if (
+      existing &&
+      existing.latest_version_value === imported.version &&
+      existing.snapshot_content_hash === imported.contentHash
+    ) {
+      await executeSqlOn(
+        client,
+        `UPDATE catalog_items
+         SET display_name = $2,
+             summary = $3,
+             long_description = $3,
+             tags = $4,
+             metadata = $5::jsonb,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [
+          existing.item_id,
+          imported.frontmatter.name,
+          imported.frontmatter.description,
+          imported.tags,
+          JSON.stringify(imported.itemMetadata),
+        ],
+      );
+      return existing.item_id;
+    }
+
+    const itemSlug = existing
+      ? existing.item_slug
+      : await allocateMarketplaceItemSlug(
+          clientRunner(client),
+          publisherId,
+          sanitizeSlug(imported.catalogSlug) || "skill",
+        );
+
+    let itemId = existing?.item_id || null;
+    if (existing) {
+      await executeSqlOn(
+        client,
+        `UPDATE catalog_items
+         SET slug = $2,
+             display_name = $3,
+             summary = $4,
+             long_description = $4,
+             mirror_source_id = $5,
+             source_kind = 'official',
+             visibility = 'public',
+             tags = $6,
+             is_active = TRUE,
+             metadata = $7::jsonb,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [
+          existing.item_id,
+          itemSlug,
+          imported.frontmatter.name,
+          imported.frontmatter.description,
+          mirrorSourceId,
+          imported.tags,
+          JSON.stringify(imported.itemMetadata),
+        ],
+      );
+      itemId = existing.item_id;
+    } else {
+      const inserted = await executeSqlOn<{ id: string }>(
+        client,
+        `INSERT INTO catalog_items (
+           publisher_id,
+           workspace_id,
+           item_kind,
+           slug,
+           display_name,
+           summary,
+           long_description,
+           mirror_source_id,
+           source_kind,
+           visibility,
+           tags,
+           is_active,
+           metadata
+         )
+         VALUES (
+           $1,
+           NULL,
+           'skill_package',
+           $2,
+           $3,
+           $4,
+           $4,
+           $5,
+           'official',
+           'public',
+           $6,
+           TRUE,
+           $7::jsonb
+         )
+         RETURNING id`,
+        [
+          publisherId,
+          itemSlug,
+          imported.frontmatter.name,
+          imported.frontmatter.description,
+          mirrorSourceId,
+          imported.tags,
+          JSON.stringify(imported.itemMetadata),
+        ],
+      );
+      itemId = inserted.rows[0]!.id;
+    }
+
+    const snapshotId = await insertSkillSnapshot(clientRunner(client), imported, {
+      mirrorSourceId,
+      resolvedRevision: imported.mirrorSource.resolvedRevision || null,
+    });
+
+    const existingVersion = await executeSqlOn<{ id: string }>(
+      client,
+      `SELECT id
+       FROM catalog_versions
+       WHERE catalog_item_id = $1
+         AND version = $2
+       LIMIT 1`,
+      [itemId, imported.version],
+    );
+
+    const versionId =
+      existingVersion.rows[0]?.id ||
+      (
+        await executeSqlOn<{ id: string }>(
+          client,
+          `INSERT INTO catalog_versions (
+             catalog_item_id,
+             version,
+             status,
+             changelog,
+             metadata,
+             created_by_user_id
+           )
+           VALUES ($1, $2, 'active', $3, $4::jsonb, $5)
+           RETURNING id`,
+          [
+            itemId,
+            imported.version,
+            imported.changelog,
+            JSON.stringify(imported.itemMetadata),
+            authorUserId || null,
+          ],
+        )
+      ).rows[0]!.id;
+
+    if (existingVersion.rows[0]) {
+      await executeSqlOn(
+        client,
+        `UPDATE catalog_versions
+         SET status = 'active',
+             changelog = $2,
+             metadata = $3::jsonb
+         WHERE id = $1`,
+        [
+          versionId,
+          imported.changelog,
+          JSON.stringify(imported.itemMetadata),
+        ],
+      );
+    }
+
+    await executeSqlOn(
+      client,
+      `INSERT INTO skill_package_version_specs (
+         catalog_version_id,
+         skill_snapshot_id,
+         default_conversation_type_mask,
+         created_at
+       )
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (catalog_version_id) DO UPDATE SET
+         skill_snapshot_id = EXCLUDED.skill_snapshot_id,
+         default_conversation_type_mask = EXCLUDED.default_conversation_type_mask`,
+      [versionId, snapshotId, DEFAULT_CONVERSATION_TYPE_MASK],
+    );
+
+    await executeSqlOn(
+      client,
+      `UPDATE catalog_items
+       SET latest_version_id = $2,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [itemId, versionId],
+    );
+
+    return itemId;
+  });
+
+  return getMarketplaceSkill(result);
+}
+
+export async function importMarketplaceMirrorSkill(input:
+  | {
+      sourceType: "github";
+      repoUrl: string;
+      path: string;
+      ref?: string;
+      authorUserId?: string;
+    }
+  | {
+      sourceType: "clawhub";
+      ownerId?: string;
+      slug: string;
+      version?: string;
+      authorUserId?: string;
+    },
+) {
+  const imported =
+    input.sourceType === "github"
+      ? await importGitHubSkillPackage({
+          repoUrl: input.repoUrl,
+          path: input.path,
+          ref: input.ref,
+        })
+      : await importClawhubSkillPackage({
+          ownerId: input.ownerId,
+          slug: input.slug,
+          version: input.version,
+        });
+
+  return upsertImportedMarketplaceSkill(imported, input.authorUserId);
+}
+
+export async function importSeededClawhubMarketplaceSkill(input: {
+  skillDir: string;
+  authorUserId?: string;
+}) {
+  const imported = await importClawhubSeedSkillPackage({
+    skillDir: input.skillDir,
+  });
+  return upsertImportedMarketplaceSkill(imported, input.authorUserId);
+}
+
+export async function refreshMarketplaceSkill(input: {
+  skillId: string;
+  authorUserId?: string;
+}) {
+  const existing = await getMarketplaceRowById(input.skillId);
+  if (!existing || !existing.mirror_source_id || !existing.mirror_source_type) {
+    throw new SkillError(400, "Marketplace skill has no mirror source");
+  }
+
+  if (existing.mirror_source_type === "github") {
+    const locator = parseJsonObject(existing.mirror_locator);
+    return importMarketplaceMirrorSkill({
+      sourceType: "github",
+      repoUrl: String(locator.repoUrl || ""),
+      path: String(locator.path || "."),
+      ref: existing.mirror_requested_ref || undefined,
+      authorUserId: input.authorUserId,
+    });
+  }
+
+  const locator = parseJsonObject(existing.mirror_locator);
+  return importMarketplaceMirrorSkill({
+    sourceType: "clawhub",
+    ownerId:
+      typeof locator.ownerId === "string" && locator.ownerId.trim().length > 0
+        ? locator.ownerId
+        : undefined,
+    slug: String(locator.slug || ""),
+    version: existing.mirror_requested_ref || undefined,
+    authorUserId: input.authorUserId,
+  });
 }
 
 export async function publishMarketplaceSkill(input: {
@@ -1645,10 +2316,13 @@ export async function publishMarketplaceSkill(input: {
     throw new SkillError(400, "Skill version is required");
   }
 
-  const description = normalizeSkillDescription(input.description);
-  const descriptionBlocks = [description];
-  const summaryText = renderSkillBlocksToText(descriptionBlocks);
   const attachmentFiles = normalizeSkillAttachments(input.attachmentFiles);
+  const preparedSnapshot = buildPreparedSnapshotFromInput({
+    fallbackName: canonicalSlug || name,
+    explicitName: name,
+    explicitDescription: input.description,
+    files: attachmentFiles,
+  });
   const defaultConversationTypeMask = resolveEffectiveConversationTypeMask({
     defaultMask: input.defaultConversationTypeMask,
     overrideMask: null,
@@ -1657,7 +2331,9 @@ export async function publishMarketplaceSkill(input: {
   const result = await transaction(async (client) => {
     const publisherId = await ensureMarketplacePublisher(
       clientRunner(client),
-      input.authorUserId,
+      {
+        ownerUserId: input.authorUserId,
+      },
     );
     const existing = input.skillId
       ? await getMarketplaceRowById(input.skillId, clientRunner(client))
@@ -1675,6 +2351,7 @@ export async function publishMarketplaceSkill(input: {
     const itemMetadata: JsonObject = {
       ...parseJsonObject(existing?.item_metadata),
       canonicalSlug,
+      frontmatterName: preparedSnapshot.frontmatter.name,
       ...(input.metadata || {}),
     };
     const nextIconFileId =
@@ -1703,8 +2380,8 @@ export async function publishMarketplaceSkill(input: {
         [
           existing.item_id,
           canonicalSlug,
-          name,
-          summaryText,
+          preparedSnapshot.frontmatter.name,
+          preparedSnapshot.frontmatter.description,
           input.tags || [],
           input.isActive ?? true,
           nextIconFileId,
@@ -1722,6 +2399,7 @@ export async function publishMarketplaceSkill(input: {
            display_name,
            summary,
            long_description,
+           mirror_source_id,
            source_kind,
            visibility,
            tags,
@@ -1737,6 +2415,7 @@ export async function publishMarketplaceSkill(input: {
            $3,
            $4,
            $4,
+           NULL,
            'official',
            'public',
            $5,
@@ -1748,8 +2427,8 @@ export async function publishMarketplaceSkill(input: {
         [
           publisherId,
           canonicalSlug,
-          name,
-          summaryText,
+          preparedSnapshot.frontmatter.name,
+          preparedSnapshot.frontmatter.description,
           input.tags || [],
           input.isActive ?? true,
           nextIconFileId,
@@ -1758,6 +2437,11 @@ export async function publishMarketplaceSkill(input: {
       );
       itemId = inserted.rows[0]!.id;
     }
+
+    const snapshotId = await insertSkillSnapshot(
+      clientRunner(client),
+      preparedSnapshot,
+    );
 
     const existingVersion = await executeSqlOn<{ id: string }>(client, 
       `SELECT id
@@ -1814,36 +2498,19 @@ export async function publishMarketplaceSkill(input: {
     await executeSqlOn(client, 
       `INSERT INTO skill_package_version_specs (
          catalog_version_id,
-         canonical_slug,
-         name,
-         description_blocks,
-         summary_text,
+         skill_snapshot_id,
          default_conversation_type_mask,
-         metadata
+         created_at
        )
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb)
+       VALUES ($1, $2, $3, NOW())
        ON CONFLICT (catalog_version_id) DO UPDATE SET
-         canonical_slug = EXCLUDED.canonical_slug,
-         name = EXCLUDED.name,
-         description_blocks = EXCLUDED.description_blocks,
-         summary_text = EXCLUDED.summary_text,
-         default_conversation_type_mask = EXCLUDED.default_conversation_type_mask,
-         metadata = EXCLUDED.metadata`,
+         skill_snapshot_id = EXCLUDED.skill_snapshot_id,
+         default_conversation_type_mask = EXCLUDED.default_conversation_type_mask`,
       [
         versionId,
-        canonicalSlug,
-        name,
-        JSON.stringify(descriptionBlocks),
-        summaryText,
+        snapshotId,
         defaultConversationTypeMask,
-        JSON.stringify(input.metadata || {}),
       ],
-    );
-
-    await upsertCatalogVersionFiles(
-      clientRunner(client),
-      versionId,
-      attachmentFiles,
     );
 
     await executeSqlOn(client, 
@@ -1875,10 +2542,13 @@ export async function createWorkspaceSkill(input: {
     throw new SkillError(400, "Skill name is required");
   }
 
-  const description = normalizeSkillDescription(input.description);
-  const descriptionBlocks = [description];
   const attachmentFiles = normalizeSkillAttachments(input.attachmentFiles);
-  assertRequiredSkillFile(attachmentFiles);
+  const preparedSnapshot = buildPreparedSnapshotFromInput({
+    fallbackName: name,
+    explicitName: name,
+    explicitDescription: input.description,
+    files: attachmentFiles,
+  });
   const iconFileId = input.iconFileId
     ? await normalizeWorkspaceSkillIconFileId(
         input.iconFileId,
@@ -1892,60 +2562,58 @@ export async function createWorkspaceSkill(input: {
   });
 
   const result = await transaction(async (client) => {
-    const skillId = crypto.randomUUID();
-
-    await executeSqlOn(client, 
+    const snapshotId = await insertSkillSnapshot(
+      clientRunner(client),
+      preparedSnapshot,
+    );
+    const installedSlug = await allocateInstalledSkillSlug(
+      clientRunner(client),
+      input.workspaceId,
+      sanitizeSlug(preparedSnapshot.frontmatter.name) || "skill",
+    );
+    const insertedSkill = await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO installed_skills (
-         id,
          workspace_id,
          slug,
          name,
          icon_file_id,
          tags,
          current_version,
+         current_snapshot_id,
          is_active,
          created_by_workspace_member_id
        )
-       VALUES ($1, $2, $3, $4, $5, $6, 1, TRUE, $7)`,
+       VALUES ($1, $2, $3, $4, $5, $6, 1, $7, TRUE, $8)
+       RETURNING id`,
       [
-        skillId,
         input.workspaceId,
-        skillId,
-        name,
+        installedSlug,
+        preparedSnapshot.frontmatter.name,
         iconFileId,
         input.tags || [],
+        snapshotId,
         input.installedByWorkspaceMemberId || null,
       ],
     );
+    const skillId = insertedSkill.rows[0]!.id;
 
-    const insertedVersion = await executeSqlOn<{ id: string }>(client, 
+    await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO skill_versions (
          skill_id,
          version,
-         name,
-         description_blocks,
-         summary_text,
+         skill_snapshot_id,
          metadata,
          created_by_workspace_member_id
        )
-       VALUES ($1, 1, $2, $3::jsonb, $4, $5::jsonb, $6)
+       VALUES ($1, 1, $2, $3::jsonb, $4)
        RETURNING id`,
       [
         skillId,
-        name,
-        JSON.stringify(descriptionBlocks),
-        renderSkillBlocksToText(descriptionBlocks),
-        JSON.stringify({}),
-        input.installedByWorkspaceMemberId || null,
-      ],
-    );
-    const skillVersionId = insertedVersion.rows[0]!.id;
-
-    await insertSkillFiles(
-      clientRunner(client),
-      skillVersionId,
-      attachmentFiles,
-    );
+          snapshotId,
+          JSON.stringify({}),
+          input.installedByWorkspaceMemberId || null,
+        ],
+      );
 
     const installedSkillAuthzEntryIds = await queueAuthzRelationships(
       client,
@@ -2015,7 +2683,7 @@ export async function listInstalledSkills(
       actorId: filters?.actorId,
       conversationId: filters?.conversationId,
     }),
-    loadSkillFilesMap(rows.map((row) => row.current_skill_version_id)),
+    loadSkillSnapshotFilesMap(rows.map((row) => row.current_snapshot_id)),
   ]);
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
@@ -2028,7 +2696,7 @@ export async function listInstalledSkills(
       row,
       bindingMap.get(row.skill_id),
       workspaceConversationTypeMask,
-      fileMap.get(row.current_skill_version_id) || [],
+      fileMap.get(row.current_snapshot_id) || [],
     ),
   );
 }
@@ -2373,15 +3041,9 @@ export async function installMarketplaceSkill(input: {
   });
 
   const marketplaceSkill = await getMarketplaceRowById(input.marketSkillId);
-  if (!marketplaceSkill || !marketplaceSkill.latest_version_id) {
+  if (!marketplaceSkill || !marketplaceSkill.latest_version_id || !marketplaceSkill.snapshot_id) {
     throw new SkillError(404, "Marketplace skill not found");
   }
-
-  const sourceFilesMap = await loadCatalogVersionFilesMap([
-    marketplaceSkill.latest_version_id,
-  ]);
-  const sourceFiles =
-    sourceFilesMap.get(marketplaceSkill.latest_version_id) || [];
 
   const result = await transaction(async (client) => {
     const existingSkillId = await findInstalledSkillBySource(
@@ -2410,9 +3072,9 @@ export async function installMarketplaceSkill(input: {
     const installedSlug = await allocateInstalledSkillSlug(
       clientRunner(client),
       input.workspaceId,
-      sanitizeSlug(
-        marketplaceSkill.spec_canonical_slug || marketplaceSkill.item_slug,
-      ),
+      sanitizeSlug(marketplaceSkill.snapshot_name || marketplaceSkill.item_slug) ||
+        sanitizeSlug(marketplaceSkill.item_slug) ||
+        "skill",
     );
 
     const insertedSkill = await executeSqlOn<{ id: string }>(client, 
@@ -2423,59 +3085,43 @@ export async function installMarketplaceSkill(input: {
          icon_file_id,
          tags,
          current_version,
+         current_snapshot_id,
          is_active,
          conversation_type_mask_override,
          created_by_workspace_member_id
        )
-       VALUES ($1, $2, $3, $4, $5, 1, TRUE, $6, $7)
+       VALUES ($1, $2, $3, $4, $5, 1, $6, TRUE, $7, $8)
        RETURNING id`,
       [
         input.workspaceId,
         installedSlug,
-        marketplaceSkill.spec_name || marketplaceSkill.item_display_name,
+        marketplaceSkill.snapshot_name || marketplaceSkill.item_display_name,
         marketplaceSkill.item_icon_file_id,
         marketplaceSkill.item_tags || [],
+        marketplaceSkill.snapshot_id,
         marketplaceSkill.spec_default_conversation_type_mask ?? null,
         input.installedByWorkspaceMemberId || null,
       ],
     );
     const skillId = insertedSkill.rows[0]!.id;
 
-    const descriptionBlocks = normalizeStoredBlocks(
-      marketplaceSkill.spec_description_blocks,
-    );
-    const insertedVersion = await executeSqlOn<{ id: string }>(client, 
+    await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO skill_versions (
          skill_id,
          version,
-         name,
-         description_blocks,
-         summary_text,
+         skill_snapshot_id,
          metadata,
          created_by_workspace_member_id
        )
-       VALUES ($1, 1, $2, $3::jsonb, $4, $5::jsonb, $6)
+       VALUES ($1, 1, $2, $3::jsonb, $4)
        RETURNING id`,
       [
         skillId,
-        marketplaceSkill.spec_name || marketplaceSkill.item_display_name,
-        JSON.stringify(descriptionBlocks),
-        marketplaceSkill.spec_summary_text ||
-          renderSkillBlocksToText(descriptionBlocks),
-        JSON.stringify({}),
-        input.installedByWorkspaceMemberId || null,
-      ],
-    );
-    const skillVersionId = insertedVersion.rows[0]!.id;
-
-    await insertSkillFiles(
-      clientRunner(client),
-      skillVersionId,
-      sourceFiles.map((file) => ({
-        path: file.path,
-        contentBlocks: file.contentBlocks,
-      })),
-    );
+          marketplaceSkill.snapshot_id,
+          JSON.stringify({}),
+          input.installedByWorkspaceMemberId || null,
+        ],
+      );
 
     await executeSqlOn(client, 
       `INSERT INTO skill_source_refs (
@@ -2553,79 +3199,60 @@ export async function updateInstalledSkill(input: {
     throw new SkillError(404, "Installed skill not found");
   }
 
-  const currentFilesMap = await loadSkillFilesMap([
-    existing.current_skill_version_id,
+  const currentFilesMap = await loadSkillSnapshotFilesMap([
+    existing.current_snapshot_id,
   ]);
   const currentFiles =
-    currentFilesMap.get(existing.current_skill_version_id) || [];
-  const currentDescription = descriptionBlockFromStored(
-    existing.version_description_blocks,
-  );
+    currentFilesMap.get(existing.current_snapshot_id) || [];
   const touchesContent =
     input.name !== undefined ||
     input.description !== undefined ||
-    input.iconFileId !== undefined ||
-    input.tags !== undefined ||
     input.attachmentFiles !== undefined;
 
   await transaction(async (client) => {
     let nextVersion = existing.current_version;
     let nextName = existing.name;
-    let nextTags = existing.tags || [];
 
     if (touchesContent) {
       nextVersion = existing.current_version + 1;
       nextName = input.name?.trim() || existing.name;
-      nextTags = input.tags || existing.tags || [];
 
-      const descriptionBlock = input.description
-        ? normalizeSkillDescription(input.description)
-        : currentDescription;
-      const descriptionBlocks = [descriptionBlock];
-      const nextIconFileId =
-        input.iconFileId === undefined
-          ? existing.icon_file_id
-          : input.iconFileId
-            ? await normalizeWorkspaceSkillIconFileId(
-                input.iconFileId,
-                input.workspaceId,
-              )
-            : null;
-      const attachmentFiles = input.attachmentFiles
-        ? normalizeSkillAttachments(input.attachmentFiles)
-        : currentFiles.map((file) => ({
-            path: file.path,
-            contentBlocks: normalizeStoredBlocks(file.contentBlocks),
-          }));
-      assertRequiredSkillFile(attachmentFiles);
+      const preparedSnapshot = buildPreparedSnapshotFromInput({
+        fallbackName: existing.slug || existing.name,
+        explicitName: nextName,
+        explicitDescription: input.description,
+        files: input.attachmentFiles
+          ? normalizeSkillAttachments(input.attachmentFiles)
+          : undefined,
+        existingSnapshot: {
+          frontmatter: frontmatterFromSnapshotRow(existing),
+          bodyBlocks: bodyBlocksFromSnapshotRow(existing),
+          files: currentFiles,
+        },
+      });
+      const snapshotId = await insertSkillSnapshot(
+        clientRunner(client),
+        preparedSnapshot,
+      );
+      nextName = preparedSnapshot.frontmatter.name;
 
-      const versionInsert = await executeSqlOn<{ id: string }>(client, 
+      await executeSqlOn<{ id: string }>(client, 
         `INSERT INTO skill_versions (
            skill_id,
            version,
-           name,
-           description_blocks,
-           summary_text,
+           skill_snapshot_id,
            metadata,
            created_by_workspace_member_id
          )
-         VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7)
+         VALUES ($1, $2, $3, $4::jsonb, $5)
          RETURNING id`,
         [
           existing.skill_id,
           nextVersion,
-          nextName,
-          JSON.stringify(descriptionBlocks),
-          renderSkillBlocksToText(descriptionBlocks),
+          snapshotId,
           JSON.stringify(parseJsonObject(existing.version_metadata)),
           existing.created_by_workspace_member_id || null,
         ],
-      );
-
-      await insertSkillFiles(
-        clientRunner(client),
-        versionInsert.rows[0]!.id,
-        attachmentFiles,
       );
 
       await executeSqlOn(client, 
@@ -2634,15 +3261,24 @@ export async function updateInstalledSkill(input: {
              icon_file_id = $3,
              tags = $4,
              current_version = $5,
-             is_active = COALESCE($6, is_active),
+             current_snapshot_id = $6,
+             is_active = COALESCE($7, is_active),
              updated_at = NOW()
          WHERE id = $1`,
         [
           existing.skill_id,
           nextName,
-          nextIconFileId,
-          nextTags,
+          input.iconFileId === undefined
+            ? existing.icon_file_id
+            : input.iconFileId
+              ? await normalizeWorkspaceSkillIconFileId(
+                  input.iconFileId,
+                  input.workspaceId,
+                )
+              : null,
+          input.tags || existing.tags || [],
           nextVersion,
+          snapshotId,
           input.isEnabled === undefined ? null : input.isEnabled,
         ],
       );
@@ -2660,23 +3296,38 @@ export async function updateInstalledSkill(input: {
       return;
     }
 
-    if (input.isEnabled !== undefined) {
-      await executeSqlOn(client, 
-        `UPDATE installed_skills
-         SET is_active = $2,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [existing.skill_id, input.isEnabled],
-      );
-    }
-
-    if (input.conversationTypeMaskOverride !== undefined) {
+    if (
+      input.isEnabled !== undefined ||
+      input.iconFileId !== undefined ||
+      input.tags !== undefined ||
+      input.conversationTypeMaskOverride !== undefined
+    ) {
+      const nextIconFileId =
+        input.iconFileId === undefined
+          ? existing.icon_file_id
+          : input.iconFileId
+            ? await normalizeWorkspaceSkillIconFileId(
+                input.iconFileId,
+                input.workspaceId,
+              )
+            : null;
       await executeSqlOn(client,
         `UPDATE installed_skills
-         SET conversation_type_mask_override = $2,
+         SET icon_file_id = $2,
+             tags = $3,
+             is_active = $4,
+             conversation_type_mask_override = $5,
              updated_at = NOW()
          WHERE id = $1`,
-        [existing.skill_id, input.conversationTypeMaskOverride],
+        [
+          existing.skill_id,
+          nextIconFileId,
+          input.tags === undefined ? existing.tags || [] : input.tags,
+          input.isEnabled === undefined ? existing.is_active : input.isEnabled,
+          input.conversationTypeMaskOverride === undefined
+            ? existing.conversation_type_mask_override
+            : input.conversationTypeMaskOverride,
+        ],
       );
     }
   });
@@ -2702,7 +3353,7 @@ export async function upgradeInstalledSkill(input: {
   const marketplaceSkill = await getMarketplaceRowById(
     existing.source_catalog_item_id,
   );
-  if (!marketplaceSkill || !marketplaceSkill.latest_version_id) {
+  if (!marketplaceSkill || !marketplaceSkill.latest_version_id || !marketplaceSkill.snapshot_id) {
     throw new SkillError(400, "Marketplace source has no latest version");
   }
 
@@ -2713,47 +3364,24 @@ export async function upgradeInstalledSkill(input: {
     return getInstalledSkillResponse(input.workspaceId, input.installedSkillId);
   }
 
-  const sourceFilesMap = await loadCatalogVersionFilesMap([
-    marketplaceSkill.latest_version_id,
-  ]);
-  const sourceFiles =
-    sourceFilesMap.get(marketplaceSkill.latest_version_id) || [];
-
   await transaction(async (client) => {
-    const descriptionBlocks = normalizeStoredBlocks(
-      marketplaceSkill.spec_description_blocks,
-    );
-    const versionInsert = await executeSqlOn<{ id: string }>(client, 
+    await executeSqlOn<{ id: string }>(client, 
       `INSERT INTO skill_versions (
          skill_id,
          version,
-         name,
-         description_blocks,
-         summary_text,
+         skill_snapshot_id,
          metadata,
          created_by_workspace_member_id
        )
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7)
+       VALUES ($1, $2, $3, $4::jsonb, $5)
        RETURNING id`,
       [
         existing.skill_id,
         existing.current_version + 1,
-        marketplaceSkill.spec_name || marketplaceSkill.item_display_name,
-        JSON.stringify(descriptionBlocks),
-        marketplaceSkill.spec_summary_text ||
-          renderSkillBlocksToText(descriptionBlocks),
+        marketplaceSkill.snapshot_id,
         JSON.stringify(parseJsonObject(existing.version_metadata)),
         existing.created_by_workspace_member_id || null,
       ],
-    );
-
-    await insertSkillFiles(
-      clientRunner(client),
-      versionInsert.rows[0]!.id,
-      sourceFiles.map((file) => ({
-        path: file.path,
-        contentBlocks: file.contentBlocks,
-      })),
     );
 
     await executeSqlOn(client, 
@@ -2762,14 +3390,16 @@ export async function upgradeInstalledSkill(input: {
            icon_file_id = $3,
            tags = $4,
            current_version = $5,
-           updated_at = NOW()
+           current_snapshot_id = $6,
+            updated_at = NOW()
        WHERE id = $1`,
       [
         existing.skill_id,
-        marketplaceSkill.spec_name || marketplaceSkill.item_display_name,
+        marketplaceSkill.snapshot_name || marketplaceSkill.item_display_name,
         marketplaceSkill.item_icon_file_id,
         marketplaceSkill.item_tags || [],
         existing.current_version + 1,
+        marketplaceSkill.snapshot_id,
       ],
     );
 
@@ -3037,7 +3667,7 @@ export async function listVisibleSkills(input: {
 	                 skill.name,
 	                 skill.current_version,
 	                 version_row.id AS current_skill_version_id,
-	                 version_row.description_blocks,
+	                 snapshot.description,
 	                 imported_version.version AS source_version_value,
 	                 skill.conversation_type_mask_override,
 	                 skill.id AS access_binding_id,
@@ -3050,6 +3680,8 @@ export async function listVisibleSkills(input: {
                JOIN skill_versions version_row
                  ON version_row.skill_id = skill.id
                 AND version_row.version = skill.current_version
+               JOIN skill_snapshots snapshot
+                 ON snapshot.id = skill.current_snapshot_id
 	               LEFT JOIN skill_source_refs source_ref
 	                 ON source_ref.skill_id = skill.id
 	               LEFT JOIN catalog_versions imported_version
@@ -3186,7 +3818,7 @@ export async function readVisibleSkill(input: {
         if (error.message.startsWith("Invalid skill file path: ")) {
           throw new SkillError(400, error.message);
         }
-        throw new SkillError(404, `Skill attachment "${input.assetPath || REQUIRED_SKILL_FILE_PATH}" not found`);
+        throw new SkillError(404, `Skill attachment "${input.assetPath || SKILL_ENTRY_PATH}" not found`);
       }
       throw error;
     }
@@ -3198,27 +3830,43 @@ export async function readVisibleSkill(input: {
   }
 
   if (!input.assetPath) {
-    const description = descriptionBlockFromStored(
-      installedSkill.version_description_blocks,
-    );
+    const synthetic = buildSyntheticEntryFile({
+      frontmatter: frontmatterFromSnapshotRow(installedSkill),
+      bodyBlocks: bodyBlocksFromSnapshotRow(installedSkill),
+    });
     return {
       skill: match,
       asset: {
-        path: SKILL_DESCRIPTION_ASSET_PATH,
-        textContent: renderSkillBlocksToText([description]),
-        contentBlocks: [description],
+        path: synthetic.path,
+        textContent: renderSkillBlocksToText(synthetic.contentBlocks),
+        contentBlocks: synthetic.contentBlocks,
       },
     };
   }
 
   const targetPath = normalizePath(input.assetPath);
-  const result = await runQuery<SkillFileRow>(
-    `SELECT id, skill_version_id, path, content_blocks, created_at, updated_at
-     FROM skill_files
-     WHERE skill_version_id = $1
+  if (targetPath === SKILL_ENTRY_PATH) {
+    const synthetic = buildSyntheticEntryFile({
+      frontmatter: frontmatterFromSnapshotRow(installedSkill),
+      bodyBlocks: bodyBlocksFromSnapshotRow(installedSkill),
+    });
+    return {
+      skill: match,
+      asset: {
+        path: synthetic.path,
+        textContent: renderSkillBlocksToText(synthetic.contentBlocks),
+        contentBlocks: synthetic.contentBlocks,
+      },
+    };
+  }
+
+  const result = await runQuery<SkillSnapshotFileRow>(
+    `SELECT id, skill_snapshot_id, path, media_type, content_blocks, created_at, updated_at
+     FROM skill_snapshot_files
+     WHERE skill_snapshot_id = $1
        AND path = $2
      LIMIT 1`,
-    [installedSkill.current_skill_version_id, targetPath],
+    [installedSkill.current_snapshot_id, targetPath],
   );
 
   const asset = result.rows[0];
