@@ -48,7 +48,7 @@ type PluginGrantScope = CapabilityAccessTargetType;
 
 const allowedGrantScopes: PluginGrantScope[] = [
   'workspace',
-  'conversation_workspace',
+  'conversation',
   'actor',
   'actor_in_conversation',
 ];
@@ -65,9 +65,9 @@ function buildGrantScopeOptions(resourceLabel: string): Array<{
       description: `Anyone in this workspace can use this ${resourceLabel}.`,
     },
     {
-      value: 'conversation_workspace',
-      label: 'Conversation Workspace',
-      description: `Only this workspace side of one conversation can use this ${resourceLabel}.`,
+      value: 'conversation',
+      label: 'Conversation',
+      description: `Only one conversation can use this ${resourceLabel}, across every workspace participating in it.`,
     },
     {
       value: 'actor',
@@ -160,8 +160,8 @@ function getScopeLabel(scope: PluginGrantScope) {
   switch (scope) {
     case 'workspace':
       return 'Workspace';
-    case 'conversation_workspace':
-      return 'Conversation Workspace';
+    case 'conversation':
+      return 'Conversation';
     case 'actor':
       return 'Actor';
     case 'actor_in_conversation':
@@ -180,7 +180,7 @@ function formatGrantTarget(
   switch (target?.type) {
     case 'workspace':
       return 'Entire workspace';
-    case 'conversation_workspace':
+    case 'conversation':
       return conversationsById.get(target.conversationId) || 'Selected conversation';
     case 'actor':
       return actorsById.get(target.actorId) || 'Selected actor';
@@ -381,7 +381,7 @@ export default function PluginAccessStep({
     if (grantScope === 'workspace') {
       return 'The entire workspace';
     }
-    if (grantScope === 'conversation_workspace') {
+    if (grantScope === 'conversation') {
       return conversationId ? 'The conversation you selected on the left' : 'Choose a conversation on the left';
     }
     if (grantScope === 'actor') {
@@ -417,10 +417,10 @@ export default function PluginAccessStep({
           secondaryActorActive: true,
           footer: `Best when this ${resourceLabelLower} should feel like shared workspace infrastructure.`,
         };
-      case 'conversation_workspace':
+      case 'conversation':
         return {
           title: PREVIEW_CONVERSATION,
-          subtitle: 'Only this workspace side of the conversation can use it',
+          subtitle: 'Only this conversation can use it',
           identities: [
             { label: PREVIEW_PRIMARY_USER, kind: 'user', active: true },
             { label: PREVIEW_SECONDARY_USER, kind: 'user', active: true },
@@ -435,7 +435,7 @@ export default function PluginAccessStep({
           secondaryActorMessage:
             `I can use it too, but only inside this same conversation with this ${resourceLabelLower}.`,
           secondaryActorActive: true,
-          footer: `Useful when one shared room needs this ${resourceLabelLower} but the rest of the workspace should not.`,
+          footer: `Useful when one shared room needs this ${resourceLabelLower} and every participant in that conversation should be able to use it.`,
         };
       case 'actor':
         return {
@@ -504,7 +504,7 @@ export default function PluginAccessStep({
   ]);
 
   const canCreateGrant = useMemo(() => {
-    if (grantScope === 'conversation_workspace') return Boolean(conversationId);
+    if (grantScope === 'conversation') return Boolean(conversationId);
     if (grantScope === 'actor') return Boolean(actorId);
     if (grantScope === 'actor_in_conversation') return Boolean(actorId && conversationId);
     return true;
@@ -568,7 +568,7 @@ export default function PluginAccessStep({
           type: grantScope,
           actorId: grantScope === 'actor' || grantScope === 'actor_in_conversation' ? actorId : undefined,
           conversationId:
-            grantScope === 'conversation_workspace' || grantScope === 'actor_in_conversation'
+            grantScope === 'conversation' || grantScope === 'actor_in_conversation'
               ? conversationId
               : undefined,
         },
@@ -591,7 +591,7 @@ export default function PluginAccessStep({
   const renderTargetSelector = () => {
     if (grantScope === 'workspace') return null;
 
-    if (grantScope === 'conversation_workspace') {
+    if (grantScope === 'conversation') {
       return (
         <Field>
           <FieldLabel>Conversation</FieldLabel>
@@ -754,13 +754,10 @@ export default function PluginAccessStep({
                         variant="ghost"
                         size="sm"
                         className="text-muted-foreground hover:text-destructive"
-                        disabled={grant.metadata?.isPrimary === true}
                         onClick={() => revokeGrant(grant.id)}
                       >
                         <Trash2 />
-                        <span className="sr-only">
-                          {grant.metadata?.isPrimary === true ? 'Primary access cannot be removed here' : 'Remove access'}
-                        </span>
+                        <span className="sr-only">Remove access</span>
                       </Button>
                     </TableCell>
                   </TableRow>

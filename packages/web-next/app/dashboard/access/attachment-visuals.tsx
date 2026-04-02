@@ -151,10 +151,10 @@ const accessTypeOptionDefs: ScopeOptionDef<AccessTargetType>[] = [
     ring: 'ring-sky-500/20',
   },
   {
-    value: 'conversation_workspace',
-    label: 'Conversation Workspace Access',
-    shortLabel: 'Conversation Workspace',
-    hint: 'Only this workspace side of one conversation can use this installation',
+    value: 'conversation',
+    label: 'Conversation Access',
+    shortLabel: 'Conversation',
+    hint: 'Only one conversation can use this installation, across every workspace participating in it',
     icon: MessageSquareText,
     tone: 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-500/20 dark:bg-orange-500/10 dark:text-orange-200',
     ring: 'ring-orange-500/20',
@@ -176,15 +176,6 @@ const accessTypeOptionDefs: ScopeOptionDef<AccessTargetType>[] = [
     icon: Layers3,
     tone: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200',
     ring: 'ring-amber-500/20',
-  },
-  {
-    value: 'workspace_member',
-    label: 'Workspace Member Access',
-    shortLabel: 'Workspace Member',
-    hint: 'Only one workspace user can use this installation personally',
-    icon: UserRound,
-    tone: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 dark:border-fuchsia-500/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-200',
-    ring: 'ring-fuchsia-500/20',
   },
 ];
 
@@ -871,13 +862,11 @@ export function AccessGrantScopeStep({
     switch (value) {
       case 'workspace':
         return true;
-      case 'conversation_workspace':
+      case 'conversation':
       case 'actor_in_conversation':
         return index === 0;
       case 'actor':
         return true;
-      case 'workspace_member':
-        return conversation.includesCurrentUser && conversation.singleRealUser;
       default:
         return false;
     }
@@ -887,14 +876,12 @@ export function AccessGrantScopeStep({
     switch (value) {
       case 'workspace':
         return true;
-      case 'conversation_workspace':
+      case 'conversation':
         return index === 0;
       case 'actor':
         return actorName === selectedActorName;
       case 'actor_in_conversation':
         return index === 0 && actorName === selectedActorName;
-      case 'workspace_member':
-        return conversation.includesCurrentUser && conversation.singleRealUser;
       default:
         return false;
     }
@@ -936,7 +923,7 @@ export function AccessGrantScopeStep({
         </div>
       )}
 
-      {(value === 'conversation_workspace' || value === 'actor_in_conversation') && (
+      {(value === 'conversation' || value === 'actor_in_conversation') && (
         <div className="space-y-2">
           <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Authorized conversation</Label>
           <div className="flex flex-wrap gap-2">
@@ -952,27 +939,6 @@ export function AccessGrantScopeStep({
               </Button>
             )) : (
               <div className="text-xs text-muted-foreground">The preview uses fake conversations until your workspace has real ones.</div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {value === 'workspace_member' && (
-        <div className="space-y-2">
-          <Label className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Authorized user</Label>
-          <div className="flex flex-wrap gap-2">
-            {users.length > 0 ? users.map((member) => (
-              <Button
-                key={member.id}
-                type="button"
-                variant={selectedUserId === member.id ? 'default' : 'outline'}
-                className="rounded-full"
-                onClick={() => onUserChange?.(member.id)}
-              >
-                {member.name}
-              </Button>
-            )) : (
-              <div className="text-xs text-muted-foreground">No workspace users are available yet.</div>
             )}
           </div>
         </div>

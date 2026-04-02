@@ -17,7 +17,7 @@ import {
   flushAuthzOutboxEntries,
   queueAuthzRelationships,
   touchConversationActorContext,
-  touchConversationWorkspaceContext,
+  touchWorkspaceInConversationContext,
   touchRelation,
 } from "../../infrastructure/authz/index.js";
 import {
@@ -1312,12 +1312,12 @@ export async function createThread(params: {
           : []),
         ...humanParticipants.map((participant) =>
           [
-            ...touchConversationWorkspaceContext(
+            ...touchWorkspaceInConversationContext(
               participant.workspaceId,
               conversationId,
             ),
             touchRelation(
-              "conversation_workspace",
+              "workspace_in_conversation",
               `${participant.workspaceId}|${conversationId}`,
               "participant",
               "workspace_member",
@@ -1341,12 +1341,12 @@ export async function createThread(params: {
           if (!actor) return [];
 
           return [
-            ...touchConversationWorkspaceContext(
+            ...touchWorkspaceInConversationContext(
               actor.workspace_id,
               conversationId,
             ),
             touchRelation(
-              "conversation_workspace",
+              "workspace_in_conversation",
               `${actor.workspace_id}|${conversationId}`,
               "participant",
               "actor",
@@ -1964,12 +1964,12 @@ export async function addMembersToConversation(params: {
 
       const actorInfo = actorMap.get(actorId)!;
       relationships.push(
-        ...touchConversationWorkspaceContext(
+        ...touchWorkspaceInConversationContext(
           actorInfo.workspace_id,
           params.conversationId,
         ),
         touchRelation(
-          "conversation_workspace",
+          "workspace_in_conversation",
           `${actorInfo.workspace_id}|${params.conversationId}`,
           "participant",
           "actor",
@@ -2019,12 +2019,12 @@ export async function addMembersToConversation(params: {
         workspaceMemberId,
       });
       relationships.push(
-        ...touchConversationWorkspaceContext(
+        ...touchWorkspaceInConversationContext(
           userInfo.workspace_id,
           params.conversationId,
         ),
         touchRelation(
-          "conversation_workspace",
+          "workspace_in_conversation",
           `${userInfo.workspace_id}|${params.conversationId}`,
           "participant",
           "workspace_member",
@@ -2155,7 +2155,7 @@ export async function removeActorFromConversation(
             ...(actorWorkspace?.workspace_id
               ? [
                   deleteRelation(
-                    "conversation_workspace",
+                    "workspace_in_conversation",
                     `${actorWorkspace.workspace_id}|${conversationId}`,
                     "participant",
                     "actor",

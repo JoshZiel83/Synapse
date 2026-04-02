@@ -16,7 +16,7 @@ CREATE TYPE conversations_kind AS ENUM ('group', 'private', 'virtual');
 CREATE TYPE conversations_boundary AS ENUM ('internal', 'external');
 CREATE TYPE files_category AS ENUM ('general', 'chat_attachment', 'plugin_output', 'plugin_asset');
 CREATE TYPE access_bindings_status AS ENUM ('active', 'revoked');
-CREATE TYPE access_bindings_target_type AS ENUM ('workspace', 'actor', 'workspace_member', 'conversation_workspace', 'actor_in_conversation');
+CREATE TYPE access_bindings_target_type AS ENUM ('workspace', 'conversation', 'actor', 'actor_in_conversation');
 CREATE TYPE authz_outbox_operation AS ENUM ('touch', 'delete');
 CREATE TYPE authz_outbox_status AS ENUM ('pending', 'processing', 'applied', 'failed');
 CREATE TYPE realtime_event_outbox_status AS ENUM ('pending', 'processing', 'dispatched', 'failed');
@@ -353,7 +353,6 @@ CREATE TABLE access_bindings (
   subject_actor_id UUID,
   subject_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
   subject_conversation_actor_context_id UUID,
-  is_primary BOOLEAN NOT NULL DEFAULT FALSE,
   granted_permissions TEXT[] NOT NULL DEFAULT '{}',
   status access_bindings_status NOT NULL DEFAULT 'active',
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
@@ -363,9 +362,8 @@ CREATE TABLE access_bindings (
   revoked_at TIMESTAMPTZ,
   CONSTRAINT chk_access_bindings_target CHECK (
     (target_type = 'workspace' AND subject_workspace_id IS NOT NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL) OR
+    (target_type = 'conversation' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NOT NULL AND subject_conversation_actor_context_id IS NULL) OR
     (target_type = 'actor' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NOT NULL AND subject_conversation_id IS NULL) OR
-    (target_type = 'workspace_member' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NOT NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL) OR
-    (target_type = 'conversation_workspace' AND subject_workspace_id IS NOT NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NOT NULL AND subject_conversation_actor_context_id IS NULL) OR
     (target_type = 'actor_in_conversation' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL AND subject_conversation_actor_context_id IS NOT NULL)
   )
 );
@@ -405,10 +403,6 @@ CREATE INDEX idx_access_bindings_target_lookup
     subject_workspace_id,
     created_at DESC
   );
-CREATE INDEX idx_access_bindings_primary_resource
-  ON access_bindings(resource_type, resource_id, created_at DESC)
-  WHERE status = 'active'
-    AND is_primary = TRUE;
 
 CREATE TABLE authz_outbox (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

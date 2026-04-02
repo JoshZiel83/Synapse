@@ -7,7 +7,7 @@ import type { ColumnType } from "kysely";
 
 export type AccessBindingsStatus = "active" | "revoked";
 
-export type AccessBindingsTargetType = "actor" | "actor_in_conversation" | "conversation_workspace" | "workspace" | "workspace_member";
+export type AccessBindingsTargetType = "actor" | "actor_in_conversation" | "conversation" | "workspace";
 
 export type ActorAccessPolicy = "approval_required" | "workspace_open";
 
@@ -340,7 +340,6 @@ export interface AccessBindings {
   created_by_workspace_member_id: string | null;
   granted_permissions: Generated<string[]>;
   id: Generated<string>;
-  is_primary: Generated<boolean>;
   metadata: Generated<Json | null>;
   reason: string | null;
   relation: string;

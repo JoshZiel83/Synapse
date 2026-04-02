@@ -52,7 +52,6 @@ import {
 } from "./feishu/features.js";
 import {
   buildResourceAccessAuthzMutations,
-  isPrimaryAccessBinding,
   mapAccessBindingToGrant,
   readAccessBindingTarget,
   resolveAccessGrantTarget,
@@ -164,15 +163,6 @@ type InstallationRow = {
   source_catalog_item_id: string | null;
   source_catalog_version_id: string | null;
   source_sync_mode: "notify" | "manual_merge" | "follow_upstream" | "detached" | null;
-  primary_access_id: string | null;
-  primary_access_target_type: RuntimeBindingScope | null;
-  primary_conversation_id: string | null;
-  primary_actor_id: string | null;
-  primary_workspace_member_id: string | null;
-  primary_access_status: "active" | "revoked" | null;
-  primary_access_metadata: unknown;
-  primary_access_created_by_workspace_member_id: string | null;
-  primary_access_created_at: string | null;
 };
 
 type InstallationAccessRow = AccessBindingRow & {
@@ -489,17 +479,13 @@ function authorizationFromRuntimePermissions(
     defaultAccessTargetForAttachment({
       type: defaultScope,
     }).type;
-  const defaultAccessTargetType =
-    rawDefaultAccessTargetType === "conversation"
-      ? "conversation_workspace"
-      : rawDefaultAccessTargetType;
 
   return {
     requiredPermissions: rows
       .filter((row) => row.isRequired !== false)
       .map((row) => String(row.permissionKey || ""))
       .filter(Boolean),
-    defaultAccessTargetType,
+    defaultAccessTargetType: rawDefaultAccessTargetType,
     reason:
       typeof metadataAuthorization.reason === "string"
         ? metadataAuthorization.reason
@@ -948,40 +934,10 @@ async function loadInstallationRows(
         installation.updated_at AS installation_updated_at,
         source_ref.source_catalog_item_id,
         source_ref.source_catalog_version_id,
-        source_ref.sync_mode AS source_sync_mode,
-        primary_access.id AS primary_access_id,
-        primary_access.target_type AS primary_access_target_type,
-        primary_access.resolved_subject_conversation_id AS primary_conversation_id,
-        primary_access.resolved_subject_actor_id AS primary_actor_id,
-        primary_access.subject_workspace_member_id AS primary_workspace_member_id,
-        primary_access.status AS primary_access_status,
-        primary_access.metadata AS primary_access_metadata,
-        primary_access.created_by_workspace_member_id AS primary_access_created_by_workspace_member_id,
-        primary_access.created_at AS primary_access_created_at
+        source_ref.sync_mode AS source_sync_mode
       FROM plugin_installations installation
       LEFT JOIN plugin_source_refs source_ref
         ON source_ref.installation_id = installation.id
-      LEFT JOIN LATERAL (
-        SELECT
-          binding.id,
-          binding.target_type,
-          COALESCE(binding.subject_conversation_id, cac.conversation_id) AS resolved_subject_conversation_id,
-          COALESCE(binding.subject_actor_id, cac.actor_id) AS resolved_subject_actor_id,
-          binding.subject_workspace_member_id,
-          binding.status,
-          binding.metadata,
-          binding.created_by_workspace_member_id,
-          binding.created_at
-        FROM access_bindings binding
-        LEFT JOIN conversation_actor_contexts cac
-          ON cac.id = binding.subject_conversation_actor_context_id
-        WHERE binding.resource_type = 'plugin_installation'
-          AND binding.resource_id = installation.id::text
-          AND binding.status = 'active'
-          AND binding.is_primary = TRUE
-        ORDER BY binding.created_at ASC
-        LIMIT 1
-      ) primary_access ON TRUE
       WHERE ${sql.join(conditions, sql` AND `)}
       ORDER BY installation.created_at DESC`.compile(db),
   );
@@ -1036,7 +992,6 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
         "subject_conversation_id",
       ),
       "binding.subject_conversation_actor_context_id",
-      "binding.is_primary",
       "binding.granted_permissions",
       "binding.status",
       "binding.created_by_workspace_member_id",
@@ -1074,14 +1029,12 @@ function buildPluginGrantPlan(input: {
     };
   }
 
-  const suggestedAccessTargetType =
-    input.authorization.defaultAccessTargetType ||
-    defaultAccessTargetForAttachment(input.attachmentTarget).type;
-
   return {
     requiresGrant: true,
     requiredPermissions,
-    suggestedAccessTargetType,
+    suggestedAccessTargetType: defaultAccessTargetForAttachment(
+      input.attachmentTarget,
+    ).type,
     reason: input.authorization.reason,
   };
 }
@@ -1094,7 +1047,7 @@ function defaultAccessTargetForAttachment(
       return { type: "workspace" };
     case "conversation":
       return {
-        type: "conversation_workspace",
+        type: "conversation",
         conversationId: attachmentTarget.conversationId,
       };
     case "actor":
@@ -1120,9 +1073,9 @@ function capabilityAccessTargetFromStored(input: {
         type: "actor",
         actorId: input.actorId || undefined,
       };
-    case "conversation_workspace":
+    case "conversation":
       return {
-        type: "conversation_workspace",
+        type: "conversation",
         conversationId: input.conversationId || undefined,
       };
     case "actor_in_conversation":
@@ -1131,11 +1084,6 @@ function capabilityAccessTargetFromStored(input: {
         actorId: input.actorId || undefined,
         conversationId: input.conversationId || undefined,
       };
-    case "workspace_member":
-      throw new McpPluginError(
-        500,
-        "workspace_member is not a valid plugin access target",
-      );
   }
 }
 
@@ -1167,11 +1115,7 @@ function buildInstallationPayload(
     conversationId: row.attachment_conversation_id || undefined,
     workspaceMemberId: row.attachment_workspace_member_id || undefined,
   };
-  const accessTarget = capabilityAccessTargetFromStored({
-    targetType: row.primary_access_target_type,
-    actorId: row.primary_actor_id,
-    conversationId: row.primary_conversation_id,
-  });
+  const accessTarget = defaultAccessTargetForAttachment(attachmentTarget);
 
   return {
     id: row.installation_id,
@@ -1182,10 +1126,7 @@ function buildInstallationPayload(
     lifecycle_scope: publicReuseScope(row.reuse_scope),
     default_reuse_scope: plugin.default_reuse_scope,
     supported_reuse_scopes: plugin.supported_reuse_scopes || [],
-    is_enabled:
-      row.installation_status === "active" &&
-      row.primary_access_status !== "revoked" &&
-      Boolean(row.primary_access_id),
+    is_enabled: row.installation_status === "active",
     status: row.installation_status,
     config_data: sanitizedConfig,
     config_state: configState,
@@ -1197,7 +1138,6 @@ function buildInstallationPayload(
     source_catalog_item_id: row.source_catalog_item_id,
     source_catalog_version_id: row.source_catalog_version_id,
     source_sync_mode: row.source_sync_mode,
-    primary_access_id: row.primary_access_id,
     plugin_slug: plugin.slug,
     plugin_display_name: plugin.display_name,
     plugin_description: plugin.description,
@@ -1917,7 +1857,7 @@ export async function installPluginUnified(data: {
         .where("id", "=", installationId),
     );
 
-    const primaryAccessTarget = await resolveAccessGrantTarget({
+    const initialAccessTarget = await resolveAccessGrantTarget({
       workspaceId: data.workspaceId,
       target: defaultAccessTargetForAttachment(data.attachmentTarget),
     });
@@ -1929,16 +1869,15 @@ export async function installPluginUnified(data: {
           workspace_id: data.workspaceId,
           resource_type: "plugin_installation",
           resource_id: installationId,
-          target_type: primaryAccessTarget.targetType,
-          relation: primaryAccessTarget.relation,
-          subject_workspace_id: primaryAccessTarget.subjectWorkspaceId,
+          target_type: initialAccessTarget.targetType,
+          relation: initialAccessTarget.relation,
+          subject_workspace_id: initialAccessTarget.subjectWorkspaceId,
           subject_workspace_member_id:
-            primaryAccessTarget.subjectWorkspaceMemberId,
-          subject_actor_id: primaryAccessTarget.subjectActorId,
-          subject_conversation_id: primaryAccessTarget.subjectConversationId,
+            initialAccessTarget.subjectWorkspaceMemberId,
+          subject_actor_id: initialAccessTarget.subjectActorId,
+          subject_conversation_id: initialAccessTarget.subjectConversationId,
           subject_conversation_actor_context_id:
-            primaryAccessTarget.subjectConversationActorContextId,
-          is_primary: true,
+            initialAccessTarget.subjectConversationActorContextId,
           granted_permissions: approvedRuntimePermissions,
           metadata: {} as TableInsert<"access_bindings">["metadata"],
           status: "active",
@@ -1948,7 +1887,7 @@ export async function installPluginUnified(data: {
         })
         .returning("id"),
     );
-    const primaryAccessId = insertedAccess!.id;
+    const initialAccessId = insertedAccess!.id;
 
     await executeCompiledQuery(
       client,
@@ -1987,7 +1926,7 @@ export async function installPluginUnified(data: {
             resourceType: "plugin_installation",
             resourceId: installationId,
             workspaceId: data.workspaceId,
-            target: primaryAccessTarget,
+            target: initialAccessTarget,
             operation: "touch",
           }),
       ],
@@ -1995,7 +1934,7 @@ export async function installPluginUnified(data: {
         source: "plugin.install",
         workspaceId: data.workspaceId,
         installationId,
-        accessBindingId: primaryAccessId,
+        accessBindingId: initialAccessId,
       },
     );
 
@@ -2133,11 +2072,6 @@ export async function updateInstallation(
 
   const workspaceId = currentRow.workspace_id;
   const { row, plugin } = await getInstallationPayload(workspaceId, installId);
-  const accessRows = await listAccessRows(installId, true);
-  const primaryAccess = accessRows.find((entry) => isPrimaryAccessBinding(entry));
-  if (!primaryAccess) {
-    throw new McpPluginError(500, "Installation is missing its primary access grant");
-  }
 
   const nextAttachmentType =
     data.attachmentTarget?.type || publicAttachmentScope(row.attachment_target_type);
@@ -2161,17 +2095,6 @@ export async function updateInstallation(
         conversationId: row.attachment_conversation_id || undefined,
         workspaceMemberId: row.attachment_workspace_member_id || undefined,
       },
-  });
-  const nextPrimaryAccessTarget = await resolveAccessGrantTarget({
-    workspaceId,
-    target: defaultAccessTargetForAttachment(
-      data.attachmentTarget || {
-        type: nextAttachmentType,
-        actorId: target.actorId || undefined,
-        conversationId: target.conversationId || undefined,
-        workspaceMemberId: target.workspaceMemberId || undefined,
-      },
-    ),
   });
 
   const mergedConfig = data.configData
@@ -2309,54 +2232,6 @@ export async function updateInstallation(
           target.workspaceMemberId,
         ],
       );
-
-      await run(
-        `UPDATE access_bindings
-         SET target_type = $2,
-             relation = $3,
-             subject_workspace_id = $4,
-             subject_workspace_member_id = $5,
-             subject_actor_id = $6,
-             subject_conversation_id = $7,
-             subject_conversation_actor_context_id = $8,
-             is_primary = TRUE,
-             metadata = $9::jsonb
-         WHERE id = $1`,
-        [
-          primaryAccess.id,
-          nextPrimaryAccessTarget.targetType,
-          nextPrimaryAccessTarget.relation,
-          nextPrimaryAccessTarget.subjectWorkspaceId,
-          nextPrimaryAccessTarget.subjectWorkspaceMemberId,
-          nextPrimaryAccessTarget.subjectActorId,
-          nextPrimaryAccessTarget.subjectConversationId,
-          nextPrimaryAccessTarget.subjectConversationActorContextId,
-          JSON.stringify(asObject(primaryAccess.metadata)),
-        ],
-      );
-
-      return queueAuthzRelationships(
-        client,
-        [
-          ...buildResourceAccessAuthzMutations({
-            resourceType: "plugin_installation",
-            resourceId: installId,
-            target: readAccessBindingTarget(primaryAccess),
-            operation: "delete",
-          }),
-          ...buildResourceAccessAuthzMutations({
-            resourceType: "plugin_installation",
-            resourceId: installId,
-            target: nextPrimaryAccessTarget,
-            operation: "touch",
-          }),
-        ],
-        {
-          source: "plugin.installation.update",
-          workspaceId,
-          installationId: installId,
-        },
-      );
     }
 
     return [] as string[];
@@ -2400,9 +2275,7 @@ export async function getPluginInstallationAccessState(
     grants,
     summary: {
       requiredPermissions: plugin.authorization?.requiredPermissions || [],
-      suggestedAccessTargetType:
-        plugin.authorization?.defaultAccessTargetType ||
-        installation.access_target.type,
+      suggestedAccessTargetType: installation.access_target.type,
       reason: plugin.authorization?.reason,
       effectivePermissions:
         grants.length > 0 ? plugin.authorization?.requiredPermissions || [] : [],
@@ -2422,28 +2295,15 @@ export async function grantPluginInstallationAccess(input: {
   reason?: string;
   metadata?: JsonObject;
 }) {
-  const { plugin } = await getInstallationPayload(
+  const { plugin, installation } = await getInstallationPayload(
     input.workspaceId,
     input.installationId,
   );
   const accessRows = await listAccessRows(input.installationId);
-  const primaryAccess = accessRows.find((entry) => isPrimaryAccessBinding(entry));
-  if (!primaryAccess) {
-    throw new McpPluginError(500, "Installation is missing its primary access grant");
-  }
 
   const resolvedAccessTarget =
     input.accessTarget ||
-    (plugin.authorization?.defaultAccessTargetType
-      ? {
-          type: plugin.authorization.defaultAccessTargetType,
-        }
-      : undefined) ||
-    capabilityAccessTargetFromStored({
-      targetType: primaryAccess.access_target_type,
-      actorId: primaryAccess.actor_id,
-      conversationId: primaryAccess.conversation_id,
-    });
+    installation.access_target;
   const accessTarget = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
     target: resolvedAccessTarget,
@@ -2483,7 +2343,6 @@ export async function grantPluginInstallationAccess(input: {
           subject_conversation_id: accessTarget.subjectConversationId,
           subject_conversation_actor_context_id:
             accessTarget.subjectConversationActorContextId,
-          is_primary: false,
           granted_permissions: input.permissions || [],
           metadata:
             (input.metadata || {}) as TableInsert<"access_bindings">["metadata"],
@@ -2543,12 +2402,6 @@ export async function revokePluginInstallationAccess(input: {
   const accessRow = accessRows.find((entry) => entry.id === input.grantId);
   if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
     throw new McpPluginError(404, "Access grant not found");
-  }
-  if (isPrimaryAccessBinding(accessRow)) {
-    throw new McpPluginError(
-      400,
-      "Primary installation access cannot be removed. Update Advanced settings or uninstall the plugin instead.",
-    );
   }
   if (accessRow.status === "revoked") {
     return mapAccessRowToGrant(accessRow, [], undefined);

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "crypto";
 import type { ToolDefinition } from "@synapse/shared";
+import type { CapabilityInvocationContext } from "@synapse/shared/types";
 import { redis } from "../../infrastructure/redis/index.js";
 import { db } from "../../infrastructure/database/kysely.js";
 import { McpHttpClient } from "./mcp-client.js";
@@ -93,17 +94,7 @@ type RemoteInstanceCommand =
       configHash: string;
     };
 
-export interface McpExecutionContext {
-  sessionId?: string;
-  conversationId?: string;
-  actorId?: string;
-  userId?: string;
-  workspaceMemberId?: string;
-  turnId?: string;
-  toolCallId?: string;
-  providerCallId?: string;
-  namespacedToolName?: string;
-}
+export type McpExecutionContext = CapabilityInvocationContext;
 
 export interface McpInstance {
   pluginId: string;

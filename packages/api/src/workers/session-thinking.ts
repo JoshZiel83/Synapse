@@ -23,9 +23,7 @@ import {
 import { buildProviderContextWindow } from '../modules/context/service.js';
 import { executeActorActions } from '../modules/orchestrator/service.js';
 import { resolveModelPlan } from '../modules/model-groups/resolver.js';
-import { resolveMcpToolsForActor } from '../modules/mcp-plugins/tool-resolver.js';
 import { shutdownSessionInstances } from '../modules/mcp-plugins/instance-manager.js';
-import type { ResolvedMcpTools } from '../modules/mcp-plugins/tool-resolver.js';
 import { getActor } from '../modules/organization/service.js';
 import {
   getSession,
@@ -53,7 +51,7 @@ import {
 } from '../modules/conversation/service.js';
 import { createTurn, updateTurnStatus } from '../modules/execution/service.js';
 import { buildMemoryRecallQuery, recallMemories } from '../modules/memory/service.js';
-import { listVisibleSkills } from '../modules/skills/service.js';
+import { resolveActorCapabilitySurface } from '../modules/capabilities/surface.js';
 import { sessionThinkingQueue } from './queues.js';
 import { registerWorker } from './registry.js';
 import { sql } from 'kysely';
@@ -144,7 +142,8 @@ export function startSessionThinkingWorker() {
       let currentPhase: ThinkingPhase | 'error' = 'thinking';
       let threadConversationId: string | undefined;
       let pendingWakeups: Awaited<ReturnType<typeof getPendingWakeups>> = [];
-      let mcpTools: ResolvedMcpTools = {
+      let availableSkills: Awaited<ReturnType<typeof resolveActorCapabilitySurface>>["availableSkills"] = [];
+      let mcpTools: Awaited<ReturnType<typeof resolveActorCapabilitySurface>>["mcpTools"] = {
         tools: [],
         executor: async () => ({ content: [] }),
         mcpVersion: 0,
@@ -253,8 +252,6 @@ export function startSessionThinkingWorker() {
         let conversationMembers: any[] | undefined;
         let promptConversationMembers: any[] | undefined;
         let memberEntries: ConversationMemberEntry[] = [];
-        let conversationUserId: string | undefined;
-        let conversationWorkspaceMemberId: string | undefined;
         let actorMemberId: string | undefined;
         let lastKnownConversationSequence = 0;
         let contextItems: CanonicalContextItem[];
@@ -289,12 +286,6 @@ export function startSessionThinkingWorker() {
                 participantId: member.id,
                 name: member.user_name || 'User',
               });
-              if (!conversationWorkspaceMemberId) {
-                conversationWorkspaceMemberId = member.workspace_member_id;
-              }
-              if (!conversationUserId) {
-                conversationUserId = member.user_id;
-              }
             } else if (member.member_type === 'external' && member.state === 'active') {
               const linkedUserName =
                 (member.linked_user_name as string | null) || undefined;
@@ -393,7 +384,6 @@ export function startSessionThinkingWorker() {
 
         const resolvedModelPlan = await resolveModelPlan(actorId, workspaceId, {
           conversationId: session.conversation_id,
-          workspaceMemberId: conversationWorkspaceMemberId,
         });
         const primaryModel = resolvedModelPlan?.candidates[0] || null;
         let finalContextItems = contextItems;
@@ -426,28 +416,21 @@ export function startSessionThinkingWorker() {
           items: finalContextItems,
         });
 
-        try {
-          mcpTools = await resolveMcpToolsForActor({
-            actorId,
-            workspaceId,
-            sessionId,
-            conversationId: session.conversation_id,
-            workspaceMemberId: conversationWorkspaceMemberId,
-            userId: conversationUserId || userId,
-          });
-          if (mcpTools.tools.length > 0) {
-            console.log(`[session-thinking] Resolved ${mcpTools.tools.length} MCP tools for actor ${actorId}`);
-          }
-        } catch (err: any) {
-          console.error('[session-thinking] Failed to resolve MCP tools:', err.message);
-        }
-
-        const availableSkills = await listVisibleSkills({
+        const capabilitySurface = await resolveActorCapabilitySurface({
           workspaceId,
           actorId,
           sessionId,
           conversationId: session.conversation_id,
+          conversationKind: session.conversation_kind,
+          conversationBoundary:
+            session.conversationBoundary || session.conversation_boundary,
+          userId,
         });
+        availableSkills = capabilitySurface.availableSkills;
+        mcpTools = capabilitySurface.mcpTools;
+        if (mcpTools.tools.length > 0) {
+          console.log(`[session-thinking] Resolved ${mcpTools.tools.length} MCP tools for actor ${actorId}`);
+        }
 
         const actorPromptSource = (() => {
           if (!promptConversationMembers) return actor;
@@ -496,7 +479,7 @@ export function startSessionThinkingWorker() {
           triggerType: pendingWakeups[0]!.sourceType,
           triggerItemId: pendingWakeups[0]!.sourceItemId,
           metadata: {
-            triggerUserId: userId || conversationUserId || null,
+            triggerUserId: userId || null,
             wakeupIds: pendingWakeups.map((wakeup) => wakeup.wakeupId),
             wakeupCount: pendingWakeups.length,
           },
@@ -534,8 +517,10 @@ export function startSessionThinkingWorker() {
               turnId: turn.id,
               conversationId: session.conversation_id,
               conversationKind: session.conversation_kind,
+              conversationBoundary:
+                session.conversationBoundary || session.conversation_boundary,
               conversationMembers: memberEntries,
-              userId: conversationUserId || userId,
+              userId,
               availableSkills,
               onStatus: emitThinkingStatus,
               mcpTools: mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
@@ -573,7 +558,7 @@ export function startSessionThinkingWorker() {
         await executeActorActions(workspaceId, actorId, result.actions, {
           sessionId,
           turnId: turn.id,
-          userId: conversationUserId || userId,
+          userId,
           conversationId: session.conversation_id,
         });
 

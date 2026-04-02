@@ -48,6 +48,7 @@ function normalizeSessionRow(row: any) {
     ...row,
     conversationId: row.conversation_id,
     conversationKind: row.conversation_kind,
+    conversationBoundary: row.conversation_boundary,
     conversationTitle: row.conversation_title,
     isGroupConversation: isGroupConversationKind(row.conversation_kind),
     hasThreadContext: isThreadConversationKind(row.conversation_kind),
@@ -78,6 +79,7 @@ async function loadSession(sessionId: UUID): Promise<any | null> {
     .select([
       'a.name as actor_name',
       'c.kind as conversation_kind',
+      'c.boundary as conversation_boundary',
       'c.title as conversation_title',
     ])
     .where('s.id', '=', sessionId)
@@ -447,6 +449,7 @@ export async function getSessionsByActor(
     .selectAll('s')
     .select([
       'c.kind as conversation_kind',
+      'c.boundary as conversation_boundary',
       'c.title as conversation_title',
     ])
     .where('s.workspace_id', '=', workspaceId)

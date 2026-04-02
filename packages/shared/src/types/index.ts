@@ -1600,9 +1600,58 @@ export interface ToolResolveContext {
   workspaceId: string;
   conversationId?: string;
   conversationKind?: "private" | "group" | "virtual";
+  conversationBoundary?: ConversationBoundary;
   conversationMembers?: ConversationMemberEntry[];
   workspaceMemberId?: string;
   availableSkills?: AvailableSkillSummary[];
+}
+
+export interface RuntimeActorContext {
+  workspaceId: string;
+  actorId: string;
+  sessionId: string;
+  conversationId?: string;
+  conversationKind?: "private" | "group" | "virtual";
+  conversationBoundary?: ConversationBoundary;
+  conversationActorContextId?: string;
+  userId?: string;
+}
+
+export interface CapabilityInvocationContext {
+  workspaceId: string;
+  ownerWorkspaceId?: string;
+  actorId?: string;
+  userId?: string;
+  workspaceMemberId?: string;
+  sessionId?: string;
+  conversationId?: string;
+  conversationKind?: "private" | "group" | "virtual";
+  conversationBoundary?: ConversationBoundary;
+  conversationActorContextId?: string;
+  turnId?: string;
+  toolCallId?: string;
+  providerCallId?: string;
+  namespacedToolName?: string;
+  toolName?: string;
+  sourceType?: "builtin" | "mcp_plugin" | "relay_exposure";
+}
+
+export interface ToolSurfaceItem {
+  id: string;
+  name: string;
+  source: "builtin" | "plugin_installation" | "relay_exposure";
+}
+
+export interface SkillSurfaceItem {
+  id: string;
+  slug: string;
+  source: "installed" | "auto_activated";
+}
+
+export interface CapabilitySurface {
+  tools: ToolSurfaceItem[];
+  skills: SkillSurfaceItem[];
+  version: number;
 }
 
 export interface ToolPlugin {
@@ -1743,7 +1792,6 @@ export interface AccessTarget {
   type: AccessTargetType;
   actorId?: string;
   conversationId?: string;
-  workspaceMemberId?: string;
 }
 
 export interface CapabilityAccessTarget {
@@ -3830,7 +3878,7 @@ export type AccessBindingStatus = "active" | "revoked";
 export type AccessResourceType =
   | "workspace"
   | "conversation"
-  | "conversation_workspace"
+  | "workspace_in_conversation"
   | "actor"
   | "installed_skill"
   | "plugin_installation"
@@ -3840,7 +3888,7 @@ export type AccessSubjectType =
   | "platform"
   | "workspace"
   | "conversation"
-  | "conversation_workspace"
+  | "workspace_in_conversation"
   | "user"
   | "actor"
   | "workspace_member"
@@ -3952,7 +4000,7 @@ export interface PluginPackageVersionSpecRecord {
   defaultConfig: Record<string, unknown>;
   installFlow: Record<string, unknown>;
   authBindings: PluginAuthBindingDefinition[];
-  defaultMountScope: RuntimeBindingScope;
+  defaultMountScope: AttachmentTargetType;
   defaultReuseScope: PluginReuseScopeV2;
   supportedReuseScopes: PluginReuseScopeV2[];
   requiresHandshake: boolean;
@@ -4025,7 +4073,6 @@ export interface SkillBindingRecord {
   bindScope: RuntimeBindingScope;
   conversationId?: string;
   actorId?: string;
-  workspaceMemberId?: string;
   status: "active" | "disabled" | "revoked";
   metadata: Record<string, unknown>;
   createdByWorkspaceMemberId?: string;
@@ -4052,7 +4099,7 @@ export interface PluginMountRecord {
   id: string;
   installationId: string;
   workspaceId: string;
-  mountScope: RuntimeBindingScope;
+  mountScope: AttachmentTargetType;
   conversationId?: string;
   actorId?: string;
   workspaceMemberId?: string;

@@ -559,6 +559,7 @@ export async function actorThink(
     turnId?: string;
     conversationId?: string;
     conversationKind?: "private" | "group" | "virtual";
+    conversationBoundary?: "internal" | "external";
     conversationMembers?: ConversationMemberEntry[];
     userId?: string;
     workspaceMemberId?: string;
@@ -654,6 +655,7 @@ export async function actorThink(
     workspaceId: workspaceId || "",
     conversationId: options?.conversationId,
     conversationKind: options?.conversationKind,
+    conversationBoundary: options?.conversationBoundary,
     conversationMembers: currentToolConversationMembers,
     workspaceMemberId: options?.workspaceMemberId,
     availableSkills: options?.availableSkills,
@@ -722,6 +724,8 @@ export async function actorThink(
         userId: options.userId,
         turnId,
         conversationId: options.conversationId,
+        conversationKind: options.conversationKind,
+        conversationBoundary: options.conversationBoundary,
       },
       () => _actorThinkInner(),
     );
@@ -1281,6 +1285,7 @@ export async function actorThink(
                 tc.toolName,
                 tc.input,
                 {
+                  workspaceId: workspaceId || "",
                   sessionId: options?.sessionId,
                   conversationId: options?.conversationId,
                   actorId: actor.id,

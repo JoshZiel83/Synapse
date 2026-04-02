@@ -119,7 +119,7 @@ definition conversation_actor_context {
     permission memory_delete = actor->memory_delete & conversation->memory_delete
 }
 
-definition conversation_workspace {
+definition workspace_in_conversation {
     relation conversation: conversation
     relation workspace: workspace
     relation participant: workspace_member | actor
@@ -231,12 +231,11 @@ definition installed_skill {
     relation owner: workspace_member | actor
     relation editor: workspace_member | actor
     relation use_actor: actor
-    relation use_workspace_member: workspace_member
+    relation use_conversation: conversation
     relation use_actor_in_conversation: conversation_actor_context
-    relation use_conversation_workspace: conversation_workspace
     relation use_workspace: workspace
 
-    permission use = owner + editor + workspace->manage_skills + use_actor + use_workspace_member->principal + use_actor_in_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
+    permission use = owner + editor + workspace->manage_skills + use_actor + use_conversation->principal + use_actor_in_conversation->principal + use_workspace->principal
     permission view = use
     permission edit = owner + editor + workspace->manage_skills
     permission grant = edit
@@ -248,12 +247,11 @@ definition plugin_installation {
     relation owner: workspace_member | actor
     relation editor: workspace_member | actor
     relation use_actor: actor
-    relation use_workspace_member: workspace_member
+    relation use_conversation: conversation
     relation use_actor_in_conversation: conversation_actor_context
-    relation use_conversation_workspace: conversation_workspace
     relation use_workspace: workspace
 
-    permission use = owner + editor + workspace->manage_plugins + use_actor + use_workspace_member->principal + use_actor_in_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
+    permission use = owner + editor + workspace->manage_plugins + use_actor + use_conversation->principal + use_actor_in_conversation->principal + use_workspace->principal
     permission view = use
     permission edit = owner + editor + workspace->manage_plugins
     permission grant = edit
@@ -280,13 +278,12 @@ definition relay_exposure {
     relation owner: workspace_member | actor
     relation operator: workspace_member | actor
     relation use_actor: actor
-    relation use_workspace_member: workspace_member
+    relation use_conversation: conversation
     relation use_actor_in_conversation: conversation_actor_context
-    relation use_conversation_workspace: conversation_workspace
     relation use_workspace: workspace
 
     permission view = device->view + owner + operator + workspace->manage_relays
-    permission invoke = device->invoke + owner + operator + workspace->manage_relays + use_actor + use_workspace_member->principal + use_actor_in_conversation->principal + use_conversation_workspace->principal + use_workspace->principal
+    permission invoke = device->invoke + owner + operator + workspace->manage_relays + use_actor + use_conversation->principal + use_actor_in_conversation->principal + use_workspace->principal
     permission request_authorization = invoke
     permission edit = owner + operator + workspace->manage_relays
     permission grant = edit

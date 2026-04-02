@@ -1,6 +1,9 @@
 import { randomUUID } from "crypto";
 import { textBlocks, type RelayHiddenToolBinding, type ToolDefinition } from "@synapse/shared";
-import type { NormalizedMcpToolResult } from "@synapse/shared/types";
+import type {
+  NormalizedMcpToolResult,
+  RuntimeActorContext,
+} from "@synapse/shared/types";
 import { sql } from "kysely";
 import {
   lookupResources,
@@ -39,13 +42,8 @@ export interface ResolvedMcpTools {
   shutdown: () => Promise<void>;
 }
 
-interface ResolveParams {
-  actorId: string;
-  workspaceId: string;
-  sessionId: string;
+interface ResolveParams extends RuntimeActorContext {
   conversationId: string;
-  userId?: string;
-  workspaceMemberId?: string;
 }
 
 export interface ResolvedRelayToolTarget {
@@ -60,6 +58,7 @@ export interface ResolvedRelayToolTarget {
 
 type VisiblePluginRow = {
   installation_id: string;
+  owner_workspace_id: string;
   installation_status: "active" | "disabled" | "error" | "archived";
   catalog_item_id: string;
   item_slug: string;
@@ -72,6 +71,7 @@ type VisiblePluginRow = {
 
 type VisibleRelayExposureRow = {
   exposure_id: string;
+  owner_workspace_id: string;
   exposure_stable_key: string;
   exposure_display_name: string;
   exposure_updated_at: string | Date | null;
@@ -169,14 +169,9 @@ async function buildVisibilitySubjects(params: ResolveParams) {
     },
   ];
 
-  if (params.workspaceMemberId) {
-    subjects.push({
-      type: "workspace_member",
-      id: params.workspaceMemberId,
-    });
-  }
-
-  const context = await getConversationActorContextBySessionId(params.sessionId);
+  const context = params.conversationActorContextId
+    ? { id: params.conversationActorContextId }
+    : await getConversationActorContextBySessionId(params.sessionId);
   if (context) {
     subjects.push({
       type: "conversation_actor_context",
@@ -415,6 +410,7 @@ async function loadVisiblePlugins(params: ResolveParams) {
     )
     .select([
       "installation.id as installation_id",
+      "installation.workspace_id as owner_workspace_id",
       "installation.status as installation_status",
       "installation.catalog_item_id",
       "item.slug as item_slug",
@@ -425,7 +421,6 @@ async function loadVisiblePlugins(params: ResolveParams) {
       "installation.reuse_scope",
     ])
     .where("installation.id", "in", Array.from(visibleInstallationIds))
-    .where("installation.workspace_id", "=", params.workspaceId)
     .where("installation.status", "=", "active")
     .orderBy("installation.updated_at", "desc")
     .execute() as Promise<VisiblePluginRow[]>;
@@ -460,6 +455,7 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
     .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
     .select([
       "exposure.id as exposure_id",
+      "device.workspace_id as owner_workspace_id",
       "exposure.stable_key as exposure_stable_key",
       "exposure.display_name as exposure_display_name",
       "exposure.updated_at as exposure_updated_at",
@@ -467,7 +463,6 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
       "device.display_name as device_display_name",
     ])
     .where("exposure.id", "in", Array.from(visibleExposureIds))
-    .where("device.workspace_id", "=", params.workspaceId)
     .where("exposure.runtime_status", "=", "healthy")
     .where(sql<boolean>`EXISTS (
       SELECT 1
@@ -578,7 +573,7 @@ async function resolveTools(
             exposureId: entry.exposureId,
             exposureStableKey: relayCatalog.exposureStableKey,
           },
-          workspaceId: params.workspaceId,
+          workspaceId: plugin.owner_workspace_id,
         });
         const relayInstance = buildRelayScopedInstance({
           baseInstance: baseRelayInstance,
@@ -617,7 +612,7 @@ async function resolveTools(
         scope: reuseScope,
         scopeId: resolveReuseOwnerKey(reuseScope, params, turnOwnerKey),
         config: resolved.config,
-        workspaceId: params.workspaceId,
+        workspaceId: plugin.owner_workspace_id,
       });
 
       const manifest = asArray<{
@@ -690,7 +685,7 @@ async function resolveTools(
         exposureId: exposure.exposure_id,
         exposureStableKey: relayCatalog.exposureStableKey,
       },
-      workspaceId: params.workspaceId,
+      workspaceId: exposure.owner_workspace_id,
     });
     const relayInstance = buildRelayScopedInstance({
       baseInstance: baseRelayInstance,

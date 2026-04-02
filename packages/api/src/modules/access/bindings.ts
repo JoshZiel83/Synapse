@@ -4,13 +4,9 @@ import type {
   CapabilityAccessTarget,
 } from "@synapse/shared/types";
 import {
-  buildConversationWorkspaceContextId,
-  buildWorkspaceMemberContextId,
   deleteRelation,
   touchConversationActorContext,
-  touchConversationWorkspaceContext,
   touchRelation,
-  touchWorkspaceMemberContext,
   type AuthzObjectType,
   type AuthzRelationMutation,
 } from "../../infrastructure/authz/index.js";
@@ -28,22 +24,19 @@ export type AccessBindingRow = {
   resource_id: string;
   target_type:
     | "workspace"
+    | "conversation"
     | "actor"
-    | "workspace_member"
-    | "conversation_workspace"
     | "actor_in_conversation";
   relation:
     | "use_workspace"
+    | "use_conversation"
     | "use_actor"
-    | "use_workspace_member"
-    | "use_conversation_workspace"
     | "use_actor_in_conversation";
   subject_workspace_id: string | null;
   subject_workspace_member_id: string | null;
   subject_actor_id: string | null;
   subject_conversation_id: string | null;
   subject_conversation_actor_context_id: string | null;
-  is_primary: boolean;
   granted_permissions: string[] | unknown;
   status: "active" | "revoked";
   created_by_workspace_member_id: string | null;
@@ -59,9 +52,8 @@ export type AccessGrantTarget = {
   relation: AccessBindingRow["relation"];
   subjectType:
     | "workspace"
+    | "conversation"
     | "actor"
-    | "workspace_member"
-    | "conversation_workspace"
     | "conversation_actor_context";
   subjectWorkspaceId: string | null;
   subjectWorkspaceMemberId: string | null;
@@ -117,6 +109,25 @@ export async function resolveAccessGrantTarget(input: {
         conversationId: null,
         workspaceMemberId: null,
       };
+    case "conversation":
+      if (!input.target.conversationId) {
+        throw new Error("conversationId is required for conversation target");
+      }
+      return {
+        targetType: "conversation",
+        bindScope: "conversation",
+        relation: "use_conversation",
+        subjectType: "conversation",
+        subjectWorkspaceId: null,
+        subjectWorkspaceMemberId: null,
+        subjectActorId: null,
+        subjectConversationId: input.target.conversationId,
+        subjectConversationActorContextId: null,
+        subjectId: input.target.conversationId,
+        actorId: null,
+        conversationId: input.target.conversationId,
+        workspaceMemberId: null,
+      };
     case "actor":
       if (!input.target.actorId) {
         throw new Error("actorId is required for actor target");
@@ -134,53 +145,6 @@ export async function resolveAccessGrantTarget(input: {
         subjectId: input.target.actorId,
         actorId: input.target.actorId,
         conversationId: null,
-        workspaceMemberId: null,
-      };
-    case "workspace_member":
-      if (!input.target.workspaceMemberId) {
-        throw new Error(
-          "workspaceMemberId is required for workspace_member target",
-        );
-      }
-      return {
-        targetType: "workspace_member",
-        bindScope: "workspace_member",
-        relation: "use_workspace_member",
-        subjectType: "workspace_member",
-        subjectWorkspaceId: null,
-        subjectWorkspaceMemberId: input.target.workspaceMemberId,
-        subjectActorId: null,
-        subjectConversationId: null,
-        subjectConversationActorContextId: null,
-        subjectId: buildWorkspaceMemberContextId(
-          input.target.workspaceMemberId,
-        ),
-        actorId: null,
-        conversationId: null,
-        workspaceMemberId: input.target.workspaceMemberId,
-      };
-    case "conversation_workspace":
-      if (!input.target.conversationId) {
-        throw new Error(
-          "conversationId is required for conversation_workspace target",
-        );
-      }
-      return {
-        targetType: "conversation_workspace",
-        bindScope: "conversation_workspace",
-        relation: "use_conversation_workspace",
-        subjectType: "conversation_workspace",
-        subjectWorkspaceId: input.workspaceId,
-        subjectWorkspaceMemberId: null,
-        subjectActorId: null,
-        subjectConversationId: input.target.conversationId,
-        subjectConversationActorContextId: null,
-        subjectId: buildConversationWorkspaceContextId(
-          input.workspaceId,
-          input.target.conversationId,
-        ),
-        actorId: null,
-        conversationId: input.target.conversationId,
         workspaceMemberId: null,
       };
     case "actor_in_conversation": {
@@ -245,6 +209,22 @@ export function readAccessBindingTarget(
         conversationId: null,
         workspaceMemberId: null,
       };
+    case "conversation":
+      return {
+        targetType: "conversation",
+        bindScope: "conversation",
+        relation: row.relation,
+        subjectType: "conversation",
+        subjectWorkspaceId: null,
+        subjectWorkspaceMemberId: null,
+        subjectActorId: null,
+        subjectConversationId: row.subject_conversation_id,
+        subjectConversationActorContextId: null,
+        subjectId: row.subject_conversation_id || "",
+        actorId: null,
+        conversationId: row.subject_conversation_id,
+        workspaceMemberId: null,
+      };
     case "actor":
       return {
         targetType: "actor",
@@ -259,46 +239,6 @@ export function readAccessBindingTarget(
         subjectId: row.subject_actor_id || "",
         actorId: row.subject_actor_id,
         conversationId: null,
-        workspaceMemberId: null,
-      };
-    case "workspace_member":
-      return {
-        targetType: "workspace_member",
-        bindScope: "workspace_member",
-        relation: row.relation,
-        subjectType: "workspace_member",
-        subjectWorkspaceId: null,
-        subjectWorkspaceMemberId: row.subject_workspace_member_id,
-        subjectActorId: null,
-        subjectConversationId: null,
-        subjectConversationActorContextId: null,
-        subjectId: row.subject_workspace_member_id
-          ? buildWorkspaceMemberContextId(row.subject_workspace_member_id)
-          : "",
-        actorId: null,
-        conversationId: null,
-        workspaceMemberId: row.subject_workspace_member_id,
-      };
-    case "conversation_workspace":
-      return {
-        targetType: "conversation_workspace",
-        bindScope: "conversation_workspace",
-        relation: row.relation,
-        subjectType: "conversation_workspace",
-        subjectWorkspaceId: row.subject_workspace_id,
-        subjectWorkspaceMemberId: null,
-        subjectActorId: null,
-        subjectConversationId: row.subject_conversation_id,
-        subjectConversationActorContextId: null,
-        subjectId:
-          row.subject_workspace_id && row.subject_conversation_id
-            ? buildConversationWorkspaceContextId(
-                row.subject_workspace_id,
-                row.subject_conversation_id,
-              )
-            : "",
-        actorId: null,
-        conversationId: row.subject_conversation_id,
         workspaceMemberId: null,
       };
     case "actor_in_conversation":
@@ -336,17 +276,6 @@ export function accessBindingMetadata(
   return asObject(row);
 }
 
-export function isPrimaryAccessBinding(
-  row: Pick<AccessBindingRow, "is_primary"> | unknown,
-) {
-  return (
-    !!row &&
-    typeof row === "object" &&
-    "is_primary" in (row as Record<string, unknown>) &&
-    (row as Pick<AccessBindingRow, "is_primary">).is_primary === true
-  );
-}
-
 export function accessBindingHasTarget(
   row: Pick<
     AccessBindingRow,
@@ -382,6 +311,16 @@ function buildAuthzSubject(target: AccessGrantTarget) {
         subjectType: "workspace" as const,
         subjectId: target.subjectWorkspaceId,
       };
+    case "conversation":
+      if (!target.subjectConversationId) {
+        throw new Error(
+          "subjectConversationId is required for conversation bindings",
+        );
+      }
+      return {
+        subjectType: "conversation" as const,
+        subjectId: target.subjectConversationId,
+      };
     case "actor":
       if (!target.subjectActorId) {
         throw new Error("subjectActorId is required for actor bindings");
@@ -389,31 +328,6 @@ function buildAuthzSubject(target: AccessGrantTarget) {
       return {
         subjectType: "actor" as const,
         subjectId: target.subjectActorId,
-      };
-    case "workspace_member":
-      if (!target.subjectWorkspaceMemberId) {
-        throw new Error(
-          "subjectWorkspaceMemberId is required for workspace_member bindings",
-        );
-      }
-      return {
-        subjectType: "workspace_member" as const,
-        subjectId: buildWorkspaceMemberContextId(
-          target.subjectWorkspaceMemberId,
-        ),
-      };
-    case "conversation_workspace":
-      if (!target.subjectWorkspaceId || !target.subjectConversationId) {
-        throw new Error(
-          "subjectWorkspaceId and subjectConversationId are required for conversation_workspace bindings",
-        );
-      }
-      return {
-        subjectType: "conversation_workspace" as const,
-        subjectId: buildConversationWorkspaceContextId(
-          target.subjectWorkspaceId,
-          target.subjectConversationId,
-        ),
       };
     case "conversation_actor_context":
       if (!target.subjectConversationActorContextId) {
@@ -441,28 +355,6 @@ export function buildResourceAccessAuthzMutations(params: {
   const relations: AuthzRelationMutation[] = [];
 
   if (params.operation === "touch") {
-    if (
-      params.target.targetType === "workspace_member" &&
-      params.target.subjectWorkspaceMemberId
-    ) {
-      relations.push(
-        ...touchWorkspaceMemberContext({
-          workspaceMemberId: params.target.subjectWorkspaceMemberId,
-        }),
-      );
-    }
-    if (
-      params.target.targetType === "conversation_workspace" &&
-      params.target.subjectWorkspaceId &&
-      params.target.subjectConversationId
-    ) {
-      relations.push(
-        ...touchConversationWorkspaceContext(
-          params.target.subjectWorkspaceId,
-          params.target.subjectConversationId,
-        ),
-      );
-    }
     if (
       params.target.targetType === "actor_in_conversation" &&
       params.target.subjectConversationActorContextId &&
@@ -508,16 +400,16 @@ export function mapAccessBindingToGrant(
     case "workspace":
       capabilityTarget = { type: "workspace" };
       break;
+    case "conversation":
+      capabilityTarget = {
+        type: "conversation",
+        conversationId: target.subjectConversationId || undefined,
+      };
+      break;
     case "actor":
       capabilityTarget = {
         type: "actor",
         actorId: target.subjectActorId || undefined,
-      };
-      break;
-    case "conversation_workspace":
-      capabilityTarget = {
-        type: "conversation_workspace",
-        conversationId: target.subjectConversationId || undefined,
       };
       break;
     case "actor_in_conversation":
@@ -527,10 +419,6 @@ export function mapAccessBindingToGrant(
         conversationId: target.subjectConversationId || undefined,
       };
       break;
-    case "workspace_member":
-      throw new Error(
-        "workspace_member access targets are not supported for capability grants",
-      );
     default:
       throw new Error(`Unsupported capability access target type: ${String(target.targetType)}`);
   }

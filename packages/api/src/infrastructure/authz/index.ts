@@ -22,7 +22,7 @@ export function buildWorkspaceMemberContextId(
   return workspaceMemberId;
 }
 
-export function buildConversationWorkspaceContextId(
+export function buildWorkspaceInConversationContextId(
   workspaceId: string,
   conversationId: string,
 ) {
@@ -33,7 +33,7 @@ export type AuthzObjectType =
   | "platform"
   | "workspace"
   | "workspace_member"
-  | "conversation_workspace"
+  | "workspace_in_conversation"
   | "user"
   | "actor"
   | "installed_skill"
@@ -66,7 +66,7 @@ const AUTHZ_RESOURCE_TYPES: AuthzObjectType[] = [
   "platform",
   "workspace",
   "workspace_member",
-  "conversation_workspace",
+  "workspace_in_conversation",
   "user",
   "actor",
   "installed_skill",
@@ -474,24 +474,24 @@ export function touchWorkspaceMemberContext(params: {
   return relations;
 }
 
-export function touchConversationWorkspaceContext(
+export function touchWorkspaceInConversationContext(
   workspaceId: string,
   conversationId: string,
 ): AuthzRelationMutation[] {
-  const contextId = buildConversationWorkspaceContextId(
+  const contextId = buildWorkspaceInConversationContextId(
     workspaceId,
     conversationId,
   );
   return [
     touchRelation(
-      "conversation_workspace",
+      "workspace_in_conversation",
       contextId,
       "workspace",
       "workspace",
       workspaceId,
     ),
     touchRelation(
-      "conversation_workspace",
+      "workspace_in_conversation",
       contextId,
       "conversation",
       "conversation",

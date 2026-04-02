@@ -103,14 +103,13 @@ export async function ensureRelayExposureDefaultAccess(params: {
          subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
-         is_primary,
          granted_permissions,
          status,
          reason,
          metadata
        )
        VALUES (
-         $1, 'relay_exposure', $2, 'workspace', 'use_workspace', $3, NULL, NULL, NULL, FALSE, ARRAY['invoke']::text[], 'active', $4, $5::jsonb
+        $1, 'relay_exposure', $2, 'workspace', 'use_workspace', $3, NULL, NULL, NULL, ARRAY['invoke']::text[], 'active', $4, $5::jsonb
        )
        RETURNING *`,
       [
@@ -290,7 +289,6 @@ export async function grantRelayExposureAccess(input: {
          subject_actor_id,
          subject_conversation_id,
          subject_conversation_actor_context_id,
-         is_primary,
          granted_permissions,
          status,
          created_by_workspace_member_id,
@@ -298,7 +296,7 @@ export async function grantRelayExposureAccess(input: {
          metadata
        )
        VALUES (
-         $1, 'relay_exposure', $2, $3, $4, $5, $6, $7, $8, $9, FALSE, ARRAY['invoke']::text[], 'active', $10, $11, $12::jsonb
+        $1, 'relay_exposure', $2, $3, $4, $5, $6, $7, $8, $9, ARRAY['invoke']::text[], 'active', $10, $11, $12::jsonb
        )
        RETURNING *`,
       [

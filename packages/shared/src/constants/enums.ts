@@ -40,15 +40,14 @@ export const ATTACHMENT_TARGET_TYPES = [
 ] as const;
 export const ACCESS_TARGET_TYPES = [
   'workspace',
+  'conversation',
   'actor',
-  'workspace_member',
-  'conversation_workspace',
   'actor_in_conversation',
 ] as const;
 export const CAPABILITY_ACCESS_TARGET_TYPES = [
   'workspace',
+  'conversation',
   'actor',
-  'conversation_workspace',
   'actor_in_conversation',
 ] as const;
 export const REUSE_SCOPES = [

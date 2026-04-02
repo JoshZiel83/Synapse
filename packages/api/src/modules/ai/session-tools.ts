@@ -17,6 +17,7 @@ import {
   type ToolResolveContext,
 } from "@synapse/shared";
 import type {
+  CapabilityInvocationContext,
   ConversationMemberEntry,
   ConversationEntityRef,
   InteractionQuestionFieldDefinition,
@@ -147,6 +148,10 @@ function getToolContextConversationId(ctx: ToolResolveContext) {
 
 function getToolContextConversationKind(ctx: ToolResolveContext) {
   return ctx.conversationKind;
+}
+
+function getToolContextConversationBoundary(ctx: ToolResolveContext) {
+  return ctx.conversationBoundary;
 }
 
 function getToolContextConversationMembers(ctx: ToolResolveContext) {
@@ -665,7 +670,6 @@ async function resolveRelayAuthorizationRequirementOrThrow(params: {
     workspaceId: params.workspaceId,
     sessionId: params.sessionId,
     conversationId: params.conversationId,
-    workspaceMemberId: params.workspaceMemberId,
     namespacedToolName: params.relayToolName,
   });
   if (!relayTarget) {
@@ -2610,8 +2614,18 @@ export function registerCallableToolPlugins(): void {
       const conversationId = getToolContextConversationId(ctx);
       if (
         !conversationId ||
-        !isGroupConversationKind(getToolContextConversationKind(ctx))
+        !isGroupConversationKind(getToolContextConversationKind(ctx)) ||
+        getToolContextConversationBoundary(ctx) !== "internal"
       ) {
+        return { active: false, definition: null as any };
+      }
+
+      const requesterAllowed = await authorizeAction({
+        subject: actorSubject(ctx.actorId),
+        action: "conversation.manage_members",
+        resourceId: conversationId,
+      });
+      if (!requesterAllowed) {
         return { active: false, definition: null as any };
       }
 
@@ -2647,6 +2661,19 @@ export function registerCallableToolPlugins(): void {
         throwToolError(
           "invite_actor is only available in group conversations.",
         );
+      }
+      if (session.conversation_boundary !== "internal") {
+        throwToolError(
+          "invite_actor is only available in internal group conversations.",
+        );
+      }
+      const requesterAllowed = await authorizeAction({
+        subject: actorSubject(context.actorId),
+        action: "conversation.manage_members",
+        resourceId: conversationId,
+      });
+      if (!requesterAllowed) {
+        throwToolError("Actor is not allowed to manage conversation members.");
       }
 
       const reason =
@@ -3694,17 +3721,11 @@ function levenshtein(a: string, b: string): number {
 // ============ Tool Execution Context ============
 // Uses AsyncLocalStorage so each concurrent BullMQ job has its own context.
 
-interface ToolExecutionContext {
+type ToolExecutionContext = CapabilityInvocationContext & {
   sessionId: string;
   actorId: string;
   workspaceId: string;
-  userId?: string;
-  workspaceMemberId?: string;
-  turnId?: string;
-  conversationId?: string;
-  toolCallId?: string;
-  toolName?: string;
-}
+};
 
 const contextStorage = new AsyncLocalStorage<ToolExecutionContext>();
 

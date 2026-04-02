@@ -180,10 +180,10 @@ const scopeOptions: Array<{
       "Every conversation and actor in this workspace can use the skill.",
   },
   {
-    value: "conversation_workspace",
-    label: "One conversation workspace",
+    value: "conversation",
+    label: "One conversation",
     description:
-      "Only this workspace side of one conversation can see and use the skill.",
+      "Only one conversation can see and use the skill, across every workspace participating in it.",
   },
   {
     value: "actor",
@@ -402,7 +402,7 @@ function resolveScopeTarget(
   switch (draft.useScope) {
     case "workspace":
       return "Entire workspace"
-    case "conversation_workspace":
+    case "conversation":
       return (
         conversations.find((item) => item.id === draft.conversationId)?.title ||
         "Choose one conversation"
@@ -444,7 +444,7 @@ function buildAccessTargetFromScopeDraft(
         ? draft.actorId || undefined
         : undefined,
     conversationId:
-      draft.useScope === "conversation_workspace" ||
+      draft.useScope === "conversation" ||
       draft.useScope === "actor_in_conversation"
         ? draft.conversationId || undefined
         : undefined,
@@ -679,7 +679,7 @@ function ScopeFields({
                   ? value.actorId
                   : null,
               conversationId:
-                nextValue === "conversation_workspace" ||
+                nextValue === "conversation" ||
                 nextValue === "actor_in_conversation"
                   ? value.conversationId
                   : null,
@@ -703,7 +703,7 @@ function ScopeFields({
         <FieldDescription>{scopeDescription(value.useScope)}</FieldDescription>
       </Field>
 
-      {value.useScope === "conversation_workspace" ||
+      {value.useScope === "conversation" ||
       value.useScope === "actor_in_conversation" ? (
         <Field>
           <FieldLabel>Conversation</FieldLabel>

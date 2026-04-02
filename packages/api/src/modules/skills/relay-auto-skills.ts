@@ -246,7 +246,6 @@ export async function listRelayAutoLoadedSkills(input: {
   workspaceId: string;
   actorId?: string;
   conversationId?: string;
-  workspaceMemberId?: string;
   sessionId?: string;
 }) {
   if (!input.actorId || !input.sessionId) {
@@ -263,7 +262,6 @@ export async function listRelayAutoLoadedSkills(input: {
         actorId: input.actorId,
         sessionId: input.sessionId,
         conversationId: input.conversationId || "",
-        workspaceMemberId: input.workspaceMemberId,
       }),
     ]);
   } catch (error) {
@@ -275,14 +273,13 @@ export async function listRelayAutoLoadedSkills(input: {
     return [] as AvailableSkillSummary[];
   }
 
-  const requiredCount = exposureMetadata.length;
-  const intersectionCounts = new Map<string, number>();
+  const readyCapabilities = new Set<string>();
   const capabilityVersions = new Map<string, Set<string>>();
 
   for (const metadata of exposureMetadata) {
-    const readyCapabilities = extractReadyCapabilities(metadata);
-    for (const [slug, version] of readyCapabilities.entries()) {
-      intersectionCounts.set(slug, (intersectionCounts.get(slug) || 0) + 1);
+    const readyFromExposure = extractReadyCapabilities(metadata);
+    for (const [slug, version] of readyFromExposure.entries()) {
+      readyCapabilities.add(slug);
       const versions = capabilityVersions.get(slug) || new Set<string>();
       versions.add(version);
       capabilityVersions.set(slug, versions);
@@ -291,7 +288,7 @@ export async function listRelayAutoLoadedSkills(input: {
 
   const skills: AvailableSkillSummary[] = [];
   for (const [capabilitySlug, definition] of definitions.entries()) {
-    if ((intersectionCounts.get(capabilitySlug) || 0) !== requiredCount) {
+    if (!readyCapabilities.has(capabilitySlug)) {
       continue;
     }
     skills.push(
