@@ -63,6 +63,8 @@ export async function resolveActorCapabilitySurface(
     actorId: runtimeContext.actorId,
     sessionId: runtimeContext.sessionId,
     conversationId: runtimeContext.conversationId,
+    conversationKind: runtimeContext.conversationKind,
+    conversationBoundary: runtimeContext.conversationBoundary,
   });
 
   return {

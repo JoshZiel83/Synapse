@@ -1,4 +1,14 @@
-import type { WorkItemStatus } from '../types/index.js';
+import {
+  CONVERSATION_TYPE_KEYS,
+  CONVERSATION_TYPE_MASK_BITS,
+  CONVERSATION_TYPE_MASK_PRESETS,
+  DEFAULT_CONVERSATION_TYPE_MASK,
+} from '../constants/enums.js';
+import type {
+  ConversationTypeKey,
+  ConversationTypeMask,
+  WorkItemStatus,
+} from '../types/index.js';
 import { WORK_ITEM_TRANSITIONS } from '../types/index.js';
 
 export function generateId(): string {
@@ -69,6 +79,115 @@ export function isPrivateConversationKind(kind: string | null | undefined): bool
 
 export function isThreadConversationKind(kind: string | null | undefined): boolean {
   return kind === GROUP_CONVERSATION_KIND || kind === PRIVATE_CONVERSATION_KIND;
+}
+
+export const CONVERSATION_TYPE_MASK_KEY_ORDER = CONVERSATION_TYPE_KEYS;
+
+export function resolveConversationTypeKey(
+  kind: string | null | undefined,
+  boundary: string | null | undefined,
+): ConversationTypeKey | null {
+  if (kind === VIRTUAL_CONVERSATION_KIND) {
+    return 'virtual';
+  }
+  if (kind === PRIVATE_CONVERSATION_KIND) {
+    return boundary === 'external' ? 'external_private' : 'internal_private';
+  }
+  if (kind === GROUP_CONVERSATION_KIND) {
+    return boundary === 'external' ? 'external_group' : 'internal_group';
+  }
+  return null;
+}
+
+export function resolveConversationTypeBit(
+  kind: string | null | undefined,
+  boundary: string | null | undefined,
+): ConversationTypeMask | null {
+  const key = resolveConversationTypeKey(kind, boundary);
+  return key ? CONVERSATION_TYPE_MASK_BITS[key] : null;
+}
+
+export function isValidConversationTypeMask(mask: unknown): mask is ConversationTypeMask {
+  if (!Number.isInteger(mask)) {
+    return false;
+  }
+  const numericMask = Number(mask);
+  if (numericMask <= 0) {
+    return false;
+  }
+  return (numericMask & ~CONVERSATION_TYPE_MASK_PRESETS.ALL) === 0;
+}
+
+export function normalizeConversationTypeMask(
+  mask: unknown,
+  fallback: ConversationTypeMask = DEFAULT_CONVERSATION_TYPE_MASK,
+): ConversationTypeMask {
+  return isValidConversationTypeMask(mask) ? Number(mask) : fallback;
+}
+
+export function resolveEffectiveConversationTypeMask(params: {
+  defaultMask?: unknown;
+  overrideMask?: unknown;
+}): ConversationTypeMask {
+  if (params.overrideMask === null || params.overrideMask === undefined) {
+    return normalizeConversationTypeMask(params.defaultMask);
+  }
+  return normalizeConversationTypeMask(
+    params.overrideMask,
+    normalizeConversationTypeMask(params.defaultMask),
+  );
+}
+
+export function resolveNarrowedConversationTypeMask(
+  parentMask: unknown,
+  overrideMask?: unknown,
+): ConversationTypeMask {
+  const normalizedParentMask = normalizeConversationTypeMask(parentMask);
+  if (overrideMask === null || overrideMask === undefined) {
+    return normalizedParentMask;
+  }
+  return (
+    normalizedParentMask &
+    normalizeConversationTypeMask(overrideMask, normalizedParentMask)
+  );
+}
+
+export function conversationTypeMaskToKeys(
+  mask: unknown,
+): ConversationTypeKey[] {
+  const normalizedMask = normalizeConversationTypeMask(mask);
+  return CONVERSATION_TYPE_MASK_KEY_ORDER.filter(
+    (key) => (normalizedMask & CONVERSATION_TYPE_MASK_BITS[key]) !== 0,
+  );
+}
+
+export function conversationTypeKeysToMask(
+  keys: readonly ConversationTypeKey[],
+  fallback: ConversationTypeMask = DEFAULT_CONVERSATION_TYPE_MASK,
+): ConversationTypeMask {
+  const normalizedKeys = Array.from(new Set(keys)).filter((key) =>
+    CONVERSATION_TYPE_MASK_KEY_ORDER.includes(key),
+  );
+  if (normalizedKeys.length === 0) {
+    return fallback;
+  }
+  return normalizedKeys.reduce(
+    (mask, key) => mask | CONVERSATION_TYPE_MASK_BITS[key],
+    0,
+  );
+}
+
+export function maskAllowsConversationType(
+  mask: unknown,
+  kind: string | null | undefined,
+  boundary: string | null | undefined,
+): boolean {
+  const bit = resolveConversationTypeBit(kind, boundary);
+  if (!bit) {
+    return false;
+  }
+  const normalizedMask = normalizeConversationTypeMask(mask);
+  return (normalizedMask & bit) !== 0;
 }
 
 export function resolveThreadSemantics(params: {

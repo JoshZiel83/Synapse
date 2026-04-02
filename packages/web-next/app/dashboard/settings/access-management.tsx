@@ -1,5 +1,12 @@
 "use client"
 
+import {
+  CONVERSATION_TYPE_MASK_PRESETS,
+  conversationTypeKeysToMask,
+  conversationTypeMaskToKeys,
+  type CapabilityConversationTypePolicyResourceFamily,
+  type ConversationTypeKey,
+} from "@synapse/shared"
 import { useCallback, useEffect, useState } from "react"
 import { Building2, RefreshCw, ShieldCheck, UserRound, Zap } from "lucide-react"
 import { useWorkspace } from "../workspace-provider"
@@ -7,6 +14,7 @@ import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
@@ -193,6 +201,192 @@ function UserIdentity({
   )
 }
 
+const conversationTypeOptions: Array<{
+  key: ConversationTypeKey
+  label: string
+  description: string
+}> = [
+  {
+    key: "internal_private",
+    label: "Internal private",
+    description: "Private conversations inside the workspace graph.",
+  },
+  {
+    key: "internal_group",
+    label: "Internal group",
+    description: "Workspace-local group conversations.",
+  },
+  {
+    key: "external_private",
+    label: "External private",
+    description: "Cross-workspace private conversations.",
+  },
+  {
+    key: "external_group",
+    label: "External group",
+    description: "Cross-workspace group conversations.",
+  },
+  {
+    key: "virtual",
+    label: "Virtual",
+    description: "Virtual or synthetic conversations.",
+  },
+]
+
+const conversationTypePresets = [
+  { label: "All", value: CONVERSATION_TYPE_MASK_PRESETS.ALL },
+  { label: "Internal only", value: CONVERSATION_TYPE_MASK_PRESETS.INTERNAL_ONLY },
+  { label: "External only", value: CONVERSATION_TYPE_MASK_PRESETS.EXTERNAL_ONLY },
+  { label: "Group only", value: CONVERSATION_TYPE_MASK_PRESETS.GROUP_ONLY },
+  { label: "Private only", value: CONVERSATION_TYPE_MASK_PRESETS.PRIVATE_ONLY },
+] as const
+
+const workspaceCapabilityPolicyFamilies: Array<{
+  family: CapabilityConversationTypePolicyResourceFamily
+  label: string
+  description: string
+}> = [
+  {
+    family: "plugin_installation",
+    label: "Plugins",
+    description:
+      "Default conversation types for plugin installations before any installation or grant override narrows them further.",
+  },
+  {
+    family: "installed_skill",
+    label: "Skills",
+    description:
+      "Default conversation types for installed skills before any installation or grant override narrows them further.",
+  },
+  {
+    family: "relay_exposure",
+    label: "Relay Exposures",
+    description:
+      "Default conversation types for relay exposures before any exposure or grant override narrows them further.",
+  },
+]
+
+function formatConversationTypeKeys(keys: ConversationTypeKey[]) {
+  return keys
+    .map(
+      (key) =>
+        conversationTypeOptions.find((option) => option.key === key)?.label || key
+    )
+    .join(", ")
+}
+
+function WorkspaceConversationTypePolicyCard({
+  label,
+  description,
+  value,
+  saving,
+  onSave,
+}: {
+  label: string
+  description: string
+  value: number
+  saving: boolean
+  onSave: (mask: number) => Promise<void>
+}) {
+  const [keys, setKeys] = useState<ConversationTypeKey[]>(
+    conversationTypeMaskToKeys(value)
+  )
+
+  useEffect(() => {
+    setKeys(conversationTypeMaskToKeys(value))
+  }, [value])
+
+  const currentMask = conversationTypeKeysToMask(keys, value)
+  const hasChanges = currentMask !== value
+
+  const toggleKey = (key: ConversationTypeKey) => {
+    setKeys((current) => {
+      const exists = current.includes(key)
+      if (exists && current.length === 1) {
+        return current
+      }
+      return exists
+        ? current.filter((item) => item !== key)
+        : [...current, key]
+    })
+  }
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5">
+      <div className="flex flex-col gap-1">
+        <div className="text-base font-semibold text-foreground">{label}</div>
+        <p className="text-sm text-muted-foreground">{description}</p>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {conversationTypePresets.map((preset) => (
+          <Button
+            key={`${label}-${preset.label}`}
+            type="button"
+            variant={currentMask === preset.value ? "default" : "outline"}
+            size="sm"
+            onClick={() => setKeys(conversationTypeMaskToKeys(preset.value))}
+          >
+            {preset.label}
+          </Button>
+        ))}
+      </div>
+
+      <div className="mt-4 grid gap-3">
+        {conversationTypeOptions.map((option) => (
+          <label
+            key={`${label}-${option.key}`}
+            className="flex items-start gap-3 rounded-2xl border border-border bg-muted/20 px-4 py-3"
+          >
+            <Checkbox
+              checked={keys.includes(option.key)}
+              onCheckedChange={() => toggleKey(option.key)}
+            />
+            <div className="space-y-1">
+              <div className="text-sm font-medium text-foreground">
+                {option.label}
+              </div>
+              <div className="text-sm text-muted-foreground">
+                {option.description}
+              </div>
+            </div>
+          </label>
+        ))}
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-border bg-muted/20 p-4">
+        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          Current default
+        </div>
+        <div className="mt-2 text-sm font-medium text-foreground">
+          {currentMask}
+        </div>
+        <div className="mt-1 text-sm text-muted-foreground">
+          {formatConversationTypeKeys(keys)}
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setKeys(conversationTypeMaskToKeys(value))}
+          disabled={saving}
+        >
+          Reset
+        </Button>
+        <Button
+          type="button"
+          onClick={() => void onSave(currentMask)}
+          disabled={!hasChanges || saving}
+        >
+          {saving ? "Saving..." : "Save default"}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export default function AccessManagement({
   mode = "all",
   showIntro = true,
@@ -212,7 +406,14 @@ export default function AccessManagement({
   const [refreshing, setRefreshing] = useState(false)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const [platformError, setPlatformError] = useState<string | null>(null)
+  const [workspacePolicyError, setWorkspacePolicyError] = useState<string | null>(
+    null
+  )
   const [actionError, setActionError] = useState<string | null>(null)
+  const [workspaceConversationTypePolicies, setWorkspaceConversationTypePolicies] =
+    useState<Record<CapabilityConversationTypePolicyResourceFamily, number> | null>(
+      null
+    )
   const [workspaceAccessTargetMemberId, setWorkspaceAccessTargetMemberId] =
     useState("")
   const [workspaceAccessKey, setWorkspaceAccessKey] =
@@ -230,6 +431,9 @@ export default function AccessManagement({
   const [revokingPlatformKey, setRevokingPlatformKey] = useState<string | null>(
     null
   )
+  const [savingWorkspacePolicyFamily, setSavingWorkspacePolicyFamily] = useState<
+    CapabilityConversationTypePolicyResourceFamily | null
+  >(null)
 
   const loadWorkspaceData = useCallback(
     async (targetWorkspaceId: string) => {
@@ -275,6 +479,25 @@ export default function AccessManagement({
     ]
   )
 
+  const loadWorkspaceConversationTypePolicies = useCallback(
+    async (targetWorkspaceId: string) => {
+      const response =
+        await api.getWorkspaceCapabilityConversationTypePolicies(
+          targetWorkspaceId
+        )
+      const nextPolicies = Object.fromEntries(
+        response.policies.map((policy) => [
+          policy.resourceFamily,
+          policy.defaultConversationTypeMask,
+        ])
+      ) as Record<CapabilityConversationTypePolicyResourceFamily, number>
+
+      setWorkspaceConversationTypePolicies(nextPolicies)
+      setWorkspacePolicyError(null)
+    },
+    []
+  )
+
   const loadPlatformData = useCallback(async () => {
     const response = await api.getPlatformAccess()
     setPlatformAccessBindings(response?.data ?? [])
@@ -308,6 +531,18 @@ export default function AccessManagement({
       }
 
       try {
+        await loadWorkspaceConversationTypePolicies(workspaceId)
+      } catch (error) {
+        setWorkspaceConversationTypePolicies(null)
+        setWorkspacePolicyError(
+          getErrorMessage(
+            error,
+            "Capability conversation type defaults are unavailable for your account."
+          )
+        )
+      }
+
+      try {
         await loadPlatformData()
       } catch (error) {
         setPlatformAccessBindings([])
@@ -322,7 +557,12 @@ export default function AccessManagement({
         setRefreshing(false)
       }
     },
-    [loadPlatformData, loadWorkspaceData, workspaceId]
+    [
+      loadPlatformData,
+      loadWorkspaceConversationTypePolicies,
+      loadWorkspaceData,
+      workspaceId,
+    ]
   )
 
   useEffect(() => {
@@ -406,6 +646,39 @@ export default function AccessManagement({
       )
     } finally {
       setRevokingPlatformKey(null)
+    }
+  }
+
+  const handleSaveWorkspaceConversationTypePolicy = async (
+    family: CapabilityConversationTypePolicyResourceFamily,
+    mask: number
+  ) => {
+    if (!workspaceId) return
+
+    setSavingWorkspacePolicyFamily(family)
+    setActionError(null)
+    try {
+      const response = await api.updateWorkspaceCapabilityConversationTypePolicies(
+        workspaceId,
+        { policies: { [family]: mask } }
+      )
+      const nextPolicies = Object.fromEntries(
+        response.policies.map((policy) => [
+          policy.resourceFamily,
+          policy.defaultConversationTypeMask,
+        ])
+      ) as Record<CapabilityConversationTypePolicyResourceFamily, number>
+      setWorkspaceConversationTypePolicies(nextPolicies)
+      setWorkspacePolicyError(null)
+    } catch (error) {
+      setActionError(
+        getErrorMessage(
+          error,
+          "Failed to update workspace capability conversation types."
+        )
+      )
+    } finally {
+      setSavingWorkspacePolicyFamily(null)
     }
   }
 
@@ -538,6 +811,47 @@ export default function AccessManagement({
                 </div>
               ) : (
                 <>
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center gap-2 text-base font-semibold text-foreground">
+                        <Zap className="h-4 w-4" />
+                        Capability Conversation Types
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        These workspace defaults are the top-level parent for
+                        plugin installations, installed skills, and relay
+                        exposures. Instance overrides and grant overrides can
+                        only narrow them.
+                      </p>
+                    </div>
+
+                    {workspacePolicyError ? (
+                      <div className="rounded-2xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
+                        {workspacePolicyError}
+                      </div>
+                    ) : workspaceConversationTypePolicies ? (
+                      <div className="grid gap-4 xl:grid-cols-3">
+                        {workspaceCapabilityPolicyFamilies.map((policy) => (
+                          <WorkspaceConversationTypePolicyCard
+                            key={policy.family}
+                            label={policy.label}
+                            description={policy.description}
+                            value={workspaceConversationTypePolicies[policy.family]}
+                            saving={savingWorkspacePolicyFamily === policy.family}
+                            onSave={(mask) =>
+                              handleSaveWorkspaceConversationTypePolicy(
+                                policy.family,
+                                mask
+                              )
+                            }
+                          />
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <Separator />
+
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_auto]">
                     <div className="flex flex-col gap-2">
                       <Label htmlFor="workspace-access-member">Person</Label>

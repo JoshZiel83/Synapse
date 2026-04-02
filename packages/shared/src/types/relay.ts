@@ -150,6 +150,9 @@ export interface RelayExposureView {
   displayName: string;
   transport: RelayExposureTransport;
   runtimeStatus: RelayExposureRuntimeStatus;
+  workspaceConversationTypeMask: number;
+  conversationTypeMaskOverride?: number | null;
+  effectiveConversationTypeMask: number;
   lastSeenAt?: string;
   lastHealthyAt?: string;
   lastError?: string;

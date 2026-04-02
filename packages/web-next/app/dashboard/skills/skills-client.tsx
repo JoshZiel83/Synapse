@@ -1,12 +1,16 @@
 "use client"
 
 import {
+  CONVERSATION_TYPE_MASK_PRESETS,
   type CapabilityAccessTarget,
   type CapabilityAccessTargetType,
+  conversationTypeKeysToMask,
+  conversationTypeMaskToKeys,
   createCanonicalContentBlockId,
   extractText,
   textBlocks,
   type CanonicalContentBlock,
+  type ConversationTypeKey,
   type InstalledSkill,
   type SkillMarketplaceEntry,
 } from "@synapse/shared"
@@ -60,10 +64,12 @@ import {
 } from "@/components/ui/dialog"
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -131,12 +137,74 @@ const skillAccessAdapter = {
     resourceId: string,
     payload: {
       accessTarget?: CapabilityAccessTarget
+      conversationTypeMaskOverride?: number | null
       permissions?: string[]
     }
   ) => api.grantInstalledSkillAccess(workspaceId, resourceId, payload),
   revokeAccess: (workspaceId: string, resourceId: string, grantId: string) =>
     api.revokeInstalledSkillAccess(workspaceId, resourceId, grantId),
+  updateGrant: (
+    workspaceId: string,
+    resourceId: string,
+    grantId: string,
+    payload: {
+      conversationTypeMaskOverride?: number | null
+    }
+  ) =>
+    api.updateInstalledSkillAccessGrant(
+      workspaceId,
+      resourceId,
+      grantId,
+      payload
+    ),
+  updatePolicy: (
+    workspaceId: string,
+    resourceId: string,
+    payload: {
+      conversationTypeMaskOverride?: number | null
+    }
+  ) => api.updateInstalledSkill(workspaceId, resourceId, payload),
 }
+
+const skillConversationTypeOptions: Array<{
+  key: ConversationTypeKey
+  label: string
+  description: string
+}> = [
+  {
+    key: "internal_private",
+    label: "Internal private",
+    description: "Private conversations inside the workspace graph.",
+  },
+  {
+    key: "internal_group",
+    label: "Internal group",
+    description: "Workspace-local group conversations.",
+  },
+  {
+    key: "external_private",
+    label: "External private",
+    description: "Cross-workspace private conversations.",
+  },
+  {
+    key: "external_group",
+    label: "External group",
+    description: "Cross-workspace group conversations.",
+  },
+  {
+    key: "virtual",
+    label: "Virtual",
+    description: "Virtual or synthetic conversations.",
+  },
+]
+
+const skillConversationTypePresets = [
+  { label: "All", value: CONVERSATION_TYPE_MASK_PRESETS.ALL },
+  { label: "Internal only", value: CONVERSATION_TYPE_MASK_PRESETS.INTERNAL_ONLY },
+  { label: "External only", value: CONVERSATION_TYPE_MASK_PRESETS.EXTERNAL_ONLY },
+  { label: "Group only", value: CONVERSATION_TYPE_MASK_PRESETS.GROUP_ONLY },
+  { label: "Private only", value: CONVERSATION_TYPE_MASK_PRESETS.PRIVATE_ONLY },
+] as const
 
 type EditorDraft = {
   skillId?: string
@@ -148,6 +216,7 @@ type EditorDraft = {
   tagsText: string
   version: string
   changelog: string
+  defaultConversationTypeMask: number
   attachmentFiles: SkillFileDraft[]
 }
 
@@ -560,6 +629,10 @@ function createMarketplaceDraft(
     tagsText: skill?.tags.join(", ") || "",
     version: latestVersion?.version || "1.0.0",
     changelog: latestVersion?.changelog || "",
+    defaultConversationTypeMask:
+      latestVersion?.defaultConversationTypeMask ||
+      skill?.defaultConversationTypeMask ||
+      CONVERSATION_TYPE_MASK_PRESETS.ALL,
     attachmentFiles: latestVersion?.attachmentFiles?.map((file) => ({
       path: file.path,
       contentBlocks: file.contentBlocks,
@@ -586,6 +659,9 @@ function createInstalledDraft(skill?: InstalledSkill | null): EditorDraft {
     tagsText: skill?.tags.join(", ") || "",
     version: skill?.sourceVersion || "",
     changelog: "",
+    defaultConversationTypeMask:
+      skill?.sourceDefaultConversationTypeMask ||
+      CONVERSATION_TYPE_MASK_PRESETS.ALL,
     attachmentFiles,
   }
 }
@@ -600,6 +676,7 @@ function createWorkspaceDraft(): EditorDraft {
     tagsText: "",
     version: "",
     changelog: "",
+    defaultConversationTypeMask: CONVERSATION_TYPE_MASK_PRESETS.ALL,
     attachmentFiles: [createEmptySkillFile(REQUIRED_SKILL_PATH)],
   }
 }
@@ -792,6 +869,13 @@ function SkillEditorDialog({
   const [scopeDraft, setScopeDraft] = useState<ScopeDraft>(createScopeDraft())
   const [saving, setSaving] = useState(false)
   const [iconUploading, setIconUploading] = useState(false)
+  const selectedConversationTypeKeys = useMemo(
+    () =>
+      conversationTypeMaskToKeys(
+        draft.defaultConversationTypeMask || CONVERSATION_TYPE_MASK_PRESETS.ALL
+      ),
+    [draft.defaultConversationTypeMask]
+  )
 
   useEffect(() => {
     const nextDraft =
@@ -852,6 +936,32 @@ function SkillEditorDialog({
       iconFileId: null,
       iconPreviewUrl: undefined,
     }))
+  }
+
+  function applyConversationTypePreset(mask: number) {
+    setDraft((current) => ({
+      ...current,
+      defaultConversationTypeMask: mask,
+    }))
+  }
+
+  function toggleConversationTypeKey(key: ConversationTypeKey) {
+    setDraft((current) => {
+      const existingKeys = conversationTypeMaskToKeys(
+        current.defaultConversationTypeMask || CONVERSATION_TYPE_MASK_PRESETS.ALL
+      )
+      const nextKeys = existingKeys.includes(key)
+        ? existingKeys.filter((item) => item !== key)
+        : [...existingKeys, key]
+
+      return {
+        ...current,
+        defaultConversationTypeMask: conversationTypeKeysToMask(
+          nextKeys,
+          current.defaultConversationTypeMask || CONVERSATION_TYPE_MASK_PRESETS.ALL
+        ),
+      }
+    })
   }
 
   function addFile() {
@@ -953,6 +1063,7 @@ function SkillEditorDialog({
           tags: parseTags(draft.tagsText),
           version: draft.version.trim() || "1.0.0",
           changelog: draft.changelog.trim(),
+          defaultConversationTypeMask: draft.defaultConversationTypeMask,
           attachmentFiles,
         })
         toast.success(
@@ -1162,6 +1273,68 @@ function SkillEditorDialog({
                   </FieldGroup>
                 </CardContent>
               </Card>
+
+              {mode === "marketplace" ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Conversation Types</CardTitle>
+                    <CardDescription>
+                      Set the default conversation topologies where installed
+                      copies of this skill may appear before any installation
+                      override is applied.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-5">
+                    <div className="flex flex-wrap gap-2">
+                      {skillConversationTypePresets.map((preset) => (
+                        <Button
+                          key={preset.label}
+                          type="button"
+                          variant={
+                            draft.defaultConversationTypeMask === preset.value
+                              ? "default"
+                              : "outline"
+                          }
+                          size="sm"
+                          onClick={() => applyConversationTypePreset(preset.value)}
+                        >
+                          {preset.label}
+                        </Button>
+                      ))}
+                    </div>
+
+                    <FieldGroup>
+                      {skillConversationTypeOptions.map((option) => (
+                        <Field key={option.key} orientation="horizontal">
+                          <FieldContent>
+                            <div className="flex items-start gap-3">
+                              <Checkbox
+                                checked={selectedConversationTypeKeys.includes(option.key)}
+                                onCheckedChange={() => toggleConversationTypeKey(option.key)}
+                              />
+                              <div className="space-y-1">
+                                <FieldLabel>{option.label}</FieldLabel>
+                                <FieldDescription>
+                                  {option.description}
+                                </FieldDescription>
+                              </div>
+                            </div>
+                          </FieldContent>
+                        </Field>
+                      ))}
+                    </FieldGroup>
+
+                    <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Default mask preview
+                      </div>
+                      <div className="mt-2 text-sm font-medium text-foreground">
+                        {draft.defaultConversationTypeMask}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
 
               <Card>
                 <CardHeader>
@@ -1876,6 +2049,9 @@ export function InstalledSkillEditorPage({ skillId }: { skillId: string }) {
         tagsText: nextSkill.tags.join(", ") || "",
         version: nextSkill.sourceVersion || "",
         changelog: "",
+        defaultConversationTypeMask:
+          nextSkill.sourceDefaultConversationTypeMask ||
+          CONVERSATION_TYPE_MASK_PRESETS.ALL,
         attachmentFiles,
       })
       const firstPath =

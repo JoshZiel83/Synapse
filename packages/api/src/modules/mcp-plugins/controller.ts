@@ -23,6 +23,7 @@ import {
   McpPluginError,
   revokePluginInstallationAccess,
   uninstallPluginUnified,
+  updatePluginInstallationAccessGrant,
   updateInstallation,
   validateConfig,
 } from "./service.js";
@@ -38,6 +39,7 @@ import { getEventLogs, getToolCallLogs } from "./audit.js";
 const attachmentTargetTypeSchema = z.enum(ATTACHMENT_TARGET_TYPES);
 const accessTargetTypeSchema = z.enum(CAPABILITY_ACCESS_TARGET_TYPES);
 const lifecycleScopeSchema = z.enum(REUSE_SCOPES);
+const conversationTypeMaskSchema = z.number().int().min(1).max(31);
 const attachmentTargetSchema = z.object({
   type: attachmentTargetTypeSchema,
   actorId: z.string().uuid().optional(),
@@ -63,6 +65,7 @@ const updateInstallSchema = z.object({
   configData: z.record(z.unknown()).optional(),
   lifecycleScope: lifecycleScopeSchema.optional(),
   attachmentTarget: attachmentTargetSchema.optional(),
+  conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
   authSessionIds: z.record(z.string().uuid()).optional(),
 });
 
@@ -78,9 +81,14 @@ const startAuthSchema = z.object({
 
 const accessGrantSchema = z.object({
   accessTarget: accessTargetSchema.optional(),
+  conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
   permissions: z.array(z.string()).optional(),
   reason: z.string().trim().min(1).optional(),
   metadata: z.record(z.unknown()).optional(),
+});
+
+const accessGrantUpdateSchema = z.object({
+  conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
 });
 
 function handleError(reply: FastifyReply, error: unknown) {
@@ -521,6 +529,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         workspaceId,
         installationId: installId,
         accessTarget: body.accessTarget,
+        conversationTypeMaskOverride: body.conversationTypeMaskOverride,
         permissions: body.permissions,
         reason: body.reason,
         metadata: body.metadata,
@@ -528,6 +537,36 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
       });
 
       reply.status(201).send({ grant });
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.put("/api/v1/workspaces/:workspaceId/mcp/installations/:installId/access/:grantId", workspaceHook, async (request, reply) => {
+    try {
+      const allowed = await requireWorkspacePermission(
+        request,
+        reply,
+        "workspace.manage_plugins",
+        "Not allowed to manage plugin access in this workspace",
+      );
+      if (!allowed) return;
+
+      const { workspaceId, installId, grantId } = request.params as {
+        workspaceId: string;
+        installId: string;
+        grantId: string;
+      };
+      const body = accessGrantUpdateSchema.parse(request.body);
+
+      const grant = await updatePluginInstallationAccessGrant({
+        workspaceId,
+        installationId: installId,
+        grantId,
+        conversationTypeMaskOverride: body.conversationTypeMaskOverride,
+      });
+
+      reply.send({ grant });
     } catch (error) {
       handleError(reply, error);
     }

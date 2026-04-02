@@ -4,11 +4,21 @@ import { useEffect, useMemo, useState } from 'react';
 import type {
   CapabilityAccessTarget,
   CapabilityAccessTargetType,
+  ConversationTypeKey,
 } from '@synapse/shared/types';
-import { Bot, Plus, ShieldCheck, Trash2, UserRound } from 'lucide-react';
+import {
+  CONVERSATION_TYPE_MASK_PRESETS,
+  conversationTypeKeysToMask,
+  conversationTypeMaskToKeys,
+  normalizeConversationTypeMask,
+  resolveNarrowedConversationTypeMask,
+} from '@synapse/shared';
+import { Bot, Loader2, Plus, RotateCcw, Save, ShieldCheck, Trash2, UserRound } from 'lucide-react';
 import { getConversationDisplayName } from '@/app/dashboard/access/attachment-visuals';
+import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -120,6 +130,7 @@ type AccessAdapter = {
     resourceId: string,
     payload: {
       accessTarget?: CapabilityAccessTarget;
+      conversationTypeMaskOverride?: number | null;
       permissions?: string[];
     },
   ) => Promise<unknown>;
@@ -127,6 +138,21 @@ type AccessAdapter = {
     workspaceId: string,
     resourceId: string,
     grantId: string,
+  ) => Promise<unknown>;
+  updateGrant?: (
+    workspaceId: string,
+    resourceId: string,
+    grantId: string,
+    payload: {
+      conversationTypeMaskOverride?: number | null;
+    },
+  ) => Promise<unknown>;
+  updatePolicy?: (
+    workspaceId: string,
+    resourceId: string,
+    payload: {
+      conversationTypeMaskOverride?: number | null;
+    },
   ) => Promise<unknown>;
 };
 
@@ -137,7 +163,62 @@ const pluginInstallationAccessAdapter: AccessAdapter = {
     api.grantPluginInstallationAccess(workspaceId, resourceId, payload),
   revokeAccess: (workspaceId, resourceId, grantId) =>
     api.revokePluginInstallationAccess(workspaceId, resourceId, grantId),
+  updateGrant: (workspaceId, resourceId, grantId, payload) =>
+    api.updatePluginInstallationAccessGrant(
+      workspaceId,
+      resourceId,
+      grantId,
+      payload,
+    ),
+  updatePolicy: (workspaceId, resourceId, payload) =>
+    api.updateInstallation(workspaceId, resourceId, payload),
 };
+
+const conversationTypeOptions: Array<{
+  key: ConversationTypeKey;
+  label: string;
+  description: string;
+}> = [
+  {
+    key: 'internal_private',
+    label: 'Internal private',
+    description: 'Private conversations inside the workspace graph.',
+  },
+  {
+    key: 'internal_group',
+    label: 'Internal group',
+    description: 'Workspace-local group conversations.',
+  },
+  {
+    key: 'external_private',
+    label: 'External private',
+    description: 'Cross-workspace private conversations.',
+  },
+  {
+    key: 'external_group',
+    label: 'External group',
+    description: 'Cross-workspace group conversations.',
+  },
+  {
+    key: 'virtual',
+    label: 'Virtual',
+    description: 'Virtual or synthetic conversations.',
+  },
+];
+
+const conversationTypePresets = [
+  { label: 'All', value: CONVERSATION_TYPE_MASK_PRESETS.ALL },
+  { label: 'Internal only', value: CONVERSATION_TYPE_MASK_PRESETS.INTERNAL_ONLY },
+  { label: 'External only', value: CONVERSATION_TYPE_MASK_PRESETS.EXTERNAL_ONLY },
+  { label: 'Group only', value: CONVERSATION_TYPE_MASK_PRESETS.GROUP_ONLY },
+  { label: 'Private only', value: CONVERSATION_TYPE_MASK_PRESETS.PRIVATE_ONLY },
+] as const;
+
+function formatConversationTypeKeys(keys: ConversationTypeKey[]) {
+  return keys
+    .map((key) => conversationTypeOptions.find((option) => option.key === key)?.label || key)
+    .join(', ');
+}
 
 function normalizeActorOption(actor: any): ActorOption {
   const definition = actor?.definition || actor;
@@ -336,10 +417,23 @@ export default function PluginAccessStep({
   const [grants, setGrants] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const [savingGrantPolicy, setSavingGrantPolicy] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [grantPolicyDialogOpen, setGrantPolicyDialogOpen] = useState(false);
+  const [editingGrant, setEditingGrant] = useState<any | null>(null);
   const [grantScope, setGrantScope] = useState<PluginGrantScope>('workspace');
   const [conversationId, setConversationId] = useState('');
   const [actorId, setActorId] = useState('');
+  const [conversationTypeKeys, setConversationTypeKeys] = useState<ConversationTypeKey[]>(
+    conversationTypeMaskToKeys(CONVERSATION_TYPE_MASK_PRESETS.ALL),
+  );
+  const [newGrantConversationTypeKeys, setNewGrantConversationTypeKeys] = useState<
+    ConversationTypeKey[]
+  >(conversationTypeMaskToKeys(CONVERSATION_TYPE_MASK_PRESETS.ALL));
+  const [grantConversationTypeKeys, setGrantConversationTypeKeys] = useState<ConversationTypeKey[]>(
+    conversationTypeMaskToKeys(CONVERSATION_TYPE_MASK_PRESETS.ALL),
+  );
 
   const resolvedResourceId = resourceId || installation?.id || null;
   const resourceLabelLower = resourceLabel.toLowerCase();
@@ -375,6 +469,104 @@ export default function PluginAccessStep({
   const selectedScopeOption = useMemo(
     () => grantScopeOptions.find((option) => option.value === grantScope) || grantScopeOptions[0],
     [grantScope],
+  );
+  const sourceDefaultConversationTypeMask = useMemo(
+    () => normalizeConversationTypeMask(summary?.sourceDefaultConversationTypeMask),
+    [summary?.sourceDefaultConversationTypeMask],
+  );
+  const workspaceConversationTypeMask = useMemo(
+    () => normalizeConversationTypeMask(summary?.workspaceConversationTypeMask),
+    [summary?.workspaceConversationTypeMask],
+  );
+  const effectiveConversationTypeMask = useMemo(
+    () =>
+      normalizeConversationTypeMask(
+        summary?.effectiveConversationTypeMask,
+        workspaceConversationTypeMask,
+      ),
+    [summary?.effectiveConversationTypeMask, workspaceConversationTypeMask],
+  );
+  const currentConversationTypeMask = useMemo(
+    () =>
+      conversationTypeKeysToMask(
+        conversationTypeKeys,
+        effectiveConversationTypeMask,
+      ),
+    [conversationTypeKeys, effectiveConversationTypeMask],
+  );
+  const selectedConversationTypeLabels = useMemo(
+    () => formatConversationTypeKeys(conversationTypeKeys),
+    [conversationTypeKeys],
+  );
+  const workspaceAllowedConversationTypeKeys = useMemo(
+    () => new Set(conversationTypeMaskToKeys(workspaceConversationTypeMask)),
+    [workspaceConversationTypeMask],
+  );
+  const canManageConversationTypes = Boolean(
+    accessAdapter.updatePolicy &&
+      typeof summary?.effectiveConversationTypeMask === 'number',
+  );
+  const nextConversationTypeMaskOverride = useMemo(
+    () =>
+      currentConversationTypeMask === workspaceConversationTypeMask
+        ? null
+        : currentConversationTypeMask,
+    [currentConversationTypeMask, workspaceConversationTypeMask],
+  );
+  const hasConversationTypeChanges =
+    canManageConversationTypes &&
+    currentConversationTypeMask !== effectiveConversationTypeMask;
+  const canManageGrantConversationTypes = Boolean(accessAdapter.updateGrant);
+  const currentGrantBaseMask = useMemo(
+    () =>
+      normalizeConversationTypeMask(
+        summary?.effectiveConversationTypeMask,
+        CONVERSATION_TYPE_MASK_PRESETS.ALL,
+      ),
+    [summary?.effectiveConversationTypeMask],
+  );
+  const instanceAllowedConversationTypeKeys = useMemo(
+    () => new Set(conversationTypeMaskToKeys(currentGrantBaseMask)),
+    [currentGrantBaseMask],
+  );
+  const currentNewGrantConversationTypeMask = useMemo(
+    () =>
+      conversationTypeKeysToMask(
+        newGrantConversationTypeKeys,
+        currentGrantBaseMask,
+      ),
+    [currentGrantBaseMask, newGrantConversationTypeKeys],
+  );
+  const nextNewGrantConversationTypeMaskOverride = useMemo(
+    () =>
+      currentNewGrantConversationTypeMask === currentGrantBaseMask
+        ? null
+        : currentNewGrantConversationTypeMask,
+    [currentGrantBaseMask, currentNewGrantConversationTypeMask],
+  );
+  const selectedNewGrantConversationTypeLabels = useMemo(
+    () => formatConversationTypeKeys(newGrantConversationTypeKeys),
+    [newGrantConversationTypeKeys],
+  );
+  const currentGrantConversationTypeMask = useMemo(
+    () =>
+      conversationTypeKeysToMask(
+        grantConversationTypeKeys,
+        currentGrantBaseMask,
+      ),
+    [currentGrantBaseMask, grantConversationTypeKeys],
+  );
+  const nextGrantConversationTypeMaskOverride = useMemo(
+    () =>
+      currentGrantConversationTypeMask === currentGrantBaseMask
+        ? null
+        : currentGrantConversationTypeMask,
+    [currentGrantBaseMask, currentGrantConversationTypeMask],
+  );
+  const hasGrantConversationTypeChanges = Boolean(
+    editingGrant &&
+      nextGrantConversationTypeMaskOverride !==
+        (editingGrant?.conversationTypeMaskOverride ?? null),
   );
 
   const previewTarget = useMemo(() => {
@@ -529,6 +721,46 @@ export default function PluginAccessStep({
   };
 
   useEffect(() => {
+    if (typeof summary?.effectiveConversationTypeMask !== 'number') {
+      return;
+    }
+    setConversationTypeKeys(
+      conversationTypeMaskToKeys(
+        summary.effectiveConversationTypeMask,
+      ),
+    );
+  }, [
+    summary?.effectiveConversationTypeMask,
+  ]);
+
+  useEffect(() => {
+    if (!dialogOpen) {
+      return;
+    }
+    setNewGrantConversationTypeKeys(
+      conversationTypeMaskToKeys(currentGrantBaseMask),
+    );
+  }, [currentGrantBaseMask, dialogOpen]);
+
+  useEffect(() => {
+    if (!grantPolicyDialogOpen || !editingGrant) {
+      return;
+    }
+    setGrantConversationTypeKeys(
+      conversationTypeMaskToKeys(
+        normalizeConversationTypeMask(
+          editingGrant.effectiveConversationTypeMask,
+          currentGrantBaseMask,
+        ),
+      ),
+    );
+  }, [
+    currentGrantBaseMask,
+    editingGrant,
+    grantPolicyDialogOpen,
+  ]);
+
+  useEffect(() => {
     if (!workspaceId || !resolvedResourceId) {
       setSummary(null);
       setGrants([]);
@@ -572,6 +804,7 @@ export default function PluginAccessStep({
               ? conversationId
               : undefined,
         },
+        conversationTypeMaskOverride: nextNewGrantConversationTypeMaskOverride,
         permissions: summary?.requiredPermissions?.length ? summary.requiredPermissions : ['use'],
       });
       await loadAccessState();
@@ -586,6 +819,152 @@ export default function PluginAccessStep({
     if (!workspaceId || !resolvedResourceId) return;
     await accessAdapter.revokeAccess(workspaceId, resolvedResourceId, grantId);
     await loadAccessState();
+  };
+
+  const toggleConversationTypeKey = (key: ConversationTypeKey) => {
+    if (!workspaceAllowedConversationTypeKeys.has(key)) {
+      return;
+    }
+    setConversationTypeKeys((current) => {
+      const exists = current.includes(key);
+      if (exists && current.length === 1) {
+        return current;
+      }
+      return exists
+        ? current.filter((item) => item !== key)
+        : [...current, key];
+    });
+  };
+
+  const applyConversationTypePreset = (mask: number) => {
+    setConversationTypeKeys(
+      conversationTypeMaskToKeys(
+        resolveNarrowedConversationTypeMask(workspaceConversationTypeMask, mask),
+      ),
+    );
+  };
+
+  const resetConversationTypePolicy = () => {
+    setConversationTypeKeys(conversationTypeMaskToKeys(workspaceConversationTypeMask));
+  };
+
+  const saveConversationTypePolicy = async () => {
+    if (
+      !workspaceId ||
+      !resolvedResourceId ||
+      !accessAdapter.updatePolicy ||
+      !hasConversationTypeChanges
+    ) {
+      return;
+    }
+
+    setSavingPolicy(true);
+    try {
+      await accessAdapter.updatePolicy(workspaceId, resolvedResourceId, {
+        conversationTypeMaskOverride: nextConversationTypeMaskOverride,
+      });
+      await loadAccessState();
+    } finally {
+      setSavingPolicy(false);
+    }
+  };
+
+  const toggleNewGrantConversationTypeKey = (key: ConversationTypeKey) => {
+    if (!instanceAllowedConversationTypeKeys.has(key)) {
+      return;
+    }
+    setNewGrantConversationTypeKeys((current) => {
+      const exists = current.includes(key);
+      if (exists && current.length === 1) {
+        return current;
+      }
+      return exists
+        ? current.filter((item) => item !== key)
+        : [...current, key];
+    });
+  };
+
+  const applyNewGrantConversationTypePreset = (mask: number) => {
+    setNewGrantConversationTypeKeys(
+      conversationTypeMaskToKeys(
+        resolveNarrowedConversationTypeMask(currentGrantBaseMask, mask),
+      ),
+    );
+  };
+
+  const resetNewGrantConversationTypePolicy = () => {
+    setNewGrantConversationTypeKeys(
+      conversationTypeMaskToKeys(currentGrantBaseMask),
+    );
+  };
+
+  const openGrantConversationTypeDialog = (grant: any) => {
+    setEditingGrant(grant);
+    setGrantPolicyDialogOpen(true);
+  };
+
+  const toggleGrantConversationTypeKey = (key: ConversationTypeKey) => {
+    if (!instanceAllowedConversationTypeKeys.has(key)) {
+      return;
+    }
+    setGrantConversationTypeKeys((current) => {
+      const exists = current.includes(key);
+      if (exists && current.length === 1) {
+        return current;
+      }
+      return exists
+        ? current.filter((item) => item !== key)
+        : [...current, key];
+    });
+  };
+
+  const applyGrantConversationTypePreset = (mask: number) => {
+    setGrantConversationTypeKeys(
+      conversationTypeMaskToKeys(
+        resolveNarrowedConversationTypeMask(currentGrantBaseMask, mask),
+      ),
+    );
+  };
+
+  const resetGrantConversationTypePolicy = () => {
+    setGrantConversationTypeKeys(
+      conversationTypeMaskToKeys(
+        normalizeConversationTypeMask(
+          editingGrant?.effectiveConversationTypeMask,
+          currentGrantBaseMask,
+        ),
+      ),
+    );
+  };
+
+  const followInstanceGrantConversationTypePolicy = () => {
+    setGrantConversationTypeKeys(
+      conversationTypeMaskToKeys(currentGrantBaseMask),
+    );
+  };
+
+  const saveGrantConversationTypePolicy = async () => {
+    if (
+      !workspaceId ||
+      !resolvedResourceId ||
+      !editingGrant?.id ||
+      !accessAdapter.updateGrant ||
+      !hasGrantConversationTypeChanges
+    ) {
+      return;
+    }
+
+    setSavingGrantPolicy(true);
+    try {
+      await accessAdapter.updateGrant(workspaceId, resolvedResourceId, editingGrant.id, {
+        conversationTypeMaskOverride: nextGrantConversationTypeMaskOverride,
+      });
+      await loadAccessState();
+      setGrantPolicyDialogOpen(false);
+      setEditingGrant(null);
+    } finally {
+      setSavingGrantPolicy(false);
+    }
   };
 
   const renderTargetSelector = () => {
@@ -702,6 +1081,145 @@ export default function PluginAccessStep({
 
   return (
     <>
+      {canManageConversationTypes ? (
+        <Card className="rounded-[28px]">
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <div className="space-y-1">
+                <CardTitle>Conversation Types</CardTitle>
+                <CardDescription>
+                  Limit which conversation topologies can surface this {resourceLabelLower}. Runtime visibility follows workspace default, then this instance override, then each matching grant.
+                </CardDescription>
+              </div>
+              <Badge variant={summary?.conversationTypeMaskOverride ? 'secondary' : 'outline'}>
+                {summary?.conversationTypeMaskOverride ? 'Override active' : 'Follow workspace'}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-5">
+            <div className="flex flex-wrap gap-2">
+              {conversationTypePresets.map((preset) => (
+                <Button
+                  key={preset.label}
+                  type="button"
+                  variant={
+                    currentConversationTypeMask === preset.value ? 'default' : 'outline'
+                  }
+                  size="sm"
+                  onClick={() => applyConversationTypePreset(preset.value)}
+                >
+                  {preset.label}
+                </Button>
+              ))}
+            </div>
+
+            <FieldGroup>
+              {conversationTypeOptions.map((option) => (
+                <Field key={option.key} orientation="horizontal">
+                  <FieldContent>
+                    <div className="flex items-start gap-3">
+                      <Checkbox
+                        checked={conversationTypeKeys.includes(option.key)}
+                        disabled={!workspaceAllowedConversationTypeKeys.has(option.key)}
+                        onCheckedChange={() => toggleConversationTypeKey(option.key)}
+                      />
+                      <div className="space-y-1">
+                        <FieldLabel>{option.label}</FieldLabel>
+                        <FieldDescription>{option.description}</FieldDescription>
+                      </div>
+                    </div>
+                  </FieldContent>
+                </Field>
+              ))}
+            </FieldGroup>
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Source Default
+                </div>
+                <div className="mt-2 text-sm font-medium text-foreground">
+                  {typeof summary?.sourceDefaultConversationTypeMask === 'number'
+                    ? sourceDefaultConversationTypeMask
+                    : 'None'}
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {typeof summary?.sourceDefaultConversationTypeMask === 'number'
+                    ? formatConversationTypeKeys(
+                        conversationTypeMaskToKeys(sourceDefaultConversationTypeMask),
+                      )
+                    : 'Used only to initialize new installs.'}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Workspace
+                </div>
+                <div className="mt-2 text-sm font-medium text-foreground">
+                  {workspaceConversationTypeMask}
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {formatConversationTypeKeys(
+                    conversationTypeMaskToKeys(workspaceConversationTypeMask),
+                  )}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Effective Instance
+                </div>
+                <div className="mt-2 text-sm font-medium text-foreground">
+                  {effectiveConversationTypeMask}
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {formatConversationTypeKeys(
+                    conversationTypeMaskToKeys(effectiveConversationTypeMask),
+                  )}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Draft
+                </div>
+                <div className="mt-2 text-sm font-medium text-foreground">
+                  {currentConversationTypeMask}
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {selectedConversationTypeLabels}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={resetConversationTypePolicy}
+                disabled={savingPolicy}
+              >
+                <RotateCcw data-icon="inline-start" />
+                Follow workspace
+              </Button>
+              <Button
+                type="button"
+                onClick={() => void saveConversationTypePolicy()}
+                disabled={!hasConversationTypeChanges || savingPolicy}
+              >
+                {savingPolicy ? (
+                  <Loader2 className="animate-spin" data-icon="inline-start" />
+                ) : (
+                  <Save data-icon="inline-start" />
+                )}
+                Save conversation types
+              </Button>
+              <div className="text-sm text-muted-foreground">
+                Override payload: {nextConversationTypeMaskOverride ?? 'follow workspace'}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card className="rounded-[28px]">
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
@@ -724,14 +1242,15 @@ export default function PluginAccessStep({
               <TableRow>
                 <TableHead className="px-6">Type</TableHead>
                 <TableHead>Who Can Use It</TableHead>
+                <TableHead>Conversation Types</TableHead>
                 <TableHead>Added</TableHead>
-                <TableHead className="w-[96px] px-6 text-right">Action</TableHead>
+                <TableHead className="w-[180px] px-6 text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {grants.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="px-6 py-8 text-sm text-muted-foreground">
+                  <TableCell colSpan={5} className="px-6 py-8 text-sm text-muted-foreground">
                     {noAccessMessage}
                   </TableCell>
                 </TableRow>
@@ -746,19 +1265,49 @@ export default function PluginAccessStep({
                         {formatGrantTarget(grant, actorNamesById, conversationNamesById)}
                       </div>
                     </TableCell>
+                    <TableCell className="max-w-0">
+                      <div className="space-y-1">
+                        <div className="truncate">
+                          {formatConversationTypeKeys(
+                            conversationTypeMaskToKeys(
+                              normalizeConversationTypeMask(
+                                grant.effectiveConversationTypeMask,
+                                effectiveConversationTypeMask,
+                              ),
+                            ),
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {grant.conversationTypeMaskOverride
+                            ? `Override ${grant.conversationTypeMaskOverride}`
+                            : 'Follow instance'}
+                        </div>
+                      </div>
+                    </TableCell>
                     <TableCell className="text-muted-foreground">
                       {formatTimestamp(grant.createdAt || grant.grantedAt)}
                     </TableCell>
                     <TableCell className="px-6 text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-muted-foreground hover:text-destructive"
-                        onClick={() => revokeGrant(grant.id)}
-                      >
-                        <Trash2 />
-                        <span className="sr-only">Remove access</span>
-                      </Button>
+                      <div className="flex justify-end gap-2">
+                        {canManageGrantConversationTypes ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => openGrantConversationTypeDialog(grant)}
+                          >
+                            Types
+                          </Button>
+                        ) : null}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-muted-foreground hover:text-destructive"
+                          onClick={() => revokeGrant(grant.id)}
+                        >
+                          <Trash2 />
+                          <span className="sr-only">Remove access</span>
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))
@@ -806,6 +1355,94 @@ export default function PluginAccessStep({
               </RadioGroup>
 
               {renderTargetSelector()}
+
+              <div className="rounded-3xl border border-border bg-muted/20 p-4">
+                <div className="flex flex-col gap-1">
+                  <div className="text-sm font-medium text-foreground">
+                    Grant conversation types
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    Leave this aligned with the instance to follow the instance policy. A grant override can only narrow the instance scope.
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {conversationTypePresets.map((preset) => (
+                    <Button
+                      key={preset.label}
+                      type="button"
+                      variant={
+                        currentNewGrantConversationTypeMask === preset.value ? 'default' : 'outline'
+                      }
+                      size="sm"
+                      onClick={() => applyNewGrantConversationTypePreset(preset.value)}
+                    >
+                      {preset.label}
+                    </Button>
+                  ))}
+                </div>
+
+                <div className="mt-4 grid gap-3">
+                  {conversationTypeOptions.map((option) => (
+                    <Field key={`new-grant-${option.key}`} orientation="horizontal">
+                      <FieldContent>
+                        <div className="flex items-start gap-3">
+                          <Checkbox
+                            checked={newGrantConversationTypeKeys.includes(option.key)}
+                            disabled={!instanceAllowedConversationTypeKeys.has(option.key)}
+                            onCheckedChange={() => toggleNewGrantConversationTypeKey(option.key)}
+                          />
+                          <div className="space-y-1">
+                            <FieldLabel>{option.label}</FieldLabel>
+                            <FieldDescription>{option.description}</FieldDescription>
+                          </div>
+                        </div>
+                      </FieldContent>
+                    </Field>
+                  ))}
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-2xl border border-border bg-background p-4">
+                    <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Instance Effective
+                    </div>
+                    <div className="mt-2 text-sm font-medium text-foreground">
+                      {currentGrantBaseMask}
+                    </div>
+                    <div className="mt-1 text-sm text-muted-foreground">
+                      {formatConversationTypeKeys(
+                        conversationTypeMaskToKeys(currentGrantBaseMask),
+                      )}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-border bg-background p-4">
+                    <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Grant Draft
+                    </div>
+                    <div className="mt-2 text-sm font-medium text-foreground">
+                      {currentNewGrantConversationTypeMask}
+                    </div>
+                    <div className="mt-1 text-sm text-muted-foreground">
+                      {selectedNewGrantConversationTypeLabels}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={resetNewGrantConversationTypePolicy}
+                  >
+                    <RotateCcw data-icon="inline-start" />
+                    Follow instance
+                  </Button>
+                  <div className="text-sm text-muted-foreground">
+                    Override payload: {nextNewGrantConversationTypeMaskOverride ?? 'follow instance'}
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div className="rounded-3xl border border-border bg-muted/20 p-5">
@@ -832,6 +1469,167 @@ export default function PluginAccessStep({
             </Button>
             <Button onClick={createGrant} disabled={saving || !canCreateGrant}>
               {saving ? 'Adding access...' : 'Add Access'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={grantPolicyDialogOpen}
+        onOpenChange={(open) => {
+          setGrantPolicyDialogOpen(open);
+          if (!open) {
+            setEditingGrant(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Grant Conversation Types</DialogTitle>
+            <DialogDescription>
+              This grant can only narrow the instance-level conversation types. Clearing the override makes it follow the instance again.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-5">
+            <div className="rounded-2xl border border-border bg-muted/20 p-4">
+              <div className="text-sm font-medium text-foreground">
+                {editingGrant
+                  ? formatGrantTarget(editingGrant, actorNamesById, conversationNamesById)
+                  : 'Selected grant'}
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                {editingGrant
+                  ? getScopeLabel(editingGrant.target?.type || 'workspace')
+                  : 'Grant'}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {conversationTypePresets.map((preset) => (
+                <Button
+                  key={`grant-preset-${preset.label}`}
+                  type="button"
+                  variant={
+                    currentGrantConversationTypeMask === preset.value ? 'default' : 'outline'
+                  }
+                  size="sm"
+                  onClick={() => applyGrantConversationTypePreset(preset.value)}
+                >
+                  {preset.label}
+                </Button>
+              ))}
+            </div>
+
+            <FieldGroup>
+              {conversationTypeOptions.map((option) => (
+                <Field key={`grant-${option.key}`} orientation="horizontal">
+                  <FieldContent>
+                    <div className="flex items-start gap-3">
+                      <Checkbox
+                        checked={grantConversationTypeKeys.includes(option.key)}
+                        disabled={!instanceAllowedConversationTypeKeys.has(option.key)}
+                        onCheckedChange={() => toggleGrantConversationTypeKey(option.key)}
+                      />
+                      <div className="space-y-1">
+                        <FieldLabel>{option.label}</FieldLabel>
+                        <FieldDescription>{option.description}</FieldDescription>
+                      </div>
+                    </div>
+                  </FieldContent>
+                </Field>
+              ))}
+            </FieldGroup>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Instance Effective
+                </div>
+                <div className="mt-2 text-sm font-medium text-foreground">
+                  {currentGrantBaseMask}
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {formatConversationTypeKeys(
+                    conversationTypeMaskToKeys(currentGrantBaseMask),
+                  )}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Saved Effective
+                </div>
+                <div className="mt-2 text-sm font-medium text-foreground">
+                  {normalizeConversationTypeMask(
+                    editingGrant?.effectiveConversationTypeMask,
+                    currentGrantBaseMask,
+                  )}
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {formatConversationTypeKeys(
+                    conversationTypeMaskToKeys(
+                      normalizeConversationTypeMask(
+                        editingGrant?.effectiveConversationTypeMask,
+                        currentGrantBaseMask,
+                      ),
+                    ),
+                  )}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Draft
+                </div>
+                <div className="mt-2 text-sm font-medium text-foreground">
+                  {currentGrantConversationTypeMask}
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {formatConversationTypeKeys(grantConversationTypeKeys)}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={followInstanceGrantConversationTypePolicy}
+              >
+                Follow instance
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={resetGrantConversationTypePolicy}
+              >
+                Reset to saved
+              </Button>
+              <div className="text-sm text-muted-foreground">
+                Override payload: {nextGrantConversationTypeMaskOverride ?? 'follow instance'}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setGrantPolicyDialogOpen(false);
+                setEditingGrant(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void saveGrantConversationTypePolicy()}
+              disabled={!hasGrantConversationTypeChanges || savingGrantPolicy}
+            >
+              {savingGrantPolicy ? (
+                <Loader2 className="animate-spin" data-icon="inline-start" />
+              ) : (
+                <Save data-icon="inline-start" />
+              )}
+              Save grant conversation types
             </Button>
           </DialogFooter>
         </DialogContent>

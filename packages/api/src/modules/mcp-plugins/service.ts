@@ -1,7 +1,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import type pg from "pg";
-import { nowISO, REUSE_SCOPES } from "@synapse/shared";
+import {
+  DEFAULT_CONVERSATION_TYPE_MASK,
+  normalizeConversationTypeMask,
+  nowISO,
+  REUSE_SCOPES,
+  resolveEffectiveConversationTypeMask,
+  resolveNarrowedConversationTypeMask,
+} from "@synapse/shared";
 import type {
   AccessGrant,
   AttachmentTarget,
@@ -30,6 +37,9 @@ import {
   type AuthzRelationMutation,
 } from "../../infrastructure/authz/index.js";
 import { query, transaction } from "../../infrastructure/database/index.js";
+import {
+  getWorkspaceCapabilityConversationTypeMask,
+} from "../capabilities/conversation-type-policies.js";
 import {
   db,
   executeCompiledQuery,
@@ -100,6 +110,7 @@ type PluginCatalogRow = {
   spec_auth_bindings: unknown;
   spec_default_mount_scope: AttachmentTargetType | null;
   spec_default_reuse_scope: PluginReuseScopeV2 | null;
+  spec_default_conversation_type_mask: number | null;
   spec_supported_reuse_scopes: unknown;
   spec_requires_handshake: boolean | null;
   spec_metadata: unknown;
@@ -155,6 +166,7 @@ type InstallationRow = {
   config_data: unknown;
   approved_runtime_permissions: string[] | null;
   reuse_scope: PluginReuseScopeV2;
+  conversation_type_mask_override: number | null;
   installation_status: "active" | "disabled" | "error" | "archived";
   installed_by_workspace_member_id: string | null;
   installation_metadata: unknown;
@@ -206,6 +218,7 @@ const PLUGIN_CATALOG_SELECT = `
     spec.auth_bindings AS spec_auth_bindings,
     spec.default_mount_scope AS spec_default_mount_scope,
     spec.default_reuse_scope AS spec_default_reuse_scope,
+    spec.default_conversation_type_mask AS spec_default_conversation_type_mask,
     spec.supported_reuse_scopes AS spec_supported_reuse_scopes,
     spec.requires_handshake AS spec_requires_handshake,
     spec.metadata AS spec_metadata,
@@ -498,6 +511,10 @@ function mapPluginView(row: PluginCatalogRow) {
   const specMetadata = asObject(row.spec_metadata);
   const defaultInstanceScope = publicAttachmentScope(row.spec_default_mount_scope);
   const defaultReuseScope = publicReuseScope(row.spec_default_reuse_scope);
+  const defaultConversationTypeMask = resolveEffectiveConversationTypeMask({
+    defaultMask: row.spec_default_conversation_type_mask,
+    overrideMask: null,
+  });
   const supportedReuseScopes = normalizeSupportedReuseScopes(
     row.spec_supported_reuse_scopes,
     defaultReuseScope,
@@ -542,6 +559,7 @@ function mapPluginView(row: PluginCatalogRow) {
     entry_point: row.spec_entry_point || "",
     lifecycle_scope: defaultReuseScope,
     default_reuse_scope: defaultReuseScope,
+    default_conversation_type_mask: defaultConversationTypeMask,
     supported_reuse_scopes: supportedReuseScopes,
     default_instance_scope: defaultInstanceScope,
     config_schema: asObject(row.spec_config_schema),
@@ -927,6 +945,7 @@ async function loadInstallationRows(
         installation.config_data,
         installation.approved_runtime_permissions,
         installation.reuse_scope,
+        installation.conversation_type_mask_override,
         installation.status AS installation_status,
         installation.installed_by_workspace_member_id,
         installation.metadata AS installation_metadata,
@@ -992,6 +1011,7 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
         "subject_conversation_id",
       ),
       "binding.subject_conversation_actor_context_id",
+      "binding.conversation_type_mask_override",
       "binding.granted_permissions",
       "binding.status",
       "binding.created_by_workspace_member_id",
@@ -1091,14 +1111,38 @@ function mapAccessRowToGrant(
   mount: InstallationAccessRow,
   requiredPermissions: string[],
   reason?: string,
+  options?: {
+    workspaceConversationTypeMask: number;
+    instanceConversationTypeMaskOverride: number | null;
+  },
 ): AccessGrant {
-  return mapAccessBindingToGrant(mount, requiredPermissions, reason);
+  const effectiveConversationTypeMask = options
+    ? resolveNarrowedConversationTypeMask(
+        resolveNarrowedConversationTypeMask(
+          options.workspaceConversationTypeMask,
+          options.instanceConversationTypeMaskOverride,
+        ),
+        mount.conversation_type_mask_override,
+      )
+    : undefined;
+  return mapAccessBindingToGrant(mount, requiredPermissions, reason, {
+    effectiveConversationTypeMask,
+  });
 }
 
 function buildInstallationPayload(
   row: InstallationRow,
   plugin: ReturnType<typeof mapPluginView>,
+  workspaceConversationTypeMask: number,
 ) {
+  const sourceDefaultConversationTypeMask = normalizeConversationTypeMask(
+    plugin.default_conversation_type_mask,
+    DEFAULT_CONVERSATION_TYPE_MASK,
+  );
+  const effectiveConversationTypeMask = resolveNarrowedConversationTypeMask(
+    workspaceConversationTypeMask,
+    row.conversation_type_mask_override,
+  );
   const { sanitizedConfig, configState } = sanitizeInstallationConfig(
     {
       config_data: row.config_data,
@@ -1125,6 +1169,11 @@ function buildInstallationPayload(
     access_target: accessTarget,
     lifecycle_scope: publicReuseScope(row.reuse_scope),
     default_reuse_scope: plugin.default_reuse_scope,
+    source_default_conversation_type_mask: sourceDefaultConversationTypeMask,
+    workspace_conversation_type_mask: workspaceConversationTypeMask,
+    conversation_type_mask_override:
+      row.conversation_type_mask_override ?? null,
+    effective_conversation_type_mask: effectiveConversationTypeMask,
     supported_reuse_scopes: plugin.supported_reuse_scopes || [],
     is_enabled: row.installation_status === "active",
     status: row.installation_status,
@@ -1188,11 +1237,21 @@ async function getInstallationPayload(workspaceId: string, installationId: strin
   if (!plugin) {
     throw new McpPluginError(404, "Plugin not found");
   }
+  const workspaceConversationTypeMask =
+    await getWorkspaceCapabilityConversationTypeMask(
+      row.workspace_id,
+      "plugin_installation",
+    );
 
   return {
     row,
     plugin,
-    installation: buildInstallationPayload(row, plugin),
+    workspaceConversationTypeMask,
+    installation: buildInstallationPayload(
+      row,
+      plugin,
+      workspaceConversationTypeMask,
+    ),
   };
 }
 
@@ -1322,6 +1381,7 @@ async function upsertPluginVersion(
     lifecycleScope?: ReuseScope;
     supportedReuseScopes?: ReuseScope[];
     defaultInstanceScope?: AttachmentTargetType;
+    defaultConversationTypeMask?: number;
     requiresHandshake?: boolean;
     toolsManifest?: unknown[];
     configSchema?: Record<string, unknown>;
@@ -1366,6 +1426,10 @@ async function upsertPluginVersion(
     },
   };
   const defaultReuseScope = input.lifecycleScope || "conversation";
+  const defaultConversationTypeMask = resolveEffectiveConversationTypeMask({
+    defaultMask: input.defaultConversationTypeMask,
+    overrideMask: null,
+  });
   const supportedReuseScopes = normalizeSupportedReuseScopes(
     input.supportedReuseScopes,
     defaultReuseScope,
@@ -1383,13 +1447,14 @@ async function upsertPluginVersion(
        auth_bindings,
        default_mount_scope,
        default_reuse_scope,
+       default_conversation_type_mask,
        supported_reuse_scopes,
        requires_handshake,
        metadata
      )
      VALUES (
        $1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb,
-       $9, $10, $11, $12, $13::jsonb
+       $9, $10, $11, $12, $13, $14::jsonb
      )
      ON CONFLICT (catalog_version_id) DO UPDATE
        SET transport = EXCLUDED.transport,
@@ -1401,6 +1466,7 @@ async function upsertPluginVersion(
            auth_bindings = EXCLUDED.auth_bindings,
            default_mount_scope = EXCLUDED.default_mount_scope,
            default_reuse_scope = EXCLUDED.default_reuse_scope,
+           default_conversation_type_mask = EXCLUDED.default_conversation_type_mask,
            supported_reuse_scopes = EXCLUDED.supported_reuse_scopes,
            requires_handshake = EXCLUDED.requires_handshake,
            metadata = EXCLUDED.metadata`,
@@ -1415,6 +1481,7 @@ async function upsertPluginVersion(
       JSON.stringify(input.authBindings || []),
       internalAttachmentScope(input.defaultInstanceScope || "workspace"),
       internalReuseScope(defaultReuseScope),
+      defaultConversationTypeMask,
       supportedReuseScopes.map((scope) => internalReuseScope(scope)),
       input.requiresHandshake ?? input.transport !== "builtin",
       JSON.stringify(metadata),
@@ -1816,6 +1883,8 @@ export async function installPluginUnified(data: {
           config_data: {} as TableInsert<"plugin_installations">["config_data"],
           approved_runtime_permissions: approvedRuntimePermissions,
           reuse_scope: internalReuseScope(lifecycleScope),
+          conversation_type_mask_override:
+            plugin.default_conversation_type_mask ?? null,
           status: "active",
           installed_by_workspace_member_id:
             data.installedByWorkspaceMemberId || null,
@@ -2035,11 +2104,18 @@ export async function getInstallations(
   const pluginsByVersionId = await loadPluginCatalogMapByVersionIds(
     Array.from(new Set(rows.map((row) => row.catalog_version_id))),
   );
+  const workspaceConversationTypeMask =
+    await getWorkspaceCapabilityConversationTypeMask(
+      workspaceId,
+      "plugin_installation",
+    );
 
   return rows
     .map((row) => {
       const plugin = pluginsByVersionId.get(row.catalog_version_id);
-      return plugin ? buildInstallationPayload(row, plugin) : null;
+      return plugin
+        ? buildInstallationPayload(row, plugin, workspaceConversationTypeMask)
+        : null;
     })
     .filter(Boolean);
 }
@@ -2057,6 +2133,7 @@ export async function updateInstallation(
     authSessionIds?: Record<string, string>;
     lifecycleScope?: ReuseScope;
     attachmentTarget?: AttachmentTarget;
+    conversationTypeMaskOverride?: number | null;
     updatedByWorkspaceMemberId?: string;
   },
 ) {
@@ -2234,6 +2311,16 @@ export async function updateInstallation(
       );
     }
 
+    if (data.conversationTypeMaskOverride !== undefined) {
+      await run(
+        `UPDATE plugin_installations
+         SET conversation_type_mask_override = $2,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [installId, data.conversationTypeMaskOverride],
+      );
+    }
+
     return [] as string[];
   });
 
@@ -2256,10 +2343,11 @@ export async function getPluginInstallationAccessState(
   workspaceId: string,
   installationId: string,
 ) {
-  const { installation, plugin } = await getInstallationPayload(
+  const { installation, plugin, workspaceConversationTypeMask } =
+    await getInstallationPayload(
     workspaceId,
     installationId,
-  );
+    );
   const accessRows = await listAccessRows(installationId);
   const grants = accessRows
     .filter((binding) => binding.status === "active")
@@ -2268,6 +2356,11 @@ export async function getPluginInstallationAccessState(
         binding,
         plugin.authorization?.requiredPermissions || [],
         plugin.authorization?.reason,
+        {
+          workspaceConversationTypeMask,
+          instanceConversationTypeMaskOverride:
+            installation.conversation_type_mask_override ?? null,
+        },
       ),
     );
 
@@ -2276,6 +2369,14 @@ export async function getPluginInstallationAccessState(
     summary: {
       requiredPermissions: plugin.authorization?.requiredPermissions || [],
       suggestedAccessTargetType: installation.access_target.type,
+      sourceDefaultConversationTypeMask:
+        installation.source_default_conversation_type_mask ||
+        DEFAULT_CONVERSATION_TYPE_MASK,
+      workspaceConversationTypeMask,
+      conversationTypeMaskOverride:
+        installation.conversation_type_mask_override ?? null,
+      effectiveConversationTypeMask:
+        installation.effective_conversation_type_mask,
       reason: plugin.authorization?.reason,
       effectivePermissions:
         grants.length > 0 ? plugin.authorization?.requiredPermissions || [] : [],
@@ -2291,14 +2392,16 @@ export async function grantPluginInstallationAccess(input: {
   installationId: string;
   accessTarget?: CapabilityAccessTarget;
   permissions?: string[];
+  conversationTypeMaskOverride?: number | null;
   grantedByWorkspaceMemberId?: string;
   reason?: string;
   metadata?: JsonObject;
 }) {
-  const { plugin, installation } = await getInstallationPayload(
+  const { plugin, installation, workspaceConversationTypeMask } =
+    await getInstallationPayload(
     input.workspaceId,
     input.installationId,
-  );
+    );
   const accessRows = await listAccessRows(input.installationId);
 
   const resolvedAccessTarget =
@@ -2322,6 +2425,11 @@ export async function grantPluginInstallationAccess(input: {
       existing,
       plugin.authorization?.requiredPermissions || [],
       plugin.authorization?.reason,
+      {
+        workspaceConversationTypeMask,
+        instanceConversationTypeMaskOverride:
+          installation.conversation_type_mask_override ?? null,
+      },
     );
   }
 
@@ -2343,6 +2451,8 @@ export async function grantPluginInstallationAccess(input: {
           subject_conversation_id: accessTarget.subjectConversationId,
           subject_conversation_actor_context_id:
             accessTarget.subjectConversationActorContextId,
+          conversation_type_mask_override:
+            input.conversationTypeMaskOverride ?? null,
           granted_permissions: input.permissions || [],
           metadata:
             (input.metadata || {}) as TableInsert<"access_bindings">["metadata"],
@@ -2390,6 +2500,73 @@ export async function grantPluginInstallationAccess(input: {
     result.accessRow,
     plugin.authorization?.requiredPermissions || [],
     plugin.authorization?.reason,
+    {
+      workspaceConversationTypeMask,
+      instanceConversationTypeMaskOverride:
+        installation.conversation_type_mask_override ?? null,
+    },
+  );
+}
+
+export async function updatePluginInstallationAccessGrant(input: {
+  workspaceId: string;
+  installationId: string;
+  grantId: string;
+  conversationTypeMaskOverride?: number | null;
+}) {
+  if (input.conversationTypeMaskOverride === undefined) {
+    const { plugin, installation, workspaceConversationTypeMask } =
+      await getInstallationPayload(input.workspaceId, input.installationId);
+    const accessRows = await listAccessRows(input.installationId);
+    const accessRow = accessRows.find((entry) => entry.id === input.grantId);
+    if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
+      throw new McpPluginError(404, "Access grant not found");
+    }
+    return mapAccessRowToGrant(
+      accessRow,
+      plugin.authorization?.requiredPermissions || [],
+      plugin.authorization?.reason,
+      {
+        workspaceConversationTypeMask,
+        instanceConversationTypeMaskOverride:
+          installation.conversation_type_mask_override ?? null,
+      },
+    );
+  }
+
+  const { plugin, installation, workspaceConversationTypeMask } =
+    await getInstallationPayload(input.workspaceId, input.installationId);
+  const accessRows = await listAccessRows(input.installationId, true);
+  const accessRow = accessRows.find((entry) => entry.id === input.grantId);
+  if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
+    throw new McpPluginError(404, "Access grant not found");
+  }
+
+  await db
+    .updateTable("access_bindings")
+    .set({
+      conversation_type_mask_override:
+        input.conversationTypeMaskOverride ?? null,
+    })
+    .where("id", "=", input.grantId)
+    .where("workspace_id", "=", input.workspaceId)
+    .executeTakeFirst();
+
+  const updatedAccessRows = await listAccessRows(input.installationId);
+  const updatedAccessRow = updatedAccessRows.find((entry) => entry.id === input.grantId);
+  if (!updatedAccessRow) {
+    throw new McpPluginError(404, "Access grant not found");
+  }
+
+  return mapAccessRowToGrant(
+    updatedAccessRow,
+    plugin.authorization?.requiredPermissions || [],
+    plugin.authorization?.reason,
+    {
+      workspaceConversationTypeMask,
+      instanceConversationTypeMaskOverride:
+        installation.conversation_type_mask_override ?? null,
+    },
   );
 }
 

@@ -264,6 +264,17 @@ CREATE TABLE workspace_access_bindings (
   PRIMARY KEY (workspace_member_id, access_key)
 );
 
+CREATE TABLE workspace_capability_conversation_type_policies (
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  resource_family VARCHAR(60) NOT NULL
+    CHECK (resource_family IN ('plugin_installation', 'installed_skill', 'relay_exposure')),
+  default_conversation_type_mask INT NOT NULL
+    CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 31),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (workspace_id, resource_family)
+);
+
 CREATE TABLE workspace_invites (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -353,6 +364,8 @@ CREATE TABLE access_bindings (
   subject_actor_id UUID,
   subject_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
   subject_conversation_actor_context_id UUID,
+  conversation_type_mask_override INT
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
   granted_permissions TEXT[] NOT NULL DEFAULT '{}',
   status access_bindings_status NOT NULL DEFAULT 'active',
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
@@ -576,6 +589,8 @@ CREATE TABLE skill_package_version_specs (
   name VARCHAR(255) NOT NULL,
   description_blocks JSONB NOT NULL DEFAULT '[]',
   summary_text TEXT DEFAULT '',
+  default_conversation_type_mask INT NOT NULL DEFAULT 31
+    CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 31),
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -591,6 +606,8 @@ CREATE TABLE plugin_package_version_specs (
   auth_bindings JSONB NOT NULL DEFAULT '[]',
   default_mount_scope plugin_package_version_specs_default_mount_scope NOT NULL DEFAULT 'workspace',
   default_reuse_scope plugin_package_version_specs_default_reuse_scope NOT NULL DEFAULT 'conversation',
+  default_conversation_type_mask INT NOT NULL DEFAULT 31
+    CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 31),
   supported_reuse_scopes plugin_package_version_specs_default_reuse_scope[] NOT NULL
     DEFAULT ARRAY['turn', 'session', 'workspace', 'conversation', 'actor']::plugin_package_version_specs_default_reuse_scope[],
   requires_handshake BOOLEAN NOT NULL DEFAULT FALSE,
@@ -2182,6 +2199,8 @@ CREATE TABLE installed_skills (
   tags TEXT[] DEFAULT '{}',
   current_version INT NOT NULL DEFAULT 1,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  conversation_type_mask_override INT
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -2243,6 +2262,8 @@ CREATE TABLE plugin_installations (
   config_data JSONB NOT NULL DEFAULT '{}',
   approved_runtime_permissions TEXT[] DEFAULT '{}',
   reuse_scope plugin_installations_reuse_scope NOT NULL DEFAULT 'conversation',
+  conversation_type_mask_override INT
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
   status plugin_installations_status NOT NULL DEFAULT 'active',
   installed_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
@@ -2448,6 +2469,8 @@ CREATE TABLE relay_exposures (
   display_name VARCHAR(255) NOT NULL,
   transport relay_exposures_transport NOT NULL,
   runtime_status relay_exposures_runtime_status NOT NULL DEFAULT 'discovered',
+  conversation_type_mask_override INT
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
   projected_catalog_item_id UUID REFERENCES catalog_items(id) ON DELETE SET NULL,
   last_seen_at TIMESTAMPTZ,
   last_healthy_at TIMESTAMPTZ,

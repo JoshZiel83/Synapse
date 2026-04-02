@@ -23,11 +23,13 @@ import {
   publishMarketplaceSkill,
   revokeInstalledSkillAccess,
   uninstallInstalledSkill,
+  updateInstalledSkillAccessGrant,
   updateInstalledSkill,
   upgradeInstalledSkill,
 } from './service.js';
 
 const accessTargetTypeSchema = z.enum(CAPABILITY_ACCESS_TARGET_TYPES);
+const conversationTypeMaskSchema = z.number().int().min(1).max(31);
 const accessTargetSchema = z.object({
   type: accessTargetTypeSchema,
   actorId: z.string().uuid().optional(),
@@ -49,6 +51,7 @@ const publishSkillSchema = z.object({
   version: z.string().min(1),
   changelog: z.string().optional(),
   isActive: z.boolean().optional(),
+  defaultConversationTypeMask: conversationTypeMaskSchema.optional(),
   metadata: z.record(z.unknown()).optional(),
   attachmentFiles: z.array(skillAttachmentSchema).optional(),
 });
@@ -73,14 +76,20 @@ const updateInstalledSkillSchema = z.object({
   iconFileId: z.string().uuid().nullable().optional(),
   tags: z.array(z.string()).optional(),
   isEnabled: z.boolean().optional(),
+  conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
   attachmentFiles: z.array(skillAttachmentSchema).optional(),
 });
 
 const skillAccessGrantSchema = z.object({
   accessTarget: accessTargetSchema.optional(),
+  conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
   permissions: z.array(z.string()).optional(),
   reason: z.string().trim().min(1).optional(),
   metadata: z.record(z.unknown()).optional(),
+});
+
+const skillAccessGrantUpdateSchema = z.object({
+  conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
 });
 
 const listInstalledSkillsQuerySchema = z.object({
@@ -425,12 +434,42 @@ export function registerSkillRoutes(app: FastifyInstance) {
         workspaceId,
         installedSkillId,
         accessTarget: body.accessTarget,
+        conversationTypeMaskOverride: body.conversationTypeMaskOverride,
         permissions: body.permissions,
         reason: body.reason,
         metadata: body.metadata,
         grantedByWorkspaceMemberId: workspaceMemberId,
       });
       return reply.status(201).send({ grant });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.put('/api/v1/workspaces/:workspaceId/skills/:installedSkillId/access/:grantId', workspaceHook, async (request, reply) => {
+    try {
+      const { workspaceId, installedSkillId, grantId } = request.params as {
+        workspaceId: string;
+        installedSkillId: string;
+        grantId: string;
+      };
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        'workspace.manage_skills',
+        workspaceId,
+        'Not allowed to manage skill access in this workspace',
+      );
+      if (!allowed) return;
+
+      const body = skillAccessGrantUpdateSchema.parse(request.body);
+      const grant = await updateInstalledSkillAccessGrant({
+        workspaceId,
+        installedSkillId,
+        grantId,
+        conversationTypeMaskOverride: body.conversationTypeMaskOverride,
+      });
+      return reply.status(200).send({ grant });
     } catch (error) {
       return handleError(reply, error);
     }

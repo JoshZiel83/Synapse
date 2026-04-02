@@ -246,6 +246,8 @@ export async function listRelayAutoLoadedSkills(input: {
   workspaceId: string;
   actorId?: string;
   conversationId?: string;
+  conversationKind?: "private" | "group" | "virtual";
+  conversationBoundary?: "internal" | "external";
   sessionId?: string;
 }) {
   if (!input.actorId || !input.sessionId) {
@@ -262,6 +264,8 @@ export async function listRelayAutoLoadedSkills(input: {
         actorId: input.actorId,
         sessionId: input.sessionId,
         conversationId: input.conversationId || "",
+        conversationKind: input.conversationKind,
+        conversationBoundary: input.conversationBoundary,
       }),
     ]);
   } catch (error) {

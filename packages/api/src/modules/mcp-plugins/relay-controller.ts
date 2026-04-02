@@ -16,6 +16,8 @@ import {
   RELAY_MANAGEABLE_TRUST_STATUSES,
   RELAY_PAIRING_TTL_MS,
   RELAY_PROTOCOL_VERSION,
+  DEFAULT_CONVERSATION_TYPE_MASK,
+  resolveNarrowedConversationTypeMask,
   relayLifecycleEventDefinitions,
 } from '@synapse/shared';
 import { config } from '../../config/index.js';
@@ -34,7 +36,10 @@ import {
   revokeRelayDeviceAuthzState,
   revokeRelayExposureAccess,
   touchRelayDeviceAuthzState,
+  updateRelayExposureAccessGrant,
+  updateRelayExposurePolicy,
 } from './relay-access.js';
+import { getWorkspaceCapabilityConversationTypeMask } from '../capabilities/conversation-type-policies.js';
 import {
   getRuntimeGrant,
   listActiveRuntimeGrantsForExposure,
@@ -68,12 +73,20 @@ const accessTargetSchema = z.object({
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
 });
+const conversationTypeMaskSchema = z.number().int().min(1).max(31);
 
 const accessGrantSchema = z.object({
   accessTarget: accessTargetSchema.optional(),
+  conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
   permissions: z.array(z.string()).optional(),
   reason: z.string().trim().min(1).optional(),
   metadata: z.record(z.unknown()).optional(),
+});
+const accessGrantUpdateSchema = z.object({
+  conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
+});
+const updateRelayExposureSchema = z.object({
+  conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
 });
 
 const claimPairingSchema = z.object({
@@ -176,6 +189,7 @@ type RelayExposureToolRow = {
   exposure_display_name: string;
   exposure_transport: RelayExposureView['transport'];
   exposure_runtime_status: RelayExposureView['runtimeStatus'];
+  exposure_conversation_type_mask_override: number | null;
   exposure_last_seen_at: string | null;
   exposure_last_healthy_at: string | null;
   exposure_last_error: string | null;
@@ -413,7 +427,10 @@ function mapInlineSyncSource(row: RelayExposureToolRow): RelaySyncSourceView | u
   };
 }
 
-function groupRelayExposures(rows: RelayExposureToolRow[]): RelayExposureView[] {
+function groupRelayExposures(
+  rows: RelayExposureToolRow[],
+  workspaceConversationTypeMask: number,
+): RelayExposureView[] {
   const exposures = new Map<string, RelayExposureView>();
 
   for (const row of rows) {
@@ -425,6 +442,13 @@ function groupRelayExposures(rows: RelayExposureToolRow[]): RelayExposureView[] 
         displayName: row.exposure_display_name,
         transport: row.exposure_transport,
         runtimeStatus: row.exposure_runtime_status,
+        workspaceConversationTypeMask,
+        conversationTypeMaskOverride:
+          row.exposure_conversation_type_mask_override || undefined,
+        effectiveConversationTypeMask: resolveNarrowedConversationTypeMask(
+          workspaceConversationTypeMask,
+          row.exposure_conversation_type_mask_override,
+        ),
         lastSeenAt: row.exposure_last_seen_at || undefined,
         lastHealthyAt: row.exposure_last_healthy_at || undefined,
         lastError: row.exposure_last_error || undefined,
@@ -436,10 +460,11 @@ function groupRelayExposures(rows: RelayExposureToolRow[]): RelayExposureView[] 
       };
       exposures.set(row.exposure_id, exposure);
     }
+    const currentExposure = exposure;
 
     const tool = mapRelayTool(row);
     if (tool) {
-      exposure.tools.push(tool);
+      currentExposure.tools.push(tool);
     }
   }
 
@@ -864,7 +889,7 @@ function mapRuntimeGrantView(record: RuntimeGrantRecord): RuntimeGrantView {
 }
 
 async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Promise<RelayDeviceDetailView> {
-  const [device, pairingsResult, syncSourcesResult, exposuresResult] = await Promise.all([
+  const [device, pairingsResult, syncSourcesResult, exposuresResult, workspaceConversationTypeMask] = await Promise.all([
     getRelayDeviceSummary(workspaceId, deviceId),
     executeSql<RelayPairingRow>(
       `SELECT *
@@ -889,6 +914,7 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
           e.display_name AS exposure_display_name,
           e.transport AS exposure_transport,
           e.runtime_status AS exposure_runtime_status,
+          e.conversation_type_mask_override AS exposure_conversation_type_mask_override,
           e.last_seen_at AS exposure_last_seen_at,
           e.last_healthy_at AS exposure_last_healthy_at,
           e.last_error AS exposure_last_error,
@@ -930,16 +956,20 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
        LEFT JOIN relay_catalog_revisions cr
          ON cr.id = tr.catalog_revision_id
        WHERE e.device_id = $1
-       ORDER BY e.display_name ASC, t.current_name ASC NULLS LAST`,
+      ORDER BY e.display_name ASC, t.current_name ASC NULLS LAST`,
       [deviceId],
     ),
+    getWorkspaceCapabilityConversationTypeMask(workspaceId, 'relay_exposure'),
   ]);
 
   return {
     device,
     pairings: pairingsResult.rows.map(mapRelayPairingSession),
     syncSources: syncSourcesResult.rows.map(mapRelaySyncSource),
-    exposures: groupRelayExposures(exposuresResult.rows),
+    exposures: groupRelayExposures(
+      exposuresResult.rows,
+      workspaceConversationTypeMask,
+    ),
   };
 }
 
@@ -1427,6 +1457,30 @@ export function registerRelayRoutes(app: FastifyInstance) {
     }
   });
 
+  app.put('/api/v1/workspaces/:workspaceId/mcp/relays/:id/exposures/:exposureId', { preHandler: workspacePreHandler }, async (request, reply) => {
+    try {
+      const allowed = await requireWorkspacePermission(
+        request as FastifyRequest<{ Params: WorkspaceParams }>,
+        reply,
+        'workspace.manage_relays',
+        'Not allowed to manage relay exposure policies in this workspace',
+      );
+      if (!allowed) return;
+
+      const { workspaceId, id, exposureId } = request.params as RelayExposureParams;
+      const body = updateRelayExposureSchema.parse(request.body || {});
+      await assertRelayExposureInWorkspaceDevice(workspaceId, id, exposureId);
+      await updateRelayExposurePolicy({
+        workspaceId,
+        exposureId,
+        conversationTypeMaskOverride: body.conversationTypeMaskOverride,
+      });
+      reply.send(await listRelayExposureAccessState(workspaceId, exposureId));
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
   app.post('/api/v1/workspaces/:workspaceId/mcp/relays/:id/exposures/:exposureId/access', { preHandler: workspacePreHandler }, async (request, reply) => {
     try {
       const allowed = await requireWorkspacePermission(
@@ -1445,12 +1499,39 @@ export function registerRelayRoutes(app: FastifyInstance) {
         workspaceId,
         exposureId,
         accessTarget: body.accessTarget,
+        conversationTypeMaskOverride: body.conversationTypeMaskOverride,
         reason: body.reason,
         metadata: body.metadata,
         grantedByWorkspaceMemberId: (request as any).workspaceMember!.id,
       });
 
       reply.status(201).send({ grant });
+    } catch (error) {
+      handleError(reply, error);
+    }
+  });
+
+  app.put('/api/v1/workspaces/:workspaceId/mcp/relays/:id/exposures/:exposureId/access/:bindingId', { preHandler: workspacePreHandler }, async (request, reply) => {
+    try {
+      const allowed = await requireWorkspacePermission(
+        request as FastifyRequest<{ Params: WorkspaceParams }>,
+        reply,
+        'workspace.manage_relays',
+        'Not allowed to manage relay exposure access in this workspace',
+      );
+      if (!allowed) return;
+
+      const { workspaceId, id, exposureId, bindingId } = request.params as RelayExposureAccessParams;
+      const body = accessGrantUpdateSchema.parse(request.body || {});
+      await assertRelayExposureInWorkspaceDevice(workspaceId, id, exposureId);
+      const grant = await updateRelayExposureAccessGrant({
+        workspaceId,
+        exposureId,
+        bindingId,
+        conversationTypeMaskOverride: body.conversationTypeMaskOverride,
+      });
+
+      reply.send({ grant });
     } catch (error) {
       handleError(reply, error);
     }

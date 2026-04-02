@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import {
+  CONVERSATION_TYPE_MASK_BITS,
   describeAutomationDelivery,
   describeAutomationPolicy,
   describeAutomationTrigger,
@@ -1155,6 +1156,8 @@ export function registerCallableToolPlugins(): void {
           actorId: context.actorId,
           sessionId: context.sessionId,
           conversationId: session.conversation_id,
+          conversationKind: session.conversation_kind,
+          conversationBoundary: session.conversation_boundary,
           skillName,
           assetPath: path || undefined,
         });
@@ -2589,6 +2592,7 @@ export function registerCallableToolPlugins(): void {
   registerToolPlugin({
     name: "invite_actor",
     kind: "callable",
+    conversationTypeMask: CONVERSATION_TYPE_MASK_BITS.internal_group,
     definition: {
       name: "invite_actor",
       description:

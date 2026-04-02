@@ -27,6 +27,7 @@ import {
   type ActorRole,
   type WorkspaceChiefActorPreference,
 } from "@synapse/shared";
+import { seedWorkspaceCapabilityConversationTypePolicies } from "../capabilities/conversation-type-policies.js";
 import type {
   WorkspaceAccessBindingsAccessKey,
   WorkspaceMembersTrustLevel,
@@ -405,6 +406,11 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     if (!creatorMember) {
       throw new Error("Failed to create workspace member.");
     }
+
+    await seedWorkspaceCapabilityConversationTypePolicies(
+      client,
+      String(workspace.id),
+    );
 
     const officialActorTemplates = await loadOfficialActorTemplates(client);
     const installedActors: Array<{

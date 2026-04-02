@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import {
+  CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
   INVITE_TRUST_LEVELS,
   WORKSPACE_ACCESS_KEYS,
 } from "@synapse/shared/constants";
@@ -26,6 +27,10 @@ import {
   revokeWorkspaceAccess,
   type WorkspaceAccessKey,
 } from "./service.js";
+import {
+  listWorkspaceCapabilityConversationTypePolicies,
+  updateWorkspaceCapabilityConversationTypePolicies,
+} from "../capabilities/conversation-type-policies.js";
 import {
   createInvite,
   getInviteByToken,
@@ -65,6 +70,18 @@ const workspaceAccessSchema = z.object({
 
 const chiefActorPreferenceSchema = z.object({
   chiefActorId: z.string().uuid().nullable(),
+});
+
+const conversationTypeMaskSchema = z.number().int().min(1).max(31);
+const capabilityConversationTypePolicyFamilySchema = z.enum(
+  CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
+);
+const workspaceCapabilityConversationTypePolicyUpdateSchema = z.object({
+  policies: z
+    .record(capabilityConversationTypePolicyFamilySchema, conversationTypeMaskSchema)
+    .refine((value) => Object.keys(value).length > 0, {
+      message: "At least one policy update is required",
+    }),
 });
 
 // ── Helpers ──
@@ -244,6 +261,54 @@ export async function handleListWorkspaceAccess(
     request.params.workspaceId,
   );
   return reply.send({ data: accessBindings });
+}
+
+export async function handleGetWorkspaceCapabilityConversationTypePolicies(
+  request: FastifyRequest<{ Params: WorkspaceParams }>,
+  reply: FastifyReply,
+) {
+  const allowed = await requireWorkspacePermission(
+    request,
+    reply,
+    "workspace.manage",
+    "Not allowed to view workspace capability policies",
+  );
+  if (!allowed) return;
+
+  return reply.send(
+    await listWorkspaceCapabilityConversationTypePolicies(
+      request.params.workspaceId,
+    ),
+  );
+}
+
+export async function handleUpdateWorkspaceCapabilityConversationTypePolicies(
+  request: FastifyRequest<{ Params: WorkspaceParams }>,
+  reply: FastifyReply,
+) {
+  const allowed = await requireWorkspacePermission(
+    request,
+    reply,
+    "workspace.manage",
+    "Not allowed to manage workspace capability policies",
+  );
+  if (!allowed) return;
+
+  const parsed = workspaceCapabilityConversationTypePolicyUpdateSchema.safeParse(
+    request.body,
+  );
+  if (!parsed.success) {
+    return reply
+      .status(400)
+      .send({ error: "Validation failed", details: parsed.error.flatten() });
+  }
+
+  return reply.send(
+    await updateWorkspaceCapabilityConversationTypePolicies({
+      workspaceId: request.params.workspaceId,
+      policies: parsed.data.policies,
+    }),
+  );
 }
 
 export async function handleGetWorkspaceChiefActorPreference(
@@ -579,6 +644,16 @@ export async function registerWorkspaceRoutes(fastify: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId/access",
     workspaceAuthHook,
     handleListWorkspaceAccess,
+  );
+  fastify.get<{ Params: WorkspaceParams }>(
+    "/api/v1/workspaces/:workspaceId/capability-conversation-type-policies",
+    workspaceAuthHook,
+    handleGetWorkspaceCapabilityConversationTypePolicies,
+  );
+  fastify.put<{ Params: WorkspaceParams }>(
+    "/api/v1/workspaces/:workspaceId/capability-conversation-type-policies",
+    workspaceAuthHook,
+    handleUpdateWorkspaceCapabilityConversationTypePolicies,
   );
   fastify.post<{ Params: WorkspaceParams }>(
     "/api/v1/workspaces/:workspaceId/access",

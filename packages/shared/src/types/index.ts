@@ -9,7 +9,9 @@ import {
   AUTH_SESSION_PERSISTENCES,
   AUTH_TRANSPORTS,
   CANONICAL_FILE_CATEGORIES,
+  CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
   CONVERSATION_BOUNDARIES,
+  CONVERSATION_TYPE_KEYS,
   INVITE_TRUST_LEVELS,
   INTERACTION_DECISIONS,
   INTERACTION_QUESTION_FIELD_TYPES,
@@ -1658,6 +1660,7 @@ export interface ToolPlugin {
   name: string;
   kind: "action" | "callable";
   definition: ToolDefinition;
+  conversationTypeMask?: ConversationTypeMask;
   resolve?: (ctx: ToolResolveContext) =>
     | {
         active: boolean;
@@ -1693,6 +1696,10 @@ export type PluginTransport =
   | "relay"
   | "filesystem";
 export type ConversationBoundary = typeof CONVERSATION_BOUNDARIES[number];
+export type ConversationTypeKey = typeof CONVERSATION_TYPE_KEYS[number];
+export type ConversationTypeMask = number;
+export type CapabilityConversationTypePolicyResourceFamily =
+  typeof CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES[number];
 export type AttachmentTargetType = typeof ATTACHMENT_TARGET_TYPES[number];
 export type AccessTargetType = typeof ACCESS_TARGET_TYPES[number];
 export type CapabilityAccessTargetType =
@@ -2010,6 +2017,7 @@ export interface MarketplaceItem {
   latestRevisionId?: string;
   defaultInstanceScope?: AttachmentTargetType;
   defaultReuseScope?: ReuseScope;
+  defaultConversationTypeMask?: ConversationTypeMask;
   supportedReuseScopes?: ReuseScope[];
   defaultIdleTtlMs?: number;
   defaultMaxAgeMs?: number;
@@ -2036,6 +2044,10 @@ export interface PluginInstallationView {
   maxAgeMs?: number;
   requiresHandshake: boolean;
   isEnabled: boolean;
+  sourceDefaultConversationTypeMask?: ConversationTypeMask;
+  workspaceConversationTypeMask: ConversationTypeMask;
+  conversationTypeMaskOverride?: ConversationTypeMask;
+  effectiveConversationTypeMask: ConversationTypeMask;
   configData: Record<string, unknown>;
   configState: PluginConfigFieldState[];
   installedByWorkspaceMemberId?: string;
@@ -2055,9 +2067,22 @@ export interface AccessGrant {
   status: AccessGrantStatus;
   grantedByWorkspaceMemberId?: string;
   reason?: string;
+  conversationTypeMaskOverride?: ConversationTypeMask | null;
+  effectiveConversationTypeMask?: ConversationTypeMask;
   metadata: Record<string, unknown>;
   createdAt: string;
   revokedAt?: string;
+}
+
+export interface WorkspaceCapabilityConversationTypePolicy {
+  workspaceId: string;
+  resourceFamily: CapabilityConversationTypePolicyResourceFamily;
+  defaultConversationTypeMask: ConversationTypeMask;
+}
+
+export interface WorkspaceCapabilityConversationTypePoliciesView {
+  workspaceId: string;
+  policies: WorkspaceCapabilityConversationTypePolicy[];
 }
 
 export interface PluginAuthSession {
@@ -2242,6 +2267,7 @@ export interface SkillMarketplaceVersion {
   version: string;
   changelog: string;
   description: CanonicalContentBlock;
+  defaultConversationTypeMask?: ConversationTypeMask;
   createdByUserId?: string;
   createdByName?: string;
   createdAt: string;
@@ -2266,6 +2292,7 @@ export interface SkillMarketplaceEntry {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+  defaultConversationTypeMask?: ConversationTypeMask;
   latestVersionId?: string;
   latestVersion?: SkillMarketplaceVersion;
   workspaceInstallation?: SkillMarketplaceWorkspaceInstallation;
@@ -2281,6 +2308,10 @@ export interface InstalledSkill {
   tags: string[];
   accessTarget: CapabilityAccessTarget;
   isEnabled: boolean;
+  sourceDefaultConversationTypeMask?: ConversationTypeMask;
+  workspaceConversationTypeMask: ConversationTypeMask;
+  conversationTypeMaskOverride?: ConversationTypeMask;
+  effectiveConversationTypeMask: ConversationTypeMask;
   isCustomized: boolean;
   installedByWorkspaceMemberId?: string;
   createdAt: string;

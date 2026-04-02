@@ -32,6 +32,48 @@ export const WORKSPACE_ACCESS_KEYS = [
 export const CONTACT_TARGET_TYPES = ['member', 'actor'] as const;
 export const CANONICAL_FILE_CATEGORIES = ['image', 'audio', 'video', 'document'] as const;
 export const CONVERSATION_BOUNDARIES = ['internal', 'external'] as const;
+export const CONVERSATION_TYPE_KEYS = [
+  'internal_private',
+  'internal_group',
+  'external_private',
+  'external_group',
+  'virtual',
+] as const;
+export const CONVERSATION_TYPE_MASK_BITS = {
+  internal_private: 1 << 0,
+  internal_group: 1 << 1,
+  external_private: 1 << 2,
+  external_group: 1 << 3,
+  virtual: 1 << 4,
+} as const;
+export const CONVERSATION_TYPE_MASK_PRESETS = {
+  ALL:
+    CONVERSATION_TYPE_MASK_BITS.internal_private |
+    CONVERSATION_TYPE_MASK_BITS.internal_group |
+    CONVERSATION_TYPE_MASK_BITS.external_private |
+    CONVERSATION_TYPE_MASK_BITS.external_group |
+    CONVERSATION_TYPE_MASK_BITS.virtual,
+  INTERNAL_ONLY:
+    CONVERSATION_TYPE_MASK_BITS.internal_private |
+    CONVERSATION_TYPE_MASK_BITS.internal_group,
+  EXTERNAL_ONLY:
+    CONVERSATION_TYPE_MASK_BITS.external_private |
+    CONVERSATION_TYPE_MASK_BITS.external_group,
+  GROUP_ONLY:
+    CONVERSATION_TYPE_MASK_BITS.internal_group |
+    CONVERSATION_TYPE_MASK_BITS.external_group,
+  PRIVATE_ONLY:
+    CONVERSATION_TYPE_MASK_BITS.internal_private |
+    CONVERSATION_TYPE_MASK_BITS.external_private,
+  VIRTUAL_ONLY: CONVERSATION_TYPE_MASK_BITS.virtual,
+} as const;
+export const DEFAULT_CONVERSATION_TYPE_MASK =
+  CONVERSATION_TYPE_MASK_PRESETS.ALL;
+export const CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES = [
+  'plugin_installation',
+  'installed_skill',
+  'relay_exposure',
+] as const;
 export const ATTACHMENT_TARGET_TYPES = [
   'workspace',
   'conversation',

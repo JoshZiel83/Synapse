@@ -1,5 +1,6 @@
 import type {
   CapabilityAccessTargetType,
+  ConversationTypeMask,
 } from '@synapse/shared/types';
 import type {
   AttachmentTargetType,
@@ -26,6 +27,7 @@ export interface BuiltinPluginSeed {
   entryPoint: string;
   defaultInstanceScope: AttachmentTargetType;
   defaultReuseScope: ReuseScope;
+  defaultConversationTypeMask?: ConversationTypeMask;
   supportedReuseScopes?: ReuseScope[];
   requiresHandshake?: boolean;
   tags: string[];

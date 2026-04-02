@@ -35,6 +35,7 @@ import type {
   RelayDeviceSummaryView,
   RelayPairingSessionView,
   SkillMarketplaceEntry,
+  WorkspaceCapabilityConversationTypePoliciesView,
 } from "@synapse/shared"
 import type { FileRecordView, RuntimeGrantView } from "@synapse/shared/types"
 
@@ -364,6 +365,29 @@ class ApiClient {
   getWorkspaceAccess(wsId: string) {
     return this.fetch(`/workspaces/${wsId}/access`)
   }
+  getWorkspaceCapabilityConversationTypePolicies(
+    wsId: string
+  ): Promise<WorkspaceCapabilityConversationTypePoliciesView> {
+    return this.fetch(
+      `/workspaces/${wsId}/capability-conversation-type-policies`
+    )
+  }
+  updateWorkspaceCapabilityConversationTypePolicies(
+    wsId: string,
+    data: {
+      policies: Partial<
+        Record<"plugin_installation" | "installed_skill" | "relay_exposure", number>
+      >
+    }
+  ): Promise<WorkspaceCapabilityConversationTypePoliciesView> {
+    return this.fetch(
+      `/workspaces/${wsId}/capability-conversation-type-policies`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+  }
   grantWorkspaceAccess(
     wsId: string,
     data: {
@@ -470,6 +494,7 @@ class ApiClient {
     tags?: string[]
     version: string
     changelog?: string
+    defaultConversationTypeMask?: number
     isActive?: boolean
     metadata?: Record<string, unknown>
     attachmentFiles?: Array<{
@@ -536,6 +561,7 @@ class ApiClient {
       iconFileId?: string | null
       tags?: string[]
       isEnabled?: boolean
+      conversationTypeMaskOverride?: number | null
       attachmentFiles?: Array<{
         path: string
         contentBlocks: CanonicalContentBlock[]
@@ -572,6 +598,7 @@ class ApiClient {
     installedSkillId: string,
     data: {
       accessTarget?: CapabilityAccessTarget
+      conversationTypeMaskOverride?: number | null
       permissions?: string[]
       reason?: string
       metadata?: Record<string, unknown>
@@ -581,6 +608,22 @@ class ApiClient {
       method: "POST",
       body: JSON.stringify(data),
     })
+  }
+  updateInstalledSkillAccessGrant(
+    wsId: string,
+    installedSkillId: string,
+    grantId: string,
+    data: {
+      conversationTypeMaskOverride?: number | null
+    }
+  ) {
+    return this.fetch(
+      `/workspaces/${wsId}/skills/${installedSkillId}/access/${grantId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
   }
   revokeInstalledSkillAccess(
     wsId: string,
@@ -1481,6 +1524,7 @@ class ApiClient {
     installId: string,
     data: {
       accessTarget?: CapabilityAccessTarget
+      conversationTypeMaskOverride?: number | null
       permissions?: string[]
       reason?: string
       metadata?: Record<string, unknown>
@@ -1490,6 +1534,22 @@ class ApiClient {
       `/workspaces/${wsId}/mcp/installations/${installId}/access`,
       {
         method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+  }
+  updatePluginInstallationAccessGrant(
+    wsId: string,
+    installId: string,
+    grantId: string,
+    data: {
+      conversationTypeMaskOverride?: number | null
+    }
+  ) {
+    return this.fetch(
+      `/workspaces/${wsId}/mcp/installations/${installId}/access/${grantId}`,
+      {
+        method: "PUT",
         body: JSON.stringify(data),
       }
     )
@@ -1574,12 +1634,29 @@ class ApiClient {
       `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access`
     )
   }
+  updateRelayExposure(
+    wsId: string,
+    relayId: string,
+    exposureId: string,
+    data: {
+      conversationTypeMaskOverride?: number | null
+    }
+  ) {
+    return this.fetch(
+      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    )
+  }
   grantRelayExposureAccess(
     wsId: string,
     relayId: string,
     exposureId: string,
     data: {
       accessTarget?: CapabilityAccessTarget
+      conversationTypeMaskOverride?: number | null
       permissions?: string[]
       reason?: string
       metadata?: Record<string, unknown>
@@ -1589,6 +1666,23 @@ class ApiClient {
       `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access`,
       {
         method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+  }
+  updateRelayExposureAccessGrant(
+    wsId: string,
+    relayId: string,
+    exposureId: string,
+    bindingId: string,
+    data: {
+      conversationTypeMaskOverride?: number | null
+    }
+  ) {
+    return this.fetch(
+      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access/${bindingId}`,
+      {
+        method: "PUT",
         body: JSON.stringify(data),
       }
     )

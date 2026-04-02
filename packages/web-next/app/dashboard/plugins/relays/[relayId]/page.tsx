@@ -175,6 +175,7 @@ export default function RelayDevicePage() {
             actorId?: string;
             conversationId?: string;
           };
+          conversationTypeMaskOverride?: number | null;
           permissions?: string[];
         },
       ) => api.grantRelayExposureAccess(targetWorkspaceId, relayId, targetExposureId, payload),
@@ -183,6 +184,28 @@ export default function RelayDevicePage() {
         targetExposureId: string,
         bindingId: string,
       ) => api.revokeRelayExposureAccess(targetWorkspaceId, relayId, targetExposureId, bindingId),
+      updateGrant: (
+        targetWorkspaceId: string,
+        targetExposureId: string,
+        bindingId: string,
+        payload: {
+          conversationTypeMaskOverride?: number | null;
+        },
+      ) =>
+        api.updateRelayExposureAccessGrant(
+          targetWorkspaceId,
+          relayId,
+          targetExposureId,
+          bindingId,
+          payload,
+        ),
+      updatePolicy: (
+        targetWorkspaceId: string,
+        targetExposureId: string,
+        payload: {
+          conversationTypeMaskOverride?: number | null;
+        },
+      ) => api.updateRelayExposure(targetWorkspaceId, relayId, targetExposureId, payload),
     }),
     [relayId],
   );

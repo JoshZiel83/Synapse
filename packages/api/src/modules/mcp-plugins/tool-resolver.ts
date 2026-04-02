@@ -1,5 +1,12 @@
 import { randomUUID } from "crypto";
-import { textBlocks, type RelayHiddenToolBinding, type ToolDefinition } from "@synapse/shared";
+import {
+  DEFAULT_CONVERSATION_TYPE_MASK,
+  maskAllowsConversationType,
+  resolveNarrowedConversationTypeMask,
+  textBlocks,
+  type RelayHiddenToolBinding,
+  type ToolDefinition,
+} from "@synapse/shared";
 import type {
   NormalizedMcpToolResult,
   RuntimeActorContext,
@@ -10,6 +17,7 @@ import {
   type AuthzSubject,
 } from "../../infrastructure/authz/index.js";
 import { db } from "../../infrastructure/database/kysely.js";
+import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js";
 import { getConversationActorContextBySessionId } from "../session/service.js";
 import { resolveInstallationConfig } from "./config-resolver.js";
 import {
@@ -67,6 +75,7 @@ type VisiblePluginRow = {
   entry_point: string | null;
   tool_manifest: unknown;
   reuse_scope: "turn" | "session" | "workspace" | "conversation" | "actor" | null;
+  conversation_type_mask_override: number | null;
 };
 
 type VisibleRelayExposureRow = {
@@ -77,6 +86,35 @@ type VisibleRelayExposureRow = {
   exposure_updated_at: string | Date | null;
   device_id: string;
   device_display_name: string;
+  conversation_type_mask_override: number | null;
+};
+
+type VisibleAccessBindingRow = {
+  id: string;
+  workspace_id: string | null;
+  resource_type: string;
+  resource_id: string;
+  target_type:
+    | "workspace"
+    | "conversation"
+    | "actor"
+    | "actor_in_conversation";
+  relation: string;
+  subject_workspace_id: string | null;
+  subject_workspace_member_id: string | null;
+  subject_actor_id: string | null;
+  subject_conversation_id: string | null;
+  subject_conversation_actor_context_id: string | null;
+  conversation_type_mask_override: number | null;
+  granted_permissions: string[] | null;
+  status: "active" | "revoked";
+  created_by_workspace_member_id: string | null;
+  reason: string | null;
+  metadata: unknown;
+  created_at: string | Date | null;
+  revoked_at: string | Date | null;
+  actor_id: string | null;
+  conversation_id: string | null;
 };
 
 type RelayToolRuntimeContext = {
@@ -184,6 +222,97 @@ async function buildVisibilitySubjects(params: ResolveParams) {
 
 function publicReuseScope(scope: VisiblePluginRow["reuse_scope"]) {
   return scope || "conversation";
+}
+
+function isConversationTypeAllowed(
+  mask: number,
+  params: Pick<ResolveParams, "conversationKind" | "conversationBoundary">,
+) {
+  return maskAllowsConversationType(
+    mask,
+    params.conversationKind,
+    params.conversationBoundary,
+  );
+}
+
+function accessBindingMatchesContext(
+  row: VisibleAccessBindingRow,
+  params: Pick<ResolveParams, "actorId" | "conversationId">,
+) {
+  switch (row.target_type) {
+    case "workspace":
+      return true;
+    case "conversation":
+      return row.conversation_id === params.conversationId;
+    case "actor":
+      return row.actor_id === params.actorId;
+    case "actor_in_conversation":
+      return (
+        row.actor_id === params.actorId &&
+        row.conversation_id === params.conversationId
+      );
+  }
+}
+
+async function loadVisibleAccessBindings(params: {
+  resourceType: "plugin_installation" | "relay_exposure";
+  resourceIds: string[];
+}) {
+  if (params.resourceIds.length === 0) {
+    return new Map<string, VisibleAccessBindingRow[]>();
+  }
+
+  const rows = await db
+    .selectFrom("access_bindings as binding")
+    .leftJoin(
+      "conversation_actor_contexts as cac",
+      "cac.id",
+      "binding.subject_conversation_actor_context_id",
+    )
+    .select([
+      "binding.id",
+      "binding.workspace_id",
+      "binding.resource_type",
+      "binding.resource_id",
+      "binding.target_type",
+      "binding.relation",
+      "binding.subject_workspace_id",
+      "binding.subject_workspace_member_id",
+      sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(
+        "subject_actor_id",
+      ),
+      sql<string | null>`COALESCE(binding.subject_conversation_id, cac.conversation_id)`.as(
+        "subject_conversation_id",
+      ),
+      "binding.subject_conversation_actor_context_id",
+      "binding.conversation_type_mask_override",
+      "binding.granted_permissions",
+      "binding.status",
+      "binding.created_by_workspace_member_id",
+      "binding.reason",
+      "binding.metadata",
+      "binding.created_at",
+      "binding.revoked_at",
+      sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(
+        "actor_id",
+      ),
+      sql<string | null>`COALESCE(binding.subject_conversation_id, cac.conversation_id)`.as(
+        "conversation_id",
+      ),
+    ])
+    .where("binding.resource_type", "=", params.resourceType)
+    .where("binding.resource_id", "in", params.resourceIds)
+    .where("binding.status", "=", "active")
+    .orderBy("binding.created_at", "desc")
+    .execute() as VisibleAccessBindingRow[];
+
+  const map = new Map<string, VisibleAccessBindingRow[]>();
+  for (const row of rows) {
+    const entries = map.get(row.resource_id) || [];
+    entries.push(row);
+    map.set(row.resource_id, entries);
+  }
+  return map;
 }
 
 function resolveReuseOwnerKey(
@@ -399,7 +528,7 @@ async function loadVisiblePlugins(params: ResolveParams) {
     return [] as VisiblePluginRow[];
   }
 
-  return db
+  const rows = await db
     .selectFrom("plugin_installations as installation")
     .innerJoin("catalog_items as item", "item.id", "installation.catalog_item_id")
     .innerJoin("publishers as publisher", "publisher.id", "item.publisher_id")
@@ -418,12 +547,47 @@ async function loadVisiblePlugins(params: ResolveParams) {
       "spec.transport",
       "spec.entry_point",
       "spec.tool_manifest",
+      sql<number | null>`installation.conversation_type_mask_override`.as(
+        "conversation_type_mask_override",
+      ),
       "installation.reuse_scope",
     ])
     .where("installation.id", "in", Array.from(visibleInstallationIds))
     .where("installation.status", "=", "active")
     .orderBy("installation.updated_at", "desc")
-    .execute() as Promise<VisiblePluginRow[]>;
+    .execute();
+
+  const [bindingsByInstallationId, workspacePolicyMap] = await Promise.all([
+    loadVisibleAccessBindings({
+      resourceType: "plugin_installation",
+      resourceIds: rows.map((row) => row.installation_id),
+    }),
+    getWorkspaceCapabilityConversationTypePolicyMap(
+      rows.map((row) => row.owner_workspace_id),
+    ),
+  ]);
+
+  return rows.filter((row) => {
+    const workspaceConversationTypeMask =
+      workspacePolicyMap.get(row.owner_workspace_id)?.plugin_installation ||
+      DEFAULT_CONVERSATION_TYPE_MASK;
+    const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
+      workspaceConversationTypeMask,
+      row.conversation_type_mask_override,
+    );
+    const matchingBindings = (bindingsByInstallationId.get(row.installation_id) || []).filter(
+      (binding) =>
+        accessBindingMatchesContext(binding, params) &&
+        isConversationTypeAllowed(
+          resolveNarrowedConversationTypeMask(
+            instanceConversationTypeMask,
+            binding.conversation_type_mask_override,
+          ),
+          params,
+        ),
+    );
+    return matchingBindings.length > 0;
+  }) as VisiblePluginRow[];
 }
 
 async function loadVisibleRelayExposures(params: ResolveParams) {
@@ -450,7 +614,7 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
     return [] as VisibleRelayExposureRow[];
   }
 
-  return db
+  const rows = await db
     .selectFrom("relay_exposures as exposure")
     .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
     .select([
@@ -461,6 +625,9 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
       "exposure.updated_at as exposure_updated_at",
       "device.id as device_id",
       "device.display_name as device_display_name",
+      sql<number | null>`exposure.conversation_type_mask_override`.as(
+        "conversation_type_mask_override",
+      ),
     ])
     .where("exposure.id", "in", Array.from(visibleExposureIds))
     .where("exposure.runtime_status", "=", "healthy")
@@ -471,7 +638,39 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
         AND session_row.status = 'active'
     )`)
     .orderBy("exposure.updated_at", "desc")
-    .execute() as Promise<VisibleRelayExposureRow[]>;
+    .execute();
+
+  const [bindingsByExposureId, workspacePolicyMap] = await Promise.all([
+    loadVisibleAccessBindings({
+      resourceType: "relay_exposure",
+      resourceIds: rows.map((row) => row.exposure_id),
+    }),
+    getWorkspaceCapabilityConversationTypePolicyMap(
+      rows.map((row) => row.owner_workspace_id),
+    ),
+  ]);
+
+  return rows.filter((row) => {
+    const workspaceConversationTypeMask =
+      workspacePolicyMap.get(row.owner_workspace_id)?.relay_exposure ||
+      DEFAULT_CONVERSATION_TYPE_MASK;
+    const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
+      workspaceConversationTypeMask,
+      row.conversation_type_mask_override,
+    );
+    const matchingBindings = (bindingsByExposureId.get(row.exposure_id) || []).filter(
+      (binding) =>
+        accessBindingMatchesContext(binding, params) &&
+        isConversationTypeAllowed(
+          resolveNarrowedConversationTypeMask(
+            instanceConversationTypeMask,
+            binding.conversation_type_mask_override,
+          ),
+          params,
+        ),
+    );
+    return matchingBindings.length > 0;
+  }) as VisibleRelayExposureRow[];
 }
 
 export async function listVisibleHealthyRelayCommandlineExposureMetadata(

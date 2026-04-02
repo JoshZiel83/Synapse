@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import type pg from "pg";
 import {
+  DEFAULT_CONVERSATION_TYPE_MASK,
+  maskAllowsConversationType,
+  normalizeConversationTypeMask,
+  resolveEffectiveConversationTypeMask,
+  resolveNarrowedConversationTypeMask,
   type AvailableSkillSummary,
   type CapabilityAccessTarget,
   type InstalledSkill,
@@ -23,6 +28,10 @@ import {
 } from "../../infrastructure/authz/index.js";
 import { transaction } from "../../infrastructure/database/index.js";
 import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
+import {
+  getWorkspaceCapabilityConversationTypeMask,
+  getWorkspaceCapabilityConversationTypePolicyMap,
+} from "../capabilities/conversation-type-policies.js";
 import {
   accessBindingMetadata,
   buildResourceAccessAuthzMutations,
@@ -96,6 +105,7 @@ type SkillPackageRow = {
   spec_name: string | null;
   spec_description_blocks: unknown;
   spec_summary_text: string | null;
+  spec_default_conversation_type_mask: number | null;
   publisher_id: string;
   publisher_slug: string;
   publisher_display_name: string;
@@ -119,6 +129,7 @@ type InstalledSkillRow = {
   tags: string[] | null;
   current_version: number;
   is_active: boolean;
+  conversation_type_mask_override: number | null;
   created_by_workspace_member_id: string | null;
   created_at: string;
   updated_at: string;
@@ -140,6 +151,7 @@ type InstalledSkillRow = {
   source_latest_version_id: string | null;
   source_version_value: string | null;
   latest_source_version: string | null;
+  source_default_conversation_type_mask: number | null;
 };
 
 type SkillFileRow = {
@@ -162,6 +174,7 @@ type SkillAccessRow = AccessBindingRow & {
 type VisibleSkillRow = {
   access_binding_id: string;
   skill_id: string;
+  workspace_id: string;
   access_bind_scope: RuntimeBindingScope;
   conversation_id: string | null;
   actor_id: string | null;
@@ -172,6 +185,7 @@ type VisibleSkillRow = {
   current_skill_version_id: string;
   description_blocks: unknown;
   source_version_value: string | null;
+  conversation_type_mask_override: number | null;
   access_created_at: string;
 };
 
@@ -208,6 +222,7 @@ const MARKETPLACE_SKILL_SELECT = `
     spec.name AS spec_name,
     spec.description_blocks AS spec_description_blocks,
     spec.summary_text AS spec_summary_text,
+    spec.default_conversation_type_mask AS spec_default_conversation_type_mask,
     publisher.id AS publisher_id,
     publisher.slug AS publisher_slug,
     publisher.display_name AS publisher_display_name,
@@ -233,6 +248,7 @@ const INSTALLED_SKILL_SELECT = `
     skill.tags,
     skill.current_version,
     skill.is_active,
+    skill.conversation_type_mask_override,
     skill.created_by_workspace_member_id,
     skill.created_at,
     skill.updated_at,
@@ -248,7 +264,8 @@ const INSTALLED_SKILL_SELECT = `
     source_item.slug AS source_slug,
     source_item.latest_version_id AS source_latest_version_id,
     imported_version.version AS source_version_value,
-    latest_version.version AS latest_source_version
+    latest_version.version AS latest_source_version,
+    imported_spec.default_conversation_type_mask AS source_default_conversation_type_mask
   FROM installed_skills skill
   JOIN skill_versions version_row
     ON version_row.skill_id = skill.id
@@ -259,6 +276,8 @@ const INSTALLED_SKILL_SELECT = `
     ON source_item.id = source_ref.source_catalog_item_id
   LEFT JOIN catalog_versions imported_version
     ON imported_version.id = source_ref.source_catalog_version_id
+  LEFT JOIN skill_package_version_specs imported_spec
+    ON imported_spec.catalog_version_id = source_ref.source_catalog_version_id
   LEFT JOIN catalog_versions latest_version
     ON latest_version.id = source_item.latest_version_id
 `;
@@ -651,10 +670,30 @@ function mapMarketplaceVersion(
     version: row.latest_version_value,
     changelog: row.latest_version_changelog || "",
     description: descriptionBlockFromStored(row.spec_description_blocks),
+    defaultConversationTypeMask:
+      row.spec_default_conversation_type_mask || DEFAULT_CONVERSATION_TYPE_MASK,
     createdByUserId: row.latest_version_created_by_user_id || undefined,
     createdAt: row.latest_version_created_at || row.item_updated_at,
     attachmentFiles,
   };
+}
+
+function resolveMarketplaceSkillDefaultConversationTypeMask(row: SkillPackageRow) {
+  return row.spec_default_conversation_type_mask || DEFAULT_CONVERSATION_TYPE_MASK;
+}
+
+function resolveInstalledSkillSourceConversationTypeMask(row: InstalledSkillRow) {
+  return row.source_default_conversation_type_mask || DEFAULT_CONVERSATION_TYPE_MASK;
+}
+
+function resolveInstalledSkillEffectiveConversationTypeMask(row: {
+  workspaceConversationTypeMask: number;
+  conversation_type_mask_override: number | null;
+}) {
+  return resolveNarrowedConversationTypeMask(
+    row.workspaceConversationTypeMask,
+    row.conversation_type_mask_override,
+  );
 }
 
 function mapMarketplaceEntry(
@@ -662,6 +701,8 @@ function mapMarketplaceEntry(
   installation?: InstallationSummary,
   attachmentFiles?: SkillAttachmentFile[],
 ): SkillMarketplaceEntry {
+  const defaultConversationTypeMask =
+    resolveMarketplaceSkillDefaultConversationTypeMask(row);
   return {
     id: row.item_id,
     slug: row.spec_canonical_slug || row.item_slug,
@@ -676,6 +717,7 @@ function mapMarketplaceEntry(
     isActive: Boolean(row.item_is_active),
     createdAt: row.item_created_at,
     updatedAt: row.item_updated_at,
+    defaultConversationTypeMask,
     latestVersionId: row.latest_version_id || undefined,
     latestVersion: mapMarketplaceVersion(row, attachmentFiles),
     workspaceInstallation: installation,
@@ -685,12 +727,20 @@ function mapMarketplaceEntry(
 function buildInstalledSkillPayload(
   row: InstalledSkillRow,
   binding: SkillAccessRow | undefined,
+  workspaceConversationTypeMask: number,
   attachmentFiles?: SkillAttachmentFile[],
 ): InstalledSkill {
   const chosenBinding = binding;
   const accessTargetType = chosenBinding
     ? resolvePublicUseScope(chosenBinding.bind_scope)
     : ("workspace" as SkillUseScope);
+  const sourceDefaultConversationTypeMask =
+    resolveInstalledSkillSourceConversationTypeMask(row);
+  const effectiveConversationTypeMask =
+    resolveInstalledSkillEffectiveConversationTypeMask({
+      workspaceConversationTypeMask,
+      conversation_type_mask_override: row.conversation_type_mask_override,
+    });
 
   return {
     id: row.skill_id,
@@ -706,6 +756,10 @@ function buildInstalledSkillPayload(
       conversationId: chosenBinding?.conversation_id || undefined,
     },
     isEnabled: Boolean(row.is_active),
+    sourceDefaultConversationTypeMask,
+    workspaceConversationTypeMask,
+    conversationTypeMaskOverride: row.conversation_type_mask_override || undefined,
+    effectiveConversationTypeMask,
     isCustomized: Boolean(
       row.source_catalog_item_id && row.source_is_customized,
     ),
@@ -1107,6 +1161,7 @@ async function loadAccessBindingsBySkillIds(
        COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
        COALESCE(binding.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
        binding.subject_conversation_actor_context_id,
+       binding.conversation_type_mask_override,
        binding.granted_permissions,
        binding.status,
        binding.created_by_workspace_member_id,
@@ -1139,8 +1194,25 @@ async function listSkillAccessRows(skillId: string, includeRevoked = false) {
   return rows.get(skillId) || [];
 }
 
-function mapSkillAccessRowToGrant(row: SkillAccessRow) {
-  return mapAccessBindingToGrant(row, ["use"]);
+function mapSkillAccessRowToGrant(
+  row: SkillAccessRow,
+  options?: {
+    workspaceConversationTypeMask: number;
+    instanceConversationTypeMaskOverride: number | null;
+  },
+) {
+  const effectiveConversationTypeMask = options
+    ? resolveNarrowedConversationTypeMask(
+        resolveNarrowedConversationTypeMask(
+          options.workspaceConversationTypeMask,
+          options.instanceConversationTypeMaskOverride,
+        ),
+        row.conversation_type_mask_override,
+      )
+    : undefined;
+  return mapAccessBindingToGrant(row, ["use"], undefined, {
+    effectiveConversationTypeMask,
+  });
 }
 
 async function loadInstalledSkillForUpdate(
@@ -1448,10 +1520,16 @@ async function getInstalledSkillResponse(
     chooseBindingMap([installedSkillId]),
     loadSkillFilesMap([row.current_skill_version_id]),
   ]);
+  const workspaceConversationTypeMask =
+    await getWorkspaceCapabilityConversationTypeMask(
+      row.workspace_id,
+      "installed_skill",
+    );
 
   return buildInstalledSkillPayload(
     row,
     bindingMap.get(installedSkillId),
+    workspaceConversationTypeMask,
     fileMap.get(row.current_skill_version_id) || [],
   );
 }
@@ -1547,6 +1625,7 @@ export async function publishMarketplaceSkill(input: {
   version: string;
   changelog?: string;
   attachmentFiles?: SkillAttachmentInput[];
+  defaultConversationTypeMask?: number;
   authorUserId?: string;
   isActive?: boolean;
   metadata?: JsonObject;
@@ -1570,6 +1649,10 @@ export async function publishMarketplaceSkill(input: {
   const descriptionBlocks = [description];
   const summaryText = renderSkillBlocksToText(descriptionBlocks);
   const attachmentFiles = normalizeSkillAttachments(input.attachmentFiles);
+  const defaultConversationTypeMask = resolveEffectiveConversationTypeMask({
+    defaultMask: input.defaultConversationTypeMask,
+    overrideMask: null,
+  });
 
   const result = await transaction(async (client) => {
     const publisherId = await ensureMarketplacePublisher(
@@ -1735,14 +1818,16 @@ export async function publishMarketplaceSkill(input: {
          name,
          description_blocks,
          summary_text,
+         default_conversation_type_mask,
          metadata
        )
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb)
        ON CONFLICT (catalog_version_id) DO UPDATE SET
          canonical_slug = EXCLUDED.canonical_slug,
          name = EXCLUDED.name,
          description_blocks = EXCLUDED.description_blocks,
          summary_text = EXCLUDED.summary_text,
+         default_conversation_type_mask = EXCLUDED.default_conversation_type_mask,
          metadata = EXCLUDED.metadata`,
       [
         versionId,
@@ -1750,6 +1835,7 @@ export async function publishMarketplaceSkill(input: {
         name,
         JSON.stringify(descriptionBlocks),
         summaryText,
+        defaultConversationTypeMask,
         JSON.stringify(input.metadata || {}),
       ],
     );
@@ -1931,11 +2017,17 @@ export async function listInstalledSkills(
     }),
     loadSkillFilesMap(rows.map((row) => row.current_skill_version_id)),
   ]);
+  const workspaceConversationTypeMask =
+    await getWorkspaceCapabilityConversationTypeMask(
+      workspaceId,
+      "installed_skill",
+    );
 
   return rows.map((row) =>
     buildInstalledSkillPayload(
       row,
       bindingMap.get(row.skill_id),
+      workspaceConversationTypeMask,
       fileMap.get(row.current_skill_version_id) || [],
     ),
   );
@@ -1960,8 +2052,19 @@ export async function getInstalledSkillAccessState(
     throw new SkillError(404, "Installed skill not found");
   }
 
+  const workspaceConversationTypeMask =
+    await getWorkspaceCapabilityConversationTypeMask(
+      skillRow.workspace_id,
+      "installed_skill",
+    );
   const accessRows = await listSkillAccessRows(installedSkillId);
-  const grants = accessRows.map(mapSkillAccessRowToGrant);
+  const grants = accessRows.map((row) =>
+    mapSkillAccessRowToGrant(row, {
+      workspaceConversationTypeMask,
+      instanceConversationTypeMaskOverride:
+        skillRow.conversation_type_mask_override ?? null,
+    }),
+  );
   const initialGrant = selectInitialSkillGrant(accessRows);
   const suggestedGrantScope = initialGrant
     ? resolvePublicUseScope(initialGrant.bind_scope)
@@ -1972,6 +2075,17 @@ export async function getInstalledSkillAccessState(
     summary: {
       requiredPermissions: ["use"],
       suggestedAccessTargetType: suggestedGrantScope,
+      sourceDefaultConversationTypeMask:
+        resolveInstalledSkillSourceConversationTypeMask(skillRow),
+      workspaceConversationTypeMask,
+      conversationTypeMaskOverride:
+        skillRow.conversation_type_mask_override ?? null,
+      effectiveConversationTypeMask:
+        resolveInstalledSkillEffectiveConversationTypeMask({
+          workspaceConversationTypeMask,
+          conversation_type_mask_override:
+            skillRow.conversation_type_mask_override,
+        }),
       reason: "Choose who can use this installed skill.",
       effectivePermissions: grants.length > 0 ? ["use"] : [],
       isVisible: grants.length > 0,
@@ -1986,6 +2100,7 @@ export async function grantInstalledSkillAccess(input: {
   installedSkillId: string;
   accessTarget?: CapabilityAccessTarget;
   permissions?: string[];
+  conversationTypeMaskOverride?: number | null;
   grantedByWorkspaceMemberId?: string;
   reason?: string;
   metadata?: JsonObject;
@@ -1997,6 +2112,11 @@ export async function grantInstalledSkillAccess(input: {
   if (!skillRow) {
     throw new SkillError(404, "Installed skill not found");
   }
+  const workspaceConversationTypeMask =
+    await getWorkspaceCapabilityConversationTypeMask(
+      skillRow.workspace_id,
+      "installed_skill",
+    );
 
   const accessRows = await listSkillAccessRows(input.installedSkillId);
   const accessTargetInput =
@@ -2026,7 +2146,11 @@ export async function grantInstalledSkillAccess(input: {
       row.workspace_member_id === accessTarget.workspaceMemberId,
   );
   if (existing) {
-    return mapSkillAccessRowToGrant(existing);
+    return mapSkillAccessRowToGrant(existing, {
+      workspaceConversationTypeMask,
+      instanceConversationTypeMaskOverride:
+        skillRow.conversation_type_mask_override ?? null,
+    });
   }
 
   const result = await transaction(async (client) => {
@@ -2042,6 +2166,7 @@ export async function grantInstalledSkillAccess(input: {
          subject_actor_id,
          subject_conversation_id,
          subject_conversation_actor_context_id,
+         conversation_type_mask_override,
          granted_permissions,
          metadata,
          status,
@@ -2059,11 +2184,12 @@ export async function grantInstalledSkillAccess(input: {
          $7,
          $8,
          $9,
-         $10::text[],
-         $11::jsonb,
+         $10,
+         $11::text[],
+         $12::jsonb,
          'active',
-         $12,
-         $13
+         $13,
+         $14
        )
        RETURNING
          id,
@@ -2077,6 +2203,7 @@ export async function grantInstalledSkillAccess(input: {
          subject_actor_id,
          subject_conversation_id,
          subject_conversation_actor_context_id,
+         conversation_type_mask_override,
          granted_permissions,
          status,
          created_by_workspace_member_id,
@@ -2094,6 +2221,7 @@ export async function grantInstalledSkillAccess(input: {
         accessTarget.subjectActorId,
         accessTarget.subjectConversationId,
         accessTarget.subjectConversationActorContextId,
+        input.conversationTypeMaskOverride ?? null,
         input.permissions || ["use"],
         JSON.stringify(input.metadata || {}),
         input.grantedByWorkspaceMemberId || null,
@@ -2131,7 +2259,59 @@ export async function grantInstalledSkillAccess(input: {
   });
 
   await flushQueuedAuthzEntries(result.authzEntryIds, "skill.access.grant");
-  return mapSkillAccessRowToGrant(result.accessRow);
+  return mapSkillAccessRowToGrant(result.accessRow, {
+    workspaceConversationTypeMask,
+    instanceConversationTypeMaskOverride:
+      skillRow.conversation_type_mask_override ?? null,
+  });
+}
+
+export async function updateInstalledSkillAccessGrant(input: {
+  workspaceId: string;
+  installedSkillId: string;
+  grantId: string;
+  conversationTypeMaskOverride?: number | null;
+}) {
+  const skillRow = await loadInstalledSkillForUpdate(
+    input.workspaceId,
+    input.installedSkillId,
+  );
+  if (!skillRow) {
+    throw new SkillError(404, "Installed skill not found");
+  }
+
+  const workspaceConversationTypeMask =
+    await getWorkspaceCapabilityConversationTypeMask(
+      skillRow.workspace_id,
+      "installed_skill",
+    );
+  const accessRows = await listSkillAccessRows(input.installedSkillId, true);
+  const accessRow = accessRows.find((row) => row.id === input.grantId);
+  if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
+    throw new SkillError(404, "Access grant not found");
+  }
+
+  if (input.conversationTypeMaskOverride !== undefined) {
+    await executeSql(
+      `UPDATE access_bindings
+       SET conversation_type_mask_override = $2
+       WHERE id = $1
+         AND workspace_id = $3`,
+      [input.grantId, input.conversationTypeMaskOverride, input.workspaceId],
+    );
+  }
+
+  const updatedRows = await listSkillAccessRows(input.installedSkillId);
+  const updatedRow = updatedRows.find((row) => row.id === input.grantId);
+  if (!updatedRow) {
+    throw new SkillError(404, "Access grant not found");
+  }
+
+  return mapSkillAccessRowToGrant(updatedRow, {
+    workspaceConversationTypeMask,
+    instanceConversationTypeMaskOverride:
+      skillRow.conversation_type_mask_override ?? null,
+  });
 }
 
 export async function revokeInstalledSkillAccess(input: {
@@ -2244,9 +2424,10 @@ export async function installMarketplaceSkill(input: {
          tags,
          current_version,
          is_active,
+         conversation_type_mask_override,
          created_by_workspace_member_id
        )
-       VALUES ($1, $2, $3, $4, $5, 1, TRUE, $6)
+       VALUES ($1, $2, $3, $4, $5, 1, TRUE, $6, $7)
        RETURNING id`,
       [
         input.workspaceId,
@@ -2254,6 +2435,7 @@ export async function installMarketplaceSkill(input: {
         marketplaceSkill.spec_name || marketplaceSkill.item_display_name,
         marketplaceSkill.item_icon_file_id,
         marketplaceSkill.item_tags || [],
+        marketplaceSkill.spec_default_conversation_type_mask ?? null,
         input.installedByWorkspaceMemberId || null,
       ],
     );
@@ -2360,6 +2542,7 @@ export async function updateInstalledSkill(input: {
   iconFileId?: string | null;
   tags?: string[];
   isEnabled?: boolean;
+  conversationTypeMaskOverride?: number | null;
   attachmentFiles?: SkillAttachmentInput[];
 }) {
   const existing = await loadInstalledSkillForUpdate(
@@ -2484,6 +2667,16 @@ export async function updateInstalledSkill(input: {
              updated_at = NOW()
          WHERE id = $1`,
         [existing.skill_id, input.isEnabled],
+      );
+    }
+
+    if (input.conversationTypeMaskOverride !== undefined) {
+      await executeSqlOn(client,
+        `UPDATE installed_skills
+         SET conversation_type_mask_override = $2,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [existing.skill_id, input.conversationTypeMaskOverride],
       );
     }
   });
@@ -2777,6 +2970,7 @@ function visibleRowToAccessRow(
     subject_conversation_id:
       publicScope === "conversation" ? row.conversation_id : null,
     subject_conversation_actor_context_id: null,
+    conversation_type_mask_override: null,
     granted_permissions: ["use"],
     status: "active",
     created_by_workspace_member_id: null,
@@ -2797,6 +2991,8 @@ export async function listVisibleSkills(input: {
   actorId?: string;
   sessionId?: string;
   conversationId?: string;
+  conversationKind?: "private" | "group" | "virtual";
+  conversationBoundary?: "internal" | "external";
 }) {
   const subjects = await buildVisibilitySubjects(input);
   const relayAutoLoadedSkills = await listRelayAutoLoadedSkills({
@@ -2804,6 +3000,8 @@ export async function listVisibleSkills(input: {
     actorId: input.actorId,
     sessionId: input.sessionId,
     conversationId: input.conversationId,
+    conversationKind: input.conversationKind,
+    conversationBoundary: input.conversationBoundary,
   });
   if (subjects.length === 0) {
     return relayAutoLoadedSkills;
@@ -2830,18 +3028,20 @@ export async function listVisibleSkills(input: {
     visibleSkillIds.size === 0
       ? []
       : await (async () => {
-          const [rows, bindingsBySkillId] = await Promise.all([
-            runQuery<VisibleSkillRow>(
-              `SELECT
-                 skill.id AS skill_id,
-                 skill.slug,
-                 skill.name,
-                 skill.current_version,
-                 version_row.id AS current_skill_version_id,
-                 version_row.description_blocks,
-                 imported_version.version AS source_version_value,
-                 skill.id AS access_binding_id,
-                 'workspace'::varchar AS access_bind_scope,
+	          const [rows, bindingsBySkillId] = await Promise.all([
+	            runQuery<VisibleSkillRow>(
+	              `SELECT
+	                 skill.id AS skill_id,
+	                 skill.workspace_id,
+	                 skill.slug,
+	                 skill.name,
+	                 skill.current_version,
+	                 version_row.id AS current_skill_version_id,
+	                 version_row.description_blocks,
+	                 imported_version.version AS source_version_value,
+	                 skill.conversation_type_mask_override,
+	                 skill.id AS access_binding_id,
+	                 'workspace'::varchar AS access_bind_scope,
                  NULL::uuid AS conversation_id,
                  NULL::uuid AS actor_id,
                  NULL::uuid AS workspace_member_id,
@@ -2850,24 +3050,49 @@ export async function listVisibleSkills(input: {
                JOIN skill_versions version_row
                  ON version_row.skill_id = skill.id
                 AND version_row.version = skill.current_version
-               LEFT JOIN skill_source_refs source_ref
-                 ON source_ref.skill_id = skill.id
-               LEFT JOIN catalog_versions imported_version
-                 ON imported_version.id = source_ref.source_catalog_version_id
-               WHERE skill.id = ANY($1::uuid[])
-                 AND skill.is_active = TRUE
-               ORDER BY skill.slug ASC, skill.updated_at DESC`,
+	               LEFT JOIN skill_source_refs source_ref
+	                 ON source_ref.skill_id = skill.id
+	               LEFT JOIN catalog_versions imported_version
+	                 ON imported_version.id = source_ref.source_catalog_version_id
+	               WHERE skill.id = ANY($1::uuid[])
+	                 AND skill.is_active = TRUE
+	               ORDER BY skill.slug ASC, skill.updated_at DESC`,
               [Array.from(visibleSkillIds)],
             ),
-            loadAccessBindingsBySkillIds(Array.from(visibleSkillIds)),
-          ]);
+	            loadAccessBindingsBySkillIds(Array.from(visibleSkillIds)),
+	          ]);
+	          const workspacePolicyMap =
+	            await getWorkspaceCapabilityConversationTypePolicyMap(
+	              rows.rows.map((row) => row.workspace_id),
+	            );
 
-          const deduped = new Map<string, VisibleSkillRow>();
-          for (const row of rows.rows) {
-            const bindings = (bindingsBySkillId.get(row.skill_id) || []).filter(
-              (binding) => accessMatchesVisibilityContext(binding, input),
-            );
-            const chosenBinding = [...bindings].sort(compareVisibleBindingPriority)[0];
+	          const deduped = new Map<string, VisibleSkillRow>();
+	          for (const row of rows.rows) {
+	            const workspaceConversationTypeMask =
+	              workspacePolicyMap.get(row.workspace_id)?.installed_skill ||
+	              DEFAULT_CONVERSATION_TYPE_MASK;
+	            const instanceConversationTypeMask =
+	              resolveInstalledSkillEffectiveConversationTypeMask({
+	                workspaceConversationTypeMask,
+	                conversation_type_mask_override:
+	                  row.conversation_type_mask_override,
+	              });
+	            const bindings = (bindingsBySkillId.get(row.skill_id) || []).filter(
+	              (binding) =>
+	                accessMatchesVisibilityContext(binding, input) &&
+	                maskAllowsConversationType(
+	                  resolveNarrowedConversationTypeMask(
+	                    instanceConversationTypeMask,
+	                    binding.conversation_type_mask_override,
+	                  ),
+	                  input.conversationKind,
+	                  input.conversationBoundary,
+	                ),
+	            );
+	            if (bindings.length === 0) {
+	              continue;
+	            }
+	            const chosenBinding = [...bindings].sort(compareVisibleBindingPriority)[0];
             const candidate: VisibleSkillRow = {
               ...row,
               access_binding_id: chosenBinding?.id || row.access_binding_id,
@@ -2915,6 +3140,8 @@ export async function readVisibleSkill(input: {
   actorId?: string;
   sessionId?: string;
   conversationId?: string;
+  conversationKind?: "private" | "group" | "virtual";
+  conversationBoundary?: "internal" | "external";
   skillName: string;
   assetPath?: string;
 }) {
@@ -2923,6 +3150,8 @@ export async function readVisibleSkill(input: {
     actorId: input.actorId,
     sessionId: input.sessionId,
     conversationId: input.conversationId,
+    conversationKind: input.conversationKind,
+    conversationBoundary: input.conversationBoundary,
   });
 
   const normalizedName = input.skillName.trim().toLowerCase();

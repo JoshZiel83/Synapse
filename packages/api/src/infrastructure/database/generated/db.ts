@@ -336,6 +336,7 @@ export type WorkspaceInvitesTrustLevel = "admin" | "guest" | "member";
 export type WorkspaceMembersTrustLevel = "admin" | "guest" | "member";
 
 export interface AccessBindings {
+  conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
   granted_permissions: Generated<string[]>;
@@ -1023,6 +1024,7 @@ export interface Files {
 }
 
 export interface InstalledSkills {
+  conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
   current_version: Generated<number>;
@@ -1305,6 +1307,7 @@ export interface PluginInstallations {
   catalog_item_id: string;
   catalog_version_id: string;
   config_data: Generated<Json>;
+  conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
   display_name: string;
   id: Generated<string>;
@@ -1322,6 +1325,7 @@ export interface PluginPackageVersionSpecs {
   config_schema: Generated<Json>;
   created_at: Generated<Timestamp | null>;
   default_config: Generated<Json>;
+  default_conversation_type_mask: Generated<number>;
   default_mount_scope: Generated<PluginPackageVersionSpecsDefaultMountScope>;
   default_reuse_scope: Generated<PluginPackageVersionSpecsDefaultReuseScope>;
   entry_point: string | null;
@@ -1461,6 +1465,7 @@ export interface RelayDeviceSessions {
 }
 
 export interface RelayExposures {
+  conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
   device_id: string;
   display_name: string;
@@ -1729,6 +1734,7 @@ export interface SkillPackageVersionSpecs {
   canonical_slug: string;
   catalog_version_id: string;
   created_at: Generated<Timestamp | null>;
+  default_conversation_type_mask: Generated<number>;
   description_blocks: Generated<Json>;
   metadata: Generated<Json | null>;
   name: string;
@@ -1958,6 +1964,14 @@ export interface WorkspaceAccessBindings {
   workspace_member_id: string;
 }
 
+export interface WorkspaceCapabilityConversationTypePolicies {
+  created_at: Generated<Timestamp | null>;
+  default_conversation_type_mask: number;
+  resource_family: string;
+  updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
+}
+
 export interface WorkspaceFriendEntries {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
@@ -2151,6 +2165,7 @@ export interface DB {
   turns: Turns;
   users: Users;
   workspace_access_bindings: WorkspaceAccessBindings;
+  workspace_capability_conversation_type_policies: WorkspaceCapabilityConversationTypePolicies;
   workspace_friend_entries: WorkspaceFriendEntries;
   workspace_friend_requests: WorkspaceFriendRequests;
   workspace_invites: WorkspaceInvites;

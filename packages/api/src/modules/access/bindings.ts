@@ -37,6 +37,7 @@ export type AccessBindingRow = {
   subject_actor_id: string | null;
   subject_conversation_id: string | null;
   subject_conversation_actor_context_id: string | null;
+  conversation_type_mask_override: number | null;
   granted_permissions: string[] | unknown;
   status: "active" | "revoked";
   created_by_workspace_member_id: string | null;
@@ -190,6 +191,7 @@ export function readAccessBindingTarget(
     | "subject_actor_id"
     | "subject_conversation_id"
     | "subject_conversation_actor_context_id"
+    | "conversation_type_mask_override"
   >,
 ): AccessGrantTarget {
   switch (row.target_type) {
@@ -390,6 +392,9 @@ export function mapAccessBindingToGrant(
   row: AccessBindingRow,
   defaultPermissions: string[] = [],
   fallbackReason?: string,
+  options?: {
+    effectiveConversationTypeMask?: number;
+  },
 ): AccessGrant {
   const metadata = accessBindingMetadata(row);
   const target = readAccessBindingTarget(row);
@@ -434,6 +439,9 @@ export function mapAccessBindingToGrant(
     grantedByWorkspaceMemberId:
       row.created_by_workspace_member_id || undefined,
     reason: row.reason || fallbackReason,
+    conversationTypeMaskOverride: row.conversation_type_mask_override ?? null,
+    effectiveConversationTypeMask:
+      options?.effectiveConversationTypeMask,
     metadata,
     createdAt: row.created_at,
     revokedAt: row.revoked_at || undefined,

@@ -1,4 +1,11 @@
-import type { ToolDefinition, ToolCall, ToolResult, ToolPlugin, ToolResolveContext } from '@synapse/shared';
+import {
+  maskAllowsConversationType,
+  type ToolDefinition,
+  type ToolCall,
+  type ToolResult,
+  type ToolPlugin,
+  type ToolResolveContext,
+} from '@synapse/shared';
 import { getToolErrorMessage, getToolErrorMetadata } from './tool-errors.js';
 
 /**
@@ -26,6 +33,16 @@ export async function resolveBuiltinTools(
 ): Promise<ToolDefinition[]> {
   const tools: ToolDefinition[] = [];
   for (const plugin of registry.values()) {
+    if (
+      plugin.conversationTypeMask !== undefined &&
+      !maskAllowsConversationType(
+        plugin.conversationTypeMask,
+        ctx.conversationKind,
+        ctx.conversationBoundary,
+      )
+    ) {
+      continue;
+    }
     if (plugin.resolve) {
       const result = await plugin.resolve(ctx);
       if (result.active) {
