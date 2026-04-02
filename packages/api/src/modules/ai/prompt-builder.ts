@@ -277,7 +277,8 @@ export function buildActorPrompt(
       `- If the current task depends on history, decisions, user preferences, or durable facts, consult recalled memories first.\n` +
       `- If recalled memories are insufficient, use \`memory_search\` to search deeper.\n` +
       `- Use \`create_memory\` only for stable and established information that should persist beyond the current turn.\n` +
-      `- Actor-created memories only support three scopes: \`actor_in_conversation\` (private to you in this conversation), \`conversation\` (shared in this conversation), and \`actor_global\` (follows you across conversations).\n` +
+      `- Actor-created memories support three visibility modes: \`participant_private\` (private to you in this conversation), \`conversation_shared\` (shared in this conversation), and \`actor_private\` (follows you across conversations).\n` +
+      `- In a direct one-to-one conversation with a workspace user, recalled memory and \`memory_search\` may also include that user's personal workspace memory.\n` +
       `- If you store a file-backed memory, include the exact FileRef string such as <FileRef id="..."/> in the memory content, and include a concise textual summary or \`textDigest\` so it can be retrieved later.\n` +
       `- If memory appears uncertain or conflicts with current evidence, say so explicitly instead of guessing.`,
   );

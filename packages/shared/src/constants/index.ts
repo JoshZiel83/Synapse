@@ -15,7 +15,7 @@ export const ACTOR_THINK_TIMEOUT = 120_000; // 2 minutes
 export const SESSION_LOCK_TTL = 120_000; // 120 seconds
 export const DEFAULT_MAX_CONCURRENT_SESSIONS = 3;
 
-export const MEMORY_EMBEDDING_DIMENSIONS = 1536;
+export const MEMORY_EMBEDDING_DIMENSIONS = 384;
 
 export const WORK_ITEM_PRIORITIES_ORDER = ['low', 'medium', 'high', 'urgent'] as const;
 
@@ -32,6 +32,7 @@ export const QUEUE_NAMES = {
   AUTOMATION_SCHEDULER: 'automation-scheduler',
   AUTOMATION_EXECUTION: 'automation-execution',
   IM_TRANSPORT_DELIVERY: 'im-transport-delivery',
+  MEMORY_INDEXING: 'memory-indexing',
 } as const;
 
 export const WS_AUTH_TIMEOUT = 5000;

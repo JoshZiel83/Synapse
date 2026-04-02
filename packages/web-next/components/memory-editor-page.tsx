@@ -22,7 +22,7 @@ import {
   type EditorState,
   type MemoryFolderNode,
   type Memory,
-  type MemoryScope,
+  type MemorySpaceType,
 } from "@/components/memory-browser-model"
 import { MemoryPathPickerDialog } from "@/components/memory-path-picker-dialog"
 import { CanonicalContentEditor } from "@/components/canonical-content-editor"
@@ -36,8 +36,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 
-function isMemoryScope(value: string | null): value is MemoryScope {
-  return value === "workspace" || value === "workspace_member" || value === "conversation" || value === "actor_global" || value === "actor_in_conversation"
+function isMemorySpaceType(value: string | null): value is MemorySpaceType {
+  return (
+    value === "workspace_shared" ||
+    value === "conversation_shared" ||
+    value === "actor_private" ||
+    value === "participant_private" ||
+    value === "user_private"
+  )
 }
 
 export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
@@ -88,13 +94,17 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
         setEditor(nextEditor)
         setBaselineSignature(serializeEditorState(nextEditor))
       } else {
-        const ownerScopeParam = searchParams.get("ownerScope")
+        const spaceTypeParam = searchParams.get("spaceType") || searchParams.get("ownerScope")
         const nextEditor = createDraftState(
           {
-            ownerScope: isMemoryScope(ownerScopeParam) ? ownerScopeParam : "workspace",
-            ownerActorId: searchParams.get("ownerActorId") || undefined,
-            ownerConversationId: searchParams.get("ownerConversationId") || undefined,
-            ownerWorkspaceMemberId:
+            spaceType: isMemorySpaceType(spaceTypeParam) ? spaceTypeParam : "workspace_shared",
+            actorId: searchParams.get("actorId") || searchParams.get("ownerActorId") || undefined,
+            conversationId:
+              searchParams.get("conversationId") ||
+              searchParams.get("ownerConversationId") ||
+              undefined,
+            workspaceMemberId:
+              searchParams.get("workspaceMemberId") ||
               searchParams.get("ownerWorkspaceMemberId") ||
               effectiveCurrentWorkspaceMemberId ||
               undefined,
@@ -149,10 +159,10 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
     return getFolderIdForOwner({
       workspaceId,
       currentWorkspaceMemberId: effectiveCurrentWorkspaceMemberId,
-      ownerScope: editor.ownerScope,
-      ownerActorId: editor.ownerActorId || undefined,
-      ownerConversationId: editor.ownerConversationId || undefined,
-      ownerWorkspaceMemberId: editor.ownerWorkspaceMemberId || undefined,
+      spaceType: editor.spaceType,
+      actorId: editor.actorId || undefined,
+      conversationId: editor.conversationId || undefined,
+      workspaceMemberId: editor.workspaceMemberId || undefined,
     })
   }, [effectiveCurrentWorkspaceMemberId, editor, workspaceId])
 
@@ -366,7 +376,7 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
                     />
                   </Field>
 
-                  <FieldGroup className="md:grid md:grid-cols-3">
+                  <FieldGroup className="md:grid md:grid-cols-2">
                     <Field>
                       <FieldLabel>Category</FieldLabel>
                       <Select
@@ -391,38 +401,19 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
                     </Field>
 
                     <Field>
-                      <FieldLabel>Status</FieldLabel>
+                      <FieldLabel>State</FieldLabel>
                       <Select
-                        value={editor.status}
-                        onValueChange={(value) => updateEditor((current) => ({ ...current, status: value as typeof current.status }))}
+                        value={editor.state}
+                        onValueChange={(value) => updateEditor((current) => ({ ...current, state: value as typeof current.state }))}
                       >
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectGroup>
-                            <SelectItem value="candidate">Candidate</SelectItem>
-                            <SelectItem value="established">Established</SelectItem>
+                            <SelectItem value="active">Active</SelectItem>
                             <SelectItem value="superseded">Superseded</SelectItem>
-                            <SelectItem value="retracted">Retracted</SelectItem>
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                    </Field>
-
-                    <Field>
-                      <FieldLabel>Stability</FieldLabel>
-                      <Select
-                        value={editor.stability}
-                        onValueChange={(value) => updateEditor((current) => ({ ...current, stability: value as typeof current.stability }))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            <SelectItem value="durable">Durable</SelectItem>
-                            <SelectItem value="ephemeral">Ephemeral</SelectItem>
+                            <SelectItem value="archived">Archived</SelectItem>
                           </SelectGroup>
                         </SelectContent>
                       </Select>

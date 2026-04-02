@@ -131,15 +131,18 @@ function buildCreateMemoryAction(input: Record<string, any>): ActorAction {
   const tags = input.tags
     ? String(input.tags).split(',').map((t: string) => t.trim()).filter(Boolean)
     : [];
+  const spaceType = input.spaceType || input.scope || 'participant_private';
+  const importance = Number(input.importance);
+  const confidence = Number(input.confidence);
   return {
     type: 'create_memory' as const,
     content: input.content,
     metadata: {
       category: input.category || 'fact',
-      scope: input.scope || 'actor_in_conversation',
-      importance: parseFloat(input.importance) || 0.5,
-      confidence: parseFloat(input.confidence) || 0.8,
-      stability: input.stability || 'durable',
+      spaceType,
+      scope: spaceType,
+      importance: Number.isFinite(importance) ? importance : 0.5,
+      confidence: Number.isFinite(confidence) ? confidence : 0.8,
       textDigest: input.textDigest || undefined,
       tags,
     },
@@ -200,10 +203,10 @@ export function registerActionToolPlugins(): void {
             description: 'Memory category',
             enum: ['fact', 'preference', 'decision', 'relationship', 'procedure', 'artifact', 'summary'],
           },
-          scope: {
+          spaceType: {
             type: 'string',
-            description: 'Memory owner scope. actor_in_conversation = private to you inside the current conversation; conversation = shared within the current conversation; actor_global = follows you across conversations.',
-            enum: ['actor_in_conversation', 'conversation', 'actor_global'],
+            description: 'Memory visibility. participant_private = private to you inside the current conversation; conversation_shared = shared in the current conversation; actor_private = follows you across conversations.',
+            enum: ['participant_private', 'conversation_shared', 'actor_private'],
           },
           importance: {
             type: 'string',
@@ -212,11 +215,6 @@ export function registerActionToolPlugins(): void {
           confidence: {
             type: 'string',
             description: 'Confidence score from 0.0 to 1.0. Use high confidence only for established facts.',
-          },
-          stability: {
-            type: 'string',
-            description: 'Whether this memory is ephemeral or durable.',
-            enum: ['ephemeral', 'durable'],
           },
           textDigest: {
             type: 'string',
@@ -252,7 +250,7 @@ export function registerActionToolPlugins(): void {
       return JSON.stringify({
         success: true,
         message: 'Memory saved.',
-        scope: action.metadata?.scope,
+        spaceType: action.metadata?.spaceType,
         category: action.metadata?.category,
       });
     },

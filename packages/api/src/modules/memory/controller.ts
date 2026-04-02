@@ -3,10 +3,10 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   CANONICAL_FILE_CATEGORIES,
   MEMORY_CATEGORIES,
+  MEMORY_ITEM_STATES,
   MEMORY_RECALL_TYPES,
-  MEMORY_SCOPES,
+  MEMORY_SPACE_TYPES,
   MEMORY_STABILITIES,
-  MEMORY_STATUSES,
 } from '@synapse/shared/constants';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
@@ -15,7 +15,6 @@ import {
   authorizeAction,
   authorizePermission,
   getRequestAccessSubject,
-  listAuthorizedResourceIds,
 } from '../access/service.js';
 import {
   createMemory,
@@ -26,13 +25,16 @@ import {
   recallMemories,
   runMemorySearch,
   updateMemory,
+  type CreateMemoryInput,
+  type UpdateMemoryInput,
 } from './service.js';
 import { ensureConversationActorSessionContext } from '../session/service.js';
 
-const memoryOwnerScopeEnum = z.enum(MEMORY_SCOPES);
+const memorySpaceTypeEnum = z.enum(MEMORY_SPACE_TYPES);
 const memoryCategoryEnum = z.enum(MEMORY_CATEGORIES);
-const memoryStatusEnum = z.enum(MEMORY_STATUSES);
+const memoryStateEnum = z.enum(MEMORY_ITEM_STATES);
 const memoryStabilityEnum = z.enum(MEMORY_STABILITIES);
+
 const contentBlockSchema = z.discriminatedUnion('type', [
   z.object({
     id: z.string().uuid().optional(),
@@ -53,12 +55,17 @@ const contentBlockSchema = z.discriminatedUnion('type', [
 ]);
 
 const memoryPayloadSchema = z.object({
-  ownerScope: memoryOwnerScopeEnum,
+  spaceType: memorySpaceTypeEnum.optional(),
+  ownerScope: memorySpaceTypeEnum.optional(),
+  actorId: z.string().uuid().optional(),
   ownerActorId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
   ownerConversationId: z.string().uuid().optional(),
+  workspaceMemberId: z.string().uuid().optional(),
   ownerWorkspaceMemberId: z.string().uuid().optional(),
-  category: memoryCategoryEnum,
-  status: memoryStatusEnum.optional(),
+  category: memoryCategoryEnum.optional(),
+  state: memoryStateEnum.optional(),
+  status: memoryStateEnum.optional(),
   stability: memoryStabilityEnum.optional(),
   importance: z.number().min(0).max(1).optional(),
   confidence: z.number().min(0).max(1).optional(),
@@ -74,7 +81,9 @@ const memoryPayloadSchema = z.object({
   metadata: z.record(z.any()).optional(),
 });
 
-const createMemorySchema = memoryPayloadSchema.refine((value) => !!value.content || !!value.contentBlocks || !!value.textDigest, {
+const createMemorySchema = memoryPayloadSchema.extend({
+  category: memoryCategoryEnum,
+}).refine((value) => !!value.content || !!value.contentBlocks || !!value.textDigest, {
   message: 'content, contentBlocks, or textDigest is required',
 });
 
@@ -84,10 +93,11 @@ const listMemoriesSchema = z.object({
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
   workspaceMemberId: z.string().uuid().optional(),
-  ownerScope: memoryOwnerScopeEnum.optional(),
+  spaceType: memorySpaceTypeEnum.optional(),
+  ownerScope: memorySpaceTypeEnum.optional(),
   category: memoryCategoryEnum.optional(),
-  status: memoryStatusEnum.optional(),
-  stability: memoryStabilityEnum.optional(),
+  state: memoryStateEnum.optional(),
+  status: memoryStateEnum.optional(),
   tags: z.union([z.string().transform((value) => value.split(',').map((item) => item.trim()).filter(Boolean)), z.array(z.string())]).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
 });
@@ -97,10 +107,11 @@ const searchMemoriesSchema = z.object({
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
   workspaceMemberId: z.string().uuid().optional(),
-  scopes: z.array(memoryOwnerScopeEnum).optional(),
+  spaceTypes: z.array(memorySpaceTypeEnum).optional(),
+  scopes: z.array(memorySpaceTypeEnum).optional(),
   categories: z.array(memoryCategoryEnum).optional(),
-  statuses: z.array(memoryStatusEnum).optional(),
-  stabilities: z.array(memoryStabilityEnum).optional(),
+  states: z.array(memoryStateEnum).optional(),
+  statuses: z.array(memoryStateEnum).optional(),
   limit: z.number().int().min(1).max(50).optional(),
   metadata: z.record(z.any()).optional(),
 });
@@ -109,6 +120,17 @@ const recallMemoriesSchema = searchMemoriesSchema.extend({
   recallType: z.enum(MEMORY_RECALL_TYPES.filter((value) => value !== 'manual_search') as ['bootstrap', 'turn_recall']),
   queryBlocks: z.array(contentBlockSchema).optional(),
 });
+
+function normalizeMemoryPayload<T extends z.infer<typeof memoryPayloadSchema>>(value: T) {
+  return {
+    ...value,
+    spaceType: value.spaceType || value.ownerScope,
+    actorId: value.actorId || value.ownerActorId,
+    conversationId: value.conversationId || value.ownerConversationId,
+    workspaceMemberId: value.workspaceMemberId || value.ownerWorkspaceMemberId,
+    state: value.state || value.status,
+  };
+}
 
 function handleError(error: unknown, reply: FastifyReply) {
   if (error instanceof MemoryError) {
@@ -145,7 +167,7 @@ async function requireMemoryPermission(
 ) {
   const allowed = await authorizePermission({
     subject: getRequestAccessSubject(request),
-    resourceType: 'memory',
+    resourceType: 'memory_item',
     resourceId: memoryId,
     permission,
   });
@@ -158,52 +180,50 @@ async function requireMemoryPermission(
   return true;
 }
 
-async function requireMemoryAnchorPermission(
+async function requireMemorySpaceWritePermission(
   request: FastifyRequest,
   reply: FastifyReply,
-  body: Pick<z.infer<typeof memoryPayloadSchema>, 'ownerScope' | 'ownerActorId' | 'ownerConversationId' | 'ownerWorkspaceMemberId'>,
+  body: Pick<CreateMemoryInput, 'spaceType' | 'actorId' | 'conversationId' | 'workspaceMemberId'>,
   errorMessage: string,
 ) {
-  const workspaceMemberId = (request as any).workspaceMember?.id as
-    | string
-    | undefined;
+  const workspaceMemberId = (request as any).workspaceMember?.id as string | undefined;
   const { workspaceId } = request.params as { workspaceId: string };
-
   let allowed = false;
-  switch (body.ownerScope) {
-    case 'workspace':
+
+  switch (body.spaceType) {
+    case 'workspace_shared':
       allowed = await authorizeAction({
         subject: getRequestAccessSubject(request),
         action: 'workspace.manage_memories',
         resourceId: workspaceId,
       });
       break;
-    case 'conversation':
-      if (body.ownerConversationId) {
+    case 'conversation_shared':
+      if (body.conversationId) {
         allowed = await authorizePermission({
           subject: getRequestAccessSubject(request),
           resourceType: 'conversation',
-          resourceId: body.ownerConversationId,
+          resourceId: body.conversationId,
           permission: 'memory_edit',
         });
       }
       break;
-    case 'actor_global':
-      if (body.ownerActorId) {
+    case 'actor_private':
+      if (body.actorId) {
         allowed = await authorizePermission({
           subject: getRequestAccessSubject(request),
           resourceType: 'actor',
-          resourceId: body.ownerActorId,
+          resourceId: body.actorId,
           permission: 'memory_edit',
         });
       }
       break;
-    case 'actor_in_conversation':
-      if (body.ownerActorId && body.ownerConversationId) {
+    case 'participant_private':
+      if (body.actorId && body.conversationId) {
         const context = await ensureConversationActorSessionContext({
           workspaceId,
-          actorId: body.ownerActorId,
-          conversationId: body.ownerConversationId,
+          actorId: body.actorId,
+          conversationId: body.conversationId,
         });
         allowed = await authorizePermission({
           subject: getRequestAccessSubject(request),
@@ -213,8 +233,8 @@ async function requireMemoryAnchorPermission(
         });
       }
       break;
-    case 'workspace_member':
-      allowed = body.ownerWorkspaceMemberId === workspaceMemberId;
+    case 'user_private':
+      allowed = body.workspaceMemberId === workspaceMemberId;
       if (!allowed) {
         allowed = await authorizeAction({
           subject: getRequestAccessSubject(request),
@@ -223,6 +243,8 @@ async function requireMemoryAnchorPermission(
         });
       }
       break;
+    default:
+      allowed = false;
   }
 
   if (!allowed) {
@@ -233,26 +255,28 @@ async function requireMemoryAnchorPermission(
   return true;
 }
 
-function resolveTargetScope(
+function resolveTargetSpace(
   existing: Awaited<ReturnType<typeof getMemory>>,
   body: z.infer<typeof updateMemorySchema>,
 ) {
+  const normalized = normalizeMemoryPayload(body);
   return {
-    ownerScope: body.ownerScope ?? existing.ownerScope,
-    ownerActorId: body.ownerActorId !== undefined ? body.ownerActorId : existing.ownerActorId,
-    ownerConversationId: body.ownerConversationId !== undefined ? body.ownerConversationId : existing.ownerConversationId,
-    ownerWorkspaceMemberId:
-      body.ownerWorkspaceMemberId !== undefined
-        ? body.ownerWorkspaceMemberId
-        : existing.ownerWorkspaceMemberId,
-  };
+    spaceType: normalized.spaceType ?? existing.spaceType,
+    actorId: normalized.actorId !== undefined ? normalized.actorId : existing.actorId,
+    conversationId:
+      normalized.conversationId !== undefined ? normalized.conversationId : existing.conversationId,
+    workspaceMemberId:
+      normalized.workspaceMemberId !== undefined
+        ? normalized.workspaceMemberId
+        : existing.workspaceMemberId,
+  } satisfies Pick<CreateMemoryInput, 'spaceType' | 'actorId' | 'conversationId' | 'workspaceMemberId'>;
 }
 
 function updateTouchesMemoryEdit(body: z.infer<typeof updateMemorySchema>) {
   return (
     body.category !== undefined ||
+    body.state !== undefined ||
     body.status !== undefined ||
-    body.stability !== undefined ||
     body.importance !== undefined ||
     body.confidence !== undefined ||
     body.tags !== undefined ||
@@ -270,9 +294,13 @@ function updateTouchesMemoryEdit(body: z.infer<typeof updateMemorySchema>) {
 
 function updateTouchesMemoryRetarget(body: z.infer<typeof updateMemorySchema>) {
   return (
+    body.spaceType !== undefined ||
     body.ownerScope !== undefined ||
+    body.actorId !== undefined ||
     body.ownerActorId !== undefined ||
+    body.conversationId !== undefined ||
     body.ownerConversationId !== undefined ||
+    body.workspaceMemberId !== undefined ||
     body.ownerWorkspaceMemberId !== undefined
   );
 }
@@ -283,17 +311,25 @@ export function registerMemoryRoutes(app: FastifyInstance) {
 
   app.post(prefix, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const body = createMemorySchema.parse(request.body);
-      const { workspaceId } = request.params as { workspaceId: string };
-      const allowed = await requireMemoryAnchorPermission(
+      const allowed = await requireWorkspacePermission(
         request,
         reply,
-        body,
-        'Not allowed to create a memory in this folder',
+        'workspace.view',
+        'Not allowed to view this workspace',
       );
       if (!allowed) return;
 
-      const memory = await createMemory(workspaceId, body);
+      const { workspaceId } = request.params as { workspaceId: string };
+      const normalizedBody = normalizeMemoryPayload(createMemorySchema.parse(request.body));
+      const canWrite = await requireMemorySpaceWritePermission(
+        request,
+        reply,
+        normalizedBody as Pick<CreateMemoryInput, 'spaceType' | 'actorId' | 'conversationId' | 'workspaceMemberId'>,
+        'Not allowed to create a memory in this path',
+      );
+      if (!canWrite) return;
+
+      const memory = await createMemory(workspaceId, normalizedBody as CreateMemoryInput);
       return reply.status(201).send({ memory });
     } catch (error) {
       return handleError(error, reply);
@@ -312,13 +348,10 @@ export function registerMemoryRoutes(app: FastifyInstance) {
 
       const { workspaceId } = request.params as { workspaceId: string };
       const filters = listMemoriesSchema.parse(request.query);
-      let memories = await listMemories(workspaceId, filters);
-      const allowedIds = await listAuthorizedResourceIds({
-        subject: getRequestAccessSubject(request),
-        action: 'memory.read',
+      const memories = await listMemories(workspaceId, {
+        ...filters,
+        accessSubject: getRequestAccessSubject(request),
       });
-      const allowedIdSet = new Set(allowedIds);
-      memories = memories.filter((memory) => allowedIdSet.has(memory.id));
       return reply.status(200).send({ memories });
     } catch (error) {
       return handleError(error, reply);
@@ -339,7 +372,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
       const memory = await getMemory(workspaceId, memoryId);
       const readable = await authorizePermission({
         subject: getRequestAccessSubject(request),
-        resourceType: 'memory',
+        resourceType: 'memory_item',
         resourceId: memoryId,
         permission: 'read',
       });
@@ -355,7 +388,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
   app.put(`${prefix}/:memoryId`, { preHandler }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { workspaceId, memoryId } = request.params as { workspaceId: string; memoryId: string };
-      const body = updateMemorySchema.parse(request.body);
+      const body = normalizeMemoryPayload(updateMemorySchema.parse(request.body));
       const existing = await getMemory(workspaceId, memoryId);
 
       if (updateTouchesMemoryEdit(body)) {
@@ -379,17 +412,17 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         );
         if (!allowed) return;
 
-        const targetScope = resolveTargetScope(existing, body);
-        const canMoveToTarget = await requireMemoryAnchorPermission(
+        const targetSpace = resolveTargetSpace(existing, body);
+        const canMoveToTarget = await requireMemorySpaceWritePermission(
           request,
           reply,
-          targetScope,
-          'Not allowed to move this memory into the selected folder',
+          targetSpace,
+          'Not allowed to move this memory into the selected path',
         );
         if (!canMoveToTarget) return;
       }
 
-      const memory = await updateMemory(workspaceId, memoryId, body);
+      const memory = await updateMemory(workspaceId, memoryId, body as UpdateMemoryInput);
       return reply.status(200).send({ memory });
     } catch (error) {
       return handleError(error, reply);
@@ -427,13 +460,10 @@ export function registerMemoryRoutes(app: FastifyInstance) {
 
       const { workspaceId } = request.params as { workspaceId: string };
       const body = searchMemoriesSchema.parse(request.body);
-      const result = await runMemorySearch(workspaceId, body);
-      const allowedIds = await listAuthorizedResourceIds({
-        subject: getRequestAccessSubject(request),
-        action: 'memory.read',
+      const result = await runMemorySearch(workspaceId, {
+        ...body,
+        accessSubject: getRequestAccessSubject(request),
       });
-      const allowedIdSet = new Set(allowedIds);
-      result.memories = result.memories.filter((memory) => allowedIdSet.has(memory.id));
       return reply.status(200).send(result);
     } catch (error) {
       return handleError(error, reply);
@@ -452,13 +482,10 @@ export function registerMemoryRoutes(app: FastifyInstance) {
 
       const { workspaceId } = request.params as { workspaceId: string };
       const body = recallMemoriesSchema.parse(request.body);
-      const result = await recallMemories(workspaceId, body);
-      const allowedIds = await listAuthorizedResourceIds({
-        subject: getRequestAccessSubject(request),
-        action: 'memory.read',
+      const result = await recallMemories(workspaceId, {
+        ...body,
+        accessSubject: getRequestAccessSubject(request),
       });
-      const allowedIdSet = new Set(allowedIds);
-      result.memories = result.memories.filter((memory) => allowedIdSet.has(memory.id));
       return reply.status(200).send(result);
     } catch (error) {
       return handleError(error, reply);

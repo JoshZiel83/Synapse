@@ -98,13 +98,12 @@ export const config = {
   memory: {
     recallLimit: parseInt(process.env.MEMORY_RECALL_LIMIT || '6'),
     searchCandidateLimit: parseInt(process.env.MEMORY_SEARCH_CANDIDATE_LIMIT || '40'),
-    embeddings: {
-      baseUrl: process.env.MEMORY_EMBEDDINGS_BASE_URL || '',
-      apiKey: process.env.MEMORY_EMBEDDINGS_API_KEY || '',
-      model: process.env.MEMORY_EMBEDDINGS_MODEL || 'text-embedding-3-small',
-      dimensions: parseInt(process.env.MEMORY_EMBEDDINGS_DIMENSIONS || '1536'),
-      timeoutMs: parseInt(process.env.MEMORY_EMBEDDINGS_TIMEOUT_MS || '12000'),
-    },
+    topK: parseInt(process.env.MEMORY_RECALL_TOP_K || process.env.MEMORY_RECALL_LIMIT || '6'),
+    modelId: process.env.MEMORY_EMBEDDING_MODEL_ID || 'Xenova/multilingual-e5-small',
+    modelCacheDir: process.env.MEMORY_MODEL_CACHE_DIR || resolve(process.cwd(), 'storage/models/memory'),
+    embedBatchSize: parseInt(process.env.MEMORY_EMBED_BATCH_SIZE || '12'),
+    indexQueueConcurrency: parseInt(process.env.MEMORY_INDEX_QUEUE_CONCURRENCY || '2'),
+    allowRuntimeModelDownload: process.env.MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD === 'true',
   },
   authz: {
     enabled: true,

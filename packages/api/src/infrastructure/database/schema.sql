@@ -105,12 +105,11 @@ CREATE TYPE automation_webhook_endpoints_status AS ENUM ('active', 'disabled', '
 CREATE TYPE automation_occurrences_source_kind AS ENUM ('clock', 'relay', 'webhook', 'internal', 'integration');
 CREATE TYPE automation_executions_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
 CREATE TYPE automation_execution_targets_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
-CREATE TYPE memory_entries_owner_scope AS ENUM ('workspace', 'conversation', 'actor_global', 'actor_in_conversation', 'workspace_member');
-CREATE TYPE memory_entries_category AS ENUM ('fact', 'preference', 'decision', 'relationship', 'procedure', 'artifact', 'summary');
-CREATE TYPE memory_entries_status AS ENUM ('candidate', 'established', 'superseded', 'retracted');
-CREATE TYPE memory_entries_stability AS ENUM ('ephemeral', 'durable');
-CREATE TYPE memory_entry_parts_part_type AS ENUM ('text', 'file_ref', 'json');
-CREATE TYPE memory_index_chunks_owner_scope AS ENUM ('workspace', 'conversation', 'actor_global', 'actor_in_conversation', 'workspace_member');
+CREATE TYPE memory_spaces_space_type AS ENUM ('workspace_shared', 'conversation_shared', 'actor_private', 'participant_private', 'user_private');
+CREATE TYPE memory_items_category AS ENUM ('fact', 'preference', 'decision', 'relationship', 'procedure', 'artifact', 'summary');
+CREATE TYPE memory_items_state AS ENUM ('active', 'superseded', 'archived');
+CREATE TYPE memory_items_index_status AS ENUM ('lexical_ready', 'ready', 'failed');
+CREATE TYPE memory_item_parts_part_type AS ENUM ('text', 'file_ref', 'json');
 CREATE TYPE memory_recall_runs_recall_type AS ENUM ('bootstrap', 'turn_recall', 'manual_search');
 CREATE TYPE context_archive_points_chain_scope AS ENUM ('shared', 'private');
 CREATE TYPE context_archive_frames_role AS ENUM ('system', 'user', 'assistant', 'tool');
@@ -1931,58 +1930,106 @@ CREATE INDEX idx_session_wakeups_automation_occurrence
   WHERE automation_occurrence_id IS NOT NULL;
 
 -- ============ Memory Runtime ============
-CREATE TABLE memory_entries (
+CREATE TABLE memory_spaces (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  owner_scope memory_entries_owner_scope NOT NULL,
-  owner_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  owner_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  owner_conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
-  owner_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  category memory_entries_category NOT NULL,
-  status memory_entries_status NOT NULL DEFAULT 'established',
-  stability memory_entries_stability NOT NULL DEFAULT 'durable',
+  space_type memory_spaces_space_type NOT NULL,
+  anchor_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  anchor_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  anchor_conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
+  anchor_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (
+    (space_type = 'workspace_shared'
+      AND anchor_conversation_id IS NULL
+      AND anchor_actor_id IS NULL
+      AND anchor_conversation_actor_context_id IS NULL
+      AND anchor_workspace_member_id IS NULL) OR
+    (space_type = 'conversation_shared'
+      AND anchor_conversation_id IS NOT NULL
+      AND anchor_actor_id IS NULL
+      AND anchor_conversation_actor_context_id IS NULL
+      AND anchor_workspace_member_id IS NULL) OR
+    (space_type = 'actor_private'
+      AND anchor_conversation_id IS NULL
+      AND anchor_actor_id IS NOT NULL
+      AND anchor_conversation_actor_context_id IS NULL
+      AND anchor_workspace_member_id IS NULL) OR
+    (space_type = 'participant_private'
+      AND anchor_conversation_id IS NULL
+      AND anchor_actor_id IS NULL
+      AND anchor_conversation_actor_context_id IS NOT NULL
+      AND anchor_workspace_member_id IS NULL) OR
+    (space_type = 'user_private'
+      AND anchor_conversation_id IS NULL
+      AND anchor_actor_id IS NULL
+      AND anchor_conversation_actor_context_id IS NULL
+      AND anchor_workspace_member_id IS NOT NULL)
+  )
+);
+
+CREATE UNIQUE INDEX idx_memory_spaces_workspace_shared
+  ON memory_spaces(workspace_id, space_type)
+  WHERE space_type = 'workspace_shared';
+CREATE UNIQUE INDEX idx_memory_spaces_conversation
+  ON memory_spaces(workspace_id, space_type, anchor_conversation_id)
+  WHERE anchor_conversation_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_memory_spaces_actor
+  ON memory_spaces(workspace_id, space_type, anchor_actor_id)
+  WHERE anchor_actor_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_memory_spaces_participant
+  ON memory_spaces(workspace_id, space_type, anchor_conversation_actor_context_id)
+  WHERE anchor_conversation_actor_context_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_memory_spaces_workspace_member
+  ON memory_spaces(workspace_id, space_type, anchor_workspace_member_id)
+  WHERE anchor_workspace_member_id IS NOT NULL;
+
+CREATE TABLE memory_items (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  memory_space_id UUID NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+  category memory_items_category NOT NULL,
+  state memory_items_state NOT NULL DEFAULT 'active',
   importance REAL NOT NULL DEFAULT 0.5 CHECK (importance >= 0 AND importance <= 1),
   confidence REAL NOT NULL DEFAULT 0.8 CHECK (confidence >= 0 AND confidence <= 1),
   tags TEXT[] DEFAULT '{}',
   text_digest TEXT NOT NULL DEFAULT '',
   search_text TEXT NOT NULL DEFAULT '',
+  index_status memory_items_index_status NOT NULL DEFAULT 'lexical_ready',
+  index_version INT NOT NULL DEFAULT 1,
+  embedding_model TEXT NOT NULL DEFAULT '',
+  embedding_dim INT,
+  indexed_at TIMESTAMPTZ,
+  index_error TEXT,
+  source_kind TEXT NOT NULL DEFAULT 'manual',
   source_item_id UUID,
   source_tool_call_id UUID,
   source_turn_id UUID,
-  supersedes_memory_id UUID REFERENCES memory_entries(id) ON DELETE SET NULL,
+  supersedes_item_id UUID REFERENCES memory_items(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (
-    (owner_scope = 'workspace' AND owner_conversation_id IS NULL AND owner_actor_id IS NULL AND owner_conversation_actor_context_id IS NULL AND owner_workspace_member_id IS NULL) OR
-    (owner_scope = 'conversation' AND owner_conversation_id IS NOT NULL AND owner_actor_id IS NULL AND owner_conversation_actor_context_id IS NULL AND owner_workspace_member_id IS NULL) OR
-    (owner_scope = 'actor_global' AND owner_actor_id IS NOT NULL AND owner_conversation_id IS NULL AND owner_conversation_actor_context_id IS NULL AND owner_workspace_member_id IS NULL) OR
-    (owner_scope = 'actor_in_conversation' AND owner_actor_id IS NULL AND owner_conversation_id IS NULL AND owner_conversation_actor_context_id IS NOT NULL AND owner_workspace_member_id IS NULL) OR
-    (owner_scope = 'workspace_member' AND owner_workspace_member_id IS NOT NULL AND owner_actor_id IS NULL AND owner_conversation_id IS NULL AND owner_conversation_actor_context_id IS NULL)
-  )
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_memory_entries_workspace ON memory_entries(workspace_id, created_at DESC);
-CREATE INDEX idx_memory_entries_owner_actor ON memory_entries(owner_actor_id, created_at DESC) WHERE owner_actor_id IS NOT NULL;
-CREATE INDEX idx_memory_entries_owner_conversation ON memory_entries(owner_conversation_id, created_at DESC) WHERE owner_conversation_id IS NOT NULL;
-CREATE INDEX idx_memory_entries_owner_conversation_actor_context ON memory_entries(owner_conversation_actor_context_id, created_at DESC) WHERE owner_conversation_actor_context_id IS NOT NULL;
-CREATE INDEX idx_memory_entries_owner_workspace_member ON memory_entries(owner_workspace_member_id, created_at DESC) WHERE owner_workspace_member_id IS NOT NULL;
-CREATE INDEX idx_memory_entries_scope_status ON memory_entries(workspace_id, owner_scope, status, stability, created_at DESC);
-CREATE INDEX idx_memory_entries_tags ON memory_entries USING GIN(tags);
+CREATE INDEX idx_memory_items_workspace ON memory_items(workspace_id, created_at DESC);
+CREATE INDEX idx_memory_items_space ON memory_items(memory_space_id, updated_at DESC);
+CREATE INDEX idx_memory_items_state ON memory_items(workspace_id, state, updated_at DESC);
+CREATE INDEX idx_memory_items_tags ON memory_items USING GIN(tags);
 
-CREATE TABLE memory_entry_parts (
+CREATE TABLE memory_item_parts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  memory_entry_id UUID NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
+  memory_item_id UUID NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,
   ordinal INT NOT NULL,
-  part_type memory_entry_parts_part_type NOT NULL,
+  part_type memory_item_parts_part_type NOT NULL,
   text_value TEXT,
   file_id UUID REFERENCES files(id) ON DELETE SET NULL,
   json_value JSONB,
   mime_type VARCHAR(255),
   name VARCHAR(255),
   metadata JSONB DEFAULT '{}',
-  UNIQUE(memory_entry_id, ordinal),
+  UNIQUE(memory_item_id, ordinal),
   CHECK (
     (part_type = 'text' AND text_value IS NOT NULL) OR
     (part_type = 'file_ref' AND file_id IS NOT NULL) OR
@@ -1990,42 +2037,28 @@ CREATE TABLE memory_entry_parts (
   )
 );
 
-CREATE INDEX idx_memory_entry_parts_entry ON memory_entry_parts(memory_entry_id, ordinal);
+CREATE INDEX idx_memory_item_parts_item ON memory_item_parts(memory_item_id, ordinal);
 
-CREATE TABLE memory_index_chunks (
+CREATE TABLE memory_item_chunks (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  memory_entry_id UUID NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
+  memory_item_id UUID NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  owner_scope memory_index_chunks_owner_scope NOT NULL,
-  owner_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  owner_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  owner_conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
-  owner_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
   chunk_index INT NOT NULL,
+  chunk_kind TEXT NOT NULL DEFAULT 'body',
   search_text TEXT NOT NULL,
-  embedding VECTOR(1536),
+  embedding VECTOR(384),
   token_count INT DEFAULT 0,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(memory_entry_id, chunk_index),
-  CHECK (
-    (owner_scope = 'workspace' AND owner_conversation_id IS NULL AND owner_actor_id IS NULL AND owner_conversation_actor_context_id IS NULL AND owner_workspace_member_id IS NULL) OR
-    (owner_scope = 'conversation' AND owner_conversation_id IS NOT NULL AND owner_actor_id IS NULL AND owner_conversation_actor_context_id IS NULL AND owner_workspace_member_id IS NULL) OR
-    (owner_scope = 'actor_global' AND owner_actor_id IS NOT NULL AND owner_conversation_id IS NULL AND owner_conversation_actor_context_id IS NULL AND owner_workspace_member_id IS NULL) OR
-    (owner_scope = 'actor_in_conversation' AND owner_actor_id IS NULL AND owner_conversation_id IS NULL AND owner_conversation_actor_context_id IS NOT NULL AND owner_workspace_member_id IS NULL) OR
-    (owner_scope = 'workspace_member' AND owner_workspace_member_id IS NOT NULL AND owner_actor_id IS NULL AND owner_conversation_id IS NULL AND owner_conversation_actor_context_id IS NULL)
-  )
+  UNIQUE(memory_item_id, chunk_index)
 );
 
-CREATE INDEX idx_memory_index_chunks_entry ON memory_index_chunks(memory_entry_id, chunk_index);
-CREATE INDEX idx_memory_index_chunks_scope ON memory_index_chunks(workspace_id, owner_scope, created_at DESC);
-CREATE INDEX idx_memory_index_chunks_actor ON memory_index_chunks(owner_actor_id, created_at DESC) WHERE owner_actor_id IS NOT NULL;
-CREATE INDEX idx_memory_index_chunks_conversation ON memory_index_chunks(owner_conversation_id, created_at DESC) WHERE owner_conversation_id IS NOT NULL;
-CREATE INDEX idx_memory_index_chunks_conversation_actor_context ON memory_index_chunks(owner_conversation_actor_context_id, created_at DESC) WHERE owner_conversation_actor_context_id IS NOT NULL;
-CREATE INDEX idx_memory_index_chunks_workspace_member ON memory_index_chunks(owner_workspace_member_id, created_at DESC) WHERE owner_workspace_member_id IS NOT NULL;
-CREATE INDEX idx_memory_index_chunks_fts ON memory_index_chunks USING GIN(to_tsvector('simple', search_text));
-CREATE INDEX idx_memory_index_chunks_trgm ON memory_index_chunks USING GIN(search_text gin_trgm_ops);
+CREATE INDEX idx_memory_item_chunks_item ON memory_item_chunks(memory_item_id, chunk_index);
+CREATE INDEX idx_memory_item_chunks_workspace ON memory_item_chunks(workspace_id, created_at DESC);
+CREATE INDEX idx_memory_item_chunks_fts ON memory_item_chunks USING GIN(to_tsvector('simple', search_text));
+CREATE INDEX idx_memory_item_chunks_trgm ON memory_item_chunks USING GIN(search_text gin_trgm_ops);
+CREATE INDEX idx_memory_item_chunks_hnsw ON memory_item_chunks USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE memory_recall_runs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2048,8 +2081,8 @@ CREATE INDEX idx_memory_recall_runs_workspace_member ON memory_recall_runs(works
 CREATE TABLE memory_recall_run_results (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   run_id UUID NOT NULL REFERENCES memory_recall_runs(id) ON DELETE CASCADE,
-  memory_entry_id UUID NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
-  matched_chunk_id UUID REFERENCES memory_index_chunks(id) ON DELETE SET NULL,
+  memory_item_id UUID NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,
+  matched_chunk_id UUID REFERENCES memory_item_chunks(id) ON DELETE SET NULL,
   rank INT NOT NULL,
   final_score REAL NOT NULL DEFAULT 0,
   vector_score REAL,
@@ -2062,7 +2095,7 @@ CREATE TABLE memory_recall_run_results (
 );
 
 CREATE INDEX idx_memory_recall_run_results_run ON memory_recall_run_results(run_id, rank);
-CREATE INDEX idx_memory_recall_run_results_memory ON memory_recall_run_results(memory_entry_id, created_at DESC);
+CREATE INDEX idx_memory_recall_run_results_memory ON memory_recall_run_results(memory_item_id, created_at DESC);
 
 -- ============ Context Runtime ============
 CREATE TABLE context_archive_points (

@@ -6,10 +6,10 @@ import type {
   AuthTransport,
   InviteTrustLevel,
   MemoryCategory,
+  MemoryIndexStatus,
   MemoryRecallType,
-  MemoryScope,
-  MemoryStability,
-  MemoryStatus,
+  MemorySpaceType,
+  MemoryItemState,
   PluginAuthConnectionStatus,
   PluginAuthOwnerScope,
   PluginAuthSessionStatus,
@@ -47,7 +47,7 @@ import {
   AUTOMATION_TRIGGER_SOURCE_KINDS,
   CONTACT_TARGET_TYPES,
   CONVERSATION_GRANT_PERMISSIONS,
-  MEMORY_SCOPES,
+  MEMORY_SPACE_TYPES,
   MODEL_GROUP_GRANT_SCOPES,
   MODEL_GROUP_ROUTING_STRATEGIES,
   PLATFORM_ACCESS_KEYS,
@@ -81,11 +81,11 @@ import type {
   AuthSessionsTransport,
   ConversationGrantsPermission,
   InteractionRequestsStatus,
-  MemoryEntriesCategory,
-  MemoryEntriesOwnerScope,
-  MemoryEntriesStability,
-  MemoryEntriesStatus,
+  MemoryItemsCategory,
+  MemoryItemsIndexStatus,
+  MemoryItemsState,
   MemoryRecallRunsRecallType,
+  MemorySpacesSpaceType,
   ModelGroupGrantsGrantScope,
   ModelGroupsRoutingStrategy,
   PlatformAccessBindingsAccessKey,
@@ -148,8 +148,8 @@ type _ModelGroupGrantScopeMatchesDb = Assert<
 >;
 type _ActorRoleMatchesDb = Assert<IsEqual<ActorRole, ActorsRole>>;
 type _ActorDocVisibilityMatchesDb = Assert<IsEqual<ActorDocVisibility, ActorVersionDocsVisibility>>;
-type _ResourceScopeMatchesMemoryScopeDb = Assert<
-  IsEqual<(typeof MEMORY_SCOPES)[number], MemoryEntriesOwnerScope>
+type _MemorySpaceTypeListMatchesDb = Assert<
+  IsEqual<(typeof MEMORY_SPACE_TYPES)[number], MemorySpacesSpaceType>
 >;
 type _ContactTargetTypeMatchesDb = Assert<
   IsEqual<(typeof CONTACT_TARGET_TYPES)[number], RelationshipTargetType>
@@ -193,10 +193,10 @@ type _AutomationEventSourceProviderKindMatchesDb = Assert<
 type _AutomationEventSourceStatusMatchesDb = Assert<
   IsEqual<(typeof AUTOMATION_EVENT_SOURCE_STATUSES)[number], AutomationEventSourcesStatus>
 >;
-type _MemoryScopeMatchesDb = Assert<IsEqual<MemoryScope, MemoryEntriesOwnerScope>>;
-type _MemoryCategoryMatchesDb = Assert<IsEqual<MemoryCategory, MemoryEntriesCategory>>;
-type _MemoryStatusMatchesDb = Assert<IsEqual<MemoryStatus, MemoryEntriesStatus>>;
-type _MemoryStabilityMatchesDb = Assert<IsEqual<MemoryStability, MemoryEntriesStability>>;
+type _MemorySpaceTypeMatchesDb = Assert<IsEqual<MemorySpaceType, MemorySpacesSpaceType>>;
+type _MemoryCategoryMatchesDb = Assert<IsEqual<MemoryCategory, MemoryItemsCategory>>;
+type _MemoryItemStateMatchesDb = Assert<IsEqual<MemoryItemState, MemoryItemsState>>;
+type _MemoryIndexStatusMatchesDb = Assert<IsEqual<MemoryIndexStatus, MemoryItemsIndexStatus>>;
 type _MemoryRecallTypeMatchesDb = Assert<IsEqual<MemoryRecallType, MemoryRecallRunsRecallType>>;
 type _SessionStatusMatchesDb = Assert<IsEqual<SessionStatus, SessionsStatus>>;
 type _SessionChannelMatchesDb = Assert<IsEqual<SessionChannelType, SessionsChannelType>>;

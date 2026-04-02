@@ -155,13 +155,16 @@ export const ACTOR_DOC_VISIBILITIES = [
   'internal_only',
 ] as const;
 
-export const MEMORY_SCOPES = [
-  'workspace',
-  'conversation',
-  'actor_global',
-  'actor_in_conversation',
-  'workspace_member',
+export const MEMORY_SPACE_TYPES = [
+  'workspace_shared',
+  'conversation_shared',
+  'actor_private',
+  'participant_private',
+  'user_private',
 ] as const;
+
+// Deprecated alias kept for in-repo transition.
+export const MEMORY_SCOPES = MEMORY_SPACE_TYPES;
 
 export const MEMORY_CATEGORIES = [
   'fact',
@@ -173,14 +176,18 @@ export const MEMORY_CATEGORIES = [
   'summary',
 ] as const;
 
-export const MEMORY_STATUSES = [
-  'candidate',
-  'established',
+export const MEMORY_ITEM_STATES = [
+  'active',
   'superseded',
-  'retracted',
+  'archived',
 ] as const;
 
-export const MEMORY_STABILITIES = ['ephemeral', 'durable'] as const;
+// Deprecated alias kept for in-repo transition.
+export const MEMORY_STATUSES = MEMORY_ITEM_STATES;
+
+// Durable-only memory in v1. Extraction/ephemeral lifecycle is deferred.
+export const MEMORY_STABILITIES = ['durable'] as const;
+export const MEMORY_INDEX_STATUSES = ['lexical_ready', 'ready', 'failed'] as const;
 export const MEMORY_RECALL_TYPES = ['bootstrap', 'turn_recall', 'manual_search'] as const;
 
 export const SESSION_STATUSES = ['idle', 'queued', 'running', 'blocked', 'closed'] as const;

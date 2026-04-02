@@ -2868,7 +2868,7 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "memory_search",
       description:
-        "Search durable memories scoped to the current actor and conversation. Use when recalled memory is insufficient and you need deeper historical context.",
+        "Search durable memories across all memory spaces you can currently read in this workspace. In direct one-to-one chats with a user, this also searches that user's personal workspace memory. Use when recalled memory is insufficient and you need deeper historical context.",
       parameters: {
         type: "object",
         properties: {
@@ -2920,7 +2920,7 @@ export function registerCallableToolPlugins(): void {
         runId: result.run.id,
         results: result.memories.map((memory) => ({
           id: memory.id,
-          ownerScope: memory.ownerScope,
+          spaceType: memory.spaceType,
           category: memory.category,
           textDigest: memory.textDigest,
           tags: memory.tags,

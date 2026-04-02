@@ -8,6 +8,7 @@ export const sessionThinkingQueue = new Queue(QUEUE_NAMES.SESSION_THINKING, { co
 export const automationSchedulerQueue = new Queue(QUEUE_NAMES.AUTOMATION_SCHEDULER, { connection });
 export const automationExecutionQueue = new Queue(QUEUE_NAMES.AUTOMATION_EXECUTION, { connection });
 export const imTransportDeliveryQueue = new Queue(QUEUE_NAMES.IM_TRANSPORT_DELIVERY, { connection });
+export const memoryIndexingQueue = new Queue(QUEUE_NAMES.MEMORY_INDEXING, { connection });
 
 export async function enqueueAutomationExecutionJobs(executionIds: string[]) {
   const uniqueExecutionIds = Array.from(
@@ -44,6 +45,7 @@ const queues = [
   automationSchedulerQueue,
   automationExecutionQueue,
   imTransportDeliveryQueue,
+  memoryIndexingQueue,
 ];
 
 export async function shutdownQueues() {

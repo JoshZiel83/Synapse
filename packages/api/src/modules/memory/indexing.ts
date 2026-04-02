@@ -1,14 +1,25 @@
+import crypto from 'node:crypto';
 import { extractText, type CanonicalContentBlock } from '@synapse/shared';
+import { sql } from 'kysely';
 import {
   db,
   type TableInsert,
 } from '../../infrastructure/database/kysely.js';
 import { config } from '../../config/index.js';
 import { itemPartsToCanonicalContentBlocks } from '../conversation/message-content.js';
-import { sql } from 'kysely';
+import { embedMemoryPassages } from './embedding-runtime.js';
+import { memoryIndexingQueue } from '../../workers/queues.js';
 
-const MEMORY_VECTOR_DIMENSIONS = 1536;
-let hasWarnedAboutEmbeddingDimensions = false;
+const MEMORY_VECTOR_DIMENSIONS = 384;
+const TARGET_CHUNK_CHARS = 800;
+const HARD_MAX_CHUNK_CHARS = 1000;
+const CHUNK_OVERLAP_CHARS = 120;
+
+type MemoryChunkSpec = {
+  chunkIndex: number;
+  chunkKind: 'digest' | 'body';
+  searchText: string;
+};
 
 function summarizeFileBlocks(blocks: CanonicalContentBlock[]) {
   return blocks
@@ -50,165 +61,361 @@ export function buildMemorySearchText(params: {
     params.tags && params.tags.length > 0 ? `tags:${params.tags.join(', ')}` : '',
   ].filter(Boolean);
 
-  return sections.join('\n').trim();
+  return sections.join('\n\n').trim();
 }
 
-export function chunkMemorySearchText(text: string, options?: { maxChars?: number; overlapChars?: number }) {
-  const normalized = text.trim();
+function normalizeWhitespace(value: string) {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function sentenceSplit(text: string) {
+  const sentences = text.match(/[^.!?。！？\n]+[.!?。！？]?/g);
+  if (!sentences) return [text];
+  return sentences.map((sentence) => sentence.trim()).filter(Boolean);
+}
+
+function sliceLongText(text: string) {
+  const normalized = normalizeWhitespace(text);
   if (!normalized) return [];
 
-  const maxChars = options?.maxChars ?? 1200;
-  const overlapChars = options?.overlapChars ?? 160;
   const chunks: string[] = [];
   let cursor = 0;
-
   while (cursor < normalized.length) {
-    const end = Math.min(normalized.length, cursor + maxChars);
+    const end = Math.min(normalized.length, cursor + HARD_MAX_CHUNK_CHARS);
     const chunk = normalized.slice(cursor, end).trim();
     if (chunk) chunks.push(chunk);
     if (end >= normalized.length) break;
-    cursor = Math.max(end - overlapChars, cursor + 1);
+    cursor = Math.max(end - CHUNK_OVERLAP_CHARS, cursor + 1);
   }
 
   return chunks;
 }
 
-function canGenerateEmbeddings() {
-  return !!(config.memory.embeddings.apiKey && config.memory.embeddings.baseUrl && config.memory.embeddings.model);
+export function chunkMemorySearchText(text: string) {
+  const normalized = text.trim();
+  if (!normalized) return [];
+
+  const paragraphs = normalized
+    .split(/\n{2,}/g)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  const chunks: string[] = [];
+  let current = '';
+
+  const flush = () => {
+    const next = normalizeWhitespace(current);
+    if (next) chunks.push(next);
+    current = '';
+  };
+
+  for (const paragraph of paragraphs) {
+    const paragraphText = normalizeWhitespace(paragraph);
+    if (!paragraphText) continue;
+
+    if (paragraphText.length > HARD_MAX_CHUNK_CHARS) {
+      if (current) flush();
+      const sentences = sentenceSplit(paragraphText);
+      let sentenceChunk = '';
+      for (const sentence of sentences) {
+        if (sentence.length > HARD_MAX_CHUNK_CHARS) {
+          if (sentenceChunk) {
+            current = sentenceChunk;
+            flush();
+            sentenceChunk = '';
+          }
+          chunks.push(...sliceLongText(sentence));
+          continue;
+        }
+
+        const next = sentenceChunk ? `${sentenceChunk} ${sentence}` : sentence;
+        if (next.length > TARGET_CHUNK_CHARS && sentenceChunk) {
+          current = sentenceChunk;
+          flush();
+          sentenceChunk = sentence;
+        } else {
+          sentenceChunk = next;
+        }
+      }
+      if (sentenceChunk) {
+        current = sentenceChunk;
+        flush();
+      }
+      continue;
+    }
+
+    const candidate = current ? `${current}\n\n${paragraphText}` : paragraphText;
+    if (candidate.length > TARGET_CHUNK_CHARS && current) {
+      flush();
+      current = paragraphText;
+    } else {
+      current = candidate;
+    }
+  }
+
+  if (current) flush();
+  return chunks;
+}
+
+function buildMemoryChunkSpecs(params: {
+  contentBlocks: CanonicalContentBlock[];
+  textDigest: string;
+  tags?: string[];
+  category?: string;
+}) {
+  const digestChunk = normalizeWhitespace([
+    params.textDigest,
+    params.category ? `category:${params.category}` : '',
+    params.tags && params.tags.length > 0 ? `tags:${params.tags.join(', ')}` : '',
+  ].filter(Boolean).join('\n'));
+
+  const bodyText = buildMemorySearchText(params);
+  const bodyChunks = chunkMemorySearchText(bodyText);
+
+  const specs: MemoryChunkSpec[] = [];
+  const seen = new Set<string>();
+
+  if (digestChunk) {
+    seen.add(digestChunk);
+    specs.push({
+      chunkIndex: specs.length,
+      chunkKind: 'digest',
+      searchText: digestChunk,
+    });
+  }
+
+  for (const chunk of bodyChunks) {
+    if (seen.has(chunk)) continue;
+    seen.add(chunk);
+    specs.push({
+      chunkIndex: specs.length,
+      chunkKind: 'body',
+      searchText: chunk,
+    });
+  }
+
+  return specs;
 }
 
 function formatEmbeddingVector(values: number[]) {
   return `[${values.map((value) => Number.isFinite(value) ? value.toFixed(8) : '0').join(',')}]`;
 }
 
-async function embedTexts(texts: string[]) {
-  if (texts.length === 0 || !canGenerateEmbeddings()) return null;
-
-  if (config.memory.embeddings.dimensions !== MEMORY_VECTOR_DIMENSIONS) {
-    if (!hasWarnedAboutEmbeddingDimensions) {
-      hasWarnedAboutEmbeddingDimensions = true;
-      console.warn(
-        `[memory] MEMORY_EMBEDDINGS_DIMENSIONS=${config.memory.embeddings.dimensions} does not match schema dimension ${MEMORY_VECTOR_DIMENSIONS}; vector recall disabled.`,
-      );
-    }
-    return null;
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.memory.embeddings.timeoutMs);
-  const baseUrl = config.memory.embeddings.baseUrl.replace(/\/+$/, '');
-
-  try {
-    const response = await fetch(`${baseUrl}/v1/embeddings`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.memory.embeddings.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: config.memory.embeddings.model,
-        input: texts,
-        dimensions: config.memory.embeddings.dimensions,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('[memory] embedding request failed:', response.status, errorText);
-      return null;
-    }
-
-    const data = await response.json() as { data?: Array<{ embedding: number[] }> };
-    if (!Array.isArray(data.data)) return null;
-    return data.data.map((item) => item.embedding);
-  } catch (error) {
-    console.error('[memory] failed to generate embeddings:', error);
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function loadMemoryEntryIndexSource(memoryEntryId: string) {
-  const entry = await db
-    .selectFrom('memory_entries as me')
-    .selectAll('me')
-    .where('me.id', '=', memoryEntryId)
+async function loadMemoryItemIndexSource(memoryItemId: string) {
+  const item = await db
+    .selectFrom('memory_items as mi')
+    .selectAll('mi')
+    .where('mi.id', '=', memoryItemId)
     .limit(1)
     .executeTakeFirst();
-  if (!entry) return null;
+  if (!item) return null;
 
   const partsResult = await db
-    .selectFrom('memory_entry_parts as mep')
-    .leftJoin('files as f', 'f.id', 'mep.file_id')
+    .selectFrom('memory_item_parts as mip')
+    .leftJoin('files as f', 'f.id', 'mip.file_id')
     .select([
-      'mep.id',
-      'mep.memory_entry_id',
-      'mep.ordinal',
-      'mep.part_type',
-      'mep.text_value',
-      'mep.file_id',
-      'mep.json_value',
-      'mep.mime_type',
-      'mep.name',
-      'mep.metadata',
+      'mip.id',
+      'mip.memory_item_id',
+      'mip.ordinal',
+      'mip.part_type',
+      'mip.text_value',
+      'mip.file_id',
+      'mip.json_value',
+      'mip.mime_type',
+      'mip.name',
+      'mip.metadata',
       'f.original_name',
       'f.stored_name',
       'f.mime_type as file_mime_type',
       'f.size_bytes',
     ])
-    .where('mep.memory_entry_id', '=', memoryEntryId)
-    .orderBy('mep.ordinal', 'asc')
+    .where('mip.memory_item_id', '=', memoryItemId)
+    .orderBy('mip.ordinal', 'asc')
     .execute();
 
   const contentBlocks = itemPartsToCanonicalContentBlocks(partsResult);
-  return { entry, contentBlocks };
+  return { item, contentBlocks };
 }
 
-export async function reindexMemoryEntry(memoryEntryId: string) {
-  const source = await loadMemoryEntryIndexSource(memoryEntryId);
-  if (!source) return;
+export async function rebuildMemoryItemLexicalIndex(memoryItemId: string) {
+  const source = await loadMemoryItemIndexSource(memoryItemId);
+  if (!source) return null;
 
   const searchText = buildMemorySearchText({
     contentBlocks: source.contentBlocks,
-    textDigest: source.entry.text_digest,
-    tags: source.entry.tags || [],
-    category: source.entry.category,
+    textDigest: source.item.text_digest,
+    tags: source.item.tags || [],
+    category: source.item.category,
   });
-  const chunks = chunkMemorySearchText(searchText);
-  const embeddings = await embedTexts(chunks);
+  const specs = buildMemoryChunkSpecs({
+    contentBlocks: source.contentBlocks,
+    textDigest: source.item.text_digest,
+    tags: source.item.tags || [],
+    category: source.item.category,
+  });
+  const nextIndexVersion = Number(source.item.index_version || 0) + 1;
 
   await db
-    .deleteFrom('memory_index_chunks')
-    .where('memory_entry_id', '=', memoryEntryId)
+    .deleteFrom('memory_item_chunks')
+    .where('memory_item_id', '=', memoryItemId)
     .execute();
 
-  for (let index = 0; index < chunks.length; index += 1) {
-    const chunk = chunks[index];
+  for (const spec of specs) {
     await db
-      .insertInto('memory_index_chunks')
+      .insertInto('memory_item_chunks')
       .values({
-        memory_entry_id: memoryEntryId,
-        workspace_id: source.entry.workspace_id,
-        owner_scope: source.entry.owner_scope,
-        owner_actor_id: source.entry.owner_actor_id,
-        owner_conversation_id: source.entry.owner_conversation_id,
-        owner_workspace_member_id: source.entry.owner_workspace_member_id,
-        chunk_index: index,
-        search_text: chunk,
-        embedding: embeddings?.[index]
-          ? sql`${formatEmbeddingVector(embeddings[index])}::vector`
-          : null,
-        token_count: Math.ceil(chunk.length / 4),
+        id: crypto.randomUUID(),
+        memory_item_id: memoryItemId,
+        workspace_id: source.item.workspace_id,
+        chunk_index: spec.chunkIndex,
+        chunk_kind: spec.chunkKind,
+        search_text: spec.searchText,
+        embedding: null,
+        token_count: Math.ceil(spec.searchText.length / 4),
         metadata: {
-          textDigest: source.entry.text_digest,
-          status: source.entry.status,
-          stability: source.entry.stability,
-        } as TableInsert<'memory_index_chunks'>['metadata'],
+          textDigest: source.item.text_digest,
+          state: source.item.state,
+        } as TableInsert<'memory_item_chunks'>['metadata'],
         created_at: sql`NOW()`,
         updated_at: sql`NOW()`,
       })
       .execute();
+  }
+
+  await db
+    .updateTable('memory_items')
+    .set({
+      search_text: searchText,
+      index_status: 'lexical_ready',
+      index_version: nextIndexVersion,
+      embedding_model: '',
+      embedding_dim: null,
+      indexed_at: null,
+      index_error: null,
+      updated_at: sql`NOW()`,
+    })
+    .where('id', '=', memoryItemId)
+    .execute();
+
+  return {
+    indexVersion: nextIndexVersion,
+    chunkCount: specs.length,
+  };
+}
+
+export async function queueMemoryItemEmbeddingIndex(memoryItemId: string, indexVersion: number) {
+  await memoryIndexingQueue.add(
+    'index',
+    {
+      memoryItemId,
+      indexVersion,
+    },
+    {
+      jobId: `memory-index-${memoryItemId}-${indexVersion}`,
+    },
+  );
+}
+
+function chunkBatches<T>(items: T[], size: number) {
+  const batches: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    batches.push(items.slice(index, index + size));
+  }
+  return batches;
+}
+
+export async function reindexMemoryItemEmbeddings(memoryItemId: string, expectedIndexVersion?: number) {
+  const item = await db
+    .selectFrom('memory_items')
+    .select([
+      'id',
+      'index_version',
+    ])
+    .where('id', '=', memoryItemId)
+    .limit(1)
+    .executeTakeFirst();
+  if (!item) return { status: 'missing' as const };
+  if (
+    expectedIndexVersion !== undefined
+    && Number(item.index_version || 0) !== expectedIndexVersion
+  ) {
+    return { status: 'stale' as const };
+  }
+
+  const chunks = await db
+    .selectFrom('memory_item_chunks')
+    .select(['id', 'search_text'])
+    .where('memory_item_id', '=', memoryItemId)
+    .orderBy('chunk_index', 'asc')
+    .execute();
+
+  if (chunks.length === 0) {
+    await db
+      .updateTable('memory_items')
+      .set({
+        index_status: 'ready',
+        embedding_model: config.memory.modelId,
+        embedding_dim: MEMORY_VECTOR_DIMENSIONS,
+        indexed_at: sql`NOW()`,
+        index_error: null,
+        updated_at: sql`NOW()`,
+      })
+      .where('id', '=', memoryItemId)
+      .execute();
+    return { status: 'ready' as const, chunkCount: 0 };
+  }
+
+  try {
+    for (const batch of chunkBatches(chunks, Math.max(1, config.memory.embedBatchSize))) {
+      const embeddings = await embedMemoryPassages(batch.map((chunk) => chunk.search_text));
+      for (let index = 0; index < batch.length; index += 1) {
+        const chunk = batch[index];
+        const embedding = embeddings[index];
+        await db
+          .updateTable('memory_item_chunks')
+          .set({
+            embedding: embedding
+              ? sql`${formatEmbeddingVector(embedding)}::vector`
+              : null,
+            updated_at: sql`NOW()`,
+          })
+          .where('id', '=', chunk.id)
+          .execute();
+      }
+    }
+
+    await db
+      .updateTable('memory_items')
+      .set({
+        index_status: 'ready',
+        embedding_model: config.memory.modelId,
+        embedding_dim: MEMORY_VECTOR_DIMENSIONS,
+        indexed_at: sql`NOW()`,
+        index_error: null,
+        updated_at: sql`NOW()`,
+      })
+      .where('id', '=', memoryItemId)
+      .execute();
+
+    return {
+      status: 'ready' as const,
+      chunkCount: chunks.length,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await db
+      .updateTable('memory_items')
+      .set({
+        index_status: 'failed',
+        embedding_model: config.memory.modelId,
+        embedding_dim: MEMORY_VECTOR_DIMENSIONS,
+        index_error: message,
+        updated_at: sql`NOW()`,
+      })
+      .where('id', '=', memoryItemId)
+      .execute();
+    return {
+      status: 'failed' as const,
+      error: message,
+    };
   }
 }

@@ -128,3 +128,25 @@ export async function listAuthorizedPermissionResourceIds(params: {
     limit: params.limit,
   });
 }
+
+export async function filterAuthorizedPermissionResourceIds(params: {
+  subject: AccessSubject;
+  resourceType: AuthzObjectType;
+  permission: string;
+  resourceIds: string[];
+}) {
+  const uniqueIds = Array.from(new Set(params.resourceIds.filter(Boolean)));
+  const checks = await Promise.all(
+    uniqueIds.map(async (resourceId) => ({
+      resourceId,
+      allowed: await authorizePermission({
+        subject: params.subject,
+        resourceType: params.resourceType,
+        resourceId,
+        permission: params.permission,
+      }),
+    })),
+  );
+
+  return checks.filter((entry) => entry.allowed).map((entry) => entry.resourceId);
+}

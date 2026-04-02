@@ -71,21 +71,18 @@ function buildCreateHref(
   if (!folder.createPreset) return null
 
   const params = new URLSearchParams({
-    ownerScope: folder.createPreset.ownerScope,
+    spaceType: folder.createPreset.spaceType,
     returnTo: buildBrowseHref(pathname, searchParams, { folder: folder.id }),
   })
 
-  if (folder.createPreset.ownerActorId) {
-    params.set("ownerActorId", folder.createPreset.ownerActorId)
+  if (folder.createPreset.actorId) {
+    params.set("actorId", folder.createPreset.actorId)
   }
-  if (folder.createPreset.ownerConversationId) {
-    params.set("ownerConversationId", folder.createPreset.ownerConversationId)
+  if (folder.createPreset.conversationId) {
+    params.set("conversationId", folder.createPreset.conversationId)
   }
-  if (folder.createPreset.ownerWorkspaceMemberId) {
-    params.set(
-      "ownerWorkspaceMemberId",
-      folder.createPreset.ownerWorkspaceMemberId
-    )
+  if (folder.createPreset.workspaceMemberId) {
+    params.set("workspaceMemberId", folder.createPreset.workspaceMemberId)
   }
 
   return `${pathname}/new?${params.toString()}`
@@ -207,7 +204,9 @@ export default function MemoryBrowser() {
     () => (activeFolder ? getFolderSegments(activeFolder.id, folderMap) : []),
     [activeFolder, folderMap],
   )
-  const workspaceFolderId = workspaceId ? `folder:workspace:${workspaceId}` : null
+  const workspaceFolderId = workspaceId
+    ? `folder:workspace:${workspaceId}:workspace_shared`
+    : null
   const isWorkspaceRoot = activeFolder?.id === workspaceFolderId
 
   const childFolders = useMemo(
@@ -230,8 +229,8 @@ export default function MemoryBrowser() {
     const normalizedQuery = deferredQuery.trim().toLowerCase()
     const folderItems = childFolders.filter((folder) => {
       if (isWorkspaceRoot && workspaceFolderType !== "all") {
-        const isConversationFolder = folder.createPreset?.ownerScope === "conversation"
-        const isActorFolder = folder.createPreset?.ownerScope === "actor_global"
+        const isConversationFolder = folder.createPreset?.spaceType === "conversation_shared"
+        const isActorFolder = folder.createPreset?.spaceType === "actor_private"
 
         if (workspaceFolderType === "conversation" && !isConversationFolder) {
           return false
@@ -260,11 +259,10 @@ export default function MemoryBrowser() {
     return getFolderIdForOwner({
       workspaceId,
       currentWorkspaceMemberId: effectiveCurrentWorkspaceMemberId,
-      ownerScope: movingMemory.ownerScope,
-      ownerActorId: movingMemory.ownerActorId || undefined,
-      ownerConversationId: movingMemory.ownerConversationId || undefined,
-      ownerWorkspaceMemberId:
-        movingMemory.ownerWorkspaceMemberId || undefined,
+      spaceType: movingMemory.spaceType,
+      actorId: movingMemory.actorId || undefined,
+      conversationId: movingMemory.conversationId || undefined,
+      workspaceMemberId: movingMemory.workspaceMemberId || undefined,
     })
   }, [effectiveCurrentWorkspaceMemberId, movingMemory, workspaceId])
 
@@ -317,14 +315,12 @@ export default function MemoryBrowser() {
       for (const file of pendingFileCreate.files) {
         const uploaded = (await api.uploadFile(workspaceId, file)) as UploadedFile
         const result = await api.createMemory(workspaceId, {
-          ownerScope: pendingFileCreate.preset.ownerScope,
-          ownerActorId: pendingFileCreate.preset.ownerActorId,
-          ownerConversationId: pendingFileCreate.preset.ownerConversationId,
-          ownerWorkspaceMemberId:
-            pendingFileCreate.preset.ownerWorkspaceMemberId,
+          spaceType: pendingFileCreate.preset.spaceType,
+          actorId: pendingFileCreate.preset.actorId,
+          conversationId: pendingFileCreate.preset.conversationId,
+          workspaceMemberId: pendingFileCreate.preset.workspaceMemberId,
           category: "artifact",
-          status: "established",
-          stability: "durable",
+          state: "active",
           importance: 0.75,
           confidence: 0.95,
           tags: [],

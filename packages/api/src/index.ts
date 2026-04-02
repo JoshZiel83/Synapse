@@ -69,8 +69,14 @@ import { startSessionThinkingWorker } from "./workers/session-thinking.js";
 import { ensureAutomationSchedulerJob, startAutomationSchedulerWorker } from "./workers/automation-scheduler.js";
 import { startAutomationExecutionWorker } from "./workers/automation-execution.js";
 import { startImTransportDeliveryWorker } from "./workers/im-transport-delivery.js";
+import { startMemoryIndexingWorker } from "./workers/memory-indexing.js";
 import { shutdownAllWorkers } from "./workers/registry.js";
 import { shutdownQueues } from "./workers/queues.js";
+import {
+  getMemoryEmbeddingRuntimeHealth,
+  shutdownMemoryEmbeddingRuntime,
+  warmMemoryEmbeddingRuntime,
+} from "./modules/memory/embedding-runtime.js";
 
 async function main() {
   const app = Fastify({
@@ -172,15 +178,22 @@ async function main() {
 
   // Health check
   app.get("/api/v1/health", async () => {
-    const [db, dbSchema, rds, authz] = await Promise.all([
+    const [db, dbSchema, rds, authz, memoryEmbeddings] = await Promise.all([
       testConnection(),
       testRequiredSchema(),
       testRedisConnection(),
       testAuthzConnection(),
+      Promise.resolve(getMemoryEmbeddingRuntimeHealth()),
     ]);
     return {
-      status: db && dbSchema && rds && authz ? "healthy" : "degraded",
-      services: { database: db, databaseSchema: dbSchema, redis: rds, authz },
+      status: db && dbSchema && rds && authz && memoryEmbeddings.ready ? "healthy" : "degraded",
+      services: {
+        database: db,
+        databaseSchema: dbSchema,
+        redis: rds,
+        authz,
+        memoryEmbeddings,
+      },
       authzEnabled: config.authz.enabled,
       timestamp: new Date().toISOString(),
     };
@@ -221,6 +234,10 @@ async function main() {
   startAutomationExecutionWorker();
   startSessionThinkingWorker();
   startImTransportDeliveryWorker();
+  startMemoryIndexingWorker();
+  void warmMemoryEmbeddingRuntime().catch((err) => {
+    console.error("Failed to warm memory embedding runtime:", err);
+  });
   if (config.im.runtimeManagerEnabled) {
     await startTransportRuntimeManager();
   } else {
@@ -292,6 +309,13 @@ async function main() {
         3000,
       ).catch((err) => {
         app.log.error({ err }, "Queue shutdown timed out");
+      });
+      await waitWithTimeout(
+        "memory embedding runtime shutdown",
+        shutdownMemoryEmbeddingRuntime(),
+        3000,
+      ).catch((err) => {
+        app.log.error({ err }, "Memory embedding runtime shutdown timed out");
       });
       await waitWithTimeout(
         "event bus shutdown",

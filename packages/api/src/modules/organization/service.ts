@@ -979,6 +979,10 @@ function buildActorAuthzMutations(params: {
     mutate("actor", params.actorId, "discover_workspace", "workspace", params.workspaceId),
     mutate("actor", params.actorId, "invoke_workspace", "workspace", params.workspaceId),
     mutate("actor", params.actorId, "receive_workspace", "workspace", params.workspaceId),
+    mutate("actor", params.actorId, "memory_reader_principal", "actor", params.actorId),
+    mutate("actor", params.actorId, "memory_editor_principal", "actor", params.actorId),
+    mutate("actor", params.actorId, "memory_retargeter_principal", "actor", params.actorId),
+    mutate("actor", params.actorId, "memory_deleter_principal", "actor", params.actorId),
   ];
 
   if (params.ownerWorkspaceMemberId) {

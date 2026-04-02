@@ -7,7 +7,7 @@ import { getActor, updateActor, type ActorUpdateSourceInput } from '../organizat
 import { getSession } from '../session/service.js';
 import { createConversationEvent, listConversationMembers } from '../conversation/service.js';
 
-const ACTOR_MEMORY_SCOPES = new Set(['actor_in_conversation', 'conversation', 'actor_global']);
+const ACTOR_MEMORY_SPACE_TYPES = new Set(['participant_private', 'conversation_shared', 'actor_private']);
 const PIXEL_ART_OPTION_KEYS = [
   'seed',
   'accessories',
@@ -148,25 +148,40 @@ async function handleCreateMemory(
 ): Promise<void> {
   const metadata = action.metadata ?? {};
   const session = context.sessionId ? await getSession(context.sessionId) : null;
-  const requestedScope = typeof metadata.scope === 'string' ? metadata.scope : 'actor_in_conversation';
-  const normalizedRequestedScope = ACTOR_MEMORY_SCOPES.has(requestedScope) ? requestedScope : 'actor_in_conversation';
-  const effectiveScope =
-    normalizedRequestedScope === 'conversation' && !session?.conversation_id
-      ? 'actor_global'
-      : normalizedRequestedScope === 'actor_in_conversation' && !session?.conversation_id
-          ? 'actor_global'
-          : normalizedRequestedScope;
-  const conversationId = effectiveScope === 'actor_global'
-    ? undefined
-    : session?.conversation_id;
+  const requestedSpaceType =
+    typeof metadata.spaceType === 'string'
+      ? metadata.spaceType
+      : typeof metadata.scope === 'string'
+        ? metadata.scope
+        : 'participant_private';
+  const normalizedRequestedSpaceType =
+    requestedSpaceType === 'actor_in_conversation'
+      ? 'participant_private'
+      : requestedSpaceType === 'conversation'
+        ? 'conversation_shared'
+        : requestedSpaceType === 'actor_global'
+          ? 'actor_private'
+          : requestedSpaceType;
+  const effectiveSpaceType =
+    !ACTOR_MEMORY_SPACE_TYPES.has(normalizedRequestedSpaceType)
+      ? 'participant_private'
+      : (
+          !session?.conversation_id
+            && (normalizedRequestedSpaceType === 'participant_private'
+              || normalizedRequestedSpaceType === 'conversation_shared')
+        )
+        ? 'actor_private'
+        : normalizedRequestedSpaceType;
+  const conversationId = effectiveSpaceType === 'participant_private' || effectiveSpaceType === 'conversation_shared'
+    ? session?.conversation_id
+    : undefined;
 
   const memory = await createMemory(workspaceId, {
-    ownerScope: effectiveScope as any,
-    ownerActorId: effectiveScope === 'conversation' ? undefined : actorId,
-    ownerConversationId: conversationId,
-    ownerWorkspaceMemberId: undefined,
+    spaceType: effectiveSpaceType as any,
+    actorId: effectiveSpaceType === 'participant_private' || effectiveSpaceType === 'actor_private' ? actorId : undefined,
+    conversationId,
+    workspaceMemberId: undefined,
     category: ((metadata.category as string | undefined) ?? 'fact') as any,
-    stability: ((metadata.stability as string | undefined) ?? 'durable') as any,
     importance: (metadata.importance as number | undefined) ?? 0.5,
     confidence: (metadata.confidence as number | undefined) ?? 0.8,
     tags: (metadata.tags as string[] | undefined) ?? [],
@@ -193,6 +208,7 @@ async function handleCreateMemory(
         actorId,
       },
       memoryId: memory.id,
+      memorySpaceType: memory.spaceType,
       memoryScope: memory.ownerScope,
       memoryCategory: memory.category,
       textDigest: memory.textDigest,
@@ -204,7 +220,7 @@ async function handleCreateMemory(
       noticeType: action.metadata?.supersedesMemoryId ? 'memory_updated' : 'memory_saved',
       actorId,
       memoryId: memory.id,
-      memoryScope: memory.ownerScope,
+      memorySpaceType: memory.spaceType,
       memoryCategory: memory.category,
       textDigest: memory.textDigest,
     },

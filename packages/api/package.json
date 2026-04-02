@@ -13,9 +13,11 @@
     "db:seed:builtin-mcp": "tsx src/infrastructure/database/seed-builtin-mcp-plugins.ts",
     "db:rebuild": "tsx src/infrastructure/database/rebuild.ts && npm run db:codegen",
     "db:codegen": "kysely-codegen --config-file .kysely-codegenrc.json",
-    "db:codegen:verify": "npm run db:codegen -- --verify"
+    "db:codegen:verify": "npm run db:codegen -- --verify",
+    "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.0",
     "@authzed/authzed-node": "^1.6.1",
     "@dicebear/collection": "^9.4.2",
     "@dicebear/core": "^9.4.2",
@@ -34,6 +36,7 @@
     "ioredis": "^5.4.0",
     "kysely": "^0.28.14",
     "node-av": "^5.2.2",
+    "onnxruntime-node": "^1.22.0",
     "pg": "^8.12.0",
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",

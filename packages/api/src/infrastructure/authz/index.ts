@@ -42,6 +42,8 @@ export type AuthzObjectType =
   | "relay_exposure"
   | "conversation_actor_context"
   | "conversation"
+  | "memory_space"
+  | "memory_item"
   | "memory"
   | "model_group"
   | "model_profile";
@@ -75,6 +77,8 @@ const AUTHZ_RESOURCE_TYPES: AuthzObjectType[] = [
   "relay_exposure",
   "conversation_actor_context",
   "conversation",
+  "memory_space",
+  "memory_item",
   "memory",
   "model_group",
   "model_profile",

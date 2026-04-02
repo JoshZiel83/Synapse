@@ -48,11 +48,11 @@ export const ACCESS_ACTIONS = {
   'conversation.memory_retarget': { resourceType: 'conversation', permission: 'memory_retarget' },
   'conversation.memory_delete': { resourceType: 'conversation', permission: 'memory_delete' },
 
-  'memory.read': { resourceType: 'memory', permission: 'read' },
-  'memory.recall': { resourceType: 'memory', permission: 'recall' },
-  'memory.edit': { resourceType: 'memory', permission: 'edit' },
-  'memory.retarget': { resourceType: 'memory', permission: 'retarget' },
-  'memory.delete': { resourceType: 'memory', permission: 'delete' },
+  'memory.read': { resourceType: 'memory_item', permission: 'read' },
+  'memory.recall': { resourceType: 'memory_item', permission: 'recall' },
+  'memory.edit': { resourceType: 'memory_item', permission: 'edit' },
+  'memory.retarget': { resourceType: 'memory_item', permission: 'retarget' },
+  'memory.delete': { resourceType: 'memory_item', permission: 'delete' },
 
   'plugin_installation.view': { resourceType: 'plugin_installation', permission: 'view' },
   'plugin_installation.use': { resourceType: 'plugin_installation', permission: 'use' },

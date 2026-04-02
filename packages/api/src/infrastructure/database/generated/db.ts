@@ -165,19 +165,17 @@ export type JsonPrimitive = boolean | number | string | null;
 
 export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 
-export type MemoryEntriesCategory = "artifact" | "decision" | "fact" | "preference" | "procedure" | "relationship" | "summary";
+export type MemoryItemPartsPartType = "file_ref" | "json" | "text";
 
-export type MemoryEntriesOwnerScope = "actor_global" | "actor_in_conversation" | "conversation" | "workspace" | "workspace_member";
+export type MemoryItemsCategory = "artifact" | "decision" | "fact" | "preference" | "procedure" | "relationship" | "summary";
 
-export type MemoryEntriesStability = "durable" | "ephemeral";
+export type MemoryItemsIndexStatus = "failed" | "lexical_ready" | "ready";
 
-export type MemoryEntriesStatus = "candidate" | "established" | "retracted" | "superseded";
-
-export type MemoryEntryPartsPartType = "file_ref" | "json" | "text";
-
-export type MemoryIndexChunksOwnerScope = "actor_global" | "actor_in_conversation" | "conversation" | "workspace" | "workspace_member";
+export type MemoryItemsState = "active" | "archived" | "superseded";
 
 export type MemoryRecallRunsRecallType = "bootstrap" | "manual_search" | "turn_recall";
+
+export type MemorySpacesSpaceType = "actor_private" | "conversation_shared" | "participant_private" | "user_private" | "workspace_shared";
 
 export type ModelGroupGrantsGrantScope = "actor" | "platform" | "workspace" | "workspace_member";
 
@@ -1083,58 +1081,56 @@ export interface InteractionRuntimeAuthorizationRequests {
   resolution_payload: Generated<Json>;
 }
 
-export interface MemoryEntries {
-  category: MemoryEntriesCategory;
-  confidence: Generated<number>;
+export interface MemoryItemChunks {
+  chunk_index: number;
+  chunk_kind: Generated<string>;
   created_at: Generated<Timestamp | null>;
+  embedding: string | null;
   id: Generated<string>;
-  importance: Generated<number>;
+  memory_item_id: string;
   metadata: Generated<Json | null>;
-  owner_actor_id: string | null;
-  owner_conversation_actor_context_id: string | null;
-  owner_conversation_id: string | null;
-  owner_scope: MemoryEntriesOwnerScope;
-  owner_workspace_member_id: string | null;
-  search_text: Generated<string>;
-  source_item_id: string | null;
-  source_tool_call_id: string | null;
-  source_turn_id: string | null;
-  stability: Generated<MemoryEntriesStability>;
-  status: Generated<MemoryEntriesStatus>;
-  supersedes_memory_id: string | null;
-  tags: Generated<string[] | null>;
-  text_digest: Generated<string>;
+  search_text: string;
+  token_count: Generated<number | null>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
 
-export interface MemoryEntryParts {
+export interface MemoryItemParts {
   file_id: string | null;
   id: Generated<string>;
   json_value: Json | null;
-  memory_entry_id: string;
+  memory_item_id: string;
   metadata: Generated<Json | null>;
   mime_type: string | null;
   name: string | null;
   ordinal: number;
-  part_type: MemoryEntryPartsPartType;
+  part_type: MemoryItemPartsPartType;
   text_value: string | null;
 }
 
-export interface MemoryIndexChunks {
-  chunk_index: number;
+export interface MemoryItems {
+  category: MemoryItemsCategory;
+  confidence: Generated<number>;
   created_at: Generated<Timestamp | null>;
-  embedding: string | null;
+  embedding_dim: number | null;
+  embedding_model: Generated<string>;
   id: Generated<string>;
-  memory_entry_id: string;
+  importance: Generated<number>;
+  index_error: string | null;
+  index_status: Generated<MemoryItemsIndexStatus>;
+  index_version: Generated<number>;
+  indexed_at: Timestamp | null;
+  memory_space_id: string;
   metadata: Generated<Json | null>;
-  owner_actor_id: string | null;
-  owner_conversation_actor_context_id: string | null;
-  owner_conversation_id: string | null;
-  owner_scope: MemoryIndexChunksOwnerScope;
-  owner_workspace_member_id: string | null;
-  search_text: string;
-  token_count: Generated<number | null>;
+  search_text: Generated<string>;
+  source_item_id: string | null;
+  source_kind: Generated<string>;
+  source_tool_call_id: string | null;
+  source_turn_id: string | null;
+  state: Generated<MemoryItemsState>;
+  supersedes_item_id: string | null;
+  tags: Generated<string[] | null>;
+  text_digest: Generated<string>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
@@ -1145,7 +1141,7 @@ export interface MemoryRecallRunResults {
   id: Generated<string>;
   matched_chunk_id: string | null;
   matched_terms: Generated<string[] | null>;
-  memory_entry_id: string;
+  memory_item_id: string;
   metadata: Generated<Json | null>;
   rank: number;
   recall_reason: string | null;
@@ -1166,6 +1162,19 @@ export interface MemoryRecallRuns {
   recall_type: MemoryRecallRunsRecallType;
   workspace_id: string;
   workspace_member_id: string | null;
+}
+
+export interface MemorySpaces {
+  anchor_actor_id: string | null;
+  anchor_conversation_actor_context_id: string | null;
+  anchor_conversation_id: string | null;
+  anchor_workspace_member_id: string | null;
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  metadata: Generated<Json | null>;
+  space_type: MemorySpacesSpaceType;
+  updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
 }
 
 export interface ModelGroupGrants {
@@ -2149,11 +2158,12 @@ export interface DB {
   interaction_question_requests: InteractionQuestionRequests;
   interaction_requests: InteractionRequests;
   interaction_runtime_authorization_requests: InteractionRuntimeAuthorizationRequests;
-  memory_entries: MemoryEntries;
-  memory_entry_parts: MemoryEntryParts;
-  memory_index_chunks: MemoryIndexChunks;
+  memory_item_chunks: MemoryItemChunks;
+  memory_item_parts: MemoryItemParts;
+  memory_items: MemoryItems;
   memory_recall_run_results: MemoryRecallRunResults;
   memory_recall_runs: MemoryRecallRuns;
+  memory_spaces: MemorySpaces;
   model_group_grants: ModelGroupGrants;
   model_group_profiles: ModelGroupProfiles;
   model_groups: ModelGroups;

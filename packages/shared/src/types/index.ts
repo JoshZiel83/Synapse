@@ -18,7 +18,10 @@ import {
   INTERACTION_REQUEST_KINDS,
   INTERACTION_REQUEST_STATUSES,
   MEMORY_CATEGORIES,
+  MEMORY_INDEX_STATUSES,
+  MEMORY_ITEM_STATES,
   MEMORY_RECALL_TYPES,
+  MEMORY_SPACE_TYPES,
   MEMORY_SCOPES,
   MEMORY_STABILITIES,
   MEMORY_STATUSES,
@@ -448,20 +451,29 @@ export interface Message {
 }
 
 // ============ Memory ============
+export type MemorySpaceType = typeof MEMORY_SPACE_TYPES[number];
 export type MemoryScope = typeof MEMORY_SCOPES[number];
 export type MemoryCategory = typeof MEMORY_CATEGORIES[number];
+export type MemoryItemState = typeof MEMORY_ITEM_STATES[number];
 export type MemoryStatus = typeof MEMORY_STATUSES[number];
 export type MemoryStability = typeof MEMORY_STABILITIES[number];
+export type MemoryIndexStatus = typeof MEMORY_INDEX_STATUSES[number];
 export type MemoryRecallType = typeof MEMORY_RECALL_TYPES[number];
 
 export interface MemoryEntry {
   id: UUID;
   workspaceId: UUID;
+  spaceId: UUID;
+  spaceType: MemorySpaceType;
   ownerScope: MemoryScope;
+  actorId?: UUID;
+  conversationId?: UUID;
+  workspaceMemberId?: UUID;
   ownerActorId?: UUID;
   ownerConversationId?: UUID;
   ownerWorkspaceMemberId?: UUID;
   category: MemoryCategory;
+  state: MemoryItemState;
   status: MemoryStatus;
   stability: MemoryStability;
   importance: number;
@@ -475,6 +487,11 @@ export interface MemoryEntry {
   sourceTurnId?: UUID;
   supersedesMemoryId?: UUID;
   metadata: Record<string, unknown>;
+  indexStatus: MemoryIndexStatus;
+  embeddingModel?: string;
+  embeddingDim?: number;
+  indexedAt?: Timestamp;
+  indexError?: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
   actorName?: string;
@@ -2918,7 +2935,8 @@ export interface ConversationFeedEventPayloadMap {
   memory_saved: {
     actor: ConversationEntityRef;
     memoryId: UUID;
-    memoryScope: MemoryScope;
+    memorySpaceType: MemorySpaceType;
+    memoryScope?: MemoryScope;
     memoryCategory: MemoryCategory;
     textDigest?: string;
     sourceItemId?: UUID;
@@ -2928,7 +2946,8 @@ export interface ConversationFeedEventPayloadMap {
     actor: ConversationEntityRef;
     memoryId: UUID;
     supersedesMemoryId?: UUID;
-    memoryScope: MemoryScope;
+    memorySpaceType: MemorySpaceType;
+    memoryScope?: MemoryScope;
     memoryCategory: MemoryCategory;
     textDigest?: string;
     sourceItemId?: UUID;
@@ -3127,7 +3146,9 @@ export function summarizeConversationEvent(
         ? eventPayload.textDigest.trim()
         : "";
     const scope =
-      typeof eventPayload.memoryScope === "string"
+      typeof eventPayload.memorySpaceType === "string"
+        ? eventPayload.memorySpaceType
+        : typeof eventPayload.memoryScope === "string"
         ? eventPayload.memoryScope
         : "memory";
     const actionLabel = eventType === "memory_updated" ? "updated" : "saved";

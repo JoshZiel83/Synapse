@@ -249,7 +249,7 @@ export async function compileContextItemsToConversationMessages(
           const digest = memory.textDigest || fallbackText;
           content.push(
             textBlock(
-              `[${memory.ownerScope}/${memory.category}]${digest ? ` ${digest}` : ""}\n`,
+              `[${memory.spaceType}/${memory.category}]${digest ? ` ${digest}` : ""}\n`,
             ),
           );
 
