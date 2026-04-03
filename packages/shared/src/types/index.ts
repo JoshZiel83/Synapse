@@ -2137,7 +2137,6 @@ export interface PluginAuthConnection {
   status: PluginAuthConnectionStatus;
   expiresAt?: string;
   publicPayload: Record<string, unknown>;
-  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -4185,7 +4184,6 @@ export interface PluginRuntimePermissionRecord {
   permissionKey: string;
   isRequired: boolean;
   rationale: string;
-  metadata: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -4277,7 +4275,6 @@ export interface SkillSnapshotFileRecord {
   contentBlocks: CanonicalContentBlock[];
   sha256: string;
   sizeBytes: number;
-  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -4293,7 +4290,6 @@ export interface SkillMirrorSourceRecord {
   lastSyncStatus: SkillMirrorSyncStatus;
   sourceWarnings: string[];
   lastError?: string;
-  metadata: Record<string, unknown>;
   lastSyncedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -4354,7 +4350,6 @@ export interface RelayDeviceRecord {
   authorizationMode: "server_trust" | "client_local";
   publicKeyFingerprint: string;
   trustStatus: "pending" | "active" | "revoked" | "blocked";
-  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }

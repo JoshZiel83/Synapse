@@ -115,7 +115,6 @@ export interface RelayPairingSessionView {
   expiresAt: string;
   confirmedAt?: string;
   consumedAt?: string;
-  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -129,7 +128,6 @@ export interface RelaySyncSourceView {
   status: RelaySyncStatus;
   lastSyncedAt?: string;
   lastError?: string;
-  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -199,7 +197,6 @@ export interface RelayDeviceSummaryView {
   lastSeenAt?: string;
   lastConnectedAt?: string;
   lastCatalogChangedAt?: string;
-  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }

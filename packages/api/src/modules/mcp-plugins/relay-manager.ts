@@ -433,16 +433,15 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
         const sessionId = crypto.randomUUID();
         const sessionResult = await executeSql(
           `INSERT INTO relay_device_sessions (
-             device_id, protocol_version, client_version, status, transport, remote_addr, last_heartbeat_at, metadata
+             device_id, protocol_version, client_version, status, transport, remote_addr, last_heartbeat_at
            )
-           VALUES ($1, $2, $3, 'active', 'websocket', $4, NOW(), $5)
+           VALUES ($1, $2, $3, 'active', 'websocket', $4, NOW())
            RETURNING id`,
           [
             pendingChallenge.device.id,
             pendingChallenge.protocolVersion,
             pendingChallenge.clientVersion,
             typeof _req?.socket?.remoteAddress === 'string' ? _req.socket.remoteAddress : null,
-            JSON.stringify({ sessionId }),
           ],
         );
 
@@ -2520,13 +2519,12 @@ async function syncRelaySyncSources(deviceId: string, syncSources: RelaySyncSour
     const result = await executeSql(
       `INSERT INTO relay_sync_sources (
          device_id, source_kind, source_key, config_path, sync_mode, status,
-         last_synced_at, last_error, metadata
+         last_synced_at, last_error
        )
        VALUES (
          $1, $2, $3, $4, $5, $6,
          COALESCE($7::timestamptz, NOW()),
-         $8,
-         $9
+         $8
        )
        ON CONFLICT (device_id, source_key) DO UPDATE SET
          source_kind = EXCLUDED.source_kind,
@@ -2535,7 +2533,6 @@ async function syncRelaySyncSources(deviceId: string, syncSources: RelaySyncSour
          status = EXCLUDED.status,
          last_synced_at = EXCLUDED.last_synced_at,
          last_error = EXCLUDED.last_error,
-         metadata = EXCLUDED.metadata,
          updated_at = NOW()
        RETURNING id`,
       [
@@ -2547,7 +2544,6 @@ async function syncRelaySyncSources(deviceId: string, syncSources: RelaySyncSour
         source.status,
         lastSyncedAt,
         source.lastError,
-        JSON.stringify(source.metadata),
       ],
     );
     bySourceKey.set(source.sourceKey, result.rows[0].id as string);
@@ -2605,15 +2601,10 @@ async function syncExposureCatalog(exposureId: string, deviceId: string, exposur
     }
 
     const catalogInsert = await executeSql(
-      `INSERT INTO relay_catalog_revisions (exposure_id, revision_seq, schema_hash, status, metadata)
-       VALUES ($1, $2, $3, 'active', $4)
+      `INSERT INTO relay_catalog_revisions (exposure_id, revision_seq, schema_hash, status)
+       VALUES ($1, $2, $3, 'active')
        RETURNING id`,
-      [
-        exposureId,
-        nextSeq,
-        schemaHash,
-        JSON.stringify({ toolCount: normalizedTools.length }),
-      ],
+      [exposureId, nextSeq, schemaHash],
     );
 
     revisionSeq = nextSeq;

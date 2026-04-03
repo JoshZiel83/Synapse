@@ -335,7 +335,7 @@ export function startSessionThinkingWorker() {
           });
         }
 
-        const recallType = session.metadata?.memoryBootstrapCompleted ? 'turn_recall' : 'bootstrap';
+        const recallType = session.memory_bootstrap_completed ? 'turn_recall' : 'bootstrap';
         const recallQuery = buildMemoryRecallQuery({
           actorName: actor.definition.name,
           conversationTitle: session.conversation_title,
@@ -369,14 +369,11 @@ export function startSessionThinkingWorker() {
             ...contextItems,
           ];
         }
-        if (recallType === 'bootstrap' && !session.metadata?.memoryBootstrapCompleted) {
+        if (recallType === 'bootstrap' && !session.memory_bootstrap_completed) {
           await db
             .updateTable('sessions')
             .set({
-              metadata:
-                sql`COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify({
-                  memoryBootstrapCompleted: true,
-                })}::jsonb`,
+              memory_bootstrap_completed: true,
             })
             .where('id', '=', sessionId)
             .execute();

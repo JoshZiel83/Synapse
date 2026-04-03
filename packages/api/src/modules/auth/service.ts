@@ -25,7 +25,6 @@ import {
   executeCompiledQuery,
   executeTakeFirst,
   type QueryExecutor,
-  type TableInsert,
 } from '../../infrastructure/database/kysely.js';
 import {
   disconnectSocketsForSession,
@@ -80,7 +79,6 @@ export interface SessionContextInput {
   sessionPersistence?: AuthSessionPersistence;
   deviceName?: string;
   platform?: string;
-  metadata?: Record<string, unknown>;
 }
 
 export interface AuthenticatedRequestSession {
@@ -358,10 +356,6 @@ async function insertSession(
   const platform = sanitizeOptionalText(input.platform, 120) ?? null;
   const ipAddress = extractIpAddress(input.request) ?? null;
   const userAgent = extractUserAgent(input.request) ?? null;
-  const metadata = {
-    ...(input.metadata ?? {}),
-    sessionPersistence,
-  };
 
   const row = await executeTakeFirst<{
     id: string;
@@ -387,7 +381,6 @@ async function insertSession(
         token_hint: getTokenHint(sessionToken),
         ip_address: ipAddress,
         user_agent: userAgent,
-        metadata: metadata as TableInsert<'auth_sessions'>['metadata'],
         expires_at: expiresAt,
       })
       .returning(authSessionReturning),
@@ -950,10 +943,6 @@ export function createAuthService(_app: FastifyInstance) {
           clientType: 'web',
           transport: 'cookie',
           sessionPersistence,
-          metadata: {
-            source: 'qr_login',
-            qrLoginRequestId: row.id,
-          },
         },
         runner,
       );

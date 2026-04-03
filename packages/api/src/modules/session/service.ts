@@ -12,7 +12,6 @@ import {
   db,
   executeTakeFirst,
   type QueryExecutor,
-  type TableInsert,
 } from '../../infrastructure/database/kysely.js';
 import { shutdownSessionInstances } from '../mcp-plugins/instance-manager.js';
 import { queueConversationTransportProjection } from '../im/service.js';
@@ -184,7 +183,6 @@ export async function ensureConversationActorSessionContext(
           channel_type: params.channelType || 'web',
           trigger: params.trigger || 'user_message',
           status: 'idle',
-          metadata: (params.metadata || {}) as TableInsert<'sessions'>['metadata'],
         })
         .onConflict((oc) =>
           oc.columns(['conversation_id', 'actor_id']).doNothing(),
@@ -214,8 +212,6 @@ export async function ensureConversationActorSessionContext(
         conversation_id: params.conversationId,
         actor_id: params.actorId,
         session_id: session.id,
-        metadata:
-          (params.metadata || {}) as TableInsert<'conversation_actor_contexts'>['metadata'],
       })
       .onConflict((oc) => oc.columns(['conversation_id', 'actor_id']).doNothing())
       .returning('id'),

@@ -186,7 +186,6 @@ CREATE TABLE auth_sessions (
   token_hint VARCHAR(16) NOT NULL,
   ip_address VARCHAR(120),
   user_agent TEXT,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   last_seen_at TIMESTAMPTZ DEFAULT NOW(),
@@ -366,7 +365,6 @@ CREATE TABLE authz_outbox (
   subject_type VARCHAR(60) NOT NULL,
   subject_id TEXT NOT NULL,
   subject_relation VARCHAR(60),
-  metadata JSONB DEFAULT '{}',
   status authz_outbox_status NOT NULL DEFAULT 'pending',
   attempts INT NOT NULL DEFAULT 0,
   last_error TEXT,
@@ -415,7 +413,6 @@ CREATE TABLE skill_mirror_sources (
   last_sync_status skill_mirror_sources_sync_status NOT NULL DEFAULT 'pending',
   source_warnings TEXT[] NOT NULL DEFAULT '{}',
   last_error TEXT,
-  metadata JSONB NOT NULL DEFAULT '{}',
   last_synced_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -446,7 +443,6 @@ CREATE TABLE skill_snapshots (
   content_hash VARCHAR(64) NOT NULL,
   source_warnings TEXT[] NOT NULL DEFAULT '{}',
   resolved_revision VARCHAR(255),
-  metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -463,7 +459,6 @@ CREATE TABLE skill_snapshot_files (
   content_blocks JSONB NOT NULL DEFAULT '[]',
   sha256 VARCHAR(64) NOT NULL,
   size_bytes INT NOT NULL DEFAULT 0,
-  metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(skill_snapshot_id, path)
@@ -629,7 +624,6 @@ CREATE TABLE plugin_version_runtime_permissions (
   permission_key VARCHAR(120) NOT NULL,
   is_required BOOLEAN NOT NULL DEFAULT TRUE,
   rationale TEXT DEFAULT '',
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(catalog_version_id, permission_key)
 );
@@ -998,7 +992,7 @@ CREATE TABLE sessions (
   channel_type sessions_channel_type NOT NULL DEFAULT 'web',
   trigger VARCHAR(50) NOT NULL DEFAULT 'user_message',
   status sessions_status NOT NULL DEFAULT 'idle',
-  metadata JSONB DEFAULT '{}',
+  memory_bootstrap_completed BOOLEAN NOT NULL DEFAULT FALSE,
   error_message TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -1017,7 +1011,6 @@ CREATE TABLE conversation_actor_contexts (
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
   session_id UUID NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(conversation_id, actor_id)
@@ -1183,7 +1176,6 @@ CREATE TABLE conversation_grants (
   status conversation_grants_status NOT NULL DEFAULT 'active',
   granted_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   reason TEXT,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
   CONSTRAINT chk_conversation_grants_target CHECK (
@@ -2385,7 +2377,6 @@ CREATE TABLE plugin_connections (
   expires_at TIMESTAMPTZ,
   public_payload JSONB DEFAULT '{}',
   secret_payload JSONB DEFAULT '{}',
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -2423,7 +2414,6 @@ CREATE TABLE relay_devices (
   automation_lifecycle_state relay_devices_automation_lifecycle_state,
   automation_lifecycle_grace_until TIMESTAMPTZ,
   automation_lifecycle_event_at TIMESTAMPTZ,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -2450,7 +2440,6 @@ CREATE TABLE relay_pairing_sessions (
   confirmed_at TIMESTAMPTZ,
   consumed_at TIMESTAMPTZ,
   status relay_pairing_sessions_status NOT NULL DEFAULT 'pending',
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -2469,7 +2458,6 @@ CREATE TABLE relay_device_sessions (
   close_reason TEXT,
   started_at TIMESTAMPTZ DEFAULT NOW(),
   ended_at TIMESTAMPTZ,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -2484,7 +2472,6 @@ CREATE TABLE relay_sync_sources (
   status relay_sync_sources_status NOT NULL DEFAULT 'unknown',
   last_synced_at TIMESTAMPTZ,
   last_error TEXT,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(device_id, source_key)
@@ -2515,7 +2502,6 @@ CREATE TABLE relay_capabilities (
   status relay_capabilities_status NOT NULL DEFAULT 'active',
   conversation_type_mask_override INT
     CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
-  metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -2612,7 +2598,6 @@ CREATE TABLE relay_catalog_revisions (
   status relay_catalog_revisions_status NOT NULL DEFAULT 'active',
   activated_at TIMESTAMPTZ DEFAULT NOW(),
   invalidated_at TIMESTAMPTZ,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(exposure_id, revision_seq)
@@ -2731,7 +2716,6 @@ CREATE TABLE interaction_requests (
   resolved_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   resolved_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ,
-  metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT interaction_requests_target_requirement_chk CHECK (
@@ -2792,7 +2776,6 @@ CREATE TABLE runtime_grants (
   consumed_at TIMESTAMPTZ,
   revoked_at TIMESTAMPTZ,
   superseded_at TIMESTAMPTZ,
-  metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

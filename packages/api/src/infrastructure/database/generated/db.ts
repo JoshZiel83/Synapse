@@ -489,7 +489,6 @@ export interface AuthSessions {
   id: Generated<string>;
   ip_address: string | null;
   last_seen_at: Generated<Timestamp | null>;
-  metadata: Generated<Json | null>;
   platform: string | null;
   revoke_reason: string | null;
   revoked_at: Timestamp | null;
@@ -507,7 +506,6 @@ export interface AuthzOutbox {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
   last_error: string | null;
-  metadata: Generated<Json | null>;
   operation: AuthzOutboxOperation;
   relation: string;
   resource_id: string;
@@ -837,7 +835,6 @@ export interface ConversationActorContexts {
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
-  metadata: Generated<Json | null>;
   session_id: string;
   updated_at: Generated<Timestamp | null>;
 }
@@ -854,7 +851,6 @@ export interface ConversationGrants {
   created_at: Generated<Timestamp | null>;
   granted_by_workspace_member_id: string | null;
   id: Generated<string>;
-  metadata: Generated<Json | null>;
   permission: ConversationGrantsPermission;
   reason: string | null;
   revoked_at: Timestamp | null;
@@ -1041,7 +1037,6 @@ export interface InteractionRequests {
   expires_at: Timestamp | null;
   id: Generated<string>;
   kind: InteractionRequestsKind;
-  metadata: Generated<Json>;
   requester_actor_id: string | null;
   requester_member_id: string | null;
   requester_workspace_member_id: string | null;
@@ -1298,7 +1293,6 @@ export interface PluginConnections {
   external_account_id: string | null;
   id: Generated<string>;
   installation_id: string;
-  metadata: Generated<Json | null>;
   owner_scope: Generated<PluginConnectionsOwnerScope>;
   owner_workspace_member_id: string | null;
   public_payload: Generated<Json | null>;
@@ -1360,7 +1354,6 @@ export interface PluginVersionRuntimePermissions {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
   is_required: Generated<boolean>;
-  metadata: Generated<Json | null>;
   permission_key: string;
   rationale: Generated<string | null>;
 }
@@ -1424,7 +1417,6 @@ export interface RelayCapabilities {
   created_at: Generated<Timestamp | null>;
   exposure_id: string;
   id: Generated<string>;
-  metadata: Generated<Json>;
   status: Generated<RelayCapabilitiesStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
@@ -1436,7 +1428,6 @@ export interface RelayCatalogRevisions {
   exposure_id: string;
   id: Generated<string>;
   invalidated_at: Timestamp | null;
-  metadata: Generated<Json | null>;
   revision_seq: Int8;
   schema_hash: string;
   status: Generated<RelayCatalogRevisionsStatus>;
@@ -1456,7 +1447,6 @@ export interface RelayDevices {
   last_catalog_changed_at: Timestamp | null;
   last_connected_at: Timestamp | null;
   last_seen_at: Timestamp | null;
-  metadata: Generated<Json | null>;
   owner_workspace_member_id: string | null;
   platform: string | null;
   public_key: string;
@@ -1477,7 +1467,6 @@ export interface RelayDeviceSessions {
   id: Generated<string>;
   last_heartbeat_at: Timestamp | null;
   last_sequence: Generated<Int8>;
-  metadata: Generated<Json | null>;
   protocol_version: Generated<number>;
   remote_addr: string | null;
   started_at: Generated<Timestamp | null>;
@@ -1564,7 +1553,6 @@ export interface RelayPairingSessions {
   device_id: string | null;
   expires_at: Timestamp;
   id: Generated<string>;
-  metadata: Generated<Json | null>;
   pairing_code: string;
   requested_authorization_mode: RelayAuthorizationMode | null;
   requested_by_workspace_member_id: string | null;
@@ -1586,7 +1574,6 @@ export interface RelaySyncSources {
   id: Generated<string>;
   last_error: string | null;
   last_synced_at: Timestamp | null;
-  metadata: Generated<Json | null>;
   source_key: string;
   source_kind: RelaySyncSourcesSourceKind;
   status: Generated<RelaySyncSourcesStatus>;
@@ -1670,7 +1657,6 @@ export interface RuntimeGrants {
   display_payload: Generated<Json>;
   effect: Generated<Json>;
   id: Generated<string>;
-  metadata: Generated<Json>;
   relay_capability_id: string;
   relay_device_id: string;
   relay_exposure_id: string;
@@ -1737,7 +1723,7 @@ export interface Sessions {
   created_at: Generated<Timestamp | null>;
   error_message: string | null;
   id: Generated<string>;
-  metadata: Generated<Json | null>;
+  memory_bootstrap_completed: Generated<boolean>;
   status: Generated<SessionsStatus>;
   trigger: Generated<string>;
   updated_at: Generated<Timestamp | null>;
@@ -1773,7 +1759,6 @@ export interface SkillMirrorSources {
   last_synced_at: Timestamp | null;
   locator: Generated<Json>;
   locator_key: string;
-  metadata: Generated<Json>;
   refresh_mode: Generated<SkillMirrorSourcesRefreshMode>;
   requested_ref: string | null;
   resolved_revision: string | null;
@@ -1794,7 +1779,6 @@ export interface SkillSnapshotFiles {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
   media_type: string | null;
-  metadata: Generated<Json>;
   path: string;
   sha256: string;
   size_bytes: Generated<number>;
@@ -1816,7 +1800,6 @@ export interface SkillSnapshots {
   entry_path: Generated<string>;
   hooks: Generated<Json>;
   id: Generated<string>;
-  metadata: Generated<Json>;
   mirror_source_id: string | null;
   model: string | null;
   name: string;

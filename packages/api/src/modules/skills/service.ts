@@ -1207,7 +1207,6 @@ async function upsertSkillMirrorSource(
        last_sync_status,
        source_warnings,
        last_error,
-       metadata,
        last_synced_at
      )
      VALUES (
@@ -1220,7 +1219,6 @@ async function upsertSkillMirrorSource(
        'synced',
        $6::text[],
        NULL,
-       $7::jsonb,
        NOW()
      )
      ON CONFLICT (source_type, locator_key) DO UPDATE SET
@@ -1231,7 +1229,6 @@ async function upsertSkillMirrorSource(
        last_sync_status = 'synced',
        source_warnings = EXCLUDED.source_warnings,
        last_error = NULL,
-       metadata = EXCLUDED.metadata,
        last_synced_at = NOW(),
        updated_at = NOW()
      RETURNING id`,
@@ -1242,7 +1239,6 @@ async function upsertSkillMirrorSource(
       input.requestedRef || null,
       input.resolvedRevision || null,
       input.sourceWarnings,
-      JSON.stringify(input.metadata || {}),
     ],
   );
   return result.rows[0]!.id;
@@ -1289,8 +1285,7 @@ async function insertSkillSnapshot(
        body_blocks,
        content_hash,
        source_warnings,
-       resolved_revision,
-       metadata
+       resolved_revision
      )
      VALUES (
        $1,
@@ -1309,8 +1304,7 @@ async function insertSkillSnapshot(
        $14::jsonb,
        $15,
        $16::text[],
-       $17,
-       '{}'::jsonb
+       $17
      )
      RETURNING id`,
     [
@@ -1343,10 +1337,9 @@ async function insertSkillSnapshot(
          media_type,
          content_blocks,
          sha256,
-         size_bytes,
-         metadata
+         size_bytes
        )
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, '{}'::jsonb)`,
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6)`,
       [
         snapshotId,
         file.path,
@@ -3115,10 +3108,9 @@ export async function installMarketplaceSkill(input: {
          source_catalog_item_id,
          source_catalog_version_id,
          sync_mode,
-         is_customized,
-         metadata
+         is_customized
        )
-       VALUES ($1, $2, $3, 'manual_merge', FALSE, '{}'::jsonb)`,
+       VALUES ($1, $2, $3, 'manual_merge', FALSE)`,
       [skillId, marketplaceSkill.item_id, marketplaceSkill.latest_version_id],
     );
 

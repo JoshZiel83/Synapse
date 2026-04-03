@@ -333,6 +333,7 @@ async function insertOutboxEntries(
   entries: AuthzRelationMutation[],
   metadata?: Record<string, unknown>,
 ) {
+  void metadata;
   if (!config.authz.enabled || entries.length === 0) {
     return [] as string[];
   }
@@ -342,7 +343,6 @@ async function insertOutboxEntries(
   for (const entry of entries) {
     const row: Pick<
       TableInsert<"authz_outbox">,
-      | "metadata"
       | "operation"
       | "relation"
       | "resource_id"
@@ -351,8 +351,6 @@ async function insertOutboxEntries(
       | "subject_relation"
       | "subject_type"
     > = {
-      metadata:
-        (metadata || {}) as TableInsert<"authz_outbox">["metadata"],
       operation: entry.operation || "touch",
       relation: entry.relation,
       resource_id: entry.resourceId,
@@ -777,6 +775,7 @@ export async function queueAuthzRelationships(
   entries: AuthzRelationMutation[],
   metadata?: Record<string, unknown>,
 ) {
+  void metadata;
   return insertOutboxEntries(client, entries, metadata);
 }
 
@@ -784,6 +783,7 @@ export async function enqueueAuthzRelationships(
   entries: AuthzRelationMutation[],
   metadata?: Record<string, unknown>,
 ) {
+  void metadata;
   return transaction(async (client) =>
     insertOutboxEntries(client, entries, metadata),
   );

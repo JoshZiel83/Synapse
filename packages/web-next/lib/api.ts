@@ -1615,7 +1615,7 @@ class ApiClient {
   }
   createRelayPairingSession(
     wsId: string,
-    data: { title?: string; metadata?: Record<string, unknown> }
+    data: { title?: string }
   ): Promise<{ pairing: RelayPairingSessionView }> {
     return this.fetch(`/workspaces/${wsId}/mcp/relays/pairing-sessions`, {
       method: "POST",
@@ -1648,7 +1648,6 @@ class ApiClient {
     platform?: string
     publicKey: string
     publicKeyFingerprint: string
-    metadata?: Record<string, unknown>
   }) {
     return this.fetch("/mcp/relay/pairing/claim", {
       method: "POST",
@@ -1763,7 +1762,6 @@ class ApiClient {
       deviceType?: string
       authorizationMode?: string
       conversationTypeMaskOverride?: number | null
-      metadata?: Record<string, unknown>
     }
   ): Promise<RelayDeviceSummaryView> {
     return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`, {

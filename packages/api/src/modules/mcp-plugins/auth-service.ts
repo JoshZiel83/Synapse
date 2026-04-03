@@ -83,7 +83,6 @@ type PluginConnectionRow = {
   expires_at: string | Date | null;
   public_payload: unknown;
   secret_payload: unknown;
-  metadata: unknown;
   created_at: string | Date;
   updated_at: string | Date;
 };
@@ -279,7 +278,6 @@ function mapConnectionRow(row: PluginConnectionRow): PluginAuthConnection {
     status: row.status as PluginAuthConnection["status"],
     expiresAt: normalizeTimestamp(row.expires_at),
     publicPayload: asObject(row.public_payload),
-    metadata: asObject(row.metadata),
     createdAt: normalizeTimestamp(row.created_at)!,
     updatedAt: normalizeTimestamp(row.updated_at)!,
   };
@@ -1834,7 +1832,6 @@ export async function attachAuthConnectionsToConfig(input: {
                expires_at = $6,
                public_payload = $7::jsonb,
                secret_payload = $8::jsonb,
-               metadata = $9::jsonb,
                updated_at = NOW()
            WHERE id = $1
            RETURNING *,
@@ -1852,11 +1849,6 @@ export async function attachAuthConnectionsToConfig(input: {
             asNullableString(secretPayload.expiresAt),
             JSON.stringify(publicPayload),
             JSON.stringify(secretPayload),
-            JSON.stringify({
-              sourceSessionId: session.id,
-              bindingKey,
-              driver: session.driver,
-            }),
           ],
         );
         connectionRow = updated.rows[0]!;
@@ -1875,11 +1867,10 @@ export async function attachAuthConnectionsToConfig(input: {
              status,
              expires_at,
              public_payload,
-             secret_payload,
-             metadata
+             secret_payload
            )
            VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10, $11::jsonb, $12::jsonb, $13::jsonb
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10, $11::jsonb, $12::jsonb
            )
            RETURNING *,
              (
@@ -1900,11 +1891,6 @@ export async function attachAuthConnectionsToConfig(input: {
             asNullableString(secretPayload.expiresAt),
             JSON.stringify(publicPayload),
             JSON.stringify(secretPayload),
-            JSON.stringify({
-              sourceSessionId: session.id,
-              bindingKey,
-              driver: session.driver,
-            }),
           ],
         );
         connectionRow = inserted.rows[0]!;
@@ -1969,7 +1955,6 @@ export async function resolveAuthConnectionRefs(config: Record<string, unknown>)
       expiresAt: row.expires_at || undefined,
       publicPayload: asObject(row.public_payload),
       secretPayload,
-      metadata: asObject(row.metadata),
     };
   }
   return resolved;

@@ -128,7 +128,6 @@ type ConversationGrantRow = {
   status: ConversationGrantsStatus;
   granted_by_workspace_member_id?: string | null;
   reason?: string | null;
-  metadata?: Record<string, unknown> | string | null;
   created_at?: string | Date | null;
   revoked_at?: string | Date | null;
 };
@@ -381,7 +380,6 @@ function mapConversationGrant(
     grantedByWorkspaceMemberId:
       row.granted_by_workspace_member_id || undefined,
     reason: row.reason || undefined,
-    metadata: parseJson(row.metadata),
     createdAt:
       row.created_at instanceof Date ? row.created_at.toISOString() : (row.created_at || ""),
     revokedAt:
@@ -2836,7 +2834,6 @@ export async function issueConversationGrant(params: {
   actorId?: string;
   grantedByWorkspaceMemberId?: string;
   reason?: string;
-  metadata?: Record<string, unknown>;
 }) {
   const subjectType = params.workspaceMemberId ? "workspace_member" : "actor";
   if (!params.workspaceMemberId && !params.actorId) {
@@ -2917,8 +2914,6 @@ export async function issueConversationGrant(params: {
           granted_by_workspace_member_id:
             params.grantedByWorkspaceMemberId ?? null,
           reason: params.reason ?? null,
-          metadata:
-            (params.metadata ?? {}) as TableInsert<"conversation_grants">["metadata"],
         })
         .returningAll(),
     );

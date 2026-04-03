@@ -99,7 +99,6 @@ export interface RuntimeGrantRecord {
   sourceRequestHash?: string;
   effect: RuntimeGrantEffect;
   displayPayload: Record<string, unknown>;
-  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
   consumedAt?: string;
@@ -125,7 +124,6 @@ export interface CreateRuntimeGrantParams {
   sourceRequestArgs: Record<string, unknown>;
   effect: RuntimeGrantEffect;
   displayPayload?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
 }
 
 export interface FindMatchingRuntimeGrantParams {
@@ -165,7 +163,6 @@ function mapRuntimeGrantRow(row: any): RuntimeGrantRecord {
     sourceRequestHash: row.source_request_hash || undefined,
     effect: parseJsonObject(row.effect) as unknown as RuntimeGrantEffect,
     displayPayload: parseJsonObject(row.display_payload),
-    metadata: parseJsonObject(row.metadata),
     createdAt: toIsoString(row.created_at) || new Date().toISOString(),
     updatedAt: toIsoString(row.updated_at) || new Date().toISOString(),
     consumedAt: toIsoString(row.consumed_at),
@@ -222,8 +219,6 @@ export async function createRuntimeGrant(
       effect: params.effect as unknown as TableInsert<"runtime_grants">["effect"],
       display_payload:
         (params.displayPayload || {}) as TableInsert<"runtime_grants">["display_payload"],
-      metadata:
-        (params.metadata || {}) as TableInsert<"runtime_grants">["metadata"],
     })
     .returningAll();
   const row = isQueryExecutor(queryable)

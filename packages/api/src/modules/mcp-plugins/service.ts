@@ -263,8 +263,7 @@ const PLUGIN_CATALOG_SELECT = `
       jsonb_build_object(
         'permissionKey', permission_key,
         'isRequired', is_required,
-        'rationale', rationale,
-        'metadata', metadata
+        'rationale', rationale
       )
       ORDER BY permission_key ASC
     ) AS runtime_permissions_json
@@ -1496,10 +1495,9 @@ async function upsertPluginVersion(
          catalog_version_id,
          permission_key,
          is_required,
-         rationale,
-         metadata
+         rationale
        )
-       VALUES ($1, $2, TRUE, '', '{}'::jsonb)`,
+       VALUES ($1, $2, TRUE, '')`,
       [versionId, permissionKey],
     );
   }

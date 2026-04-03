@@ -52,7 +52,6 @@ import {
 
 const createPairingSchema = z.object({
   title: z.string().trim().min(1).max(255).optional(),
-  metadata: z.record(z.unknown()).optional(),
 });
 
 const relayDesktopUpdateQuerySchema = z.object({
@@ -69,7 +68,6 @@ const updateRelayDeviceSchema = z.object({
   deviceType: z.string().trim().min(1).max(64).optional(),
   authorizationMode: z.string().trim().min(1).max(64).optional(),
   conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
-  metadata: z.record(z.unknown()).optional(),
 }).refine((value) => Object.keys(value).length > 0, {
   message: 'At least one relay device field must be updated',
 });
@@ -107,7 +105,6 @@ const claimPairingSchema = z.object({
   platform: z.string().trim().min(1).max(40).optional(),
   publicKey: z.string().trim().min(1),
   publicKeyFingerprint: z.string().trim().min(8).max(128),
-  metadata: z.record(z.unknown()).optional(),
 });
 
 const relayDesktopReleaseSchema = z.object({
@@ -159,7 +156,6 @@ type RelayDeviceSummaryRow = {
   last_seen_at: string | null;
   last_connected_at: string | null;
   last_catalog_changed_at: string | null;
-  metadata: Record<string, unknown> | string | null;
   created_at: string;
   updated_at: string;
 };
@@ -181,7 +177,6 @@ type RelayPairingRow = {
   confirmed_at: string | null;
   consumed_at: string | null;
   status: RelayPairingSessionView['status'];
-  metadata: Record<string, unknown> | string | null;
   created_at: string;
   updated_at: string;
 };
@@ -195,7 +190,6 @@ type RelaySyncSourceRow = {
   status: RelaySyncSourceView['status'];
   last_synced_at: string | null;
   last_error: string | null;
-  metadata: Record<string, unknown> | string | null;
   created_at: string;
   updated_at: string;
 };
@@ -223,7 +217,6 @@ type RelayExposureToolRow = {
   sync_source_status: RelaySyncSourceView['status'] | null;
   sync_source_last_synced_at: string | null;
   sync_source_last_error: string | null;
-  sync_source_metadata: Record<string, unknown> | string | null;
   sync_source_created_at: string | null;
   sync_source_updated_at: string | null;
   tool_id: string | null;
@@ -364,7 +357,6 @@ function mapRelayDeviceSummary(
     lastSeenAt: row.last_seen_at || undefined,
     lastConnectedAt: row.last_connected_at || undefined,
     lastCatalogChangedAt: row.last_catalog_changed_at || undefined,
-    metadata: parseJsonObject(row.metadata),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -386,7 +378,6 @@ function mapRelayPairingSession(row: RelayPairingRow): RelayPairingSessionView {
     expiresAt: row.expires_at,
     confirmedAt: row.confirmed_at || undefined,
     consumedAt: row.consumed_at || undefined,
-    metadata: parseJsonObject(row.metadata),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -402,7 +393,6 @@ function mapRelaySyncSource(row: RelaySyncSourceRow): RelaySyncSourceView {
     status: row.status,
     lastSyncedAt: row.last_synced_at || undefined,
     lastError: row.last_error || undefined,
-    metadata: parseJsonObject(row.metadata),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -453,7 +443,6 @@ function mapInlineSyncSource(row: RelayExposureToolRow): RelaySyncSourceView | u
     status: row.sync_source_status,
     lastSyncedAt: row.sync_source_last_synced_at || undefined,
     lastError: row.sync_source_last_error || undefined,
-    metadata: parseJsonObject(row.sync_source_metadata),
     createdAt: row.sync_source_created_at,
     updatedAt: row.sync_source_updated_at,
   };
@@ -731,7 +720,6 @@ async function listRelayDeviceSummaries(workspaceId: string) {
         d.last_seen_at,
         d.last_connected_at,
         d.last_catalog_changed_at,
-        d.metadata,
         d.created_at,
         d.updated_at,
         COALESCE(session_stats.is_connected, FALSE) AS is_connected,
@@ -822,7 +810,6 @@ async function getRelayDeviceSummary(workspaceId: string, deviceId: string) {
         d.last_seen_at,
         d.last_connected_at,
         d.last_catalog_changed_at,
-        d.metadata,
         d.created_at,
         d.updated_at,
         COALESCE(session_stats.is_connected, FALSE) AS is_connected,
@@ -990,7 +977,6 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
           source.status AS sync_source_status,
           source.last_synced_at AS sync_source_last_synced_at,
           source.last_error AS sync_source_last_error,
-          source.metadata AS sync_source_metadata,
           source.created_at AS sync_source_created_at,
           source.updated_at AS sync_source_updated_at,
           t.id AS tool_id,
@@ -1041,7 +1027,6 @@ async function createRelayPairingSession(params: {
   requestedByWorkspaceMemberId: string;
   serverBaseUrl: string;
   title?: string;
-  metadata?: Record<string, unknown>;
 }) {
   const expiresAt = new Date(Date.now() + RELAY_PAIRING_TTL_MS).toISOString();
 
@@ -1058,10 +1043,9 @@ async function createRelayPairingSession(params: {
            pairing_code,
            verification_uri,
            verification_uri_complete,
-           expires_at,
-           metadata
+           expires_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *`,
         [
           params.workspaceId,
@@ -1072,7 +1056,6 @@ async function createRelayPairingSession(params: {
           buildVerificationUri(params.serverBaseUrl, 'pending'),
           buildVerificationUriComplete(params.serverBaseUrl, 'pending', pairingCode),
           expiresAt,
-          JSON.stringify(params.metadata || {}),
         ],
       );
 
@@ -1258,10 +1241,9 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
          authorization_mode,
          public_key,
          public_key_fingerprint,
-         trust_status,
-         metadata
+         trust_status
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
        RETURNING id, workspace_id, title`,
       [
         pairing.workspace_id,
@@ -1275,7 +1257,6 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
           'server_trust',
         input.publicKey,
         computedFingerprint,
-        JSON.stringify(input.metadata || {}),
       ],
     );
 
@@ -1387,7 +1368,6 @@ export function registerRelayRoutes(app: FastifyInstance) {
         requestedByWorkspaceMemberId: workspaceMemberId,
         serverBaseUrl: resolveServerBaseUrl(request),
         title: body.title,
-        metadata: body.metadata,
       });
 
       logEvent({
@@ -1688,8 +1668,6 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const hasAuthorizationMode = 'authorizationMode' in body;
       const hasConversationTypeMaskOverride =
         'conversationTypeMaskOverride' in body;
-      const hasMetadata = 'metadata' in body;
-
       if (hasConversationTypeMaskOverride) {
         const workspaceConversationTypeMask =
           await getWorkspaceCapabilityConversationTypeMask(
@@ -1717,10 +1695,6 @@ export function registerRelayRoutes(app: FastifyInstance) {
                WHEN $11 THEN $12
                ELSE conversation_type_mask_override
              END,
-             metadata = CASE
-               WHEN $13 THEN $14::jsonb
-               ELSE metadata
-             END,
              updated_at = NOW()
          WHERE id = $1
            AND workspace_id = $2
@@ -1738,8 +1712,6 @@ export function registerRelayRoutes(app: FastifyInstance) {
           body.authorizationMode ?? null,
           hasConversationTypeMaskOverride,
           body.conversationTypeMaskOverride ?? null,
-          hasMetadata,
-          body.metadata ? JSON.stringify(body.metadata) : null,
         ],
       );
 
@@ -1772,7 +1744,6 @@ export function registerRelayRoutes(app: FastifyInstance) {
             hasConversationTypeMaskOverride
               ? 'conversationTypeMaskOverride'
               : null,
-            hasMetadata ? 'metadata' : null,
           ].filter(Boolean),
         },
       });
@@ -1904,7 +1875,6 @@ export function registerRelayRoutes(app: FastifyInstance) {
              FROM relay_catalog_revisions rev
              WHERE rev.device_id = relay_devices.id
            ) AS last_catalog_changed_at,
-           metadata,
            created_at,
            updated_at`,
         [id, workspaceId, body.trustStatus],
