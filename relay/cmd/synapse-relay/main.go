@@ -258,7 +258,7 @@ func runImport(cfgPath string) {
 
 func runPair(cfgPath, serverBaseURL, pairingCode, displayName string) {
 	reader := bufio.NewReader(os.Stdin)
-	defaultDisplayName := cloud.DefaultRelayDisplayName()
+	defaultTitle := cloud.DefaultRelayDisplayName()
 
 	if strings.TrimSpace(serverBaseURL) == "" {
 		fmt.Print("Enter relay server base URL: ")
@@ -271,7 +271,7 @@ func runPair(cfgPath, serverBaseURL, pairingCode, displayName string) {
 		pairingCode = strings.TrimSpace(value)
 	}
 	if strings.TrimSpace(displayName) == "" {
-		fmt.Printf("Enter display name (optional, default %s): ", defaultDisplayName)
+		fmt.Printf("Enter device title (optional, default %s): ", defaultTitle)
 		value, _ := reader.ReadString('\n')
 		displayName = strings.TrimSpace(value)
 	}
@@ -303,7 +303,7 @@ func runPair(cfgPath, serverBaseURL, pairingCode, displayName string) {
 		log.Fatalf("Failed to save config: %v", err)
 	}
 
-	fmt.Printf("Relay paired: %s (%s)\n", result.DeviceID, result.DisplayName)
+	fmt.Printf("Relay paired: %s (%s)\n", result.DeviceID, result.Title)
 	fmt.Printf("Config saved to %s\n", cfgPath)
 }
 
