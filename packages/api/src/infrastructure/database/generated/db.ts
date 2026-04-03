@@ -1183,7 +1183,6 @@ export interface ModelGroupGrants {
   granted_by_workspace_member_id: string | null;
   group_id: string;
   id: Generated<string>;
-  metadata: Generated<Json | null>;
   reason: string | null;
   revoked_at: Timestamp | null;
   status: Generated<ModelGroupGrantsStatus>;
@@ -1260,7 +1259,6 @@ export interface PlatformAccessBindings {
   access_key: PlatformAccessBindingsAccessKey;
   assigned_by_user_id: string | null;
   created_at: Generated<Timestamp | null>;
-  metadata: Generated<Json | null>;
   source: Generated<PlatformAccessBindingsSource>;
   updated_at: Generated<Timestamp | null>;
   user_id: string;
@@ -1629,7 +1627,6 @@ export interface ResourceAccessBindings {
   granted_permissions: Generated<string[]>;
   id: Generated<string>;
   installed_skill_id: string | null;
-  metadata: Generated<Json | null>;
   plugin_installation_id: string | null;
   reason: string | null;
   relay_capability_id: string | null;
@@ -2044,7 +2041,6 @@ export interface WorkspaceAccessBindings {
   access_key: WorkspaceAccessBindingsAccessKey;
   assigned_by_workspace_member_id: string | null;
   created_at: Generated<Timestamp | null>;
-  metadata: Generated<Json | null>;
   updated_at: Generated<Timestamp | null>;
   workspace_member_id: string;
 }

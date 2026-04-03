@@ -35,7 +35,6 @@ import {
   getWorkspaceCapabilityConversationTypePolicyMap,
 } from "../capabilities/conversation-type-policies.js";
 import {
-  accessBindingMetadata,
   buildResourceAccessBindingRef,
   buildResourceAccessAuthzMutations,
   mapAccessBindingToGrant,
@@ -1537,7 +1536,6 @@ async function loadAccessBindingsBySkillIds(
        binding.status,
        binding.created_by_workspace_member_id,
        binding.reason,
-       binding.metadata,
        binding.created_at,
        binding.revoked_at
      FROM resource_access_bindings binding
@@ -1766,7 +1764,6 @@ async function ensureSkillBinding(
        binding.status,
        binding.created_by_workspace_member_id,
        binding.reason,
-       binding.metadata,
        binding.created_at,
        binding.revoked_at
      FROM resource_access_bindings binding
@@ -1815,7 +1812,6 @@ async function ensureSkillBinding(
        subject_conversation_id,
        subject_conversation_actor_context_id,
        granted_permissions,
-       metadata,
        status,
        created_by_workspace_member_id
      )
@@ -1830,9 +1826,8 @@ async function ensureSkillBinding(
        $7,
        $8,
        $9::text[],
-       $10::jsonb,
        'active',
-       $11
+       $10
      )
      RETURNING id`,
     [
@@ -1845,7 +1840,6 @@ async function ensureSkillBinding(
       grantTarget.subjectConversationId,
       grantTarget.subjectConversationActorContextId,
       ["use"],
-      JSON.stringify({}),
       input.createdByWorkspaceMemberId || null,
     ],
   );
@@ -2769,7 +2763,6 @@ export async function grantInstalledSkillAccess(input: {
   conversationTypeMaskOverride?: number | null;
   grantedByWorkspaceMemberId?: string;
   reason?: string;
-  metadata?: JsonObject;
 }) {
   const skillRow = await loadInstalledSkillForUpdate(
     input.workspaceId,
@@ -2833,7 +2826,6 @@ export async function grantInstalledSkillAccess(input: {
          subject_conversation_actor_context_id,
          conversation_type_mask_override,
          granted_permissions,
-         metadata,
          status,
          created_by_workspace_member_id,
          reason
@@ -2850,10 +2842,9 @@ export async function grantInstalledSkillAccess(input: {
          $8,
          $9,
          $10::text[],
-         $11::jsonb,
          'active',
-         $12,
-         $13
+         $11,
+         $12
        )
        RETURNING
          id,
@@ -2874,7 +2865,6 @@ export async function grantInstalledSkillAccess(input: {
          status,
          created_by_workspace_member_id,
          reason,
-         metadata,
          created_at,
          revoked_at`,
       [
@@ -2888,7 +2878,6 @@ export async function grantInstalledSkillAccess(input: {
         accessTarget.subjectConversationActorContextId,
         input.conversationTypeMaskOverride ?? null,
         input.permissions || ["use"],
-        JSON.stringify(input.metadata || {}),
         input.grantedByWorkspaceMemberId || null,
         input.reason || null,
       ],
@@ -3600,7 +3589,6 @@ function visibleRowToAccessRow(
     status: "active",
     created_by_workspace_member_id: null,
     reason: null,
-    metadata: {},
     created_at: row.access_created_at,
     revoked_at: null,
     skill_id: row.skill_id,

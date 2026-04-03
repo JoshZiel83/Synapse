@@ -52,7 +52,6 @@ export type AccessBindingRow = ResourceAccessBindingStorageRow & {
   status: "active" | "revoked";
   created_by_workspace_member_id: string | null;
   reason: string | null;
-  metadata: unknown;
   created_at: string;
   revoked_at: string | null;
 };
@@ -152,20 +151,6 @@ export type AccessGrantTarget = {
   conversationId: string | null;
   workspaceMemberId: string | null;
 };
-
-function asObject(value: unknown) {
-  if (!value) return {} as Record<string, unknown>;
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
-  return typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
 
 function asStringArray(value: unknown) {
   if (!Array.isArray(value)) return [] as string[];
@@ -350,19 +335,6 @@ export function readAccessBindingTarget(
   }
 }
 
-export function accessBindingMetadata(
-  row: Pick<AccessBindingRow, "metadata"> | unknown,
-) {
-  if (
-    row &&
-    typeof row === "object" &&
-    "metadata" in (row as Record<string, unknown>)
-  ) {
-    return asObject((row as Pick<AccessBindingRow, "metadata">).metadata);
-  }
-  return asObject(row);
-}
-
 export function accessBindingHasTarget(
   row: Pick<
     AccessBindingRow,
@@ -481,7 +453,6 @@ export function mapAccessBindingToGrant(
     effectiveConversationTypeMask?: number;
   },
 ): AccessGrant {
-  const metadata = accessBindingMetadata(row);
   const target = readAccessBindingTarget(row);
   const grantedPermissions = asStringArray(row.granted_permissions);
   let capabilityTarget: CapabilityAccessTarget;
@@ -527,7 +498,6 @@ export function mapAccessBindingToGrant(
     conversationTypeMaskOverride: row.conversation_type_mask_override ?? null,
     effectiveConversationTypeMask:
       options?.effectiveConversationTypeMask,
-    metadata,
     createdAt: row.created_at,
     revokedAt: row.revoked_at || undefined,
   };

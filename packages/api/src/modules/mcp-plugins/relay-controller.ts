@@ -90,7 +90,6 @@ const accessGrantSchema = z.object({
   conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
   permissions: z.array(z.string()).optional(),
   reason: z.string().trim().min(1).optional(),
-  metadata: z.record(z.unknown()).optional(),
 });
 const accessGrantUpdateSchema = z.object({
   conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
@@ -1571,7 +1570,6 @@ export function registerRelayRoutes(app: FastifyInstance) {
         accessTarget: body.accessTarget,
         conversationTypeMaskOverride: body.conversationTypeMaskOverride,
         reason: body.reason,
-        metadata: body.metadata,
         grantedByWorkspaceMemberId: (request as any).workspaceMember!.id,
       });
 

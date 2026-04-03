@@ -1062,7 +1062,6 @@ export interface ModelGroupGrant {
   status: "active" | "revoked";
   grantedByWorkspaceMemberId?: UUID | null;
   reason?: string | null;
-  metadata?: Record<string, unknown>;
   createdAt?: Timestamp | null;
   revokedAt?: Timestamp | null;
 }
@@ -2087,7 +2086,6 @@ export interface AccessGrant {
   reason?: string;
   conversationTypeMaskOverride?: ConversationTypeMask | null;
   effectiveConversationTypeMask?: ConversationTypeMask;
-  metadata: Record<string, unknown>;
   createdAt: string;
   revokedAt?: string;
 }

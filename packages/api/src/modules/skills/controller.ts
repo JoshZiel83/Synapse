@@ -103,7 +103,6 @@ const skillAccessGrantSchema = z.object({
   conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
   permissions: z.array(z.string()).optional(),
   reason: z.string().trim().min(1).optional(),
-  metadata: z.record(z.unknown()).optional(),
 });
 
 const skillAccessGrantUpdateSchema = z.object({
@@ -497,7 +496,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
         conversationTypeMaskOverride: body.conversationTypeMaskOverride,
         permissions: body.permissions,
         reason: body.reason,
-        metadata: body.metadata,
         grantedByWorkspaceMemberId: workspaceMemberId,
       });
       return reply.status(201).send({ grant });

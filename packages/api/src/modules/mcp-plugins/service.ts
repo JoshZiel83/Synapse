@@ -1013,7 +1013,6 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
       "binding.status",
       "binding.created_by_workspace_member_id",
       "binding.reason",
-      "binding.metadata",
       "binding.created_at",
       "binding.revoked_at",
     ])
@@ -1943,7 +1942,6 @@ export async function installPluginUnified(data: {
           subject_conversation_actor_context_id:
             initialAccessTarget.subjectConversationActorContextId,
           granted_permissions: approvedRuntimePermissions,
-          metadata: {} as TableInsert<"resource_access_bindings">["metadata"],
           status: "active",
           created_by_workspace_member_id:
             data.installedByWorkspaceMemberId || null,
@@ -2388,7 +2386,6 @@ export async function grantPluginInstallationAccess(input: {
   conversationTypeMaskOverride?: number | null;
   grantedByWorkspaceMemberId?: string;
   reason?: string;
-  metadata?: JsonObject;
 }) {
   const { plugin, installation, workspaceConversationTypeMask } =
     await getInstallationPayload(
@@ -2448,8 +2445,6 @@ export async function grantPluginInstallationAccess(input: {
           conversation_type_mask_override:
             input.conversationTypeMaskOverride ?? null,
           granted_permissions: input.permissions || [],
-          metadata:
-            (input.metadata || {}) as TableInsert<"resource_access_bindings">["metadata"],
           status: "active",
           created_by_workspace_member_id:
             input.grantedByWorkspaceMemberId || null,

@@ -15,7 +15,6 @@ import { authorizeAction, userSubject } from "../access/service.js";
 const platformAccessSchema = z.object({
   userId: z.string().uuid(),
   accessKey: z.enum(PLATFORM_ACCESS_KEYS),
-  metadata: z.record(z.unknown()).optional(),
 });
 
 async function requirePlatformManagePermission(
@@ -88,7 +87,6 @@ export function registerPlatformRoutes(app: FastifyInstance) {
         userId: parsed.data.userId,
         accessKey: parsed.data.accessKey as PlatformAccessKey,
         assignedByUserId: (request as any).user!.userId,
-        metadata: parsed.data.metadata as Record<string, unknown> | undefined,
       });
       return reply.status(201).send(accessBinding);
     } catch (err: any) {

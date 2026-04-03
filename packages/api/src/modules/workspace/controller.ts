@@ -65,7 +65,6 @@ const createInviteSchema = z.object({
 const workspaceAccessSchema = z.object({
   workspaceMemberId: z.string().uuid(),
   accessKey: z.enum(WORKSPACE_ACCESS_KEYS),
-  metadata: z.record(z.unknown()).optional(),
 });
 
 const chiefActorPreferenceSchema = z.object({
@@ -431,7 +430,6 @@ export async function handleGrantWorkspaceAccess(
       workspaceMemberId: parsed.data.workspaceMemberId,
       accessKey: parsed.data.accessKey as WorkspaceAccessKey,
       assignedByWorkspaceMemberId: (request as any).workspaceMember!.id,
-      metadata: parsed.data.metadata as Record<string, unknown> | undefined,
     });
     return reply.status(201).send(accessBinding);
   } catch (err: any) {

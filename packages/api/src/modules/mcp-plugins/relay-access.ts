@@ -168,7 +168,6 @@ async function listRelayExposureAccessRows(
        binding.status,
        binding.created_by_workspace_member_id,
        binding.reason,
-       binding.metadata,
        binding.created_at,
        binding.revoked_at
      FROM resource_access_bindings binding
@@ -212,11 +211,10 @@ export async function ensureRelayExposureDefaultAccess(params: {
          subject_conversation_id,
          granted_permissions,
          status,
-         reason,
-         metadata
+         reason
        )
        VALUES (
-        $1, 'relay_capability', $2, 'workspace', $3, NULL, NULL, NULL, ARRAY['use']::text[], 'active', $4, $5::jsonb
+        $1, 'relay_capability', $2, 'workspace', $3, NULL, NULL, NULL, ARRAY['use']::text[], 'active', $4
        )
        RETURNING *, relay_capability_id::text AS resource_id`,
       [
@@ -224,7 +222,6 @@ export async function ensureRelayExposureDefaultAccess(params: {
         params.capabilityId,
         params.workspaceId,
         RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
-        JSON.stringify({ isDefault: true }),
       ],
     );
 
@@ -391,7 +388,6 @@ export async function grantRelayExposureAccess(input: {
   conversationTypeMaskOverride?: number | null;
   grantedByWorkspaceMemberId?: string;
   reason?: string;
-  metadata?: Record<string, unknown>;
 }) {
   const exposure = await loadRelayExposurePolicyState(
     input.workspaceId,
@@ -471,11 +467,10 @@ export async function grantRelayExposureAccess(input: {
          granted_permissions,
          status,
          created_by_workspace_member_id,
-         reason,
-         metadata
+         reason
        )
        VALUES (
-        $1, 'relay_capability', $2, $3, $4, $5, $6, $7, $8, $9, ARRAY['use']::text[], 'active', $10, $11, $12::jsonb
+        $1, 'relay_capability', $2, $3, $4, $5, $6, $7, $8, $9, ARRAY['use']::text[], 'active', $10, $11
        )
        RETURNING *, relay_capability_id::text AS resource_id`,
       [
@@ -490,7 +485,6 @@ export async function grantRelayExposureAccess(input: {
         input.conversationTypeMaskOverride ?? null,
         input.grantedByWorkspaceMemberId || null,
         input.reason || RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
-        JSON.stringify(input.metadata || {}),
       ],
     );
 

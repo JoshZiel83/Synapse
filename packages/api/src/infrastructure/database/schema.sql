@@ -243,7 +243,6 @@ CREATE TABLE platform_access_bindings (
   access_key platform_access_bindings_access_key NOT NULL,
   source platform_access_bindings_source NOT NULL DEFAULT 'manual',
   assigned_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   PRIMARY KEY (user_id, access_key)
@@ -265,7 +264,6 @@ CREATE TABLE workspace_access_bindings (
   workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
   access_key workspace_access_bindings_access_key NOT NULL,
   assigned_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   PRIMARY KEY (workspace_member_id, access_key)
@@ -952,7 +950,6 @@ CREATE TABLE model_group_grants (
   status model_group_grants_status NOT NULL DEFAULT 'active',
   granted_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   reason TEXT,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
   CONSTRAINT chk_model_group_grants_target CHECK (
@@ -2546,7 +2543,6 @@ CREATE TABLE resource_access_bindings (
   status resource_access_bindings_status NOT NULL DEFAULT 'active',
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   reason TEXT,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
   CONSTRAINT chk_resource_access_bindings_resource CHECK (

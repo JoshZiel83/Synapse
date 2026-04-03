@@ -70,7 +70,6 @@ type ModelGroupGrant = {
   status: 'active' | 'revoked';
   grantedByWorkspaceMemberId?: string | null;
   reason?: string | null;
-  metadata?: Record<string, unknown> | null;
   created_at?: string | null;
   revoked_at?: string | null;
 };

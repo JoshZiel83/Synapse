@@ -310,7 +310,6 @@ async function loadVisibleAccessBindings(params: {
       "binding.status",
       "binding.created_by_workspace_member_id",
       "binding.reason",
-      "binding.metadata",
       "binding.created_at",
       "binding.revoked_at",
       sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(

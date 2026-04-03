@@ -14,7 +14,6 @@ import {
   db,
   executeCompiledQuery,
   executeTakeFirst,
-  type TableInsert,
 } from "../../infrastructure/database/kysely.js";
 import { sql } from "kysely";
 import { getFileUrlById } from "../files/service.js";
@@ -116,7 +115,6 @@ export async function listPlatformAccessBindings() {
       'pab.access_key',
       'pab.source',
       'pab.assigned_by_user_id',
-      'pab.metadata',
       'pab.created_at',
       'pab.updated_at',
       'u.name as user_name',
@@ -132,7 +130,6 @@ export async function listPlatformAccessBindings() {
     accessKey: row.access_key as PlatformAccessKey,
     source: row.source,
     assignedByUserId: row.assigned_by_user_id ?? null,
-    metadata: row.metadata ?? {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     userName: row.user_name,
@@ -145,7 +142,6 @@ export async function grantPlatformAccess(input: {
   userId: string;
   accessKey: PlatformAccessKey;
   assignedByUserId: string;
-  metadata?: Record<string, unknown>;
 }) {
   await ensureUserExists(input.userId);
 
@@ -156,8 +152,6 @@ export async function grantPlatformAccess(input: {
       access_key: input.accessKey,
       source: 'manual',
       assigned_by_user_id: input.assignedByUserId,
-      metadata:
-        (input.metadata || {}) as TableInsert<'platform_access_bindings'>['metadata'],
     })
     .onConflict((oc) => oc.columns(['user_id', 'access_key']).doNothing())
     .returningAll()
@@ -191,7 +185,6 @@ export async function grantPlatformAccess(input: {
     accessKey: row.access_key as PlatformAccessKey,
     source: row.source,
     assignedByUserId: row.assigned_by_user_id ?? null,
-    metadata: row.metadata ?? {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -209,10 +202,6 @@ export async function ensureSeedPlatformAdminForUser(user: UserIdentity) {
       access_key: 'super_admin',
       source,
       assigned_by_user_id: null,
-      metadata: {
-        source: 'db.seed',
-        email: user.email,
-      } as TableInsert<'platform_access_bindings'>['metadata'],
     })
     .onConflict((oc) => oc.columns(['user_id', 'access_key']).doNothing())
     .execute();
@@ -282,7 +271,6 @@ export async function ensureConfiguredPlatformAdminForUser(user: UserIdentity) {
       access_key: 'super_admin',
       source: 'config',
       assigned_by_user_id: null,
-      metadata: {} as TableInsert<'platform_access_bindings'>['metadata'],
     })
     .onConflict((oc) => oc.columns(['user_id', 'access_key']).doNothing())
     .execute();
@@ -350,7 +338,6 @@ export async function syncConfiguredPlatformAdmins() {
             access_key: 'super_admin',
             source: 'config',
             assigned_by_user_id: null,
-            metadata: {} as TableInsert<'platform_access_bindings'>['metadata'],
           })),
         )
         .onConflict((oc) => oc.columns(['user_id', 'access_key']).doNothing()),

@@ -402,7 +402,6 @@ class ApiClient {
         | "memory_admin"
         | "relay_admin"
         | "conversation_admin"
-      metadata?: Record<string, unknown>
     }
   ) {
     return this.fetch(`/workspaces/${wsId}/access`, {
@@ -443,7 +442,6 @@ class ApiClient {
       | "model_admin"
       | "support"
       | "auditor"
-    metadata?: Record<string, unknown>
   }) {
     return this.fetch("/platform/access", {
       method: "POST",
@@ -634,7 +632,6 @@ class ApiClient {
       conversationTypeMaskOverride?: number | null
       permissions?: string[]
       reason?: string
-      metadata?: Record<string, unknown>
     }
   ) {
     return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/access`, {
@@ -1561,7 +1558,6 @@ class ApiClient {
       conversationTypeMaskOverride?: number | null
       permissions?: string[]
       reason?: string
-      metadata?: Record<string, unknown>
     }
   ) {
     return this.fetch(
@@ -1695,7 +1691,6 @@ class ApiClient {
       conversationTypeMaskOverride?: number | null
       permissions?: string[]
       reason?: string
-      metadata?: Record<string, unknown>
     }
   ) {
     return this.fetch(

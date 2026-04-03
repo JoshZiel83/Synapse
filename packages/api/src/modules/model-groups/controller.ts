@@ -114,7 +114,6 @@ const issueGrantSchema = z.object({
   workspaceMemberId: z.string().uuid().optional(),
   actorId: z.string().uuid().optional(),
   reason: z.string().max(1000).optional(),
-  metadata: z.record(z.unknown()).optional(),
 });
 
 function handleError(error: unknown, reply: FastifyReply) {

@@ -855,7 +855,6 @@ export async function listWorkspaceAccessBindings(workspaceId: string) {
       "wab.workspace_member_id",
       "wab.access_key",
       "wab.assigned_by_workspace_member_id",
-      "wab.metadata",
       "wab.created_at",
       "wab.updated_at",
       "wm.id",
@@ -879,7 +878,6 @@ export async function listWorkspaceAccessBindings(workspaceId: string) {
     accessKey: row.access_key as WorkspaceAccessKey,
     assignedByWorkspaceMemberId:
       row.assigned_by_workspace_member_id ?? null,
-    metadata: row.metadata ?? {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     trustLevel: deriveWorkspaceTrustLevel(row),
@@ -894,7 +892,6 @@ export async function grantWorkspaceAccess(input: {
   workspaceMemberId: string;
   accessKey: WorkspaceAccessKey;
   assignedByWorkspaceMemberId: string;
-  metadata?: Record<string, unknown>;
 }) {
   const membership = await getWorkspaceMemberRowById(input.workspaceMemberId);
 
@@ -908,7 +905,6 @@ export async function grantWorkspaceAccess(input: {
       workspace_member_id: input.workspaceMemberId,
       access_key: input.accessKey,
       assigned_by_workspace_member_id: input.assignedByWorkspaceMemberId,
-      metadata: (input.metadata || {}) as TableInsert<'workspace_access_bindings'>['metadata'],
     })
     .onConflict((oc) =>
       oc.columns(["workspace_member_id", "access_key"]).doNothing(),
@@ -928,7 +924,6 @@ export async function grantWorkspaceAccess(input: {
     source: "workspace.access.grant",
     metadata: {
       assignedByWorkspaceMemberId: input.assignedByWorkspaceMemberId,
-      ...input.metadata,
     },
   });
   await flushQueuedAuthzEntries(authzEntryIds, "workspace.access.grant");
@@ -940,7 +935,6 @@ export async function grantWorkspaceAccess(input: {
     accessKey: row.access_key as WorkspaceAccessKey,
     assignedByWorkspaceMemberId:
       row.assigned_by_workspace_member_id ?? null,
-    metadata: row.metadata ?? {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

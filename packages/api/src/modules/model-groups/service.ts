@@ -60,7 +60,6 @@ type ModelGroupGrantRow = {
   status: 'active' | 'revoked';
   granted_by_workspace_member_id?: string | null;
   reason?: string | null;
-  metadata?: Record<string, unknown> | null;
   created_at?: string | Date;
   revoked_at?: string | Date | null;
 };
@@ -254,7 +253,6 @@ function mapGrantRow(row: ModelGroupGrantRow & { id: string; group_id: string })
     grantedByWorkspaceMemberId:
       row.granted_by_workspace_member_id || null,
     reason: row.reason || null,
-    metadata: asObject(row.metadata),
     created_at: toIsoString(row.created_at),
     revoked_at: toIsoString(row.revoked_at),
   };
@@ -444,7 +442,6 @@ async function createDefaultGroupGrant(
       granted_by_workspace_member_id:
         grantedByWorkspaceMemberId || null,
       reason: 'default_group_scope',
-      metadata: {} as TableInsert<'model_group_grants'>['metadata'],
     })
     .returningAll()
     .executeTakeFirstOrThrow()) as ModelGroupGrantRow;
@@ -1554,7 +1551,6 @@ export async function issueModelGroupGrant(groupId: string, input: {
   actorId?: string;
   grantedByWorkspaceMemberId?: string;
   reason?: string;
-  metadata?: JsonMap;
 }) {
   const previousState = await loadGroupAuthzState(groupId);
   await validateGrantTarget(input);
@@ -1572,7 +1568,6 @@ export async function issueModelGroupGrant(groupId: string, input: {
       granted_by_workspace_member_id:
         input.grantedByWorkspaceMemberId || null,
       reason: input.reason || null,
-      metadata: (input.metadata || {}) as TableInsert<'model_group_grants'>['metadata'],
     })
     .returningAll()
     .executeTakeFirstOrThrow();
