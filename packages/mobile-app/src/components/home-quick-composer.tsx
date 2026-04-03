@@ -124,12 +124,17 @@ export function HomeQuickComposer({
             pressed && styles.actorTriggerPressed,
           ]}
         >
-          <Avatar
-            name={actor?.definition.name || "?"}
-            uri={actor?.avatarUrl}
-            icon="cpu"
-            size={42}
-          />
+          <View style={styles.actorAvatarWrap}>
+            <Avatar
+              name={actor?.definition.name || "?"}
+              uri={actor?.avatarUrl}
+              icon="cpu"
+              size={42}
+            />
+            <View style={styles.actorSwitchBadge}>
+              <Feather name="repeat" size={10} color={theme.colors.white} />
+            </View>
+          </View>
         </Pressable>
 
         <View style={styles.inputShell}>
@@ -284,6 +289,24 @@ const styles = StyleSheet.create({
   },
   actorTriggerPressed: {
     opacity: 0.7,
+  },
+  actorAvatarWrap: {
+    position: "relative",
+    width: 42,
+    height: 42,
+  },
+  actorSwitchBadge: {
+    position: "absolute",
+    right: -2,
+    bottom: -2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: theme.colors.background,
+    backgroundColor: theme.colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
   },
   inputShell: {
     flex: 1,

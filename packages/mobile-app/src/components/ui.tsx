@@ -428,15 +428,15 @@ const styles = StyleSheet.create({
   pageHeader: {
     marginHorizontal: -18,
     paddingHorizontal: 18,
-    paddingBottom: 6,
-    minHeight: 54,
+    paddingBottom: 4,
+    minHeight: 48,
     justifyContent: "flex-end",
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
     backgroundColor: theme.colors.background,
   },
   pageHeaderRow: {
-    minHeight: 36,
+    minHeight: 32,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -444,7 +444,7 @@ const styles = StyleSheet.create({
   },
   pageHeaderTitle: {
     flex: 1,
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "800",
     color: theme.colors.text,
   },

@@ -1,5 +1,6 @@
 import type { ConversationFeedItem } from "@shared";
 
+import { listPendingConversationReads } from "@/lib/chat-sync";
 import type {
   ConversationParticipantView,
   ConversationSummaryView,
@@ -12,6 +13,31 @@ export function sortConversationItems(items: ConversationFeedItem[]) {
       new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
     );
   });
+}
+
+export function sortConversationSummaries(
+  conversations: ConversationSummaryView[],
+) {
+  return [...conversations].sort((left, right) => {
+    const leftAt = left.lastMessage?.createdAt || left.createdAt;
+    const rightAt = right.lastMessage?.createdAt || right.createdAt;
+    return new Date(rightAt).getTime() - new Date(leftAt).getTime();
+  });
+}
+
+export async function applyPendingConversationReadState(
+  conversations: ConversationSummaryView[],
+) {
+  const pendingReads = await listPendingConversationReads();
+  const pendingConversationIds = new Set(
+    pendingReads.map((entry) => entry.conversationId),
+  );
+
+  return conversations.map((conversation) =>
+    pendingConversationIds.has(conversation.id)
+      ? { ...conversation, unreadCount: 0 }
+      : conversation,
+  );
 }
 
 export function getActiveConversationMembers(

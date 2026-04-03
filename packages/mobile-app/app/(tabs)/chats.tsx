@@ -1,51 +1,31 @@
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
-import { RefreshControl, StyleSheet, Text, View } from "react-native";
+import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 
-import { ConversationItem } from "@/components/conversation-item";
+import { ConversationList } from "@/components/conversation-list";
 import { MobileHeaderActions } from "@/components/mobile-header-actions";
 import {
   Button,
   EmptyState,
   LoadingBlock,
   MobilePageHeader,
-  ScreenScroll,
+  ScreenView,
   SectionBlock,
-  SectionTitleRow,
 } from "@/components/ui";
 import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket";
 import { api } from "@/lib/api";
-import { listPendingConversationReads } from "@/lib/chat-sync";
+import {
+  applyPendingConversationReadState,
+  sortConversationSummaries,
+} from "@/lib/conversations";
+import { useScanLauncher } from "@/hooks/use-scan-launcher";
 import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
 import type { ConversationSummaryView } from "@/types/api";
 import type { ChatSocketEvent, ConversationFeedItem } from "@shared";
 
-function sortConversations(conversations: ConversationSummaryView[]) {
-  return [...conversations].sort((left, right) => {
-    const leftAt = left.lastMessage?.createdAt || left.createdAt;
-    const rightAt = right.lastMessage?.createdAt || right.createdAt;
-    return new Date(rightAt).getTime() - new Date(leftAt).getTime();
-  });
-}
-
-async function applyLocalReadState(
-  conversations: ConversationSummaryView[],
-) {
-  const pendingReads = await listPendingConversationReads();
-  const pendingConversationIds = new Set(
-    pendingReads.map((entry) => entry.conversationId),
-  );
-
-  return conversations.map((conversation) =>
-    pendingConversationIds.has(conversation.id)
-      ? { ...conversation, unreadCount: 0 }
-      : conversation,
-  );
-}
-
 export default function ChatsTab() {
   const router = useRouter();
+  const { openScan, permissionSheet } = useScanLauncher("relationship");
   const { workspaceId } = useWorkspace();
   const [conversations, setConversations] = useState<ConversationSummaryView[]>(
     [],
@@ -53,6 +33,11 @@ export default function ChatsTab() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const unreadCount = conversations.reduce(
+    (total, conversation) => total + conversation.unreadCount,
+    0,
+  );
+  const headerTitle = unreadCount > 0 ? `消息(${unreadCount})` : "消息";
 
   const loadConversations = useCallback(
     async (isRefreshing = false) => {
@@ -71,10 +56,10 @@ export default function ChatsTab() {
 
       try {
         const response = await api.getThreads(workspaceId);
-        const syncedConversations = await applyLocalReadState(
+        const syncedConversations = await applyPendingConversationReadState(
           response.conversations,
         );
-        setConversations(sortConversations(syncedConversations));
+        setConversations(sortConversationSummaries(syncedConversations));
         setError(null);
       } catch (nextError) {
         setError(
@@ -136,111 +121,103 @@ export default function ChatsTab() {
   });
 
   return (
-    <ScreenScroll
-      topPadding={0}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => void loadConversations(true)}
-        />
-      }
-    >
-      <MobilePageHeader
-        title="聊天"
-        action={
-          <MobileHeaderActions
-            onSearch={() => router.push("/search")}
-            onStartGroup={() => router.push("/contacts/group/new")}
-            onAddFriend={() => router.push("/contacts/add")}
-            onScan={() => router.push("/scan?intent=relationship")}
-          />
-        }
-      />
-
-      <SectionBlock>
-        <SectionTitleRow title="会话列表" />
-        <Text style={styles.headerCopy}>
-          联系人页可直接新建对话；点进任意会话后，首期已支持文字、图片、语音、拍照和录像发送。
-        </Text>
-        <Button
-          label="去联系人页发起新会话"
-          icon="users"
-          variant="secondary"
-          onPress={() => router.push("/contacts")}
-        />
-      </SectionBlock>
-
-      {loading ? (
-        <SectionBlock>
-          <LoadingBlock label="正在加载会话..." />
-        </SectionBlock>
-      ) : error ? (
-        <SectionBlock>
-          <EmptyState
-            icon="alert-circle"
-            title="会话加载失败"
-            description={error}
+    <ScreenView>
+      <View style={styles.pageShell}>
+        <View style={styles.headerGutter}>
+          <MobilePageHeader
+            title={headerTitle}
             action={
-              <View style={styles.retryAction}>
-                <Button
-                  label="重试"
-                  icon="refresh-cw"
-                  onPress={() => void loadConversations()}
-                />
-              </View>
-            }
-          />
-        </SectionBlock>
-      ) : conversations.length > 0 ? (
-        <SectionBlock>
-          <SectionTitleRow
-            title="最近消息"
-            action={
-              <Text style={styles.countText}>
-                {conversations.length} 个会话
-              </Text>
-            }
-          />
-          <View style={styles.listShell}>
-            {conversations.map((conversation) => (
-              <ConversationItem
-                key={conversation.id}
-                conversation={conversation}
-                onPress={() => router.push(`/chat/${conversation.id}`)}
+              <MobileHeaderActions
+                onSearch={() => router.push("/search")}
+                onStartGroup={() => router.push("/contacts/group/new")}
+                onAddFriend={() => router.push("/contacts/add")}
+                onScan={() => void openScan()}
               />
-            ))}
-          </View>
-        </SectionBlock>
-      ) : (
-        <SectionBlock>
-          <EmptyState
-            icon="message-square"
-            title="还没有任何聊天"
-            description="去联系人页选一个数字员工，或从首页快捷创建新会话。"
+            }
           />
-        </SectionBlock>
-      )}
-    </ScreenScroll>
+        </View>
+
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentInsetAdjustmentBehavior="automatic"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => void loadConversations(true)}
+            />
+          }
+        >
+          {loading ? (
+            <SectionBlock>
+              <LoadingBlock label="正在加载会话..." />
+            </SectionBlock>
+          ) : error ? (
+            <SectionBlock>
+              <EmptyState
+                icon="alert-circle"
+                title="会话加载失败"
+                description={error}
+                action={
+                  <View style={styles.retryAction}>
+                    <Button
+                      label="重试"
+                      icon="refresh-cw"
+                      onPress={() => void loadConversations()}
+                    />
+                  </View>
+                }
+              />
+            </SectionBlock>
+          ) : conversations.length > 0 ? (
+            <SectionBlock style={styles.listSection}>
+              <ConversationList
+                conversations={conversations}
+                onPressConversation={(conversation) =>
+                  router.push(`/chat/${conversation.id}`)
+                }
+              />
+            </SectionBlock>
+          ) : (
+            <SectionBlock>
+              <EmptyState
+                icon="message-square"
+                title="还没有任何聊天"
+                description="去联系人页选一个数字员工，或从首页快捷创建新会话。"
+              />
+            </SectionBlock>
+          )}
+        </ScrollView>
+      </View>
+      {permissionSheet}
+    </ScreenView>
   );
 }
 
 const styles = StyleSheet.create({
-  headerCopy: {
-    fontSize: 14,
-    lineHeight: 21,
-    color: theme.colors.textMuted,
+  pageShell: {
+    flex: 1,
+  },
+  headerGutter: {
+    paddingHorizontal: 18,
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: 18,
+    paddingBottom: 128,
+  },
+  listSection: {
+    borderTopWidth: 0,
+    borderBottomWidth: 0,
+    paddingVertical: 0,
+    gap: 0,
   },
   retryAction: {
     marginTop: 10,
     width: "100%",
-  },
-  countText: {
-    fontSize: 12,
-    color: theme.colors.textSoft,
-  },
-  listShell: {
-    marginTop: 2,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
   },
 });

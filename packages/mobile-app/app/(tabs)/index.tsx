@@ -1,8 +1,15 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { startTransition, useEffect, useMemo, useState } from "react";
-import { Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import {
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
-import { ConversationItem } from "@/components/conversation-item";
+import { ConversationList } from "@/components/conversation-list";
 import { HomeQuickComposer } from "@/components/home-quick-composer";
 import { MobileHeaderActions } from "@/components/mobile-header-actions";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
@@ -10,44 +17,24 @@ import {
   EmptyState,
   LoadingBlock,
   MobilePageHeader,
-  ScreenScroll,
+  ScreenView,
   SectionBlock,
   SectionTitleRow,
 } from "@/components/ui";
 import { api } from "@/lib/api";
-import { listPendingConversationReads } from "@/lib/chat-sync";
+import {
+  applyPendingConversationReadState,
+  sortConversationSummaries,
+} from "@/lib/conversations";
+import { useScanLauncher } from "@/hooks/use-scan-launcher";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
 import type { ConversationSummaryView } from "@/types/api";
 import type { Actor } from "@shared";
 
-function sortConversations<
-  T extends { createdAt: string; lastMessage?: { createdAt?: string } },
->(items: T[]) {
-  return [...items].sort((left, right) => {
-    const leftAt = left.lastMessage?.createdAt || left.createdAt;
-    const rightAt = right.lastMessage?.createdAt || right.createdAt;
-    return new Date(rightAt).getTime() - new Date(leftAt).getTime();
-  });
-}
-
-async function applyLocalReadState(
-  conversations: ConversationSummaryView[],
-) {
-  const pendingReads = await listPendingConversationReads();
-  const pendingConversationIds = new Set(
-    pendingReads.map((entry) => entry.conversationId),
-  );
-
-  return conversations.map((conversation) =>
-    pendingConversationIds.has(conversation.id)
-      ? { ...conversation, unreadCount: 0 }
-      : conversation,
-  );
-}
-
 export default function HomeTab() {
   const router = useRouter();
+  const { openScan, permissionSheet } = useScanLauncher("relationship");
   const params = useLocalSearchParams<{ actorId?: string }>();
   const {
     workspaceId,
@@ -102,8 +89,10 @@ export default function HomeTab() {
 
       setActors(activeActors);
       setConversations(
-        sortConversations(
-          await applyLocalReadState(conversationsResponse.conversations),
+        sortConversationSummaries(
+          await applyPendingConversationReadState(
+            conversationsResponse.conversations,
+          ),
         ),
       );
       setSelectedActorId(
@@ -166,99 +155,130 @@ export default function HomeTab() {
 
   if (!workspaceId && needsOnboarding) {
     return (
-      <ScreenScroll bottomPadding={56}>
-        <LoadingBlock label="正在进入工作区创建流程..." />
-      </ScreenScroll>
+      <ScreenView>
+        <View style={styles.stateWrap}>
+          <LoadingBlock label="正在进入工作区创建流程..." />
+        </View>
+      </ScreenView>
     );
   }
 
   return (
-    <ScreenScroll
-      topPadding={0}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => void loadData(true)}
-        />
-      }
-    >
-      <MobilePageHeader
-        titleNode={
-          <WorkspaceSwitcher
-            workspaceName={workspaceName}
-            activeWorkspaceId={workspaceId}
-            workspaces={workspaces}
-            onSelectWorkspace={setWorkspaceId}
-            onCreateWorkspace={() => router.push("/workspace/create")}
-          />
-        }
-        action={
-          <MobileHeaderActions
-            onSearch={() => router.push("/search")}
-            onStartGroup={() => router.push("/contacts/group/new")}
-            onAddFriend={() => router.push("/contacts/add")}
-            onScan={() => router.push("/scan?intent=relationship")}
-          />
-        }
-      />
-
-      {loading ? (
-        <SectionBlock>
-          <LoadingBlock label="正在加载首页..." />
-        </SectionBlock>
-      ) : (
-        <>
-          <SectionBlock style={styles.quickComposerBlock}>
-            <SectionTitleRow title="快捷发起" />
-            <HomeQuickComposer
-              actor={selectedActor}
-              sending={submitting}
-              disabled={actors.length === 0}
-              onPressSelectActor={() => router.push("/actors/select")}
-              onSend={handleStartConversation}
-            />
-            {actors.length === 0 ? (
-              <Text style={styles.emptyHint}>当前工作区还没有可用角色。</Text>
-            ) : null}
-            {error ? <Text style={styles.error}>{error}</Text> : null}
-          </SectionBlock>
-
-          <SectionBlock>
-            <SectionTitleRow
-              title="最近会话"
-              action={
-                <Pressable onPress={() => router.push("/chats")}>
-                  <Text style={styles.linkText}>查看全部</Text>
-                </Pressable>
-              }
-            />
-            {conversations.length > 0 ? (
-              <View style={styles.listShell}>
-                {conversations.slice(0, 3).map((conversation) => (
-                  <ConversationItem
-                    key={conversation.id}
-                    conversation={conversation}
-                    onPress={() => router.push(`/chat/${conversation.id}`)}
-                  />
-                ))}
-              </View>
-            ) : (
-              <EmptyState
-                icon="message-square"
-                title="还没有会话"
-                description="先通过上面的输入框发起第一条消息。"
+    <ScreenView>
+      <View style={styles.pageShell}>
+        <View style={styles.headerGutter}>
+          <MobilePageHeader
+            titleNode={
+              <WorkspaceSwitcher
+                workspaceName={workspaceName}
+                activeWorkspaceId={workspaceId}
+                workspaces={workspaces}
+                onSelectWorkspace={setWorkspaceId}
+                onCreateWorkspace={() => router.push("/workspace/create")}
               />
-            )}
-          </SectionBlock>
-        </>
-      )}
-    </ScreenScroll>
+            }
+            action={
+              <MobileHeaderActions
+                onSearch={() => router.push("/search")}
+                onStartGroup={() => router.push("/contacts/group/new")}
+                onAddFriend={() => router.push("/contacts/add")}
+                onScan={() => void openScan()}
+              />
+            }
+          />
+        </View>
+
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentInsetAdjustmentBehavior="automatic"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => void loadData(true)}
+            />
+          }
+        >
+          {loading ? (
+            <SectionBlock>
+              <LoadingBlock label="正在加载首页..." />
+            </SectionBlock>
+          ) : (
+            <>
+              <SectionBlock style={styles.quickComposerBlock}>
+                <SectionTitleRow title="快捷发起" />
+                <HomeQuickComposer
+                  actor={selectedActor}
+                  sending={submitting}
+                  disabled={actors.length === 0}
+                  onPressSelectActor={() => router.push("/actors/select")}
+                  onSend={handleStartConversation}
+                />
+                {actors.length === 0 ? (
+                  <Text style={styles.emptyHint}>当前工作区还没有可用角色。</Text>
+                ) : null}
+                {error ? <Text style={styles.error}>{error}</Text> : null}
+              </SectionBlock>
+
+              <SectionBlock>
+                <SectionTitleRow
+                  title="最近会话"
+                  action={
+                    <Pressable onPress={() => router.push("/chats")}>
+                      <Text style={styles.linkText}>查看全部</Text>
+                    </Pressable>
+                  }
+                />
+                {conversations.length > 0 ? (
+                  <ConversationList
+                    conversations={conversations}
+                    maxItems={3}
+                    showDividers={false}
+                    onPressConversation={(conversation) =>
+                      router.push(`/chat/${conversation.id}`)
+                    }
+                  />
+                ) : (
+                  <EmptyState
+                    icon="message-square"
+                    title="还没有会话"
+                    description="先通过上面的输入框发起第一条消息。"
+                  />
+                )}
+              </SectionBlock>
+            </>
+          )}
+        </ScrollView>
+      </View>
+      {permissionSheet}
+    </ScreenView>
   );
 }
 
 const styles = StyleSheet.create({
+  pageShell: {
+    flex: 1,
+  },
+  headerGutter: {
+    paddingHorizontal: 18,
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: 18,
+    paddingBottom: 128,
+  },
+  stateWrap: {
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: 18,
+  },
   quickComposerBlock: {
     borderTopWidth: 0,
+    borderBottomWidth: 0,
   },
   emptyHint: {
     fontSize: 13,
@@ -272,10 +292,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     color: theme.colors.primary,
-  },
-  listShell: {
-    marginTop: 2,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
   },
 });

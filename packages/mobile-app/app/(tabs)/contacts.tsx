@@ -24,6 +24,7 @@ import {
   ScreenView,
 } from "@/components/ui";
 import { api } from "@/lib/api";
+import { useScanLauncher } from "@/hooks/use-scan-launcher";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
 import type { ContactHubResponse, ContactHubEntryView } from "@/types/api";
@@ -65,6 +66,7 @@ function formatPendingCount(count: number) {
 
 export default function ContactsTab() {
   const router = useRouter();
+  const { openScan, permissionSheet } = useScanLauncher("relationship");
   const { workspaceId } = useWorkspace();
   const [hub, setHub] = useState<ContactHubResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -161,7 +163,7 @@ export default function ContactsTab() {
                 onSearch={() => router.push("/search")}
                 onStartGroup={() => router.push("/contacts/group/new")}
                 onAddFriend={() => router.push("/contacts/add")}
-                onScan={() => router.push("/scan?intent=relationship")}
+                onScan={() => void openScan()}
                 extraAction={
                   <Pressable
                     accessibilityRole="button"
@@ -248,6 +250,7 @@ export default function ContactsTab() {
           />
         )}
       </View>
+      {permissionSheet}
 
       <Modal
         visible={filterMenuOpen}
@@ -319,12 +322,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
+    paddingVertical: 2,
   },
   filterTriggerPressed: {
     opacity: 0.75,
@@ -342,12 +340,8 @@ const styles = StyleSheet.create({
     paddingTop: 24,
   },
   headerRequestTrigger: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
+    width: 24,
+    height: 24,
     alignItems: "center",
     justifyContent: "center",
   },
