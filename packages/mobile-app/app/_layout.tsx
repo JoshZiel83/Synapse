@@ -10,6 +10,7 @@ import "react-native-url-polyfill/auto";
 
 import { AppProviders } from "@/providers/app-providers";
 import { useSession } from "@/providers/session-provider";
+import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
@@ -83,22 +84,39 @@ function ProtectedNavigation() {
   const router = useRouter();
   const segments = useSegments();
   const { status } = useSession();
+  const { loading: workspaceLoading, needsOnboarding } = useWorkspace();
 
   useEffect(() => {
     if (status === "loading") return;
 
     const first = segments[0];
-    const isLoginRoute = first === "login";
+    const second = segments[1];
+    const isAuthRoute = first === "login" || first === "register";
+    const isWorkspaceCreateRoute =
+      first === "workspace" && second === "create";
 
-    if (status === "unauthenticated" && !isLoginRoute) {
+    if (status === "unauthenticated" && !isAuthRoute) {
       router.replace("/login");
       return;
     }
 
-    if (status === "authenticated" && isLoginRoute) {
+    if (status !== "authenticated") {
+      return;
+    }
+
+    if (workspaceLoading) {
+      return;
+    }
+
+    if (needsOnboarding && !isWorkspaceCreateRoute) {
+      router.replace("/workspace/create?required=1");
+      return;
+    }
+
+    if (!needsOnboarding && isAuthRoute) {
       router.replace("/");
     }
-  }, [router, segments, status]);
+  }, [needsOnboarding, router, segments, status, workspaceLoading]);
 
   return (
     <Stack
@@ -108,14 +126,6 @@ function ProtectedNavigation() {
           backgroundColor: theme.colors.background,
         },
       }}
-    >
-      <Stack.Screen name="login" />
-      <Stack.Screen name="(tabs)" />
-      <Stack.Screen name="search" />
-      <Stack.Screen name="scan" />
-      <Stack.Screen name="scan-login" />
-      <Stack.Screen name="qr-login" />
-      <Stack.Screen name="chat/[conversationId]" />
-    </Stack>
+    />
   );
 }

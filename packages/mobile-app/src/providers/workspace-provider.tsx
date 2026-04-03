@@ -22,7 +22,7 @@ interface WorkspaceContextValue {
   loading: boolean;
   needsOnboarding: boolean;
   setWorkspaceId: (workspaceId: string) => Promise<void>;
-  refreshWorkspaces: () => Promise<void>;
+  refreshWorkspaces: (preferredWorkspaceId?: string | null) => Promise<void>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -45,7 +45,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [workspaces],
   );
 
-  const refreshWorkspaces = useCallback(async () => {
+  const refreshWorkspaces = useCallback(async (preferredWorkspaceId?: string | null) => {
     if (status !== 'authenticated') {
       setWorkspaces([]);
       setWorkspaceIdState(null);
@@ -71,7 +71,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
 
       const savedWorkspaceId = await readStoredValue(WORKSPACE_KEY);
-      const activeWorkspace = list.find((workspace) => workspace.id === savedWorkspaceId) ?? list[0] ?? null;
+      const targetWorkspaceId = preferredWorkspaceId ?? savedWorkspaceId;
+      const activeWorkspace = list.find((workspace) => workspace.id === targetWorkspaceId) ?? list[0] ?? null;
 
       if (activeWorkspace) {
         setWorkspaceIdState(activeWorkspace.id);

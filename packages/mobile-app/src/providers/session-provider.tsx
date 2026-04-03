@@ -27,6 +27,7 @@ interface SessionContextValue {
   session: AuthSessionSummary | null;
   token: string | null;
   signIn: (email: string, password: string) => Promise<void>;
+  signUp: (name: string, email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshSession: () => Promise<void>;
   updateProfile: (data: { name?: string; avatarFileId?: string | null }) => Promise<void>;
@@ -143,6 +144,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const signUp = useCallback(async (name: string, email: string, password: string) => {
+    const response = await api.register(name, email, password);
+    if (!response.sessionToken) {
+      throw new ApiError('The server did not return a mobile session token.', 500);
+    }
+
+    await persistSessionToken(response.sessionToken);
+    applySession(
+      {
+        token: response.sessionToken,
+        response: {
+          user: response.user,
+          session: response.session,
+        },
+      },
+      setState,
+    );
+  }, []);
+
   const signOut = useCallback(async () => {
     try {
       await api.logout();
@@ -172,11 +192,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       session: state.session,
       token: state.token,
       signIn,
+      signUp,
       signOut,
       refreshSession,
       updateProfile,
     }),
-    [refreshSession, signIn, signOut, state.session, state.status, state.token, state.user, updateProfile],
+    [refreshSession, signIn, signOut, signUp, state.session, state.status, state.token, state.user, updateProfile],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

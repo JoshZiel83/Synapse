@@ -29,6 +29,7 @@ import type {
   RelationshipScanResponse,
   UploadAssetInput,
   WorkspaceChiefActorPreference,
+  WorkspaceInfo,
   WorkspaceListResponse,
   WorkspaceMemberListResponse,
 } from "@/types/api";
@@ -206,6 +207,22 @@ class ApiClient {
     });
   }
 
+  register(name: string, email: string, password: string): Promise<AuthResponse> {
+    return this.request<AuthResponse>("/auth/register", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        email,
+        password,
+        clientType: getPlatformClientType(),
+        transport: "token",
+        sessionPersistence: "persistent",
+        deviceName: getDeviceLabel(),
+        platform: `${Platform.OS} / Expo ${Constants.expoVersion ?? "runtime"}`,
+      }),
+    });
+  }
+
   logout() {
     return this.request<void>("/auth/logout", {
       method: "POST",
@@ -228,6 +245,16 @@ class ApiClient {
     return this.request<unknown>("/workspaces").then(
       normalizeWorkspaceListResponse,
     );
+  }
+
+  createWorkspace(name: string, description?: string): Promise<WorkspaceInfo> {
+    return this.request<WorkspaceInfo>("/workspaces", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        description,
+      }),
+    });
   }
 
   getWorkspaceMembers(
@@ -441,6 +468,19 @@ class ApiClient {
   ): Promise<WorkspaceChiefActorPreference> {
     return this.request<WorkspaceChiefActorPreference>(
       `/workspaces/${workspaceId}/preferences/chief-actor`,
+    );
+  }
+
+  updateWorkspaceChiefActorPreference(
+    workspaceId: string,
+    data: { chiefActorId: string | null },
+  ): Promise<WorkspaceChiefActorPreference> {
+    return this.request<WorkspaceChiefActorPreference>(
+      `/workspaces/${workspaceId}/preferences/chief-actor`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      },
     );
   }
 

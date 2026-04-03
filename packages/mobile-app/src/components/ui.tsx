@@ -126,17 +126,23 @@ export function SectionTitleRow({
 
 export function MobilePageHeader({
   title,
+  titleNode,
   action,
 }: {
-  title: string;
+  title?: string;
+  titleNode?: React.ReactNode;
   action?: React.ReactNode;
 }) {
   return (
     <View style={styles.pageHeader}>
       <View style={styles.pageHeaderRow}>
-        <Text numberOfLines={1} style={styles.pageHeaderTitle}>
-          {title}
-        </Text>
+        {titleNode ? (
+          <View style={styles.pageHeaderTitleWrap}>{titleNode}</View>
+        ) : (
+          <Text numberOfLines={1} style={styles.pageHeaderTitle}>
+            {title}
+          </Text>
+        )}
         {action ? <View style={styles.pageHeaderAction}>{action}</View> : null}
       </View>
     </View>
@@ -441,6 +447,10 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "800",
     color: theme.colors.text,
+  },
+  pageHeaderTitleWrap: {
+    flex: 1,
+    minWidth: 0,
   },
   pageHeaderAction: {
     justifyContent: "center",

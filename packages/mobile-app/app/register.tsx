@@ -4,29 +4,35 @@ import { Link, useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { EmailField } from "@/components/email-field";
 import { Button, Field, ScreenScroll } from "@/components/ui";
+import { EmailField } from "@/components/email-field";
 import { useSession } from "@/providers/session-provider";
 import { theme } from "@/theme/tokens";
 import { APP_NAME } from "@shared";
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) return error.message;
-  return "登录失败，请检查邮箱和密码。";
+  return "注册失败，请检查填写信息。";
 }
 
-export default function LoginScreen() {
+export default function RegisterScreen() {
   const router = useRouter();
-  const { signIn } = useSession();
+  const { signUp } = useSession();
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [acceptedPolicy, setAcceptedPolicy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleLogin() {
-    if (!email.trim() || !password) {
-      setError("请输入账号和密码。");
+  async function handleRegister() {
+    if (!name.trim() || !email.trim() || !password) {
+      setError("请完整填写昵称、邮箱和密码。");
+      return;
+    }
+
+    if (password.length < 8) {
+      setError("密码至少需要 8 位。");
       return;
     }
 
@@ -39,7 +45,7 @@ export default function LoginScreen() {
     setError(null);
 
     try {
-      await signIn(email.trim(), password);
+      await signUp(name.trim(), email.trim(), password);
       router.replace("/");
     } catch (nextError) {
       setError(getErrorMessage(nextError));
@@ -61,12 +67,19 @@ export default function LoginScreen() {
             style={styles.logoImage}
             contentFit="contain"
           />
-          <Text style={styles.appName}>{APP_NAME}</Text>
+          <Text style={styles.appName}>注册 {APP_NAME}</Text>
         </View>
 
         <View style={styles.formSection}>
+          <Field
+            label="昵称"
+            placeholder="请输入你的名字"
+            autoCorrect={false}
+            value={name}
+            onChangeText={setName}
+          />
           <EmailField
-            label="账号"
+            label="邮箱"
             placeholder="请输入邮箱"
             autoCapitalize="none"
             keyboardType="email-address"
@@ -78,14 +91,14 @@ export default function LoginScreen() {
           />
           <Field
             label="密码"
-            placeholder="请输入密码"
+            placeholder="至少 8 位密码"
             secureTextEntry
-            autoComplete="password"
-            textContentType="password"
+            autoComplete="password-new"
+            textContentType="newPassword"
             returnKeyType="go"
             value={password}
             onChangeText={setPassword}
-            onSubmitEditing={() => void handleLogin()}
+            onSubmitEditing={() => void handleRegister()}
           />
 
           <Pressable
@@ -116,16 +129,16 @@ export default function LoginScreen() {
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
           <Button
-            label={submitting ? "登录中..." : "登录"}
-            onPress={() => void handleLogin()}
+            label={submitting ? "注册中..." : "注册"}
+            onPress={() => void handleRegister()}
             disabled={submitting}
           />
 
           <View style={styles.footerRow}>
-            <Text style={styles.footerLabel}>还没有账号？</Text>
-            <Link href="/register" asChild>
+            <Text style={styles.footerLabel}>已有账号？</Text>
+            <Link href="/login" asChild>
               <Pressable>
-                <Text style={styles.footerLink}>立即注册</Text>
+                <Text style={styles.footerLink}>去登录</Text>
               </Pressable>
             </Link>
           </View>
@@ -156,7 +169,7 @@ const styles = StyleSheet.create({
     height: 84,
   },
   appName: {
-    fontSize: 30,
+    fontSize: 28,
     fontWeight: "800",
     color: theme.colors.text,
   },
