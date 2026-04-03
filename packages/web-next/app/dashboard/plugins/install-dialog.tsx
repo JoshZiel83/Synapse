@@ -2,7 +2,6 @@
 
 import QRCode from 'qrcode';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ExclamationCircleIcon } from '@heroicons/react/16/solid';
 import type {
   AttachmentTargetType,
   AutomationIntegrationProvider,
@@ -23,7 +22,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
-import { Check, ExternalLink, HelpCircle, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, ExternalLink, HelpCircle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePluginStore } from '@/stores/plugin-store';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
@@ -1233,7 +1232,7 @@ export default function InstallDialog({
               ))}
             </select>
             {error && (
-              <ExclamationCircleIcon
+              <AlertCircle
                 aria-hidden="true"
                 className="pointer-events-none col-start-1 row-start-1 mr-3 size-5 self-center justify-self-end text-red-500 sm:size-4 dark:text-red-400"
               />
@@ -1508,7 +1507,7 @@ export default function InstallDialog({
             }`}
           />
           {error && (
-            <ExclamationCircleIcon
+            <AlertCircle
               aria-hidden="true"
               className="pointer-events-none col-start-1 row-start-1 mr-3 size-5 self-center justify-self-end text-red-500 sm:size-4 dark:text-red-400"
             />
