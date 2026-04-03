@@ -160,6 +160,8 @@ export interface RelayExposureView {
   transport: RelayExposureTransport;
   runtimeStatus: RelayExposureRuntimeStatus;
   workspaceConversationTypeMask: number;
+  parentConversationTypeMask: number;
+  parentPolicyLabel: string;
   conversationTypeMaskOverride?: number | null;
   effectiveConversationTypeMask: number;
   lastSeenAt?: string;
@@ -184,6 +186,9 @@ export interface RelayDeviceSummaryView {
   publicKeyFingerprint: string;
   trustStatus: RelayDeviceTrustStatus;
   isConnected: boolean;
+  workspaceConversationTypeMask: number;
+  conversationTypeMaskOverride?: number | null;
+  effectiveConversationTypeMask: number;
   exposureCount: number;
   healthyExposureCount: number;
   degradedExposureCount: number;

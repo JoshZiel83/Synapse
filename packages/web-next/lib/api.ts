@@ -378,7 +378,7 @@ class ApiClient {
     wsId: string,
     data: {
       policies: Partial<
-        Record<"plugin_installation" | "installed_skill" | "relay_exposure", number>
+        Record<"plugin_installation" | "installed_skill" | "relay_capability", number>
       >
     }
   ): Promise<WorkspaceCapabilityConversationTypePoliciesView> {
@@ -1763,10 +1763,11 @@ class ApiClient {
     wsId: string,
     relayId: string,
     data: {
-      title: string
+      title?: string
       description?: string | null
       deviceType?: string
       authorizationMode?: string
+      conversationTypeMaskOverride?: number | null
       metadata?: Record<string, unknown>
     }
   ): Promise<RelayDeviceSummaryView> {

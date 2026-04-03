@@ -32,6 +32,11 @@ import {
   loadRelayExposureCatalogSnapshot,
   resolveRelayToolAuthorization,
 } from "./relay-manager.js";
+import {
+  resolveRelayCapabilityConversationTypeMask,
+  resolveRelayDeviceConversationTypeMask,
+  resolveRelayGrantConversationTypeMask,
+} from "./relay-policy.js";
 import { normalizeMcpToolResult } from "./result-normalizer.js";
 
 const MCP_TOOL_NAMESPACE_SEPARATOR = "__";
@@ -89,7 +94,8 @@ type VisibleRelayCapabilityRow = {
   exposure_updated_at: string | Date | null;
   device_id: string;
   device_display_name: string;
-  conversation_type_mask_override: number | null;
+  device_conversation_type_mask_override: number | null;
+  capability_conversation_type_mask_override: number | null;
 };
 
 type VisibleAccessBindingRow = {
@@ -640,8 +646,11 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
       "exposure.updated_at as exposure_updated_at",
       "device.id as device_id",
       "device.title as device_display_name",
+      sql<number | null>`device.conversation_type_mask_override`.as(
+        "device_conversation_type_mask_override",
+      ),
       sql<number | null>`capability.conversation_type_mask_override`.as(
-        "conversation_type_mask_override",
+        "capability_conversation_type_mask_override",
       ),
     ])
     .where("capability.id", "in", Array.from(visibleCapabilityIds))
@@ -670,15 +679,19 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
     const workspaceConversationTypeMask =
       workspacePolicyMap.get(row.owner_workspace_id)?.relay_capability ||
       DEFAULT_CONVERSATION_TYPE_MASK;
-    const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
+    const deviceConversationTypeMask = resolveRelayDeviceConversationTypeMask(
       workspaceConversationTypeMask,
-      row.conversation_type_mask_override,
+      row.device_conversation_type_mask_override,
+    );
+    const instanceConversationTypeMask = resolveRelayCapabilityConversationTypeMask(
+      deviceConversationTypeMask,
+      row.capability_conversation_type_mask_override,
     );
     const matchingBindings = (bindingsByExposureId.get(row.capability_id) || []).filter(
       (binding) =>
         accessBindingMatchesContext(binding, params) &&
         isConversationTypeAllowed(
-          resolveNarrowedConversationTypeMask(
+          resolveRelayGrantConversationTypeMask(
             instanceConversationTypeMask,
             binding.conversation_type_mask_override,
           ),

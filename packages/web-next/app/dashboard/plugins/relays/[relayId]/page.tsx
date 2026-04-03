@@ -8,8 +8,17 @@ import type {
   RelayDeviceSummaryView,
   RelayExposureView,
 } from '@synapse/shared';
-import type { RuntimeGrantEffect, RuntimeGrantView } from '@synapse/shared/types';
-import { relayLifecycleEventDefinitions } from '@synapse/shared';
+import type {
+  ConversationTypeKey,
+  RuntimeGrantEffect,
+  RuntimeGrantView,
+} from '@synapse/shared/types';
+import {
+  CONVERSATION_TYPE_MASK_PRESETS,
+  conversationTypeKeysToMask,
+  conversationTypeMaskToKeys,
+  relayLifecycleEventDefinitions,
+} from '@synapse/shared';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -38,12 +47,14 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
+  FieldDescription,
   Field,
   FieldContent,
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
@@ -55,6 +66,66 @@ import PluginAccessStep from '../../plugin-access-step';
 function formatDateTime(value?: string) {
   if (!value) return 'Never';
   return new Date(value).toLocaleString();
+}
+
+const conversationTypeOptions: Array<{
+  key: ConversationTypeKey;
+  label: string;
+  description: string;
+}> = [
+  {
+    key: 'internal_private',
+    label: 'Internal private',
+    description: 'Private conversations inside the workspace graph.',
+  },
+  {
+    key: 'internal_group',
+    label: 'Internal group',
+    description: 'Workspace-local group conversations.',
+  },
+  {
+    key: 'external_private',
+    label: 'External private',
+    description: 'Cross-workspace private conversations.',
+  },
+  {
+    key: 'external_group',
+    label: 'External group',
+    description: 'Cross-workspace group conversations.',
+  },
+  {
+    key: 'virtual',
+    label: 'Virtual',
+    description: 'Virtual or synthetic conversations.',
+  },
+];
+
+const conversationTypePresets = [
+  { label: 'All', value: CONVERSATION_TYPE_MASK_PRESETS.ALL },
+  { label: 'Internal only', value: CONVERSATION_TYPE_MASK_PRESETS.INTERNAL_ONLY },
+  { label: 'External only', value: CONVERSATION_TYPE_MASK_PRESETS.EXTERNAL_ONLY },
+  { label: 'Group only', value: CONVERSATION_TYPE_MASK_PRESETS.GROUP_ONLY },
+  { label: 'Private only', value: CONVERSATION_TYPE_MASK_PRESETS.PRIVATE_ONLY },
+] as const;
+
+function formatConversationTypeKeys(keys: ConversationTypeKey[]) {
+  return keys
+    .map((key) => conversationTypeOptions.find((option) => option.key === key)?.label || key)
+    .join(', ');
+}
+
+function narrowPresetConversationTypeKeys(
+  parentConversationTypeMask: number,
+  presetConversationTypeMask: number,
+) {
+  const allowedKeys = new Set(conversationTypeMaskToKeys(parentConversationTypeMask));
+  const narrowedKeys = conversationTypeMaskToKeys(presetConversationTypeMask).filter((key) =>
+    allowedKeys.has(key),
+  );
+  if (narrowedKeys.length > 0) {
+    return narrowedKeys;
+  }
+  return conversationTypeMaskToKeys(parentConversationTypeMask);
 }
 
 function relayTrustVariant(trustStatus: RelayDeviceSummaryView['trustStatus']) {
@@ -160,6 +231,10 @@ export default function RelayDevicePage() {
   const [loadingRuntimeGrants, setLoadingRuntimeGrants] = useState(false);
   const [revokingGrantId, setRevokingGrantId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
+  const [savingDevicePolicy, setSavingDevicePolicy] = useState(false);
+  const [deviceConversationTypeKeys, setDeviceConversationTypeKeys] = useState<ConversationTypeKey[]>(
+    conversationTypeMaskToKeys(CONVERSATION_TYPE_MASK_PRESETS.ALL),
+  );
 
   const exposureId = searchParams.get('exposureId');
   const relayAccessAdapter = useMemo(
@@ -226,6 +301,40 @@ export default function RelayDevicePage() {
     if (!relayDetail?.exposures.length) return null;
     return relayDetail.exposures.find((exposure) => exposure.id === exposureId) || relayDetail.exposures[0];
   }, [exposureId, relayDetail?.exposures]);
+
+  const deviceWorkspaceConversationTypeMask = useMemo(
+    () => relayDetail?.device.workspaceConversationTypeMask ?? CONVERSATION_TYPE_MASK_PRESETS.ALL,
+    [relayDetail?.device.workspaceConversationTypeMask],
+  );
+  const deviceEffectiveConversationTypeMask = useMemo(
+    () => relayDetail?.device.effectiveConversationTypeMask ?? deviceWorkspaceConversationTypeMask,
+    [deviceWorkspaceConversationTypeMask, relayDetail?.device.effectiveConversationTypeMask],
+  );
+  const deviceAllowedConversationTypeKeys = useMemo(
+    () => new Set(conversationTypeMaskToKeys(deviceWorkspaceConversationTypeMask)),
+    [deviceWorkspaceConversationTypeMask],
+  );
+  const currentDeviceConversationTypeMask = useMemo(
+    () =>
+      conversationTypeKeysToMask(
+        deviceConversationTypeKeys,
+        deviceEffectiveConversationTypeMask,
+      ),
+    [deviceConversationTypeKeys, deviceEffectiveConversationTypeMask],
+  );
+  const nextDeviceConversationTypeMaskOverride = useMemo(
+    () =>
+      currentDeviceConversationTypeMask === deviceWorkspaceConversationTypeMask
+        ? null
+        : currentDeviceConversationTypeMask,
+    [currentDeviceConversationTypeMask, deviceWorkspaceConversationTypeMask],
+  );
+  const hasDeviceConversationTypeChanges =
+    currentDeviceConversationTypeMask !== deviceEffectiveConversationTypeMask;
+  const selectedDeviceConversationTypeLabels = useMemo(
+    () => formatConversationTypeKeys(deviceConversationTypeKeys),
+    [deviceConversationTypeKeys],
+  );
 
   async function loadRelayDetail() {
     if (!workspaceId || !relayId) return;
@@ -301,6 +410,13 @@ export default function RelayDevicePage() {
     void loadRuntimeGrants(activeExposure.id);
   }, [activeExposure?.id, relayId, workspaceId]);
 
+  useEffect(() => {
+    if (!relayDetail?.device) return;
+    setDeviceConversationTypeKeys(
+      conversationTypeMaskToKeys(relayDetail.device.effectiveConversationTypeMask),
+    );
+  }, [relayDetail?.device]);
+
   async function handleSaveRelay() {
     if (!workspaceId || !relayDetail || !draftName.trim()) return;
 
@@ -314,6 +430,51 @@ export default function RelayDevicePage() {
       toast.error(error instanceof Error ? error.message : 'Failed to update relay');
     } finally {
       setSaving(false);
+    }
+  }
+
+  function toggleDeviceConversationTypeKey(key: ConversationTypeKey) {
+    if (!deviceAllowedConversationTypeKeys.has(key)) {
+      return;
+    }
+    setDeviceConversationTypeKeys((current) => {
+      const exists = current.includes(key);
+      if (exists && current.length === 1) {
+        return current;
+      }
+      return exists
+        ? current.filter((item) => item !== key)
+        : [...current, key];
+    });
+  }
+
+  function applyDeviceConversationTypePreset(mask: number) {
+    setDeviceConversationTypeKeys(
+      narrowPresetConversationTypeKeys(deviceWorkspaceConversationTypeMask, mask),
+    );
+  }
+
+  function resetDeviceConversationTypePolicy() {
+    setDeviceConversationTypeKeys(
+      conversationTypeMaskToKeys(deviceWorkspaceConversationTypeMask),
+    );
+  }
+
+  async function saveDeviceConversationTypePolicy() {
+    if (!workspaceId || !relayDetail || !hasDeviceConversationTypeChanges) return;
+
+    setSavingDevicePolicy(true);
+    try {
+      await api.updateRelayDevice(workspaceId, relayDetail.device.id, {
+        conversationTypeMaskOverride: nextDeviceConversationTypeMaskOverride,
+      });
+      await loadRelayDetail();
+      toast.success('Device conversation policy updated');
+    } catch (error) {
+      console.error('Failed to update relay device policy:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update device policy');
+    } finally {
+      setSavingDevicePolicy(false);
     }
   }
 
@@ -541,6 +702,140 @@ export default function RelayDevicePage() {
             <Badge variant="outline">Last connected {formatDateTime(relayDetail.device.lastConnectedAt)}</Badge>
             <Badge variant="outline">{relayDetail.device.exposureCount} MCPs</Badge>
             <Badge variant="outline">{relayDetail.device.toolCount} tools</Badge>
+          </div>
+        </AppCardContent>
+      </AppCard>
+
+      <AppCard variant="panel">
+        <AppCardHeader className="gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <AppCardTitle>Device Conversation Policy</AppCardTitle>
+              <AppCardDescription className="mt-2">
+                Limit which conversation topologies can surface tools from this device. Runtime visibility follows the
+                workspace default, then this device override, then each exposure override, then each matching grant.
+              </AppCardDescription>
+            </div>
+            <Badge
+              variant={
+                relayDetail.device.conversationTypeMaskOverride ? 'secondary' : 'outline'
+              }
+            >
+              {relayDetail.device.conversationTypeMaskOverride
+                ? 'Override active'
+                : 'Follow workspace'}
+            </Badge>
+          </div>
+        </AppCardHeader>
+        <AppCardContent className="flex flex-col gap-5">
+          <div className="flex flex-wrap gap-2">
+            {conversationTypePresets.map((preset) => (
+              <Button
+                key={preset.label}
+                type="button"
+                variant={
+                  currentDeviceConversationTypeMask === preset.value ? 'default' : 'outline'
+                }
+                size="sm"
+                onClick={() => applyDeviceConversationTypePreset(preset.value)}
+              >
+                {preset.label}
+              </Button>
+            ))}
+          </div>
+
+          <FieldGroup>
+            {conversationTypeOptions.map((option) => (
+              <Field key={option.key} orientation="horizontal">
+                <FieldContent>
+                  <div className="flex items-start gap-3">
+                    <Checkbox
+                      checked={deviceConversationTypeKeys.includes(option.key)}
+                      disabled={!deviceAllowedConversationTypeKeys.has(option.key)}
+                      onCheckedChange={() => toggleDeviceConversationTypeKey(option.key)}
+                    />
+                    <div className="space-y-1">
+                      <FieldLabel>{option.label}</FieldLabel>
+                      <FieldDescription>{option.description}</FieldDescription>
+                    </div>
+                  </div>
+                </FieldContent>
+              </Field>
+            ))}
+          </FieldGroup>
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-2xl border border-border bg-muted/20 p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Workspace
+              </div>
+              <div className="mt-2 text-sm font-medium text-foreground">
+                {deviceWorkspaceConversationTypeMask}
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                {formatConversationTypeKeys(
+                  conversationTypeMaskToKeys(deviceWorkspaceConversationTypeMask),
+                )}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-border bg-muted/20 p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Effective Device
+              </div>
+              <div className="mt-2 text-sm font-medium text-foreground">
+                {deviceEffectiveConversationTypeMask}
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                {formatConversationTypeKeys(
+                  conversationTypeMaskToKeys(deviceEffectiveConversationTypeMask),
+                )}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-border bg-muted/20 p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Draft
+              </div>
+              <div className="mt-2 text-sm font-medium text-foreground">
+                {currentDeviceConversationTypeMask}
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                {selectedDeviceConversationTypeLabels}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-border bg-muted/20 p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Override Payload
+              </div>
+              <div className="mt-2 text-sm font-medium text-foreground">
+                {nextDeviceConversationTypeMaskOverride ?? 'follow workspace'}
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                Exposure policies can only narrow this result further.
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={resetDeviceConversationTypePolicy}
+              disabled={savingDevicePolicy}
+            >
+              Follow workspace
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void saveDeviceConversationTypePolicy()}
+              disabled={!hasDeviceConversationTypeChanges || savingDevicePolicy}
+            >
+              {savingDevicePolicy ? (
+                <Loader2 className="animate-spin" data-icon="inline-start" />
+              ) : (
+                <Shield data-icon="inline-start" />
+              )}
+              Save device policy
+            </Button>
           </div>
         </AppCardContent>
       </AppCard>

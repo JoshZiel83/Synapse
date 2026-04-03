@@ -11,7 +11,6 @@ import {
   conversationTypeKeysToMask,
   conversationTypeMaskToKeys,
   normalizeConversationTypeMask,
-  resolveNarrowedConversationTypeMask,
 } from '@synapse/shared';
 import { Bot, Loader2, Plus, RotateCcw, Save, ShieldCheck, Trash2, UserRound } from 'lucide-react';
 import { getConversationDisplayName } from '@/app/dashboard/access/attachment-visuals';
@@ -276,6 +275,26 @@ function formatGrantTarget(
   }
 }
 
+function formatPolicyLabel(label?: string | null) {
+  const normalized = (label || 'workspace').trim()
+  if (!normalized) return 'Workspace'
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1)
+}
+
+function narrowPresetConversationTypeKeys(
+  parentConversationTypeMask: number,
+  presetConversationTypeMask: number,
+) {
+  const allowedKeys = new Set(conversationTypeMaskToKeys(parentConversationTypeMask))
+  const narrowedKeys = conversationTypeMaskToKeys(presetConversationTypeMask).filter((key) =>
+    allowedKeys.has(key),
+  )
+  if (narrowedKeys.length > 0) {
+    return narrowedKeys
+  }
+  return conversationTypeMaskToKeys(parentConversationTypeMask)
+}
+
 function formatTimestamp(value?: string | null) {
   if (!value) return 'Just now';
   const date = new Date(value);
@@ -486,6 +505,18 @@ export default function PluginAccessStep({
       ),
     [summary?.effectiveConversationTypeMask, workspaceConversationTypeMask],
   );
+  const parentPolicyLabel = useMemo(
+    () => String(summary?.parentPolicyLabel || 'workspace'),
+    [summary?.parentPolicyLabel],
+  );
+  const parentConversationTypeMask = useMemo(
+    () =>
+      normalizeConversationTypeMask(
+        summary?.parentConversationTypeMask,
+        workspaceConversationTypeMask,
+      ),
+    [summary?.parentConversationTypeMask, workspaceConversationTypeMask],
+  );
   const currentConversationTypeMask = useMemo(
     () =>
       conversationTypeKeysToMask(
@@ -498,9 +529,9 @@ export default function PluginAccessStep({
     () => formatConversationTypeKeys(conversationTypeKeys),
     [conversationTypeKeys],
   );
-  const workspaceAllowedConversationTypeKeys = useMemo(
-    () => new Set(conversationTypeMaskToKeys(workspaceConversationTypeMask)),
-    [workspaceConversationTypeMask],
+  const parentAllowedConversationTypeKeys = useMemo(
+    () => new Set(conversationTypeMaskToKeys(parentConversationTypeMask)),
+    [parentConversationTypeMask],
   );
   const canManageConversationTypes = Boolean(
     accessAdapter.updatePolicy &&
@@ -508,10 +539,10 @@ export default function PluginAccessStep({
   );
   const nextConversationTypeMaskOverride = useMemo(
     () =>
-      currentConversationTypeMask === workspaceConversationTypeMask
+      currentConversationTypeMask === parentConversationTypeMask
         ? null
         : currentConversationTypeMask,
-    [currentConversationTypeMask, workspaceConversationTypeMask],
+    [currentConversationTypeMask, parentConversationTypeMask],
   );
   const hasConversationTypeChanges =
     canManageConversationTypes &&
@@ -822,7 +853,7 @@ export default function PluginAccessStep({
   };
 
   const toggleConversationTypeKey = (key: ConversationTypeKey) => {
-    if (!workspaceAllowedConversationTypeKeys.has(key)) {
+    if (!parentAllowedConversationTypeKeys.has(key)) {
       return;
     }
     setConversationTypeKeys((current) => {
@@ -838,14 +869,14 @@ export default function PluginAccessStep({
 
   const applyConversationTypePreset = (mask: number) => {
     setConversationTypeKeys(
-      conversationTypeMaskToKeys(
-        resolveNarrowedConversationTypeMask(workspaceConversationTypeMask, mask),
-      ),
+      narrowPresetConversationTypeKeys(parentConversationTypeMask, mask),
     );
   };
 
   const resetConversationTypePolicy = () => {
-    setConversationTypeKeys(conversationTypeMaskToKeys(workspaceConversationTypeMask));
+    setConversationTypeKeys(
+      conversationTypeMaskToKeys(parentConversationTypeMask),
+    );
   };
 
   const saveConversationTypePolicy = async () => {
@@ -886,9 +917,7 @@ export default function PluginAccessStep({
 
   const applyNewGrantConversationTypePreset = (mask: number) => {
     setNewGrantConversationTypeKeys(
-      conversationTypeMaskToKeys(
-        resolveNarrowedConversationTypeMask(currentGrantBaseMask, mask),
-      ),
+      narrowPresetConversationTypeKeys(currentGrantBaseMask, mask),
     );
   };
 
@@ -920,9 +949,7 @@ export default function PluginAccessStep({
 
   const applyGrantConversationTypePreset = (mask: number) => {
     setGrantConversationTypeKeys(
-      conversationTypeMaskToKeys(
-        resolveNarrowedConversationTypeMask(currentGrantBaseMask, mask),
-      ),
+      narrowPresetConversationTypeKeys(currentGrantBaseMask, mask),
     );
   };
 
@@ -1088,11 +1115,15 @@ export default function PluginAccessStep({
               <div className="space-y-1">
                 <CardTitle>Conversation Types</CardTitle>
                 <CardDescription>
-                  Limit which conversation topologies can surface this {resourceLabelLower}. Runtime visibility follows workspace default, then this instance override, then each matching grant.
+                  Limit which conversation topologies can surface this {resourceLabelLower}. Runtime visibility follows workspace default, then the {parentPolicyLabel} policy, then this instance override, then each matching grant.
                 </CardDescription>
               </div>
-              <Badge variant={summary?.conversationTypeMaskOverride ? 'secondary' : 'outline'}>
-                {summary?.conversationTypeMaskOverride ? 'Override active' : 'Follow workspace'}
+              <Badge
+                variant={summary?.conversationTypeMaskOverride ? 'secondary' : 'outline'}
+              >
+                {summary?.conversationTypeMaskOverride
+                  ? 'Override active'
+                  : `Follow ${parentPolicyLabel}`}
               </Badge>
             </div>
           </CardHeader>
@@ -1120,7 +1151,7 @@ export default function PluginAccessStep({
                     <div className="flex items-start gap-3">
                       <Checkbox
                         checked={conversationTypeKeys.includes(option.key)}
-                        disabled={!workspaceAllowedConversationTypeKeys.has(option.key)}
+                        disabled={!parentAllowedConversationTypeKeys.has(option.key)}
                         onCheckedChange={() => toggleConversationTypeKey(option.key)}
                       />
                       <div className="space-y-1">
@@ -1133,7 +1164,7 @@ export default function PluginAccessStep({
               ))}
             </FieldGroup>
 
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
               <div className="rounded-2xl border border-border bg-muted/20 p-4">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Source Default
@@ -1161,6 +1192,19 @@ export default function PluginAccessStep({
                 <div className="mt-1 text-sm text-muted-foreground">
                   {formatConversationTypeKeys(
                     conversationTypeMaskToKeys(workspaceConversationTypeMask),
+                  )}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Parent {formatPolicyLabel(parentPolicyLabel)}
+                </div>
+                <div className="mt-2 text-sm font-medium text-foreground">
+                  {parentConversationTypeMask}
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {formatConversationTypeKeys(
+                    conversationTypeMaskToKeys(parentConversationTypeMask),
                   )}
                 </div>
               </div>
@@ -1198,7 +1242,7 @@ export default function PluginAccessStep({
                 disabled={savingPolicy}
               >
                 <RotateCcw data-icon="inline-start" />
-                Follow workspace
+                Follow {parentPolicyLabel}
               </Button>
               <Button
                 type="button"
@@ -1213,7 +1257,7 @@ export default function PluginAccessStep({
                 Save conversation types
               </Button>
               <div className="text-sm text-muted-foreground">
-                Override payload: {nextConversationTypeMaskOverride ?? 'follow workspace'}
+                Override payload: {nextConversationTypeMaskOverride ?? `follow ${parentPolicyLabel}`}
               </div>
             </div>
           </CardContent>

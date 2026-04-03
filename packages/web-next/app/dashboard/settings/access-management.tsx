@@ -262,7 +262,7 @@ const workspaceCapabilityPolicyFamilies: Array<{
     family: "relay_capability",
     label: "Relay Capabilities",
     description:
-      "Default conversation types for relay capabilities before any capability or grant override narrows them further.",
+      "Default conversation types for relay devices and exposures before any device, exposure, or grant override narrows them further.",
   },
 ]
 

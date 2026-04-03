@@ -1481,6 +1481,7 @@ export interface RelayDevices {
   automation_lifecycle_event_at: Timestamp | null;
   automation_lifecycle_grace_until: Timestamp | null;
   automation_lifecycle_state: RelayDevicesAutomationLifecycleState | null;
+  conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
   description: string | null;
   device_type: Generated<RelayDevicesDeviceType>;
@@ -1519,7 +1520,6 @@ export interface RelayDeviceSessions {
 }
 
 export interface RelayExposures {
-  conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
   description: string | null;
   device_id: string;

@@ -2502,6 +2502,8 @@ CREATE TABLE relay_devices (
   device_type relay_devices_device_type NOT NULL DEFAULT 'desktop_computer',
   platform VARCHAR(40),
   authorization_mode relay_authorization_mode NOT NULL DEFAULT 'server_trust',
+  conversation_type_mask_override INT
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
   public_key TEXT NOT NULL,
   public_key_fingerprint VARCHAR(128) NOT NULL UNIQUE,
   trust_status relay_devices_trust_status NOT NULL DEFAULT 'pending',
@@ -2587,8 +2589,6 @@ CREATE TABLE relay_exposures (
   description TEXT,
   transport relay_exposures_transport NOT NULL,
   runtime_status relay_exposures_runtime_status NOT NULL DEFAULT 'discovered',
-  conversation_type_mask_override INT
-    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
   last_seen_at TIMESTAMPTZ,
   last_healthy_at TIMESTAMPTZ,
   last_error TEXT,

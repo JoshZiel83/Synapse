@@ -1,5 +1,4 @@
 import type pg from "pg";
-import { resolveNarrowedConversationTypeMask } from "@synapse/shared";
 import type { CapabilityAccessTarget } from "@synapse/shared/types";
 import {
   deleteRelation,
@@ -18,6 +17,12 @@ import {
   type AccessBindingRow,
 } from "../access/bindings.js";
 import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js";
+import {
+  assertRelayConversationTypeMaskWithinParent,
+  resolveRelayCapabilityConversationTypeMask,
+  resolveRelayDeviceConversationTypeMask,
+  resolveRelayGrantConversationTypeMask,
+} from "./relay-policy.js";
 import { incrementMcpVersion } from "./runtime-version.js";
 
 type Queryable = Pick<pg.PoolClient, "query">;
@@ -95,14 +100,14 @@ async function loadRelayExposurePolicyState(
     id: string;
     capability_id: string;
     owner_workspace_id: string;
-    exposure_conversation_type_mask_override: number | null;
+    device_conversation_type_mask_override: number | null;
     capability_conversation_type_mask_override: number | null;
   }>(
     `SELECT
        e.id,
        capability.id AS capability_id,
        d.workspace_id AS owner_workspace_id,
-       e.conversation_type_mask_override AS exposure_conversation_type_mask_override,
+       d.conversation_type_mask_override AS device_conversation_type_mask_override,
        capability.conversation_type_mask_override AS capability_conversation_type_mask_override
      FROM relay_exposures e
      INNER JOIN relay_devices d
@@ -116,6 +121,25 @@ async function loadRelayExposurePolicyState(
   );
 
   return result.rows[0] || null;
+}
+
+function resolveRelayExposurePolicyMasks(params: {
+  workspaceConversationTypeMask: number;
+  deviceConversationTypeMaskOverride?: number | null;
+  capabilityConversationTypeMaskOverride?: number | null;
+}) {
+  const parentConversationTypeMask = resolveRelayDeviceConversationTypeMask(
+    params.workspaceConversationTypeMask,
+    params.deviceConversationTypeMaskOverride,
+  );
+  const effectiveConversationTypeMask = resolveRelayCapabilityConversationTypeMask(
+    parentConversationTypeMask,
+    params.capabilityConversationTypeMaskOverride,
+  );
+  return {
+    parentConversationTypeMask,
+    effectiveConversationTypeMask,
+  };
 }
 
 async function listRelayExposureAccessRows(
@@ -324,14 +348,19 @@ export async function listRelayExposureAccessState(
       exposure.owner_workspace_id,
       "relay_capability",
     );
+  const { parentConversationTypeMask, effectiveConversationTypeMask } =
+    resolveRelayExposurePolicyMasks({
+      workspaceConversationTypeMask,
+      deviceConversationTypeMaskOverride:
+        exposure.device_conversation_type_mask_override,
+      capabilityConversationTypeMaskOverride:
+        exposure.capability_conversation_type_mask_override,
+    });
   const grants = (await listRelayExposureAccessRows(workspaceId, exposure.capability_id)).map(
     (row) =>
       mapAccessBindingToGrant(row, ["use"], undefined, {
-        effectiveConversationTypeMask: resolveNarrowedConversationTypeMask(
-          resolveNarrowedConversationTypeMask(
-            workspaceConversationTypeMask,
-            exposure.capability_conversation_type_mask_override,
-          ),
+        effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
+          effectiveConversationTypeMask,
           row.conversation_type_mask_override,
         ),
       }),
@@ -341,13 +370,12 @@ export async function listRelayExposureAccessState(
     summary: {
       ...RELAY_CAPABILITY_PERMISSION_SUMMARY,
       workspaceConversationTypeMask,
+      parentConversationTypeMask,
+      parentPolicyLabel: "device",
       capabilityId: exposure.capability_id,
       conversationTypeMaskOverride:
         exposure.capability_conversation_type_mask_override ?? null,
-      effectiveConversationTypeMask: resolveNarrowedConversationTypeMask(
-        workspaceConversationTypeMask,
-        exposure.capability_conversation_type_mask_override,
-      ),
+      effectiveConversationTypeMask,
       effectivePermissions: grants.length > 0 ? ["use"] : [],
       isVisible: grants.length > 0,
       isAuthorized: grants.length > 0,
@@ -379,6 +407,14 @@ export async function grantRelayExposureAccess(input: {
       exposure.owner_workspace_id,
       "relay_capability",
     );
+  const { effectiveConversationTypeMask } =
+    resolveRelayExposurePolicyMasks({
+      workspaceConversationTypeMask,
+      deviceConversationTypeMaskOverride:
+        exposure.device_conversation_type_mask_override,
+      capabilityConversationTypeMaskOverride:
+        exposure.capability_conversation_type_mask_override,
+    });
   const target = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
     target: input.accessTarget || { type: "workspace" },
@@ -402,15 +438,22 @@ export async function grantRelayExposureAccess(input: {
 
   if (existing) {
     return mapAccessBindingToGrant(existing, ["use"], undefined, {
-      effectiveConversationTypeMask: resolveNarrowedConversationTypeMask(
-        resolveNarrowedConversationTypeMask(
-          workspaceConversationTypeMask,
-          exposure.capability_conversation_type_mask_override,
-        ),
+      effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
+        effectiveConversationTypeMask,
         existing.conversation_type_mask_override,
       ),
     });
   }
+
+  assertRelayConversationTypeMaskWithinParent(
+    effectiveConversationTypeMask,
+    input.conversationTypeMaskOverride,
+    {
+      errorCode: "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
+      errorMessage:
+        "Relay exposure grant conversation policy must allow at least one conversation type from the exposure policy.",
+    },
+  );
 
   const inserted = await transaction(async (client) => {
     const binding = await executeSqlOn<AccessBindingRow>(client, 
@@ -486,11 +529,8 @@ export async function grantRelayExposureAccess(input: {
     subject_conversation_actor_context_id:
       target.subjectConversationActorContextId,
   } as AccessBindingRow, ["use"], undefined, {
-    effectiveConversationTypeMask: resolveNarrowedConversationTypeMask(
-      resolveNarrowedConversationTypeMask(
-        workspaceConversationTypeMask,
-        exposure.capability_conversation_type_mask_override,
-      ),
+    effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
+      effectiveConversationTypeMask,
       input.conversationTypeMaskOverride,
     ),
   });
@@ -569,6 +609,35 @@ export async function updateRelayExposurePolicy(input: {
     return;
   }
 
+  const exposure = await loadRelayExposurePolicyState(
+    input.workspaceId,
+    input.exposureId,
+  );
+  if (!exposure) {
+    const error = new Error("Relay exposure not found") as Error & { code: string };
+    error.code = "RELAY_EXPOSURE_NOT_FOUND";
+    throw error;
+  }
+
+  const workspaceConversationTypeMask =
+    await getWorkspaceCapabilityConversationTypeMask(
+      exposure.owner_workspace_id,
+      "relay_capability",
+    );
+  const parentConversationTypeMask = resolveRelayDeviceConversationTypeMask(
+    workspaceConversationTypeMask,
+    exposure.device_conversation_type_mask_override,
+  );
+  assertRelayConversationTypeMaskWithinParent(
+    parentConversationTypeMask,
+    input.conversationTypeMaskOverride,
+    {
+      errorCode: "RELAY_EXPOSURE_CONVERSATION_POLICY_INVALID",
+      errorMessage:
+        "Relay exposure conversation policy must allow at least one conversation type from the device policy.",
+    },
+  );
+
   await executeSql(
     `UPDATE relay_capabilities capability
      SET conversation_type_mask_override = $3,
@@ -614,6 +683,32 @@ export async function updateRelayExposureAccessGrant(input: {
     throw error;
   }
 
+  const workspaceConversationTypeMask =
+    await getWorkspaceCapabilityConversationTypeMask(
+      exposure.owner_workspace_id,
+      "relay_capability",
+    );
+  const { effectiveConversationTypeMask } =
+    resolveRelayExposurePolicyMasks({
+      workspaceConversationTypeMask,
+      deviceConversationTypeMaskOverride:
+        exposure.device_conversation_type_mask_override,
+      capabilityConversationTypeMaskOverride:
+        exposure.capability_conversation_type_mask_override,
+    });
+
+  if (input.conversationTypeMaskOverride !== undefined) {
+    assertRelayConversationTypeMaskWithinParent(
+      effectiveConversationTypeMask,
+      input.conversationTypeMaskOverride,
+      {
+        errorCode: "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
+        errorMessage:
+          "Relay exposure grant conversation policy must allow at least one conversation type from the exposure policy.",
+      },
+    );
+  }
+
   if (input.conversationTypeMaskOverride !== undefined) {
     await executeSql(
       `UPDATE access_bindings
@@ -636,18 +731,9 @@ export async function updateRelayExposureAccessGrant(input: {
     throw error;
   }
 
-  const workspaceConversationTypeMask =
-    await getWorkspaceCapabilityConversationTypeMask(
-      exposure.owner_workspace_id,
-      "relay_capability",
-    );
-
   return mapAccessBindingToGrant(updated, ["use"], undefined, {
-    effectiveConversationTypeMask: resolveNarrowedConversationTypeMask(
-      resolveNarrowedConversationTypeMask(
-        workspaceConversationTypeMask,
-        exposure.capability_conversation_type_mask_override,
-      ),
+    effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
+      effectiveConversationTypeMask,
       updated.conversation_type_mask_override,
     ),
   });

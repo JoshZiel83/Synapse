@@ -16,8 +16,6 @@ import {
   RELAY_MANAGEABLE_TRUST_STATUSES,
   RELAY_PAIRING_TTL_MS,
   RELAY_PROTOCOL_VERSION,
-  DEFAULT_CONVERSATION_TYPE_MASK,
-  resolveNarrowedConversationTypeMask,
   relayLifecycleEventDefinitions,
 } from '@synapse/shared';
 import { config } from '../../config/index.js';
@@ -41,6 +39,11 @@ import {
 } from './relay-access.js';
 import { getWorkspaceCapabilityConversationTypeMask } from '../capabilities/conversation-type-policies.js';
 import {
+  assertRelayConversationTypeMaskWithinParent,
+  resolveRelayCapabilityConversationTypeMask,
+  resolveRelayDeviceConversationTypeMask,
+} from './relay-policy.js';
+import {
   getRuntimeGrant,
   listActiveRuntimeGrantsForExposure,
   revokeRuntimeGrant,
@@ -58,12 +61,17 @@ const relayDesktopUpdateQuerySchema = z.object({
   arch: z.string().trim().min(1).max(40),
 });
 
+const conversationTypeMaskSchema = z.number().int().min(1).max(31);
+
 const updateRelayDeviceSchema = z.object({
-  title: z.string().trim().min(1).max(255),
+  title: z.string().trim().min(1).max(255).optional(),
   description: z.string().trim().max(4000).nullable().optional(),
   deviceType: z.string().trim().min(1).max(64).optional(),
   authorizationMode: z.string().trim().min(1).max(64).optional(),
+  conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
   metadata: z.record(z.unknown()).optional(),
+}).refine((value) => Object.keys(value).length > 0, {
+  message: 'At least one relay device field must be updated',
 });
 
 const updateRelayTrustSchema = z.object({
@@ -76,7 +84,6 @@ const accessTargetSchema = z.object({
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
 });
-const conversationTypeMaskSchema = z.number().int().min(1).max(31);
 
 const accessGrantSchema = z.object({
   accessTarget: accessTargetSchema.optional(),
@@ -139,6 +146,7 @@ type RelayDeviceSummaryRow = {
   device_type: string;
   platform: string | null;
   authorization_mode: string;
+  conversation_type_mask_override: number | null;
   public_key_fingerprint: string;
   trust_status: RelayDeviceSummaryView['trustStatus'];
   is_connected: boolean;
@@ -201,7 +209,7 @@ type RelayExposureToolRow = {
   exposure_description: string | null;
   exposure_transport: RelayExposureView['transport'];
   exposure_runtime_status: RelayExposureView['runtimeStatus'];
-  exposure_conversation_type_mask_override: number | null;
+  capability_conversation_type_mask_override: number | null;
   exposure_last_seen_at: string | null;
   exposure_last_healthy_at: string | null;
   exposure_last_error: string | null;
@@ -323,7 +331,14 @@ async function requireWorkspacePermission(
   return requireRequestAction(request, reply, action, workspaceId, errorMessage);
 }
 
-function mapRelayDeviceSummary(row: RelayDeviceSummaryRow): RelayDeviceSummaryView {
+function mapRelayDeviceSummary(
+  row: RelayDeviceSummaryRow,
+  workspaceConversationTypeMask: number,
+): RelayDeviceSummaryView {
+  const effectiveConversationTypeMask = resolveRelayDeviceConversationTypeMask(
+    workspaceConversationTypeMask,
+    row.conversation_type_mask_override,
+  );
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -337,6 +352,9 @@ function mapRelayDeviceSummary(row: RelayDeviceSummaryRow): RelayDeviceSummaryVi
     publicKeyFingerprint: row.public_key_fingerprint,
     trustStatus: row.trust_status,
     isConnected: Boolean(row.is_connected),
+    workspaceConversationTypeMask,
+    conversationTypeMaskOverride: row.conversation_type_mask_override ?? null,
+    effectiveConversationTypeMask,
     exposureCount: parseCount(row.exposure_count),
     healthyExposureCount: parseCount(row.healthy_exposure_count),
     degradedExposureCount: parseCount(row.degraded_exposure_count),
@@ -445,6 +463,7 @@ function mapInlineSyncSource(row: RelayExposureToolRow): RelaySyncSourceView | u
 function groupRelayExposures(
   rows: RelayExposureToolRow[],
   workspaceConversationTypeMask: number,
+  parentConversationTypeMask: number,
 ): RelayExposureView[] {
   const exposures = new Map<string, RelayExposureView>();
 
@@ -460,11 +479,13 @@ function groupRelayExposures(
         transport: row.exposure_transport,
         runtimeStatus: row.exposure_runtime_status,
         workspaceConversationTypeMask,
+        parentConversationTypeMask,
+        parentPolicyLabel: 'device',
         conversationTypeMaskOverride:
-          row.exposure_conversation_type_mask_override || undefined,
-        effectiveConversationTypeMask: resolveNarrowedConversationTypeMask(
-          workspaceConversationTypeMask,
-          row.exposure_conversation_type_mask_override,
+          row.capability_conversation_type_mask_override ?? null,
+        effectiveConversationTypeMask: resolveRelayCapabilityConversationTypeMask(
+          parentConversationTypeMask,
+          row.capability_conversation_type_mask_override,
         ),
         lastSeenAt: row.exposure_last_seen_at || undefined,
         lastHealthyAt: row.exposure_last_healthy_at || undefined,
@@ -690,6 +711,11 @@ async function expireRelayPairings(workspaceId?: string) {
 }
 
 async function listRelayDeviceSummaries(workspaceId: string) {
+  const workspaceConversationTypeMask =
+    await getWorkspaceCapabilityConversationTypeMask(
+      workspaceId,
+      'relay_capability',
+    );
   const result = await executeSql<RelayDeviceSummaryRow>(
     `SELECT
         d.id,
@@ -700,6 +726,7 @@ async function listRelayDeviceSummaries(workspaceId: string) {
         d.device_type,
         d.platform,
         d.authorization_mode,
+        d.conversation_type_mask_override,
         d.public_key_fingerprint,
         d.trust_status,
         d.last_seen_at,
@@ -757,7 +784,9 @@ async function listRelayDeviceSummaries(workspaceId: string) {
     [workspaceId],
   );
 
-  return result.rows.map(mapRelayDeviceSummary);
+  return result.rows.map((row) =>
+    mapRelayDeviceSummary(row, workspaceConversationTypeMask),
+  );
 }
 
 async function listPendingRelayPairings(workspaceId: string) {
@@ -773,6 +802,11 @@ async function listPendingRelayPairings(workspaceId: string) {
 }
 
 async function getRelayDeviceSummary(workspaceId: string, deviceId: string) {
+  const workspaceConversationTypeMask =
+    await getWorkspaceCapabilityConversationTypeMask(
+      workspaceId,
+      'relay_capability',
+    );
   const result = await executeSql<RelayDeviceSummaryRow>(
     `SELECT
         d.id,
@@ -783,6 +817,7 @@ async function getRelayDeviceSummary(workspaceId: string, deviceId: string) {
         d.device_type,
         d.platform,
         d.authorization_mode,
+        d.conversation_type_mask_override,
         d.public_key_fingerprint,
         d.trust_status,
         d.last_seen_at,
@@ -845,7 +880,10 @@ async function getRelayDeviceSummary(workspaceId: string, deviceId: string) {
     throw createNotFoundError('RELAY_DEVICE_NOT_FOUND', 'Relay device not found');
   }
 
-  return mapRelayDeviceSummary(result.rows[0]);
+  return mapRelayDeviceSummary(
+    result.rows[0],
+    workspaceConversationTypeMask,
+  );
 }
 
 async function getRelayPairingSession(workspaceId: string, pairingId: string) {
@@ -911,7 +949,7 @@ function mapRuntimeGrantView(record: RuntimeGrantRecord): RuntimeGrantView {
 }
 
 async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Promise<RelayDeviceDetailView> {
-  const [device, pairingsResult, syncSourcesResult, exposuresResult, workspaceConversationTypeMask] = await Promise.all([
+  const [device, pairingsResult, syncSourcesResult, exposuresResult] = await Promise.all([
     getRelayDeviceSummary(workspaceId, deviceId),
     executeSql<RelayPairingRow>(
       `SELECT *
@@ -938,7 +976,7 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
           e.description AS exposure_description,
           e.transport AS exposure_transport,
           e.runtime_status AS exposure_runtime_status,
-          capability.conversation_type_mask_override AS exposure_conversation_type_mask_override,
+          capability.conversation_type_mask_override AS capability_conversation_type_mask_override,
           e.last_seen_at AS exposure_last_seen_at,
           e.last_healthy_at AS exposure_last_healthy_at,
           e.last_error AS exposure_last_error,
@@ -985,7 +1023,6 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
       ORDER BY e.display_name ASC, t.current_name ASC NULLS LAST`,
       [deviceId],
     ),
-    getWorkspaceCapabilityConversationTypeMask(workspaceId, 'relay_capability'),
   ]);
 
   return {
@@ -994,7 +1031,8 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
     syncSources: syncSourcesResult.rows.map(mapRelaySyncSource),
     exposures: groupRelayExposures(
       exposuresResult.rows,
-      workspaceConversationTypeMask,
+      device.workspaceConversationTypeMask,
+      device.effectiveConversationTypeMask,
     ),
   };
 }
@@ -1646,15 +1684,44 @@ export function registerRelayRoutes(app: FastifyInstance) {
 
       const { workspaceId, id } = request.params as RelayParams;
       const body = updateRelayDeviceSchema.parse(request.body);
+      const hasTitle = 'title' in body;
+      const hasDescription = 'description' in body;
+      const hasDeviceType = 'deviceType' in body;
+      const hasAuthorizationMode = 'authorizationMode' in body;
+      const hasConversationTypeMaskOverride =
+        'conversationTypeMaskOverride' in body;
+      const hasMetadata = 'metadata' in body;
+
+      if (hasConversationTypeMaskOverride) {
+        const workspaceConversationTypeMask =
+          await getWorkspaceCapabilityConversationTypeMask(
+            workspaceId,
+            'relay_capability',
+          );
+        assertRelayConversationTypeMaskWithinParent(
+          workspaceConversationTypeMask,
+          body.conversationTypeMaskOverride,
+          {
+            errorCode: 'RELAY_DEVICE_CONVERSATION_POLICY_INVALID',
+            errorMessage:
+              'Relay device conversation policy must allow at least one workspace conversation type.',
+          },
+        );
+      }
+
       const result = await executeSql(
         `UPDATE relay_devices
-         SET title = $3,
-             description = COALESCE($4, description),
-             device_type = COALESCE($5, device_type),
-             authorization_mode = COALESCE($6, authorization_mode),
+         SET title = CASE WHEN $3 THEN $4 ELSE title END,
+             description = CASE WHEN $5 THEN $6 ELSE description END,
+             device_type = CASE WHEN $7 THEN $8 ELSE device_type END,
+             authorization_mode = CASE WHEN $9 THEN $10 ELSE authorization_mode END,
+             conversation_type_mask_override = CASE
+               WHEN $11 THEN $12
+               ELSE conversation_type_mask_override
+             END,
              metadata = CASE
-               WHEN $7::jsonb IS NULL THEN metadata
-               ELSE $7::jsonb
+               WHEN $13 THEN $14::jsonb
+               ELSE metadata
              END,
              updated_at = NOW()
          WHERE id = $1
@@ -1663,10 +1730,17 @@ export function registerRelayRoutes(app: FastifyInstance) {
         [
           id,
           workspaceId,
-          body.title,
+          hasTitle,
+          body.title ?? null,
+          hasDescription,
           body.description ?? null,
+          hasDeviceType,
           body.deviceType ?? null,
+          hasAuthorizationMode,
           body.authorizationMode ?? null,
+          hasConversationTypeMaskOverride,
+          body.conversationTypeMaskOverride ?? null,
+          hasMetadata,
           body.metadata ? JSON.stringify(body.metadata) : null,
         ],
       );
@@ -1675,20 +1749,34 @@ export function registerRelayRoutes(app: FastifyInstance) {
         throw createNotFoundError('RELAY_DEVICE_NOT_FOUND', 'Relay device not found');
       }
 
-      await ensureRelayLifecycleAutomationSourcesForDeviceTx(
-        executeSql,
-        {
-          workspaceId,
-          deviceId: id,
-          displayName: body.title,
-        },
-      );
+      if (hasTitle && body.title) {
+        await ensureRelayLifecycleAutomationSourcesForDeviceTx(
+          executeSql,
+          {
+            workspaceId,
+            deviceId: id,
+            displayName: body.title,
+          },
+        );
+      }
 
       logEvent({
         workspaceId,
         relayId: id,
         eventType: 'relay.device.updated',
-        eventData: { title: body.title },
+        eventData: {
+          title: body.title,
+          updatedFields: [
+            hasTitle ? 'title' : null,
+            hasDescription ? 'description' : null,
+            hasDeviceType ? 'deviceType' : null,
+            hasAuthorizationMode ? 'authorizationMode' : null,
+            hasConversationTypeMaskOverride
+              ? 'conversationTypeMaskOverride'
+              : null,
+            hasMetadata ? 'metadata' : null,
+          ].filter(Boolean),
+        },
       });
 
       const detail = await buildRelayDeviceDetail(workspaceId, id);
@@ -1842,7 +1930,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
         },
       });
 
-      reply.send({ device: mapRelayDeviceSummary(result.rows[0]) });
+      reply.send({ device: await getRelayDeviceSummary(workspaceId, id) });
     } catch (error) {
       handleError(reply, error);
     }
