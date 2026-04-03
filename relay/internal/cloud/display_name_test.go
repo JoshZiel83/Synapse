@@ -22,3 +22,18 @@ func TestPlatformDisplayName(t *testing.T) {
 		}
 	}
 }
+
+func TestPlatformTitlePrefix(t *testing.T) {
+	cases := map[string]string{
+		"windows": "windows",
+		"darwin":  "macos",
+		"linux":   "linux",
+		"freebsd": "freebsd",
+		"":        "device",
+	}
+	for input, want := range cases {
+		if got := platformTitlePrefix(input); got != want {
+			t.Fatalf("platformTitlePrefix(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

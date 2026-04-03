@@ -24,7 +24,23 @@ func DefaultRelayDisplayName() string {
 	if host == "" {
 		host = "unknown-host"
 	}
-	return fmt.Sprintf("%s@%s", platformDisplayName(runtime.GOOS), host)
+	return fmt.Sprintf("%s@%s", platformTitlePrefix(runtime.GOOS), host)
+}
+
+func platformTitlePrefix(goos string) string {
+	switch strings.ToLower(strings.TrimSpace(goos)) {
+	case "windows":
+		return "windows"
+	case "darwin":
+		return "macos"
+	case "linux":
+		return "linux"
+	default:
+		if strings.TrimSpace(goos) == "" {
+			return "device"
+		}
+		return strings.ToLower(strings.TrimSpace(goos))
+	}
 }
 
 func platformDisplayName(goos string) string {

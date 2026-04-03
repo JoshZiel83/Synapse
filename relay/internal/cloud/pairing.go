@@ -29,6 +29,8 @@ type pairingClaimErrorResponse struct {
 	Error string `json:"error"`
 }
 
+const defaultRelayDeviceType = "desktop_computer"
+
 func ClaimPairing(ctx context.Context, relayCfg config.RelayConfig, pairingCode, displayName string) (*config.RelayConfig, *PairingClaimResult, error) {
 	serverBaseURL := config.NormalizeServerBaseURL(relayCfg.ServerBaseURL)
 	if serverBaseURL == "" {
@@ -42,6 +44,7 @@ func ClaimPairing(ctx context.Context, relayCfg config.RelayConfig, pairingCode,
 		privateKeyPath = config.DefaultPrivateKeyPath()
 	}
 	resolvedDisplayName := ResolveRelayDisplayName(displayName)
+	resolvedDescription := DefaultRelayDescription(defaultRelayDeviceType)
 
 	identity, err := deviceauth.EnsureIdentity(privateKeyPath)
 	if err != nil {
@@ -51,7 +54,8 @@ func ClaimPairing(ctx context.Context, relayCfg config.RelayConfig, pairingCode,
 	requestBody := map[string]interface{}{
 		"pairingCode":          strings.TrimSpace(pairingCode),
 		"title":                resolvedDisplayName,
-		"deviceType":           "desktop_computer",
+		"description":          resolvedDescription,
+		"deviceType":           defaultRelayDeviceType,
 		"authorizationMode":    "server_trust",
 		"platform":             runtimePlatform(),
 		"publicKey":            identity.PublicKeyPEM,
