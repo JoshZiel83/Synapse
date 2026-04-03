@@ -1193,8 +1193,6 @@ export async function createThread(params: {
         db.insertInto("direct_conversation_bindings").values({
           conversation_id: conversationId,
           ...directConversationBindingValues(pair),
-          metadata:
-            {} as TableInsert<"direct_conversation_bindings">["metadata"],
         }),
       );
     }

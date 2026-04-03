@@ -485,7 +485,6 @@ CREATE TABLE publishers (
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   is_builtin BOOLEAN DEFAULT FALSE,
   is_verified BOOLEAN DEFAULT FALSE,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -703,7 +702,6 @@ CREATE TABLE workspace_friend_requests (
   status relationship_request_status NOT NULL DEFAULT 'pending',
   resolved_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   resolved_at TIMESTAMPTZ,
-  metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
@@ -741,7 +739,6 @@ CREATE TABLE workspace_friend_entries (
   peer_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
   peer_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   source_request_id UUID REFERENCES workspace_friend_requests(id) ON DELETE SET NULL,
-  metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
@@ -767,7 +764,6 @@ CREATE TABLE actor_access_requests (
   status relationship_request_status NOT NULL DEFAULT 'pending',
   resolved_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   resolved_at TIMESTAMPTZ,
-  metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -789,7 +785,6 @@ CREATE TABLE direct_conversation_bindings (
   participant_two_kind relationship_target_type NOT NULL,
   participant_two_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
   participant_two_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
     (participant_one_kind = 'member' AND participant_one_workspace_member_id IS NOT NULL AND participant_one_actor_id IS NULL) OR
@@ -877,7 +872,6 @@ CREATE TABLE actor_source_refs (
   source_catalog_version_id UUID REFERENCES catalog_versions(id) ON DELETE SET NULL,
   sync_mode actor_source_refs_sync_mode NOT NULL DEFAULT 'notify',
   baseline_actor_version INT,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -895,7 +889,6 @@ CREATE TABLE model_groups (
   is_default BOOLEAN DEFAULT FALSE,
   is_enabled BOOLEAN DEFAULT TRUE,
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
@@ -921,7 +914,6 @@ CREATE TABLE model_profiles (
   current_revision_id UUID,
   is_enabled BOOLEAN DEFAULT TRUE,
   installed_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -941,7 +933,6 @@ CREATE TABLE model_profile_revisions (
   extra_config JSONB DEFAULT '{}',
   request_timeout_ms INT,
   max_retries INT,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(profile_id, version)
 );
@@ -984,7 +975,6 @@ CREATE TABLE model_group_profiles (
   priority INT NOT NULL DEFAULT 0,
   weight INT NOT NULL DEFAULT 100 CHECK (weight >= 0 AND weight <= 1000),
   is_enabled BOOLEAN DEFAULT TRUE,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(group_id, profile_id)
@@ -1869,7 +1859,6 @@ CREATE TABLE memory_spaces (
   anchor_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   anchor_conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
   anchor_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
@@ -2303,7 +2292,6 @@ CREATE TABLE plugin_installations (
     CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
   status plugin_installations_status NOT NULL DEFAULT 'active',
   installed_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
@@ -2413,7 +2401,6 @@ CREATE TABLE plugin_source_refs (
   source_catalog_item_id UUID REFERENCES catalog_items(id) ON DELETE SET NULL,
   source_catalog_version_id UUID REFERENCES catalog_versions(id) ON DELETE SET NULL,
   sync_mode plugin_source_refs_sync_mode NOT NULL DEFAULT 'manual_merge',
-  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

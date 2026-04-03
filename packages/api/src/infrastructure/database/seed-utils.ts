@@ -9,22 +9,20 @@ export async function ensurePublisher(
     ownerUserId?: string | null;
     isBuiltin?: boolean;
     isVerified?: boolean;
-    metadata?: Record<string, unknown>;
   },
 ) {
   const result = await executeSqlOn<{ id: string }>(
     client,
     `INSERT INTO publishers (
-       slug, display_name, description, owner_user_id, workspace_id, is_builtin, is_verified, metadata
+       slug, display_name, description, owner_user_id, workspace_id, is_builtin, is_verified
      )
-     VALUES ($1, $2, $3, $4, NULL, $5, $6, $7::jsonb)
+     VALUES ($1, $2, $3, $4, NULL, $5, $6)
      ON CONFLICT (slug) DO UPDATE SET
        display_name = EXCLUDED.display_name,
        description = EXCLUDED.description,
        owner_user_id = COALESCE(publishers.owner_user_id, EXCLUDED.owner_user_id),
        is_builtin = EXCLUDED.is_builtin,
        is_verified = EXCLUDED.is_verified,
-       metadata = EXCLUDED.metadata,
        updated_at = NOW()
      RETURNING id`,
     [
@@ -34,7 +32,6 @@ export async function ensurePublisher(
       input.ownerUserId || null,
       input.isBuiltin === true,
       input.isVerified !== false,
-      JSON.stringify(input.metadata || {}),
     ],
   );
 

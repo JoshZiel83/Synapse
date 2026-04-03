@@ -1702,10 +1702,9 @@ export async function installActorPackage(input: {
          source_catalog_item_id,
          source_catalog_version_id,
          sync_mode,
-         baseline_actor_version,
-         metadata
+         baseline_actor_version
        )
-       VALUES ($1, $2, $3, $4, 1, '{}'::jsonb)`,
+       VALUES ($1, $2, $3, $4, 1)`,
       [
         actorId,
         actorPackage.package.id,

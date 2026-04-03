@@ -1001,7 +1001,6 @@ async function ensureMarketplacePublisher(
     slug?: string;
     displayName?: string;
     description?: string;
-    metadata?: JsonObject;
   },
 ) {
   const result = await run<{ id: string }>(
@@ -1011,10 +1010,9 @@ async function ensureMarketplacePublisher(
        description,
        owner_user_id,
        workspace_id,
-       is_verified,
-       metadata
+       is_verified
      )
-     VALUES ($1, $2, 'Official marketplace publisher', $3, NULL, TRUE, '{}'::jsonb)
+     VALUES ($1, $2, 'Official marketplace publisher', $3, NULL, TRUE)
      ON CONFLICT (slug) DO UPDATE SET
        display_name = EXCLUDED.display_name,
        description = EXCLUDED.description,

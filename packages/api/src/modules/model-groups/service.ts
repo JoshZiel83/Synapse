@@ -46,7 +46,6 @@ type ModelGroupRow = {
   is_default: boolean;
   is_enabled: boolean;
   created_by_workspace_member_id: string | null;
-  metadata: Record<string, unknown> | null;
   created_at: string | Date;
   updated_at: string | Date;
 };
@@ -210,7 +209,6 @@ function mapGroupRow(row: ModelGroupRow) {
     is_default: Boolean(row.is_default),
     is_active: Boolean(row.is_enabled),
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || null,
-    metadata: asObject(row.metadata),
     created_at: toIsoString(row.created_at),
     updated_at: toIsoString(row.updated_at),
   };
@@ -414,7 +412,6 @@ async function createProfileRevision(input: {
         (withEngineKind(input.extraConfig, validated.engineKind) || {}) as TableInsert<'model_profile_revisions'>['extra_config'],
       request_timeout_ms: input.requestTimeoutMs ?? null,
       max_retries: input.maxRetries ?? null,
-      metadata: {} as TableInsert<'model_profile_revisions'>['metadata'],
     })
     .returningAll()
     .executeTakeFirstOrThrow();
@@ -773,7 +770,6 @@ export async function createModelGroup(data: {
       is_enabled: true,
       created_by_workspace_member_id:
         data.createdByWorkspaceMemberId || null,
-      metadata: {} as TableInsert<'model_groups'>['metadata'],
     })
     .returningAll()
     .executeTakeFirstOrThrow()) as ModelGroupRow;
@@ -999,7 +995,6 @@ export async function addModelItem(groupId: string, data: {
         data.installedByWorkspaceMemberId
         || group.created_by_workspace_member_id
         || null,
-      metadata: {} as TableInsert<'model_profiles'>['metadata'],
     })
     .returningAll()
     .executeTakeFirstOrThrow();
@@ -1036,7 +1031,6 @@ export async function addModelItem(groupId: string, data: {
       priority: data.priority ?? 0,
       weight: data.weight ?? 100,
       is_enabled: true,
-      metadata: {} as TableInsert<'model_group_profiles'>['metadata'],
     })
     .returningAll()
     .executeTakeFirstOrThrow();

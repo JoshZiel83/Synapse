@@ -5,7 +5,6 @@ import {
   db,
   executeCompiledQuery,
   executeTakeFirst,
-  type TableInsert,
 } from "../../infrastructure/database/kysely.js";
 import {
   buildWorkspaceMemberContextId,
@@ -599,7 +598,6 @@ async function ensureFriendEntry(params: {
           : null,
       peer_actor_id: params.peerType === "actor" ? params.peerActorId || null : null,
       source_request_id: params.sourceRequestId || null,
-      metadata: {} as TableInsert<"workspace_friend_entries">["metadata"],
     })
     .onConflict((oc) => oc.doNothing())
     .execute();
@@ -680,7 +678,6 @@ async function createFriendRequest(params: {
         target_actor_id: params.targetType === "actor" ? params.targetActorId || null : null,
         requested_via_profile_id: params.profileId || null,
         status: "pending",
-        metadata: {} as TableInsert<"workspace_friend_requests">["metadata"],
       })
       .returningAll()
       .executeTakeFirst();
@@ -725,7 +722,6 @@ async function createActorAccessRequest(params: {
         actor_id: params.actorId,
         requester_workspace_member_id: params.requesterWorkspaceMemberId,
         status: "pending",
-        metadata: {} as TableInsert<"actor_access_requests">["metadata"],
       })
       .returningAll()
       .executeTakeFirst();

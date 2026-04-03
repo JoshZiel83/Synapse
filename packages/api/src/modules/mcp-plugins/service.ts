@@ -125,7 +125,6 @@ type PluginCatalogRow = {
   publisher_is_verified: boolean;
   publisher_owner_user_id: string | null;
   publisher_logo_file_id: string | null;
-  publisher_metadata: unknown;
   categories_json: unknown;
   runtime_permissions_json: unknown;
 };
@@ -149,7 +148,6 @@ type PublisherRow = {
   workspace_id: string | null;
   is_builtin: boolean;
   is_verified: boolean;
-  metadata: unknown;
   created_at: string;
   updated_at: string;
   plugin_count?: string | number | null;
@@ -171,7 +169,6 @@ type InstallationRow = {
   conversation_type_mask_override: number | null;
   installation_status: "active" | "disabled" | "error" | "archived";
   installed_by_workspace_member_id: string | null;
-  installation_metadata: unknown;
   installation_created_at: string;
   installation_updated_at: string;
   source_catalog_item_id: string | null;
@@ -233,7 +230,6 @@ const PLUGIN_CATALOG_SELECT = `
     publisher.is_verified AS publisher_is_verified,
     publisher.owner_user_id AS publisher_owner_user_id,
     publisher.logo_file_id AS publisher_logo_file_id,
-    publisher.metadata AS publisher_metadata,
     COALESCE(categories.categories_json, '[]'::jsonb) AS categories_json,
     COALESCE(runtime_permissions.runtime_permissions_json, '[]'::jsonb) AS runtime_permissions_json
   FROM catalog_items item
@@ -599,7 +595,6 @@ function mapPluginView(row: PluginCatalogRow) {
 }
 
 function mapPublisherView(row: PublisherRow) {
-  const metadata = asObject(row.metadata);
   return {
     id: row.id,
     slug: row.slug,
@@ -610,7 +605,6 @@ function mapPublisherView(row: PublisherRow) {
     is_verified: row.is_verified,
     owner_user_id: row.owner_user_id,
     workspace_id: row.workspace_id,
-    metadata,
     plugin_count:
       typeof row.plugin_count === "number"
         ? row.plugin_count
@@ -950,7 +944,6 @@ async function loadInstallationRows(
         installation.conversation_type_mask_override,
         installation.status AS installation_status,
         installation.installed_by_workspace_member_id,
-        installation.metadata AS installation_metadata,
         installation.created_at AS installation_created_at,
         installation.updated_at AS installation_updated_at,
         source_ref.source_catalog_item_id,
@@ -1186,7 +1179,6 @@ function buildInstallationPayload(
     config_state: configState,
     approved_runtime_permissions: row.approved_runtime_permissions || [],
     installed_by_workspace_member_id: row.installed_by_workspace_member_id,
-    metadata: asObject(row.installation_metadata),
     created_at: row.installation_created_at,
     updated_at: row.installation_updated_at,
     source_catalog_item_id: row.source_catalog_item_id,
@@ -1576,7 +1568,6 @@ export async function createOrganization(data: {
       workspace_id: null,
       is_builtin: data.isBuiltin === true,
       is_verified: data.isVerified === true,
-      metadata: {} as TableInsert<"publishers">["metadata"],
     })
     .onConflict((oc) =>
       oc.column("slug").doUpdateSet({
@@ -1586,7 +1577,6 @@ export async function createOrganization(data: {
         owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
         is_builtin: data.isBuiltin === true,
         is_verified: data.isVerified === true,
-        metadata: {} as TableInsert<"publishers">["metadata"],
         updated_at: sql`NOW()`,
       }),
     )
@@ -1893,7 +1883,6 @@ export async function installPluginUnified(data: {
           status: "active",
           installed_by_workspace_member_id:
             data.installedByWorkspaceMemberId || null,
-          metadata: {} as TableInsert<"plugin_installations">["metadata"],
         })
         .returning("id"),
     );
@@ -1973,7 +1962,6 @@ export async function installPluginUnified(data: {
           source_catalog_item_id: plugin.id,
           source_catalog_version_id: catalogVersionId,
           sync_mode: "manual_merge",
-          metadata: {} as TableInsert<"plugin_source_refs">["metadata"],
         }),
     );
 

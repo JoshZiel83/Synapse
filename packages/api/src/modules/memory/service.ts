@@ -824,7 +824,6 @@ async function ensureMemorySpace(
         anchor_actor_id: binding.spaceType === 'actor_private' ? binding.actorId || null : null,
         anchor_conversation_actor_context_id: binding.spaceType === 'participant_private' ? conversationActorContextId : null,
         anchor_workspace_member_id: binding.spaceType === 'user_private' ? binding.workspaceMemberId || null : null,
-        metadata: {} as TableInsert<'memory_spaces'>['metadata'],
         created_at: sql`NOW()`,
         updated_at: sql`NOW()`,
       }),

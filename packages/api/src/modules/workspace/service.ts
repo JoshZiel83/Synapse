@@ -496,7 +496,6 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
             source_catalog_version_id: template.versionId,
             sync_mode: "notify",
             baseline_actor_version: 1,
-            metadata: {} as TableInsert<'actor_source_refs'>['metadata'],
           }),
       );
 

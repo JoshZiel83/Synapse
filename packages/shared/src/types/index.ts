@@ -2070,7 +2070,6 @@ export interface PluginInstallationView {
   configData: Record<string, unknown>;
   configState: PluginConfigFieldState[];
   installedByWorkspaceMemberId?: string;
-  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
   package?: MarketplaceItem;
@@ -4111,7 +4110,6 @@ export interface CatalogPublisherRecord {
   workspaceId?: string;
   isBuiltin: boolean;
   isVerified: boolean;
-  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -4327,7 +4325,6 @@ export interface PluginInstallationRecord {
   approvedRuntimePermissions: string[];
   status: "active" | "disabled" | "error" | "archived";
   installedByWorkspaceMemberId?: string;
-  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }

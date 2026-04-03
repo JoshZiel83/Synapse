@@ -351,7 +351,6 @@ export interface ActorAccessRequests {
   actor_id: string;
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
-  metadata: Generated<Json>;
   requester_workspace_member_id: string;
   resolved_at: Timestamp | null;
   resolved_by_workspace_member_id: string | null;
@@ -392,7 +391,6 @@ export interface ActorSourceRefs {
   actor_id: string;
   baseline_actor_version: number | null;
   created_at: Generated<Timestamp | null>;
-  metadata: Generated<Json | null>;
   source_catalog_item_id: string | null;
   source_catalog_version_id: string | null;
   sync_mode: Generated<ActorSourceRefsSyncMode>;
@@ -976,7 +974,6 @@ export interface DirectConversationBindings {
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
-  metadata: Generated<Json>;
   participant_one_actor_id: string | null;
   participant_one_kind: RelationshipTargetType;
   participant_one_workspace_member_id: string | null;
@@ -1174,7 +1171,6 @@ export interface MemorySpaces {
   anchor_workspace_member_id: string | null;
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
-  metadata: Generated<Json | null>;
   space_type: MemorySpacesSpaceType;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
@@ -1200,7 +1196,6 @@ export interface ModelGroupProfiles {
   group_id: string;
   id: Generated<string>;
   is_enabled: Generated<boolean | null>;
-  metadata: Generated<Json | null>;
   priority: Generated<number>;
   profile_id: string;
   updated_at: Generated<Timestamp | null>;
@@ -1215,7 +1210,6 @@ export interface ModelGroups {
   id: Generated<string>;
   is_default: Generated<boolean | null>;
   is_enabled: Generated<boolean | null>;
-  metadata: Generated<Json | null>;
   name: string;
   owner_type: ModelGroupsOwnerType;
   owner_workspace_id: string | null;
@@ -1233,7 +1227,6 @@ export interface ModelProfileRevisions {
   id: Generated<string>;
   max_retries: number | null;
   max_tokens: Generated<number>;
-  metadata: Generated<Json | null>;
   model_name: string;
   profile_id: string;
   provider_type: string;
@@ -1248,7 +1241,6 @@ export interface ModelProfiles {
   id: Generated<string>;
   installed_by_workspace_member_id: string | null;
   is_enabled: Generated<boolean | null>;
-  metadata: Generated<Json | null>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string | null;
 }
@@ -1332,7 +1324,6 @@ export interface PluginInstallations {
   display_name: string;
   id: Generated<string>;
   installed_by_workspace_member_id: string | null;
-  metadata: Generated<Json | null>;
   reuse_scope: Generated<PluginInstallationsReuseScope>;
   status: Generated<PluginInstallationsStatus>;
   updated_at: Generated<Timestamp | null>;
@@ -1360,7 +1351,6 @@ export interface PluginPackageVersionSpecs {
 export interface PluginSourceRefs {
   created_at: Generated<Timestamp | null>;
   installation_id: string;
-  metadata: Generated<Json | null>;
   source_catalog_item_id: string | null;
   source_catalog_version_id: string | null;
   sync_mode: Generated<PluginSourceRefsSyncMode>;
@@ -1408,7 +1398,6 @@ export interface Publishers {
   is_builtin: Generated<boolean | null>;
   is_verified: Generated<boolean | null>;
   logo_file_id: string | null;
-  metadata: Generated<Json | null>;
   owner_user_id: string | null;
   slug: string;
   updated_at: Generated<Timestamp | null>;
@@ -2071,7 +2060,6 @@ export interface WorkspaceCapabilityConversationTypePolicies {
 export interface WorkspaceFriendEntries {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
-  metadata: Generated<Json>;
   owner_workspace_member_id: string;
   peer_actor_id: string | null;
   peer_type: RelationshipTargetType;
@@ -2084,7 +2072,6 @@ export interface WorkspaceFriendEntries {
 export interface WorkspaceFriendRequests {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
-  metadata: Generated<Json>;
   requested_via_profile_id: string | null;
   requester_workspace_member_id: string;
   resolved_at: Timestamp | null;
