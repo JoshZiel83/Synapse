@@ -29,6 +29,10 @@ import {
   registerAuthenticatedSocket,
   unregisterAuthenticatedSocket,
 } from "./auth-session-registry.js";
+import {
+  setupAsrWebSocket,
+  shutdownAsrWebSockets,
+} from "./asr.js";
 
 type InboxSubscription = {
   key: string;
@@ -259,6 +263,7 @@ export function setupWebSocket(app: FastifyInstance) {
   void initAuthSessionRegistry().catch((error) => {
     app.log.error({ error }, "Failed to initialize auth session registry");
   });
+  setupAsrWebSocket(app);
 
   app.addHook("onRequest", async (request, reply) => {
     const isUpgrade = request.headers.upgrade?.toLowerCase() === "websocket";
@@ -595,6 +600,8 @@ export function broadcastToWorkspace(workspaceId: string, data: unknown) {
 export async function shutdownWebSockets(
   reason = "Synapse API server is shutting down",
 ) {
+  await shutdownAsrWebSockets(reason);
+
   for (const [clientId, client] of clients) {
     if (client.authTimer) clearTimeout(client.authTimer);
     if (client.heartbeatTimer) clearInterval(client.heartbeatTimer);

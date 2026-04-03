@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "test": "tsx --test src/**/*.test.ts",
     "db:bootstrap": "tsx src/infrastructure/database/bootstrap.ts && npm run db:codegen",
     "db:seed": "tsx src/infrastructure/database/seed.ts",
     "db:seed:builtin-mcp": "tsx src/infrastructure/database/seed-builtin-mcp-plugins.ts",
@@ -17,7 +18,6 @@
     "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.0",
     "@authzed/authzed-node": "^1.6.1",
     "@dicebear/collection": "^9.4.2",
     "@dicebear/core": "^9.4.2",
@@ -26,6 +26,7 @@
     "@fastify/jwt": "^8.0.0",
     "@fastify/multipart": "^8.3.1",
     "@fastify/websocket": "^10.0.0",
+    "@huggingface/transformers": "^3.8.0",
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@synapse/shared": "*",
@@ -43,12 +44,14 @@
     "sharp": "^0.34.5",
     "sherpa-onnx-node": "^1.12.28",
     "tesseract.js": "^7.0.0",
+    "ws": "^8.20.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^25.1.0",
     "@types/pg": "^8.11.0",
+    "@types/ws": "^8.18.1",
     "kysely-codegen": "^0.20.0",
     "tsx": "^4.16.0",
     "typescript": "^5.4.0"

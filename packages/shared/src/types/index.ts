@@ -3374,6 +3374,103 @@ export interface ConversationFeedPage {
   readWatermarkSequence?: number;
 }
 
+export type RealtimeAsrAudioFormat = "pcm" | "ogg";
+export type RealtimeAsrAudioCodec = "raw" | "opus";
+
+export interface RealtimeAsrAudioConfig {
+  format: RealtimeAsrAudioFormat;
+  codec: RealtimeAsrAudioCodec;
+  rate: 16000;
+  bits: 16;
+  channel: 1;
+}
+
+export type RealtimeAsrClientMessage =
+  | {
+      type: "auth";
+      token?: string;
+      workspaceId: UUID;
+    }
+  | {
+      type: "start";
+      audio: RealtimeAsrAudioConfig;
+    }
+  | {
+      type: "stop";
+    }
+  | {
+      type: "cancel";
+    }
+  | {
+      type: "pong";
+    };
+
+export interface RealtimeAsrFinalSegment {
+  text: string;
+  segmentIndex: number;
+  startTimeMs: number;
+  endTimeMs: number;
+  receivedAt: Timestamp;
+}
+
+export type RealtimeAsrSocketEventType =
+  | "auth.ok"
+  | "auth.error"
+  | "ping"
+  | "server.shutdown"
+  | "asr.started"
+  | "asr.partial"
+  | "asr.segment.final"
+  | "asr.completed"
+  | "asr.error";
+
+export interface RealtimeAsrSocketEventPayloadMap {
+  "auth.ok": {
+    connectionId: UUID;
+    heartbeatMs: number;
+  };
+  "auth.error": {
+    message: string;
+  };
+  ping: {
+    at: Timestamp;
+  };
+  "server.shutdown": {
+    message: string;
+    retryable: boolean;
+  };
+  "asr.started": {
+    sessionId: UUID;
+    providerConnectId: UUID;
+    heartbeatMs: number;
+  };
+  "asr.partial": {
+    displayText: string;
+    unstableText: string;
+    receivedAt: Timestamp;
+  };
+  "asr.segment.final": RealtimeAsrFinalSegment;
+  "asr.completed": {
+    text: string;
+    segments: RealtimeAsrFinalSegment[];
+    durationMs: number;
+  };
+  "asr.error": {
+    code: string;
+    message: string;
+    retryable: boolean;
+    providerCode?: number;
+    providerLogId?: string;
+  };
+}
+
+export type RealtimeAsrSocketEvent<
+  T extends RealtimeAsrSocketEventType = RealtimeAsrSocketEventType,
+> = {
+  type: T;
+  payload: RealtimeAsrSocketEventPayloadMap[T];
+};
+
 export type ChatSocketEventType =
   | "auth.ok"
   | "auth.error"

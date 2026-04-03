@@ -30,6 +30,18 @@ This creates:
 - `.env`
 - `packages/web-next/.env.local`
 
+Before starting the API in any environment, fill the Volcengine realtime ASR variables in `.env`:
+
+- `ASR_PROVIDER=volcengine`
+- `VOLCENGINE_ASR_APP_ID`
+- `VOLCENGINE_ASR_ACCESS_TOKEN`
+- `VOLCENGINE_ASR_SECRET_KEY`
+- `VOLCENGINE_ASR_RESOURCE_ID=volc.seedasr.sauc.duration`
+- `VOLCENGINE_ASR_WS_URL=wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async`
+- `VOLCENGINE_ASR_MAX_CONCURRENCY=3`
+- `VOLCENGINE_ASR_CONNECT_TIMEOUT_MS=10000`
+- `VOLCENGINE_ASR_IDLE_TIMEOUT_MS=15000`
+
 Default seeded platform admin:
 
 - email: `demo@synapse.dev`

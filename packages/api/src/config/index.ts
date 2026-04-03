@@ -52,6 +52,21 @@ export const config = {
     outboxBatchSize: parseInt(process.env.REALTIME_OUTBOX_BATCH_SIZE || '100'),
     outboxPollMs: parseInt(process.env.REALTIME_OUTBOX_POLL_MS || '500'),
   },
+  asr: {
+    provider: process.env.ASR_PROVIDER || 'volcengine',
+    volcengine: {
+      appId: process.env.VOLCENGINE_ASR_APP_ID || '',
+      accessToken: process.env.VOLCENGINE_ASR_ACCESS_TOKEN || '',
+      secretKey: process.env.VOLCENGINE_ASR_SECRET_KEY || '',
+      resourceId: process.env.VOLCENGINE_ASR_RESOURCE_ID || 'volc.seedasr.sauc.duration',
+      wsUrl:
+        process.env.VOLCENGINE_ASR_WS_URL
+        || 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async',
+      maxConcurrency: parseInt(process.env.VOLCENGINE_ASR_MAX_CONCURRENCY || '3'),
+      connectTimeoutMs: parseInt(process.env.VOLCENGINE_ASR_CONNECT_TIMEOUT_MS || '10000'),
+      idleTimeoutMs: parseInt(process.env.VOLCENGINE_ASR_IDLE_TIMEOUT_MS || '15000'),
+    },
+  },
   im: {
     runtimeManagerEnabled:
       process.env.IM_RUNTIME_MANAGER_ENABLED !== 'false',
